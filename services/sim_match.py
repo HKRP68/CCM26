@@ -841,9 +841,13 @@ def simulate_match(home_xi, away_xi, overs, pitch_type,
     if result["margin_type"] == "tie":
         from services.match_dynamics import resolve_super_over
         so_feed = []
+        # first_bat="b" — the side that batted SECOND in the match bats first in
+        # the super over, as the Laws have it (and as the interactive Super Over
+        # in handlers/super_over.py already did).
         super_over = resolve_super_over(
             first_bat, first_bowl, first_name, second_name, pitch_type,
-            run_factor=run_factor, commentary=commentary, feed=so_feed)
+            run_factor=run_factor, commentary=commentary, feed=so_feed,
+            first_bat="b")
         feed.extend(so_feed)
         if not super_over.get("shared"):
             result = {"winner": super_over["winner"], "loser": super_over["loser"],

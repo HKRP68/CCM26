@@ -300,7 +300,7 @@ def test_owner_gating_blocks_wrong_user():
     assert so["sel_batters"] == []  # rejected — wrong owner
 
 
-def test_dismissed_batter_cannot_be_reselected():
+def test_a_batter_who_already_batted_cannot_be_reselected():
     random.seed(3)
     _patch_finalize(so_mod)
     ctx = FakeContext()
@@ -311,11 +311,12 @@ def test_dismissed_batter_cannot_be_reselected():
 
     bat_uid = so["bat_uid"]                       # GUEST
     bat_tg = so["teams"][bat_uid]["tg"]
-    # Pretend this batter was dismissed in an earlier Super Over of this tie.
+    # Pretend this batter came to the crease in an earlier Super Over of this
+    # tie — they are spent and cannot bat again.
     gone = int(so["teams"][bat_uid]["xi"][0]["roster_id"])
-    so["dismissed"][bat_uid].add(gone)
+    so["batted"][bat_uid].add(gone)
 
-    # A stale button tap for the dismissed player must be rejected.
+    # A stale button tap for the used player must be rejected.
     asyncio.run(so_bat_callback(
         _upd(FakeQuery(f"so_bat_{mid}_{gone}", bat_tg)), ctx))
     assert gone not in so["sel_batters"]
@@ -339,9 +340,9 @@ def test_ineligible_bowler_tap_is_rejected():
 
     bowl_uid = so["bowl_uid"]                      # HOST
     bowl_tg = so["teams"][bowl_uid]["tg"]
-    # Mark this team's previous-Super-Over bowler — now restricted.
+    # Mark a bowler who has already bowled a Super Over in this tie.
     restricted = int(so["teams"][bowl_uid]["xi"][0]["roster_id"])
-    so["last_bowler"][bowl_uid] = restricted
+    so["used_bowlers"][bowl_uid].add(restricted)
 
     # A stale button for the restricted bowler must be rejected.
     asyncio.run(so_bowl_callback(
@@ -659,7 +660,10 @@ def test_scorecard_images_sent_tie_superover_and_winner():
         # 1) main "Match Tied" card, 2) Super Over card, 3) main winner card.
         assert "Match Tied" in caps
         assert "Super Over" in caps
-        assert "won the match by" in caps
+        # The winner card reads either "won the match by N runs/wickets" or,
+        # when a level score went to the boundary countback, "won on sixes/fours
+        # hit (scores level) — and the match". Both are winner captions.
+        assert "won the match by" in caps or "and the match" in caps
         assert len(photos) >= 3
         # Every scorecard image carries the main-match spectate button.
         assert all(getattr(p, "reply_markup", None) is not None for p in photos)
@@ -841,3 +845,232 @@ def test_many_seeds_always_terminate_with_a_winner():
         assert asyncio.run(start_super_over(ctx, mid, state)) is True
         asyncio.run(_play_match(ctx, mid))
         assert _get(ctx, mid) is None, f"seed {seed} did not finish"
+
+
+# ── Rule enforcement, ball by ball ────────────────────────────────────
+#
+# The tests above drive the real engine, so what happens on any given ball is up
+# to the dice. These script the outcome instead, so the wicket limit, the crease
+# and the extras arithmetic can be asserted exactly.
+
+WIDE = {"type": "extra", "is_extra": True, "extra_type": "Wide", "runs": 0,
+        "batter_out": False, "wicket_type": None}
+BOWLED = {"type": "wicket", "is_extra": False, "runs": 0, "batter_out": True,
+          "wicket_type": "Bowled", "extra_type": ""}
+
+
+def _live_innings():
+    """A Super Over kicked off and taken through selection, ready to bowl."""
+    _patch_finalize(so_mod)
+    ctx = FakeContext()
+    state = _tied_state()
+    mid = state["match_id"]
+    asyncio.run(start_super_over(ctx, mid, state))
+    asyncio.run(_do_selection(ctx, mid))
+    return ctx, mid
+
+
+def _bowl_scripted(ctx, mid, outcome):
+    """Bowl one ball whose outcome is fixed rather than rolled."""
+    so = _get(ctx, mid)
+    bat_tg = so["teams"][so["bat_uid"]]["tg"]
+    bowl_tg = so["teams"][so["bowl_uid"]]["tg"]
+    orig = so_mod._super_over_ball
+    so_mod._super_over_ball = lambda *a, **k: dict(outcome)
+    try:
+        asyncio.run(so_deliv_callback(_upd(FakeQuery(f"so_dv_{mid}_0", bowl_tg)), ctx))
+        so = _get(ctx, mid)
+        if so and "inn" in so and so["inn"]["stage"] == "LEN":
+            asyncio.run(so_len_callback(_upd(FakeQuery(f"so_ln_{mid}_0", bowl_tg)), ctx))
+        asyncio.run(so_shot_callback(_upd(FakeQuery(f"so_sh_{mid}_0", bat_tg)), ctx))
+    finally:
+        so_mod._super_over_ball = orig
+
+
+def test_a_wide_costs_a_run_and_is_re_bowled():
+    ctx, mid = _live_innings()
+    _bowl_scripted(ctx, mid, WIDE)
+    inn = _get(ctx, mid)["inn"]
+    # A wide is one run to the batting side and is NOT a legal ball — it used to
+    # be scored as nothing at all, making it a free re-bowl for the bowler.
+    assert inn["runs"] == 1
+    assert inn["bowl_runs"] == 1
+    assert inn["legal"] == 0
+    assert inn["deliveries"] == 1
+
+
+def test_a_no_ball_carries_the_penalty_run_and_the_batter_keeps_the_six():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    striker = int(so["inn"]["striker"])
+    _bowl_scripted(ctx, mid, {"type": "extra", "is_extra": True,
+                              "extra_type": "No Ball", "runs": 6,
+                              "batter_out": False, "wicket_type": None})
+    inn = _get(ctx, mid)["inn"]
+    assert inn["runs"] == 7                     # 6 off the bat + 1 penalty
+    assert inn["bat"][striker]["r"] == 6        # the six is the batter's
+    assert inn["bat"][striker]["6"] == 1        # ...and counts on the countback
+    assert inn["legal"] == 0
+    assert inn["free_hit"] is True
+
+
+def test_the_innings_is_over_the_moment_the_second_wicket_falls():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    bat_uid = so["bat_uid"]
+    _bowl_scripted(ctx, mid, BOWLED)
+    assert _get(ctx, mid)["inn"]["wickets"] == 1     # backup walks in
+    _bowl_scripted(ctx, mid, BOWLED)
+
+    so = _get(ctx, mid)
+    assert so["score"][bat_uid] == (0, 2)
+    assert so["innings_no"] == 2                     # rolled straight on to the chase
+    assert so["bat_uid"] != bat_uid                  # roles swapped
+    assert so["inn"]["legal"] == 2                   # nobody batted a 3rd time
+
+
+def test_no_shot_is_accepted_once_two_wickets_are_down():
+    ctx, mid = _live_innings()
+    _bowl_scripted(ctx, mid, BOWLED)
+    _bowl_scripted(ctx, mid, BOWLED)
+
+    so = _get(ctx, mid)
+    inn = so["inn"]                                  # the finished innings
+    assert inn["wickets"] == 2
+    # Simulate a prompt that was still on screen when the innings closed: the
+    # shot button must be refused rather than bowling a 3rd ball at a side that
+    # is already all out.
+    inn["stage"] = "SHOT"
+    inn["pending"] = {"delivery": "Bouncer", "length": "Short"}
+    before = (inn["runs"], inn["legal"], inn["deliveries"])
+    asyncio.run(so_shot_callback(
+        _upd(FakeQuery(f"so_sh_{mid}_0", so["teams"][so["bat_uid"]]["tg"])), ctx))
+    assert (inn["runs"], inn["legal"], inn["deliveries"]) == before
+
+
+def test_a_run_out_takes_the_dismissed_batter_off_whichever_end_they_are_at():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    inn = so["inn"]
+    opener, partner, backup = inn["striker"], inn["non_striker"], inn["backup"]
+    # One completed run, then the run out: the batters crossed, so the man who
+    # is out is standing at the NON-striker's end.
+    _bowl_scripted(ctx, mid, {"type": "wicket", "is_extra": False, "runs": 1,
+                              "batter_out": True, "wicket_type": "Run Out",
+                              "extra_type": ""})
+    inn = _get(ctx, mid)["inn"]
+    assert inn["wickets"] == 1
+    assert opener not in (inn["striker"], inn["non_striker"])
+    assert {inn["striker"], inn["non_striker"]} == {partner, backup}
+    assert inn["bowl_wkts"] == 0                # a run out is not the bowler's
+
+
+def test_a_dismissal_off_a_no_ball_still_costs_a_wicket():
+    ctx, mid = _live_innings()
+    _bowl_scripted(ctx, mid, {"type": "extra", "is_extra": True,
+                              "extra_type": "No Ball", "runs": 0,
+                              "batter_out": True, "wicket_type": "Run Out"})
+    inn = _get(ctx, mid)["inn"]
+    assert inn["runs"] == 1                     # the penalty run still stands
+    assert inn["wickets"] == 1                  # and the wicket is not lost
+    assert inn["legal"] == 0                    # a no-ball is still re-bowled
+
+
+def test_used_batters_are_not_re_offered_while_fresh_ones_remain():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    uid = so["bat_uid"]
+    xi = so["teams"][uid]["xi"]                 # five players
+    so["batted"][uid] = {int(p["roster_id"]) for p in xi[:3]}
+
+    names = [p["name"] for p in _eligible_batters(so, uid)]
+    # Two fresh batters left, so the pool is topped back up to three — and the
+    # two who never batted are both in it.
+    assert len(names) == 3
+    assert xi[3]["name"] in names and xi[4]["name"] in names
+
+
+def test_the_next_batter_is_announced_when_a_wicket_falls():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    from handlers.super_over import _name
+    backup = so["inn"]["backup"]
+    backup_name = _name(so, so["bat_uid"], backup)
+
+    _bowl_scripted(ctx, mid, BOWLED)
+
+    inn = _get(ctx, mid)["inn"]
+    assert backup in (inn["striker"], inn["non_striker"])   # they really came in
+    # ...and the chat says so, rather than silently swapping a name on the
+    # two-batter line where nobody notices it. Crucially it must survive into
+    # the NEXT prompt: the ball message is overwritten a second later, so an
+    # announcement that lives only there is one nobody sees.
+    latest = ctx.bot.messages[-1].text
+    assert f"{backup_name}</b> walks out to the middle" in latest
+    assert f"🆕 {backup_name}" in latest      # badged until they face a ball
+
+
+def test_only_the_batters_who_walked_out_are_spent_by_a_replay():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    bat_uid = so["bat_uid"]
+    inn = so["inn"]
+    openers = {int(inn["striker"]), int(inn["non_striker"])}
+    backup = int(inn["backup"])
+
+    # Six dot balls: the reserve never leaves the dressing room.
+    for _ in range(6):
+        _bowl_scripted(ctx, mid, {"type": "run", "is_extra": False, "runs": 0,
+                                  "batter_out": False, "wicket_type": None})
+
+    so = _get(ctx, mid)
+    assert so["batted"][bat_uid] == openers
+    assert backup not in so["batted"][bat_uid]
+    # So the next Super Over may still pick them.
+    assert backup in {int(p["roster_id"]) for p in _eligible_batters(so, bat_uid)}
+
+
+def test_a_bowler_who_has_bowled_a_super_over_cannot_bowl_another():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    bowl_uid = so["bowl_uid"]
+    bowler = int(so["inn"]["bowler_rid"])
+
+    for _ in range(6):
+        _bowl_scripted(ctx, mid, {"type": "run", "is_extra": False, "runs": 0,
+                                  "batter_out": False, "wicket_type": None})
+
+    so = _get(ctx, mid)
+    assert bowler in so["used_bowlers"][bowl_uid]
+    assert bowler not in {int(p["roster_id"])
+                          for p in _eligible_bowlers(so, bowl_uid)}
+
+
+def test_bowling_the_same_ball_over_and_over_is_charged_for():
+    ctx, mid = _live_innings()
+    so = _get(ctx, mid)
+    # The delivery + length pair is what the engine's spam layer counts.
+    _bowl_scripted(ctx, mid, WIDE)
+    assert _get(ctx, mid)["inn"]["repeat"] == 1
+    _bowl_scripted(ctx, mid, WIDE)
+    assert _get(ctx, mid)["inn"]["repeat"] == 2
+
+
+def test_the_super_over_leaks_more_extras_than_an_ordinary_over():
+    from handlers.super_over import _super_over_ball, SO_EXTRAS_MULT
+    import services.probability_engine as pe
+
+    seen = {}
+    orig = pe.calculate_outcome
+
+    def spy(*a, **k):
+        seen["extras_mult"] = k.get("extras_mult")
+        return orig(*a, **k)
+
+    pe.calculate_outcome = spy
+    try:
+        _super_over_ball({"batting_rating": 75}, {"bowling_rating": 70},
+                         "Flat", shot="Drive", variation="Seam Up", length="Good")
+    finally:
+        pe.calculate_outcome = orig
+    assert seen["extras_mult"] == SO_EXTRAS_MULT > 1.0

@@ -593,7 +593,7 @@ BOND_DOT_PENALTY = 3.9
 
 def _apply_dynamic_mods(probs, *, free_hit=False, mystery=False,
                         recent_runs=0, consec_wickets=0, delivery_repeat=0,
-                        pressure=0.0, chem_bond=0.0):
+                        pressure=0.0, chem_bond=0.0, extras_mult=1.0):
     """Multiplicatively adjust the prob distribution for live-match mechanics.
 
     Runs after every additive layer and before _normalize, so the relative
@@ -608,6 +608,12 @@ def _apply_dynamic_mods(probs, *, free_hit=False, mystery=False,
     together for years turn dots into ones and ones into twos. Deliberately
     touches only running — a bond makes a pair harder to tie down, it does not
     make them better strikers of the ball.
+
+    extras_mult: multiplier on the wide/no-ball weights. 1.0 (the default) is
+    the ordinary match. A Super Over passes more than 1 — six balls with a match
+    riding on them is the most nerve-shredding over a bowler ever bowls, and a
+    wide or a no-ball (with the free hit that follows) is the moment that makes
+    it. Only the extras move; the runs and wickets model is untouched.
     """
     # Partnership Bond — better running between the wickets.
     if chem_bond:
@@ -643,6 +649,15 @@ def _apply_dynamic_mods(probs, *, free_hit=False, mystery=False,
         probs["wide"] *= SPAM_EXTRAS_MULT
         probs["noball"] *= SPAM_EXTRAS_MULT
 
+    # Nerves — a bowler under Super Over pressure sprays a few more. Clamped
+    # rather than tested for truthiness: extras_mult=0 means "no extras at all",
+    # not "leave them alone", and a negative would put a negative weight into
+    # _normalize, which cannot make sense of it.
+    _extras = 1.0 if extras_mult is None else max(0.0, float(extras_mult))
+    if _extras != 1.0:
+        probs["wide"] *= _extras
+        probs["noball"] *= _extras
+
     # Free hit — boundary bias up, dismissals (bar run-out) suppressed.
     if free_hit:
         probs["4"] *= FREE_HIT_BOUNDARY_MULT
@@ -670,7 +685,8 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
                       pitch_wear=0, free_hit=False, mystery=False,
                       recent_runs=0, consec_wickets=0, delivery_repeat=0,
                       pressure=0.0, balls_faced=None, batter_runs=None,
-                      fielding_quality=None, bat_hand=None, chem_bond=0.0):
+                      fielding_quality=None, bat_hand=None, chem_bond=0.0,
+                      extras_mult=1.0):
     """Calculate one ball outcome.
 
     pitch_wear: 0-100 (deterioration). 0 fresh; 100 fully worn.
@@ -683,6 +699,8 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
       delivery_repeat — times this exact delivery was bowled in a row (spam)
       chem_bond       — Team Chemistry partnership bond (0..1) between the two
                         batters at the crease; improves running only
+      extras_mult     — multiplier on the wide/no-ball weights (1.0 = normal;
+                        a Super Over passes more, see _apply_dynamic_mods)
 
     Batter innings context (None → no-op, so legacy callers are unchanged):
       balls_faced     — balls this batter has faced (early vulnerability)
@@ -821,7 +839,7 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
         probs, free_hit=free_hit, mystery=mystery,
         recent_runs=recent_runs, consec_wickets=consec_wickets,
         delivery_repeat=delivery_repeat, pressure=pressure,
-        chem_bond=chem_bond,
+        chem_bond=chem_bond, extras_mult=extras_mult,
     )
 
     # Final normalize
