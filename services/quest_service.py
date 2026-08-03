@@ -871,6 +871,14 @@ def consume_pending_auto_claims(session, user_id, quest_type):
 def claim_quest_reward(session, user_id, quest_id):
     """User claims the reward for a completed quest.
     Returns (success, message, reward_dict).
+
+    The ``claimed`` flag is flipped by a conditional UPDATE *before* any
+    currency moves, not by assigning to the ORM object afterwards. Reading
+    ``uqp.claimed``, paying out, and then setting the flag left the entire
+    payout sitting between the check and the write, so two taps that overlapped
+    both read ``claimed == False`` and both paid. Now the UPDATE only matches a
+    row that is still unclaimed: exactly one caller gets rowcount 1 and pays
+    out, and the other is told it's already claimed.
     """
     user = session.query(User).get(user_id)
     if not user:
@@ -894,6 +902,23 @@ def claim_quest_reward(session, user_id, quest_id):
     if uqp.claimed:
         return False, "Already claimed.", None
 
+    # Take the claim before paying it. Whoever flips the flag owns the reward;
+    # anyone racing them matches no row here and leaves empty-handed.
+    claimed_at = datetime.utcnow()
+    won = (session.query(UserQuestProgress)
+           .filter(UserQuestProgress.user_id == user_id,
+                   UserQuestProgress.quest_id == quest_id,
+                   UserQuestProgress.period_key == period,
+                   UserQuestProgress.claimed == False)   # noqa: E712 (SQL, not Python)
+           .update({UserQuestProgress.claimed: True,
+                    UserQuestProgress.claimed_at: claimed_at},
+                   synchronize_session=False))
+    if not won:
+        return False, "Already claimed.", None
+    # Bring the in-session row in step with the UPDATE above.
+    uqp.claimed = True
+    uqp.claimed_at = claimed_at
+
     # Award rewards
     user.quest_points = (user.quest_points or 0) + (quest.reward_points or 0)
     coins = quest.reward_coins or 0
@@ -907,8 +932,6 @@ def claim_quest_reward(session, user_id, quest_id):
         user.total_coins = (user.total_coins or 0) + coins
     if quest.reward_gems:
         user.total_gems = (user.total_gems or 0) + quest.reward_gems
-    uqp.claimed = True
-    uqp.claimed_at = datetime.utcnow()
 
     # Quests contribute to the monthly season
     try:
