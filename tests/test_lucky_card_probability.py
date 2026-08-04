@@ -120,6 +120,9 @@ class LuckyCardProbabilityTests(unittest.TestCase):
 
     def test_draw_matches_configured_split(self):
         import random
+        # Seeding is process-wide; put the generator back so a later test
+        # doesn't silently inherit this sequence.
+        self.addCleanup(random.setstate, random.getstate())
         random.seed(7)
         rewards = [Reward("Common", 90.0), Reward("Rare", 10.0)]
         session = FakeSession(rewards)
@@ -135,6 +138,20 @@ class LuckyCardProbabilityTests(unittest.TestCase):
 
     def test_no_rewards_returns_none(self):
         self.assertIsNone(self.svc.pick_reward(FakeSession([])))
+
+    def test_non_finite_weights_are_treated_as_zero(self):
+        # Only reachable by writing straight to the database — the form clamps
+        # to 0-100 — but an infinite total makes every `roll < cumulative`
+        # comparison false and the picker falls out to the last row.
+        for bad in (float("inf"), float("-inf"), float("nan")):
+            rewards = [Reward("Good", 100.0), Reward("Broken", bad)]
+            self.assertEqual(self.svc.reward_probability(rewards[1], rewards), 0.0,
+                             f"{bad} was not neutralised")
+            self.assertAlmostEqual(
+                self.svc.reward_probability(rewards[0], rewards), 1.0, places=9)
+            session = FakeSession(rewards)
+            picks = {self.svc.pick_reward(session).label for _ in range(200)}
+            self.assertEqual(picks, {"Good"})
 
 
 if __name__ == "__main__":

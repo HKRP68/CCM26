@@ -788,8 +788,13 @@ def reassign_all_users(session, quest_type, *, now=None):
                .join(Quest, Quest.id == UserQuestProgress.quest_id)
                .join(User, User.id == UserQuestProgress.user_id)
                .filter(UserQuestProgress.period_key == period,
-                       UserQuestProgress.completed == True,
-                       UserQuestProgress.claimed == False,
+                       # Only a quest the user was actually dealt can pay out.
+                       # ensure_quests_assigned's rollover claim filters the
+                       # same way; a stale unassigned row is deleted below
+                       # rather than credited.
+                       UserQuestProgress.assigned.is_(True),
+                       UserQuestProgress.completed.is_(True),
+                       UserQuestProgress.claimed.is_(False),
                        UserQuestProgress.quest_id.in_(quest_ids))
                .all())
     auto_claimed = 0

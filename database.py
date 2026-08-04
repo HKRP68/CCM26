@@ -422,6 +422,26 @@ def _record_migration_signature(key, sig):
         pass
 
 
+def _column_is_floating(table, column):
+    """True when ``table.column`` is a real/float type in the live schema.
+
+    For migrations that would silently truncate on an integer column. Returns
+    False when the schema can't be read, so a caller skips the write and retries
+    on a later boot rather than corrupting data on a guess.
+    """
+    try:
+        from sqlalchemy import inspect as _sa_inspect
+        from sqlalchemy.types import Float, Numeric
+        for col in _sa_inspect(engine).get_columns(table):
+            if col["name"] == column:
+                return isinstance(col["type"], (Float, Numeric))
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "could not read the type of %s.%s", table, column, exc_info=True)
+    return False
+
+
 def _run_isolated(statements):
     """Run each statement on ONE connection, each inside its own SAVEPOINT.
 
@@ -832,16 +852,27 @@ def _migrate_add_columns():
     # only ever uses each weight's share of the total — it just makes the stored
     # number mean what the page says it means. Idempotent by construction: a
     # column that already sums to 100 is multiplied by 1.
+    #
+    # Disabled rows are rescaled by the same factor on purpose. They are not in
+    # the sum, but they are still on the old scale, and leaving them there would
+    # give a wrong share the moment one is switched back on.
+    #
+    # Guarded on the column actually being floating point. The widening ALTER is
+    # in the backfill batch above, where _run_isolated swallows its failure —
+    # SQLite rejects ALTER COLUMN outright. Rescaling an INTEGER column would
+    # truncate 4.2 to 4 and 0.8 to 1, and the one-shot marker would make that
+    # permanent, so skip and retry on a later boot instead.
     # ─────────────────────────────────────────────────────────────
-    lucky_card_sql = [
-        "UPDATE gspin_rewards SET weight = weight * 100.0 / "
-        "(SELECT SUM(weight) FROM gspin_rewards WHERE enabled) "
-        "WHERE (SELECT SUM(weight) FROM gspin_rewards WHERE enabled) > 0",
-    ]
-    done, sig = _migration_signature_matches("lucky_card_pct", lucky_card_sql)
-    if not done:
-        if not _run_isolated(lucky_card_sql):
-            _record_migration_signature("lucky_card_pct", sig)
+    if _column_is_floating("gspin_rewards", "weight"):
+        lucky_card_sql = [
+            "UPDATE gspin_rewards SET weight = weight * 100.0 / "
+            "(SELECT SUM(weight) FROM gspin_rewards WHERE enabled) "
+            "WHERE (SELECT SUM(weight) FROM gspin_rewards WHERE enabled) > 0",
+        ]
+        done, sig = _migration_signature_matches("lucky_card_pct", lucky_card_sql)
+        if not done:
+            if not _run_isolated(lucky_card_sql):
+                _record_migration_signature("lucky_card_pct", sig)
 
     # ─────────────────────────────────────────────────────────────
     # Player versioning: name was originally UNIQUE, but with versions

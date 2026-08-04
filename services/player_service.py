@@ -65,17 +65,27 @@ def get_random_player_by_rating_range(session: Session, low: int, high: int,
 def _pick_widening(session: Session, low: int, high: int, source: str) -> Player | None:
     """Cache-backed pick that widens outward but never past a blocked rating.
 
-    Mirrors ``player_cache.get_random_in_rating_range``'s widen-then-give-up
-    behaviour, minus the "any active player" last resort, which would hand back
-    exactly the ratings the block rules exist to withhold.
+    Mirrors ``player_cache.get_random_in_rating_range`` step for step — the same
+    ten expansions, then the same "any active player" last resort — with the
+    blocked ratings removed at every stage. Keeping that final fallback (rather
+    than giving up once widening fails) is what makes a block a veto on ratings
+    and nothing more: an empty 60-65 band degrades identically whether or not
+    some unrelated 95-100 rule happens to be switched on.
     """
+    from services import player_cache, rating_block_service
+
     for expand in range(0, 11):
         band_low = max(50, low - expand)
         band_high = min(100, high + expand)
         player = _pick_in_range_strict(session, band_low, band_high, source)
         if player:
             return player
-    return None
+
+    pool = rating_block_service.filter_players(
+        session, player_cache.get_all_active(), source)
+    if not pool:
+        return None
+    return session.get(Player, random.choice(pool)["id"])
 
 
 def _get_rarity_distribution(session: Session):

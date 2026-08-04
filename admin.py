@@ -12572,18 +12572,19 @@ def admin_rarity_list():
         # `pool_live` excludes ratings a block rule has taken out of /claim, so
         # a tier that still looks healthy but can never pay out is obvious.
         from models import Player
+        # One grouped count for the whole 50-100 range answers every tier —
+        # cheaper than a query per tier, and tiers may overlap anyway.
+        by_rating = dict(
+            db.query(Player.rating, func.count(Player.id))
+              .filter(Player.is_active == True)
+              .group_by(Player.rating).all())
         pool = {}
         pool_live = {}
         for t in tiers:
-            counts = dict(
-                db.query(Player.rating, func.count(Player.id))
-                  .filter(Player.rating >= t.rating_min,
-                          Player.rating <= t.rating_max,
-                          Player.is_active == True)
-                  .group_by(Player.rating).all())
-            pool[t.id] = sum(counts.values())
-            pool_live[t.id] = sum(n for rating, n in counts.items()
-                                  if rating not in blocked_claim)
+            band = range(t.rating_min, t.rating_max + 1)
+            pool[t.id] = sum(by_rating.get(r, 0) for r in band)
+            pool_live[t.id] = sum(by_rating.get(r, 0) for r in band
+                                  if r not in blocked_claim)
 
         return render_template(
             "admin_rarity.html",
@@ -12886,6 +12887,7 @@ def admin_rarity_simulate():
 
         return render_template("admin_rarity_simulate.html",
                                rows=rows, total=draws, sizes=SIMULATION_SIZES,
+                               min_probability=MIN_TIER_PROBABILITY,
                                misses=result["misses"])
     finally:
         db.close()

@@ -39,19 +39,28 @@ _SOURCE_COLUMNS = {
 SOURCE_LABELS = {
     "claim": "Claim / Daily",
     "drop": "Drops & Packs",
-    "gspin": "GSpin",
+    "gspin": "Lucky Card",
 }
 
 REFRESH_INTERVAL = timedelta(seconds=30)
+# How long to stay quiet after a failed read. Without it a database outage
+# turns every draw into another failing query and another logged traceback,
+# so the busier the bot gets the harder it hammers the thing that is down.
+FAILURE_BACKOFF = timedelta(seconds=5)
 
 _lock = threading.Lock()
-_cache = {"by_source": {}, "loaded_at": None}
+_cache = {"by_source": {}, "loaded_at": None, "failed_at": None}
 
 
 def invalidate():
-    """Drop the cached rules so the next draw re-reads them. Call after edits."""
+    """Drop the cached rules so the next draw re-reads them. Call after edits.
+
+    Also clears any failure backoff: an admin who just saved a rule should see
+    it take effect immediately, not after the backoff expires.
+    """
     with _lock:
         _cache["loaded_at"] = None
+        _cache["failed_at"] = None
 
 
 def _load(session):
@@ -81,19 +90,25 @@ def blocked_ratings(session, source):
     """
     if source not in SOURCES:
         return frozenset()
+    now = datetime.utcnow()
     with _lock:
         loaded = _cache["loaded_at"]
-        fresh = loaded is not None and (datetime.utcnow() - loaded) <= REFRESH_INTERVAL
-        if fresh:
+        if loaded is not None and (now - loaded) <= REFRESH_INTERVAL:
             return _cache["by_source"].get(source, frozenset())
+        failed = _cache["failed_at"]
+        if failed is not None and (now - failed) <= FAILURE_BACKOFF:
+            return frozenset()
     try:
         by_source = _load(session)
     except Exception:
         logger.exception("could not load rating block rules — treating as unblocked")
+        with _lock:
+            _cache["failed_at"] = datetime.utcnow()
         return frozenset()
     with _lock:
         _cache["by_source"] = by_source
         _cache["loaded_at"] = datetime.utcnow()
+        _cache["failed_at"] = None
     return by_source.get(source, frozenset())
 
 

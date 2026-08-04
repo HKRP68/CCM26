@@ -29,7 +29,8 @@
   draw the bot uses — including empty-band re-rolls and blocked ratings.
   <strong>Configured</strong> is your normalised setting; <strong>Actual</strong> is what the run produced.
   Small gaps are sampling noise, and a rare tier needs a big sample before it appears at all:
-  a {{ 0.00001|pct }}% tier averages one hit per {{ 0.00001|odds|replace('1 in ', '') }} pulls.
+  a {{ min_probability|pct }}% tier averages one hit per
+  {{ min_probability|odds|replace('1 in ', '') }} pulls.
 </div>
 
 {% if misses %}

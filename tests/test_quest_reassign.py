@@ -159,6 +159,23 @@ class ReassignAllUsersTests(unittest.TestCase):
         self.assertEqual(result["auto_claimed"], 0)
         self.assertEqual(user.total_coins, 0)
 
+    def test_unassigned_completed_rows_are_not_paid_out(self):
+        # A row the user was never dealt must not pay, even if it somehow
+        # carries completed=True — it is deleted with the rest of the period.
+        from services.quest_service import reassign_all_users
+        quest = _make_quest(self.session, "daily", "Daily Stale",
+                            reward_points=9, reward_coins=400, reward_gems=3)
+        user = _make_user(self.session)
+        _assign(self.session, user, quest, progress=1,
+                completed=True, assigned=False)
+
+        result = reassign_all_users(self.session, "daily")
+        self.assertEqual(result["auto_claimed"], 0)
+        self.assertEqual(user.quest_points, 0)
+        self.assertEqual(user.total_coins, 0)
+        self.assertEqual(user.total_gems, 0)
+        self.assertEqual(self._rows_for("daily"), 0)
+
     def test_incomplete_progress_is_dropped_without_payment(self):
         from services.quest_service import reassign_all_users
         quest = _make_quest(self.session, "daily", "Daily Partial",

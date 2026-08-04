@@ -113,9 +113,18 @@ class RatingBlockTestCase(unittest.TestCase):
                 sys.modules[key] = value
 
     def _patch_cache(self, pools):
-        """pools: {rating: [player dicts]}."""
+        """pools: {rating: [player dicts]}.
+
+        Stubs the all-active accessor too, so the widening fallback is served
+        from these pools instead of reaching for a real database.
+        """
         from services import player_cache
         player_cache.get_by_rating = lambda r: list(pools.get(r, []))
+        # The real cache dicts carry their rating; fill it in from the pool key
+        # so the fallback's block filter sees the same shape it does live.
+        everything = [{"rating": rating, **player}
+                      for rating, players in pools.items() for player in players]
+        player_cache.get_all_active = lambda: list(everything)
 
 
 class BlockServiceTests(RatingBlockTestCase):
@@ -170,6 +179,34 @@ class BlockServiceTests(RatingBlockTestCase):
 
         self.assertEqual(self.blocks.blocked_ratings(ExplodingSession(), "claim"),
                          frozenset())
+
+    def test_a_failed_read_is_not_retried_on_every_draw(self):
+        # During an outage the draw rate would otherwise become the failing-query
+        # rate, with a logged traceback per draw.
+        calls = []
+
+        class ExplodingSession:
+            def query(self, *a, **k):
+                calls.append(1)
+                raise RuntimeError("connection reset")
+
+        session = ExplodingSession()
+        for _ in range(50):
+            self.blocks.blocked_ratings(session, "claim")
+        self.assertEqual(len(calls), 1, "the failing query was retried")
+
+    def test_an_admin_edit_clears_the_failure_backoff(self):
+        class ExplodingSession:
+            def query(self, *a, **k):
+                raise RuntimeError("connection reset")
+
+        self.blocks.blocked_ratings(ExplodingSession(), "claim")
+        # invalidate() is what the website calls after saving a rule; the new
+        # rule has to take effect now, not once the backoff expires.
+        self.blocks.invalidate()
+        session = FakeSession(blocks=[Block(95, 100)])
+        self.assertEqual(self.blocks.blocked_ratings(session, "claim"),
+                         frozenset(range(95, 101)))
 
     def test_describe_collapses_runs(self):
         session = FakeSession(blocks=[Block(90, 94), Block(99, 100), Block(60, 60)])
@@ -234,6 +271,31 @@ class ClaimDrawRespectsBlocksTests(RatingBlockTestCase):
 
         pick = self.ps.get_random_player_by_rating_range(session, 81, 85, source=None)
         self.assertIsNotNone(pick)
+
+    def test_an_unrelated_block_keeps_the_last_resort_fallback(self):
+        # Widening 60-65 finds nothing. Without any block rule the cache's last
+        # resort returns some active player; a rule about 95-100 says nothing
+        # about 60-65 and must not turn that into "no player at all".
+        session = FakeSession(blocks=[Block(95, 100)])
+        self._patch_cache({})
+        from services import player_cache
+        player_cache.get_all_active = lambda: [{"id": 70, "rating": 70},
+                                               {"id": 97, "rating": 97}]
+
+        picks = [self.ps.get_random_player_by_rating_range(session, 60, 65)
+                 for _ in range(50)]
+        self.assertTrue(all(p is not None for p in picks), "fallback was lost")
+        self.assertTrue(all(p.id == 70 for p in picks),
+                        "the last resort handed out a blocked rating")
+
+    def test_the_last_resort_is_filtered_not_just_present(self):
+        session = FakeSession(blocks=[Block(50, 100)])
+        self._patch_cache({})
+        from services import player_cache
+        player_cache.get_all_active = lambda: [{"id": 97, "rating": 97}]
+
+        self.assertIsNone(
+            self.ps.get_random_player_by_rating_range(session, 60, 65))
 
     def test_widening_never_crosses_into_a_blocked_rating(self):
         # 86-88 is empty, so the draw widens outward — but 89+ is blocked and

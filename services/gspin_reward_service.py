@@ -12,6 +12,7 @@ picker falls back to a plain coin reward built from the legacy config range,
 and the spin always has something to land on.
 """
 
+import math
 import random
 import logging
 
@@ -55,11 +56,17 @@ def _weight_of(row):
     are never rounded or floored here — a reward configured at 0.00001% has to
     stay at 0.00001%. Zero is honoured as "parked": the reward keeps its row and
     its settings but never lands.
+
+    Infinity and NaN are treated as 0 rather than passed through. The website
+    clamps to 0-100 so they can only arrive from a direct database write, but an
+    infinite total makes every ``roll < cumulative`` comparison false and the
+    picker falls out to the last row instead of honouring any configured share.
     """
     try:
-        return max(0.0, float(row.weight or 0))
+        weight = float(row.weight or 0)
     except (TypeError, ValueError):
         return 0.0
+    return weight if math.isfinite(weight) and weight > 0 else 0.0
 
 
 def pick_reward(session):
