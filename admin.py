@@ -11560,6 +11560,53 @@ def admin_quests_reseed():
     return redirect(url_for("admin_quests_list"))
 
 
+@app.route("/quests/reassign", methods=["POST"])
+@login_required
+def admin_quests_reassign():
+    """Re-deal quests for EVERY user: the current set is dropped and the next
+    time each user opens their quests they draw a fresh one from the catalogue.
+
+    Progress for the period is wiped (that is the point), but anything already
+    completed and not yet claimed is paid out first — see
+    :func:`services.quest_service.reassign_all_users`.
+    """
+    from services.quest_service import QUEST_TYPES, reassign_all_users
+
+    requested = (request.form.get("quest_type") or "").strip().lower()
+    types = list(QUEST_TYPES) if requested == "all" else [requested]
+    if any(t not in QUEST_TYPES for t in types):
+        flash("Pick which quests to reassign (daily, weekly, monthly or all).", "error")
+        return redirect(url_for("admin_quests_list"))
+
+    db = get_session()
+    try:
+        parts, cleared_total, claimed_total = [], 0, 0
+        for quest_type in types:
+            result = reassign_all_users(db, quest_type)
+            cleared_total += result["cleared"]
+            claimed_total += result["auto_claimed"]
+            parts.append(f"{quest_type}: {result['cleared']} cleared "
+                         f"({result['period']})")
+        db.commit()
+        log_admin(db, "quest_reassign", "quest", 0, ",".join(types),
+                  "; ".join(parts) + f"; auto-claimed {claimed_total}")
+        db.commit()
+
+        detail = (f" {claimed_total} completed-but-unclaimed quest"
+                  f"{'' if claimed_total == 1 else 's'} were paid out first."
+                  if claimed_total else "")
+        flash(f"♻️ Reassigned {', '.join(types)} quests for all users — "
+              f"{cleared_total} assignment{'' if cleared_total == 1 else 's'} "
+              f"cleared. Everyone draws a new set the next time they open "
+              f"their quests.{detail}", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Reassign failed: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_quests_list"))
+
+
 @app.route("/quests/import", methods=["POST"])
 @login_required
 def admin_quests_import():
@@ -13680,9 +13727,38 @@ def admin_live_matches():
 # GSPIN REWARDS — admin CRUD for wheel outcomes
 # ═══════════════════════════════════════════════════════════════════════
 
+# A Lucky Card reward's weight is entered as a percentage, so it shares the
+# rarity table's floor: anything thinner than this can't be typed into a number
+# input and would round to nothing.
+MIN_LUCKY_CARD_WEIGHT = MIN_TIER_PROBABILITY
+
+
+def _lucky_card_weight(raw, fallback=10.0):
+    """Parse a probability-percent weight off the form. 0 parks the reward."""
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return float(fallback)
+    if value <= 0:
+        return 0.0
+    return min(100.0, max(MIN_LUCKY_CARD_WEIGHT, value))
+
+
 @app.route("/gspin-rewards", methods=["GET", "POST"])
 @login_required
 def admin_gspin_rewards():
+    """The wheel was called GSpin before it was called Lucky Card.
+
+    Kept so bookmarks and any older link still land on the page. 308 rather
+    than 302 so a POST keeps its method and body instead of being silently
+    downgraded to a GET that drops the edit.
+    """
+    return redirect(url_for("admin_lucky_card_rewards"), code=308)
+
+
+@app.route("/lucky-card-rewards", methods=["GET", "POST"])
+@login_required
+def admin_lucky_card_rewards():
     db = get_session()
     try:
         from models import GSpinReward, Pack
@@ -13694,7 +13770,7 @@ def admin_gspin_rewards():
                         label=(request.form.get("label", "") or "Reward").strip()[:60],
                         emoji=(request.form.get("emoji", "") or "🎁").strip()[:10],
                         color=(request.form.get("color", "888888") or "888888").lstrip("#")[:7],
-                        weight=max(1, int(request.form.get("weight", 10))),
+                        weight=_lucky_card_weight(request.form.get("weight"), 10.0),
                         sort_order=int(request.form.get("sort_order", 100)),
                         enabled=request.form.get("enabled") == "on",
                         reward_type=(request.form.get("reward_type") or "coins"),
@@ -13718,7 +13794,7 @@ def admin_gspin_rewards():
                         r.label = (request.form.get("label", "") or r.label).strip()[:60]
                         r.emoji = (request.form.get("emoji", "") or r.emoji or "🎁").strip()[:10]
                         r.color = (request.form.get("color", "") or r.color or "888888").lstrip("#")[:7]
-                        r.weight = max(1, int(request.form.get("weight", r.weight)))
+                        r.weight = _lucky_card_weight(request.form.get("weight"), r.weight)
                         r.sort_order = int(request.form.get("sort_order", r.sort_order))
                         r.enabled = request.form.get("enabled") == "on"
                         r.reward_type = request.form.get("reward_type") or r.reward_type
@@ -13761,18 +13837,25 @@ def admin_gspin_rewards():
                 db.rollback()
                 logger.exception("gspin_rewards mutation failed")
                 flash(f"Error: {e}", "error")
-            return redirect(url_for("admin_gspin_rewards"))
+            return redirect(url_for("admin_lucky_card_rewards"))
+
+        from services.gspin_reward_service import reward_probability
 
         rewards = (db.query(GSpinReward)
                     .order_by(GSpinReward.sort_order, GSpinReward.id).all())
         enabled_rewards = [r for r in rewards if r.enabled]
-        total_weight = sum(max(1, r.weight) for r in enabled_rewards) or 1
+        total_weight = sum(max(0.0, float(r.weight or 0)) for r in enabled_rewards)
+        # `_pct` is the real chance of the row landing, normalised across the
+        # enabled column — the same number the wheel actually rolls against, so
+        # weights entered as percentages read straight back.
         for r in rewards:
-            r._pct = round(max(1, r.weight) / total_weight * 100, 1) if r.enabled else 0.0
+            r._pct = (reward_probability(r, enabled_rewards) * 100.0
+                      if r.enabled else 0.0)
         packs = db.query(Pack).filter(Pack.is_active == True).order_by(Pack.slot_number).all()
-        return render_template("admin_gspin_rewards.html",
+        return render_template("admin_lucky_card_rewards.html",
                                rewards=rewards, packs=packs,
                                total_weight=total_weight,
+                               min_weight=MIN_LUCKY_CARD_WEIGHT,
                                enabled_count=len(enabled_rewards))
     finally:
         db.close()

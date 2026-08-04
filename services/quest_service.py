@@ -749,6 +749,71 @@ def period_key_for(quest_type, now=None):
 
 
 # ════════════════════════════════════════════════════════════════════
+# ADMIN — force a fresh deal for everybody
+# ════════════════════════════════════════════════════════════════════
+
+QUEST_TYPES = ("daily", "weekly", "monthly")
+
+
+def reassign_all_users(session, quest_type, *, now=None):
+    """Clear this period's ``quest_type`` quests for EVERY user so they re-deal.
+
+    The website calls this after editing the catalogue: without it, a user who
+    already opened their quests today keeps the old set until the period rolls,
+    because :func:`ensure_quests_assigned` deliberately does nothing once an
+    assignment exists. Wiping the current period's rows puts every user back in
+    the "not dealt yet" state, and their next quest read draws a fresh set from
+    the live catalogue.
+
+    Progress is intentionally lost — that is what a reassign is. Rewards are
+    not: any quest already completed but not yet claimed is auto-claimed and
+    credited first, exactly as a period rollover would, so nobody is punished
+    for not having tapped Claim before the admin pressed the button.
+
+    Returns ``{"cleared": int, "auto_claimed": int, "points": int,
+    "coins": int, "gems": int, "period": str}``.
+    """
+    now = now or datetime.utcnow()
+    period = period_key_for(quest_type, now)
+
+    quest_ids = [qid for (qid,) in
+                 session.query(Quest.id).filter(Quest.quest_type == quest_type)]
+    if not quest_ids:
+        return {"cleared": 0, "auto_claimed": 0, "points": 0, "coins": 0,
+                "gems": 0, "period": period}
+
+    # Pay out what users already earned this period before it disappears.
+    totals = {"points": 0, "coins": 0, "gems": 0}
+    pending = (session.query(UserQuestProgress, Quest, User)
+               .join(Quest, Quest.id == UserQuestProgress.quest_id)
+               .join(User, User.id == UserQuestProgress.user_id)
+               .filter(UserQuestProgress.period_key == period,
+                       UserQuestProgress.completed == True,
+                       UserQuestProgress.claimed == False,
+                       UserQuestProgress.quest_id.in_(quest_ids))
+               .all())
+    auto_claimed = 0
+    for uqp, quest, user in pending:
+        rewards = _claim_silently(session, user, uqp, quest)
+        if rewards:
+            auto_claimed += 1
+            totals["points"] += rewards["points"]
+            totals["coins"] += rewards["coins"]
+            totals["gems"] += rewards["gems"]
+    session.flush()
+
+    # Drop every row for the period, assigned or not, so the next read starts
+    # from nothing and a re-picked quest can't inherit stale progress.
+    cleared = (session.query(UserQuestProgress)
+               .filter(UserQuestProgress.period_key == period,
+                       UserQuestProgress.quest_id.in_(quest_ids))
+               .delete(synchronize_session=False))
+
+    return {"cleared": int(cleared or 0), "auto_claimed": auto_claimed,
+            "period": period, **totals}
+
+
+# ════════════════════════════════════════════════════════════════════
 # EVENT TRACKING
 # ════════════════════════════════════════════════════════════════════
 

@@ -302,7 +302,7 @@
   <div style="font-size:.85rem;color:var(--muted);line-height:1.8;">
     <b>Last Claim:</b> {{ stats.last_claim | ist('%d %b %Y %H:%M') if stats.last_claim else 'Never' }}<br>
     <b>Last Daily:</b> {{ stats.last_daily | ist('%d %b %Y %H:%M') if stats.last_daily else 'Never' }}<br>
-    <b>Last GSpin:</b> {{ stats.last_gspin | ist('%d %b %Y %H:%M') if stats.last_gspin else 'Never' }}<br>
+    <b>Last Lucky Card:</b> {{ stats.last_gspin | ist('%d %b %Y %H:%M') if stats.last_gspin else 'Never' }}<br>
     <b>Streak:</b> {{ stats.streak_count }}/14 ({{ stats.total_streaks_completed }} completed)<br>
     <b>Telegram ID:</b> {{ user.telegram_id }}<br>
     <b>Joined:</b> {{ user.created_at | ist('%d %b %Y %H:%M') if user.created_at else '—' }}

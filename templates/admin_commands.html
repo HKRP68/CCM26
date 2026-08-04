@@ -246,7 +246,14 @@
 
       {% if c.command_key == 'gspin' %}
       <p style="color:var(--muted);font-size:.78rem;margin-top:.5rem;">
-        ℹ️ /gspin uses the full <a href="{{ url_for('admin_gspin_rewards') }}" style="color:#00C9A7;">GSpin Rewards</a> table — these fields here are unused.
+        ℹ️ /gspin uses the full <a href="{{ url_for('admin_lucky_card_rewards') }}" style="color:#00C9A7;">Lucky Card Rewards</a> table — these fields here are unused.
+      </p>
+      {% endif %}
+      {% if c.command_key == 'claim' %}
+      <p style="color:var(--muted);font-size:.78rem;margin-top:.5rem;">
+        ℹ️ /claim pays <strong>no coins</strong> — the card itself is the reward, so the
+        pull card shows no "+Coin Added" line. Set Coins above 0 only if you want to
+        bring the coin payout back.
       </p>
       {% endif %}
     </form>

@@ -1551,10 +1551,15 @@ class EventSound(Base):
 
 
 class GSpinReward(Base):
-    """Admin-configurable rewards for the /gspin wheel.
+    """Admin-configurable rewards for the Lucky Card wheel (/gspin).
 
     Each enabled row is a possible outcome. Probability of any outcome is
     `weight / sum(enabled weights)`. Inactive rows are skipped.
+
+    ``weight`` is a float so the website can express it directly as a
+    percentage down to 0.00001% (1 in 10,000,000) — enter values that sum to
+    100 and each weight reads as its own probability. A weight of 0 parks a
+    reward without deleting it.
 
     reward_type values:
       'coins'        → random in amount_min..amount_max
@@ -1569,7 +1574,7 @@ class GSpinReward(Base):
     label = Column(String(60), nullable=False)
     emoji = Column(String(10), nullable=True)
     color = Column(String(7), default="888888")
-    weight = Column(Integer, default=10, nullable=False)
+    weight = Column(Float, default=10, nullable=False)
     sort_order = Column(Integer, default=100)
     enabled = Column(Boolean, default=True, nullable=False)
     reward_type = Column(String(20), nullable=False)

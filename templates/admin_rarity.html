@@ -186,7 +186,7 @@
   matter what the rarity table says. Use it to retire a rating band without rewriting your tiers —
   untick the rule later and the ratings come straight back.
   <strong>Claim</strong> covers /claim, /daily and the Mystery Box's rarity pulls,
-  <strong>Drop</strong> covers packs and free packs, and <strong>GSpin</strong> covers the wheel and
+  <strong>Drop</strong> covers packs and free packs, and <strong>Lucky Card</strong> covers the wheel and
   its Mini App twin. Buying, trading, the market and admin grants are never filtered — those are
   deliberate, not random.
 </div>
@@ -229,7 +229,7 @@
             <div class="src-boxes">
               <label><input type="checkbox" name="{{ b.id }}_block_claim" {% if b.block_claim %}checked{% endif %}> Claim</label>
               <label><input type="checkbox" name="{{ b.id }}_block_drop" {% if b.block_drop %}checked{% endif %}> Drop</label>
-              <label><input type="checkbox" name="{{ b.id }}_block_gspin" {% if b.block_gspin %}checked{% endif %}> GSpin</label>
+              <label><input type="checkbox" name="{{ b.id }}_block_gspin" {% if b.block_gspin %}checked{% endif %}> Lucky Card</label>
             </div>
           </td>
           <td><input type="text" name="note_{{ b.id }}" value="{{ b.note or '' }}" maxlength="200"
@@ -279,7 +279,7 @@
     <div class="src-boxes" style="justify-content:flex-start; padding-top:.35rem;">
       <label><input type="checkbox" name="block_claim" checked> Claim</label>
       <label><input type="checkbox" name="block_drop" checked> Drop</label>
-      <label><input type="checkbox" name="block_gspin" checked> GSpin</label>
+      <label><input type="checkbox" name="block_gspin" checked> Lucky Card</label>
     </div>
   </div>
   <div>
