@@ -129,18 +129,55 @@ def seed_default_packs(session):
 # Pack opening
 # ════════════════════════════════════════════════════════════════════
 
-def _weighted_pick_rating(min_r, max_r, weights_json):
-    """Pick a rating in [min_r, max_r] using the JSON weights, or uniform."""
+def _unblocked(session, pool):
+    """Drop players whose rating the website has blocked for card drops.
+
+    Every pack pick funnels through here, so a blocked rating can't arrive via
+    a rating band, a version list, or the widening fallback. An empty result is
+    handled the same way an empty pool always was: the caller returns None and
+    the pack falls back to its other slots.
+    """
+    from services import rating_block_service
+    return rating_block_service.filter_players(session, pool, "drop")
+
+
+def _weighted_pick_rating(min_r, max_r, weights_json, session=None):
+    """Pick a rating in [min_r, max_r] using the JSON weights, or uniform.
+
+    With a session, blocked ratings are dropped from the candidate list along
+    with their weights, so the draw spends its probability on ratings that can
+    actually be awarded instead of rolling a dead number. If every rating in the
+    band is blocked the band is used unfiltered — the pool filter downstream
+    still refuses to award the card, and this way the pick stays inside the
+    pack's configured band rather than inventing one.
+    """
     ratings = list(range(min_r, max_r + 1))
     if not ratings:
         return min_r
+
+    weights = None
     if weights_json:
         try:
-            weights = json.loads(weights_json)
-            if isinstance(weights, list) and len(weights) == len(ratings):
-                return random.choices(ratings, weights=weights, k=1)[0]
+            parsed = json.loads(weights_json)
+            if isinstance(parsed, list) and len(parsed) == len(ratings):
+                weights = parsed
+            else:
+                logger.warning(f"Bad weights_json: {weights_json!r}, using uniform")
         except (ValueError, TypeError):
             logger.warning(f"Bad weights_json: {weights_json!r}, using uniform")
+
+    if session is not None:
+        from services import rating_block_service
+        blocked = rating_block_service.blocked_ratings(session, "drop")
+        if blocked:
+            keep = [i for i, r in enumerate(ratings) if r not in blocked]
+            if keep:
+                ratings = [ratings[i] for i in keep]
+                if weights is not None:
+                    weights = [weights[i] for i in keep]
+
+    if weights is not None and sum(weights) > 0:
+        return random.choices(ratings, weights=weights, k=1)[0]
     return random.choice(ratings)
 
 
@@ -175,6 +212,7 @@ def _pick_main_player(session, pack, *, exclude_player_ids=None,
     if mode == "rating":
         rating = force_rating if force_rating is not None else _weighted_pick_rating(
             pack.main_min_rating, pack.main_max_rating, pack.main_weights_json,
+            session,
         )
         return _pick_base_at_rating(session, rating,
                                      exclude_player_ids=exclude,
@@ -192,7 +230,7 @@ def _pick_main_player(session, pack, *, exclude_player_ids=None,
                 .filter(Player.is_active == True,
                         _func.lower(Player.version).in_(lowered))
                 .all())
-        pool = [p for p in pool if p.id not in exclude]
+        pool = _unblocked(session, [p for p in pool if p.id not in exclude])
         if not pool:
             return None
         # Prefer not-owned families
@@ -211,6 +249,7 @@ def _pick_main_player(session, pack, *, exclude_player_ids=None,
         lowered = [v.lower() for v in versions]
         rating = force_rating if force_rating is not None else _weighted_pick_rating(
             pack.main_min_rating, pack.main_max_rating, pack.main_weights_json,
+            session,
         )
         # Try exact rating first
         pool = (not_career(session.query(Player))
@@ -225,7 +264,7 @@ def _pick_main_player(session, pack, *, exclude_player_ids=None,
                             Player.rating.between(pack.main_min_rating, pack.main_max_rating),
                             _func.lower(Player.version).in_(lowered))
                     .all())
-        pool = [p for p in pool if p.id not in exclude]
+        pool = _unblocked(session, [p for p in pool if p.id not in exclude])
         if not pool:
             return None
         fresh = [p for p in pool
@@ -259,14 +298,14 @@ def _pick_base_at_rating(session, rating, *, exclude_player_ids=None,
               .filter(Player.is_active == True,
                       Player.parent_player_id.is_(None),
                       Player.rating == rating))
-    pool = [p for p in base_q.all() if p.id not in exclude]
+    pool = _unblocked(session, [p for p in base_q.all() if p.id not in exclude])
     if not pool:
         widened = (not_career(session.query(Player))
                    .filter(Player.is_active == True,
                            Player.parent_player_id.is_(None),
                            Player.rating.between(rating - 1, rating + 1))
                    .all())
-        pool = [p for p in widened if p.id not in exclude]
+        pool = _unblocked(session, [p for p in widened if p.id not in exclude])
     if not pool:
         return None
     fresh = [p for p in pool if p.id not in owned]
@@ -278,6 +317,7 @@ def _pick_bonus_player(session, pack, *, exclude_player_ids=None,
     """Bonus pick is always rating-based, base cards only."""
     rating = _weighted_pick_rating(
         pack.bonus_min_rating, pack.bonus_max_rating, pack.bonus_weights_json,
+        session,
     )
     return _pick_base_at_rating(session, rating,
                                  exclude_player_ids=exclude_player_ids,

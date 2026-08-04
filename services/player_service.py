@@ -35,18 +35,47 @@ def not_career(query):
                             Player.is_career.is_(None)))
 
 
-def get_random_player_by_rating_range(session: Session, low: int, high: int) -> Player | None:
+def get_random_player_by_rating_range(session: Session, low: int, high: int,
+                                      source: str | None = "claim") -> Player | None:
     """Return a random active player within [low, high] rating.
 
     Implementation: uses in-memory cache to pick the ID, then fetches just that
     one row. Was previously fetching every player in range — wasteful.
+
+    ``source`` names the reward path for the website's blocked rating ranges
+    (see :mod:`services.rating_block_service`); pass None to skip the check for
+    a draw that isn't a random reward. When blocks are in play the widening this
+    normally delegates to the cache is done here instead, over allowed ratings
+    only, so a widened search can never reach into a blocked band.
     """
     from services import player_cache
+
+    if source:
+        from services import rating_block_service
+        if rating_block_service.blocked_ratings(session, source):
+            return _pick_widening(session, low, high, source)
+
     pick = player_cache.get_random_in_rating_range(low, high)
     if not pick:
         return None
     # Fetch single ORM row (cheap — single row, indexed lookup)
     return session.get(Player, pick["id"])
+
+
+def _pick_widening(session: Session, low: int, high: int, source: str) -> Player | None:
+    """Cache-backed pick that widens outward but never past a blocked rating.
+
+    Mirrors ``player_cache.get_random_in_rating_range``'s widen-then-give-up
+    behaviour, minus the "any active player" last resort, which would hand back
+    exactly the ratings the block rules exist to withhold.
+    """
+    for expand in range(0, 11):
+        band_low = max(50, low - expand)
+        band_high = min(100, high + expand)
+        player = _pick_in_range_strict(session, band_low, band_high, source)
+        if player:
+            return player
+    return None
 
 
 def _get_rarity_distribution(session: Session):
@@ -77,22 +106,94 @@ def _get_rarity_distribution(session: Session):
     return CLAIM_RARITY
 
 
-def _pick_in_range_strict(session: Session, low: int, high: int) -> Player | None:
+def _pick_in_range_strict(session: Session, low: int, high: int,
+                          source: str | None = "claim") -> Player | None:
     """Pick a random active player strictly inside [low, high] — no widening.
 
     Unlike get_random_player_by_rating_range (which progressively widens the
     band and ultimately returns ANY active player when the band is empty), this
     helper never leaks outside the requested band. That keeps the website-set
     rarity weights authoritative for /claim and /daily.
+
+    Ratings the website has blocked for ``source`` are skipped, so a band that
+    is half blocked still pays out from the half that isn't.
     """
     from services import player_cache
+    ratings = range(low, high + 1)
+    if source:
+        from services import rating_block_service
+        ratings = rating_block_service.allowed_ratings(session, low, high, source)
     pool = []
-    for r in range(low, high + 1):
+    for r in ratings:
         pool.extend(player_cache.get_by_rating(r))
     if not pool:
         return None
     pick = random.choice(pool)
     return session.get(Player, pick["id"])
+
+
+def _rarity_bands(session: Session):
+    """The configured distribution as ``[weight, low, high]`` rows.
+
+    Shared by the live draw and the website's simulator so both read the rarity
+    table the same way.
+    """
+    dist = _get_rarity_distribution(session)
+    bands = []
+    prev = 0.0
+    for threshold, low, high in dist or []:
+        bands.append([max(0.0, threshold - prev), low, high])
+        prev = threshold
+    return bands
+
+
+def simulate_rarity_draws(session: Session, draws: int = 10000,
+                          source: str = "claim") -> dict:
+    """Model ``draws`` pulls and report where they land — no player rows fetched.
+
+    The website uses this to preview a rarity change. It reproduces the live
+    draw exactly (same weights, same "empty band re-rolls into another band"
+    rule, same blocked ratings) but reads pool sizes from the player cache
+    instead of loading a card per pull, so a run large enough to show a
+    0.00001% tier is still one page load.
+
+    Returns ``{"bands": [{low, high, weight, pool, draws}], "misses": int}``,
+    where ``misses`` counts pulls that found no eligible card anywhere.
+    """
+    from services import player_cache, rating_block_service
+
+    bands = _rarity_bands(session)
+    if not bands:
+        return {"bands": [], "misses": draws}
+
+    blocked = rating_block_service.blocked_ratings(session, source) if source else frozenset()
+
+    # Pool sizes per band, blocked ratings excluded. A band's pool never changes
+    # mid-run, so "is this band empty?" is answered once rather than per draw.
+    live = []
+    for weight, low, high in bands:
+        ratings = [r for r in range(low, high + 1) if r not in blocked]
+        pool = sum(len(player_cache.get_by_rating(r)) for r in ratings)
+        live.append({"low": low, "high": high, "weight": weight,
+                     "pool": pool, "draws": 0})
+
+    eligible = [b for b in live if b["pool"] > 0 and b["weight"] > 0]
+    if not eligible:
+        # Mirror the live draw's fallback: zero-weight bands still get used
+        # rather than failing the pull outright.
+        eligible = [b for b in live if b["pool"] > 0]
+    if not eligible:
+        return {"bands": live, "misses": draws}
+
+    # random.choices draws the whole run in one C-level call, which is what
+    # makes a million-pull preview cheap enough to render on a page load.
+    weights = [b["weight"] for b in eligible]
+    if sum(weights) <= 0:
+        weights = [1.0] * len(eligible)
+    for band in random.choices(eligible, weights=weights, k=draws):
+        band["draws"] += 1
+
+    return {"bands": live, "misses": 0}
 
 
 def get_random_player_by_rarity(session: Session) -> Player | None:
@@ -103,6 +204,11 @@ def get_random_player_by_rarity(session: Session) -> Player | None:
     eligible players we re-roll among the OTHER configured bands (weighted by
     their probabilities) rather than widening into arbitrary ratings, so the
     rarity set on the website is the rarity players actually receive.
+
+    Ratings blocked for the ``claim`` source are removed from every band before
+    the draw. A band with nothing left behaves exactly like an empty one — the
+    draw re-rolls into another configured band instead of awarding a blocked
+    card.
     """
     dist = _get_rarity_distribution(session)
     if not dist:

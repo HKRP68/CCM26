@@ -966,10 +966,41 @@ class ClaimRarityTier(Base):
     label = Column(String(40), nullable=False)               # 'Bronze', 'Legendary', etc
     rating_min = Column(Integer, nullable=False)             # inclusive
     rating_max = Column(Integer, nullable=False)             # inclusive
-    probability = Column(Float, nullable=False)              # 0.0 to 100.0 (percent)
+    # Percent, 0.0-100.0. Stored as a float so odds as thin as 0.00001%
+    # (1 in 10,000,000) survive a round-trip through the website form.
+    probability = Column(Float, nullable=False)
     sort_order = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
     emoji = Column(String(10), default="🃏")
+
+
+class RatingBlockRule(Base):
+    """A rating band that random reward draws must never hand out.
+
+    Blocking is a hard veto applied *after* the rarity weights have chosen a
+    band, so an admin can retire a rating (say, everything 95+) without having
+    to rewrite the rarity table — flip the rule off later and the ratings come
+    back. Each rule names the sources it applies to, because "no 95+ from the
+    free spin" and "no 95+ from anything" are different decisions:
+
+      ``block_claim`` — /claim, /daily and the rest of the rarity-driven pulls
+      ``block_drop``  — packs, free packs and other card drops
+      ``block_gspin`` — the /gspin wheel and its Mini App twin
+
+    Blocks never apply to buying, trading, the market or admin grants: those
+    are deliberate acquisitions, not random ones.
+    """
+    __tablename__ = "rating_block_rules"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    rating_min = Column(Integer, nullable=False)             # inclusive
+    rating_max = Column(Integer, nullable=False)             # inclusive
+    block_claim = Column(Boolean, default=True, nullable=False)
+    block_drop = Column(Boolean, default=True, nullable=False)
+    block_gspin = Column(Boolean, default=True, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    note = Column(String(200), default="")                   # why it's blocked
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 # ══════════════════════════════════════════════════════════════════════

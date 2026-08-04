@@ -176,6 +176,12 @@ def apply_reward(session, user, reward, hold_overflow=False):
                               Player.rating <= hi)
                       .filter((Player.version == "Base") |
                               (Player.version.is_(None))))
+        # Ratings the website has blocked for the spin never reach the wheel —
+        # if that empties the band the reward pays coins instead, below.
+        from services import rating_block_service
+        block_clause = rating_block_service.rating_filter("gspin", session, Player)
+        if block_clause is not None:
+            candidates = candidates.filter(block_clause)
         from services.version_service import user_owns_any_version
         all_in_range = candidates.all()
         unowned = [p for p in all_in_range

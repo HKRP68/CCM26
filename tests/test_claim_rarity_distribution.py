@@ -15,6 +15,7 @@ def _load_player_service():
     # Stub sqlalchemy (not installed in the test env).
     sa = types.ModuleType("sqlalchemy")
     sa.and_ = lambda *a, **k: None
+    sa.or_ = lambda *a, **k: None
     sys.modules["sqlalchemy"] = sa
     sa_orm = types.ModuleType("sqlalchemy.orm")
     sa_orm.Session = object
@@ -27,6 +28,7 @@ def _load_player_service():
     # query filters don't raise — the FakeSession ignores the filter args.
     models.ClaimRarityTier = type(
         "ClaimRarityTier", (), {"is_active": True, "sort_order": 0, "id": 0})
+    models.RatingBlockRule = type("RatingBlockRule", (), {"is_active": True})
     sys.modules["models"] = models
 
     # Stub config — CLAIM_RARITY is only the fallback when no tiers exist.
@@ -66,12 +68,20 @@ class _TierQuery:
 
 
 class FakeSession:
-    """Minimal session: serves ClaimRarityTier rows and Player.get-by-id."""
+    """Minimal session: serves ClaimRarityTier rows and Player.get-by-id.
 
-    def __init__(self, tiers):
+    Any other model (the block rules, say) queries empty, which is what an
+    install with no blocked ranges looks like.
+    """
+
+    def __init__(self, tiers, blocks=()):
         self._tiers = tiers
+        self._blocks = list(blocks)
 
-    def query(self, *a, **k):
+    def query(self, model=None, *a, **k):
+        import models as _models
+        if model is getattr(_models, "RatingBlockRule", None):
+            return _TierQuery(self._blocks)
         return _TierQuery(self._tiers)
 
     def get(self, _model, pk):
@@ -89,8 +99,14 @@ class ClaimRarityDistributionTests(unittest.TestCase):
         # other test files aren't affected by our stubs.
         self._saved = {k: sys.modules.get(k) for k in _STUBBED_MODULES}
         self.ps = _load_player_service()
+        # Block rules are cached across calls — start every test from a clean
+        # read so one test's stub session can't answer the next test's lookups.
+        from services import rating_block_service
+        rating_block_service.invalidate()
 
     def tearDown(self):
+        from services import rating_block_service
+        rating_block_service.invalidate()
         for key, value in self._saved.items():
             if value is None:
                 sys.modules.pop(key, None)

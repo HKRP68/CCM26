@@ -34,7 +34,7 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     UserReport,
                     CommentaryEntry,
                     NotificationSchedule, NotificationLog,
-                    ClaimRarityTier, GameConfig,
+                    ClaimRarityTier, RatingBlockRule, GameConfig,
                     MessageTemplate,
                     GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
                     ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer,
@@ -189,6 +189,38 @@ _LOGIN_ATTEMPTS = {}  # {ip: [count, first_attempt_dt]}
 _LOGIN_LOCKOUT_THRESHOLD = 5
 _LOGIN_LOCKOUT_WINDOW_SEC = 600  # 10 minutes
 _LOGIN_LOCKOUT_DURATION_SEC = 1800  # 30 minutes
+
+
+@app.template_filter("pct")
+def _pct_filter(value):
+    """Format a probability percent without dropping tiny odds to '0.00'.
+
+    Rarity probabilities go as low as 0.00001% (1 in 10 million), so a fixed
+    two-decimal format would render several distinct tiers as the same number.
+    Prints up to 5 decimals and trims the trailing zeros, so 26.0 stays "26"
+    and 0.00001 stays "0.00001".
+    """
+    try:
+        value = float(value or 0)
+    except (TypeError, ValueError):
+        return "0"
+    text = f"{value:.5f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+@app.template_filter("odds")
+def _odds_filter(value):
+    """Render a percent as '1 in N' — the way players actually feel a drop rate."""
+    try:
+        value = float(value or 0)
+    except (TypeError, ValueError):
+        return "—"
+    if value <= 0:
+        return "never"
+    one_in = 100.0 / value
+    if one_in < 10:
+        return f"1 in {one_in:.1f}"
+    return f"1 in {round(one_in):,}"
 
 
 @app.template_filter("fromjson")
@@ -12467,26 +12499,56 @@ DEFAULT_RARITY_TIERS = [
 ]
 
 
+# The smallest probability the website accepts. One in ten million — thin
+# enough for a true chase card, and the HTML number input's step is set to the
+# same value so the browser never rounds a deliberate long shot away.
+MIN_TIER_PROBABILITY = 0.00001
+
+
 @app.route("/rarity")
 @login_required
 def admin_rarity_list():
     db = get_session()
     try:
+        from services import rating_block_service
+
         tiers = (db.query(ClaimRarityTier)
                  .order_by(ClaimRarityTier.sort_order, ClaimRarityTier.id).all())
         # Compute total + normalized %
         total_active = sum(t.probability for t in tiers if t.is_active)
-        # For each tier, count actual players in range so admin sees pool size
+
+        blocks = (db.query(RatingBlockRule)
+                  .order_by(RatingBlockRule.rating_min, RatingBlockRule.id).all())
+        blocked_claim = rating_block_service.blocked_ratings(db, "claim")
+
+        # Per-tier pool sizes. `pool` is every active player in the band;
+        # `pool_live` excludes ratings a block rule has taken out of /claim, so
+        # a tier that still looks healthy but can never pay out is obvious.
         from models import Player
         pool = {}
+        pool_live = {}
         for t in tiers:
-            count = (db.query(Player)
-                     .filter(Player.rating >= t.rating_min,
-                             Player.rating <= t.rating_max,
-                             Player.is_active == True).count())
-            pool[t.id] = count
-        return render_template("admin_rarity.html",
-                               tiers=tiers, total_active=total_active, pool=pool)
+            counts = dict(
+                db.query(Player.rating, func.count(Player.id))
+                  .filter(Player.rating >= t.rating_min,
+                          Player.rating <= t.rating_max,
+                          Player.is_active == True)
+                  .group_by(Player.rating).all())
+            pool[t.id] = sum(counts.values())
+            pool_live[t.id] = sum(n for rating, n in counts.items()
+                                  if rating not in blocked_claim)
+
+        return render_template(
+            "admin_rarity.html",
+            tiers=tiers, total_active=total_active,
+            pool=pool, pool_live=pool_live,
+            blocks=blocks,
+            min_probability=MIN_TIER_PROBABILITY,
+            blocked_summary={
+                source: rating_block_service.describe(db, source)
+                for source in rating_block_service.SOURCES
+            },
+            source_labels=rating_block_service.SOURCE_LABELS)
     finally:
         db.close()
 
@@ -12516,7 +12578,17 @@ def admin_rarity_save():
                 if t.rating_max > 100: t.rating_max = 100
                 if t.rating_min > t.rating_max:
                     t.rating_min, t.rating_max = t.rating_max, t.rating_min
-                if t.probability < 0: t.probability = 0
+                # 0 is a legitimate entry (the tier is parked without deleting
+                # it), but anything between 0 and the minimum was meant to be a
+                # real chance and would round to nothing — lift it to the floor.
+                if t.probability < 0:
+                    t.probability = 0
+                elif 0 < t.probability < MIN_TIER_PROBABILITY:
+                    flash(f"'{t.label}' raised to the {_pct_filter(MIN_TIER_PROBABILITY)}% "
+                          f"minimum (anything smaller can't be entered).", "info")
+                    t.probability = MIN_TIER_PROBABILITY
+                if t.probability > 100:
+                    t.probability = 100.0
             except Exception as e:
                 flash(f"Tier {tid} skipped (bad input): {e}", "error")
         db.commit()
@@ -12596,17 +12668,151 @@ def admin_rarity_reset_defaults():
     return redirect(url_for("admin_rarity_list"))
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# BLOCKED RATING RANGES — ratings random rewards may never hand out
+# ═══════════════════════════════════════════════════════════════════════
+
+def _block_sources_from_form(prefix=""):
+    """Read the three source checkboxes off a submitted block-rule form."""
+    return {
+        "block_claim": bool(request.form.get(f"{prefix}block_claim")),
+        "block_drop": bool(request.form.get(f"{prefix}block_drop")),
+        "block_gspin": bool(request.form.get(f"{prefix}block_gspin")),
+    }
+
+
+def _clamp_band(low, high):
+    """Clamp a rating band into 50-100 and put it the right way round."""
+    low = max(50, min(100, int(low)))
+    high = max(50, min(100, int(high)))
+    return (high, low) if low > high else (low, high)
+
+
+@app.route("/rarity/blocks/new", methods=["POST"])
+@login_required
+def admin_rating_block_new():
+    """Add a blocked rating range."""
+    db = get_session()
+    try:
+        from services import rating_block_service
+
+        low, high = _clamp_band(request.form.get("rating_min") or 50,
+                                request.form.get("rating_max") or 100)
+        sources = _block_sources_from_form()
+        if not any(sources.values()):
+            flash("Pick at least one source to block (Claim, Drop or GSpin).", "error")
+            return redirect(url_for("admin_rarity_list"))
+
+        rule = RatingBlockRule(
+            rating_min=low, rating_max=high,
+            note=(request.form.get("note") or "").strip()[:200],
+            is_active=True, **sources)
+        db.add(rule); db.commit()
+        log_admin(db, "rating_block_new", "rarity", rule.id, f"{low}-{high}",
+                  f"Blocked {low}-{high} from "
+                  + ", ".join(k[6:] for k, v in sources.items() if v))
+        db.commit()
+        rating_block_service.invalidate()
+        flash(f"🚫 Ratings {low}–{high} blocked.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_rarity_list"))
+
+
+@app.route("/rarity/blocks/save", methods=["POST"])
+@login_required
+def admin_rating_block_save():
+    """Bulk-save every blocked range in one submit."""
+    db = get_session()
+    try:
+        from services import rating_block_service
+
+        for bid_str in request.form.getlist("block_id"):
+            bid = int(bid_str)
+            rule = db.query(RatingBlockRule).get(bid)
+            if not rule:
+                continue
+            try:
+                rule.rating_min, rule.rating_max = _clamp_band(
+                    request.form.get(f"rating_min_{bid}", rule.rating_min) or 50,
+                    request.form.get(f"rating_max_{bid}", rule.rating_max) or 100)
+                for field, value in _block_sources_from_form(f"{bid}_").items():
+                    setattr(rule, field, value)
+                rule.note = (request.form.get(f"note_{bid}") or "").strip()[:200]
+                rule.is_active = bool(request.form.get(f"is_active_{bid}"))
+                if rule.is_active and not (rule.block_claim or rule.block_drop
+                                           or rule.block_gspin):
+                    # A rule that blocks nothing is a rule that does nothing;
+                    # switching it off is clearer than leaving it enabled.
+                    rule.is_active = False
+                    flash(f"Rule {rule.rating_min}–{rule.rating_max} turned off "
+                          f"— it had no sources selected.", "info")
+            except Exception as e:
+                flash(f"Block rule {bid} skipped (bad input): {e}", "error")
+        db.commit()
+        log_admin(db, "rating_block_save", "rarity", 0, "bulk", "Saved block rules")
+        db.commit()
+        rating_block_service.invalidate()
+        flash("✅ Blocked ranges saved.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_rarity_list"))
+
+
+@app.route("/rarity/blocks/<int:bid>/delete", methods=["POST"])
+@login_required
+def admin_rating_block_delete(bid):
+    db = get_session()
+    try:
+        from services import rating_block_service
+
+        rule = db.query(RatingBlockRule).get(bid)
+        if rule:
+            band = f"{rule.rating_min}-{rule.rating_max}"
+            db.delete(rule); db.commit()
+            log_admin(db, "rating_block_delete", "rarity", bid, band,
+                      f"Unblocked {band}")
+            db.commit()
+            rating_block_service.invalidate()
+            flash(f"Unblocked {band}.", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_rarity_list"))
+
+
+SIMULATION_SIZES = (1_000, 10_000, 100_000, 1_000_000)
+
+
 @app.route("/rarity/simulate", methods=["GET"])
 @login_required
 def admin_rarity_simulate():
     """Simulate a batch of pulls and show the actual distribution.
-    Lets the admin visualize the impact of their config before committing."""
+
+    Lets the admin visualize the impact of their config before committing. The
+    sample size is selectable because a tier set to 0.00001% needs millions of
+    pulls before it shows up at all — 100 would only ever prove the common
+    tiers work.
+    """
     db = get_session()
     try:
-        from services.player_service import get_random_player_by_rarity
-        N = 100
-        bands = {}  # rating_band → count
-        # Pre-compute band labels from active tiers
+        from services.player_service import simulate_rarity_draws
+
+        try:
+            draws = int(request.args.get("n", 10_000))
+        except (TypeError, ValueError):
+            draws = 10_000
+        if draws not in SIMULATION_SIZES:
+            draws = 10_000
+
         tiers = (db.query(ClaimRarityTier)
                  .filter(ClaimRarityTier.is_active == True)
                  .order_by(ClaimRarityTier.sort_order, ClaimRarityTier.id).all())
@@ -12614,19 +12820,26 @@ def admin_rarity_simulate():
             flash("No active tiers — set some up first.", "error")
             return redirect(url_for("admin_rarity_list"))
 
-        for _ in range(N):
-            p = get_random_player_by_rarity(db)
-            if not p:
-                continue
-            for t in tiers:
-                if t.rating_min <= p.rating <= t.rating_max:
-                    bands[t.label] = bands.get(t.label, 0) + 1
-                    break
-            else:
-                bands["(out of range)"] = bands.get("(out of range)", 0) + 1
+        result = simulate_rarity_draws(db, draws)
+        # Map each simulated band back onto the tier that defines it, so the
+        # results table can show labels and emojis rather than bare numbers.
+        by_range = {(b["low"], b["high"]): b for b in result["bands"]}
+        rows = []
+        for t in tiers:
+            band = by_range.get((t.rating_min, t.rating_max), {})
+            rows.append({
+                "tier": t,
+                "pool": band.get("pool", 0),
+                "count": band.get("draws", 0),
+                "actual": (band.get("draws", 0) * 100.0 / draws) if draws else 0.0,
+            })
+        total_weight = sum(t.probability for t in tiers) or 1.0
+        for row in rows:
+            row["configured"] = row["tier"].probability * 100.0 / total_weight
 
         return render_template("admin_rarity_simulate.html",
-                               bands=bands, total=N, tiers=tiers)
+                               rows=rows, total=draws, sizes=SIMULATION_SIZES,
+                               misses=result["misses"])
     finally:
         db.close()
 

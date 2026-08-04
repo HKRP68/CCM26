@@ -225,7 +225,8 @@ async def _reveal(query, opened_index: int):
             log_detail = f"+{qp} QP"
         else:  # player
             low, high, band_label = get_weighted_player_band()
-            player = get_random_player_by_rating_range(session, low, high)
+            player = get_random_player_by_rating_range(session, low, high,
+                                                      source="drop")
             reward_line, extra_coins = _grant_player(session, user, player)
             coins += extra_coins  # squad-full fallback credits coins
             log_detail = (f"player {player.name if player else 'none'} "
