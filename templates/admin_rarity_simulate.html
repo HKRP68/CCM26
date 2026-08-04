@@ -2,62 +2,83 @@
 {% block title %}Rarity Simulation{% endblock %}
 {% block content %}
 
-<a href="{{ url_for('admin_rarity_list') }}" style="color:var(--muted); text-decoration:none;">← Back to rarity</a>
+<style>
+  .sim-head { display:flex; justify-content:space-between; align-items:center; gap:.75rem; flex-wrap:wrap; margin-bottom:1rem; }
+  .sim-note { background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius-lg);
+              padding:1rem 1.15rem; margin-bottom:1.1rem; font-size:.86rem; color:var(--muted); line-height:1.6; }
+  .mono { font-family:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size:.82rem; }
+  .bar { background:var(--bg); border-radius:var(--radius-full); height:16px; overflow:hidden; min-width:120px; }
+  .bar i { display:block; height:100%; background:var(--gradient); }
+  .num { text-align:right; white-space:nowrap; }
+</style>
 
-<h1 style="margin:1rem 0;">📊 Simulation Results — {{ "{:,}".format(total) }} pulls</h1>
+<a href="{{ url_for('admin_rarity_list') }}" class="muted" style="color:var(--muted); text-decoration:none;">← Back to rarity</a>
 
-<div style="background:var(--card); padding:1rem; border-radius:8px; margin-bottom:1rem; font-size:.9rem; color:var(--muted); border:1px solid var(--border);">
-  ℹ️ Simulated {{ "{:,}".format(total) }} <code>/claim</code> pulls using your current
-  active rarity tiers. Configured % is what you set; Actual % is what really happens.
-  Small differences are normal (sampling noise).
+<div class="sim-head">
+  <h1 style="margin:1rem 0 0;">📊 Simulation — {{ "{:,}".format(total) }} pulls</h1>
+  <div class="actions">
+    {% for size in sizes %}
+      <a href="{{ url_for('admin_rarity_simulate', n=size) }}"
+         class="btn {{ 'btn-primary' if size == total else 'btn-ghost' }} btn-sm">{{ "{:,}".format(size) }}</a>
+    {% endfor %}
+  </div>
 </div>
 
-<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0;">
-  <thead>
-    <tr style="background:var(--bg); color:var(--muted); font-size:.75rem; text-transform:uppercase;">
-      <th style="padding:.6rem; text-align:left;">Tier</th>
-      <th style="padding:.6rem; text-align:center;">Range</th>
-      <th style="padding:.6rem; text-align:right;">Configured %</th>
-      <th style="padding:.6rem; text-align:right;">Actual %</th>
-      <th style="padding:.6rem; text-align:right;">Pulled</th>
-      <th style="padding:.6rem;">Distribution</th>
-    </tr>
-  </thead>
-  <tbody>
-  {% set total_active = namespace(value=0) %}
-  {% for t in tiers %}{% set total_active.value = total_active.value + t.probability %}{% endfor %}
-  {% for t in tiers %}
-    {% set count = bands.get(t.label, 0) %}
-    {% set actual_pct = (count * 100 / total) if total else 0 %}
-    {% set configured_pct = (t.probability * 100 / total_active.value) if total_active.value else 0 %}
-    <tr style="border-bottom:1px solid var(--border);">
-      <td style="padding:.6rem;">{{ t.emoji }} <strong>{{ t.label }}</strong></td>
-      <td style="padding:.6rem; text-align:center;">{{ t.rating_min }}–{{ t.rating_max }}</td>
-      <td style="padding:.6rem; text-align:right; font-family:monospace;">{{ "%.2f"|format(configured_pct) }}%</td>
-      <td style="padding:.6rem; text-align:right; font-family:monospace; color:{{ 'var(--green)' if (actual_pct - configured_pct)|abs < 0.5 else 'var(--accent2)' }};">
-        {{ "%.2f"|format(actual_pct) }}%
-      </td>
-      <td style="padding:.6rem; text-align:right; color:var(--muted);">{{ "{:,}".format(count) }}</td>
-      <td style="padding:.6rem;">
-        <div style="background:var(--bg); border-radius:4px; height:18px; position:relative; overflow:hidden;">
-          <div style="background:var(--accent); height:100%; width:{{ (actual_pct * 2)|round(1) }}%; max-width:100%;"></div>
-        </div>
-      </td>
-    </tr>
-  {% endfor %}
-  {% if bands.get("(out of range)", 0) %}
-    <tr style="border-bottom:1px solid var(--border);">
-      <td style="padding:.6rem; color:var(--red);">⚠️ Out of range</td>
-      <td colspan="3"></td>
-      <td style="padding:.6rem; text-align:right;">{{ bands["(out of range)"] }}</td>
-      <td></td>
-    </tr>
-  {% endif %}
-  </tbody>
-</table>
+<div class="sim-note">
+  ℹ️ Ran {{ "{:,}".format(total) }} <code>/claim</code> pulls against your active tiers, using the same
+  draw the bot uses — including empty-band re-rolls and blocked ratings.
+  <strong>Configured</strong> is your normalised setting; <strong>Actual</strong> is what the run produced.
+  Small gaps are sampling noise, and a rare tier needs a big sample before it appears at all:
+  a {{ min_probability|pct }}% tier averages one hit per
+  {{ min_probability|odds|replace('1 in ', '') }} pulls.
+</div>
 
-<div style="margin-top:1.5rem;">
-  <a href="{{ url_for('admin_rarity_simulate') }}" style="color:var(--accent2); text-decoration:none;">↻ Run again (different random seed)</a>
+{% if misses %}
+<div class="flash flash-error">
+  ⚠️ {{ "{:,}".format(misses) }} pulls found no eligible card in any configured band —
+  every band is either empty or fully blocked.
+</div>
+{% endif %}
+
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Tier</th>
+        <th class="num">Range</th>
+        <th class="num">Pool</th>
+        <th class="num">Configured</th>
+        <th class="num">Actual</th>
+        <th class="num">Pulled</th>
+        <th style="width:35%;">Distribution</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% set peak = (rows | map(attribute='actual') | max) if rows else 0 %}
+    {% for row in rows %}
+      <tr>
+        <td>{{ row.tier.emoji }} <strong>{{ row.tier.label }}</strong></td>
+        <td class="num mono">{{ row.tier.rating_min }}–{{ row.tier.rating_max }}</td>
+        <td class="num mono" style="color:{{ 'var(--accent)' if row.pool == 0 else 'var(--muted)' }};">
+          {{ "{:,}".format(row.pool) }}
+        </td>
+        <td class="num mono">{{ row.configured|pct }}%</td>
+        <td class="num mono"
+            style="color:{{ 'var(--green)' if (row.actual - row.configured)|abs < 0.5 else 'var(--brand)' }};">
+          {{ row.actual|pct }}%
+        </td>
+        <td class="num mono" style="color:var(--muted);">{{ "{:,}".format(row.count) }}</td>
+        <td>
+          <div class="bar"><i style="width:{{ (row.actual * 100 / peak) if peak else 0 }}%;"></i></div>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div style="margin-top:1.25rem;">
+  <a href="{{ url_for('admin_rarity_simulate', n=total) }}" class="btn btn-ghost btn-sm">↻ Run again</a>
 </div>
 
 {% endblock %}

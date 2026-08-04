@@ -207,7 +207,8 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             elif rt == "player":
                 low = reward_row.player_rating_min or 50
                 high = max(reward_row.player_rating_max or low, low)
-                player = get_random_player_by_rating_range(session, low, high)
+                player = get_random_player_by_rating_range(session, low, high,
+                                                          source="gspin")
                 if player:
                     if user.roster_count < MAX_ROSTER:
                         entry = UserRoster(user_id=user.id, player_id=player.id,
@@ -304,7 +305,8 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                 reward_lines = f"YOU GOT GEMS!\n💎 +{amount} gems"
             elif outcome_type == "player":
                 low, high = outcome_range
-                player = get_random_player_by_rating_range(session, low, high)
+                player = get_random_player_by_rating_range(session, low, high,
+                                                          source="gspin")
                 if player and user.roster_count < MAX_ROSTER:
                     entry = UserRoster(user_id=user.id, player_id=player.id,
                                         order_position=user.roster_count + 1,

@@ -192,7 +192,8 @@ def init_db():
         PlayerMarket, BotTeam, BotTeamPlayer,
         MatchState, Quest, UserQuestProgress,
         UserAchievement, PlayerFormHistory, CommentaryEntry, PlayerImage,
-        NotificationSchedule, NotificationLog, ClaimRarityTier, GameConfig,
+        NotificationSchedule, NotificationLog, ClaimRarityTier,
+        RatingBlockRule, GameConfig,
         MessageTemplate, Bowlout, BowloutBall,
         UserReport, ShotProbability, BotChat, Broadcast, PendingUndo,
         GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
@@ -419,6 +420,26 @@ def _record_migration_signature(key, sig):
     except Exception:
         # Worst case the batch simply re-runs next boot. Never fail the start.
         pass
+
+
+def _column_is_floating(table, column):
+    """True when ``table.column`` is a real/float type in the live schema.
+
+    For migrations that would silently truncate on an integer column. Returns
+    False when the schema can't be read, so a caller skips the write and retries
+    on a later boot rather than corrupting data on a guess.
+    """
+    try:
+        from sqlalchemy import inspect as _sa_inspect
+        from sqlalchemy.types import Float, Numeric
+        for col in _sa_inspect(engine).get_columns(table):
+            if col["name"] == column:
+                return isinstance(col["type"], (Float, Numeric))
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "could not read the type of %s.%s", table, column, exc_info=True)
+    return False
 
 
 def _run_isolated(statements):
@@ -756,6 +777,10 @@ def _migrate_add_columns():
         # Telegram ids outgrew INTEGER — widen the legacy column so adsgram
         # postbacks stop failing with "integer out of range".
         "ALTER TABLE adsgram_rewards ALTER COLUMN telegram_id TYPE BIGINT",
+        # Lucky Card weights are entered as percentages on the website and go
+        # down to 0.00001, so an INTEGER column would round every fine-grained
+        # probability to a whole number.
+        "ALTER TABLE gspin_rewards ALTER COLUMN weight TYPE DOUBLE PRECISION",
         # Career Player flags are non-nullable in the model. ADD COLUMN with a
         # DEFAULT already backfills existing rows, but a database migrated by an
         # earlier build may still hold NULLs — normalise them so the "is this a
@@ -795,6 +820,59 @@ def _migrate_add_columns():
     if not done:
         if not _run_isolated(ad_gap_sql):
             _record_migration_signature("ad_gap_off", sig)
+
+    # ─────────────────────────────────────────────────────────────
+    # /claim pays no coins. The card you pull IS the reward — that has been
+    # the intent since the economy rebalance (config.CLAIM_COINS = 0, and the
+    # fresh-install seed below writes coin_amount=0), but databases seeded
+    # before it still hold the original 500 and keep printing
+    # "+500 Coin Added" on every pull. migrate_economy_rebalance.py fixes that
+    # too; this does it without anyone having to remember to run a script.
+    #
+    # Deliberately narrow, and keyed separately so it stays a one-shot: only a
+    # row still sitting on the shipped 500 is cleared, and once the marker is
+    # recorded an admin who sets claim coins back keeps them.
+    # ─────────────────────────────────────────────────────────────
+    claim_coins_sql = [
+        "UPDATE command_rewards SET coin_amount = 0 "
+        "WHERE command_key = 'claim' AND coin_amount = 500",
+    ]
+    done, sig = _migration_signature_matches("claim_coins_off", claim_coins_sql)
+    if not done:
+        if not _run_isolated(claim_coins_sql):
+            _record_migration_signature("claim_coins_off", sig)
+
+    # ─────────────────────────────────────────────────────────────
+    # Lucky Card weights are now shown and edited as percentages on the
+    # website. Older databases hold the original relative weights (the seed
+    # used 580/240/130/42/8 for what were meant to be 58/24/13/4.2/0.8), which
+    # would read as "580%" and fail the 0-100 form validation on the next edit.
+    #
+    # Rescaling the column so it sums to 100 changes NO probability — the wheel
+    # only ever uses each weight's share of the total — it just makes the stored
+    # number mean what the page says it means. Idempotent by construction: a
+    # column that already sums to 100 is multiplied by 1.
+    #
+    # Disabled rows are rescaled by the same factor on purpose. They are not in
+    # the sum, but they are still on the old scale, and leaving them there would
+    # give a wrong share the moment one is switched back on.
+    #
+    # Guarded on the column actually being floating point. The widening ALTER is
+    # in the backfill batch above, where _run_isolated swallows its failure —
+    # SQLite rejects ALTER COLUMN outright. Rescaling an INTEGER column would
+    # truncate 4.2 to 4 and 0.8 to 1, and the one-shot marker would make that
+    # permanent, so skip and retry on a later boot instead.
+    # ─────────────────────────────────────────────────────────────
+    if _column_is_floating("gspin_rewards", "weight"):
+        lucky_card_sql = [
+            "UPDATE gspin_rewards SET weight = weight * 100.0 / "
+            "(SELECT SUM(weight) FROM gspin_rewards WHERE enabled) "
+            "WHERE (SELECT SUM(weight) FROM gspin_rewards WHERE enabled) > 0",
+        ]
+        done, sig = _migration_signature_matches("lucky_card_pct", lucky_card_sql)
+        if not done:
+            if not _run_isolated(lucky_card_sql):
+                _record_migration_signature("lucky_card_pct", sig)
 
     # ─────────────────────────────────────────────────────────────
     # Player versioning: name was originally UNIQUE, but with versions
@@ -911,21 +989,22 @@ def _migrate_add_columns():
         sess = SessionLocal()
         try:
             if sess.query(GSpinReward).count() == 0:
+                # Weights ARE the percentages the website shows, so they sum
+                # to 100 (they mirror the legacy config: 58/24/13/4.2/0.8).
                 defaults = [
-                    # weight mirrors old config: 58/24/13/4.2/0.8
-                    dict(label="Coin Stash", emoji="🟥", color="C41E3A", weight=580,
+                    dict(label="Coin Stash", emoji="🟥", color="C41E3A", weight=58.0,
                          sort_order=10, reward_type="coins",
                          amount_min=1500, amount_max=3000),
-                    dict(label="Common Pull", emoji="🟨", color="FFD93D", weight=240,
+                    dict(label="Common Pull", emoji="🟨", color="FFD93D", weight=24.0,
                          sort_order=20, reward_type="player",
                          player_rating_min=65, player_rating_max=78),
-                    dict(label="Gem Drop", emoji="🟦", color="2196F3", weight=130,
+                    dict(label="Gem Drop", emoji="🟦", color="2196F3", weight=13.0,
                          sort_order=30, reward_type="gems",
                          amount_min=3, amount_max=150),
-                    dict(label="Rare Pull", emoji="🟩", color="2ECC71", weight=42,
+                    dict(label="Rare Pull", emoji="🟩", color="2ECC71", weight=4.2,
                          sort_order=40, reward_type="player",
                          player_rating_min=79, player_rating_max=84),
-                    dict(label="Epic Pull", emoji="⭐", color="9B59B6", weight=8,
+                    dict(label="Epic Pull", emoji="⭐", color="9B59B6", weight=0.8,
                          sort_order=50, reward_type="player",
                          player_rating_min=85, player_rating_max=90),
                 ]

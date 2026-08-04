@@ -12,6 +12,7 @@ picker falls back to a plain coin reward built from the legacy config range,
 and the spin always has something to land on.
 """
 
+import math
 import random
 import logging
 
@@ -48,6 +49,26 @@ class _FallbackReward:
         self.amount_max = amount_max
 
 
+def _weight_of(row):
+    """A row's weight as a non-negative float.
+
+    Weights are percentages set on the website and can be fractional, so they
+    are never rounded or floored here — a reward configured at 0.00001% has to
+    stay at 0.00001%. Zero is honoured as "parked": the reward keeps its row and
+    its settings but never lands.
+
+    Infinity and NaN are treated as 0 rather than passed through. The website
+    clamps to 0-100 so they can only arrive from a direct database write, but an
+    infinite total makes every ``roll < cumulative`` comparison false and the
+    picker falls out to the last row instead of honouring any configured share.
+    """
+    try:
+        weight = float(row.weight or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    return weight if math.isfinite(weight) and weight > 0 else 0.0
+
+
 def pick_reward(session):
     """Pick one enabled GSpinReward row using weighted random selection.
 
@@ -62,14 +83,16 @@ def pick_reward(session):
     if not rows:
         return None
 
-    total_weight = sum(max(1, r.weight or 1) for r in rows)
+    total_weight = sum(_weight_of(r) for r in rows)
     if total_weight <= 0:
+        # Every enabled reward is parked at 0 — there is nothing to land on, so
+        # let the caller fall back rather than picking one at random anyway.
         return None
 
     r = random.random() * total_weight
-    cumulative = 0
+    cumulative = 0.0
     for row in rows:
-        cumulative += max(1, row.weight or 1)
+        cumulative += _weight_of(row)
         if r < cumulative:
             return row
     return rows[-1]  # safety fallback
@@ -110,12 +133,16 @@ def guaranteed_reward(session):
 
 
 def reward_probability(row, all_enabled_rows):
-    """Helper for admin UI — compute the actual probability of a row firing."""
-    total = sum(max(1, r.weight or 1) for r in all_enabled_rows
-                if r.enabled)
+    """Helper for admin UI — the actual chance of a row firing, as a fraction.
+
+    Weights are relative, so a row's real probability only exists once the whole
+    enabled column is normalised. Set weights that sum to 100 and each one reads
+    back as its own percentage.
+    """
+    total = sum(_weight_of(r) for r in all_enabled_rows if r.enabled)
     if total <= 0:
         return 0.0
-    return max(1, row.weight or 1) / total
+    return _weight_of(row) / total
 
 
 def apply_reward(session, user, reward, hold_overflow=False):
@@ -176,6 +203,12 @@ def apply_reward(session, user, reward, hold_overflow=False):
                               Player.rating <= hi)
                       .filter((Player.version == "Base") |
                               (Player.version.is_(None))))
+        # Ratings the website has blocked for the spin never reach the wheel —
+        # if that empties the band the reward pays coins instead, below.
+        from services import rating_block_service
+        block_clause = rating_block_service.rating_filter("gspin", session, Player)
+        if block_clause is not None:
+            candidates = candidates.filter(block_clause)
         from services.version_service import user_owns_any_version
         all_in_range = candidates.all()
         unowned = [p for p in all_in_range

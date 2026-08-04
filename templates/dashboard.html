@@ -235,7 +235,7 @@
       ('🎁','CLAIMS',reward_stats.total_claims,reward_stats.range_label ~ ' reward pulls','+' ~ reward_stats.claims_24h ~ ' in last 24h','gold'),
       ('⚡','24-HOUR ACTIVITY',reward_stats.active_players_24h,'Active players','' ~ reward_stats.rewards_24h ~ ' rewards in 24h','hot'),
       ('✅',"TODAY'S CLAIMS",reward_stats.todays_claims,'Claims submitted today','Fresh claim volume','cyan'),
-      ('🎡','TOTAL GSPIN',reward_stats.total_gspin,'GSpin rewards triggered','Wheel activity','purple'),
+      ('🎴','TOTAL LUCKY CARD',reward_stats.total_gspin,'Lucky Card rewards triggered','Lucky Card activity','purple'),
       ('☀️','TOTAL DAILY',reward_stats.total_daily,'Daily rewards collected','Retention reward','cyan'),
       ('📺','TOTAL AD WATCHED',reward_stats.total_ad_watched,'Ad rewards completed','Monetized rewards','slate'),
       ('🎒','FREE PACK OPEN',reward_stats.total_free_pack_open,'Free packs opened','Pack economy','purple'),
@@ -255,7 +255,7 @@
       <div class="glass-panel">
         <div class="panel-head"><div><p class="eyebrow">Leaderboard</p><h3>🏅 {{ reward_stats.range_label }} Top Player Rewards</h3></div></div>
         <div class="leaderboard-list">
-          {% for action, label in [('claim', 'Claim'), ('daily', 'Daily'), ('gspin', 'GSpin')] %}
+          {% for action, label in [('claim', 'Claim'), ('daily', 'Daily'), ('gspin', 'Lucky Card')] %}
             {% set row = reward_stats.top_player_by_source.get(action) %}
             <div class="leader-row">
               <span class="source-chip {{ action }}">{{ label }}</span>
@@ -272,7 +272,7 @@
       </div>
 
       <div class="analytics-grid">
-        <div class="glass-panel mini"><h3>📊 Reward Source Distribution</h3>{% set max_src = reward_stats.source_counts.values()|max if reward_stats.source_counts else 1 %}{% for action, label in [('claim','Claim'),('daily','Daily'),('gspin','GSpin'),('free_pack','Free Pack'),('ad_watched','Ad Reward')] %}{% set cnt = reward_stats.source_counts.get(action, 0) %}<div class="dist-row"><span>{{ label }}</span><div><i style="width:{{ (cnt / max_src * 100) if max_src else 0 }}%"></i></div><b>{{ cnt }}</b></div>{% endfor %}</div>
+        <div class="glass-panel mini"><h3>📊 Reward Source Distribution</h3>{% set max_src = reward_stats.source_counts.values()|max if reward_stats.source_counts else 1 %}{% for action, label in [('claim','Claim'),('daily','Daily'),('gspin','Lucky Card'),('free_pack','Free Pack'),('ad_watched','Ad Reward')] %}{% set cnt = reward_stats.source_counts.get(action, 0) %}<div class="dist-row"><span>{{ label }}</span><div><i style="width:{{ (cnt / max_src * 100) if max_src else 0 }}%"></i></div><b>{{ cnt }}</b></div>{% endfor %}</div>
         <div class="glass-panel mini"><h3>🔥 Top 5 Active Users · {{ reward_stats.range_label }}</h3>{% for item in reward_stats.top_active_today %}<div class="active-user"><span>#{{ loop.index }}</span><strong>{{ item.user.first_name or item.user.username or item.user.telegram_id }}</strong><b>{{ item.count }}</b></div>{% else %}<p class="empty-note">No activity yet today.</p>{% endfor %}</div>
         <div class="glass-panel mini"><h3>👑 Highest Rated · {{ reward_stats.range_label }}</h3>{% if reward_stats.highest_today %}<div class="highest-card"><span class="rating-badge r{{ '90' if reward_stats.highest_today.player.rating >= 90 else '80' if reward_stats.highest_today.player.rating >= 80 else '70' if reward_stats.highest_today.player.rating >= 70 else '60' }}">{{ reward_stats.highest_today.player.rating }}</span><strong>{{ reward_stats.highest_today.player.name }}</strong><small>{{ reward_stats.highest_today.action|title }} • {{ reward_stats.highest_today.created_at | ist('%H:%M') }}</small></div>{% else %}<p class="empty-note">No player reward found for {{ reward_stats.range_label|lower }}.</p>{% endif %}</div>
       </div>

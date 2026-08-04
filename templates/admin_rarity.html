@@ -2,127 +2,351 @@
 {% block title %}Claim Rarity{% endblock %}
 {% block content %}
 
-<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:.5rem;">
-  <h1>🎲 Claim Rarity Distribution</h1>
-  <div style="display:flex; gap:.5rem;">
-    <a href="{{ url_for('admin_rarity_simulate') }}"
-       style="background:var(--accent2); color:#000; padding:.5rem 1rem; border-radius:6px; font-weight:600; text-decoration:none;">📊 Simulate 100 pulls</a>
-    <form method="POST" action="{{ url_for('admin_rarity_reset_defaults') }}" style="display:inline;"
+<style>
+  .rarity-head { display:flex; justify-content:space-between; align-items:center; gap:.75rem; flex-wrap:wrap; margin-bottom:1rem; }
+  .rarity-note { background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius-lg); padding:1rem 1.15rem; margin-bottom:1.1rem; font-size:.86rem; color:var(--muted); line-height:1.6; }
+  .rarity-note strong { color:var(--text); }
+  .rarity-total { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap;
+                  background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius-lg);
+                  padding:.85rem 1.15rem; margin-bottom:1.1rem; }
+  .rarity-total .big { font-family:'Bebas Neue', sans-serif; font-size:1.9rem; line-height:1; letter-spacing:.02em; }
+  .rarity-table td { padding:.5rem .6rem; }
+  .rarity-table th { padding:.65rem .6rem; }
+  .rarity-table input[type=number], .rarity-table input[type=text] { padding:.42rem .5rem; font-size:.85rem; }
+  .cell-num { text-align:center; }
+  .w-order { width:64px; } .w-emoji { width:56px; } .w-rating { width:64px; } .w-prob { width:130px; }
+  .mono { font-family:'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; font-size:.82rem; }
+  .muted-sm { color:var(--muted); font-size:.76rem; }
+  .pill { display:inline-block; padding:.16rem .5rem; border-radius:var(--radius-full); font-size:.7rem; font-weight:800; letter-spacing:.03em; }
+  .pill-ok { background:var(--green-dim); color:var(--green); }
+  .pill-warn { background:var(--red-dim); color:var(--accent); }
+  .pill-idle { background:var(--brand-light); color:var(--muted); }
+  .section-head { display:flex; justify-content:space-between; align-items:center; gap:.75rem; flex-wrap:wrap; margin:2rem 0 .8rem; }
+  .section-head h2 { margin:0; font-size:1.15rem; }
+  .src-boxes { display:flex; gap:.7rem; justify-content:center; flex-wrap:wrap; }
+  .src-boxes label { display:inline-flex; align-items:center; gap:.28rem; margin:0; text-transform:none;
+                     letter-spacing:0; font-size:.76rem; font-weight:700; color:var(--text); white-space:nowrap; }
+  .src-boxes input[type=checkbox] { width:auto; margin:0; }
+  .block-new { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:.8rem; align-items:end;
+               background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius-lg); padding:1rem 1.15rem; }
+  .block-summary { display:grid; grid-template-columns:repeat(auto-fit, minmax(210px,1fr)); gap:.8rem; margin-bottom:1.1rem; }
+  .block-summary div { background:var(--card-bg); border:1px solid var(--border); border-left:4px solid var(--accent);
+                       border-radius:var(--radius-lg); padding:.75rem .95rem; }
+  .block-summary .label { font-size:.66rem; text-transform:uppercase; letter-spacing:.12em; color:var(--muted); font-weight:800; }
+  .block-summary .value { font-weight:800; margin-top:.2rem; }
+  .save-row { margin-top:1rem; display:flex; gap:.6rem; flex-wrap:wrap; align-items:center; }
+</style>
+
+<div class="rarity-head">
+  <h1 style="margin:0;">🎲 Claim Rarity Distribution</h1>
+  <div class="actions">
+    <a href="{{ url_for('admin_rarity_simulate') }}" class="btn btn-blue">📊 Simulate</a>
+    <form method="POST" action="{{ url_for('admin_rarity_reset_defaults') }}"
           onsubmit="return confirm('Wipe current tiers and reset to the default 7? This cannot be undone.');">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="btn btn-ghost btn-sm" style="border:1px solid var(--border);">↺ Reset to Defaults</button>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-ghost">↺ Reset to Defaults</button>
     </form>
-    <form method="POST" action="{{ url_for('admin_rarity_new') }}" style="display:inline;">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="btn btn-primary" style="padding:.4rem 1rem;">+ New Tier</button>
+    <form method="POST" action="{{ url_for('admin_rarity_new') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-primary">+ New Tier</button>
     </form>
   </div>
 </div>
 
-<div style="background:var(--card); padding:1rem; border-radius:8px; margin-bottom:1rem; font-size:.9rem; color:var(--muted); border:1px solid var(--border);">
-  ℹ️ These probabilities apply to <code>/claim</code> pulls. The /gspin wheel
-  uses its own (separate) outcome table.
-  Rating bands: <strong>50-100</strong>. Probabilities are normalized — they don't have to sum
-  to exactly 100 (e.g. 26 + 25 + 38 + 6 + 3.5 + 1.45 + 0.05 = 100). Higher number = more likely.
-  If no tiers are active, the bot falls back to the built-in defaults.
+<div class="rarity-note">
+  ℹ️ These probabilities drive <code>/claim</code> and <code>/daily</code> pulls. Rating bands run
+  <strong>50–100</strong>, and probabilities are normalised — they don't have to add up to exactly 100,
+  a bigger number simply means a bigger share of the pulls.
+  The smallest chance you can set is <strong>{{ min_probability|pct }}%</strong> ({{ min_probability|odds }}),
+  so a true chase tier is possible without deleting it from the table.
+  Set a tier to <strong>0</strong> to park it without deleting it.
+  If no tier is active the bot falls back to the built-in defaults in <code>config.py</code>.
 </div>
 
-<!-- Total active probability indicator -->
-<div style="background:var(--card); padding:.7rem 1rem; border-radius:8px; margin-bottom:1rem; border:1px solid var(--border); display:flex; justify-content:space-between; align-items:center;">
+<div class="rarity-total">
   <div>
-    <strong>Total active probability:</strong>
-    <span style="color:{{ 'var(--green)' if 99 <= total_active <= 101 else 'var(--accent2)' }};">{{ "%.2f"|format(total_active) }}%</span>
+    <div class="muted-sm" style="text-transform:uppercase; letter-spacing:.12em; font-weight:800;">Total active probability</div>
+    <div class="big" id="total-display"
+         style="color:{{ 'var(--green)' if 99 <= total_active <= 101 else 'var(--brand)' }};">
+      {{ total_active|pct }}%
+    </div>
   </div>
-  <div style="color:var(--muted); font-size:.85rem;">
+  <div class="muted-sm" id="total-hint" style="max-width:38ch; text-align:right;">
     {% if total_active < 99 or total_active > 101 %}
-      <em>(Will be normalized to 100% automatically — bot still works)</em>
+      Doesn't sum to 100 — every share below is normalised, so the split still works exactly as shown.
     {% else %}
-      ✓ Sums to 100%
+      ✓ Sums to 100%.
     {% endif %}
   </div>
 </div>
 
 {% if tiers %}
-<form method="POST" action="{{ url_for('admin_rarity_save') }}">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-<table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0;">
-  <thead>
-    <tr style="background:var(--bg); color:var(--muted); font-size:.75rem; text-transform:uppercase;">
-      <th style="padding:.6rem; text-align:center; width:60px;">Order</th>
-      <th style="padding:.6rem; text-align:center; width:60px;">Emoji</th>
-      <th style="padding:.6rem; text-align:left; width:140px;">Label</th>
-      <th style="padding:.6rem; text-align:center; width:140px;">Rating Range</th>
-      <th style="padding:.6rem; text-align:center; width:120px;">Probability %</th>
-      <th style="padding:.6rem; text-align:center; width:100px;">Players in DB</th>
-      <th style="padding:.6rem; text-align:center; width:60px;">Active</th>
-      <th style="padding:.6rem; text-align:right; width:80px;">Actions</th>
-    </tr>
-  </thead>
-  <tbody>
-  {% for t in tiers %}
-    <tr style="border-bottom:1px solid var(--border);">
-      <td style="padding:.4rem;">
-        <input type="hidden" name="tier_id" value="{{ t.id }}">
-        <input type="number" name="sort_order_{{ t.id }}" value="{{ t.sort_order }}" min="0" max="999"
-               style="width:50px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:center;">
-      </td>
-      <td style="padding:.4rem; text-align:center;">
-        <input type="text" name="emoji_{{ t.id }}" value="{{ t.emoji or '🃏' }}" maxlength="4"
-               style="width:40px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:center; font-size:1rem;">
-      </td>
-      <td style="padding:.4rem;">
-        <input type="text" name="label_{{ t.id }}" value="{{ t.label }}"
-               style="width:100%; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text);">
-      </td>
-      <td style="padding:.4rem; text-align:center;">
-        <input type="number" name="rating_min_{{ t.id }}" value="{{ t.rating_min }}" min="50" max="100"
-               style="width:55px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:center;">
-        <span style="color:var(--muted);">→</span>
-        <input type="number" name="rating_max_{{ t.id }}" value="{{ t.rating_max }}" min="50" max="100"
-               style="width:55px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:center;">
-      </td>
-      <td style="padding:.4rem; text-align:center;">
-        <input type="number" step="0.01" name="probability_{{ t.id }}" value="{{ '%.2f'|format(t.probability) }}" min="0" max="100"
-               style="width:80px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:center;">
-      </td>
-      <td style="padding:.4rem; text-align:center; color:var(--muted); font-size:.85rem;">
-        {{ pool.get(t.id, 0) }}
-      </td>
-      <td style="padding:.4rem; text-align:center;">
-        <input type="checkbox" name="is_active_{{ t.id }}" {% if t.is_active %}checked{% endif %}>
-      </td>
-      <td style="padding:.4rem; text-align:right;">
-        <button type="button"
-                onclick="if(confirm('Delete tier {{ t.label }}?')) document.getElementById('delete-{{ t.id }}').submit();"
-                style="background:none; border:none; color:var(--red); cursor:pointer; font-size:.85rem;">
-          ✕
-        </button>
-      </td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
+<form method="POST" action="{{ url_for('admin_rarity_save') }}" id="tier-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="table-wrap">
+    <table class="rarity-table">
+      <thead>
+        <tr>
+          <th class="cell-num w-order">Order</th>
+          <th class="cell-num w-emoji">Emoji</th>
+          <th>Label</th>
+          <th class="cell-num">Rating Range</th>
+          <th class="cell-num w-prob">Probability %</th>
+          <th class="cell-num">Real Share</th>
+          <th class="cell-num">Odds</th>
+          <th class="cell-num">Pool</th>
+          <th class="cell-num">Active</th>
+          <th style="text-align:right;"></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for t in tiers %}
+        {% set live = pool_live.get(t.id, 0) %}
+        {% set total_pool = pool.get(t.id, 0) %}
+        <tr data-tier-row>
+          <td class="cell-num">
+            <input type="hidden" name="tier_id" value="{{ t.id }}">
+            <input type="number" name="sort_order_{{ t.id }}" value="{{ t.sort_order }}" min="0" max="999" class="cell-num">
+          </td>
+          <td class="cell-num">
+            <input type="text" name="emoji_{{ t.id }}" value="{{ t.emoji or '🃏' }}" maxlength="4" class="cell-num">
+          </td>
+          <td><input type="text" name="label_{{ t.id }}" value="{{ t.label }}"></td>
+          <td class="cell-num" style="white-space:nowrap;">
+            <input type="number" name="rating_min_{{ t.id }}" value="{{ t.rating_min }}" min="50" max="100"
+                   class="cell-num w-rating" style="display:inline-block;">
+            <span class="muted-sm">→</span>
+            <input type="number" name="rating_max_{{ t.id }}" value="{{ t.rating_max }}" min="50" max="100"
+                   class="cell-num w-rating" style="display:inline-block;">
+          </td>
+          <td class="cell-num">
+            {# step must be decimal text: str(1e-05) would render as "1e-05" #}
+            <input type="number" step="{{ min_probability|pct }}" min="0" max="100"
+                   name="probability_{{ t.id }}" value="{{ t.probability|pct }}"
+                   class="cell-num mono" data-prob
+                   data-active="{{ 1 if t.is_active else 0 }}">
+          </td>
+          <td class="cell-num mono" data-share>—</td>
+          <td class="cell-num mono muted-sm" data-odds>—</td>
+          <td class="cell-num">
+            {% if total_pool == 0 %}
+              <span class="pill pill-warn" title="No active players in this rating band">0 cards</span>
+            {% elif live == 0 %}
+              <span class="pill pill-warn" title="Every rating in this band is blocked for /claim">all blocked</span>
+            {% elif live < total_pool %}
+              <span class="mono">{{ live }}</span>
+              <div class="muted-sm">of {{ total_pool }} — rest blocked</div>
+            {% else %}
+              <span class="mono">{{ live }}</span>
+            {% endif %}
+          </td>
+          <td class="cell-num">
+            <input type="checkbox" name="is_active_{{ t.id }}" data-active-box style="width:auto;"
+                   {% if t.is_active %}checked{% endif %}>
+          </td>
+          <td style="text-align:right;">
+            <button type="button" class="btn btn-ghost btn-sm" style="color:var(--accent);"
+                    onclick="if(confirm('Delete tier {{ t.label }}?')) document.getElementById('delete-{{ t.id }}').submit();">✕</button>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
 
-<div style="margin-top:1rem; display:flex; gap:.5rem;">
-  <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.7rem 1.5rem; border-radius:6px; font-weight:600; cursor:pointer;">
-    💾 Save All Changes
-  </button>
-</div>
+  <div class="save-row">
+    <button type="submit" class="btn btn-primary">💾 Save All Changes</button>
+    <span class="muted-sm">Real Share and Odds update as you type — they show what each tier is worth
+      once the column is normalised.</span>
+  </div>
 </form>
 
 <!-- Hidden delete forms (one per tier, to avoid nested forms) -->
 {% for t in tiers %}
 <form id="delete-{{ t.id }}" method="POST" action="{{ url_for('admin_rarity_delete', tid=t.id) }}" style="display:none;">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form>
 {% endfor %}
 
 {% else %}
-<div style="background:var(--card); border:1px solid var(--border); border-radius:10px; padding:2rem; text-align:center; color:var(--muted);">
+<div class="rarity-note" style="text-align:center;">
   No rarity tiers configured yet.<br>
   Click <strong>↺ Reset to Defaults</strong> for the standard 7-tier setup,
   or <strong>+ New Tier</strong> to start from scratch.<br>
   <em>(While empty, the bot uses the built-in defaults from config.py.)</em>
 </div>
 {% endif %}
+
+
+<div class="section-head">
+  <h2>🚫 Blocked Rating Ranges</h2>
+</div>
+
+<div class="rarity-note">
+  A blocked range is a hard veto: those ratings are never handed out by the sources you tick, no
+  matter what the rarity table says. Use it to retire a rating band without rewriting your tiers —
+  untick the rule later and the ratings come straight back.
+  <strong>Claim</strong> covers /claim, /daily and the rest of the rarity-driven pulls,
+  <strong>Drop</strong> covers packs, free packs and the Mystery Box, and
+  <strong>Lucky Card</strong> covers the wheel and its Mini App twin. Buying, trading, the market and admin grants are never filtered — those are
+  deliberate, not random.
+</div>
+
+<div class="block-summary">
+  {% for source, label in source_labels.items() %}
+  <div style="border-left-color:{{ 'var(--accent)' if blocked_summary[source] != 'nothing blocked' else 'var(--border)' }};">
+    <div class="label">{{ label }}</div>
+    <div class="value">{{ blocked_summary[source] }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if blocks %}
+<form method="POST" action="{{ url_for('admin_rating_block_save') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div class="table-wrap">
+    <table class="rarity-table">
+      <thead>
+        <tr>
+          <th class="cell-num">Rating Range</th>
+          <th class="cell-num">Blocked From</th>
+          <th>Note</th>
+          <th class="cell-num">Enabled</th>
+          <th style="text-align:right;"></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for b in blocks %}
+        <tr>
+          <td class="cell-num" style="white-space:nowrap;">
+            <input type="hidden" name="block_id" value="{{ b.id }}">
+            <input type="number" name="rating_min_{{ b.id }}" value="{{ b.rating_min }}" min="50" max="100"
+                   class="cell-num w-rating" style="display:inline-block;">
+            <span class="muted-sm">→</span>
+            <input type="number" name="rating_max_{{ b.id }}" value="{{ b.rating_max }}" min="50" max="100"
+                   class="cell-num w-rating" style="display:inline-block;">
+          </td>
+          <td>
+            <div class="src-boxes">
+              <label><input type="checkbox" name="{{ b.id }}_block_claim" {% if b.block_claim %}checked{% endif %}> Claim</label>
+              <label><input type="checkbox" name="{{ b.id }}_block_drop" {% if b.block_drop %}checked{% endif %}> Drop</label>
+              <label><input type="checkbox" name="{{ b.id }}_block_gspin" {% if b.block_gspin %}checked{% endif %}> Lucky Card</label>
+            </div>
+          </td>
+          <td><input type="text" name="note_{{ b.id }}" value="{{ b.note or '' }}" maxlength="200"
+                     placeholder="Why is this blocked?"></td>
+          <td class="cell-num">
+            <input type="checkbox" name="is_active_{{ b.id }}" style="width:auto;" {% if b.is_active %}checked{% endif %}>
+          </td>
+          <td style="text-align:right;">
+            <button type="button" class="btn btn-ghost btn-sm" style="color:var(--accent);"
+                    onclick="if(confirm('Delete the {{ b.rating_min }}–{{ b.rating_max }} block?')) document.getElementById('block-delete-{{ b.id }}').submit();">✕</button>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="save-row">
+    <button type="submit" class="btn btn-primary">💾 Save Blocked Ranges</button>
+    <span class="muted-sm">A rule with no sources ticked is switched off — it wouldn't block anything.</span>
+  </div>
+</form>
+
+{% for b in blocks %}
+<form id="block-delete-{{ b.id }}" method="POST"
+      action="{{ url_for('admin_rating_block_delete', bid=b.id) }}" style="display:none;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"></form>
+{% endfor %}
+{% else %}
+<div class="rarity-note" style="text-align:center;">
+  Nothing is blocked — every rating a tier covers can be pulled.
+</div>
+{% endif %}
+
+<div class="section-head"><h2 style="font-size:1rem;">Add a blocked range</h2></div>
+<form method="POST" action="{{ url_for('admin_rating_block_new') }}" class="block-new">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <div>
+    <label for="new-block-min">From rating</label>
+    <input id="new-block-min" type="number" name="rating_min" value="95" min="50" max="100">
+  </div>
+  <div>
+    <label for="new-block-max">To rating</label>
+    <input id="new-block-max" type="number" name="rating_max" value="100" min="50" max="100">
+  </div>
+  <div>
+    <label>Blocked from</label>
+    <div class="src-boxes" style="justify-content:flex-start; padding-top:.35rem;">
+      <label><input type="checkbox" name="block_claim" checked> Claim</label>
+      <label><input type="checkbox" name="block_drop" checked> Drop</label>
+      <label><input type="checkbox" name="block_gspin" checked> Lucky Card</label>
+    </div>
+  </div>
+  <div>
+    <label for="new-block-note">Note (optional)</label>
+    <input id="new-block-note" type="text" name="note" maxlength="200" placeholder="e.g. saving 95+ for events">
+  </div>
+  <div><button type="submit" class="btn btn-red">🚫 Block Range</button></div>
+</form>
+
+<script>
+// Live readout of what each tier is really worth. The stored numbers are
+// relative weights, so a tier's true share only exists once the whole active
+// column is normalised — showing it as you type is the difference between
+// guessing at 0.00001 and knowing it means 1 in 10,000,000.
+(function () {
+  const form = document.getElementById('tier-form');
+  if (!form) return;
+  const rows = Array.from(form.querySelectorAll('[data-tier-row]'));
+  const totalDisplay = document.getElementById('total-display');
+  const totalHint = document.getElementById('total-hint');
+
+  const fmtPct = (v) => {
+    if (!(v > 0)) return '0';
+    const s = v.toFixed(5).replace(/0+$/, '').replace(/\.$/, '');
+    return s || '0';
+  };
+  const fmtOdds = (share) => {
+    if (!(share > 0)) return 'never';
+    const oneIn = 100 / share;
+    return oneIn < 10 ? `1 in ${oneIn.toFixed(1)}`
+                      : `1 in ${Math.round(oneIn).toLocaleString()}`;
+  };
+
+  function recalc() {
+    let total = 0;
+    const values = rows.map((row) => {
+      const active = row.querySelector('[data-active-box]').checked;
+      const value = parseFloat(row.querySelector('[data-prob]').value) || 0;
+      if (active) total += value;
+      return { row, active, value };
+    });
+
+    values.forEach(({ row, active, value }) => {
+      const shareCell = row.querySelector('[data-share]');
+      const oddsCell = row.querySelector('[data-odds]');
+      if (!active) {
+        shareCell.innerHTML = '<span class="pill pill-idle">off</span>';
+        oddsCell.textContent = '—';
+        return;
+      }
+      const share = total > 0 ? (value * 100) / total : 0;
+      shareCell.textContent = fmtPct(share) + '%';
+      oddsCell.textContent = fmtOdds(share);
+    });
+
+    totalDisplay.textContent = fmtPct(total) + '%';
+    const balanced = total >= 99 && total <= 101;
+    totalDisplay.style.color = balanced ? 'var(--green)' : 'var(--brand)';
+    totalHint.textContent = balanced
+      ? '✓ Sums to 100%.'
+      : "Doesn't sum to 100 — every share is normalised, so the split still works exactly as shown.";
+  }
+
+  form.addEventListener('input', recalc);
+  form.addEventListener('change', recalc);
+  recalc();
+})();
+</script>
 
 {% endblock %}

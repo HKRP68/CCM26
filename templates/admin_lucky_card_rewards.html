@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}GSpin Rewards{% endblock %}
+{% block title %}Lucky Card Rewards{% endblock %}
 {% block content %}
 
 <style>
@@ -85,19 +85,45 @@
 </style>
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
-  <h2>🎡 GSpin Rewards <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ enabled_count }} active / {{ rewards|length }} total)</span></h2>
+  <h2>🎴 Lucky Card Rewards <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ enabled_count }} active / {{ rewards|length }} total)</span></h2>
   <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
 </div>
 
 <p style="color:var(--muted);font-size:.88rem;margin-bottom:1rem;">
-  Each spin picks one reward at random. <strong>Probability = weight ÷ total weight of enabled rewards.</strong>
-  Total enabled weight: <strong>{{ total_weight }}</strong>. Higher weight = more frequent.
+  Each Lucky Card pick lands on exactly one reward. Probabilities are entered as
+  percentages and <strong>normalised</strong> — they don't have to add up to 100, a bigger
+  number simply means a bigger share of the picks. The smallest you can set is
+  <strong>{{ min_weight|pct }}%</strong> ({{ min_weight|odds }}); <strong>0</strong> parks a reward
+  without deleting it.
 </p>
+
+<div class="panel" style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
+  <div>
+    <div style="font-size:.68rem;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);font-weight:800;">
+      Total enabled probability
+    </div>
+    <div style="font-size:1.6rem;font-weight:800;line-height:1.2;
+                color:{{ 'var(--green)' if 99 <= total_weight <= 101 else 'var(--brand)' }};">
+      {{ total_weight|pct }}%
+    </div>
+  </div>
+  <div style="color:var(--muted);font-size:.82rem;max-width:40ch;text-align:right;">
+    {% if total_weight <= 0 %}
+      Every enabled reward is parked at 0 — the wheel falls back to the built-in
+      outcomes until at least one has a probability.
+    {% elif total_weight < 99 or total_weight > 101 %}
+      Doesn't add up to 100 — the Probability column below shows each reward's real
+      share after normalising, which is what the wheel rolls against.
+    {% else %}
+      ✓ Adds up to 100%.
+    {% endif %}
+  </div>
+</div>
 
 <!-- Add new reward — collapsible -->
 <details class="panel">
   <summary style="cursor:pointer;font-weight:600;">➕ Add new reward</summary>
-  <form method="POST" action="{{ url_for('admin_gspin_rewards') }}" style="margin-top:.75rem;">
+  <form method="POST" action="{{ url_for('admin_lucky_card_rewards') }}" style="margin-top:.75rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="action" value="add">
 
@@ -111,8 +137,10 @@
       <label>Color (hex)
         <input type="text" name="color" maxlength="7" placeholder="C41E3A" value="888888">
       </label>
-      <label>Weight
-        <input type="number" name="weight" required min="1" max="10000" value="10">
+      <label>Probability %
+        {# step must be decimal text: str(1e-05) would render as "1e-05" #}
+        <input type="number" name="weight" required min="0" max="100"
+               step="{{ min_weight|pct }}" value="10">
       </label>
       <label>Sort order
         <input type="number" name="sort_order" value="100">
@@ -166,8 +194,8 @@
   <div style="width:40px;"></div>
   <div style="flex:1.6;">Label / Type</div>
   <div style="flex:1.2;">Reward</div>
-  <div style="width:90px;text-align:right;">Weight</div>
-  <div style="width:80px;text-align:center;">Probability</div>
+  <div style="width:90px;text-align:right;">Set %</div>
+  <div style="width:80px;text-align:center;">Real Chance</div>
   <div style="width:80px;text-align:center;">Status</div>
   <div style="width:110px;text-align:right;">Actions</div>
 </div>
@@ -197,11 +225,16 @@
     {% endif %}
   </div>
 
-  <div class="weight-cell"><strong>{{ r.weight }}</strong></div>
-  <div><span class="pct-bar">{{ r._pct }}%</span></div>
+  <div class="weight-cell"><strong>{{ r.weight|pct }}%</strong></div>
+  <div>
+    <span class="pct-bar">{{ r._pct|pct }}%</span>
+    <small style="display:block;color:var(--muted);font-size:.68rem;margin-top:.15rem;">
+      {{ r._pct|odds if r.enabled else 'off' }}
+    </small>
+  </div>
 
   <div style="text-align:center;">
-    <form method="POST" action="{{ url_for('admin_gspin_rewards') }}" style="display:inline;">
+    <form method="POST" action="{{ url_for('admin_lucky_card_rewards') }}" style="display:inline;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="toggle">
       <input type="hidden" name="id" value="{{ r.id }}">
@@ -214,7 +247,7 @@
   <div class="actions">
     <button type="button" class="btn btn-blue btn-sm"
             onclick="openEdit({{ r.id }})">Edit</button>
-    <form method="POST" action="{{ url_for('admin_gspin_rewards') }}" style="display:inline;"
+    <form method="POST" action="{{ url_for('admin_lucky_card_rewards') }}" style="display:inline;"
           onsubmit="return confirm('Delete \'{{ r.label }}\'?')">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="delete">
@@ -230,7 +263,7 @@
         <h3 style="margin:0;">Edit: {{ r.label }}</h3>
         <button type="button" onclick="closeEdit({{ r.id }})" class="btn btn-ghost btn-sm">✕</button>
       </div>
-      <form method="POST" action="{{ url_for('admin_gspin_rewards') }}">
+      <form method="POST" action="{{ url_for('admin_lucky_card_rewards') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="action" value="edit">
         <input type="hidden" name="id" value="{{ r.id }}">
@@ -244,8 +277,9 @@
           <label>Color (hex)
             <input type="text" name="color" maxlength="7" value="{{ r.color }}">
           </label>
-          <label>Weight
-            <input type="number" name="weight" required min="1" max="10000" value="{{ r.weight }}">
+          <label>Probability %
+            <input type="number" name="weight" required min="0" max="100"
+                   step="{{ min_weight|pct }}" value="{{ r.weight|pct }}">
           </label>
           <label>Sort order
             <input type="number" name="sort_order" value="{{ r.sort_order }}">
