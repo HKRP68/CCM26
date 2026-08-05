@@ -11,6 +11,17 @@ from models import User, Player, UserRoster, Match, PlayerGameStats
 
 logger = logging.getLogger(__name__)
 
+# The AI opponent (/vsbot, /wpmbot, /lpbot, /ciplbot) is a real ``users`` row so
+# a bot match can be stored like any other, and it is credited with matches,
+# wins and per-player stats every time somebody plays it. It is not a player, so
+# it must never appear on the leaderboard — it would sit permanently at the top
+# of Matches, Wins and Runs. Its telegram_id is the sentinel -1
+# (``services.bot_ai.BOT_TG_ID``); the filter keeps only positive ids, so any
+# other system/placeholder account created the same way is excluded too.
+def _humans_only(q):
+    """Restrict a User query to real Telegram accounts (drops the AI/system rows)."""
+    return q.filter(User.telegram_id > 0)
+
 
 def _display_name(user):
     """Plain (non-tagging) display name for the leaderboard.
@@ -49,19 +60,23 @@ def _build_keyboard(active):
 def _get_leaderboard_data(session, metric, viewer_id):
     """Return (top_10, viewer_rank, viewer_value) for the given metric."""
     if metric == "matches":
-        q = session.query(User).filter(User.matches_played > 0).order_by(desc(User.matches_played), User.id)
+        q = (_humans_only(session.query(User).filter(User.matches_played > 0))
+             .order_by(desc(User.matches_played), User.id))
         value_fn = lambda u: u.matches_played
         unit = "matches"
     elif metric == "wins":
-        q = session.query(User).filter(User.matches_won > 0).order_by(desc(User.matches_won), User.id)
+        q = (_humans_only(session.query(User).filter(User.matches_won > 0))
+             .order_by(desc(User.matches_won), User.id))
         value_fn = lambda u: u.matches_won
         unit = "wins"
     elif metric == "streak":
-        q = session.query(User).filter(User.best_streak > 0).order_by(desc(User.best_streak), User.id)
+        q = (_humans_only(session.query(User).filter(User.best_streak > 0))
+             .order_by(desc(User.best_streak), User.id))
         value_fn = lambda u: u.best_streak
         unit = "streak"
     elif metric == "gamer":
-        q = session.query(User).filter(User.active_days > 0).order_by(desc(User.active_days), User.id)
+        q = (_humans_only(session.query(User).filter(User.active_days > 0))
+             .order_by(desc(User.active_days), User.id))
         value_fn = lambda u: u.active_days
         unit = "days"
     elif metric == "value":
@@ -71,7 +86,7 @@ def _get_leaderboard_data(session, metric, viewer_id):
             func.sum(Player.rating).label("team_val")
         ).join(Player, UserRoster.player_id == Player.id)
           .group_by(UserRoster.user_id).subquery())
-        q = (session.query(User, value_subq.c.team_val)
+        q = (_humans_only(session.query(User, value_subq.c.team_val))
              .join(value_subq, User.id == value_subq.c.user_id)
              .order_by(desc(value_subq.c.team_val)))
         rows = q.limit(100).all()
@@ -86,7 +101,7 @@ def _get_leaderboard_data(session, metric, viewer_id):
         rows = (session.query(PlayerGameStats, Player, User)
                 .join(Player, PlayerGameStats.player_id == Player.id)
                 .join(User, PlayerGameStats.user_id == User.id)
-                .filter(PlayerGameStats.runs > 0)
+                .filter(PlayerGameStats.runs > 0, User.telegram_id > 0)
                 .order_by(desc(PlayerGameStats.runs))
                 .limit(100).all())
         top_10 = rows[:10]

@@ -266,18 +266,47 @@ def cp_to_player_dict(cp):
     # rosters handed to both captains, not cards anyone collected, so — exactly
     # like traits — Team Chemistry does not apply to them. See
     # handlers.cipl_play._chem_line for the display side of the same rule.
+    rating = int(_g("rating", default=50) or 50)
+    bat_rating = int(_g("bat_rating", default=50) or 50)
+    bowl_rating = int(_g("bowl_rating", default=40) or 40)
     return {
         "roster_id": int(getattr(cp, "id")),
         "player_id": _g("source_player_id", default=getattr(cp, "source_player_id", None)),
         "name": getattr(cp, "name", None) or _g("name", default="Player"),
-        "rating": int(_g("rating", default=50) or 50),
+        # ``rating``/``bat_rating``/``bowl_rating`` are the ENGINE's numbers and
+        # may be adjusted before the first ball (see
+        # handlers.cipl_play._compress_team_gap). ``card_*`` is the squad-sheet
+        # rating the captain picked, is never touched by any balancing pass, and
+        # is what every piece of UI must show — otherwise an 87 turns up as 86 in
+        # one dugout and 88 in the other, which reads as a bug even though the
+        # simulation is behaving as designed. See display_rating() below.
+        "rating": rating,
+        "bat_rating": bat_rating,
+        "bowl_rating": bowl_rating,
+        "card_rating": rating,
+        "card_bat_rating": bat_rating,
+        "card_bowl_rating": bowl_rating,
         "category": category,
-        "bat_rating": int(_g("bat_rating", default=50) or 50),
-        "bowl_rating": int(_g("bowl_rating", default=40) or 40),
         "bowl_style": _g("bowl_style", default="") or "",
         "bowl_hand": _g("bowl_hand", default="Right") or "Right",
         "bat_hand": _g("bat_hand", default="Right") or "Right",
     }
+
+
+def display_rating(player, key="rating"):
+    """The rating to SHOW for ``player`` — always the printed card number.
+
+    ``key`` is the engine key ('rating', 'bat_rating', 'bowl_rating'); the
+    matching ``card_<key>`` wins when present. States created before card
+    ratings were stored have no ``card_*`` keys, so those fall back to the
+    engine value and read exactly as they did before.
+    """
+    if not player:
+        return 0
+    val = player.get("card_" + key)
+    if val is None:
+        val = player.get(key, 0)
+    return int(val or 0)
 
 
 # ════════════════════════════════════════════════════════════════════

@@ -12,6 +12,23 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
+def is_ai_user(user) -> bool:
+    """True for the AI opponent's ``users`` row (and any other system account).
+
+    The bot side of /vsbot, /wpmbot, /lpbot and /ciplbot is stored as a real user
+    so a bot match can be persisted like any other, with the sentinel
+    telegram_id -1 (``services.bot_ai.BOT_TG_ID``). It plays constantly and wins
+    constantly, so crediting it with matches, wins, coins or streaks puts it
+    permanently on top of every leaderboard. Nothing in this module writes career
+    counters for it; the leaderboards filter on the same rule
+    (``User.telegram_id > 0``) so historic rows stay hidden too.
+    """
+    if user is None:
+        return True
+    tg = getattr(user, "telegram_id", None)
+    return tg is None or tg <= 0
+
+
 def record_active_day(user, when=None) -> bool:
     """Count today as an active day for ``user`` (once per UTC day).
 
@@ -73,6 +90,8 @@ def record_match_result_stats(session, winner_user_id, loser_user_id,
             if not uid:
                 continue
             u = session.query(User).get(uid)
+            if is_ai_user(u):
+                continue
             record_active_day(u, now)
         return
 
@@ -80,7 +99,7 @@ def record_match_result_stats(session, winner_user_id, loser_user_id,
         if not uid:
             continue
         u = session.query(User).get(uid)
-        if not u:
+        if not u or is_ai_user(u):
             continue
         apply_win_streak(u, won)
         record_active_day(u, now)
@@ -115,6 +134,12 @@ def award_match_rewards_core(session, winner_user_id, loser_user_id, overs,
     cfg = get_config(session)
     w = session.query(User).get(winner_user_id) if winner_user_id else None
     l = session.query(User).get(loser_user_id) if loser_user_id else None
+
+    # The AI never banks anything — see is_ai_user().
+    if is_ai_user(w):
+        w = None
+    if is_ai_user(l):
+        l = None
 
     w_coins = int(overs * cfg["match_win_coins_per_over"])
     w_gems = max(0, int(overs * cfg["match_win_gems_per_over"]))

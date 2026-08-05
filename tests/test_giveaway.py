@@ -271,6 +271,96 @@ class DrawWinnersTest(unittest.TestCase):
             self.svc.draw_winners(session, g)
             self.assertEqual(getattr(users[1], attr), 300)
 
+    def test_a_gems_giveaway_credits_gems_and_labels_them(self):
+        # The prize type an admin picks as "💎 Gems" on the create form, end to
+        # end: granted to the winner's gem balance and named in the results post.
+        users = {1: _user(1)}
+        entries = self._entries([1])
+        g = _giveaway("gems", amount=250, winners=1)
+        session = _FakeSession(entries, users, g)
+        winners = self.svc.draw_winners(session, g)
+        self.assertEqual(users[1].total_gems, 250)
+        self.assertEqual(users[1].total_coins, 0)
+        self.assertIn("gems", winners[0]["prize_detail"])
+        self.assertIn("💎", self.svc.prize_label(g))
+        self.assertIn("gems", self.svc.winners_text(g, winners))
+
+
+class PriorityWinnerTest(unittest.TestCase):
+    """Admin-marked participants are seated first at the draw."""
+
+    def setUp(self):
+        self.svc, self.models, self.IntegrityError = _load_service(self)
+        random.seed(7)
+
+    def _entries(self, uids, priority=()):
+        out = []
+        for i, u in enumerate(uids, start=1):
+            e = self.models.GiveawayEntry(giveaway_id=1, user_id=u,
+                                          telegram_id=1000 + u)
+            e.id = i
+            e.is_priority = u in priority
+            e.priority_set_at = (datetime(2026, 1, 1) + timedelta(minutes=u)
+                                 if e.is_priority else None)
+            out.append(e)
+        return out
+
+    def test_a_marked_participant_always_wins(self):
+        # One slot, 20 entrants — random alone would pick #7 once in 20.
+        users = {u: _user(u) for u in range(1, 21)}
+        entries = self._entries(range(1, 21), priority=(7,))
+        g = _giveaway(winners=1)
+        session = _FakeSession(entries, users, g)
+        winners = self.svc.draw_winners(session, g)
+        self.assertEqual([w["user_id"] for w in winners], [7])
+
+    def test_remaining_slots_are_still_random(self):
+        users = {u: _user(u) for u in range(1, 11)}
+        entries = self._entries(range(1, 11), priority=(3,))
+        g = _giveaway(winners=3)
+        session = _FakeSession(entries, users, g)
+        winners = self.svc.draw_winners(session, g)
+        ids = [w["user_id"] for w in winners]
+        self.assertEqual(len(ids), 3)
+        self.assertEqual(len(set(ids)), 3)
+        self.assertIn(3, ids)
+
+    def test_priority_does_not_bypass_the_ban_check(self):
+        # A reserved seat is not a licence to pay a banned account.
+        users = {1: _user(1), 2: _user(2, banned=True)}
+        entries = self._entries([1, 2], priority=(2,))
+        g = _giveaway(winners=1)
+        session = _FakeSession(entries, users, g)
+        winners = self.svc.draw_winners(session, g)
+        self.assertEqual([w["user_id"] for w in winners], [1])
+
+    def test_priority_does_not_bypass_the_gc_recheck(self):
+        users = {u: _user(u) for u in (1, 2, 3)}
+        entries = self._entries([1, 2, 3], priority=(3,))
+        g = _giveaway(winners=1)
+        session = _FakeSession(entries, users, g)
+        # User 3 left the Official GC between joining and the draw.
+        winners = self.svc.draw_winners(session, g, eligible_user_ids={1, 2})
+        self.assertNotIn(3, [w["user_id"] for w in winners])
+
+    def test_more_marked_than_slots_seats_the_earliest_marked(self):
+        users = {u: _user(u) for u in (1, 2, 3, 4)}
+        entries = self._entries([1, 2, 3, 4], priority=(2, 3, 4))
+        g = _giveaway(winners=2)
+        session = _FakeSession(entries, users, g)
+        winners = self.svc.draw_winners(session, g)
+        # priority_set_at ascends with user id in the fixture, so 2 then 3.
+        self.assertEqual(sorted(w["user_id"] for w in winners), [2, 3])
+
+    def test_an_unmarked_giveaway_is_a_plain_random_draw(self):
+        users = {u: _user(u) for u in range(1, 6)}
+        entries = self._entries(range(1, 6))
+        g = _giveaway(winners=2)
+        session = _FakeSession(entries, users, g)
+        winners = self.svc.draw_winners(session, g)
+        self.assertEqual(len(winners), 2)
+        self.assertEqual(len({w["user_id"] for w in winners}), 2)
+
 
 class RecordEntryTest(unittest.TestCase):
     def setUp(self):

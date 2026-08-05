@@ -6089,10 +6089,10 @@ async def _end_innings(ctx, mid):
                 pass  # No user stats update
             else:
                 from services.match_rewards import (
-                    apply_win_streak, record_active_day)
+                    apply_win_streak, record_active_day, is_ai_user)
                 for uid, is_winner in [(winner_uid, True), (loser_uid, False)]:
                     u = session.query(User).get(uid)
-                    if u:
+                    if u and not is_ai_user(u):
                         u.matches_played = (u.matches_played or 0) + 1
                         if is_winner:
                             u.matches_won = (u.matches_won or 0) + 1

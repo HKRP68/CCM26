@@ -2199,6 +2199,18 @@ def player_delete(player_id):
 
         name = player.name
         rating = player.rating
+
+        # Typed-name confirmation. The Players tab collects it in a prompt, but
+        # the check lives here so the delete can't be fired by a bare POST — a
+        # bookmarked URL, a double-submit or a re-sent form. Compared with case
+        # and surrounding whitespace normalised; the exact spelling still has to
+        # match.
+        confirm_name = (request.form.get("confirm_name") or "").strip()
+        if confirm_name.casefold() != (name or "").strip().casefold():
+            flash(f"Delete cancelled — type the player name '{name}' exactly to "
+                  "confirm.", "error")
+            return redirect(url_for("players_list"))
+
         refunded_users = _purge_player_references(db, player)
         log_admin(db, "player_delete", target_type="player", target_id=player.id,
                   target_name=name,
@@ -5918,7 +5930,12 @@ def webapp_countries():
 def webapp_leaderboard():
     """Top users by various metrics.
 
-    Body: {metric: 'wins' | 'win_rate' | 'coins' | 'roster_rating', limit: int}
+    Body: {metric: 'wins' | 'win_rate' | 'coins' | 'roster_rating' | 'streak'
+                 | 'active_days', limit: int}
+
+    The AI opponent is a real ``users`` row (telegram_id -1) that plays and wins
+    constantly, so every board here is restricted to real Telegram accounts —
+    the same rule handlers/leaderboard.py applies to /cmuleaderboard.
     """
     auth, tg_id, err = _webapp_auth()
     if err:
@@ -5929,11 +5946,28 @@ def webapp_leaderboard():
         metric = (data.get("metric") or "wins").strip()
         limit = min(50, max(5, int(data.get("limit") or 20)))
 
+        # Real accounts only — drops the AI opponent's users row.
+        humans = User.telegram_id > 0
+
         # Build the leaderboard query
         if metric == "wins":
             q = (db.query(User)
-                 .filter(User.matches_played > 0)
+                 .filter(humans, User.matches_played > 0)
                  .order_by(User.matches_won.desc().nullslast(),
+                           User.matches_played.desc().nullslast()))
+        elif metric == "streak":
+            # Longest win streak ever reached (User.best_streak), with the
+            # live run as the tiebreak so an active streak ranks above a
+            # finished one of the same length.
+            q = (db.query(User)
+                 .filter(humans, User.best_streak > 0)
+                 .order_by(User.best_streak.desc().nullslast(),
+                           User.win_streak.desc().nullslast()))
+        elif metric == "active_days":
+            # "Days with at least 1 match" — see match_rewards.record_active_day.
+            q = (db.query(User)
+                 .filter(humans, User.active_days > 0)
+                 .order_by(User.active_days.desc().nullslast(),
                            User.matches_played.desc().nullslast()))
         elif metric == "win_rate":
             # Order by ratio — require at least 5 matches for stability
@@ -5944,10 +5978,11 @@ def webapp_leaderboard():
                 else_=0.0,
             )
             q = (db.query(User)
-                 .filter(User.matches_played >= 5)
+                 .filter(humans, User.matches_played >= 5)
                  .order_by(ratio.desc(), User.matches_played.desc()))
         elif metric == "coins":
-            q = db.query(User).order_by(User.total_coins.desc().nullslast())
+            q = (db.query(User).filter(humans)
+                 .order_by(User.total_coins.desc().nullslast()))
         elif metric == "roster_rating":
             # Average rating of player roster — requires join + aggregate
             from sqlalchemy import func as _sf
@@ -5961,6 +5996,7 @@ def webapp_leaderboard():
                    .subquery())
             rows = (db.query(User, sub.c.avg_rating, sub.c.roster_n)
                     .join(sub, sub.c.user_id == User.id)
+                    .filter(humans)
                     .order_by(sub.c.avg_rating.desc())
                     .limit(limit).all())
             users_list = []
@@ -6002,6 +6038,13 @@ def webapp_leaderboard():
             elif metric == "coins":
                 value = u.total_coins or 0
                 label = f"{value:,} 🪙"
+            elif metric == "streak":
+                value = u.best_streak or 0
+                live = u.win_streak or 0
+                label = f"{value} best" + (f" · {live} live" if live else "")
+            elif metric == "active_days":
+                value = u.active_days or 0
+                label = f"{value} day" + ("" if value == 1 else "s")
             entry = {
                 "rank": i,
                 "telegram_id": u.telegram_id,
@@ -11473,8 +11516,19 @@ EVENT_KEYS = [
     ("free_pack_opened", "Open the free daily pack"),
     ("cmumysterybox", "Open a mystery box (/cmumysterybox)"),
     ("ad_watched", "Watch a rewarded ad"),
-    ("vsbot_played", "⛔ RETIRED — bot matches no longer count for quests"),
-    ("vsbot_won", "⛔ RETIRED — bot matches no longer count for quests"),
+    # Bot matches count for quests again, capped per day — see
+    # services.quest_service.BOT_QUEST_MATCH_DAILY_CAP.
+    ("vsbot_played", "🤖 Play a match vs the AI (/wpmbot, /vsbot)"),
+    ("vsbot_won", "🤖 Beat the AI (/wpmbot, /vsbot)"),
+    # Pitch quests — "play 3 matches on a Green pitch today". One key per
+    # surface in services.match_constants.PITCH_TYPES.
+    ("pitch_dry", "🏟 Play a match on a Dry pitch"),
+    ("pitch_dusty", "🏟 Play a match on a Dusty pitch"),
+    ("pitch_hard", "🏟 Play a match on a Hard pitch"),
+    ("pitch_even", "🏟 Play a match on an Even pitch"),
+    ("pitch_flat", "🏟 Play a match on a Flat pitch"),
+    ("pitch_green", "🏟 Play a match on a Green pitch"),
+    ("pitch_bouncy", "🏟 Play a match on a Bouncy pitch"),
     # Career Player events — fire only for the user's own /cmucareer card.
     # Pair these with the "Career Player quest" checkbox. Grouped the same way
     # the weekly assigner buckets them: batting, bowling, then all-round.
@@ -17308,11 +17362,68 @@ def admin_giveaway_detail(gid):
                    .join(User, User.id == GiveawayEntry.user_id)
                    .filter(GiveawayEntry.giveaway_id == gid)
                    .order_by(GiveawayEntry.is_winner.desc(),
+                             GiveawayEntry.is_priority.desc(),
                              GiveawayEntry.joined_at.asc())
                    .all())
+        priority_count = sum(1 for e, _ in entries if e.is_priority)
         return render_template("admin_giveaway_detail.html",
                                g=g, entries=entries,
-                               entry_count=len(entries))
+                               entry_count=len(entries),
+                               priority_count=priority_count)
+    finally:
+        db.close()
+
+
+@app.route("/giveaways/<int:gid>/entries/<int:entry_id>/priority", methods=["POST"])
+@login_required
+def admin_giveaway_toggle_priority(gid, entry_id):
+    """Mark / unmark one participant as a guaranteed winner.
+
+    Priority entries take the first winner slots at draw time; see
+    ``services.giveaway_service.draw_winners``. Only editable before the draw —
+    once winners are out, flipping the flag would say something about the result
+    that isn't true.
+    """
+    db = get_session()
+    try:
+        from datetime import datetime as _dt
+        from models import Giveaway, GiveawayEntry
+        g = db.query(Giveaway).get(gid)
+        entry = db.query(GiveawayEntry).get(entry_id)
+        if not g or not entry or entry.giveaway_id != gid:
+            flash("Not found.", "error")
+            return redirect(url_for("admin_giveaways"))
+        if g.winners_drawn_at is not None or g.status in ("ended", "cancelled"):
+            flash("Winners are already drawn — priority can't be changed now.",
+                  "error")
+            return redirect(url_for("admin_giveaway_detail", gid=gid))
+
+        entry.is_priority = not bool(entry.is_priority)
+        entry.priority_set_at = _dt.utcnow() if entry.is_priority else None
+        db.commit()
+
+        marked = (db.query(GiveawayEntry)
+                  .filter(GiveawayEntry.giveaway_id == gid,
+                          GiveawayEntry.is_priority == True).count())
+        if entry.is_priority:
+            msg = f"⭐ Marked as a guaranteed winner ({marked}/{g.num_winners} slots reserved)."
+            if marked > (g.num_winners or 1):
+                msg += (" ⚠️ More participants are marked than there are winner "
+                        "slots — only the earliest-marked will win.")
+        else:
+            msg = f"Priority removed ({marked}/{g.num_winners} slots reserved)."
+        flash(msg, "success")
+        try:
+            log_admin(db, "giveaway_priority", "giveaway", gid, g.title,
+                      f"entry {entry_id} → {'priority' if entry.is_priority else 'normal'}")
+            db.commit()
+        except Exception:
+            pass
+        return redirect(url_for("admin_giveaway_detail", gid=gid))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_giveaway_detail", gid=gid))
     finally:
         db.close()
 

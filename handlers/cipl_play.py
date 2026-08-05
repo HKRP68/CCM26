@@ -81,8 +81,23 @@ def _env_float(name, default, lo, hi):
 
 CIPL_GAP_COMPRESSION = _env_float("CIPL_GAP_COMPRESSION", 0.4, 0.0, 1.0)
 
+# Dead zone, in rating points of squad-average gap. Below this the two XIs are
+# already an even contest, so compressing them buys no fairness at all — it only
+# rounds every card up or down by one and makes an 87 show as 86 for one captain
+# and 88 for the other. Anything at or under this gap now plays at its true
+# ratings. (At the default 0.4 factor, a 5-point gap is the first that shifts a
+# card by a full point, so 5.0 is also the smallest threshold that changes
+# nothing about how genuinely lopsided ties are handled.)
+CIPL_GAP_DEADZONE = _env_float("CIPL_GAP_DEADZONE", 5.0, 0.0, 100.0)
 
-def _compress_team_gap(team_a, team_b, factor=CIPL_GAP_COMPRESSION):
+# Engine rating keys the balancing pass may touch. Each has a ``card_<key>``
+# twin written by services.cipl_match.cp_to_player_dict that is never modified —
+# that twin is what the UI reads (services.cipl_match.display_rating).
+_RATING_KEYS = ("rating", "bat_rating", "bowl_rating")
+
+
+def _compress_team_gap(team_a, team_b, factor=CIPL_GAP_COMPRESSION,
+                       deadzone=CIPL_GAP_DEADZONE):
     """Nudge two XIs' effective ratings toward each other by ``factor``.
 
     Mutates the player dicts in place (``rating``/``bat_rating``/``bowl_rating``)
@@ -90,15 +105,29 @@ def _compress_team_gap(team_a, team_b, factor=CIPL_GAP_COMPRESSION):
     side eased down while every player keeps their relative standing within the
     squad. Deterministic and idempotent across both innings because the team
     means are computed from the same players each time.
+
+    Two things this deliberately does NOT do:
+
+    * It never touches the ``card_*`` keys, so the ratings shown in the dugout,
+      the bowler picker and the scorecard stay the numbers on the squad sheet.
+      Balancing is a simulation weight, not a re-rating of anybody's players.
+    * It does nothing at all when the two squad averages are within ``deadzone``
+      of each other — an even tie is left completely alone rather than being
+      "balanced" by a rounding step in each direction.
+
+    Returns the applied per-team shift (0.0 when the pass was skipped), which
+    callers can record on the match state for display.
     """
     if factor <= 0 or not team_a or not team_b:
-        return
+        return 0.0
 
     def _mean(team):
-        vals = [float(p.get("rating") or 0) for p in team]
+        vals = [float(p.get("card_rating", p.get("rating")) or 0) for p in team]
         return sum(vals) / len(vals) if vals else 0.0
 
     mean_a, mean_b = _mean(team_a), _mean(team_b)
+    if abs(mean_a - mean_b) <= deadzone:
+        return 0.0
     midpoint = (mean_a + mean_b) / 2.0
 
     def _shift(team, team_mean):
@@ -106,12 +135,17 @@ def _compress_team_gap(team_a, team_b, factor=CIPL_GAP_COMPRESSION):
         if abs(delta) < 1e-9:
             return
         for p in team:
-            for key in ("rating", "bat_rating", "bowl_rating"):
-                if p.get(key) is not None:
-                    p[key] = int(round(max(1, min(100, float(p[key]) + delta))))
+            for key in _RATING_KEYS:
+                # Always shift from the untouched card value, so re-running this
+                # on an already-compressed XI is a no-op rather than a second
+                # nudge on top of the first.
+                base = p.get("card_" + key, p.get(key))
+                if base is not None:
+                    p[key] = int(round(max(1, min(100, float(base) + delta))))
 
     _shift(team_a, mean_a)
     _shift(team_b, mean_b)
+    return abs(factor * (midpoint - mean_a))
 
 
 class SimpleUser:
@@ -1147,8 +1181,12 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
             return
         # Balance the tie: compress the two squads' rating gap so a lopsided
         # draft doesn't turn into a blowout (applied once; carried into both
-        # innings via the stored XIs).
-        _compress_team_gap(bat_xi, bowl_xi)
+        # innings via the stored XIs). Card ratings are left untouched — only
+        # the engine's working numbers move.
+        gap_shift = _compress_team_gap(bat_xi, bowl_xi)
+        if gap_shift:
+            logger.info("/cipl balancing applied ±%.2f to the engine ratings of "
+                        "match %s; card ratings unchanged", gap_shift, draft_id)
 
         # Capture all primitives BEFORE the session closes (avoid detached ORM).
         bat_info = SimpleUser(bat_user.id, bat_user.telegram_id,
@@ -1492,7 +1530,8 @@ async def _prompt_bowler(context, mid, state=None, first=False):
         tag = " 🧤" if cipl_match.is_part_time_bowler(p) else ""
         left = cipl_match.overs_left(state, p)
         row.append(InlineKeyboardButton(
-            f"{p['name']} ({p.get('bowl_rating', 0)}) · {left} left{tag}",
+            f"{p['name']} ({cipl_match.display_rating(p, 'bowl_rating')}) "
+            f"· {left} left{tag}",
             callback_data=f"cipl_bowler_{mid}_{p['roster_id']}"))
         if len(row) == 2:
             rows.append(row); row = []
@@ -1534,7 +1573,7 @@ async def _bot_take_the_ball(context, mid, state):
     text = (f"{_approach_card(state)}\n\n"
             f"🤖 <b>{html.escape(str(state.get('bowl_team_name', 'Bot')))}</b> "
             f"hands the ball to <b>{html.escape(str(bowler['name']))}</b> "
-            f"({bowler.get('bowl_rating', 0)}) for "
+            f"({cipl_match.display_rating(bowler, 'bowl_rating')}) for "
             f"{_unit_word(state)} {state['current_over']}…")
     await _new_action_message(context, state, text, None)
     await asyncio.sleep(BOT_THINK_DELAY)

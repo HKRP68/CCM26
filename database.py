@@ -491,6 +491,9 @@ def _migrate_add_columns():
         "active_days": "INTEGER DEFAULT 0",
         "last_match_date": "TIMESTAMP",
         "quest_points": "INTEGER DEFAULT 0",
+        # Daily allowance of AI matches that may feed quests.
+        "bot_quest_matches_today": "INTEGER DEFAULT 0",
+        "bot_quest_matches_date": "VARCHAR(10)",
         "is_banned": "BOOLEAN DEFAULT FALSE",
         "ban_reason": "VARCHAR(500)",
         "banned_at": "TIMESTAMP",
@@ -546,6 +549,10 @@ def _migrate_add_columns():
     # Rewarded ads are no longer Adsgram-only — tag each postback with the
     # network that sent it. Legacy rows stay NULL and are read as Adsgram.
     _try_add("adsgram_rewards", "provider", "VARCHAR(20)")
+
+    # Giveaways: admin-marked guaranteed winners, set from the Participants tab.
+    _try_add("giveaway_entries", "is_priority", "BOOLEAN DEFAULT FALSE")
+    _try_add("giveaway_entries", "priority_set_at", "TIMESTAMP")
 
     # Challenge League Tournaments: per-league tournament command + match tagging.
     # (The tournament_* tables themselves are created by create_all above.)

@@ -10,15 +10,28 @@ Event-driven design:
 
 Which matches count
 -------------------
-Match-end quests are a reward for *competitive* cricket: a user's own XI
-against another user's own XI. :func:`match_counts_for_quests` is the single
-gate every finalize goes through, and it turns quest tracking off for
+:func:`match_counts_for_quests` is the single gate every finalize goes through,
+and it turns quest tracking off for
 
-  * matches against the AI (``/vsbot``, ``/wpmbot``, ``/lpbot``, ``/ciplbot``),
   * spectator and bot-vs-bot matches, which nobody is playing,
   * unranked practice, which already pays no coins, gems, W/L or streak, and
   * matches the fair-match gate voided because the two Team Overalls are
     ``player_stats_service.STATS_FAIRNESS_OVR_GAP`` or more apart.
+
+Ranked matches against the AI (``/wpmbot`` and ``/vsbot``, the two that pay
+coins, gems and a Win/Loss record) DO count, but only for the first
+:data:`BOT_QUEST_MATCH_DAILY_CAP` of them each day — see
+:func:`consume_bot_quest_allowance`. A player with nobody online should still be
+able to finish "play 3 matches today" against the bot; what the cap stops is a
+whole daily card being farmed off an opponent that is always available and never
+refuses. The allowance is spent per user per UTC day, in the finalize, by every
+bot match that reaches the tracker — whether or not the player happens to hold a
+quest it would have moved.
+
+``/lpbot`` and ``/ciplbot`` remain outside all of this: they are explicitly
+unranked practice (``stats_disabled``/``unranked``, set by
+``handlers.cipl_play.mark_bot_match``) and already pay nothing at all, so they
+stay refused by the gate below along with every other voided match.
 
 Cumulative keys count over the *quest's own period* — a ``wickets_taken``
 quest is "wickets today" as a daily, "wickets this week" as a weekly and
@@ -56,9 +69,17 @@ Per-match event_keys (added for the v2 quest list):
   'defended_total'        — fired once when you won batting first
   'super_over_won'        — fired when you win a Super Over
 
-Retired event_keys — kept so old quests still render, but nothing fires them
-any more now that bot matches earn no quest progress:
-  'vsbot_played', 'vsbot_won'
+Bot-match event_keys (fire only when the match was against the AI, and only
+while the player still has bot-match quest allowance left for the day):
+  'vsbot_played'  — finished a match against the AI
+  'vsbot_won'     — …and won it
+
+Pitch event_keys — one per surface in services.match_constants.PITCH_TYPES,
+fired once at match end for the pitch the match was played on, so a quest can
+ask for "3 matches on a Green pitch today". The key is
+``pitch_<surface lowercased>``; see PITCH_EVENT_KEYS.
+  'pitch_dry', 'pitch_dusty', 'pitch_hard', 'pitch_even', 'pitch_flat',
+  'pitch_green', 'pitch_bouncy'
 
 Career Player event_keys (fired only for the user's own /cmucareer card, and
 only ever consumed by quests flagged career_only). Every one is derived from
@@ -107,6 +128,7 @@ Manual event_key:
              Admin can bump UserQuestProgress.progress directly via the website."""
 
 import logging
+import os
 import random
 from datetime import datetime, timedelta
 from sqlalchemy import func
@@ -170,6 +192,56 @@ CAREER_QUEST_MIX = (
 )
 
 
+# How many AI matches may feed a user's quests each UTC day. Enough to finish a
+# "play 3 matches today" card when nobody is online to play; not enough to farm
+# a whole daily/monthly board off an opponent that never says no. 0 turns AI
+# quest progress off entirely. A malformed env value falls back to the default
+# rather than taking the whole import down with it.
+def _bot_quest_cap(default=3):
+    raw = os.getenv("BOT_QUEST_MATCH_DAILY_CAP")
+    if raw is None:
+        return default
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        logger.warning("BOT_QUEST_MATCH_DAILY_CAP=%r is not an integer — "
+                       "using the default of %d", raw, default)
+        return default
+
+
+BOT_QUEST_MATCH_DAILY_CAP = _bot_quest_cap()
+
+# Surfaces a match can be played on, and the quest event each one fires. Sourced
+# from services.match_constants.PITCH_TYPES so adding a pitch there adds its
+# quest key here, with no second list to keep in step.
+try:
+    from services.match_constants import PITCH_TYPES as _PITCH_TYPES
+except Exception:  # pragma: no cover - import cycle / partial deploy safety
+    _PITCH_TYPES = ["Dry", "Dusty", "Hard", "Even", "Flat", "Green", "Bouncy"]
+
+
+def pitch_event_key(pitch_type) -> str | None:
+    """'Green' → 'pitch_green'. None for a blank/unknown surface.
+
+    Normalised on the way in (case and surrounding space), because the pitch on
+    a match state comes from a mix of admin input, a captain's pick and
+    ``random_match_settings``.
+    """
+    name = str(pitch_type or "").strip().lower()
+    if not name:
+        return None
+    return "pitch_" + name.replace(" ", "_")
+
+
+PITCH_EVENT_KEYS = {p: pitch_event_key(p) for p in _PITCH_TYPES}
+
+
+def is_bot_match(state, *, is_vsbot=False) -> bool:
+    """True when one side of this match was the AI."""
+    s = state or {}
+    return bool(is_vsbot or s.get("is_vsbot") or s.get("is_bot_match"))
+
+
 def match_counts_for_quests(state, *, is_vsbot=False):
     """True when a finished match may feed match-end quest progress.
 
@@ -179,11 +251,8 @@ def match_counts_for_quests(state, *, is_vsbot=False):
     (``handlers.super_over``) — so a quest counts the same wherever the match
     was played, and a mode added later has one place to opt in.
 
-    A match counts only when a user's own XI played another user's own XI:
+    A match is refused when:
 
-    * ``is_vsbot`` / ``is_bot_match`` — one side is the AI. Practice against a
-      bot is not something to hand out quest rewards for, and the bot side has
-      no owner to credit anyway.
     * ``is_spectator`` / ``is_bot_vs_bot`` — nobody played it.
     * ``stats_disabled`` — the fair-match gate voided the match because the two
       Team Overalls were too far apart (see
@@ -193,16 +262,46 @@ def match_counts_for_quests(state, *, is_vsbot=False):
       gate exists to close. Unranked practice sets this flag too, which is the
       same answer for the same reason.
 
+    Matches against the AI pass this gate — ``/wpmbot`` and friends complete
+    quests. Their *daily* limit is enforced separately, per user, by
+    :func:`consume_bot_quest_allowance`, because it needs a user row and a
+    write; this function stays a pure predicate that any caller can ask.
+
     ``state`` may be ``{}`` or ``None`` — an unknown match counts, so a caller
     that cannot supply state does not silently lose every quest.
     """
     s = state or {}
-    if is_vsbot or s.get("is_vsbot") or s.get("is_bot_match"):
-        return False
     if s.get("is_spectator") or s.get("is_bot_vs_bot"):
         return False
     if s.get("stats_disabled") or s.get("unranked"):
         return False
+    return True
+
+
+def consume_bot_quest_allowance(session, user) -> bool:
+    """Spend one of ``user``'s daily AI-match quest slots. True if they had one.
+
+    Called once per user per finished bot match, immediately before that match's
+    quest events fire. Returns False once the day's allowance is gone, which is
+    the caller's signal to skip tracking entirely — so the 4th bot match of the
+    day still pays coins and gems, it just stops moving quest bars.
+
+    The counter lives on the User row (``bot_quest_matches_today`` plus the UTC
+    date it belongs to) and resets lazily on the first bot match of a new day,
+    the same pattern Quick Match's daily limit uses. Caller commits.
+    """
+    if user is None:
+        return False
+    if BOT_QUEST_MATCH_DAILY_CAP <= 0:
+        return False
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    if getattr(user, "bot_quest_matches_date", None) != today:
+        user.bot_quest_matches_date = today
+        user.bot_quest_matches_today = 0
+    used = user.bot_quest_matches_today or 0
+    if used >= BOT_QUEST_MATCH_DAILY_CAP:
+        return False
+    user.bot_quest_matches_today = used + 1
     return True
 
 
@@ -1062,8 +1161,10 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
     callers still wrap this in their own try/except.
 
     Nothing fires at all unless :func:`match_counts_for_quests` says the match
-    qualifies, so a bot match, a spectator match or a Team-Overall mismatch
-    leaves every quest exactly where it was.
+    qualifies, so a spectator match or a Team-Overall mismatch leaves every
+    quest exactly where it was. A match against the AI qualifies, but spends one
+    of the day's :data:`BOT_QUEST_MATCH_DAILY_CAP` bot-match slots to do it, and
+    fires nothing once those are gone.
 
     Player of the Match is worked out by the caller, not here, so a caller that
     wants ``career_potm`` to fire puts ``potm_player_id`` and
@@ -1076,10 +1177,28 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
     if not match_counts_for_quests(state, is_vsbot=is_vsbot):
         return
 
+    bot_match = is_bot_match(state, is_vsbot=is_vsbot)
+    if bot_match and not consume_bot_quest_allowance(session, user):
+        # Daily AI-match allowance spent — the match still paid out, it just
+        # stops here rather than moving any quest bar.
+        return
+
     uid = user.id
     safe_track(session, uid, "match_played", 1)
     if is_winner:
         safe_track(session, uid, "match_won", 1)
+    if bot_match:
+        # Bot-specific quests ("beat the AI twice today") — these only ever
+        # fire from an AI match, so they are never reachable in a PvP game.
+        safe_track(session, uid, "vsbot_played", 1)
+        if is_winner:
+            safe_track(session, uid, "vsbot_won", 1)
+
+    # Pitch quests — "play 3 matches on a Green pitch today". One event per
+    # match, keyed on the surface it was played on.
+    pitch_key = pitch_event_key(state.get("pitch_type"))
+    if pitch_key:
+        safe_track(session, uid, pitch_key, 1)
 
     # Aggregates across all of this user's players (both innings)
     runs_total = wkts_total = fifties = hundreds = 0

@@ -6,10 +6,12 @@ paying coins, instead of having to find/buy the higher version outright.
 Example: you own 93 (Base) of a player and a 96 (IPL) version exists in the
 catalog. You can upgrade your 93 entry into a 96 entry for:
 
-    cost = (buy_value(96) - buy_value(93)) * (1 + markup)
+    cost = buy_value(96) - buy_value(93)
 
-The markup (default 10%) makes it a genuine coin sink while still being
-cheaper/easier than acquiring the higher version through packs or the market.
+You pay exactly the difference in card value — nothing on top. The buy-value
+curve is steep at the top end, so a percentage markup on that difference read as
+an arbitrary surcharge on precisely the upgrades players care about most; the
+price is now the honest "pay the gap" number the UI already implies.
 
 This works on the Player-version model: OVR lives on the Player row, so an
 "upgrade" swaps the roster entry's player_id to the higher-version Player,
@@ -24,18 +26,20 @@ from config import get_buy_value
 
 logger = logging.getLogger(__name__)
 
-# Markup on the raw rating-cost difference. 0.10 = 10% extra (the sink).
-UPGRADE_MARKUP = 0.10
 # Minimum cost so trivial +1 upgrades still cost something meaningful.
 MIN_UPGRADE_COST = 1000
 
 
 def _upgrade_cost(current_rating, target_rating):
-    base = get_buy_value(target_rating) - get_buy_value(current_rating)
-    if base < 0:
-        base = 0
-    cost = int(round(base * (1 + UPGRADE_MARKUP)))
-    return max(MIN_UPGRADE_COST, cost)
+    """Coins to upgrade ``current_rating`` → ``target_rating``.
+
+    Straight difference in buy value, floored at MIN_UPGRADE_COST. No markup:
+    an upgrade costs what the extra rating is worth, and nothing else.
+    """
+    cost = get_buy_value(target_rating) - get_buy_value(current_rating)
+    if cost < 0:
+        cost = 0
+    return max(MIN_UPGRADE_COST, int(cost))
 
 
 def get_upgrade_options(session, user_id, roster_id):

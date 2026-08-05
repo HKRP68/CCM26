@@ -16,6 +16,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime
 
 _TG_IDS = itertools.count(98_401)
 
@@ -92,11 +93,21 @@ class MatchCountsForQuestsTests(unittest.TestCase):
         self.assertTrue(match_counts_for_quests(None))
         self.assertTrue(match_counts_for_quests({}))
 
-    def test_bot_matches_do_not_count(self):
+    def test_bot_matches_pass_the_gate(self):
+        # /wpmbot and /vsbot complete quests. The gate lets them through; the
+        # DAILY limit on them is consume_bot_quest_allowance's job, not this
+        # predicate's — see BotMatchQuestAllowanceTests.
         from services.quest_service import match_counts_for_quests
-        self.assertFalse(match_counts_for_quests({}, is_vsbot=True))
-        self.assertFalse(match_counts_for_quests({"is_vsbot": True}))
-        self.assertFalse(match_counts_for_quests({"is_bot_match": True}))
+        self.assertTrue(match_counts_for_quests({}, is_vsbot=True))
+        self.assertTrue(match_counts_for_quests({"is_vsbot": True}))
+        self.assertTrue(match_counts_for_quests({"is_bot_match": True}))
+
+    def test_unranked_bot_practice_still_does_not_count(self):
+        # /lpbot and /ciplbot mark their state unranked + stats_disabled
+        # (handlers.cipl_play.mark_bot_match); they pay nothing and stay out.
+        from services.quest_service import match_counts_for_quests
+        self.assertFalse(match_counts_for_quests(
+            {"is_bot_match": True, "stats_disabled": True, "unranked": True}))
 
     def test_matches_nobody_played_do_not_count(self):
         from services.quest_service import match_counts_for_quests
@@ -186,12 +197,70 @@ class MismatchGateTests(unittest.TestCase):
         self.session.flush()
         self.assertEqual(self._progress(), 0)
 
-    def test_a_bot_match_credits_nothing(self):
+    def test_a_bot_match_credits_the_runs_while_allowance_remains(self):
+        # /wpmbot completes quests — that is the whole point of the allowance.
         from services.quest_service import track_user_match_quests
         track_user_match_quests(self.session, self._state(), self.user,
                                 True, True, self.user.id)
         self.session.flush()
+        self.assertEqual(self._progress(), 80)
+
+    def test_a_bot_match_credits_nothing_once_the_daily_cap_is_spent(self):
+        from services import quest_service
+        from services.quest_service import track_user_match_quests
+        self.user.bot_quest_matches_date = datetime.utcnow().strftime("%Y-%m-%d")
+        self.user.bot_quest_matches_today = quest_service.BOT_QUEST_MATCH_DAILY_CAP
+        self.session.flush()
+        track_user_match_quests(self.session, self._state(), self.user,
+                                True, True, self.user.id)
+        self.session.flush()
         self.assertEqual(self._progress(), 0)
+
+    def test_the_cap_only_applies_to_bot_matches(self):
+        # A spent bot allowance must not block a real PvP match.
+        from services import quest_service
+        from services.quest_service import track_user_match_quests
+        self.user.bot_quest_matches_date = datetime.utcnow().strftime("%Y-%m-%d")
+        self.user.bot_quest_matches_today = quest_service.BOT_QUEST_MATCH_DAILY_CAP
+        self.session.flush()
+        track_user_match_quests(self.session, self._state(), self.user,
+                                True, False, self.user.id)
+        self.session.flush()
+        self.assertEqual(self._progress(), 80)
+
+
+class BotMatchQuestAllowanceTests(unittest.TestCase):
+    """The per-day limit on how many AI matches may feed quests."""
+
+    def setUp(self):
+        from database import get_session
+        self.session = get_session()
+        self.user = _make_user(self.session, next(_TG_IDS))
+        self.session.commit()
+
+    def tearDown(self):
+        self.session.rollback()
+        self.session.close()
+
+    def test_the_cap_is_spent_then_refused(self):
+        from services import quest_service
+        from services.quest_service import consume_bot_quest_allowance
+        cap = quest_service.BOT_QUEST_MATCH_DAILY_CAP
+        for i in range(cap):
+            self.assertTrue(consume_bot_quest_allowance(self.session, self.user),
+                            f"bot match {i + 1} of {cap} should have been allowed")
+        self.assertFalse(consume_bot_quest_allowance(self.session, self.user))
+        self.assertEqual(self.user.bot_quest_matches_today, cap)
+
+    def test_a_new_day_resets_the_allowance(self):
+        from services.quest_service import consume_bot_quest_allowance
+        consume_bot_quest_allowance(self.session, self.user)
+        self.user.bot_quest_matches_date = "2000-01-01"
+        self.user.bot_quest_matches_today = 999
+        self.assertTrue(consume_bot_quest_allowance(self.session, self.user))
+        self.assertEqual(self.user.bot_quest_matches_today, 1)
+        self.assertEqual(self.user.bot_quest_matches_date,
+                         datetime.utcnow().strftime("%Y-%m-%d"))
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -527,7 +596,25 @@ class CatalogueTests(unittest.TestCase):
             # The tracker also fires from (event_key, amount) tuple tables.
             keys.update(re.findall(r'^\s*\("([a-z0-9_]+)",\s*\w+\),\s*$',
                                    source, re.M))
+        # Pitch keys are the one family built at runtime rather than written as
+        # a literal — track_user_match_quests fires pitch_event_key(pitch_type)
+        # for whatever surface the match was on. Take them from the same
+        # PITCH_TYPES-derived map the tracker uses, so a pitch added to
+        # match_constants shows up here without anyone editing this test, and a
+        # quest on a surface that does not exist still fails.
+        from services.quest_service import PITCH_EVENT_KEYS
+        keys.update(PITCH_EVENT_KEYS.values())
         return keys
+
+    def test_pitch_event_keys_match_the_playable_surfaces(self):
+        from services.match_constants import PITCH_TYPES
+        from services.quest_service import PITCH_EVENT_KEYS, pitch_event_key
+        self.assertEqual(set(PITCH_EVENT_KEYS), set(PITCH_TYPES))
+        self.assertEqual(pitch_event_key("Green"), "pitch_green")
+        # Whatever case/padding the state carries resolves to the same key.
+        self.assertEqual(pitch_event_key("  green "), "pitch_green")
+        self.assertIsNone(pitch_event_key(None))
+        self.assertIsNone(pitch_event_key(""))
 
     def test_no_seeded_quest_uses_an_event_nothing_fires(self):
         from seed_quests_v3 import DAILY_QUESTS, MONTHLY_QUESTS

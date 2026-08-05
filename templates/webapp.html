@@ -2961,9 +2961,12 @@
   <div class="filters">
     <button class="chip active" data-metric="wins" onclick="setLeaderboardMetric('wins')">🏆 Wins</button>
     <button class="chip" data-metric="win_rate" onclick="setLeaderboardMetric('win_rate')">📈 Win %</button>
+    <button class="chip" data-metric="streak" onclick="setLeaderboardMetric('streak')">🔥 Streak</button>
+    <button class="chip" data-metric="active_days" onclick="setLeaderboardMetric('active_days')">📅 Active Days</button>
     <button class="chip" data-metric="coins" onclick="setLeaderboardMetric('coins')">💰 Coins</button>
     <button class="chip" data-metric="roster_rating" onclick="setLeaderboardMetric('roster_rating')">⭐ Squad</button>
   </div>
+  <p id="lb-caption" style="margin:0 0 0.6rem;font-size:0.72rem;color:var(--muted);"></p>
   <div id="leaderboard-list">
     <div class="empty"><div class="icon">⏳</div>Loading…</div>
   </div>
@@ -4497,6 +4500,18 @@ function renderInnings(title, inn) {
 // ════════════════ Leaderboard ════════════════
 let lbMetric = 'wins';
 
+// One line under the chips saying what the board actually measures — "Streak"
+// and "Active Days" are both ambiguous without it (best-ever vs current run,
+// days played vs days logged in).
+const LB_CAPTIONS = {
+  wins: 'Career wins across every ranked match. The AI opponent is not listed.',
+  win_rate: 'Win percentage, minimum 5 matches played.',
+  streak: 'Longest run of wins ever reached — a defeat resets the live streak.',
+  active_days: 'Days on which you played at least one match.',
+  coins: 'Current coin balance.',
+  roster_rating: 'Average rating of your squad, minimum 5 cards.',
+};
+
 function setLeaderboardMetric(m) {
   haptic('light');
   lbMetric = m;
@@ -4508,6 +4523,8 @@ function setLeaderboardMetric(m) {
 async function loadLeaderboard() {
   const el = document.getElementById('leaderboard-list');
   const rankPill = document.getElementById('my-rank-pill');
+  const caption = document.getElementById('lb-caption');
+  if (caption) caption.textContent = LB_CAPTIONS[lbMetric] || '';
   el.innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
   rankPill.style.display = 'none';
   const { ok, data } = await api('/api/webapp/leaderboard', {
@@ -7299,7 +7316,7 @@ function renderUpgradeOptions(data) {
     body.innerHTML = html;
     return;
   }
-  html += `<p style="color:var(--muted);font-size:0.78rem;margin:0 0 0.6rem;">Upgrade to a higher version (you keep your squad slot):</p>`;
+  html += `<p style="color:var(--muted);font-size:0.78rem;margin:0 0 0.6rem;">Upgrade to a higher version (you keep your squad slot).<br>You pay the difference in card value — no extra fee.</p>`;
   html += data.options.map(o => `
     <div class="upgrade-option ${o.affordable ? 'affordable' : ''}">
       <div class="upgrade-arrow">⬆️</div>

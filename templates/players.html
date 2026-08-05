@@ -159,8 +159,11 @@
       <td>
         <div class="actions">
           <a href="{{ url_for('player_edit', player_id=p.id) }}" class="btn btn-blue btn-sm">Edit</a>
-          <form method="POST" action="{{ url_for('player_delete', player_id=p.id) }}" style="display:inline;" onsubmit="return confirm('Delete {{ p.name }}?')">
+          <form method="POST" action="{{ url_for('player_delete', player_id=p.id) }}" style="display:inline;"
+                onsubmit="return confirmPlayerDelete(this)">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="confirm_name" value="">
+          <input type="hidden" name="expected_name" value="{{ p.name }}">
             <button type="submit" class="btn btn-red btn-sm">Del</button>
           </form>
           {% if p.is_active %}
@@ -209,6 +212,25 @@
 </div>
 
 <script>
+  // Deleting a player is not undoable — it purges the card from every roster,
+  // market slot and pack, refunding its sell value to each owner. A one-tap
+  // "OK" next to an "Edit" button is far too easy to hit by accident, so the
+  // admin has to type the player's name back. The server checks the same thing
+  // (see player_delete in admin.py), so this is a guard rail, not the lock.
+  function confirmPlayerDelete(form) {
+    const expected = form.elements['expected_name'].value;
+    const typed = window.prompt(
+      'This permanently deletes "' + expected + '" and refunds its sell value ' +
+      'to every owner.\n\nType the player name exactly to confirm:');
+    if (typed === null) return false;               // cancelled
+    if (typed.trim() !== expected.trim()) {
+      window.alert('Name did not match — nothing was deleted.');
+      return false;
+    }
+    form.elements['confirm_name'].value = typed;
+    return true;
+  }
+
   function selectedPlayerIds() {
     return Array.from(document.querySelectorAll('.player-row-cb:checked'))
                 .map(cb => cb.value);
