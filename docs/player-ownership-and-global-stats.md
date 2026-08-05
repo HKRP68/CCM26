@@ -85,7 +85,7 @@ immediately), and only when there *is* something to write does
 stall every update queued behind it.
 
 Planning **reserves** the sender's throttle slot before returning, which is what
-makes the off-loop write safe: two messages arriving back to back cannot both
+makes the off-loop write safe: two messages arriving back-to-back cannot both
 queue a write for the same member and race on the unique `(chat_id, user_id)`
 index. `_release_throttle` hands the slot back when the write turns out to be a
 no-op or fails, so a user who debuts *after* their first message is picked up on

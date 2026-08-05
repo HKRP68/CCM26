@@ -254,6 +254,51 @@ class MembershipTrackingTests(OwnershipTestBase):
         self.assertIsNotNone(first)
         self.assertIsNone(second)
 
+    def test_pruning_drops_only_the_entries_past_the_window(self):
+        now = datetime.utcnow()
+        window = chat_tracker.MEMBER_THROTTLE_SECONDS
+        chat_tracker._MEMBER_SEEN_MEM.update({
+            ("fresh", 1): now,
+            ("stale", 2): now - timedelta(seconds=window + 1),
+        })
+        chat_tracker._prune_member_seen(now)
+        self.assertEqual(list(chat_tracker._MEMBER_SEEN_MEM), [("fresh", 1)])
+
+    def test_pruning_survives_the_cache_being_popped_underneath_it(self):
+        """The write runs in a worker thread and pops this dict as it goes.
+
+        ``_release_throttle`` hands a slot back from that thread while the loop
+        thread may be inside ``_prune_member_seen``. Walking ``.items()`` live
+        then raises "dictionary changed size during iteration" and loses the
+        very update that triggered the prune, so the prune must walk a snapshot.
+
+        The pop is driven from inside the iteration rather than from a real
+        thread so the interleaving is certain instead of a coin flip.
+        """
+        now = datetime.utcnow()
+        stale = now - timedelta(seconds=chat_tracker.MEMBER_THROTTLE_SECONDS + 1)
+
+        class _PopsWhenCompared:
+            """A timestamp that releases another slot the moment it's read."""
+
+            def __init__(self, when, release):
+                self.when = when
+                self.release = release
+
+            def __rsub__(self, other):          # evaluated as ``now - ts``
+                chat_tracker._release_throttle(self.release)
+                return other - self.when
+
+        chat_tracker._MEMBER_SEEN_MEM.update({
+            (GROUP_ID, 1): _PopsWhenCompared(stale, (GROUP_ID, 2)),
+            (GROUP_ID, 2): stale,
+            (GROUP_ID, 3): now,
+        })
+
+        chat_tracker._prune_member_seen(now)     # must not raise RuntimeError
+        # The fresh entry survives; both stale ones are gone either way.
+        self.assertEqual(list(chat_tracker._MEMBER_SEEN_MEM), [(GROUP_ID, 3)])
+
     def test_a_reserved_slot_is_handed_back_when_nothing_is_written(self):
         plan = chat_tracker._plan_member_write(_update(501))  # never debuted
         self.assertIsNotNone(plan)

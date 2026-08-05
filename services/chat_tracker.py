@@ -119,8 +119,14 @@ GROUP_CHAT_TYPES = ("group", "supergroup")
 
 
 def _prune_member_seen(now):
-    """Drop membership-throttle entries that no longer suppress a write."""
-    stale = [key for key, ts in _MEMBER_SEEN_MEM.items()
+    """Drop membership-throttle entries that no longer suppress a write.
+
+    Iterates a *snapshot*: this runs on the event loop, while the worker thread
+    doing the write can pop the same dict through ``_release_throttle``. Reading
+    ``.items()`` live would then raise "dictionary changed size during
+    iteration" and lose the member update that triggered the prune.
+    """
+    stale = [key for key, ts in list(_MEMBER_SEEN_MEM.items())
              if (now - ts).total_seconds() >= MEMBER_THROTTLE_SECONDS]
     for key in stale:
         _MEMBER_SEEN_MEM.pop(key, None)
