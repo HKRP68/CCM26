@@ -15,7 +15,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base
-from models import Player, PlayerGameStats, User
+from models import BotCommand, Player, PlayerGameStats, User
 from services import global_stats_service as gs
 import handlers.gstats as gstats_mod
 
@@ -299,6 +299,14 @@ class GStatsHandlerTests(GlobalStatsTestBase):
         text = self._call(["Virat"])
         self.assertIn("Multiple players found", text)
         self.assertIn("/gstats Virat Kohli", text)
+
+    def test_an_admin_can_switch_the_command_off(self):
+        """It is in the website's command catalog, so the toggle must bite."""
+        self._user(1)
+        self.db.add(BotCommand(command_key="gstats", display_name="/gstats",
+                               enabled=False))
+        self.db.commit()
+        self.assertIn("temporarily disabled", self._call(["Virat Kohli"]))
 
     def test_you_must_have_debuted(self):
         self.assertIn("/debut", self._call(["Virat Kohli"], tg_id=404))

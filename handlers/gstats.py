@@ -149,6 +149,13 @@ async def gstats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     search_name = " ".join(context.args).strip()
     session = get_session()
     try:
+        from services.command_config_service import (
+            is_command_enabled, get_disabled_message)
+        if not is_command_enabled(session, "gstats"):
+            await update.message.reply_text(
+                get_disabled_message(session, "gstats"), parse_mode="HTML")
+            return
+
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if not user:
             await update.message.reply_text("❌ Do /debut first!")

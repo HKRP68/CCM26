@@ -110,6 +110,14 @@ The card also names the managers with the most runs and most wickets using him
 (a natural person to trade with), and splits the totals per edition when the
 card has variants.
 
+## Admin registration
+
+Both commands are seeded into the `bot_commands` catalog (`database.py`,
+idempotent) under the `utility` category with no cooldown and no reward, so they
+appear in the website's command manager and can be switched off there. Each
+handler checks `is_command_enabled` first and fails open when there is no row,
+matching `/claim`, `/daily`, `/sim` and the rest of the catalog.
+
 ## Menu scoping
 
 Telegram caps a slash menu at 100 commands **per scope**, and the group scope

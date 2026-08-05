@@ -1060,6 +1060,14 @@ def _migrate_add_columns():
                  "Instant auto-simulated match vs a Sim XI — scorecard, result, "
                  "and ball-by-ball commentary JSON.",
                  "matches", 0, 95, dict()),
+                ("gstats", "/gstats", "globalstats",
+                 "A player's career record summed over every owner and every "
+                 "match type. Read-only.",
+                 "utility", 0, 100, dict()),
+                ("owners", "/owners", "ownedby whoowns",
+                 "Who owns a player in this group, plus how rare the card is "
+                 "globally. Read-only; helps players find trades.",
+                 "utility", 0, 105, dict()),
             ]
             # Two queries for the whole catalog rather than two per command —
             # every round trip here is downtime on a cold start.

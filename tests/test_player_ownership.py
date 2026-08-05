@@ -23,7 +23,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base
-from models import ChatMember, Player, User, UserRoster
+from models import BotCommand, ChatMember, Player, User, UserRoster
 from services import chat_tracker
 from services import ownership_service as own
 import handlers.owners as owners_mod
@@ -417,6 +417,14 @@ class OwnersHandlerTests(OwnershipTestBase):
         self._user(1)
         self.db.commit()
         self.assertIn("not found", self._call(["Nobody At All"]))
+
+    def test_an_admin_can_switch_the_command_off(self):
+        """It is in the website's command catalog, so the toggle must bite."""
+        self._user(1)
+        self.db.add(BotCommand(command_key="owners", display_name="/owners",
+                               enabled=False))
+        self.db.commit()
+        self.assertIn("temporarily disabled", self._call(["Rohit Sharma"]))
 
     def test_no_argument_explains_the_command(self):
         self._user(1)
