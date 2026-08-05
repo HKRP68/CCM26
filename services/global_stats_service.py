@@ -150,6 +150,25 @@ def top_owners(session, player_ids: Sequence[int], metric: str = "runs",
 
 
 def per_version(session, versions: Sequence[Player]) -> List[Dict[str, object]]:
-    """One aggregate per edition, for cards that have variants."""
-    return [{"player": version, "totals": aggregate_stats(session, [version.id])}
+    """Innings, runs and wickets per edition, for cards that have variants.
+
+    One grouped query for every edition rather than a full ``aggregate_stats``
+    each — the per-edition line is a three-number summary, and a card with six
+    variants should not cost eighteen queries to print it.
+    """
+    if not versions:
+        return []
+    ids = [v.id for v in versions]
+    rows = (session.query(PlayerGameStats.player_id,
+                          func.sum(PlayerGameStats.bat_inns),
+                          func.sum(PlayerGameStats.runs),
+                          func.sum(PlayerGameStats.wickets_taken))
+            .filter(PlayerGameStats.player_id.in_(ids))
+            .group_by(PlayerGameStats.player_id)
+            .all())
+    summed = {pid: {"bat_inns": int(inns or 0), "runs": int(runs or 0),
+                    "wickets_taken": int(wickets or 0)}
+              for pid, inns, runs, wickets in rows}
+    empty = {"bat_inns": 0, "runs": 0, "wickets_taken": 0}
+    return [{"player": version, "totals": summed.get(version.id, dict(empty))}
             for version in versions]

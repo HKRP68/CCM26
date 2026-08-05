@@ -35,16 +35,24 @@ def _run(coro):
 
 
 class _Msg:
-    def __init__(self, sent):
+    """A Telegram message recording what the handler sent.
+
+    ``photo_ok`` decides whether the card image "uploads": Telegram returns a
+    Message on success and the handler treats a None return as "no photo went
+    out, send the stats as text instead", so both settings are worth exercising.
+    """
+
+    def __init__(self, sent, photo_ok=False):
         self.sent = sent
+        self.photo_ok = photo_ok
 
     async def reply_text(self, text, **kwargs):
-        self.sent.append(text)
+        self.sent.append(("text", text))
         return self
 
     async def reply_photo(self, **kwargs):
-        self.sent.append(kwargs.get("caption", ""))
-        return None
+        self.sent.append(("photo", kwargs.get("caption", "")))
+        return self if self.photo_ok else None
 
 
 class GlobalStatsTestBase(unittest.TestCase):
@@ -242,14 +250,14 @@ class GStatsHandlerTests(GlobalStatsTestBase):
         gstats_mod.get_session = self._real
         super().tearDown()
 
-    def _call(self, args, tg_id=1):
-        msg = _Msg(self.sent)
+    def _call(self, args, tg_id=1, photo_ok=False):
+        msg = _Msg(self.sent, photo_ok=photo_ok)
         update = SimpleNamespace(
             effective_user=SimpleNamespace(id=tg_id, is_bot=False),
             message=msg)
         context = SimpleNamespace(args=args, bot_data={})
         _run(gstats_mod.gstats_handler(update, context))
-        return "\n".join(self.sent)
+        return "\n".join(body for _kind, body in self.sent)
 
     def test_it_reports_the_whole_games_record(self):
         caller = self._user(1, username="caller")
@@ -272,6 +280,42 @@ class GStatsHandlerTests(GlobalStatsTestBase):
         self.assertIn("Most runs:</b> @caller", text)
         self.assertIn("Most wickets:</b> @mate", text)
         self.assertIn("By edition", text)
+
+    def test_a_short_card_travels_as_the_photo_caption_alone(self):
+        """One message, not a photo followed by the same stats again."""
+        caller = self._user(1, username="caller")
+        self._stats(caller, self.base, bat_inns=10, runs=400, balls_faced=300,
+                    times_out=8)
+        self.db.commit()
+
+        self._call(["Virat Kohli"], photo_ok=True)
+        self.assertEqual([kind for kind, _ in self.sent], ["photo"])
+        self.assertIn("Runs: 400", self.sent[0][1])
+
+    def test_an_over_long_card_falls_back_to_a_short_caption_plus_text(self):
+        """Telegram caps a caption at 1024 chars; the stats must survive it."""
+        caller = self._user(1, username="caller")
+        self._stats(caller, self.base, bat_inns=10, runs=400)
+        self.db.commit()
+
+        real = gstats_mod._caption_fits
+        gstats_mod._caption_fits = lambda text, **kw: False
+        try:
+            self._call(["Virat Kohli"], photo_ok=True)
+        finally:
+            gstats_mod._caption_fits = real
+
+        self.assertEqual([kind for kind, _ in self.sent], ["photo", "text"])
+        self.assertNotIn("Runs: 400", self.sent[0][1])   # short caption
+        self.assertIn("Runs: 400", self.sent[1][1])      # full block follows
+
+    def test_a_failed_photo_still_delivers_the_stats(self):
+        caller = self._user(1, username="caller")
+        self._stats(caller, self.base, bat_inns=10, runs=400)
+        self.db.commit()
+        self._call(["Virat Kohli"], photo_ok=False)
+        self.assertEqual(self.sent[-1][0], "text")
+        self.assertIn("Runs: 400", self.sent[-1][1])
 
     def test_a_card_nobody_has_played_says_so_plainly(self):
         self._user(1)

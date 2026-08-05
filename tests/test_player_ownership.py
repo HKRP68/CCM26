@@ -21,6 +21,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from database import Base
 from models import BotCommand, ChatMember, Player, User, UserRoster
@@ -71,7 +72,11 @@ def _update(tg_id, chat_type="supergroup", chat_id=GROUP_ID, title="Cric Masters
 
 class OwnershipTestBase(unittest.TestCase):
     def setUp(self):
-        self.engine = create_engine("sqlite://")
+        # One shared in-memory connection, usable from a worker thread —
+        # record_chat_member_async does its write off the event loop.
+        self.engine = create_engine(
+            "sqlite://", poolclass=StaticPool,
+            connect_args={"check_same_thread": False})
         Base.metadata.create_all(self.engine)
         self.db = sessionmaker(bind=self.engine)()
         self.db.close = lambda: None  # handlers close it; the test still reads
@@ -219,6 +224,42 @@ class MembershipTrackingTests(OwnershipTestBase):
         row = self.db.query(ChatMember).filter(ChatMember.user_id == user.id).one()
         self.assertFalse(row.is_active)
 
+    def test_the_middleware_path_writes_the_same_row(self):
+        """The async wrapper does the work in a worker, not on the loop."""
+        user = self._user(501)
+        self.db.commit()
+        _run(chat_tracker.record_chat_member_async(_update(501)))
+        self.assertEqual([r.user_id for r in self._rows()], [user.id])
+
+    def test_the_async_path_skips_the_worker_when_there_is_nothing_to_write(self):
+        self._user(501)
+        self.db.commit()
+        _run(chat_tracker.record_chat_member_async(_update(501)))
+
+        calls = []
+        real = chat_tracker._write_member_plan
+        chat_tracker._write_member_plan = lambda plan: calls.append(plan)
+        try:
+            _run(chat_tracker.record_chat_member_async(_update(501)))
+        finally:
+            chat_tracker._write_member_plan = real
+        self.assertEqual(calls, [])
+
+    def test_planning_reserves_the_slot_so_two_updates_cannot_race(self):
+        """Off-loop writes mean the second update must not queue a duplicate."""
+        self._user(501)
+        self.db.commit()
+        first = chat_tracker._plan_member_write(_update(501))
+        second = chat_tracker._plan_member_write(_update(501))
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
+
+    def test_a_reserved_slot_is_handed_back_when_nothing_is_written(self):
+        plan = chat_tracker._plan_member_write(_update(501))  # never debuted
+        self.assertIsNotNone(plan)
+        self.assertFalse(chat_tracker._write_member_plan(plan))
+        self.assertEqual(chat_tracker._MEMBER_SEEN_MEM, {})
+
     def test_a_leaver_who_was_never_seen_creates_no_row(self):
         self._user(501)
         self.db.commit()
@@ -308,6 +349,31 @@ class OwnershipQueryTests(OwnershipTestBase):
             self.db, [self.base.id, self.gold.id], [GROUP_ID])
         self.assertEqual(counts, {GROUP_ID: 1})
 
+        # …and the listing agrees: one entry, both editions on it.
+        owners = own.group_owners(self.db, GROUP_ID, [self.base.id, self.gold.id])
+        self.assertEqual(len(owners), 1)
+        self.assertEqual([c.version for c in owners[0]["cards"]], ["Gold", "Base"])
+
+    def test_a_collapsed_owner_is_dated_by_their_oldest_holding(self):
+        hoarder = self._user(1)
+        self._own(hoarder, self.gold, days_ago=2)
+        self._own(hoarder, self.base, days_ago=40)
+        self._member(hoarder)
+        self.db.commit()
+        owners = own.group_owners(self.db, GROUP_ID, [self.base.id, self.gold.id])
+        self.assertEqual((datetime.utcnow() - owners[0]["acquired"]).days, 40)
+
+    def test_owners_are_ranked_by_their_best_edition(self):
+        base_only = self._user(1, username="base")
+        gold_owner = self._user(2, username="gold")
+        self._own(base_only, self.base)
+        self._own(gold_owner, self.gold)
+        self._member(base_only)
+        self._member(gold_owner)
+        self.db.commit()
+        owners = own.group_owners(self.db, GROUP_ID, [self.base.id, self.gold.id])
+        self.assertEqual([o["user"].username for o in owners], ["gold", "base"])
+
     def test_scarcity_reads_as_a_ratio(self):
         self.assertEqual(own.scarcity_line(0, 100), "nobody owns this card yet")
         self.assertEqual(own.scarcity_line(100, 100), "every manager owns one")
@@ -362,6 +428,29 @@ class OwnersHandlerTests(OwnershipTestBase):
         self.assertIn("Gold ⭐94", text)
         self.assertIn("5d", text)
         self.assertIn("/trade @user", text)
+
+    def test_one_manager_with_two_editions_is_one_line_and_one_owner(self):
+        """Never "Owned by 2 of 1 known member (200%)"."""
+        hoarder = self._user(1, username="hoarder")
+        self._own(hoarder, self.base, days_ago=30)
+        self._own(hoarder, self.gold, days_ago=2)
+        self._member(hoarder)
+        self.db.commit()
+
+        text = self._call(["Rohit Sharma"])
+        self.assertIn("Owned by <b>1</b> of 1 known member (100%)", text)
+        self.assertEqual(text.count("@hoarder"), 1)
+        self.assertIn("Gold ⭐94 + Base ⭐92", text)
+
+    def test_an_owner_the_bot_has_not_seen_speak_never_exceeds_the_group(self):
+        """Membership is learned, so a stale count must not read as >100%."""
+        quiet = self._user(1, username="quiet")
+        self._own(quiet, self.base)
+        row = self._member(quiet)
+        row.is_active = True
+        self.db.commit()
+        text = self._call(["Rohit Sharma"])
+        self.assertIn("Owned by <b>1</b> of 1 known member (100%)", text)
 
     def test_a_manager_without_a_username_is_still_reachable(self):
         caller = self._user(1, first_name="Solo")

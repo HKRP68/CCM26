@@ -926,6 +926,27 @@ def _migrate_add_columns():
                 f"migration step skipped ({sql[:60]}…): {e}"
             )
 
+    # ─────────────────────────────────────────────────────────────
+    # /gstats reads every owner's rows for one card, so it filters
+    # player_game_stats on player_id alone. The table's existing composite
+    # index leads with user_id and cannot serve that predicate, and
+    # create_all() never adds an index to a table that already exists — so the
+    # index has to be created here or the command scans the whole table.
+    # ─────────────────────────────────────────────────────────────
+    pgs_index_sql = [
+        "CREATE INDEX IF NOT EXISTS ix_pgs_player "
+        "ON player_game_stats (player_id)",
+    ]
+    done, sig = _migration_signature_matches("pgs_player_index", pgs_index_sql)
+    if not done:
+        failures = _run_isolated(pgs_index_sql)
+        if not failures:
+            _record_migration_signature("pgs_player_index", sig)
+        for sql, e in failures:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"migration step skipped ({sql[:60]}…): {e}")
+
     # Seed default packs (idempotent)
     try:
         from services.pack_service import seed_default_packs

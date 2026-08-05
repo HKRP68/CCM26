@@ -1020,12 +1020,14 @@ def main():
             if _is_storage_only_command(update):
                 return
             try:
-                from services.chat_tracker import record_chat, record_chat_member
+                from services.chat_tracker import (
+                    record_chat, record_chat_member_async)
                 record_chat(update)
                 # Learns which managers are in this group — /owners reads it.
-                # Throttled per member per chat, so this is a dict lookup on
-                # all but a handful of updates.
-                record_chat_member(update)
+                # Decides on the loop (a dict lookup on all but a handful of
+                # updates) and does the rare write in a worker thread, so a
+                # slow database round trip can't stall the update queue.
+                await record_chat_member_async(update)
             except Exception:
                 pass
         app.add_handler(TypeHandler(_TGUpdate, _track_chat), group=-3)

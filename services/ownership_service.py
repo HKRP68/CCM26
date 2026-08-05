@@ -14,6 +14,7 @@ unknown, which is why every group figure is reported as "of N known members".
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Dict, List, Sequence
 
 from models import ChatMember, Player, User, UserRoster
@@ -40,6 +41,39 @@ def group_owner_rows(session, chat_id: int, player_ids: Sequence[int]):
                     UserRoster.player_id.in_(list(player_ids)))
             .order_by(Player.rating.desc(), UserRoster.acquired_date.asc())
             .all())
+
+
+def group_owners(session, chat_id: int, player_ids: Sequence[int]) -> List[Dict]:
+    """One entry per *manager* in the group who owns the player.
+
+    ``group_owner_rows`` returns a roster row, and a manager holding both Base
+    and Gold has two of those — listing them twice would name the same person
+    twice and count them twice ("2 of 1 known member"). Collapsing here keeps
+    the identity right while preserving every edition they hold, which is
+    exactly what a trader wants to see against the name.
+
+    Each entry: ``{"user", "cards": [Player, …], "acquired": datetime|None}``,
+    where ``acquired`` is the earliest of that manager's holdings.
+    """
+    collapsed: Dict[int, Dict] = {}
+    for user, entry, card in group_owner_rows(session, chat_id, player_ids):
+        holding = collapsed.get(user.id)
+        if holding is None:
+            collapsed[user.id] = {"user": user, "cards": [card],
+                                  "acquired": entry.acquired_date}
+            continue
+        holding["cards"].append(card)
+        if entry.acquired_date and (holding["acquired"] is None
+                                    or entry.acquired_date < holding["acquired"]):
+            holding["acquired"] = entry.acquired_date
+
+    owners = list(collapsed.values())
+    for holding in owners:
+        holding["cards"].sort(key=lambda c: (-(c.rating or 0), c.id))
+    # Best card first, then the longest-standing holding.
+    owners.sort(key=lambda h: (-(h["cards"][0].rating or 0),
+                               h["acquired"] or datetime.max))
+    return owners
 
 
 def group_member_count(session, chat_id: int) -> int:

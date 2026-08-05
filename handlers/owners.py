@@ -81,11 +81,13 @@ def _global_block(session, player_ids) -> str:
 def _render_group_page(session, player, versions, chat_id, chat_title, page):
     """Build the group view for one page. Returns (text, total_pages, total)."""
     player_ids = [v.id for v in versions]
-    rows = own.group_owner_rows(session, chat_id, player_ids)
-    total = len(rows)
+    # One entry per manager, not per roster row — somebody holding Base *and*
+    # Gold is one owner with two cards, and must be counted once.
+    owners = own.group_owners(session, chat_id, player_ids)
+    total = len(owners)
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     page = max(1, min(page, total_pages))
-    window = rows[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
+    window = owners[(page - 1) * PAGE_SIZE: page * PAGE_SIZE]
 
     title = escape(chat_title or "this group")
     lines = [_header(player), ""]
@@ -95,18 +97,21 @@ def _render_group_page(session, player, versions, chat_id, chat_title, page):
                      f"Nobody here owns this card yet — "
                      f"you'd be the first.")
     else:
-        known = own.group_member_count(session, chat_id)
+        # A manager can be counted as an owner without the bot having seen them
+        # speak since; never let the tally read as more than the group.
+        known = max(own.group_member_count(session, chat_id), total)
         share = f" ({round(total * 100 / known)}%)" if known else ""
         lines.append(f"🏠 <b>{title}</b>\n"
                      f"Owned by <b>{total}</b> of {known} known member"
                      f"{'' if known == 1 else 's'}{share}")
         lines.append("")
         start = (page - 1) * PAGE_SIZE
-        for i, (user, entry, card) in enumerate(window, start=start + 1):
-            held = _held_for(entry.acquired_date)
+        for i, holding in enumerate(window, start=start + 1):
+            held = _held_for(holding["acquired"])
             suffix = f" · {held}" if held else ""
-            lines.append(f"{i}. {_display_name(user)} — "
-                         f"{escape(_version_label(card))} ⭐{card.rating}{suffix}")
+            cards = " + ".join(f"{escape(_version_label(c))} ⭐{c.rating}"
+                               for c in holding["cards"])
+            lines.append(f"{i}. {_display_name(holding['user'])} — {cards}{suffix}")
 
     lines.append("")
     lines.append(_global_block(session, player_ids))

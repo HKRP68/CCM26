@@ -147,8 +147,101 @@ def _upsert_member(session, chat_id, user_id, now, active=True):
     return row
 
 
-def record_chat_member(update: Update):
-    """Learn group membership from ordinary activity.
+def _plan_member_write(update: Update):
+    """Decide what (if anything) this update should write. No database.
+
+    Returns ``(chat_id, targets, throttle_key, now)`` or None, where ``targets``
+    is a list of ``(telegram_id, is_member)``.
+
+    Cheap enough to run on the event loop for every update: attribute reads and
+    one dict lookup. It also *reserves* the sender's throttle slot before
+    returning, so two messages arriving back to back can't both queue a write
+    for the same member — which is what makes it safe to do the actual write in
+    a worker thread. ``_release_throttle`` hands the slot back if the write
+    turns out to be a no-op or fails.
+    """
+    chat = getattr(update, "effective_chat", None)
+    if not chat or (chat.type or "") not in GROUP_CHAT_TYPES:
+        return None
+
+    message = (getattr(update, "effective_message", None)
+               or getattr(update, "message", None))
+    joined = list(getattr(message, "new_chat_members", None) or [])
+    left = getattr(message, "left_chat_member", None)
+    sender = getattr(update, "effective_user", None)
+
+    now = datetime.utcnow()
+
+    # Joins/leaves are rare and authoritative — always write them through.
+    targets = [(u.id, True) for u in joined if not getattr(u, "is_bot", False)]
+    if left is not None and not getattr(left, "is_bot", False):
+        targets.append((left.id, False))
+
+    throttle_key = None
+    if (sender is not None and not getattr(sender, "is_bot", False)
+            and not any(tg_id == sender.id for tg_id, _ in targets)):
+        key = (chat.id, sender.id)
+        last = _MEMBER_SEEN_MEM.get(key)
+        if last is None or (now - last).total_seconds() >= MEMBER_THROTTLE_SECONDS:
+            if len(_MEMBER_SEEN_MEM) > _MEMBER_SEEN_MEM_MAX:
+                _prune_member_seen(now)
+            _MEMBER_SEEN_MEM[key] = now  # reserve before anyone else can
+            throttle_key = key
+            targets.append((sender.id, True))
+
+    if not targets:
+        return None
+    return chat.id, targets, throttle_key, now
+
+
+def _release_throttle(throttle_key):
+    """Hand a reserved slot back so the next message retries the write."""
+    if throttle_key is not None:
+        _MEMBER_SEEN_MEM.pop(throttle_key, None)
+
+
+def _write_member_plan(plan) -> bool:
+    """Apply a plan from ``_plan_member_write``. Blocking; never raises."""
+    chat_id, targets, throttle_key, now = plan
+    try:
+        from database import get_session
+        from models import User
+        s = get_session()
+        try:
+            tg_ids = [tg_id for tg_id, _ in targets]
+            known = {u.telegram_id: u.id for u in
+                     s.query(User).filter(User.telegram_id.in_(tg_ids)).all()}
+
+            wrote = False
+            for tg_id, active in targets:
+                uid = known.get(tg_id)
+                if uid and _upsert_member(s, chat_id, uid, now, active) is not None:
+                    wrote = True
+
+            if wrote:
+                s.commit()
+            else:
+                # Nothing landed (e.g. the sender has never done /debut), so the
+                # reservation would only suppress the next real chance to record
+                # them.
+                _release_throttle(throttle_key)
+            return wrote
+        except Exception:
+            s.rollback()
+            _release_throttle(throttle_key)
+            logger.debug("record_chat_member write failed (non-fatal)",
+                         exc_info=True)
+            return False
+        finally:
+            s.close()
+    except Exception:
+        _release_throttle(throttle_key)
+        logger.debug("record_chat_member failed (non-fatal)", exc_info=True)
+        return False
+
+
+def record_chat_member(update: Update) -> bool:
+    """Learn group membership from ordinary activity (blocking).
 
     Every update from a group tells us one true thing: this user is in this
     group right now. That is the only membership signal a bot gets, so it is
@@ -159,74 +252,41 @@ def record_chat_member(update: Update):
     ``new_chat_members`` (record immediately, no throttle) and
     ``left_chat_member`` (flip the row inactive so they stop being counted).
 
-    Best-effort: never raises, never blocks a user's message.
+    The bot's middleware should call ``record_chat_member_async`` instead; this
+    is the synchronous core, kept callable on its own for scripts and tests.
     """
     try:
-        chat = getattr(update, "effective_chat", None)
-        if not chat or (chat.type or "") not in GROUP_CHAT_TYPES:
-            return
-
-        message = (getattr(update, "effective_message", None)
-                   or getattr(update, "message", None))
-        joined = list(getattr(message, "new_chat_members", None) or [])
-        left = getattr(message, "left_chat_member", None)
-        sender = getattr(update, "effective_user", None)
-
-        now = datetime.utcnow()
-
-        # Joins/leaves are rare and authoritative — always write them through.
-        forced = [(u, True) for u in joined if not getattr(u, "is_bot", False)]
-        if left is not None and not getattr(left, "is_bot", False):
-            forced.append((left, False))
-
-        throttled = None
-        if (sender is not None and not getattr(sender, "is_bot", False)
-                and not any(u.id == sender.id for u, _ in forced)):
-            key = (chat.id, sender.id)
-            last = _MEMBER_SEEN_MEM.get(key)
-            if last is None or (now - last).total_seconds() >= MEMBER_THROTTLE_SECONDS:
-                throttled = sender
-
-        if not forced and throttled is None:
-            return
-
-        from database import get_session
-        from models import User
-        s = get_session()
-        try:
-            tg_ids = [u.id for u, _ in forced]
-            if throttled is not None:
-                tg_ids.append(throttled.id)
-            known = {u.telegram_id: u.id for u in
-                     s.query(User).filter(User.telegram_id.in_(tg_ids)).all()}
-
-            wrote = False
-            for tg_user, active in forced:
-                uid = known.get(tg_user.id)
-                if uid and _upsert_member(s, chat.id, uid, now, active) is not None:
-                    wrote = True
-            if throttled is not None:
-                uid = known.get(throttled.id)
-                if uid:
-                    _upsert_member(s, chat.id, uid, now, True)
-                    wrote = True
-
-            if wrote:
-                s.commit()
-            # Mark the throttle only once the write actually landed, so a failed
-            # write is retried on the next message instead of being skipped.
-            if throttled is not None and known.get(throttled.id):
-                if len(_MEMBER_SEEN_MEM) > _MEMBER_SEEN_MEM_MAX:
-                    _prune_member_seen(now)
-                _MEMBER_SEEN_MEM[(chat.id, throttled.id)] = now
-        except Exception:
-            s.rollback()
-            logger.debug("record_chat_member write failed (non-fatal)",
-                         exc_info=True)
-        finally:
-            s.close()
+        plan = _plan_member_write(update)
     except Exception:
-        logger.debug("record_chat_member failed (non-fatal)", exc_info=True)
+        logger.debug("record_chat_member plan failed (non-fatal)", exc_info=True)
+        return False
+    if plan is None:
+        return False
+    return _write_member_plan(plan)
+
+
+async def record_chat_member_async(update: Update) -> None:
+    """Middleware entry point: decide on the loop, write in a worker thread.
+
+    The decision is in-memory and returns immediately for the overwhelming
+    majority of updates (the member was recorded within the throttle window).
+    Only the rare update that actually has something to write pays for a
+    database round trip, and that round trip happens off the event loop so it
+    can't stall every other update queued behind it.
+    """
+    try:
+        plan = _plan_member_write(update)
+    except Exception:
+        logger.debug("record_chat_member plan failed (non-fatal)", exc_info=True)
+        return
+    if plan is None:
+        return
+    import asyncio
+    try:
+        await asyncio.to_thread(_write_member_plan, plan)
+    except Exception:
+        _release_throttle(plan[2])
+        logger.debug("record_chat_member_async failed (non-fatal)", exc_info=True)
 
 
 async def handle_chat_member_update(update: Update,

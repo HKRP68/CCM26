@@ -355,6 +355,10 @@ class PlayerGameStats(Base):
 
     __table_args__ = (
         Index("ix_pgs_user_player", "user_id", "player_id", unique=True),
+        # /gstats filters on player_id alone (every owner's rows for one card).
+        # The composite above leads with user_id, which most engines cannot use
+        # for that predicate, so a widely owned card would scan the table.
+        Index("ix_pgs_player", "player_id"),
     )
 
     @property

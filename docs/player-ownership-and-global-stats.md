@@ -14,7 +14,7 @@ Aliases: `/ownedby`, `/whoowns`; `/globalstats`.
 
 ### In a group
 
-```
+```text
 👥 Who owns Rohit Sharma 🇮🇳
 ⭐ 92 OVR · Batsman
 
@@ -44,7 +44,7 @@ holds is named, because Base and Gold are not the same trade.
 There is no group to scope to, so the DM view leads with global rarity and then
 tallies the groups the bot has seen you in:
 
-```
+```text
 🌍 Globally: 412 owners — 1 in every 13 managers
 🎴 Editions: Base 380 · Gold 32
 
@@ -75,10 +75,21 @@ users own nothing, so they are skipped.
 **Throttling.** One write per member per chat per `MEMBER_THROTTLE_SECONDS`
 (6 hours), tracked in an in-memory dict — deliberately far coarser than the
 10-minute `bot_chats` throttle, because membership barely changes. A 200-strong
-group costs a few hundred writes a day, not one per message. The throttle key is
-only marked once the write actually lands, so a user who debuts *after* their
-first message is picked up on their next one rather than being suppressed for
-six hours.
+group costs a few hundred writes a day, not one per message.
+
+**Off the event loop.** The middleware calls `record_chat_member_async`, which
+splits the work in two: `_plan_member_write` decides what to write (attribute
+reads and one dict lookup, so the overwhelming majority of updates return
+immediately), and only when there *is* something to write does
+`_write_member_plan` run — in a worker thread, so the database round trip can't
+stall every update queued behind it.
+
+Planning **reserves** the sender's throttle slot before returning, which is what
+makes the off-loop write safe: two messages arriving back to back cannot both
+queue a write for the same member and race on the unique `(chat_id, user_id)`
+index. `_release_throttle` hands the slot back when the write turns out to be a
+no-op or fails, so a user who debuts *after* their first message is picked up on
+their next one rather than being suppressed for six hours.
 
 **This is best effort, and the wording says so.** A member who has not spoken
 since the bot joined is invisible to us, which is why the group line always
