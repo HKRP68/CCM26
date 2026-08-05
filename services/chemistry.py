@@ -897,7 +897,9 @@ def render_chemistry_card(players):
         lines.append("")
         lines.append("💡 <b>How to improve</b>")
         lines.extend(f"• {text}" for _points, text in tips)
-        lines.append("<i>/chemhelp for the full guide</i>")
+    # Always point at the guide: /chemhelp is not listed in the group slash
+    # menu, so this line is how it stays discoverable there.
+    lines.append("<i>/chemhelp for the full guide</i>")
 
     return "\n".join(lines)
 

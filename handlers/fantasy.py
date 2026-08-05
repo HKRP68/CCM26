@@ -100,6 +100,9 @@ async def fantasy_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             btn = _squad_button(label)
             if btn:
                 buttons.append([btn])
+        # /fantasyguide is not listed in the group slash menu, so point at it
+        # here — this is how it stays discoverable in a group.
+        text += "\n\n<i>New to this? /fantasyguide explains the rules.</i>"
         buttons.append([InlineKeyboardButton(
             "🏆 Leaderboard", callback_data=f"fant_lb_{league.id}_1")])
 
