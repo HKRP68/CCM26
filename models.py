@@ -1739,6 +1739,36 @@ class BotChat(Base):
     welcome_enabled = Column(Boolean, default=True, nullable=False)
 
 
+class ChatMember(Base):
+    """Which managers belong to which group — the roster behind /owners.
+
+    Telegram gives a bot no way to list a group's members, so membership is
+    *learned* from activity: the first time a debuted user is seen in a group,
+    ``services.chat_tracker.record_chat_member`` writes a row here (throttled,
+    so an active group costs one write per member per few hours). Joining via
+    ``new_chat_members`` marks a row active immediately; ``left_chat_member``
+    flips it off.
+
+    This is a best-effort view of a group — a member who has never spoken since
+    the bot arrived is unknown to us — which is why /owners always reports the
+    group figure as "of N known members".
+    """
+    __tablename__ = "chat_members"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chat_id = Column(BigInteger, nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    first_seen_at = Column(DateTime, default=datetime.utcnow)
+    last_seen_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_chat_member_unique", "chat_id", "user_id", unique=True),
+        Index("ix_chat_member_active", "chat_id", "is_active"),
+    )
+
+
 class Broadcast(Base):
     __tablename__ = "broadcasts"
     id = Column(Integer, primary_key=True, autoincrement=True)

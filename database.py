@@ -195,7 +195,7 @@ def init_db():
         NotificationSchedule, NotificationLog, ClaimRarityTier,
         RatingBlockRule, GameConfig,
         MessageTemplate, Bowlout, BowloutBall,
-        UserReport, ShotProbability, BotChat, Broadcast, PendingUndo,
+        UserReport, ShotProbability, BotChat, ChatMember, Broadcast, PendingUndo,
         GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
         ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer, UserTeamLastXI,
         CLTour, CLTourMatch,

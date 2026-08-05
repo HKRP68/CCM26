@@ -44,6 +44,8 @@ from handlers.gspin import gspin_handler, gspin_spin_callback
 from handlers.daily import daily_handler, daily_claim_callback
 from handlers.myroster import myroster_handler, roster_page_callback
 from handlers.playerinfo import playerinfo_handler, player_version_callback
+from handlers.owners import owners_handler, owners_page_callback
+from handlers.gstats import gstats_handler
 
 # Phase 2 handlers
 from handlers.release import (
@@ -328,10 +330,15 @@ GROUP_ONLY_COMMANDS = frozenset({
 })
 
 # Commands that only make sense one-to-one with the bot: deep-link entry
-# points, the ones that wait on a typed reply (hopeless in a busy group), and
-# personal toggles.
+# points, the ones that wait on a typed reply (hopeless in a busy group),
+# personal toggles, and the long rules pages nobody wants dumped into a busy
+# group. They still RUN anywhere — this only decides which slash menu lists
+# them, and the group menu is at Telegram's 100-command ceiling.
 PRIVATE_ONLY_COMMANDS = frozenset({
     "start", "debut", "redeem", "feedback", "notifications", "invite",
+    # Rules pages. Their parent commands (/cmuchem, /fantasy) stay in the group
+    # menu and both print a "…for the full guide" pointer to these.
+    "chemhelp", "fantasyguide",
 })
 
 # Admin/owner-gated commands. Published only into the DMs of the ids in
@@ -381,6 +388,8 @@ BOT_MENU_COMMANDS = (
     ("coins2gems", "Convert coins into gems (1000 coins = 1 gem)"),
     ("cmushop", "Browse the CMU shop 🛍️"),
     ("stats", "View player game statistics"),
+    ("gstats", "Global player stats — every owner, every match type 🌍"),
+    ("owners", "See who owns a player in this group 👥"),
     ("statscl", "View any Challenge League player's stats"),
     ("statstour", "View a player's active-tournament stats"),
     ("tournamentstats", "Tournament Top-10 stat leaderboards"),
@@ -739,6 +748,8 @@ async def start_handler(update, context):
         "/ximage /xiimg - Playing XI as an image\n"
         "/playerinfo /pi [name] - Player details\n"
         "/stats /st [name] - Player game stats\n"
+        "/gstats [name] - Global stats — every owner, every match type\n"
+        "/owners [name] - Who owns this player in this group\n"
         "/searchpl /sp [name] - Search player\n"
         "/searchovr /so [rating] - Search by OVR\n"
         "/buypl /buy /b [name] - Buy a player\n"
@@ -1009,8 +1020,12 @@ def main():
             if _is_storage_only_command(update):
                 return
             try:
-                from services.chat_tracker import record_chat
+                from services.chat_tracker import record_chat, record_chat_member
                 record_chat(update)
+                # Learns which managers are in this group — /owners reads it.
+                # Throttled per member per chat, so this is a dict lookup on
+                # all but a handful of updates.
+                record_chat_member(update)
             except Exception:
                 pass
         app.add_handler(TypeHandler(_TGUpdate, _track_chat), group=-3)
@@ -1144,6 +1159,12 @@ def main():
         app.add_handler(CommandHandler(["teamname", "tn"], teamname_handler))
         app.add_handler(CommandHandler(["purse", "p"], purse_handler))
         app.add_handler(CommandHandler(["stats", "st"], stats_handler))
+        # /gstats — the same career record summed over every owner and match
+        # type; /owners — who is holding the card, group first (trade finder).
+        app.add_handler(CommandHandler(["gstats", "globalstats"], gstats_handler))
+        app.add_handler(CommandHandler(
+            ["owners", "ownedby", "whoowns"], owners_handler))
+        app.add_handler(CallbackQueryHandler(owners_page_callback, pattern=r"^own_"))
         app.add_handler(CommandHandler("statscl", statscl_handler))
         app.add_handler(CommandHandler("statstour", statstour_handler))
         app.add_handler(CommandHandler("tournamentstats", tournamentstats_handler))
