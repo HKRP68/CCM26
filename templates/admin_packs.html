@@ -109,15 +109,19 @@
 </div>
 {% endif %}
 
-<!-- Recent purchases -->
-<h2 style="margin-top:2rem;">📋 Recent Purchases</h2>
+<!-- Who opened what -->
+<h2 style="margin-top:2rem;">📋 Who Opened What</h2>
+<p style="color:var(--muted); font-size:.8rem; margin:.2rem 0 .8rem;">
+  Newest first. A row stays <em>Sealed</em> until the manager actually opens the
+  pack — that is when the pulls are recorded.
+</p>
 {% if recent_purchases %}
 <div style="background:var(--card); border:1px solid var(--border); border-radius:10px; overflow:auto;">
   <table style="width:100%; border-collapse:collapse; font-size:.85rem;">
     <thead>
       <tr style="background:var(--bg); color:var(--muted); font-size:.7rem; text-transform:uppercase;">
         <th style="padding:.6rem; text-align:left;">When</th>
-        <th style="padding:.6rem; text-align:left;">User</th>
+        <th style="padding:.6rem; text-align:left;">Who</th>
         <th style="padding:.6rem; text-align:left;">Pack</th>
         <th style="padding:.6rem; text-align:left;">Cost</th>
         <th style="padding:.6rem; text-align:left;">Got</th>
@@ -126,17 +130,34 @@
     <tbody>
     {% for pp in recent_purchases %}
       <tr style="border-top:1px solid var(--border);">
-        <td style="padding:.5rem .6rem; font-size:.75rem; color:var(--muted);">
-          {{ pp.purchased_at | ist('%d %b %H:%M') }}
+        <td style="padding:.5rem .6rem; font-size:.75rem; color:var(--muted); white-space:nowrap;">
+          {{ pp.row.purchased_at | ist('%d %b %H:%M') }}
         </td>
         <td style="padding:.5rem .6rem;">
-          <a href="{{ url_for('user_detail', user_id=pp.user_id) }}"
-             style="color:var(--accent); text-decoration:none;">#{{ pp.user_id }}</a>
+          <a href="{{ url_for('user_detail', user_id=pp.row.user_id) }}"
+             style="color:var(--accent); text-decoration:none;">
+            {{ pp.user_label or 'user' }}</a>
+          <span style="color:var(--muted); font-size:.72rem;">#{{ pp.row.user_id }}</span>
         </td>
-        <td style="padding:.5rem .6rem;">Pack #{{ pp.pack_id }}</td>
-        <td style="padding:.5rem .6rem;">{{ '{:,}'.format(pp.cost_paid) }} {{ pp.currency }}</td>
-        <td style="padding:.5rem .6rem; font-size:.78rem; color:var(--muted);">
-          {{ pp.players_json|truncate(80) if pp.players_json else '—' }}
+        <td style="padding:.5rem .6rem;">{{ pp.pack_label }}</td>
+        <td style="padding:.5rem .6rem; white-space:nowrap;">
+          {{ '{:,}'.format(pp.row.cost_paid) }} {{ pp.row.currency }}
+        </td>
+        <td style="padding:.5rem .6rem; font-size:.78rem;">
+          {% if pp.pulls is none %}
+            <span style="color:var(--muted);">🔒 Sealed — not opened yet</span>
+          {% elif not pp.pulls %}
+            <span style="color:var(--muted);">—</span>
+          {% else %}
+            {% for pull in pp.pulls %}
+              <span style="display:inline-block; margin:.1rem .25rem .1rem 0; padding:.1rem .4rem;
+                           border-radius:6px; border:1px solid var(--border);
+                           background:var(--bg); white-space:nowrap;">
+                {% if pull.slot == 'main' %}⭐{% else %}🎁{% endif %}
+                {{ pull.name }}{% if pull.rating %} <strong>{{ pull.rating }}</strong>{% endif %}
+              </span>
+            {% endfor %}
+          {% endif %}
         </td>
       </tr>
     {% endfor %}

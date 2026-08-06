@@ -45,7 +45,9 @@ from handlers.daily import daily_handler, daily_claim_callback
 from handlers.myroster import myroster_handler, roster_page_callback
 from handlers.playerinfo import playerinfo_handler, player_version_callback
 from handlers.owners import owners_handler, owners_page_callback
-from handlers.gstats import gstats_handler
+from handlers.gstats import (gstats_handler, gstats_page_callback,
+                             gstats_owners_callback, gstats_close_callback)
+from services.dm_only import DM_ONLY_COMMANDS, dm_only
 
 # Phase 2 handlers
 from handlers.release import (
@@ -341,6 +343,13 @@ PRIVATE_ONLY_COMMANDS = frozenset({
     "chemhelp", "fantasyguide",
 })
 
+# The stat and inventory readouts that answer in DM only. Their handlers are
+# wrapped in ``dm_only`` at registration, so in a group they post one deep-link
+# notice instead of the answer (services/dm_only.py). Kept out of the group
+# slash menu too — advertising a command there that only redirects when tapped
+# would be a promise the bot doesn't keep.
+DM_ONLY_MENU_COMMANDS = frozenset(DM_ONLY_COMMANDS)
+
 # Admin/owner-gated commands. Published only into the DMs of the ids in
 # config.ADMIN_IDS, so they are usable from the slash menu by the people who
 # own them without ever appearing in a player's list.
@@ -475,11 +484,13 @@ def _menu_for_scope(scope):
 
     ``scope`` is 'private', 'group' or 'admin'. Group-only commands are left out
     of private menus (and vice versa) because their handlers refuse to run
-    there, so advertising them would only promise an error.
+    there, so advertising them would only promise an error. DM-only commands
+    are dropped from the group menu for the same reason: in a group they answer
+    with a redirect, not with the thing the menu entry describes.
     """
     if scope == "group":
-        return [(c, d) for c, d in BOT_MENU_COMMANDS
-                if c not in PRIVATE_ONLY_COMMANDS]
+        hidden = PRIVATE_ONLY_COMMANDS | DM_ONLY_MENU_COMMANDS
+        return [(c, d) for c, d in BOT_MENU_COMMANDS if c not in hidden]
     commands = [(c, d) for c, d in BOT_MENU_COMMANDS
                 if c not in GROUP_ONLY_COMMANDS]
     if scope == "admin":
@@ -581,6 +592,55 @@ def _admin_menu_ids():
         return []
 
 
+def _dm_only_handlers():
+    """command name → the handler ``/start cmd_<name>`` should run.
+
+    Built on demand from names already imported at module scope, so a command
+    that loses its handler fails loudly at import rather than silently dropping
+    its deep link. Every key must appear in DM_ONLY_COMMANDS — the pairing is
+    pinned by tests/test_dm_only_commands.py.
+    """
+    return {
+        "stats": stats_handler,
+        "gstats": gstats_handler,
+        "statscl": statscl_handler,
+        "setbo": setbo_handler,
+        "recentmatches": recentmatches_handler,
+        "traits": traits_handler,
+        "traitshop": traitshop_handler,
+        "traitapply": traitapply_handler,
+        "traitupgrade": traitupgrade_handler,
+        "traitreplace": traitreplace_handler,
+        "removetrait": removetrait_handler,
+        "selltrait": selltrait_handler,
+    }
+
+
+async def _replay_dm_only_command(update, context, payload):
+    """Run the command a group redirect deep-linked here. True if it ran.
+
+    The handlers read their input from ``context.args``, so the decoded
+    arguments are put back there before dispatch — ``/gstats Virat Kohli`` in a
+    group therefore opens the DM already showing Kohli's card, not a usage line.
+    """
+    from services.dm_only import parse_start_payload
+    command, decoded = parse_start_payload(payload)
+    handler = _dm_only_handlers().get(command) if command else None
+    if handler is None:
+        return False
+    context.args = decoded
+    try:
+        await handler(update, context)
+    except Exception:
+        logger.exception("deep-linked /%s failed", command)
+        try:
+            await update.message.reply_text(
+                f"⚠️ Couldn't run /{command} — try typing it here.")
+        except Exception:
+            pass
+    return True
+
+
 async def start_handler(update, context):
     # Handle deep-link payloads from group redirects: /start spin or /start daily
     # Also handle referral: /start ref<inviter_telegram_id>
@@ -598,6 +658,17 @@ async def start_handler(update, context):
             await asyncio.to_thread(record_start, tg_user.id)
     except Exception:
         pass
+
+    # ── DM-only command replay: cmd_<command>[-<base64url args>] ──
+    # The "📩 Open in DM" button a group redirect posts lands here. Running the
+    # command now is the whole point of the redirect — landing on a generic
+    # welcome would just make the player retype what they already typed.
+    # Matched against the RAW payload: the argument blob is base64, so the
+    # lower-cased copy above would decode to mush.
+    if args and str(args[0]).startswith("cmd_"):
+        replayed = await _replay_dm_only_command(update, context, str(args[0]))
+        if replayed:
+            return
 
     # ── Referral payload ──
     if payload.startswith("ref"):
@@ -1147,8 +1218,10 @@ def main():
         app.add_handler(CommandHandler(["swapplayers", "swappl", "swap"], swapplayers_handler))
         # /setbo, /sbo — set your own batting order (roster slots 1-11). The
         # order saved here is what /letsplay and the Mini App XI screen use.
+        # DM-only: an eleven-line order posted into a group is pure noise.
         app.add_handler(CommandHandler(
-            ["setbo", "sbo", "battingorder", "bo"], setbo_handler))
+            ["setbo", "sbo", "battingorder", "bo"],
+            dm_only("setbo", setbo_handler)))
         app.add_handler(CommandHandler(["setcaptain", "captain", "cap"], setcaptain_handler))
         app.add_handler(CommandHandler(["searchpl", "search", "sp"], searchpl_handler))
         app.add_handler(CommandHandler(["searchovr", "so"], searchovr_handler))
@@ -1160,14 +1233,28 @@ def main():
         app.add_handler(CommandHandler(["buypl", "buy", "b"], buypl_handler))
         app.add_handler(CommandHandler(["teamname", "tn"], teamname_handler))
         app.add_handler(CommandHandler(["purse", "p"], purse_handler))
-        app.add_handler(CommandHandler(["stats", "st"], stats_handler))
+        # The stat readouts all answer in DM — a group full of managers pulling
+        # career cards buried every match and lobby under them. In a group each
+        # posts one deep-link notice that replays the command in the DM.
+        app.add_handler(CommandHandler(
+            ["stats", "st"], dm_only("stats", stats_handler)))
         # /gstats — the same career record summed over every owner and match
-        # type; /owners — who is holding the card, group first (trade finder).
-        app.add_handler(CommandHandler(["gstats", "globalstats"], gstats_handler))
+        # type, paged edition by edition, with a 👥 Owners flip;
+        # /owners — who is holding the card, group first (trade finder). That
+        # one stays in the group: naming the people around you is its point.
+        app.add_handler(CommandHandler(
+            ["gstats", "globalstats"], dm_only("gstats", gstats_handler)))
+        app.add_handler(CallbackQueryHandler(gstats_page_callback,
+                                             pattern=r"^gstpg_"))
+        app.add_handler(CallbackQueryHandler(gstats_owners_callback,
+                                             pattern=r"^gstow_"))
+        app.add_handler(CallbackQueryHandler(gstats_close_callback,
+                                             pattern=r"^gstcl_"))
         app.add_handler(CommandHandler(
             ["owners", "ownedby", "whoowns"], owners_handler))
         app.add_handler(CallbackQueryHandler(owners_page_callback, pattern=r"^own_"))
-        app.add_handler(CommandHandler("statscl", statscl_handler))
+        app.add_handler(CommandHandler(
+            "statscl", dm_only("statscl", statscl_handler)))
         app.add_handler(CommandHandler("statstour", statstour_handler))
         app.add_handler(CommandHandler("tournamentstats", tournamentstats_handler))
         app.add_handler(CallbackQueryHandler(tournamentstats_callback, pattern=r"^tstat_"))
@@ -1182,7 +1269,9 @@ def main():
         app.add_handler(CommandHandler(["removematch", "rmatch", "kickmatch"], removematch_handler))
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
         app.add_handler(CommandHandler(["lastmatch", "lm"], lastmatch_handler))
-        app.add_handler(CommandHandler(["recentmatches", "recent", "matches"], recentmatches_handler))
+        app.add_handler(CommandHandler(
+            ["recentmatches", "recent", "matches"],
+            dm_only("recentmatches", recentmatches_handler)))
         app.add_handler(CommandHandler(["h2h", "headtohead"], h2h_handler))
         app.add_handler(CommandHandler(["matchinfo", "mi"], info_handler))
 
@@ -1375,15 +1464,28 @@ def main():
         app.add_handler(CallbackQueryHandler(unscramble_answer_callback, pattern=r"^us_ans_"))
 
         # ── Trait system ─────────────────────────────────────────────
-        app.add_handler(CommandHandler(["traits", "tt"], traits_handler))
-        app.add_handler(CommandHandler(["traitshop", "tshop"], traitshop_handler))
-        app.add_handler(CommandHandler(["traitapply", "tapply"], traitapply_handler))
-        app.add_handler(CommandHandler(["traitupgrade", "tup"], traitupgrade_handler))
-        app.add_handler(CommandHandler(["traitreplace", "trep"], traitreplace_handler))
-        app.add_handler(CommandHandler(["removetrait", "rtrait"], removetrait_handler))
+        # Every trait command is a private inventory operation, so they all
+        # answer in DM. /tradetrait is the one exception below: a trade needs
+        # both managers in the same room, which is what the group is for.
+        app.add_handler(CommandHandler(
+            ["traits", "tt"], dm_only("traits", traits_handler)))
+        app.add_handler(CommandHandler(
+            ["traitshop", "tshop"], dm_only("traitshop", traitshop_handler)))
+        app.add_handler(CommandHandler(
+            ["traitapply", "tapply"], dm_only("traitapply", traitapply_handler)))
+        app.add_handler(CommandHandler(
+            ["traitupgrade", "tup"],
+            dm_only("traitupgrade", traitupgrade_handler)))
+        app.add_handler(CommandHandler(
+            ["traitreplace", "trep"],
+            dm_only("traitreplace", traitreplace_handler)))
+        app.add_handler(CommandHandler(
+            ["removetrait", "rtrait"],
+            dm_only("removetrait", removetrait_handler)))
         # /selltrait — cash an inventory trait in for gems (30% below buy value).
         app.add_handler(CommandHandler(
-            ["selltrait", "tsell", "straits"], selltrait_handler))
+            ["selltrait", "tsell", "straits"],
+            dm_only("selltrait", selltrait_handler)))
         # /tradetrait @user — swap an inventory trait, same level both ways.
         app.add_handler(CommandHandler(
             ["tradetrait", "ttrade", "trtrade"], tradetrait_handler))

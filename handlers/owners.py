@@ -20,6 +20,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import Player, User
 from services.button_timeout import schedule_button_timeout
+from services.display_name import manager_name
 from services.flags import get_flag
 from services import ownership_service as own
 
@@ -31,11 +32,12 @@ GROUP_CHAT_TYPES = ("group", "supergroup")
 
 
 def _display_name(user: User) -> str:
-    """A tappable name: @handle when there is one, else a mention link."""
-    if user.username:
-        return f"@{escape(user.username)}"
-    name = escape((user.first_name or user.team_name or "Manager").strip() or "Manager")
-    return f'<a href="tg://user?id={user.telegram_id}">{name}</a>'
+    """The manager's name as plain text — handle without the ``@``.
+
+    A card owned by thirty people used to send thirty notifications every time
+    somebody idly checked who had it. Names here are read, not pinged.
+    """
+    return manager_name(user)
 
 
 def _held_for(acquired_date) -> str:
@@ -161,6 +163,24 @@ def _render_private(session, user, player, versions) -> str:
     lines.append("💡 <i>Run</i> <code>/owners " + escape(player.name) +
                  "</code> <i>inside a group to see exactly who owns him there.</i>")
     return "\n".join(lines)
+
+
+def render_owners_summary(session, user, player, versions) -> str:
+    """The DM ownership picture for a card — reused by /gstats' 👥 Owners button.
+
+    ``versions`` is the scope: every edition for the combined view, or a single
+    edition when /gstats is paged onto one. A caller without a User row (never
+    debuted) still gets the global rarity, just not the per-group tally.
+    """
+    if user is None:
+        player_ids = [v.id for v in versions]
+        lines = [_header(player), "", _global_block(session, player_ids)]
+        versions_line = _versions_line(
+            versions, own.owners_per_version(session, player_ids))
+        if versions_line:
+            lines.append(versions_line)
+        return "\n".join(lines)
+    return _render_private(session, user, player, versions)
 
 
 def _pagination_kb(owner_tg, base_id, page, total_pages):

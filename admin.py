@@ -11702,6 +11702,7 @@ def admin_packs_list():
     db = get_session()
     try:
         from models import Pack, PackPurchase
+        from services.audit_feed import manager_label, pack_pulls, users_by_id
         from services.pack_service import count_main_pool, count_bonus_pool
         packs = db.query(Pack).order_by(Pack.slot_number).all()
         rows = []
@@ -11711,9 +11712,27 @@ def admin_packs_list():
                 "main_pool": count_main_pool(db, p),
                 "bonus_pool": count_bonus_pool(db, p),
             })
-        recent_purchases = (db.query(PackPurchase)
-                            .order_by(PackPurchase.purchased_at.desc())
-                            .limit(20).all())
+
+        # Who opened which pack, and what came out of it. The audit rows carry
+        # ids only, so names for the manager and the pack are resolved here —
+        # "#84 bought pack #3" told nobody anything they could act on.
+        audit = (db.query(PackPurchase)
+                 .order_by(PackPurchase.purchased_at.desc())
+                 .limit(40).all())
+        users = users_by_id(db, [a.user_id for a in audit])
+        known_packs = {p.id: p for p in packs}
+        recent_purchases = []
+        for a in audit:
+            pack = known_packs.get(a.pack_id) or db.query(Pack).get(a.pack_id)
+            recent_purchases.append({
+                "row": a,
+                "user": users.get(a.user_id),
+                "user_label": manager_label(users.get(a.user_id)),
+                "pack": pack,
+                "pack_label": (f"{pack.emoji or '📦'} {pack.name}" if pack
+                               else f"Pack #{a.pack_id}"),
+                "pulls": pack_pulls(a.players_json),
+            })
         return render_template("admin_packs.html",
                                rows=rows, recent_purchases=recent_purchases)
     finally:
@@ -16383,8 +16402,30 @@ def admin_markets_overview():
         for s in t_slots:
             trait = db.query(Trait).get(s.trait_id)
             t_data.append({"row": s, "trait": trait})
-        recent = (db.query(MarketPurchase)
-                  .order_by(MarketPurchase.purchased_at.desc()).limit(20).all())
+        # Who bought which player (or trait), same as the pack feed: the audit
+        # rows store ids, so the manager and the card are resolved to names here.
+        from services.audit_feed import manager_label, users_by_id
+        audit = (db.query(MarketPurchase)
+                 .order_by(MarketPurchase.purchased_at.desc()).limit(40).all())
+        buyers = users_by_id(db, [a.user_id for a in audit])
+        bought_player_ids = {a.item_id for a in audit
+                             if (a.market_type or "") == "player" and a.item_id}
+        bought_players = {}
+        if bought_player_ids:
+            bought_players = {p.id: p for p in db.query(Player)
+                              .filter(Player.id.in_(bought_player_ids)).all()}
+        recent = []
+        for a in audit:
+            bought = (bought_players.get(a.item_id)
+                      if (a.market_type or "") == "player" else None)
+            recent.append({
+                "row": a,
+                "user_label": manager_label(buyers.get(a.user_id)),
+                "player": bought,
+                "item_label": (a.item_name
+                               or (bought.name if bought else None)
+                               or f"#{a.item_id}"),
+            })
 
         # Build dropdown options: every active player with version label visible
         all_players = (db.query(Player)
