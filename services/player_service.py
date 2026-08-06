@@ -36,17 +36,21 @@ def not_career(query):
 
 
 def get_random_player_by_rating_range(session: Session, low: int, high: int,
-                                      source: str | None = "claim") -> Player | None:
+                                      source: str | None = None) -> Player | None:
     """Return a random active player within [low, high] rating.
 
     Implementation: uses in-memory cache to pick the ID, then fetches just that
     one row. Was previously fetching every player in range — wasteful.
 
     ``source`` names the reward path for the website's blocked rating ranges
-    (see :mod:`services.rating_block_service`); pass None to skip the check for
-    a draw that isn't a random reward. When blocks are in play the widening this
-    normally delegates to the cache is done here instead, over allowed ratings
-    only, so a widened search can never reach into a blocked band.
+    (see :mod:`services.rating_block_service`). It defaults to None — no
+    filtering — because blocks exist to trim the free daily draws, and a caller
+    that inherited the check by accident would quietly shrink a pack, a Mystery
+    Box or a subscriber card that promised a rating band. The two draws that do
+    want it, /claim + /daily (``"claim"``) and /gspin (``"gspin"``), say so at
+    the call site. When blocks are in play the widening this normally delegates
+    to the cache is done here instead, over allowed ratings only, so a widened
+    search can never reach into a blocked band.
     """
     from services import player_cache
 
@@ -117,7 +121,7 @@ def _get_rarity_distribution(session: Session):
 
 
 def _pick_in_range_strict(session: Session, low: int, high: int,
-                          source: str | None = "claim") -> Player | None:
+                          source: str | None = None) -> Player | None:
     """Pick a random active player strictly inside [low, high] — no widening.
 
     Unlike get_random_player_by_rating_range (which progressively widens the
@@ -222,7 +226,7 @@ def get_random_player_by_rarity(session: Session) -> Player | None:
     """
     dist = _get_rarity_distribution(session)
     if not dist:
-        return get_random_player_by_rating_range(session, 50, 58)
+        return get_random_player_by_rating_range(session, 50, 58, source="claim")
 
     # Convert cumulative thresholds back to per-band weights.
     bands = []
@@ -247,14 +251,14 @@ def get_random_player_by_rarity(session: Session) -> Player | None:
                 chosen = band
                 break
         remaining.remove(chosen)
-        player = _pick_in_range_strict(session, chosen[1], chosen[2])
+        player = _pick_in_range_strict(session, chosen[1], chosen[2], "claim")
         if player:
             return player
 
     # Nothing in any configured band (shouldn't happen) — last-resort widening
     # so /claim and /daily never fail outright.
     _, low, high = dist[-1]
-    return get_random_player_by_rating_range(session, low, high)
+    return get_random_player_by_rating_range(session, low, high, source="claim")
 
 
 def get_player_values(rating: int) -> tuple[int, int]:

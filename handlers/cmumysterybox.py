@@ -225,8 +225,10 @@ async def _reveal(query, opened_index: int):
             log_detail = f"+{qp} QP"
         else:  # player
             low, high, band_label = get_weighted_player_band()
+            # source=None: the Mystery Box is bought, so the website's blocked
+            # rating ranges (claim/daily/gspin only) don't apply to it.
             player = get_random_player_by_rating_range(session, low, high,
-                                                      source="drop")
+                                                      source=None)
             reward_line, extra_coins = _grant_player(session, user, player)
             coins += extra_coins  # squad-full fallback credits coins
             log_detail = (f"player {player.name if player else 'none'} "

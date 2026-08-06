@@ -182,13 +182,14 @@
 </div>
 
 <div class="rarity-note">
-  A blocked range is a hard veto: those ratings are never handed out by the sources you tick, no
-  matter what the rarity table says. Use it to retire a rating band without rewriting your tiers —
-  untick the rule later and the ratings come straight back.
-  <strong>Claim</strong> covers /claim, /daily and the rest of the rarity-driven pulls,
-  <strong>Drop</strong> covers packs, free packs and the Mystery Box, and
-  <strong>Lucky Card</strong> covers the wheel and its Mini App twin. Buying, trading, the market and admin grants are never filtered — those are
-  deliberate, not random.
+  A blocked range is a hard veto on the free daily draws: those ratings are never handed out by the
+  sources you tick, no matter what the rarity table says. Use it to retire a rating band without
+  rewriting your tiers — untick the rule later and the ratings come straight back.
+  <strong>Claim</strong> covers /claim and /daily (including the streak milestone card) and
+  <strong>Lucky Card</strong> covers the /gspin wheel and its Mini App twin.
+  <strong>Packs are never affected</strong> — nor are free packs, the Mystery Box, the Weekly Card,
+  buying, trading, the market or admin grants. A pack that promises 92-99 still pays out 92-99 while
+  92-99 is blocked here.
 </div>
 
 <div class="block-summary">
@@ -227,8 +228,7 @@
           </td>
           <td>
             <div class="src-boxes">
-              <label><input type="checkbox" name="{{ b.id }}_block_claim" {% if b.block_claim %}checked{% endif %}> Claim</label>
-              <label><input type="checkbox" name="{{ b.id }}_block_drop" {% if b.block_drop %}checked{% endif %}> Drop</label>
+              <label><input type="checkbox" name="{{ b.id }}_block_claim" {% if b.block_claim %}checked{% endif %}> Claim / Daily</label>
               <label><input type="checkbox" name="{{ b.id }}_block_gspin" {% if b.block_gspin %}checked{% endif %}> Lucky Card</label>
             </div>
           </td>
@@ -277,8 +277,7 @@
   <div>
     <label>Blocked from</label>
     <div class="src-boxes" style="justify-content:flex-start; padding-top:.35rem;">
-      <label><input type="checkbox" name="block_claim" checked> Claim</label>
-      <label><input type="checkbox" name="block_drop" checked> Drop</label>
+      <label><input type="checkbox" name="block_claim" checked> Claim / Daily</label>
       <label><input type="checkbox" name="block_gspin" checked> Lucky Card</label>
     </div>
   </div>

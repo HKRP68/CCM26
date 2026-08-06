@@ -80,7 +80,10 @@ async def cmuweekly_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         low, high = _weighted_weekly_band()
-        player = get_random_player_by_rating_range(session, low, high)
+        # source=None: this card is part of a paid subscription, so the
+        # website's blocked ranges (claim/daily/gspin only) never trim it.
+        player = get_random_player_by_rating_range(session, low, high,
+                                                   source=None)
         line, extra = _grant_player(session, user, player)
         stats.last_weekly = datetime.utcnow()
         log_activity(session, user.id, "cmuweekly",
