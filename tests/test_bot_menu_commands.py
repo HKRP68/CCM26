@@ -54,15 +54,26 @@ def _limit():
     return _literal("MENU_LIMIT")
 
 
+def _dm_only():
+    """The DM-only set, read from the service bot.py builds its constant from.
+
+    Importing services.dm_only costs a couple of stdlib modules and telegram's
+    keyboard classes — nothing like importing bot.py, and it keeps this file
+    from re-listing a set that lives somewhere else.
+    """
+    from services.dm_only import DM_ONLY_COMMANDS
+    return set(DM_ONLY_COMMANDS)
+
+
 def _scopes():
     """Mirror bot._menu_for_scope so the buckets can be checked without importing."""
     menu = _menu_commands()
     group_only = _literal("GROUP_ONLY_COMMANDS")
-    private_only = _literal("PRIVATE_ONLY_COMMANDS")
+    hidden_in_groups = set(_literal("PRIVATE_ONLY_COMMANDS")) | _dm_only()
     private = [c for c in menu if c not in group_only]
     return {
         "private": private,
-        "group": [c for c in menu if c not in private_only],
+        "group": [c for c in menu if c not in hidden_in_groups],
         "admin": _admin_commands() + private,
     }
 
@@ -140,6 +151,22 @@ def test_private_only_commands_are_kept_out_of_group_menus():
         assert command not in group, (
             f"/{command} is a private-chat command and must not be advertised "
             f"in groups")
+
+
+def test_dm_only_commands_are_kept_out_of_group_menus():
+    """In a group they answer with a redirect, not with what the menu promises."""
+    group = _scopes()["group"]
+    for command in _dm_only():
+        assert command not in group, (
+            f"/{command} answers in DM only, so the group menu must not offer it")
+
+
+def test_every_dm_only_command_is_still_offered_in_dms():
+    """Hiding one from groups must never hide it everywhere."""
+    private = set(_scopes()["private"])
+    missing = sorted(_dm_only() - private)
+    assert not missing, (
+        f"these DM-only commands reach no private menu either: {missing}")
 
 
 def test_group_and_private_together_cover_the_whole_player_menu():

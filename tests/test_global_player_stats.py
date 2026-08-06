@@ -45,14 +45,59 @@ class _Msg:
     def __init__(self, sent, photo_ok=False):
         self.sent = sent
         self.photo_ok = photo_ok
+        self.chat_id = 99
+        self.message_id = 1
+        self.markups = []
 
     async def reply_text(self, text, **kwargs):
         self.sent.append(("text", text))
+        self.markups.append(kwargs.get("reply_markup"))
         return self
 
     async def reply_photo(self, **kwargs):
         self.sent.append(("photo", kwargs.get("caption", "")))
+        self.markups.append(kwargs.get("reply_markup"))
         return self if self.photo_ok else None
+
+
+class _Query:
+    """A tapped inline button, recording every edit the handler makes."""
+
+    def __init__(self, data, from_id, *, is_photo=False):
+        self.data = data
+        self.from_user = SimpleNamespace(id=from_id)
+        self.message = SimpleNamespace(
+            photo=[object()] if is_photo else None,
+            chat=SimpleNamespace(id=99, title="Cric Masters", type="private"))
+        self.alerts = []
+        self.edits = []
+
+    async def answer(self, text=None, **kwargs):
+        if text:
+            self.alerts.append(text)
+
+    async def edit_message_text(self, text, **kwargs):
+        self.edits.append(("text", text, kwargs.get("reply_markup")))
+
+    async def edit_message_caption(self, caption=None, **kwargs):
+        self.edits.append(("caption", caption, kwargs.get("reply_markup")))
+
+    async def edit_message_media(self, media=None, **kwargs):
+        self.edits.append(("media", media.caption, kwargs.get("reply_markup")))
+
+    async def edit_message_reply_markup(self, **kwargs):
+        self.edits.append(("markup", None, kwargs.get("reply_markup")))
+
+    @property
+    def last_body(self):
+        return self.edits[-1][1] if self.edits else ""
+
+    @property
+    def buttons(self):
+        markup = self.edits[-1][2] if self.edits else None
+        if markup is None:
+            return []
+        return [b.text for row in markup.inline_keyboard for b in row]
 
 
 class GlobalStatsTestBase(unittest.TestCase):
@@ -251,13 +296,20 @@ class GStatsHandlerTests(GlobalStatsTestBase):
         super().tearDown()
 
     def _call(self, args, tg_id=1, photo_ok=False):
-        msg = _Msg(self.sent, photo_ok=photo_ok)
+        self.msg = _Msg(self.sent, photo_ok=photo_ok)
         update = SimpleNamespace(
             effective_user=SimpleNamespace(id=tg_id, is_bot=False),
-            message=msg)
+            effective_chat=SimpleNamespace(id=99, type="private"),
+            message=self.msg)
         context = SimpleNamespace(args=args, bot_data={})
         _run(gstats_mod.gstats_handler(update, context))
         return "\n".join(body for _kind, body in self.sent)
+
+    def _tap(self, handler, data, tg_id=1, is_photo=False):
+        query = _Query(data, tg_id, is_photo=is_photo)
+        update = SimpleNamespace(callback_query=query)
+        _run(handler(update, SimpleNamespace(args=[], bot_data={})))
+        return query
 
     def test_it_reports_the_whole_games_record(self):
         caller = self._user(1, username="caller")
@@ -277,9 +329,19 @@ class GStatsHandlerTests(GlobalStatsTestBase):
         self.assertIn("Wkts: 12", text)
         self.assertIn("HS: 110", text)
         self.assertIn("BBF: 4/20", text)
-        self.assertIn("Most runs:</b> @caller", text)
-        self.assertIn("Most wickets:</b> @mate", text)
+        self.assertIn("Most runs:</b> caller", text)
+        self.assertIn("Most wickets:</b> mate", text)
         self.assertIn("By edition", text)
+
+    def test_the_leaders_are_named_without_tagging_them(self):
+        """Reading a stat board must not notify everyone named on it."""
+        caller = self._user(1, username="caller")
+        self._stats(caller, self.base, bat_inns=4, runs=200)
+        self.db.commit()
+        text = self._call(["Virat Kohli"])
+        self.assertIn("caller", text)
+        self.assertNotIn("@caller", text)
+        self.assertNotIn("tg://user", text)
 
     def test_a_short_card_travels_as_the_photo_caption_alone(self):
         """One message, not a photo followed by the same stats again."""
@@ -354,6 +416,217 @@ class GStatsHandlerTests(GlobalStatsTestBase):
 
     def test_you_must_have_debuted(self):
         self.assertIn("/debut", self._call(["Virat Kohli"], tg_id=404))
+
+
+# ════════════════════════════════════════════════════════════════════
+# 3. The edition browser: ◀ Prev / Next ▶, 👥 Owners, and who may tap
+# ════════════════════════════════════════════════════════════════════
+
+class GStatsBrowserTests(GlobalStatsTestBase):
+    def setUp(self):
+        super().setUp()
+        self._real = gstats_mod.get_session
+        gstats_mod.get_session = lambda: self.db
+        self.sent = []
+        self.caller = self._user(1, username="caller")
+        self._stats(self.caller, self.base, bat_inns=10, runs=400,
+                    balls_faced=300, times_out=8)
+        self._stats(self.caller, self.gold, bowl_inns=4, wickets_taken=9,
+                    balls_bowled=96, runs_conceded=100)
+        self.db.commit()
+
+    def tearDown(self):
+        gstats_mod.get_session = self._real
+        super().tearDown()
+
+    def _tap(self, handler, data, tg_id=1, is_photo=False):
+        query = _Query(data, tg_id, is_photo=is_photo)
+        update = SimpleNamespace(callback_query=query)
+        _run(handler(update, SimpleNamespace(args=[], bot_data={})))
+        return query
+
+    def _pages(self):
+        from services.version_paginator import get_versions_ordered
+        return gstats_mod._build_pages(get_versions_ordered(self.db, self.base.id))
+
+    # ── pages ────────────────────────────────────────────────────────
+    def test_a_two_edition_card_pages_combined_then_each_edition(self):
+        labels = [p["label"] for p in self._pages()]
+        self.assertEqual(labels, ["All editions", "Base", "Gold"])
+
+    def test_a_card_with_one_edition_has_a_single_page(self):
+        solo = Player(name="Solo Man", version="Base", rating=80,
+                      category="Bowler", country="India", is_active=True,
+                      **_HANDS)
+        self.db.add(solo)
+        self.db.commit()
+        self.assertEqual(len(gstats_mod._build_pages([solo])), 1)
+
+    def test_paging_to_an_edition_reports_only_that_editions_numbers(self):
+        gold_page = self._tap(gstats_mod.gstats_page_callback,
+                              f"gstpg_1_{self.base.id}_2")
+        self.assertIn("Wkts: 9", gold_page.last_body)
+        self.assertIn("Runs: 0", gold_page.last_body)   # Gold never batted
+        self.assertIn("Edition 3/3", gold_page.last_body)
+
+    def test_the_combined_page_still_sums_every_edition(self):
+        combined = self._tap(gstats_mod.gstats_page_callback,
+                             f"gstpg_1_{self.base.id}_0")
+        self.assertIn("Runs: 400", combined.last_body)
+        self.assertIn("Wkts: 9", combined.last_body)
+        self.assertIn("By edition", combined.last_body)
+
+    def test_the_per_edition_breakdown_stays_on_the_combined_page(self):
+        """On one edition's own page it would just repeat the block above it."""
+        page = self._tap(gstats_mod.gstats_page_callback,
+                         f"gstpg_1_{self.base.id}_1")
+        self.assertNotIn("By edition", page.last_body)
+
+    def test_an_out_of_range_page_lands_on_a_real_one(self):
+        page = self._tap(gstats_mod.gstats_page_callback,
+                         f"gstpg_1_{self.base.id}_99")
+        self.assertIn("Edition 3/3", page.last_body)
+
+    # ── the owners flip ──────────────────────────────────────────────
+    def test_the_owners_button_answers_in_the_same_message(self):
+        owners = self._tap(gstats_mod.gstats_owners_callback,
+                           f"gstow_1_{self.base.id}_0")
+        self.assertIn("Who owns Virat Kohli", owners.last_body)
+        self.assertIn("◀ Back to stats", owners.buttons)
+
+    def test_the_owners_view_of_one_edition_says_which(self):
+        owners = self._tap(gstats_mod.gstats_owners_callback,
+                           f"gstow_1_{self.base.id}_2")
+        self.assertIn("Gold edition only", owners.last_body)
+
+    def test_back_from_owners_returns_to_that_same_edition(self):
+        back = self._tap(gstats_mod.gstats_page_callback,
+                         f"gstpg_1_{self.base.id}_2")
+        self.assertIn("Edition 3/3", back.last_body)
+        self.assertIn("👥 Owners", back.buttons)
+
+    # ── ownership of the buttons ─────────────────────────────────────
+    def test_only_the_manager_who_asked_may_drive_the_card(self):
+        for handler, data in (
+                (gstats_mod.gstats_page_callback, f"gstpg_1_{self.base.id}_1"),
+                (gstats_mod.gstats_owners_callback, f"gstow_1_{self.base.id}_0"),
+                (gstats_mod.gstats_close_callback, f"gstcl_1_{self.base.id}_0")):
+            query = self._tap(handler, data, tg_id=2)
+            self.assertEqual(query.edits, [])
+            self.assertTrue(any("Not your stats" in a for a in query.alerts))
+
+    def test_close_drops_the_buttons_and_keeps_the_card(self):
+        query = self._tap(gstats_mod.gstats_close_callback,
+                          f"gstcl_1_{self.base.id}_0")
+        self.assertEqual(query.edits, [("markup", None, None)])
+
+    def test_malformed_callback_data_is_refused_not_crashed(self):
+        query = self._tap(gstats_mod.gstats_page_callback, "gstpg_nope")
+        self.assertEqual(query.edits, [])
+
+    # ── how the edit reaches Telegram ────────────────────────────────
+    def test_a_text_card_is_edited_as_text(self):
+        query = self._tap(gstats_mod.gstats_page_callback,
+                          f"gstpg_1_{self.base.id}_1", is_photo=False)
+        self.assertEqual(query.edits[-1][0], "text")
+
+    def test_a_photo_card_is_edited_in_place_never_reposted(self):
+        query = self._tap(gstats_mod.gstats_page_callback,
+                          f"gstpg_1_{self.base.id}_1", is_photo=True)
+        self.assertIn(query.edits[-1][0], ("media", "caption"))
+
+    def test_an_owners_view_too_long_for_a_caption_is_trimmed_not_dropped(self):
+        long_text = "\n".join(f"line {i} " + "x" * 60 for i in range(60))
+        trimmed = gstats_mod._trim_to_caption(long_text)
+        self.assertTrue(gstats_mod._caption_fits(trimmed))
+        self.assertTrue(trimmed.endswith("…"))
+        self.assertIn("line 0", trimmed)
+
+    def test_a_trim_through_the_stat_block_still_sends(self):
+        """The stat table is one <code> spanning eleven lines.
+
+        Telegram parses a caption's entities before rendering any of it, so a
+        cut that leaves that element open gets the whole edit rejected — the
+        reader would lose the page instead of the overflow.
+        """
+        text = ("<b>head</b>\n<code>" +
+                "\n".join(f"row {i} " + "y" * 50 for i in range(40)) +
+                "</code>\n<i>tail</i>")
+        trimmed = gstats_mod._trim_to_caption(text)
+        self.assertTrue(gstats_mod._caption_fits(trimmed))
+        self.assertEqual(trimmed.count("<code>"), trimmed.count("</code>"))
+        self.assertEqual(trimmed.count("<b>"), trimmed.count("</b>"))
+        self.assertIn("row 0", trimmed)
+
+    def test_a_first_line_too_long_to_keep_degrades_to_plain_text(self):
+        """Nothing survives a line cut, so there is no markup left to break."""
+        trimmed = gstats_mod._trim_to_caption("<code>" + "z" * 3000 + "</code>")
+        self.assertNotIn("<", trimmed)
+        self.assertLessEqual(len(trimmed), gstats_mod.TG_CAPTION_LIMIT)
+
+    def test_closing_tags_are_balanced_innermost_first(self):
+        self.assertEqual(gstats_mod._close_open_tags("<b>a<i>b"), "<b>a<i>b</i></b>")
+        self.assertEqual(gstats_mod._close_open_tags("<b>a</b>"), "<b>a</b>")
+        self.assertEqual(gstats_mod._close_open_tags('<a href="x">t'),
+                         '<a href="x">t</a>')
+
+    def test_a_stray_closing_tag_does_not_open_one(self):
+        self.assertEqual(gstats_mod._close_open_tags("</b>plain"), "</b>plain")
+
+    def test_a_load_failure_closes_its_session_and_answers_the_tap(self):
+        """A leaked session per failed tap would drain the connection pool."""
+        closed = []
+        real_close = self.db.close
+        self.db.close = lambda: closed.append(True)
+
+        def _explode(versions):
+            raise RuntimeError("db down")
+
+        real_build = gstats_mod._build_pages
+        gstats_mod._build_pages = _explode
+        try:
+            query = self._tap(gstats_mod.gstats_page_callback,
+                              f"gstpg_1_{self.base.id}_1")
+        finally:
+            gstats_mod._build_pages = real_build
+            self.db.close = real_close
+
+        self.assertTrue(closed, "the session opened by _load was never closed")
+        self.assertEqual(query.edits, [])
+
+    def test_many_editions_do_not_push_the_page_past_a_caption(self):
+        """The editions list is the only part that grows with the card."""
+        for i in range(12):
+            self.db.add(Player(name="Virat Kohli", version=f"V{i}", rating=90,
+                               category="Batsman", country="India",
+                               is_active=True, parent_player_id=self.base.id,
+                               **_HANDS))
+        self.db.commit()
+        from services.version_paginator import get_versions_ordered
+        versions = get_versions_ordered(self.db, self.base.id)
+        lines = gstats_mod._editions_lines(self.db, versions)
+        self.assertEqual(len(lines), gstats_mod.MAX_EDITIONS_LISTED + 2)
+        self.assertIn("more", lines[-1])
+
+        pages = gstats_mod._build_pages(versions)
+        text, _card = gstats_mod._render_stats(
+            self.db, self.base, versions, pages, 0)
+        self.assertTrue(gstats_mod._caption_fits(text))
+
+    # ── the landing message ──────────────────────────────────────────
+    def test_the_first_message_carries_the_buttons(self):
+        msg = _Msg(self.sent, photo_ok=True)
+        update = SimpleNamespace(
+            effective_user=SimpleNamespace(id=1, is_bot=False),
+            effective_chat=SimpleNamespace(id=99, type="private"),
+            message=msg)
+        _run(gstats_mod.gstats_handler(
+            update, SimpleNamespace(args=["Virat Kohli"], bot_data={})))
+        markup = next(m for m in msg.markups if m is not None)
+        labels = [b.text for row in markup.inline_keyboard for b in row]
+        self.assertIn("👥 Owners", labels)
+        self.assertIn("◀ Prev", labels)
+        self.assertIn("Next ▶", labels)
 
 
 if __name__ == "__main__":

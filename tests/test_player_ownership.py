@@ -468,8 +468,12 @@ class OwnersHandlerTests(OwnershipTestBase):
         text = self._call(["Rohit", "Sharma"])
         self.assertIn("Cric Masters", text)
         self.assertIn("Owned by <b>2</b> of 2 known members", text)
-        self.assertIn("@caller", text)
-        self.assertIn("@mate", text)
+        # Handles are printed, not tagged — reading a list must not notify
+        # everybody on it.
+        self.assertIn("caller", text)
+        self.assertIn("mate", text)
+        self.assertNotIn("@caller", text)
+        self.assertNotIn("@mate", text)
         self.assertIn("Gold ⭐94", text)
         self.assertIn("5d", text)
         self.assertIn("/trade @user", text)
@@ -484,7 +488,7 @@ class OwnersHandlerTests(OwnershipTestBase):
 
         text = self._call(["Rohit Sharma"])
         self.assertIn("Owned by <b>1</b> of 1 known member (100%)", text)
-        self.assertEqual(text.count("@hoarder"), 1)
+        self.assertEqual(text.count("hoarder"), 1)
         self.assertIn("Gold ⭐94 + Base ⭐92", text)
 
     def test_an_owner_the_bot_has_not_seen_speak_never_exceeds_the_group(self):
@@ -497,13 +501,15 @@ class OwnersHandlerTests(OwnershipTestBase):
         text = self._call(["Rohit Sharma"])
         self.assertIn("Owned by <b>1</b> of 1 known member (100%)", text)
 
-    def test_a_manager_without_a_username_is_still_reachable(self):
+    def test_a_manager_without_a_username_is_named_anyway(self):
         caller = self._user(1, first_name="Solo")
         self._own(caller, self.base)
         self._member(caller)
         self.db.commit()
         text = self._call(["Rohit Sharma"])
-        self.assertIn('<a href="tg://user?id=1">Solo</a>', text)
+        self.assertIn("Solo", text)
+        # Not a mention link either: the old tg://user name pinged them too.
+        self.assertNotIn("tg://user", text)
 
     def test_nobody_in_the_group_owns_him(self):
         caller = self._user(1, username="caller")
@@ -545,7 +551,7 @@ class OwnersHandlerTests(OwnershipTestBase):
         text = self._call(["Rohit Sharma"], chat_type="private")
         self.assertIn("Your groups", text)
         self.assertIn("1</b> owner", text)
-        self.assertNotIn("@mate", text)  # a DM never names other groups' members
+        self.assertNotIn("mate", text)  # a DM never names other groups' members
 
     def test_an_unknown_player_says_so(self):
         self._user(1)

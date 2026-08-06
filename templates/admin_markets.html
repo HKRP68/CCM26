@@ -298,27 +298,47 @@
 </div>
 {% endif %}
 
-<!-- Recent purchases -->
+<!-- Who bought what -->
 {% if recent %}
-<h2 style="margin-top:1.5rem;">📨 Recent Purchases</h2>
+<h2 style="margin-top:1.5rem;">📨 Who Bought What</h2>
+<p style="color:var(--muted); font-size:.8rem; margin:.2rem 0 .8rem;">
+  Newest first — every player and trait taken out of the shared market.
+</p>
 <table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0;">
   <thead>
     <tr style="background:var(--bg); color:var(--muted); font-size:.7rem; text-transform:uppercase;">
       <th style="padding:.5rem; text-align:left;">When</th>
       <th style="padding:.5rem; text-align:left;">Type</th>
-      <th style="padding:.5rem; text-align:left;">User</th>
-      <th style="padding:.5rem; text-align:left;">Item</th>
+      <th style="padding:.5rem; text-align:left;">Who</th>
+      <th style="padding:.5rem; text-align:left;">Got</th>
       <th style="padding:.5rem; text-align:right;">Price</th>
     </tr>
   </thead>
   <tbody>
   {% for r in recent %}
     <tr style="border-bottom:1px solid var(--border); font-size:.85rem;">
-      <td style="padding:.4rem;">{{ r.purchased_at | ist('%d %b %H:%M') }}</td>
-      <td style="padding:.4rem;">{{ r.market_type }}</td>
-      <td style="padding:.4rem;">user #{{ r.user_id }}</td>
-      <td style="padding:.4rem;">{{ r.item_name or '-' }}</td>
-      <td style="padding:.4rem; text-align:right; font-family:monospace;">{{ r.price_paid }}</td>
+      <td style="padding:.4rem; white-space:nowrap;">{{ r.row.purchased_at | ist('%d %b %H:%M') }}</td>
+      <td style="padding:.4rem;">
+        {% if r.row.market_type == 'player' %}🃏 player{% else %}✨ {{ r.row.market_type }}{% endif %}
+      </td>
+      <td style="padding:.4rem;">
+        <a href="{{ url_for('user_detail', user_id=r.row.user_id) }}"
+           style="color:var(--accent); text-decoration:none;">{{ r.user_label or 'user' }}</a>
+        <span style="color:var(--muted); font-size:.72rem;">#{{ r.row.user_id }}</span>
+      </td>
+      <td style="padding:.4rem;">
+        {{ r.item_label }}
+        {% if r.player %}
+          <span style="color:var(--muted); font-size:.75rem;">
+            · <strong>{{ r.player.rating }}</strong> OVR
+            {%- if r.player.version and r.player.version|lower not in ('base', 'base card') %}
+              · {{ r.player.version }}
+            {%- endif %}
+            {%- if r.player.country %} · {{ r.player.country }}{% endif %}
+          </span>
+        {% endif %}
+      </td>
+      <td style="padding:.4rem; text-align:right; font-family:monospace;">{{ r.row.price_paid }}</td>
     </tr>
   {% endfor %}
   </tbody>
