@@ -191,6 +191,37 @@ def _grant_player(session, giveaway, user) -> str:
 
 # ── Winner draw ──────────────────────────────────────────────────────
 
+def _seat_winners(eligible, slots, giveaway_id=None):
+    """Pick ``slots`` winners from ``eligible`` [(entry, user), …].
+
+    Admin-marked priority entries take the first seats, ordered by when they
+    were marked (``priority_set_at``, then entry id so an un-timestamped legacy
+    row still sorts deterministically). Whatever is left over is filled by
+    ``random.sample`` from the unmarked entries, which is the original behaviour
+    for a giveaway nobody has marked anyone in.
+    """
+    if slots <= 0:
+        return []
+
+    priority = [pair for pair in eligible if getattr(pair[0], "is_priority", False)]
+    rest = [pair for pair in eligible if not getattr(pair[0], "is_priority", False)]
+    priority.sort(key=lambda pair: (getattr(pair[0], "priority_set_at", None)
+                                    or datetime.max,
+                                    getattr(pair[0], "id", 0) or 0))
+
+    if len(priority) > slots:
+        logger.warning(
+            "Giveaway %s has %d priority entries for %d winner slot(s) — "
+            "seating the %d earliest-marked, the rest do not win",
+            giveaway_id, len(priority), slots, slots)
+
+    chosen = priority[:slots]
+    remaining = slots - len(chosen)
+    if remaining > 0 and rest:
+        chosen += random.sample(rest, min(remaining, len(rest)))
+    return chosen
+
+
 def draw_winners(session, giveaway, eligible_user_ids=None) -> list[dict]:
     """Draw winners, grant prizes, and mark the giveaway ended.
 
@@ -202,6 +233,15 @@ def draw_winners(session, giveaway, eligible_user_ids=None) -> list[dict]:
       * When ``eligible_user_ids`` is provided (the caller computes live Official
         GC membership via the bot), only those users survive — so anyone who
         left the GC after joining is excluded.
+
+    Priority (guaranteed) winners:
+      Entries an admin marked from the Participants tab (``is_priority``) are
+      seated FIRST, in the order they were marked, and the remaining slots are
+      filled at random from everyone else. So a marked participant wins as long
+      as they are still eligible above — a priority flag is a reserved seat, not
+      a bypass of the ban / GC checks, and it cannot conjure a prize for someone
+      who left the group. If more entries are marked than there are slots, the
+      earliest-marked ones win and the rest are logged as overflow.
 
     ``random.sample`` over the surviving DISTINCT entries guarantees no user
     wins two slots. If there are fewer eligible entries than ``num_winners``,
@@ -242,7 +282,7 @@ def draw_winners(session, giveaway, eligible_user_ids=None) -> list[dict]:
     winners: list[dict] = []
     if eligible:
         n = min(int(giveaway.num_winners or 1), len(eligible))
-        chosen = random.sample(eligible, n)
+        chosen = _seat_winners(eligible, n, giveaway.id)
         now = datetime.utcnow()
         for entry, user in chosen:
             detail = _grant_prize(session, giveaway, user)

@@ -65,7 +65,25 @@
   </div>
 </div>
 
-<h3>Participants ({{ entry_count }})</h3>
+{% set draw_open = g.winners_drawn_at is none and g.status not in ('ended', 'cancelled') %}
+
+<div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:.5rem;">
+  <h3 style="margin-bottom:.3rem;">Participants ({{ entry_count }})</h3>
+  {% if priority_count %}
+  <span style="font-size:.8rem;color:var(--accent);font-weight:700;">
+    ⭐ {{ priority_count }}/{{ g.num_winners }} winner slot{{ '' if g.num_winners == 1 else 's' }} reserved
+  </span>
+  {% endif %}
+</div>
+<p style="font-size:.78rem;color:var(--muted);margin:0 0 .8rem;">
+  ⭐ <b>Guaranteed</b> reserves a winner slot for that participant — they win at the
+  draw, and the remaining slots are filled at random from everyone else. They must
+  still be eligible when the draw runs (not banned, still in the Official GC).
+  {% if priority_count > g.num_winners %}
+  <br><b style="color:var(--red);">More participants are marked than there are winner
+  slots — only the {{ g.num_winners }} earliest-marked will win.</b>
+  {% endif %}
+</p>
 {% if entries %}
 <div class="table-wrap">
 <table>
@@ -73,14 +91,36 @@
     <th>User</th>
     <th>Telegram ID</th>
     <th>Joined (IST)</th>
+    <th>Priority</th>
     <th>Result</th>
   </tr></thead>
   <tbody>
   {% for e, u in entries %}
   <tr>
-    <td>{{ ('@' + u.username) if u.username else (u.first_name or '—') }}</td>
+    <td>
+      {% if e.is_priority %}<span title="Guaranteed winner">⭐</span> {% endif %}
+      {{ ('@' + u.username) if u.username else (u.first_name or '—') }}
+    </td>
     <td style="font-size:.82rem;color:var(--muted);">{{ e.telegram_id }}</td>
     <td style="font-size:.82rem;">{{ e.joined_at | ist('%Y-%m-%d %H:%M') }}</td>
+    <td>
+      {% if draw_open %}
+      <form method="POST" action="{{ url_for('admin_giveaway_toggle_priority', gid=g.id, entry_id=e.id) }}" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if e.is_priority %}
+        <button type="submit" class="btn btn-sm" style="background:var(--accent);color:#111;font-weight:700;"
+                title="Remove the reserved winner slot">⭐ Guaranteed</button>
+        {% else %}
+        <button type="submit" class="btn btn-ghost btn-sm"
+                title="Reserve a winner slot for this participant">☆ Make winner</button>
+        {% endif %}
+      </form>
+      {% elif e.is_priority %}
+      <span style="color:var(--accent);font-weight:700;">⭐ Guaranteed</span>
+      {% else %}
+      <span style="color:var(--muted);">—</span>
+      {% endif %}
+    </td>
     <td>
       {% if e.is_winner %}<span style="color:var(--green);font-weight:700;">🏆 {{ e.prize_detail }}</span>
       {% else %}<span style="color:var(--muted);">—</span>{% endif %}

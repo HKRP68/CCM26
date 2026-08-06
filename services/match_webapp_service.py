@@ -2972,9 +2972,10 @@ def finalize_webapp_match(session, match_id):
             u1 = m.user1_id; u2 = m.user2_id
             from models import User as _U
             if count_result:
+                from services.match_rewards import is_ai_user as _is_ai
                 for uid in (u1, u2):
                     usr = session.query(_U).get(uid)
-                    if usr:
+                    if usr and not _is_ai(usr):
                         usr.matches_played = (usr.matches_played or 0) + 1
             # A tie breaks nobody's streak, but it was still a day spent playing.
             from services.match_rewards import record_match_result_stats
@@ -3283,7 +3284,10 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit"):
                          f"Quit match #{match_id} ({balls} balls) — penalty",
                          coins_change=-applied_penalty)
         # No coin compensation — the win is the reward. See the docstring.
-        if opponent:
+        # A user can only quit on the AI, never the other way round, so the
+        # opponent here may be the bot — which banks nothing (is_ai_user).
+        from services.match_rewards import is_ai_user as _is_ai
+        if opponent and not _is_ai(opponent):
             opponent.matches_won = (opponent.matches_won or 0) + 1
             opponent.matches_played = (opponent.matches_played or 0) + 1
             log_activity(session, opponent.id, "match_quit_win",

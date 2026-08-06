@@ -102,15 +102,17 @@ def _render_quest_list(quests_data, quest_type, user, owner_tg, *,
             f"{'  ' + reward_str if reward_str else ''}"
         )
 
-    # Why a match sometimes doesn't move the bar. Players read a bot match or a
-    # voided mismatch as the quest being broken, so say it on the panel rather
-    # than leaving them to guess.
+    # Why a match sometimes doesn't move the bar. Players read the daily bot cap
+    # or a voided mismatch as the quest being broken, so say it on the panel
+    # rather than leaving them to guess.
     if page_items:
+        from services.quest_service import BOT_QUEST_MATCH_DAILY_CAP
         lines.append(
             "\n━━━━━━━━━━━━━━━━━━━\n"
-            "⚖️ <i>Match quests count in real matches only — your XI vs another "
-            "player's XI. Bot practice and matches voided for a 10+ Team "
-            "Overall gap don't count.</i>")
+            f"⚖️ <i>Match quests count in ranked matches — including your first "
+            f"{BOT_QUEST_MATCH_DAILY_CAP} matches against the AI each day "
+            f"(/wpmbot, /vsbot). Unranked practice (/lpbot, /ciplbot) and "
+            f"matches voided for a 10+ Team Overall gap don't count.</i>")
 
     # ── Build keyboard
     btns = []

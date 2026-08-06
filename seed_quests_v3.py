@@ -147,6 +147,37 @@ DAILY_QUESTS = [
      "Have a bowler take 3+ wickets in a match today", "three_fer", 1,
      "🎳", 2),
 
+    # ── Conditions ───────────────────────────────────────────────────────
+    # One quest per surface, fired by services.quest_service.pitch_event_key
+    # from the match's own pitch_type. The pitch is randomised per match (or
+    # picked by the host in Challenge League), so these ask a player to keep
+    # playing until the surface comes up rather than to grind a stat — hence
+    # a target of 2-3 and a tier that pays like the "win 2 matches" quests.
+    ("Green Top Specialist",
+     "Play 3 matches on a Green pitch today", "pitch_green", 3, "🟢", 2),
+    ("Dust Bowl Tactician",
+     "Play 3 matches on a Dusty pitch today", "pitch_dusty", 3, "🟤", 2),
+    ("Rock Hard",
+     "Play 3 matches on a Hard pitch today", "pitch_hard", 3, "⬜", 2),
+    ("Flat Track Bully",
+     "Play 3 matches on a Flat pitch today", "pitch_flat", 3, "🛣", 2),
+    ("Bounce and Carry",
+     "Play 2 matches on a Bouncy pitch today", "pitch_bouncy", 2, "⬆️", 2),
+    ("Dry Conditions",
+     "Play 2 matches on a Dry pitch today", "pitch_dry", 2, "🌵", 2),
+    ("Fair Surface",
+     "Play 2 matches on an Even pitch today", "pitch_even", 2, "⚖️", 2),
+
+    # ── Taking on the AI ─────────────────────────────────────────────────
+    # Bot matches count for quests again, capped daily by
+    # services.quest_service.BOT_QUEST_MATCH_DAILY_CAP — keep these targets at
+    # or under that cap or the quest cannot be finished.
+    ("Practice Session",
+     "Play 2 matches against the AI today (/wpmbot)", "vsbot_played", 2,
+     "🤖", 1),
+    ("Beat the Machine",
+     "Beat the AI today (/wpmbot)", "vsbot_won", 1, "🤖", 1),
+
     # ── All-round and rewards ────────────────────────────────────────────
     ("All-Rounder Performance",
      "Score 30+ runs AND take 2+ wickets in the same match today",

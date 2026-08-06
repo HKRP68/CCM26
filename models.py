@@ -59,6 +59,12 @@ class User(Base):
     quick_matches_today = Column(Integer, default=0)
     quick_matches_today_date = Column(String(10), nullable=True)  # 'YYYY-MM-DD'
     quest_points = Column(Integer, default=0)  # earned from completing quests
+    # AI-match quest allowance. Matches against the bot (/wpmbot, /vsbot,
+    # /lpbot, /ciplbot) DO complete quests, but only the first N each UTC day —
+    # see services.quest_service.consume_bot_quest_allowance, which resets the
+    # counter lazily when bot_quest_matches_date is not today.
+    bot_quest_matches_today = Column(Integer, default=0)
+    bot_quest_matches_date = Column(String(10), nullable=True)  # 'YYYY-MM-DD'
     # Pack pity timer — increments on low rolls, resets on a max-rating roll.
     # When ≥ PITY_THRESHOLD, the next pack guarantees max-rating from the band.
     pack_pity_counter = Column(Integer, default=0)
@@ -2013,6 +2019,13 @@ class GiveawayEntry(Base):
     is_winner = Column(Boolean, default=False, nullable=False)
     won_at = Column(DateTime, nullable=True)
     prize_detail = Column(String(200), nullable=True)  # e.g. "50,000 coins" / "Virat Kohli (91)"
+    # Admin-set guaranteed winner. Priority entries are seated first at the draw
+    # (in the order they were marked), and the remaining slots are filled at
+    # random from everyone else — so marking a participant means they win,
+    # provided they are still eligible when the draw runs (not banned, still in
+    # the Official GC). See services.giveaway_service.draw_winners.
+    is_priority = Column(Boolean, default=False, nullable=False)
+    priority_set_at = Column(DateTime, nullable=True)
 
     __table_args__ = (
         Index("ix_giveaway_entry_uniq", "giveaway_id", "user_id", unique=True),
