@@ -93,7 +93,9 @@ class PackRouteTests(unittest.TestCase):
     def test_the_managers_are_looked_up_in_one_batch(self):
         """One query for the page, not one per row."""
         self.assertIn("users_by_id(", self.route)
-        self.assertNotIn("for a in audit:\n            user =", self.route)
+        # The batch helper is the *only* way this route reaches users — a
+        # per-row lookup would have to query User itself to get there.
+        self.assertNotIn("query(User)", self.route)
 
     def test_the_feed_is_newest_first(self):
         self.assertIn("purchased_at.desc()", self.route)

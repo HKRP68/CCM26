@@ -67,6 +67,9 @@ DM_ONLY_COMMANDS = {
 # (chat_id, user_id, command) -> monotonic time the last notice went out.
 _last_notice: dict[tuple[int, int, str], float] = {}
 
+# Strong references to the in-flight self-delete tasks; see _schedule_cleanup.
+_cleanup_tasks: set = set()
+
 
 def _bot_username() -> str:
     return (os.getenv("BOT_USERNAME", "") or "").strip().lstrip("@")
@@ -142,6 +145,17 @@ def _throttled(chat_id: int, user_id: int, command: str) -> bool:
     return False
 
 
+def _release_throttle(chat_id: int, user_id: int, command: str):
+    """Hand the slot back when no notice actually reached the group.
+
+    ``_throttled`` reserves before the send, so two taps in the same instant
+    can't both post. That reservation has to be undone when the send fails, or
+    a manager whose notice never arrived is silently muted for a minute and
+    looks to themselves like the command did nothing at all.
+    """
+    _last_notice.pop((chat_id, user_id, command), None)
+
+
 def _notice_text(command: str, args) -> str:
     label = DM_ONLY_COMMANDS.get(command, f"/{command}")
     typed = " ".join(str(a) for a in (args or [])).strip()
@@ -163,6 +177,24 @@ async def _delete_later(context, chat_id: int, message_id: int, delay: int):
         # No delete rights, or the message is already gone. Either way the
         # notice staying put is not worth an error.
         logger.debug("dm-only notice cleanup skipped", exc_info=True)
+
+
+def _schedule_cleanup(context, sent):
+    """Start the self-delete, keeping a reference until it finishes.
+
+    A bare ``create_task`` is only weakly held by the event loop, so a sleeping
+    cleanup can be collected mid-await and the notice would stay in the group
+    forever — the exact litter this is here to prevent.
+    """
+    try:
+        task = asyncio.create_task(
+            _delete_later(context, sent.chat_id, sent.message_id,
+                          NOTICE_TTL_SECONDS))
+    except RuntimeError:
+        return None  # no running loop (tests) — the notice simply stays put
+    _cleanup_tasks.add(task)
+    task.add_done_callback(_cleanup_tasks.discard)
+    return task
 
 
 async def require_dm(update, context, command: str) -> bool:
@@ -204,13 +236,10 @@ async def require_dm(update, context, command: str) -> bool:
                                         disable_web_page_preview=True)
     except Exception:
         logger.exception("dm-only notice failed for /%s", command)
+        _release_throttle(chat.id, tg_user.id, command)
         return False
 
-    try:
-        asyncio.create_task(_delete_later(context, sent.chat_id, sent.message_id,
-                                          NOTICE_TTL_SECONDS))
-    except RuntimeError:
-        pass  # no running loop (tests) — the notice simply stays put
+    _schedule_cleanup(context, sent)
     return False
 
 

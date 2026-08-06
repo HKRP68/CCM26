@@ -42,6 +42,7 @@ TG_CAPTION_LIMIT = 1024
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 COL = 20  # width of the batting column in the stat block
 BUTTON_TTL_SECONDS = 300
+MAX_EDITIONS_LISTED = 6  # keeps the combined page inside a photo caption
 
 ALL_EDITIONS = "All editions"
 
@@ -104,15 +105,25 @@ def _leaders_lines(session, player_ids):
 
 
 def _editions_lines(session, versions):
-    """Per-edition split — only meaningful when the card has variants."""
+    """Per-edition split — only meaningful when the card has variants.
+
+    Capped, because this is the one part of the page that grows with the card:
+    a cricketer with a dozen editions would push the block past Telegram's
+    1024-character caption and force a trim through the stat table itself. The
+    editions that don't fit are one Next ▶ away on their own pages.
+    """
     if len(versions) <= 1:
         return []
     lines = ["🎴 <b>By edition:</b>"]
-    for entry in gs.per_version(session, versions):
+    entries = gs.per_version(session, versions)
+    for entry in entries[:MAX_EDITIONS_LISTED]:
         version, totals = entry["player"], entry["totals"]
         lines.append(f"• {_version_label(version)} ⭐{version.rating} — "
                      f"{totals['bat_inns']:,} inns · {totals['runs']:,} runs · "
                      f"{totals['wickets_taken']:,} wkts")
+    remaining = len(entries) - MAX_EDITIONS_LISTED
+    if remaining > 0:
+        lines.append(f"<i>…and {remaining} more — page through them above.</i>")
     return lines
 
 
@@ -430,26 +441,72 @@ async def _apply(q, session, user, player, versions, pages, index, view,
                                      reply_markup=keyboard)
 
 
+def _close_open_tags(html_text):
+    """Close whatever elements a trim left open, innermost first.
+
+    Telegram parses a caption's entities before it renders anything: one
+    unclosed ``<code>`` and the *whole* edit is rejected, which would cost the
+    reader the page they asked for rather than the few lines that didn't fit.
+    Every tag this module emits is explicitly closed, so an opener with no
+    partner can only be a casualty of the trim.
+    """
+    open_tags = []
+    for match in _HTML_TAG_RE.finditer(html_text):
+        tag = match.group(0)
+        body = tag.strip("</> ")
+        if not body:
+            continue
+        name = body.split()[0].lower()
+        if tag.startswith("</"):
+            # Unwind to the matching opener; a stray closer changes nothing.
+            if name in open_tags:
+                while open_tags and open_tags.pop() != name:
+                    pass
+        else:
+            open_tags.append(name)
+    return html_text + "".join(f"</{name}>" for name in reversed(open_tags))
+
+
 def _trim_to_caption(text, limit=TG_CAPTION_LIMIT):
+    """Cut a block down to a caption without breaking its markup.
+
+    Lines go whole, so a cut can never land mid-tag — but the stat block is a
+    single ``<code>`` element spanning eleven lines, so a cut *inside* it still
+    leaves that element open. Re-balance what survives before sending it.
+    """
     lines = text.split("\n")
-    while lines and not _caption_fits("\n".join(lines + ["…"]), limit):
+    while lines and not _caption_fits("\n".join([*lines, "…"]), limit):
         lines.pop()
-    return "\n".join(lines + ["…"]) if lines else text[:limit]
+    if not lines:
+        # Not even the first line fits — fall back to plain text, which has no
+        # markup left to break.
+        return _HTML_TAG_RE.sub("", text)[:limit]
+    return _close_open_tags("\n".join(lines)) + "\n…"
 
 
 async def _load(q, base_id):
-    """(session, user, player, versions, pages) or None once it has answered."""
+    """(session, user, player, versions, pages) or None once it has answered.
+
+    Owns the session until it hands one back: a caller that gets None — or an
+    exception — has nothing to close, so a failed lookup can never strand a
+    pooled connection.
+    """
     session = get_session()
-    player = session.query(Player).get(base_id)
-    if not player:
+    try:
+        player = session.query(Player).get(base_id)
+        if not player:
+            session.close()
+            await q.answer("Player not found", show_alert=True)
+            return None
+        from services.version_paginator import get_versions_ordered
+        versions = get_versions_ordered(session, base_id) or [player]
+        user = (session.query(User)
+                .filter(User.telegram_id == q.from_user.id).first())
+        pages = _build_pages(versions)
+    except Exception:
         session.close()
-        await q.answer("Player not found", show_alert=True)
-        return None
-    from services.version_paginator import get_versions_ordered
-    versions = get_versions_ordered(session, base_id) or [player]
-    user = (session.query(User)
-            .filter(User.telegram_id == q.from_user.id).first())
-    return session, user, player, versions, _build_pages(versions)
+        raise
+    return session, user, player, versions, pages
 
 
 async def gstats_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -474,11 +531,14 @@ async def _navigate(update, view):
         return
     await q.answer()
 
-    loaded = await _load(q, base_id)
-    if loaded is None:
-        return
-    session, user, player, versions, pages = loaded
+    # The load is inside the guard too: a query that raises there must answer
+    # the tap rather than escape the handler and leave the card looking dead.
+    session = None
     try:
+        loaded = await _load(q, base_id)
+        if loaded is None:
+            return
+        session, user, player, versions, pages = loaded
         index = _clamp(index, len(pages))
         await _apply(q, session, user, player, versions, pages, index, view,
                      owner_tg, base_id)
@@ -487,9 +547,10 @@ async def _navigate(update, view):
         try:
             await q.answer("⚠️ Error", show_alert=True)
         except Exception:
-            pass
+            logger.debug("gstats error alert failed", exc_info=True)
     finally:
-        session.close()
+        if session is not None:
+            session.close()
 
 
 async def gstats_close_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

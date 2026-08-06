@@ -180,6 +180,26 @@ class GuardTests(DmOnlyTestBase):
             mod.THROTTLE_SECONDS = real
         self.assertEqual(len(mod._last_notice), 1)
 
+    def test_a_notice_that_never_sent_does_not_mute_the_manager(self):
+        """The throttle reserves before the send — a failed send must hand it back.
+
+        Otherwise the one manager whose notice didn't arrive is silenced for a
+        minute and, from where they are sitting, the command did nothing.
+        """
+        update = self._update()
+
+        async def _refuse(*args, **kwargs):
+            raise RuntimeError("telegram down")
+
+        update.effective_message.reply_text = _refuse
+        with _bot_username("CricMasterBot"):
+            _run(mod.require_dm(update, self._context(), "stats"))
+        self.assertEqual(mod._last_notice, {})
+
+        # The retry gets through.
+        self._guard(command="stats")
+        self.assertEqual(len(self.sent), 1)
+
     def test_an_update_with_no_chat_is_never_blocked(self):
         update = SimpleNamespace(effective_chat=None, effective_user=None,
                                  effective_message=None, message=None)

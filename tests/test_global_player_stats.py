@@ -542,6 +542,77 @@ class GStatsBrowserTests(GlobalStatsTestBase):
         self.assertTrue(trimmed.endswith("…"))
         self.assertIn("line 0", trimmed)
 
+    def test_a_trim_through_the_stat_block_still_sends(self):
+        """The stat table is one <code> spanning eleven lines.
+
+        Telegram parses a caption's entities before rendering any of it, so a
+        cut that leaves that element open gets the whole edit rejected — the
+        reader would lose the page instead of the overflow.
+        """
+        text = ("<b>head</b>\n<code>" +
+                "\n".join(f"row {i} " + "y" * 50 for i in range(40)) +
+                "</code>\n<i>tail</i>")
+        trimmed = gstats_mod._trim_to_caption(text)
+        self.assertTrue(gstats_mod._caption_fits(trimmed))
+        self.assertEqual(trimmed.count("<code>"), trimmed.count("</code>"))
+        self.assertEqual(trimmed.count("<b>"), trimmed.count("</b>"))
+        self.assertIn("row 0", trimmed)
+
+    def test_a_first_line_too_long_to_keep_degrades_to_plain_text(self):
+        """Nothing survives a line cut, so there is no markup left to break."""
+        trimmed = gstats_mod._trim_to_caption("<code>" + "z" * 3000 + "</code>")
+        self.assertNotIn("<", trimmed)
+        self.assertLessEqual(len(trimmed), gstats_mod.TG_CAPTION_LIMIT)
+
+    def test_closing_tags_are_balanced_innermost_first(self):
+        self.assertEqual(gstats_mod._close_open_tags("<b>a<i>b"), "<b>a<i>b</i></b>")
+        self.assertEqual(gstats_mod._close_open_tags("<b>a</b>"), "<b>a</b>")
+        self.assertEqual(gstats_mod._close_open_tags('<a href="x">t'),
+                         '<a href="x">t</a>')
+
+    def test_a_stray_closing_tag_does_not_open_one(self):
+        self.assertEqual(gstats_mod._close_open_tags("</b>plain"), "</b>plain")
+
+    def test_a_load_failure_closes_its_session_and_answers_the_tap(self):
+        """A leaked session per failed tap would drain the connection pool."""
+        closed = []
+        real_close = self.db.close
+        self.db.close = lambda: closed.append(True)
+
+        def _explode(versions):
+            raise RuntimeError("db down")
+
+        real_build = gstats_mod._build_pages
+        gstats_mod._build_pages = _explode
+        try:
+            query = self._tap(gstats_mod.gstats_page_callback,
+                              f"gstpg_1_{self.base.id}_1")
+        finally:
+            gstats_mod._build_pages = real_build
+            self.db.close = real_close
+
+        self.assertTrue(closed, "the session opened by _load was never closed")
+        self.assertEqual(query.edits, [])
+
+    def test_many_editions_do_not_push_the_page_past_a_caption(self):
+        """The editions list is the only part that grows with the card."""
+        for i in range(12):
+            self.db.add(Player(name="Virat Kohli", version=f"V{i}", rating=90,
+                               category="Batsman", country="India",
+                               is_active=True, parent_player_id=self.base.id,
+                               **_HANDS))
+        self.db.commit()
+        from services.version_paginator import get_versions_ordered
+        versions = get_versions_ordered(self.db, self.base.id)
+        lines = gstats_mod._editions_lines(self.db, versions)
+        self.assertEqual(len(lines), gstats_mod.MAX_EDITIONS_LISTED + 2)
+        self.assertIn("more", lines[-1])
+
+        pages = gstats_mod._build_pages(versions)
+        text, _card = gstats_mod._render_stats(
+            self.db, self.base, versions, pages, 0)
+        self.assertTrue(gstats_mod._caption_fits(text))
+
     # ── the landing message ──────────────────────────────────────────
     def test_the_first_message_carries_the_buttons(self):
         msg = _Msg(self.sent, photo_ok=True)
