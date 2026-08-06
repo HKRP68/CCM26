@@ -1,9 +1,11 @@
 """Tests for blocked rating ranges — the website's "this rating never drops" rule.
 
-Two things have to hold. The block service must read the rules correctly and
-per source, and the /claim draw must respect them: a blocked band behaves like
-an empty one (re-roll into another configured band) and no widening or fallback
-path may sneak a blocked rating back in.
+Three things have to hold. The block service must read the rules correctly and
+per source; the /claim draw must respect them (a blocked band behaves like an
+empty one, and no widening or fallback path may sneak a blocked rating back
+in); and the rules must reach nothing beyond /claim, /daily and /gspin —
+``tests/test_blocked_ratings_scope.py`` covers that last part for packs and the
+other earned rewards.
 """
 
 import sys
@@ -51,7 +53,12 @@ class Tier:
 
 
 class Block:
-    """A RatingBlockRule stand-in. Sources default to blocked everywhere."""
+    """A RatingBlockRule stand-in. Sources default to blocked everywhere.
+
+    ``drop`` fills the retired ``block_drop`` column, which real rows written
+    before drops were taken out of scope still carry set. It defaults to True
+    precisely so the tests below prove that column no longer does anything.
+    """
 
     def __init__(self, rating_min, rating_max, claim=True, drop=True, gspin=True):
         self.rating_min = rating_min
@@ -129,12 +136,28 @@ class RatingBlockTestCase(unittest.TestCase):
 
 class BlockServiceTests(RatingBlockTestCase):
     def test_rule_applies_only_to_its_selected_sources(self):
-        session = FakeSession(blocks=[Block(95, 100, claim=True, drop=False, gspin=True)])
+        session = FakeSession(blocks=[Block(95, 100, claim=True, gspin=False)])
         self.assertEqual(self.blocks.blocked_ratings(session, "claim"),
                          frozenset(range(95, 101)))
-        self.assertEqual(self.blocks.blocked_ratings(session, "gspin"),
-                         frozenset(range(95, 101)))
+        self.assertEqual(self.blocks.blocked_ratings(session, "gspin"), frozenset())
+
+    def test_only_claim_and_gspin_can_be_blocked(self):
+        # The source list is the guard that keeps packs and the other earned
+        # rewards out of reach. Widening it changes what players can pull.
+        self.assertEqual(tuple(self.blocks.SOURCES), ("claim", "gspin"))
+        self.assertEqual(set(self.blocks.SOURCE_LABELS), {"claim", "gspin"})
+
+    def test_the_retired_drop_column_blocks_nothing(self):
+        # Rules saved while packs were still blockable carry block_drop=True.
+        # They must not take a single card off a pack, a free pack or the
+        # Mystery Box now.
+        session = FakeSession(blocks=[Block(92, 99, claim=True, drop=True, gspin=True)])
         self.assertEqual(self.blocks.blocked_ratings(session, "drop"), frozenset())
+        self.assertEqual(self.blocks.describe(session, "drop"), "nothing blocked")
+        pool = [{"id": 1, "rating": 95}, {"id": 2, "rating": 99}]
+        self.assertEqual(self.blocks.filter_players(session, pool, "drop"), pool)
+        self.assertEqual(self.blocks.allowed_ratings(session, 92, 94, "drop"),
+                         [92, 93, 94])
 
     def test_inactive_rules_block_nothing(self):
         rule = Block(90, 100)
@@ -213,7 +236,7 @@ class BlockServiceTests(RatingBlockTestCase):
         self.assertEqual(self.blocks.describe(session, "claim"), "60, 90-94, 99-100")
 
     def test_describe_says_so_when_nothing_blocked(self):
-        self.assertEqual(self.blocks.describe(FakeSession(), "drop"), "nothing blocked")
+        self.assertEqual(self.blocks.describe(FakeSession(), "gspin"), "nothing blocked")
 
     def test_unknown_source_blocks_nothing(self):
         session = FakeSession(blocks=[Block(50, 100)])
@@ -254,13 +277,25 @@ class ClaimDrawRespectsBlocksTests(RatingBlockTestCase):
         self.assertIsNone(self.ps.get_random_player_by_rarity(session))
 
     def test_rating_range_draw_respects_blocks(self):
-        # The /daily milestone card and the Mystery Box come through here.
+        # The /daily streak milestone card comes through here.
         session = FakeSession(blocks=[Block(81, 83)])
         self._patch_cache({81: [{"id": 81}], 84: [{"id": 84}], 85: [{"id": 85}]})
 
-        picks = [self.ps.get_random_player_by_rating_range(session, 81, 85)
+        picks = [self.ps.get_random_player_by_rating_range(session, 81, 85,
+                                                           source="claim")
                  for _ in range(100)]
         self.assertTrue(all(p is not None and p.id in (84, 85) for p in picks))
+
+    def test_rating_range_draw_defaults_to_no_filtering(self):
+        # The default is "don't filter": a caller that never opted in — a pack,
+        # the Mystery Box, the Weekly Card — must get the band it asked for.
+        session = FakeSession(blocks=[Block(81, 85)])
+        self._patch_cache({81: [{"id": 81}]})
+        from services import player_cache
+        player_cache.get_random_in_rating_range = lambda low, high: {"id": 81}
+
+        self.assertIsNotNone(
+            self.ps.get_random_player_by_rating_range(session, 81, 85))
 
     def test_rating_range_draw_can_opt_out(self):
         # source=None is for draws that aren't random rewards at all.
@@ -282,7 +317,8 @@ class ClaimDrawRespectsBlocksTests(RatingBlockTestCase):
         player_cache.get_all_active = lambda: [{"id": 70, "rating": 70},
                                                {"id": 97, "rating": 97}]
 
-        picks = [self.ps.get_random_player_by_rating_range(session, 60, 65)
+        picks = [self.ps.get_random_player_by_rating_range(session, 60, 65,
+                                                           source="claim")
                  for _ in range(50)]
         self.assertTrue(all(p is not None for p in picks), "fallback was lost")
         self.assertTrue(all(p.id == 70 for p in picks),
@@ -295,7 +331,8 @@ class ClaimDrawRespectsBlocksTests(RatingBlockTestCase):
         player_cache.get_all_active = lambda: [{"id": 97, "rating": 97}]
 
         self.assertIsNone(
-            self.ps.get_random_player_by_rating_range(session, 60, 65))
+            self.ps.get_random_player_by_rating_range(session, 60, 65,
+                                                      source="claim"))
 
     def test_widening_never_crosses_into_a_blocked_rating(self):
         # 86-88 is empty, so the draw widens outward — but 89+ is blocked and
@@ -303,7 +340,8 @@ class ClaimDrawRespectsBlocksTests(RatingBlockTestCase):
         session = FakeSession(blocks=[Block(89, 100)])
         self._patch_cache({85: [{"id": 85}], 90: [{"id": 90}]})
 
-        picks = [self.ps.get_random_player_by_rating_range(session, 86, 88)
+        picks = [self.ps.get_random_player_by_rating_range(session, 86, 88,
+                                                           source="claim")
                  for _ in range(50)]
         self.assertTrue(all(p is not None and p.id == 85 for p in picks))
 

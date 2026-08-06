@@ -12794,11 +12794,17 @@ def admin_rarity_reset_defaults():
 # ═══════════════════════════════════════════════════════════════════════
 
 def _block_sources_from_form(prefix=""):
-    """Read the three source checkboxes off a submitted block-rule form."""
+    """Read the source checkboxes off a submitted block-rule form.
+
+    Only Claim/Daily and Lucky Card can be blocked. ``block_drop`` is written
+    False on every save so the retired column can never make a rule look like
+    it covers packs — packs, free packs and the Mystery Box are out of scope
+    (see :mod:`services.rating_block_service`).
+    """
     return {
         "block_claim": bool(request.form.get(f"{prefix}block_claim")),
-        "block_drop": bool(request.form.get(f"{prefix}block_drop")),
         "block_gspin": bool(request.form.get(f"{prefix}block_gspin")),
+        "block_drop": False,
     }
 
 
@@ -12821,7 +12827,7 @@ def admin_rating_block_new():
                                 request.form.get("rating_max") or 100)
         sources = _block_sources_from_form()
         if not any(sources.values()):
-            flash("Pick at least one source to block (Claim, Drop or GSpin).", "error")
+            flash("Pick at least one source to block (Claim / Daily or Lucky Card).", "error")
             return redirect(url_for("admin_rarity_list"))
 
         rule = RatingBlockRule(
@@ -12864,8 +12870,7 @@ def admin_rating_block_save():
                     setattr(rule, field, value)
                 rule.note = (request.form.get(f"note_{bid}") or "").strip()[:200]
                 rule.is_active = bool(request.form.get(f"is_active_{bid}"))
-                if rule.is_active and not (rule.block_claim or rule.block_drop
-                                           or rule.block_gspin):
+                if rule.is_active and not (rule.block_claim or rule.block_gspin):
                     # A rule that blocks nothing is a rule that does nothing;
                     # switching it off is clearer than leaving it enabled.
                     rule.is_active = False

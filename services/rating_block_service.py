@@ -1,4 +1,4 @@
-"""Blocked rating ranges — ratings that random reward draws must never award.
+"""Blocked rating ranges — ratings the free daily draws must never award.
 
 The website's Claim Rarity page owns both halves of "what can a player pull":
 the rarity weights decide how likely each band is, and the block rules decide
@@ -7,15 +7,24 @@ is applied after a band has been chosen, so an admin can pull rating 95-100 out
 of circulation without touching the tier table and put it back with one
 checkbox.
 
-Three sources are recognised, matching the three ways a card arrives by chance:
+A block reaches exactly two draws, and nothing else:
 
-  ``claim``  /claim, /daily and everything else driven by the rarity tiers
-  ``drop``   packs, free packs, and other card drops
+  ``claim``  /claim and /daily — the rarity-tier pulls, including the /daily
+             streak milestone card
   ``gspin``  the /gspin wheel and its Mini App twin
 
-Deliberate acquisitions — buying, trading, the market, admin grants, career
-cards — are never filtered here. Blocking those would take players' own cards
-away from them, which is not what the setting means.
+**Everything else is out of scope on purpose.** Packs (bought, granted or
+free), the Mystery Box, the subscriber Weekly Card, quest and event rewards,
+buying, trading, the market, admin grants and career cards are never filtered
+here. Those are things a player worked for or paid for: a pack that advertises
+a guaranteed 92-99 card has to hand one over, even while 92-99 is blocked from
+the free daily draws. Blocking the freebies is the whole point of the setting;
+blocking a purchase would just be taking something away.
+
+That scope is enforced by the source list itself — :func:`blocked_ratings`
+returns "nothing blocked" for any source not named in :data:`SOURCES`, so a
+caller outside claim/gspin cannot be filtered even by mistake. Keep it that
+way: adding a source here silently changes what players can pull.
 
 Lookups are served from a small module-level cache (rules change roughly never,
 draws happen constantly). :func:`invalidate` clears it; the website calls that
@@ -29,16 +38,18 @@ from datetime import datetime, timedelta
 logger = logging.getLogger(__name__)
 
 # Every source a rule can veto, and the column that stores the decision.
-SOURCES = ("claim", "drop", "gspin")
+# Card drops (packs, free packs, the Mystery Box) are deliberately absent —
+# see the module docstring. ``RatingBlockRule.block_drop`` still exists as a
+# dead column on old rows and is ignored here, so a rule saved back when drops
+# were blockable no longer touches a pack.
+SOURCES = ("claim", "gspin")
 _SOURCE_COLUMNS = {
     "claim": "block_claim",
-    "drop": "block_drop",
     "gspin": "block_gspin",
 }
 
 SOURCE_LABELS = {
     "claim": "Claim / Daily",
-    "drop": "Drops & Packs",
     "gspin": "Lucky Card",
 }
 
@@ -83,6 +94,10 @@ def _load(session):
 
 def blocked_ratings(session, source):
     """Return the frozenset of ratings ``source`` may not award.
+
+    Any source outside :data:`SOURCES` — including the retired ``"drop"`` —
+    blocks nothing at all. That is the guard that keeps packs and other earned
+    rewards out of the setting's reach.
 
     Never raises: a missing table or a dead connection means "nothing is
     blocked", because failing open costs an admin one unwanted card while

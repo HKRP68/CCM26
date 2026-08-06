@@ -991,14 +991,19 @@ class RatingBlockRule(Base):
     band, so an admin can retire a rating (say, everything 95+) without having
     to rewrite the rarity table — flip the rule off later and the ratings come
     back. Each rule names the sources it applies to, because "no 95+ from the
-    free spin" and "no 95+ from anything" are different decisions:
+    free spin" and "no 95+ from either freebie" are different decisions:
 
-      ``block_claim`` — /claim, /daily and the rest of the rarity-driven pulls
-      ``block_drop``  — packs, free packs and other card drops
+      ``block_claim`` — /claim and /daily, including the streak milestone card
       ``block_gspin`` — the /gspin wheel and its Mini App twin
 
-    Blocks never apply to buying, trading, the market or admin grants: those
-    are deliberate acquisitions, not random ones.
+    Those two are the whole list. Blocks never apply to packs (bought, granted
+    or free), the Mystery Box, the subscriber Weekly Card, buying, trading, the
+    market or admin grants: a pack advertising a guaranteed 92-99 card must hand
+    one over even while 92-99 is blocked from the free draws.
+
+    ``block_drop`` is retired. It used to cover packs and other drops;
+    :mod:`services.rating_block_service` no longer reads it and the website
+    writes it False, but the column stays so existing rows still load.
     """
     __tablename__ = "rating_block_rules"
 
@@ -1006,7 +1011,7 @@ class RatingBlockRule(Base):
     rating_min = Column(Integer, nullable=False)             # inclusive
     rating_max = Column(Integer, nullable=False)             # inclusive
     block_claim = Column(Boolean, default=True, nullable=False)
-    block_drop = Column(Boolean, default=True, nullable=False)
+    block_drop = Column(Boolean, default=False, nullable=False)  # retired, ignored
     block_gspin = Column(Boolean, default=True, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     note = Column(String(200), default="")                   # why it's blocked

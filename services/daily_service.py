@@ -108,7 +108,8 @@ def claim_daily(session, user, source_label="bot", skip_cooldown=False,
     # Milestone bonus
     milestone_player = None
     if milestone:
-        milestone_player = get_random_player_by_rating_range(session, 81, 85)
+        milestone_player = get_random_player_by_rating_range(
+            session, 81, 85, source="claim")
 
     # Roster placement — auto-add if space, otherwise skip (Mini App can't
     # show release/replace picker)

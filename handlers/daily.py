@@ -178,7 +178,8 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         # Milestone bonus
         milestone_player = None
         if milestone:
-            milestone_player = get_random_player_by_rating_range(session, 81, 85)
+            milestone_player = get_random_player_by_rating_range(
+                session, 81, 85, source="claim")
 
         stats.last_daily = datetime.utcnow()
 

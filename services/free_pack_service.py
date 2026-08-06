@@ -163,11 +163,9 @@ def open_free_pack(session, user, hold_overflow=False):
     tried_ratings = set()
     # Build a candidate rating list within the band, in random order
     ratings = list(range(int(band["min"]), int(band["max"]) + 1))
-    # Ratings blocked for drops on the website never enter the shuffle.
-    from services import rating_block_service
-    blocked = rating_block_service.blocked_ratings(session, "drop")
-    allowed = [r for r in ratings if r not in blocked]
-    ratings = allowed or ratings
+    # The website's blocked rating ranges are not consulted here: they cover
+    # /claim, /daily and /gspin only, and a Free Pack was paid for with an ad
+    # watched to the end. Its band is what it says it is.
     random.shuffle(ratings)
     # Owned base ids so we prefer new players
     owned_base_ids = set(
@@ -185,14 +183,11 @@ def open_free_pack(session, user, hold_overflow=False):
 
     if not player:
         # Last resort — any active base player in the whole band range
-        pool = rating_block_service.filter_players(
-            session,
-            (not_career(session.query(Player))
-             .filter(Player.is_active == True,
-                     Player.parent_player_id.is_(None),
-                     Player.rating.between(int(band["min"]), int(band["max"])))
-             .all()),
-            "drop")
+        pool = (not_career(session.query(Player))
+                .filter(Player.is_active == True,
+                        Player.parent_player_id.is_(None),
+                        Player.rating.between(int(band["min"]), int(band["max"])))
+                .all())
         if pool:
             player = random.choice(pool)
 
