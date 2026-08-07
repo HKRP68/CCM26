@@ -3659,6 +3659,11 @@ def clear_players():
 def admin_traits_list():
     db = get_session()
     try:
+        from config import (TRAIT_RARITIES, TRAIT_MARKET_BUY_COST,
+                            trait_rarity_meta)
+        from services.trait_engine import TRAIT_HANDLERS
+        from services.trait_service import trait_price_of, trait_rarity_of
+
         traits = db.query(Trait).order_by(Trait.category, Trait.name).all()
         # Stats: equipped count + inventory count per trait
         stats = {}
@@ -3666,7 +3671,14 @@ def admin_traits_list():
             equipped = db.query(PlayerTrait).filter(PlayerTrait.trait_id == t.id).count()
             inventory = db.query(TraitInventory).filter(TraitInventory.trait_id == t.id).count()
             stats[t.id] = {"equipped": equipped, "inventory": inventory}
-        return render_template("admin_traits.html", traits=traits, stats=stats)
+        return render_template(
+            "admin_traits.html", traits=traits, stats=stats,
+            rarities=TRAIT_RARITIES, base_cost=TRAIT_MARKET_BUY_COST,
+            effect_keys=set(TRAIT_HANDLERS),
+            # Resolved per trait so an unrecognised rarity string in the column
+            # renders as Common instead of blowing up the page.
+            rarity_meta={t.id: trait_rarity_meta(trait_rarity_of(t)) for t in traits},
+            prices={t.id: trait_price_of(t) for t in traits})
     finally:
         db.close()
 
@@ -3681,21 +3693,38 @@ def admin_trait_edit(trait_id):
             flash("Trait not found.", "error")
             return redirect(url_for("admin_traits_list"))
 
+        from config import (TRAIT_RARITIES, TRAIT_MARKET_BUY_COST,
+                            trait_rarity_key)
+        from services.trait_engine import TRAIT_HANDLERS
+        from services.trait_service import TRAIT_CATEGORY_ORDER
+
         if request.method == "POST":
             t.name = request.form.get("name", t.name).strip()
             t.category = request.form.get("category", t.category).strip()
             t.description = request.form.get("description", t.description).strip()
             t.emoji = request.form.get("emoji", t.emoji).strip() or "✨"
             t.effect_key = request.form.get("effect_key", t.effect_key).strip()
+            t.rarity = trait_rarity_key(request.form.get("rarity", t.rarity))
+            # Blank clears the override, which puts the trait back on its
+            # rarity's price rather than pinning it at 0 gems.
+            price = (request.form.get("base_price") or "").strip()
+            t.base_price = int(price) if price.isdigit() and int(price) > 0 else None
             t.is_active = bool(request.form.get("is_active"))
             db.commit()
             log_admin(db, "trait_edit", "trait", t.id, t.name,
-                       f"Edited trait {t.name}")
+                       f"Edited trait {t.name} (rarity={t.rarity})")
             db.commit()
+            if t.effect_key not in TRAIT_HANDLERS:
+                flash(f"⚠️ '{t.effect_key}' is not an engine effect key — this "
+                      f"trait will have no effect in matches.", "error")
             flash(f"Trait '{t.name}' updated.", "info")
             return redirect(url_for("admin_traits_list"))
 
-        return render_template("admin_trait_form.html", trait=t)
+        return render_template("admin_trait_form.html", trait=t,
+                               rarities=TRAIT_RARITIES,
+                               base_cost=TRAIT_MARKET_BUY_COST,
+                               categories=TRAIT_CATEGORY_ORDER,
+                               effect_keys=sorted(TRAIT_HANDLERS))
     finally:
         db.close()
 
@@ -6696,7 +6725,9 @@ def webapp_market():
     db, user, tg_id = auth
     try:
         from models import GlobalPlayerMarket, UserRoster
-        from services.global_market import ensure_player_market_fresh
+        from services.global_market import (
+            ensure_player_market_fresh, is_sold_out, is_unlimited,
+        )
         try:
             ensure_player_market_fresh(db)
         except Exception:
@@ -6746,7 +6777,10 @@ def webapp_market():
                 "discount_pct": disc,
                 "quantity": s.quantity,
                 "purchased_count": s.purchased_count,
-                "sold_out": s.purchased_count >= s.quantity,
+                # quantity 0 = unlimited stock, so this is never True for the
+                # default listing — see services.global_market.is_sold_out.
+                "sold_out": is_sold_out(s),
+                "unlimited": is_unlimited(s),
                 "is_owned": p.id in owned,
             })
         return {"ok": True, "slots": results, "total": len(results),
@@ -6773,6 +6807,7 @@ def webapp_market_buy(slot_id):
         if locked:
             return locked
         from models import GlobalPlayerMarket, UserRoster
+        from services.global_market import is_sold_out
 
         slot = db.query(GlobalPlayerMarket).filter(
             GlobalPlayerMarket.id == slot_id,
@@ -6780,7 +6815,7 @@ def webapp_market_buy(slot_id):
         if not slot:
             return {"ok": False, "error": "not_found",
                     "message": "Market slot not found."}, 404
-        if slot.purchased_count >= slot.quantity:
+        if is_sold_out(slot):
             return {"ok": False, "error": "sold_out",
                     "message": "This item is sold out."}, 400
 
@@ -16461,6 +16496,13 @@ def admin_markets_overview():
                       .filter(Trait.is_active == True)
                       .order_by(Trait.name).all())
 
+        # Rarity label for every trait, not just the active ones — a listed slot
+        # can point at a trait the admin has since deactivated.
+        from config import trait_rarity_label
+        from services.trait_service import trait_rarity_of
+        trait_rarity = {t.id: trait_rarity_label(trait_rarity_of(t))
+                        for t in db.query(Trait).all()}
+
         next_refresh = get_next_refresh_at(db)
         next_trait_refresh = get_next_trait_refresh_at(db)
 
@@ -16468,6 +16510,7 @@ def admin_markets_overview():
                                p_data=p_data, t_data=t_data, recent=recent,
                                cfg=cfg, dropdown_options=dropdown_options,
                                all_traits=all_traits,
+                               trait_rarity=trait_rarity,
                                next_refresh=next_refresh,
                                next_trait_refresh=next_trait_refresh)
     finally:
@@ -16598,8 +16641,8 @@ def admin_market_trait_add():
 
         custom_price = request.form.get("price", "").strip()
         custom_price_int = int(custom_price) if custom_price else None
-        quantity = request.form.get("quantity", "10").strip()
-        quantity_int = int(quantity) if quantity else 10
+        quantity = request.form.get("quantity", "0").strip()
+        quantity_int = max(0, int(quantity)) if quantity else 0
 
         from services.global_market import add_trait_to_market
         ok, result = add_trait_to_market(db, trait_id,
@@ -16608,10 +16651,11 @@ def admin_market_trait_add():
         if ok:
             db.commit()
             trait = db.query(Trait).get(trait_id)
+            qty_label = "unlimited" if quantity_int <= 0 else f"qty {quantity_int}"
             log_admin(db, "market_add_trait", "market", result, trait.name,
-                      f"Added trait to slot {result}, qty={quantity_int}")
+                      f"Added trait to slot {result}, {qty_label}")
             db.commit()
-            flash(f"✅ Added {trait.name} to slot #{result} (qty {quantity_int}).", "info")
+            flash(f"✅ Added {trait.name} to slot #{result} ({qty_label}).", "info")
         else:
             flash(f"⚠️ {result}", "error")
     except Exception as e:

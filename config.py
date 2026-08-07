@@ -348,6 +348,12 @@ ROSTER_PAGE_SIZE = 10
 # ══════════════════════════════════════════════════════════════════════
 
 # Master trait list. Seeded on startup (admin can toggle is_active).
+#
+# NOTE: the list the bot actually seeds and renders is
+# ``services.trait_service.TRAIT_DEFINITIONS`` — it carries the effect keys the
+# engine routes on, plus each trait's rarity. This copy is the older, shorter
+# summary table and is kept only so nothing importing it breaks; edit the
+# service list when adding or re-tuning a trait.
 TRAIT_DEFINITIONS = [
     # Batting
     {"key": "finisher", "name": "Finisher", "category": "batting", "emoji": "🔥",
@@ -410,6 +416,54 @@ TRAIT_BOOST_CAP = 0.25   # 25%
 TRAIT_MAX_PER_PLAYER = 3
 # Max same-category traits per player (prevents 3 batting traits on one batsman)
 TRAIT_MAX_SAME_CATEGORY = 2
+# Elite traits are the top of the ladder — one per player, ever. Without this a
+# captain could stack Master Blaster + Run Machine + GOAT Instinct on a single
+# card and the rest of the catalogue would stop mattering.
+TRAIT_MAX_ELITE_PER_PLAYER = 1
+
+# ── Rarity ────────────────────────────────────────────────────────
+# Every trait carries a rarity, and it decides three things:
+#   • how often the shared market rolls it (``weight``),
+#   • what a Lv.1 copy costs (``price_mult`` × TRAIT_MARKET_BUY_COST),
+#   • how much resale and the swap fee scale with it (the same multiplier).
+#
+# Upgrade costs are deliberately NOT scaled: levelling an Elite trait costs the
+# same gems as levelling a Common one. Rarity is a barrier to *getting* the
+# trait, not a tax on using it — and scaling both would put a Lv.5 Elite at
+# 24,000 gems, which nobody would ever build.
+TRAIT_RARITIES = {
+    "common": {"label": "Common", "emoji": "⚪", "price_mult": 1, "weight": 50},
+    "rare":   {"label": "Rare",   "emoji": "🔵", "price_mult": 2, "weight": 30},
+    "epic":   {"label": "Epic",   "emoji": "🟣", "price_mult": 4, "weight": 15},
+    "elite":  {"label": "Elite",  "emoji": "⭐", "price_mult": 8, "weight": 5},
+}
+TRAIT_DEFAULT_RARITY = "common"
+TRAIT_RARITY_ORDER = ["common", "rare", "epic", "elite"]
+
+
+def trait_rarity_key(rarity) -> str:
+    """Normalise anything (None, a Trait row's column, mixed case) to a key."""
+    key = str(rarity or "").strip().lower()
+    return key if key in TRAIT_RARITIES else TRAIT_DEFAULT_RARITY
+
+
+def trait_rarity_meta(rarity) -> dict:
+    return TRAIT_RARITIES[trait_rarity_key(rarity)]
+
+
+def trait_rarity_mult(rarity) -> int:
+    """Price multiplier for a rarity. Common is 1, so old callers are unchanged."""
+    return int(trait_rarity_meta(rarity)["price_mult"])
+
+
+def trait_rarity_label(rarity) -> str:
+    meta = trait_rarity_meta(rarity)
+    return f"{meta['emoji']} {meta['label']}"
+
+
+def trait_list_price(rarity=None) -> int:
+    """Gems the market asks for a fresh Lv.1 copy at this rarity."""
+    return TRAIT_MARKET_BUY_COST * trait_rarity_mult(rarity)
 
 # ── Market ────────────────────────────────────────────────────────
 TRAIT_MARKET_SLOTS = 5
@@ -449,6 +503,12 @@ TRAIT_REPLACE_COST = 250  # gems
 #   floor    120    320    720  1,520  3,020   (cheapest this level can cost)
 #   sell     119    319    719  1,519  3,019   (+50%, capped below the floor)
 #   trade fee 15     25     45     85    160   (each side, in gems)
+#
+# That table is the COMMON tier. Rarer traits scale the Lv.1 price (and only the
+# Lv.1 price) by ``trait_rarity_mult`` — see TRAIT_RARITIES — so an Elite Lv.1
+# lists at 1,200 gems while its upgrades cost exactly what a Common's do. Every
+# function below takes an optional ``rarity``; omitting it means Common, which
+# is why every existing caller and price is unchanged.
 
 
 def _trait_buy_values():
@@ -533,38 +593,58 @@ def _trait_floor_costs():
 TRAIT_FLOOR_COST = _trait_floor_costs()
 
 
-def trait_buy_value(level) -> int:
+def _rarity_premium(rarity) -> int:
+    """Extra gems a rarity adds to the Lv.1 price (0 for Common)."""
+    return TRAIT_MARKET_BUY_COST * (trait_rarity_mult(rarity) - 1)
+
+
+def trait_buy_value(level, rarity=None) -> int:
     """Gems invested in a trait by the time it reaches ``level``."""
-    return TRAIT_BUY_VALUE[_clamp_trait_level(level)]
+    return TRAIT_BUY_VALUE[_clamp_trait_level(level)] + _rarity_premium(rarity)
 
 
-def trait_floor_cost(level) -> int:
-    """Cheapest gems a trait of ``level`` could have been acquired for."""
-    return TRAIT_FLOOR_COST[_clamp_trait_level(level)]
+def trait_floor_cost(level, rarity=None) -> int:
+    """Cheapest gems a trait of ``level`` could have been acquired for.
+
+    The rarity premium is discountable — it is part of the list price the shop
+    marks down — so it enters the floor at the deepest discount the shop rolls,
+    exactly as the Common list price does.
+    """
+    best_discount = max(TRAIT_DISCOUNT_RANGE)
+    premium = _rarity_premium(rarity) * (100 - best_discount) // 100
+    return TRAIT_FLOOR_COST[_clamp_trait_level(level)] + premium
 
 
-def trait_sell_value(level) -> int:
+def trait_sell_value(level, rarity=None) -> int:
     """Gems returned for selling a trait.
 
     50% more than the original resale table, then held one gem below what the
     trait could have cost to acquire — see the notes above ``TRAIT_SELL_*``.
-    Selling is therefore always a loss, however cheaply the trait was bought.
+    Selling is therefore always a loss, however cheaply the trait was bought,
+    and that stays true at every rarity because both sides of the comparison
+    scale together.
     """
     level = _clamp_trait_level(level)
-    baseline = (trait_buy_value(level)
+    baseline = (trait_buy_value(level, rarity)
                 * (100 - TRAIT_SELL_BASELINE_DISCOUNT_PCT) // 100)
     uplifted = baseline * (100 + TRAIT_SELL_UPLIFT_PCT) // 100
-    ceiling = trait_floor_cost(level) - TRAIT_SELL_FLOOR_MARGIN
+    ceiling = trait_floor_cost(level, rarity) - TRAIT_SELL_FLOOR_MARGIN
     return max(1, min(uplifted, ceiling))
 
 
-def trait_trade_fee(level) -> int:
-    """Gems each side pays to swap a trait of ``level``."""
-    upgrades_above_l1 = trait_buy_value(level) - TRAIT_BUY_VALUE[1]
+def trait_trade_fee(level, rarity=None) -> int:
+    """Gems each side pays to swap a trait of ``level``.
+
+    Scales with rarity for the same reason the price does — a swap of two Elite
+    traits moves far more value than a swap of two Commons — while staying well
+    under the cost of the alternative (sell one, buy the other back).
+    """
+    upgrades_above_l1 = (TRAIT_BUY_VALUE[_clamp_trait_level(level)]
+                         - TRAIT_BUY_VALUE[1])
     # int() after the division, not floor division on the percentage — the
     # share is now a fraction of a percent, which integer division would
     # collapse to zero and flatten the fee to a single number at every level.
-    fee = TRAIT_TRADE_FEE_BASE + int(
+    fee = TRAIT_TRADE_FEE_BASE * trait_rarity_mult(rarity) + int(
         upgrades_above_l1 * TRAIT_TRADE_FEE_UPGRADE_PCT / 100)
     return max(1, fee)
 

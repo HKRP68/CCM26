@@ -312,28 +312,60 @@ def _seed_competition_templates():
 
 
 def _seed_traits():
-    """Idempotent trait seed. Inserts missing traits only."""
+    """Idempotent trait seed — inserts new traits and refreshes existing ones.
+
+    Keyed on ``effect_key`` (the thing the engine actually routes on), falling
+    back to the name for rows written before this seed existed. Everything the
+    catalogue owns — name, category, description, emoji, rarity — is written on
+    every boot, so re-tuning a trait in ``services.trait_service`` reaches live
+    databases instead of only new ones. ``is_active`` and ``base_price`` are
+    deliberately never touched: those belong to the admin, who can disable a
+    trait or pin its price from the website without the next deploy undoing it.
+    """
     from models import Trait
+    from config import trait_rarity_key
     from services.trait_service import TRAIT_DEFINITIONS
     session = SessionLocal()
     try:
-        existing = {t.name for t in session.query(Trait).all()}
-        added = 0
+        rows = session.query(Trait).all()
+        by_effect = {t.effect_key: t for t in rows if t.effect_key}
+        by_name = {t.name: t for t in rows}
+        added = changed = 0
         for td in TRAIT_DEFINITIONS:
-            if td["name"] not in existing:
+            rarity = trait_rarity_key(td.get("rarity"))
+            row = by_effect.get(td["effect_key"]) or by_name.get(td["name"])
+            if row is None:
                 session.add(Trait(
                     name=td["name"],
                     category=td["category"],
                     description=td["description"],
                     emoji=td["emoji"],
                     effect_key=td["effect_key"],
+                    rarity=rarity,
                     is_active=True,
                 ))
                 added += 1
-        if added:
+                continue
+            updates = {
+                "name": td["name"], "category": td["category"],
+                "description": td["description"], "emoji": td["emoji"],
+                "effect_key": td["effect_key"], "rarity": rarity,
+            }
+            dirty = False
+            for field, value in updates.items():
+                if getattr(row, field, None) != value:
+                    setattr(row, field, value)
+                    dirty = True
+            changed += 1 if dirty else 0
+        if added or changed:
             session.commit()
+            import logging
+            logging.getLogger("database").info(
+                "traits seeded: %s new, %s updated", added, changed)
     except Exception:
         session.rollback()
+        import logging
+        logging.getLogger("database").exception("trait seed failed")
     finally:
         session.close()
 
@@ -763,6 +795,12 @@ def _migrate_add_columns():
     _try_add("users", "career_weekly_last_period", "VARCHAR(10)")
     # Career-only quests are assigned solely to users who have a career player.
     _try_add("quests", "career_only", "BOOLEAN DEFAULT FALSE")
+    # ── Trait rarity ──
+    # Rarity drives the market roll odds and the price; base_price is the
+    # admin's per-trait override (NULL = derive it from the rarity).
+    _try_add("traits", "rarity", "VARCHAR(20) DEFAULT 'common'")
+    _try_add("traits", "base_price", "INTEGER")
+
     _try_add("game_config", "career_quest_gems", "INTEGER DEFAULT 15")
     _try_add("game_config", "career_streak_weeks", "INTEGER DEFAULT 4")
     _try_add("game_config", "career_streak_bonus_gems", "INTEGER DEFAULT 100")
@@ -827,6 +865,33 @@ def _migrate_add_columns():
     if not done:
         if not _run_isolated(ad_gap_sql):
             _record_migration_signature("ad_gap_off", sig)
+
+    # ─────────────────────────────────────────────────────────────
+    # Both shared markets now carry unlimited stock: quantity 0 means "never
+    # sells out" (services.global_market.is_unlimited). Fresh listings are
+    # written that way, but a live market is full of rows from the old scheme —
+    # one copy per player card, ten per trait — and those would keep selling out
+    # under the new rules. Convert them once.
+    #
+    # A trait row already at its ten-copy cap is included on purpose: it was
+    # only ever capped because stock existed, and leaving it sold out would keep
+    # a listing on the shelf that nobody can buy.
+    #
+    # Rarity is backfilled in the same pass so rows that predate the column read
+    # as Common rather than NULL, which is what the pricing helpers assume.
+    # Keyed as a one-shot: an admin who deliberately sets a limited run tomorrow
+    # keeps it.
+    # ─────────────────────────────────────────────────────────────
+    unlimited_stock_sql = [
+        "UPDATE global_player_market SET quantity = 0 WHERE quantity > 0",
+        "UPDATE global_trait_market SET quantity = 0 WHERE quantity > 0",
+        "UPDATE traits SET rarity = 'common' WHERE rarity IS NULL OR rarity = ''",
+    ]
+    done, sig = _migration_signature_matches("market_unlimited_stock",
+                                             unlimited_stock_sql)
+    if not done:
+        if not _run_isolated(unlimited_stock_sql):
+            _record_migration_signature("market_unlimited_stock", sig)
 
     # ─────────────────────────────────────────────────────────────
     # /claim pays no coins. The card you pull IS the reward — that has been

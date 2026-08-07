@@ -24,11 +24,13 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import User, Player, UserRoster, Trait, PlayerTrait, TraitInventory, TraitDaily
 from utils.idempotency import claim_once, release
+from utils.message_chunks import chunk_blocks
 from services.trait_service import (
     TRAIT_DEFINITIONS, refresh_shop, reroll_shop, buy_trait_from_shop,
     apply_trait_to_player, replace_trait_on_player, remove_trait_from_player,
     upgrade_player_trait, upgrade_inventory_trait,
-    get_player_traits, _today_key, _get_or_create_daily,
+    get_player_traits, trait_rarity_of, sorted_categories,
+    _today_key, _get_or_create_daily,
 )
 from services.flags import get_flag
 from services.roster_lock import match_lock_alert, match_lock_message
@@ -36,10 +38,17 @@ from services.trait_trading_service import list_inventory, sell_inventory_trait
 from config import (
     TRAIT_SHOP_DAILY_PURCHASE_LIMIT, TRAIT_REROLL_COST,
     TRAIT_UPGRADE_COSTS, TRAIT_REPLACE_COST,
+    TRAIT_MAX_PER_PLAYER, TRAIT_MAX_ELITE_PER_PLAYER,
     TRAIT_BUY_VALUE, trait_buy_value, trait_sell_value,
+    trait_rarity_meta, trait_rarity_label, TRAIT_RARITY_ORDER,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _rarity_tag(trait) -> str:
+    """The rarity pip shown next to a trait everywhere it is listed."""
+    return trait_rarity_meta(trait_rarity_of(trait))["emoji"]
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -82,8 +91,9 @@ async def traits_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 max_badge = " 🌟" if inv.level == 5 else ""
                 # Resale price rides along so the sell decision needs no maths.
                 lines.append(
-                    f"  <code>#{inv.id}</code> {t.emoji} {t.name} Lv.{inv.level}"
-                    f"{max_badge} · 💰 {trait_sell_value(inv.level):,}💎")
+                    f"  <code>#{inv.id}</code> {_rarity_tag(t)}{t.emoji} {t.name} "
+                    f"Lv.{inv.level}{max_badge} · 💰 "
+                    f"{trait_sell_value(inv.level, trait_rarity_of(t)):,}💎")
             lines.append("<i>Use /traitapply to attach to a player, "
                          "/selltrait to cash one in</i>")
             lines.append("")
@@ -103,7 +113,8 @@ async def traits_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"\n<b>#{pos}. {pname}</b> {flag}")
                 for pt, t in traits:
                     max_badge = " 🌟" if pt.level == 5 else ""
-                    lines.append(f"  <code>#{pt.id}</code> {t.emoji} {t.name} Lv.{pt.level}{max_badge}")
+                    lines.append(f"  <code>#{pt.id}</code> {_rarity_tag(t)}{t.emoji} "
+                                 f"{t.name} Lv.{pt.level}{max_badge}")
             lines.append("")
         else:
             lines.append("🏏 <i>No equipped traits yet</i>\n")
@@ -117,6 +128,7 @@ async def traits_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append("📦 /removetrait — unequip, back to inventory")
         lines.append("💰 /selltrait — sell an inventory trait for gems")
         lines.append("💠 /tradetrait @user — swap a trait, same level both ways")
+        lines.append("📖 /traitlist — the full catalogue and what each one does")
 
         await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
@@ -128,8 +140,118 @@ async def traits_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# /traitlist — the whole catalogue, so nobody has to guess
+# ═══════════════════════════════════════════════════════════════════════
+
+async def traitlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/traitlist [category] — every trait in the game, what it does, what it costs.
+
+    The shop only ever shows a handful of slots, so without this the catalogue
+    is invisible: a captain can't plan for a trait they've never seen. Takes an
+    optional category (``/traitlist bowling``) to narrow a long list.
+    """
+    session = get_session()
+    try:
+        wanted = " ".join(context.args or []).strip().lower()
+
+        rows = (session.query(Trait)
+                .filter(Trait.is_active == True)  # noqa: E712
+                .order_by(Trait.name).all())
+        if not rows:
+            await update.message.reply_text(
+                "📖 No traits are active right now — check back later.")
+            return
+
+        by_category = {}
+        for t in rows:
+            by_category.setdefault(t.category or "Other", []).append(t)
+        categories = sorted_categories(by_category)
+
+        if wanted:
+            matched = [c for c in categories if c.lower().startswith(wanted)]
+            if not matched:
+                await update.message.reply_text(
+                    "❓ No such category. Try one of: "
+                    + ", ".join(c.lower() for c in categories))
+                return
+            categories = matched
+
+        header = ("📖 <b>TRAIT CATALOGUE</b>\n"
+                  f"<i>{len(rows)} active traits · rarity sets the price and how "
+                  f"often the market lists it</i>\n"
+                  "━━━━━━━━━━━━━━━━━━━")
+        footer = ("━━━━━━━━━━━━━━━━━━━\n"
+                  f"⭐ Elite: max <b>{TRAIT_MAX_ELITE_PER_PLAYER} per player</b>. "
+                  f"Any card can carry {TRAIT_MAX_PER_PLAYER} traits in total.\n"
+                  "🏪 /traitshop to buy · 📖 /traitlist bowling to filter")
+
+        blocks = []
+        for category in categories:
+            entries = sorted(
+                by_category[category],
+                key=lambda t: (TRAIT_RARITY_ORDER.index(trait_rarity_of(t)), t.name))
+            block = [f"<b>{category.upper()}</b>"]
+            for t in entries:
+                rarity = trait_rarity_of(t)
+                block.append(
+                    f"{_rarity_tag(t)} {t.emoji} <b>{t.name}</b> — "
+                    f"{trait_buy_value(1, rarity):,} 💎\n"
+                    f"   <i>{t.description}</i>")
+            blocks.append("<blockquote expandable>" + "\n".join(block)
+                          + "</blockquote>")
+
+        # The whole catalogue is well past Telegram's 4,096-character ceiling,
+        # and an over-long send fails outright rather than truncating — so pack
+        # whole category blocks into messages and split when the next one won't
+        # fit. Splitting BETWEEN blocks keeps every <blockquote> closed inside
+        # the message that opens it; a blind character-count split would tear
+        # the HTML in half and the send would be rejected for that instead.
+        for chunk in chunk_blocks(blocks, header, footer):
+            await update.message.reply_text(chunk, parse_mode="HTML")
+    except Exception:
+        logger.exception("traitlist_handler error")
+        await update.message.reply_text("⚠️ Error loading the trait catalogue.")
+    finally:
+        session.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # /traitshop — daily shop
 # ═══════════════════════════════════════════════════════════════════════
+
+def _trait_slot_lines(session, rows, btns, owner_tg):
+    """Render the shop's slot listings and fill ``btns`` with their Buy buttons.
+
+    Shared by the first render and the post-buy refresh so the two can't drift —
+    they had two copies of this loop and the rarity/stock lines would have had
+    to be written twice.
+    """
+    from services.global_market import is_sold_out, stock_label, is_unlimited
+
+    slot_lines = []
+    for row in rows:
+        trait = session.query(Trait).get(row.trait_id)
+        if not trait:
+            continue
+        sold_out = is_sold_out(row)
+        status = " ❌ <i>sold out</i>" if sold_out else ""
+        discount_tag = f"  🏷️ -{row.discount_pct}%" if row.discount_pct > 0 else ""
+        # Unlimited is the norm now, so only a limited run is worth the pixels.
+        stock = "" if is_unlimited(row) else f"  📦 {stock_label(row)}"
+        rarity = trait_rarity_label(trait_rarity_of(trait))
+        slot_lines.append(
+            f"<b>Slot {row.slot_index + 1}.</b> {trait.emoji} <b>{trait.name}</b> "
+            f"Lv.1 — <b>{row.final_price}</b> 💎{discount_tag}{stock}{status}\n"
+            f"   {rarity} · {trait.category}\n"
+            f"   <i>{trait.description}</i>"
+        )
+        if not sold_out:
+            btns.append([InlineKeyboardButton(
+                f"Buy: {trait.emoji} {trait.name} ({row.final_price} 💎)",
+                callback_data=f"trbuy_{owner_tg}_{row.slot_index}"
+            )])
+    return slot_lines
+
 
 async def traitshop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg = update.effective_user
@@ -157,29 +279,12 @@ async def traitshop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🏪 <b>TRAIT MARKET</b>",
             f"💎 Gems: <b>{user.total_gems:,}</b>  |  Purchases left today: <b>{remaining}/{TRAIT_SHOP_DAILY_PURCHASE_LIMIT}</b>",
             f"📊 Same shop for all players — admin-managed.",
+            "♾️ <i>Unlimited stock — nothing here sells out.</i>",
             "━━━━━━━━━━━━━━━━━━━",
         ]
 
         btns = []
-        slot_lines = []
-        for row in rows:
-            trait = session.query(Trait).get(row.trait_id)
-            if not trait:
-                continue
-            sold_out = row.purchased_count >= row.quantity
-            status = " ❌ <i>sold out</i>" if sold_out else ""
-            discount_tag = f"  🏷️ -{row.discount_pct}%" if row.discount_pct > 0 else ""
-            stock = f"  📦 {row.quantity - row.purchased_count}/{row.quantity}" if row.quantity > 1 else ""
-            slot_lines.append(
-                f"<b>Slot {row.slot_index + 1}.</b> {trait.emoji} <b>{trait.name}</b> "
-                f"Lv.1 — <b>{row.final_price}</b> 💎{discount_tag}{stock}{status}\n"
-                f"   <i>{trait.description}</i>"
-            )
-            if not sold_out:
-                btns.append([InlineKeyboardButton(
-                    f"Buy: {trait.emoji} {trait.name} ({row.final_price} 💎)",
-                    callback_data=f"trbuy_{tg.id}_{row.slot_index}"
-                )])
+        slot_lines = _trait_slot_lines(session, rows, btns, tg.id)
 
         # Slot 1–5 listings live inside an expandable quote to keep chat tidy.
         if slot_lines:
@@ -317,28 +422,11 @@ async def _refresh_shop_display(q, session, user):
     lines = [
         "🏪 <b>TRAIT MARKET</b>",
         f"💎 Gems: <b>{user.total_gems:,}</b>  |  Purchases left today: <b>{remaining}/{TRAIT_SHOP_DAILY_PURCHASE_LIMIT}</b>",
+        "♾️ <i>Unlimited stock — nothing here sells out.</i>",
         "━━━━━━━━━━━━━━━━━━━",
     ]
     btns = []
-    slot_lines = []
-    for row in rows:
-        trait = session.query(Trait).get(row.trait_id)
-        if not trait:
-            continue
-        sold_out = row.purchased_count >= row.quantity
-        status = " ❌ <i>sold out</i>" if sold_out else ""
-        discount_tag = f"  🏷️ -{row.discount_pct}%" if row.discount_pct > 0 else ""
-        stock = f"  📦 {row.quantity - row.purchased_count}/{row.quantity}" if row.quantity > 1 else ""
-        slot_lines.append(
-            f"<b>Slot {row.slot_index + 1}.</b> {trait.emoji} <b>{trait.name}</b> "
-            f"Lv.1 — <b>{row.final_price}</b> 💎{discount_tag}{stock}{status}\n"
-            f"   <i>{trait.description}</i>"
-        )
-        if not sold_out:
-            btns.append([InlineKeyboardButton(
-                f"Buy: {trait.emoji} {trait.name} ({row.final_price} 💎)",
-                callback_data=f"trbuy_{owner_tg}_{row.slot_index}"
-            )])
+    slot_lines = _trait_slot_lines(session, rows, btns, owner_tg)
     # Slot 1–5 listings live inside an expandable quote to keep chat tidy.
     if slot_lines:
         lines.append("<blockquote expandable>" + "\n\n".join(slot_lines) + "</blockquote>")
@@ -920,16 +1008,26 @@ async def trrem_pt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # /selltrait — cash an inventory trait in for gems
 # ═══════════════════════════════════════════════════════════════════════
 
-def _sell_quote_lines(user):
-    """The price list shown above the picker, so nobody sells on a guess."""
+def _sell_quote_lines(user, rarities=()):
+    """The price list shown above the picker, so nobody sells on a guess.
+
+    Priced per rarity, because a Lv.3 Elite is worth four times a Lv.3 Common
+    and a single table would misquote both. Only the rarities the captain
+    actually holds are listed, so the message stays short.
+    """
     lines = ["💰 <b>SELL TRAIT</b>", "━━━━━━━━━━━━━━━━━━━",
              f"💎 Gems: {user.total_gems:,}", "",
              "Selling always returns <b>a little less</b> than the gems a "
              "trait cost to build — never more, however cheaply you bought "
              "it:"]
-    for level in sorted(TRAIT_BUY_VALUE):
-        lines.append(f"  Lv.{level}: {trait_buy_value(level):,} 💎 invested → "
-                     f"<b>{trait_sell_value(level):,} 💎</b> back")
+    shown = [r for r in TRAIT_RARITY_ORDER if r in set(rarities)] or ["common"]
+    for rarity in shown:
+        if len(shown) > 1:
+            lines.append(f"<b>{trait_rarity_label(rarity)}</b>")
+        for level in sorted(TRAIT_BUY_VALUE):
+            lines.append(
+                f"  Lv.{level}: {trait_buy_value(level, rarity):,} 💎 invested → "
+                f"<b>{trait_sell_value(level, rarity):,} 💎</b> back")
     lines += ["",
               "<i>Only unequipped traits can be sold. A trait on a player? "
               "/removetrait first — that's free and keeps its level.</i>", "",
@@ -962,12 +1060,13 @@ async def selltrait_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             level = int(inv.level or 1)
             btns.append([InlineKeyboardButton(
                 f"{trait.emoji} {trait.name} Lv.{level} → "
-                f"{trait_sell_value(level):,} 💎",
+                f"{trait_sell_value(level, trait_rarity_of(trait)):,} 💎",
                 callback_data=f"trsell_{inv.id}")])
         btns.append([InlineKeyboardButton("❌ Cancel", callback_data="trcancel")])
 
+        rarities = [trait_rarity_of(trait) for _inv, trait in rows]
         await update.message.reply_text(
-            "\n".join(_sell_quote_lines(user)), parse_mode="HTML",
+            "\n".join(_sell_quote_lines(user, rarities)), parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(btns))
     except Exception:
         logger.exception("selltrait_handler error")
@@ -1004,8 +1103,9 @@ async def trsell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         level = int(inv.level or 1)
         await q.answer()
 
-        gems = trait_sell_value(level)
-        buy = trait_buy_value(level)
+        rarity = trait_rarity_of(trait)
+        gems = trait_sell_value(level, rarity)
+        buy = trait_buy_value(level, rarity)
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton(f"✅ Sell for {gems:,} 💎",
                                  callback_data=f"trsellok_{inv.id}"),
@@ -1014,7 +1114,7 @@ async def trsell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text(
             f"💰 <b>SELL THIS TRAIT?</b>\n\n"
             f"{trait.emoji} <b>{trait.name}</b> Lv.{level}\n"
-            f"🏷 {trait.category}\n\n"
+            f"🏷 {trait.category} · {trait_rarity_label(rarity)}\n\n"
             f"Invested: {buy:,} 💎\n"
             f"You receive: <b>{gems:,} 💎</b> "
             f"(you lose {buy - gems:,} 💎)\n\n"

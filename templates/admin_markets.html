@@ -5,7 +5,9 @@
 <h1>🛒 Markets</h1>
 
 <div style="background:var(--card); padding:1rem; border-radius:8px; margin-bottom:1.5rem; font-size:.9rem; color:var(--muted); border:1px solid var(--border);">
-  ℹ️ Markets are <strong>shared by all users</strong>. Both refresh once daily at <strong>{{ '%02d:00 IST' | format(cfg.market_refresh_hour_ist or 0) }}</strong>. Player cards list at their <strong>base price</strong> — that's what Free, Bronze and Silver pay; <strong>Platinum</strong> saves 5% and <strong>Diamond</strong> 10%. Lower a slot's <strong>Sell</strong> price to put it on sale for everyone. Race-safe atomic stock updates.
+  ℹ️ Markets are <strong>shared by all users</strong>. Both refresh once daily at <strong>{{ '%02d:00 IST' | format(cfg.market_refresh_hour_ist or 0) }}</strong>. Player cards list at their <strong>base price</strong> — that's what Free, Bronze and Silver pay; <strong>Platinum</strong> saves 5% and <strong>Diamond</strong> 10%. Lower a slot's <strong>Sell</strong> price to put it on sale for everyone.
+  <br><br>
+  📦 <strong>Stock: 0 means unlimited</strong> — the slot never sells out and everyone can buy it (a captain still can't own two copies of the same card). That's the default for everything listed. Enter a positive number to make a slot a limited run instead; those stay race-safe under concurrent buys.
 </div>
 
 <!-- ── Market settings ── -->
@@ -148,9 +150,11 @@
                  style="width:90px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:right;">
         </td>
         <td style="padding:.4rem; text-align:center;">
-          <input type="number" name="quantity" value="{{ d.row.quantity }}" min="0" max="999"
+          <input type="number" name="quantity" value="{{ d.row.quantity }}" min="0" max="999" title="0 = unlimited"
                  style="width:55px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:center;">
-          <span style="color:var(--muted); font-size:.75rem;">/ {{ d.row.purchased_count }} sold</span>
+          <span style="color:var(--muted); font-size:.75rem;">
+            {% if d.row.quantity and d.row.quantity > 0 %}limited{% else %}∞{% endif %} · {{ d.row.purchased_count }} sold
+          </span>
         </td>
         <td style="padding:.4rem; text-align:center;">
           <input type="checkbox" name="is_active" {% if d.row.is_active %}checked{% endif %}>
@@ -189,7 +193,7 @@
               style="width:100%; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text); font-family:inherit;">
         <option value="">— pick a trait —</option>
         {% for t in all_traits %}
-        <option value="{{ t.id }}">{{ t.emoji }} {{ t.name }} — {{ t.description[:50] }}{% if t.description|length > 50 %}…{% endif %}</option>
+        <option value="{{ t.id }}">{{ trait_rarity[t.id] }} {{ t.emoji }} {{ t.name }} — {{ t.description[:50] }}{% if t.description|length > 50 %}…{% endif %}</option>
         {% endfor %}
       </select>
     </div>
@@ -202,9 +206,9 @@
     </div>
     <div>
       <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
-        Quantity
+        Quantity <span title="0 = unlimited stock">(0 = ∞)</span>
       </label>
-      <input type="number" name="quantity" min="1" max="999" value="10"
+      <input type="number" name="quantity" min="0" max="999" value="0"
              style="width:80px; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
     </div>
     <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.55rem 1.2rem; border-radius:5px; font-weight:600; cursor:pointer;">+ Add</button>
@@ -253,6 +257,7 @@
         <td style="padding:.4rem;">
           {% if d.trait %}
           <strong>{{ d.trait.emoji }} {{ d.trait.name }}</strong>
+          <span style="color:var(--muted); font-size:.75rem;">{{ trait_rarity[d.trait.id] }} · {{ d.trait.category }}</span>
           <div style="color:var(--muted); font-size:.78rem;">{{ d.trait.description[:60] }}{% if d.trait.description|length > 60 %}…{% endif %}</div>
           {% else %}
           <em>trait {{ d.row.trait_id }} missing</em>
@@ -271,9 +276,11 @@
                  style="width:80px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:right;">
         </td>
         <td style="padding:.4rem; text-align:center;">
-          <input type="number" name="quantity" value="{{ d.row.quantity }}" min="0" max="999"
+          <input type="number" name="quantity" value="{{ d.row.quantity }}" min="0" max="999" title="0 = unlimited"
                  style="width:55px; padding:.3rem; background:var(--input-bg); border:1px solid var(--border); border-radius:4px; color:var(--text); text-align:center;">
-          <span style="color:var(--muted); font-size:.75rem;">/ {{ d.row.purchased_count }}</span>
+          <span style="color:var(--muted); font-size:.75rem;">
+            {% if d.row.quantity and d.row.quantity > 0 %}limited{% else %}∞{% endif %} · {{ d.row.purchased_count }} sold
+          </span>
         </td>
         <td style="padding:.4rem; text-align:center;">
           <input type="checkbox" name="is_active" {% if d.row.is_active %}checked{% endif %}>

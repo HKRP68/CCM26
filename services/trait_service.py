@@ -13,7 +13,7 @@ from config import (
     TRAIT_SHOP_SLOTS, TRAIT_SHOP_DAILY_PURCHASE_LIMIT, TRAIT_SHOP_BASE_PRICE,
     TRAIT_REROLL_COST, TRAIT_DAILY_DISCOUNT_MIN, TRAIT_DAILY_DISCOUNT_MAX,
     TRAIT_UPGRADE_COSTS, TRAIT_REPLACE_COST,
-    TRAIT_MAX_PER_PLAYER, TRAIT_MAX_SAME_CATEGORY,
+    TRAIT_MAX_PER_PLAYER, TRAIT_MAX_SAME_CATEGORY, TRAIT_MAX_ELITE_PER_PLAYER,
 )
 
 logger = logging.getLogger(__name__)
@@ -22,58 +22,215 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════
 # TRAIT DEFINITIONS — seeded into the `traits` table
 # ═══════════════════════════════════════════════════════════════════════
+#
+# This list is the single source of truth for the catalogue. ``database.
+# _seed_traits`` upserts it on every boot (keyed on ``effect_key``), so editing
+# a description, emoji, category or rarity here updates the live rows — it does
+# NOT touch ``is_active``, which stays the admin's switch.
+#
+# Every ``effect_key`` must have a handler in ``services.trait_engine.
+# TRAIT_HANDLERS``; a key with no handler is a trait that quietly does nothing,
+# which tests/test_trait_catalogue.py exists to prevent.
+#
+# ``rarity`` (config.TRAIT_RARITIES) sets both how often the shared market rolls
+# a trait and what it costs:
+#
+#   ⚪ common  ×1 →   150 💎    a straightforward, always-on edge
+#   🔵 rare    ×2 →   300 💎    conditional, but the condition comes up often
+#   🟣 epic    ×4 →   600 💎    situational and strong when it lands
+#   ⭐ elite   ×8 → 1,200 💎    very rare; one per player (TRAIT_MAX_ELITE_PER_PLAYER)
 
 TRAIT_DEFINITIONS = [
     # ── BATTING ──────────────────────────────────────────────────────
-    {"name": "Finisher", "category": "Batting", "emoji": "🔥",
+    {"name": "Finisher", "category": "Batting", "emoji": "🔥", "rarity": "rare",
      "description": "Boosts 6s and 4s in the last 3 overs of the innings.",
      "effect_key": "bat_finisher"},
-    {"name": "Power Hitter", "category": "Batting", "emoji": "💥",
+    {"name": "Power Hitter", "category": "Batting", "emoji": "💥", "rarity": "common",
      "description": "More 6s at the cost of higher wicket risk.",
      "effect_key": "bat_power_hitter"},
-    {"name": "Anchor", "category": "Batting", "emoji": "⚓",
+    {"name": "Anchor", "category": "Batting", "emoji": "⚓", "rarity": "common",
      "description": "Lower wicket chance but slightly fewer 6s.",
      "effect_key": "bat_anchor"},
-    {"name": "Fast Starter", "category": "Batting", "emoji": "⚡",
+    {"name": "Fast Starter", "category": "Batting", "emoji": "⚡", "rarity": "common",
      "description": "Boosts boundaries in the first 10 balls faced.",
      "effect_key": "bat_fast_starter"},
-    {"name": "Clutch Player", "category": "Batting", "emoji": "🎯",
+    {"name": "Clutch Player", "category": "Batting", "emoji": "🎯", "rarity": "rare",
      "description": "Boosts boundaries when required run rate exceeds 8.",
      "effect_key": "bat_clutch"},
+    {"name": "Spin Basher", "category": "Batting", "emoji": "🌀", "rarity": "rare",
+     "description": "Stronger against spin bowlers — more boundaries, less risk.",
+     "effect_key": "bat_spin_basher"},
+    {"name": "Pace Destroyer", "category": "Batting", "emoji": "🚀", "rarity": "rare",
+     "description": "Better against fast bowlers — more boundaries, less risk.",
+     "effect_key": "bat_pace_destroyer"},
+    {"name": "Late Bloomer", "category": "Batting", "emoji": "🌱", "rarity": "rare",
+     "description": "Gets stronger after facing 20 balls.",
+     "effect_key": "bat_late_bloomer"},
+    {"name": "Power Surge", "category": "Batting", "emoji": "⚡", "rarity": "epic",
+     "description": "Temporary boost after consecutive boundaries.",
+     "effect_key": "bat_power_surge"},
+    {"name": "Pinch Hitter", "category": "Batting", "emoji": "🏏", "rarity": "common",
+     "description": "Extra boundaries while the powerplay field is up.",
+     "effect_key": "bat_pinch_hitter"},
 
     # ── BOWLING ──────────────────────────────────────────────────────
-    {"name": "Death Specialist", "category": "Bowling", "emoji": "☠️",
+    {"name": "Death Specialist", "category": "Bowling", "emoji": "☠️", "rarity": "rare",
      "description": "Better economy & wickets in the last 3 overs.",
      "effect_key": "bowl_death"},
-    {"name": "Wicket Hunter", "category": "Bowling", "emoji": "🏹",
+    {"name": "Wicket Hunter", "category": "Bowling", "emoji": "🏹", "rarity": "common",
      "description": "Higher wicket chance on every delivery.",
      "effect_key": "bowl_wicket_hunter"},
-    {"name": "Dot Ball Specialist", "category": "Bowling", "emoji": "⚪",
+    {"name": "Dot Ball Specialist", "category": "Bowling", "emoji": "⚪", "rarity": "common",
      "description": "Higher dot ball chance on every delivery.",
      "effect_key": "bowl_dot_specialist"},
-    {"name": "Powerplay King", "category": "Bowling", "emoji": "👑",
+    {"name": "Powerplay King", "category": "Bowling", "emoji": "👑", "rarity": "rare",
      "description": "Strong in the first 3 overs — more dots, more wickets.",
      "effect_key": "bowl_powerplay"},
-    {"name": "Yorker Specialist", "category": "Bowling", "emoji": "🎯",
+    {"name": "Yorker Specialist", "category": "Bowling", "emoji": "🎯", "rarity": "rare",
      "description": "Death-over accuracy — more wickets & dots in final 3 overs.",
      "effect_key": "bowl_yorker"},
+    {"name": "Spell Builder", "category": "Bowling", "emoji": "📶", "rarity": "epic",
+     "description": "Improves with each over bowled in the spell.",
+     "effect_key": "bowl_spell_builder"},
+    {"name": "Partnership Breaker", "category": "Bowling", "emoji": "💔", "rarity": "epic",
+     "description": "Bonus against 50+ partnerships.",
+     "effect_key": "bowl_partner_breaker"},
+    {"name": "Tail-End Hunter", "category": "Bowling", "emoji": "🐍", "rarity": "epic",
+     "description": "Much stronger against lower-order batters.",
+     "effect_key": "bowl_tail_hunter"},
+    {"name": "Middle-Over Squeeze", "category": "Bowling", "emoji": "🗜️", "rarity": "rare",
+     "description": "Chokes the middle overs — more dots, more wickets.",
+     "effect_key": "bowl_middle_squeeze"},
+    {"name": "Economy Machine", "category": "Bowling", "emoji": "🔒", "rarity": "common",
+     "description": "Concedes fewer boundaries in every phase.",
+     "effect_key": "bowl_economy"},
 
     # ── FIELDING ─────────────────────────────────────────────────────
-    {"name": "Safe Hands", "category": "Fielding", "emoji": "🧤",
+    {"name": "Safe Hands", "category": "Fielding", "emoji": "🧤", "rarity": "common",
      "description": "Lowers the chance of a dropped catch.",
      "effect_key": "field_safe_hands"},
-    {"name": "Sniper Arm", "category": "Fielding", "emoji": "🎯",
+    {"name": "Sniper Arm", "category": "Fielding", "emoji": "🎯", "rarity": "common",
      "description": "Raises run-out chance on quick singles.",
      "effect_key": "field_sniper"},
+    {"name": "Boundary Rider", "category": "Fielding", "emoji": "🛡️", "rarity": "rare",
+     "description": "Cuts off 4s in the deep — boundaries become singles.",
+     "effect_key": "field_boundary_rider"},
+    {"name": "Livewire", "category": "Fielding", "emoji": "⚡", "rarity": "common",
+     "description": "Electric in the ring — turns pushed runs into dots.",
+     "effect_key": "field_livewire"},
 
     # ── MENTAL ───────────────────────────────────────────────────────
-    {"name": "Consistency King", "category": "Mental", "emoji": "📊",
+    {"name": "Consistency King", "category": "Mental", "emoji": "📊", "rarity": "rare",
      "description": "Trims extremes — fewer wickets but also fewer 6s.",
      "effect_key": "mental_consistency"},
-    {"name": "Momentum Player", "category": "Mental", "emoji": "📈",
+    {"name": "Momentum Player", "category": "Mental", "emoji": "📈", "rarity": "rare",
      "description": "Gains momentum — bonus scales from 0% to full over balls 1-30.",
      "effect_key": "mental_momentum"},
+    {"name": "Confidence Player", "category": "Mental", "emoji": "😎", "rarity": "common",
+     "description": "Gains a small bonus after every boundary.",
+     "effect_key": "mental_confidence"},
+    {"name": "Comeback King", "category": "Mental", "emoji": "🔄", "rarity": "rare",
+     "description": "Gets stronger after being beaten earlier in the spell.",
+     "effect_key": "mental_comeback"},
+    {"name": "Ice Veins", "category": "Mental", "emoji": "🧊", "rarity": "rare",
+     "description": "Calm under a high required rate — far less likely to throw it away.",
+     "effect_key": "mental_ice"},
+
+    # ── AWARENESS ────────────────────────────────────────────────────
+    {"name": "Pitch Reader", "category": "Awareness", "emoji": "🔍", "rarity": "rare",
+     "description": "Adapts faster to pitch conditions — settles in early.",
+     "effect_key": "aware_pitch"},
+    {"name": "Strike Rotator", "category": "Awareness", "emoji": "🔁", "rarity": "common",
+     "description": "Converts dots into singles more often.",
+     "effect_key": "aware_rotation"},
+    {"name": "Gap Finder", "category": "Awareness", "emoji": "🎳", "rarity": "common",
+     "description": "Slightly more 2s and 4s.",
+     "effect_key": "aware_gap"},
+
+    # ── SPECIAL ──────────────────────────────────────────────────────
+    {"name": "Giant Killer", "category": "Special", "emoji": "🗡️", "rarity": "epic",
+     "description": "Performs better against higher-rated opponents.",
+     "effect_key": "special_giantkiller"},
+
+    # ── ELITE (very rare — one per player) ───────────────────────────
+    {"name": "Master Blaster", "category": "Elite", "emoji": "💫", "rarity": "elite",
+     "description": "Excels in every batting phase.",
+     "effect_key": "elite_master_blaster"},
+    {"name": "Run Machine", "category": "Elite", "emoji": "🏃", "rarity": "elite",
+     "description": "Consistently scores big innings — grows the longer they bat.",
+     "effect_key": "elite_run_machine"},
+    {"name": "Ice Finisher", "category": "Elite", "emoji": "❄️", "rarity": "elite",
+     "description": "Elite finisher in close chases.",
+     "effect_key": "elite_ice_finisher"},
+    {"name": "Bowling Wizard", "category": "Elite", "emoji": "🧙", "rarity": "elite",
+     "description": "Small bonus in every bowling phase.",
+     "effect_key": "elite_bowling_wizard"},
+    {"name": "Magic Spell", "category": "Elite", "emoji": "✨", "rarity": "elite",
+     "description": "Occasionally produces an exceptional over.",
+     "effect_key": "elite_magic_spell"},
+    {"name": "Unplayable", "category": "Elite", "emoji": "🚧", "rarity": "elite",
+     "description": "Rarely gets hit for consecutive boundaries.",
+     "effect_key": "elite_unplayable"},
+    {"name": "Golden Arm", "category": "Elite", "emoji": "🥇", "rarity": "elite",
+     "description": "Strikes early when introduced into the attack.",
+     "effect_key": "elite_golden_arm"},
+    {"name": "Big Fish Hunter", "category": "Elite", "emoji": "🐋", "rarity": "elite",
+     "description": "More likely to dismiss top-order batters.",
+     "effect_key": "elite_big_fish"},
+    {"name": "Nightmare Matchup", "category": "Elite", "emoji": "😱", "rarity": "elite",
+     "description": "Performs exceptionally against a specific batter type.",
+     "effect_key": "elite_matchup"},
+    {"name": "GOAT Instinct", "category": "Elite", "emoji": "🐐", "rarity": "elite",
+     "description": "Rare clutch boost in high-pressure moments.",
+     "effect_key": "elite_goat"},
 ]
+
+# Display order for anything that groups the catalogue (the /traits list, the
+# admin page). Anything not named here sorts last, alphabetically.
+TRAIT_CATEGORY_ORDER = [
+    "Batting", "Bowling", "Fielding", "Mental", "Awareness", "Special", "Elite",
+]
+
+TRAIT_BY_EFFECT = {t["effect_key"]: t for t in TRAIT_DEFINITIONS}
+
+
+def trait_meta(effect_key):
+    """The catalogue entry for an effect key, or None if it isn't one of ours."""
+    return TRAIT_BY_EFFECT.get(effect_key)
+
+
+def trait_rarity_of(trait) -> str:
+    """Rarity of a ``Trait`` row (or a catalogue dict), normalised.
+
+    Reads the column when the database has one and falls back to the catalogue,
+    so a row written before the rarity column existed still prices correctly.
+    """
+    from config import trait_rarity_key
+    if trait is None:
+        return trait_rarity_key(None)
+    if isinstance(trait, dict):
+        return trait_rarity_key(trait.get("rarity"))
+    rarity = getattr(trait, "rarity", None)
+    if not rarity:
+        meta = trait_meta(getattr(trait, "effect_key", None))
+        rarity = meta.get("rarity") if meta else None
+    return trait_rarity_key(rarity)
+
+
+def trait_price_of(trait) -> int:
+    """Gems for a fresh Lv.1 copy — the admin's pinned price, else the rarity's."""
+    from config import trait_list_price
+    pinned = getattr(trait, "base_price", None) if not isinstance(trait, dict) else None
+    if pinned and int(pinned) > 0:
+        return int(pinned)
+    return trait_list_price(trait_rarity_of(trait))
+
+
+def sorted_categories(categories):
+    """Categories in catalogue order, unknown ones alphabetically at the end."""
+    known = {c: i for i, c in enumerate(TRAIT_CATEGORY_ORDER)}
+    return sorted(set(categories),
+                  key=lambda c: (known.get(c, len(known)), str(c)))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -122,16 +279,19 @@ def refresh_shop(session, user_id, force=False):
     if not all_traits:
         return []
     n_slots = min(TRAIT_SHOP_SLOTS, len(all_traits))
-    chosen = random.sample(all_traits, n_slots)
+    # Weighted by rarity, so this shop shows Elite as rarely as the shared one.
+    from services.global_market import pick_traits_by_rarity
+    chosen = pick_traits_by_rarity(all_traits, n_slots)
 
     discount_slot = random.randint(0, n_slots - 1)
     discount_pct = random.randint(TRAIT_DAILY_DISCOUNT_MIN, TRAIT_DAILY_DISCOUNT_MAX)
 
     new_rows = []
     for i, t in enumerate(chosen):
-        base = TRAIT_SHOP_BASE_PRICE
+        # Price per trait, not one flat number: rarity is what a trait costs.
+        base = trait_price_of(t)
         disc = discount_pct if i == discount_slot else 0
-        final = int(base * (100 - disc) / 100)
+        final = base * (100 - disc) // 100
         row = TraitMarket(
             user_id=user_id, slot_index=i, trait_id=t.id,
             base_price=base, discount_pct=disc, final_price=final,
@@ -194,6 +354,23 @@ def _count_same_category(session, roster_id, category):
             .count())
 
 
+def _elite_block(new_trait, other_traits):
+    """Message refusing a second Elite trait on one player, or None.
+
+    ``other_traits`` is every trait that will still be on the player after this
+    change — the equipped list for an apply, that list minus the slot being
+    overwritten for a replace.
+    """
+    if trait_rarity_of(new_trait) != "elite":
+        return None
+    already = sum(1 for t in other_traits if trait_rarity_of(t) == "elite")
+    if already < TRAIT_MAX_ELITE_PER_PLAYER:
+        return None
+    return (f"Only {TRAIT_MAX_ELITE_PER_PLAYER} ⭐ Elite trait per player. "
+            f"Remove the one they're wearing first (/removetrait — it's free "
+            f"and keeps its level).")
+
+
 def get_player_traits(session, roster_id):
     return (session.query(PlayerTrait, Trait)
             .join(Trait, PlayerTrait.trait_id == Trait.id)
@@ -229,6 +406,10 @@ def apply_trait_to_player(session, user, inventory_id, roster_id):
     if same_cat >= TRAIT_MAX_SAME_CATEGORY:
         return False, (f"Max {TRAIT_MAX_SAME_CATEGORY} traits of same category "
                        f"({trait.category}) per player.")
+
+    elite_block = _elite_block(trait, [t for _pt, t in current])
+    if elite_block:
+        return False, elite_block
 
     pt = PlayerTrait(
         user_id=user.id, roster_id=roster_id,
@@ -268,13 +449,23 @@ def replace_trait_on_player(session, user, player_trait_id, inventory_id):
             return False, f"Player already has {new_trait.name} in another slot."
 
     current_cat_count = 0
+    remaining = []
     for o in other_traits:
         ot = session.query(Trait).get(o.trait_id)
+        if not ot:
+            continue
+        remaining.append(ot)
         if ot.category == new_trait.category:
             current_cat_count += 1
     if current_cat_count >= TRAIT_MAX_SAME_CATEGORY:
         return False, (f"Would exceed {TRAIT_MAX_SAME_CATEGORY} {new_trait.category} "
                        f"traits on this player.")
+
+    # The slot being overwritten is already excluded from ``other_traits``, so
+    # swapping one Elite straight out for another is allowed.
+    elite_block = _elite_block(new_trait, remaining)
+    if elite_block:
+        return False, elite_block
 
     user.total_gems -= TRAIT_REPLACE_COST
     old_trait = session.query(Trait).get(pt.trait_id)

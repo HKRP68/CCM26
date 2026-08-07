@@ -58,6 +58,9 @@ def build_market_composite(slots_with_players, columns=2, padding=20,
     if not cards:
         return None
 
+    # An unlimited slot is never stamped SOLD OUT, however many people bought it.
+    from services.global_market import is_sold_out
+
     # Standardize card size — pick smallest dimensions to keep output reasonable
     target_card_w = min(450, max(c[2].size[0] for c in cards))
     # Maintain aspect ratio
@@ -133,7 +136,7 @@ def build_market_composite(slots_with_players, columns=2, padding=20,
         canvas.paste(img, (x, y))
 
         # Label below card: "Slot N · 60,000 🪙"
-        sold_out = slot.purchased_count >= slot.quantity
+        sold_out = is_sold_out(slot)
         label_text = f"#{slot.slot_index}"
         try:
             bbox = draw.textbbox((0, 0), label_text, font=slot_font)

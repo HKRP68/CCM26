@@ -22,22 +22,34 @@ discount plus the (never-discounted) upgrades. Selling is therefore a small loss
 however cheaply the trait was bought, and the shop can never be farmed by buying
 a discounted trait and selling it straight back.
 
+Those are the Common-tier numbers. A trait's rarity multiplies its Lv.1 price
+(config.TRAIT_RARITIES), and resale and the swap fee scale with it, so an Elite
+trait is never sold or swapped at a Common's valuation.
+
 The swap mirrors ``services.trading_service``: both traits must be the same
-level (the trait analogue of the same-OVR player rule), so one fee figure covers
-both captains, and the gems leave the economy rather than moving between them. A
-captain who cannot cover the fee gets no half-done trade — nothing changes hands
-unless both sides can pay.
+level AND the same rarity (the trait analogue of the same-OVR player rule), so
+one fee figure covers both captains, and the gems leave the economy rather than
+moving between them. A captain who cannot cover the fee gets no half-done trade
+— nothing changes hands unless both sides can pay.
 
 No Telegram and no globals here, so every rule below is unit-testable directly.
 """
 
 import logging
 
-from config import trait_buy_value, trait_sell_value, trait_trade_fee
+from config import (
+    trait_buy_value, trait_sell_value, trait_trade_fee, trait_rarity_label,
+)
 from models import Trait, TraitInventory
 from services.activity_service import log_activity
 
 logger = logging.getLogger(__name__)
+
+
+def _rarity(trait):
+    """Rarity of a trait row, tolerant of rows that predate the column."""
+    from services.trait_service import trait_rarity_of
+    return trait_rarity_of(trait)
 
 
 def _label(trait, level):
@@ -90,8 +102,9 @@ def sell_inventory_trait(session, user, inventory_id):
         return False, "Trait data is missing — please contact support.", None
 
     level = int(inv.level or 1)
+    rarity = _rarity(trait)
     label = _label(trait, level)
-    gems = trait_sell_value(level)
+    gems = trait_sell_value(level, rarity)
 
     session.delete(inv)
     user.total_gems = (user.total_gems or 0) + gems
@@ -102,8 +115,9 @@ def sell_inventory_trait(session, user, inventory_id):
 
     return True, f"Sold {label} for {gems:,} 💎.", {
         "gems": gems,
-        "buy_value": trait_buy_value(level),
+        "buy_value": trait_buy_value(level, rarity),
         "level": level,
+        "rarity": rarity,
         "label": label,
         "balance": user.total_gems,
     }
@@ -126,6 +140,15 @@ def validate_trait_swap(session, user1, user2, inv1_id, inv2_id):
     if int(inv1.level or 1) != int(inv2.level or 1):
         return None, None, None, None, (
             "Trade cancelled because both traits no longer have the same level.")
+    if _rarity(t1) != _rarity(t2):
+        # Same level is not the same value once rarity exists: a Lv.2 Elite cost
+        # 1,400 gems to build and a Lv.2 Common 350. Swapping across tiers would
+        # be the trait economy's free-money trade.
+        return None, None, None, None, (
+            f"Trade cancelled — {trait_rarity_label(_rarity(t1))} and "
+            f"{trait_rarity_label(_rarity(t2))} traits can't be swapped for each "
+            f"other. Both traits must be the same rarity as well as the same "
+            f"level.")
     if inv1.trait_id == inv2.trait_id:
         return None, None, None, None, (
             "Those are the same trait at the same level — swapping them would "
@@ -156,11 +179,12 @@ def quote_trait_swap(session, user1, user2, inv1_id, inv2_id):
     if error:
         return {"ok": False, "message": error}
     level = int(inv1.level or 1)
-    fee = trait_trade_fee(level)
+    rarity = _rarity(t1)
+    fee = trait_trade_fee(level, rarity)
     short = cannot_afford_fee(user1, user2, fee)
     if short:
         return {"ok": False, "message": short, "fee": fee}
-    return {"ok": True, "fee": fee, "level": level,
+    return {"ok": True, "fee": fee, "level": level, "rarity": rarity,
             "label1": _label(t1, level), "label2": _label(t2, level)}
 
 
@@ -177,7 +201,8 @@ def complete_trait_swap(session, user1, user2, inv1_id, inv2_id):
         return {"success": False, "message": error}
 
     level = int(inv1.level or 1)
-    fee = trait_trade_fee(level)
+    rarity = _rarity(t1)
+    fee = trait_trade_fee(level, rarity)
     short = cannot_afford_fee(user1, user2, fee)
     if short:
         return {"success": False, "message": short, "fee": fee}
@@ -205,6 +230,7 @@ def complete_trait_swap(session, user1, user2, inv1_id, inv2_id):
         "success": True,
         "fee": fee,
         "level": level,
+        "rarity": rarity,
         "label1": label1,
         "label2": label2,
         "message": "Trade completed",

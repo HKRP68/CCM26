@@ -17,10 +17,30 @@
   <div style="margin-bottom:1rem;">
     <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Category</label>
     <select name="category" style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
-      {% for cat in ['Batting', 'Bowling', 'Fielding', 'Mental'] %}
+      {% for cat in categories %}
         <option value="{{ cat }}" {% if trait.category == cat %}selected{% endif %}>{{ cat }}</option>
       {% endfor %}
     </select>
+  </div>
+
+  <div style="margin-bottom:1rem; display:flex; gap:1rem; flex-wrap:wrap;">
+    <div style="flex:1; min-width:200px;">
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Rarity</label>
+      <select name="rarity" style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+        {% for key, meta in rarities.items() %}
+          <option value="{{ key }}" {% if (trait.rarity or 'common') == key %}selected{% endif %}>
+            {{ meta.emoji }} {{ meta.label }} — {{ '{:,}'.format(base_cost * meta.price_mult) }} 💎, weight {{ meta.weight }}
+          </option>
+        {% endfor %}
+      </select>
+      <small style="color:var(--muted); font-size:.75rem;">Sets how often the market rolls this trait, and what it costs.</small>
+    </div>
+    <div style="min-width:180px;">
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">Price override 💎</label>
+      <input type="number" name="base_price" min="0" placeholder="auto" value="{{ trait.base_price or '' }}"
+             style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text);">
+      <small style="color:var(--muted); font-size:.75rem;">Blank = use the rarity's price.</small>
+    </div>
   </div>
 
   <div style="margin-bottom:1rem;">
@@ -40,9 +60,9 @@
     <input type="text" name="effect_key" value="{{ trait.effect_key }}"
            style="width:100%; padding:.6rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-family:monospace;">
     <small style="color:var(--muted); font-size:.75rem;">
-      Allowed: bat_finisher, bat_power_hitter, bat_anchor, bat_fast_starter, bat_clutch,
-      bowl_death, bowl_wicket_hunter, bowl_dot_specialist, bowl_powerplay, bowl_yorker,
-      field_safe_hands, field_sniper, mental_consistency, mental_momentum
+      Must be one of the keys the engine routes on — anything else makes the trait
+      do nothing at all. Allowed:
+      <code style="word-break:break-all;">{{ effect_keys|join(', ') }}</code>
     </small>
   </div>
 

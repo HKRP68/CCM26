@@ -21,7 +21,7 @@ from models import User, Player
 from utils.idempotency import claim_once, release
 from services.global_market import (
     list_player_market, buy_player, ensure_player_market_fresh,
-    get_next_refresh_at,
+    get_next_refresh_at, is_sold_out, is_unlimited,
 )
 from services.market_image import generate_market_image
 from services.card_generator import generate_card
@@ -144,7 +144,7 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             player = session.query(Player).get(slot.player_id)
             if not player:
                 continue
-            sold = (slot.purchased_count >= slot.quantity)
+            sold = is_sold_out(slot)
             label = f"{'❌ ' if sold else ''}{player.name} • {_slot_price(slot):,} 🪙"
             cb = (f"pmsel_{tg_user.id}_{slot.slot_index}"
                   if not sold else f"pmnoop_{tg_user.id}")
@@ -157,10 +157,15 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                          if discount_pct else
                          "🏷️ <b>Platinum</b> 5% / <b>Diamond</b> 10% off all cards "
                          "· Refreshes every 24h")
+        # Stock is unlimited by default, so say so — the old market sold one
+        # copy per card and captains learned to rush it.
+        stock_line = ("♾️ <b>Unlimited stock</b> — nothing here sells out"
+                      if all(is_unlimited(s) for s in slots) else
+                      "📦 Limited stock on some cards — check before you plan")
         caption = (
             f"💰 <b>{user.total_coins:,}</b> 🪙 · "
             f"📊 {user.roster_count}/25 roster\n"
-            f"{discount_line}"
+            f"{discount_line}\n{stock_line}"
         )
 
         if img_bytes:
@@ -240,7 +245,7 @@ async def playermarket_select_callback(update: Update, context: ContextTypes.DEF
             await q.answer("Player gone.", show_alert=True)
             return
 
-        sold = (slot.purchased_count >= slot.quantity)
+        sold = is_sold_out(slot)
 
         # Free, Bronze and Silver pay the slot's sell price (== base price);
         # Platinum gets 5% off it and Diamond 10%.
@@ -265,6 +270,8 @@ async def playermarket_select_callback(update: Update, context: ContextTypes.DEF
         if price < sell_price:
             disc = int(round((1 - price / sell_price) * 100))
             cap_lines.insert(3, f"<s>{sell_price:,}</s> 🪙  <i>(-{disc}%)</i>")
+        if is_unlimited(slot):
+            cap_lines.append("♾️ <i>Unlimited stock — no rush</i>")
         if sold:
             cap_lines.append("\n❌ <i>Sold out</i>")
         cap = "\n".join(cap_lines)

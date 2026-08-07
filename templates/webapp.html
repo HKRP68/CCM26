@@ -5743,7 +5743,7 @@ function marketRow(s) {
     <div class="market-row">
       <div class="market-info">
         <div class="market-name">${escapeHtml(s.name)} <span style="color:${ratingColor(s.rating)};font-weight:800;">${s.rating}</span>${s.version !== 'Base' ? ` <span class="ver-badge">${escapeHtml(s.version)}</span>` : ''}</div>
-        <div class="market-meta">${escapeHtml(s.category)} · ${escapeHtml(s.country)} ${priceLine ? '· ' + priceLine : ''}</div>
+        <div class="market-meta">${escapeHtml(s.category)} · ${escapeHtml(s.country)} ${priceLine ? '· ' + priceLine : ''}${s.unlimited ? ' · ♾️ always in stock' : ''}</div>
       </div>
       <button class="market-buy-btn ${disabled ? 'disabled' : ''}"
               ${disabled ? 'disabled' : ''}
