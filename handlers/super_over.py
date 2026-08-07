@@ -1113,10 +1113,29 @@ def _super_over_ball(batter, bowler, pitch, *, batter_runs=0, balls_faced=0,
     """
     from services.probability_engine import calculate_outcome
 
+    from services.bowling_service import is_spinner
+    bowl_style = (bowler.get("bowl_style") or bowler.get("bowling_type")
+                  or "Medium Pacer")
     trait_ctx = {
         "over": SO_ENGINE_OVER, "total_overs": SO_ENGINE_TOTAL_OVERS,
+        "innings": 1,
         "rrr": _required_rate(target, runs, legal),
         "bat_balls_faced": balls_faced,
+        "bat_runs": batter_runs,
+        "balls_left": max(0, SO_LEGAL_BALLS - legal),
+        "runs_needed": max(0, (target or 0) - runs) if target else 0,
+        # A Super Over is one over of one spell, so the bowler's ball count is
+        # the balls already bowled — Golden Arm fires, Spell Builder cannot.
+        "bowler_balls": legal,
+        "is_spin": bool(is_spinner(bowl_style)),
+        "bat_rating": int(batter.get("batting_rating")
+                          or batter.get("bat_rating") or 50),
+        "bowl_rating": int(bowler.get("bowling_rating")
+                           or bowler.get("bowl_rating") or 40),
+        "bat_hand": batter.get("batting_hand") or batter.get("bat_hand"),
+        "bowl_hand": bowler.get("bowl_hand") or bowler.get("bowling_hand"),
+        "striker_id": batter.get("roster_id"), "bowler_id": bowler.get("roster_id"),
+        "pitch": pitch,
     }
     oc = calculate_outcome(
         bowler.get("bowl_style") or bowler.get("bowling_type") or "Medium Pacer",

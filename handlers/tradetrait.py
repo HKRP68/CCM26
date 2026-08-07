@@ -1,18 +1,20 @@
 """/tradetrait @username — swap an inventory trait with another captain.
 
 The same shape as /trade for players, one tier down: you pick one of your
-unequipped traits, they pick one of theirs at the **same level** (the trait
-analogue of /trade's same-OVR rule), then both confirm and the two swap. Each
-side pays a gem fee for that level — 15 💎 at Lv.1, rising with the upgrade gems
-sunk into the trait (see ``config.trait_trade_fee``):
+unequipped traits, they pick one of theirs at the **same level and rarity** (the
+trait analogue of /trade's same-OVR rule), then both confirm and the two swap.
+Each side pays a gem fee for that tier — 15 💎 at Common Lv.1, rising with the
+upgrade gems sunk into the trait and with its rarity (see
+``config.trait_trade_fee``):
 
     Level        1      2      3      4      5
-    trade fee   15     16     18     22     29   each side
+    trade fee   15     16     18     22     29   each side, Common tier
 
 Rules worth knowing:
   • Inventory only. A trait on a player isn't tradable — /removetrait first,
     which is free and keeps the level.
-  • Same level both ways, so one fee covers both sides.
+  • Same level AND same rarity both ways, so one fee covers both sides and a
+    Common is never swapped for an Elite.
   • Not the same trait: swapping Yorker Lv.3 for Yorker Lv.3 changes nothing.
   • One open trade per captain, 60s to complete it, and the fee is re-checked at
     the moment of the swap — nobody ends up with a half-done trade.
@@ -29,7 +31,8 @@ import uuid
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from config import TRADE_EXPIRES_SECONDS, trait_trade_fee
+from config import TRADE_EXPIRES_SECONDS, trait_trade_fee, trait_rarity_label
+from services.trait_service import trait_rarity_of
 from database import get_session
 from models import User
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
@@ -212,7 +215,7 @@ async def tradetrait_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"💠 <b>TRAIT TRADE</b>\n\n"
             f"{_mention(user1)} wants to trade a trait with {_mention(user2)}.\n\n"
             f"{_mention(user1)}, pick the trait you're offering:\n"
-            f"<i>Both traits must be the same level, and each side pays the "
+            f"<i>Both traits must be the same level and rarity, and each side pays the "
             f"level's fee in gems.</i>",
             parse_mode="HTML",
             reply_markup=_pick_buttons(trade_id, mine, "tt1"))
@@ -266,26 +269,33 @@ async def tradetrait_user1_callback(update: Update, context: ContextTypes.DEFAUL
             return
         inv, trait = mine[inv_id]
         level = int(inv.level or 1)
+        rarity = trait_rarity_of(trait)
+        rarity_name = trait_rarity_label(rarity)
 
         theirs = list_inventory(session, user2.id, level=level)
-        # Their identical trait can't be the other half of the swap.
-        theirs = [(i, t) for i, t in theirs if i.trait_id != inv.trait_id]
+        # Their identical trait can't be the other half of the swap, and neither
+        # can one from a different rarity tier — a swap has to be like for like.
+        theirs = [(i, t) for i, t in theirs
+                  if i.trait_id != inv.trait_id and trait_rarity_of(t) == rarity]
         if not theirs:
             await query.edit_message_text(
-                f"❌ {_mention(user2)} has no other unequipped <b>Lv.{level}</b> "
-                f"trait to trade. Pick a different level, or they can /traitupgrade "
-                f"one to match.", parse_mode="HTML")
+                f"❌ {_mention(user2)} has no other unequipped {rarity_name} "
+                f"<b>Lv.{level}</b> trait to trade. Pick a different one, or they "
+                f"can /traitupgrade one to match.", parse_mode="HTML")
             _clear_trade(context, trade_id)
             return
 
-        fee = trait_trade_fee(level)
+        fee = trait_trade_fee(level, rarity)
         state.update({"status": "awaiting_user2_trait",
-                      "user1_inv_id": inv.id, "level": level, "fee": fee})
+                      "user1_inv_id": inv.id, "level": level,
+                      "rarity": rarity, "fee": fee})
         await query.edit_message_text(
             f"💠 <b>TRAIT TRADE</b>\n\n"
-            f"{_mention(user1)} offers: <b>{_label(trait, level)}</b>\n\n"
-            f"{_mention(user2)}, pick a <b>Lv.{level}</b> trait to trade back:\n"
-            f"<i>Fee at this level: {fee:,} 💎 each.</i>",
+            f"{_mention(user1)} offers: <b>{_label(trait, level)}</b> "
+            f"({rarity_name})\n\n"
+            f"{_mention(user2)}, pick a {rarity_name} <b>Lv.{level}</b> trait to "
+            f"trade back:\n"
+            f"<i>Fee at this tier: {fee:,} 💎 each.</i>",
             parse_mode="HTML",
             reply_markup=_pick_buttons(trade_id, theirs, "tt2"))
     except Exception:

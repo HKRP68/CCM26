@@ -2,7 +2,15 @@
 {% block title %}Traits{% endblock %}
 {% block content %}
 
-<h1 style="margin-bottom:1rem;">💎 Traits ({{ traits|length }})</h1>
+<h1 style="margin-bottom:.5rem;">💎 Traits ({{ traits|length }})</h1>
+
+<div style="background:var(--card); padding:.9rem 1rem; border-radius:8px; margin-bottom:1.2rem; font-size:.85rem; color:var(--muted); border:1px solid var(--border);">
+  Rarity sets both the market roll odds and the price of a Lv.1 copy:
+  {% for key, meta in rarities.items() %}
+    <strong>{{ meta.emoji }} {{ meta.label }}</strong> {{ '{:,}'.format(base_cost * meta.price_mult) }} 💎 (weight {{ meta.weight }}){% if not loop.last %} · {% endif %}
+  {% endfor %}.
+  A trait whose effect key has no engine handler is flagged <span style="color:var(--red);">⚠️ no effect</span> — it can be bought and equipped but does nothing in a match.
+</div>
 
 <table style="width:100%; background:var(--card); border:1px solid var(--border); border-radius:10px; border-collapse:separate; border-spacing:0;">
   <thead>
@@ -10,6 +18,8 @@
       <th style="padding:.75rem; text-align:left;">Emoji</th>
       <th style="padding:.75rem; text-align:left;">Name</th>
       <th style="padding:.75rem; text-align:left;">Category</th>
+      <th style="padding:.75rem; text-align:left;">Rarity</th>
+      <th style="padding:.75rem; text-align:right;">Price 💎</th>
       <th style="padding:.75rem; text-align:left;">Effect Key</th>
       <th style="padding:.75rem; text-align:left;">Description</th>
       <th style="padding:.75rem; text-align:center;">Equipped</th>
@@ -26,7 +36,18 @@
       <td style="padding:.75rem;">
         <span style="background:var(--bg); padding:.2rem .5rem; border-radius:4px; font-size:.8rem;">{{ t.category }}</span>
       </td>
-      <td style="padding:.75rem; color:var(--muted); font-family:monospace; font-size:.85rem;">{{ t.effect_key }}</td>
+      <td style="padding:.75rem;">
+        <span style="background:var(--bg); padding:.2rem .5rem; border-radius:4px; font-size:.8rem;">
+          {{ rarity_meta[t.id].emoji }} {{ rarity_meta[t.id].label }}
+        </span>
+      </td>
+      <td style="padding:.75rem; text-align:right; font-family:monospace;">
+        {{ '{:,}'.format(prices[t.id]) }}{% if t.base_price %} <span title="admin price override" style="color:var(--accent);">*</span>{% endif %}
+      </td>
+      <td style="padding:.75rem; color:var(--muted); font-family:monospace; font-size:.85rem;">
+        {{ t.effect_key }}
+        {% if t.effect_key not in effect_keys %}<br><span style="color:var(--red); font-size:.75rem;">⚠️ no effect</span>{% endif %}
+      </td>
       <td style="padding:.75rem; color:var(--muted); font-size:.85rem;">{{ t.description }}</td>
       <td style="padding:.75rem; text-align:center; color:var(--accent2);">{{ stats[t.id]['equipped'] }}</td>
       <td style="padding:.75rem; text-align:center; color:var(--accent);">{{ stats[t.id]['inventory'] }}</td>

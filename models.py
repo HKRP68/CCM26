@@ -474,15 +474,23 @@ class AdminLog(Base):
 # ══════════════════════════════════════════════════════════════════════
 
 class Trait(Base):
-    """Master definition of a trait. 14 rows seeded at startup."""
+    """Master definition of a trait. Seeded from
+    ``services.trait_service.TRAIT_DEFINITIONS`` at startup."""
     __tablename__ = "traits"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(50), unique=True, nullable=False)
-    category = Column(String(30), nullable=False)  # Batting / Bowling / Fielding / Mental
+    # Batting / Bowling / Fielding / Mental / Awareness / Special / Elite
+    category = Column(String(30), nullable=False)
     description = Column(String(300), nullable=False)
     emoji = Column(String(10), default="✨")
     effect_key = Column(String(50), nullable=False)  # routed to trait_engine handlers
+    # common / rare / epic / elite — drives the market roll odds and the price
+    # (config.TRAIT_RARITIES). NULL is read as "common" everywhere.
+    rarity = Column(String(20), default="common")
+    # Gems for a Lv.1 copy. NULL means "derive from rarity", which is what the
+    # seed leaves it as; an admin can pin a price per trait from the website.
+    base_price = Column(Integer, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -1213,7 +1221,11 @@ class GlobalPlayerMarket(Base):
     # Sell price everyone pays; equals base_price when listed, admin-editable to
     # put a slot on sale. Platinum/Diamond discounts come off it per-buyer.
     final_price = Column(Integer, nullable=False)
-    quantity = Column(Integer, default=1)               # how many can be bought
+    # How many copies may be bought. 0 (the default) means UNLIMITED — the
+    # market never sells out, so a card listed today is still there tomorrow for
+    # the captain who was 2,000 coins short. Set a positive number to make a
+    # slot a limited run. See services.global_market.is_unlimited.
+    quantity = Column(Integer, default=0)
     purchased_count = Column(Integer, default=0)        # how many already sold
     listed_at = Column(DateTime, default=datetime.utcnow)
     is_active = Column(Boolean, default=True)
@@ -1229,7 +1241,8 @@ class GlobalTraitMarket(Base):
     base_price = Column(Integer, nullable=False)
     discount_pct = Column(Integer, default=0)
     final_price = Column(Integer, nullable=False)
-    quantity = Column(Integer, default=10)              # traits can be re-bought
+    # 0 (the default) means UNLIMITED stock — see GlobalPlayerMarket.quantity.
+    quantity = Column(Integer, default=0)
     purchased_count = Column(Integer, default=0)
     listed_at = Column(DateTime, default=datetime.utcnow)
     is_active = Column(Boolean, default=True)

@@ -684,7 +684,13 @@ def find_player(xi, roster_id):
 # ``weight_hook`` on engine.ball_outcome.calculate_outcome.
 
 # trait_engine probability keys → engine raw-weight keys.
-_TRAIT_KEY_MAP = (("6", "Six"), ("4", "Four"), ("W", "Wicket"), ("dot", "Dot"))
+#
+# Singles and doubles are in the map because traits work on them: Strike Rotator
+# turns dots into singles, Gap Finder finds twos, Boundary Rider saves the four
+# and concedes the two. Without those two rows their deltas were computed and
+# then thrown away, so the traits looked equipped and did nothing.
+_TRAIT_KEY_MAP = (("6", "Six"), ("4", "Four"), ("W", "Wicket"), ("dot", "Dot"),
+                  ("1", "Single"), ("2", "Double"))
 
 
 def _apply_trait_weights(raw_weights, striker_traits, bowler_traits, ctx,
@@ -743,6 +749,42 @@ def _record_activated_traits(collector, activated, striker_traits, bowler_traits
             collector["bowl"].add(f"{t.get('emoji', '✨')} {label}")
         else:
             collector["bowl"].add(f"✨ {label}")
+
+
+def _trait_ctx(state, striker, bowler, bs, bws, streak, overs_total, innings,
+               required_rr, balls_left, target, pitch):
+    """Everything the trait engine may want to know about this delivery.
+
+    See ``services.trait_engine`` for the contract: every key is optional and a
+    handler that isn't told what it needs stays silent. This loop knows the most
+    of any of them, so it fills the whole thing — the matchup traits (Spin
+    Basher, Tail-End Hunter, Partnership Breaker, Golden Arm…) are only
+    interesting because these numbers are available here.
+    """
+    try:
+        from services.bowling_service import is_spinner
+        is_spin = bool(is_spinner(bowler.get("bowl_style") or ""))
+    except Exception:
+        is_spin = None
+    runs_needed = max(0, (target or 0) - state["total_runs"]) if target else 0
+    return {
+        "over": state["current_over"], "total_overs": overs_total,
+        "innings": innings, "rrr": required_rr,
+        "balls_left": balls_left, "runs_needed": runs_needed,
+        "bat_balls_faced": bs.get("balls", 0), "bat_runs": bs.get("runs", 0),
+        "bat_boundaries": bs.get("fours", 0) + bs.get("sixes", 0),
+        "boundary_streak": (streak or {}).get("boundaries", 0),
+        "bat_position": state.get("striker_idx", 0) + 1,
+        "wickets": state.get("total_wickets", 0),
+        "partnership_runs": state.get("partnership_runs", 0),
+        "bowler_balls": bws.get("balls", 0), "bowler_runs": bws.get("runs", 0),
+        "is_spin": is_spin,
+        "bat_rating": striker.get("bat_rating") or striker.get("batting_rating"),
+        "bowl_rating": bowler.get("bowl_rating") or bowler.get("bowling_rating"),
+        "bat_hand": striker.get("bat_hand"), "bowl_hand": bowler.get("bowl_hand"),
+        "striker_id": striker.get("roster_id"), "bowler_id": bowler.get("roster_id"),
+        "pitch": pitch,
+    }
 
 
 def _make_trait_hook(striker_traits, bowler_traits, ctx, collector=None):
@@ -1290,8 +1332,9 @@ def simulate_over(state):
             # carry no traits — so the engine call is unchanged for /cipl).
             trait_hook = _make_trait_hook(
                 striker.get("traits"), bowler.get("traits"),
-                {"over": state["current_over"], "total_overs": overs_total,
-                 "rrr": required_rr, "bat_balls_faced": bs["balls"]},
+                _trait_ctx(state, striker, bowler, bs, bws, streak,
+                           overs_total, innings, required_rr, balls_left,
+                           target, pitch),
                 collector=over_traits)
             # Dynamic conditions hook (dew/weather/overs progression) for
             # Challenge League matches. None for callers without conditions, and

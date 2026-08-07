@@ -5016,13 +5016,48 @@ def _calc(s, striker, bowler, shot, delivery):
         if balls_left > 0:
             rrr = (remaining_runs / balls_left) * 6
 
+    # The striker's current run of consecutive boundaries, read off the momentum
+    # window the loop already keeps — no new state to maintain, and the strike
+    # can't have changed while boundaries are being hit.
+    boundary_streak = 0
+    for _r in reversed(s.get("recent_runs_window") or []):
+        if _r in (4, 6):
+            boundary_streak += 1
+        else:
+            break
+
+    bows = _stats_get(s.get("bowl_stats"), bowler.get("roster_id"))
+    balls_left_now = max(0, (total_overs - (over - 1)) * 6 - s.get("current_ball", 0))
     trait_ctx = {
         "over": over,
         "total_overs": total_overs,
+        "innings": innings,
         "rrr": rrr,
-        "bat_balls_faced": bat_balls_faced,
         "target": s.get("target", 0),
         "total_runs": s.get("total_runs", 0),
+        "balls_left": balls_left_now,
+        "runs_needed": max(0, (s.get("target") or 0) - s.get("total_runs", 0)),
+        # Batter context
+        "bat_balls_faced": bat_balls_faced,
+        "bat_runs": bs.get("runs", 0),
+        "bat_boundaries": bs.get("fours", 0) + bs.get("sixes", 0),
+        "boundary_streak": boundary_streak,
+        "bat_position": s.get("striker_idx", 0) + 1,
+        "wickets": s.get("total_wickets", 0),
+        "partnership_runs": s.get("partnership_runs", 0),
+        # Bowler context
+        "bowler_balls": bows.get("balls", 0),
+        "bowler_runs": bows.get("runs", 0),
+        "is_spin": _is_spin(bowler.get("bowl_style", "")),
+        # The matchup inputs — ratings here are the effective ones (form and
+        # chemistry included), which is what the traits should be judging.
+        "bat_rating": eff_bat,
+        "bowl_rating": eff_bowl,
+        "bat_hand": striker.get("bat_hand"),
+        "bowl_hand": bowler.get("bowl_hand"),
+        "striker_id": striker.get("roster_id"),
+        "bowler_id": bowler.get("roster_id"),
+        "pitch": pitch,
     }
 
     # Live-match mechanics (UnderCover /cric parity). All read from state and

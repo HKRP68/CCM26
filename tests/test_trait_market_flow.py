@@ -180,6 +180,9 @@ class TraitMarketFlowTests(unittest.TestCase):
                             description="d", emoji="🎯", effect_key="bowl_death")
             session.add_all([self.t1, self.t2])
             session.flush()
+            # Ids, not the instances: these rows are detached once the session
+            # closes, so tests must not touch their attributes afterwards.
+            self.t1_id, self.t2_id = self.t1.id, self.t2.id
 
             # One Lv.3 trait each, different traits — a legal swap.
             self.inv1 = TraitInventory(user_id=self.u1_id, trait_id=self.t1.id, level=3)
@@ -385,6 +388,81 @@ class TraitMarketFlowTests(unittest.TestCase):
         context.args = [f"@u{self.tg2}"]
         asyncio.run(h.tradetrait_handler(_update(msg=again, tg_id=self.tg1), context))
         self.assertIn("TRAIT TRADE", again.last)
+
+    # ── shared trait market: the daily purchase cap ──────────────────
+
+    def _list_one_slot(self, price=10):
+        """Put a single unlimited-stock trait slot in the shared market."""
+        from models import GlobalTraitMarket
+        session = self.get_session()
+        try:
+            session.query(GlobalTraitMarket).delete()
+            row = GlobalTraitMarket(
+                slot_index=0, trait_id=self.t1_id, base_price=price,
+                discount_pct=0, final_price=price, quantity=0,
+                purchased_count=0, is_active=True)
+            session.add(row)
+            session.commit()
+        finally:
+            session.close()
+
+    def _inventory_count(self, user_id):
+        from models import TraitInventory
+        session = self.get_session()
+        try:
+            return (session.query(TraitInventory)
+                    .filter(TraitInventory.user_id == user_id).count())
+        finally:
+            session.close()
+
+    def test_the_daily_purchase_cap_holds_on_an_unlimited_slot(self):
+        """Unlimited stock removed the accidental cap; the daily one must hold.
+
+        The shop header has always advertised "Purchases left today", so a
+        captain with gems must not be able to drain the same slot all day.
+        """
+        from config import TRAIT_SHOP_DAILY_PURCHASE_LIMIT
+        from handlers import traits as h
+        from utils.idempotency import release as _release
+
+        self._list_one_slot()
+        before = self._inventory_count(self.u1_id)
+        context = _context()
+
+        # One more attempt than the cap allows.
+        answers = []
+        for attempt in range(TRAIT_SHOP_DAILY_PURCHASE_LIMIT + 2):
+            query = _Query(f"trbuy_{self.tg1}_0", self.tg1)
+            query.message.message_id = 100 + attempt   # dodge the tap dedup
+            asyncio.run(h.traitbuy_callback(_update(query=query), context))
+            answers.extend(a for a in query.answers if a)
+            _release(f"trbuy_5_{100 + attempt}_0")
+
+        bought = self._inventory_count(self.u1_id) - before
+        self.assertEqual(bought, TRAIT_SHOP_DAILY_PURCHASE_LIMIT)
+        self.assertTrue(any("Daily limit reached" in a for a in answers),
+                        f"expected a daily-limit refusal, got {answers}")
+
+    def test_the_cap_is_per_captain(self):
+        """One captain hitting the cap must not close the shop for another."""
+        from config import TRAIT_SHOP_DAILY_PURCHASE_LIMIT
+        from handlers import traits as h
+        from utils.idempotency import release as _release
+
+        self._list_one_slot()
+        context = _context()
+        for attempt in range(TRAIT_SHOP_DAILY_PURCHASE_LIMIT + 1):
+            query = _Query(f"trbuy_{self.tg1}_0", self.tg1)
+            query.message.message_id = 200 + attempt
+            asyncio.run(h.traitbuy_callback(_update(query=query), context))
+            _release(f"trbuy_5_{200 + attempt}_0")
+
+        before = self._inventory_count(self.u2_id)
+        query = _Query(f"trbuy_{self.tg2}_0", self.tg2)
+        query.message.message_id = 300
+        asyncio.run(h.traitbuy_callback(_update(query=query), context))
+        _release("trbuy_5_300_0")
+        self.assertEqual(self._inventory_count(self.u2_id), before + 1)
 
     def test_trading_with_yourself_is_refused(self):
         from handlers import tradetrait as h

@@ -8,13 +8,16 @@ Models: GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase.
 
 Key principles:
   - Admin reroll wipes all slots and regenerates from a random seed
-  - Each slot has `quantity` and `purchased_count` — when the latter reaches
-    the former, the slot is sold out (still visible but unbuyable)
-  - Players: typically quantity=1 (unique copy)
-  - Traits: typically quantity=10 (multiple players can buy the same trait)
+  - Stock is UNLIMITED by default (`quantity = 0`). Everything listed stays
+    buyable by everyone until the next refresh or until the admin pulls it —
+    the market is a shop, not a race. A positive `quantity` turns a slot back
+    into a limited run, and then `purchased_count` reaching it sells the slot
+    out (still visible but unbuyable).
+  - `purchased_count` is always maintained, unlimited or not, because it is
+    what tells the admin which listings people actually want.
   - All purchases logged in MarketPurchase for audit
-  - Per-player ownership rule still applies for player buys (can't own 2
-    versions of same player)
+  - Per-player ownership rule still applies for player buys — unlimited stock
+    lets a hundred captains own the same card, but never the same captain twice
 """
 
 import random
@@ -30,6 +33,46 @@ from models import (
 from services.player_service import not_career
 
 logger = logging.getLogger(__name__)
+
+# ════════════════════════════════════════════════════════════════════
+# Stock
+# ════════════════════════════════════════════════════════════════════
+
+UNLIMITED = 0  # the value stored in `quantity` to mean "never runs out"
+INFINITY = "∞"
+
+
+def is_unlimited(slot) -> bool:
+    """True when this slot can be bought any number of times."""
+    try:
+        return int(getattr(slot, "quantity", 0) or 0) <= 0
+    except (TypeError, ValueError):
+        return True
+
+
+def is_sold_out(slot) -> bool:
+    """The one place 'can I still buy this?' is decided.
+
+    Every caller used to compare `purchased_count >= quantity` inline, which is
+    exactly the comparison that reads an unlimited slot (quantity 0) as sold out
+    from the moment it is listed. Ask this instead.
+    """
+    if is_unlimited(slot):
+        return False
+    return int(getattr(slot, "purchased_count", 0) or 0) >= int(slot.quantity)
+
+
+def stock_left(slot):
+    """Copies still available, or None when the slot is unlimited."""
+    if is_unlimited(slot):
+        return None
+    return max(0, int(slot.quantity) - int(getattr(slot, "purchased_count", 0) or 0))
+
+
+def stock_label(slot) -> str:
+    """Short human label for a slot's stock: "∞" or "3 left"."""
+    left = stock_left(slot)
+    return INFINITY if left is None else f"{left} left"
 
 # ════════════════════════════════════════════════════════════════════
 # Player market
@@ -117,7 +160,7 @@ def reroll_player_market(session, num_slots=None, min_rating=None):
             player_id=p.id,
             base_price=base_price,
             final_price=final_price,
-            quantity=1,
+            quantity=UNLIMITED,
             purchased_count=0,
             listed_at=datetime.utcnow(),
             is_active=True,
@@ -268,8 +311,11 @@ def list_player_market(session):
             .order_by(GlobalPlayerMarket.slot_index).all())
 
 
-def add_player_to_market(session, player_id, custom_price=None):
+def add_player_to_market(session, player_id, custom_price=None,
+                         quantity=UNLIMITED):
     """Add a single player (base or variant) to the market in the next free slot.
+
+    ``quantity`` defaults to unlimited; pass a positive number for a limited run.
     Returns (success, message_or_slot_index).
     """
     player = session.query(Player).get(player_id)
@@ -297,7 +343,7 @@ def add_player_to_market(session, player_id, custom_price=None):
         player_id=player.id,
         base_price=base_price,
         final_price=final_price,
-        quantity=1,
+        quantity=max(UNLIMITED, int(quantity or UNLIMITED)),
         purchased_count=0,
         listed_at=datetime.utcnow(),
         is_active=True,
@@ -312,9 +358,10 @@ def buy_player(session, user, slot_index):
 
     Returns (success, message_or_player_name).
 
-    Race-safe: uses an UPDATE with WHERE clause checking purchased_count <
-    quantity. If two users buy the same slot at the same time, only one
-    succeeds.
+    Race-safe for a limited run: the UPDATE's WHERE clause checks
+    purchased_count < quantity, so if two users buy the last copy at the same
+    time only one succeeds. An unlimited slot has no such contention — the
+    count is still incremented, purely as a record of demand.
     """
     from config import MAX_ROSTER
 
@@ -324,7 +371,7 @@ def buy_player(session, user, slot_index):
     if not slot:
         return False, "Slot not found or inactive."
 
-    if slot.purchased_count >= slot.quantity:
+    if is_sold_out(slot):
         return False, "Sold out — try another slot."
 
     player = session.query(Player).get(slot.player_id)
@@ -351,12 +398,13 @@ def buy_player(session, user, slot_index):
         return False, f"Not enough coins. Need {price:,}, have {user.total_coins:,}."
 
     # Atomic decrement using UPDATE...WHERE — prevents race condition
+    where = [GlobalPlayerMarket.id == slot.id]
+    if not is_unlimited(slot):
+        where.append(
+            GlobalPlayerMarket.purchased_count < GlobalPlayerMarket.quantity)
     result = session.execute(
         update(GlobalPlayerMarket)
-        .where(
-            GlobalPlayerMarket.id == slot.id,
-            GlobalPlayerMarket.purchased_count < GlobalPlayerMarket.quantity,
-        )
+        .where(*where)
         .values(purchased_count=GlobalPlayerMarket.purchased_count + 1)
     )
     if result.rowcount == 0:
@@ -390,8 +438,51 @@ DEFAULT_TRAIT_SLOTS = 5
 
 
 def _calc_trait_price(trait):
-    """Pricing per trait — uses base_price if defined, else default 200."""
-    return getattr(trait, "base_price", None) or 200
+    """Gems for a Lv.1 copy — the admin's pinned price, else the rarity's."""
+    from services.trait_service import trait_price_of
+    return trait_price_of(trait)
+
+
+def roll_trait_discount():
+    """A sale percentage the resale economy can survive.
+
+    ``config.trait_sell_value`` prices resale just under ``trait_floor_cost`` —
+    the cheapest gems a trait could possibly have cost — and that floor is
+    computed from ``TRAIT_DISCOUNT_RANGE``. Listing a slot at a *deeper*
+    discount than that range therefore sells a trait for less than resale pays
+    back, which is a gem printer: buy the slot, /selltrait it, repeat. This
+    market used to roll a flat 25% against a 20% range and got away with it
+    only because stock ran out at ten copies. Unlimited stock removes that
+    accident, so the roll is now clamped to the range resale was priced for.
+    """
+    from config import TRAIT_DISCOUNT_RANGE
+    low, high = min(TRAIT_DISCOUNT_RANGE), max(TRAIT_DISCOUNT_RANGE)
+    mid = (low + high) // 2
+    return random.choice([0, 0, low, mid, high])
+
+
+def pick_traits_by_rarity(traits, num_slots):
+    """Choose the traits to list, weighted so Elite stays a sighting.
+
+    A flat ``random.sample`` over the catalogue would put an Elite trait in the
+    shop roughly a quarter of the time now that there are ten of them — which
+    is not what "very rare" means, and matters more than it used to because
+    stock is unlimited: whatever is listed is buyable by everyone all day.
+    Weights come from ``config.TRAIT_RARITIES``.
+    """
+    from config import trait_rarity_key, TRAIT_RARITIES
+    from services.trait_service import trait_rarity_of
+
+    pool = list(traits)
+    picked = []
+    n = min(int(num_slots or 0), len(pool))
+    for _ in range(n):
+        weights = [max(1, TRAIT_RARITIES[trait_rarity_key(trait_rarity_of(t))]["weight"])
+                   for t in pool]
+        chosen = random.choices(pool, weights=weights, k=1)[0]
+        picked.append(chosen)
+        pool.remove(chosen)
+    return picked
 
 
 def reroll_trait_market(session, num_slots=None):
@@ -410,19 +501,19 @@ def reroll_trait_market(session, num_slots=None):
               .filter(Trait.is_active == True).all())
     if not traits:
         return 0
-    picked = random.sample(traits, k=min(num_slots, len(traits)))
+    picked = pick_traits_by_rarity(traits, num_slots)
     generated = 0
     for slot, t in enumerate(picked):
         base_price = _calc_trait_price(t)
-        discount_pct = random.choice([0, 0, 10, 15, 25])
-        final_price = int(base_price * (1 - discount_pct / 100))
+        discount_pct = roll_trait_discount()
+        final_price = base_price * (100 - discount_pct) // 100
         row = GlobalTraitMarket(
             slot_index=slot,
             trait_id=t.id,
             base_price=base_price,
             discount_pct=discount_pct,
             final_price=final_price,
-            quantity=10,
+            quantity=UNLIMITED,
             purchased_count=0,
             listed_at=datetime.utcnow(),
             is_active=True,
@@ -453,8 +544,11 @@ def list_trait_market(session):
             .order_by(GlobalTraitMarket.slot_index).all())
 
 
-def add_trait_to_market(session, trait_id, custom_price=None, quantity=10):
+def add_trait_to_market(session, trait_id, custom_price=None,
+                        quantity=UNLIMITED):
     """Add a single trait to the trait market in the next free slot.
+
+    ``quantity`` defaults to unlimited; pass a positive number for a limited run.
     Returns (success, message_or_slot_index).
     """
     trait = session.query(Trait).get(trait_id)
@@ -481,7 +575,7 @@ def add_trait_to_market(session, trait_id, custom_price=None, quantity=10):
         base_price=base_price,
         discount_pct=0,
         final_price=final_price,
-        quantity=int(quantity) if quantity else 10,
+        quantity=max(UNLIMITED, int(quantity or UNLIMITED)),
         purchased_count=0,
         listed_at=datetime.utcnow(),
         is_active=True,
@@ -498,7 +592,7 @@ def buy_trait(session, user, slot_index):
                     GlobalTraitMarket.is_active == True).first())
     if not slot:
         return False, "Slot not found or inactive."
-    if slot.purchased_count >= slot.quantity:
+    if is_sold_out(slot):
         return False, "Sold out."
     trait = session.query(Trait).get(slot.trait_id)
     if not trait:
@@ -506,13 +600,14 @@ def buy_trait(session, user, slot_index):
     if (user.total_gems or 0) < slot.final_price:
         return False, f"Not enough gems. Need {slot.final_price}, have {user.total_gems or 0}."
 
-    # Atomic decrement
+    # Atomic decrement (no stock race to lose on an unlimited slot)
+    where = [GlobalTraitMarket.id == slot.id]
+    if not is_unlimited(slot):
+        where.append(
+            GlobalTraitMarket.purchased_count < GlobalTraitMarket.quantity)
     result = session.execute(
         update(GlobalTraitMarket)
-        .where(
-            GlobalTraitMarket.id == slot.id,
-            GlobalTraitMarket.purchased_count < GlobalTraitMarket.quantity,
-        )
+        .where(*where)
         .values(purchased_count=GlobalTraitMarket.purchased_count + 1)
     )
     if result.rowcount == 0:
@@ -535,12 +630,19 @@ def buy_trait(session, user, slot_index):
 # ════════════════════════════════════════════════════════════════════
 
 def update_player_slot(session, slot_id, **fields):
-    """Update one slot's editable fields (final_price, quantity, is_active, etc)."""
+    """Update one slot's editable fields (final_price, quantity, is_active, etc).
+
+    ``quantity`` 0 (or below) is stored as UNLIMITED rather than rejected — that
+    is how the admin page puts a slot back into unlimited stock.
+    """
     slot = session.query(GlobalPlayerMarket).get(slot_id)
     if not slot:
         return False, "Not found."
     for k, v in fields.items():
-        if k in ("base_price", "final_price", "quantity", "purchased_count"):
+        if k == "quantity":
+            try: slot.quantity = max(UNLIMITED, int(v))
+            except Exception: pass
+        elif k in ("base_price", "final_price", "purchased_count"):
             try: setattr(slot, k, int(v))
             except Exception: pass
         elif k == "is_active":
@@ -557,7 +659,10 @@ def update_trait_slot(session, slot_id, **fields):
     if not slot:
         return False, "Not found."
     for k, v in fields.items():
-        if k in ("base_price", "final_price", "quantity", "purchased_count", "discount_pct"):
+        if k == "quantity":
+            try: slot.quantity = max(UNLIMITED, int(v))
+            except Exception: pass
+        elif k in ("base_price", "final_price", "purchased_count", "discount_pct"):
             try: setattr(slot, k, int(v))
             except Exception: pass
         elif k == "is_active":

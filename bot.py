@@ -131,7 +131,7 @@ from handlers.sim import sim_handler
 
 # Trait handlers
 from handlers.traits import (
-    traits_handler, traitshop_handler, traitapply_handler,
+    traits_handler, traitshop_handler, traitapply_handler, traitlist_handler,
     traitupgrade_handler, traitreplace_handler, removetrait_handler,
     selltrait_handler,
     traitbuy_callback, traitreroll_callback, traitshop_cancel_callback,
@@ -438,6 +438,7 @@ BOT_MENU_COMMANDS = (
     ("eu", "Leave the Unscramble lobby"),
     ("cu", "Cancel the Unscramble lobby (host only)"),
     ("traits", "View your traits and inventory"),
+    ("traitlist", "Browse every trait in the game"),
     ("traitshop", "Browse the daily trait shop"),
     ("traitapply", "Apply a trait to a player"),
     ("traitupgrade", "Upgrade a player trait"),
@@ -852,6 +853,7 @@ async def start_handler(update, context):
         "/botstatus - Bot ping, uptime & status\n"
         "/myprofile /me - Your profile\n"
         "/traits /tt - Your traits & inventory\n"
+        "/traitlist /tlist - Every trait, effect and price\n"
         "/traitshop /tshop - Daily trait shop\n"
         "/traitapply /tapply - Apply trait to player\n"
         "/traitupgrade /tup - Level up a trait\n"
@@ -1469,6 +1471,10 @@ def main():
         # both managers in the same room, which is what the group is for.
         app.add_handler(CommandHandler(
             ["traits", "tt"], dm_only("traits", traits_handler)))
+        # /traitlist — the full catalogue. Read-only and useful to quote in a
+        # group, so unlike the inventory commands it is not DM-gated.
+        app.add_handler(CommandHandler(
+            ["traitlist", "tlist", "traitcatalogue"], traitlist_handler))
         app.add_handler(CommandHandler(
             ["traitshop", "tshop"], dm_only("traitshop", traitshop_handler)))
         app.add_handler(CommandHandler(

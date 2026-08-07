@@ -169,8 +169,9 @@ def _draw_card(draw, base, x, y, slot_index, player, slot_row, accent=False):
         bowl_style = bowl_style[:18]
     draw.text((text_x + 130, s_y), bowl_style, fill=TEXT_PRIMARY, font=val_font)
 
-    # Sold-out overlay
-    sold_out = (slot_row.purchased_count >= slot_row.quantity)
+    # Sold-out overlay (never drawn on an unlimited slot)
+    from services.global_market import is_sold_out
+    sold_out = is_sold_out(slot_row)
     if sold_out:
         draw.rectangle([x, y, x + COL_W, y + COL_H],
                        fill=None, outline=SOLD_OUT, width=4)
