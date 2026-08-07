@@ -307,10 +307,18 @@ class NewTraitBehaviourTests(unittest.TestCase):
         self.assertFalse(_fire("elite_big_fish", self.ctx(), role="bowler"))
 
     def test_golden_arm_strikes_in_the_first_over_of_the_spell(self):
-        self.assertTrue(_fire("elite_golden_arm", self.ctx(bowler_balls=0),
-                              role="bowler"))
-        self.assertFalse(_fire("elite_golden_arm", self.ctx(bowler_balls=7),
-                               role="bowler"))
+        # bowler_balls counts the deliveries BEFORE this one, so the first over
+        # is 0-5 and ball seven (count 6) is already the second over.
+        for balls in (0, 5):
+            with self.subTest(balls=balls):
+                self.assertTrue(_fire("elite_golden_arm",
+                                      self.ctx(bowler_balls=balls),
+                                      role="bowler"))
+        for balls in (6, 7, 30):
+            with self.subTest(balls=balls):
+                self.assertFalse(_fire("elite_golden_arm",
+                                       self.ctx(bowler_balls=balls),
+                                       role="bowler"))
 
     def test_unplayable_shuts_down_a_boundary_run(self):
         hit = _fire("elite_unplayable", self.ctx(boundary_streak=1), role="bowler")
@@ -428,6 +436,57 @@ class NewTraitBehaviourTests(unittest.TestCase):
         self.assertLess(_fire("mental_ice", self.ctx(rrr=12))["W"], 0)
 
 
+class PhaseGuardTests(unittest.TestCase):
+    """A missing phase must not read as the death overs."""
+
+    DEATH_TRAITS = ("bat_finisher", "bowl_death", "bowl_yorker",
+                    "elite_ice_finisher")
+
+    def test_death_traits_stay_silent_without_phase_data(self):
+        """`0 >= 0 - 2` is True, so an empty ctx used to look like over 18."""
+        for key in self.DEATH_TRAITS:
+            for ctx in ({}, {"rrr": 12}, {"over": None, "total_overs": None}):
+                with self.subTest(trait=key, ctx=ctx):
+                    self.assertFalse(_fire(key, dict(ctx)))
+
+    def test_death_traits_still_fire_when_the_phase_is_known(self):
+        for key in self.DEATH_TRAITS:
+            with self.subTest(trait=key):
+                self.assertTrue(
+                    _fire(key, {"over": 19, "total_overs": 20, "rrr": 9}))
+
+    def test_the_powerplay_guard_is_not_fooled_by_a_missing_over(self):
+        self.assertFalse(_fire("bowl_powerplay", {}, role="bowler"))
+        self.assertTrue(_fire("bowl_powerplay", {"over": 2, "total_overs": 20},
+                              role="bowler"))
+
+
+class StackOrderTests(unittest.TestCase):
+    """Two traits at the same level must not depend on database row order."""
+
+    def _totals(self, traits):
+        probs = {"6": 10.0, "4": 10.0, "W": 5.0, "dot": 30.0, "1": 20.0}
+        apply_traits(probs, traits, [], {"over": 5, "total_overs": 20})
+        return probs
+
+    def test_equal_levels_are_broken_by_effect_key_not_input_order(self):
+        a = {"effect_key": "aware_gap", "level": 3, "display_name": "A"}
+        b = {"effect_key": "bat_power_hitter", "level": 3, "display_name": "B"}
+        self.assertEqual(self._totals([a, b]), self._totals([b, a]))
+
+    def test_a_full_three_trait_stack_is_order_independent(self):
+        traits = [
+            {"effect_key": "aware_rotation", "level": 4, "display_name": "A"},
+            {"effect_key": "bat_anchor", "level": 4, "display_name": "B"},
+            {"effect_key": "mental_consistency", "level": 2, "display_name": "C"},
+        ]
+        first = self._totals(traits)
+        for order in ([traits[2], traits[0], traits[1]],
+                      [traits[1], traits[2], traits[0]],
+                      list(reversed(traits))):
+            self.assertEqual(self._totals(order), first)
+
+
 class EliteStackingRuleTests(unittest.TestCase):
     def test_only_one_elite_trait_per_player(self):
         self.assertEqual(TRAIT_MAX_ELITE_PER_PLAYER, 1)
@@ -496,11 +555,33 @@ class TraitListMessageTests(unittest.TestCase):
         self.assertEqual(chunk_blocks([], "H", "F"), ["H\nF"])
         self.assertEqual(chunk_blocks([]), [""])
 
+    def test_a_long_footer_cannot_push_the_last_message_over_the_limit(self):
+        """The footer lands after packing, so its length must be reserved."""
+        footer = "F" * 600
+        blocks = ["x" * 900] * 8
+        for chunk in chunk_blocks(blocks, "HEADER", footer, limit=3800):
+            self.assertLessEqual(len(chunk), 3800)
+
+    def test_the_budget_holds_for_awkward_footer_and_block_sizes(self):
+        for footer_len in (0, 1, 200, 1500):
+            for block_len in (10, 499, 1200):
+                with self.subTest(footer=footer_len, block=block_len):
+                    chunks = chunk_blocks(["y" * block_len] * 12, "H",
+                                          "F" * footer_len, limit=2000)
+                    for chunk in chunks:
+                        self.assertLessEqual(len(chunk), 2000)
+
     def test_a_single_oversized_block_is_sent_rather_than_dropped(self):
+        """A block bigger than the limit can't be split — but it isn't lost.
+
+        The footer moves to its own message rather than making a second message
+        oversized as well.
+        """
         giant = "x" * 9000
         chunks = chunk_blocks([giant], "H", "F")
-        self.assertEqual(len(chunks), 1)
         self.assertIn(giant, chunks[0])
+        self.assertEqual(chunks[-1], "F")
+        self.assertTrue(chunks[0].startswith("H"))
 
 
 if __name__ == "__main__":

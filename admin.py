@@ -3706,9 +3706,11 @@ def admin_trait_edit(trait_id):
             t.effect_key = request.form.get("effect_key", t.effect_key).strip()
             t.rarity = trait_rarity_key(request.form.get("rarity", t.rarity))
             # Blank clears the override, which puts the trait back on its
-            # rarity's price rather than pinning it at 0 gems.
+            # rarity's price rather than pinning it at 0 gems. isdecimal() and
+            # not isdigit(): the latter passes characters int() then rejects
+            # (superscripts like '²'), turning a typo into a 500.
             price = (request.form.get("base_price") or "").strip()
-            t.base_price = int(price) if price.isdigit() and int(price) > 0 else None
+            t.base_price = int(price) if price.isdecimal() and int(price) > 0 else None
             t.is_active = bool(request.form.get("is_active"))
             db.commit()
             log_admin(db, "trait_edit", "trait", t.id, t.name,

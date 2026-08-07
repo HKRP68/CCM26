@@ -17,6 +17,7 @@ toss. Buying, rerolling and upgrading traits that are sitting in the inventory
 stay open: none of those touch a player who is out on the field.
 """
 
+import html
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -49,6 +50,22 @@ logger = logging.getLogger(__name__)
 def _rarity_tag(trait) -> str:
     """The rarity pip shown next to a trait everywhere it is listed."""
     return trait_rarity_meta(trait_rarity_of(trait))["emoji"]
+
+
+def _esc(value) -> str:
+    """Escape a name or description before it goes into an HTML message.
+
+    Trait names and descriptions are free text an admin types on the website
+    (``admin_trait_edit`` only strips whitespace), and player names come from
+    seeded data. A single ``<`` or bare ``&`` makes Telegram reject the WHOLE
+    message, so one bad description would break /traitlist or /traits for every
+    user rather than just garbling its own line. Same convention as
+    ``services.trait_service.remove_trait_from_player``.
+
+    Button labels are deliberately left raw — Telegram does not parse HTML in
+    them, so escaping there would show a literal "&amp;".
+    """
+    return html.escape(str(value or ""))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -91,7 +108,7 @@ async def traits_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 max_badge = " 🌟" if inv.level == 5 else ""
                 # Resale price rides along so the sell decision needs no maths.
                 lines.append(
-                    f"  <code>#{inv.id}</code> {_rarity_tag(t)}{t.emoji} {t.name} "
+                    f"  <code>#{inv.id}</code> {_rarity_tag(t)}{t.emoji} {_esc(t.name)} "
                     f"Lv.{inv.level}{max_badge} · 💰 "
                     f"{trait_sell_value(inv.level, trait_rarity_of(t)):,}💎")
             lines.append("<i>Use /traitapply to attach to a player, "
@@ -110,11 +127,11 @@ async def traits_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 by_roster.setdefault((ur.id, p.name, p.country, ur.order_position), []).append((pt, t))
             for (rid, pname, pcountry, pos), traits in sorted(by_roster.items(), key=lambda x: x[0][3] or 999):
                 flag = get_flag(pcountry) if pcountry else ""
-                lines.append(f"\n<b>#{pos}. {pname}</b> {flag}")
+                lines.append(f"\n<b>#{pos}. {_esc(pname)}</b> {flag}")
                 for pt, t in traits:
                     max_badge = " 🌟" if pt.level == 5 else ""
                     lines.append(f"  <code>#{pt.id}</code> {_rarity_tag(t)}{t.emoji} "
-                                 f"{t.name} Lv.{pt.level}{max_badge}")
+                                 f"{_esc(t.name)} Lv.{pt.level}{max_badge}")
             lines.append("")
         else:
             lines.append("🏏 <i>No equipped traits yet</i>\n")
@@ -194,9 +211,9 @@ async def traitlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for t in entries:
                 rarity = trait_rarity_of(t)
                 block.append(
-                    f"{_rarity_tag(t)} {t.emoji} <b>{t.name}</b> — "
+                    f"{_rarity_tag(t)} {t.emoji} <b>{_esc(t.name)}</b> — "
                     f"{trait_buy_value(1, rarity):,} 💎\n"
-                    f"   <i>{t.description}</i>")
+                    f"   <i>{_esc(t.description)}</i>")
             blocks.append("<blockquote expandable>" + "\n".join(block)
                           + "</blockquote>")
 
@@ -240,10 +257,10 @@ def _trait_slot_lines(session, rows, btns, owner_tg):
         stock = "" if is_unlimited(row) else f"  📦 {stock_label(row)}"
         rarity = trait_rarity_label(trait_rarity_of(trait))
         slot_lines.append(
-            f"<b>Slot {row.slot_index + 1}.</b> {trait.emoji} <b>{trait.name}</b> "
+            f"<b>Slot {row.slot_index + 1}.</b> {trait.emoji} <b>{_esc(trait.name)}</b> "
             f"Lv.1 — <b>{row.final_price}</b> 💎{discount_tag}{stock}{status}\n"
             f"   {rarity} · {trait.category}\n"
-            f"   <i>{trait.description}</i>"
+            f"   <i>{_esc(trait.description)}</i>"
         )
         if not sold_out:
             btns.append([InlineKeyboardButton(
@@ -351,15 +368,26 @@ async def traitbuy_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.answer("Do /debut first")
             return
 
+        # The daily cap is enforced HERE, before the buy, not just counted
+        # after it. The shop header has always said "Purchases left today:
+        # N/2" while this path only ever incremented the counter — the shared
+        # ten-copy stock was the accidental cap, and unlimited stock removes
+        # it entirely, so a captain with gems could buy the same slot all day.
+        # ``buy_trait_from_shop`` has always enforced it; the two shop paths
+        # now agree.
+        daily = _get_or_create_daily(session, user.id)
+        if (daily.purchases or 0) >= TRAIT_SHOP_DAILY_PURCHASE_LIMIT:
+            session.rollback()
+            release(key)
+            await q.answer(
+                f"Daily limit reached ({TRAIT_SHOP_DAILY_PURCHASE_LIMIT} "
+                f"purchases/day). Come back tomorrow!", show_alert=True)
+            return
+
         from services.global_market import buy_trait
         ok, name_or_msg = buy_trait(session, user, slot)
         if ok:
-            # Daily-limit tracking still applies
-            try:
-                daily = _get_or_create_daily(session, user.id)
-                daily.purchases = (daily.purchases or 0) + 1
-            except Exception:
-                pass
+            daily.purchases = (daily.purchases or 0) + 1
             # 'trait_buy' has been offered on the quest form all along but was
             # never fired anywhere, so a "buy a trait" quest sat at 0 forever.
             try:
@@ -533,7 +561,7 @@ async def trapply_inv_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         btns.append([InlineKeyboardButton("❌ Cancel", callback_data="trcancel")])
 
         await q.edit_message_text(
-            f"🎯 Applying <b>{trait.emoji} {trait.name} Lv.{inv.level}</b>\n\n"
+            f"🎯 Applying <b>{trait.emoji} {_esc(trait.name)} Lv.{inv.level}</b>\n\n"
             f"Pick a player:",
             parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
     except Exception:
@@ -653,7 +681,8 @@ async def traitupgrade_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             lines.append("<b>Equipped:</b>")
             for pt, t, ur, p in equipped:
                 cost = TRAIT_UPGRADE_COSTS.get(pt.level, 0)
-                lines.append(f"  {t.emoji} {t.name} Lv.{pt.level} on {p.name}  →  Lv.{pt.level + 1} ({cost} 💎)")
+                lines.append(f"  {t.emoji} {_esc(t.name)} Lv.{pt.level} on "
+                             f"{_esc(p.name)}  →  Lv.{pt.level + 1} ({cost} 💎)")
                 btns.append([InlineKeyboardButton(
                     f"⬆️ {t.emoji} {t.name} Lv.{pt.level}→{pt.level + 1} on {p.name} ({cost} 💎)",
                     callback_data=f"trup_pt_{pt.id}"
@@ -663,7 +692,8 @@ async def traitupgrade_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             lines.append("\n<b>Inventory (not equipped):</b>")
             for inv, t in inv_rows:
                 cost = TRAIT_UPGRADE_COSTS.get(inv.level, 0)
-                lines.append(f"  {t.emoji} {t.name} Lv.{inv.level}  →  Lv.{inv.level + 1} ({cost} 💎)")
+                lines.append(f"  {t.emoji} {_esc(t.name)} Lv.{inv.level}  →  "
+                             f"Lv.{inv.level + 1} ({cost} 💎)")
                 btns.append([InlineKeyboardButton(
                     f"⬆️ {t.emoji} {t.name} Lv.{inv.level}→{inv.level + 1} (INV) ({cost} 💎)",
                     callback_data=f"trup_inv_{inv.id}"

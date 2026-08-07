@@ -109,8 +109,10 @@ class _FakeSession:
     def execute(self, statement):
         self.statements.append(statement)
         # A limited slot's UPDATE carries the stock guard, so it is the only one
-        # that can lose the race.
-        guarded = len(statement._where_criteria) > 1
+        # that can lose the race. Read off the compiled SQL rather than
+        # SQLAlchemy's private _where_criteria, so a change to their internals
+        # can't quietly turn this assertion into a no-op.
+        guarded = "purchased_count <" in str(statement)
         if guarded and (self.limited_race_loss
                         or self.slot.purchased_count >= self.slot.quantity):
             return _Result(0)
@@ -159,7 +161,13 @@ class BuyTraitStockTests(unittest.TestCase):
     def test_an_unlimited_buy_carries_no_stock_guard(self):
         session = _FakeSession(_Slot(quantity=0, final_price=10), trait=_Trait())
         gm.buy_trait(session, _User(), 0)
-        self.assertEqual(len(session.statements[0]._where_criteria), 1)
+        self.assertNotIn("purchased_count <", str(session.statements[0]))
+
+    def test_a_limited_buy_does_carry_the_stock_guard(self):
+        """The other half: the guard is what keeps a limited run race-safe."""
+        session = _FakeSession(_Slot(quantity=3, final_price=10), trait=_Trait())
+        gm.buy_trait(session, _User(), 0)
+        self.assertIn("purchased_count <", str(session.statements[0]))
 
     def test_a_limited_trait_slot_still_runs_out(self):
         slot = _Slot(quantity=2, final_price=10)

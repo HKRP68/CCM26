@@ -68,7 +68,14 @@ def _num(ctx, key, default=0):
 
 
 def _death_overs(ctx) -> bool:
-    return _num(ctx, "over") >= _num(ctx, "total_overs") - 2
+    """The last three overs — and only when the phase is actually known.
+
+    Both values have to be positive: with neither supplied the comparison is
+    ``0 >= -2``, which would silently declare every ball a death over and fire
+    Finisher / Death Specialist / Yorker in any loop with a thin context.
+    """
+    over, total_overs = _num(ctx, "over"), _num(ctx, "total_overs")
+    return over > 0 and total_overs > 0 and over >= total_overs - 2
 
 
 def _powerplay(ctx) -> bool:
@@ -372,8 +379,13 @@ def _elite_unplayable(ctx, x, role):
 
 
 def _elite_golden_arm(ctx, x, role):
-    """Strikes in the first over of the spell — the captain's hunch that works."""
-    if _num(ctx, "bowler_balls") > 6:
+    """Strikes in the first over of the spell — the captain's hunch that works.
+
+    ``bowler_balls`` counts the balls bowled BEFORE this delivery, so the first
+    over is 0-5 and the cut-off is ``>= 6``. ``> 6`` would have let it fire on
+    a seventh ball, i.e. the first ball of the second over.
+    """
+    if _num(ctx, "bowler_balls") >= 6:
         return []
     return [("W", x)]
 
@@ -491,7 +503,14 @@ def apply_traits(probs, striker_traits, bowler_traits, ctx):
         # (rather than by the order the traits happen to come back from the
         # database) is what makes the stack deterministic: a player's Lv.5
         # trait always takes the full-strength slot, whichever slot it sits in.
-        ordered = sorted(traits, key=lambda t: -int(t.get("level", 1) or 1))
+        #
+        # effect_key breaks ties, because level alone does not finish the job:
+        # two traits at the SAME level would keep their input order and take
+        # different stack weights from it, which puts the row order back in
+        # charge for the case where it is most likely (a player levelling their
+        # traits together).
+        ordered = sorted(traits, key=lambda t: (-int(t.get("level", 1) or 1),
+                                                str(t.get("effect_key", ""))))
         for i, t in enumerate(ordered):
             handler = TRAIT_HANDLERS.get(t.get("effect_key"))
             if not handler:
