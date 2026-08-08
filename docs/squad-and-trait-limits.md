@@ -122,7 +122,15 @@ actively misleading there.
 
 ## 4. Downsizing existing accounts
 
-`migrate_squad_and_trait_limits.py`, run once by hand on deploy.
+Two entry points, one implementation — `services/squad_downsize_service.py`:
+
+- **The website.** Maintenance → **Apply Squad & Trait Limits**. This is the
+  normal way to run it.
+- **`migrate_squad_and_trait_limits.py`.** A thin CLI over the same service, for
+  a deploy-time sweep or when the panel isn't reachable.
+
+They share the service precisely so the two can never disagree about what
+"apply the caps" means.
 
 ### 4.1 Refunds are at BUY price, not sell price
 
@@ -161,12 +169,48 @@ trait pass first would destroy traits that the roster pass was about to hand
 back intact. On a typical 25-card account with a trait on every card, the roster
 pass alone is enough and nothing is refunded in gems.
 
-### 4.4 Operational shape
+### 4.4 The preview is the real thing, rolled back
 
-`--dry-run` reports without writing. Each user commits separately inside its own
-try/except, so one bad row skips that user instead of aborting the run. A second
-run is a no-op — everyone is already at or under both caps — so it is safe to
-re-run after fixing whatever caused a skip.
+`preview_downsize` does not estimate. It runs the actual downsizing and then
+rolls the transaction back, so the numbers it reports are exactly what an apply
+produces. That matters because of §4.3: counting over-cap traits up front
+*overstates* the gem refund, since releasing cards frees most of those traits
+into inventory instead. The earlier hand-rolled `--dry-run` had that bug — it
+reported six traits on an account where only one was really refunded.
+
+This is also what makes the button's confirm step honest: the figure on screen
+is the figure you get.
+
+### 4.5 Operational shape
+
+Only over-cap accounts are visited. `find_over_cap_user_ids` gets them with two
+`GROUP BY … HAVING` queries rather than walking every user and asking each one,
+which is a query per user on a table where the over-cap accounts are a small
+minority.
+
+Each user commits separately inside its own try/except, so one bad row skips
+that user instead of aborting the run, and the accounts already fixed stay
+fixed. A second run is a no-op — everyone is at or under both caps — so it is
+safe to re-run after fixing whatever caused a skip. The website reports skipped
+users and tells you to press Preview and Apply again.
+
+Between users the session is expunged to bound memory on a large user table.
+That detaches **every** object in the session, so `run_downsize` is only safe to
+hand a session the caller owns for the duration — both entry points do.
+
+### 4.6 The Apply button is gated on Preview
+
+Apply carries a token that only Preview issues, held in the Flask session and
+cleared *before* the work starts. Three things follow:
+
+- A bare POST — a bookmarked URL, a double submit, a re-sent form — cannot
+  release anybody's cards, because it has no token.
+- The token is single-use, so a double submit cannot apply twice even while the
+  first request is still in flight.
+- You cannot reach Apply without having seen the numbers first.
+
+Every apply writes an `AdminLog` row with the totals, since this is the one
+action that rewrites every squad on the service at once.
 
 ---
 

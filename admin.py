@@ -15585,9 +15585,120 @@ def admin_maintenance():
         return render_template("admin_maintenance.html",
                                cfg=cfg, active=active,
                                until_ist_str=until_ist_str,
-                               preview=preview)
+                               preview=preview,
+                               squad_limits=_squad_limits_panel(db))
     finally:
         db.close()
+
+
+# ── Squad + trait limit enforcement ──────────────────────────────────
+# Cutting MAX_ROSTER / introducing TRAIT_MAX_PER_SQUAD only guards NEW
+# acquisitions; accounts already over a cap stay over it and get stuck. These
+# two routes are the website equivalent of running
+# migrate_squad_and_trait_limits.py, and share its service so the two can never
+# drift apart.
+#
+# Apply is gated on a token that only Preview issues, so this is genuinely
+# "look, then commit": a bare POST — a bookmarked URL, a double submit, a
+# re-sent form — cannot release anybody's cards on its own.
+
+_SQUAD_PREVIEW_KEY = "squad_downsize_preview"
+_SQUAD_TOKEN_KEY = "squad_downsize_token"
+
+
+def _squad_limits_panel(db):
+    """Data for the Maintenance page's squad-limits panel."""
+    from config import MAX_ROSTER as _cap, TRAIT_MAX_PER_SQUAD as _tcap
+    from services.squad_downsize_service import find_over_cap_user_ids
+    try:
+        over = len(find_over_cap_user_ids(db))
+    except Exception:
+        logger.exception("squad limits scan failed")
+        over = None
+    return {
+        "roster_cap": _cap,
+        "trait_cap": _tcap,
+        "over_cap_users": over,
+        "preview": session.get(_SQUAD_PREVIEW_KEY),
+        "token": session.get(_SQUAD_TOKEN_KEY),
+    }
+
+
+@app.route("/maintenance/squad-limits/preview", methods=["POST"])
+@login_required
+def admin_squad_limits_preview():
+    """Report exactly what applying the caps would do, changing nothing."""
+    import secrets
+    from services.squad_downsize_service import preview_downsize
+
+    db = get_session()
+    try:
+        totals = preview_downsize(db)
+        if not totals["users"]:
+            session.pop(_SQUAD_PREVIEW_KEY, None)
+            session.pop(_SQUAD_TOKEN_KEY, None)
+            flash("✅ Nothing to do — every squad is already within the limits.",
+                  "success")
+        else:
+            session[_SQUAD_PREVIEW_KEY] = totals
+            session[_SQUAD_TOKEN_KEY] = secrets.token_urlsafe(16)
+            flash(f"👀 Preview only — nothing has changed yet. "
+                  f"{totals['users']} squad(s) would be trimmed.", "info")
+    except Exception as e:
+        db.rollback()
+        logger.exception("squad limits preview failed")
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_maintenance"))
+
+
+@app.route("/maintenance/squad-limits/apply", methods=["POST"])
+@login_required
+def admin_squad_limits_apply():
+    """Release over-cap cards and refund over-cap traits, for every account."""
+    from services.squad_downsize_service import run_downsize
+
+    expected = session.get(_SQUAD_TOKEN_KEY)
+    supplied = request.form.get("confirm_token", "")
+    if not expected or supplied != expected:
+        flash("⚠️ Run Preview first — nothing was changed.", "error")
+        return redirect(url_for("admin_maintenance"))
+
+    # Single-use: clear before the work runs, so a double submit can't apply
+    # twice even if the first request is still in flight.
+    session.pop(_SQUAD_TOKEN_KEY, None)
+    session.pop(_SQUAD_PREVIEW_KEY, None)
+
+    db = get_session()
+    try:
+        totals = run_downsize(db)
+        log_admin(db, "squad_limits_apply", target_type="config", target_id=0,
+                  target_name="squad_limits",
+                  detail=(f"users={totals['users']}, "
+                          f"cards={totals['cards']} (+{totals['coins']:,} coins), "
+                          f"traits={totals['traits']} (+{totals['gems']:,} gems), "
+                          f"failed={totals['failed']}"))
+        db.commit()
+
+        if not totals["users"]:
+            flash("✅ Nothing to do — every squad is already within the limits.",
+                  "success")
+        else:
+            flash(f"✅ Applied to {totals['users']} squad(s): "
+                  f"{totals['cards']} card(s) released for "
+                  f"{totals['coins']:,} 🪙, {totals['traits']} trait(s) "
+                  f"refunded for {totals['gems']:,} 💎.", "success")
+        if totals["failed"]:
+            flash(f"⚠️ {totals['failed']} user(s) were skipped after an error — "
+                  f"press Preview and Apply again to retry them.", "error")
+    except Exception as e:
+        db.rollback()
+        logger.exception("squad limits apply failed")
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_maintenance"))
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -280,10 +280,10 @@ class SquadDownsizeMigrationTest(unittest.TestCase):
 
     # ── end-to-end ──────────────────────────────────────────────────────
 
-    def test_migrate_user_is_idempotent(self):
+    def test_downsize_user_is_idempotent(self):
         from config import MAX_ROSTER, TRAIT_MAX_PER_SQUAD
         from database import get_session
-        from migrate_squad_and_trait_limits import migrate_user
+        from services.squad_downsize_service import downsize_user
         from services.roster_service import get_roster_count
         from services.trait_service import count_squad_traits
 
@@ -296,7 +296,7 @@ class SquadDownsizeMigrationTest(unittest.TestCase):
                 self._equip(session, user, entry, trait, level=(i % 5) + 1)
             session.commit()
 
-            first = migrate_user(session, user)
+            first = downsize_user(session, user)
             session.commit()
             self.assertEqual(get_roster_count(session, user.id), MAX_ROSTER)
             self.assertLessEqual(count_squad_traits(session, user.id),
@@ -305,7 +305,7 @@ class SquadDownsizeMigrationTest(unittest.TestCase):
 
             coins_after, gems_after = user.total_coins, user.total_gems
 
-            second = migrate_user(session, user)
+            second = downsize_user(session, user)
             session.commit()
             self.assertEqual(second, {"cards": 0, "coins": 0,
                                       "traits": 0, "gems": 0})
