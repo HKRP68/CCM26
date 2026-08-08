@@ -2092,6 +2092,26 @@ def _render_over_summary(state, summary):
         f"🎳 {summary['bowler']['name']}: {summary['bowler_figures']}",
         f"{arrow} Momentum: {state['bat_team_name']}",
     ]
+    # Approach Interaction System flavour — the name of the special combination
+    # the two picks made, or the match-up's one-line character.
+    #
+    # Deliberately withheld in bot matches, for the same reason the bot's plan
+    # itself is (see above): the 5x5 flavour table is a lookup, so printing
+    # "The Chess Match" after the over is printing both picks, and a bot whose
+    # picks are published is a bot that can be written down. Between two humans
+    # the reveal is symmetric — each captain gives up exactly what they learn —
+    # and it is what makes an over feel like an event rather than a number.
+    if not _is_bot_match(state):
+        combo, flavour = summary.get("combo"), summary.get("flavour")
+        if combo:
+            lines.append(f"⚔️ <b>{html.escape(combo)}</b> — "
+                         f"<i>{html.escape(flavour or '')}</i>")
+        elif flavour:
+            lines.append(f"⚔️ <i>{html.escape(flavour)}</i>")
+        carry = summary.get("carry")
+        if carry and carry.get("note"):
+            lines.append(f"↪️ <i>Into the next {_unit_word(state)}: "
+                         f"{html.escape(carry['note'])}.</i>")
     # What the bot has *noticed* is still said out loud — that it has caught the
     # player repeating themselves is a warning, not a plan, so it keeps the mind
     # game visible without handing over the counter.

@@ -27,6 +27,7 @@ from engine.game_state_engine import (
     _compute_momentum,
     BALL_HISTORY_WINDOW,
 )
+from engine import approach_modifiers
 from engine.approach_modifiers import batting_label, bowling_label
 from services.match_engine import note_bowler_ball
 from services.sim_match import (
@@ -85,6 +86,65 @@ def total_balls(state):
 def is_hundred(state):
     """True when the state is a The-Hundred (100-ball) match."""
     return (state or {}).get("ball_format") == "The100"
+
+
+# Overs at the end of an innings that count as the death. The powerplay length
+# is per-format (``FORMAT_SPECS[...]["powerplay_units"]``); the death is not.
+DEATH_UNITS = 4
+
+
+def approach_phase(state):
+    """``"powerplay"`` / ``"middle"`` / ``"death"`` for the over about to be bowled.
+
+    One definition, used by both the live over (through :func:`approach_context`)
+    and the AI captain's model of it (``services.bot_tactics``) — a bot reasoning
+    about a different phase boundary from the one the engine bowls would pick the
+    wrong plan and never know why. Short formats scale both windows down so a
+    5-over game still has all three phases.
+    """
+    total = max(1, int((state or {}).get("overs") or 20))
+    over = max(1, int((state or {}).get("current_over") or 1))
+    if total >= 20:
+        pp, death = _spec(state)["powerplay_units"], DEATH_UNITS
+    else:
+        pp, death = max(1, round(total * 0.3)), max(1, round(total * 0.2))
+    if over <= pp:
+        return "powerplay"
+    if over > total - death:
+        return "death"
+    return "middle"
+
+
+def approach_context(state, bowler=None):
+    """The situational context for the upcoming over's approach match-up.
+
+    Everything ``engine.approach_modifiers`` needs beyond the two picks: where
+    the over is bowled (pitch, phase, bowling style), how deep the bowler is
+    into their spell, how settled the partnership is, who has the momentum, and
+    whatever the previous over's special combination carried over.
+
+    Pure and read-only, so the AI captain can build the *same* context when it
+    scores the over it is about to bowl into.
+    """
+    bowl = bowler if bowler is not None else (state or {}).get("current_bowler")
+    bowl = bowl or {}
+    bpu = balls_per_unit(state)
+    stats = ((state or {}).get("bowl_stats") or {}).get(
+        str(bowl.get("roster_id")), {})
+    # 1-based: the over about to be bowled is one past the ones already sent down.
+    spell_over = int(stats.get("balls", 0) or 0) // max(1, bpu) + 1
+    over_runs = (state or {}).get("over_runs") or []
+    return approach_modifiers.make_context(
+        pitch=(state or {}).get("pitch_type"),
+        phase=approach_phase(state),
+        bowling_type=_adapt_player(bowl).get("bowling_type") if bowl else None,
+        bowler_over_index=spell_over,
+        partnership_overs=float((state or {}).get("partnership_balls") or 0) / max(1, bpu),
+        batting_momentum=bool(over_runs)
+        and over_runs[-1] >= approach_modifiers.MOMENTUM_OVER_RUNS,
+        bowling_momentum=bool(stats.get("last_over_wickets")),
+        carry=(state or {}).get("approach_carry"),
+    )
 
 
 # Chase-chance steering: nudge ball outcomes toward the matrix-estimated
@@ -471,7 +531,10 @@ def _new_bat_stat():
 
 def _new_bowl_stat():
     return {"balls": 0, "runs": 0, "wickets": 0, "overs_done": 0,
-            "this_over_balls": 0, "this_over_runs": 0, "maidens": 0}
+            "this_over_balls": 0, "this_over_runs": 0, "maidens": 0,
+            # Wickets this bowler took in their own most recent over — the
+            # rhythm half of the approach momentum rule.
+            "last_over_wickets": 0}
 
 
 def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
@@ -506,6 +569,9 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         "striker_idx": 0, "non_striker_idx": 1, "next_batsman_idx": 2,
         "current_bowler": None, "prev_bowler_rid": None,
         "batting_approach": None, "bowling_approach": None,
+        # What the previous over's special combination hands to the next one
+        # (engine.approach_modifiers.combo_carry). None for all but a few overs.
+        "approach_carry": None,
         "bat_stats": bat_stats, "bowl_stats": bowl_stats,
         "timeline": [], "over_runs": [], "fow": [],
         "ball_history": [], "batter_streaks": {},
@@ -1184,6 +1250,17 @@ def simulate_over(state):
     bws = state["bowl_stats"].setdefault(bowler_rid, _new_bowl_stat())
     bws["this_over_balls"] = 0
     bws["this_over_runs"] = 0
+    bowl_wkts_before = bws["wickets"]
+
+    # The Approach Interaction System's situational layers for this match-up —
+    # pitch, phase, the mind game, momentum, fatigue, partnership chemistry and
+    # anything the previous over's special combination carried in. Built once,
+    # from the state as it stands BEFORE the first ball, so every delivery in
+    # the over is bowled under the same conditions the captains picked into.
+    approach_ctx = approach_context(state, bowler)
+    # The name of the special combination these two picks make (None for most
+    # pairs) and the line that describes the over they tend to produce.
+    combo_name, combo_flavour = approach_modifiers.over_flavour(bat_app, bowl_app)
 
     ball_history = list(state.get("ball_history", []))
     streaks = dict(state.get("batter_streaks", {}))
@@ -1382,6 +1459,7 @@ def simulate_over(state):
                 fielding_quality=fielding_q,
                 format_config=engine_fmt,
                 batting_approach=bat_app, bowling_approach=bowl_app,
+                approach_context=approach_ctx,
                 weight_hook=weight_hook))
 
         otype = oc.get("type")
@@ -1607,6 +1685,15 @@ def simulate_over(state):
     state["batter_streaks"] = streaks
     state["prev_bowler_rid"] = bowler["roster_id"]
     over_completed = balls_this_over >= bpu
+    # Approach momentum + carry-over. The bowler's rhythm is their OWN wickets
+    # this over (a run-out at the other end is not a spell on), and the special
+    # combination's carry is resolved now that the over's result is known — it
+    # lands on the next over through approach_context(). Both are cleared and
+    # re-set every over, so nothing leaks past the over that earned it.
+    bws["last_over_wickets"] = bws["wickets"] - bowl_wkts_before
+    approach_carry = approach_modifiers.combo_carry(
+        bat_app, bowl_app, over_runs, over_wkts) if over_completed else None
+    state["approach_carry"] = approach_carry
     # Track the current bowling spell for The Hundred's 5/10-ball rule: a bowler
     # may bowl up to two consecutive sets, then must hand the ball over. (Unused
     # for T20, where prev_bowler_rid already enforces no back-to-back overs.)
@@ -1647,6 +1734,12 @@ def simulate_over(state):
         "bowler_figures": _bowler_figures(bws, bpu),
         "traits_activated": {"bat": sorted(over_traits["bat"]),
                              "bowl": sorted(over_traits["bowl"])},
+        # Approach Interaction System: what this match-up was, and what it left
+        # behind. ``combo``/``flavour`` describe the over that was just bowled;
+        # ``carry`` is the effect the next one inherits (None most overs).
+        "combo": combo_name,
+        "flavour": combo_flavour,
+        "carry": approach_carry,
     }
 
     # Advance the over pointer if the over completed and play continues
@@ -1963,6 +2056,8 @@ def end_first_innings(state):
     state["spell_units"] = 0
     state["batting_approach"] = None
     state["bowling_approach"] = None
+    # Nothing an innings-1 over set up survives the interval.
+    state["approach_carry"] = None
     state["timeline"] = []
     state["over_runs"] = []
     state["fow"] = []

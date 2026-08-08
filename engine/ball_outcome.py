@@ -976,6 +976,7 @@ def calculate_outcome(
     is_day_night: bool = False,
     batting_approach: str = None,
     bowling_approach: str = None,
+    approach_context: dict = None,
     weight_hook=None,
 ) -> dict:
     """
@@ -1352,11 +1353,14 @@ def calculate_outcome(
 
     # 4b) Approach modifiers (Challenge League over-by-over mode). No-op when
     # both approaches are None/Balanced, so existing callers are unaffected.
+    # ``approach_context`` (engine.approach_modifiers.make_context) switches on
+    # the situational layers — pitch/phase/mind-game/momentum/fatigue/chemistry;
+    # without one only the three base approach layers apply.
     if batting_approach is not None or bowling_approach is not None:
         from engine.approach_modifiers import apply_approach_modifiers
         raw_weights = apply_approach_modifiers(
             raw_weights, batting_approach, bowling_approach,
-            bowler_rating=bowling)
+            bowler_rating=bowling, context=approach_context)
         total_weight = sum(raw_weights.values())
 
     # 4c) Generic weight hook — used by /letsplay to apply player TRAITS to the
