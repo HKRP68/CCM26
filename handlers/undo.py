@@ -22,7 +22,7 @@ from services.undo_service import (
 
 logger = logging.getLogger(__name__)
 
-MAX_ROSTER = 25  # also defined in handlers/buy.py — kept in sync intentionally
+from config import MAX_ROSTER
 
 
 async def cmuundo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -169,7 +169,7 @@ async def _undo_buy(update, session, user, payload):
         f"Removed: <b>{player_name}</b> ({rating} OVR)\n"
         f"💰 Refunded: <b>{price:,}</b> 🪙\n"
         f"💳 Balance: {user.total_coins:,} 🪙\n"
-        f"📊 Roster: {user.roster_count}/25{traits_line}",
+        f"📊 Roster: {user.roster_count}/{MAX_ROSTER}{traits_line}",
         parse_mode="HTML")
 
 
@@ -290,5 +290,5 @@ async def _undo_release(update, session, user, payload):
         f"Restored {len(items)} player(s): {names_str}\n\n"
         f"💸 Deducted: <b>{total_refund:,}</b> 🪙\n"
         f"💳 Balance: {user.total_coins:,} 🪙\n"
-        f"📊 Roster: {user.roster_count}/25",
+        f"📊 Roster: {user.roster_count}/{MAX_ROSTER}",
         parse_mode="HTML")

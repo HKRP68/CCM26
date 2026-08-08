@@ -220,7 +220,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                             f"YOU GOT A NEW PLAYER!\n"
                             f"🎉 {player.name} - {player.rating} OVR\n"
                             f"🎯 {player.category} | {player.country}\n"
-                            f"✅ Added to squad ({user.roster_count}/25)"
+                            f"✅ Added to squad ({user.roster_count}/{MAX_ROSTER})"
                         )
                     else:
                         sell_val = get_sell_value(player.rating)
@@ -315,7 +315,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
                     user.roster_count += 1
                     reward_lines = (f"YOU GOT A NEW PLAYER!\n"
                                     f"🎉 {player.name} - {player.rating} OVR\n"
-                                    f"✅ Added to squad ({user.roster_count}/25)")
+                                    f"✅ Added to squad ({user.roster_count}/{MAX_ROSTER})")
                 elif player:
                     sell_val = get_sell_value(player.rating)
                     stats.last_gspin = datetime.utcnow()

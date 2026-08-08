@@ -647,6 +647,8 @@ def _migrate_add_columns():
         "market_refresh_hour_ist": "INTEGER DEFAULT 0",
         "trait_market_default_slots": "INTEGER DEFAULT 5",
         "trait_market_last_refresh_at": "TIMESTAMP",
+        "trait_market_refresh_interval_hours": "INTEGER DEFAULT 24",
+        "trait_market_refresh_start_hour_ist": "INTEGER",
         "scorecard_color_inn1": "VARCHAR(9) DEFAULT '#c41e3a'",
         "scorecard_color_inn2": "VARCHAR(9) DEFAULT '#00c9a7'",
         "scorecard_text_settings": "TEXT",

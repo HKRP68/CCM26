@@ -226,7 +226,7 @@ def apply_reward(session, user, reward, hold_overflow=False):
         out["player_name"] = player.name
         out["player_rating"] = player.rating
 
-        MAX_ROSTER = 25
+        from config import MAX_ROSTER
         if (user.roster_count or 0) < MAX_ROSTER:
             entry = UserRoster(
                 user_id=user.id, player_id=player.id,

@@ -207,7 +207,12 @@ MYSTERYBOX_REWARD_TYPE_BANDS = [
 # ── Debut rewards ───────────────────────────────────────────────────
 DEBUT_COINS = 1500
 DEBUT_GEMS = 30
-MAX_ROSTER = 25
+
+# ── Squad size ──────────────────────────────────────────────────────
+# How many cards a captain may hold, Career Player included. Every
+# acquisition path checks this, and a squad already over it is brought back
+# down by ``migrate_squad_and_trait_limits.py``.
+MAX_ROSTER = 19
 
 # ── Coins → Gems conversion (/coins2gems) ───────────────────────────
 # How many coins buy one gem. The conversion is one-way and irreversible;
@@ -421,6 +426,18 @@ TRAIT_MAX_SAME_CATEGORY = 2
 # card and the rest of the catalogue would stop mattering.
 TRAIT_MAX_ELITE_PER_PLAYER = 1
 
+# Max traits equipped across a whole squad. Sized to exactly the number of
+# ordinary cards (MAX_ROSTER - 1, the squad minus the Career Player), so the
+# budget stretches to one trait each — but the per-card limit is
+# TRAIT_MAX_PER_PLAYER, so stacking a second or third trait on a key card
+# means leaving other cards bare. That trade is the decision the cap exists
+# to create.
+#
+# The Career Player is EXEMPT: it carries its own TRAIT_MAX_PER_PLAYER
+# allowance on top of this budget, so a fully kitted account holds
+# TRAIT_MAX_PER_SQUAD + TRAIT_MAX_PER_PLAYER == 21 equipped traits.
+TRAIT_MAX_PER_SQUAD = 18
+
 # ── Rarity ────────────────────────────────────────────────────────
 # Every trait carries a rarity, and it decides three things:
 #   • how often the shared market rolls it (``weight``),
@@ -468,6 +485,51 @@ def trait_list_price(rarity=None) -> int:
 # ── Market ────────────────────────────────────────────────────────
 TRAIT_MARKET_SLOTS = 5
 TRAIT_MARKET_REFRESH_HOURS = 24
+
+# How often the trait market may be set to refresh, in hours. Only divisors of
+# 24 are offered: they are the intervals that tile a day evenly, so "every 12
+# hours starting 12 AM" lands on 12 AM and 12 PM every day forever instead of
+# drifting round the clock. Admin-selectable from /markets on the website; the
+# live values live in GameConfig, not here.
+TRAIT_MARKET_REFRESH_INTERVALS = (1, 2, 3, 4, 6, 8, 12, 24)
+
+
+def clamp_refresh_interval(hours) -> int:
+    """Snap an interval to the nearest allowed value (24 if unparseable).
+
+    Ties break toward the SHORTER interval — an ambiguous 7 becomes 6, not 8 —
+    so a mis-set value errs toward refreshing more often rather than less.
+    """
+    try:
+        hours = int(hours)
+    except (TypeError, ValueError):
+        return 24
+    if hours in TRAIT_MARKET_REFRESH_INTERVALS:
+        return hours
+    return min(TRAIT_MARKET_REFRESH_INTERVALS, key=lambda h: (abs(h - hours), h))
+
+
+def refresh_anchor_hours(start_hour, interval_hours) -> list:
+    """The IST clock hours a market refreshes at, sorted ascending.
+
+    ``refresh_anchor_hours(0, 12) == [0, 12]`` — midnight and noon.
+    """
+    interval = clamp_refresh_interval(interval_hours)
+    try:
+        start = int(start_hour) % 24
+    except (TypeError, ValueError):
+        start = 0
+    return sorted((start + k * interval) % 24 for k in range(24 // interval))
+
+
+def format_hour_ist(hour) -> str:
+    """Render an IST clock hour as '12:00 AM' / '1:00 PM'."""
+    hour = int(hour) % 24
+    suffix = "AM" if hour < 12 else "PM"
+    display = hour % 12 or 12
+    return f"{display}:00 {suffix}"
+
+
 TRAIT_MARKET_BUY_COST = 150  # gems — flat cost for L1 trait
 TRAIT_MARKET_REROLL_COST = 30  # gems
 

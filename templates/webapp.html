@@ -15,6 +15,11 @@
   // Block id, rendered server-side so the controller can be built without
   // waiting for /api/webapp/init. Empty object = mock mode.
   window.__adConfig = {{ (ad_config or {}) | tojson }};
+  // Squad + trait limits, rendered server-side so the UI never disagrees with
+  // what the API enforces. See config.MAX_ROSTER / config.TRAIT_MAX_PER_SQUAD.
+  const MAX_ROSTER = {{ game_limits.max_roster }};
+  const TRAIT_MAX_PER_SQUAD = {{ game_limits.trait_max_per_squad }};
+  const TRAIT_MAX_PER_PLAYER = {{ game_limits.trait_max_per_player }};
 </script>
 {# Loaded unconditionally, exactly like the SortableJS tag below it: the URL is
    fixed and the download is wasted only in mock mode. This tag was briefly
@@ -1942,6 +1947,8 @@
   .pd-trait-info { flex: 1; }
   .pd-trait-name { font-weight: 700; font-size: 0.88rem; }
   .pd-trait-lvl { font-size: 0.7rem; color: var(--accent); }
+  .pd-squad-budget { float: right; font-size: 0.7rem; font-weight: 400; color: var(--muted); }
+  .pd-squad-budget.is-full { color: #e2574c; }
   .pd-trait-desc { font-size: 0.7rem; color: var(--muted); margin-top: 0.1rem; }
   .pd-mini-btn {
     border: none; border-radius: 6px; padding: 0.35rem 0.6rem;
@@ -3381,7 +3388,7 @@ async function refreshDashboard() {
   document.getElementById('stat-coins').textContent = formatNum(userData.coins);
   document.getElementById('stat-gems').textContent = formatNum(userData.gems);
   document.getElementById('stat-qp').textContent = formatNum(userData.quest_points);
-  document.getElementById('stat-roster').textContent = `${userData.roster_count}/25`;
+  document.getElementById('stat-roster').textContent = `${userData.roster_count}/${MAX_ROSTER}`;
   document.getElementById('rec-played').textContent = userData.matches_played;
   document.getElementById('rec-won').textContent = userData.matches_won;
   document.getElementById('rec-lost').textContent = userData.matches_lost;
@@ -3951,7 +3958,7 @@ async function openReplacePicker(claimId, name, rating) {
   body.innerHTML = `
     <h2>Replace a player</h2>
     <div style="color:var(--muted);font-size:0.9rem;margin-bottom:0.8rem;">
-      Squad is full (${data.count || 25}/${data.max || 25}). Pick a player to drop for
+      Squad is full (${data.count || MAX_ROSTER}/${data.max || MAX_ROSTER}). Pick a player to drop for
       <strong>${escapeHtml(name)} (${rating})</strong>.
     </div>
     <div style="max-height:52vh;overflow-y:auto;">${rows || '<div class="empty">No players to drop.</div>'}</div>
@@ -6680,7 +6687,7 @@ function renderFreePackAction() {
     // pending claim and the user picks who to Replace (or releases it) after.
     const fullNote = d.roster_full
       ? `<p style="color:var(--accent);font-size:0.78rem;margin:0 0 0.8rem;">
-           Squad is full (${d.roster_count}/25) — you'll choose who to replace after opening.
+           Squad is full (${d.roster_count}/${MAX_ROSTER}) — you'll choose who to replace after opening.
          </p>`
       : '';
     card.innerHTML = `
@@ -7666,8 +7673,16 @@ function renderPdLast10(rows) {
 }
 
 function renderPdTraits(d) {
+  // The Career Player's slots sit outside the squad budget, so it gets an
+  // "exempt" note instead of a counter that would read as misleading.
+  const sq = d.squad_trait_slots || {};
+  const squadNote = sq.exempt
+    ? `<span class="pd-squad-budget">🎖 Career slots — outside the squad limit</span>`
+    : (sq.max
+        ? `<span class="pd-squad-budget${sq.full ? ' is-full' : ''}">Squad traits ${sq.used}/${sq.max}</span>`
+        : '');
   let html = `<div class="pd-section">
-    <p class="card-title">✨ Equipped (${d.trait_slots.used}/${d.trait_slots.max})</p>`;
+    <p class="card-title">✨ Equipped (${d.trait_slots.used}/${d.trait_slots.max}) ${squadNote}</p>`;
   if (!d.traits.length) {
     html += `<div class="empty" style="padding:0.8rem;"><span style="font-size:0.82rem;">No traits equipped. Add one from your inventory below.</span></div>`;
   } else {
@@ -7691,6 +7706,9 @@ function renderPdTraits(d) {
     html += `<div class="empty" style="padding:0.8rem;"><span style="font-size:0.82rem;">No spare traits. Buy from the Trait Shop (/tshop in the bot).</span></div>`;
   } else if (d.trait_slots.full) {
     html += `<p style="color:var(--muted);font-size:0.78rem;">Trait slots full. Remove one to add another.</p>`;
+    html += d.inventory.map(t => pdInvRow(t, true)).join('');
+  } else if (sq.full && !sq.exempt) {
+    html += `<p style="color:var(--muted);font-size:0.78rem;">Squad trait limit reached (${sq.used}/${sq.max}). Remove one from any card to add another — your Career Player has its own ${TRAIT_MAX_PER_PLAYER} slots.</p>`;
     html += d.inventory.map(t => pdInvRow(t, true)).join('');
   } else {
     html += d.inventory.map(t => pdInvRow(t, false)).join('');

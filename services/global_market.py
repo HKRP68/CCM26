@@ -204,43 +204,73 @@ def _ist_to_utc(dt):
     return dt - timedelta(hours=5, minutes=30)
 
 
-def _next_refresh_utc(refresh_hour_ist, last_refresh_utc=None):
+def _next_refresh_utc(refresh_hour_ist, last_refresh_utc=None, interval_hours=24):
     """Return the next UTC datetime when the market should refresh.
 
-    The market refreshes once a day at refresh_hour_ist (in IST). Given we
-    last refreshed at last_refresh_utc, return the next time refresh_hour_ist
-    will occur AFTER that (or after now if no last_refresh).
+    The market refreshes every ``interval_hours``, starting from
+    ``refresh_hour_ist`` (an IST clock hour). With the default 24 that is one
+    daily reroll at that hour — the player market's long-standing behaviour.
+    With ``interval_hours=12`` and hour 0 it is midnight and noon IST, which is
+    what the trait market's website setting drives.
+
+    Given ``last_refresh_utc``, this returns the first anchor strictly after
+    it; with no last refresh, the first anchor after now.
     """
     from datetime import timedelta
-    now_utc = _now_utc()
-    # The reference point is "today's refresh hour in IST"
-    now_ist = _utc_to_ist(now_utc)
-    today_ist_refresh = now_ist.replace(
-        hour=int(refresh_hour_ist) % 24, minute=0, second=0, microsecond=0,
+    from config import refresh_anchor_hours
+
+    # The search is anchored on the LAST refresh, not on now. A market that has
+    # not rerolled for a week must report the anchor it first missed — that is
+    # what makes ``_is_due`` mean "has an anchor passed since we last ran?".
+    after = last_refresh_utc if last_refresh_utc is not None else _now_utc()
+    after_ist = _utc_to_ist(after)
+    midnight_ist = after_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Span the day either side so the search never falls off an end: the answer
+    # for "refreshed late yesterday" can be an anchor earlier the same day.
+    anchors = sorted(
+        _ist_to_utc(midnight_ist + timedelta(days=day, hours=hour))
+        for day in (-1, 0, 1)
+        for hour in refresh_anchor_hours(refresh_hour_ist, interval_hours)
     )
-    # Convert today's refresh time to UTC
-    today_refresh_utc = _ist_to_utc(today_ist_refresh)
 
-    if last_refresh_utc is None:
-        # Never refreshed — next is today's refresh time if still ahead, else tomorrow
-        if today_refresh_utc > now_utc:
-            return today_refresh_utc
-        return today_refresh_utc + timedelta(days=1)
-
-    # Find next refresh time that's after last_refresh_utc
-    candidate = today_refresh_utc
-    # If today's refresh time was already past at last_refresh, jump forward
-    while candidate <= last_refresh_utc:
-        candidate += timedelta(days=1)
-    return candidate
+    for candidate in anchors:
+        if candidate > after:
+            return candidate
+    # Unreachable while the anchors span a full day either side of `after`,
+    # but stay defensive rather than returning None to a caller doing >=.
+    return anchors[-1] + timedelta(days=1)
 
 
-def _is_due(last_refresh_utc, refresh_hour_ist):
+def _is_due(last_refresh_utc, refresh_hour_ist, interval_hours=24):
     """Has the next scheduled refresh time already passed?"""
     if last_refresh_utc is None:
         return True  # never refreshed
-    next_at = _next_refresh_utc(refresh_hour_ist, last_refresh_utc)
+    next_at = _next_refresh_utc(refresh_hour_ist, last_refresh_utc,
+                                interval_hours)
     return _now_utc() >= next_at
+
+
+def _trait_schedule(cfg_row):
+    """``(start_hour_ist, interval_hours)`` for the trait market.
+
+    A DB migrated but not yet re-saved has a NULL start hour; falling back to
+    ``market_refresh_hour_ist`` keeps such an install on exactly the time it
+    already had rather than silently moving it to midnight.
+    """
+    from config import clamp_refresh_interval
+    if not cfg_row:
+        return 0, 24
+    start = cfg_row.trait_market_refresh_start_hour_ist
+    if start is None:
+        start = cfg_row.market_refresh_hour_ist or 0
+    # Only NULL means "unset" — a stored 0 is a real value and must reach
+    # clamp_refresh_interval, which snaps it to the 1-hour minimum rather than
+    # silently reading as "once a day".
+    stored_interval = cfg_row.trait_market_refresh_interval_hours
+    interval = clamp_refresh_interval(
+        24 if stored_interval is None else stored_interval)
+    return int(start) % 24, interval
 
 
 def ensure_player_market_fresh(session):
@@ -269,9 +299,9 @@ def ensure_trait_market_fresh(session):
     from models import GameConfig
     cfg_row = session.query(GameConfig).first()
     last = cfg_row.trait_market_last_refresh_at if cfg_row else None
-    refresh_hour = (cfg_row.market_refresh_hour_ist if cfg_row else 0) or 0
+    refresh_hour, interval = _trait_schedule(cfg_row)
 
-    if _is_due(last, refresh_hour):
+    if _is_due(last, refresh_hour, interval):
         try:
             n = reroll_trait_market(session)
             session.commit()
@@ -300,8 +330,78 @@ def get_next_trait_refresh_at(session):
     if not cfg_row:
         return None
     last = cfg_row.trait_market_last_refresh_at
-    refresh_hour = cfg_row.market_refresh_hour_ist or 0
-    return _next_refresh_utc(refresh_hour, last)
+    refresh_hour, interval = _trait_schedule(cfg_row)
+    return _next_refresh_utc(refresh_hour, last, interval)
+
+
+def get_trait_refresh_schedule(session):
+    """Describe the trait market's schedule for the admin page.
+
+    Returns ``{start_hour, interval_hours, hours, labels, summary}`` — the
+    summary being a ready-to-render string like "12:00 AM, 12:00 PM IST".
+    """
+    from config import refresh_anchor_hours, format_hour_ist
+    from models import GameConfig
+
+    cfg_row = session.query(GameConfig).first()
+    start, interval = _trait_schedule(cfg_row)
+    hours = refresh_anchor_hours(start, interval)
+    labels = [format_hour_ist(h) for h in hours]
+    return {
+        "start_hour": start,
+        "interval_hours": interval,
+        "hours": hours,
+        "labels": labels,
+        "summary": ", ".join(labels) + " IST",
+    }
+
+
+def get_trait_refresh_interval_hours(session=None):
+    """The configured trait-refresh interval, for callers outside this module."""
+    from models import GameConfig
+    own = session is None
+    if own:
+        from database import get_session
+        session = get_session()
+    try:
+        return _trait_schedule(session.query(GameConfig).first())[1]
+    except Exception:
+        logger.exception("get_trait_refresh_interval_hours failed; using 24h")
+        return 24
+    finally:
+        if own:
+            session.close()
+
+
+def is_trait_refresh_due(last_refresh_utc, session=None):
+    """Is a trait shop due, against the configured IST anchor schedule?
+
+    Same question ``ensure_trait_market_fresh`` asks of the shared market, for
+    callers holding their own timestamp — notably the legacy per-user shop in
+    ``services.trait_service.refresh_shop``. Anchors matter here rather than
+    bare elapsed time: with "every 12 hours from 12 AM" configured, a shop that
+    last rolled at 11 PM is due at midnight, one hour later, not at 11 AM.
+    Without it the shared market and the per-user shops would drift apart on
+    the same setting.
+
+    Fails open (True) if the config cannot be read, matching how the rest of
+    this module treats an unreadable schedule: an extra reroll is harmless, a
+    permanently stale shop is not.
+    """
+    from models import GameConfig
+    own = session is None
+    if own:
+        from database import get_session
+        session = get_session()
+    try:
+        start, interval = _trait_schedule(session.query(GameConfig).first())
+        return _is_due(last_refresh_utc, start, interval)
+    except Exception:
+        logger.exception("is_trait_refresh_due failed; forcing a refresh")
+        return True
+    finally:
+        if own:
+            session.close()
 
 
 def list_player_market(session):

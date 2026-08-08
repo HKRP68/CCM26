@@ -22,6 +22,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Import shared DB and models ─────────────────────────────────────
+# The squad cap is read in enough places here (roster payloads, market buys,
+# user filters) that it earns a module-level import rather than a local one.
+from config import MAX_ROSTER
 from database import get_session, init_db
 from services.perf_log import perf_span as _perf_span, perf_timed as _perf_timed
 from services.telegram_user_service import user_lookup_filter
@@ -143,6 +146,22 @@ def _inject_subscription_helpers():
         "upgrade_targets": subscription_service.upgrade_targets,
         "upgrade_rewards": subscription_service.upgrade_rewards,
     }
+
+
+@app.context_processor
+def _inject_game_limits():
+    """Expose the squad/trait caps to templates.
+
+    The Mini App renders "12/19" style counters in a dozen places; reading the
+    caps from config here keeps the page and the API from ever disagreeing
+    after a rebalance.
+    """
+    from config import MAX_ROSTER as _cap, TRAIT_MAX_PER_SQUAD, TRAIT_MAX_PER_PLAYER
+    return {"game_limits": {
+        "max_roster": _cap,
+        "trait_max_per_squad": TRAIT_MAX_PER_SQUAD,
+        "trait_max_per_player": TRAIT_MAX_PER_PLAYER,
+    }}
 
 
 @app.context_processor
@@ -2452,7 +2471,7 @@ def users_list():
             label = f"{gems_min if gems_min is not None else '0'}-{gems_max if gems_max is not None else '∞'}"
             active_filters.append(("Gems", label, "gems"))
         if roster_min is not None or roster_max is not None:
-            label = f"{roster_min if roster_min is not None else '0'}-{roster_max if roster_max is not None else '25'}"
+            label = f"{roster_min if roster_min is not None else '0'}-{roster_max if roster_max is not None else MAX_ROSTER}"
             active_filters.append(("Roster", label, "roster"))
         if wins_min is not None or wins_max is not None:
             label = f"{wins_min if wins_min is not None else '0'}-{wins_max if wins_max is not None else '∞'}"
@@ -4254,6 +4273,28 @@ def _webapp_auth(allow_not_debuted=False):
 
 
 
+def _next_roster_position(max_pos_row):
+    """Where a newly acquired card should sit in the squad order.
+
+    ``max_pos_row`` is the ``(order_position,)`` result of the highest-position
+    query, or None when the user holds no cards. While the highest position is
+    still inside the squad the new card appends right after it; at or past the
+    cap it goes to the 99 "unordered" bucket, which the roster views sort last.
+    A row whose position is NULL also lands in 99 — there is no number to
+    append after.
+
+    A module-level helper rather than an inline branch so the boundary is
+    testable: the comparison is against MAX_ROSTER, and it used to be a literal
+    25 that silently stopped tracking the cap.
+    """
+    if not max_pos_row:
+        return 1
+    max_pos = max_pos_row[0]
+    if max_pos is not None and max_pos < MAX_ROSTER:
+        return max_pos + 1
+    return 99
+
+
 def _player_card_url(player_id):
     """Return the Mini App-safe URL for a rendered player card image."""
     try:
@@ -4741,7 +4782,7 @@ def webapp_buy(player_id):
         from datetime import datetime as _dt
         from models import UserRoster
         from services.version_service import user_owns_any_version
-        from config import get_buy_value, MAX_ROSTER
+        from config import get_buy_value
 
         p = db.query(Player).get(player_id)
         if not p or not p.is_active:
@@ -5071,7 +5112,7 @@ def webapp_roster():
             } for r, p in rows],
             "captain_roster_id": user.captain_roster_id,
             "count": len(rows),
-            "max": 25,
+            "max": MAX_ROSTER,
         }
     except Exception as e:
         logger.exception("webapp_roster failed")
@@ -5094,7 +5135,7 @@ def webapp_roster_overflow():
         pending = list_overflow(db, user)
         db.commit()  # persist any pruning of expired claims
         return {"ok": True, "pending": pending,
-                "roster_count": user.roster_count or 0, "max": 25}
+                "roster_count": user.roster_count or 0, "max": MAX_ROSTER}
     except Exception as e:
         db.rollback()
         logger.exception("webapp_roster_overflow failed")
@@ -6366,7 +6407,7 @@ def webapp_freepack_status():
             # banked the pack opens without showing another.
             "ads_saved": ad_service.count_credits(db, tg_id),
             "roster_count": user.roster_count or 0,
-            "roster_full": (user.roster_count or 0) >= 25,
+            "roster_full": (user.roster_count or 0) >= MAX_ROSTER,
         }
     except Exception as e:
         db.rollback()
@@ -6788,7 +6829,7 @@ def webapp_market():
         return {"ok": True, "slots": results, "total": len(results),
                 "balance": {"coins": user.total_coins or 0,
                             "roster_count": user.roster_count or 0,
-                            "roster_max": 25}}
+                            "roster_max": MAX_ROSTER}}
     except Exception as e:
         logger.exception("webapp_market failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
@@ -6837,9 +6878,9 @@ def webapp_market_buy(slot_id):
                     "message": "You already own this version."}, 400
 
         # Roster cap
-        if (user.roster_count or 0) >= 25:
+        if (user.roster_count or 0) >= MAX_ROSTER:
             return {"ok": False, "error": "roster_full",
-                    "message": "Your roster is full (25/25)."}, 400
+                    "message": f"Your roster is full ({MAX_ROSTER}/{MAX_ROSTER})."}, 400
 
         # Free, Bronze and Silver pay the slot's sell price (== base price);
         # Platinum gets 5% off it and Diamond 10%.
@@ -6857,13 +6898,7 @@ def webapp_market_buy(slot_id):
         max_pos = (db.query(UserRoster.order_position)
                    .filter(UserRoster.user_id == user.id)
                    .order_by(UserRoster.order_position.desc()).first())
-        # If max position < 25, use max+1. Otherwise default to 99.
-        if max_pos and max_pos[0] is not None and max_pos[0] < 25:
-            next_pos = max_pos[0] + 1
-        elif not max_pos:
-            next_pos = 1
-        else:
-            next_pos = 99
+        next_pos = _next_roster_position(max_pos)
         new_row = UserRoster(user_id=user.id, player_id=player.id,
                              order_position=next_pos,
                              acquired_date=datetime.utcnow())
@@ -7876,6 +7911,13 @@ def webapp_roster_player_detail():
 
         slots_full = len(equipped) >= TRAIT_MAX_PER_PLAYER
 
+        # The Career Player's trait slots sit outside the squad-wide budget, so
+        # the client labels them "exempt" rather than counting them against it.
+        from services.trait_service import squad_trait_budget
+        is_career_card = bool(getattr(player, "is_career", False))
+        squad_budget = squad_trait_budget(db, user.id)
+        squad_budget["exempt"] = is_career_card
+
         # ── Upgrade availability (higher versions of same base player) ──
         base_id = get_base_id(player.id, db)
         versions = get_all_versions(db, base_id)
@@ -7900,6 +7942,7 @@ def webapp_roster_player_detail():
                 "bowl_style": player.bowl_style,
                 "sell_value": sell_value,
                 "is_captain": False,
+                "is_career": is_career_card,
             },
             "stats": stats,
             "last10": last10,
@@ -7907,6 +7950,7 @@ def webapp_roster_player_detail():
             "inventory": inventory,
             "trait_slots": {"used": len(equipped), "max": TRAIT_MAX_PER_PLAYER,
                             "full": slots_full},
+            "squad_trait_slots": squad_budget,
             "replace_cost": TRAIT_REPLACE_COST,
             "upgrade_available": upgrade_available,
             "gems": user.total_gems or 0,
@@ -16508,13 +16552,21 @@ def admin_markets_overview():
         next_refresh = get_next_refresh_at(db)
         next_trait_refresh = get_next_trait_refresh_at(db)
 
+        # Computed server-side so the schedule preview needs no JS and always
+        # matches what ensure_trait_market_fresh will actually do.
+        from config import TRAIT_MARKET_REFRESH_INTERVALS
+        from services.global_market import get_trait_refresh_schedule
+        trait_schedule = get_trait_refresh_schedule(db)
+
         return render_template("admin_markets.html",
                                p_data=p_data, t_data=t_data, recent=recent,
                                cfg=cfg, dropdown_options=dropdown_options,
                                all_traits=all_traits,
                                trait_rarity=trait_rarity,
                                next_refresh=next_refresh,
-                               next_trait_refresh=next_trait_refresh)
+                               next_trait_refresh=next_trait_refresh,
+                               trait_schedule=trait_schedule,
+                               refresh_intervals=TRAIT_MARKET_REFRESH_INTERVALS)
     finally:
         db.close()
 
@@ -16524,25 +16576,43 @@ def admin_markets_overview():
 def admin_market_settings_save():
     db = get_session()
     try:
+        from config import clamp_refresh_interval, refresh_anchor_hours, format_hour_ist
         from services.config_service import save_config
         updates = {
             "market_min_rating": int(request.form.get("market_min_rating", 87)),
             "market_default_slots": int(request.form.get("market_default_slots", 6)),
             "market_refresh_hour_ist": int(request.form.get("market_refresh_hour_ist", 0)),
             "trait_market_default_slots": int(request.form.get("trait_market_default_slots", 5)),
+            "trait_market_refresh_interval_hours": request.form.get(
+                "trait_market_refresh_interval_hours", 24),
+            "trait_market_refresh_start_hour_ist": int(request.form.get(
+                "trait_market_refresh_start_hour_ist", 0)),
         }
         # Clamp
         updates["market_min_rating"] = max(50, min(100, updates["market_min_rating"]))
         updates["market_default_slots"] = max(1, min(20, updates["market_default_slots"]))
         updates["market_refresh_hour_ist"] = max(0, min(23, updates["market_refresh_hour_ist"]))
         updates["trait_market_default_slots"] = max(1, min(15, updates["trait_market_default_slots"]))
+        # Only divisors of 24 tile a day evenly — anything else would drift the
+        # refresh times round the clock instead of holding "12 AM and 12 PM".
+        updates["trait_market_refresh_interval_hours"] = clamp_refresh_interval(
+            updates["trait_market_refresh_interval_hours"])
+        updates["trait_market_refresh_start_hour_ist"] = max(
+            0, min(23, updates["trait_market_refresh_start_hour_ist"]))
         save_config(db, updates,
                     updated_by=session.get("admin_user", "admin"))
-        db.commit()
+        # One commit, after the audit row is staged: if log_admin throws, the
+        # settings roll back with it rather than going live behind an error.
+        trait_times = ", ".join(
+            format_hour_ist(h) for h in refresh_anchor_hours(
+                updates["trait_market_refresh_start_hour_ist"],
+                updates["trait_market_refresh_interval_hours"]))
         log_admin(db, "market_settings", "config", 0, "market",
                   f"min_rating={updates['market_min_rating']}, slots={updates['market_default_slots']}, "
                   f"refresh@{updates['market_refresh_hour_ist']}:00 IST, "
-                  f"trait_slots={updates['trait_market_default_slots']}")
+                  f"trait_slots={updates['trait_market_default_slots']}, "
+                  f"trait_refresh every {updates['trait_market_refresh_interval_hours']}h "
+                  f"at {trait_times} IST")
         db.commit()
         flash("✅ Market settings saved. Applied on next refresh.", "info")
     except Exception as e:

@@ -18,6 +18,7 @@ import logging
 import random
 from datetime import datetime, timedelta
 
+from config import MAX_ROSTER
 from models import User, UserStats, UserRoster, Player
 from services.pack_service import _pick_base_at_rating
 
@@ -25,7 +26,6 @@ from services.player_service import not_career
 
 logger = logging.getLogger(__name__)
 
-MAX_ROSTER = 25
 DEFAULT_COOLDOWN_MINUTES = 60
 
 # Default probability bands. weight is relative; we normalize at draw time.

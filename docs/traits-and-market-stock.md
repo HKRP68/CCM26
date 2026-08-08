@@ -30,6 +30,12 @@ The one-per-player Elite rule (`TRAIT_MAX_ELITE_PER_PLAYER`) exists because
 without it a captain stacks Master Blaster + Run Machine + GOAT Instinct on one
 card and the other 33 traits stop being decisions.
 
+> **Since this note was written**, a squad-wide budget of 18 equipped traits
+> (`TRAIT_MAX_PER_SQUAD`) was added on top of the per-card rules, with the
+> Career Player exempt and carrying its own 3 slots; and the trait market moved
+> off the player market's daily hour onto its own interval + start hour, set
+> from the website. See [`squad-and-trait-limits.md`](./squad-and-trait-limits.md).
+
 ---
 
 ## 2. Unlimited stock

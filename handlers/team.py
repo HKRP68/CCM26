@@ -13,7 +13,7 @@ from models import (
     User, Player, UserRoster, PlayerGameStats,
     ChallengeLeague, ChallengeTeam, ChallengePlayer,
 )
-from config import get_buy_value, get_sell_value
+from config import get_buy_value, get_sell_value, MAX_ROSTER
 from services.activity_service import log_activity
 from services.flags import get_flag
 
@@ -92,7 +92,7 @@ async def purse_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🏏 Team: {team}\n\n"
             f"💰 <b>Coins:</b> {user.total_coins:,}\n"
             f"💎 <b>Gems:</b> {user.total_gems}\n"
-            f"📊 Roster: {user.roster_count}/25",
+            f"📊 Roster: {user.roster_count}/{MAX_ROSTER}",
             parse_mode="HTML",
         )
     except Exception:

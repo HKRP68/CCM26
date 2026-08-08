@@ -98,7 +98,8 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if user.roster_count >= MAX_ROSTER:
-            await update.message.reply_text("❌ Roster full (25/25)! Release players first.")
+            await update.message.reply_text(
+                f"❌ Roster full ({MAX_ROSTER}/{MAX_ROSTER})! Release players first.")
             return
 
         # Find any matching player
@@ -542,7 +543,7 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             f"📛 {player.name} - {player.rating} OVR\n"
             f"💰 Paid: {buy_val:,} 🪙\n"
             f"💳 Balance: {user.total_coins:,} 🪙\n"
-            f"📊 Roster: {user.roster_count}/25\n\n"
+            f"📊 Roster: {user.roster_count}/{MAX_ROSTER}\n\n"
             f"<i>↩️ Made a mistake? /cmuundo within 60 seconds to reverse.</i>",
             parse_mode="HTML",
         )
