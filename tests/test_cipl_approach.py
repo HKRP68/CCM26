@@ -50,12 +50,14 @@ class ApproachModifierTests(unittest.TestCase):
         self.assertLess(hi["Six"], lo["Six"])  # high-rated bowler concedes fewer sixes
 
     def test_combined_multipliers(self):
-        """All three layers multiply: batting intent × bowling plan × counter."""
+        """The pick-only layers multiply: batting intent × bowling plan ×
+        counter × the special combination the pair makes."""
         out = am.apply_approach_modifiers(BASE_WEIGHTS, "ultra", "aggressive")
         expected = (BASE_WEIGHTS["Six"]
                     * am._BATTING_MULT["ultra"]["Six"]
                     * am._BOWLING_MULT["aggressive"]["Six"]
-                    * am._COUNTER_MULT[("ultra", "aggressive")]["Six"])
+                    * am._COUNTER_MULT[("ultra", "aggressive")]["Six"]
+                    * am.SPECIAL_COMBOS[("ultra", "aggressive")]["mult"]["Six"])
         self.assertAlmostEqual(out["Six"], expected, places=5)
 
     def test_the_counter_matrix_makes_the_over_non_separable(self):
@@ -198,6 +200,402 @@ class ApproachBalanceTests(unittest.TestCase):
                                    f"in every situation tested")
         self.assertFalse(dead_bowl, f"bowling {dead_bowl} is strictly dominated "
                                     f"in every situation tested")
+
+
+class SituationalLayerTests(unittest.TestCase):
+    """The Approach Interaction System's context layers: pitch, phase, the mind
+    game, momentum, bowler fatigue, partnership chemistry and carry-overs.
+
+    Each one is checked by the direction it moves the over in, not by a magic
+    number, so a retune of the tables stays free while the *cricket* they encode
+    stays pinned.
+    """
+
+    def _runs(self, weights):
+        """Expected runs per ball, the only summary of a weight dict that
+        matters here — a layer that shuffles weight between dots and sixes
+        without moving this has done nothing."""
+        value = {"Dot": 0, "Single": 1, "Double": 2, "Three": 3, "Four": 4,
+                 "Six": 6, "Wicket": 0, "Extras": 1}
+        total = sum(weights.values())
+        return sum(weights[k] * value[k] for k in weights) / total
+
+    def _apply(self, bat, bowl, **ctx):
+        return am.apply_approach_modifiers(
+            BASE_WEIGHTS, bat, bowl, bowler_rating=70,
+            context=am.make_context(**ctx) if ctx else None)
+
+    def _wicket_share(self, weights):
+        return weights["Wicket"] / sum(weights.values())
+
+    # ── the layers are opt-in ────────────────────────────────────────
+    def test_no_context_means_no_situational_layers(self):
+        """Every caller that predates the system must be untouched by it."""
+        for bat in am.BATTING_KEYS:
+            for bowl in am.BOWLING_KEYS:
+                bare = am.apply_approach_modifiers(BASE_WEIGHTS, bat, bowl,
+                                                   bowler_rating=70)
+                mult = am.approach_multipliers(bat, bowl, bowler_rating=70)
+                self.assertEqual(
+                    bare, {k: v * mult.get(k, 1.0) for k, v in BASE_WEIGHTS.items()},
+                    f"{bat}/{bowl} picked up a situational layer with no context")
+
+    def test_empty_context_is_harmless(self):
+        """A context that knows nothing must not change the over."""
+        out = self._apply("aggressive", "mixed", mind_games=False)
+        bare = am.apply_approach_modifiers(BASE_WEIGHTS, "aggressive", "mixed",
+                                           bowler_rating=70)
+        for key in BASE_WEIGHTS:
+            self.assertAlmostEqual(out[key], bare[key], places=6)
+
+    # ── pitch ────────────────────────────────────────────────────────
+    def test_pitch_rewards_hitting_on_hard_and_punishes_it_on_dry(self):
+        hard = self._apply("aggressive", "balanced", pitch="Hard", mind_games=False)
+        dry = self._apply("aggressive", "balanced", pitch="Dry", mind_games=False)
+        self.assertGreater(self._runs(hard), self._runs(dry))
+
+    def test_pitch_rewards_nudging_on_dry_and_punishes_it_on_dusty(self):
+        dry = self._apply("rotate", "balanced", pitch="Dry", mind_games=False)
+        dusty = self._apply("rotate", "balanced", pitch="Dusty", mind_games=False)
+        self.assertGreater(self._runs(dry), self._runs(dusty))
+
+    def test_flat_pitch_blunts_the_attacking_bowling_plans(self):
+        flat = self._apply("balanced", "aggressive", pitch="Flat", mind_games=False)
+        even = self._apply("balanced", "aggressive", pitch="Even", mind_games=False)
+        self.assertLess(self._wicket_share(flat), self._wicket_share(even))
+
+    def test_green_seam_only_bites_in_the_powerplay(self):
+        early = self._apply("balanced", "balanced", pitch="Green",
+                            phase="powerplay", mind_games=False)
+        late = self._apply("balanced", "balanced", pitch="Green",
+                           phase="death", mind_games=False)
+        self.assertLess(self._runs(early), self._runs(late))
+
+    # ── phase ────────────────────────────────────────────────────────
+    def test_ultra_is_worth_more_at_the_death_and_defensive_is_worth_less(self):
+        for approach, expect_more in (("ultra", True), ("defensive", False)):
+            death = self._apply(approach, "balanced", phase="death", mind_games=False)
+            middle = self._apply(approach, "balanced", phase="middle", mind_games=False)
+            if expect_more:
+                self.assertGreater(self._runs(death), self._runs(middle))
+            else:
+                self.assertLess(self._runs(death), self._runs(middle))
+
+    def test_powerplay_field_restrictions_cost_the_bowler_wickets(self):
+        pp = self._apply("balanced", "balanced", phase="powerplay", mind_games=False)
+        mid = self._apply("balanced", "balanced", phase="middle", mind_games=False)
+        self.assertLess(self._wicket_share(pp), self._wicket_share(mid))
+
+    def test_hitting_spin_off_the_square_is_harder_in_the_middle(self):
+        spin = self._apply("aggressive", "balanced", phase="middle",
+                           bowling_type="Off spin", mind_games=False)
+        pace = self._apply("aggressive", "balanced", phase="middle",
+                           bowling_type="Fast", mind_games=False)
+        self.assertLess(self._runs(spin), self._runs(pace))
+
+    # ── the mind game ────────────────────────────────────────────────
+    def test_reading_the_plan_pays_and_can_be_switched_off(self):
+        self.assertIn("defensive", am._READS["rotate"])
+        read = self._apply("rotate", "defensive", pitch="Even")
+        blind = self._apply("rotate", "defensive", pitch="Even", mind_games=False)
+        self.assertGreater(self._runs(read), self._runs(blind))
+        self.assertLessEqual(self._wicket_share(read), self._wicket_share(blind))
+
+    def test_walking_into_the_wrong_plan_costs_a_wicket_chance(self):
+        """The other side of the same coin — and the doc's own example of it."""
+        self.assertNotIn("variation", am._READS["aggressive"])
+        missed = self._apply("aggressive", "variation", pitch="Even")
+        blind = self._apply("aggressive", "variation", pitch="Even",
+                            mind_games=False)
+        self.assertGreater(self._wicket_share(missed), self._wicket_share(blind))
+        self.assertLess(self._runs(missed), self._runs(blind))
+
+    def test_the_mind_game_prices_both_directions(self):
+        """A read bonus with no matching penalty would be a standing gift to the
+        batting side. Every cell must pay one way or the other."""
+        for bat in am.BATTING_KEYS:
+            self.assertTrue(am._READS[bat], f"{bat} reads nothing")
+            self.assertNotEqual(am._READS[bat], am.BOWLING_KEYS,
+                                f"{bat} reads everything — the layer is a constant")
+            for bowl in am.BOWLING_KEYS:
+                live = self._apply(bat, bowl, pitch="Even")
+                blind = self._apply(bat, bowl, pitch="Even", mind_games=False)
+                if bowl in am._READS[bat]:
+                    self.assertGreater(self._runs(live), self._runs(blind))
+                else:
+                    self.assertGreater(self._wicket_share(live),
+                                       self._wicket_share(blind))
+
+    # ── momentum, fatigue, chemistry ─────────────────────────────────
+    def test_a_batting_side_in_the_ascendancy_carries_it_into_the_next_over(self):
+        hot = self._apply("balanced", "balanced", batting_momentum=True)
+        cold = self._apply("balanced", "balanced")
+        self.assertGreater(self._runs(hot), self._runs(cold))
+
+    def test_a_bowler_on_a_roll_is_more_likely_to_strike_again(self):
+        hot = self._apply("balanced", "balanced", bowling_momentum=True)
+        cold = self._apply("balanced", "balanced")
+        self.assertGreater(self._wicket_share(hot), self._wicket_share(cold))
+
+    def test_fatigue_only_bites_late_in_a_spell_and_gets_worse(self):
+        first = self._apply("balanced", "balanced", bowler_over_index=1)
+        second = self._apply("balanced", "balanced", bowler_over_index=2)
+        third = self._apply("balanced", "balanced", bowler_over_index=3)
+        fourth = self._apply("balanced", "balanced", bowler_over_index=4)
+        self.assertEqual(self._runs(first), self._runs(second))   # nothing yet
+        self.assertLess(self._wicket_share(third), self._wicket_share(second))
+        self.assertLess(self._wicket_share(fourth), self._wicket_share(third))
+        self.assertGreater(self._runs(fourth), self._runs(third))
+
+    def test_a_settled_pair_scores_more_freely(self):
+        settled = self._apply("balanced", "balanced", partnership_overs=5)
+        fresh = self._apply("balanced", "balanced", partnership_overs=1)
+        self.assertGreater(self._runs(settled), self._runs(fresh))
+        # The threshold is a threshold, not a ramp.
+        self.assertEqual(self._runs(fresh),
+                         self._runs(self._apply("balanced", "balanced",
+                                                partnership_overs=3.9)))
+
+    # ── special combinations ─────────────────────────────────────────
+    def test_every_named_combination_resolves_and_has_flavour(self):
+        for (bat, bowl), combo in am.SPECIAL_COMBOS.items():
+            self.assertEqual(am.special_combo(bat, bowl)["name"], combo["name"])
+            name, text = am.over_flavour(bat, bowl)
+            self.assertEqual(name, combo["name"])
+            self.assertTrue(text)
+
+    def test_an_unnamed_matchup_falls_back_to_the_matrix_flavour(self):
+        self.assertIsNone(am.special_combo("ultra", "mixed"))
+        name, text = am.over_flavour("ultra", "mixed")
+        self.assertIsNone(name)
+        self.assertEqual(text, am.MATRIX_FLAVOUR[("ultra", "mixed")])
+
+    def test_the_shootout_makes_the_over_volatile(self):
+        """Ultra into Aggressive must buy its runs with wickets, not for free —
+        both ends of the over move, and the safe outcomes drain."""
+        mult = am.approach_multipliers("ultra", "aggressive", bowler_rating=70)
+        without_combo = {
+            key: (am._BATTING_MULT["ultra"].get(key, 1.0)
+                  * am._BOWLING_MULT["aggressive"].get(key, 1.0)
+                  * am._COUNTER_MULT[("ultra", "aggressive")].get(key, 1.0))
+            for key in BASE_WEIGHTS}
+        self.assertGreater(mult["Six"], without_combo["Six"])
+        self.assertGreater(mult["Wicket"], without_combo["Wicket"])
+        self.assertLess(mult["Dot"], without_combo["Dot"])
+        self.assertLess(mult["Single"], without_combo["Single"])
+
+    def test_carry_overs_fire_only_on_their_own_condition(self):
+        # Blockathon: only a strangled over releases the frustration.
+        self.assertIsNone(am.combo_carry("defensive", "defensive", 7, 0))
+        blocked = am.combo_carry("defensive", "defensive", 2, 0)
+        self.assertEqual(blocked["name"], "The Blockathon")
+        # Survival: only if the batter is still there.
+        self.assertIsNone(am.combo_carry("defensive", "aggressive", 4, 1))
+        survived = am.combo_carry("defensive", "aggressive", 4, 0)
+        self.assertLess(survived["mult"]["Wicket"], 1.0)
+        # Purist: exactly par, or nothing.
+        self.assertIsNone(am.combo_carry("balanced", "balanced", 7, 0))
+        self.assertIsNotNone(am.combo_carry("balanced", "balanced", 8, 0))
+        # A match-up with no carry rule never produces one.
+        self.assertIsNone(am.combo_carry("ultra", "mixed", 20, 0))
+
+    def test_a_carry_actually_changes_the_next_over(self):
+        carry = am.combo_carry("defensive", "defensive", 2, 0)
+        with_carry = self._apply("balanced", "balanced", carry=carry)
+        without = self._apply("balanced", "balanced")
+        self.assertGreater(self._runs(with_carry), self._runs(without))
+
+    def test_layers_stack_multiplicatively(self):
+        """Two layers together are the product of the two — no layer is lost,
+        and none is applied twice."""
+        ctx = dict(pitch="Hard", phase="death", batting_momentum=True,
+                   mind_games=False)
+        both = am.approach_multipliers("ultra", "balanced", bowler_rating=70,
+                                       context=am.make_context(**ctx))
+        base = am.approach_multipliers("ultra", "balanced", bowler_rating=70)
+        pitch_only = am.approach_multipliers(
+            "ultra", "balanced", bowler_rating=70,
+            context=am.make_context(pitch="Hard", mind_games=False))
+        phase_only = am.approach_multipliers(
+            "ultra", "balanced", bowler_rating=70,
+            context=am.make_context(phase="death", mind_games=False))
+        momentum_only = am.approach_multipliers(
+            "ultra", "balanced", bowler_rating=70,
+            context=am.make_context(batting_momentum=True, mind_games=False))
+        for key in ("Six", "Four", "Dot"):
+            expected = (base[key]
+                        * (pitch_only[key] / base[key])
+                        * (phase_only[key] / base[key])
+                        * (momentum_only[key] / base[key]))
+            self.assertAlmostEqual(both[key], expected, places=6)
+
+    def test_no_layer_can_drive_a_weight_negative(self):
+        ctx = am.make_context(pitch="Dry", phase="death", bowler_over_index=4,
+                              carry={"mult": {"Six": 0.0}})
+        for bat in am.BATTING_KEYS:
+            for bowl in am.BOWLING_KEYS:
+                out = am.apply_approach_modifiers(BASE_WEIGHTS, bat, bowl,
+                                                  bowler_rating=70, context=ctx)
+                for key, val in out.items():
+                    self.assertGreaterEqual(val, 0.0, f"{bat}/{bowl} {key}")
+
+
+class SituationalBalanceTests(ApproachBalanceTests):
+    """The same no-dominant-approach bar as :class:`ApproachBalanceTests`, but
+    measured through the situational layers.
+
+    The base 5×5 game was balanced by measurement; a pitch/phase/mind-game layer
+    on top of it could quietly hand one intent every column back. Re-running the
+    dominance checks with the live context is what stops that shipping. The
+    situations come from the parent class, so both grids are scored over the
+    same phases, pitches and rating match-ups.
+    """
+
+    def _grid(self, state):
+        from services import bot_tactics as bt
+        base = bt.ball_probabilities(state)
+        ctx = bt._approach_context(state)
+        self.assertIsNotNone(ctx, "the situational context failed to build")
+        grid = {}
+        for ba in self.BAT:
+            for bo in self.BOWL:
+                p = bt.approach_probabilities(base, ba, bo, 75, context=ctx)
+                rpo = sum(p[k] * bt.RUN_VALUE[k] for k in p) * 6.0
+                wpo = p["Wicket"] * 6.0
+                overs = min(20.0, 10.0 / wpo) if wpo > 0 else 20.0
+                grid[(ba, bo)] = rpo * overs
+        return grid
+
+
+class ApproachContextTests(unittest.TestCase):
+    """``cipl_match`` is what turns a live match state into the context above —
+    and it is the *same* builder the AI captain plans with."""
+
+    def test_phase_boundaries(self):
+        s = _make_state(overs=20)
+        for over, expected in ((1, "powerplay"), (6, "powerplay"), (7, "middle"),
+                               (16, "middle"), (17, "death"), (20, "death")):
+            s["current_over"] = over
+            self.assertEqual(cm.approach_phase(s), expected, f"over {over}")
+
+    def test_hundred_powerplay_is_five_sets_not_six(self):
+        h = _make_state(overs=20, ball_format="The100")
+        h["current_over"] = 5
+        self.assertEqual(cm.approach_phase(h), "powerplay")
+        h["current_over"] = 6
+        self.assertEqual(cm.approach_phase(h), "middle")
+
+    def test_short_formats_still_have_all_three_phases(self):
+        s = _make_state(overs=5)
+        seen = {cm.approach_phase(dict(s, current_over=o)) for o in range(1, 6)}
+        self.assertEqual(seen, {"powerplay", "middle", "death"})
+
+    def test_the_bot_plans_in_the_same_phase_the_engine_bowls(self):
+        from services import bot_tactics as bt
+        s = _make_state(overs=20)
+        for over in range(1, 21):
+            s["current_over"] = over
+            self.assertEqual(bt.phase(s), cm.approach_phase(s))
+
+    def test_context_reads_the_live_situation(self):
+        s = _make_state(overs=20)
+        s["current_over"] = 18
+        s["current_bowler"] = cm.eligible_bowlers(s)[0]
+        rid = str(s["current_bowler"]["roster_id"])
+        s["bowl_stats"][rid].update({"balls": 12, "wickets": 1,
+                                     "last_over_wickets": 1})
+        s["partnership_balls"] = 30
+        s["over_runs"] = [6, 14]
+        ctx = cm.approach_context(s)
+        self.assertEqual(ctx["pitch"], "Hard")
+        self.assertEqual(ctx["phase"], "death")
+        self.assertEqual(ctx["bowler_over_index"], 3)      # 2 bowled, this is the 3rd
+        self.assertEqual(ctx["partnership_overs"], 5.0)
+        self.assertTrue(ctx["batting_momentum"])           # 14 off the last over
+        self.assertTrue(ctx["bowling_momentum"])           # struck in their last
+        self.assertIn(ctx["bowling_type"], ("Fast", "Fast-medium", "Medium-fast",
+                                            "Off spin", "Leg spin"))
+
+    def test_context_is_quiet_at_the_start_of_an_innings(self):
+        s = _make_state(overs=20)
+        s["current_bowler"] = cm.eligible_bowlers(s)[0]
+        ctx = cm.approach_context(s)
+        self.assertEqual(ctx["bowler_over_index"], 1)
+        self.assertEqual(ctx["partnership_overs"], 0.0)
+        self.assertFalse(ctx["batting_momentum"])
+        self.assertFalse(ctx["bowling_momentum"])
+        self.assertIsNone(ctx["carry"])
+
+    def test_context_survives_a_missing_bowler(self):
+        """/rcl can rebuild a state before a bowler has been picked."""
+        ctx = cm.approach_context(_make_state(overs=20))
+        self.assertEqual(ctx["bowler_over_index"], 1)
+        self.assertIsNone(ctx["bowling_type"])
+
+    def test_simulate_over_reports_and_carries_the_combination(self):
+        random.seed(11)
+        s = _make_state(overs=20)
+        s["current_bowler"] = cm.eligible_bowlers(s)[0]
+        s["bowling_approach"] = "aggressive"
+        s["batting_approach"] = "ultra"
+        summary = cm.simulate_over(s)
+        self.assertEqual(summary["combo"], "The Shootout")
+        self.assertEqual(summary["flavour"],
+                         am.SPECIAL_COMBOS[("ultra", "aggressive")]["flavour"])
+        # The Shootout has no carry rule, so nothing is handed on.
+        self.assertIsNone(summary["carry"])
+        self.assertIsNone(s["approach_carry"])
+        # A pair with no name still describes itself, from the 5x5 matrix.
+        s["current_bowler"] = cm.eligible_bowlers(s)[0]
+        s["bowling_approach"] = "mixed"
+        s["batting_approach"] = "ultra"
+        summary = cm.simulate_over(s)
+        self.assertIsNone(summary["combo"])
+        self.assertEqual(summary["flavour"], am.MATRIX_FLAVOUR[("ultra", "mixed")])
+
+    def test_a_survived_over_carries_into_the_next_one(self):
+        s = _make_state(overs=20)
+        s["current_bowler"] = cm.eligible_bowlers(s)[0]
+        s["bowling_approach"] = "aggressive"
+        s["batting_approach"] = "defensive"
+        # Seed a run of overs until one is survived intact, then check the carry.
+        for seed in range(30):
+            random.seed(seed)
+            trial = _make_state(overs=20)
+            trial["current_bowler"] = cm.eligible_bowlers(trial)[0]
+            trial["bowling_approach"] = "aggressive"
+            trial["batting_approach"] = "defensive"
+            summary = cm.simulate_over(trial)
+            if summary["over_wickets"] == 0:
+                self.assertEqual(summary["carry"]["name"], "The Survival")
+                self.assertEqual(trial["approach_carry"], summary["carry"])
+                # And the next over sees it.
+                trial["current_bowler"] = cm.eligible_bowlers(trial)[0]
+                self.assertEqual(cm.approach_context(trial)["carry"],
+                                 summary["carry"])
+                return
+        self.skipTest("no wicketless Defensive-vs-Aggressive over in 30 seeds")
+
+    def test_the_carry_does_not_survive_the_interval(self):
+        s = _make_state(overs=5)
+        s["approach_carry"] = {"mult": {"Wicket": 0.9}, "name": "The Survival"}
+        cm.end_first_innings(s)
+        self.assertIsNone(s["approach_carry"])
+        self.assertIsNone(cm.approach_context(s)["carry"])
+
+    def test_bowler_momentum_is_the_bowlers_own_wickets(self):
+        """A wicket at the other end is not this bowler's rhythm."""
+        random.seed(3)
+        s = _make_state(overs=20)
+        s["current_bowler"] = cm.eligible_bowlers(s)[0]
+        rid = str(s["current_bowler"]["roster_id"])
+        s["bowl_stats"][rid]["wickets"] = 2      # from earlier overs
+        s["bowling_approach"] = "defensive"
+        s["batting_approach"] = "defensive"
+        before = s["bowl_stats"][rid]["wickets"]
+        cm.simulate_over(s)
+        self.assertEqual(s["bowl_stats"][rid]["last_over_wickets"],
+                         s["bowl_stats"][rid]["wickets"] - before)
 
 
 def _mk(rid, name, cat, bat, bowl, style="Fast"):

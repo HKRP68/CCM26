@@ -62,8 +62,11 @@ RUN_VALUE = {"Dot": 0, "Single": 1, "Double": 2, "Three": 3,
              "Four": 4, "Six": 6, "Wicket": 0, "Extras": 1}
 
 # Phase windows, scaled for short formats so a 5-over game still has all three.
-POWERPLAY_UNITS = 6
-DEATH_UNITS = 4
+# The windows themselves live in ``cipl_match`` — the bot has to reason about
+# the same powerplay the engine bowls — and are re-exported here because
+# ``bot_captain`` and the tests read them off this module.
+POWERPLAY_UNITS = cipl_match.FORMAT_SPECS["T20"]["powerplay_units"]
+DEATH_UNITS = cipl_match.DEATH_UNITS
 
 # Par scoring rate for a T20 innings, in runs per ball — the yardstick the
 # value model measures a projected over against.
@@ -146,16 +149,13 @@ def current_unit(state):
 
 
 def phase(state):
-    """``"powerplay"`` / ``"middle"`` / ``"death"`` for the upcoming over."""
-    total = total_units(state)
-    over = current_unit(state)
-    pp = POWERPLAY_UNITS if total >= 20 else max(1, round(total * 0.3))
-    death = DEATH_UNITS if total >= 20 else max(1, round(total * 0.2))
-    if over <= pp:
-        return "powerplay"
-    if over > total - death:
-        return "death"
-    return "middle"
+    """``"powerplay"`` / ``"middle"`` / ``"death"`` for the upcoming over.
+
+    Delegates to ``cipl_match.approach_phase`` so the phase the bot plans for is
+    always the phase the over is actually bowled in — including The Hundred,
+    whose powerplay is five sets rather than six.
+    """
+    return cipl_match.approach_phase(state)
 
 
 def units_left(state):
@@ -319,15 +319,19 @@ def _normalized(probs):
     return {k: v / total for k, v in probs.items()}
 
 
-def approach_probabilities(base_probs, bat_approach, bowl_approach, bowler_rating):
+def approach_probabilities(base_probs, bat_approach, bowl_approach, bowler_rating,
+                           context=None):
     """``base_probs`` with both captains' approaches applied, renormalised.
 
     The multipliers come straight from ``engine.approach_modifiers``, so this is
-    the same arithmetic the over itself will run.
+    the same arithmetic the over itself will run — including the situational
+    layers when ``context`` is the one ``cipl_match.approach_context`` will hand
+    the engine. Called without a context this is the bare 5×5 game, which is
+    what the balance tests measure.
     """
     return _normalized(apply_approach_modifiers(
         base_probs, batting_approach=bat_approach, bowling_approach=bowl_approach,
-        bowler_rating=bowler_rating))
+        bowler_rating=bowler_rating, context=context))
 
 
 def over_distribution(probs, balls, wkts_available, run_cap=40, floor=1e-7):
@@ -480,6 +484,33 @@ _SOLVE_CACHE = {}
 _SOLVE_CACHE_MAX = 128
 
 
+def _approach_context(state, bowler=None):
+    """The engine's own situational context for the over, or None on failure.
+
+    Sharing ``cipl_match.approach_context`` is the whole point: the bot scores
+    the over under the pitch/phase/fatigue/momentum conditions the engine will
+    actually bowl it in. A failure here costs the bot those layers, never an
+    over — it falls back to the bare approach match-up.
+    """
+    try:
+        return cipl_match.approach_context(state, bowler)
+    except Exception:
+        logger.exception("bot tactics: could not build the approach context")
+        return None
+
+
+def _context_fingerprint(ctx):
+    """The parts of a context that change the payoffs, as a hashable tuple."""
+    if not ctx:
+        return None
+    carry = ctx.get("carry") or {}
+    return (ctx.get("pitch"), ctx.get("phase"), ctx.get("bowling_type"),
+            ctx.get("bowler_over_index"),
+            round(float(ctx.get("partnership_overs") or 0.0), 2),
+            ctx.get("batting_momentum"), ctx.get("bowling_momentum"),
+            ctx.get("mind_games"), carry.get("name"))
+
+
 def _fingerprint(state, bowler):
     """Everything the payoff matrix depends on, and nothing that it doesn't."""
     bat = striker(state)
@@ -496,6 +527,7 @@ def _fingerprint(state, bowler):
         (bowl or {}).get("roster_id"), round(rating(bowl, "bowl_rating", default=60.0), 1),
         balls_faced, round(sr, 1),
         None if not ch else (ch["runs_required"], ch["balls_remaining"]),
+        _context_fingerprint(_approach_context(state, bowler)),
     )
 
 
@@ -519,6 +551,7 @@ def payoff_matrix(state, bowler=None):
     bowl = bowler if bowler is not None else ((state or {}).get("current_bowler") or {})
     bowl_rating = rating(bowl, "bowl_rating", default=60.0) if bowl else 60.0
     edge = match_up_edge(state, bowler)
+    ctx = _approach_context(state, bowler)
 
     ch = _chase(state)
     hand = wickets_in_hand(state)
@@ -528,7 +561,8 @@ def payoff_matrix(state, bowler=None):
     for bat_key in BAT_KEYS:
         row = []
         for bowl_key in BOWL_KEYS:
-            probs = approach_probabilities(base, bat_key, bowl_key, bowl_rating)
+            probs = approach_probabilities(base, bat_key, bowl_key, bowl_rating,
+                                           context=ctx)
             dist = over_distribution(probs, balls, hand)
             row.append(over_value(state, dist, chase=ch, edge=edge))
         matrix.append(row)
