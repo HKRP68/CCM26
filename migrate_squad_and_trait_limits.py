@@ -75,6 +75,7 @@ def migrate_user(session, user, dry_run=False):
 
 
 def main():
+    """Walk every user, bring the over-cap ones back in line, report totals."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true",
                         help="report what would change without writing")
