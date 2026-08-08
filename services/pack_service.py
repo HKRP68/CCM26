@@ -496,7 +496,7 @@ def open_unopened_pack(session, user, inventory_id):
         return {"success": False,
                 "message": "❌ Couldn't roll any players. Contact admin — your pack is still in inventory."}
 
-    MAX_ROSTER = 25
+    from config import MAX_ROSTER
     added = []; to_claim = []
     for player, slot_type in rolled:
         if user.roster_count < MAX_ROSTER:

@@ -31,6 +31,7 @@ from services.trait_service import (
     apply_trait_to_player, replace_trait_on_player, remove_trait_from_player,
     upgrade_player_trait, upgrade_inventory_trait,
     get_player_traits, trait_rarity_of, sorted_categories,
+    squad_trait_budget,
     _today_key, _get_or_create_daily,
 )
 from services.flags import get_flag
@@ -39,7 +40,7 @@ from services.trait_trading_service import list_inventory, sell_inventory_trait
 from config import (
     TRAIT_SHOP_DAILY_PURCHASE_LIMIT, TRAIT_REROLL_COST,
     TRAIT_UPGRADE_COSTS, TRAIT_REPLACE_COST,
-    TRAIT_MAX_PER_PLAYER, TRAIT_MAX_ELITE_PER_PLAYER,
+    TRAIT_MAX_PER_PLAYER, TRAIT_MAX_ELITE_PER_PLAYER, TRAIT_MAX_PER_SQUAD,
     TRAIT_BUY_VALUE, trait_buy_value, trait_sell_value,
     trait_rarity_meta, trait_rarity_label, TRAIT_RARITY_ORDER,
 )
@@ -95,9 +96,14 @@ async def traits_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     .filter(PlayerTrait.user_id == user.id)
                     .order_by(UserRoster.order_position).all())
 
+        budget = squad_trait_budget(session, user.id)
         lines = [
             "✨ <b>YOUR TRAITS</b>",
             f"💎 Gems: <b>{user.total_gems:,}</b>",
+            # The Career Player's own slots are outside this budget, so the
+            # count can sit at max while a 🎖 card still has room.
+            f"🎯 Squad traits: <b>{budget['used']}/{budget['max']}</b>"
+            f" (🎖 Career Player: +{TRAIT_MAX_PER_PLAYER} on top)",
             "━━━━━━━━━━━━━━━━━━━",
         ]
 
@@ -124,10 +130,14 @@ async def traits_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Group by roster_id
             by_roster = {}
             for pt, t, ur, p in equipped:
-                by_roster.setdefault((ur.id, p.name, p.country, ur.order_position), []).append((pt, t))
-            for (rid, pname, pcountry, pos), traits in sorted(by_roster.items(), key=lambda x: x[0][3] or 999):
+                key = (ur.id, p.name, p.country, ur.order_position,
+                       bool(getattr(p, "is_career", False)))
+                by_roster.setdefault(key, []).append((pt, t))
+            for (rid, pname, pcountry, pos, pcareer), traits in sorted(
+                    by_roster.items(), key=lambda x: x[0][3] or 999):
                 flag = get_flag(pcountry) if pcountry else ""
-                lines.append(f"\n<b>#{pos}. {_esc(pname)}</b> {flag}")
+                career_mark = " 🎖" if pcareer else ""
+                lines.append(f"\n<b>#{pos}. {_esc(pname)}</b> {flag}{career_mark}")
                 for pt, t in traits:
                     max_badge = " 🌟" if pt.level == 5 else ""
                     lines.append(f"  <code>#{pt.id}</code> {_rarity_tag(t)}{t.emoji} "
@@ -553,15 +563,22 @@ async def trapply_inv_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         btns = []
         for ur, p in roster:
-            # Show current trait count
+            # Show current trait count. The Career Player is flagged because
+            # its slots sit outside the squad-wide budget.
             count = session.query(PlayerTrait).filter(PlayerTrait.roster_id == ur.id).count()
-            label = f"#{ur.order_position} {p.name} ({count}/3)"
+            mark = " 🎖" if getattr(p, "is_career", False) else ""
+            label = f"#{ur.order_position} {p.name}{mark} ({count}/{TRAIT_MAX_PER_PLAYER})"
             btns.append([InlineKeyboardButton(label, callback_data=f"trapply_pl_{inv_id}_{ur.id}")])
 
         btns.append([InlineKeyboardButton("❌ Cancel", callback_data="trcancel")])
 
+        budget = squad_trait_budget(session, user.id)
+        budget_line = (f"Squad traits: <b>{budget['used']}/{budget['max']}</b>"
+                       f"{' — full, only 🎖 Career slots left' if budget['full'] else ''}")
+
         await q.edit_message_text(
-            f"🎯 Applying <b>{trait.emoji} {_esc(trait.name)} Lv.{inv.level}</b>\n\n"
+            f"🎯 Applying <b>{trait.emoji} {_esc(trait.name)} Lv.{inv.level}</b>\n"
+            f"{budget_line}\n\n"
             f"Pick a player:",
             parse_mode="HTML", reply_markup=InlineKeyboardMarkup(btns))
     except Exception:

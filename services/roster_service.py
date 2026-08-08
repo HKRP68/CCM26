@@ -94,6 +94,63 @@ def reconcile_roster_count(session: Session, user: User) -> int:
     return actual
 
 
+def trim_roster_to_cap(session: Session, user: User, cap: int = MAX_ROSTER,
+                       value_fn=get_buy_value) -> dict:
+    """Release the lowest-rated cards until the user is back at ``cap``.
+
+    Used by ``migrate_squad_and_trait_limits.py`` when the squad cap is cut and
+    existing rosters are suddenly over it. The captain did not choose to sell,
+    so ``value_fn`` defaults to :func:`config.get_buy_value` — they get back
+    what the card cost, not the lossy sell price.
+
+    The Career Player is never a candidate: it is permanent
+    (``handlers.release._do_release`` refuses to release one, which would abort
+    the whole batch), so it is filtered out before selection.
+
+    Selection order is lowest rating first, then most-recently-acquired, then
+    highest id — so of two identically rated cards the older one is kept.
+
+    Returns ``{"released": [...], "coins": int, "count": int}``. Caller commits.
+    """
+    from handlers.release import _do_release
+
+    rows = (
+        session.query(UserRoster, Player)
+        .join(Player, UserRoster.player_id == Player.id)
+        .filter(UserRoster.user_id == user.id)
+        .all()
+    )
+    over = len(rows) - cap
+    if over <= 0:
+        return {"released": [], "coins": 0, "count": 0}
+
+    candidates = [(e, p) for e, p in rows if not getattr(p, "is_career", False)]
+    candidates.sort(key=lambda ep: (
+        ep[1].rating or 0,
+        -(ep[0].acquired_date.timestamp() if ep[0].acquired_date else 0),
+        -ep[0].id,
+    ))
+    doomed = candidates[:over]
+    if not doomed:
+        # Everything left is a Career Player — impossible in practice (one per
+        # user), but never loop or raise over it.
+        logger.warning("user %s is %s over the cap with no releasable cards",
+                       user.id, over)
+        return {"released": [], "coins": 0, "count": 0}
+
+    result = _do_release(session, user, doomed,
+                         value_fn=value_fn, record_undo=False)
+    if not result.get("success"):
+        raise RuntimeError(
+            f"trim_roster_to_cap failed for user {user.id}: "
+            f"{result.get('message') or result.get('error')}")
+
+    reconcile_roster_count(session, user)
+    return {"released": result["released"],
+            "coins": result["total_coins"],
+            "count": len(result["released"])}
+
+
 def get_duplicate_entries(session: Session, user_id: int):
     """Return list of (player, quantity) for players owned more than once."""
     subq = (

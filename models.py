@@ -1117,6 +1117,13 @@ class GameConfig(Base):
     # Trait market settings
     trait_market_default_slots = Column(Integer, default=5)
     trait_market_last_refresh_at = Column(DateTime, nullable=True)
+    # The trait market runs its own schedule, independent of the player market
+    # above: it refreshes every `interval` hours starting from `start_hour`
+    # (IST). Interval 12 + start 0 means 12 AM and 12 PM, every day. NULL start
+    # hour falls back to market_refresh_hour_ist, so a DB migrated but not yet
+    # re-saved keeps the time it had.
+    trait_market_refresh_interval_hours = Column(Integer, default=24)
+    trait_market_refresh_start_hour_ist = Column(Integer, nullable=True)
     # ── Scorecard color customization ──
     # Hex strings like "#c41e3a". Used as accent (header border, table-header
     # bottom border, RTG color, FoW labels, target line) on the per-innings
@@ -2682,7 +2689,7 @@ class FantasyPick(Base):
 
 class RosterOverflowClaim(Base):
     """A player rolled from a Mini App reward (daily / free pack / pack / gspin)
-    that couldn't be auto-added because the roster was full (25/25).
+    that couldn't be auto-added because the roster was at ``config.MAX_ROSTER``.
 
     Instead of silently discarding the overflow player, we hold it here so the
     Mini App can offer a "Replace" flow (mirroring the bot's /claim replace):

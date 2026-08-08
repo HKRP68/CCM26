@@ -22,7 +22,7 @@ from services.undo_service import (
 
 logger = logging.getLogger(__name__)
 
-MAX_ROSTER = 25  # also defined in handlers/buy.py — kept in sync intentionally
+from config import MAX_ROSTER
 
 
 async def cmuundo_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

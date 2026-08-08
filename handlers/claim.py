@@ -310,7 +310,8 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user.roster_count >= MAX_ROSTER:
             release(key)
             await context.bot.send_message(chat_id=chat_id,
-                text="❌ Your squad is full (25/25).\nUse ⚪ Replace or /releasepl <name>",
+                text=(f"❌ Your squad is full ({MAX_ROSTER}/{MAX_ROSTER}).\n"
+                      "Use ⚪ Replace or /releasepl &lt;name&gt;"),
                 parse_mode="HTML")
             return
 

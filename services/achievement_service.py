@@ -24,6 +24,7 @@ import logging
 from datetime import datetime
 from sqlalchemy.exc import IntegrityError
 
+from config import MAX_ROSTER
 from models import (
     User, UserAchievement, UserRoster, Player, PlayerTrait,
     Trade, PlayerGameStats, Match, UserStats,
@@ -132,10 +133,13 @@ CATALOG = [
      "category": "Collection", "coins": 1500, "gems": 0,
      "check": lambda s, u: u.roster_count >= 10},
 
+    # Key stays "roster_25" so already-unlocked rows keep matching the catalog;
+    # the threshold itself tracks MAX_ROSTER, or the achievement would become
+    # impossible the moment the squad cap is lowered.
     {"key": "roster_25", "emoji": "👥", "name": "Full Squad",
-     "desc": "Fill your roster to 25 players",
+     "desc": f"Fill your roster to {MAX_ROSTER} players",
      "category": "Collection", "coins": 7500, "gems": 1,
-     "check": lambda s, u: u.roster_count >= 25},
+     "check": lambda s, u: (u.roster_count or 0) >= MAX_ROSTER},
 
     {"key": "first_legend", "emoji": "🌟", "name": "Legend Acquired",
      "desc": "Own a player rated 95+",

@@ -98,7 +98,8 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if user.roster_count >= MAX_ROSTER:
-            await update.message.reply_text("❌ Roster full (25/25)! Release players first.")
+            await update.message.reply_text(
+                f"❌ Roster full ({MAX_ROSTER}/{MAX_ROSTER})! Release players first.")
             return
 
         # Find any matching player

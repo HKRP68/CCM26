@@ -24,6 +24,13 @@ _STUBBED_MODULES = (
     "config", "services.giveaway_service",
 )
 
+# Read the real squad cap once, at import time — before any test stubs out the
+# ``config`` module — so the stub below mirrors the live value instead of
+# pinning a literal that a rebalance would silently leave behind. config.py
+# pulls in nothing heavier than python-dotenv, so this is safe here.
+import config as _real_config  # noqa: E402
+_REAL_MAX_ROSTER = _real_config.MAX_ROSTER
+
 
 def _restore_modules(saved):
     for name, mod in saved.items():
@@ -92,7 +99,7 @@ def _load_service(test):
     act.log_activity = lambda *a, **k: None
     sys.modules["services.activity_service"] = act
     cfg = types.ModuleType("config")
-    cfg.MAX_ROSTER = 25
+    cfg.MAX_ROSTER = _REAL_MAX_ROSTER
     sys.modules["config"] = cfg
 
     sys.modules.pop("services.giveaway_service", None)

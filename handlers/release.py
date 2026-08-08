@@ -116,7 +116,8 @@ def _renumber_roster(session, user_id):
             entry.order_position = i
 
 
-def _do_release(session, user, entries):
+def _do_release(session, user, entries, *, value_fn=get_sell_value,
+                record_undo=True):
     """Release a list of (UserRoster, Player) tuples atomically.
 
     Cleans up all known references to the doomed roster rows BEFORE deleting,
@@ -125,6 +126,16 @@ def _do_release(session, user, entries):
       - pending Trade rows (cancelled, FKs nulled)
       - User.captain_roster_id (nulled if it points to a doomed row)
       - any other lingering references caught by the catch-all SQL below
+
+    ``value_fn`` maps a rating to the coins credited per card. It defaults to
+    the normal lossy sell price; the squad-downsizing migration passes
+    ``get_buy_value`` instead, because a forced release is not a sale and the
+    captain should not eat the buy/sell spread on a card they never chose to
+    part with.
+
+    ``record_undo`` writes the 60-second /cmuundo record. Bulk/automated
+    releases pass False: restoring them would put the squad straight back over
+    the cap that forced the release in the first place.
 
     Returns dict with success, released list, total_coins, new_balance, new_count.
     """
@@ -213,7 +224,7 @@ def _do_release(session, user, entries):
     # 5. Delete the roster entries
     undo_items = []  # for /cmuundo
     for entry, player in entries:
-        sv = get_sell_value(player.rating)
+        sv = value_fn(player.rating)
         undo_items.append({
             "player_id": player.id,
             "player_name": player.name,
@@ -233,7 +244,7 @@ def _do_release(session, user, entries):
     _renumber_roster(session, user.id)
 
     # Record for /cmuundo
-    if undo_items:
+    if undo_items and record_undo:
         try:
             from services.undo_service import record_release
             record_release(session, user.id,

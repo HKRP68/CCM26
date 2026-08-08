@@ -1,7 +1,7 @@
 """Roster-overflow "pending claim" logic for the Mini App.
 
 When a Mini App reward (daily / free pack / pack / gspin) rolls a player but the
-user's roster is already full (25/25), the player is parked in a
+user's roster is already full (``config.MAX_ROSTER``), the player is parked in a
 ``RosterOverflowClaim`` row instead of being discarded. The Mini App can then
 offer a Replace flow — mirroring the bot's /claim replace — where the user picks
 a roster player to drop so the pending player takes its slot, or releases the

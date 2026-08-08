@@ -14,6 +14,7 @@ from config import (
     TRAIT_REROLL_COST, TRAIT_DAILY_DISCOUNT_MIN, TRAIT_DAILY_DISCOUNT_MAX,
     TRAIT_UPGRADE_COSTS, TRAIT_REPLACE_COST,
     TRAIT_MAX_PER_PLAYER, TRAIT_MAX_SAME_CATEGORY, TRAIT_MAX_ELITE_PER_PLAYER,
+    TRAIT_MAX_PER_SQUAD,
 )
 
 logger = logging.getLogger(__name__)
@@ -267,7 +268,15 @@ def refresh_shop(session, user_id, force=False):
 
     needs_refresh = force or not rows
     if not needs_refresh and rows:
-        if now - rows[0].refreshed_at >= timedelta(hours=24):
+        # Honour the website's trait-refresh interval so this legacy per-user
+        # shop can never disagree with the shared one.
+        try:
+            from services.global_market import get_trait_refresh_interval_hours
+            window = get_trait_refresh_interval_hours(session)
+        except Exception:
+            logger.exception("trait refresh interval lookup failed; using 24h")
+            window = 24
+        if now - rows[0].refreshed_at >= timedelta(hours=window):
             needs_refresh = True
 
     if not needs_refresh:
@@ -354,6 +363,55 @@ def _count_same_category(session, roster_id, category):
             .count())
 
 
+def _squad_traits_query(session, user_id):
+    """Equipped traits on a user's NON-career roster cards.
+
+    The Career Player is excluded on purpose: it carries its own
+    TRAIT_MAX_PER_PLAYER allowance outside the squad budget. ``is_career`` is
+    NULL on rows predating the career feature, so the filter is written
+    NULL-safe exactly like ``services.player_service.not_career``.
+    """
+    return (session.query(PlayerTrait)
+            .join(UserRoster, PlayerTrait.roster_id == UserRoster.id)
+            .join(Player, UserRoster.player_id == Player.id)
+            .filter(PlayerTrait.user_id == user_id,
+                    (Player.is_career == False) | (Player.is_career.is_(None))))  # noqa: E712
+
+
+def count_squad_traits(session, user_id):
+    """How many traits the user has equipped across their non-career squad."""
+    return _squad_traits_query(session, user_id).count()
+
+
+def squad_trait_budget(session, user_id):
+    """``{used, max, full}`` for the squad-wide trait cap — for UI payloads."""
+    used = count_squad_traits(session, user_id)
+    return {"used": used, "max": TRAIT_MAX_PER_SQUAD,
+            "full": used >= TRAIT_MAX_PER_SQUAD}
+
+
+def _is_career_roster(session, roster):
+    """True if a roster entry holds the user's Career Player."""
+    player = session.query(Player).get(roster.player_id)
+    return bool(player is not None and getattr(player, "is_career", False))
+
+
+def _squad_cap_block(session, user, roster):
+    """Message refusing an apply that would exceed the squad budget, or None.
+
+    Career cards are exempt, so they never hit this. Anything else is refused
+    once the non-career squad already holds TRAIT_MAX_PER_SQUAD traits.
+    """
+    if _is_career_roster(session, roster):
+        return None
+    if count_squad_traits(session, user.id) < TRAIT_MAX_PER_SQUAD:
+        return None
+    return (f"Squad trait limit reached ({TRAIT_MAX_PER_SQUAD}). Free a slot "
+            f"with /removetrait — it's free and the trait keeps its level. "
+            f"Your Career Player has its own {TRAIT_MAX_PER_PLAYER} slots on "
+            f"top of this.")
+
+
 def _elite_block(new_trait, other_traits):
     """Message refusing a second Elite trait on one player, or None.
 
@@ -411,6 +469,10 @@ def apply_trait_to_player(session, user, inventory_id, roster_id):
     if elite_block:
         return False, elite_block
 
+    squad_block = _squad_cap_block(session, user, roster)
+    if squad_block:
+        return False, squad_block
+
     pt = PlayerTrait(
         user_id=user.id, roster_id=roster_id,
         trait_id=trait.id, level=inv.level,
@@ -466,6 +528,10 @@ def replace_trait_on_player(session, user, player_trait_id, inventory_id):
     elite_block = _elite_block(new_trait, remaining)
     if elite_block:
         return False, elite_block
+
+    # No TRAIT_MAX_PER_SQUAD check here on purpose: a replace overwrites an
+    # existing PlayerTrait row in place, so the squad count is unchanged. A
+    # captain sitting exactly on the cap can still reshape their squad.
 
     user.total_gems -= TRAIT_REPLACE_COST
     old_trait = session.query(Trait).get(pt.trait_id)
@@ -547,6 +613,61 @@ def remove_trait_from_player(session, user, player_trait_id):
                   f"<b>{html.escape(player_name)}</b> — it's back in your "
                   f"inventory.\n"
                   f"<i>Use /traitapply to attach it to another player.</i>")
+
+
+def trim_squad_traits_to_cap(session, user, cap=TRAIT_MAX_PER_SQUAD):
+    """Refund the least valuable equipped squad traits until the user is at ``cap``.
+
+    Used by ``migrate_squad_and_trait_limits.py`` when TRAIT_MAX_PER_SQUAD is
+    introduced and existing squads are over it. The trait is destroyed and the
+    user is credited the full gems it cost to build (``config.trait_buy_value``)
+    — a forced removal is not a sale, so no resale discount applies.
+
+    Career Player traits are never candidates: they sit outside the squad
+    budget (see :func:`_squad_traits_query`).
+
+    Removal order is lowest level first, then lowest rarity, then lowest id —
+    a stable key, because level alone ties constantly (see the note in
+    ``services.trait_engine`` on why ordering by level is not deterministic).
+
+    Returns ``{"removed": [...], "gems": int, "count": int}``. Caller commits.
+    """
+    from config import trait_buy_value, trait_rarity_key, TRAIT_RARITY_ORDER
+
+    rows = (_squad_traits_query(session, user.id)
+            .add_entity(Trait)
+            .join(Trait, PlayerTrait.trait_id == Trait.id)
+            .all())
+    over = len(rows) - cap
+    if over <= 0:
+        return {"removed": [], "gems": 0, "count": 0}
+
+    rows.sort(key=lambda rt: (
+        rt[0].level or 1,
+        TRAIT_RARITY_ORDER.index(trait_rarity_key(rt[1].rarity)),
+        rt[0].id,
+    ))
+
+    removed, gems = [], 0
+    for pt, trait in rows[:over]:
+        refund = trait_buy_value(pt.level, trait.rarity)
+        user.total_gems = (user.total_gems or 0) + refund
+        gems += refund
+        removed.append({"name": trait.name, "level": pt.level,
+                        "rarity": trait_rarity_key(trait.rarity), "gems": refund})
+        session.delete(pt)
+
+    session.flush()
+    try:
+        from services.activity_service import log_activity
+        log_activity(session, user.id, "trait_refund",
+                     f"Squad trait limit ({cap}): refunded {len(removed)} "
+                     f"trait(s) for {gems:,} gems",
+                     gems_change=gems)
+    except Exception:
+        logger.exception("log_activity failed during trait trim (non-fatal)")
+
+    return {"removed": removed, "gems": gems, "count": len(removed)}
 
 
 def upgrade_player_trait(session, user, player_trait_id):
