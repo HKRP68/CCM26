@@ -65,6 +65,35 @@ class SquadDownsizeServiceTest(unittest.TestCase):
     _next_pid = [20000]
     _next_trait = [0]
 
+    def setUp(self):
+        # preview_downsize/run_downsize sweep EVERY over-cap account in the
+        # shared database, so a user left behind by one test would silently
+        # change what the next one sees swept. Each test cleans up after
+        # itself, keeping the global scans scoped to the accounts it created.
+        self._created_user_ids = []
+        self.addCleanup(self._delete_created_users)
+
+    def _delete_created_users(self):
+        from database import get_session
+        from models import PlayerTrait, TraitInventory, User, UserRoster
+        if not self._created_user_ids:
+            return
+        session = get_session()
+        try:
+            ids = self._created_user_ids
+            for model in (PlayerTrait, TraitInventory, UserRoster):
+                (session.query(model)
+                 .filter(model.user_id.in_(ids))
+                 .delete(synchronize_session=False))
+            (session.query(User).filter(User.id.in_(ids))
+             .delete(synchronize_session=False))
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
     def _make_user(self, session):
         from models import User
         self._next_tg[0] += 1
@@ -72,6 +101,7 @@ class SquadDownsizeServiceTest(unittest.TestCase):
                     roster_count=0, total_coins=0, total_gems=0)
         session.add(user)
         session.flush()
+        self._created_user_ids.append(user.id)
         return user
 
     def _add_card(self, session, user, rating=80, is_career=False):
@@ -144,6 +174,9 @@ class SquadDownsizeServiceTest(unittest.TestCase):
         from database import get_session
         from services.squad_downsize_service import find_over_cap_user_ids
 
+        from models import PlayerTrait, UserRoster
+        from services.trait_service import count_squad_traits
+
         session = get_session()
         try:
             user = self._make_user(session)
@@ -152,13 +185,23 @@ class SquadDownsizeServiceTest(unittest.TestCase):
                 self._equip(session, user, career, level=5)
             for _ in range(MAX_ROSTER - 1):
                 self._add_card(session, user)
-            for entry in (session.query(type(career))
-                          .filter_by(user_id=user.id).all()[:TRAIT_MAX_PER_SQUAD]):
-                if entry.id != career.id:
-                    self._equip(session, user, entry)
+
+            # Exclude the career entry BEFORE slicing, or a career row landing
+            # inside the first 18 leaves the squad one trait short and the test
+            # stops checking the boundary it says it checks.
+            squad = [e for e in session.query(UserRoster)
+                     .filter_by(user_id=user.id).all() if e.id != career.id]
+            for entry in squad[:TRAIT_MAX_PER_SQUAD]:
+                self._equip(session, user, entry)
             session.commit()
 
-            # 21 equipped traits in total, but only 18 count toward the squad.
+            # Exactly on the squad cap, with the career card's 3 on top of it.
+            self.assertEqual(count_squad_traits(session, user.id),
+                             TRAIT_MAX_PER_SQUAD)
+            self.assertEqual(
+                session.query(PlayerTrait).filter_by(user_id=user.id).count(),
+                TRAIT_MAX_PER_SQUAD + TRAIT_MAX_PER_PLAYER)
+            # 21 equipped in total, but only 18 count — so this is not over cap.
             self.assertNotIn(user.id, find_over_cap_user_ids(session))
         finally:
             session.close()
@@ -171,13 +214,18 @@ class SquadDownsizeServiceTest(unittest.TestCase):
         from services.roster_service import get_roster_count
         from services.squad_downsize_service import preview_downsize
 
+        from models import User
+
         session = get_session()
         try:
             user = self._make_user(session)
             for _ in range(MAX_ROSTER + 4):
                 self._add_card(session, user)
             session.commit()
-            before = get_roster_count(session, user.id)
+            # preview_downsize expunges as it goes (see its docstring), so hold
+            # the id and re-query rather than the instance.
+            user_id = user.id
+            before = get_roster_count(session, user_id)
             coins_before = user.total_coins
 
             first = preview_downsize(session)
@@ -186,8 +234,8 @@ class SquadDownsizeServiceTest(unittest.TestCase):
             self.assertEqual(first, second, "a preview must not affect the next")
             self.assertGreater(first["cards"], 0)
             # Nothing persisted: the roster and the balance are untouched.
-            self.assertEqual(get_roster_count(session, user.id), before)
-            self.assertEqual(user.total_coins, coins_before)
+            self.assertEqual(get_roster_count(session, user_id), before)
+            self.assertEqual(session.get(User, user_id).total_coins, coins_before)
         finally:
             session.close()
 
@@ -217,6 +265,43 @@ class SquadDownsizeServiceTest(unittest.TestCase):
             self.assertLessEqual(get_roster_count(session, user_id), MAX_ROSTER)
             self.assertLessEqual(count_squad_traits(session, user_id),
                                  TRAIT_MAX_PER_SQUAD)
+        finally:
+            session.close()
+
+    def test_one_bad_account_does_not_abort_a_preview(self):
+        """A dry run must skip what a real run would skip, not die on it."""
+        from unittest.mock import patch
+        from config import MAX_ROSTER
+        from database import get_session
+        from services.squad_downsize_service import preview_downsize
+
+        session = get_session()
+        try:
+            doomed = self._make_user(session)
+            healthy = self._make_user(session)
+            for user in (doomed, healthy):
+                for _ in range(MAX_ROSTER + 2):
+                    self._add_card(session, user)
+            session.commit()
+            doomed_id = doomed.id
+
+            real_trim = __import__("services.squad_downsize_service",
+                                   fromlist=["x"]).trim_roster_to_cap
+
+            def explode(sess, user, *a, **kw):
+                if user.id == doomed_id:
+                    raise RuntimeError("boom")
+                return real_trim(sess, user, *a, **kw)
+
+            with patch("services.squad_downsize_service.trim_roster_to_cap",
+                       side_effect=explode):
+                totals = preview_downsize(session)
+
+            # The bad account is counted, not fatal, and the healthy one is
+            # still previewed.
+            self.assertEqual(totals["failed"], 1)
+            self.assertEqual(totals["users"], 1)
+            self.assertGreater(totals["cards"], 0)
         finally:
             session.close()
 
@@ -278,7 +363,7 @@ class ApplyRouteIsGatedOnPreviewTest(unittest.TestCase):
     def test_the_token_is_single_use(self):
         # Cleared before the work runs, so a double submit can't apply twice
         # even while the first request is still in flight.
-        popped = self.route.index(f"session.pop(_SQUAD_TOKEN_KEY")
+        popped = self.route.index("session.pop(_SQUAD_TOKEN_KEY")
         work = self.route.index("run_downsize(db)")
         self.assertLess(popped, work)
 

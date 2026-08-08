@@ -45,17 +45,21 @@ def _empty_totals():
             "failed": 0}
 
 
-def find_over_cap_user_ids(session, roster_cap=MAX_ROSTER,
-                           trait_cap=TRAIT_MAX_PER_SQUAD):
+def find_over_cap_user_ids(session):
     """User ids over the roster cap, the squad trait cap, or both.
 
     Two GROUP BY queries rather than a per-user loop: on a large user table the
     over-cap accounts are a small minority, and walking every row to ask each
     one costs a query apiece.
+
+    The caps are read from config rather than taken as arguments on purpose.
+    The trimming underneath (``trim_roster_to_cap``, ``trim_squad_traits_to_cap``)
+    reads them from config too, so a caller passing custom caps here would get a
+    candidate list that disagrees with what actually happens to those accounts.
     """
     over_roster = (session.query(UserRoster.user_id)
                    .group_by(UserRoster.user_id)
-                   .having(func.count(UserRoster.id) > roster_cap))
+                   .having(func.count(UserRoster.id) > MAX_ROSTER))
 
     # Same non-career rule as trait_service._squad_traits_query — the Career
     # Player's traits are outside the budget, so they must not push a user onto
@@ -66,7 +70,7 @@ def find_over_cap_user_ids(session, roster_cap=MAX_ROSTER,
                    .filter(or_(Player.is_career.is_(False),
                                Player.is_career.is_(None)))
                    .group_by(PlayerTrait.user_id)
-                   .having(func.count(PlayerTrait.id) > trait_cap))
+                   .having(func.count(PlayerTrait.id) > TRAIT_MAX_PER_SQUAD))
 
     ids = {row[0] for row in over_roster.all()}
     ids |= {row[0] for row in over_traits.all()}
@@ -100,43 +104,75 @@ def downsize_user(session, user):
     return summary
 
 
-def _walk(session, user_ids, on_user_done=None):
-    """Run downsize_user over ``user_ids``, accumulating totals.
+def _preview_walk(session, user_ids, on_user_done=None):
+    """Downsize each account, note the numbers, then undo it.
 
-    Never commits or rolls back — that is the caller's call, which is the only
-    difference between a preview and an apply.
+    One account per transaction, rolled back immediately. Two things follow,
+    and both matter:
+
+    * **A bad account can't abort the run.** A mid-flush error leaves the
+      session needing a rollback, which is exactly what happens next anyway, so
+      the walk records the failure and moves on — matching ``run_downsize``,
+      which isolates per user with its own commit. Without this a dry run could
+      die on an account the real run would simply skip.
+    * **No long-held locks.** Doing every account in one transaction and
+      rolling back at the end would hold write locks on ``user_roster``,
+      ``player_traits`` and ``users`` for the whole scan, blocking live
+      gameplay writes on a large database.
+
+    SAVEPOINTs would be the textbook tool here, but pysqlite's transaction
+    handling makes them unreliable — verified: a released savepoint survived
+    the outer rollback — and the test suite runs on SQLite. A plain rollback
+    per account behaves identically on both backends.
     """
     totals = _empty_totals()
     for user_id in user_ids:
-        user = session.query(User).get(user_id)
-        if not user:
-            continue
-        result = downsize_user(session, user)
-        if not (result["cards"] or result["traits"]):
+        try:
+            user = session.get(User, user_id)
+            result = downsize_user(session, user) if user else None
+        except Exception:
+            totals["failed"] += 1
+            logger.exception("squad downsize preview failed for user %s",
+                             user_id)
+            result = None
+        finally:
+            # Unconditional: a preview that leaked a partial write would be far
+            # worse than one that failed.
+            session.rollback()
+            session.expunge_all()
+
+        if not result or not (result["cards"] or result["traits"]):
             continue
         totals["users"] += 1
         for key in ("cards", "coins", "traits", "gems"):
             totals[key] += result[key]
         if on_user_done:
-            on_user_done(user, result)
+            on_user_done(user_id, result)
     return totals
 
 
 def preview_downsize(session):
     """Exactly what an apply would do, without keeping any of it.
 
-    Runs the real downsizing and rolls it back, so the numbers are the true
-    outcome rather than an estimate. This matters because the two passes
-    interact: releasing cards frees their traits into inventory, so counting
-    over-cap traits up front would overstate how many get refunded.
+    Runs the real downsizing and rolls it back per account, so the numbers are
+    the true outcome rather than an estimate. This matters because the two
+    passes interact: releasing cards frees their traits into inventory, so
+    counting over-cap traits up front would overstate how many get refunded.
+
+    ``failed`` is populated the same way ``run_downsize`` populates it, so a
+    dry run reports the accounts a real run would skip instead of dying on the
+    first one.
+
+    NOTE: like ``run_downsize``, this expunges the session as it goes, which
+    detaches **every** object in it — including any the caller loaded
+    beforehand. Re-query anything you still need afterwards.
     """
     try:
-        totals = _walk(session, find_over_cap_user_ids(session))
+        return _preview_walk(session, find_over_cap_user_ids(session))
     finally:
-        # Roll back unconditionally. A preview that leaked a partial write
-        # would be far worse than one that failed.
+        # Belt and braces: _preview_walk already rolls back after every
+        # account, but a preview must never leave a write behind.
         session.rollback()
-    return totals
 
 
 def run_downsize(session, on_user_done=None, log=None):
@@ -146,6 +182,10 @@ def run_downsize(session, on_user_done=None, log=None):
     instead of aborting the sweep, and the accounts already fixed stay fixed.
     Re-running is a no-op, so a skipped user can be retried by running again.
 
+    ``on_user_done(user_id, result)`` is called after each account commits. It
+    is handed the id rather than the User instance on purpose — see the expunge
+    note below — and its failures are logged, never counted as a failed user.
+
     NOTE: this expunges the session between users to bound memory on a large
     user table, which detaches **every** object in it — including any the
     caller loaded beforehand. Re-query anything you still need afterwards.
@@ -154,37 +194,53 @@ def run_downsize(session, on_user_done=None, log=None):
     """
     totals = _empty_totals()
     for user_id in find_over_cap_user_ids(session):
+        result = None
         try:
-            user = session.query(User).get(user_id)
+            user = session.get(User, user_id)
             if not user:
                 continue
             result = downsize_user(session, user)
             if not (result["cards"] or result["traits"]):
                 session.rollback()
+                result = None
                 continue
-
+            # Read anything reporting needs BEFORE the commit: commit expires
+            # the instance, so touching it afterwards is a fresh query at best
+            # and a DetachedInstanceError after the expunge below.
+            tg_id = getattr(user, "telegram_id", "?")
             session.commit()
-            totals["users"] += 1
-            for key in ("cards", "coins", "traits", "gems"):
-                totals[key] += result[key]
-            if on_user_done:
-                on_user_done(user, result)
-            if log:
-                log.info("  user %s (tg %s): -%s cards (+%s coins), "
-                         "-%s traits (+%s gems)",
-                         user.id, getattr(user, "telegram_id", "?"),
-                         result["cards"], f"{result['coins']:,}",
-                         result["traits"], f"{result['gems']:,}")
         except Exception:
             session.rollback()
+            result = None
             totals["failed"] += 1
             logger.exception("squad downsize failed for user %s — skipped",
                              user_id)
             if log:
                 log.exception("  user %s FAILED — skipped", user_id)
+            continue
         finally:
             # commit() expires objects but leaves them in the identity map.
             # Without this the one long-lived Session accumulates every User,
             # UserRoster, Player and PlayerTrait touched by the whole run.
             session.expunge_all()
+
+        # Past here the work is COMMITTED. Nothing below may mark it failed or
+        # roll anything back — this account is done, and reporting is only
+        # reporting. Counting a committed user as "skipped" would tell the
+        # admin to retry work that already happened.
+        totals["users"] += 1
+        for key in ("cards", "coins", "traits", "gems"):
+            totals[key] += result[key]
+        try:
+            if on_user_done:
+                on_user_done(user_id, result)
+            if log:
+                log.info("  user %s (tg %s): -%s cards (+%s coins), "
+                         "-%s traits (+%s gems)",
+                         user_id, tg_id,
+                         result["cards"], f"{result['coins']:,}",
+                         result["traits"], f"{result['gems']:,}")
+        except Exception:
+            logger.exception("post-commit reporting failed for user %s "
+                             "(the downsizing itself succeeded)", user_id)
     return totals

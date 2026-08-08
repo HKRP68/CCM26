@@ -16,8 +16,13 @@ import unittest
 
 
 class SquadDownsizeMigrationTest(unittest.TestCase):
+    # squad_downsize_service is listed because the sibling
+    # tests/test_squad_limits_button.py evicts it and rebinds it to its own
+    # temporary database. Without it here, whichever file runs second can pick
+    # up a service module bound to the other one's engine.
     _MODULE_NAMES = ("database", "models", "config", "services.roster_service",
-                     "services.trait_service", "handlers.release")
+                     "services.trait_service", "handlers.release",
+                     "services.squad_downsize_service")
 
     @classmethod
     def setUpClass(cls):

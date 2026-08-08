@@ -172,14 +172,29 @@ pass alone is enough and nothing is refunded in gems.
 ### 4.4 The preview is the real thing, rolled back
 
 `preview_downsize` does not estimate. It runs the actual downsizing and then
-rolls the transaction back, so the numbers it reports are exactly what an apply
-produces. That matters because of §4.3: counting over-cap traits up front
-*overstates* the gem refund, since releasing cards frees most of those traits
-into inventory instead. The earlier hand-rolled `--dry-run` had that bug — it
-reported six traits on an account where only one was really refunded.
+rolls it back, so the numbers it reports are exactly what an apply produces.
+That matters because of §4.3: counting over-cap traits up front *overstates*
+the gem refund, since releasing cards frees most of those traits into inventory
+instead. The earlier hand-rolled `--dry-run` had that bug — it reported six
+traits on an account where only one was really refunded.
 
 This is also what makes the button's confirm step honest: the figure on screen
 is the figure you get.
+
+**One account per transaction, rolled back immediately** — not one transaction
+across the whole scan. Two reasons:
+
+- A failing account can't abort the run. It is recorded in `failed` and the
+  walk continues, matching `run_downsize`. Otherwise a dry run could die on an
+  account the real run would simply skip.
+- No long-held write locks on `user_roster`, `player_traits` and `users`, which
+  on a large database would block live gameplay for the length of the scan.
+
+SAVEPOINTs are the textbook tool for the first point, and were tried. They do
+not work here: under pysqlite a released savepoint **survived the outer
+rollback**, so the preview silently persisted. The test suite runs on SQLite, so
+that is not a theoretical concern. A plain rollback per account behaves the same
+on both backends.
 
 ### 4.5 Operational shape
 
@@ -195,8 +210,15 @@ safe to re-run after fixing whatever caused a skip. The website reports skipped
 users and tells you to press Preview and Apply again.
 
 Between users the session is expunged to bound memory on a large user table.
-That detaches **every** object in the session, so `run_downsize` is only safe to
-hand a session the caller owns for the duration — both entry points do.
+That detaches **every** object in the session, so `run_downsize` and
+`preview_downsize` are only safe to hand a session the caller owns for the
+duration — both entry points do. Re-query anything you still need afterwards.
+
+Once an account's downsizing has committed, nothing downstream may mark it
+failed. Totals accounting and the per-user log line sit outside the
+transactional `try`, and the audit-log write on the website is wrapped
+separately: a failure there warns that the log is missing, rather than
+reporting a bare error for releases and refunds that already happened.
 
 ### 4.6 The Apply button is gated on Preview
 

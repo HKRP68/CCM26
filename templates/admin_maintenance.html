@@ -262,7 +262,7 @@
 
   {% if squad_limits.over_cap_users is none %}
     <p style="color:var(--red);">⚠️ Couldn't scan for over-cap squads — check the logs.</p>
-  {% elif squad_limits.over_cap_users == 0 and not squad_limits.preview %}
+  {% elif squad_limits.over_cap_users == 0 %}
     <p style="color:var(--green); font-weight:600;">
       ✅ Every squad is already within the limits — nothing to apply.
     </p>

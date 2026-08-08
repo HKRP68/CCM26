@@ -15603,7 +15603,8 @@ def admin_maintenance():
 # re-sent form — cannot release anybody's cards on its own.
 
 _SQUAD_PREVIEW_KEY = "squad_downsize_preview"
-_SQUAD_TOKEN_KEY = "squad_downsize_token"
+# Flask session key name, not a credential — Ruff's S105 fires on the word.
+_SQUAD_TOKEN_KEY = "squad_downsize_token"  # noqa: S105
 
 
 def _squad_limits_panel(db):
@@ -15673,13 +15674,24 @@ def admin_squad_limits_apply():
     db = get_session()
     try:
         totals = run_downsize(db)
-        log_admin(db, "squad_limits_apply", target_type="config", target_id=0,
-                  target_name="squad_limits",
-                  detail=(f"users={totals['users']}, "
-                          f"cards={totals['cards']} (+{totals['coins']:,} coins), "
-                          f"traits={totals['traits']} (+{totals['gems']:,} gems), "
-                          f"failed={totals['failed']}"))
-        db.commit()
+
+        # The releases and refunds are already committed, per user, by the time
+        # we get here. A failing audit write must not turn that into a bare
+        # "Error:" with no totals — the admin would be left with no record of
+        # what just happened to every squad on the service.
+        try:
+            log_admin(db, "squad_limits_apply", target_type="config",
+                      target_id=0, target_name="squad_limits",
+                      detail=(f"users={totals['users']}, "
+                              f"cards={totals['cards']} (+{totals['coins']:,} coins), "
+                              f"traits={totals['traits']} (+{totals['gems']:,} gems), "
+                              f"failed={totals['failed']}"))
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("squad limits audit log failed after apply")
+            flash("⚠️ The changes were applied, but the audit-log entry "
+                  "could not be written — see the server logs.", "error")
 
         if not totals["users"]:
             flash("✅ Nothing to do — every squad is already within the limits.",
