@@ -122,7 +122,15 @@ actively misleading there.
 
 ## 4. Downsizing existing accounts
 
-`migrate_squad_and_trait_limits.py`, run once by hand on deploy.
+Two entry points, one implementation — `services/squad_downsize_service.py`:
+
+- **The website.** Maintenance → **Apply Squad & Trait Limits**. This is the
+  normal way to run it.
+- **`migrate_squad_and_trait_limits.py`.** A thin CLI over the same service, for
+  a deploy-time sweep or when the panel isn't reachable.
+
+They share the service precisely so the two can never disagree about what
+"apply the caps" means.
 
 ### 4.1 Refunds are at BUY price, not sell price
 
@@ -161,12 +169,141 @@ trait pass first would destroy traits that the roster pass was about to hand
 back intact. On a typical 25-card account with a trait on every card, the roster
 pass alone is enough and nothing is refunded in gems.
 
-### 4.4 Operational shape
+### 4.4 The preview is the real thing, rolled back
 
-`--dry-run` reports without writing. Each user commits separately inside its own
-try/except, so one bad row skips that user instead of aborting the run. A second
-run is a no-op — everyone is already at or under both caps — so it is safe to
-re-run after fixing whatever caused a skip.
+`preview_downsize` does not estimate. It runs the actual downsizing and then
+rolls it back, so the numbers it reports are exactly what an apply produces.
+That matters because of §4.3: counting over-cap traits up front *overstates*
+the gem refund, since releasing cards frees most of those traits into inventory
+instead. The earlier hand-rolled `--dry-run` had that bug — it reported six
+traits on an account where only one was really refunded.
+
+This is also what makes the button's confirm step honest: the figure on screen
+is the figure you get.
+
+**What the preview is not: a contract.** Apply re-scans for over-cap accounts
+rather than replaying a stored account list, so what it touches is whoever is
+over a cap *at Apply time*, which need not be exactly the set Preview measured.
+In practice that set cannot drift — over-cap accounts only exist because the
+caps were lowered underneath them, and every acquisition path has enforced the
+new caps since, so no account can newly become over-cap. The re-scan is also
+the behaviour you want if it ever did: the point of the button is "bring
+everyone within the limits", not "bring these nineteen accounts within the
+limits". Binding the token to a snapshot would trade that for an Apply that
+refuses and sends the admin round the loop again.
+
+**One account per transaction, rolled back immediately** — not one transaction
+across the whole scan. Two reasons:
+
+- A failing account can't abort the run. It is recorded in `failed` and the
+  walk continues, matching `run_downsize`. Otherwise a dry run could die on an
+  account the real run would simply skip.
+- No long-held write locks on `user_roster`, `player_traits` and `users`, which
+  on a large database would block live gameplay for the length of the scan.
+
+SAVEPOINTs are the textbook tool for the first point, and were tried. They do
+not work here: under pysqlite a released savepoint **survived the outer
+rollback**, so the preview silently persisted. The test suite runs on SQLite, so
+that is not a theoretical concern. A plain rollback per account behaves the same
+on both backends.
+
+### 4.5 Operational shape
+
+Only over-cap accounts are visited. `find_over_cap_user_ids` gets them with two
+`GROUP BY … HAVING` queries rather than walking every user and asking each one,
+which is a query per user on a table where the over-cap accounts are a small
+minority.
+
+Each user commits separately inside its own try/except, so one bad row skips
+that user instead of aborting the run, and the accounts already fixed stay
+fixed. A second run is a no-op — everyone is at or under both caps — so it is
+safe to re-run after fixing whatever caused a skip. The website reports skipped
+users and tells you to press Preview and Apply again.
+
+Between users the session is expunged to bound memory on a large user table.
+That detaches **every** object in the session, so `run_downsize` and
+`preview_downsize` are only safe to hand a session the caller owns for the
+duration — both entry points do. Re-query anything you still need afterwards.
+
+Once an account's downsizing has committed, nothing downstream may mark it
+failed. Totals accounting and the per-user log line sit outside the
+transactional `try`, and the audit-log write on the website is wrapped
+separately: a failure there warns that the log is missing, rather than
+reporting a bare error for releases and refunds that already happened.
+
+### 4.6 The Apply button is gated on Preview
+
+Apply carries a token that only Preview issues, held in the Flask session and
+cleared *before* the work starts. Three things follow:
+
+- A bare POST — a bookmarked URL, a re-sent form, a bookmark — cannot release
+  anybody's cards, because it has no token.
+- The token is single-use: it is popped from the session *before* the work
+  starts, so a form resubmitted after the fact is refused.
+- You cannot reach Apply without having seen the numbers first.
+
+**The single-use guarantee is not atomic.** The token lives in Flask's signed
+session cookie, so two Apply requests that are genuinely in flight at the same
+instant both read the token before either clears it, and both pass. Nothing in
+the cookie can fix that — closing it properly needs a server-side consume
+(a row with a unique constraint, or a lock) that this codebase has nowhere to
+put yet. Two things keep it narrow rather than dangerous: the realistic trigger
+is a double-click, which the form now blocks by disabling the button on submit;
+and the work itself is idempotent, so a second pass finds nobody over the caps
+and does nothing. Worth closing properly if this page ever grows more bulk
+actions.
+
+Every apply writes an `AdminLog` row with the totals, since this is the one
+action that rewrites every squad on the service at once.
+
+### 4.7 Affected captains are DMed
+
+A captain who opens the bot to find six cards missing and their gem balance
+changed deserves better than working it out themselves. So every account the
+button actually changed gets a Telegram DM: the new caps, an itemised list of
+what was released and what each refunded, and an explicit line that **nothing
+was removed from their trait inventory** — true, because only *equipped* traits
+are ever candidates. Note the precise claim: the inventory is never *drained*,
+but it does grow, since a released card hands its traits back into it. "Not
+touched" would have contradicted the line above it.
+
+The Career Player is described carefully too. It is exempt from *release* and
+from the trait budget, but it still occupies one of the `MAX_ROSTER` slots —
+`trim_roster_to_cap` counts every roster row, career included. A DM claiming it
+was "exempt from both" would have captains expecting 19 ordinary cards plus a
+free career slot, then finding 18.
+
+Three properties are worth stating, because each is a deliberate choice:
+
+- **Only committed work is announced.** The messages are collected through
+  `run_downsize`'s `on_user_done`, which fires after that account's commit. A
+  user whose downsizing was rolled back is never told it happened.
+- **Messaging cannot undo a refund.** `run_downsize` runs the callback inside
+  its post-commit reporting block, where an exception is logged rather than
+  counted as a failed account.
+- **One thread, paced.** `_tg_send_batch_async` walks the whole list in a single
+  daemon thread with a 50 ms gap (~20/s, under Telegram's ~30/s ceiling). The
+  per-message thread of `_tg_send_async` is fine for one Mini App notification
+  and wrong for an action that can touch every account on the service. The
+  admin's request returns immediately; delivery outlives it, so the flash
+  reports how many were *queued*, not how many arrived.
+
+**Delivery is best effort, and the count on screen is a queue depth.** The
+thread is a daemon in one web worker's process, which has two consequences
+worth stating rather than discovering: a restart or deploy during a large batch
+drops whatever is still unsent, and the 50 ms pacing is per process, so two
+workers sending at once could exceed the per-bot rate limit and have Telegram
+throttle some messages. Neither loses anyone's cards or gems — the refunds are
+committed before the first DM is queued, and a missed DM costs a captain an
+explanation, not an asset. Making delivery durable means a real job queue with
+a shared rate limiter, which is a bigger change than this page justifies; the
+audit-log row is the durable record of what happened.
+
+`format_downsize_dm` lives in the service and takes a plain result dict, so the
+wording is testable without a database and without Telegram.
+
+The CLI does **not** DM anyone — a shell run is silent. If the players should
+hear about it, use the button.
 
 ---
 

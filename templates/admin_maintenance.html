@@ -239,6 +239,96 @@
   </form>
 </div>
 
+<!-- Squad + trait limits -->
+<div class="panel">
+  <h3>👥 Apply Squad &amp; Trait Limits</h3>
+  <p style="color:var(--muted); line-height:1.6; margin-top:0;">
+    The squad cap ({{ squad_limits.roster_cap }} cards) and the squad trait budget
+    ({{ squad_limits.trait_cap }} traits, Career Player exempt) are enforced on
+    everything <em>new</em> — but accounts that were already over a cap stay over it,
+    and can't buy or claim until they're brought back in line. This does that for
+    everyone at once.
+  </p>
+  <ul style="color:var(--muted); line-height:1.7; padding-left:1.2rem;">
+    <li><strong>Extra players:</strong> the lowest-rated cards are released until the
+      squad is at {{ squad_limits.roster_cap }}, refunded at their full
+      <strong>buy price</strong> — not the lower sell price, because the captain
+      didn't choose to sell. Any traits they were wearing go back to inventory.</li>
+    <li><strong>Extra traits:</strong> the lowest-level traits are removed until the
+      squad is at {{ squad_limits.trait_cap }}, refunded at their full gem cost.</li>
+    <li><strong>Career Players are never touched</strong> — not released, and their
+      own {{ game_limits.trait_max_per_player }} trait slots aren't counted.</li>
+    <li><strong>Trait inventories are never touched</strong> — only traits
+      <em>equipped on players</em> count toward the budget.</li>
+    <li><strong>Every affected captain gets a DM</strong> listing what left their
+      squad and what it refunded. Only accounts that actually changed are
+      messaged, and only after their changes are saved.</li>
+  </ul>
+
+  {% if squad_limits.over_cap_users is none %}
+    <p style="color:var(--red);">⚠️ Couldn't scan for over-cap squads — check the logs.</p>
+  {% elif squad_limits.over_cap_users == 0 %}
+    <p style="color:var(--green); font-weight:600;">
+      ✅ Every squad is already within the limits — nothing to apply.
+    </p>
+  {% else %}
+    <p style="margin:.8rem 0;">
+      <strong>{{ squad_limits.over_cap_users }}</strong> account(s) are currently over a limit.
+    </p>
+  {% endif %}
+
+  {% if squad_limits.preview %}
+    <div class="preview-box" style="margin:.8rem 0;">
+      <strong>Preview — nothing has been changed yet.</strong><br>
+      Squads to trim: <strong>{{ squad_limits.preview.users }}</strong><br>
+      Cards to release: <strong>{{ squad_limits.preview.cards }}</strong>
+        (refunding {{ '{:,}'.format(squad_limits.preview.coins) }} 🪙)<br>
+      Traits to refund: <strong>{{ squad_limits.preview.traits }}</strong>
+        (refunding {{ '{:,}'.format(squad_limits.preview.gems) }} 💎)
+    </div>
+  {% endif %}
+
+  <div style="display:flex; gap:.6rem; flex-wrap:wrap; margin-top:.8rem;">
+    <form method="POST" action="{{ url_for('admin_squad_limits_preview') }}" style="margin:0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-blue">👀 Preview</button>
+    </form>
+
+    {% if squad_limits.preview %}
+    <form method="POST" action="{{ url_for('admin_squad_limits_apply') }}" style="margin:0;"
+          data-confirm="Release {{ squad_limits.preview.cards }} card(s) and refund {{ squad_limits.preview.traits }} trait(s) across {{ squad_limits.preview.users }} squad(s)?&#10;&#10;Each affected captain will be sent a DM.&#10;&#10;This cannot be undone."
+          onsubmit="return squadLimitsApply(this);">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="confirm_token" value="{{ squad_limits.token }}">
+      <button type="submit" class="btn btn-red">⚠️ Apply — release now</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <small style="color:var(--muted); display:block; margin-top:.7rem;">
+    Preview changes nothing — it runs the real thing and rolls it back, so the numbers
+    are exact. Apply is only available after a preview, and can't be undone
+    (<code>/cmuundo</code> deliberately doesn't cover it, or a captain could restore
+    their way straight back over the cap). Safe to re-run: a second pass is a no-op.
+  </small>
+</div>
+
+<script>
+// Confirm, then disable the button so it cannot fire twice.
+//
+// The server's single-use token lives in Flask's session cookie, so two Apply
+// requests genuinely in flight at the same instant would both read it before
+// either cleared it. Blocking the second click is the practical half of that
+// fix — see docs/squad-and-trait-limits.md §4.6 for why the other half needs a
+// server-side consume this codebase has nowhere to put yet.
+function squadLimitsApply(form) {
+  if (!confirm(form.dataset.confirm)) return false;
+  var btn = form.querySelector('button[type=submit]');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Applying…'; }
+  return true;
+}
+</script>
+
 <!-- Preview -->
 {% if preview %}
 <div class="panel">

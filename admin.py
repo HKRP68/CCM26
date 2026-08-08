@@ -9515,6 +9515,58 @@ def _tg_send_async(payload):
 
 
 
+def _tg_send_batch_async(messages, label="broadcast"):
+    """Deliver many DMs from ONE background thread, paced under Telegram's limit.
+
+    ``_tg_send_async`` spawns a thread per message, which is right for the odd
+    Mini App notification and reckless for a mass action that can touch every
+    account on the service. This walks the list in a single daemon thread with
+    a small gap between sends, so the admin's request returns immediately and
+    Telegram never sees a burst it would rate-limit us for.
+
+    Individual failures — a captain who blocked the bot, a stale chat id — are
+    logged and skipped; one dead recipient must not stop the rest. Returns how
+    many messages were queued, not how many arrived, because delivery outlives
+    the request.
+    """
+    import os as _os
+    import threading
+    import time as _time
+    token = _os.getenv("BOT_TOKEN", "").strip()
+    if not token or not messages:
+        return 0
+
+    queued = list(messages)
+
+    def _send():
+        sent = 0
+        for chat_id, text in queued:
+            try:
+                resp = _tg_call("sendMessage", json_body={
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                })
+                if resp and resp.get("ok"):
+                    sent += 1
+                else:
+                    logger.warning("%s DM to %s rejected: %s", label, chat_id,
+                                   (resp or {}).get("description", "no response"))
+            except Exception:
+                logger.exception("%s DM to %s failed", label, chat_id)
+            # ~20 messages/second, comfortably under Telegram's ~30/s ceiling.
+            _time.sleep(0.05)
+        logger.info("%s: %s/%s DMs delivered", label, sent, len(queued))
+
+    try:
+        threading.Thread(target=_send, daemon=True).start()
+    except Exception:
+        logger.exception("could not spawn %s DM thread", label)
+        return 0
+    return len(queued)
+
+
 def _tg_send_photo_async(payload, photo_bytes, filename="match_summary.png"):
     """Fire a Telegram sendPhoto in a daemon thread so result cards do not
     block Mini App requests."""
@@ -15585,9 +15637,156 @@ def admin_maintenance():
         return render_template("admin_maintenance.html",
                                cfg=cfg, active=active,
                                until_ist_str=until_ist_str,
-                               preview=preview)
+                               preview=preview,
+                               squad_limits=_squad_limits_panel(db))
     finally:
         db.close()
+
+
+# ── Squad + trait limit enforcement ──────────────────────────────────
+# Cutting MAX_ROSTER / introducing TRAIT_MAX_PER_SQUAD only guards NEW
+# acquisitions; accounts already over a cap stay over it and get stuck. These
+# two routes are the website equivalent of running
+# migrate_squad_and_trait_limits.py, and share its service so the two can never
+# drift apart.
+#
+# Apply is gated on a token that only Preview issues, so this is genuinely
+# "look, then commit": a bare POST — a bookmarked URL, a double submit, a
+# re-sent form — cannot release anybody's cards on its own.
+
+_SQUAD_PREVIEW_KEY = "squad_downsize_preview"
+# Flask session key name, not a credential — Ruff's S105 fires on the word.
+_SQUAD_TOKEN_KEY = "squad_downsize_token"  # noqa: S105
+
+
+def _squad_limits_panel(db):
+    """Data for the Maintenance page's squad-limits panel."""
+    from config import MAX_ROSTER as _cap, TRAIT_MAX_PER_SQUAD as _tcap
+    from services.squad_downsize_service import find_over_cap_user_ids
+    try:
+        over = len(find_over_cap_user_ids(db))
+    except Exception:
+        logger.exception("squad limits scan failed")
+        over = None
+    return {
+        "roster_cap": _cap,
+        "trait_cap": _tcap,
+        "over_cap_users": over,
+        "preview": session.get(_SQUAD_PREVIEW_KEY),
+        "token": session.get(_SQUAD_TOKEN_KEY),
+    }
+
+
+@app.route("/maintenance/squad-limits/preview", methods=["POST"])
+@login_required
+def admin_squad_limits_preview():
+    """Report exactly what applying the caps would do, changing nothing."""
+    import secrets
+    from services.squad_downsize_service import preview_downsize
+
+    db = get_session()
+    try:
+        totals = preview_downsize(db)
+        if not totals["users"]:
+            session.pop(_SQUAD_PREVIEW_KEY, None)
+            session.pop(_SQUAD_TOKEN_KEY, None)
+            flash("✅ Nothing to do — every squad is already within the limits.",
+                  "success")
+        else:
+            session[_SQUAD_PREVIEW_KEY] = totals
+            session[_SQUAD_TOKEN_KEY] = secrets.token_urlsafe(16)
+            flash(f"👀 Preview only — nothing has changed yet. "
+                  f"{totals['users']} squad(s) would be trimmed.", "info")
+    except Exception as e:
+        db.rollback()
+        logger.exception("squad limits preview failed")
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_maintenance"))
+
+
+@app.route("/maintenance/squad-limits/apply", methods=["POST"])
+@login_required
+def admin_squad_limits_apply():
+    """Release over-cap cards and refund over-cap traits, for every account."""
+    from services.squad_downsize_service import format_downsize_dm, run_downsize
+
+    expected = session.get(_SQUAD_TOKEN_KEY)
+    supplied = request.form.get("confirm_token", "")
+    if not expected or supplied != expected:
+        flash("⚠️ Run Preview first — nothing was changed.", "error")
+        return redirect(url_for("admin_maintenance"))
+
+    # Single-use: clear before the work runs, so a double submit can't apply
+    # twice even if the first request is still in flight.
+    session.pop(_SQUAD_TOKEN_KEY, None)
+    session.pop(_SQUAD_PREVIEW_KEY, None)
+
+    # Collected during the run and sent after it. run_downsize calls this only
+    # once a user's changes are COMMITTED, so nobody is told about a release
+    # that was rolled back — and a raising callback is logged there rather than
+    # counted as a failed account, so a bad message can't undo anyone's refund.
+    dms = []
+
+    def _queue_dm(user_id, result):
+        chat_id = result.get("telegram_id")
+        if not chat_id:
+            return  # web-only or seeded account with nowhere to send
+        text = format_downsize_dm(result)
+        if text:
+            dms.append((chat_id, text))
+
+    db = get_session()
+    try:
+        totals = run_downsize(db, on_user_done=_queue_dm)
+
+        # The releases and refunds are already committed, per user, by the time
+        # we get here. A failing audit write must not turn that into a bare
+        # "Error:" with no totals — the admin would be left with no record of
+        # what just happened to every squad on the service.
+        try:
+            log_admin(db, "squad_limits_apply", target_type="config",
+                      target_id=0, target_name="squad_limits",
+                      detail=(f"users={totals['users']}, "
+                              f"cards={totals['cards']} (+{totals['coins']:,} coins), "
+                              f"traits={totals['traits']} (+{totals['gems']:,} gems), "
+                              f"failed={totals['failed']}"))
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("squad limits audit log failed after apply")
+            flash("⚠️ The changes were applied, but the audit-log entry "
+                  "could not be written — see the server logs.", "error")
+
+        if not totals["users"]:
+            flash("✅ Nothing to do — every squad is already within the limits.",
+                  "success")
+        else:
+            flash(f"✅ Applied to {totals['users']} squad(s): "
+                  f"{totals['cards']} card(s) released for "
+                  f"{totals['coins']:,} 🪙, {totals['traits']} trait(s) "
+                  f"refunded for {totals['gems']:,} 💎.", "success")
+            # Deliberately after the flashes above: messaging is a courtesy on
+            # top of work that is already done, so a Telegram outage changes
+            # nothing about what the admin is told happened.
+            queued = _tg_send_batch_async(dms, label="squad limits")
+            if queued:
+                flash(f"📬 Notifying {queued} captain(s) by DM — delivering in "
+                      f"the background.", "info")
+            elif dms:
+                flash("⚠️ The changes were applied, but the DMs could not be "
+                      "queued (is BOT_TOKEN set?).", "error")
+        if totals["failed"]:
+            flash(f"⚠️ {totals['failed']} user(s) were skipped after an error — "
+                  f"press Preview and Apply again to retry them.", "error")
+    except Exception as e:
+        db.rollback()
+        logger.exception("squad limits apply failed")
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_maintenance"))
 
 
 # ═══════════════════════════════════════════════════════════════════════
