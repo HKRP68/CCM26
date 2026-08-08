@@ -32,7 +32,7 @@ reasoning about the over the player is about to face.
 | 4 | Special combination | both picks | `SPECIAL_COMBOS` |
 | 5 | Pitch × approach | context | `_PITCH_RULES` |
 | 6 | Phase × approach | context | `_PHASE_RULES` |
-| 7 | The mind game | context | `_READS`, `_OUTTHINK` |
+| 7 | The mind game | context | `_READS`, `READ_BONUS`, `OUTTHINK_BONUS` |
 | 8 | Momentum / fatigue / chemistry | context | `MOMENTUM_*`, `FATIGUE`, `CHEMISTRY_*` |
 | 9 | Last over's carry-over | context | `combo_carry` |
 

@@ -265,6 +265,8 @@ _SPIN_TYPES = {"Off spin", "Leg spin", "Finger spin", "Wrist spin"}
 
 
 def _is_spin(bowling_type):
+    """True for the four spin styles the engine models, for the rules that only
+    apply to spin (hitting off the square in the middle overs)."""
     return str(bowling_type or "") in _SPIN_TYPES
 
 
@@ -468,6 +470,7 @@ CHEMISTRY_BAT = 1.03               # → +3% runs
 def _validate_situational_tables():
     """A typo in any table above would be a silent no-op — fail at import."""
     def check(table, label):
+        """Assert every key in one multiplier table is a real outcome."""
         unknown = set(table or {}) - _OUTCOME_KEYS
         assert not unknown, (f"{label} scales unknown outcome(s) "
                              f"{sorted(unknown)}")
