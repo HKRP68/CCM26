@@ -4273,6 +4273,28 @@ def _webapp_auth(allow_not_debuted=False):
 
 
 
+def _next_roster_position(max_pos_row):
+    """Where a newly acquired card should sit in the squad order.
+
+    ``max_pos_row`` is the ``(order_position,)`` result of the highest-position
+    query, or None when the user holds no cards. While the highest position is
+    still inside the squad the new card appends right after it; at or past the
+    cap it goes to the 99 "unordered" bucket, which the roster views sort last.
+    A row whose position is NULL also lands in 99 — there is no number to
+    append after.
+
+    A module-level helper rather than an inline branch so the boundary is
+    testable: the comparison is against MAX_ROSTER, and it used to be a literal
+    25 that silently stopped tracking the cap.
+    """
+    if not max_pos_row:
+        return 1
+    max_pos = max_pos_row[0]
+    if max_pos is not None and max_pos < MAX_ROSTER:
+        return max_pos + 1
+    return 99
+
+
 def _player_card_url(player_id):
     """Return the Mini App-safe URL for a rendered player card image."""
     try:
@@ -6876,13 +6898,7 @@ def webapp_market_buy(slot_id):
         max_pos = (db.query(UserRoster.order_position)
                    .filter(UserRoster.user_id == user.id)
                    .order_by(UserRoster.order_position.desc()).first())
-        # If max position is still inside the squad, use max+1. Otherwise 99.
-        if max_pos and max_pos[0] is not None and max_pos[0] < MAX_ROSTER:
-            next_pos = max_pos[0] + 1
-        elif not max_pos:
-            next_pos = 1
-        else:
-            next_pos = 99
+        next_pos = _next_roster_position(max_pos)
         new_row = UserRoster(user_id=user.id, player_id=player.id,
                              order_position=next_pos,
                              acquired_date=datetime.utcnow())
@@ -16585,7 +16601,8 @@ def admin_market_settings_save():
             0, min(23, updates["trait_market_refresh_start_hour_ist"]))
         save_config(db, updates,
                     updated_by=session.get("admin_user", "admin"))
-        db.commit()
+        # One commit, after the audit row is staged: if log_admin throws, the
+        # settings roll back with it rather than going live behind an error.
         trait_times = ", ".join(
             format_hour_ist(h) for h in refresh_anchor_hours(
                 updates["trait_market_refresh_start_hour_ist"],

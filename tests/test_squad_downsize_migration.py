@@ -146,8 +146,8 @@ class SquadDownsizeMigrationTest(unittest.TestCase):
         session = get_session()
         try:
             user = self._make_user(session)
-            career_entry, career_player = self._add_card(session, user, 50,
-                                                         is_career=True)
+            career_entry, _career_player = self._add_card(session, user, 50,
+                                                          is_career=True)
             for r in range(70, 70 + 24):
                 self._add_card(session, user, r)
             session.commit()

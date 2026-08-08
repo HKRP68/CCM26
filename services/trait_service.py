@@ -268,16 +268,15 @@ def refresh_shop(session, user_id, force=False):
 
     needs_refresh = force or not rows
     if not needs_refresh and rows:
-        # Honour the website's trait-refresh interval so this legacy per-user
-        # shop can never disagree with the shared one.
+        # Honour the website's trait-refresh SCHEDULE, not just its interval, so
+        # this legacy per-user shop lands on the same IST anchors as the shared
+        # market. Bare elapsed time would drift every user to their own clock.
         try:
-            from services.global_market import get_trait_refresh_interval_hours
-            window = get_trait_refresh_interval_hours(session)
+            from services.global_market import is_trait_refresh_due
+            needs_refresh = is_trait_refresh_due(rows[0].refreshed_at, session)
         except Exception:
-            logger.exception("trait refresh interval lookup failed; using 24h")
-            window = 24
-        if now - rows[0].refreshed_at >= timedelta(hours=window):
-            needs_refresh = True
+            logger.exception("trait refresh schedule lookup failed; using 24h")
+            needs_refresh = now - rows[0].refreshed_at >= timedelta(hours=24)
 
     if not needs_refresh:
         return rows

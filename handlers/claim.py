@@ -540,7 +540,7 @@ async def replace_confirm_callback(update: Update, context: ContextTypes.DEFAULT
             text=(f"🔁 <b>Player SUCCESSFULLY REPLACED!</b>\n\n"
                   f"⬅ Removed: {old_name}\n"
                   f"➡ Added: {new_name}\n\n"
-                  f"✅ Squad Updated: {count}/25{traits_line}"),
+                  f"✅ Squad Updated: {count}/{MAX_ROSTER}{traits_line}"),
             parse_mode="HTML")
 
     except Exception:

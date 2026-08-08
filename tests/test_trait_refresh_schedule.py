@@ -23,6 +23,12 @@ def _ist(y, m, d, hour):
     return datetime(y, m, d, hour, 0, 0) - IST_OFFSET
 
 
+def _frozen_now(utc_dt):
+    """Pin ``global_market._now_utc`` so due-checks don't race the real clock."""
+    from unittest.mock import patch
+    return patch("services.global_market._now_utc", lambda: utc_dt)
+
+
 class AnchorHoursTest(unittest.TestCase):
 
     def test_twelve_hourly_from_midnight_is_midnight_and_noon(self):
@@ -79,19 +85,26 @@ class NextRefreshTest(unittest.TestCase):
         self.assertEqual(_next_refresh_utc(0, last, 12), _ist(2026, 5, 1, 12))
 
     def test_is_due_only_after_an_anchor_has_passed(self):
-        # A refresh one minute ago cannot be due again on any interval.
-        just_now = datetime.utcnow() - timedelta(minutes=1)
-        self.assertFalse(_is_due(just_now, 0, 12))
-        self.assertFalse(_is_due(just_now, 0, 24))
-        # Never refreshed is always due.
-        self.assertTrue(_is_due(None, 0, 12))
-        # A refresh two days ago is due on any interval.
-        self.assertTrue(_is_due(datetime.utcnow() - timedelta(days=2), 0, 12))
+        # Frozen clock: against a live utcnow() these assertions flip for a
+        # minute either side of every anchor (18:30 UTC is midnight IST), which
+        # is a genuine once-a-day flake rather than a real failure.
+        now = _ist(2026, 5, 4, 6)
+        with _frozen_now(now):
+            # A refresh one minute ago cannot be due again on any interval.
+            just_now = now - timedelta(minutes=1)
+            self.assertFalse(_is_due(just_now, 0, 12))
+            self.assertFalse(_is_due(just_now, 0, 24))
+            # Never refreshed is always due.
+            self.assertTrue(_is_due(None, 0, 12))
+            # A refresh two days ago is due on any interval.
+            self.assertTrue(_is_due(now - timedelta(days=2), 0, 12))
 
     def test_hourly_interval_becomes_due_after_an_hour(self):
-        ninety_min_ago = datetime.utcnow() - timedelta(minutes=90)
-        self.assertTrue(_is_due(ninety_min_ago, 0, 1))
-        self.assertFalse(_is_due(ninety_min_ago, 0, 24))
+        now = _ist(2026, 5, 4, 6)
+        with _frozen_now(now):
+            ninety_min_ago = now - timedelta(minutes=90)
+            self.assertTrue(_is_due(ninety_min_ago, 0, 1))
+            self.assertFalse(_is_due(ninety_min_ago, 0, 24))
 
 
 class TraitScheduleFallbackTest(unittest.TestCase):
@@ -119,17 +132,112 @@ class TraitScheduleFallbackTest(unittest.TestCase):
         self.assertEqual(_trait_schedule(self._Cfg(0, 7)), (0, 6))
         self.assertEqual(_trait_schedule(self._Cfg(0, None)), (0, 24))
 
+    def test_a_stored_zero_interval_is_a_value_not_an_absence(self):
+        # Only NULL means "unset". A stored 0 must reach clamp_refresh_interval
+        # and snap to the 1-hour minimum, not read as "once a day".
+        self.assertEqual(_trait_schedule(self._Cfg(0, 0)),
+                         (0, clamp_refresh_interval(0)))
+        self.assertEqual(_trait_schedule(self._Cfg(0, 0))[1], 1)
+
+    def test_a_stored_zero_start_hour_is_midnight_not_a_fallback(self):
+        # 0 is a legitimate start hour; it must not fall back to the player
+        # market's hour the way NULL does.
+        self.assertEqual(_trait_schedule(self._Cfg(0, 12, player_hour=9)),
+                         (0, 12))
+
+
+class _FakeSession:
+    """Minimal stand-in: ``session.query(GameConfig).first()`` → the row."""
+
+    def __init__(self, cfg_row):
+        self._cfg = cfg_row
+
+    def query(self, *_args, **_kwargs):
+        return self
+
+    def first(self):
+        return self._cfg
+
+
+class _FakeCfg:
+    def __init__(self, *, player_hour, player_last,
+                 trait_start, trait_interval, trait_last=None):
+        self.market_refresh_hour_ist = player_hour
+        self.market_last_refresh_at = player_last
+        self.trait_market_refresh_start_hour_ist = trait_start
+        self.trait_market_refresh_interval_hours = trait_interval
+        self.trait_market_last_refresh_at = trait_last
+
 
 class PlayerMarketUnaffectedTest(unittest.TestCase):
+    """The two markets must not be able to reach each other's schedule."""
 
-    def test_player_schedule_ignores_trait_interval_settings(self):
-        from services.global_market import get_next_refresh_at  # noqa: F401
-        # get_next_refresh_at calls _next_refresh_utc without an interval, so
-        # the trait market's setting can never reach it. Pin the default here.
-        last = _ist(2026, 5, 4, 0)
-        daily = _next_refresh_utc(0, last)
-        self.assertEqual(daily, _ist(2026, 5, 5, 0))
-        self.assertNotEqual(daily, _next_refresh_utc(0, last, 12))
+    def setUp(self):
+        # Several service tests here stub ``models`` (and ``sqlalchemy``) in
+        # sys.modules with lightweight fakes. If one leaks its stub, the
+        # ``from models import GameConfig`` inside global_market fails and
+        # these tests error out purely on test ordering — and the real module
+        # can't be re-imported, because sqlalchemy is stubbed too.
+        #
+        # The functions under test only use GameConfig as a query argument that
+        # the fake session ignores, so supplying the name is enough. Whatever
+        # was in sys.modules is restored afterwards, leaving the leaker's own
+        # state exactly as it was.
+        import sys
+        import types
+        saved = sys.modules.get("models")
+        self.addCleanup(self._restore_models, saved)
+        try:
+            from models import GameConfig  # noqa: F401
+        except ImportError:
+            stub = types.ModuleType("models")
+            if saved is not None:
+                stub.__dict__.update(saved.__dict__)
+            stub.GameConfig = type("GameConfig", (), {})
+            sys.modules["models"] = stub
+
+    @staticmethod
+    def _restore_models(saved):
+        import sys
+        if saved is None:
+            sys.modules.pop("models", None)
+        else:
+            sys.modules["models"] = saved
+
+    def _session(self):
+        # Player market: daily at midnight IST, last rolled at midnight.
+        # Trait market: every 12 hours from 6 AM IST, same last-roll time.
+        return _FakeSession(_FakeCfg(
+            player_hour=0, player_last=_ist(2026, 5, 4, 0),
+            trait_start=6, trait_interval=12, trait_last=_ist(2026, 5, 4, 0),
+        ))
+
+    def test_player_next_refresh_is_the_daily_anchor(self):
+        from services.global_market import get_next_refresh_at
+        # Aggressive trait settings sit in the same config row and must not
+        # pull the player market off its once-a-day schedule.
+        self.assertEqual(get_next_refresh_at(self._session()),
+                         _ist(2026, 5, 5, 0))
+
+    def test_trait_next_refresh_follows_its_own_anchors(self):
+        from services.global_market import get_next_trait_refresh_at
+        # 12 h from 6 AM → 6 AM and 6 PM; from midnight the next is 6 AM.
+        self.assertEqual(get_next_trait_refresh_at(self._session()),
+                         _ist(2026, 5, 4, 6))
+
+    def test_the_two_markets_disagree_on_purpose(self):
+        from services.global_market import (get_next_refresh_at,
+                                            get_next_trait_refresh_at)
+        session = self._session()
+        self.assertNotEqual(get_next_refresh_at(session),
+                            get_next_trait_refresh_at(session))
+
+    def test_a_missing_config_row_yields_no_schedule(self):
+        from services.global_market import (get_next_refresh_at,
+                                            get_next_trait_refresh_at)
+        empty = _FakeSession(None)
+        self.assertIsNone(get_next_refresh_at(empty))
+        self.assertIsNone(get_next_trait_refresh_at(empty))
 
 
 if __name__ == "__main__":

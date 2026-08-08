@@ -72,8 +72,13 @@ Trait limits used to be purely per roster slot — 3 per card, 2 of a category,
 only real constraint was gems. With a 25-card squad that was 75 trait slots to
 fill, and "which cards get traits" was not a decision anyone had to make.
 
-18 across the squad is deliberately one short of the 18 ordinary cards plus the
-career card: someone always goes without, and choosing who is the point.
+18 is exactly the number of ordinary cards (19 minus the Career Player). The
+budget therefore stretches to **one trait on every ordinary card** — a squad
+does not have to leave anyone bare. What it cannot do is stack: the per-card
+limit is 3, so a squad has room for 54 traits' worth of slots against a budget
+of 18. Giving a key card a second or third trait means another card gives one
+up. That trade is the decision the cap exists to create, and it is why the
+number sits at the card count rather than well above it.
 
 ### 3.2 Why the Career Player is exempt
 

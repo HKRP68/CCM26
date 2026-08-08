@@ -16,6 +16,7 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
+from config import MAX_ROSTER
 from database import get_session
 from models import User, Player
 from utils.idempotency import claim_once, release
@@ -164,7 +165,7 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                       "📦 Limited stock on some cards — check before you plan")
         caption = (
             f"💰 <b>{user.total_coins:,}</b> 🪙 · "
-            f"📊 {user.roster_count}/25 roster\n"
+            f"📊 {user.roster_count}/{MAX_ROSTER} roster\n"
             f"{discount_line}\n{stock_line}"
         )
 
@@ -386,7 +387,7 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
                 chat_id=q.message.chat_id,
                 text=(f"🎉 <b>{msg}</b> added to your roster!\n"
                       f"💰 Balance: <b>{user.total_coins:,}</b> 🪙\n"
-                      f"📊 Roster: {user.roster_count}/25"),
+                      f"📊 Roster: {user.roster_count}/{MAX_ROSTER}"),
                 parse_mode="HTML",
             )
 

@@ -264,8 +264,12 @@ def _trait_schedule(cfg_row):
     start = cfg_row.trait_market_refresh_start_hour_ist
     if start is None:
         start = cfg_row.market_refresh_hour_ist or 0
+    # Only NULL means "unset" — a stored 0 is a real value and must reach
+    # clamp_refresh_interval, which snaps it to the 1-hour minimum rather than
+    # silently reading as "once a day".
+    stored_interval = cfg_row.trait_market_refresh_interval_hours
     interval = clamp_refresh_interval(
-        cfg_row.trait_market_refresh_interval_hours or 24)
+        24 if stored_interval is None else stored_interval)
     return int(start) % 24, interval
 
 
@@ -364,6 +368,37 @@ def get_trait_refresh_interval_hours(session=None):
     except Exception:
         logger.exception("get_trait_refresh_interval_hours failed; using 24h")
         return 24
+    finally:
+        if own:
+            session.close()
+
+
+def is_trait_refresh_due(last_refresh_utc, session=None):
+    """Is a trait shop due, against the configured IST anchor schedule?
+
+    Same question ``ensure_trait_market_fresh`` asks of the shared market, for
+    callers holding their own timestamp — notably the legacy per-user shop in
+    ``services.trait_service.refresh_shop``. Anchors matter here rather than
+    bare elapsed time: with "every 12 hours from 12 AM" configured, a shop that
+    last rolled at 11 PM is due at midnight, one hour later, not at 11 AM.
+    Without it the shared market and the per-user shops would drift apart on
+    the same setting.
+
+    Fails open (True) if the config cannot be read, matching how the rest of
+    this module treats an unreadable schedule: an extra reroll is harmless, a
+    permanently stale shop is not.
+    """
+    from models import GameConfig
+    own = session is None
+    if own:
+        from database import get_session
+        session = get_session()
+    try:
+        start, interval = _trait_schedule(session.query(GameConfig).first())
+        return _is_due(last_refresh_utc, start, interval)
+    except Exception:
+        logger.exception("is_trait_refresh_due failed; forcing a refresh")
+        return True
     finally:
         if own:
             session.close()

@@ -120,6 +120,12 @@ def main():
                 session.rollback()
                 failed += 1
                 log.exception("  user %s FAILED — skipped", user_id)
+            finally:
+                # commit() expires objects but leaves them in the identity map.
+                # Without this the one long-lived Session accumulates every
+                # User, UserRoster, Player and PlayerTrait touched by the whole
+                # run, which matters on a large user table.
+                session.expunge_all()
     finally:
         session.close()
 

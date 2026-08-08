@@ -426,9 +426,12 @@ TRAIT_MAX_SAME_CATEGORY = 2
 # card and the rest of the catalogue would stop mattering.
 TRAIT_MAX_ELITE_PER_PLAYER = 1
 
-# Max traits equipped across a whole squad. Deliberately one short of the
-# MAX_ROSTER - 1 outfield cards, so a captain can never kit out every single
-# card and must decide who goes without.
+# Max traits equipped across a whole squad. Sized to exactly the number of
+# ordinary cards (MAX_ROSTER - 1, the squad minus the Career Player), so the
+# budget stretches to one trait each — but the per-card limit is
+# TRAIT_MAX_PER_PLAYER, so stacking a second or third trait on a key card
+# means leaving other cards bare. That trade is the decision the cap exists
+# to create.
 #
 # The Career Player is EXEMPT: it carries its own TRAIT_MAX_PER_PLAYER
 # allowance on top of this budget, so a fully kitted account holds

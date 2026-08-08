@@ -543,7 +543,7 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             f"📛 {player.name} - {player.rating} OVR\n"
             f"💰 Paid: {buy_val:,} 🪙\n"
             f"💳 Balance: {user.total_coins:,} 🪙\n"
-            f"📊 Roster: {user.roster_count}/25\n\n"
+            f"📊 Roster: {user.roster_count}/{MAX_ROSTER}\n\n"
             f"<i>↩️ Made a mistake? /cmuundo within 60 seconds to reverse.</i>",
             parse_mode="HTML",
         )

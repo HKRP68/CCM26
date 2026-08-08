@@ -22,6 +22,7 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
+from config import MAX_ROSTER
 from database import get_session
 from models import User, Pack, UserRoster, Player
 from services.pack_service import (
@@ -761,7 +762,7 @@ async def pack_open_inventory_callback(update: Update, context: ContextTypes.DEF
         summary = [
             f"{pack.emoji} <b>{pack.name}</b> — opened!",
             "━━━━━━━━━━━━━━━━━━━",
-            f"📊 Roster: <b>{user.roster_count}/25</b>",
+            f"📊 Roster: <b>{user.roster_count}/{MAX_ROSTER}</b>",
             f"📦 Inventory: <b>{len(remaining_inv)}/50</b> unopened packs",
         ]
         if to_claim:

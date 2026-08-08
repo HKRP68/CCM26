@@ -281,7 +281,7 @@
         {% if t in subscription_tiers %}<span style="color:#b9f2ff;font-weight:600;">{{ tier_label(t) }}</span>
         {% else %}<span style="color:var(--muted);">Free</span>{% endif %}
       </td>
-      <td>{{ u.roster_count }}/25</td>
+      <td>{{ u.roster_count }}/{{ game_limits.max_roster }}</td>
       <td>{{ u.matches_won or 0 }} <span style="color:var(--muted);font-size:.75rem;">/ {{ u.matches_played or 0 }}</span></td>
       <td style="font-size:.85rem;">{{ u._winpct }}%</td>
       <td>{{ u._streak }}</td>

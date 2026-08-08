@@ -6687,7 +6687,7 @@ function renderFreePackAction() {
     // pending claim and the user picks who to Replace (or releases it) after.
     const fullNote = d.roster_full
       ? `<p style="color:var(--accent);font-size:0.78rem;margin:0 0 0.8rem;">
-           Squad is full (${d.roster_count}/25) — you'll choose who to replace after opening.
+           Squad is full (${d.roster_count}/${MAX_ROSTER}) — you'll choose who to replace after opening.
          </p>`
       : '';
     card.innerHTML = `

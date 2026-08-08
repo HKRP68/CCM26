@@ -19,7 +19,7 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import User, Player, UserRoster
-from config import get_sell_value
+from config import get_sell_value, get_buy_value, MAX_ROSTER
 from utils.idempotency import claim_once, release
 from services.activity_service import log_activity
 from services.flags import get_flag
@@ -482,7 +482,7 @@ async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             f"{r['name']} ({r['rating']} OVR)\n\n"
             f"💸 Received: <b>{r['value']:,}</b> 🪙\n"
             f"💰 Balance: {result['new_balance']:,}\n"
-            f"📊 Roster: {result['new_count']}/25"
+            f"📊 Roster: {result['new_count']}/{MAX_ROSTER}"
         )
         if result["captain_released"]:
             text += "\n\n⚠️ Captain slot cleared. Use /setcaptain to assign new one."
@@ -732,7 +732,7 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
             f"{names_str}\n\n"
             f"💸 Total: <b>{result['total_coins']:,}</b> 🪙\n"
             f"💰 Balance: {result['new_balance']:,}\n"
-            f"📊 Roster: {result['new_count']}/25"
+            f"📊 Roster: {result['new_count']}/{MAX_ROSTER}"
         )
         if result["captain_released"]:
             text += "\n\n⚠️ Captain slot cleared. Use /setcaptain."

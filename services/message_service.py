@@ -32,12 +32,12 @@ REGISTRY = {
     "welcome_existing": {
         "label": "Welcome (returning user)",
         "category": "Onboarding",
-        "description": "Shown by /start when user has already debuted. Placeholders: {first_name}, {team_name}, {coins}, {gems}, {roster}",
+        "description": "Shown by /start when user has already debuted. Placeholders: {first_name}, {team_name}, {coins}, {gems}, {roster}, {max_roster}",
         "default": (
             "👋 Welcome back, <b>{first_name}</b>!\n\n"
             "🏏 <b>{team_name}</b>\n"
             "💰 {coins:,} coins · 💎 {gems} gems\n"
-            "📊 Roster: {roster}/25\n\n"
+            "📊 Roster: {roster}/{max_roster}\n\n"
             "Type /howto for the full command list."
         ),
     },
@@ -61,7 +61,7 @@ REGISTRY = {
             "✅ Your debut is complete!\n"
             "✅ You received {count} starting players\n\n"
             "{player_list}\n\n"
-            "📊 Your Roster: {count}/25 players\n"
+            "📊 Your Roster: {count}/{max_roster} players\n"
             "💰 Coins: {coins:,}\n"
             "💎 Gems: {gems}\n\n"
             "<b>Commands:</b>\n"
@@ -115,9 +115,9 @@ REGISTRY = {
     "roster_full": {
         "label": "Roster full",
         "category": "Errors",
-        "description": "Shown when user can't acquire more players. Placeholders: {max}",
+        "description": "Shown when user can't acquire more players. Placeholders: {max}, {max_roster}",
         "default": (
-            "❌ <b>Roster full!</b> ({max}/25)\n\n"
+            "❌ <b>Roster full!</b> ({max}/{max_roster})\n\n"
             "Use /release or /releasemultiple to free up slots."
         ),
     },
@@ -299,6 +299,11 @@ def get_msg(key, **placeholders):
     """
     if _cache["data"] is None:
         _refresh()
+    # {max_roster} is always available, to every template and to admin-edited
+    # overrides, so a squad-cap rebalance can't leave a stale number baked into
+    # a message. An explicit caller value still wins.
+    from config import MAX_ROSTER
+    placeholders.setdefault("max_roster", MAX_ROSTER)
     overrides = _cache["data"] or {}
     template = overrides.get(key)
     if template is None:

@@ -2,6 +2,11 @@ import sys
 import types
 from types import SimpleNamespace
 
+# Captured before any test stubs out ``config``, so the stub below can mirror
+# the live squad cap instead of pinning a literal that a rebalance would strand.
+import config as _real_config
+_REAL_MAX_ROSTER = _real_config.MAX_ROSTER
+
 
 def _load_debut_with_stubs(monkeypatch):
     """Load handlers.debut with tiny dependency stubs for this helper test."""
@@ -53,6 +58,9 @@ def _load_debut_with_stubs(monkeypatch):
     config = types.ModuleType("config")
     config.DEBUT_COINS = 0
     config.DEBUT_GEMS = 0
+    # The debut message renders "N/<cap> players", so the stub has to carry the
+    # squad cap too. Mirror the real value rather than pinning a literal.
+    config.MAX_ROSTER = _REAL_MAX_ROSTER
     monkeypatch.setitem(sys.modules, "config", config)
 
     activity_service = types.ModuleType("services.activity_service")

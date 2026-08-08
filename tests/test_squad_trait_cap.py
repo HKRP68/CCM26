@@ -157,10 +157,13 @@ class SquadTraitCapTest(unittest.TestCase):
                 self.assertTrue(ok, f"career slot {i + 1}: {msg}")
 
             # A 4th is refused by the per-player rule, not the squad budget.
+            # Assert on distinctive text: both messages happen to contain "3",
+            # so a bare number check would pass for either one.
             inv = self._stock_inventory(session, user, category="Mental")
             ok, msg = apply_trait_to_player(session, user, inv.id, career.id)
             self.assertFalse(ok)
-            self.assertIn(str(TRAIT_MAX_PER_PLAYER), msg)
+            self.assertIn(f"already has {TRAIT_MAX_PER_PLAYER} traits", msg)
+            self.assertNotIn("Squad trait limit", msg)
 
             # Career traits never count toward the squad budget.
             self.assertEqual(count_squad_traits(session, user.id),

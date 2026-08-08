@@ -8,7 +8,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import User, UserRoster, UserStats
 from services.player_service import get_players_for_debut
-from config import DEBUT_COINS, DEBUT_GEMS
+from config import DEBUT_COINS, DEBUT_GEMS, MAX_ROSTER
 from services.activity_service import log_activity
 from services.miniapp_buttons import miniapp_button
 
@@ -164,7 +164,7 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ You received {len(players)} starting players\n"
             "🏏 <b>Here is your starter XI.</b>\n\n"
             + "\n".join(lines) + "\n\n"
-            f"📊 Your Roster: {len(players)}/25 players\n"
+            f"📊 Your Roster: {len(players)}/{MAX_ROSTER} players\n"
             f"💰 Coins: {debut_coins:,}\n"
             f"💎 Gems: {debut_gems}\n\n"
             "<b>Commands:</b>\n"
