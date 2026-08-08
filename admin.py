@@ -11662,6 +11662,12 @@ EVENT_KEYS = [
     ("pitch_flat", "🏟 Play a match on a Flat pitch"),
     ("pitch_green", "🏟 Play a match on a Green pitch"),
     ("pitch_bouncy", "🏟 Play a match on a Bouncy pitch"),
+    # Match-length quests — one key per threshold in
+    # services.quest_service.MATCH_LENGTH_THRESHOLDS. A match fires every
+    # threshold it clears, so a 20-over game counts for all three.
+    ("overs_10", "⏱ Play a match of 10 overs or more"),
+    ("overs_15", "⏱ Play a match of 15 overs or more"),
+    ("overs_20", "⏱ Play a match of 20 overs"),
     # Career Player events — fire only for the user's own /cmucareer card.
     # Pair these with the "Career Player quest" checkbox. Grouped the same way
     # the weekly assigner buckets them: batting, bowling, then all-round.

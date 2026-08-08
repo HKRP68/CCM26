@@ -81,6 +81,15 @@ ask for "3 matches on a Green pitch today". The key is
   'pitch_dry', 'pitch_dusty', 'pitch_hard', 'pitch_even', 'pitch_flat',
   'pitch_green', 'pitch_bouncy'
 
+Match-length event_keys — one per threshold in MATCH_LENGTH_THRESHOLDS, fired
+at match end for every threshold the match's own over count clears, so a quest
+can ask for "3 matches of 15 overs or more today" and a 20-over game moves all
+three at once. See :func:`match_length_event_keys`.
+  'overs_10', 'overs_15', 'overs_20'
+
+Both of those families are guaranteed a slot on every daily card rather than
+being left to the random draw — see DAILY_GUARANTEED_BUCKETS.
+
 Career Player event_keys (fired only for the user's own /cmucareer card, and
 only ever consumed by quests flagged career_only). Every one is derived from
 the same per-player match stats the scorecards read, so nothing here depends on
@@ -234,6 +243,67 @@ def pitch_event_key(pitch_type) -> str | None:
 
 
 PITCH_EVENT_KEYS = {p: pitch_event_key(p) for p in _PITCH_TYPES}
+
+# Match-length quests — "play 3 matches of 15 overs or more today". The host
+# already chooses the length when they open a lobby (``/wpm <overs>``, 1-20),
+# so these ask a player to commit to a format rather than to grind a stat.
+#
+# The thresholds are a ladder, not a partition: a finished match fires the key
+# for *every* threshold its over count clears, so one 20-over game moves the
+# 10-, 15- and 20-over quests together. Matching the length exactly would have
+# meant that picking the longest format made no progress at all on "play 2
+# matches of 10+ overs", which reads like a bug from the player's side.
+MATCH_LENGTH_THRESHOLDS = (10, 15, 20)
+
+OVERS_EVENT_KEYS = {n: "overs_%d" % n for n in MATCH_LENGTH_THRESHOLDS}
+
+
+def match_length_event_keys(overs):
+    """Quest event keys for every length threshold ``overs`` clears.
+
+    ``overs`` is the match's own length off the state (``state['overs']``),
+    which round-trips through JSON and arrives as an int, a float or a string
+    depending on which mode wrote it. A length that cannot be read as a number
+    — or a match that never recorded one — clears nothing rather than guessing
+    a default, so a missing field can never hand out a 20-over quest.
+    """
+    try:
+        length = int(float(overs))
+    except (TypeError, ValueError):
+        return []
+    return [key for n, key in OVERS_EVENT_KEYS.items() if length >= n]
+
+
+# Quest families that are guaranteed a place on every daily card: one pitch
+# quest and one match-length quest, dealt from their own slots on top of the
+# random three rather than competing for them.
+#
+# Both families ask a player to keep playing until a surface or a format comes
+# up, which is only worth holding if the quest itself turns up often enough to
+# plan a session around. Left in the general draw, a given player saw a pitch
+# quest roughly one day in five and a length quest less often still — not a
+# theme, just an occasional curiosity. Own slots is the same answer
+# CAREER_QUESTS_PER_USER already gives for career weeklies, for the same
+# reason: a category that has to appear cannot be made to compete for the
+# general slots.
+#
+# Pinning them (``always_assign``) would also have made them daily, but a pin
+# is per quest, not per family — pinning the pitch quests would deal all seven
+# surfaces to everybody every day, on top of the random three. Reserving a slot
+# instead keeps the card short and rotates *which* surface and *which* format
+# the day asks for. An admin pin still works and fills the family's slot rather
+# than arriving alongside it, so pinning one pitch quest gives everybody that
+# pitch quest today instead of two.
+#
+# (family, event keys it covers, how many slots it gets)
+DAILY_GUARANTEED_BUCKETS = (
+    ("pitch", frozenset(PITCH_EVENT_KEYS.values()), 1),
+    ("overs", frozenset(OVERS_EVENT_KEYS.values()), 1),
+)
+
+# Flattened, for the "is this quest spoken for by a family?" checks.
+DAILY_GUARANTEED_EVENTS = frozenset(
+    key for _family, keys, _slots in DAILY_GUARANTEED_BUCKETS for key in keys)
 
 
 def is_bot_match(state, *, is_vsbot=False) -> bool:
@@ -639,6 +709,86 @@ def _top_up_career_weeklies(session, user_id, quest_type, current_period, now,
     return dealt
 
 
+def _deal_daily_guaranteed(session, user_id, pool, now, *, held=()):
+    """Pick one quest from each guaranteed daily family the user is short of.
+
+    ``pool`` is the day's eligible daily quests; only those on a family's event
+    key are ever considered. ``held`` is what the user already has for today —
+    a pinned quest, or the rows from an earlier read — so a family that is
+    already covered contributes nothing.
+
+    Yesterday's picks go to the back of the queue, so the same surface and the
+    same format rarely land two days running. A family with nothing active in
+    the catalogue (an admin deactivated every pitch quest, say) simply
+    contributes nothing; the user still gets their random three.
+    """
+    held = list(held)
+    held_ids = {q.id for q in held}
+    yesterday = _quests_assigned_in(
+        session, user_id, daily_period_key(now - timedelta(days=1)))
+
+    seen = set(yesterday) | held_ids
+    chosen = []
+    for _family, event_keys, slots in DAILY_GUARANTEED_BUCKETS:
+        short = slots - sum(1 for q in held
+                            if (q.event_key or "") in event_keys)
+        if short <= 0:
+            continue
+        bucket = [q for q in pool
+                  if (q.event_key or "") in event_keys and q.id not in held_ids]
+        chosen += _draw(bucket, short, seen)
+    return chosen
+
+
+def _top_up_daily_guaranteed(session, user_id, quest_type, current_period, now,
+                             *, already_pinned=()):
+    """Deal any guaranteed daily family the user is missing for today.
+
+    The daily deal happens once, on the user's first quest read of the day, and
+    :func:`ensure_quests_assigned` deliberately does nothing on later reads. So
+    a family that became dealable *after* that read — this feature shipping
+    mid-day, or an admin activating the last pitch quest — would reach nobody
+    until tomorrow. This fills the gap on the user's next read instead.
+
+    Returns the quests newly assigned, which is empty for everybody already up
+    to date — the common case, and one query.
+    """
+    if quest_type != "daily":
+        return []
+
+    held = (session.query(Quest)
+            .join(UserQuestProgress, Quest.id == UserQuestProgress.quest_id)
+            .filter(UserQuestProgress.user_id == user_id,
+                    UserQuestProgress.period_key == current_period,
+                    UserQuestProgress.assigned == True,
+                    Quest.quest_type == "daily",
+                    Quest.is_active == True,
+                    Quest.event_key.in_(sorted(DAILY_GUARANTEED_EVENTS)))
+            .all())
+    held += [q for q in already_pinned
+             if (q.event_key or "") in DAILY_GUARANTEED_EVENTS]
+    if all(slots <= sum(1 for q in held if (q.event_key or "") in keys)
+           for _family, keys, slots in DAILY_GUARANTEED_BUCKETS):
+        return []
+
+    pool = (session.query(Quest)
+            .filter(Quest.quest_type == "daily",
+                    Quest.is_active == True,
+                    Quest.always_assign == False,
+                    Quest.event_key.in_(sorted(DAILY_GUARANTEED_EVENTS)))
+            .all())
+    dealt = _deal_daily_guaranteed(session, user_id, pool, now, held=held)
+    for quest in dealt:
+        session.add(UserQuestProgress(
+            user_id=user_id, quest_id=quest.id, period_key=current_period,
+            progress=0, completed=False, claimed=False, assigned=True,
+            last_updated=now))
+    if dealt:
+        logger.info("topped up %s guaranteed daily quest(s) for user %s",
+                    len(dealt), user_id)
+    return dealt
+
+
 def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
     """Make sure the user has a randomly-assigned set of quests for the current period.
 
@@ -712,6 +862,13 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
             session, user_id, quest_type, current_period, now, has_career,
             already_pinned=newly_pinned)
 
+        # Same story for the guaranteed daily families: somebody who opened
+        # their quests before a pitch or match-length quest went live would
+        # otherwise wait until tomorrow to see one.
+        newly_pinned += _top_up_daily_guaranteed(
+            session, user_id, quest_type, current_period, now,
+            already_pinned=newly_pinned)
+
         if newly_pinned:
             session.flush()
         return {"assigned": newly_pinned, "auto_claimed": []}
@@ -770,6 +927,17 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
             "no auto-tracked %s quests available — falling back to the manual "
             "ones so users are not left with an empty quest list", quest_type)
 
+    # Pitch and match-length quests are dealt from their own slots below, so
+    # they come out of the random draw here. Leaving them in it would let the
+    # draw spend a general slot on a second pitch quest — or on the very one
+    # the guaranteed slot is about to hand out.
+    guaranteed_pool = []
+    if quest_type == "daily":
+        guaranteed_pool = [q for q in random_pool
+                           if (q.event_key or "") in DAILY_GUARANTEED_EVENTS]
+        random_pool = [q for q in random_pool
+                       if (q.event_key or "") not in DAILY_GUARANTEED_EVENTS]
+
     # Career weekly quests get their own five slots rather than competing with
     # the ordinary weekly ones, so a Career Player owner always has a full
     # career card to work through — and always has a week that can be judged.
@@ -791,6 +959,12 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
     chosen = list(pinned)  # start with all pinned
     if random_pool:
         chosen += random.sample(random_pool, min(max_count, len(random_pool)))
+    if guaranteed_pool:
+        # One pitch quest and one match-length quest, on top of the three — a
+        # pinned quest in either family fills that family's slot rather than
+        # doubling it up.
+        chosen += _deal_daily_guaranteed(session, user_id, guaranteed_pool, now,
+                                         held=pinned)
     if career_pool and career_slots > 0:
         chosen += _pick_career_weeklies(session, user_id, career_pool, now,
                                         slots=career_slots)
@@ -1199,6 +1373,12 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
     pitch_key = pitch_event_key(state.get("pitch_type"))
     if pitch_key:
         safe_track(session, uid, pitch_key, 1)
+
+    # Match-length quests — "play 3 matches of 15 overs or more today". Every
+    # threshold this match's length clears fires, so one 20-over game moves the
+    # 10-, 15- and 20-over quests together.
+    for overs_key in match_length_event_keys(state.get("overs")):
+        safe_track(session, uid, overs_key, 1)
 
     # Aggregates across all of this user's players (both innings)
     runs_total = wkts_total = fifties = hundreds = 0

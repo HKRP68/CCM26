@@ -1,6 +1,7 @@
-# Quests: AI matches, the daily cap, and pitch quests
+# Quests: AI matches, the daily cap, pitch and match-length quests
 
-Two changes to what moves a quest bar, plus the operational notes for both.
+What moves a quest bar, which quests are guaranteed to show up each day, and
+the operational notes for all of it.
 
 ## AI matches complete quests again
 
@@ -59,10 +60,96 @@ The pitch is randomised per match (or chosen by the host in Challenge League), s
 these quests ask a player to keep playing until the surface comes up rather than
 to grind a stat — which is why the seeded targets are 2–3, not 10.
 
+## Match-length quests
+
+The host picks the length when they open a lobby (`/wpm <overs>`, 1–20), so a
+quest can ask for a *format* rather than a stat: "play 3 matches of 15 overs or
+more today".
+
+`track_user_match_quests` reads the match's own `overs` off the state and fires
+one event per threshold that length **clears** — the keys are a ladder, not a
+partition:
+
+| length played | events fired |
+| --- | --- |
+| 20 overs | `overs_10`, `overs_15`, `overs_20` |
+| 15–19 overs | `overs_10`, `overs_15` |
+| 10–14 overs | `overs_10` |
+| under 10 | none |
+
+Clearing rather than matching is deliberate. If `overs_10` meant *exactly* ten,
+a player who chose the longest format would watch "play 2 matches of 10+ overs"
+sit at 0/2 all day, which reads as a bug from the other side of the screen.
+
+The thresholds live in `services.quest_service.MATCH_LENGTH_THRESHOLDS`, and
+`match_length_event_keys` builds the keys from them — adding a threshold there
+adds its key everywhere, with no second list to update. A state whose `overs` is
+missing or unreadable clears nothing rather than falling back to a default, so a
+mode that forgets to record its own length can never hand out a 20-over quest
+for free.
+
+The three seeded quests are **Double Header** (2 × 10+ overs, tier 1), **Long
+Format** (3 × 15+ overs, tier 2) and **Full Twenty** (4 × 20 overs, tier 3).
+Target and length climb together on purpose — the three are one difficulty
+ladder, and the tier prices each accordingly, so Full Twenty is the family's
+heaviest ask rather than its lightest. Four full T20s is a real session; if that
+proves too steep in practice, the target is the cheapest thing to tune, editable
+per quest on the admin quest form with no deploy.
+
+## Both families are guaranteed a slot every day
+
+Pitch and match-length quests are only worth holding if they turn up often
+enough to plan a session around. Left in the ordinary random draw, a player saw
+a pitch quest roughly one day in five and a length quest less often still — not
+a theme, just an occasional curiosity.
+
+The reference point is **Ad Enthusiast**, the pinned "watch 5 ads today" quest
+`database.py` seeds — it is on every card, every day. Pitch and match-length
+quests now show up just as reliably, but a pin was the wrong tool for it: a pin
+is per *quest*, so pinning the pitch family would deal all seven surfaces to
+everybody every day. A reserved slot per family gives the same reliability and
+still rotates which surface and which format the day asks for.
+
+So the daily deal now reserves a slot for each family:
+
+```
+daily card = 3 random  +  1 pitch quest  +  1 match-length quest  (+ any pins)
+```
+
+The two are drawn **on top of** the random three, not out of them, so nobody
+loses general quests to make room — the same arrangement
+`CAREER_QUESTS_PER_USER` already uses for career weeklies, for the same reason:
+a category that has to appear cannot be made to compete for the general slots.
+Note that this does mean two more quests' worth of rewards per player per day.
+
+Which surface and which format the day asks for still rotates, and yesterday's
+picks go to the back of the queue, so the same pitch quest rarely lands two days
+running. The reserved families are removed from the random pool entirely, so the
+draw can never spend a general slot on a second pitch quest.
+
+The families are declared in one place —
+`services.quest_service.DAILY_GUARANTEED_BUCKETS` — as `(family, event keys,
+slots)`. Some consequences worth knowing:
+
+* **Pinning still works, and doesn't double up.** A pitch quest an admin pins
+  (`always_assign`) *fills* the pitch slot instead of arriving next to it, so
+  pinning one gives everybody that pitch quest today rather than two pitch
+  quests.
+* **An empty family costs nobody a slot.** Deactivate every pitch quest and
+  players simply get their random three and a length quest.
+* **A mid-day rollout reaches everyone the same day.** The daily deal normally
+  happens once, on a user's first quest read of the day.
+  `_top_up_daily_guaranteed` fills a family a user is missing on their *next*
+  read, so shipping this at noon does not leave the whole player base waiting
+  until 00:00 UTC.
+
+Weekly and monthly deals are untouched.
+
 ## Rolling the new quests out
 
-The seven pitch quests and the two AI quests are in `seed_quests_v3.py`. They are
-**not** live until that script is run against the database:
+The seven pitch quests, three match-length quests and two AI quests are in
+`seed_quests_v3.py`. They are **not** live until that script is run against the
+database:
 
 ```
 python seed_quests_v3.py --dry-run   # report what would change
@@ -74,4 +161,5 @@ updated in place, and any other active daily/monthly quest is deactivated.
 Pinned (`always_assign`) and Career Player quests are never touched.
 
 Until it runs, everything above is inert — the events fire, but no quest is
-listening for them.
+listening for them, and a guaranteed slot with nothing active to draw from
+simply stays empty.
