@@ -307,10 +307,17 @@ def format_downsize_dm(result, roster_cap=MAX_ROSTER,
 
     esc = html.escape
     out = ["🔧 <b>Squad limits updated</b>", ""]
-    out.append(f"The squad limit is now <b>{roster_cap} players</b> and "
-               f"<b>{trait_cap} traits</b> across your squad. Your Career "
-               f"Player is exempt from both — it keeps its own "
-               f"{TRAIT_MAX_PER_PLAYER} trait slots and is never released.")
+    # Careful with the Career Player's status: it is exempt from *release* and
+    # from the trait budget, but it still occupies one of the roster_cap slots
+    # (find_over_cap_user_ids counts every roster row). Saying "exempt from
+    # both" would have captains expecting 19 ordinary cards plus a free career
+    # slot, and then finding 18.
+    out.append(f"The squad limit is now <b>{roster_cap} players</b> — your "
+               f"Career Player takes one of those slots, but is never "
+               f"released. Across the rest of your squad you can equip "
+               f"<b>{trait_cap} traits</b>; the Career Player's own "
+               f"{TRAIT_MAX_PER_PLAYER} slots are on top of that and don't "
+               f"count.")
     out.append("")
     out.append("Your squad was over the new limits, so the weakest of each "
                "were taken out for you. <b>You were refunded everything you "
@@ -333,6 +340,9 @@ def format_downsize_dm(result, roster_cap=MAX_ROSTER,
                           f"Lv.{r.get('level', 1)} — +{r.get('gems', 0):,} 💎"
                           for r in removed])
 
-    out += ["", "<i>Nothing in your trait inventory was touched — only traits "
-                "equipped on players counted toward the limit.</i>"]
+    # "Not touched" would contradict the line above about released cards
+    # handing their traits back — the inventory does change, it just only ever
+    # grows. Say what the captain actually wants to know: nothing was taken.
+    out += ["", "<i>Nothing was removed from your trait inventory — only "
+                "traits equipped on players counted toward the limit.</i>"]
     return "\n".join(out)

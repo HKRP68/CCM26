@@ -181,6 +181,17 @@ traits on an account where only one was really refunded.
 This is also what makes the button's confirm step honest: the figure on screen
 is the figure you get.
 
+**What the preview is not: a contract.** Apply re-scans for over-cap accounts
+rather than replaying a stored account list, so what it touches is whoever is
+over a cap *at Apply time*, which need not be exactly the set Preview measured.
+In practice that set cannot drift — over-cap accounts only exist because the
+caps were lowered underneath them, and every acquisition path has enforced the
+new caps since, so no account can newly become over-cap. The re-scan is also
+the behaviour you want if it ever did: the point of the button is "bring
+everyone within the limits", not "bring these nineteen accounts within the
+limits". Binding the token to a snapshot would trade that for an Apply that
+refuses and sends the admin round the loop again.
+
 **One account per transaction, rolled back immediately** — not one transaction
 across the whole scan. Two reasons:
 
@@ -225,11 +236,22 @@ reporting a bare error for releases and refunds that already happened.
 Apply carries a token that only Preview issues, held in the Flask session and
 cleared *before* the work starts. Three things follow:
 
-- A bare POST — a bookmarked URL, a double submit, a re-sent form — cannot
-  release anybody's cards, because it has no token.
-- The token is single-use, so a double submit cannot apply twice even while the
-  first request is still in flight.
+- A bare POST — a bookmarked URL, a re-sent form, a bookmark — cannot release
+  anybody's cards, because it has no token.
+- The token is single-use: it is popped from the session *before* the work
+  starts, so a form resubmitted after the fact is refused.
 - You cannot reach Apply without having seen the numbers first.
+
+**The single-use guarantee is not atomic.** The token lives in Flask's signed
+session cookie, so two Apply requests that are genuinely in flight at the same
+instant both read the token before either clears it, and both pass. Nothing in
+the cookie can fix that — closing it properly needs a server-side consume
+(a row with a unique constraint, or a lock) that this codebase has nowhere to
+put yet. Two things keep it narrow rather than dangerous: the realistic trigger
+is a double-click, which the form now blocks by disabling the button on submit;
+and the work itself is idempotent, so a second pass finds nobody over the caps
+and does nothing. Worth closing properly if this page ever grows more bulk
+actions.
 
 Every apply writes an `AdminLog` row with the totals, since this is the one
 action that rewrites every squad on the service at once.
@@ -238,10 +260,18 @@ action that rewrites every squad on the service at once.
 
 A captain who opens the bot to find six cards missing and their gem balance
 changed deserves better than working it out themselves. So every account the
-button actually changed gets a Telegram DM: the new caps, the Career Player
-exemption, an itemised list of what was released and what each refunded, and an
-explicit line that their **trait inventory was not touched** — which is true,
-because only *equipped* traits are ever candidates.
+button actually changed gets a Telegram DM: the new caps, an itemised list of
+what was released and what each refunded, and an explicit line that **nothing
+was removed from their trait inventory** — true, because only *equipped* traits
+are ever candidates. Note the precise claim: the inventory is never *drained*,
+but it does grow, since a released card hands its traits back into it. "Not
+touched" would have contradicted the line above it.
+
+The Career Player is described carefully too. It is exempt from *release* and
+from the trait budget, but it still occupies one of the `MAX_ROSTER` slots —
+`trim_roster_to_cap` counts every roster row, career included. A DM claiming it
+was "exempt from both" would have captains expecting 19 ordinary cards plus a
+free career slot, then finding 18.
 
 Three properties are worth stating, because each is a deliberate choice:
 
@@ -257,6 +287,17 @@ Three properties are worth stating, because each is a deliberate choice:
   and wrong for an action that can touch every account on the service. The
   admin's request returns immediately; delivery outlives it, so the flash
   reports how many were *queued*, not how many arrived.
+
+**Delivery is best effort, and the count on screen is a queue depth.** The
+thread is a daemon in one web worker's process, which has two consequences
+worth stating rather than discovering: a restart or deploy during a large batch
+drops whatever is still unsent, and the 50 ms pacing is per process, so two
+workers sending at once could exceed the per-bot rate limit and have Telegram
+throttle some messages. Neither loses anyone's cards or gems — the refunds are
+committed before the first DM is queued, and a missed DM costs a captain an
+explanation, not an asset. Making delivery durable means a real job queue with
+a shared rate limiter, which is a bigger change than this page justifies; the
+audit-log row is the durable record of what happened.
 
 `format_downsize_dm` lives in the service and takes a plain result dict, so the
 wording is testable without a database and without Telegram.

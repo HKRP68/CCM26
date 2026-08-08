@@ -296,7 +296,8 @@
 
     {% if squad_limits.preview %}
     <form method="POST" action="{{ url_for('admin_squad_limits_apply') }}" style="margin:0;"
-          onsubmit="return confirm('Release {{ squad_limits.preview.cards }} card(s) and refund {{ squad_limits.preview.traits }} trait(s) across {{ squad_limits.preview.users }} squad(s)?\n\nEach affected captain will be sent a DM.\n\nThis cannot be undone.');">
+          data-confirm="Release {{ squad_limits.preview.cards }} card(s) and refund {{ squad_limits.preview.traits }} trait(s) across {{ squad_limits.preview.users }} squad(s)?&#10;&#10;Each affected captain will be sent a DM.&#10;&#10;This cannot be undone."
+          onsubmit="return squadLimitsApply(this);">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="confirm_token" value="{{ squad_limits.token }}">
       <button type="submit" class="btn btn-red">⚠️ Apply — release now</button>
@@ -311,6 +312,22 @@
     their way straight back over the cap). Safe to re-run: a second pass is a no-op.
   </small>
 </div>
+
+<script>
+// Confirm, then disable the button so it cannot fire twice.
+//
+// The server's single-use token lives in Flask's session cookie, so two Apply
+// requests genuinely in flight at the same instant would both read it before
+// either cleared it. Blocking the second click is the practical half of that
+// fix — see docs/squad-and-trait-limits.md §4.6 for why the other half needs a
+// server-side consume this codebase has nowhere to put yet.
+function squadLimitsApply(form) {
+  if (!confirm(form.dataset.confirm)) return false;
+  var btn = form.querySelector('button[type=submit]');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Applying…'; }
+  return true;
+}
+</script>
 
 <!-- Preview -->
 {% if preview %}

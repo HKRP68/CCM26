@@ -464,6 +464,26 @@ class DownsizeDmTest(unittest.TestCase):
         self.assertIn(str(TRAIT_MAX_PER_SQUAD), msg)
         self.assertIn("Career", msg)
 
+    def test_does_not_claim_the_career_player_is_outside_the_roster_cap(self):
+        """It is exempt from release, NOT from the count.
+
+        trim_roster_to_cap computes ``over = len(rows) - cap`` across every
+        roster row, career included, so a captain with 19 cards one of which is
+        their Career Player is exactly at the cap. Telling them the career slot
+        is free would have them expecting 20.
+        """
+        from services.squad_downsize_service import format_downsize_dm
+        msg = format_downsize_dm(self._result())
+        self.assertNotIn("exempt from both", msg)
+        self.assertIn("takes one of those slots", msg)
+
+    def test_does_not_claim_the_inventory_was_untouched(self):
+        # Released cards hand their traits BACK to inventory, so "untouched"
+        # would contradict the line above it. Nothing is ever removed, though.
+        from services.squad_downsize_service import format_downsize_dm
+        msg = format_downsize_dm(self._result())
+        self.assertIn("Nothing was removed from your trait inventory", msg)
+
     def test_promises_the_trait_inventory_was_untouched(self):
         # The fear a message like this creates, answered explicitly — and the
         # answer is true: only equipped traits are ever candidates.
