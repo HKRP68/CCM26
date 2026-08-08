@@ -268,6 +268,60 @@ class SquadDownsizeServiceTest(unittest.TestCase):
         finally:
             session.close()
 
+    def test_a_committed_run_hands_back_everything_a_dm_needs(self):
+        """on_user_done gets the chat id and the itemised detail, post-commit.
+
+        The callback fires only after that account's changes are committed, so
+        nobody can be told about a release that was rolled back.
+        """
+        from config import MAX_ROSTER
+        from database import get_session
+        from services.squad_downsize_service import (format_downsize_dm,
+                                                     run_downsize)
+
+        session = get_session()
+        try:
+            user = self._make_user(session)
+            for i in range(MAX_ROSTER + 3):
+                self._add_card(session, user, rating=60 + i)
+            session.commit()
+            user_id, tg_id = user.id, user.telegram_id
+
+            seen = []
+            run_downsize(session, on_user_done=lambda uid, r: seen.append((uid, r)))
+
+            mine = [r for uid, r in seen if uid == user_id]
+            self.assertEqual(len(mine), 1)
+            result = mine[0]
+            self.assertEqual(result["telegram_id"], tg_id)
+            self.assertEqual(len(result["released"]), 3)
+            self.assertTrue(all(r.get("name") for r in result["released"]))
+            # ...and it composes into a message naming a real released card.
+            msg = format_downsize_dm(result)
+            self.assertIn(result["released"][0]["name"], msg)
+        finally:
+            session.close()
+
+    def test_an_untouched_account_is_never_reported_for_a_dm(self):
+        """A squad already within the limits must not be messaged."""
+        from config import MAX_ROSTER
+        from database import get_session
+        from services.squad_downsize_service import run_downsize
+
+        session = get_session()
+        try:
+            user = self._make_user(session)
+            for _ in range(MAX_ROSTER - 2):
+                self._add_card(session, user)
+            session.commit()
+            user_id = user.id
+
+            seen = []
+            run_downsize(session, on_user_done=lambda uid, r: seen.append(uid))
+            self.assertNotIn(user_id, seen)
+        finally:
+            session.close()
+
     def test_one_bad_account_does_not_abort_a_preview(self):
         """A dry run must skip what a real run would skip, not die on it."""
         from unittest.mock import patch
@@ -353,19 +407,92 @@ class ApplyRouteIsGatedOnPreviewTest(unittest.TestCase):
         # Order matters: a mismatched token must return before run_downsize is
         # ever reached, or a bare POST would still have emptied every roster.
         check = self.route.index("supplied != expected")
-        work = self.route.index("run_downsize(db)")
+        work = self.route.index("run_downsize(db")
         self.assertLess(check, work)
 
     def test_a_failed_check_returns_without_doing_work(self):
-        head = self.route[:self.route.index("run_downsize(db)")]
+        head = self.route[:self.route.index("run_downsize(db")]
         self.assertIn("return redirect", head)
 
     def test_the_token_is_single_use(self):
         # Cleared before the work runs, so a double submit can't apply twice
         # even while the first request is still in flight.
         popped = self.route.index("session.pop(_SQUAD_TOKEN_KEY")
-        work = self.route.index("run_downsize(db)")
+        work = self.route.index("run_downsize(db")
         self.assertLess(popped, work)
+
+
+class DownsizeDmTest(unittest.TestCase):
+    """The DM a captain gets after the Apply button rewrites their squad.
+
+    ``format_downsize_dm`` takes a plain result dict, so these need no database
+    — which is the point: the message can be checked without seeding an
+    account, and the composer stays a pure function that both entry points and
+    the tests can call the same way.
+    """
+
+    def _result(self, **over):
+        base = {"cards": 2, "coins": 3400, "traits": 1, "gems": 250,
+                "telegram_id": 555,
+                "released": [{"name": "Foo Bar", "rating": 61, "value": 1700},
+                             {"name": "Baz Qux", "rating": 62, "value": 1700}],
+                "removed": [{"name": "Power Hitter", "level": 2,
+                             "rarity": "common", "gems": 250}]}
+        base.update(over)
+        return base
+
+    def test_silent_when_the_account_lost_nothing(self):
+        """No message for a squad that was already legal."""
+        from services.squad_downsize_service import format_downsize_dm
+        self.assertIsNone(format_downsize_dm(self._result(released=[],
+                                                          removed=[])))
+
+    def test_names_what_left_and_what_it_paid_back(self):
+        from services.squad_downsize_service import format_downsize_dm
+        msg = format_downsize_dm(self._result())
+        self.assertIn("Foo Bar", msg)
+        self.assertIn("Baz Qux", msg)
+        self.assertIn("Power Hitter", msg)
+        self.assertIn("3,400", msg)   # coins refunded
+        self.assertIn("250", msg)     # gems refunded
+
+    def test_states_the_caps_and_the_career_exemption(self):
+        from config import MAX_ROSTER, TRAIT_MAX_PER_SQUAD
+        from services.squad_downsize_service import format_downsize_dm
+        msg = format_downsize_dm(self._result())
+        self.assertIn(str(MAX_ROSTER), msg)
+        self.assertIn(str(TRAIT_MAX_PER_SQUAD), msg)
+        self.assertIn("Career", msg)
+
+    def test_promises_the_trait_inventory_was_untouched(self):
+        # The fear a message like this creates, answered explicitly — and the
+        # answer is true: only equipped traits are ever candidates.
+        from services.squad_downsize_service import format_downsize_dm
+        self.assertIn("inventory", format_downsize_dm(self._result()).lower())
+
+    def test_a_roster_only_trim_does_not_claim_traits_were_removed(self):
+        from services.squad_downsize_service import format_downsize_dm
+        msg = format_downsize_dm(self._result(removed=[], traits=0, gems=0))
+        self.assertIn("Players released", msg)
+        self.assertNotIn("Traits removed", msg)
+
+    def test_player_names_are_html_escaped(self):
+        # parse_mode=HTML: an unescaped name is a broken message at best.
+        from services.squad_downsize_service import format_downsize_dm
+        msg = format_downsize_dm(self._result(
+            released=[{"name": "<b>hax</b> & co", "rating": 60, "value": 1}]))
+        self.assertNotIn("<b>hax</b>", msg)
+        self.assertIn("&lt;b&gt;hax&lt;/b&gt; &amp; co", msg)
+
+    def test_long_lists_are_collapsed_to_stay_under_telegrams_limit(self):
+        from services.squad_downsize_service import format_downsize_dm
+        released = [{"name": f"P{i}", "rating": 60, "value": 100}
+                    for i in range(30)]
+        msg = format_downsize_dm(self._result(released=released, cards=30))
+        self.assertIn("more", msg)
+        self.assertLess(len(msg), 4096, "Telegram rejects longer messages")
+        # The count in the heading is still the true one.
+        self.assertIn("Players released (30)", msg)
 
 
 if __name__ == "__main__":

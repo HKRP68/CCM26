@@ -28,11 +28,12 @@ The Career Player is never released and its own traits are never touched — it
 sits outside the squad trait budget by design.
 """
 
+import html
 import logging
 
 from sqlalchemy import func, or_
 
-from config import MAX_ROSTER, TRAIT_MAX_PER_SQUAD
+from config import MAX_ROSTER, TRAIT_MAX_PER_PLAYER, TRAIT_MAX_PER_SQUAD
 from models import Player, PlayerTrait, User, UserRoster
 from services.roster_service import get_roster_count, trim_roster_to_cap
 from services.trait_service import count_squad_traits, trim_squad_traits_to_cap
@@ -41,8 +42,22 @@ logger = logging.getLogger(__name__)
 
 
 def _empty_totals():
+    """The run-wide tally shape, before any account has been touched."""
     return {"users": 0, "cards": 0, "coins": 0, "traits": 0, "gems": 0,
             "failed": 0}
+
+
+def _empty_summary():
+    """The per-account result shape, before anything has been done to it.
+
+    ``released`` and ``removed`` carry the itemised detail — card names and
+    ratings, trait names and levels — so a caller can tell the captain what
+    actually left their squad rather than just how many things did. They are
+    plain dicts, not ORM rows, which is what makes them safe to read after
+    ``run_downsize`` expunges the session.
+    """
+    return {"cards": 0, "coins": 0, "traits": 0, "gems": 0,
+            "released": [], "removed": [], "telegram_id": None}
 
 
 def find_over_cap_user_ids(session):
@@ -89,18 +104,25 @@ def downsize_user(session, user):
     Returning without committing is what lets :func:`preview_downsize` run the
     real thing and roll it back, so the preview reports exactly what an apply
     would do rather than an estimate.
+
+    ``telegram_id`` is captured up front, while the instance is certainly
+    loaded, because the caller may only look at this dict after a commit has
+    expired the User and an expunge has detached it.
     """
-    summary = {"cards": 0, "coins": 0, "traits": 0, "gems": 0}
+    summary = _empty_summary()
+    summary["telegram_id"] = getattr(user, "telegram_id", None)
     if not is_over_cap(session, user):
         return summary
 
     roster_result = trim_roster_to_cap(session, user)
     summary["cards"] = roster_result["count"]
     summary["coins"] = roster_result["coins"]
+    summary["released"] = roster_result["released"]
 
     trait_result = trim_squad_traits_to_cap(session, user)
     summary["traits"] = trait_result["count"]
     summary["gems"] = trait_result["gems"]
+    summary["removed"] = trait_result["removed"]
     return summary
 
 
@@ -204,10 +226,10 @@ def run_downsize(session, on_user_done=None, log=None):
                 session.rollback()
                 result = None
                 continue
-            # Read anything reporting needs BEFORE the commit: commit expires
-            # the instance, so touching it afterwards is a fresh query at best
-            # and a DetachedInstanceError after the expunge below.
-            tg_id = getattr(user, "telegram_id", "?")
+            # Everything reporting needs is already inside `result` — plain
+            # dicts and scalars read before the commit. That matters: commit
+            # expires the instance, so touching `user` below would be a fresh
+            # query at best and a DetachedInstanceError after the expunge.
             session.commit()
         except Exception:
             session.rollback()
@@ -237,10 +259,80 @@ def run_downsize(session, on_user_done=None, log=None):
             if log:
                 log.info("  user %s (tg %s): -%s cards (+%s coins), "
                          "-%s traits (+%s gems)",
-                         user_id, tg_id,
+                         user_id, result["telegram_id"] or "?",
                          result["cards"], f"{result['coins']:,}",
                          result["traits"], f"{result['gems']:,}")
         except Exception:
             logger.exception("post-commit reporting failed for user %s "
                              "(the downsizing itself succeeded)", user_id)
     return totals
+
+
+# How many items to itemise per section before collapsing the rest into a
+# "…and N more" line. A Telegram message caps at 4096 characters, and a captain
+# who lost a dozen cards does not need all twelve spelled out to get the point.
+_DM_LIST_LIMIT = 8
+
+
+def _dm_lines(items, limit=_DM_LIST_LIMIT):
+    """Bullet the first ``limit`` items, then say how many were left out."""
+    lines = list(items[:limit])
+    extra = len(items) - len(lines)
+    if extra > 0:
+        lines.append(f"   …and {extra} more")
+    return lines
+
+
+def format_downsize_dm(result, roster_cap=MAX_ROSTER,
+                       trait_cap=TRAIT_MAX_PER_SQUAD):
+    """The message a captain gets after the caps were applied to their squad.
+
+    Returns HTML for Telegram's ``parse_mode=HTML``, or ``None`` when the
+    account lost nothing — there is no reason to message someone whose squad
+    was already legal.
+
+    Written to answer the three questions a captain will actually have: what
+    left my squad, what did I get back, and did you touch my inventory. The
+    last one gets an explicit "no" because that is the fear a message like this
+    creates, and the answer is genuinely no — only *equipped* traits are
+    candidates (see :func:`services.trait_service.trim_squad_traits_to_cap`).
+
+    Takes a plain ``result`` dict rather than a session so both entry points —
+    and the tests — can format without touching the database.
+    """
+    released = result.get("released") or []
+    removed = result.get("removed") or []
+    if not (released or removed):
+        return None
+
+    esc = html.escape
+    out = ["🔧 <b>Squad limits updated</b>", ""]
+    out.append(f"The squad limit is now <b>{roster_cap} players</b> and "
+               f"<b>{trait_cap} traits</b> across your squad. Your Career "
+               f"Player is exempt from both — it keeps its own "
+               f"{TRAIT_MAX_PER_PLAYER} trait slots and is never released.")
+    out.append("")
+    out.append("Your squad was over the new limits, so the weakest of each "
+               "were taken out for you. <b>You were refunded everything you "
+               "put in</b> — the full price you paid, not the lower sell "
+               "price.")
+
+    if released:
+        out += ["", f"<b>Players released ({len(released)})</b> "
+                    f"— +{result['coins']:,} 🪙"]
+        out += _dm_lines([f"   • {esc(str(r.get('name', '?')))} "
+                          f"({r.get('rating', '?')}) — +{r.get('value', 0):,} 🪙"
+                          for r in released])
+        out.append("   <i>Traits they were wearing went back to your "
+                   "inventory.</i>")
+
+    if removed:
+        out += ["", f"<b>Traits removed ({len(removed)})</b> "
+                    f"— +{result['gems']:,} 💎"]
+        out += _dm_lines([f"   • {esc(str(r.get('name', '?')))} "
+                          f"Lv.{r.get('level', 1)} — +{r.get('gems', 0):,} 💎"
+                          for r in removed])
+
+    out += ["", "<i>Nothing in your trait inventory was touched — only traits "
+                "equipped on players counted toward the limit.</i>"]
+    return "\n".join(out)

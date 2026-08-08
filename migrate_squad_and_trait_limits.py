@@ -18,6 +18,10 @@ Usage:
 Idempotent: a second run is a no-op because every user is already at or under
 both caps. Each user is committed separately and wrapped in its own
 try/except, so one bad row can never abort the whole run.
+
+NOTE: this CLI does **not** notify anyone. The Apply button DMs every affected
+captain a summary of what left their squad; a shell run is silent. If the
+players should hear about it, use the button.
 """
 
 import argparse

@@ -234,6 +234,36 @@ cleared *before* the work starts. Three things follow:
 Every apply writes an `AdminLog` row with the totals, since this is the one
 action that rewrites every squad on the service at once.
 
+### 4.7 Affected captains are DMed
+
+A captain who opens the bot to find six cards missing and their gem balance
+changed deserves better than working it out themselves. So every account the
+button actually changed gets a Telegram DM: the new caps, the Career Player
+exemption, an itemised list of what was released and what each refunded, and an
+explicit line that their **trait inventory was not touched** — which is true,
+because only *equipped* traits are ever candidates.
+
+Three properties are worth stating, because each is a deliberate choice:
+
+- **Only committed work is announced.** The messages are collected through
+  `run_downsize`'s `on_user_done`, which fires after that account's commit. A
+  user whose downsizing was rolled back is never told it happened.
+- **Messaging cannot undo a refund.** `run_downsize` runs the callback inside
+  its post-commit reporting block, where an exception is logged rather than
+  counted as a failed account.
+- **One thread, paced.** `_tg_send_batch_async` walks the whole list in a single
+  daemon thread with a 50 ms gap (~20/s, under Telegram's ~30/s ceiling). The
+  per-message thread of `_tg_send_async` is fine for one Mini App notification
+  and wrong for an action that can touch every account on the service. The
+  admin's request returns immediately; delivery outlives it, so the flash
+  reports how many were *queued*, not how many arrived.
+
+`format_downsize_dm` lives in the service and takes a plain result dict, so the
+wording is testable without a database and without Telegram.
+
+The CLI does **not** DM anyone — a shell run is silent. If the players should
+hear about it, use the button.
+
 ---
 
 ## 5. Trait market refresh timing

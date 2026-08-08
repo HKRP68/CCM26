@@ -312,8 +312,13 @@ class SquadDownsizeMigrationTest(unittest.TestCase):
 
             second = downsize_user(session, user)
             session.commit()
-            self.assertEqual(second, {"cards": 0, "coins": 0,
-                                      "traits": 0, "gems": 0})
+            self.assertEqual(second["cards"], 0)
+            self.assertEqual(second["coins"], 0)
+            self.assertEqual(second["traits"], 0)
+            self.assertEqual(second["gems"], 0)
+            # Nothing left, so nothing to tell the captain about.
+            self.assertEqual(second["released"], [])
+            self.assertEqual(second["removed"], [])
             self.assertEqual(user.total_coins, coins_after)
             self.assertEqual(user.total_gems, gems_after)
         finally:

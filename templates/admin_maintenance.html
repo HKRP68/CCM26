@@ -258,6 +258,11 @@
       squad is at {{ squad_limits.trait_cap }}, refunded at their full gem cost.</li>
     <li><strong>Career Players are never touched</strong> — not released, and their
       own {{ game_limits.trait_max_per_player }} trait slots aren't counted.</li>
+    <li><strong>Trait inventories are never touched</strong> — only traits
+      <em>equipped on players</em> count toward the budget.</li>
+    <li><strong>Every affected captain gets a DM</strong> listing what left their
+      squad and what it refunded. Only accounts that actually changed are
+      messaged, and only after their changes are saved.</li>
   </ul>
 
   {% if squad_limits.over_cap_users is none %}
@@ -291,7 +296,7 @@
 
     {% if squad_limits.preview %}
     <form method="POST" action="{{ url_for('admin_squad_limits_apply') }}" style="margin:0;"
-          onsubmit="return confirm('Release {{ squad_limits.preview.cards }} card(s) and refund {{ squad_limits.preview.traits }} trait(s) across {{ squad_limits.preview.users }} squad(s)?\n\nThis cannot be undone.');">
+          onsubmit="return confirm('Release {{ squad_limits.preview.cards }} card(s) and refund {{ squad_limits.preview.traits }} trait(s) across {{ squad_limits.preview.users }} squad(s)?\n\nEach affected captain will be sent a DM.\n\nThis cannot be undone.');">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="confirm_token" value="{{ squad_limits.token }}">
       <button type="submit" class="btn btn-red">⚠️ Apply — release now</button>

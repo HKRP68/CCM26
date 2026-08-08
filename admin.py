@@ -9515,6 +9515,58 @@ def _tg_send_async(payload):
 
 
 
+def _tg_send_batch_async(messages, label="broadcast"):
+    """Deliver many DMs from ONE background thread, paced under Telegram's limit.
+
+    ``_tg_send_async`` spawns a thread per message, which is right for the odd
+    Mini App notification and reckless for a mass action that can touch every
+    account on the service. This walks the list in a single daemon thread with
+    a small gap between sends, so the admin's request returns immediately and
+    Telegram never sees a burst it would rate-limit us for.
+
+    Individual failures — a captain who blocked the bot, a stale chat id — are
+    logged and skipped; one dead recipient must not stop the rest. Returns how
+    many messages were queued, not how many arrived, because delivery outlives
+    the request.
+    """
+    import os as _os
+    import threading
+    import time as _time
+    token = _os.getenv("BOT_TOKEN", "").strip()
+    if not token or not messages:
+        return 0
+
+    queued = list(messages)
+
+    def _send():
+        sent = 0
+        for chat_id, text in queued:
+            try:
+                resp = _tg_call("sendMessage", json_body={
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
+                })
+                if resp and resp.get("ok"):
+                    sent += 1
+                else:
+                    logger.warning("%s DM to %s rejected: %s", label, chat_id,
+                                   (resp or {}).get("description", "no response"))
+            except Exception:
+                logger.exception("%s DM to %s failed", label, chat_id)
+            # ~20 messages/second, comfortably under Telegram's ~30/s ceiling.
+            _time.sleep(0.05)
+        logger.info("%s: %s/%s DMs delivered", label, sent, len(queued))
+
+    try:
+        threading.Thread(target=_send, daemon=True).start()
+    except Exception:
+        logger.exception("could not spawn %s DM thread", label)
+        return 0
+    return len(queued)
+
+
 def _tg_send_photo_async(payload, photo_bytes, filename="match_summary.png"):
     """Fire a Telegram sendPhoto in a daemon thread so result cards do not
     block Mini App requests."""
@@ -15658,7 +15710,7 @@ def admin_squad_limits_preview():
 @login_required
 def admin_squad_limits_apply():
     """Release over-cap cards and refund over-cap traits, for every account."""
-    from services.squad_downsize_service import run_downsize
+    from services.squad_downsize_service import format_downsize_dm, run_downsize
 
     expected = session.get(_SQUAD_TOKEN_KEY)
     supplied = request.form.get("confirm_token", "")
@@ -15671,9 +15723,23 @@ def admin_squad_limits_apply():
     session.pop(_SQUAD_TOKEN_KEY, None)
     session.pop(_SQUAD_PREVIEW_KEY, None)
 
+    # Collected during the run and sent after it. run_downsize calls this only
+    # once a user's changes are COMMITTED, so nobody is told about a release
+    # that was rolled back — and a raising callback is logged there rather than
+    # counted as a failed account, so a bad message can't undo anyone's refund.
+    dms = []
+
+    def _queue_dm(user_id, result):
+        chat_id = result.get("telegram_id")
+        if not chat_id:
+            return  # web-only or seeded account with nowhere to send
+        text = format_downsize_dm(result)
+        if text:
+            dms.append((chat_id, text))
+
     db = get_session()
     try:
-        totals = run_downsize(db)
+        totals = run_downsize(db, on_user_done=_queue_dm)
 
         # The releases and refunds are already committed, per user, by the time
         # we get here. A failing audit write must not turn that into a bare
@@ -15701,6 +15767,16 @@ def admin_squad_limits_apply():
                   f"{totals['cards']} card(s) released for "
                   f"{totals['coins']:,} 🪙, {totals['traits']} trait(s) "
                   f"refunded for {totals['gems']:,} 💎.", "success")
+            # Deliberately after the flashes above: messaging is a courtesy on
+            # top of work that is already done, so a Telegram outage changes
+            # nothing about what the admin is told happened.
+            queued = _tg_send_batch_async(dms, label="squad limits")
+            if queued:
+                flash(f"📬 Notifying {queued} captain(s) by DM — delivering in "
+                      f"the background.", "info")
+            elif dms:
+                flash("⚠️ The changes were applied, but the DMs could not be "
+                      "queued (is BOT_TOKEN set?).", "error")
         if totals["failed"]:
             flash(f"⚠️ {totals['failed']} user(s) were skipped after an error — "
                   f"press Preview and Apply again to retry them.", "error")
