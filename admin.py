@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger("admin")
 from functools import wraps
-from flask import Flask, render_template, request, redirect, url_for, flash, session, Response, send_file
+from flask import Flask, render_template, request, redirect, url_for, flash, session, Response, send_file, jsonify
 from sqlalchemy import func, or_, desc, asc, cast, String
 from dotenv import load_dotenv
 
@@ -15646,55 +15646,92 @@ def admin_maintenance():
 # ── Squad + trait limit enforcement ──────────────────────────────────
 # Cutting MAX_ROSTER / introducing TRAIT_MAX_PER_SQUAD only guards NEW
 # acquisitions; accounts already over a cap stay over it and get stuck. These
-# two routes are the website equivalent of running
+# routes are the website equivalent of running
 # migrate_squad_and_trait_limits.py, and share its service so the two can never
 # drift apart.
 #
-# Apply is gated on a token that only Preview issues, so this is genuinely
-# "look, then commit": a bare POST — a bookmarked URL, a double submit, a
-# re-sent form — cannot release anybody's cards on its own.
+# Apply is ONE press and returns immediately. The sweep itself runs on a worker
+# thread, for a reason that is correctness and not just comfort: it costs ~28
+# queries per over-cap account, so on a large database it can outlast the web
+# server's request timeout. A synchronous route would have the browser show a
+# 502 while the sweep carried on committing in the background — the admin left
+# guessing whether it worked. Now the request returns in milliseconds and the
+# page reports live progress.
+#
+# Preview is still available for anyone who wants the numbers first, but it is
+# no longer a gate: it runs the same work and throws it away, so requiring it
+# made every apply cost twice what it needed to.
 
 _SQUAD_PREVIEW_KEY = "squad_downsize_preview"
-# Flask session key name, not a credential — Ruff's S105 fires on the word.
-_SQUAD_TOKEN_KEY = "squad_downsize_token"  # noqa: S105
+
+# Single-flight guard for the sweep. This is what stops a double-click applying
+# twice, and unlike the session-cookie token it used to rely on, it is a real
+# atomic check: the lock is held across "is one running?" and "mark it
+# running", so two simultaneous requests cannot both pass.
+#
+# In-process, so it does not coordinate across web workers. That is a genuine
+# limit rather than an ignored one — see docs/squad-and-trait-limits.md §4.6 —
+# and it is bounded by the work being idempotent: a second sweep finds nobody
+# over the caps and does nothing.
+_SQUAD_JOB_LOCK = threading.Lock()
+_SQUAD_JOB = {"state": "idle"}
+
+
+def _squad_job_snapshot():
+    """A copy of the job state, safe to read outside the lock."""
+    with _SQUAD_JOB_LOCK:
+        return dict(_SQUAD_JOB)
 
 
 def _squad_limits_panel(db):
     """Data for the Maintenance page's squad-limits panel."""
     from config import MAX_ROSTER as _cap, TRAIT_MAX_PER_SQUAD as _tcap
     from services.squad_downsize_service import find_over_cap_user_ids
-    try:
-        over = len(find_over_cap_user_ids(db))
-    except Exception:
-        logger.exception("squad limits scan failed")
+    job = _squad_job_snapshot()
+    # Skip the scan while a sweep is running: the number would be a moving
+    # target, and the job's own progress is the better answer anyway.
+    if job.get("state") == "running":
         over = None
+    else:
+        try:
+            over = len(find_over_cap_user_ids(db))
+        except Exception:
+            logger.exception("squad limits scan failed")
+            over = None
     return {
         "roster_cap": _cap,
         "trait_cap": _tcap,
         "over_cap_users": over,
         "preview": session.get(_SQUAD_PREVIEW_KEY),
-        "token": session.get(_SQUAD_TOKEN_KEY),
+        "job": job,
     }
 
 
 @app.route("/maintenance/squad-limits/preview", methods=["POST"])
 @login_required
 def admin_squad_limits_preview():
-    """Report exactly what applying the caps would do, changing nothing."""
-    import secrets
+    """Report exactly what applying the caps would do, changing nothing.
+
+    Optional. Apply no longer requires it — a preview runs the entire sweep and
+    throws it away, so demanding one made every apply cost twice over. It is
+    still here for anyone who wants the numbers before pressing the button.
+    """
     from services.squad_downsize_service import preview_downsize
+
+    if _squad_job_snapshot().get("state") == "running":
+        flash("⏳ A sweep is running — a preview now would report against a "
+              "moving target. Wait for it to finish.", "info")
+        return redirect(url_for("admin_maintenance"))
 
     db = get_session()
     try:
         totals = preview_downsize(db)
         if not totals["users"]:
             session.pop(_SQUAD_PREVIEW_KEY, None)
-            session.pop(_SQUAD_TOKEN_KEY, None)
             flash("✅ Nothing to do — every squad is already within the limits.",
                   "success")
         else:
             session[_SQUAD_PREVIEW_KEY] = totals
-            session[_SQUAD_TOKEN_KEY] = secrets.token_urlsafe(16)
             flash(f"👀 Preview only — nothing has changed yet. "
                   f"{totals['users']} squad(s) would be trimmed.", "info")
     except Exception as e:
@@ -15706,30 +15743,27 @@ def admin_squad_limits_preview():
     return redirect(url_for("admin_maintenance"))
 
 
-@app.route("/maintenance/squad-limits/apply", methods=["POST"])
-@login_required
-def admin_squad_limits_apply():
-    """Release over-cap cards and refund over-cap traits, for every account."""
-    from services.squad_downsize_service import format_downsize_dm, run_downsize
+def _squad_limits_worker(app_logger=None):
+    """Run the whole sweep on a worker thread, tracking progress as it goes.
 
-    expected = session.get(_SQUAD_TOKEN_KEY)
-    supplied = request.form.get("confirm_token", "")
-    if not expected or supplied != expected:
-        flash("⚠️ Run Preview first — nothing was changed.", "error")
-        return redirect(url_for("admin_maintenance"))
+    Owns its own Session: the request that started this returned long ago, and
+    a Session is not safe to share across threads.
 
-    # Single-use: clear before the work runs, so a double submit can't apply
-    # twice even if the first request is still in flight.
-    session.pop(_SQUAD_TOKEN_KEY, None)
-    session.pop(_SQUAD_PREVIEW_KEY, None)
-
-    # Collected during the run and sent after it. run_downsize calls this only
-    # once a user's changes are COMMITTED, so nobody is told about a release
-    # that was rolled back — and a raising callback is logged there rather than
-    # counted as a failed account, so a bad message can't undo anyone's refund.
+    Never raises. A failure is recorded on the job so the page can show it —
+    a thread that died silently would leave the panel saying "running" forever.
+    """
+    from services.squad_downsize_service import (find_over_cap_user_ids,
+                                                 format_downsize_dm,
+                                                 run_downsize)
+    log = app_logger or logger
+    db = get_session()
     dms = []
 
-    def _queue_dm(user_id, result):
+    def _on_user(user_id, result):
+        # Called after that account's commit, so progress only ever counts
+        # work that is genuinely saved.
+        with _SQUAD_JOB_LOCK:
+            _SQUAD_JOB["done_users"] = _SQUAD_JOB.get("done_users", 0) + 1
         chat_id = result.get("telegram_id")
         if not chat_id:
             return  # web-only or seeded account with nowhere to send
@@ -15737,14 +15771,20 @@ def admin_squad_limits_apply():
         if text:
             dms.append((chat_id, text))
 
-    db = get_session()
     try:
-        totals = run_downsize(db, on_user_done=_queue_dm)
+        # Costs two queries and gives the progress bar a denominator. Worth it:
+        # "142 of 900" is a different experience from a spinner.
+        try:
+            total = len(find_over_cap_user_ids(db))
+        except Exception:
+            total = None
+        with _SQUAD_JOB_LOCK:
+            _SQUAD_JOB["total_users"] = total
 
-        # The releases and refunds are already committed, per user, by the time
-        # we get here. A failing audit write must not turn that into a bare
-        # "Error:" with no totals — the admin would be left with no record of
-        # what just happened to every squad on the service.
+        totals = run_downsize(db, on_user_done=_on_user)
+
+        # Past here every account is committed. Reporting must not be able to
+        # turn that into a failure.
         try:
             log_admin(db, "squad_limits_apply", target_type="config",
                       target_id=0, target_name="squad_limits",
@@ -15755,38 +15795,73 @@ def admin_squad_limits_apply():
             db.commit()
         except Exception:
             db.rollback()
-            logger.exception("squad limits audit log failed after apply")
-            flash("⚠️ The changes were applied, but the audit-log entry "
-                  "could not be written — see the server logs.", "error")
+            log.exception("squad limits audit log failed after apply")
 
-        if not totals["users"]:
-            flash("✅ Nothing to do — every squad is already within the limits.",
-                  "success")
-        else:
-            flash(f"✅ Applied to {totals['users']} squad(s): "
-                  f"{totals['cards']} card(s) released for "
-                  f"{totals['coins']:,} 🪙, {totals['traits']} trait(s) "
-                  f"refunded for {totals['gems']:,} 💎.", "success")
-            # Deliberately after the flashes above: messaging is a courtesy on
-            # top of work that is already done, so a Telegram outage changes
-            # nothing about what the admin is told happened.
-            queued = _tg_send_batch_async(dms, label="squad limits")
-            if queued:
-                flash(f"📬 Notifying {queued} captain(s) by DM — delivering in "
-                      f"the background.", "info")
-            elif dms:
-                flash("⚠️ The changes were applied, but the DMs could not be "
-                      "queued (is BOT_TOKEN set?).", "error")
-        if totals["failed"]:
-            flash(f"⚠️ {totals['failed']} user(s) were skipped after an error — "
-                  f"press Preview and Apply again to retry them.", "error")
+        queued = _tg_send_batch_async(dms, label="squad limits")
+        with _SQUAD_JOB_LOCK:
+            _SQUAD_JOB.update(state="done", totals=totals, dms_queued=queued,
+                              dms_pending=len(dms),
+                              finished_at=datetime.utcnow().isoformat())
+        log.info("squad limits sweep finished: %s", totals)
     except Exception as e:
-        db.rollback()
-        logger.exception("squad limits apply failed")
-        flash(f"Error: {e}", "error")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        log.exception("squad limits sweep failed")
+        with _SQUAD_JOB_LOCK:
+            _SQUAD_JOB.update(state="error", error=str(e),
+                              finished_at=datetime.utcnow().isoformat())
     finally:
         db.close()
+
+
+@app.route("/maintenance/squad-limits/apply", methods=["POST"])
+@login_required
+def admin_squad_limits_apply():
+    """Start the sweep and return at once — one press, no preview needed.
+
+    The work is handed to a thread rather than done here. At ~28 queries per
+    over-cap account a large database can outrun the web server's request
+    timeout, and a timed-out apply is the worst outcome available: the browser
+    shows an error while the sweep keeps committing, so the admin cannot tell
+    what happened. Returning immediately makes the page honest about both the
+    start and the finish.
+    """
+    with _SQUAD_JOB_LOCK:
+        if _SQUAD_JOB.get("state") == "running":
+            flash("⏳ A sweep is already running — watch the progress below.",
+                  "info")
+            return redirect(url_for("admin_maintenance"))
+        # Claim it inside the same lock that checked it. This is the atomic
+        # single-flight the session-cookie token could never be.
+        _SQUAD_JOB.clear()
+        _SQUAD_JOB.update(state="running", done_users=0, total_users=None,
+                          started_at=datetime.utcnow().isoformat())
+
+    # A stale preview would sit on screen contradicting the live progress.
+    session.pop(_SQUAD_PREVIEW_KEY, None)
+
+    try:
+        threading.Thread(target=_squad_limits_worker, daemon=True,
+                         name="squad-limits-sweep").start()
+    except Exception as e:
+        with _SQUAD_JOB_LOCK:
+            _SQUAD_JOB.update(state="error", error=str(e))
+        logger.exception("could not start squad limits sweep")
+        flash(f"Error: could not start the sweep — {e}", "error")
+        return redirect(url_for("admin_maintenance"))
+
+    flash("🚀 Applying the limits now — this page will update as it goes. "
+          "You can leave it open or come back later.", "success")
     return redirect(url_for("admin_maintenance"))
+
+
+@app.route("/maintenance/squad-limits/status")
+@login_required
+def admin_squad_limits_status():
+    """Live job state, polled by the Maintenance page while a sweep runs."""
+    return jsonify(_squad_job_snapshot())
 
 
 # ═══════════════════════════════════════════════════════════════════════

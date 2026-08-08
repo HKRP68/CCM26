@@ -124,8 +124,9 @@ actively misleading there.
 
 Two entry points, one implementation — `services/squad_downsize_service.py`:
 
-- **The website.** Maintenance → **Apply Squad & Trait Limits**. This is the
-  normal way to run it.
+- **The website.** Maintenance → **Apply Squad & Trait Limits** → **Apply limits
+  now**. One press; it starts immediately and runs in the background. This is
+  the normal way to run it.
 - **`migrate_squad_and_trait_limits.py`.** A thin CLI over the same service, for
   a deploy-time sweep or when the panel isn't reachable.
 
@@ -231,30 +232,70 @@ transactional `try`, and the audit-log write on the website is wrapped
 separately: a failure there warns that the log is missing, rather than
 reporting a bare error for releases and refunds that already happened.
 
-### 4.6 The Apply button is gated on Preview
+### 4.6 Apply is one press, and it does not block the request
 
-Apply carries a token that only Preview issues, held in the Flask session and
-cleared *before* the work starts. Three things follow:
+Apply needs no preview. It used to: a token that only Preview issued gated the
+route, so "look, then commit" was mandatory. That cost more than it bought —
+`preview_downsize` runs the *entire* sweep and rolls it back, so requiring one
+made every apply cost exactly twice what the work needed. Preview is still
+there for anyone who wants the numbers first; it is no longer a gate.
 
-- A bare POST — a bookmarked URL, a re-sent form, a bookmark — cannot release
-  anybody's cards, because it has no token.
-- The token is single-use: it is popped from the session *before* the work
-  starts, so a form resubmitted after the fact is refused.
-- You cannot reach Apply without having seen the numbers first.
+**The sweep runs on a worker thread and the request returns immediately.** That
+is correctness, not comfort. At roughly 28 queries per over-cap account, a
+large database can outlast the web server's request timeout — and a timed-out
+apply is the worst outcome on the menu, because the sweep does not stop. The
+browser shows a 502 while accounts keep being committed, and the admin has no
+way to tell what happened. Returning in milliseconds and reporting progress
+makes the page honest about both ends.
 
-**The single-use guarantee is not atomic.** The token lives in Flask's signed
-session cookie, so two Apply requests that are genuinely in flight at the same
-instant both read the token before either clears it, and both pass. Nothing in
-the cookie can fix that — closing it properly needs a server-side consume
-(a row with a unique constraint, or a lock) that this codebase has nowhere to
-put yet. Two things keep it narrow rather than dangerous: the realistic trigger
-is a double-click, which the form now blocks by disabling the button on submit;
-and the work itself is idempotent, so a second pass finds nobody over the caps
-and does nothing. Worth closing properly if this page ever grows more bulk
-actions.
+The page polls `/maintenance/squad-limits/status` every two seconds while a
+sweep is running and reloads when it finishes, so the summary renders
+server-side. An idle Maintenance page makes no polling requests at all.
+
+**Single-flight, and this time genuinely atomic.** `_SQUAD_JOB_LOCK` is held
+across both the "is one already running?" check and the claim, so two
+simultaneous presses cannot both start a sweep. This is what the old
+session-cookie token could never be: that token was read and cleared in
+separate steps against a cookie, so two requests in flight at the same instant
+both passed. Replacing it with a real lock closed that hole rather than
+documenting it.
+
+The lock is in-process, so it does not coordinate across web workers — a
+genuine remaining limit. It is bounded by the work being idempotent: a second
+sweep finds nobody over the caps and does nothing.
 
 Every apply writes an `AdminLog` row with the totals, since this is the one
-action that rewrites every squad on the service at once.
+action that rewrites every squad on the service at once. The audit write is
+isolated in its own `try`, so a failure there cannot report committed work as
+an error.
+
+### 4.6.1 What was done for speed, and what was not
+
+Measured on a seeded SQLite database, 300 over-cap accounts of 25 cards each:
+
+| | before | after |
+|---|---|---|
+| queries per account | 29 | 28 |
+| preview + apply (the old mandatory path) | 6.2 s | — |
+| apply alone | 3.2 s | 3.1 s |
+| **admin's wait** | **6.2 s, blocking** | **~2 ms** |
+
+The headline number is not a faster sweep — it is that the admin no longer
+waits for one. Two changes got there, in order of how much they mattered:
+
+1. **The request no longer does the work.** This is the whole win.
+2. **Preview is not mandatory**, which halves the actual work for anyone who
+   was previewing out of obligation rather than interest.
+3. **`downsize_user` dropped its `is_over_cap` pre-check** — two COUNT queries
+   per account to learn something both trims work out for themselves a moment
+   later. Small (29 → 28 queries) but free, and it compounds on Postgres where
+   every query is a network round trip.
+
+What was *not* done: batching the per-card `log_activity` inserts, which are
+the largest remaining share of the per-account cost. They are written through
+the shared release path (`handlers.release._do_release`), so changing how they
+are written would change every release in the game to speed up one admin
+button. Not a trade worth making here.
 
 ### 4.7 Affected captains are DMed
 

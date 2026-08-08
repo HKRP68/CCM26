@@ -93,7 +93,13 @@ def find_over_cap_user_ids(session):
 
 
 def is_over_cap(session, user):
-    """True if this one account is over either cap."""
+    """True if this one account is over either cap.
+
+    Costs two COUNT queries. :func:`downsize_user` deliberately does NOT call
+    this as a pre-check — both trims already load their own rows and return
+    early when there is nothing over, so asking first is two wasted round trips
+    per account on a sweep that may touch thousands.
+    """
     return (get_roster_count(session, user.id) > MAX_ROSTER
             or count_squad_traits(session, user.id) > TRAIT_MAX_PER_SQUAD)
 
@@ -108,11 +114,16 @@ def downsize_user(session, user):
     ``telegram_id`` is captured up front, while the instance is certainly
     loaded, because the caller may only look at this dict after a commit has
     expired the User and an expunge has detached it.
+
+    There is no ``is_over_cap`` pre-check on purpose. Both trims already load
+    the rows they need and return an empty result when the account is at or
+    under its cap, so asking first would add two COUNT queries per account to a
+    sweep that may run over thousands — to learn something the very next call
+    works out anyway. An account that is under both caps still costs two
+    queries here, and returns exactly the same empty summary.
     """
     summary = _empty_summary()
     summary["telegram_id"] = getattr(user, "telegram_id", None)
-    if not is_over_cap(session, user):
-        return summary
 
     roster_result = trim_roster_to_cap(session, user)
     summary["cards"] = roster_result["count"]

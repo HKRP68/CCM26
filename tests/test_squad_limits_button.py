@@ -395,31 +395,68 @@ class ApplyRouteIsGatedOnPreviewTest(unittest.TestCase):
     def setUp(self):
         path = os.path.join(os.path.dirname(__file__), "..", "admin.py")
         with open(path) as fh:
-            src = fh.read()
-        self.route = (src.split("def admin_squad_limits_apply():")[1]
+            self.src = fh.read()
+        self.route = (self.src.split("def admin_squad_limits_apply():")[1]
                       .split("\n@app.route")[0])
+        self.worker = (self.src.split("def _squad_limits_worker(")[1]
+                       .split("\n@app.route")[0])
 
-    def test_the_route_requires_a_token_issued_by_preview(self):
-        self.assertIn('request.form.get("confirm_token"', self.route)
-        self.assertIn("_SQUAD_TOKEN_KEY", self.route)
+    def test_apply_needs_no_preview_token(self):
+        """One press. The preview gate is gone on purpose.
 
-    def test_the_token_is_checked_before_anything_is_released(self):
-        # Order matters: a mismatched token must return before run_downsize is
-        # ever reached, or a bare POST would still have emptied every roster.
-        check = self.route.index("supplied != expected")
-        work = self.route.index("run_downsize(db")
-        self.assertLess(check, work)
+        A preview runs the entire sweep and throws it away, so requiring one
+        made every apply cost twice what it needed to.
+        """
+        self.assertNotIn("confirm_token", self.route)
+        self.assertNotIn("_SQUAD_TOKEN_KEY", self.src)
 
-    def test_a_failed_check_returns_without_doing_work(self):
-        head = self.route[:self.route.index("run_downsize(db")]
+    def test_the_request_does_not_do_the_work(self):
+        # At ~28 queries per over-cap account the sweep can outlast the web
+        # server's request timeout. A timed-out apply is the worst outcome
+        # available: the browser errors while the work keeps committing.
+        self.assertNotIn("run_downsize", self.route)
+        self.assertIn("threading.Thread", self.route)
+        self.assertIn("_squad_limits_worker", self.route)
+
+    def test_the_single_flight_claim_is_atomic(self):
+        """Checking "already running?" and claiming must share one lock hold.
+
+        Two `with` blocks would reintroduce exactly the race the session-cookie
+        token had — both requests read "idle", both start a sweep.
+        """
+        head = self.route[:self.route.index("threading.Thread")]
+        acquire = head.index("with _SQUAD_JOB_LOCK")
+        check = head.index('_SQUAD_JOB.get("state") == "running"')
+        claim = head.index('state="running"')
+        self.assertLess(acquire, check)
+        self.assertLess(check, claim)
+        # ...and no second acquisition between them.
+        self.assertEqual(head[acquire:claim].count("with _SQUAD_JOB_LOCK"), 1)
+
+    def test_a_busy_sweep_is_refused_rather_than_doubled(self):
+        head = self.route[:self.route.index("threading.Thread")]
+        self.assertIn("already running", head)
         self.assertIn("return redirect", head)
 
-    def test_the_token_is_single_use(self):
-        # Cleared before the work runs, so a double submit can't apply twice
-        # even while the first request is still in flight.
-        popped = self.route.index("session.pop(_SQUAD_TOKEN_KEY")
-        work = self.route.index("run_downsize(db")
-        self.assertLess(popped, work)
+    def test_the_worker_owns_its_session_and_never_raises(self):
+        # The request that started it returned long ago, so it cannot borrow
+        # that Session; and a thread dying silently would leave the panel
+        # reading "running" forever.
+        self.assertIn("get_session()", self.worker)
+        self.assertIn("db.close()", self.worker)
+        self.assertIn('state="error"', self.worker)
+
+    def test_progress_counts_only_committed_accounts(self):
+        # on_user_done fires after each account's commit, so the number on
+        # screen can never be ahead of what is actually saved.
+        self.assertIn("on_user_done=_on_user", self.worker)
+        self.assertIn('_SQUAD_JOB["done_users"]', self.worker)
+
+    def test_the_audit_log_cannot_fail_the_committed_sweep(self):
+        tail = self.worker[self.worker.index("run_downsize("):]
+        self.assertIn("log_admin", tail)
+        self.assertIn("squad limits audit log failed after apply", tail)
+
 
 
 class DownsizeDmTest(unittest.TestCase):

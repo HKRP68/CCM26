@@ -265,19 +265,49 @@
       messaged, and only after their changes are saved.</li>
   </ul>
 
-  {% if squad_limits.over_cap_users is none %}
-    <p style="color:var(--red);">⚠️ Couldn't scan for over-cap squads — check the logs.</p>
-  {% elif squad_limits.over_cap_users == 0 %}
-    <p style="color:var(--green); font-weight:600;">
-      ✅ Every squad is already within the limits — nothing to apply.
-    </p>
-  {% else %}
-    <p style="margin:.8rem 0;">
-      <strong>{{ squad_limits.over_cap_users }}</strong> account(s) are currently over a limit.
-    </p>
+  {% set job = squad_limits.job %}
+
+  {% if job.state == 'running' %}
+    <div class="preview-box" id="squad-job" style="margin:.8rem 0;">
+      <strong>⏳ Applying the limits…</strong><br>
+      <span id="squad-job-progress">Starting…</span>
+    </div>
+  {% elif job.state == 'done' %}
+    <div class="preview-box" style="margin:.8rem 0; border-left:3px solid var(--green);">
+      <strong>✅ Finished.</strong><br>
+      Squads trimmed: <strong>{{ job.totals.users }}</strong><br>
+      Cards released: <strong>{{ job.totals.cards }}</strong>
+        (refunded {{ '{:,}'.format(job.totals.coins) }} 🪙)<br>
+      Traits refunded: <strong>{{ job.totals.traits }}</strong>
+        (refunded {{ '{:,}'.format(job.totals.gems) }} 💎)<br>
+      Captains DMed: <strong>{{ job.dms_queued or 0 }}</strong>
+      {%- if job.totals.failed %}<br>
+      <span style="color:var(--red);">⚠️ {{ job.totals.failed }} account(s) were
+        skipped after an error — press Apply again to retry them.</span>
+      {%- endif %}
+    </div>
+  {% elif job.state == 'error' %}
+    <div class="preview-box" style="margin:.8rem 0; border-left:3px solid var(--red);">
+      <strong>⚠️ The sweep failed:</strong> {{ job.error }}<br>
+      Accounts already finished stayed finished — press Apply again to continue.
+    </div>
   {% endif %}
 
-  {% if squad_limits.preview %}
+  {% if job.state != 'running' %}
+    {% if squad_limits.over_cap_users is none %}
+      <p style="color:var(--red);">⚠️ Couldn't scan for over-cap squads — check the logs.</p>
+    {% elif squad_limits.over_cap_users == 0 %}
+      <p style="color:var(--green); font-weight:600;">
+        ✅ Every squad is already within the limits — nothing to apply.
+      </p>
+    {% else %}
+      <p style="margin:.8rem 0;">
+        <strong>{{ squad_limits.over_cap_users }}</strong> account(s) are currently over a limit.
+      </p>
+    {% endif %}
+  {% endif %}
+
+  {% if squad_limits.preview and job.state != 'running' %}
     <div class="preview-box" style="margin:.8rem 0;">
       <strong>Preview — nothing has been changed yet.</strong><br>
       Squads to trim: <strong>{{ squad_limits.preview.users }}</strong><br>
@@ -289,44 +319,67 @@
   {% endif %}
 
   <div style="display:flex; gap:.6rem; flex-wrap:wrap; margin-top:.8rem;">
-    <form method="POST" action="{{ url_for('admin_squad_limits_preview') }}" style="margin:0;">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="btn btn-blue">👀 Preview</button>
-    </form>
-
-    {% if squad_limits.preview %}
+    {% if job.state == 'running' %}
+      <button type="button" class="btn btn-red" disabled>⏳ Applying…</button>
+    {% else %}
     <form method="POST" action="{{ url_for('admin_squad_limits_apply') }}" style="margin:0;"
-          data-confirm="Release {{ squad_limits.preview.cards }} card(s) and refund {{ squad_limits.preview.traits }} trait(s) across {{ squad_limits.preview.users }} squad(s)?&#10;&#10;Each affected captain will be sent a DM.&#10;&#10;This cannot be undone."
+          data-confirm="Bring every squad within the limits now?&#10;&#10;{% if squad_limits.over_cap_users %}{{ squad_limits.over_cap_users }} account(s) are over.{% endif %} Extra cards and traits are released and refunded, and each affected captain is DMed.&#10;&#10;This cannot be undone."
           onsubmit="return squadLimitsApply(this);">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="confirm_token" value="{{ squad_limits.token }}">
-      <button type="submit" class="btn btn-red">⚠️ Apply — release now</button>
+      <button type="submit" class="btn btn-red"
+        {{ 'disabled' if squad_limits.over_cap_users == 0 }}>⚠️ Apply limits now</button>
+    </form>
+
+    <form method="POST" action="{{ url_for('admin_squad_limits_preview') }}" style="margin:0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-blue">👀 Preview first (optional)</button>
     </form>
     {% endif %}
   </div>
 
   <small style="color:var(--muted); display:block; margin-top:.7rem;">
-    Preview changes nothing — it runs the real thing and rolls it back, so the numbers
-    are exact. Apply is only available after a preview, and can't be undone
+    Apply starts immediately and runs in the background — the page returns at once and
+    updates as it goes, so a large sweep can't time out your browser. It can't be undone
     (<code>/cmuundo</code> deliberately doesn't cover it, or a captain could restore
-    their way straight back over the cap). Safe to re-run: a second pass is a no-op.
+    their way straight back over the cap), but it is safe to re-run: a second pass finds
+    nobody over the limits and does nothing. Preview is optional — it runs the real thing
+    and rolls it back, so its numbers are exact, but it costs the same time as the apply.
   </small>
 </div>
 
 <script>
-// Confirm, then disable the button so it cannot fire twice.
-//
-// The server's single-use token lives in Flask's session cookie, so two Apply
-// requests genuinely in flight at the same instant would both read it before
-// either cleared it. Blocking the second click is the practical half of that
-// fix — see docs/squad-and-trait-limits.md §4.6 for why the other half needs a
-// server-side consume this codebase has nowhere to put yet.
+// Confirm, then disable the button so it cannot fire twice. The server holds
+// the authoritative single-flight lock; this just avoids the pointless second
+// request and makes the press feel acknowledged.
 function squadLimitsApply(form) {
   if (!confirm(form.dataset.confirm)) return false;
   var btn = form.querySelector('button[type=submit]');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Applying…'; }
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Starting…'; }
   return true;
 }
+
+// While a sweep runs, poll its progress and reload once it finishes so the
+// summary panel renders server-side. Polling only exists on the running page,
+// so an idle Maintenance page makes no requests at all.
+(function () {
+  var box = document.getElementById('squad-job-progress');
+  if (!box) return;
+  var url = {{ url_for('admin_squad_limits_status')|tojson }};
+  function tick() {
+    fetch(url, {credentials: 'same-origin'})
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        if (j.state !== 'running') { window.location.reload(); return; }
+        var done = j.done_users || 0;
+        box.textContent = j.total_users
+          ? done + ' of ' + j.total_users + ' squad(s) done'
+          : done + ' squad(s) done';
+        setTimeout(tick, 2000);
+      })
+      .catch(function () { setTimeout(tick, 5000); });
+  }
+  setTimeout(tick, 1000);
+})();
 </script>
 
 <!-- Preview -->
