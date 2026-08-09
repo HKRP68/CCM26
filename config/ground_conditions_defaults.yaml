@@ -14,13 +14,13 @@ pitch_profiles:
     scoring_matrix:
       Dot: 0.394
       Single: 0.330
-      Double: 0.081
+      Double: 0.0526
       Three: 0.005
-      Four: 0.056
+      Four: 0.0844
       Six: 0.026
       Wicket: 0.048
       Extras: 0.060
-    run_factor: 1.900
+    run_factor: 2.100
     wicket_factors:
       Fast: 1.12
       Fast-medium: 1.06
@@ -40,15 +40,15 @@ pitch_profiles:
   Dry:
     description: "Slow turn with low bounce — spin comes into play in the middle overs (par ~176)"
     scoring_matrix:
-      Dot: 0.324
+      Dot: 0.326
       Single: 0.350
-      Double: 0.101
+      Double: 0.0657
       Three: 0.006
-      Four: 0.085
+      Four: 0.1203
       Six: 0.044
-      Wicket: 0.040
+      Wicket: 0.0380
       Extras: 0.050
-    run_factor: 1.030
+    run_factor: 1.020
     wicket_factors:
       Leg spin: 1.10
       Wrist spin: 1.08
@@ -71,13 +71,13 @@ pitch_profiles:
     scoring_matrix:
       Dot: 0.335
       Single: 0.350
-      Double: 0.099
+      Double: 0.0643
       Three: 0.006
-      Four: 0.088
+      Four: 0.1227
       Six: 0.053
       Wicket: 0.034
       Extras: 0.035
-    run_factor: 1.430
+    run_factor: 1.490
     wicket_factors:
       Fast: 1.06
       Fast-medium: 1.03
@@ -99,13 +99,13 @@ pitch_profiles:
     scoring_matrix:
       Dot: 0.351
       Single: 0.340
-      Double: 0.097
+      Double: 0.0630
       Three: 0.006
-      Four: 0.091
+      Four: 0.1250
       Six: 0.060
       Wicket: 0.030
       Extras: 0.025
-    run_factor: 1.085
+    run_factor: 1.300
     wicket_factors:
       default: 0.88
     scoring_dynamics: {floor: 190, par_low: 225, par_high: 240, ceiling: 280, anomaly: 315}
@@ -124,13 +124,13 @@ pitch_profiles:
     scoring_matrix:
       Dot: 0.20
       Single: 0.325
-      Double: 0.145
+      Double: 0.0943
       Three: 0.005
-      Four: 0.17
+      Four: 0.2207
       Six: 0.09
       Wicket: 0.035
       Extras: 0.025
-    run_factor: 1.30
+    run_factor: 1.520
     wicket_factors:
       Fast: 0.60
       Fast-medium: 0.60
@@ -154,15 +154,15 @@ pitch_profiles:
   Dusty:
     description: "Sharp turn with variable bounce — spin-attack pitch, low-scoring dogfights (par ~158)"
     scoring_matrix:
-      Dot: 0.356
-      Single: 0.340
-      Double: 0.092
+      Dot: 0.359
+      Single: 0.362
+      Double: 0.0598
       Three: 0.006
-      Four: 0.078
+      Four: 0.0882
       Six: 0.042
-      Wicket: 0.036
+      Wicket: 0.033
       Extras: 0.050
-    run_factor: 0.860
+    run_factor: 0.820
     wicket_factors:
       Leg spin: 1.08
       Wrist spin: 1.06
@@ -185,13 +185,13 @@ pitch_profiles:
     scoring_matrix:
       Dot: 0.336
       Single: 0.350
-      Double: 0.099
+      Double: 0.0643
       Three: 0.006
-      Four: 0.079
+      Four: 0.1137
       Six: 0.045
       Wicket: 0.040
       Extras: 0.045
-    run_factor: 1.310
+    run_factor: 1.520
     wicket_factors:
       Fast: 1.18
       Fast-medium: 1.08
@@ -213,13 +213,13 @@ pitch_profiles:
     scoring_matrix:
       Dot: 0.323
       Single: 0.350
-      Double: 0.106
+      Double: 0.0689
       Three: 0.006
-      Four: 0.086
+      Four: 0.1231
       Six: 0.053
       Wicket: 0.036
       Extras: 0.040
-    run_factor: 1.230
+    run_factor: 1.430
     wicket_factors:
       Fast: 1.03
       Fast-medium: 1.01
