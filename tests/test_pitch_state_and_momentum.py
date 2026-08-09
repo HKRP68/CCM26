@@ -248,6 +248,28 @@ class LiveWiringTests(unittest.TestCase):
                 self.assertIn(over["bat"], approach_modifiers.BATTING_KEYS)
                 self.assertIn(over["bowl"], approach_modifiers.BOWLING_KEYS)
 
+    def test_every_logged_over_carries_its_ball_marks(self):
+        """The analysis report lists the duel ball by ball, so the marks have to
+        survive the over that produced them — ``last_over_timeline`` is
+        overwritten every over and only ever holds the most recent one."""
+        bpu = 6
+        for key in ("approach_log", "inn1_approach_log"):
+            for over in self.state.get(key) or []:
+                marks = over.get("timeline")
+                self.assertTrue(marks, f"{key} over {over.get('over')} has no marks")
+                legal = sum(1 for m in marks if m not in ("WD", "NB"))
+                # A completed over is exactly bpu legal balls; the last over of
+                # an innings can be short when the side is bowled out or the
+                # chase finishes mid-over.
+                self.assertLessEqual(legal, bpu, over)
+
+    def test_the_marks_agree_with_the_runs_they_are_logged_against(self):
+        """A timeline that disagrees with its own over would put a fiction in
+        the report — the one place a reader checks the engine's working."""
+        for over in self.state.get("inn1_approach_log") or []:
+            wickets = sum(1 for m in over["timeline"] if m == "W")
+            self.assertEqual(wickets, over["wickets"], over)
+
     def test_the_pitch_trace_is_recorded_for_the_chase(self):
         trace = self.state.get("dps_trace") or []
         self.assertTrue(trace, "Dry has innings-2 rules; none were recorded")

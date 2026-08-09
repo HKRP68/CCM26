@@ -1986,6 +1986,10 @@ def simulate_over(state):
             "runs": over_runs,
             "wickets": over_wkts,
             "combo": combo_name,
+            # The over's ball marks. Kept only because the match analysis report
+            # lists the duel over by over; ``last_over_timeline`` above holds the
+            # most recent over for the live card and is overwritten every over.
+            "timeline": list(over_timeline),
         })
         if state.get("innings") == 2:
             _dps = pitch_state.innings2_trace(pitch, state["current_over"],

@@ -38,11 +38,18 @@ def _state(**over):
                                   1.0, 1.6, 1.4, 1.8],
         "inn1_approach_log": [
             {"over": 1, "bat": "balanced", "bowl": "aggressive", "runs": 6,
-             "wickets": 0, "combo": None},
+             "wickets": 0, "combo": None,
+             "timeline": ["0", "1", "4", "0", "1", "0"]},
             {"over": 2, "bat": "ultra", "bowl": "variation", "runs": 12,
-             "wickets": 0, "combo": "The Chess Match"},
+             "wickets": 0, "combo": "The Chess Match",
+             "timeline": ["6", "0", "4", "1", "0", "1"]},
             {"over": 3, "bat": "rotate", "bowl": "defensive", "runs": 4,
-             "wickets": 1, "combo": "The Grind"}],
+             "wickets": 1, "combo": "The Grind",
+             "timeline": ["1", "W", "0", "WD", "2", "0", "1"]},
+            # An over logged before the ball marks were recorded — a match
+            # already in flight when that column shipped.
+            {"over": 4, "bat": "ultra", "bowl": "variation", "runs": 18,
+             "wickets": 0, "combo": "The Chess Match"}],
 
         "bat_team_name": "Titan Kings", "total_runs": 171, "total_wickets": 8,
         "inn2_overs": "20.0",
@@ -65,9 +72,11 @@ def _state(**over):
                                50, 53, 51, 46, 52, 45, 44, 41, 30, 12])],
         "approach_log": [
             {"over": 1, "bat": "aggressive", "bowl": "balanced", "runs": 8,
-             "wickets": 0, "combo": None},
+             "wickets": 0, "combo": None,
+             "timeline": ["1", "1", "4", "0", "1", "1"]},
             {"over": 2, "bat": "aggressive", "bowl": "mixed", "runs": 7,
-             "wickets": 0, "combo": None}],
+             "wickets": 0, "combo": None,
+             "timeline": ["0", "6", "0", "0", "1", "0"]}],
         "dps_trace": [{"over": 17, "effects": ["cracks open (+10% variable "
                                                "bounce) — death overs dangerous"]}],
     }
@@ -164,6 +173,147 @@ class ContentTests(unittest.TestCase):
             _state(bat_team_name="<script>alert(1)</script>"), _RESULT)
         self.assertNotIn("<script>alert(1)</script>", html)
         self.assertIn("&lt;script&gt;", html)
+
+
+class ApproachDuelTests(unittest.TestCase):
+    """The over-by-over duel — the section that answers "which approach met which".
+
+    Everything it draws is already in ``state["approach_log"]``; these pin that it
+    is *listed* rather than summarised away, and that a row survives an entry
+    written before the ball marks were recorded.
+    """
+
+    def setUp(self):
+        self.html = ma.build_match_analysis_html(_state(), _RESULT, _SCORECARD)
+        # The block for the side that batted first.
+        start = self.html.index("Royal Rangers batting")
+        self.first = self.html[start:self.html.index("Titan Kings batting")]
+
+    def _rows(self, block):
+        return re.findall(r"<tr class='(?:tr-\w+)?'>(.*?)</tr>", block, re.S)
+
+    def test_one_row_per_over_in_order(self):
+        overs = re.findall(r"<tr class='[^']*'><td class='n'>(\d+)</td>", self.first)
+        self.assertEqual(overs, ["1", "2", "3", "4"])
+
+    def test_a_row_carries_both_picks_and_its_own_result(self):
+        """Over 3 was Rotate Strike against Defensive for 4 and a wicket."""
+        row = [r for r in self._rows(self.first) if r.startswith("<td class='n'>3<")]
+        self.assertEqual(len(row), 1)
+        row = row[0]
+        self.assertIn("Rotate Strike", row)
+        self.assertIn("Defensive", row)
+        self.assertIn(">4</td>", row)   # runs
+        self.assertIn(">1</td>", row)   # wickets
+
+    def test_runs_and_wickets_come_before_the_ball_sequence(self):
+        """Six columns do not fit a phone. The two the table exists for have to
+        be the ones on screen; the sequence is what you scroll to."""
+        duel = self.first[self.first.index("<table class='duel'>"):]
+        head = duel[:duel.index("</thead>")]
+        self.assertLess(head.index("<th>R</th>"), head.index("<th>Balls</th>"))
+        self.assertLess(head.index("<th>W</th>"), head.index("<th>Balls</th>"))
+
+    def test_the_ball_sequence_is_drawn(self):
+        self.assertIn("b-four", self.first)     # the 4 in over 1
+        self.assertIn("b-six", self.first)      # the 6 in over 2
+        self.assertIn("b-wkt", self.first)      # the W in over 3
+        self.assertIn("b-extra", self.first)    # the wide in over 3
+        self.assertIn("b-dot", self.first)
+
+    def test_an_over_with_no_recorded_balls_still_gets_a_row(self):
+        """Over 4 of the fixture predates the column. It must not vanish, and it
+        must not take the rest of the table with it."""
+        overs = re.findall(r"<tr class='[^']*'><td class='n'>(\d+)</td>", self.first)
+        self.assertIn("4", overs)
+
+    def test_the_balls_column_disappears_when_no_over_has_one(self):
+        """An entirely pre-column match gets a five-column table, not a column of
+        blanks."""
+        state = _state()
+        for entry in state["inn1_approach_log"]:
+            entry.pop("timeline", None)
+        for entry in state["approach_log"]:
+            entry.pop("timeline", None)
+        html = ma.build_match_analysis_html(state, _RESULT, _SCORECARD)
+        # Scoped to the duel table — the partnerships table has a Balls column
+        # of its own and is not what this is about.
+        duel = html[html.index("<table class='duel'>"):]
+        duel = duel[:duel.index("</table>")]
+        self.assertNotIn("<th>Balls</th>", duel)
+        self.assertNotIn("class='balls'", duel)
+        self.assertIn("Rotate Strike", html)
+
+    def test_rows_are_tinted_by_who_won_the_over(self):
+        # Over 2 went for 12 — the batting side's. Over 3 took a wicket.
+        self.assertIn("tr-bat", self.first)
+        self.assertIn("tr-bowl", self.first)
+
+    def test_the_tint_is_never_the_only_signal(self):
+        """Colour is decoration: every tinted row states its runs and wickets in
+        text, so the table reads identically with colour off."""
+        for row in self._rows(self.first):
+            self.assertGreaterEqual(row.count("class='n'"), 3)
+
+
+class MatchupGridTests(unittest.TestCase):
+    """Approach vs approach: what each intent returned against each plan."""
+
+    def setUp(self):
+        self.html = ma.build_match_analysis_html(_state(), _RESULT, _SCORECARD)
+
+    def test_a_matchup_cell_aggregates_every_over_of_that_pairing(self):
+        """Ultra Attack met Variation twice in innings 1 — 12 and 18 off two
+        overs, so the cell reads 15.0 RPO over 30 runs."""
+        self.assertIn("<b>15.0</b>", self.html)
+        self.assertIn("30r 0w · 2", self.html)
+
+    def test_a_matchup_that_never_happened_is_empty_not_zero(self):
+        """A blank cell means "not tried". Printing 0.0 would mean "tried and
+        scored nothing", which is a different and wrong statement."""
+        self.assertIn("cell empty", self.html)
+        self.assertIn(">–</td>", self.html)
+
+    def test_every_intent_and_plan_has_a_row_and_a_column(self):
+        for _k, _emoji, name in ma.approach_modifiers.BATTING_APPROACHES:
+            self.assertIn(f"<th class='rowhead'>{name}</th>", self.html)
+        for _k, _emoji, name in ma.approach_modifiers.BOWLING_APPROACHES:
+            self.assertIn(f'title="{name}"', self.html)
+
+    def test_shading_is_banded_by_runs_per_over_not_by_the_innings(self):
+        """Absolute bands, so a cell means the same thing in both innings and in
+        every match — a scale relative to the innings would paint the best of a
+        bad set of overs as a good one."""
+        self.assertEqual(ma._rpo_band(4.0), 0)
+        self.assertEqual(ma._rpo_band(7.0), 1)
+        self.assertEqual(ma._rpo_band(9.0), 2)
+        self.assertEqual(ma._rpo_band(11.0), 3)
+        self.assertEqual(ma._rpo_band(15.0), 4)
+        # Monotone: a more expensive over never gets a quieter band.
+        bands = [ma._rpo_band(r) for r in (0, 3, 6, 8, 10, 12, 20)]
+        self.assertEqual(bands, sorted(bands))
+
+    def test_the_shading_has_a_legend_and_the_number_is_always_present(self):
+        self.assertIn("Shading runs quiet", self.html)
+        self.assertIn("DEF Defensive", self.html)
+
+
+class BotMatchRevealTests(unittest.TestCase):
+    """The file reveals both captains' picks in every match, bot ones included.
+
+    That is a deliberate line — mid-match against post-match. `_render_over_summary`
+    still withholds the bot's plan while the match is being played, because a mix
+    read off the screen can be countered over the next few overs; a finished
+    match's record has nothing left to protect. Pinned here so a future change
+    back to hiding is a conscious one rather than a silent regression.
+    """
+
+    def test_a_bot_match_shows_both_columns(self):
+        state = _state(is_bot_match=True, bot_user_id=99, bot_persona="tactician")
+        html = ma.build_match_analysis_html(state, _RESULT, _SCORECARD)
+        self.assertIn("Ultra Attack", html)
+        self.assertIn("Variation", html)
+        self.assertIn("The Chess Match", html)
 
 
 class ResilienceTests(unittest.TestCase):

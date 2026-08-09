@@ -271,6 +271,9 @@ def _innings_views(state):
     for v in views:
         v["wkt_by_over"] = _wickets_by_over(v["fow"], bpu)
         v["balls_per_unit"] = bpu
+        # The Hundred is scored in sets of five, not overs, and the report says so
+        # everywhere the live match does.
+        v["unit"] = "Over" if bpu == 6 else "Set"
     return views
 
 
@@ -365,14 +368,160 @@ def _partnership_section(views):
     return "".join(out)
 
 
+# How an over's ball marks are drawn. Keys are the marks
+# ``services.cipl_match.simulate_over`` writes to its over timeline.
+_BALL_CLASSES = {"0": "b-dot", "4": "b-four", "6": "b-six", "W": "b-wkt",
+                 "WD": "b-extra", "NB": "b-extra", "LB": "b-extra"}
+_BALL_TEXT = {"0": "•"}
+
+# Match-up grid tint bands, in runs per over. Absolute rather than relative to
+# the innings, so a cell means the same thing in both innings and in every match
+# — a relative scale would paint the best of a bad set of overs as a good one.
+_RPO_BANDS = (6.0, 8.0, 10.0, 12.0)
+
+# An over belongs to whoever won it. A wicket or a strangling is the bowling
+# side's; twelve-plus is the batting side's, wicket or no wicket.
+_BAT_WON_RUNS = 12
+_BOWL_WON_RUNS = 4
+
+
+def _ball_pills(timeline):
+    """An over's ball marks as inline pills, or ``""`` when it wasn't recorded.
+
+    ``timeline`` is absent from overs logged before this column existed — a match
+    already in flight when it deployed — so an empty cell is a normal outcome,
+    not a bug.
+    """
+    if not timeline:
+        return ""
+    return "".join(
+        f'<i class="ball {_BALL_CLASSES.get(mark, "b-run")}">'
+        f'{_e(_BALL_TEXT.get(mark, mark))}</i>'
+        for mark in timeline)
+
+
+def _over_row_class(runs, wickets):
+    if runs >= _BAT_WON_RUNS:
+        return "tr-bat"
+    if wickets or runs <= _BOWL_WON_RUNS:
+        return "tr-bowl"
+    return ""
+
+
+def _over_by_over_table(view):
+    """The duel, over by over: which intent met which plan, and what it cost.
+
+    The row tint is decoration — every over's outcome is already in the runs and
+    wickets columns in text, so the table reads the same with colour switched off.
+    """
+    log = view["approaches"]
+    if not log:
+        return ""
+    has_balls = any(o.get("timeline") for o in log)
+    rows = []
+    for over in log:
+        runs, wkts = _num(over.get("runs")), _num(over.get("wickets"))
+        balls = (f"<td class='balls'>{_ball_pills(over.get('timeline'))}</td>"
+                 if has_balls else "")
+        rows.append(
+            f"<tr class='{_over_row_class(runs, wkts)}'>"
+            f"<td class='n'>{_num(over.get('over'))}</td>"
+            f"<td>{_e(approach_modifiers.batting_label(over.get('bat')))}</td>"
+            f"<td>{_e(approach_modifiers.bowling_label(over.get('bowl')))}</td>"
+            f"<td class='n'>{runs}</td><td class='n'>{wkts}</td>"
+            f"{balls}</tr>")
+    # Runs and wickets sit BEFORE the ball sequence on purpose: at phone width
+    # six columns do not fit, and the two the table exists to show must be the
+    # ones on screen. The sequence is what you scroll for.
+    head = (f"<tr><th>{_e(view['unit'])}</th><th>Batting</th><th>Bowling</th>"
+            "<th>R</th><th>W</th>"
+            + ("<th>Balls</th>" if has_balls else "") + "</tr>")
+    return ("<div class='scroll'><table class='duel'><thead>" + head
+            + "</thead><tbody>" + "".join(rows) + "</tbody></table></div>")
+
+
+def _rpo_band(rpo):
+    """Which tint step an RPO falls in (0 = quietest, 4 = most expensive)."""
+    for idx, edge in enumerate(_RPO_BANDS):
+        if rpo < edge:
+            return idx
+    return len(_RPO_BANDS)
+
+
+def _matchup_grid(view):
+    """Approach vs approach: every intent against every plan it actually faced.
+
+    The over-by-over table says what happened; this says what *worked*. Runs per
+    over is the headline because it is the only figure comparable across cells
+    that saw different numbers of overs, and it is what the tint encodes — the
+    raw runs, wickets and over count sit under it, so the cell is readable with
+    no colour at all.
+    """
+    log = view["approaches"]
+    if not log:
+        return ""
+    cells = {}
+    for over in log:
+        key = (over.get("bat"), over.get("bowl"))
+        agg = cells.setdefault(key, {"runs": 0, "wickets": 0, "overs": 0})
+        agg["runs"] += _num(over.get("runs"))
+        agg["wickets"] += _num(over.get("wickets"))
+        agg["overs"] += 1
+
+    # Abbreviated, with the full name on hover: five spelled-out plans put the
+    # last two columns off a phone screen before you have read the first three.
+    head = "".join(f'<th title="{_e(name)}">{_e(name[:3].upper())}</th>'
+                   for _k, _emoji, name in approach_modifiers.BOWLING_APPROACHES)
+    rows = []
+    for bat_key, _bat_emoji, bat_name in approach_modifiers.BATTING_APPROACHES:
+        tds = []
+        for bowl_key, _e2, _n2 in approach_modifiers.BOWLING_APPROACHES:
+            agg = cells.get((bat_key, bowl_key))
+            if not agg:
+                tds.append("<td class='cell empty'>–</td>")
+                continue
+            rpo = agg["runs"] / agg["overs"]
+            tds.append(
+                f"<td class='cell q{_rpo_band(rpo)}'>"
+                f"<b>{rpo:.1f}</b>"
+                f"<span>{agg['runs']}r {agg['wickets']}w · {agg['overs']}</span>"
+                "</td>")
+        rows.append(f"<tr><th class='rowhead'>{_e(bat_name)}</th>"
+                    + "".join(tds) + "</tr>")
+    legend = " &nbsp;·&nbsp; ".join(
+        f"{_e(name[:3].upper())} {_e(name)}"
+        for _k, _emoji, name in approach_modifiers.BOWLING_APPROACHES)
+
+    scale = "".join(f"<i class='sq q{i}'></i>" for i in range(len(_RPO_BANDS) + 1))
+    return (
+        "<div class='scroll'><table class='grid'><thead><tr>"
+        "<th class='rowhead'>Batting \\ Bowling</th>" + head
+        + "</tr></thead><tbody>" + "".join(rows) + "</tbody></table></div>"
+        f"<p class='note'>Columns: {legend}.<br>Runs per over, with runs, "
+        f"wickets and overs bowled beneath. "
+        f"Shading runs quiet {scale} expensive.</p>")
+
+
 def _approach_section(views):
-    """The duel: how often each captain reached for each plan, and what it
-    returned. This is the part of the match nothing else records."""
+    """The duel: over by over, then match-up by match-up, then in aggregate.
+
+    Nothing here is hidden in a bot match, and that is deliberate rather than an
+    oversight. ``handlers/cipl_play._render_over_summary`` withholds the bot's
+    plan *during* the match, so its mix cannot be read off the screen and
+    countered over the next few overs. This file is the record of a match that is
+    already over; the line being drawn is mid-match against post-match, and only
+    the first half of it needs protecting.
+    """
     out = []
     for v in views:
         log = v["approaches"]
         if not log:
             continue
+        out.append(f"<h3>{_e(v['team'])} batting</h3>")
+        out.append(_over_by_over_table(v))
+        out.append("<h4>Approach vs approach</h4>")
+        out.append(_matchup_grid(v))
+
         bat_rows, bowl_rows = [], []
         for keys, label_fn, field, rows in (
                 (approach_modifiers.BATTING_APPROACHES,
@@ -395,7 +544,6 @@ def _approach_section(views):
         for o in log:
             if o.get("combo"):
                 combos[o["combo"]] = combos.get(o["combo"], 0) + 1
-        out.append(f"<h3>{_e(v['team'])} batting</h3>")
         out.append("<div class='two'>")
         for title, rows in (("Batting intent", bat_rows),
                             ("Bowling plan faced", bowl_rows)):
@@ -565,16 +713,27 @@ _CSS = """
 :root{
   --bg:#f6f7f9; --panel:#ffffff; --ink:#14181f; --dim:#5c6673; --line:#dfe3e9;
   --accent:#1f6feb; --s1:#1f6feb; --s2:#e8590c; --pressure:#8b5cf6; --wkt:#d92d20;
+  /* Sequential ramp for the match-up grid: one hue, light to dark. Every step
+     clears 4.5:1 against --ink, so the number in the cell stays readable and the
+     shading is decoration rather than the only way to read the grid. */
+  --q0:#eef4fd; --q1:#cde2fb; --q2:#9ec5f4; --q3:#6da7ec; --q4:#3987e5;
+  --tint-bat:rgba(31,111,235,.07); --tint-bowl:rgba(217,45,32,.07);
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
     --bg:#0e1116; --panel:#161b22; --ink:#e6edf3; --dim:#8b949e; --line:#2a313a;
     --accent:#58a6ff; --s1:#58a6ff; --s2:#ff922b; --pressure:#a78bfa; --wkt:#ff6b6b;
+    /* The ramp's anchor flips in dark: quietest sits nearest the surface and the
+       expensive end brightens. Same hue, same monotone lightness, re-stepped. */
+    --q0:#16202e; --q1:#104281; --q2:#184f95; --q3:#1c5cab; --q4:#256abf;
+    --tint-bat:rgba(88,166,255,.10); --tint-bowl:rgba(255,107,107,.10);
   }
 }
 :root[data-theme="dark"]{
   --bg:#0e1116; --panel:#161b22; --ink:#e6edf3; --dim:#8b949e; --line:#2a313a;
   --accent:#58a6ff; --s1:#58a6ff; --s2:#ff922b; --pressure:#a78bfa; --wkt:#ff6b6b;
+  --q0:#16202e; --q1:#104281; --q2:#184f95; --q3:#1c5cab; --q4:#256abf;
+  --tint-bat:rgba(88,166,255,.10); --tint-bowl:rgba(255,107,107,.10);
 }
 *{box-sizing:border-box}
 body{margin:0;padding:0 16px 56px;background:var(--bg);color:var(--ink);
@@ -632,6 +791,39 @@ svg.chart{width:100%;height:auto;aspect-ratio:720/300;display:block;
 .legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:6px}
 .key{display:flex;align-items:center;gap:6px;color:var(--dim);font-size:.82rem}
 .sw{width:12px;height:3px;border-radius:2px;display:inline-block}
+/* Over-by-over duel */
+table.duel th,table.duel td{padding:5px 6px;vertical-align:middle}
+tr.tr-bat td{background:var(--tint-bat)}
+tr.tr-bowl td{background:var(--tint-bowl)}
+td.balls{white-space:nowrap}
+.ball{display:inline-block;min-width:17px;padding:1px 3px;margin-right:2px;
+  border-radius:4px;font-style:normal;font-size:.74rem;text-align:center;
+  font-variant-numeric:tabular-nums;background:var(--bg);color:var(--dim)}
+.ball.b-run{color:var(--ink)}
+.ball.b-four,.ball.b-six{background:var(--accent);color:#fff;font-weight:700}
+.ball.b-wkt{background:var(--wkt);color:#fff;font-weight:700}
+.ball.b-extra{font-size:.66rem;color:var(--dim)}
+/* Approach vs approach grid */
+table.grid th{white-space:nowrap}
+th.rowhead{text-align:left;color:var(--ink);text-transform:none;
+  font-size:.8rem;letter-spacing:0}
+td.cell{text-align:center;padding:5px 8px;border-bottom:2px solid var(--panel);
+  border-right:2px solid var(--panel)}
+td.cell b{display:block;font-size:.9rem;font-variant-numeric:tabular-nums}
+td.cell span{display:block;font-size:.68rem;opacity:.75}
+td.cell.empty{color:var(--dim);background:none}
+td.cell.q0{background:var(--q0)}
+td.cell.q1{background:var(--q1)}
+td.cell.q2{background:var(--q2)}
+td.cell.q3{background:var(--q3)}
+td.cell.q4{background:var(--q4)}
+.sq{display:inline-block;width:13px;height:9px;margin:0 1px;border-radius:2px;
+  vertical-align:-1px}
+.sq.q0{background:var(--q0)}
+.sq.q1{background:var(--q1)}
+.sq.q2{background:var(--q2)}
+.sq.q3{background:var(--q3)}
+.sq.q4{background:var(--q4)}
 ol.turns{margin:0;padding-left:20px}
 ol.turns li{margin-bottom:6px}
 ul.trace{margin:0;padding-left:18px}

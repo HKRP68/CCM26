@@ -156,8 +156,42 @@ match chat after the summary card:
 phase-by-phase splits against the pitch's par · runs per over with wickets ·
 both innings' worms · full scorecards · momentum and pressure · the live win
 probability · turning points · partnerships and fall of wickets · **the approach
-duel**, every intent and plan with what it returned and which special
-combinations fired · how the pitch changed under them.
+duel** · how the pitch changed under them.
+
+The duel section is the one nothing else in the bot keeps, and it has three
+parts per innings:
+
+* **Over by over** — one row per over: which intent met which plan, the runs, the
+  wickets, and the over's ball marks. Runs and wickets sit *before* the ball
+  sequence because six columns do not fit a phone, and those two are what the
+  table exists to show; the sequence is what you scroll to. Rows tint by who won
+  the over, but the tint is decoration — every row states its runs and wickets in
+  text, so the table reads identically with colour off.
+* **Approach vs approach** — a 5×5 grid, intents down and plans across, each cell
+  the runs per over that pairing actually produced with the raw runs, wickets and
+  over count beneath. Runs per over is the headline because it is the only figure
+  comparable across cells that saw different numbers of overs. A pairing that
+  never happened is blank, not `0.0`: "not tried" and "tried and scored nothing"
+  are different statements. Shading is a one-hue sequential ramp banded on
+  absolute RPO — absolute so a cell means the same thing in both innings and in
+  every match; a scale relative to the innings would paint the best of a bad set
+  of overs as a good one. Every step of the ramp clears 4.5:1 against the ink in
+  both themes, so the number is always readable.
+* **Aggregates** — how often each intent and plan was reached for, and the
+  special combinations that fired.
+
+The ball marks are the one thing the report needed that was not already tracked:
+`simulate_over` built an over timeline and threw it away, keeping only
+`last_over_timeline` for the live card. It now goes onto the `approach_log`
+entry. An over logged before that change still renders — its row simply has no
+marks, and a match with none at all gets a five-column table rather than a column
+of blanks.
+
+**The duel reveals both captains' picks in every match, bot matches included**,
+and that is a deliberate line rather than an oversight. `_render_over_summary`
+still withholds the bot's plan *during* the match, because a mix read off the
+screen can be countered over the following overs. The distinction is mid-match
+against post-match; a finished match's record has nothing left to protect.
 
 Two constraints shaped it. It is **self-contained** — Telegram opens a
 downloaded file from local storage, so a CDN stylesheet or a charting library

@@ -216,6 +216,13 @@ can be written down and countered. Between two humans the reveal is symmetric �
 each captain gives up exactly what they learn — so it stays on. The switch is the
 `_is_bot_match` check in `handlers/cipl_play._render_over_summary`.
 
+**The post-match analysis file does not withhold it.** `services/match_analysis.py`
+lists every over's two picks, in every match, bot ones included. The line being
+drawn is mid-match against post-match: what this switch protects is a mix being
+read off the screen and countered over the next few overs, and a match that is
+already finished has none of that left to protect — reading your own defeat back
+is the point of the file. See `docs/unified-t20-engine-v3.md`.
+
 ## Where things live
 
 | Thing | File |
