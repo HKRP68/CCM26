@@ -28,6 +28,8 @@ from engine.game_state_engine import (
     BALL_HISTORY_WINDOW,
 )
 from engine import approach_modifiers
+from engine import momentum as momentum_engine
+from engine import pitch_state
 from engine.approach_modifiers import batting_label, bowling_label
 from services.match_engine import note_bowler_ball
 from services.sim_match import (
@@ -133,15 +135,20 @@ def approach_context(state, bowler=None):
         str(bowl.get("roster_id")), {})
     # 1-based: the over about to be bowled is one past the ones already sent down.
     spell_over = int(stats.get("balls", 0) or 0) // max(1, bpu) + 1
-    over_runs = (state or {}).get("over_runs") or []
     return approach_modifiers.make_context(
         pitch=(state or {}).get("pitch_type"),
         phase=approach_phase(state),
         bowling_type=_adapt_player(bowl).get("bowling_type") if bowl else None,
         bowler_over_index=spell_over,
         partnership_overs=float((state or {}).get("partnership_balls") or 0) / max(1, bpu),
-        batting_momentum=bool(over_runs)
-        and over_runs[-1] >= approach_modifiers.MOMENTUM_OVER_RUNS,
+        # The batting side of "momentum" is now the tracked accumulator in
+        # engine.momentum, applied per ball through _make_mpi_hook. Feeding the
+        # old 12-runs-last-over boolean in here as well would price the same
+        # ascendancy twice — once as a flat +5% on the over, once as the MPI
+        # band it also pushed the side into. The bowler's side stays: that rule
+        # is about one bowler's rhythm, not the batting side's flow, and the MPI
+        # has nothing to say about it.
+        batting_momentum=False,
         bowling_momentum=bool(stats.get("last_over_wickets")),
         carry=(state or {}).get("approach_carry"),
     )
@@ -173,19 +180,32 @@ CLUTCH_WINDOW_BALLS = 6
 # BOUNDED weight nudge layered on top of the existing rating/trait weights
 # (never an override — ratings and traits still decide the raw distribution):
 #
-#   Sub-100 Rule   — a side bowled out under ~100 is very rare; lower-order
-#                    hitting pushes the score to 110+ (see _make_floor_hook).
+#   Sub-130 Rule   — v3.0 section 1.1: on a standard surface anything under 130
+#                    is a collapse, not a total, and a side bowled out under 100
+#                    stays under 2% globally. The tail digs in short of the
+#                    pitch's own Floor (see _make_floor_hook).
 #   Variance Rule  — the Ceiling is a cap, not a baseline; totals fluctuate
 #                    between Floor and Ceiling, most near Par (_make_variance_hook).
 #   Fighting Match — chases stay close and deep; a low-win-probability side loses
 #                    by ~10-15 rather than capitulating (_make_no_collapse_hook +
 #                    the total-band chase baseline set at the innings break).
 
-# (Sub-100) The tail digs in once 5+ down and short of the pitch's floor.
+# (Sub-130) The tail digs in once 5+ down and short of the pitch's floor. The
+# global fallback is the section 1.1 Collapse Threshold, used only by a pitch
+# with no scoring_dynamics of its own.
 FLOOR_MIN_WICKETS = 5
-FLOOR_GLOBAL = 100               # fallback floor when a pitch has no spec dynamics
+FLOOR_GLOBAL = 130               # fallback floor when a pitch has no spec dynamics
 FLOOR_WICKET_SCALE_MIN = 0.22    # hardest Wicket damping when far below floor
 FLOOR_BOUNDARY_MAX = 1.70        # cap on lower-order boundary uplift
+# The per-pitch Floor is a *relative* line — 190 on Flat, 120 on Dusty — and
+# scaling resistance off it alone leaves a hole exactly where section 1.1 says
+# there should be none. A side 5 down for 95 on a dusty track is only a quarter
+# of the way below that pitch's Floor, gets a quarter of the protection, and is
+# all out for 98: the outcome the Sub-100 rule exists to make rare. So the hard
+# line gets its own term, in absolute runs, on every pitch. It fades in from
+# COLLAPSE_HARD_FLOOR + FADE and saturates below it.
+COLLAPSE_HARD_FLOOR = 100
+COLLAPSE_HARD_FADE = 30
 
 # (Variance) One multiplier per innings — the innings' scoring "mood".
 VARIANCE_SIGMA = 0.11
@@ -206,10 +226,31 @@ CORRIDOR_GAP_RUNS = 30.0         # deficit vs par-chase line that saturates the 
 BASELINE_BOUNDARY_K = 0.32       # ±32% boundaries — kept mild so a losing chase
 BASELINE_DOT_K = 0.05            # stays in touch and loses CLOSE, not blown away
 BASELINE_WICKET_K = 0.12         # only ∓12% wickets (weak on purpose)
+#
+# An asymmetric version of BASELINE_BOUNDARY_K — a larger gain on the hard-chase
+# side, to pull a Flat 271+ chase down toward the v3.0 grid's 12% — was built,
+# measured and removed. It cannot work, because the target it aims at is not
+# self-consistent: section 9's Step-1 grid is keyed on the absolute total, while
+# section 5A puts Flat par at ~230, so the grid's own "191-210 -> 62%" describes a
+# total 20 runs BELOW par being chased down barely three times in five. Tightening
+# the gain drags the batting pitches toward that figure and simultaneously pushes
+# the bowling pitches past theirs the other way (Dry's above-par 210 band went
+# from a 46% spec to 14% observed). Across the calibration sweep a symmetric 0.32
+# produced the fewest out-of-tolerance bands; 0.45 and 0.58 both produced more.
+# The residual on the flat-deck bands is the grid disagreeing with the par table,
+# not the engine disagreeing with the grid.
 # The engine gives the side batting second an intrinsic edge (it knows the
 # target, dew, etc.). Shift the effective win% down so a spec-50% total is
 # actually defended ~50% of the time rather than routinely chased down.
-CHASE_INTRINSIC_BIAS = 14
+#
+# Raised from 14 with the v3.0 section 9 Step-1 grid, which is markedly more
+# defensive at big targets than the bands it replaced: measured over 220 matches
+# per pitch, 14 left the engine chasing about 5 points more often than the grid
+# says across every judgeable band, and 20 more than halves that. Past ~24 there
+# is nothing left to win — the residual is sampling noise, and pushing harder
+# only starts blowing losing chases away, which the Fighting Match rule exists to
+# prevent.
+CHASE_INTRINSIC_BIAS = 20
 
 
 def _clamp(v, lo, hi):
@@ -580,6 +621,16 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         "partnership_runs": 0, "partnership_balls": 0,
         "partnership_history": [], "wkt_marks": [],
         "momentum_prev": 0.0,
+        # Sections 8A/8B: the two tracked accumulators, and one entry per
+        # completed over so the match analysis report can draw them. Pressure
+        # stays at 0.0 through innings 1 — there is nothing to chase yet.
+        "momentum": 0.0, "pressure": 0.0,
+        "momentum_history": [], "pressure_history": [],
+        # Section 9: the live chasing chance after each over of the 2nd innings.
+        "chase_history": [],
+        # What each captain actually picked, over by over (the analysis report's
+        # approach duel). Never read by the simulation.
+        "approach_log": [],
         "over_msg_ids": [],
         "commentary_log": [],
         "chat_id": chat_id, "is_private": is_private,
@@ -1019,13 +1070,149 @@ def _make_variance_hook(v):
     return _hook
 
 
+def _make_dps_hook(state, pitch):
+    """Dynamic Pitch State (v3.0 section 2): the *character* the surface takes on
+    in the second innings.
+
+    ``engine.ball_outcome._apply_pitch_wear`` already supplies the slow, generic
+    drift, driven by :func:`engine.pitch_state.carry_wear` — but it only knows
+    four pitches and cannot express "after over 16" or "overs 7-12". This hook
+    supplies the part it cannot: the per-pitch, per-phase identity. The two do
+    not overlap, so the pitch is applied once.
+
+    No-op in the first innings, which is the whole point — the surface has to be
+    the same one both sides played on, and different by the time the chase gets
+    to it.
+    """
+    if state.get("innings") != 2:
+        return None
+    mult = pitch_state.innings2_effects(
+        pitch,
+        state.get("current_over", 1),
+        state.get("overs", 20),
+        is_spin=approach_modifiers.is_spin(
+            _adapt_player(state.get("current_bowler") or {}).get("bowling_type")),
+    )
+    if not mult:
+        return None
+
+    def _hook(raw_weights):
+        rw = dict(raw_weights)
+        for key, factor in mult.items():
+            if key in rw:
+                rw[key] *= factor
+        return rw
+
+    return _hook
+
+
+def _make_mpi_hook(state):
+    """Momentum-Pressure Index (v3.0 section 8C).
+
+    The two accumulators are updated once per completed over (see
+    :func:`_update_mpi`); this reads their current net value and applies the band
+    it falls in to every ball of the over. Inert in the neutral band, which is
+    where most of an innings is spent.
+    """
+    net = momentum_engine.mpi(state.get("momentum", 0.0),
+                              state.get("pressure", 0.0))
+    mult = momentum_engine.mpi_effects(net)
+    if not mult:
+        return None
+
+    def _hook(raw_weights):
+        rw = dict(raw_weights)
+        for key, factor in mult.items():
+            if key in rw:
+                rw[key] *= factor
+        return rw
+
+    return _hook
+
+
+def _longest_dot_run(over_timeline):
+    """Longest run of consecutive dots in an over's timeline.
+
+    Only true dot balls count: a wide is not a dot the batter faced, and the
+    momentum rule this feeds is about a batter who cannot get the ball away.
+    """
+    best = run = 0
+    for mark in over_timeline or []:
+        if mark == "0":
+            run += 1
+            best = max(best, run)
+        elif mark in ("WD", "NB"):
+            continue          # not a ball faced — neither breaks nor extends
+        else:
+            run = 0
+    return best
+
+
+def _update_mpi(state, over_runs, over_wkts, over_timeline,
+                partnership_before, partnership_after, bpu):
+    """Advance Momentum (8A) and, in a chase, Pressure (8B) by one over, and
+    append both to the per-over histories the analysis report draws from.
+
+    Called once per *completed* over. A part-over — the last of an innings, or
+    one interrupted — moves neither accumulator, because both tables are written
+    in whole overs and a two-ball over would otherwise read as a strangling.
+    """
+    boundaries = sum(1 for m in over_timeline or [] if m in ("4", "6"))
+    state["momentum"] = momentum_engine.update_momentum(
+        state.get("momentum", 0.0),
+        {
+            "runs": over_runs,
+            "wickets": over_wkts,
+            "boundaries": boundaries,
+            "is_maiden": over_runs == 0,
+            "longest_dot_run": _longest_dot_run(over_timeline),
+            "partnership_before": partnership_before,
+            "partnership_after": partnership_after,
+        })
+
+    if state.get("innings") == 2 and state.get("target"):
+        balls_left = total_balls(state) - balls_bowled(state)
+        runs_needed = int(state["target"]) - int(state["total_runs"])
+        required_rr = (runs_needed / balls_left * 6.0) if balls_left > 0 else 0.0
+        # A boundary is only "relief" if it actually pulled the ask back — the
+        # doc's "reduces the RRR gap by 1.0+". One boundary in an over of 6 does
+        # that; one in an over of 6 that also went for a wicket may not, so it is
+        # measured against the rate, not counted off the timeline.
+        rr_before = ((runs_needed + over_runs) / (balls_left + bpu) * 6.0
+                     if (balls_left + bpu) > 0 else 0.0)
+        relief = 1 if (boundaries and rr_before - required_rr >= 1.0) else 0
+        state["pressure"] = momentum_engine.update_pressure(
+            state.get("pressure", 0.0),
+            {
+                "required_rr": required_rr,
+                "current_rr": current_run_rate(state),
+                "overs_left": max(0, balls_left) // max(1, bpu),
+                "dots_last_6": sum(1 for m in (over_timeline or [])[-bpu:]
+                                   if m == "0"),
+                "relief_boundaries": relief,
+                "wickets": over_wkts,
+                "runs_needed": runs_needed,
+                "wickets_in_hand": (state.get("wicket_limit", WICKET_LIMIT)
+                                    - state["total_wickets"]),
+            })
+
+    state.setdefault("momentum_history", []).append(round(state["momentum"], 2))
+    state.setdefault("pressure_history", []).append(round(state.get("pressure", 0.0), 2))
+
+
 def _make_floor_hook(state, pitch):
-    """Sub-100 Rule: once the batting side is several wickets down and short of
-    the pitch's expected Floor, the tail digs in and swings — damp Wicket and
-    lift Four/Six, scaled by how far below the Floor the score is and how many
-    are down. Bounded (Wicket never below ``FLOOR_WICKET_SCALE_MIN``) so genuine
-    collapses still happen, but a full all-out under ~100 becomes rare. No-op
-    above threshold."""
+    """Section 1.1: once the batting side is several wickets down and short of the
+    pitch's expected Floor, the tail digs in and swings — damp Wicket and lift
+    Four/Six, scaled by how far below the Floor the score is and how many are
+    down.
+
+    Two lines feed the scaling, and the stronger of them wins. The pitch's own
+    Floor is relative (190 on Flat, 120 on Dusty) and drives the Sub-130 Collapse
+    Threshold; ``COLLAPSE_HARD_FLOOR`` is absolute and drives the global
+    "sub-100 stays under 2%" rule, which is the same number on every surface.
+
+    Bounded (Wicket never below ``FLOOR_WICKET_SCALE_MIN``) so genuine collapses
+    still happen. No-op above threshold."""
     wkts = state.get("total_wickets", 0)
     if wkts < FLOOR_MIN_WICKETS:
         return None
@@ -1038,6 +1225,10 @@ def _make_floor_hook(state, pitch):
         return None
     # 0 at the floor → 1 when half the floor short.
     deficit = min(1.0, (floor - runs) / max(1.0, floor * 0.5))
+    # …but never less than the absolute Sub-100 term, whatever the pitch.
+    hard = min(1.0, (COLLAPSE_HARD_FLOOR + COLLAPSE_HARD_FADE - runs)
+               / float(COLLAPSE_HARD_FADE))
+    deficit = max(deficit, max(0.0, hard))
     wkt_urgency = (wkts - FLOOR_MIN_WICKETS + 1) / (WICKET_LIMIT - FLOOR_MIN_WICKETS + 1)
     strength = min(1.0, deficit * (0.78 + 0.22 * wkt_urgency))
     wkt_scale = 1.0 - (1.0 - FLOOR_WICKET_SCALE_MIN) * strength
@@ -1124,6 +1315,36 @@ def _compose_hooks(*hooks):
 # Score / chase helpers
 # ════════════════════════════════════════════════════════════════════
 
+# The bowlers a chasing side does not want to face in the closing overs. Keyed on
+# ``effect_key`` — the trait engine's own identifier, and the only field that is
+# stable: ``display_name`` is admin-editable, so matching on it would leave this
+# rule one rename away from silently never firing. These are exactly the two
+# effects in services.trait_engine that gate themselves on the death overs.
+# /cipl players carry no traits at all, so this is a /letsplay rule in practice.
+_DEATH_TRAIT_KEYS = {"bowl_death", "bowl_yorker"}
+
+
+def _has_death_trait(bowler):
+    """True when this bowler carries a death-overs trait (Section 9 Step 2)."""
+    for trait in (bowler or {}).get("traits") or ():
+        key = trait.get("effect_key") if isinstance(trait, dict) else trait
+        if str(key or "").strip().lower() in _DEATH_TRAIT_KEYS:
+            return True
+    return False
+
+
+def _powerplay_runs(state):
+    """Runs the side currently batting scored in its powerplay.
+
+    Read off ``over_runs`` rather than tracked separately: the list is one entry
+    per completed over from the start of the innings, so the powerplay is just
+    its first N entries, and it cannot drift out of step with the score.
+    """
+    pp = (_spec(state)["powerplay_units"] if int(state.get("overs") or 20) >= 20
+          else max(1, round(int(state.get("overs") or 20) * 0.3)))
+    return sum(int(r or 0) for r in (state.get("over_runs") or [])[:pp])
+
+
 def chase_chance_now(state):
     """Live chasing-chance estimate for the current 2nd-innings situation (matrix
     + player/pitch/momentum modifiers), or None when not a live chase. Used for
@@ -1140,15 +1361,33 @@ def chase_chance_now(state):
     non_striker = order[ns_idx] if ns_idx < len(order) else {}
     bowler = state.get("current_bowler") or {}
     s_runs = state.get("bat_stats", {}).get(str(striker.get("roster_id")), {}).get("runs", 0)
-    required_rr = runs_needed / balls_left * 6.0
-    recent = (state.get("ball_history") or [])[-6:]
-    recent_runs = sum(int(b.get("runs", 0) or 0) for b in recent)
+    pitch = state.get("pitch_type")
+    # Section 9 Step 2. Momentum comes from the tracked accumulators when they
+    # exist; a caller that has not run an over yet still gets the old required-
+    # rate proxy, so the estimate is never worse than it was.
+    if state.get("momentum") or state.get("pressure"):
+        momentum_mod = chase_chance.mpi_modifier(state.get("momentum", 0.0),
+                                                 state.get("pressure", 0.0))
+    else:
+        required_rr = runs_needed / balls_left * 6.0
+        recent = (state.get("ball_history") or [])[-6:]
+        recent_runs = sum(int(b.get("runs", 0) or 0) for b in recent)
+        momentum_mod = chase_chance.momentum_modifier(required_rr, recent_runs,
+                                                      len(recent))
+    situation_mod = (
+        chase_chance.powerplay_modifier(_powerplay_runs(state))
+        + chase_chance.deterioration_modifier(pitch, 2)
+        + chase_chance.nothing_to_lose_modifier(state.get("target"), pitch))
     info = chase_chance.final_chase_chance(
         runs_needed, int(state["total_wickets"]),
         batter_mod=chase_chance.batter_modifier(striker, non_striker, s_runs),
-        bowler_mod=chase_chance.bowler_modifier(bowler, is_emergency=is_part_time_bowler(bowler)),
-        pitch_mod=chase_chance.pitch_modifier(state.get("pitch_type")),
-        momentum_mod=chase_chance.momentum_modifier(required_rr, recent_runs, len(recent)),
+        bowler_mod=chase_chance.bowler_modifier(
+            bowler, is_emergency=is_part_time_bowler(bowler),
+            is_death_phase=approach_phase(state) == "death",
+            has_death_trait=_has_death_trait(bowler)),
+        pitch_mod=chase_chance.pitch_modifier(pitch),
+        momentum_mod=momentum_mod,
+        situation_mod=situation_mod,
     )
     # The matrix is keyed only on runs+wickets; fold in the balls actually left so
     # an out-of-reach ask (e.g. 16 off 1) correctly favours the defence.
@@ -1269,6 +1508,9 @@ def simulate_over(state):
     over_events = []
     runs_before = state["total_runs"]
     wkts_before = state["total_wickets"]
+    # Momentum's partnership milestones (8A) are crossings, so the stand has to
+    # be measured from where it stood when the over started.
+    partnership_at_over_start = state.get("partnership_runs", 0)
     momentum_before = state.get("momentum_prev", 0.0)
     free_hit = state.get("free_hit", False)
 
@@ -1403,7 +1645,10 @@ def simulate_over(state):
                                             _cc["chasing_chance"],
                                             strength=CHASE_STEER_STRENGTH))
 
-            pitch_wear = min(1.0, balls_bowled(state) / max(1, innings_balls))
+            # Section 2: wear is measured across the MATCH, not the innings —
+            # otherwise the chase is bowled on a brand-new square every time.
+            pitch_wear = pitch_state.carry_wear(innings, balls_bowled(state),
+                                                innings_balls)
             # /letsplay traits: build a per-ball weight hook from the striker's
             # and bowler's active traits (None for Challenge League players, who
             # carry no traits — so the engine call is unchanged for /cipl).
@@ -1436,6 +1681,11 @@ def simulate_over(state):
             floor_hook = _make_floor_hook(state, pitch)
             corridor_hook = _make_no_collapse_hook(state)
             variance_hook = _make_variance_hook(state.get("innings_variance"))
+            # v3.0 layers: how this surface has changed for the chase (section 2)
+            # and where the batting side's head is (sections 8A-8C). Both are
+            # bounded nudges in the same family as the three above.
+            dps_hook = _make_dps_hook(state, pitch)
+            mpi_hook = _make_mpi_hook(state)
             # LetsPlay clutch amplifier — layered AFTER traits so trait deltas
             # (Finisher/Clutch/Death/Yorker) land first, then chase intent scales
             # the six-or-bust spread. None for /cipl and non-finale balls.
@@ -1448,6 +1698,7 @@ def simulate_over(state):
             weight_hook = _compose_hooks(trait_hook, env_hook,
                                          wicket_hook, drama_hook,
                                          floor_hook, corridor_hook, variance_hook,
+                                         dps_hook, mpi_hook,
                                          clutch_hook)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
@@ -1709,6 +1960,39 @@ def simulate_over(state):
 
     momentum_after = _compute_momentum(ball_history)
     state["momentum_prev"] = momentum_after
+
+    # v3.0 sections 8A-8C and 9. All of this runs on a COMPLETED over only: the
+    # momentum and pressure tables are written in whole overs, and the last
+    # part-over of an innings would otherwise register as a strangling.
+    if over_completed:
+        _update_mpi(state, over_runs, over_wkts, over_timeline,
+                    partnership_at_over_start, state.get("partnership_runs", 0),
+                    bpu)
+        _cc_now = chase_chance_now(state)
+        if _cc_now:
+            state.setdefault("chase_history", []).append({
+                "over": state["current_over"],
+                "chasing": _cc_now["chasing_chance"],
+                "runs_needed": _cc_now["runs_needed"],
+            })
+        # The approach duel, for the analysis report. Written here rather than
+        # derived later because the picks are cleared the moment the over ends.
+        state.setdefault("approach_log", []).append({
+            "over": state["current_over"],
+            "phase": approach_phase(state),
+            "bat": bat_app,
+            "bowl": bowl_app,
+            "bowler": bowler.get("name", ""),
+            "runs": over_runs,
+            "wickets": over_wkts,
+            "combo": combo_name,
+        })
+        if state.get("innings") == 2:
+            _dps = pitch_state.innings2_trace(pitch, state["current_over"],
+                                              state.get("overs", 20))
+            if _dps:
+                state.setdefault("dps_trace", []).append({
+                    "over": state["current_over"], "effects": _dps})
 
     # Change ends only at a format end-change boundary: every over (6 balls) in
     # T20, every 2nd set (10 balls) in The Hundred — so the batters keep their
@@ -2009,6 +2293,10 @@ def end_first_innings(state):
     state["inn1_fow"] = state["fow"]
     state["inn1_timeline"] = state["timeline"]
     state["inn1_over_runs"] = list(state.get("over_runs") or [])
+    # v3.0 traces, frozen for the match analysis report. The chase history and
+    # the pitch-state trace are 2nd-innings-only, so there is nothing to archive.
+    state["inn1_momentum_history"] = list(state.get("momentum_history") or [])
+    state["inn1_approach_log"] = list(state.get("approach_log") or [])
     state["target"] = state["total_runs"] + 1
 
     # Record the unbroken closing partnership, then freeze the 1st-innings
@@ -2068,6 +2356,14 @@ def end_first_innings(state):
     state["partnership_balls"] = 0
     state["wkt_marks"] = []
     state["momentum_prev"] = 0.0
+    # Momentum does not survive the interval — the side batting second starts
+    # level, whatever happened to the side batting first. Pressure starts at
+    # zero because until now there was nothing to chase.
+    state["momentum"] = 0.0
+    state["pressure"] = 0.0
+    state["momentum_history"] = []
+    state["pressure_history"] = []
+    state["approach_log"] = []
     # Clear sequence-aware commentary flags so innings-1's final ball can't
     # trigger a back-to-back / post-wicket / dot-streak line on the first
     # delivery of the chase.

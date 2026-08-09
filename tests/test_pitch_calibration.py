@@ -26,18 +26,35 @@ from tools import pitch_calibration as pc
 # ── Deterministic getter unit tests ─────────────────────────────────────
 
 def test_get_chase_win_pct_band_edges():
-    # Flat: [<200:90][201-219:86][220-240:70][241-260:50][261+:30]
-    assert ground_config.get_chase_win_pct("Flat", 180) == 90
-    assert ground_config.get_chase_win_pct("Flat", 200) == 90
-    assert ground_config.get_chase_win_pct("Flat", 201) == 86
-    assert ground_config.get_chase_win_pct("Flat", 240) == 70
-    assert ground_config.get_chase_win_pct("Flat", 261) == 30
-    assert ground_config.get_chase_win_pct("Flat", 400) == 30
-    # Dusty low-scoring bands.
-    assert ground_config.get_chase_win_pct("Dusty", 130) == 75
-    assert ground_config.get_chase_win_pct("Dusty", 131) == 50
+    """The Unified T20 Engine v3.0 section 9 Step 1 grid, band by band.
+
+    Bands are <=150, <=170, <=190, <=210, <=230, <=250, <=270, 271+ on every
+    pitch — the doc's own columns — so the edges are exact, not approximate.
+    """
+    # Flat: [96][90][78][62][48][34][22][12]
+    assert ground_config.get_chase_win_pct("Flat", 150) == 96
+    assert ground_config.get_chase_win_pct("Flat", 151) == 90
+    assert ground_config.get_chase_win_pct("Flat", 190) == 78
+    assert ground_config.get_chase_win_pct("Flat", 210) == 62
+    assert ground_config.get_chase_win_pct("Flat", 230) == 48
+    assert ground_config.get_chase_win_pct("Flat", 271) == 12
+    assert ground_config.get_chase_win_pct("Flat", 400) == 12
+    # Dusty is the doc's hardest chase, Flat its easiest — at every target.
+    for total in (150, 190, 230, 300):
+        assert (ground_config.get_chase_win_pct("Dusty", total)
+                < ground_config.get_chase_win_pct("Flat", total))
+    assert ground_config.get_chase_win_pct("Dusty", 150) == 85
+    assert ground_config.get_chase_win_pct("Dusty", 151) == 76
     # Unknown pitch → safe default.
     assert ground_config.get_chase_win_pct("Nope", 180) == 50
+
+
+def test_chase_win_pct_falls_monotonically_with_the_target():
+    """No pitch may make a bigger target easier to chase than a smaller one."""
+    for pitch in ("Flat", "Dead", "Hard", "Even", "Bouncy", "Dry", "Green", "Dusty"):
+        pcts = [ground_config.get_chase_win_pct(pitch, t)
+                for t in (140, 160, 180, 200, 220, 240, 260, 300)]
+        assert pcts == sorted(pcts, reverse=True), f"{pitch}: {pcts}"
 
 
 def test_get_scoring_dynamics_shape():

@@ -2599,6 +2599,19 @@ async def _complete_match(context, mid, state):
     except Exception:
         logger.exception("cipl match summary image failed for match %s", mid)
 
+    # The post-match analysis file. Everything above answers "who won"; this
+    # answers "why" — phase splits, the worm, both momentum tracks, the live win
+    # probability, and the over-by-over record of the approach duel, which
+    # nothing else keeps. Sent last so a failure here costs only the file.
+    #
+    # It has to be built while the live state is still up (cleanup_state below
+    # takes it away), but the render itself is pure string work, so the state
+    # read stays on the loop and only the rendering goes to a thread.
+    try:
+        await _send_match_analysis(context, mid, state, result, miniapp_row)
+    except Exception:
+        logger.exception("cipl match analysis failed for match %s", mid)
+
     # Unpin the match-start announcement now that the match is over.
     pinned = state.get("pinned_msg_id")
     if pinned:
@@ -2610,6 +2623,63 @@ async def _complete_match(context, mid, state):
     await _ss(context, mid, state, next_action=A_COMPLETED)
     cleanup_state(context, mid)
     release_match_lock(mid)
+
+
+async def _send_match_analysis(context, mid, state, result, keyboard_rows=None):
+    """Render the match analysis report and send it into the match chat.
+
+    Shared by the main finish (:func:`_complete_match`) and the Super Over one,
+    so a match decided in a Super Over is not the single case that silently gets
+    no file. Best-effort throughout: every failure is logged and swallowed, and
+    a missing section is dropped rather than faked, because a match that has
+    already been paid out must never be held up by its own paperwork.
+    """
+    from services.match_analysis import analysis_filename, build_match_analysis_html
+
+    filename = analysis_filename(mid)
+    result = result or {}
+    # Read on the loop (this can reach the state cache / DB), render off it.
+    try:
+        from services.match_webapp_service import build_scorecard
+        scorecard = build_scorecard(mid, None)
+    except Exception:
+        logger.exception("cipl analysis scorecard build failed for match %s", mid)
+        scorecard = None
+    try:
+        potm = _cipl_calc_potm(state, None if result.get("tie") else result.get("winner"))
+    except Exception:
+        logger.exception("cipl analysis POTM failed for match %s", mid)
+        potm = None
+
+    html = await asyncio.to_thread(
+        build_match_analysis_html, state, result, scorecard, potm)
+    if not html:
+        logger.warning("cipl match analysis came back empty for match %s", mid)
+        return
+
+    # File it in the storage channel next to MatchNo<id>.txt as well, so the
+    # analysis survives the chat it was posted in.
+    try:
+        from services import tg_storage_service
+        if tg_storage_service.is_configured():
+            asyncio.get_running_loop().create_task(
+                tg_storage_service.upload_text_async(
+                    html, filename,
+                    caption=f"📊 Match analysis · Match {mid}"))
+    except Exception:
+        logger.exception("cipl analysis archive failed for match %s", mid)
+
+    doc = BytesIO(html.encode("utf-8"))
+    doc.name = filename
+    await context.bot.send_document(
+        state["chat_id"], document=doc, filename=filename,
+        caption=("📊 <b>Full Match Analysis</b>\n"
+                 "<blockquote expandable>Phase-by-phase splits, the worm, "
+                 "momentum &amp; pressure, win probability, partnerships and the "
+                 "over-by-over approach duel. Open it in your browser."
+                 "</blockquote>"),
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(keyboard_rows) if keyboard_rows else None)
 
 
 def _summary_rows(bat_stats, bat_xi, bowl_stats, bowl_xi, bpu=6):

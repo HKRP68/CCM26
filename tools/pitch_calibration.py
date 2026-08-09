@@ -158,15 +158,17 @@ def collect(pitch, n):
     # closing overs. A 30-45 run loss chasing a big total is a fighting loss.
     defended = [r for r in rows if r["margin_type"] == "runs"]
     def_margins = sorted(r["margin"] for r in defended)
+    blowout = capitulation_margin(pitch)
     capitulations = sum(
         1 for r in defended
-        if r["margin"] > 55 or (r["inn2_wkts"] >= 10
-                                and r["inn2_balls"] < r["innings_balls"] * 0.75))
+        if r["margin"] > blowout or (r["inn2_wkts"] >= 10
+                                     and r["inn2_balls"] < r["innings_balls"] * 0.75))
     # Depth: reached the closing 2 overs (ball 108+ of 120).
     deep = sum(1 for r in rows if r["inn2_balls"] >= r["innings_balls"] - 12)
 
     return {
         "n": n, "rows": rows, "inn1_sorted": inn1,
+        "blowout_margin": blowout,
         "floor": _pct(inn1, 0.10), "par": statistics.median(inn1),
         "ceiling": _pct(inn1, 0.90), "anomaly": inn1[-1] if inn1 else 0,
         "mean": statistics.mean(inn1) if inn1 else 0,
@@ -184,14 +186,27 @@ def collect(pitch, n):
 # Par (median) is the primary, tight target. Floor/Ceiling are the spec's soft
 # "scores fluctuate anywhere between" guides, so their tolerances are wider.
 TOL = {"floor_lo": 35, "floor_hi": 35, "par_pad": 10, "ceiling_lo": 35,
-       "ceiling_hi": 40, "sub100_max": 3.0, "chase_band": 20, "capitulation_max": 30,
-       "anomaly_pad": 35, "deep_min": 45.0, "margin_max": 55.0}
+       "ceiling_hi": 40, "sub100_max": 6.0, "sub100_global_max": 2.0,
+       "chase_band": 20, "capitulation_max": 30,
+       "anomaly_pad": 35, "deep_min": 45.0, "margin_frac": 0.30}
 # Chase bands with fewer than this many samples are too noisy to judge — they are
 # reported as an explicit "n<min (not judged)" check rather than silently skipped.
 MIN_BAND_N = 12
+
 # Capitulation = a blown-away loss (mirrors collect(): margin > this, or an early
-# fold). Kept in sync with the counting there so the report label is accurate.
-CAPITULATION_MARGIN = 55
+# fold). It is a FRACTION of the pitch's par rather than a fixed run count: under
+# the v3.0 par ranges a Flat innings is worth 232 and a Dusty one 158, so a flat
+# 55 runs is a fighting loss on one and a hammering on the other. 30% of par is
+# roughly "lost by a fifth of the total", which reads the same on every surface.
+CAPITULATION_PAR_FRACTION = 0.30
+CAPITULATION_MARGIN_FLOOR = 40
+
+
+def capitulation_margin(pitch):
+    """Run margin above which a defended win counts as a blowout, for *pitch*."""
+    dyn = ground_config.get_scoring_dynamics(pitch) or {}
+    par = dyn.get("par_high") or dyn.get("par_low") or 180
+    return max(CAPITULATION_MARGIN_FLOOR, round(par * CAPITULATION_PAR_FRACTION))
 
 
 def evaluate(pitch, m):
@@ -212,16 +227,24 @@ def evaluate(pitch, m):
         f"P90 {m['ceiling']:.0f} vs ceiling {ceiling}")
     chk("anomaly", m["anomaly"] <= anomaly + TOL["anomaly_pad"],
         f"max {m['anomaly']:.0f} vs anomaly {anomaly} (+{TOL['anomaly_pad']})")
+    # v3.0 section 1.1 states the Sub-100 rule GLOBALLY — "sub-100 remains <2%
+    # probability globally" — not per surface, and it is a claim about the game,
+    # not about any one pitch. A turner is where a side gets bowled out for 80;
+    # holding every individual pitch to the global number would mean flattening
+    # the very pitch the rule expects to be the exception. So the per-pitch bar
+    # here is a sanity ceiling that catches a broken surface, and the spec's own
+    # number is checked across all of them in main().
     chk("sub100", m["sub100_rate"] <= TOL["sub100_max"],
-        f"{m['sub100_rate']:.1f}% all-out<100 (max {TOL['sub100_max']}%)")
+        f"{m['sub100_rate']:.1f}% all-out<100 (per-pitch ceiling {TOL['sub100_max']}%)")
     # Fighting Match Rule: matches run deep, losses stay close.
     chk("deep", m["deep_rate"] >= TOL["deep_min"],
         f"{m['deep_rate']:.0f}% reach ov18 (min {TOL['deep_min']}%)")
-    chk("margin", m["def_margin_median"] <= TOL["margin_max"],
-        f"median defended margin {m['def_margin_median']:.0f} (max {TOL['margin_max']})")
+    margin_max = m["blowout_margin"] * TOL["margin_frac"] / CAPITULATION_PAR_FRACTION
+    chk("margin", m["def_margin_median"] <= margin_max,
+        f"median defended margin {m['def_margin_median']:.0f} (max {margin_max:.0f})")
     chk("capitulation", m["capitulation_rate"] <= TOL["capitulation_max"],
         f"{m['capitulation_rate']:.0f}% blown out "
-        f"(>{CAPITULATION_MARGIN} runs or early fold; max {TOL['capitulation_max']}%)")
+        f"(>{m['blowout_margin']} runs or early fold; max {TOL['capitulation_max']}%)")
 
     for mx, st in m["band_stats"].items():
         if st["n"] >= MIN_BAND_N:
@@ -271,12 +294,24 @@ def main(argv=None):
     random.seed(args.seed)
     pitches = [args.pitch] if args.pitch else SPEC_PITCHES
     all_pass = True
+    sub100 = []
     for pitch in pitches:
         m = collect(pitch, args.n)
         checks = evaluate(pitch, m)
         if not all(ok for _, ok, _ in checks):
             all_pass = False
+        sub100.append(m["sub100_rate"])
         print_report(pitch, m, checks, verbose=args.verbose)
+
+    # v3.0 section 1.1, as the doc actually states it: across the game, not per
+    # pitch. Only meaningful over the whole sweep, so it lives here.
+    if len(pitches) > 1:
+        rate = statistics.mean(sub100)
+        ok = rate <= TOL["sub100_global_max"]
+        all_pass = all_pass and ok
+        print(f"\n   [{'ok ' if ok else 'XX '}] Sub-100 Rule (global): "
+              f"{rate:.2f}% of innings all-out under 100 "
+              f"(max {TOL['sub100_global_max']}%)")
 
     print("\n" + ("✅ ALL PITCHES WITHIN TOLERANCE" if all_pass
                   else "❌ SOME PITCHES OUT OF TOLERANCE — tune constants/YAML"))
