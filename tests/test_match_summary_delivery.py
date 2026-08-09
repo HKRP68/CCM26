@@ -140,6 +140,7 @@ class EndOfMatchDeliveryTests(unittest.TestCase):
         self.ctx = MagicMock()
         self.ctx.bot.send_message = AsyncMock()
         self.ctx.bot.send_photo = AsyncMock()
+        self.ctx.bot.send_document = AsyncMock()
         self.ctx.bot.unpin_chat_message = AsyncMock()
 
     def tearDown(self):
@@ -183,6 +184,55 @@ class EndOfMatchDeliveryTests(unittest.TestCase):
         cp._miniapp_row = boom
         self._run()
         self.ctx.bot.send_photo.assert_called_once()
+
+    def test_the_match_analysis_file_is_sent_too(self):
+        """The third artefact of a finished match, after the result message and
+        the summary image: the analysis report, as a real HTML document."""
+        self._run()
+        self.ctx.bot.send_document.assert_called_once()
+        kwargs = self.ctx.bot.send_document.call_args.kwargs
+        self.assertEqual(kwargs["filename"], "MatchAnalysis42.html")
+        body = kwargs["document"].getvalue().decode("utf-8")
+        self.assertIn("<!doctype html>", body)
+        self.assertIn("Bot XI beat You by 6 wickets", body)
+        # Self-contained: a downloaded file that fetches anything is a blank page.
+        self.assertNotIn("https://", body)
+
+    def test_the_analysis_file_goes_out_after_the_image(self):
+        """Order matters in chat: result, then card, then the deep dive."""
+        calls = []
+        self.ctx.bot.send_message = AsyncMock(side_effect=lambda *a, **k: calls.append("msg"))
+        self.ctx.bot.send_photo = AsyncMock(side_effect=lambda *a, **k: calls.append("photo"))
+        self.ctx.bot.send_document = AsyncMock(side_effect=lambda *a, **k: calls.append("doc"))
+        self._run()
+        self.assertEqual(calls, ["msg", "photo", "doc"])
+
+    def test_a_failed_analysis_send_does_not_strand_the_live_state(self):
+        """The result is already committed by this point. A file that will not
+        send must not stop the cleanup — that would leave the match parked on a
+        consumed approach pick."""
+        cleaned = []
+        cp.cleanup_state = lambda ctx, mid: cleaned.append(mid)
+        self.ctx.bot.send_document = AsyncMock(side_effect=RuntimeError("too big"))
+        self._run()
+        self.assertEqual(cleaned, [42])
+
+    def test_a_broken_report_builder_does_not_cost_the_cleanup(self):
+        cleaned = []
+        cp.cleanup_state = lambda ctx, mid: cleaned.append(mid)
+        import services.match_analysis as ma
+        real = ma.build_match_analysis_html
+
+        def boom(*a, **k):
+            raise ValueError("bad state")
+
+        ma.build_match_analysis_html = boom
+        try:
+            self._run()
+        finally:
+            ma.build_match_analysis_html = real
+        self.ctx.bot.send_document.assert_not_called()
+        self.assertEqual(cleaned, [42])
 
 
 if __name__ == "__main__":

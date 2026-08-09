@@ -557,6 +557,28 @@ _validate_scoring_matrices()
 
 
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Modern Death Surge (v3.0 section 5C)
+# -----------------------------------------------------------------------------
+_DEATH_SURGE_CACHE = {}
+
+
+def _death_surge_multipliers(rpo_boost):
+    """Per-outcome multipliers for "+N RPO in the last three overs".
+
+    Translated through ``engine.approach_modifiers.runs_factor`` so a run of
+    scoring means the same thing here as it does in the approach layer and the
+    pitch-state layer — one reading of "a run per over", not three. Cached
+    because this is called once per outcome per ball and the answer only ever
+    depends on one config number.
+    """
+    key = round(float(rpo_boost or 0.0), 4)
+    if key not in _DEATH_SURGE_CACHE:
+        from engine.approach_modifiers import _RUN_UNIT, runs_factor
+        _DEATH_SURGE_CACHE[key] = runs_factor(1.0 + _RUN_UNIT * key)
+    return _DEATH_SURGE_CACHE[key]
+
+
 # Feature 3: Pitch deterioration function
 # -----------------------------------------------------------------------------
 def _apply_pitch_wear(raw_weights: dict, pitch_type: str, pitch_wear: float) -> dict:
@@ -1169,6 +1191,20 @@ def calculate_outcome(
                     wicket_boost = _death_cfg.get("wicket_boost", 1.6)
                     logger.debug(f"  DeathOver: WICKET on {pitch} by factor {wicket_boost}")
                     weight *= wicket_boost
+
+            # Modern Death Surge (v3.0 section 5C): the last three overs on a
+            # true surface go at a rate the rest of the death does not. Layered
+            # on top of the death boosts rather than replacing them, and gated to
+            # the pitches where modern hitting has actually moved the numbers —
+            # a dry or dusty track has not got faster, because it cannot.
+            _surge_cfg = _phase.get("death_surge") or {}
+            if _surge_cfg and pitch in (_surge_cfg.get("pitches") or ()):
+                _surge_start = _surge_cfg.get("overs_start", 17)
+                if over_number >= _surge_start and over_number <= death_end:
+                    _surge_mult = _death_surge_multipliers(
+                        _surge_cfg.get("rpo_boost", 1.0)).get(outcome)
+                    if _surge_mult:
+                        weight *= _surge_mult
 
             # Second innings death-over boosts (mild — chasing advantage already helps)
             if innings == 2 and in_death:

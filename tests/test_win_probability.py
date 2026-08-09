@@ -35,12 +35,21 @@ class WinProbabilityTests(unittest.TestCase):
         self.assertGreater(easy, tight)
         self.assertGreater(tight, hard)
 
-    def test_values_stay_in_range(self):
-        bat, bowl = _win_prob(200, 9, 3)  # hopeless
-        self.assertGreaterEqual(bat, 1)
-        self.assertLessEqual(bat, 99)
-        self.assertGreaterEqual(bowl, 1)
-        self.assertLessEqual(bowl, 99)
+    def test_a_live_chase_stays_inside_the_spec_caps(self):
+        """While the chase is still possible the bar never reads as certainty in
+        either direction — section 9 Step 4's 95/3 caps."""
+        for args in [(20, 2, 30), (40, 4, 12), (60, 8, 40), (1, 0, 60)]:
+            bat, bowl = _win_prob(*args)
+            self.assertGreaterEqual(bat, cc.LOWER_CAP, args)
+            self.assertLessEqual(bat, cc.UPPER_CAP, args)
+            self.assertEqual(bat + bowl, 100, args)
+
+    def test_an_eliminated_chase_reads_zero(self):
+        """200 off 3 is not a slim chance, it is arithmetic. The lower cap is for
+        chases that are merely hopeless; this one is over."""
+        bat, bowl = _win_prob(200, 9, 3)
+        self.assertEqual(bat, 0)
+        self.assertEqual(bowl, 100)
 
 
 if __name__ == "__main__":

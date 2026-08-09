@@ -511,7 +511,11 @@ class ApproachContextTests(unittest.TestCase):
         self.assertEqual(ctx["phase"], "death")
         self.assertEqual(ctx["bowler_over_index"], 3)      # 2 bowled, this is the 3rd
         self.assertEqual(ctx["partnership_overs"], 5.0)
-        self.assertTrue(ctx["batting_momentum"])           # 14 off the last over
+        # Batting momentum is no longer read here. It moved to the tracked
+        # accumulator in engine.momentum, applied per ball through the MPI hook;
+        # leaving the 12-runs-last-over boolean in the approach context as well
+        # would price the same ascendancy twice. See _make_mpi_hook.
+        self.assertFalse(ctx["batting_momentum"])
         self.assertTrue(ctx["bowling_momentum"])           # struck in their last
         self.assertIn(ctx["bowling_type"], ("Fast", "Fast-medium", "Medium-fast",
                                             "Off spin", "Leg spin"))

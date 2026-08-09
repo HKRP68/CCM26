@@ -123,10 +123,21 @@ bowler-favourable — switching it off entirely *adds* about 10 runs an innings.
 
 ### 8 — momentum, fatigue, chemistry
 
-* **Momentum** — 12+ off the previous over and the batting side keeps the
-  ascendancy; a bowler who struck in their *own* previous over is more likely to
-  strike again. (A run-out at the other end is not a bowler's rhythm, so the
-  bowling side of this reads `last_over_wickets`, credited to the bowler.)
+* **Momentum** — the *bowling* side of this rule only. A bowler who struck in
+  their **own** previous over is more likely to strike again; a run-out at the
+  other end is not a bowler's rhythm, so it reads `last_over_wickets`, credited
+  to the bowler.
+
+  The batting side of it — "12+ off the previous over and the side keeps the
+  ascendancy" — was **removed from this layer** when the v3.0 work built the real
+  Momentum/Pressure Index (`engine/momentum.py`, and see
+  `docs/unified-t20-engine-v3.md`). `MOMENTUM_BAT` and the MPI's momentum term
+  are the same ascendancy, and a 12-run over is one of the events that *feeds*
+  the accumulator; charging for it here as well — a flat +5% on the over, on top
+  of the band it also pushed the side into — would be a double count.
+  `approach_context` therefore passes `batting_momentum=False` and the MPI hook
+  carries it. `MOMENTUM_BAT` remains defined and honoured for any caller that
+  does set the flag, so the 5×5 game is still complete on its own.
 * **Fatigue** — a bowler's third over of the innings is where the legs go, and
   the fourth is worse. The engine never lets a T20 bowler send down back-to-back
   overs, so "consecutive" is read as how deep into their own spell the over is —
@@ -204,6 +215,13 @@ picks are hidden on purpose: a bot whose plans are published is a bot whose mix
 can be written down and countered. Between two humans the reveal is symmetric —
 each captain gives up exactly what they learn — so it stays on. The switch is the
 `_is_bot_match` check in `handlers/cipl_play._render_over_summary`.
+
+**The post-match analysis file does not withhold it.** `services/match_analysis.py`
+lists every over's two picks, in every match, bot ones included. The line being
+drawn is mid-match against post-match: what this switch protects is a mix being
+read off the screen and countered over the next few overs, and a match that is
+already finished has none of that left to protect — reading your own defeat back
+is the point of the file. See `docs/unified-t20-engine-v3.md`.
 
 ## Where things live
 

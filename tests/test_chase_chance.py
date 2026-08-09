@@ -53,15 +53,76 @@ class FinalChanceTests(unittest.TestCase):
 
     def test_total_modifier_clamped(self):
         out = cc.final_chase_chance(30, 5, batter_mod=20, bowler_mod=20)
-        self.assertEqual(out["total_modifier"], 15)   # clamped to +15
-        self.assertEqual(out["chasing_chance"], 71)    # 56 + 15
+        self.assertEqual(out["total_modifier"], cc.MODIFIER_CLAMP)
+        self.assertEqual(out["chasing_chance"], 56 + cc.MODIFIER_CLAMP)
 
-    def test_final_chance_clamped_1_99(self):
+    def test_situation_mod_counts_toward_the_same_clamp(self):
+        """The Step-2 match factors are not a way around the modifier ceiling."""
+        out = cc.final_chase_chance(30, 5, batter_mod=20, situation_mod=20)
+        self.assertEqual(out["total_modifier"], cc.MODIFIER_CLAMP)
+
+    def test_final_chance_clamped_to_the_spec_caps(self):
+        """No chase is guaranteed, and none is dead while it is still possible."""
         lo = cc.final_chase_chance(200, 9, bowler_mod=-15)
-        self.assertGreaterEqual(lo["chasing_chance"], 1)
-        hi = cc.final_chase_chance(10, 0, batter_mod=15)
-        self.assertLessEqual(hi["chasing_chance"], 99)
+        self.assertGreaterEqual(lo["chasing_chance"], cc.LOWER_CAP)
+        hi = cc.final_chase_chance(10, 0, batter_mod=25)
+        self.assertLessEqual(hi["chasing_chance"], cc.UPPER_CAP)
         self.assertEqual(lo["chasing_chance"] + lo["defending_chance"], 100)
+
+
+class Step2ModifierTests(unittest.TestCase):
+    """Section 9 Step 2 — the factors the runs x wickets matrix cannot see."""
+
+    def test_powerplay_bonus_needs_sixty(self):
+        self.assertEqual(cc.powerplay_modifier(59), 0)
+        self.assertEqual(cc.powerplay_modifier(60), cc.POWERPLAY_BONUS)
+
+    def test_deterioration_only_bites_when_batting_last(self):
+        self.assertEqual(cc.deterioration_modifier("Dusty", innings=2),
+                         cc.DETERIORATION_PENALTY)
+        self.assertEqual(cc.deterioration_modifier("Dusty", innings=1), 0)
+        self.assertEqual(cc.deterioration_modifier("Flat", innings=2), 0)
+
+    def test_nothing_to_lose_needs_both_a_road_and_a_monster(self):
+        self.assertEqual(cc.nothing_to_lose_modifier(265, "Flat"), cc.NTL_BONUS)
+        self.assertEqual(cc.nothing_to_lose_modifier(265, "Dusty"), 0)
+        self.assertEqual(cc.nothing_to_lose_modifier(200, "Flat"), 0)
+
+    def test_death_bowler_penalty_needs_the_phase_the_trait_and_the_rating(self):
+        elite = {"bowl_rating": 90}
+        self.assertEqual(cc.bowler_modifier(elite), -5)
+        self.assertEqual(
+            cc.bowler_modifier(elite, is_death_phase=True, has_death_trait=True),
+            -5 + cc.DEATH_BOWLER_PENALTY)
+        # The trait alone, outside the death overs, changes nothing.
+        self.assertEqual(cc.bowler_modifier(elite, has_death_trait=True), -5)
+        # And an 80-rated death bowler is not the bowler this rule is about.
+        self.assertEqual(
+            cc.bowler_modifier({"bowl_rating": 80}, is_death_phase=True,
+                               has_death_trait=True), 0)
+
+    def test_emergency_bowler_still_short_circuits_everything(self):
+        self.assertEqual(
+            cc.bowler_modifier({"bowl_rating": 95}, is_emergency=True,
+                               is_death_phase=True, has_death_trait=True), 8)
+
+    def test_mpi_modifier_nets_momentum_against_pressure(self):
+        self.assertEqual(cc.mpi_modifier(1.0, 0.0), 5.0)
+        self.assertEqual(cc.mpi_modifier(0.0, 1.0), -6.0)
+        self.assertEqual(cc.mpi_modifier(1.0, 1.0), -1.0)
+        # Each side is capped separately.
+        self.assertEqual(cc.mpi_modifier(10.0, 0.0), cc.MPI_MOMENTUM_CAP)
+        self.assertEqual(cc.mpi_modifier(0.0, 10.0), -cc.MPI_PRESSURE_CAP)
+
+    def test_an_impossible_ask_is_zero_not_the_floor(self):
+        """The lower cap is for chases that are merely hopeless. 40 off 1 is
+        over, and the model has to be able to say so."""
+        info = cc.final_chase_chance(40, 5)
+        out = cc.apply_feasibility(dict(info), 40, 1)
+        self.assertEqual(out["chasing_chance"], 0)
+        # Still alive, however unlikely → never below the floor.
+        alive = cc.apply_feasibility(dict(info), 40, 24)
+        self.assertGreaterEqual(alive["chasing_chance"], cc.LOWER_CAP)
 
 
 class ModifierTests(unittest.TestCase):
@@ -139,3 +200,29 @@ class FeasibilityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeathTraitLookupTests(unittest.TestCase):
+    """The Step-2 death-bowler penalty is keyed on the trait engine's own
+    ``effect_key``, not on the display name — display names are admin-editable,
+    so matching on them would leave the rule one rename from never firing."""
+
+    def setUp(self):
+        import services.cipl_match as cm
+        self.cm = cm
+
+    def test_the_two_death_gated_effects_are_recognised(self):
+        from services import trait_engine
+        for key in self.cm._DEATH_TRAIT_KEYS:
+            self.assertIn(key, trait_engine.TRAIT_HANDLERS,
+                          f"{key} is not a real trait effect")
+            self.assertTrue(self.cm._has_death_trait(
+                {"traits": [{"effect_key": key, "level": 2}]}), key)
+
+    def test_other_traits_and_missing_traits_do_not_count(self):
+        self.assertFalse(self.cm._has_death_trait({}))
+        self.assertFalse(self.cm._has_death_trait({"traits": []}))
+        self.assertFalse(self.cm._has_death_trait(
+            {"traits": [{"effect_key": "bowl_economy"}]}))
+        # A /cipl player carries no traits at all.
+        self.assertFalse(self.cm._has_death_trait({"traits": None}))

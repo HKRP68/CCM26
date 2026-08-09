@@ -1847,6 +1847,29 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
         parse_mode="HTML", reply_markup=_spectate_markup(so),
         disable_web_page_preview=True)
 
+    # The post-match analysis file, same as a match that finished inside the
+    # 20 overs — the main match is exactly as worth analysing when it happened to
+    # end level. Sent from the main match's state, with the Super Over's winner
+    # as the result, and before the cleanup below takes that state away.
+    try:
+        from handlers.cipl_play import _send_match_analysis
+        main_state = so.get("main_state") or {}
+        if main_state:
+            markup = _spectate_markup(so)
+            await _send_match_analysis(
+                context, mid, main_state,
+                {"tie": False, "winner": win["name"], "loser": lose["name"],
+                 "margin": margin, "margin_type": margin_type,
+                 # A countback win has no run or wicket margin — margin is 0 and
+                 # margin_type is the countback key — so the report gets the
+                 # finished phrase for the same reason the card above does,
+                 # rather than printing "won by 0 sixes".
+                 "margin_text": (margin_text if decided_by in _COUNTBACK_TEXT
+                                 else None)},
+                list(markup.inline_keyboard) if markup else None)
+    except Exception:
+        logger.exception("Super Over match analysis failed (%s)", mid)
+
     # Clean up the live match state and the Super Over working state.
     try:
         from services.match_state_store import cleanup_state

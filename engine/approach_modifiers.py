@@ -261,6 +261,16 @@ def _merge(*tables):
     return out
 
 
+# Public names for the three translation helpers above. The doc's units — "this
+# over scores 5% more freely", "+10% wicket chance", "both of those at once" —
+# are the vocabulary every rules layer in the engine is written in, so the
+# neighbouring layers (engine.pitch_state, engine.momentum) share these rather
+# than each inventing their own reading of a percentage.
+runs_factor = _runs_factor
+wicket_factor = _wkt
+merge_multipliers = _merge
+
+
 _SPIN_TYPES = {"Off spin", "Leg spin", "Finger spin", "Wrist spin"}
 
 
@@ -268,6 +278,11 @@ def _is_spin(bowling_type):
     """True for the four spin styles the engine models, for the rules that only
     apply to spin (hitting off the square in the middle overs)."""
     return str(bowling_type or "") in _SPIN_TYPES
+
+
+# Shared with the other rules layers, for the same reason as the helpers above:
+# "is this a spinner" must mean one thing across the engine.
+is_spin = _is_spin
 
 
 # ── Section 4: special combination effects ───────────────────────────
