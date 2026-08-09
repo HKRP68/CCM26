@@ -381,6 +381,7 @@ BOT_MENU_COMMANDS = (
     ("releasemultiple", "Release multiple roster players"),
     ("trade", "Trade players with another user"),
     ("cmucareer", "Create and train your own Career Player 🎖"),
+    ("cmuchange", "Change your Career Player's name or country ✏️"),
     ("playingxi", "View or manage your playing XI"),
     ("ximage", "View your Playing XI as an image"),
     ("cmuchem", "Check your Playing XI's Team Chemistry 🧪"),
@@ -1299,6 +1300,22 @@ def main():
         app.add_handler(CommandHandler(["cmucareer", "career"], cmucareer_handler))
         app.add_handler(CallbackQueryHandler(cmucareer_callback,
                                              pattern=r"^cmucareer:"))
+        # Name/country changes for an existing career card. Same single-owner
+        # rule, so cmuchg: also stays out of SHARED_CALLBACK_PREFIXES.
+        from handlers.career_change import (cmuchange_handler,
+                                            cmuchange_callback,
+                                            career_name_text)
+        app.add_handler(CommandHandler(["cmuchange", "careerchange"],
+                                       cmuchange_handler))
+        app.add_handler(CallbackQueryHandler(cmuchange_callback,
+                                             pattern=r"^cmuchg:"))
+        # The typed custom name arrives as an ordinary message. Own group (8)
+        # so it can never starve the other text handlers, and it returns on a
+        # dictionary miss for every user who hasn't asked to type one.
+        from telegram.ext import MessageHandler as _ChgMsgHandler
+        from telegram.ext import filters as _chg_filters
+        app.add_handler(_ChgMsgHandler(
+            _chg_filters.TEXT & ~_chg_filters.COMMAND, career_name_text), group=8)
 
         # ── Admin reply-forward broadcasts ───────────────────────────
         app.add_handler(CommandHandler("frwd_grp", frwd_grp_handler))

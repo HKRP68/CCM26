@@ -7665,7 +7665,21 @@ def _career_payload(db, user, player):
             "to_jackpot": (weeks - (streak % weeks)) if weeks else 0,
             "bonus_gems": int(cfg.get("career_streak_bonus_gems") or 100),
         },
+        # What the next name/country change costs, and whether one is already
+        # sitting in the review queue. Cheap enough (one indexed lookup) to ride
+        # along with the screen rather than needing its own round trip.
+        "change": _career_change_quote(db, user, player),
     }
+
+
+def _career_change_quote(db, user, player):
+    """The change panel's payload, or ``None`` if the service is unavailable."""
+    try:
+        from services import career_change_service as ccs
+        return ccs.quote(db, user, player)
+    except Exception:
+        logger.exception("career change quote failed")
+        return None
 
 
 @app.route("/api/webapp/career", methods=["POST"])
@@ -7740,6 +7754,140 @@ def webapp_career_upgrade():
     except Exception as e:
         db.rollback()
         logger.exception("webapp_career_upgrade failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/career/change/options", methods=["POST"])
+@csrf_exempt
+def webapp_career_change_options():
+    """Everything the change panel needs: the price, the countries, the queue."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import career_change_service as ccs
+        from services.career_service import get_career_player
+        player = get_career_player(db, user.id)
+        if not player:
+            return {"ok": False, "error": "no_career",
+                    "message": "Create your Career Player with /cmucareer first."}, 400
+        return {"ok": True,
+                "quote": ccs.quote(db, user, player),
+                "countries": [c for c in ccs.available_countries(db)
+                              if c != player.country],
+                "current": {"name": player.name, "country": player.country},
+                "name_rules": {"min": 2, "max": 48}}
+    except Exception as e:
+        logger.exception("webapp_career_change_options failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/career/change/suggest", methods=["POST"])
+@csrf_exempt
+def webapp_career_change_suggest():
+    """Roll one unused name out of a country's pool. Body: {country}."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import career_change_service as ccs
+        from services.career_service import get_career_player
+        player = get_career_player(db, user.id)
+        if not player:
+            return {"ok": False, "error": "no_career",
+                    "message": "You don't have a Career Player."}, 400
+        data = request.get_json(silent=True) or {}
+        country = (data.get("country") or "").strip() or player.country
+        name = ccs.roll_pool_name(db, country)
+        if not name:
+            return {"ok": False, "error": "empty_pool",
+                    "message": f"No free names left in the {country} pool — "
+                               f"type your own instead."}, 400
+        return {"ok": True, "name": name, "country": country,
+                "source": ccs.SOURCE_POOL}
+    except Exception as e:
+        logger.exception("webapp_career_change_suggest failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/career/change/submit", methods=["POST"])
+@csrf_exempt
+def webapp_career_change_submit():
+    """Buy a name and/or country change. Body: {name, country, source}.
+
+    A pool name or a country on its own lands immediately; a name the user typed
+    is queued for the website and the card keeps its current identity until an
+    admin approves it — ``applied`` in the response says which happened.
+    """
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import career_change_service as ccs
+        from services.career_service import get_career_player
+        data = request.get_json(silent=True) or {}
+        player = get_career_player(db, user.id)
+        if not player:
+            return {"ok": False, "error": "no_career",
+                    "message": "You don't have a Career Player."}, 400
+
+        result = ccs.submit_change(db, user, player=player,
+                                   name=data.get("name"),
+                                   country=data.get("country"),
+                                   source=data.get("source"))
+        if not result["ok"]:
+            db.rollback()
+            return {"ok": False, "error": result["error"],
+                    "message": result["message"]}, 400
+        request_row = ccs.request_summary(result["request"])
+        db.commit()
+        _career_card_invalidate(player.id)
+        player = get_career_player(db, user.id)
+        return {"ok": True, "applied": result["applied"],
+                "request": request_row, "message": result["message"],
+                **_career_payload(db, user, player)}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_career_change_submit failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/career/change/cancel", methods=["POST"])
+@csrf_exempt
+def webapp_career_change_cancel():
+    """Withdraw the pending name request and take the gems back."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import career_change_service as ccs
+        from services.career_service import get_career_player
+        result = ccs.cancel_request(db, ccs.pending_request(db, user.id),
+                                    by_owner=True)
+        if not result["ok"]:
+            db.rollback()
+            return {"ok": False, "error": result["error"],
+                    "message": result["message"]}, 400
+        db.commit()
+        player = get_career_player(db, user.id)
+        return {"ok": True, "message": result["message"],
+                "refunded": result["refunded"],
+                **_career_payload(db, user, player)}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_career_change_cancel failed")
         return {"ok": False, "error": "internal", "message": str(e)}, 500
     finally:
         db.close()
@@ -18610,9 +18758,11 @@ def admin_career():
     db = get_session()
     try:
         from models import User
+        from services import career_change_service as ccs
         from services.career_service import (ALL_ATTRS, ATTR_LABELS, NAME_MAX,
                                              NAME_MIN, attr_column,
                                              total_invested, cost_to_max)
+        change_conf = ccs.settings(db)
         country = (request.args.get("country") or "").strip()
         sort = (request.args.get("sort") or "rating").strip()
 
@@ -18646,6 +18796,10 @@ def admin_career():
                           or (f"id {owner.telegram_id}" if owner else "—")),
                 "streak": (owner.career_weekly_streak or 0) if owner else 0,
                 "best_streak": (owner.career_weekly_best_streak or 0) if owner else 0,
+                "changes_used": ccs.changes_used(player),
+                "free_changes": ccs.free_grants(player),
+                "next_change_cost": ccs.change_cost(ccs.changes_used(player) + 1,
+                                                    change_conf),
             })
 
         sort_keys = {
@@ -18676,6 +18830,8 @@ def admin_career():
             career_quests_live=quests_live,
             career_quest_count=len(CAREER_QUESTS),
             career_quests_per_user=CAREER_QUESTS_PER_USER,
+            change_settings=change_conf,
+            change_pending=ccs.pending_count(db),
             total_invested_all=sum(p["invested"] for p in players))
     finally:
         db.close()
@@ -18895,6 +19051,254 @@ def admin_career_delete(player_id):
         return redirect(url_for("admin_career"))
     finally:
         db.close()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# CAREER PLAYER — name / country change requests
+# ══════════════════════════════════════════════════════════════════════
+
+@app.route("/career/changes", methods=["GET"])
+@login_required
+def admin_career_changes():
+    """The review queue for typed Career Player names, and the price settings.
+
+    Owners get one free name/country change and buy the rest on a rising ladder.
+    Names rolled from the curated pool apply themselves; a name somebody *typed*
+    lands here first, and their card keeps its current name until it is approved.
+    """
+    db = get_session()
+    try:
+        from models import CareerChangeRequest, User
+        from services import career_change_service as ccs
+
+        status = (request.args.get("status") or ccs.STATUS_PENDING).strip()
+        if status not in ("all",) + ccs.OPEN_STATUSES + ccs.DONE_STATUSES:
+            status = ccs.STATUS_PENDING
+
+        rows = (db.query(CareerChangeRequest, User, Player)
+                .outerjoin(User, CareerChangeRequest.user_id == User.id)
+                .outerjoin(Player, CareerChangeRequest.player_id == Player.id))
+        if status != "all":
+            rows = rows.filter(CareerChangeRequest.status == status)
+        rows = (rows.order_by(CareerChangeRequest.created_at.desc(),
+                              CareerChangeRequest.id.desc())
+                .limit(300).all())
+
+        requests_ = [{
+            "id": req.id,
+            "status": req.status,
+            "old_name": req.old_name,
+            "new_name": req.new_name,
+            "old_country": req.old_country,
+            "new_country": req.new_country,
+            "source": req.name_source,
+            "gems": req.gems_charged or 0,
+            "change_index": req.change_index or 0,
+            "free_grant": bool(req.used_free_grant),
+            "note": req.review_note,
+            "reviewed_by": req.reviewed_by,
+            "created_at": req.created_at,
+            "decided_at": req.decided_at,
+            "owner_id": owner.id if owner else None,
+            "owner": _career_owner_label(owner),
+            "player_id": player.id if player else None,
+            # The name on the card *right now*, which is what the owner is still
+            # playing under while the request waits.
+            "current_name": player.name if player else None,
+            "blocked_word": (ccs.name_is_blocked(req.new_name)
+                             if req.new_name else None),
+        } for req, owner, player in rows]
+
+        conf = ccs.settings(db)
+        return render_template(
+            "admin_career_changes.html", requests=requests_, status=status,
+            settings=conf, ladder=ccs.price_ladder(conf, 6),
+            pending_count=ccs.pending_count(db),
+            statuses=(ccs.STATUS_PENDING,) + ccs.DONE_STATUSES)
+    finally:
+        db.close()
+
+
+@app.route("/career/changes/settings", methods=["POST"])
+@login_required
+def admin_career_changes_settings():
+    """Open or close paid changes and set the price ladder."""
+    db = get_session()
+    try:
+        from services.config_service import save_config
+
+        def _num(field, fallback):
+            try:
+                return max(0, int(request.form.get(field) or fallback))
+            except (TypeError, ValueError):
+                return fallback
+
+        save_config(db, {
+            "career_change_price_2": _num("price_2", 300),
+            "career_change_price_3": _num("price_3", 500),
+            "career_change_price_step": _num("step", 250),
+            # Checkboxes: absent means off, so these are always written.
+            "career_paid_changes_open": bool(request.form.get("paid_open")),
+            "career_custom_names_open": bool(request.form.get("custom_open")),
+            "career_custom_names_need_approval":
+                bool(request.form.get("needs_approval")),
+            "career_name_blocklist": (request.form.get("blocklist") or "").strip(),
+        }, updated_by=session.get("admin_user", "admin"))
+        log_admin(db, "career_change_settings",
+                  detail=f"paid_open={bool(request.form.get('paid_open'))} "
+                         f"prices={_num('price_2', 300)}/{_num('price_3', 500)}"
+                         f"/+{_num('step', 250)}")
+        db.commit()
+        flash("✅ Career change settings saved.", "success")
+    except Exception as e:
+        db.rollback()
+        logger.exception("career change settings save failed")
+        flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_career_changes"))
+
+
+def _career_change_decide(request_id, approve):
+    """Shared approve/reject plumbing: decide, log, invalidate, DM the owner."""
+    db = get_session()
+    try:
+        from models import CareerChangeRequest, User
+        from services import career_change_service as ccs
+
+        req = db.query(CareerChangeRequest).get(request_id)
+        if req is None:
+            flash("❌ No such request.", "error")
+            return redirect(url_for("admin_career_changes"))
+
+        owner = db.query(User).get(req.user_id) if req.user_id else None
+        note = (request.form.get("note") or "").strip()
+        reviewer = session.get("admin_user") or "admin"
+        old_name = req.old_name
+        wanted = req.new_name
+
+        if approve:
+            result = ccs.approve_request(db, req, reviewer=reviewer)
+        else:
+            result = ccs.reject_request(db, req, reviewer=reviewer, note=note)
+
+        if not result["ok"]:
+            # approve_request leaves a name that clashed still pending on
+            # purpose, so its bookkeeping is worth committing either way.
+            db.commit()
+            flash(f"❌ {result['message']}", "error")
+            return redirect(url_for("admin_career_changes"))
+
+        log_admin(db, "career_change_approve" if approve else "career_change_reject",
+                  target_type="player", target_id=req.player_id,
+                  target_name=wanted,
+                  detail=(f"{'Approved' if approve else 'Rejected'} "
+                          f"'{old_name}' → '{wanted}' for "
+                          f"{_career_owner_label(owner)}"
+                          + (f"; refunded {result.get('refunded', 0)} gems"
+                             if not approve else "")
+                          + (f"; note: {note}" if note else "")))
+        db.commit()
+        if req.player_id:
+            _career_card_invalidate(req.player_id)
+
+        message = result["message"]
+        if owner is not None:
+            if approve:
+                dm = (f"✏️ <b>Your new Career Player name is approved!</b>\n\n"
+                      f"{html_lib.escape(old_name or '')} → "
+                      f"<b>{html_lib.escape(result.get('name') or wanted or '')}</b>\n\n"
+                      f"It is on your card from right now — everything else "
+                      f"about it is exactly as it was. Run /cmucareer to see it.")
+            else:
+                refunded = result.get("refunded", 0)
+                dm = (f"✏️ <b>That Career Player name wasn't approved.</b>\n\n"
+                      f"You asked for <b>{html_lib.escape(wanted or '')}</b> and "
+                      f"your card keeps the name "
+                      f"<b>{html_lib.escape(old_name or '')}</b>.\n\n"
+                      + (f"Reason: {html_lib.escape(note)}\n\n" if note else "")
+                      + (f"The <b>{refunded:,} 💎</b> you paid has been refunded"
+                         f" and this doesn't count against your changes.\n\n"
+                         if refunded else
+                         "Your change hasn't been used up — try another name.\n\n")
+                      + "Run /cmuchange to pick another name.")
+            message += " Owner notified." if _career_owner_dm(owner, dm) \
+                else " Owner could not be notified."
+        flash(f"✅ {message}", "success")
+        return redirect(url_for("admin_career_changes"))
+    except Exception as e:
+        db.rollback()
+        logger.exception("career change decision failed")
+        flash(f"❌ {e}", "error")
+        return redirect(url_for("admin_career_changes"))
+    finally:
+        db.close()
+
+
+@app.route("/career/changes/<int:request_id>/approve", methods=["POST"])
+@login_required
+def admin_career_change_approve(request_id):
+    """Put a reviewed name on the card."""
+    return _career_change_decide(request_id, True)
+
+
+@app.route("/career/changes/<int:request_id>/reject", methods=["POST"])
+@login_required
+def admin_career_change_reject(request_id):
+    """Refuse a name, refund the gems and hand the change back."""
+    return _career_change_decide(request_id, False)
+
+
+@app.route("/career/<int:player_id>/grant-change", methods=["POST"])
+@login_required
+def admin_career_grant_change(player_id):
+    """Give one card an extra free name/country change.
+
+    Useful after refusing a name ("try again on us"), and the way to let one
+    person change again without opening paid changes for everybody. A granted
+    change never advances that card's price ladder.
+    """
+    db = get_session()
+    try:
+        from models import User
+        from services import career_change_service as ccs
+
+        player = db.query(Player).get(player_id)
+        if not player or not player.is_career:
+            flash("❌ That isn't a Career Player.", "error")
+            return redirect(url_for("admin_career"))
+        try:
+            count = max(1, min(10, int(request.form.get("count") or 1)))
+        except (TypeError, ValueError):
+            count = 1
+
+        total = ccs.grant_free_change(db, player, count)
+        owner = (db.query(User).get(player.career_owner_user_id)
+                 if player.career_owner_user_id else None)
+        log_admin(db, "career_change_grant", target_type="player",
+                  target_id=player.id, target_name=player.name,
+                  detail=f"Granted {count} free change(s); {total} in hand")
+        db.commit()
+
+        message = f"🎁 Gave {player.name} {count} free change(s) — {total} in hand."
+        if request.form.get("notify") and owner is not None:
+            if _career_owner_dm(
+                    owner,
+                    f"🎁 <b>A free Career Player change is yours.</b>\n\n"
+                    f"You can change your name or country once more at no cost "
+                    f"— it won't count against your paid changes either.\n\n"
+                    f"Run /cmuchange to use it."):
+                message += " Owner notified."
+            else:
+                message += " Owner could not be notified."
+        flash(message, "success")
+    except Exception as e:
+        db.rollback()
+        logger.exception("career free change grant failed")
+        flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_career"))
 
 
 @app.route("/career/names", methods=["GET"])

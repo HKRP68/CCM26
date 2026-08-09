@@ -6448,6 +6448,8 @@ function renderCareer() {
       <div class="career-stat"><div class="career-stat-v">${st.current || 0}</div><div class="career-stat-l">🔥 Streak</div></div>
     </div>
 
+    <div class="career-group" id="career-change-panel">${careerChangePanel()}</div>
+
     <div class="career-note">
       Each point costs its own new value — 78 → 79 is <b>79 💎</b> — and caps at
       <b>${d.max_value}</b>. Batting is the average of the five batting attributes,
@@ -6524,6 +6526,171 @@ async function upgradeCareer(attr, steps) {
   toast(`${u.label} ${u.from} → ${u.to} for ${u.cost.toLocaleString()} 💎${u.rating_changed ? ` · now ${u.rating} OVR` : ''}`, 'success');
   cachedCareer = data;
   renderCareer();
+  refreshDashboard();
+}
+
+// ── Name & country changes ─────────────────────────────────────────────────
+// The first change is free, the rest cost gems on a rising ladder. A name
+// rolled from the curated pool applies itself; a name the user types goes to
+// the website for approval and the card keeps its current name until then.
+let careerChange = { open: false, options: null, name: '', country: '', source: null };
+
+function careerChangePanel() {
+  const q = (cachedCareer && cachedCareer.change) || null;
+  if (!q) return '';
+  const title = `<div class="career-group-title">✏️ Name &amp; country</div>`;
+
+  if (q.pending) {
+    const p = q.pending;
+    return `${title}
+      <div class="career-note" style="margin-top:0;">
+        ⏳ <b>Waiting for approval</b><br>
+        ${p.new_name ? `Name: ${escapeHtml(p.old_name || '')} → <b>${escapeHtml(p.new_name)}</b><br>` : ''}
+        ${p.new_country ? `Country: ${escapeHtml(p.old_country || '')} → <b>${escapeHtml(p.new_country)}</b><br>` : ''}
+        Your card keeps its current name and country until an admin approves it.
+        Withdraw to get your ${(p.gems_charged || 0).toLocaleString()} 💎 back.
+      </div>
+      <button class="career-btn ghost" onclick="careerChangeCancel()">🚫 Withdraw request</button>`;
+  }
+
+  const price = q.free_grants
+    ? `🎁 You have ${q.free_grants} free change${q.free_grants > 1 ? 's' : ''} in hand.`
+    : (q.is_free ? '🎁 Your first change is free.'
+                 : `💎 Your next change costs <b>${q.cost.toLocaleString()}</b> gems.`);
+  const after = (q.next_costs || []).slice(1)
+    .map(([i, c]) => `#${i} ${c ? c.toLocaleString() + ' 💎' : 'free'}`).join(' · ');
+
+  if (!careerChange.open) {
+    return `${title}
+      <div class="career-note" style="margin-top:0;">
+        ${price}${after ? `<br><span style="opacity:.75;">After this: ${after}</span>` : ''}
+        ${q.can_change ? '' : `<br>⚠️ ${escapeHtml(q.message || '')}`}
+      </div>
+      <button class="career-btn" ${q.can_change ? '' : 'disabled'} onclick="careerChangeOpen()">
+        Change name or country
+      </button>`;
+  }
+
+  const o = careerChange.options;
+  if (!o) return `${title}<div class="empty"><div class="spinner"></div></div>`;
+  const countries = (o.countries || []).map(c =>
+    `<option value="${escapeHtmlAttr(c)}" ${c === careerChange.country ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
+
+  return `${title}
+    <div class="career-note" style="margin-top:0;">${price}</div>
+    <div style="display:grid;gap:.5rem;">
+      <label style="font-size:.78rem;opacity:.8;">Country</label>
+      <select id="career-change-country" onchange="careerChangeCountry(this.value)"
+              style="padding:.5rem;border-radius:8px;border:1px solid var(--border);background:var(--card);color:inherit;">
+        <option value="">Keep ${escapeHtml(o.current.country || '')}</option>
+        ${countries}
+      </select>
+
+      <label style="font-size:.78rem;opacity:.8;">Name</label>
+      <input id="career-change-name" type="text" maxlength="${(o.name_rules || {}).max || 48}"
+             value="${escapeHtmlAttr(careerChange.name)}"
+             placeholder="Keep ${escapeHtmlAttr(o.current.name || '')}"
+             oninput="careerChange.name = this.value; careerChange.source = 'custom';"
+             style="padding:.5rem;border-radius:8px;border:1px solid var(--border);background:var(--card);color:inherit;">
+      <div style="display:flex;gap:.35rem;flex-wrap:wrap;">
+        <button class="career-btn ghost" onclick="careerChangeSuggest()">🎲 Roll a pool name</button>
+        <button class="career-btn ghost" onclick="careerChange.name=''; careerChange.source=null; renderCareerChange();">Clear</button>
+      </div>
+      <div class="career-note" style="margin:0;">
+        ${careerChange.source === 'custom' && q.needs_approval
+          ? '✍️ A name you type is checked by an admin first — your card keeps its current name until it is approved, and a refused name refunds every gem.'
+          : "🎲 Names rolled from your country pool are already vetted and go on your card straight away."}
+      </div>
+      <div style="display:flex;gap:.35rem;">
+        <button class="career-btn" onclick="careerChangeSubmit()">
+          ✅ Apply${q.cost ? ` — ${q.cost.toLocaleString()} 💎` : ' — free'}
+        </button>
+        <button class="career-btn ghost" onclick="careerChange.open=false; renderCareerChange();">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function renderCareerChange() {
+  const el = document.getElementById('career-change-panel');
+  if (el) el.innerHTML = careerChangePanel();
+}
+
+async function careerChangeOpen() {
+  careerChange = { open: true, options: null, name: '', country: '', source: null };
+  renderCareerChange();
+  const { ok, data } = await api('/api/webapp/career/change/options', {});
+  if (!ok) {
+    careerChange.open = false;
+    renderCareerChange();
+    toast(data.message || 'Unavailable', 'error');
+    return;
+  }
+  careerChange.options = data;
+  // The server's quote is the authority on price and gating — refresh the
+  // cached copy so the panel can't offer a change that has since closed.
+  if (cachedCareer) cachedCareer.change = data.quote;
+  renderCareerChange();
+}
+
+function careerChangeCountry(value) {
+  careerChange.country = value;
+  // A rolled name belongs to the pool of the country it came from. Keeping it
+  // after a country switch would quietly turn an instant change into one that
+  // waits for review, so drop it and let them roll again.
+  if (careerChange.source === 'pool') {
+    careerChange.name = '';
+    careerChange.source = null;
+    renderCareerChange();
+  }
+}
+
+async function careerChangeSuggest() {
+  const { ok, data } = await api('/api/webapp/career/change/suggest',
+                                 { country: careerChange.country || '' });
+  if (!ok) { toast(data.message || 'No name available', 'error'); return; }
+  careerChange.name = data.name;
+  careerChange.source = 'pool';
+  renderCareerChange();
+}
+
+async function careerChangeSubmit() {
+  if (careerBusy) return;
+  const name = (careerChange.name || '').trim();
+  const country = careerChange.country || '';
+  if (!name && !country) { toast('Pick a new name or country first', 'error'); return; }
+  const q = cachedCareer.change || {};
+  careerBusy = true;
+  const agreed = await askConfirm(
+    `${name ? `Name → ${name}. ` : ''}${country ? `Country → ${country}. ` : ''}` +
+    (q.cost ? `This costs ${q.cost.toLocaleString()} 💎.` : 'This is your free change.'));
+  careerBusy = false;
+  if (!agreed) return;
+
+  careerBusy = true;
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/career/change/submit',
+                                 { name, country, source: careerChange.source });
+  careerBusy = false;
+  if (!ok) { toast(data.message || 'Change failed', 'error'); return; }
+  careerChange = { open: false, options: null, name: '', country: '', source: null };
+  toast(data.message || (data.applied ? 'Done!' : 'Sent for review'),
+        data.applied ? 'success' : 'info');
+  await loadCareer();
+  refreshDashboard();
+}
+
+async function careerChangeCancel() {
+  if (careerBusy) return;
+  careerBusy = true;
+  const agreed = await askConfirm('Withdraw the name you sent for approval? The gems come back.');
+  careerBusy = false;
+  if (!agreed) return;
+  careerBusy = true;
+  const { ok, data } = await api('/api/webapp/career/change/cancel', {});
+  careerBusy = false;
+  if (!ok) { toast(data.message || 'Could not withdraw', 'error'); return; }
+  toast(data.message || 'Withdrawn', 'success');
+  await loadCareer();
   refreshDashboard();
 }
 

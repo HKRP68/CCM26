@@ -807,6 +807,21 @@ def _migrate_add_columns():
     _try_add("game_config", "career_streak_weeks", "INTEGER DEFAULT 4")
     _try_add("game_config", "career_streak_bonus_gems", "INTEGER DEFAULT 100")
 
+    # ── Career Player name / country changes ──
+    # The price ladder is read off career_changes_used, so it has to exist (and
+    # be 0) on every card created before this feature shipped — those owners
+    # still have their free change. career_free_changes are admin-granted extras.
+    _try_add("players", "career_changes_used", "INTEGER DEFAULT 0")
+    _try_add("players", "career_free_changes", "INTEGER DEFAULT 0")
+    _try_add("game_config", "career_change_price_2", "INTEGER DEFAULT 300")
+    _try_add("game_config", "career_change_price_3", "INTEGER DEFAULT 500")
+    _try_add("game_config", "career_change_price_step", "INTEGER DEFAULT 250")
+    _try_add("game_config", "career_paid_changes_open", "BOOLEAN DEFAULT FALSE")
+    _try_add("game_config", "career_custom_names_open", "BOOLEAN DEFAULT TRUE")
+    _try_add("game_config", "career_custom_names_need_approval",
+             "BOOLEAN DEFAULT TRUE")
+    _try_add("game_config", "career_name_blocklist", "TEXT")
+
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so
     # they stay independently fault-tolerant without a round trip each.
@@ -838,6 +853,13 @@ def _migrate_add_columns():
         "UPDATE users SET career_weekly_streak = 0 WHERE career_weekly_streak IS NULL",
         "UPDATE users SET career_weekly_best_streak = 0 "
         "WHERE career_weekly_best_streak IS NULL",
+        # The change counters are non-nullable in the model and are read as
+        # numbers by the price ladder — a NULL here would price the free change
+        # as a crash rather than as free.
+        "UPDATE players SET career_changes_used = 0 "
+        "WHERE career_changes_used IS NULL",
+        "UPDATE players SET career_free_changes = 0 "
+        "WHERE career_free_changes IS NULL",
     ]
     done, sig = _migration_signature_matches("backfill", backfill_sql)
     if not done:

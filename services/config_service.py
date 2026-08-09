@@ -80,6 +80,15 @@ DEFAULTS = {
     "career_quest_gems": 15,
     "career_streak_weeks": 4,
     "career_streak_bonus_gems": 100,
+    # Career Player name / country changes. The first is free; the rest are sold
+    # on this ladder and only while career_paid_changes_open is on.
+    "career_change_price_2": 300,
+    "career_change_price_3": 500,
+    "career_change_price_step": 250,
+    "career_paid_changes_open": False,
+    "career_custom_names_open": True,
+    "career_custom_names_need_approval": True,
+    "career_name_blocklist": None,
 }
 
 
