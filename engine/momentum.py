@@ -80,6 +80,7 @@ PR_FINISH_LINE_WICKETS = 4
 
 
 def _clamp(v, cap):
+    """Hold an accumulator inside its symmetric hard cap."""
     return max(-cap, min(cap, float(v)))
 
 
@@ -180,6 +181,7 @@ MPI_BANDS = (
 
 
 def _band(net):
+    """The MPI_BANDS row this index falls in, scanned from the top."""
     for lower, scoring, wkt, label in MPI_BANDS:
         if float(net) >= lower:
             return lower, scoring, wkt, label

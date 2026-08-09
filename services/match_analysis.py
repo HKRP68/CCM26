@@ -53,6 +53,7 @@ _MOMENTUM_WEIGHT = 10.0
 
 
 def analysis_filename(match_id):
+    """The report's filename, shared by the chat send and the channel archive."""
     return f"MatchAnalysis{match_id}.html"
 
 
@@ -65,14 +66,11 @@ def _e(value):
 
 
 def _num(value, default=0):
+    """Read an int out of a match state that may hold ``None`` or a string."""
     try:
         return int(value)
     except (TypeError, ValueError):
         return default
-
-
-def _rate(runs, balls):
-    return (runs / balls * 6.0) if balls else 0.0
 
 
 def _phase_of(over, overs_total, spec_pp=None):
@@ -147,6 +145,7 @@ def _axes(y_labels, x_max, x_ticks):
 
 
 def _x_ticks(n_overs):
+    """Which over numbers to label, thinned so they do not collide on a phone."""
     if n_overs <= 0:
         return []
     step = 1 if n_overs <= 10 else (2 if n_overs <= 24 else 5)
@@ -218,6 +217,7 @@ def _band_svg(series, lo, hi, overs_total, zero_line=True, label=""):
     span = float(hi - lo) or 1.0
 
     def _y(v):
+        """A signed value's pixel row, clamped into the band."""
         return _PAD_T + plot_h * (1.0 - (max(lo, min(hi, v)) - lo) / span)
 
     out = []
@@ -249,6 +249,8 @@ def _svg(body, label=""):
 
 
 def _legend(items):
+    """Series swatches. Present for every chart with more than one series, so
+    identity is never carried by colour alone."""
     return ('<div class="legend">' + "".join(
         f'<span class="key"><i class="sw {cls}"></i>{_e(label)}</span>'
         for label, cls in items) + "</div>")
@@ -395,6 +397,7 @@ def _scorecard_section(scorecard):
 
 
 def _partnership_section(views):
+    """Every stand of the match, and the fall of wickets that ended each."""
     out = []
     for v in views:
         rows = "".join(
@@ -449,6 +452,8 @@ def _ball_pills(timeline):
 
 
 def _over_row_class(runs, wickets):
+    """Which side won the over, as a row tint. Decoration only — the runs and
+    wickets columns say the same thing in text."""
     if runs >= _BAT_WON_RUNS:
         return "tr-bat"
     if wickets or runs <= _BOWL_WON_RUNS:
@@ -653,6 +658,8 @@ def _turning_points(views, chase_history):
 
 
 def _pitch_section(state, pitch):
+    """How the surface changed for the chase — the pitch's own note, plus the
+    trace of which innings-2 rules were live and from which over."""
     note = pitch_state.evolution_note(pitch)
     trace = state.get("dps_trace") or []
     seen, ordered = set(), []

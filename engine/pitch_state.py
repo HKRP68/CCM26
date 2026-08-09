@@ -82,10 +82,12 @@ def _at(over, overs_total, frac):
 
 
 def _between(over, overs_total, lo, hi):
+    """True inside a window given as two fractions of the innings."""
     return _at(over, overs_total, lo) and not _at(over, overs_total, hi)
 
 
 def _spin_only(rule):
+    """Wrap an over/total predicate so it fires for spin bowling only."""
     return lambda over, total, is_spin: is_spin and rule(over, total)
 
 
@@ -161,6 +163,7 @@ EVOLUTION_NOTES = {
 
 
 def _rules(pitch):
+    """This pitch's innings-2 rules, or an empty tuple for one with no row."""
     return INNINGS2_EVOLUTION.get(str(pitch or ""), ())
 
 
