@@ -2063,6 +2063,35 @@ async def _run_over(context, mid, state):
         await _prompt_bowler(context, mid, state)
 
 
+def _predictability_lines(state, summary):
+    """Warn a captain that their pattern has been read.
+
+    Shown OUTSIDE the bot-match gate above, because this is not a reveal — it is
+    feedback to a captain about their own picks, which they already know. A side
+    is only named when its picks are not the secret ones: in a bot match the
+    bot's run stays hidden (publishing "the bot has bowled Variations four times"
+    is publishing its plan), while the human is told about their own.
+
+    Without this the layer is invisible and reads as bad luck, which is the worst
+    way for a rule to work.
+    """
+    from engine.approach_modifiers import REPEAT_FROM
+
+    bot_uid = state.get("bot_user_id") if _is_bot_match(state) else None
+    out = []
+    for side, label, word in (("bat", state.get("bat_team_name"), "intent"),
+                              ("bowl", state.get("bowl_team_name"), "plan")):
+        if bot_uid is not None and state.get(f"{side}_team_id") == bot_uid:
+            continue                      # that side's picks are the hidden ones
+        run = int(summary.get(f"{side}_repeat") or 0)
+        if run >= REPEAT_FROM:
+            out.append(
+                f"🔍 <i>{html.escape(str(label or 'They'))} have used the same "
+                f"{word} {run} {_unit_word(state)}s running — the opposition "
+                f"has it read.</i>")
+    return out
+
+
 def _render_over_summary(state, summary):
     timeline = " ".join(cipl_match._SYM.get(_sym_key(s), s)
                         for s in summary["over_timeline"]) or "—"
@@ -2112,6 +2141,7 @@ def _render_over_summary(state, summary):
         if carry and carry.get("note"):
             lines.append(f"↪️ <i>Into the next {_unit_word(state)}: "
                          f"{html.escape(carry['note'])}.</i>")
+    lines.extend(_predictability_lines(state, summary))
     # What the bot has *noticed* is still said out loud — that it has caught the
     # player repeating themselves is a warning, not a plan, so it keeps the mind
     # game visible without handing over the counter.

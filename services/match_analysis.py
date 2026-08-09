@@ -31,6 +31,7 @@ import logging
 
 from engine import approach_modifiers, momentum as momentum_engine, pitch_state
 from engine import ground_config
+from engine.approach_modifiers import REPEAT_FROM as _REPEAT_FROM
 
 logger = logging.getLogger(__name__)
 
@@ -555,6 +556,26 @@ def _matchup_grid(view):
         f"Shading runs quiet {scale} expensive.</p>")
 
 
+def _longest_repeats(log):
+    """The longest unbroken run of one pick, per side, as ``{side: (pick, n)}``.
+
+    The over-by-over table shows the sequence and the grid shows the returns;
+    this names the thing a captain most wants to be told afterwards — how long
+    they were readable for.
+    """
+    out = {}
+    for field in ("bat", "bowl"):
+        best_key, best, run, prev = None, 0, 0, object()
+        for over in log:
+            pick = over.get(field)
+            run = run + 1 if pick == prev else 1
+            prev = pick
+            if run > best:
+                best_key, best = pick, run
+        out[field] = (best_key, best)
+    return out
+
+
 def _approach_section(views):
     """The duel: over by over, then match-up by match-up, then in aggregate.
 
@@ -597,6 +618,7 @@ def _approach_section(views):
         for o in log:
             if o.get("combo"):
                 combos[o["combo"]] = combos.get(o["combo"], 0) + 1
+        streaks = _longest_repeats(log)
         out.append("<div class='two'>")
         for title, rows in (("Batting intent", bat_rows),
                             ("Bowling plan faced", bowl_rows)):
@@ -605,6 +627,16 @@ def _approach_section(views):
                        "<th>Wkts</th><th>RPO</th></tr></thead><tbody>"
                        + "".join(rows) + "</tbody></table></div></div>")
         out.append("</div>")
+        for field, label, fn in (
+                ("bat", "Longest run of one intent",
+                 approach_modifiers.batting_label),
+                ("bowl", "Longest run of one plan",
+                 approach_modifiers.bowling_label)):
+            key, run = streaks.get(field) or (None, 0)
+            if run:
+                read = (" — read by the opposition" if run >= _REPEAT_FROM else "")
+                out.append(f"<p class='note'><b>{label}:</b> {_e(fn(key))} "
+                           f"&times;{run}{read}</p>")
         if combos:
             out.append("<p class='note'><b>Special combinations:</b> "
                        + " &nbsp;·&nbsp; ".join(

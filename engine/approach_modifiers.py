@@ -481,6 +481,66 @@ FATIGUE = {
 CHEMISTRY_OVERS = 4                # overs together before a pair is humming
 CHEMISTRY_BAT = 1.03               # → +3% runs
 
+# ── Predictability: doing the same thing over after over ─────────────
+#
+# The mind game above is priced one over at a time — a read is a coin that lands
+# fresh every ball. Nothing was pricing the *pattern*. A captain could pick Ultra
+# Attack in all five death overs, or bowl Variations from the 7th to the 15th,
+# and the opposition never once set up for it, which is not how anybody has ever
+# played cricket. A plan you have seen four times is a plan you are ready for:
+# the field goes back for the slog, the batter sits deep in the crease waiting
+# for the slower ball.
+#
+# Symmetric, because both captains are guessing:
+#   the BATTING side repeating → the field is set for it: fewer runs, more wickets
+#   the BOWLING side repeating → the batter has picked it: more runs, fewer wickets
+#
+# It starts at the fourth consecutive over — three is a plan, four is a habit —
+# and stops growing at the sixth, so a side is never simply unable to bat. The
+# counter resets the moment they change, which is the point: the cost is not for
+# using an approach, it is for being readable, and one different over buys the
+# surprise back.
+REPEAT_FROM = 4                    # overs in a row before the opposition reads it
+REPEAT_CAP = 6                     # and the point past which it stops worsening
+
+# Keyed on the length of the run, from REPEAT_FROM to REPEAT_CAP.
+BAT_REPEAT = {
+    4: _merge(_runs(-1), _wkt(+0.08)),
+    5: _merge(_runs(-2), _wkt(+0.16)),
+    6: _merge(_runs(-3), _wkt(+0.24)),
+}
+BOWL_REPEAT = {
+    4: _merge(_runs(+1), _wkt(-0.08)),
+    5: _merge(_runs(+2), _wkt(-0.16)),
+    6: _merge(_runs(+3), _wkt(-0.24)),
+}
+
+
+def _readability(run):
+    """How far past the threshold a run of identical picks is, 0 if not past it."""
+    return max(0, min(int(run or 0), REPEAT_CAP) - (REPEAT_FROM - 1))
+
+
+def repeat_multipliers(bat_repeat=0, bowl_repeat=0):
+    """What being predictable costs, for a run of identical picks on each side.
+
+    Only the *difference* is priced. Both sides can be readable at once — two
+    stubborn captains staring at each other — and when they are equally readable
+    neither has learned anything the other has not, so the over is untouched.
+
+    Applying both tables and multiplying them does NOT give that: the run
+    factors are multiplicative over a spread, so a -3 and a +3 compose to 0.80
+    on the six rather than to 1.0, and two obstinate captains would produce a
+    systematically low-scoring over for no reason anybody could explain. Netting
+    first is both the correct answer and the one that leaves a fixed-approach
+    calibration run exactly where it was.
+    """
+    net = _readability(bat_repeat) - _readability(bowl_repeat)
+    if net == 0:
+        return {}
+    table = BAT_REPEAT if net > 0 else BOWL_REPEAT
+    return dict(table[REPEAT_FROM - 1 + abs(net)])
+
 
 def _validate_situational_tables():
     """A typo in any table above would be a silent no-op — fail at import."""
@@ -538,7 +598,8 @@ _validate_situational_tables()
 def make_context(pitch=None, phase=None, bowling_type=None,
                  bowler_over_index=0, partnership_overs=0.0,
                  batting_momentum=False, bowling_momentum=False,
-                 carry=None, mind_games=True):
+                 carry=None, mind_games=True,
+                 bat_repeat=0, bowl_repeat=0):
     """Build the situational context :func:`apply_approach_modifiers` reads.
 
     Every field is optional and a missing one simply switches its layer off, so
@@ -555,6 +616,9 @@ def make_context(pitch=None, phase=None, bowling_type=None,
                          special combination (see :func:`combo_carry`).
     mind_games         — False disables the read/outthink layer, for callers
                          whose picks are not simultaneous and hidden.
+    bat_repeat         — consecutive overs the batting side has picked this same
+                         intent, counting this one (see REPEAT_FROM).
+    bowl_repeat        — the same for the bowling side's plan.
     """
     return {
         "pitch": pitch,
@@ -566,6 +630,8 @@ def make_context(pitch=None, phase=None, bowling_type=None,
         "bowling_momentum": bool(bowling_momentum),
         "carry": carry or None,
         "mind_games": bool(mind_games),
+        "bat_repeat": int(bat_repeat or 0),
+        "bowl_repeat": int(bowl_repeat or 0),
     }
 
 
@@ -645,6 +711,12 @@ def _situational_multipliers(bat, bowl, context):
 
     if float(context.get("partnership_overs") or 0.0) >= CHEMISTRY_OVERS:
         tables.append(_runs_factor(CHEMISTRY_BAT))
+
+    # Predictability. Applied last, and outside the mind_games switch: reading a
+    # pattern over four overs is not the same skill as guessing one hidden pick,
+    # and a caller whose picks are not simultaneous can still be repetitive.
+    tables.append(repeat_multipliers(context.get("bat_repeat"),
+                                     context.get("bowl_repeat")))
 
     carry = context.get("carry") or {}
     tables.append(carry.get("mult"))

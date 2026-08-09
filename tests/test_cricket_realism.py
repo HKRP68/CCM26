@@ -200,3 +200,97 @@ class SetBatterTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PredictabilityTests(unittest.TestCase):
+    """Doing the same thing over after over should cost you.
+
+    The mind-game layer prices a single hidden pick; nothing priced the pattern,
+    so a captain could bowl Variations from the 7th to the 15th and the batting
+    side never once set up for it.
+    """
+
+    def setUp(self):
+        from engine import approach_modifiers as am
+        self.am = am
+
+    def test_nothing_happens_below_the_threshold(self):
+        for run in range(0, self.am.REPEAT_FROM):
+            self.assertEqual(self.am.repeat_multipliers(bat_repeat=run), {}, run)
+            self.assertEqual(self.am.repeat_multipliers(bowl_repeat=run), {}, run)
+
+    def test_a_readable_batter_scores_less_and_gets_out_more(self):
+        m = self.am.repeat_multipliers(bat_repeat=self.am.REPEAT_FROM)
+        self.assertLess(m["Four"], 1.0)
+        self.assertLess(m["Six"], 1.0)
+        self.assertGreater(m["Wicket"], 1.0)
+        self.assertGreater(m["Dot"], 1.0)
+
+    def test_a_readable_bowler_is_punished_the_other_way(self):
+        m = self.am.repeat_multipliers(bowl_repeat=self.am.REPEAT_FROM)
+        self.assertGreater(m["Four"], 1.0)
+        self.assertLess(m["Wicket"], 1.0)
+
+    def test_it_gets_worse_the_longer_it_goes_on(self):
+        sixes = [self.am.repeat_multipliers(bat_repeat=r)["Six"]
+                 for r in range(self.am.REPEAT_FROM, self.am.REPEAT_CAP + 1)]
+        self.assertEqual(sixes, sorted(sixes, reverse=True))
+
+    def test_but_it_stops_getting_worse(self):
+        """A side has to remain able to bat. Past the cap it plateaus."""
+        capped = self.am.repeat_multipliers(bat_repeat=self.am.REPEAT_CAP)
+        for run in (self.am.REPEAT_CAP + 1, self.am.REPEAT_CAP + 40):
+            self.assertEqual(self.am.repeat_multipliers(bat_repeat=run), capped)
+
+    def test_two_equally_obvious_captains_cancel_exactly(self):
+        """Nobody has learned anything the other has not, so the over is
+        untouched. Applying both tables and multiplying them would not give
+        this — the run factors compose to 0.80 on the six, so two obstinate
+        captains would quietly produce a low-scoring over for no reason."""
+        for run in range(self.am.REPEAT_FROM, self.am.REPEAT_CAP + 1):
+            self.assertEqual(self.am.repeat_multipliers(run, run), {}, run)
+
+    def test_only_the_difference_in_readability_is_priced(self):
+        gap_one = self.am.repeat_multipliers(self.am.REPEAT_CAP,
+                                             self.am.REPEAT_CAP - 1)
+        plain_one = self.am.repeat_multipliers(self.am.REPEAT_FROM, 0)
+        self.assertEqual(gap_one, plain_one)
+
+    def test_a_fixed_approach_calibration_run_is_untouched(self):
+        """tools/pitch_calibration bowls balanced-vs-balanced every over. Both
+        sides are maximally readable, so this layer must be inert there or it
+        would silently move par."""
+        self.assertEqual(self.am.repeat_multipliers(20, 20), {})
+
+    def test_the_run_resets_the_moment_the_captain_changes(self):
+        """The cost is for being readable, not for using an approach — one
+        different over has to buy the surprise back."""
+        state = {"bat_repeat": 5, "last_bat_approach": "ultra",
+                 "batting_approach": "rotate"}
+        self.assertEqual(cm._repeat_if_same(state, "bat"), 1)
+        state["batting_approach"] = "ultra"
+        self.assertEqual(cm._repeat_if_same(state, "bat"), 6)
+
+    def test_before_the_pick_is_in_the_context_looks_one_ahead(self):
+        """approach_context is built before the captain has chosen, and the AI
+        has to see the number its *next* pick would produce."""
+        state = {"bat_repeat": 3, "last_bat_approach": "ultra",
+                 "batting_approach": None}
+        self.assertEqual(cm._repeat_if_same(state, "bat"), 4)
+
+    def test_the_engine_context_carries_both_runs(self):
+        ctx = self.am.make_context(bat_repeat=5, bowl_repeat=2)
+        self.assertEqual(ctx["bat_repeat"], 5)
+        self.assertEqual(ctx["bowl_repeat"], 2)
+        mult = self.am.approach_multipliers("ultra", "balanced", context=ctx)
+        plain = self.am.approach_multipliers(
+            "ultra", "balanced", context=self.am.make_context())
+        self.assertLess(mult["Six"], plain["Six"])
+
+    def test_the_bot_cannot_serve_a_stale_payoff_matrix(self):
+        """The repeat counts change the payoffs, so they must change the cache
+        key — otherwise the bot keeps reasoning from before it was read."""
+        from services import bot_tactics
+        a = bot_tactics._context_fingerprint(self.am.make_context(bat_repeat=1))
+        b = bot_tactics._context_fingerprint(self.am.make_context(bat_repeat=5))
+        self.assertNotEqual(a, b)

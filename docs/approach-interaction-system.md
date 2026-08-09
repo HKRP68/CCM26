@@ -146,6 +146,54 @@ bowler-favourable — switching it off entirely *adds* about 10 runs an innings.
 * **Chemistry** — a pair who have batted four overs together run better between
   the wickets. Reset, like the partnership itself, by a wicket.
 
+## 10 — predictability
+
+The mind game above prices a *single hidden pick*: a read is a coin that lands
+fresh every over. Nothing priced the **pattern**. A captain could take Ultra
+Attack in all five death overs, or bowl Variations from the 7th to the 15th, and
+the opposition never once set up for it — which is not how anybody has played
+cricket. A plan you have seen four times is a plan you are ready for: the field
+goes back for the slog, the batter sits deep waiting for the slower ball.
+
+`repeat_multipliers` prices it, symmetrically:
+
+* the **batting** side repeating → the field is set: fewer runs, more wickets;
+* the **bowling** side repeating → the batter has picked it: more runs, fewer wickets.
+
+It starts at the **fourth** consecutive over (three is a plan, four is a habit),
+worsens to the sixth and then stops, so a side is never simply unable to bat.
+The counter resets the instant the captain changes — the cost is for being
+readable, not for using an approach, and one different over buys the surprise
+back.
+
+**Only the difference is priced.** Two stubborn captains staring at each other
+have each learned nothing the other has not, so the over is untouched. That
+needs saying because the obvious implementation — apply both tables and multiply
+— does not give it: the run factors compose over a spread, so a −3 and a +3 land
+on 0.80 for the six, and two obstinate captains would quietly produce a
+low-scoring over that nobody could explain. Netting first is both the right
+answer and what leaves a fixed-approach calibration run (which bowls
+balanced-vs-balanced every over, maximally readable on both sides) exactly where
+it was.
+
+Measured over 150 death-over blocks, spamming one intent for eight overs against
+varying it: **83.4 runs and 4.15 wickets against 87.3 and 3.41**. Spam is still
+playable — it is a real option, not a trap — it is just measurably worse than
+mixing, which is what makes the 5×5 a genuine mixed-strategy problem instead of
+a table you solve once.
+
+The AI captain gets this for free: `bot_tactics` builds its payoff matrix from
+`cipl_match.approach_context`, so the bot sees its own readability and steers off
+it. Its payoff cache is keyed on the two counts as well, or it would keep
+reasoning from before it was read.
+
+The chat says so, too. A rule the player cannot see reads as bad luck, so the
+over summary tells a captain their pattern has been read. That line sits
+*outside* the bot-match gate below, because it is not a reveal — it is feedback
+to a captain about their own picks. In a bot match the bot's own run stays
+hidden, since publishing "the bot has bowled Variations four times" is
+publishing its plan.
+
 ## What was deliberately *not* built
 
 **Player rating modifiers** (the Elite / Good / Average / Below Avg / Poor

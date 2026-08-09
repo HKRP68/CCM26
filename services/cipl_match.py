@@ -117,6 +117,24 @@ def approach_phase(state):
     return "middle"
 
 
+def _repeat_if_same(state, side):
+    """What the repeat count becomes if this captain picks the same thing again.
+
+    The state carries the run over the overs already bowled. The context is
+    built *before* the pick, so the useful number — the one the AI captain has
+    to reason about and the one the over will actually be judged on when the
+    pick comes in — is one further along.
+    """
+    state = state or {}
+    current = state.get(f"{side}ting_approach" if side == "bat" else "bowling_approach")
+    last = state.get(f"last_{side}_approach")
+    run = int(state.get(f"{side}_repeat") or 0)
+    if current is not None:
+        # The pick is already in — count it for real.
+        return run + 1 if current == last else 1
+    return run + 1
+
+
 def approach_context(state, bowler=None):
     """The situational context for the upcoming over's approach match-up.
 
@@ -151,6 +169,14 @@ def approach_context(state, bowler=None):
         batting_momentum=False,
         bowling_momentum=bool(stats.get("last_over_wickets")),
         carry=(state or {}).get("approach_carry"),
+        # +1 because the run recorded on the state covers the overs already
+        # bowled; the over about to be bowled is the next one in the sequence if
+        # the captain picks the same thing again. approach_context is called
+        # before the pick is known, so this is the count the pick would produce
+        # — which is exactly what the AI captain needs to see to avoid walking
+        # into it.
+        bat_repeat=_repeat_if_same(state, "bat"),
+        bowl_repeat=_repeat_if_same(state, "bowl"),
     )
 
 
@@ -640,6 +666,11 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         # What each captain actually picked, over by over (the analysis report's
         # approach duel). Never read by the simulation.
         "approach_log": [],
+        # How many overs in a row each side has now picked the same thing, and
+        # what that thing was. Drives the predictability layer — see
+        # engine.approach_modifiers.repeat_multipliers.
+        "bat_repeat": 0, "bowl_repeat": 0,
+        "last_bat_approach": None, "last_bowl_approach": None,
         "over_msg_ids": [],
         "commentary_log": [],
         "chat_id": chat_id, "is_private": is_private,
@@ -2039,6 +2070,14 @@ def simulate_over(state):
         _update_mpi(state, over_runs, over_wkts, over_timeline,
                     partnership_at_over_start, state.get("partnership_runs", 0),
                     bpu)
+        # Predictability: how long each side has now been doing the same thing.
+        # A different pick resets to 1 — the cost is for being readable, and one
+        # changed over buys the surprise back.
+        for side, pick in (("bat", bat_app), ("bowl", bowl_app)):
+            last_key, run_key = f"last_{side}_approach", f"{side}_repeat"
+            state[run_key] = (int(state.get(run_key) or 0) + 1
+                              if pick == state.get(last_key) else 1)
+            state[last_key] = pick
 
     # The records the analysis report reads are per-ball facts, not whole-over
     # tables, so a part-over still gets logged. A chase won or lost mid-over
@@ -2117,6 +2156,11 @@ def simulate_over(state):
         "combo": combo_name,
         "flavour": combo_flavour,
         "carry": approach_carry,
+        # How long each side has now been doing the same thing. The chat uses
+        # this to tell a captain their pattern has been read; the analysis report
+        # uses it to show the longest run of the innings.
+        "bat_repeat": int(state.get("bat_repeat") or 0),
+        "bowl_repeat": int(state.get("bowl_repeat") or 0),
     }
 
     # Advance the over pointer if the over completed and play continues
@@ -2457,6 +2501,11 @@ def end_first_innings(state):
     state["momentum_history"] = []
     state["pressure_history"] = []
     state["approach_log"] = []
+    # Nobody has read anybody yet: different players, different plans.
+    state["bat_repeat"] = 0
+    state["bowl_repeat"] = 0
+    state["last_bat_approach"] = None
+    state["last_bowl_approach"] = None
     # Clear sequence-aware commentary flags so innings-1's final ball can't
     # trigger a back-to-back / post-wicket / dot-streak line on the first
     # delivery of the chase.
