@@ -216,6 +216,16 @@ class MismatchGateTests(unittest.TestCase):
         self.session.flush()
         self.assertEqual(self._progress(), 0)
 
+    def test_a_junk_over_count_does_not_abandon_the_rest_of_the_tracking(self):
+        # The match-length keys are worked out outside safe_track and before
+        # the batting/bowling totals are credited, so an exception escaping
+        # from a bad 'overs' would silently cost this user their runs.
+        from services.quest_service import track_user_match_quests
+        track_user_match_quests(self.session, self._state(overs=float("inf")),
+                                self.user, True, False, self.user.id)
+        self.session.flush()
+        self.assertEqual(self._progress(), 80)
+
     def test_the_cap_only_applies_to_bot_matches(self):
         # A spent bot allowance must not block a real PvP match.
         from services import quest_service
@@ -794,6 +804,15 @@ class MatchLengthEventTests(unittest.TestCase):
         self.assertEqual(match_length_event_keys(None), [])
         self.assertEqual(match_length_event_keys(""), [])
         self.assertEqual(match_length_event_keys("T20"), [])
+
+    def test_an_infinite_length_clears_nothing_rather_than_raising(self):
+        # int(float(x)) raises OverflowError, not ValueError, for an infinite
+        # length. This call sits outside safe_track, so an escape would abandon
+        # the rest of the match's quest tracking over a junk field.
+        from services.quest_service import match_length_event_keys
+        self.assertEqual(match_length_event_keys(float("inf")), [])
+        self.assertEqual(match_length_event_keys("1e309"), [])
+        self.assertEqual(match_length_event_keys(float("nan")), [])
 
     def test_the_keys_line_up_with_the_thresholds(self):
         from services.quest_service import (MATCH_LENGTH_THRESHOLDS,

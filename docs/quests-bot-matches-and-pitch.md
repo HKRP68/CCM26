@@ -112,7 +112,7 @@ still rotates which surface and which format the day asks for.
 
 So the daily deal now reserves a slot for each family:
 
-```
+```text
 daily card = 3 random  +  1 pitch quest  +  1 match-length quest  (+ any pins)
 ```
 
@@ -151,7 +151,7 @@ The seven pitch quests, three match-length quests and two AI quests are in
 `seed_quests_v3.py`. They are **not** live until that script is run against the
 database:
 
-```
+```bash
 python seed_quests_v3.py --dry-run   # report what would change
 python seed_quests_v3.py             # replace the daily/monthly catalogue
 ```

@@ -266,10 +266,17 @@ def match_length_event_keys(overs):
     depending on which mode wrote it. A length that cannot be read as a number
     — or a match that never recorded one — clears nothing rather than guessing
     a default, so a missing field can never hand out a 20-over quest.
+
+    ``OverflowError`` is caught alongside the ordinary parse failures because
+    ``int(float(x))`` raises it, not ValueError, for an infinite length
+    (``float('inf')``, or a string like ``"1e309"`` that parses to it). This
+    call sits outside ``safe_track``, so letting one escape would abandon the
+    rest of ``track_user_match_quests`` — the runs, wickets and milestones that
+    have not been credited yet — over a junk field.
     """
     try:
         length = int(float(overs))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return []
     return [key for n, key in OVERS_EVENT_KEYS.items() if length >= n]
 
