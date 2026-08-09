@@ -257,15 +257,47 @@ MATCH_LENGTH_THRESHOLDS = (10, 15, 20)
 
 OVERS_EVENT_KEYS = {n: "overs_%d" % n for n in MATCH_LENGTH_THRESHOLDS}
 
+# Legal balls in an over. The thresholds above are stated in overs but compared
+# in balls — see :func:`match_length_event_keys`.
+BALLS_PER_OVER = 6
 
-def match_length_event_keys(overs):
-    """Quest event keys for every length threshold ``overs`` clears.
+
+def match_balls_per_unit(state):
+    """How many legal balls one unit of ``state['overs']`` is worth.
+
+    Six everywhere except Challenge League's The Hundred, which counts an
+    innings as 20 *sets of five* — so a 100-ball Hundred match carries
+    ``overs == 20`` exactly as a 120-ball T20 does. Taking that at face value
+    let a Hundred game complete "play a 20-over match" twenty balls short.
+
+    Read from ``services.cipl_match`` so there is one definition of a format's
+    ball count rather than a copy here that can drift. Imported lazily and
+    defensively: quest tracking must not gain a load-time dependency on the
+    whole Challenge League engine, and an unknown or absent format is a
+    six-ball over.
+    """
+    try:
+        from services.cipl_match import balls_per_unit
+        return int(balls_per_unit(state or {}))
+    except Exception:  # pragma: no cover - partial deploy / import safety
+        return BALLS_PER_OVER
+
+
+def match_length_event_keys(overs, balls_per_unit=BALLS_PER_OVER):
+    """Quest event keys for every length threshold this match clears.
 
     ``overs`` is the match's own length off the state (``state['overs']``),
     which round-trips through JSON and arrives as an int, a float or a string
     depending on which mode wrote it. A length that cannot be read as a number
     — or a match that never recorded one — clears nothing rather than guessing
     a default, so a missing field can never hand out a 20-over quest.
+
+    The comparison is done in **balls**, not in units of ``overs``, because
+    ``overs`` does not mean the same thing in every format: The Hundred stores
+    20 five-ball sets as ``overs == 20``. Multiplying by ``balls_per_unit``
+    (see :func:`match_balls_per_unit`) makes a 100-ball match clear the 10- and
+    15-over thresholds — which by length it genuinely does — but not the
+    20-over one, which needs a full 120.
 
     ``OverflowError`` is caught alongside the ordinary parse failures because
     ``int(float(x))`` raises it, not ValueError, for an infinite length
@@ -275,10 +307,11 @@ def match_length_event_keys(overs):
     have not been credited yet — over a junk field.
     """
     try:
-        length = int(float(overs))
+        balls = int(float(overs)) * int(balls_per_unit)
     except (TypeError, ValueError, OverflowError):
         return []
-    return [key for n, key in OVERS_EVENT_KEYS.items() if length >= n]
+    return [key for n, key in OVERS_EVENT_KEYS.items()
+            if balls >= n * BALLS_PER_OVER]
 
 
 # Quest families that are guaranteed a place on every daily card: one pitch
@@ -872,6 +905,16 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
         # Same story for the guaranteed daily families: somebody who opened
         # their quests before a pitch or match-length quest went live would
         # otherwise wait until tomorrow to see one.
+        #
+        # This tops a family *up*; it never trims one. An admin who pins a
+        # pitch quest at noon leaves everybody who already opened their card
+        # holding two — the one their morning deal gave them, plus the pin the
+        # loop above just added. That is deliberate. The alternatives are both
+        # worse: unassigning the morning's quest would retract something the
+        # player may already have progress on, and skipping the pin for those
+        # users would break what a pin means everywhere else in this function
+        # ("every user gets this one, now"). It is a bonus quest for one day,
+        # and the next daily deal puts them back on one-per-family.
         newly_pinned += _top_up_daily_guaranteed(
             session, user_id, quest_type, current_period, now,
             already_pinned=newly_pinned)
@@ -1383,8 +1426,10 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
 
     # Match-length quests — "play 3 matches of 15 overs or more today". Every
     # threshold this match's length clears fires, so one 20-over game moves the
-    # 10-, 15- and 20-over quests together.
-    for overs_key in match_length_event_keys(state.get("overs")):
+    # 10-, 15- and 20-over quests together. Measured in balls, so The Hundred's
+    # 20 five-ball sets are not mistaken for a full 20-over match.
+    for overs_key in match_length_event_keys(state.get("overs"),
+                                             match_balls_per_unit(state)):
         safe_track(session, uid, overs_key, 1)
 
     # Aggregates across all of this user's players (both innings)

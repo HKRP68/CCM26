@@ -72,14 +72,25 @@ partition:
 
 | length played | events fired |
 | --- | --- |
-| 20 overs | `overs_10`, `overs_15`, `overs_20` |
+| 20 overs (120 balls) | `overs_10`, `overs_15`, `overs_20` |
 | 15–19 overs | `overs_10`, `overs_15` |
+| The Hundred (100 balls) | `overs_10`, `overs_15` |
 | 10–14 overs | `overs_10` |
 | under 10 | none |
 
 Clearing rather than matching is deliberate. If `overs_10` meant *exactly* ten,
 a player who chose the longest format would watch "play 2 matches of 10+ overs"
 sit at 0/2 all day, which reads as a bug from the other side of the screen.
+
+**The comparison is in balls, not in `overs`.** `overs` does not mean the same
+thing in every format: Challenge League's The Hundred stores an innings as 20
+*sets of five*, so a 100-ball Hundred match carries `overs == 20` exactly as a
+120-ball T20 does. Taken at face value that let a Hundred game complete "Full
+Twenty" twenty balls short. `match_balls_per_unit` reads the ball count for the
+state's format straight out of `services.cipl_match`, so there is one
+definition of how long a format is rather than a copy here that can drift — and
+a Hundred match now clears 10 and 15, which by length it genuinely does, but
+not 20.
 
 The thresholds live in `services.quest_service.MATCH_LENGTH_THRESHOLDS`, and
 `match_length_event_keys` builds the keys from them — adding a threshold there
@@ -131,10 +142,18 @@ The families are declared in one place —
 `services.quest_service.DAILY_GUARANTEED_BUCKETS` — as `(family, event keys,
 slots)`. Some consequences worth knowing:
 
-* **Pinning still works, and doesn't double up.** A pitch quest an admin pins
-  (`always_assign`) *fills* the pitch slot instead of arriving next to it, so
-  pinning one gives everybody that pitch quest today rather than two pitch
-  quests.
+* **Pinning still works, and doesn't double up — at deal time.** A pitch quest
+  an admin pins (`always_assign`) *fills* the pitch slot instead of arriving
+  next to it, so a card dealt after the pin carries that pitch quest rather
+  than two.
+
+  The exception is a pin added *mid-day*: everybody who already opened their
+  card that day ends up holding two, their morning draw plus the pin. The
+  top-up only ever adds. Trimming instead would mean unassigning a quest the
+  player may already have progress on, and skipping the pin for those users
+  would break what a pin means everywhere else ("every user gets this one,
+  now"). It is one bonus quest for one day; the next daily deal puts them back
+  on one per family.
 * **An empty family costs nobody a slot.** Deactivate every pitch quest and
   players simply get their random three and a length quest.
 * **A mid-day rollout reaches everyone the same day.** The daily deal normally

@@ -814,6 +814,32 @@ class MatchLengthEventTests(unittest.TestCase):
         self.assertEqual(match_length_event_keys("1e309"), [])
         self.assertEqual(match_length_event_keys(float("nan")), [])
 
+    def test_the_hundred_does_not_clear_the_20_over_threshold(self):
+        # Challenge League stores a 100-ball Hundred innings as 20 sets of
+        # five, so overs == 20 exactly as a 120-ball T20 does. By length it is
+        # a 16.4-over game: it clears 10 and 15, and must not clear 20.
+        from services.quest_service import match_length_event_keys
+        self.assertEqual(match_length_event_keys(20, 5),
+                         ["overs_10", "overs_15"])
+
+    def test_balls_per_unit_comes_from_the_format_on_the_state(self):
+        # Read through the real cipl_match helper rather than a copy, so a
+        # format whose ball count changes there is reflected here.
+        from services.quest_service import match_balls_per_unit
+        self.assertEqual(match_balls_per_unit({"ball_format": "The100"}), 5)
+        self.assertEqual(match_balls_per_unit({"ball_format": "T20"}), 6)
+        self.assertEqual(match_balls_per_unit({}), 6)
+        self.assertEqual(match_balls_per_unit(None), 6)
+        self.assertEqual(match_balls_per_unit({"ball_format": "nonsense"}), 6)
+
+    def test_a_hundred_match_is_a_real_hundred_balls(self):
+        # Guards the premise of the test above: if The Hundred ever stopped
+        # being 20x5, the threshold maths here would need revisiting.
+        from services.cipl_match import total_balls
+        self.assertEqual(total_balls({"overs": 20, "ball_format": "The100"}),
+                         100)
+        self.assertEqual(total_balls({"overs": 20, "ball_format": "T20"}), 120)
+
     def test_the_keys_line_up_with_the_thresholds(self):
         from services.quest_service import (MATCH_LENGTH_THRESHOLDS,
                                             OVERS_EVENT_KEYS)
@@ -884,6 +910,18 @@ class MatchLengthTrackingTests(unittest.TestCase):
         self._play(5)
         self.assertEqual(self._progress("overs_10"), 0)
 
+    def test_a_hundred_match_moves_the_10_and_15_bars_only(self):
+        # End-to-end through the tracker: a Challenge League Hundred game
+        # carries overs == 20 but is only 100 balls.
+        from services.quest_service import track_user_match_quests
+        track_user_match_quests(self.session,
+                                {"overs": 20, "ball_format": "The100"},
+                                self.user, True, False, self.user.id)
+        self.session.flush()
+        self.assertEqual(self._progress("overs_10"), 1)
+        self.assertEqual(self._progress("overs_15"), 1)
+        self.assertEqual(self._progress("overs_20"), 0)
+
     def test_a_voided_match_moves_nothing(self):
         from services.quest_service import track_user_match_quests
         track_user_match_quests(self.session,
@@ -946,6 +984,17 @@ class DailyGuaranteedDealTests(unittest.TestCase):
         return (sum(1 for k in keys if k.startswith("pitch_")),
                 sum(1 for k in keys if k.startswith("overs_")))
 
+    def _assigned_quests(self, user):
+        """Everything the user actually holds for today, not just new rows."""
+        from models import Quest, UserQuestProgress
+        from services.quest_service import daily_period_key
+        return (self.session.query(Quest)
+                .join(UserQuestProgress, Quest.id == UserQuestProgress.quest_id)
+                .filter(UserQuestProgress.user_id == user.id,
+                        UserQuestProgress.period_key == daily_period_key(),
+                        UserQuestProgress.assigned == True)  # noqa: E712
+                .all())
+
     def test_a_daily_deal_contains_one_of_each_family(self):
         for _ in range(8):
             _user, dealt = self._deal()
@@ -998,6 +1047,32 @@ class DailyGuaranteedDealTests(unittest.TestCase):
         _user, dealt = self._deal()
         self.assertEqual(self._families(dealt), (1, 1))
         self.assertIn(pin.id, [q.id for q in dealt])
+
+    def test_a_pin_added_mid_day_arrives_on_top_and_retracts_nothing(self):
+        # An admin pinning a pitch quest after the user opened their card
+        # leaves them holding two for the day: the morning's draw plus the pin.
+        # Deliberate — see the comment at the top-up call site. What must NOT
+        # happen is the morning's quest being unassigned (it may hold progress)
+        # or a *third* being dealt on top.
+        from models import Quest
+        from services.quest_service import ensure_quests_assigned
+
+        user, dealt = self._deal()
+        morning = [q for q in dealt if q.event_key.startswith("pitch_")][0]
+
+        pin = (self.session.query(Quest)
+               .filter(Quest.event_key.like("pitch_%"),
+                       Quest.id != morning.id).first())
+        pin.always_assign = True
+        self.session.commit()
+
+        added = ensure_quests_assigned(self.session, user.id, "daily")
+        self.session.commit()
+        self.assertEqual([q.id for q in added["assigned"]], [pin.id])
+
+        held = self._assigned_quests(user)
+        self.assertEqual(self._families(held), (2, 1))
+        self.assertIn(morning.id, [q.id for q in held])
 
     def test_an_empty_family_costs_nobody_their_random_three(self):
         from models import Quest
