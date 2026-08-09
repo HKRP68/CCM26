@@ -508,7 +508,11 @@ def _context_fingerprint(ctx):
             ctx.get("bowler_over_index"),
             round(float(ctx.get("partnership_overs") or 0.0), 2),
             ctx.get("batting_momentum"), ctx.get("bowling_momentum"),
-            ctx.get("mind_games"), carry.get("name"))
+            ctx.get("mind_games"), carry.get("name"),
+            # Predictability changes the payoffs, so it has to change the cache
+            # key too — otherwise the bot keeps serving the matrix from before
+            # the opposition had it read, and walks into its own habit.
+            ctx.get("bat_repeat"), ctx.get("bowl_repeat"))
 
 
 def _fingerprint(state, bowler):

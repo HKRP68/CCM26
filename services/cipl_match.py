@@ -117,6 +117,24 @@ def approach_phase(state):
     return "middle"
 
 
+def _repeat_if_same(state, side):
+    """What the repeat count becomes if this captain picks the same thing again.
+
+    The state carries the run over the overs already bowled. The context is
+    built *before* the pick, so the useful number — the one the AI captain has
+    to reason about and the one the over will actually be judged on when the
+    pick comes in — is one further along.
+    """
+    state = state or {}
+    current = state.get(f"{side}ting_approach" if side == "bat" else "bowling_approach")
+    last = state.get(f"last_{side}_approach")
+    run = int(state.get(f"{side}_repeat") or 0)
+    if current is not None:
+        # The pick is already in — count it for real.
+        return run + 1 if current == last else 1
+    return run + 1
+
+
 def approach_context(state, bowler=None):
     """The situational context for the upcoming over's approach match-up.
 
@@ -151,6 +169,14 @@ def approach_context(state, bowler=None):
         batting_momentum=False,
         bowling_momentum=bool(stats.get("last_over_wickets")),
         carry=(state or {}).get("approach_carry"),
+        # +1 because the run recorded on the state covers the overs already
+        # bowled; the over about to be bowled is the next one in the sequence if
+        # the captain picks the same thing again. approach_context is called
+        # before the pick is known, so this is the count the pick would produce
+        # — which is exactly what the AI captain needs to see to avoid walking
+        # into it.
+        bat_repeat=_repeat_if_same(state, "bat"),
+        bowl_repeat=_repeat_if_same(state, "bowl"),
     )
 
 
@@ -208,8 +234,17 @@ COLLAPSE_HARD_FLOOR = 100
 COLLAPSE_HARD_FADE = 30
 
 # (Variance) One multiplier per innings — the innings' scoring "mood".
-VARIANCE_SIGMA = 0.11
-VARIANCE_LO, VARIANCE_HI = 0.76, 1.20
+#
+# Tightened from sigma 0.11 / clamp 0.76-1.20 after measuring the innings-total
+# distribution against real T20. The old spread put the interdecile range on a
+# Dusty track at 121 runs (P10 105, P90 226) around a median of 164; real
+# first-innings totals on one ground cluster far harder than that. It showed at
+# both ends of the harness at once — every pitch's P90 sat above its spec
+# ceiling, and the sub-100 rate on the turners was pushed over the global 2%
+# bar. A narrower mood fixes both tails without touching the median, which is
+# what "the Ceiling is a cap, not a baseline" was always meant to say.
+VARIANCE_SIGMA = 0.085
+VARIANCE_LO, VARIANCE_HI = 0.82, 1.15
 
 # (Fighting Match) Anti-capitulation corridor for the 2nd-innings chase. It
 # PURELY preserves wickets (no scoring help) so a losing chase bats deep and
@@ -631,6 +666,11 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         # What each captain actually picked, over by over (the analysis report's
         # approach duel). Never read by the simulation.
         "approach_log": [],
+        # How many overs in a row each side has now picked the same thing, and
+        # what that thing was. Drives the predictability layer — see
+        # engine.approach_modifiers.repeat_multipliers.
+        "bat_repeat": 0, "bowl_repeat": 0,
+        "last_bat_approach": None, "last_bowl_approach": None,
         "over_msg_ids": [],
         "commentary_log": [],
         "chat_id": chat_id, "is_private": is_private,
@@ -1130,6 +1170,50 @@ def _make_mpi_hook(state):
         return None
 
     return _mult_hook(mult)
+
+
+# Dot-ball pressure. A batter who has not scored for several balls stops
+# playing the percentages and goes looking for the boundary — which is exactly
+# why a maiden over is a rare, remarked-upon event in T20 rather than a routine
+# one. Measured before this existed, the engine bowled a maiden in 1.03% of
+# overs against a real-world 0.25%: dots were clustering (an intent holds for a
+# whole over, and the pressure layers reinforce it) with nothing modelling the
+# batter's response to being tied down.
+#
+# Keyed on the run of dots the batter has just played out, and it lifts the
+# wicket weight alongside the boundary weight, because the forced shot is the
+# one that gets people out. Nothing fires below three: two dots is a good over
+# so far, not pressure.
+DOT_PRESSURE = {
+    3: {"Dot": 0.82, "Single": 1.08, "Four": 1.12, "Six": 1.12, "Wicket": 1.06},
+    4: {"Dot": 0.60, "Single": 1.14, "Four": 1.24, "Six": 1.26, "Wicket": 1.12},
+    5: {"Dot": 0.40, "Single": 1.20, "Four": 1.36, "Six": 1.42, "Wicket": 1.18},
+}
+DOT_PRESSURE_MAX = max(DOT_PRESSURE)
+
+
+def _trailing_dots(over_timeline):
+    """How many dots the batter has just played out, unbroken.
+
+    Wides and no-balls neither break the run nor extend it — the batter did not
+    face a legal ball, so the pressure is unchanged.
+    """
+    run = 0
+    for mark in reversed(over_timeline or []):
+        if mark == "0":
+            run += 1
+        elif mark in ("WD", "NB"):
+            continue
+        else:
+            break
+    return run
+
+
+def _make_dot_pressure_hook(over_timeline):
+    """Weight hook for a batter who has been tied down. See ``DOT_PRESSURE``."""
+    dots = min(_trailing_dots(over_timeline), DOT_PRESSURE_MAX)
+    mult = DOT_PRESSURE.get(dots)
+    return _mult_hook(mult) if mult else None
 
 
 def _longest_dot_run(over_timeline):
@@ -1701,6 +1785,9 @@ def simulate_over(state):
             # bounded nudges in the same family as the three above.
             dps_hook = _make_dps_hook(state, pitch)
             mpi_hook = _make_mpi_hook(state)
+            # A batter who has been tied down for three or more balls starts
+            # looking for the boundary — the reason maidens are rare in T20.
+            dot_hook = _make_dot_pressure_hook(over_timeline)
             # LetsPlay clutch amplifier — layered AFTER traits so trait deltas
             # (Finisher/Clutch/Death/Yorker) land first, then chase intent scales
             # the six-or-bust spread. None for /cipl and non-finale balls.
@@ -1713,7 +1800,7 @@ def simulate_over(state):
             weight_hook = _compose_hooks(trait_hook, env_hook,
                                          wicket_hook, drama_hook,
                                          floor_hook, corridor_hook, variance_hook,
-                                         dps_hook, mpi_hook,
+                                         dps_hook, mpi_hook, dot_hook,
                                          clutch_hook)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
@@ -1983,6 +2070,14 @@ def simulate_over(state):
         _update_mpi(state, over_runs, over_wkts, over_timeline,
                     partnership_at_over_start, state.get("partnership_runs", 0),
                     bpu)
+        # Predictability: how long each side has now been doing the same thing.
+        # A different pick resets to 1 — the cost is for being readable, and one
+        # changed over buys the surprise back.
+        for side, pick in (("bat", bat_app), ("bowl", bowl_app)):
+            last_key, run_key = f"last_{side}_approach", f"{side}_repeat"
+            state[run_key] = (int(state.get(run_key) or 0) + 1
+                              if pick == state.get(last_key) else 1)
+            state[last_key] = pick
 
     # The records the analysis report reads are per-ball facts, not whole-over
     # tables, so a part-over still gets logged. A chase won or lost mid-over
@@ -2061,6 +2156,11 @@ def simulate_over(state):
         "combo": combo_name,
         "flavour": combo_flavour,
         "carry": approach_carry,
+        # How long each side has now been doing the same thing. The chat uses
+        # this to tell a captain their pattern has been read; the analysis report
+        # uses it to show the longest run of the innings.
+        "bat_repeat": int(state.get("bat_repeat") or 0),
+        "bowl_repeat": int(state.get("bowl_repeat") or 0),
     }
 
     # Advance the over pointer if the over completed and play continues
@@ -2401,6 +2501,11 @@ def end_first_innings(state):
     state["momentum_history"] = []
     state["pressure_history"] = []
     state["approach_log"] = []
+    # Nobody has read anybody yet: different players, different plans.
+    state["bat_repeat"] = 0
+    state["bowl_repeat"] = 0
+    state["last_bat_approach"] = None
+    state["last_bowl_approach"] = None
     # Clear sequence-aware commentary flags so innings-1's final ball can't
     # trigger a back-to-back / post-wicket / dot-streak line on the first
     # delivery of the chase.

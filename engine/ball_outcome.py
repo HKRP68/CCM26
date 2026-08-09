@@ -894,21 +894,31 @@ def compute_weighted_prob(
         effective_batting *= 0.94 if _is_lista else 0.90
 
     # Graduated confidence based on runs scored.
-    # ListA keeps this curve flatter to reduce opener snowballing.
+    #
+    # The curve plateaus deliberately. A set batter really is harder to bowl at,
+    # but the bonus does not keep growing — it is worth the same at 90 as at 50,
+    # because by then everything that being "in" buys you has already been
+    # bought. The T20 branch used to top out at 1.20 (1.26 with the balls-faced
+    # layer below), which measured as centuries in 20% of innings against a real
+    # rate near 3.5%, and openers striking at 173 against a real ~135: once a
+    # batter passed fifty they were a quarter better than their rating for the
+    # rest of the night and simply ran away. The ListA branch had already been
+    # flattened for exactly this reason — see the note it used to carry about
+    # opener snowballing — and this brings T20 into line with it.
     if batter_runs >= 50:
-        effective_batting *= 1.10 if _is_lista else 1.20
+        effective_batting *= 1.10 if _is_lista else 1.12
     elif batter_runs >= 35:
-        effective_batting *= 1.07 if _is_lista else 1.15
+        effective_batting *= 1.07 if _is_lista else 1.09
     elif batter_runs >= 20:
-        effective_batting *= 1.05 if _is_lista else 1.10
+        effective_batting *= 1.05 if _is_lista else 1.06
     elif batter_runs >= 10:
-        effective_batting *= 1.02 if _is_lista else 1.05
+        effective_batting *= 1.02 if _is_lista else 1.03
 
     # Balls-faced confidence layer (independent of runs).
     if balls_faced >= 20:
-        effective_batting *= 1.02 if _is_lista else 1.05
+        effective_batting *= 1.02 if _is_lista else 1.03
     elif balls_faced >= 12:
-        effective_batting *= 1.01 if _is_lista else 1.03
+        effective_batting *= 1.01 if _is_lista else 1.02
 
     # Extras depend on bowler error, not the batting contest — handle first.
     if outcome_type == "Extras":
@@ -953,25 +963,114 @@ def compute_weighted_prob(
 # -----------------------------------------------------------------------------
 # 4b) Wicket type selection based on bowling style
 # -----------------------------------------------------------------------------
-def _get_wicket_type_by_bowling(bowling_type: str):
-    """Return (types, weights) for wicket dismissal based on bowling style.
+# -----------------------------------------------------------------------------
+# How a batter gets out
+# -----------------------------------------------------------------------------
+# Dismissal shares, as percentages, measured against real T20 cricket. Catching
+# is the overwhelming mode in this format — holing out to the deep is the
+# signature T20 wicket — and LBW is comparatively rare because so few batters
+# are playing back and across to a ball that would hit the stumps.
+#
+# Run Out is deliberately the SAME in every row. It is a fielding accident that
+# happens between the wickets; the style of the bowler who happened to deliver
+# the ball has nothing to do with it, so varying it by bowling type (as this
+# table used to, 8% for pace against 12% for spin) was modelling a relationship
+# that does not exist.
+#
+# The pace row's Stumped is 0.5% rather than zero because it does happen — a
+# batter dragged out of the crease by a slower ball with the keeper up — but it
+# is a freak, not a mode. It used to be 4%, which is eight times too often.
+#
+# The base rows sit a little under the real-world LBW share on purpose: the
+# phase and intent layers below are net LBW-positive across a normal spread of
+# captaincy (the powerplay and the two accumulating intents all push it up),
+# so a base set at the observed figure lands above it once they have applied.
+# These numbers are the ones that make the *measured output* match reality.
+_DISMISSAL_BASE = {
+    #             Caught Bowled  LBW  RunOut Stumped
+    "pace":      (62.5,  21.0,   7.0,  9.0,   0.5),
+    "spin":      (52.0,  17.0,   9.0,  9.0,  13.0),
+    "default":   (57.0,  19.5,   8.5,  9.0,   6.0),
+}
+_DISMISSAL_TYPES = ("Caught", "Bowled", "LBW", "Run Out", "Stumped")
 
-    Includes Stumped as a dismissal mode. Spinners produce far more stumpings
-    than pace bowlers, matching real T20 cricket patterns.
+# What the phase of the innings does to that mix. A wicket in the last four
+# overs is nearly always a catch, because nearly every batter is swinging; the
+# stumps come back into play with the new ball, and the desperate second run at
+# the death costs more batters their ground.
+_DISMISSAL_PHASE = {
+    "powerplay": {"Caught": 0.92, "Bowled": 1.25, "LBW": 1.25, "Run Out": 0.85},
+    "middle":    {},
+    "death":     {"Caught": 1.15, "Bowled": 0.75, "LBW": 0.60, "Run Out": 1.40},
+}
+
+# And what the batter was *trying* to do. Someone slogging gets caught in the
+# deep; someone defending gets bowled through the gate or trapped in front;
+# someone busy turning ones into twos runs themselves out.
+_DISMISSAL_INTENT = {
+    "ultra":      {"Caught": 1.30, "Bowled": 0.70, "LBW": 0.55, "Stumped": 1.20},
+    "aggressive": {"Caught": 1.15, "Bowled": 0.85, "LBW": 0.75, "Stumped": 1.10},
+    "balanced":   {},
+    "rotate":     {"Caught": 0.85, "Bowled": 1.15, "LBW": 1.20, "Run Out": 1.35},
+    "defensive":  {"Caught": 0.70, "Bowled": 1.40, "LBW": 1.40, "Run Out": 0.80},
+}
+
+_SPIN_STYLES = ("Off spin", "Leg spin", "Finger spin", "Wrist spin")
+_PACE_STYLES = ("Fast", "Fast-medium", "Medium-fast")
+
+
+def _dismissal_phase(over_number, format_config=None, approach_context=None):
+    """Which third of the innings this ball is in, for the dismissal mix.
+
+    Prefers the phase the caller already worked out — CIPL builds one every over
+    and passes it in the approach context, and using it keeps the scorecard's
+    dismissals agreeing with the phase the rest of the engine bowled the over in.
+    Falls back to the over number so callers without an approach layer still get
+    a death over that looks like one. ``over_number`` is 0-based.
     """
-    if bowling_type in ("Fast", "Fast-medium", "Medium-fast"):
-        # Pace bowlers: more bowled/LBW, very few stumpings
-        types   = ["Caught", "Bowled", "LBW", "Run Out", "Stumped"]
-        weights = [0.40,     0.28,     0.20,   0.08,      0.04]
-    elif bowling_type in ("Off spin", "Leg spin", "Finger spin", "Wrist spin"):
-        # Spinners: high stumping rate, more caught (bat-pad)
-        types   = ["Caught", "Stumped", "Bowled", "LBW", "Run Out"]
-        weights = [0.30,     0.25,      0.18,    0.15,   0.12]
+    ctx_phase = (approach_context or {}).get("phase")
+    if ctx_phase in _DISMISSAL_PHASE:
+        return ctx_phase
+    pp_end, death_start = 5, 16          # 0-based: overs 1-6 and 17-20 of a T20
+    if format_config is not None:
+        try:
+            if format_config.powerplay_phases:
+                pp_end = format_config.powerplay_phases[-1].end
+            if format_config.death_phase is not None:
+                death_start = format_config.death_phase.start
+        except Exception:
+            pass
+    if over_number <= pp_end:
+        return "powerplay"
+    if over_number >= death_start:
+        return "death"
+    return "middle"
+
+
+def _get_wicket_type_by_bowling(bowling_type: str, phase: str = None,
+                                batting_approach: str = None):
+    """Return ``(types, weights)`` for how this wicket fell.
+
+    Three layers, in the order a commentator would describe them: what the
+    bowler bowls, where in the innings it is, and what the batter was trying to
+    do. Only the first is required — a caller with no phase or intent gets the
+    plain per-style mix, so nothing outside CIPL had to change to keep working.
+    """
+    if bowling_type in _PACE_STYLES:
+        base = _DISMISSAL_BASE["pace"]
+    elif bowling_type in _SPIN_STYLES:
+        base = _DISMISSAL_BASE["spin"]
     else:
-        # Medium pace / default: balanced distribution
-        types   = ["Caught", "Bowled", "LBW", "Run Out", "Stumped"]
-        weights = [0.35,     0.25,     0.20,   0.10,      0.10]
-    return types, weights
+        base = _DISMISSAL_BASE["default"]
+
+    phase_mult = _DISMISSAL_PHASE.get(phase or "", {})
+    intent_mult = _DISMISSAL_INTENT.get(batting_approach or "", {})
+    if not phase_mult and not intent_mult:
+        return list(_DISMISSAL_TYPES), list(base)
+
+    weights = [w * phase_mult.get(t, 1.0) * intent_mult.get(t, 1.0)
+               for t, w in zip(_DISMISSAL_TYPES, base)]
+    return list(_DISMISSAL_TYPES), weights
 
 # -----------------------------------------------------------------------------
 # 5) Main outcome selection function: calculate_outcome
@@ -1462,8 +1561,14 @@ def calculate_outcome(
         result["runs"] = 0
         result["batter_out"] = True
 
-        # Decide wicket type based on bowling style (A7: varies by bowling type, A6: includes Stumped)
-        types, weights_pct = _get_wicket_type_by_bowling(bowling_type)
+        # How the wicket fell: bowling style, then the phase, then what the
+        # batter was attempting. The phase comes off the approach context when
+        # the caller has one (CIPL builds it every over); otherwise it is
+        # derived from the over number, so /cm and /wpm get it too.
+        types, weights_pct = _get_wicket_type_by_bowling(
+            bowling_type,
+            phase=_dismissal_phase(over_number, format_config, approach_context),
+            batting_approach=batting_approach)
         if free_hit:
             # On a free hit (the ball after a no-ball) the only legal dismissal
             # is a run out — bowled/caught/LBW/stumped do not count.

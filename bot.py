@@ -231,6 +231,13 @@ from handlers.achievements import (
     achievements_close_callback,
 )
 
+# /matchhelp — the Approach-game manual for /letsplay and /cipl
+from handlers.matchhelp import (
+    matchhelp_handler,
+    matchhelp_go_callback,
+    matchhelp_close_callback,
+)
+
 # /howto handler
 from handlers.howto import (
     howto_handler,
@@ -341,6 +348,14 @@ PRIVATE_ONLY_COMMANDS = frozenset({
     # Rules pages. Their parent commands (/cmuchem, /fantasy) stay in the group
     # menu and both print a "…for the full guide" pointer to these.
     "chemhelp", "fantasyguide",
+    # Personal fantasy readouts. These were ALREADY absent from the group menu —
+    # the list had grown past Telegram's 100-command ceiling and _clamped was
+    # dropping exactly these three off the tail, silently apart from a log line.
+    # Listing them here changes nothing a group user sees; it makes the omission
+    # a decision instead of an accident, and it is the right decision anyway
+    # (they answer about you, in a chat full of other people). /fantasy itself
+    # stays in the group menu.
+    "myfantasy", "fantasyleaderboard", "fantasystats",
 })
 
 # The stat and inventory readouts that answer in DM only. Their handlers are
@@ -458,6 +473,7 @@ BOT_MENU_COMMANDS = (
     ("myquest", "View and claim quest rewards"),
     ("achievements", "View your achievements"),
     ("howto", "Open the help guide"),
+    ("matchhelp", "How to play LetsPlay & CIPL"),
     ("invite", "Invite friends and view referrals"),
     ("redeem", "Redeem a reward code"),
     ("botvsbot", "Configure a bot-versus-bot match"),
@@ -1624,6 +1640,14 @@ def main():
         app.add_handler(CommandHandler(["howto", "help", "guide"], howto_handler))
         app.add_handler(CallbackQueryHandler(howto_tab_callback, pattern=r"^howto_tab_"))
         app.add_handler(CallbackQueryHandler(howto_close_callback, pattern=r"^howto_close_"))
+
+        # ── /matchhelp — the Approach game, page by page ─────────────
+        app.add_handler(CommandHandler(["matchhelp", "mhelp", "howtoplay"],
+                                       matchhelp_handler))
+        app.add_handler(CallbackQueryHandler(matchhelp_go_callback,
+                                             pattern=r"^mhelp_go_"))
+        app.add_handler(CallbackQueryHandler(matchhelp_close_callback,
+                                             pattern=r"^mhelp_close_"))
 
         # ── /chemhelp Chemistry guide ───────────────────────────────
         app.add_handler(CommandHandler(["chemhelp", "chemguide"], chemhelp_handler))
