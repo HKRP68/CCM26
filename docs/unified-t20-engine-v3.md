@@ -62,6 +62,12 @@ layer, the death surge and the MPI bands between them moved par most of the way,
 and only Green and Dusty needed their `run_factor` and wicket weight retuned to
 land in band.
 
+`Dead` is absent from that table because it is absent from the sweep:
+`tools/pitch_calibration.py`'s `SPEC_PITCHES` covers the seven surfaces the doc
+gives a par band for. Dead is fully configured — a step above Flat, with its own
+innings-2 rule and chase grid — but it has no measured row, and inventing one for
+a table headed "measured over 300 matches per pitch" would be worse than the gap.
+
 **This changes existing statistics.** Averages and strike rates step up from the
 deploy onward, and totals from before it are not comparable. Nothing needs
 migrating; the numbers simply describe a different game after this point.
@@ -186,6 +192,16 @@ The ball marks are the one thing the report needed that was not already tracked:
 entry. An over logged before that change still renders — its row simply has no
 marks, and a match with none at all gets a five-column table rather than a column
 of blanks.
+
+The duel record and the chase history are written for **every over that had a
+ball bowled**, not only completed ones. Only the momentum and pressure tables
+need the whole-over gate — they are written in overs, and a two-ball over would
+read as a strangling. The other records are per-ball facts, and gating them the
+same way dropped the deciding over of any chase won or lost mid-over: the one
+over the report exists to explain. The win-probability series also gets an
+explicit terminal point at the result, because `chase_chance_now` has nothing to
+say once there is no chance left to estimate, and a chart that stops an over
+short reads as though the match never finished.
 
 **The duel reveals both captains' picks in every match, bot matches included**,
 and that is a deliberate line rather than an oversight. `_render_over_summary`

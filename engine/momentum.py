@@ -104,11 +104,17 @@ def update_momentum(momentum, over):
     if before < 100 <= after:
         m += MOM_PARTNERSHIP_100
 
-    runs = int(o.get("runs") or 0)
-    if runs >= MOM_BIG_OVER_RUNS:
-        m += MOM_BIG_OVER
-    elif runs < MOM_QUIET_OVER_RUNS:
-        m += MOM_QUIET_OVER
+    # An absent ``runs`` contributes nothing; an explicit ``runs=0`` is a quiet
+    # over and costs. The distinction matters because every other key here is
+    # optional in the same way, and reading "no information" as "nothing was
+    # scored" would let a caller that cannot see the runs drift the accumulator
+    # downward every over.
+    if o.get("runs") is not None:
+        runs = int(o["runs"] or 0)
+        if runs >= MOM_BIG_OVER_RUNS:
+            m += MOM_BIG_OVER
+        elif runs < MOM_QUIET_OVER_RUNS:
+            m += MOM_QUIET_OVER
 
     if o.get("is_maiden"):
         m += MOM_MAIDEN

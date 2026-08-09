@@ -1859,7 +1859,13 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
             await _send_match_analysis(
                 context, mid, main_state,
                 {"tie": False, "winner": win["name"], "loser": lose["name"],
-                 "margin": margin, "margin_type": margin_type},
+                 "margin": margin, "margin_type": margin_type,
+                 # A countback win has no run or wicket margin — margin is 0 and
+                 # margin_type is the countback key — so the report gets the
+                 # finished phrase for the same reason the card above does,
+                 # rather than printing "won by 0 sixes".
+                 "margin_text": (margin_text if decided_by in _COUNTBACK_TEXT
+                                 else None)},
                 list(markup.inline_keyboard) if markup else None)
     except Exception:
         logger.exception("Super Over match analysis failed (%s)", mid)

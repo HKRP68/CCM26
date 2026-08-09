@@ -2625,6 +2625,10 @@ async def _complete_match(context, mid, state):
     release_match_lock(mid)
 
 
+# Strong references to the in-flight storage-channel uploads (see below).
+_ARCHIVE_TASKS = set()
+
+
 async def _send_match_analysis(context, mid, state, result, keyboard_rows=None):
     """Render the match analysis report and send it into the match chat.
 
@@ -2638,21 +2642,30 @@ async def _send_match_analysis(context, mid, state, result, keyboard_rows=None):
 
     filename = analysis_filename(mid)
     result = result or {}
-    # Read on the loop (this can reach the state cache / DB), render off it.
-    try:
-        from services.match_webapp_service import build_scorecard
-        scorecard = build_scorecard(mid, None)
-    except Exception:
-        logger.exception("cipl analysis scorecard build failed for match %s", mid)
-        scorecard = None
     try:
         potm = _cipl_calc_potm(state, None if result.get("tie") else result.get("winner"))
     except Exception:
         logger.exception("cipl analysis POTM failed for match %s", mid)
         potm = None
 
-    html = await asyncio.to_thread(
-        build_match_analysis_html, state, result, scorecard, potm)
+    def _render():
+        """Build the scorecard and render the page, both off the event loop.
+
+        ``build_scorecard`` reads the match state, which can miss the process
+        cache and fall through to a blocking MatchState query — so it belongs in
+        the worker thread with the rendering rather than in front of it. It has
+        no running-loop dependency of its own (unlike ``save_final_scorecard``,
+        which schedules the text archive and must stay on the loop).
+        """
+        try:
+            from services.match_webapp_service import build_scorecard
+            scorecard = build_scorecard(mid, None)
+        except Exception:
+            logger.exception("cipl analysis scorecard build failed for match %s", mid)
+            scorecard = None
+        return build_match_analysis_html(state, result, scorecard, potm)
+
+    html = await asyncio.to_thread(_render)
     if not html:
         logger.warning("cipl match analysis came back empty for match %s", mid)
         return
@@ -2662,10 +2675,15 @@ async def _send_match_analysis(context, mid, state, result, keyboard_rows=None):
     try:
         from services import tg_storage_service
         if tg_storage_service.is_configured():
-            asyncio.get_running_loop().create_task(
+            task = asyncio.get_running_loop().create_task(
                 tg_storage_service.upload_text_async(
                     html, filename,
                     caption=f"📊 Match analysis · Match {mid}"))
+            # The loop keeps only a weak reference to a task, so a fire-and-forget
+            # upload can be collected mid-flight. upload_text_async swallows its
+            # own errors, which would make that look like nothing happened at all.
+            _ARCHIVE_TASKS.add(task)
+            task.add_done_callback(_ARCHIVE_TASKS.discard)
     except Exception:
         logger.exception("cipl analysis archive failed for match %s", mid)
 

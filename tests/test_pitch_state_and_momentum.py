@@ -132,8 +132,18 @@ class MomentumTests(unittest.TestCase):
         self.assertEqual(low, -M.MOMENTUM_CAP)
 
     def test_a_missing_event_contributes_nothing(self):
-        self.assertEqual(M.update_momentum(0.4, {}), 0.4 + M.MOM_QUIET_OVER)
-        self.assertEqual(M.update_momentum(None, None), 0.0 + M.MOM_QUIET_OVER)
+        """Every key is optional, and that has to include ``runs``. Reading an
+        absent runs count as a quiet over would drift the accumulator downward
+        every over for a caller that simply cannot see the score."""
+        self.assertEqual(M.update_momentum(0.4, {}), 0.4)
+        self.assertEqual(M.update_momentum(None, None), 0.0)
+        self.assertEqual(M.update_momentum(0.4, {"boundaries": 1}),
+                         0.4 + M.MOM_BOUNDARY)
+
+    def test_an_explicit_zero_is_still_a_quiet_over(self):
+        """Absent is not the same as nought — a maiden really did cost them."""
+        self.assertAlmostEqual(M.update_momentum(0.4, {"runs": 0}),
+                               0.4 + M.MOM_QUIET_OVER)
 
 
 class PressureTests(unittest.TestCase):
@@ -269,6 +279,25 @@ class LiveWiringTests(unittest.TestCase):
         for over in self.state.get("inn1_approach_log") or []:
             wickets = sum(1 for m in over["timeline"] if m == "W")
             self.assertEqual(wickets, over["wickets"], over)
+
+    def test_no_over_is_missing_from_the_duel_record(self):
+        """A chase won or lost mid-over used to be left out of the approach log
+        and the chase history, because both were gated behind ``over_completed``
+        along with the momentum tables — so the analysis report dropped the one
+        over that decided the match from the duel table, the match-up grid and
+        the win-probability chart."""
+        for key, runs_key in (("inn1_approach_log", "inn1_over_runs"),
+                              ("approach_log", "over_runs")):
+            self.assertEqual(len(self.state[key]), len(self.state[runs_key]), key)
+
+    def test_the_win_probability_series_reaches_the_result(self):
+        """chase_chance_now has nothing to say once the chase is decided, so the
+        deciding over needs an explicit terminal point — otherwise the chart
+        stops an over short and reads as though the match never finished."""
+        history = self.state.get("chase_history") or []
+        self.assertTrue(history)
+        self.assertIn(history[-1]["chasing"], (0, 100))
+        self.assertEqual(history[-1]["over"], self.state["current_over"])
 
     def test_the_pitch_trace_is_recorded_for_the_chase(self):
         trace = self.state.get("dps_trace") or []

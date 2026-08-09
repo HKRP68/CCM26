@@ -35,9 +35,18 @@ from engine import ground_config
 logger = logging.getLogger(__name__)
 
 # Phase windows, as fractions of the innings, so the report agrees with
-# services.cipl_match.approach_phase for every format it can be handed.
+# services.cipl_match.approach_phase for every format it can be handed. The
+# death fraction is 0.20 because that is what the engine uses: its short-format
+# branch is round(total * 0.20), and its 20-over branch is DEATH_UNITS = 4, which
+# is the same number. A report that filed over 16 under Death while the engine
+# called it Middle would disagree with the `phase` it prints from the approach
+# log two sections further down.
 _PP_FRACTION = 0.30
-_DEATH_FRACTION = 0.25
+_DEATH_FRACTION = 0.20
+
+# The Hundred's powerplay is five sets, not six — the one place the fraction
+# above does not reproduce the engine, which reads it from the format spec.
+_HUNDRED_POWERPLAY = 5
 
 # Momentum points → win-probability points, for ranking turning points together.
 _MOMENTUM_WEIGHT = 10.0
@@ -170,7 +179,10 @@ def _manhattan_svg(series):
                             f'cy="{y - 6 - w * 9:.1f}" r="3.4"/>')
     y_labels = [(f / peak, str(int(f))) for f in
                 (0, peak / 2, peak) if peak] or [(0, "0")]
-    return _svg(_axes(y_labels, overs, _x_ticks(overs)) + "".join(bars))
+    names = " and ".join(s[0] for s in series if s[0])
+    return _svg(_axes(y_labels, overs, _x_ticks(overs)) + "".join(bars),
+                label=f"Runs scored in each over by {names}" if names
+                else "Runs scored in each over")
 
 
 def _worm_svg(series, overs_total):
@@ -193,10 +205,13 @@ def _worm_svg(series, overs_total):
         out.append(f'<polyline class="worm {cls}" points="{" ".join(pts)}"/>'
                    + "".join(marks))
     y_labels = [(f / peak, str(int(f))) for f in (0, peak / 2, peak)]
-    return _svg(_axes(y_labels, overs, _x_ticks(overs)) + "".join(out))
+    names = " and ".join(s[0] for s in series if s[0])
+    return _svg(_axes(y_labels, overs, _x_ticks(overs)) + "".join(out),
+                label=f"Cumulative score over by over for {names}" if names
+                else "Cumulative score over by over")
 
 
-def _band_svg(series, lo, hi, overs_total, zero_line=True):
+def _band_svg(series, lo, hi, overs_total, zero_line=True, label=""):
     """Signed series (momentum, pressure) drawn about a zero line."""
     plot_w, plot_h = _W - _PAD_L - _PAD_R, _H - _PAD_T - _PAD_B
     overs = max(overs_total, max([len(s[1]) for s in series] + [1]))
@@ -215,12 +230,22 @@ def _band_svg(series, lo, hi, overs_total, zero_line=True):
         if pts:
             out.append(f'<polyline class="worm {cls}" points="{" ".join(pts)}"/>')
     y_labels = [((v - lo) / span, f"{v:g}") for v in (hi, (hi + lo) / 2.0, lo)]
-    return _svg(_axes(y_labels, overs, _x_ticks(overs)) + "".join(out))
+    return _svg(_axes(y_labels, overs, _x_ticks(overs)) + "".join(out),
+                label=label)
 
 
-def _svg(body):
+def _svg(body, label=""):
+    """Wrap chart body in an SVG.
+
+    ``label`` becomes the first-child ``<title>``, which is what names a
+    ``role="img"`` element to a screen reader. The phase and duel tables carry
+    their numbers as text, but the worm and the momentum band have no text
+    equivalent anywhere in the file — without a title they announce as an
+    unnamed image and the section is simply missing for that reader.
+    """
+    title = f"<title>{_e(label)}</title>" if label else ""
     return (f'<svg class="chart" viewBox="0 0 {_W} {_H}" role="img">'
-            f'{body}</svg>')
+            f'{title}{body}</svg>')
 
 
 def _legend(items):
@@ -230,6 +255,28 @@ def _legend(items):
 
 
 # ── report sections ──────────────────────────────────────────────────
+
+def _live_overs(state):
+    """How far the innings in progress has got, as the live match writes it.
+
+    ``end_first_innings`` archives the first innings as ``inn1_overs``; there is
+    no matching ``inn2_overs`` on the state, because the second innings is the
+    live one and its figure is produced on demand by ``cipl_match.format_overs``.
+    Reuse that rather than re-deriving it — it is the function that knows The
+    Hundred counts balls, and a report that formatted overs its own way would
+    drift from the scorecard beside it.
+
+    Imported locally: this module is otherwise engine-only, and a match state
+    that did not come from CIPL still renders (with a blank figure) rather than
+    failing to import.
+    """
+    try:
+        from services.cipl_match import format_overs
+        return format_overs(state)
+    except Exception:
+        logger.exception("match analysis: could not format the live overs")
+        return ""
+
 
 def _innings_views(state):
     """``[(number, team, runs, wickets, overs, over_runs, fow, ...)]`` for the
@@ -260,7 +307,7 @@ def _innings_views(state):
         "team": state.get("bat_team_name", ""),
         "runs": _num(state.get("total_runs")),
         "wickets": _num(state.get("total_wickets")),
-        "overs": state.get("inn2_overs") or "",
+        "overs": _live_overs(state),
         "over_runs": list(state.get("over_runs") or []),
         "fow": list(state.get("fow") or []),
         "partnerships": list(state.get("partnership_history") or []),
@@ -274,6 +321,7 @@ def _innings_views(state):
         # The Hundred is scored in sets of five, not overs, and the report says so
         # everywhere the live match does.
         v["unit"] = "Over" if bpu == 6 else "Set"
+        v["powerplay"] = None if bpu == 6 else _HUNDRED_POWERPLAY
     return views
 
 
@@ -285,7 +333,7 @@ def _phase_table(views, overs_total, pitch):
     for v in views:
         buckets = {"Powerplay": [0, 0, 0], "Middle": [0, 0, 0], "Death": [0, 0, 0]}
         for idx, runs in enumerate(v["over_runs"]):
-            phase = _phase_of(idx + 1, overs_total)
+            phase = _phase_of(idx + 1, overs_total, v.get("powerplay"))
             buckets[phase][0] += runs
             buckets[phase][1] += v["wkt_by_over"].get(idx + 1, 0)
             buckets[phase][2] += 1
@@ -571,6 +619,13 @@ def _turning_points(views, chase_history):
     move in the chase. Deliberately less than a full swing in win probability,
     because momentum describes how an over *felt* and win probability describes
     what it *cost*.
+
+    Momentum is read from the **first innings only**. In the second there is a
+    target, so win probability measures the same swings in the unit that matters,
+    and counting both would let one over enter the ranking twice. The cost of
+    that choice: a match with no ``chase_history`` — one abandoned before the
+    chase, or replayed from a state written before the chase was tracked — gets
+    turning points from the first innings alone.
     """
     events = []
     prev = None
@@ -637,8 +692,17 @@ def build_match_analysis_html(state, result=None, scorecard=None, potm=None):
     if result and result.get("tie"):
         headline = "Match tied"
     elif result and result.get("winner"):
-        headline = (f"{result['winner']} beat {result['loser']} by "
-                    f"{_num(result.get('margin'))} {_e(result.get('margin_type'))}")
+        # ``margin_text`` is the finished phrase, used where a run/wicket margin
+        # would be nonsense — a Super Over decided on countback has a margin of
+        # 0, and "beat X by 0 sixes" is what the summary card already learned not
+        # to print. Nothing is escaped here; the whole headline is escaped once,
+        # below, where it is rendered.
+        margin_text = result.get("margin_text")
+        headline = (
+            f"{result['winner']} beat {result['loser']} — {margin_text}"
+            if margin_text else
+            f"{result['winner']} beat {result['loser']} by "
+            f"{_num(result.get('margin'))} {result.get('margin_type')}")
     else:
         headline = "Result unavailable"
 
@@ -661,13 +725,13 @@ def build_match_analysis_html(state, result=None, scorecard=None, potm=None):
                     f"s{v['number']}") for v in views]
     chase_history = state.get("chase_history") or []
 
-    sections = [("Scorecards", _scorecard_section(scorecard))]
-
-    sections.insert(0, ("Phase by phase", _phase_table(views, overs_total, pitch)))
-    sections.insert(1, ("Runs per over", _manhattan_svg(series_bars)
-                        + _legend([(v["team"], f"s{v['number']}") for v in views])))
-    sections.insert(2, ("The worm", _worm_svg(series_bars, overs_total)
-                        + _legend([(v["team"], f"s{v['number']}") for v in views])))
+    legend = _legend([(v["team"], f"s{v['number']}") for v in views])
+    sections = [
+        ("Phase by phase", _phase_table(views, overs_total, pitch)),
+        ("Runs per over", _manhattan_svg(series_bars) + legend),
+        ("The worm", _worm_svg(series_bars, overs_total) + legend),
+        ("Scorecards", _scorecard_section(scorecard)),
+    ]
 
     mom_series = [(v["team"], v["momentum"], f"s{v['number']}") for v in views
                   if v["momentum"]]
@@ -677,7 +741,8 @@ def build_match_analysis_html(state, result=None, scorecard=None, potm=None):
         sections.append((
             "Momentum &amp; pressure",
             _band_svg(mom_series + pressure, -momentum_engine.MOMENTUM_CAP,
-                      momentum_engine.MOMENTUM_CAP, overs_total)
+                      momentum_engine.MOMENTUM_CAP, overs_total,
+                      label="Batting momentum and chasing pressure, over by over")
             + _legend([(lbl, cls) for lbl, _v, cls in mom_series + pressure])
             + "<p class='note'>Momentum runs from &minus;2 (collapsed) to "
               "+2 (unstoppable). Pressure is the chasing side's; it counts "
@@ -688,7 +753,8 @@ def build_match_analysis_html(state, result=None, scorecard=None, potm=None):
             "Win probability",
             _band_svg([("Chasing side",
                         [_num(c.get("chasing")) for c in chase_history], "s2")],
-                      0, 100, overs_total, zero_line=False)
+                      0, 100, overs_total, zero_line=False,
+                      label="The chasing side's win probability, over by over")
             + "<p class='note'>The chasing side's live chance, over by over.</p>"))
 
     turns = _turning_points(views, chase_history)

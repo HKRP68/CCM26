@@ -202,6 +202,20 @@ def nothing_to_lose_modifier(target, pitch):
     return 0
 
 
+# Section 9 Step 4. No chase is safe until the winning runs are hit, and while
+# it is mathematically possible somebody has done it — so the live estimate never
+# reads as certainty in either direction. 0% is reserved for elimination, which
+# is :func:`apply_feasibility`'s business, not this function's.
+UPPER_CAP = 95
+LOWER_CAP = 3
+
+# Step 2 now contributes more terms than it used to (powerplay, deterioration,
+# nothing-to-lose, the death bowler, and the MPI pair), so the total swing is
+# allowed to be larger — but still small enough that the matrix, not the
+# modifiers, decides what kind of chase this is.
+MODIFIER_CLAMP = 25
+
+
 def feasibility_factor(runs_needed, balls_left):
     """0..1 scale applied to the chasing chance for the balls actually left.
 
@@ -218,8 +232,9 @@ def feasibility_factor(runs_needed, balls_left):
 
 
 def apply_feasibility(info, runs_needed, balls_left):
-    """Scale an ``info`` dict's chasing chance toward 1% as the required rate
-    becomes unachievable for the balls left. Mutates and returns ``info``."""
+    """Scale an ``info`` dict's chasing chance toward ``LOWER_CAP`` as the
+    required rate becomes unachievable for the balls left, and to 0 once it is
+    not achievable at all. Mutates and returns ``info``."""
     f = feasibility_factor(runs_needed, balls_left)
     if f <= 0.0:
         # Not "unlikely" — gone. Six an over off the last ball is not a chase.
@@ -230,20 +245,6 @@ def apply_feasibility(info, runs_needed, balls_left):
     info["chasing_chance"] = chance
     info["defending_chance"] = 100 - chance
     return info
-
-
-# Section 9 Step 4. No chase is safe until the winning runs are hit, and while
-# it is mathematically possible somebody has done it — so the live estimate never
-# reads as certainty in either direction. 0% is reserved for elimination, which
-# is :func:`apply_feasibility`'s business, not this function's.
-UPPER_CAP = 95
-LOWER_CAP = 3
-
-# Step 2 now contributes more terms than it used to (powerplay, deterioration,
-# nothing-to-lose, the death bowler, and the MPI pair), so the total swing is
-# allowed to be larger — but still small enough that the matrix, not the
-# modifiers, decides what kind of chase this is.
-MODIFIER_CLAMP = 25
 
 
 def final_chase_chance(runs_needed, wickets_lost, batter_mod=0, bowler_mod=0,

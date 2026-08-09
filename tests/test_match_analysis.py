@@ -52,7 +52,9 @@ def _state(**over):
              "wickets": 0, "combo": "The Chess Match"}],
 
         "bat_team_name": "Titan Kings", "total_runs": 171, "total_wickets": 8,
-        "inn2_overs": "20.0",
+        # No inn2_overs: nothing writes one. The live innings' figure comes from
+        # cipl_match.format_overs, which reads these two.
+        "current_over": 20, "current_ball": 6,
         "over_runs": [8, 7, 11, 6, 9, 12, 5, 8, 7, 10,
                       4, 9, 8, 6, 11, 7, 9, 12, 10, 12],
         "fow": [[40, 1, "G Gill", "5.1"], [88, 2, "H Kishan", "10.4"],
@@ -138,6 +140,19 @@ class ContentTests(unittest.TestCase):
     def test_both_innings_totals_are_reported(self):
         self.assertIn("186/6", self.html)
         self.assertIn("171/8", self.html)
+
+    def test_the_second_innings_shows_how_far_it_got(self):
+        """There is no ``inn2_overs`` on a live state — only the archived
+        ``inn1_overs`` — so the second innings figure has to be derived the way
+        the live match derives it, or the header reads "171/8" with no overs."""
+        self.assertIn("<span class='runs'>171/8</span><span class='ov'>20.0</span>",
+                      self.html)
+
+    def test_a_second_innings_stopped_mid_over_reports_the_part_over(self):
+        html = ma.build_match_analysis_html(
+            _state(current_over=18, current_ball=3), _RESULT, None)
+        self.assertIn("<span class='runs'>171/8</span><span class='ov'>17.3</span>",
+                      html)
 
     def test_the_result_and_potm_are_reported(self):
         self.assertIn("Royal Rangers beat Titan Kings by 15 runs", self.html)
@@ -298,6 +313,42 @@ class MatchupGridTests(unittest.TestCase):
         self.assertIn("DEF Defensive", self.html)
 
 
+class HeadlineTests(unittest.TestCase):
+    def test_a_run_margin_reads_normally(self):
+        html = ma.build_match_analysis_html(_state(), _RESULT, _SCORECARD)
+        self.assertIn("Royal Rangers beat Titan Kings by 15 runs", html)
+
+    def test_a_countback_win_uses_the_finished_phrase(self):
+        """A Super Over decided on countback has a margin of 0 and a margin_type
+        of the countback key, so the default wording is "by 0 sixes"."""
+        result = {"winner": "Royal Rangers", "loser": "Titan Kings",
+                  "margin": 0, "margin_type": "sixes", "tie": False,
+                  "margin_text": "on countback (more sixes)"}
+        html = ma.build_match_analysis_html(_state(), result, _SCORECARD)
+        self.assertIn("on countback (more sixes)", html)
+        self.assertNotIn("by 0 sixes", html)
+
+    def test_the_headline_is_escaped_exactly_once(self):
+        result = {"winner": "A & B", "loser": "C", "margin": 5,
+                  "margin_type": "runs", "tie": False}
+        html = ma.build_match_analysis_html(_state(), result, _SCORECARD)
+        # One escape pass turns & into &amp;; a second would give &amp;amp;.
+        self.assertIn("A &amp; B beat C by 5 runs", html)
+        self.assertNotIn("&amp;amp;", html)
+
+
+class ChartAccessibilityTests(unittest.TestCase):
+    def test_every_chart_is_named(self):
+        """A role="img" with no title announces as an unnamed image, and the
+        worm and momentum band have no text equivalent anywhere in the file."""
+        html = ma.build_match_analysis_html(_state(), _RESULT, _SCORECARD)
+        charts = re.findall(r"<svg class=\"chart\".*?>(.{0,80})", html, re.S)
+        self.assertTrue(charts)
+        for opening in charts:
+            self.assertTrue(opening.startswith("<title>"),
+                            f"chart has no accessible name: {opening[:40]!r}")
+
+
 class BotMatchRevealTests(unittest.TestCase):
     """The file reveals both captains' picks in every match, bot ones included.
 
@@ -366,11 +417,33 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(ma._phase_of(1, 20), "Powerplay")
         self.assertEqual(ma._phase_of(6, 20), "Powerplay")
         self.assertEqual(ma._phase_of(7, 20), "Middle")
-        self.assertEqual(ma._phase_of(15, 20), "Middle")
-        self.assertEqual(ma._phase_of(16, 20), "Death")
+        self.assertEqual(ma._phase_of(16, 20), "Middle")
+        self.assertEqual(ma._phase_of(17, 20), "Death")
         # A 5-over game still has all three phases.
         self.assertEqual({ma._phase_of(o, 5) for o in range(1, 6)},
                          {"Powerplay", "Middle", "Death"})
+
+    def test_the_phase_windows_are_the_engine_s_own(self):
+        """The report prints the engine's `phase` from the approach log in one
+        section and derives its own in another. If the two disagree, over 16
+        appears in Middle in the duel table and in Death in the phase table."""
+        from services import cipl_match
+        for overs in (20, 10, 5):
+            for over in range(1, overs + 1):
+                state = {"overs": overs, "current_over": over,
+                         "ball_format": "T20"}
+                self.assertEqual(
+                    ma._phase_of(over, overs).lower(),
+                    cipl_match.approach_phase(state),
+                    f"over {over} of {overs}")
+
+    def test_the_hundred_keeps_its_five_set_powerplay(self):
+        from services import cipl_match
+        for over in range(1, 21):
+            state = {"overs": 20, "current_over": over, "ball_format": "The100"}
+            self.assertEqual(
+                ma._phase_of(over, 20, ma._HUNDRED_POWERPLAY).lower(),
+                cipl_match.approach_phase(state), f"set {over}")
 
     def test_the_filename_carries_the_match_id(self):
         self.assertEqual(ma.analysis_filename(412), "MatchAnalysis412.html")

@@ -1070,6 +1070,22 @@ def _make_variance_hook(v):
     return _hook
 
 
+def _mult_hook(mult):
+    """A weight hook that scales every outcome named in ``mult``.
+
+    Shared by the two v3.0 layers below, which differ only in how they arrive at
+    their multipliers — one place to change what "apply a multiplier table" means.
+    """
+    def _hook(raw_weights):
+        rw = dict(raw_weights)
+        for key, factor in mult.items():
+            if key in rw:
+                rw[key] *= factor
+        return rw
+
+    return _hook
+
+
 def _make_dps_hook(state, pitch):
     """Dynamic Pitch State (v3.0 section 2): the *character* the surface takes on
     in the second innings.
@@ -1096,14 +1112,7 @@ def _make_dps_hook(state, pitch):
     if not mult:
         return None
 
-    def _hook(raw_weights):
-        rw = dict(raw_weights)
-        for key, factor in mult.items():
-            if key in rw:
-                rw[key] *= factor
-        return rw
-
-    return _hook
+    return _mult_hook(mult)
 
 
 def _make_mpi_hook(state):
@@ -1120,14 +1129,7 @@ def _make_mpi_hook(state):
     if not mult:
         return None
 
-    def _hook(raw_weights):
-        rw = dict(raw_weights)
-        for key, factor in mult.items():
-            if key in rw:
-                rw[key] *= factor
-        return rw
-
-    return _hook
+    return _mult_hook(mult)
 
 
 def _longest_dot_run(over_timeline):
@@ -1221,10 +1223,16 @@ def _make_floor_hook(state, pitch):
     # side collapsing under it gets tail resistance until it climbs back toward it.
     floor = int(dyn.get("floor", FLOOR_GLOBAL))
     runs = state.get("total_runs", 0)
-    if runs >= floor:
+    # Both lines have to be clear before the hook stands down. Gating only on the
+    # pitch Floor put a hole in the absolute term on every surface whose Floor is
+    # under it: a Dusty Floor is 120, so a side five down for 125 was past the
+    # relative line and returned here, never reaching the Sub-100 term that was
+    # still worth something to them.
+    if runs >= max(floor, COLLAPSE_HARD_FLOOR + COLLAPSE_HARD_FADE):
         return None
-    # 0 at the floor → 1 when half the floor short.
-    deficit = min(1.0, (floor - runs) / max(1.0, floor * 0.5))
+    # 0 at the floor → 1 when half the floor short. Clamped at 0 because past
+    # that Floor — which is now reachable, see above — it goes negative.
+    deficit = max(0.0, min(1.0, (floor - runs) / max(1.0, floor * 0.5)))
     # …but never less than the absolute Sub-100 term, whatever the pitch.
     hard = min(1.0, (COLLAPSE_HARD_FLOOR + COLLAPSE_HARD_FADE - runs)
                / float(COLLAPSE_HARD_FADE))
@@ -1365,7 +1373,14 @@ def chase_chance_now(state):
     # Section 9 Step 2. Momentum comes from the tracked accumulators when they
     # exist; a caller that has not run an over yet still gets the old required-
     # rate proxy, so the estimate is never worse than it was.
-    if state.get("momentum") or state.get("pressure"):
+    # Gated on the *history*, not on the accumulators being non-zero: they are
+    # floats starting at 0.0, and an over with no momentum event at all — 4 to 11
+    # runs, no boundary, no maiden, no dot run, no wicket — leaves momentum at
+    # exactly 0.0. Reading that as "not tracked yet" would drop back to the
+    # required-rate proxy for that one over, and the two estimators have
+    # different ranges (±10/12 against ±6), so the live chance and the
+    # chase_history series would jump scales mid-innings and back again.
+    if state.get("momentum_history") or state.get("pressure_history"):
         momentum_mod = chase_chance.mpi_modifier(state.get("momentum", 0.0),
                                                  state.get("pressure", 0.0))
     else:
@@ -1961,19 +1976,37 @@ def simulate_over(state):
     momentum_after = _compute_momentum(ball_history)
     state["momentum_prev"] = momentum_after
 
-    # v3.0 sections 8A-8C and 9. All of this runs on a COMPLETED over only: the
-    # momentum and pressure tables are written in whole overs, and the last
-    # part-over of an innings would otherwise register as a strangling.
+    # v3.0 sections 8A-8C. The momentum and pressure tables are written in whole
+    # overs, so they run on a COMPLETED over only — the last part-over of an
+    # innings would otherwise register as a strangling.
     if over_completed:
         _update_mpi(state, over_runs, over_wkts, over_timeline,
                     partnership_at_over_start, state.get("partnership_runs", 0),
                     bpu)
+
+    # The records the analysis report reads are per-ball facts, not whole-over
+    # tables, so a part-over still gets logged. A chase won or lost mid-over
+    # would otherwise leave the deciding over out of the duel table, the match-up
+    # grid and the win-probability chart — the one over the report exists to
+    # explain. A part-over only ever happens at an innings end (the ball loop
+    # breaks on all out, overs done or target reached), so there is no way for
+    # the same over to be logged twice.
+    if balls_this_over:
         _cc_now = chase_chance_now(state)
         if _cc_now:
             state.setdefault("chase_history", []).append({
                 "over": state["current_over"],
                 "chasing": _cc_now["chasing_chance"],
                 "runs_needed": _cc_now["runs_needed"],
+            })
+        elif state.get("innings") == 2 and state.get("target") and is_innings_over(state):
+            # Decided. chase_chance_now has nothing to say once there is no
+            # chance left to estimate, but a probability chart that stops one
+            # over short of the result reads as though the match never finished.
+            state.setdefault("chase_history", []).append({
+                "over": state["current_over"],
+                "chasing": 100 if chased else 0,
+                "runs_needed": max(0, int(state["target"]) - state["total_runs"]),
             })
         # The approach duel, for the analysis report. Written here rather than
         # derived later because the picks are cleared the moment the over ends.
