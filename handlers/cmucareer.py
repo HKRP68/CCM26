@@ -359,6 +359,10 @@ async def _send_career_card(target, session, player, user, chat, tg_id):
         rows.append([button])
     rows.append([InlineKeyboardButton("📊 Career Stats",
                                       callback_data=_cb("stats", tg_id))])
+    # Name/country changes live in handlers/career_change.py under their own
+    # cmuchg: prefix — this is just the way in from the card.
+    rows.append([InlineKeyboardButton("✏️ Change name / country",
+                                      callback_data=f"cmuchg:open:{tg_id}")])
 
     text = _career_overview(player, user, session)
     try:

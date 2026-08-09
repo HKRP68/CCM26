@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Career name changes{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>✏️ Career name &amp; country changes</h2>
+  <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
+    <a href="{{ url_for('admin_career') }}" class="btn btn-ghost btn-sm">🎖 Career players</a>
+    <a href="{{ url_for('admin_career_names') }}" class="btn btn-ghost btn-sm">🔤 Name pool</a>
+  </div>
+</div>
+
+<p style="color:var(--muted);font-size:.9rem;line-height:1.6;margin-bottom:1.25rem;">
+  Every owner gets <strong>one free change</strong> of their Career Player's name and country.
+  After that they pay on the ladder below — and only while <strong>paid changes are open</strong>.
+  A name rolled from the <a href="{{ url_for('admin_career_names') }}">curated pool</a> is already
+  vetted and applies itself; a name somebody <strong>typed</strong> lands in the queue here, and
+  <strong>their card keeps its current name until you approve it</strong>.
+  Gems are taken when the request is made and refunded in full when you reject it — a refused name
+  costs the owner nothing and doesn't use up a change.
+</p>
+
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem;margin-bottom:1.5rem;">
+  <div style="font-weight:700;margin-bottom:.7rem;">⚙️ Change settings</div>
+  <form method="POST" action="{{ url_for('admin_career_changes_settings') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.9rem;margin-bottom:.9rem;">
+      <div>
+        <label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">2nd change 💎</label>
+        <input type="number" name="price_2" min="0" value="{{ settings.price_2 }}"
+               style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">3rd change 💎</label>
+        <input type="number" name="price_3" min="0" value="{{ settings.price_3 }}"
+               style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">Each one after that, +💎</label>
+        <input type="number" name="step" min="0" value="{{ settings.step }}"
+               style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:1.1rem;margin-bottom:.9rem;">
+      <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;">
+        <input type="checkbox" name="paid_open" style="width:auto;margin:0;" {{ 'checked' if settings.paid_open }}>
+        <span><strong>Paid changes are open</strong> — off means only the free first change works</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;">
+        <input type="checkbox" name="custom_open" style="width:auto;margin:0;" {{ 'checked' if settings.custom_open }}>
+        <span>Owners may type their own names</span>
+      </label>
+      <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;">
+        <input type="checkbox" name="needs_approval" style="width:auto;margin:0;" {{ 'checked' if settings.needs_approval }}>
+        <span>Typed names need approval here</span>
+      </label>
+    </div>
+
+    <div style="margin-bottom:.9rem;">
+      <label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">
+        Blocked words — one per line or comma separated. Matched against the name with spaces and
+        punctuation stripped out, so <code>s.l u-r</code> can't sneak past <code>slur</code>.
+      </label>
+      <textarea name="blocklist" rows="3"
+                style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;">{{ settings.blocklist }}</textarea>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
+      <button type="submit" class="btn btn-primary btn-sm">Save settings</button>
+      <span style="color:var(--muted);font-size:.8rem;">
+        Ladder now:
+        {% for index, cost in ladder %}<strong>#{{ index }}</strong> {{ 'free' if not cost else '{:,} 💎'.format(cost) }}{{ ' · ' if not loop.last }}{% endfor %} · …
+      </span>
+    </div>
+  </form>
+</div>
+
+<div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem;">
+  {% for s in statuses %}
+  <a href="{{ url_for('admin_career_changes', status=s) }}"
+     class="btn btn-sm {{ 'btn-primary' if status == s else 'btn-ghost' }}">
+    {{ s|capitalize }}{% if s == 'pending' and pending_count %} ({{ pending_count }}){% endif %}
+  </a>
+  {% endfor %}
+  <a href="{{ url_for('admin_career_changes', status='all') }}"
+     class="btn btn-sm {{ 'btn-primary' if status == 'all' else 'btn-ghost' }}">All</a>
+</div>
+
+{% if not requests %}
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:2rem;text-align:center;color:var(--muted);">
+  Nothing here. {% if status == 'pending' %}No names are waiting for review.{% endif %}
+</div>
+{% else %}
+<div style="display:grid;gap:.85rem;">
+  {% for r in requests %}
+  <div style="background:var(--card);border:1px solid {{ '#b4762d' if r.status == 'pending' else 'var(--border)' }};border-radius:10px;padding:1rem;">
+    <div style="display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;align-items:flex-start;">
+      <div style="min-width:0;">
+        <div style="font-size:1.05rem;font-weight:800;">
+          {% if r.new_name %}{{ r.old_name }} → {{ r.new_name }}{% else %}{{ r.old_name }}{% endif %}
+        </div>
+        <div style="color:var(--muted);font-size:.82rem;line-height:1.6;margin-top:.25rem;">
+          {% if r.new_country %}🌍 {{ r.old_country }} → <strong>{{ r.new_country }}</strong><br>{% endif %}
+          👤 {% if r.owner_id %}<a href="{{ url_for('user_detail', user_id=r.owner_id) }}">{{ r.owner }}</a>{% else %}{{ r.owner }}{% endif %}
+          · {{ '🎁 free grant' if r.free_grant else ('change #' ~ r.change_index) }}
+          · {{ '{:,}'.format(r.gems) }} 💎 paid
+          · {{ '✍️ typed' if r.source == 'custom' else ('🎲 pool' if r.source == 'pool' else '🌍 country only') }}
+          {% if r.created_at %}<br>🕒 {{ r.created_at.strftime('%d %b %Y %H:%M') }} UTC{% endif %}
+          {% if r.current_name %}<br>Card currently reads <strong>{{ r.current_name }}</strong>{% endif %}
+        </div>
+        {% if r.blocked_word and r.status == 'pending' %}
+        <div style="margin-top:.5rem;color:#e0a33c;font-size:.82rem;">
+          ⚠️ Contains the blocked word <code>{{ r.blocked_word }}</code> — it was added to the
+          blocklist after this was submitted. Approving overrides the blocklist.
+        </div>
+        {% endif %}
+      </div>
+      <div style="text-align:right;">
+        <span style="font-size:.78rem;padding:.2rem .5rem;border-radius:999px;border:1px solid var(--border);color:var(--muted);">
+          {{ r.status }}
+        </span>
+        {% if r.reviewed_by %}<div style="color:var(--muted);font-size:.74rem;margin-top:.3rem;">by {{ r.reviewed_by }}</div>{% endif %}
+      </div>
+    </div>
+
+    {% if r.note %}
+    <div style="color:var(--muted);font-size:.82rem;margin-top:.5rem;">📝 {{ r.note }}</div>
+    {% endif %}
+
+    {% if r.status == 'pending' %}
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.85rem;padding-top:.85rem;border-top:1px solid var(--border);">
+      <form method="POST" action="{{ url_for('admin_career_change_approve', request_id=r.id) }}"
+            style="display:inline;"
+            onsubmit="return confirm('Approve {{ r.new_name or r.new_country }}? It goes on the card immediately and the owner is told.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn btn-primary btn-sm">✅ Approve</button>
+      </form>
+      <form method="POST" action="{{ url_for('admin_career_change_reject', request_id=r.id) }}"
+            style="display:flex;gap:.5rem;flex:1 1 320px;align-items:center;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="text" name="note" maxlength="300" placeholder="Reason (sent to the owner)"
+               style="flex:1 1 180px;padding:.45rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+        <button type="submit" class="btn btn-red btn-sm">🚫 Reject &amp; refund {{ '{:,}'.format(r.gems) }} 💎</button>
+      </form>
+      {% if r.player_id %}
+      <a href="{{ url_for('admin_player_card_preview', player_id=r.player_id) }}" target="_blank" class="btn btn-ghost btn-sm">Card</a>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<p style="color:var(--muted);font-size:.78rem;margin-top:1.25rem;line-height:1.6;">
+  Rejecting refunds every gem and hands the change back, so the owner can try another name without
+  paying twice. To let one person change again without opening paid changes for everybody, use
+  <strong>🎁 Grant free change</strong> on the <a href="{{ url_for('admin_career') }}">Career players</a> page.
+</p>
+{% endblock %}

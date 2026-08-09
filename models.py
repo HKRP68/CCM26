@@ -168,6 +168,13 @@ class Player(Base):
     attr_swing = Column(Integer, default=78, nullable=False)
     attr_stamina = Column(Integer, default=78, nullable=False)
     attr_variation = Column(Integer, default=78, nullable=False)
+    # ── Name / country changes (see services/career_change_service.py) ──
+    # How many identity changes this card has consumed. The first is free and
+    # every one after it costs gems on a rising ladder, so this counter is what
+    # the price is read off. career_free_changes are admin-granted extras that
+    # are spent before the ladder and never advance it.
+    career_changes_used = Column(Integer, default=0, nullable=False)
+    career_free_changes = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
@@ -928,6 +935,62 @@ class CareerNamePool(Base):
     )
 
 
+class CareerChangeRequest(Base):
+    """One request to change a Career Player's name and/or country.
+
+    The owner submits it from the bot or the Mini App; what happens next depends
+    on where the new name came from (see services/career_change_service.py):
+
+    * a name rolled from the admin-curated ``career_name_pool``, or a country
+      change on its own, is already vetted — it is applied on the spot and the
+      row is written straight to ``applied``
+    * a **custom** name the owner typed has to be approved on the website, so
+      the row stays ``pending`` and *nothing* about the card changes: the old
+      name and the old country both continue until an admin approves it
+
+    The gems are taken when the request is submitted, which is what stops the
+    review queue filling with speculative names, and they are returned in full
+    if the request is rejected or cancelled. The row is the receipt for that:
+    ``gems_charged``, ``change_index`` and ``used_free_grant`` are everything
+    the refund needs to put the owner back exactly where they were.
+    """
+    __tablename__ = "career_change_requests"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    # Deliberately *not* a foreign key: this row is the receipt for gems that
+    # were taken, and it has to outlive the card it was about. Support can
+    # delete a career player at any time, and a FK here would either block that
+    # delete or cascade the payment history away with it.
+    player_id = Column(Integer, nullable=False, index=True)
+
+    # What was asked for. A NULL new_* means that half was left alone.
+    old_name = Column(String(150), nullable=True)
+    new_name = Column(String(150), nullable=True)
+    old_country = Column(String(60), nullable=True)
+    new_country = Column(String(60), nullable=True)
+    # 'pool' | 'custom' | None (country-only change)
+    name_source = Column(String(10), nullable=True)
+
+    # What it cost. change_index is the 1-based rung of the price ladder this
+    # request consumed, or 0 when an admin-granted free change paid for it.
+    change_index = Column(Integer, default=0, nullable=False)
+    gems_charged = Column(Integer, default=0, nullable=False)
+    used_free_grant = Column(Boolean, default=False, nullable=False)
+
+    # 'pending' | 'applied' | 'approved' | 'rejected' | 'cancelled'
+    status = Column(String(12), default="pending", nullable=False, index=True)
+    review_note = Column(String(300), nullable=True)
+    reviewed_by = Column(String(80), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    decided_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_career_change_status", "status", "created_at"),
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════
 # NOTIFICATIONS — scheduled FOMO-style push messages from the bot
 # ══════════════════════════════════════════════════════════════════════
@@ -1178,6 +1241,24 @@ class GameConfig(Base):
     career_quest_gems = Column(Integer, default=15, nullable=False)
     career_streak_weeks = Column(Integer, default=4, nullable=False)
     career_streak_bonus_gems = Column(Integer, default=100, nullable=False)
+    # ── Career Player name / country changes ──
+    # The first change is free for everyone. Every change after it costs gems on
+    # a rising ladder — 2nd, 3rd, then +step for each one after — and is only
+    # sold at all while career_paid_changes_open is on, which is the switch the
+    # website uses to open the paid changes up.
+    career_change_price_2 = Column(Integer, default=300, nullable=False)
+    career_change_price_3 = Column(Integer, default=500, nullable=False)
+    career_change_price_step = Column(Integer, default=250, nullable=False)
+    career_paid_changes_open = Column(Boolean, default=False, nullable=False)
+    # Whether owners may type their own name at all, and whether a typed one
+    # waits for website approval before it goes on the card. Turning approval
+    # off makes custom names instant — the pool names always are.
+    career_custom_names_open = Column(Boolean, default=True, nullable=False)
+    career_custom_names_need_approval = Column(Boolean, default=True, nullable=False)
+    # Newline/comma separated words a custom name may not contain. Checked
+    # against the name with everything but letters and digits stripped out, so
+    # spacing and punctuation can't be used to slip one through.
+    career_name_blocklist = Column(Text, nullable=True)
     # Updated tracking (existing)
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String(80), nullable=True)

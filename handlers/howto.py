@@ -123,6 +123,13 @@ SECTIONS = {
             "gems, with the tougher ones paying more\n"
             "• Clear <b>all five</b> in a week to build your streak; keep it up "
             "week after week for the <b>gem jackpot</b>\n"
+            "• <b>/cmuchange</b> — change your name and country. Your "
+            "<b>first change is free</b>; after that each one costs gems on a "
+            "rising ladder, and one change buys the name and the country "
+            "together. Roll a name from your country's pool and it lands "
+            "straight away, or type your own — a typed name is checked by an "
+            "admin first, your card keeps its current name until it's "
+            "approved, and a refused name refunds every gem\n"
             "• <b>It can never be sold or traded.</b> One per account, free"
         ),
     },

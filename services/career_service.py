@@ -543,6 +543,21 @@ def delete_career_player(session, player, *, refund_gems=True):
 
     owner = session.query(User).get(owner_id) if owner_id else None
 
+    # A name change still waiting for approval belongs to a card that is about
+    # to stop existing. Close and refund it here rather than leaving it in the
+    # queue, where it would both block the owner's brand-new card from being
+    # changed and offer an admin an Approve button with nothing behind it.
+    change_refund = 0
+    try:
+        from services import career_change_service
+        pending = career_change_service.pending_request(session, owner_id)
+        if pending is not None and pending.player_id == player_id:
+            closed = career_change_service.cancel_request(session, pending,
+                                                          by_owner=False)
+            change_refund = closed.get("refunded", 0) if closed["ok"] else 0
+    except Exception:
+        logger.exception("pending career change cleanup failed")
+
     # Roster row, traits, stats and every other pointer at this card — and the
     # squad renumbering that closes the gap the roster row leaves behind. Never
     # with a coin refund: a career card was bought with gems, and the sell value
@@ -561,6 +576,9 @@ def delete_career_player(session, player, *, refund_gems=True):
             detail = f"Career Player '{name}' ({rating}) deleted by admin"
             if refunded:
                 detail += f" · refunded {refunded:,} 💎"
+            if change_refund:
+                detail += (f" · pending name change closed, "
+                           f"{change_refund:,} 💎 returned")
             log_activity(session, owner.id, "career_delete", detail,
                          gems_change=refunded, player_name=name,
                          player_rating=rating)
@@ -568,7 +586,8 @@ def delete_career_player(session, player, *, refund_gems=True):
             logger.exception("career delete activity log failed")
 
     return {"ok": True, "name": name, "player_id": player_id, "rating": rating,
-            "owner_id": owner_id, "invested": invested, "refunded": refunded}
+            "owner_id": owner_id, "invested": invested, "refunded": refunded,
+            "change_refunded": change_refund}
 
 
 # ── Presentation ────────────────────────────────────────────────────────────
