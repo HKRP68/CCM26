@@ -216,6 +216,16 @@ class MismatchGateTests(unittest.TestCase):
         self.session.flush()
         self.assertEqual(self._progress(), 0)
 
+    def test_a_junk_over_count_does_not_abandon_the_rest_of_the_tracking(self):
+        # The match-length keys are worked out outside safe_track and before
+        # the batting/bowling totals are credited, so an exception escaping
+        # from a bad 'overs' would silently cost this user their runs.
+        from services.quest_service import track_user_match_quests
+        track_user_match_quests(self.session, self._state(overs=float("inf")),
+                                self.user, True, False, self.user.id)
+        self.session.flush()
+        self.assertEqual(self._progress(), 80)
+
     def test_the_cap_only_applies_to_bot_matches(self):
         # A spent bot allowance must not block a real PvP match.
         from services import quest_service
@@ -602,8 +612,12 @@ class CatalogueTests(unittest.TestCase):
         # PITCH_TYPES-derived map the tracker uses, so a pitch added to
         # match_constants shows up here without anyone editing this test, and a
         # quest on a surface that does not exist still fails.
-        from services.quest_service import PITCH_EVENT_KEYS
+        from services.quest_service import PITCH_EVENT_KEYS, OVERS_EVENT_KEYS
         keys.update(PITCH_EVENT_KEYS.values())
+        # Match-length keys are built the same way, from
+        # MATCH_LENGTH_THRESHOLDS, so a threshold added there needs no edit
+        # here — and a quest on a threshold that does not exist still fails.
+        keys.update(OVERS_EVENT_KEYS.values())
         return keys
 
     def test_pitch_event_keys_match_the_playable_surfaces(self):
@@ -752,6 +766,414 @@ class SeederTests(unittest.TestCase):
         self.session.commit()
         self.assertEqual(result["retired"], 0)
         self.assertTrue(self.session.query(Quest).get(legacy.id).is_active)
+
+
+# ════════════════════════════════════════════════════════════════════
+# Match-length quests
+# ════════════════════════════════════════════════════════════════════
+
+class MatchLengthEventTests(unittest.TestCase):
+    """Which length thresholds a match's over count clears."""
+
+    def test_a_20_over_match_clears_every_threshold(self):
+        # The ladder is the point: picking the longest format must not leave a
+        # "play 2 matches of 10+ overs" quest sitting at 0.
+        from services.quest_service import match_length_event_keys
+        self.assertEqual(match_length_event_keys(20),
+                         ["overs_10", "overs_15", "overs_20"])
+
+    def test_a_match_clears_only_the_thresholds_it_reaches(self):
+        from services.quest_service import match_length_event_keys
+        self.assertEqual(match_length_event_keys(15), ["overs_10", "overs_15"])
+        self.assertEqual(match_length_event_keys(10), ["overs_10"])
+        self.assertEqual(match_length_event_keys(9), [])
+        self.assertEqual(match_length_event_keys(1), [])
+
+    def test_a_length_written_as_a_string_or_float_still_counts(self):
+        # State round-trips through JSON, and the modes disagree about type.
+        from services.quest_service import match_length_event_keys
+        self.assertEqual(match_length_event_keys("20"),
+                         ["overs_10", "overs_15", "overs_20"])
+        self.assertEqual(match_length_event_keys(15.0),
+                         ["overs_10", "overs_15"])
+
+    def test_a_missing_or_unreadable_length_clears_nothing(self):
+        # Better a length quest that does not move than one handed out free to
+        # every match whose state forgot to record its own format.
+        from services.quest_service import match_length_event_keys
+        self.assertEqual(match_length_event_keys(None), [])
+        self.assertEqual(match_length_event_keys(""), [])
+        self.assertEqual(match_length_event_keys("T20"), [])
+
+    def test_an_infinite_length_clears_nothing_rather_than_raising(self):
+        # int(float(x)) raises OverflowError, not ValueError, for an infinite
+        # length. This call sits outside safe_track, so an escape would abandon
+        # the rest of the match's quest tracking over a junk field.
+        from services.quest_service import match_length_event_keys
+        self.assertEqual(match_length_event_keys(float("inf")), [])
+        self.assertEqual(match_length_event_keys("1e309"), [])
+        self.assertEqual(match_length_event_keys(float("nan")), [])
+
+    def test_the_hundred_does_not_clear_the_20_over_threshold(self):
+        # Challenge League stores a 100-ball Hundred innings as 20 sets of
+        # five, so overs == 20 exactly as a 120-ball T20 does. By length it is
+        # a 16.4-over game: it clears 10 and 15, and must not clear 20.
+        from services.quest_service import match_length_event_keys
+        self.assertEqual(match_length_event_keys(20, 5),
+                         ["overs_10", "overs_15"])
+
+    def test_balls_per_unit_comes_from_the_format_on_the_state(self):
+        # Read through the real cipl_match helper rather than a copy, so a
+        # format whose ball count changes there is reflected here.
+        from services.quest_service import match_balls_per_unit
+        self.assertEqual(match_balls_per_unit({"ball_format": "The100"}), 5)
+        self.assertEqual(match_balls_per_unit({"ball_format": "T20"}), 6)
+        self.assertEqual(match_balls_per_unit({}), 6)
+        self.assertEqual(match_balls_per_unit(None), 6)
+        self.assertEqual(match_balls_per_unit({"ball_format": "nonsense"}), 6)
+
+    def test_a_hundred_match_is_a_real_hundred_balls(self):
+        # Guards the premise of the test above: if The Hundred ever stopped
+        # being 20x5, the threshold maths here would need revisiting.
+        from services.cipl_match import total_balls
+        self.assertEqual(total_balls({"overs": 20, "ball_format": "The100"}),
+                         100)
+        self.assertEqual(total_balls({"overs": 20, "ball_format": "T20"}), 120)
+
+    def test_the_keys_line_up_with_the_thresholds(self):
+        from services.quest_service import (MATCH_LENGTH_THRESHOLDS,
+                                            OVERS_EVENT_KEYS)
+        self.assertEqual(set(OVERS_EVENT_KEYS), set(MATCH_LENGTH_THRESHOLDS))
+        self.assertEqual(OVERS_EVENT_KEYS[20], "overs_20")
+
+
+class MatchLengthTrackingTests(unittest.TestCase):
+    """A finished match moves the length quests the player is holding."""
+
+    def setUp(self):
+        from database import get_session
+        from models import Quest, UserQuestProgress
+        from services.quest_service import daily_period_key
+
+        self.session = get_session()
+        self.session.query(UserQuestProgress).delete()
+        self.session.query(Quest).delete()
+
+        self.quests = {}
+        for key in ("overs_10", "overs_15", "overs_20"):
+            quest = Quest(name=f"Play {key}", description=key,
+                          quest_type="daily", event_key=key, target_count=4,
+                          reward_points=10, reward_coins=0, reward_gems=0,
+                          is_active=True, emoji="🕛", sort_order=0)
+            self.session.add(quest)
+            self.quests[key] = quest
+        self.user = _make_user(self.session, next(_TG_IDS))
+        self.session.flush()
+
+        for quest in self.quests.values():
+            self.session.add(UserQuestProgress(
+                user_id=self.user.id, quest_id=quest.id,
+                period_key=daily_period_key(), progress=0, completed=False,
+                claimed=False, assigned=True))
+        self.session.commit()
+
+    def tearDown(self):
+        self.session.rollback()
+        self.session.close()
+
+    def _progress(self, key):
+        from models import UserQuestProgress
+        return (self.session.query(UserQuestProgress)
+                .filter(UserQuestProgress.user_id == self.user.id,
+                        UserQuestProgress.quest_id == self.quests[key].id)
+                .first().progress)
+
+    def _play(self, overs):
+        from services.quest_service import track_user_match_quests
+        track_user_match_quests(self.session, {"overs": overs}, self.user,
+                                True, False, self.user.id)
+        self.session.flush()
+
+    def test_a_20_over_match_moves_all_three_bars(self):
+        self._play(20)
+        self.assertEqual(self._progress("overs_10"), 1)
+        self.assertEqual(self._progress("overs_15"), 1)
+        self.assertEqual(self._progress("overs_20"), 1)
+
+    def test_a_15_over_match_leaves_the_20_over_bar_alone(self):
+        self._play(15)
+        self.assertEqual(self._progress("overs_10"), 1)
+        self.assertEqual(self._progress("overs_15"), 1)
+        self.assertEqual(self._progress("overs_20"), 0)
+
+    def test_a_short_match_moves_nothing(self):
+        self._play(5)
+        self.assertEqual(self._progress("overs_10"), 0)
+
+    def test_a_hundred_match_moves_the_10_and_15_bars_only(self):
+        # End-to-end through the tracker: a Challenge League Hundred game
+        # carries overs == 20 but is only 100 balls.
+        from services.quest_service import track_user_match_quests
+        track_user_match_quests(self.session,
+                                {"overs": 20, "ball_format": "The100"},
+                                self.user, True, False, self.user.id)
+        self.session.flush()
+        self.assertEqual(self._progress("overs_10"), 1)
+        self.assertEqual(self._progress("overs_15"), 1)
+        self.assertEqual(self._progress("overs_20"), 0)
+
+    def test_a_voided_match_moves_nothing(self):
+        from services.quest_service import track_user_match_quests
+        track_user_match_quests(self.session,
+                                {"overs": 20, "stats_disabled": True},
+                                self.user, True, False, self.user.id)
+        self.session.flush()
+        self.assertEqual(self._progress("overs_20"), 0)
+
+
+# ════════════════════════════════════════════════════════════════════
+# The guaranteed daily families
+# ════════════════════════════════════════════════════════════════════
+
+class DailyGuaranteedDealTests(unittest.TestCase):
+    """Every daily card carries one pitch quest and one match-length quest."""
+
+    def setUp(self):
+        from database import get_session
+        from models import Quest, UserQuestProgress
+        self.session = get_session()
+        self.session.query(UserQuestProgress).delete()
+        self.session.query(Quest).delete()
+
+        # A general pool big enough that the random three could never happen to
+        # contain a pitch or length quest by luck.
+        for i in range(12):
+            self.session.add(Quest(
+                name=f"General {i}", description="general", quest_type="daily",
+                event_key="match_played", target_count=1, reward_points=10,
+                reward_coins=0, reward_gems=0, is_active=True, emoji="🏏",
+                sort_order=i))
+        for surface in ("green", "flat", "dusty"):
+            self.session.add(Quest(
+                name=f"Pitch {surface}", description=surface,
+                quest_type="daily", event_key=f"pitch_{surface}",
+                target_count=3, reward_points=20, reward_coins=0,
+                reward_gems=0, is_active=True, emoji="🟢", sort_order=0))
+        for overs in (10, 15, 20):
+            self.session.add(Quest(
+                name=f"Overs {overs}", description=str(overs),
+                quest_type="daily", event_key=f"overs_{overs}",
+                target_count=2, reward_points=20, reward_coins=0,
+                reward_gems=0, is_active=True, emoji="🕛", sort_order=0))
+        self.session.commit()
+
+    def tearDown(self):
+        self.session.rollback()
+        self.session.close()
+
+    def _deal(self, user=None):
+        """Deal today's dailies and return the assigned quests."""
+        from services.quest_service import ensure_quests_assigned
+        user = user or _make_user(self.session, next(_TG_IDS))
+        result = ensure_quests_assigned(self.session, user.id, "daily")
+        self.session.commit()
+        return user, result["assigned"]
+
+    def _families(self, quests):
+        keys = [q.event_key for q in quests]
+        return (sum(1 for k in keys if k.startswith("pitch_")),
+                sum(1 for k in keys if k.startswith("overs_")))
+
+    def _assigned_quests(self, user):
+        """Everything the user actually holds for today, not just new rows."""
+        from models import Quest, UserQuestProgress
+        from services.quest_service import daily_period_key
+        return (self.session.query(Quest)
+                .join(UserQuestProgress, Quest.id == UserQuestProgress.quest_id)
+                .filter(UserQuestProgress.user_id == user.id,
+                        UserQuestProgress.period_key == daily_period_key(),
+                        UserQuestProgress.assigned == True)  # noqa: E712
+                .all())
+
+    def test_a_daily_deal_contains_one_of_each_family(self):
+        for _ in range(8):
+            _user, dealt = self._deal()
+            self.assertEqual(self._families(dealt), (1, 1))
+
+    def test_the_guaranteed_slots_do_not_eat_the_random_three(self):
+        from services.quest_service import QUESTS_PER_USER
+        _user, dealt = self._deal()
+        general = [q for q in dealt if q.event_key == "match_played"]
+        self.assertEqual(len(general), QUESTS_PER_USER["daily"])
+        self.assertEqual(len(dealt), QUESTS_PER_USER["daily"] + 2)
+
+    def test_dealing_twice_in_a_day_adds_nothing(self):
+        from services.quest_service import ensure_quests_assigned
+        user, first = self._deal()
+        again = ensure_quests_assigned(self.session, user.id, "daily")
+        self.session.commit()
+        self.assertEqual(again["assigned"], [])
+        self.assertEqual(self._families(first), (1, 1))
+
+    def test_a_card_dealt_before_the_families_existed_is_topped_up(self):
+        # Shipping mid-day must not leave everybody waiting until tomorrow.
+        from models import Quest
+        from services.quest_service import ensure_quests_assigned
+        live = (self.session.query(Quest)
+                .filter(Quest.event_key.like("pitch_%")
+                        | Quest.event_key.like("overs_%")).all())
+        for quest in live:
+            quest.is_active = False
+        self.session.commit()
+
+        user, dealt = self._deal()
+        self.assertEqual(self._families(dealt), (0, 0))
+
+        for quest in live:
+            quest.is_active = True
+        self.session.commit()
+
+        topped = ensure_quests_assigned(self.session, user.id, "daily")
+        self.session.commit()
+        self.assertEqual(self._families(topped["assigned"]), (1, 1))
+
+    def test_a_pinned_quest_fills_its_family_rather_than_doubling_it(self):
+        from models import Quest
+        pin = (self.session.query(Quest)
+               .filter(Quest.event_key == "pitch_green").first())
+        pin.always_assign = True
+        self.session.commit()
+
+        _user, dealt = self._deal()
+        self.assertEqual(self._families(dealt), (1, 1))
+        self.assertIn(pin.id, [q.id for q in dealt])
+
+    def test_a_pin_added_mid_day_arrives_on_top_and_retracts_nothing(self):
+        # An admin pinning a pitch quest after the user opened their card
+        # leaves them holding two for the day: the morning's draw plus the pin.
+        # Deliberate — see the comment at the top-up call site. What must NOT
+        # happen is the morning's quest being unassigned (it may hold progress)
+        # or a *third* being dealt on top.
+        from models import Quest
+        from services.quest_service import ensure_quests_assigned
+
+        user, dealt = self._deal()
+        morning = [q for q in dealt if q.event_key.startswith("pitch_")][0]
+
+        pin = (self.session.query(Quest)
+               .filter(Quest.event_key.like("pitch_%"),
+                       Quest.id != morning.id).first())
+        pin.always_assign = True
+        self.session.commit()
+
+        added = ensure_quests_assigned(self.session, user.id, "daily")
+        self.session.commit()
+        self.assertEqual([q.id for q in added["assigned"]], [pin.id])
+
+        held = self._assigned_quests(user)
+        self.assertEqual(self._families(held), (2, 1))
+        self.assertIn(morning.id, [q.id for q in held])
+
+    def test_an_empty_family_costs_nobody_their_random_three(self):
+        from models import Quest
+        from services.quest_service import QUESTS_PER_USER
+        for quest in (self.session.query(Quest)
+                      .filter(Quest.event_key.like("overs_%")).all()):
+            quest.is_active = False
+        self.session.commit()
+
+        _user, dealt = self._deal()
+        self.assertEqual(self._families(dealt), (1, 0))
+        self.assertEqual(len([q for q in dealt if q.event_key == "match_played"]),
+                         QUESTS_PER_USER["daily"])
+
+    def test_yesterdays_pick_goes_to_the_back_of_the_queue(self):
+        from datetime import timedelta
+        from models import UserQuestProgress
+        from services.quest_service import (daily_period_key,
+                                            _deal_daily_guaranteed)
+        from models import Quest
+
+        user = _make_user(self.session, next(_TG_IDS))
+        yesterday = daily_period_key(datetime.utcnow() - timedelta(days=1))
+        stale = (self.session.query(Quest)
+                 .filter(Quest.event_key == "pitch_green").first())
+        self.session.add(UserQuestProgress(
+            user_id=user.id, quest_id=stale.id, period_key=yesterday,
+            progress=0, completed=False, claimed=False, assigned=True))
+        self.session.commit()
+
+        pool = (self.session.query(Quest)
+                .filter(Quest.event_key.like("pitch_%")).all()
+                + self.session.query(Quest)
+                .filter(Quest.event_key.like("overs_%")).all())
+        for _ in range(10):
+            picked = _deal_daily_guaranteed(self.session, user.id, pool,
+                                            datetime.utcnow())
+            pitch = [q for q in picked if q.event_key.startswith("pitch_")]
+            self.assertNotEqual(pitch[0].id, stale.id)
+
+    def test_monthly_deals_are_untouched(self):
+        from models import Quest
+        from services.quest_service import (ensure_quests_assigned,
+                                            QUESTS_PER_USER)
+        for i in range(10):
+            self.session.add(Quest(
+                name=f"Monthly {i}", description="m", quest_type="monthly",
+                event_key="match_played", target_count=20, reward_points=50,
+                reward_coins=0, reward_gems=0, is_active=True, emoji="🏟",
+                sort_order=i))
+        self.session.commit()
+
+        user = _make_user(self.session, next(_TG_IDS))
+        result = ensure_quests_assigned(self.session, user.id, "monthly")
+        self.session.commit()
+        self.assertEqual(len(result["assigned"]), QUESTS_PER_USER["monthly"])
+
+
+class DailyGuaranteedCatalogueTests(unittest.TestCase):
+    """The seeded catalogue has to be able to fill the guaranteed slots."""
+
+    def test_every_guaranteed_family_has_something_to_deal(self):
+        from seed_quests_v3 import DAILY_QUESTS
+        from services.quest_service import DAILY_GUARANTEED_BUCKETS
+        seeded = {row[2] for row in DAILY_QUESTS}
+        for family, keys, slots in DAILY_GUARANTEED_BUCKETS:
+            with self.subTest(family=family):
+                self.assertGreaterEqual(len(seeded & set(keys)), slots)
+
+    def test_the_families_rotate_rather_than_repeat(self):
+        # A family with one quest in it would deal the same quest every day,
+        # which is the thing the freshness pass exists to avoid.
+        from seed_quests_v3 import DAILY_QUESTS
+        from services.quest_service import DAILY_GUARANTEED_BUCKETS
+        seeded = {row[2] for row in DAILY_QUESTS}
+        for family, keys, _slots in DAILY_GUARANTEED_BUCKETS:
+            with self.subTest(family=family):
+                self.assertGreater(len(seeded & set(keys)), 1)
+
+    def test_no_length_quest_asks_for_a_format_the_lobby_cannot_make(self):
+        # A threshold above the longest lobby /wpm will open is a quest nobody
+        # can finish. Read off the source rather than imported — handlers.match
+        # drags in the whole Telegram stack for one integer.
+        import re
+        from services.quest_service import MATCH_LENGTH_THRESHOLDS
+        with open(os.path.join(os.path.dirname(__file__), "..",
+                               "handlers", "match.py")) as fh:
+            found = re.search(r"^WPM_MAX_OVERS = (\d+)", fh.read(), re.M)
+        self.assertIsNotNone(found, "WPM_MAX_OVERS moved or was renamed")
+        for threshold in MATCH_LENGTH_THRESHOLDS:
+            self.assertLessEqual(threshold, int(found.group(1)))
+
+    def test_the_seeded_length_targets_are_reachable(self):
+        # Every length quest is a "play N matches" count, so its target has to
+        # be a number of matches somebody could get through in a day.
+        from seed_quests_v3 import DAILY_QUESTS
+        lengths = [row for row in DAILY_QUESTS if row[2].startswith("overs_")]
+        self.assertTrue(lengths)
+        for name, _desc, _key, target, _emoji, _tier in lengths:
+            with self.subTest(quest=name):
+                self.assertLessEqual(target, 4)
 
 
 if __name__ == "__main__":

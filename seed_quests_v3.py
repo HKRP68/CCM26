@@ -168,6 +168,29 @@ DAILY_QUESTS = [
     ("Fair Surface",
      "Play 2 matches on an Even pitch today", "pitch_even", 2, "⚖️", 2),
 
+    # ── Match length ─────────────────────────────────────────────────────
+    # The host picks the length when they open the lobby (/wpm <overs>), so
+    # these ask for a format rather than a stat. Fired by
+    # services.quest_service.match_length_event_keys off the match's own over
+    # count, as a ladder — a 20-over game clears the 10- and 15-over thresholds
+    # too, so a player choosing the longest format is never left with a
+    # shorter-format quest stuck at 0.
+    #
+    # Target and length climb together on purpose: these three are one
+    # difficulty ladder, and the tier prices them to match. "Full Twenty" is
+    # meant to be the heaviest ask in the family, not the lightest — four full
+    # T20s is a session, which is why it is priced as a tier 3. The counts are
+    # the cheapest thing to tune if that turns out to be too steep: they are
+    # editable per quest on the admin quest form, no deploy needed.
+    ("Double Header",
+     "Play 2 matches of 10 overs or more today (e.g. /wpm 10)", "overs_10", 2,
+     "🕙", 1),
+    ("Long Format",
+     "Play 3 matches of 15 overs or more today (e.g. /wpm 15)", "overs_15", 3,
+     "🕒", 2),
+    ("Full Twenty",
+     "Play 4 matches of 20 overs today (/wpm 20)", "overs_20", 4, "🕛", 3),
+
     # ── Taking on the AI ─────────────────────────────────────────────────
     # Bot matches count for quests again, capped daily by
     # services.quest_service.BOT_QUEST_MATCH_DAILY_CAP — keep these targets at
