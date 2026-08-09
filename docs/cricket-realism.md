@@ -106,8 +106,15 @@ The first audit reported maidens at four times the real rate. It was wrong —
 it was counting pure maidens and wicket maidens together. A wicket ball *is* a
 dot ball, and the new batter arrives with a settling penalty, so wicket maidens
 are several times more common than pure ones. Split apart, the engine bowls
-0.26% pure maidens and 0.71% wicket maidens, against real figures near 0.15% and
-0.7%. Both are fine.
+about 0.4% pure maidens and 0.7% wicket maidens, against real figures near 0.15%
+and 0.7%. The wicket-maiden rate is right; pure maidens run a little rich, which
+is the honest remaining figure rather than the four-times-worse one the combined
+count implied.
+
+(The denominator matters too, and got its own correction: an over is counted as
+six legal balls, not as one call of ``simulate_over``. A chase finishing mid-over
+produces a part-over that can never be a maiden, and counting it whole quietly
+understated both rates.)
 
 `tools/realism_audit.py` reports the two separately for exactly this reason, and
 says so in its docstring.
@@ -126,17 +133,22 @@ says so in its docstring.
 ## Calibration state after this work
 
 Par sits inside its Section 5A band on all seven measured pitches, and the
-global Sub-100 rate is 1.10% against the doc's "<2% globally":
+global Sub-100 rate is 0.92% against the doc's "<2% globally". Measured with
+`python -m tools.pitch_calibration --n 350`:
 
-| Pitch | par | band |
-|---|---|---|
-| Flat | 228 | 225–240 |
-| Hard | 211 | 212–226 |
-| Even | 201 | 190–202 |
-| Bouncy | 180 | 180–192 |
-| Dry | 178 | 170–182 |
-| Green | 164 | 165–178 |
-| Dusty | 162 | 152–165 |
+| Pitch | par | band | | Pitch | par | band |
+|---|---|---|---|---|---|---|
+| Flat | 227 | 225–240 | | Dry | 172 | 170–182 |
+| Hard | 213 | 212–226 | | Green | 167 | 165–178 |
+| Even | 199 | 190–202 | | Dusty | 159 | 152–165 |
+| Bouncy | 184 | 180–192 | | | | |
+
+These are Monte-Carlo medians, so read them with a couple of runs' tolerance:
+at `--n 300` the same build put Hard and Green a run *below* their bands, and at
+`--n 350` both sit inside. A pitch drifting one or two runs across a band edge
+between runs is noise, not a regression — which is why the harness carries a
+`par_pad` rather than testing the edge exactly. Judge a real change at `--n 300`
+or more.
 
 Anyone changing the ball model should re-run **both** harnesses — the totals can
 stay perfect while the cricket underneath them stops making sense, which is the

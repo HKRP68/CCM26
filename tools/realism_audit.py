@@ -75,9 +75,16 @@ def _play_innings(state, S):
         marks = summary.get("over_timeline") or []
         for mark in marks:
             S["balls"][mark] += 1
-        S["legal"] += sum(1 for m in marks if m not in ("WD", "NB"))
-        S["overs"] += 1
-        if summary.get("over_runs") == 0 and len(marks) >= 6:
+        # Count legal balls, not calls of simulate_over. A chase that finishes
+        # mid-over still produces a summary, and counting it as a whole over
+        # inflates the denominator with an over that could never have been a
+        # maiden — which quietly understates both maiden rates. Six legal balls
+        # is also the right maiden test: an over of five legal balls and a wide
+        # has six marks, and is not a maiden.
+        legal_balls = sum(1 for m in marks if m not in ("WD", "NB"))
+        S["legal"] += legal_balls
+        S["overs"] += legal_balls / 6
+        if summary.get("over_runs") == 0 and legal_balls == 6:
             S["wicket_maidens" if "W" in marks else "pure_maidens"] += 1
 
 
@@ -130,7 +137,7 @@ def _row(label, got, real, tol_frac=0.30, tol_min=1.0):
 def report(pitch, S):
     legal = S["legal"] or 1
     overs = S["overs"] or 1
-    print(f"\n═══ {pitch}  ·  {S['innings']} innings, {overs} overs ═══")
+    print(f"\n═══ {pitch}  ·  {S['innings']} innings, {overs:.0f} overs ═══")
     print(f"   totals median {statistics.median(S['totals']):.0f}   "
           f"wickets/innings {statistics.mean(S['wickets']):.2f}   "
           f"extras/innings {statistics.mean(S['extras']):.1f}")
