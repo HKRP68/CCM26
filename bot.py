@@ -420,6 +420,7 @@ BOT_MENU_COMMANDS = (
     ("tournamentstats", "Tournament Top-10 stat leaderboards"),
     ("cmuleaderboard", "View the leaderboard"),
     ("myprofile", "View your profile"),
+    ("membership", "View your membership, perks and the plans 💳"),
     ("playmatch", "Challenge another user to a match"),
     ("wpm", "Match lobby up to 20 overs — tag/reply to invite a player (Mini App)"),
     ("sim", "Simulate a full match instantly"),
@@ -826,8 +827,9 @@ async def start_handler(update, context):
 
     await update.message.reply_text(
         "🏏 <b>Welcome to Cricket Simulator Bot!</b>\n\n"
-        "Use /debut (or /d) to create your account and receive your starting squad.\n\n"
-        "<b>Commands</b> <i>(short aliases in brackets)</i>:\n"
+        "Use /debut (or /d) to create your account and receive your starting squad.\n"
+        + _get_start_rookie_notice() +
+        "\n<b>Commands</b> <i>(short aliases in brackets)</i>:\n"
         "/debut /d - Create account & get your starter XI\n"
         "/claim /c - Claim 1 player + coins (hourly)\n"
         "/daily /dl - Daily reward (24h)\n"
@@ -883,6 +885,25 @@ async def start_handler(update, context):
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
+
+
+def _get_start_rookie_notice():
+    """One line on the welcome message when the bot is members-only.
+
+    /start is a doorway command that keeps working while Rookie mode is on, so
+    it is the first place a new player can be told that the command list below
+    needs a membership — rather than finding out command by command.
+    """
+    try:
+        from services import rookie_gate
+        if not rookie_gate.is_rookie_mode_active():
+            return ""
+        return (f"\n🔒 The bot is <b>members-only</b> right now — "
+                f"{rookie_gate.rookie_price_label()} unlocks everything below "
+                f"(every higher plan includes it). See /membership.\n")
+    except Exception:
+        logger.exception("Rookie start notice failed (non-fatal)")
+        return ""
 
 
 def _get_start_branding():
@@ -1053,7 +1074,16 @@ def main():
             """Compatibility hook: all current commands use normal middleware."""
             return False
 
-        # ── Reply-context middleware (group=-4, runs before outbound replies) ──
+        # ── Middleware ordering ───────────────────────────────────────
+        # Every middleware below sits in its own NEGATIVE handler group so it
+        # runs before the command handlers in groups 0+. PTB runs only the
+        # FIRST matching handler per group, so each one needs a group of its
+        # own; the numbers are spaced by ten purely to leave room to insert a
+        # new gate between two existing ones later without renumbering.
+        # Order: button owner → reply context → chat tracker → maintenance →
+        # ban → Rookie membership gate → handlers.
+
+        # ── Reply-context middleware (group=-50, runs before outbound replies) ──
         # Refreshing the sender's stored username/name is a *blocking* DB round
         # trip. Running it on every single update (every button tap, every
         # message) serialises the asyncio event loop behind that I/O and is a
@@ -1100,12 +1130,12 @@ def main():
                             user_sync_cache.pop(uid, None)
             except Exception:
                 logger.exception("Failed to sync Telegram user details")
-        app.add_handler(TypeHandler(_TGUpdate, _bind_reply_context), group=-4)
+        app.add_handler(TypeHandler(_TGUpdate, _bind_reply_context), group=-50)
 
-        # ── Button-owner guard (group=-5, before callbacks) ──
-        app.add_handler(TypeHandler(_TGUpdate, button_access_guard), group=-5)
+        # ── Button-owner guard (group=-60, before callbacks) ──
+        app.add_handler(TypeHandler(_TGUpdate, button_access_guard), group=-60)
 
-        # ── Chat-tracker middleware (group=-3, runs FIRST) ──
+        # ── Chat-tracker middleware (group=-40) ──
         async def _track_chat(update, context):
             if _is_storage_only_command(update):
                 return
@@ -1120,9 +1150,9 @@ def main():
                 await record_chat_member_async(update)
             except Exception:
                 pass
-        app.add_handler(TypeHandler(_TGUpdate, _track_chat), group=-3)
+        app.add_handler(TypeHandler(_TGUpdate, _track_chat), group=-40)
 
-        # ── Maintenance middleware (group=-2, runs FIRST) ──
+        # ── Maintenance middleware (group=-30) ──
         async def _maintenance_check(update, context):
             if _is_storage_only_command(update):
                 return
@@ -1154,9 +1184,9 @@ def main():
                 raise
             except Exception:
                 logger.exception("Maintenance check failed (non-fatal)")
-        app.add_handler(TypeHandler(_TGUpdate, _maintenance_check), group=-2)
+        app.add_handler(TypeHandler(_TGUpdate, _maintenance_check), group=-30)
 
-        # ── Ban-guard middleware (group=-1, runs before all handlers) ──
+        # ── Ban-guard middleware (group=-20) ──
         # Cache ban lookups briefly so every button tap/command does not pay a
         # synchronous database round trip before the real handler can run.
         ban_cache_ttl = float(os.getenv("BAN_CACHE_TTL_SECONDS", "60"))
@@ -1208,7 +1238,89 @@ def main():
                 except Exception:
                     pass
                 raise ApplicationHandlerStop
-        app.add_handler(TypeHandler(_TGUpdate, _ban_check), group=-1)
+        app.add_handler(TypeHandler(_TGUpdate, _ban_check), group=-20)
+
+        # ── Rookie membership gate (group=-10, last middleware) ──
+        # While Rookie mode is ON, only members (any tier — Rookie and up) may
+        # use the bot; everyone else gets the upsell and nothing else, apart
+        # from the doorway commands in services/rookie_gate.py. Runs LAST of
+        # the middleware so "the bot is down" and "you are banned" still win
+        # over "you need a membership".
+        #
+        # The tier lookup is a blocking DB read, so it is cached per user for a
+        # short window (a freshly activated membership therefore unlocks the
+        # bot within one TTL, without a bot restart) and skipped entirely —
+        # zero DB cost — whenever Rookie mode is off.
+        rookie_cache_ttl = float(os.getenv("ROOKIE_CACHE_TTL_SECONDS", "30"))
+        rookie_cache = {}
+
+        async def _rookie_check(update, context):
+            if _is_storage_only_command(update):
+                return
+            try:
+                from services import rookie_gate
+                if not rookie_gate.is_rookie_mode_active():
+                    return
+                user = update.effective_user
+                if not user:
+                    return
+
+                now = time.monotonic()
+                cached = rookie_cache.get(user.id)
+                if cached and now - cached[0] < rookie_cache_ttl:
+                    has_membership, has_account = cached[1], cached[2]
+                else:
+                    def _query_access():
+                        from database import get_session as _gs
+                        from models import User as _User
+                        s = _gs()
+                        try:
+                            u = (s.query(_User)
+                                 .filter(_User.telegram_id == user.id)
+                                 .first())
+                            return rookie_gate.has_access(u), u is not None
+                        finally:
+                            s.close()
+                    has_membership, has_account = await asyncio.to_thread(
+                        _query_access)
+                    rookie_cache[user.id] = (now, has_membership, has_account)
+                    if len(rookie_cache) > 10000:
+                        cutoff = now - rookie_cache_ttl
+                        for uid in [u for u, entry in rookie_cache.items()
+                                    if entry[0] < cutoff]:
+                            rookie_cache.pop(uid, None)
+
+                # A fresh debutant typing their referral code is still inside
+                # the /debut flow the gate just let through — don't swallow it.
+                user_data = getattr(context, "user_data", None) or {}
+                allow_text = bool(user_data.get("awaiting_referral_code"))
+
+                bot_username = getattr(context.bot, "username", None)
+                if not rookie_gate.should_block_update(
+                        update, has_membership=has_membership,
+                        bot_username=bot_username, allow_text=allow_text):
+                    return
+
+                if rookie_gate.should_reply(update, bot_username):
+                    try:
+                        if update.callback_query:
+                            await update.callback_query.answer(
+                                rookie_gate.rookie_required_alert(),
+                                show_alert=True)
+                        elif update.message:
+                            await update.message.reply_text(
+                                rookie_gate.rookie_required_message(
+                                    is_new_user=not has_account),
+                                parse_mode="HTML")
+                    except Exception:
+                        pass
+                raise ApplicationHandlerStop
+            except ApplicationHandlerStop:
+                raise
+            except Exception:
+                # Never let a broken gate take the whole bot down with it.
+                logger.exception("Rookie gate failed (non-fatal)")
+        app.add_handler(TypeHandler(_TGUpdate, _rookie_check), group=-10)
 
         # Record process start time for /botstatus uptime reporting.
         from datetime import datetime as _dt_now
@@ -1653,6 +1765,15 @@ def main():
         app.add_handler(CommandHandler(["chemhelp", "chemguide"], chemhelp_handler))
         app.add_handler(CallbackQueryHandler(chemhelp_tab_callback, pattern=r"^chemhelp_tab_"))
         app.add_handler(CallbackQueryHandler(chemhelp_close_callback, pattern=r"^chemhelp_close_"))
+
+        # ── /membership — plan status + price list ──────────────────
+        # One of the doorway commands that stay open while Rookie mode is on
+        # (services/rookie_gate.py) — it is what a locked-out player is told
+        # to send, so it must always answer.
+        from handlers.membership import membership_handler
+        app.add_handler(CommandHandler(
+            ["membership", "member", "mysub", "subscription", "plans"],
+            membership_handler))
 
         # ── /invite Referral system ─────────────────────────────────
         from handlers.invite import invite_handler

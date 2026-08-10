@@ -48,7 +48,7 @@ SIM_COOLDOWN = 14400     # 4 hours
 #   instant                 — one-time rewards credited on activation.
 #   upgrade_from            — per-source top-up bundle credited when a member
 #                             steps UP into this tier (see below).
-#   mysterybox_cooldown_days — /cmumysterybox recurrence.
+#   mysterybox_cooldown_days — /cmumysterybox recurrence (0 = no Mystery Box).
 #   cooldown_reduction_min_per_hour — shaves this many minutes off every hour
 #                             of a normal command cooldown (Bronze 0, Silver 5,
 #                             Platinum 10, Diamond 15) — see the ladder above.
@@ -59,22 +59,51 @@ SIM_COOLDOWN = 14400     # 4 hours
 #   premium_commands        — unlocks /autobuild and /wpmbot.
 #   autoplay                — unlocks the Mini App Autoplay button.
 #
-# DECLARATION ORDER IS THE TIER RANK (bronze < silver < platinum < diamond) —
-# services.subscription_service.tier_rank reads it, so keep tiers ordered from
-# cheapest to richest.
+# DECLARATION ORDER IS THE TIER RANK (rookie < bronze < silver < platinum <
+# diamond) — services.subscription_service.tier_rank reads it, so keep tiers
+# ordered from cheapest to richest.
+#
+# ROOKIE is the access tier, not a perk tier: it buys the right to USE the bot
+# while Rookie mode is on (see services/rookie_gate.py) and nothing else. Every
+# higher tier outranks it, so a Bronze/Silver/Platinum/Diamond member already
+# has Rookie access without holding the Rookie tier itself.
 #
 # Upgrade top-ups follow one rule: roughly HALF the raw instant difference
 # between the two tiers, plus whichever signature packs the source tier never
 # granted. The member keeps their remaining paid time, so an upgrade tops them
 # up instead of handing out a second subscription. The halves are also chosen so
-# hopping (Bronze → Silver → Diamond) never pays more than going direct.
+# hopping (Rookie → Bronze → Silver → Diamond) never pays more than going direct.
 SUBSCRIPTION_TIERS = {
+    "rookie": {
+        "label": "🐣 Rookie",
+        "price_inr": 15,
+        "duration_days": 30,
+        # Deliberately the smallest bundle on the ladder: what Rookie sells is
+        # ACCESS (every command + the Mini App while Rookie mode is on), so its
+        # rewards must never make the ₹19 Bronze tier look pointless.
+        "instant": {"coins": 10000, "gems": 50, "quest_points": 0,
+                    "packs": []},
+        # 0 = no Mystery Box. Every recurring drop starts at Bronze.
+        "mysterybox_cooldown_days": 0,
+        "cooldown_reduction_min_per_hour": 0,
+        "market_discount_pct": 0,
+        "weekly_card": False,
+        "coin_chests": None,
+        "daily_login_multiplier": 1,
+        # /autobuild and /wpmbot stay a Bronze-and-above perk.
+        "premium_commands": False,
+        "autoplay": False,
+    },
     "bronze": {
         "label": "🥉 Bronze",
         "price_inr": 19,
         "duration_days": 30,
         "instant": {"coins": 29000, "gems": 150, "quest_points": 0,
                     "packs": []},
+        "upgrade_from": {
+            "rookie": {"coins": 19000, "gems": 100, "quest_points": 0,
+                       "packs": []},
+        },
         "mysterybox_cooldown_days": 15,
         # Bronze runs on the free-user cooldowns — the entry tier buys the
         # rewards and premium commands, not faster timers.
@@ -94,6 +123,8 @@ SUBSCRIPTION_TIERS = {
         "instant": {"coins": 49000, "gems": 499, "quest_points": 499,
                     "packs": ["Star Pack"]},
         "upgrade_from": {
+            "rookie": {"coins": 39000, "gems": 425, "quest_points": 450,
+                       "packs": ["Star Pack"]},
             "bronze": {"coins": 10000, "gems": 175, "quest_points": 250,
                        "packs": ["Star Pack"]},
         },
@@ -120,6 +151,8 @@ SUBSCRIPTION_TIERS = {
         # is granted — the Star Pack the user got from Silver is already theirs.
         # Set "packs": [] here if you don't want any pack on upgrade.
         "upgrade_from": {
+            "rookie": {"coins": 505000, "gems": 700, "quest_points": 750,
+                       "packs": ["Legend Pack"]},
             "bronze": {"coins": 485000, "gems": 425, "quest_points": 500,
                        "packs": ["Legend Pack"]},
             "silver": {"coins": 451000, "gems": 251, "quest_points": 251,
@@ -142,6 +175,8 @@ SUBSCRIPTION_TIERS = {
         "instant": {"coins": 2000000, "gems": 1500, "quest_points": 1500,
                     "packs": ["Legend Pack", "Ultimate Legend Pack"]},
         "upgrade_from": {
+            "rookie": {"coins": 1015000, "gems": 975, "quest_points": 1025,
+                       "packs": ["Legend Pack", "Ultimate Legend Pack"]},
             "bronze": {"coins": 985000, "gems": 675, "quest_points": 750,
                        "packs": ["Legend Pack", "Ultimate Legend Pack"]},
             "silver": {"coins": 975000, "gems": 500, "quest_points": 500,

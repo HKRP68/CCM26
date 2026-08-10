@@ -1210,6 +1210,15 @@ class GameConfig(Base):
     # Comma-separated telegram IDs allowed to use commands during maintenance
     # (admins testing the bot, for example).
     maintenance_bypass_ids = Column(String(500), nullable=True)
+    # ── Rookie mode (membership gate) ──
+    # When rookie_mode is True, using the bot at all requires an active
+    # subscription of at least the ``rookie`` tier: every command, button and
+    # Mini App API is locked for everybody else, except the doorway commands
+    # (/debut, /membership, /help …) listed in services/rookie_gate.py. The
+    # maintenance bypass list doubles as the Rookie bypass list.
+    # rookie_message replaces the default upsell shown to locked-out users.
+    rookie_mode = Column(Boolean, default=False, nullable=False)
+    rookie_message = Column(Text, nullable=True)
     # Comma-separated telegram IDs allowed to use the Challenge League Tournament
     # command. Empty/None = open to everyone (restriction off).
     tournament_allowed_ids = Column(String(500), nullable=True)

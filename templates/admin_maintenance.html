@@ -218,6 +218,71 @@
 </div>
 {% endif %}
 
+<!-- Rookie mode — the membership gate (independent of maintenance) -->
+<div class="panel" style="border-color: {% if cfg.rookie_mode %}#c9a227{% else %}var(--border){% endif %};">
+  <h3>🐣 Rookie Mode — members-only bot</h3>
+  <p style="color:var(--muted);font-size:.9rem;margin-top:0;line-height:1.6;">
+    {% if cfg.rookie_mode %}
+      <strong style="color:#c9a227;">Status: ON</strong> — only players with an
+      active membership ({{ rookie_tier_label }} or higher) can use the bot.
+      Everyone else gets the message below and nothing else.
+    {% else %}
+      <strong style="color:var(--green,#00C9A7);">Status: OFF</strong> — the bot
+      is open to everyone, exactly as before. Memberships still grant their perks.
+    {% endif %}
+  </p>
+  <ul style="color:var(--muted);line-height:1.7;padding-left:1.2rem;font-size:.88rem;">
+    <li><strong>Locked for non-members:</strong> every command, every button,
+      and the whole Mini App.</li>
+    <li><strong>Still open to everyone:</strong>
+      {% for command in rookie_free_commands %}<code>/{{ command }}</code>{% if not loop.last %} {% endif %}{% endfor %}
+      — so a new player can still <code>/debut</code>, read the guide, and see
+      what a membership costs.</li>
+    <li><strong>Every paid tier is included:</strong> Rookie is the cheapest rung
+      of the ladder, so Bronze → Diamond members already have access.</li>
+    <li><strong>Admins are never locked out</strong> — the maintenance bypass
+      list above doubles as the Rookie bypass list.</li>
+    <li><strong>Expiry is live:</strong> a membership that lapses locks the bot
+      again on its own, and a fresh activation unlocks it within ~30 seconds.</li>
+  </ul>
+  <p style="color:var(--muted);font-size:.85rem;">
+    Right now <strong>{{ rookie_members }}</strong> of
+    <strong>{{ rookie_total_users }}</strong> registered players hold an active
+    membership{% if not cfg.rookie_mode %} and would keep access if you switch this on{% endif %}.
+  </p>
+
+  <form method="POST" action="{{ url_for('admin_maintenance') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-row">
+      <label>Custom lock message (HTML allowed)</label>
+      <textarea name="rookie_message" placeholder="🔒 &lt;b&gt;Members only&lt;/b&gt;&#10;&#10;Get Rookie (₹15/month) to unlock the bot.">{{ cfg.rookie_message or '' }}</textarea>
+      <div class="hint">Leave blank for the default, which quotes the live price
+        list from <code>config.SUBSCRIPTION_TIERS</code> and points players at
+        <code>/membership</code>.</div>
+    </div>
+    <div style="display:flex;gap:.6rem;flex-wrap:wrap;">
+      {% if cfg.rookie_mode %}
+      <button type="submit" name="action" value="rookie_disable" class="btn btn-green"
+              onclick="return confirm('Turn Rookie mode OFF and open the bot to everyone again?')">
+        ✅ Disable Rookie Mode
+      </button>
+      {% else %}
+      <button type="submit" name="action" value="rookie_enable" class="btn btn-red"
+              onclick="return confirm('Turn Rookie mode ON?\n\nEvery player without an active membership loses access to all commands and the Mini App — only /debut, /membership and the help commands keep working.')">
+        🔒 Enable Rookie Mode
+      </button>
+      {% endif %}
+      <button type="submit" name="action" value="rookie_save_message" class="btn btn-blue">
+        💾 Save Message
+      </button>
+    </div>
+  </form>
+
+  {% if rookie_preview %}
+  <div class="preview-box" style="margin-top:1rem;">{{ rookie_preview|safe }}</div>
+  {% endif %}
+</div>
+
 <!-- Tournament command access panel (independent of maintenance) -->
 <div class="panel">
   <h3>🏆 Tournament Command Access</h3>

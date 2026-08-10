@@ -2,7 +2,9 @@
 
 Subscribers open ONE box per cooldown window, at their tier's cadence (Bronze
 every 15 days, Silver 8, Platinum 4, Diamond 2 — see
-config.SUBSCRIPTION_TIERS["…"]["mysterybox_cooldown_days"]). Picking a box
+config.SUBSCRIPTION_TIERS["…"]["mysterybox_cooldown_days"]). A tier whose
+cadence is 0 has no Mystery Box at all: that is how the Rookie access tier
+stays out of it. Picking a box
 generates weighted rewards (coins, gems,
 quest points and one random OVR-banded player), reveals them in place, and locks
 all nine buttons so the box cannot be re-opened until the cooldown resets.
@@ -119,9 +121,13 @@ async def cmumysterybox_handler(update: Update, context: ContextTypes.DEFAULT_TY
         if not user:
             await update.message.reply_text("❌ Use /debut first.")
             return
-        if not subscription_service.is_subscribed(user):
+        # The Mystery Box belongs to the tiers that pay for it: Rookie buys
+        # ACCESS to the bot, not the recurring drops, so check the perk rather
+        # than "does this user have any subscription?".
+        if not subscription_service.has_mysterybox(user):
             await update.message.reply_text(
-                subscription_service.premium_required_message("The Mystery Box"),
+                subscription_service.premium_required_message(
+                    "The Mystery Box", perk="mysterybox_cooldown_days"),
                 parse_mode="HTML")
             return
 
@@ -185,8 +191,10 @@ async def _reveal(query, opened_index: int):
         if not user:
             await query.answer("❌ Use /debut first.", show_alert=True)
             return
-        if not subscription_service.is_subscribed(user):
-            await query.answer("Your subscription has expired.", show_alert=True)
+        if not subscription_service.has_mysterybox(user):
+            await query.answer(
+                "Your Mystery Box membership is no longer active.",
+                show_alert=True)
             return
 
         stats = _ensure_stats(session, user.id)

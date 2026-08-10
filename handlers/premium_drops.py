@@ -65,7 +65,7 @@ async def cmuweekly_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not subscription_service.has_weekly_card(user):
             await update.message.reply_text(
                 subscription_service.premium_required_message(
-                    "The Weekly Card", min_tier="platinum"),
+                    "The Weekly Card", perk="weekly_card"),
                 parse_mode="HTML")
             return
 
@@ -120,7 +120,7 @@ async def cmuchest_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not chest_cfg:
             await update.message.reply_text(
                 subscription_service.premium_required_message(
-                    "Coin Chests", min_tier="platinum"),
+                    "Coin Chests", perk="coin_chests"),
                 parse_mode="HTML")
             return
 

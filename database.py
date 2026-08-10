@@ -695,6 +695,11 @@ def _migrate_add_columns():
     _try_add("game_config", "match_style", "VARCHAR(20) DEFAULT 'telegram' NOT NULL")
     _try_add("game_config", "challenge_max_overs", "INTEGER DEFAULT 2 NOT NULL")
     _try_add("game_config", "allow_same_team_challenge", "BOOLEAN DEFAULT FALSE NOT NULL")
+    # Rookie mode — the membership gate (services/rookie_gate.py). Defaults to
+    # OFF so an existing deployment keeps its open-to-everyone behaviour until
+    # an admin turns the gate on from the website.
+    _try_add("game_config", "rookie_mode", "BOOLEAN DEFAULT FALSE NOT NULL")
+    _try_add("game_config", "rookie_message", "TEXT")
     # Player card rendering — alternate admin-uploaded template card style
     _try_add("game_config", "card_style", "VARCHAR(20) DEFAULT 'tier' NOT NULL")
     _try_add("game_config", "card_template_image_path", "VARCHAR(300)")

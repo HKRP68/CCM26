@@ -22,29 +22,35 @@ var state = {
   pendingRolePid: null,
 };
 
-/* ── Maintenance lock ─────────────────────────────────── */
+/* ── Locked-out screens ───────────────────────────────── */
 /* Every /api/fantasy/* endpoint returns 503 {error:"maintenance"} while the
-   game is under maintenance. Show that once instead of an empty picker. */
+   game is under maintenance, and 403 {error:"rookie_required"} when Rookie
+   mode is on and the player has no membership. Show either once instead of an
+   empty picker. */
 var maintenanceShown = false;
 
 function isMaintenance(d) {
-  return !!(d && d.ok === false && d.error === 'maintenance');
+  return !!(d && d.ok === false
+            && (d.error === 'maintenance' || d.error === 'rookie_required'));
 }
 
 function showMaintenance(d) {
   if (maintenanceShown) return true;
   maintenanceShown = true;
+  var locked = !!(d && d.error === 'rookie_required');
   var wrap = document.createElement('div');
   wrap.style.cssText = 'position:fixed;inset:0;z-index:9999;display:flex;'
     + 'align-items:center;justify-content:center;padding:1.5rem;text-align:center;'
     + 'background:#0b0f17;color:#fff;font:inherit;';
   var icon = document.createElement('div');
   icon.style.cssText = 'font-size:2.75rem;margin-bottom:.85rem;';
-  icon.textContent = '🛠️';
+  icon.textContent = locked ? '🔒' : '🛠️';
   var body = document.createElement('div');
   body.style.cssText = 'max-width:22rem;line-height:1.65;white-space:pre-line;';
   // textContent, so an admin-written message can never inject markup here.
-  body.textContent = ((d && d.message) || 'The game is under maintenance.')
+  body.textContent = ((d && d.message)
+    || (locked ? 'Members only — send /membership in the bot to see the plans.'
+               : 'The game is under maintenance.'))
     .replace(/<[^>]+>/g, '');
   var card = document.createElement('div');
   card.appendChild(icon);

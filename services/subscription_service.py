@@ -2,8 +2,11 @@
 
 Subscriptions are granted manually by an admin from the website (there is no
 self-serve payment). A user's ``subscription_tier`` is one of ``none``,
-``bronze``, ``silver``, ``platinum`` or ``diamond`` and stays active until
-``subscription_expires_at``. An expired tier is treated as ``none`` everywhere
+``rookie``, ``bronze``, ``silver``, ``platinum`` or ``diamond`` and stays active
+until ``subscription_expires_at``. ``rookie`` is the cheapest tier and the one
+that grants plain ACCESS to the bot while Rookie mode is on (see
+``services/rookie_gate.py``); every higher tier outranks it and therefore
+includes that access. An expired tier is treated as ``none`` everywhere
 WITHOUT needing a background job — every access check goes through
 :func:`get_tier`, which compares the expiry to ``utcnow()`` on read.
 
@@ -66,6 +69,17 @@ def tier_label(tier: str) -> str:
     return "Free"
 
 
+def has_tier_at_least(user, min_tier: str) -> bool:
+    """True if the user's ACTIVE tier ranks at or above ``min_tier``.
+
+    The rank ladder comes from ``SUBSCRIPTION_TIERS`` declaration order, so
+    "at least Rookie" automatically includes every richer tier — callers never
+    enumerate tiers themselves. An unknown ``min_tier`` ranks 0, which every
+    subscribed user clears and no free user does.
+    """
+    return tier_rank(get_tier(user)) >= max(1, tier_rank(min_tier))
+
+
 def can_upgrade(user, target_tier: str) -> bool:
     """True if ``target_tier`` is strictly higher than the user's active tier."""
     return tier_rank(target_tier) > tier_rank(get_tier(user))
@@ -106,6 +120,18 @@ def has_autoplay(user) -> bool:
     """True if the active tier unlocks the Mini App Autoplay toggle."""
     cfg = tier_config(get_tier(user))
     return bool(cfg and cfg.get("autoplay"))
+
+
+def has_mysterybox(user) -> bool:
+    """True if the active tier includes /cmumysterybox.
+
+    Driven by ``mysterybox_cooldown_days``: a tier that sets it to 0 (Rookie —
+    the access tier) has no Mystery Box at all, while every tier with a real
+    cadence does. Checking the perk rather than "is the user subscribed?" keeps
+    the drop with the tiers that actually pay for it.
+    """
+    cfg = tier_config(get_tier(user))
+    return bool(cfg and cfg.get("mysterybox_cooldown_days"))
 
 
 def has_weekly_card(user) -> bool:
@@ -267,6 +293,18 @@ def tiers_with_perk(perk: str) -> list[str]:
     return [name for name, cfg in SUBSCRIPTION_TIERS.items() if cfg.get(perk)]
 
 
+def min_tier_with_perk(perk: str) -> str | None:
+    """The CHEAPEST tier that enables ``perk``, or None if no tier does.
+
+    Feeds :func:`premium_required_message` so an upsell never advertises a tier
+    that doesn't actually unlock what the user just tried to use — the reason
+    the Rookie access tier can sit at the bottom of the ladder without appearing
+    in every "upgrade to unlock" message.
+    """
+    tiers = tiers_with_perk(perk)
+    return tiers[0] if tiers else None
+
+
 def tier_names(tiers) -> str:
     """"🥈 Silver, 🏆 Platinum or 💎 Diamond" — a plain-text (no HTML) tier list
     for JSON API messages and Mini App alerts, where markup would show through
@@ -279,12 +317,17 @@ def tier_names(tiers) -> str:
 
 
 def premium_required_message(feature: str = "This feature",
-                             min_tier: str | None = None) -> str:
+                             min_tier: str | None = None,
+                             perk: str | None = None) -> str:
     """Upsell shown when a free (or too-low) member hits a paid feature.
 
     ``min_tier`` names the cheapest tier that unlocks ``feature`` so the message
-    only advertises tiers that actually include it.
+    only advertises tiers that actually include it. Pass ``perk`` instead to
+    have that floor derived from the config (see :func:`min_tier_with_perk`),
+    which keeps the message correct when a perk is moved up or down the ladder.
     """
+    if min_tier is None and perk:
+        min_tier = min_tier_with_perk(perk)
     return (
         f"🔒 <b>{feature} is a premium feature.</b>\n\n"
         f"Upgrade to {tier_price_list(min_tier)} to unlock it, plus Mystery "
