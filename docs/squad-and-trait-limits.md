@@ -1,7 +1,7 @@
-# Squad size, the squad-wide trait budget, and trait refresh timing
+# Squad size, the squad-wide trait budget, and market refresh timing
 
 Design note for the 25 → 19 squad rebalance, the new squad-wide trait cap, and
-the website-editable trait market schedule.
+the website-editable market schedules.
 
 Reference implementation: `config.py` (the constants),
 `services/trait_service.py` (counting and enforcement),
@@ -24,9 +24,10 @@ Three changes, plus the data migration the first two force:
    top of the existing per-card rules. The **Career Player is exempt** and keeps
    its own 3 slots, so a fully kitted account holds **18 + 3 = 21** equipped
    traits.
-3. **The trait market refreshes on its own interval + start hour**, editable
+3. **Each shared market refreshes on its own interval + start hour**, editable
    from the admin website — "every 12 hours starting 12 AM" means 12 AM and
-   12 PM IST, every day.
+   12 PM IST, every day. The player market and the trait market are set
+   separately and neither defaults away from the daily reroll it had.
 
 ---
 
@@ -307,25 +308,36 @@ hear about it, use the button.
 
 ---
 
-## 5. Trait market refresh timing
+## 5. Market refresh timing
 
-### 5.1 Why it moved off the player market's hour
+### 5.1 Why each market got its own schedule
 
 Both shared markets used to reroll once daily at
 `GameConfig.market_refresh_hour_ist` — one setting, two markets. Traits want to
-turn over more often than player cards, and there was no way to say so.
+turn over more often than player cards, and there was no way to say so, so the
+trait market moved to its own interval first. The player market has since
+followed: an admin who wants the cards to turn over twice a day, or every six
+hours, should not have to reroll by hand.
 
 ### 5.2 Interval + start hour
 
-Two new `GameConfig` columns, `trait_market_refresh_interval_hours` and
-`trait_market_refresh_start_hour_ist`. Anchors are
-`(start + k × interval) mod 24`, so 12 h from 12 AM is `[0, 12]` — midnight and
-noon, on the same clock hours forever.
+Each market stores the same pair of settings in its own `GameConfig` columns:
 
-**Only divisors of 24 are offered** (`TRAIT_MARKET_REFRESH_INTERVALS`). An
-interval like 5 h does not tile a day: the refresh times would drift round the
-clock and "12 AM and 12 PM" would stop being true after the first day. A stored
-value outside the list is snapped by `clamp_refresh_interval`, which breaks ties
+| Market | Interval | Start hour |
+| --- | --- | --- |
+| Player | `market_refresh_interval_hours` | `market_refresh_hour_ist` |
+| Trait | `trait_market_refresh_interval_hours` | `trait_market_refresh_start_hour_ist` |
+
+Anchors are `(start + k × interval) mod 24`, so 12 h from 12 AM is `[0, 12]` —
+midnight and noon, on the same clock hours forever. `_player_schedule` and
+`_trait_schedule` read one pair each and hand it to the shared `_schedule`,
+which is the only place a raw column becomes a usable `(start, interval)`.
+
+**Only divisors of 24 are offered** (`MARKET_REFRESH_INTERVALS`, still exported
+under its old name `TRAIT_MARKET_REFRESH_INTERVALS` for importers). An interval
+like 5 h does not tile a day: the refresh times would drift round the clock and
+"12 AM and 12 PM" would stop being true after the first day. A stored value
+outside the list is snapped by `clamp_refresh_interval`, which breaks ties
 toward the *shorter* interval so a mis-set value errs toward refreshing more
 often rather than less.
 
@@ -337,16 +349,20 @@ market that has not rerolled for a week reports the anchor it first missed and
 fires immediately. Anchoring the search on *now* looks equivalent and quietly
 breaks the stale case.
 
-The player market calls the same function without an interval, so it keeps its
-single daily anchor and is entirely unaffected.
+Both markets call the same function against their own last-refresh column, so
+one market falling behind never drags the other with it.
 
 ### 5.4 Back-compat
 
-`trait_market_refresh_start_hour_ist` is nullable. A database that has been
-migrated but whose settings have not been re-saved has NULL there, and
-`_trait_schedule` falls back to `market_refresh_hour_ist` — such an install
-keeps exactly the refresh time it already had rather than silently jumping to
-midnight.
+Nothing moves until an admin picks a new interval. `market_refresh_interval_hours`
+defaults to 24 — the single daily reroll the player market always had, at the
+hour it is already set to — and a NULL reads as 24 too, so a database migrated
+but never re-saved keeps its cadence exactly.
+
+`trait_market_refresh_start_hour_ist` is nullable for the same reason, and
+`_trait_schedule` falls back to `market_refresh_hour_ist` there: an install
+migrated before the trait columns existed keeps the refresh time it had rather
+than silently jumping to midnight.
 
 ### 5.5 The legacy per-user shop
 
@@ -355,14 +371,28 @@ no longer uses) hardcoded a 24-hour window. It now reads the configured
 interval, so it cannot disagree with the setting if anything ever calls it
 again.
 
+### 5.6 What players see
+
+`/playermarket` reads the interval through `get_player_refresh_interval_hours`
+rather than promising "Refreshes every 24h" in a hardcoded string, so the
+caption matches the setting. The market image's subtitle already counted down to
+`get_next_refresh_at`, which now follows the configured anchors for free.
+
+The Mini App is the surface most captains actually see — `/playermarket` redirects
+there whenever `WEBAPP_URL` is set — and its market screen had "Refreshes daily"
+baked into the HTML. `/api/webapp/market` now returns `refresh_interval_hours`
+and the screen writes its own caption from it, so the two surfaces cannot
+disagree about a setting either of them is reading live.
+
 ---
 
 ## 6. Admin UI
 
-`/markets` → **Market Settings**. The player market keeps its single
-"daily refresh time" select; the trait market gets an interval select and a
-start-hour select, with the resulting schedule rendered underneath
-("🔁 Trait market currently refreshes at 12:00 AM, 12:00 PM IST"). The preview
-is computed server-side by `get_trait_refresh_schedule`, from the same helpers
-`ensure_trait_market_fresh` uses — so the page cannot show a schedule the bot
-won't follow, and it needs no JavaScript.
+`/markets` → **Market Settings**. Each market gets an interval select and a
+start-hour select — four controls from two Jinja macros, since both markets
+choose from the same two lists — with the resulting schedules rendered
+underneath ("🔁 Player market currently refreshes at 12:00 AM, 12:00 PM IST").
+The previews are computed server-side by `get_player_refresh_schedule` and
+`get_trait_refresh_schedule`, from the same helpers `ensure_*_market_fresh`
+use — so the page cannot show a schedule the bot won't follow, and it needs no
+JavaScript.

@@ -22,7 +22,8 @@ from models import User, Player
 from utils.idempotency import claim_once, release
 from services.global_market import (
     list_player_market, buy_player, ensure_player_market_fresh,
-    get_next_refresh_at, is_sold_out, is_unlimited,
+    get_next_refresh_at, get_player_refresh_interval_hours,
+    is_sold_out, is_unlimited,
 )
 from services.market_image import generate_market_image
 from services.card_generator import generate_card
@@ -110,7 +111,7 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 return
 
         # Legacy fallback when Mini App isn't configured
-        # Auto-refresh if 24h have passed (or first run)
+        # Auto-refresh if a scheduled refresh has passed (or first run)
         ensure_player_market_fresh(session)
 
         slots = list_player_market(session)
@@ -153,11 +154,15 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         btns.append([InlineKeyboardButton(
             "❌ Cancel", callback_data=f"pmcancel_{tg_user.id}")])
 
+        # How often the market turns over is an admin setting now, so read it
+        # rather than promising a day that may not be what's configured.
+        every = get_player_refresh_interval_hours(session)
+        cadence = "daily" if every >= 24 else f"every {every}h"
         discount_line = (f"🏷️ Your membership: <b>{discount_pct}% off</b> all cards "
-                         "· Refreshes every 24h"
+                         f"· Refreshes {cadence}"
                          if discount_pct else
                          "🏷️ <b>Platinum</b> 5% / <b>Diamond</b> 10% off all cards "
-                         "· Refreshes every 24h")
+                         f"· Refreshes {cadence}")
         # Stock is unlimited by default, so say so — the old market sold one
         # copy per card and captains learned to rush it.
         stock_line = ("♾️ <b>Unlimited stock</b> — nothing here sells out"

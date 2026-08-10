@@ -521,12 +521,19 @@ def trait_list_price(rarity=None) -> int:
 TRAIT_MARKET_SLOTS = 5
 TRAIT_MARKET_REFRESH_HOURS = 24
 
-# How often the trait market may be set to refresh, in hours. Only divisors of
-# 24 are offered: they are the intervals that tile a day evenly, so "every 12
-# hours starting 12 AM" lands on 12 AM and 12 PM every day forever instead of
-# drifting round the clock. Admin-selectable from /markets on the website; the
-# live values live in GameConfig, not here.
-TRAIT_MARKET_REFRESH_INTERVALS = (1, 2, 3, 4, 6, 8, 12, 24)
+# How often a market may be set to refresh, in hours. Only divisors of 24 are
+# offered: they are the intervals that tile a day evenly, so "every 12 hours
+# starting 12 AM" lands on 12 AM and 12 PM every day forever instead of drifting
+# round the clock. Admin-selectable from /markets on the website; the live
+# values live in GameConfig, not here.
+#
+# Both shared markets choose from this same list — the player market and the
+# trait market each keep their own interval + start hour in GameConfig.
+MARKET_REFRESH_INTERVALS = (1, 2, 3, 4, 6, 8, 12, 24)
+
+# The name this list had when only the trait market could use it, kept as an
+# alias so existing importers keep working.
+TRAIT_MARKET_REFRESH_INTERVALS = MARKET_REFRESH_INTERVALS
 
 
 def clamp_refresh_interval(hours) -> int:
@@ -539,9 +546,9 @@ def clamp_refresh_interval(hours) -> int:
         hours = int(hours)
     except (TypeError, ValueError):
         return 24
-    if hours in TRAIT_MARKET_REFRESH_INTERVALS:
+    if hours in MARKET_REFRESH_INTERVALS:
         return hours
-    return min(TRAIT_MARKET_REFRESH_INTERVALS, key=lambda h: (abs(h - hours), h))
+    return min(MARKET_REFRESH_INTERVALS, key=lambda h: (abs(h - hours), h))
 
 
 def refresh_anchor_hours(start_hour, interval_hours) -> list:

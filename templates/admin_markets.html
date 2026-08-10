@@ -2,10 +2,33 @@
 {% block title %}Markets{% endblock %}
 {% block content %}
 
+{# Both markets pick a start hour and an interval from the same two lists, so
+   the controls are macros rather than four near-identical copies. #}
+{% macro hour_select(name, current) %}
+  <select name="{{ name }}" required
+          style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    {% for h in range(24) %}
+      {% set lbl = '12:00 AM' if h == 0 else ('12:00 PM' if h == 12 else (h ~ ':00 AM' if h < 12 else (h - 12) ~ ':00 PM')) %}
+      <option value="{{ h }}" {% if h == current %}selected{% endif %}>{{ lbl }}</option>
+    {% endfor %}
+  </select>
+{% endmacro %}
+
+{% macro interval_select(name, current) %}
+  <select name="{{ name }}" required
+          style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    {% for h in refresh_intervals %}
+      <option value="{{ h }}" {% if h == current %}selected{% endif %}>
+        {{ '24 hours (once a day)' if h == 24 else ('1 hour' if h == 1 else h ~ ' hours') }}
+      </option>
+    {% endfor %}
+  </select>
+{% endmacro %}
+
 <h1>🛒 Markets</h1>
 
 <div style="background:var(--card); padding:1rem; border-radius:8px; margin-bottom:1.5rem; font-size:.9rem; color:var(--muted); border:1px solid var(--border);">
-  ℹ️ Markets are <strong>shared by all users</strong>, and each runs its own schedule: the <strong>player</strong> market refreshes once daily at <strong>{{ '%02d:00 IST' | format(cfg.market_refresh_hour_ist or 0) }}</strong>, the <strong>trait</strong> market at <strong>{{ trait_schedule.summary }}</strong>. Player cards list at their <strong>base price</strong> — that's what Free, Bronze and Silver pay; <strong>Platinum</strong> saves 5% and <strong>Diamond</strong> 10%. Lower a slot's <strong>Sell</strong> price to put it on sale for everyone.
+  ℹ️ Markets are <strong>shared by all users</strong>, and each runs its own schedule: the <strong>player</strong> market refreshes at <strong>{{ player_schedule.summary }}</strong>, the <strong>trait</strong> market at <strong>{{ trait_schedule.summary }}</strong>. Player cards list at their <strong>base price</strong> — that's what Free, Bronze and Silver pay; <strong>Platinum</strong> saves 5% and <strong>Diamond</strong> 10%. Lower a slot's <strong>Sell</strong> price to put it on sale for everyone.
   <br><br>
   📦 <strong>Stock: 0 means unlimited</strong> — the slot never sells out and everyone can buy it (a captain still can't own two copies of the same card). That's the default for everything listed. Enter a positive number to make a slot a limited run instead; those stay race-safe under concurrent buys.
 </div>
@@ -42,47 +65,39 @@
     </div>
     <div>
       <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
-        Player market — daily refresh (IST)
+        Player market — refresh every
       </label>
-      <select name="market_refresh_hour_ist" required
-              style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-        {% set current_hour = cfg.market_refresh_hour_ist or 0 %}
-        {% for h in range(24) %}
-          {% set lbl = '12:00 AM' if h == 0 else ('12:00 PM' if h == 12 else (h ~ ':00 AM' if h < 12 else (h - 12) ~ ':00 PM')) %}
-          <option value="{{ h }}" {% if h == current_hour %}selected{% endif %}>{{ lbl }}</option>
-        {% endfor %}
-      </select>
+      {{ interval_select('market_refresh_interval_hours', player_schedule.interval_hours) }}
+    </div>
+    <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
+        Player market — starting at (IST)
+      </label>
+      {{ hour_select('market_refresh_hour_ist', player_schedule.start_hour) }}
     </div>
     <div>
       <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
         Trait market — refresh every
       </label>
-      <select name="trait_market_refresh_interval_hours" required
-              style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-        {% for h in refresh_intervals %}
-          <option value="{{ h }}" {% if h == trait_schedule.interval_hours %}selected{% endif %}>
-            {{ '24 hours (once a day)' if h == 24 else ('1 hour' if h == 1 else h ~ ' hours') }}
-          </option>
-        {% endfor %}
-      </select>
+      {{ interval_select('trait_market_refresh_interval_hours', trait_schedule.interval_hours) }}
     </div>
     <div>
       <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
         Trait market — starting at (IST)
       </label>
-      <select name="trait_market_refresh_start_hour_ist" required
-              style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-        {% for h in range(24) %}
-          {% set lbl = '12:00 AM' if h == 0 else ('12:00 PM' if h == 12 else (h ~ ':00 AM' if h < 12 else (h - 12) ~ ':00 PM')) %}
-          <option value="{{ h }}" {% if h == trait_schedule.start_hour %}selected{% endif %}>{{ lbl }}</option>
-        {% endfor %}
-      </select>
+      {{ hour_select('trait_market_refresh_start_hour_ist', trait_schedule.start_hour) }}
     </div>
     <div>
       <button type="submit" style="background:var(--accent); color:#000; border:none; padding:.55rem 1.2rem; border-radius:5px; font-weight:600; cursor:pointer; width:100%;">💾 Save</button>
     </div>
   </form>
   <div style="margin-top:.7rem; padding:.6rem .8rem; background:var(--input-bg); border:1px solid var(--border); border-radius:6px;">
+    <span style="font-size:.8rem; color:var(--muted);">🔁 Player market currently refreshes at</span>
+    <strong style="font-size:.9rem;">{{ player_schedule.summary }}</strong>
+    <span style="font-size:.8rem; color:var(--muted);">
+      ({{ player_schedule.labels | length }}× a day, every {{ player_schedule.interval_hours }}h)
+    </span>
+    <br>
     <span style="font-size:.8rem; color:var(--muted);">🔁 Trait market currently refreshes at</span>
     <strong style="font-size:.9rem;">{{ trait_schedule.summary }}</strong>
     <span style="font-size:.8rem; color:var(--muted);">
@@ -90,7 +105,7 @@
     </span>
   </div>
   <small style="color:var(--muted); display:block; margin-top:.6rem;">
-    The two markets refresh independently. Only intervals that divide 24 evenly are offered, so the trait times stay on the same clock hours every day instead of drifting. Settings apply on the next refresh; click <strong>Reroll Now</strong> below to apply immediately.
+    The two markets refresh independently. Only intervals that divide 24 evenly are offered, so the times stay on the same clock hours every day instead of drifting. Settings apply on the next refresh; click <strong>Reroll Now</strong> below to apply immediately.
   </small>
 </div>
 

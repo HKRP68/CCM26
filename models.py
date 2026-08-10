@@ -1175,14 +1175,18 @@ class GameConfig(Base):
     market_min_rating = Column(Integer, default=87)
     market_default_slots = Column(Integer, default=6)
     market_last_refresh_at = Column(DateTime, nullable=True)
-    # Refresh schedule (IST). 0 = midnight IST, 9 = 9 AM IST, etc.
+    # Refresh schedule (IST): every `interval` hours starting from
+    # `market_refresh_hour_ist`. 0 = midnight IST, 9 = 9 AM IST, etc., and
+    # interval 12 + start 0 means 12 AM and 12 PM, every day. Interval 24 (the
+    # default) is the single daily reroll this market has always had, so a DB
+    # migrated but not yet re-saved keeps exactly the schedule it had.
     market_refresh_hour_ist = Column(Integer, default=0)
+    market_refresh_interval_hours = Column(Integer, default=24)
     # Trait market settings
     trait_market_default_slots = Column(Integer, default=5)
     trait_market_last_refresh_at = Column(DateTime, nullable=True)
-    # The trait market runs its own schedule, independent of the player market
-    # above: it refreshes every `interval` hours starting from `start_hour`
-    # (IST). Interval 12 + start 0 means 12 AM and 12 PM, every day. NULL start
+    # The trait market runs the same kind of schedule on its own columns, so
+    # the two markets can turn over at completely different rates. NULL start
     # hour falls back to market_refresh_hour_ist, so a DB migrated but not yet
     # re-saved keeps the time it had.
     trait_market_refresh_interval_hours = Column(Integer, default=24)

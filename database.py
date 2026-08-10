@@ -645,6 +645,9 @@ def _migrate_add_columns():
         "market_default_slots": "INTEGER DEFAULT 6",
         "market_last_refresh_at": "TIMESTAMP",
         "market_refresh_hour_ist": "INTEGER DEFAULT 0",
+        # 24 = the single daily reroll the player market had before it became
+        # interval-driven, so an existing install is unchanged by the migration.
+        "market_refresh_interval_hours": "INTEGER DEFAULT 24",
         "trait_market_default_slots": "INTEGER DEFAULT 5",
         "trait_market_last_refresh_at": "TIMESTAMP",
         "trait_market_refresh_interval_hours": "INTEGER DEFAULT 24",

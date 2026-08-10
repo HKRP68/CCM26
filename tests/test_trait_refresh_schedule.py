@@ -1,19 +1,22 @@
-"""Coverage for the website-editable trait market refresh schedule.
+"""Coverage for the website-editable market refresh schedules.
 
-The trait market used to share one daily reroll hour with the player market.
-It now runs on its own interval + start hour (GameConfig), so an admin can set
-"every 12 hours starting 12 AM" and get midnight and noon IST every day.
+Both shared markets used to reroll once a day at a single shared hour. Each now
+runs on its own interval + start hour (GameConfig), so an admin can set the
+traits to "every 12 hours starting 12 AM" — midnight and noon IST every day —
+and leave the player cards on a slower cadence, or vice versa.
 
-These tests pin the anchor maths, the back-compat fallback for a DB migrated
-but not yet re-saved, and that the player market's schedule is untouched.
+These tests pin the anchor maths, the back-compat fallbacks for a DB migrated
+but not yet re-saved, and that neither market can reach the other's schedule.
 """
 
 import unittest
 from datetime import datetime, timedelta
 
 from config import (clamp_refresh_interval, refresh_anchor_hours,
-                    format_hour_ist, TRAIT_MARKET_REFRESH_INTERVALS)
-from services.global_market import _next_refresh_utc, _is_due, _trait_schedule
+                    format_hour_ist, MARKET_REFRESH_INTERVALS,
+                    TRAIT_MARKET_REFRESH_INTERVALS)
+from services.global_market import (_next_refresh_utc, _is_due,
+                                    _player_schedule, _trait_schedule)
 
 IST_OFFSET = timedelta(hours=5, minutes=30)
 
@@ -41,8 +44,13 @@ class AnchorHoursTest(unittest.TestCase):
     def test_default_interval_is_a_single_daily_anchor(self):
         self.assertEqual(refresh_anchor_hours(9, 24), [9])
 
+    def test_the_trait_alias_is_the_shared_interval_list(self):
+        # The list was named for the trait market when only it could use one.
+        # Both markets pick from it now; the old name has to keep importing.
+        self.assertIs(TRAIT_MARKET_REFRESH_INTERVALS, MARKET_REFRESH_INTERVALS)
+
     def test_every_allowed_interval_tiles_the_day_evenly(self):
-        for interval in TRAIT_MARKET_REFRESH_INTERVALS:
+        for interval in MARKET_REFRESH_INTERVALS:
             hours = refresh_anchor_hours(0, interval)
             self.assertEqual(len(hours), 24 // interval, interval)
             self.assertEqual(len(set(hours)), len(hours), interval)
@@ -146,6 +154,40 @@ class TraitScheduleFallbackTest(unittest.TestCase):
                          (0, 12))
 
 
+class PlayerScheduleTest(unittest.TestCase):
+    """The player market reads its own interval, on its own start hour."""
+
+    class _Cfg:
+        def __init__(self, hour, interval):
+            self.market_refresh_hour_ist = hour
+            self.market_refresh_interval_hours = interval
+
+    def test_reads_the_configured_schedule(self):
+        self.assertEqual(_player_schedule(self._Cfg(0, 12)), (0, 12))
+        self.assertEqual(_player_schedule(self._Cfg(9, 6)), (9, 6))
+
+    def test_the_default_interval_is_the_old_single_daily_reroll(self):
+        # An install that never touches the new setting must not change
+        # cadence: 24 h from the hour it already had.
+        self.assertEqual(_player_schedule(self._Cfg(9, 24)), (9, 24))
+
+    def test_a_null_interval_reads_as_daily(self):
+        # Migrated but not yet re-saved — same cadence as before the column.
+        self.assertEqual(_player_schedule(self._Cfg(9, None)), (9, 24))
+
+    def test_a_null_start_hour_is_midnight(self):
+        # Unlike the trait market there is no earlier column to fall back to;
+        # the player hour IS that column.
+        self.assertEqual(_player_schedule(self._Cfg(None, 12)), (0, 12))
+
+    def test_a_bad_stored_interval_is_snapped_not_trusted(self):
+        self.assertEqual(_player_schedule(self._Cfg(0, 7)), (0, 6))
+        self.assertEqual(_player_schedule(self._Cfg(0, 0)), (0, 1))
+
+    def test_missing_config_row_defaults_to_daily_midnight(self):
+        self.assertEqual(_player_schedule(None), (0, 24))
+
+
 class _FakeSession:
     """Minimal stand-in: ``session.query(GameConfig).first()`` → the row."""
 
@@ -160,16 +202,17 @@ class _FakeSession:
 
 
 class _FakeCfg:
-    def __init__(self, *, player_hour, player_last,
+    def __init__(self, *, player_hour, player_last, player_interval=24,
                  trait_start, trait_interval, trait_last=None):
         self.market_refresh_hour_ist = player_hour
+        self.market_refresh_interval_hours = player_interval
         self.market_last_refresh_at = player_last
         self.trait_market_refresh_start_hour_ist = trait_start
         self.trait_market_refresh_interval_hours = trait_interval
         self.trait_market_last_refresh_at = trait_last
 
 
-class PlayerMarketUnaffectedTest(unittest.TestCase):
+class IndependentSchedulesTest(unittest.TestCase):
     """The two markets must not be able to reach each other's schedule."""
 
     def setUp(self):
@@ -238,6 +281,39 @@ class PlayerMarketUnaffectedTest(unittest.TestCase):
         empty = _FakeSession(None)
         self.assertIsNone(get_next_refresh_at(empty))
         self.assertIsNone(get_next_trait_refresh_at(empty))
+
+    def test_the_player_market_honours_its_own_shorter_interval(self):
+        # 6 h from midnight → 12 AM, 6 AM, 12 PM, 6 PM. Last rolled at
+        # midnight, so the next is 6 AM the same day — not tomorrow.
+        session = _FakeSession(_FakeCfg(
+            player_hour=0, player_interval=6, player_last=_ist(2026, 5, 4, 0),
+            trait_start=0, trait_interval=24, trait_last=_ist(2026, 5, 4, 0),
+        ))
+        from services.global_market import (get_next_refresh_at,
+                                            get_next_trait_refresh_at)
+        self.assertEqual(get_next_refresh_at(session), _ist(2026, 5, 4, 6))
+        # …while the traits, on 24 h in the same row, stay on tomorrow.
+        self.assertEqual(get_next_trait_refresh_at(session),
+                         _ist(2026, 5, 5, 0))
+
+    def test_the_player_market_is_due_once_its_interval_elapses(self):
+        from services.global_market import _is_due
+        now = _ist(2026, 5, 4, 7)
+        with _frozen_now(now):
+            # Rolled at 6 AM on a 6-hourly schedule: not due until noon.
+            self.assertFalse(_is_due(_ist(2026, 5, 4, 6), 0, 6))
+            # Rolled at 5 AM: the 6 AM anchor has passed, so it is.
+            self.assertTrue(_is_due(_ist(2026, 5, 4, 5), 0, 6))
+
+    def test_the_player_schedule_reaches_the_describing_helper(self):
+        from services.global_market import get_player_refresh_schedule
+        session = _FakeSession(_FakeCfg(
+            player_hour=6, player_interval=12, player_last=None,
+            trait_start=0, trait_interval=24,
+        ))
+        described = get_player_refresh_schedule(session)
+        self.assertEqual(described["hours"], [6, 18])
+        self.assertEqual(described["summary"], "6:00 AM, 6:00 PM IST")
 
 
 if __name__ == "__main__":
