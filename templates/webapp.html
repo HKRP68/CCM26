@@ -2627,8 +2627,8 @@
     <h2 style="margin:0;font-size:1.25rem;">🌟 Player Market</h2>
     <span style="color:var(--muted);font-size:0.8rem;" id="market-balance">— 🪙</span>
   </div>
-  <p style="color:var(--muted);font-size:0.78rem;margin:0 0 0.7rem;">
-    Today's market. Refreshes daily. Prices include discounts.
+  <p style="color:var(--muted);font-size:0.78rem;margin:0 0 0.7rem;" id="market-cadence">
+    The current market. Prices include discounts.
   </p>
   <div id="market-list">
     <div class="empty"><div class="spinner"></div></div>
@@ -5756,6 +5756,14 @@ async function loadMarket() {
   }
   const bal = document.getElementById('market-balance');
   if (data.balance) bal.textContent = `${data.balance.coins.toLocaleString()} 🪙 · ${data.balance.roster_count}/${data.balance.roster_max}`;
+  // The refresh cadence is an admin setting — say what it actually is.
+  const every = data.refresh_interval_hours;
+  const cadence = document.getElementById('market-cadence');
+  if (cadence && every) {
+    cadence.textContent = every >= 24
+      ? "Today's market. Refreshes daily. Prices include discounts."
+      : `The current market. Refreshes every ${every}h. Prices include discounts.`;
+  }
   if (!data.slots.length) {
     list.innerHTML = `<div class="empty"><div class="icon">🌟</div>Market is empty — try again soon</div>`;
     return;

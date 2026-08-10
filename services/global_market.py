@@ -209,9 +209,9 @@ def _next_refresh_utc(refresh_hour_ist, last_refresh_utc=None, interval_hours=24
 
     The market refreshes every ``interval_hours``, starting from
     ``refresh_hour_ist`` (an IST clock hour). With the default 24 that is one
-    daily reroll at that hour — the player market's long-standing behaviour.
-    With ``interval_hours=12`` and hour 0 it is midnight and noon IST, which is
-    what the trait market's website setting drives.
+    daily reroll at that hour — the behaviour both markets shipped with. With
+    ``interval_hours=12`` and hour 0 it is midnight and noon IST. Both markets
+    drive this from their own website setting.
 
     Given ``last_refresh_utc``, this returns the first anchor strictly after
     it; with no last refresh, the first anchor after now.
@@ -251,38 +251,57 @@ def _is_due(last_refresh_utc, refresh_hour_ist, interval_hours=24):
     return _now_utc() >= next_at
 
 
-def _trait_schedule(cfg_row):
-    """``(start_hour_ist, interval_hours)`` for the trait market.
+def _schedule(start, stored_interval, fallback_start=0):
+    """``(start_hour_ist, interval_hours)`` from two raw config values.
 
-    A DB migrated but not yet re-saved has a NULL start hour; falling back to
-    ``market_refresh_hour_ist`` keeps such an install on exactly the time it
-    already had rather than silently moving it to midnight.
+    Shared by both markets, which store the same pair of settings in their own
+    columns. NULL start falls back to ``fallback_start`` — a DB migrated but
+    not yet re-saved keeps the time it already had rather than silently moving
+    to midnight.
     """
     from config import clamp_refresh_interval
-    if not cfg_row:
-        return 0, 24
-    start = cfg_row.trait_market_refresh_start_hour_ist
     if start is None:
-        start = cfg_row.market_refresh_hour_ist or 0
+        start = fallback_start or 0
     # Only NULL means "unset" — a stored 0 is a real value and must reach
     # clamp_refresh_interval, which snaps it to the 1-hour minimum rather than
     # silently reading as "once a day".
-    stored_interval = cfg_row.trait_market_refresh_interval_hours
     interval = clamp_refresh_interval(
         24 if stored_interval is None else stored_interval)
     return int(start) % 24, interval
 
 
+def _player_schedule(cfg_row):
+    """``(start_hour_ist, interval_hours)`` for the player market.
+
+    Interval 24 — the column default — is the single daily reroll this market
+    ran on before the interval was configurable, so nothing moves until an
+    admin picks a shorter one.
+    """
+    if not cfg_row:
+        return 0, 24
+    return _schedule(cfg_row.market_refresh_hour_ist,
+                     cfg_row.market_refresh_interval_hours)
+
+
+def _trait_schedule(cfg_row):
+    """``(start_hour_ist, interval_hours)`` for the trait market."""
+    if not cfg_row:
+        return 0, 24
+    return _schedule(cfg_row.trait_market_refresh_start_hour_ist,
+                     cfg_row.trait_market_refresh_interval_hours,
+                     fallback_start=cfg_row.market_refresh_hour_ist)
+
+
 def ensure_player_market_fresh(session):
-    """Reroll the player market if today's refresh time has passed since last reroll.
-    Called from the bot before showing the market.
+    """Reroll the player market if a scheduled refresh has passed since the last
+    reroll. Called from the bot before showing the market.
     """
     from models import GameConfig
     cfg_row = session.query(GameConfig).first()
     last = cfg_row.market_last_refresh_at if cfg_row else None
-    refresh_hour = (cfg_row.market_refresh_hour_ist if cfg_row else 0) or 0
+    refresh_hour, interval = _player_schedule(cfg_row)
 
-    if _is_due(last, refresh_hour):
+    if _is_due(last, refresh_hour, interval):
         try:
             n = reroll_player_market(session)
             session.commit()
@@ -320,8 +339,8 @@ def get_next_refresh_at(session):
     if not cfg_row:
         return None
     last = cfg_row.market_last_refresh_at
-    refresh_hour = cfg_row.market_refresh_hour_ist or 0
-    return _next_refresh_utc(refresh_hour, last)
+    refresh_hour, interval = _player_schedule(cfg_row)
+    return _next_refresh_utc(refresh_hour, last, interval)
 
 
 def get_next_trait_refresh_at(session):
@@ -334,17 +353,12 @@ def get_next_trait_refresh_at(session):
     return _next_refresh_utc(refresh_hour, last, interval)
 
 
-def get_trait_refresh_schedule(session):
-    """Describe the trait market's schedule for the admin page.
+def _describe_schedule(start, interval):
+    """``{start_hour, interval_hours, hours, labels, summary}`` for a schedule.
 
-    Returns ``{start_hour, interval_hours, hours, labels, summary}`` — the
-    summary being a ready-to-render string like "12:00 AM, 12:00 PM IST".
+    The summary is a ready-to-render string like "12:00 AM, 12:00 PM IST".
     """
     from config import refresh_anchor_hours, format_hour_ist
-    from models import GameConfig
-
-    cfg_row = session.query(GameConfig).first()
-    start, interval = _trait_schedule(cfg_row)
     hours = refresh_anchor_hours(start, interval)
     labels = [format_hour_ist(h) for h in hours]
     return {
@@ -356,21 +370,47 @@ def get_trait_refresh_schedule(session):
     }
 
 
-def get_trait_refresh_interval_hours(session=None):
-    """The configured trait-refresh interval, for callers outside this module."""
+def get_player_refresh_schedule(session):
+    """Describe the player market's schedule, for the admin page and the bot."""
+    from models import GameConfig
+    return _describe_schedule(*_player_schedule(session.query(GameConfig).first()))
+
+
+def get_trait_refresh_schedule(session):
+    """Describe the trait market's schedule for the admin page."""
+    from models import GameConfig
+    return _describe_schedule(*_trait_schedule(session.query(GameConfig).first()))
+
+
+def _interval_hours(schedule_fn, session):
+    """One market's configured interval, opening a session if given none.
+
+    Falls back to 24 rather than raising: a caller asking "how often does this
+    refresh?" is labelling a screen, and a wrong label beats a crashed command.
+    """
     from models import GameConfig
     own = session is None
     if own:
         from database import get_session
         session = get_session()
     try:
-        return _trait_schedule(session.query(GameConfig).first())[1]
+        return schedule_fn(session.query(GameConfig).first())[1]
     except Exception:
-        logger.exception("get_trait_refresh_interval_hours failed; using 24h")
+        logger.exception("refresh interval lookup failed; using 24h")
         return 24
     finally:
         if own:
             session.close()
+
+
+def get_player_refresh_interval_hours(session=None):
+    """The configured player-refresh interval, for callers outside this module."""
+    return _interval_hours(_player_schedule, session)
+
+
+def get_trait_refresh_interval_hours(session=None):
+    """The configured trait-refresh interval, for callers outside this module."""
+    return _interval_hours(_trait_schedule, session)
 
 
 def is_trait_refresh_due(last_refresh_utc, session=None):

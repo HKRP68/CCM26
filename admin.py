@@ -6890,7 +6890,11 @@ def webapp_market():
                 "unlimited": is_unlimited(s),
                 "is_owned": p.id in owned,
             })
+        # How often this market turns over is an admin setting, so the Mini App
+        # is told rather than left saying "daily" over a 6-hourly shop.
+        from services.global_market import get_player_refresh_interval_hours
         return {"ok": True, "slots": results, "total": len(results),
+                "refresh_interval_hours": get_player_refresh_interval_hours(db),
                 "balance": {"coins": user.total_coins or 0,
                             "roster_count": user.roster_count or 0,
                             "roster_max": MAX_ROSTER}}
@@ -17036,10 +17040,12 @@ def admin_markets_overview():
         next_refresh = get_next_refresh_at(db)
         next_trait_refresh = get_next_trait_refresh_at(db)
 
-        # Computed server-side so the schedule preview needs no JS and always
-        # matches what ensure_trait_market_fresh will actually do.
-        from config import TRAIT_MARKET_REFRESH_INTERVALS
-        from services.global_market import get_trait_refresh_schedule
+        # Computed server-side so the schedule previews need no JS and always
+        # match what ensure_*_market_fresh will actually do.
+        from config import MARKET_REFRESH_INTERVALS
+        from services.global_market import (get_player_refresh_schedule,
+                                            get_trait_refresh_schedule)
+        player_schedule = get_player_refresh_schedule(db)
         trait_schedule = get_trait_refresh_schedule(db)
 
         return render_template("admin_markets.html",
@@ -17049,8 +17055,9 @@ def admin_markets_overview():
                                trait_rarity=trait_rarity,
                                next_refresh=next_refresh,
                                next_trait_refresh=next_trait_refresh,
+                               player_schedule=player_schedule,
                                trait_schedule=trait_schedule,
-                               refresh_intervals=TRAIT_MARKET_REFRESH_INTERVALS)
+                               refresh_intervals=MARKET_REFRESH_INTERVALS)
     finally:
         db.close()
 
@@ -17066,6 +17073,8 @@ def admin_market_settings_save():
             "market_min_rating": int(request.form.get("market_min_rating", 87)),
             "market_default_slots": int(request.form.get("market_default_slots", 6)),
             "market_refresh_hour_ist": int(request.form.get("market_refresh_hour_ist", 0)),
+            "market_refresh_interval_hours": request.form.get(
+                "market_refresh_interval_hours", 24),
             "trait_market_default_slots": int(request.form.get("trait_market_default_slots", 5)),
             "trait_market_refresh_interval_hours": request.form.get(
                 "trait_market_refresh_interval_hours", 24),
@@ -17079,6 +17088,8 @@ def admin_market_settings_save():
         updates["trait_market_default_slots"] = max(1, min(15, updates["trait_market_default_slots"]))
         # Only divisors of 24 tile a day evenly — anything else would drift the
         # refresh times round the clock instead of holding "12 AM and 12 PM".
+        updates["market_refresh_interval_hours"] = clamp_refresh_interval(
+            updates["market_refresh_interval_hours"])
         updates["trait_market_refresh_interval_hours"] = clamp_refresh_interval(
             updates["trait_market_refresh_interval_hours"])
         updates["trait_market_refresh_start_hour_ist"] = max(
@@ -17087,13 +17098,18 @@ def admin_market_settings_save():
                     updated_by=session.get("admin_user", "admin"))
         # One commit, after the audit row is staged: if log_admin throws, the
         # settings roll back with it rather than going live behind an error.
-        trait_times = ", ".join(
-            format_hour_ist(h) for h in refresh_anchor_hours(
-                updates["trait_market_refresh_start_hour_ist"],
-                updates["trait_market_refresh_interval_hours"]))
+        def _times(start_hour, interval_hours):
+            return ", ".join(format_hour_ist(h) for h in
+                             refresh_anchor_hours(start_hour, interval_hours))
+
+        player_times = _times(updates["market_refresh_hour_ist"],
+                              updates["market_refresh_interval_hours"])
+        trait_times = _times(updates["trait_market_refresh_start_hour_ist"],
+                             updates["trait_market_refresh_interval_hours"])
         log_admin(db, "market_settings", "config", 0, "market",
                   f"min_rating={updates['market_min_rating']}, slots={updates['market_default_slots']}, "
-                  f"refresh@{updates['market_refresh_hour_ist']}:00 IST, "
+                  f"refresh every {updates['market_refresh_interval_hours']}h "
+                  f"at {player_times} IST, "
                   f"trait_slots={updates['trait_market_default_slots']}, "
                   f"trait_refresh every {updates['trait_market_refresh_interval_hours']}h "
                   f"at {trait_times} IST")

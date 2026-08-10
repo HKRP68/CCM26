@@ -50,8 +50,8 @@ scarcity — the market charges the standard `/buy` price, so an extra sale is
 not an extra discount, and per-captain ownership is already limited by the rule
 that nobody may own two copies of the same card.
 
-So the shop is a shop now. What is listed today is buyable by everyone, all
-day, at the same price.
+So the shop is a shop now. What is listed is buyable by everyone, at the same
+price, right up to the next refresh.
 
 ### 2.2 The convention
 

@@ -45,8 +45,9 @@ DEFAULTS = {
     "market_min_rating": 87,
     "market_default_slots": 6,
     "market_refresh_hour_ist": 0,
+    "market_refresh_interval_hours": 24,
     "trait_market_default_slots": 5,
-    # Trait market runs its own schedule — see models.GameConfig for why.
+    # Each market runs its own schedule — see models.GameConfig for why.
     "trait_market_refresh_interval_hours": 24,
     "trait_market_refresh_start_hour_ist": 0,
     # Scorecard accent colors (hex strings)
