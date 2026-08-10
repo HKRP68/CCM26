@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 logger = logging.getLogger("admin")
 from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, flash, session, Response, send_file
-from sqlalchemy import func, or_, desc, asc, cast, String
+from sqlalchemy import func, or_, desc, asc, case, cast, String
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14166,6 +14166,7 @@ def _person(people, uid, fallback="?"):
 
 
 def _is_bot_user(people, uid):
+    """Whether this side is the AI. The bot user is the one with telegram_id -1."""
     if uid == -1:
         return True
     u = people.get(uid)
@@ -14224,7 +14225,10 @@ def _live_match_snapshots(db):
                 snap["bat_team"] = st.get("bat_team_name", "?")
                 snap["bowl_team"] = st.get("bowl_team_name", "?")
             except Exception:
-                pass
+                # The card still renders, just without a score — log why, so a
+                # match that mysteriously shows no runs is traceable.
+                logger.debug("live-matches: unreadable state_json for match %s",
+                             m.id, exc_info=True)
         live.append(snap)
     return live
 
@@ -14235,7 +14239,12 @@ def _completed_match_query(db, q="", mtype=""):
     Kept separate from the end-reason filter so the reason tallies can be
     counted against the same search without recursing into themselves.
     """
-    query = db.query(Match).filter(Match.status.notin_(UNFINISHED_MATCH_STATUSES))
+    # A NULL status fails `NOT IN` (it evaluates to NULL, not true), which
+    # would drop the row from the table while end_reason_filter's Unrecorded
+    # branch still counted it — a chip tallying rows the list never shows.
+    query = db.query(Match).filter(
+        or_(Match.status.is_(None),
+            Match.status.notin_(UNFINISHED_MATCH_STATUSES)))
 
     q = (q or "").strip()
     if q:
@@ -14324,11 +14333,22 @@ def admin_live_matches():
         # Tallies come from the search-filtered set but ignore the reason
         # filter, so the chips keep showing what else is in there once one is
         # picked.
-        reason_counts = {}
+        #
+        # One conditional-aggregate pass rather than a COUNT per chip: six
+        # separate counts would each re-run the search join. The clauses are
+        # still the same end_reason_filter() ones the chips themselves use, so
+        # there is no second copy of the bucketing logic to drift.
+        reason_counts = {key: 0 for key in END_REASONS}
+        tally_keys, tally_cols = [], []
         for key in END_REASONS:
             clause = end_reason_filter(Match, key)
-            reason_counts[key] = (base.filter(clause).count()
-                                  if clause is not None else 0)
+            if clause is None:
+                continue
+            tally_keys.append(key)
+            tally_cols.append(func.sum(case((clause, 1), else_=0)))
+        if tally_cols:
+            for key, value in zip(tally_keys, base.with_entities(*tally_cols).one()):
+                reason_counts[key] = int(value or 0)
 
         query = base
         clause = end_reason_filter(Match, reason) if reason else None

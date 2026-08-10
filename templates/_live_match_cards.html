@@ -74,8 +74,14 @@
           <div class="lm-card-foot">
             <span>Started {{ m.created_at | ist('%d %b %H:%M') if m.created_at else '—' }}</span>
             {% if m.last_modified %}
-              <span class="lm-ago" data-since="{{ m.last_modified.isoformat() }}Z">
-                last ball {{ m.last_modified | ist('%H:%M:%S') }}
+              {# A lobby row can carry a MatchState timestamp too, but no ball
+                 has been bowled yet — call that what it is. The label is a data
+                 attribute because the poll's relative-time pass rewrites this
+                 text every second. #}
+              {% set ago_label = 'last ball' if m.phase == 'live' else 'last activity' %}
+              <span class="lm-ago" data-label="{{ ago_label }}"
+                    data-since="{{ m.last_modified.isoformat() }}Z">
+                {{ ago_label }} {{ m.last_modified | ist('%H:%M:%S') }}
               </span>
             {% endif %}
           </div>

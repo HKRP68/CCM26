@@ -58,12 +58,26 @@ ROWS = [
     # Legacy — reconstructed.
     (dict(status="completed", winner_id=3, margin_type="runs"), END_COMPLETED, True),
     (dict(status="completed", margin_type="tie"), END_COMPLETED, True),
+    # Both spellings are in the database: handlers/super_over.py writes one,
+    # sim_match.py and the Mini App finaliser write the other.
     (dict(status="completed", margin_type="super over"), END_COMPLETED, True),
+    (dict(status="completed", margin_type="super_over"), END_COMPLETED, True),
+    # SQL `IN` is case-sensitive on Postgres; the derivation lowercases first.
+    (dict(status="completed", margin_type="Tie"), END_COMPLETED, True),
     (dict(status="completed"), END_UNKNOWN, True),
     (dict(status="completed", margin_type=None, winner_id=None), END_UNKNOWN, True),
+    # A no-progress Mini App cancel is not a result — it must not read as
+    # Completed just because it carries a margin.
+    (dict(status="completed", margin_type="cancelled"), END_UNKNOWN, True),
     (dict(status="abandoned", margin_type="abandoned"), END_AUTO, True),
     (dict(status="expired"), END_AUTO, True),
     (dict(status="cancelled"), END_AUTO, True),
+    # A status from neither list. The derivation falls through to unknown
+    # whether or not the row has a winner, so the SQL has to as well — else
+    # the row renders as Unrecorded but no chip ever selects it.
+    (dict(status="mystery"), END_UNKNOWN, True),
+    (dict(status="mystery", winner_id=4, margin_type="runs"), END_UNKNOWN, True),
+    (dict(status=None), END_UNKNOWN, True),
 ]
 
 
@@ -132,6 +146,16 @@ class EndReasonFilterTests(unittest.TestCase):
 
     def test_an_unrecognised_reason_asks_for_no_filter(self):
         self.assertIsNone(end_reason_filter(FakeMatch, "made_up"))
+
+    def test_a_cancelled_margin_is_not_treated_as_a_result(self):
+        # "cancelled" is written for a no-progress Mini App cancel. It means
+        # nothing happened, not "a result with no named winner", so it must
+        # not join RESULTLESS_MARGINS and land in the Completed bucket.
+        cancelled = {m.id for m in self.session.query(FakeMatch)
+                     .filter(FakeMatch.margin_type == "cancelled").all()}
+        self.assertTrue(cancelled)
+        self.assertFalse(cancelled & self._selected(END_COMPLETED))
+        self.assertTrue(cancelled <= self._selected(END_UNKNOWN))
 
 
 class MatchTypeTests(unittest.TestCase):

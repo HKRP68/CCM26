@@ -319,7 +319,7 @@
       var txt = s < 60 ? s + 's ago'
               : s < 3600 ? Math.floor(s / 60) + 'm ago'
               : Math.floor(s / 3600) + 'h ago';
-      el.textContent = 'last ball ' + txt;
+      el.textContent = (el.dataset.label || 'last activity') + ' ' + txt;
     });
     var age = Math.round((now - lastFetch) / 1000);
     updated.textContent = age < 5 ? 'updated just now' : 'updated ' + age + 's ago';

@@ -1,6 +1,6 @@
 # Live Matches (admin)
 
-The ops view at `/live-matches`. Covers what the page shows, the two columns
+The ops view at `/live-matches`. Covers what the page shows, the three columns
 added to `matches` to make it possible, and how rows written before those
 columns existed are handled.
 
@@ -42,7 +42,7 @@ end reason through the tally chips. The chip counts are computed against the
 search but *not* against the reason filter, so picking one still shows what
 else is in there.
 
-## 2. Why two new columns
+## 2. Why three new columns
 
 Every terminal path but the cleanup job wrote `status = "completed"`. A
 completed row with no `winner_id` could equally be a tie, a forfeit, an

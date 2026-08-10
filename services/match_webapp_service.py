@@ -3235,7 +3235,8 @@ def quit_penalty_quote(match_id, user_id=None):
     }
 
 
-def handle_match_termination(session, match_id, quitter_id, reason="quit"):
+def handle_match_termination(session, match_id, quitter_id, reason="quit",
+                             automatic=False):
     """Terminate a match because a player quit (or timed out).
 
     • No balls bowled → no penalty, no rewards; the match just ends with no W/L.
@@ -3329,8 +3330,10 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit"):
     m.completed_at = __import__("datetime").datetime.utcnow()
     # Same forfeit result either way, but the two callers are different events:
     # a player tapping quit, versus the sweep resolving a match nobody is
-    # playing any more. ``reason`` is what tells them apart.
-    if "timeout" in (reason or "").lower():
+    # playing any more. ``automatic`` says which — deliberately not sniffed out
+    # of ``reason``, which is free-form display text: a sweep worded differently
+    # would silently file itself under a player's name.
+    if automatic:
         mark_end(m, END_AUTO)
     else:
         mark_end(m, END_ENDED_BY_USER, by_user_id=quitter_id)
@@ -3363,9 +3366,14 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit"):
                   "result_text": result_text}
 
 
-def abandon_match(session, match_id, by_user_id, reason="abandoned"):
+def abandon_match(session, match_id, by_user_id, reason="abandoned",
+                  automatic=False):
     """A participant abandons the match → the OTHER side wins by forfeit.
-    Finalizes + persists scorecard. Returns (ok, msg)."""
+    Finalizes + persists scorecard. Returns (ok, msg).
+
+    ``automatic`` marks the call as the inactivity sweep rather than a player
+    tapping forfeit, so the end reason names the system instead of them.
+    """
     from models import Match
     state = mwa.get_state(match_id)
     m = session.query(Match).get(match_id)
@@ -3386,9 +3394,9 @@ def abandon_match(session, match_id, by_user_id, reason="abandoned"):
         mwa.save_state(match_id, state)
     m.status = "completed"
     m.completed_at = __import__("datetime").datetime.utcnow()
-    # The Mini App's forfeit button, or the sweep timing out a vsbot match —
-    # ``reason`` separates them.
-    if "timeout" in (reason or "").lower():
+    # The Mini App's forfeit button, or the sweep timing out a vsbot match.
+    # See handle_match_termination for why this isn't read out of ``reason``.
+    if automatic:
         mark_end(m, END_AUTO)
     else:
         mark_end(m, END_ENDED_BY_USER, by_user_id=by_user_id)
@@ -3554,10 +3562,12 @@ def sweep_stale_webapp_matches(session):
             # player is treated as the quitter). vsbot → plain forfeit (no
             # penalty against a human for a bot stall).
             if state.get("is_vsbot"):
-                abandon_match(session, ms.match_id, idle, reason="timeout")
+                abandon_match(session, ms.match_id, idle, reason="timeout",
+                              automatic=True)
             else:
                 handle_match_termination(session, ms.match_id, idle,
-                                         reason="inactivity timeout")
+                                         reason="inactivity timeout",
+                                         automatic=True)
             ended += 1
     return ended
 

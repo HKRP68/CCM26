@@ -14,7 +14,7 @@ reconstruct a best-effort answer from the fields that did exist, and flag it as
 inferred so the admin table never presents a guess as a recorded fact.
 """
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -79,7 +79,16 @@ DEAD_STATUSES = ("abandoned", "expired", "cancelled")
 
 # A completed row with no ``winner_id`` is still a genuine result when the match
 # ended in one of these ways — none of them name a winning side on the Match row.
-RESULTLESS_MARGINS = ("tie", "tied", "super over", "bowl-out", "forfeit")
+#
+# Both spellings of super over are here on purpose: handlers/super_over.py
+# writes "super over", while sim_match.py, the Mini App finaliser and
+# handlers/match.py's own super-over branch all write "super_over".
+#
+# "cancelled" (a no-progress Mini App cancel) is deliberately NOT here. It is a
+# margin that means *nothing happened*, not a result reached without a named
+# winner, and listing it would report those rows as Completed.
+RESULTLESS_MARGINS = ("tie", "tied", "super over", "super_over",
+                      "bowl-out", "forfeit")
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -178,6 +187,7 @@ def derive_end_reason(match):
 
 
 def end_reason_label(reason):
+    """Display text for an end reason, tidying up anything unrecognised."""
     return END_REASON_LABELS.get(reason, (reason or "—").replace("_", " ").title())
 
 
@@ -199,6 +209,11 @@ def match_type_label(match, opponent_is_bot=False, both_bots=False):
 
 
 def match_type_family(match, opponent_is_bot=False, both_bots=False):
+    """Coarse bucket for the mode — ``pvp`` / ``ai`` / ``spectate``.
+
+    Drives the colour of the type pill, and falls back the same way
+    :func:`match_type_label` does on rows with no recorded mode.
+    """
     recorded = getattr(match, "match_type", None)
     if recorded:
         return MATCH_TYPE_FAMILY.get(recorded, "pvp")
@@ -226,19 +241,29 @@ def end_reason_filter(Match, reason):
     # ``margin_type IN (...)`` is NULL — not false — for a NULL margin, and a
     # NULL survives the ``~`` below as a NULL, quietly dropping every row it
     # touches. Pin it to false first so the negated branch works.
+    #
+    # ``derive_end_reason`` lowercases the margin before comparing, and SQL
+    # ``IN`` is case-sensitive on Postgres — lower() here so a stray "Tie"
+    # can't land in a different bucket than the one the table shows.
     has_result = or_(Match.winner_id.isnot(None),
                      and_(Match.margin_type.isnot(None),
-                          Match.margin_type.in_(RESULTLESS_MARGINS)))
+                          func.lower(Match.margin_type).in_(RESULTLESS_MARGINS)))
+    # Any status is dead-or-alive; NULL compares as neither, so spell it out.
+    is_dead = Match.status.in_(DEAD_STATUSES)
+    not_dead = or_(Match.status.is_(None), Match.status.notin_(DEAD_STATUSES))
+    not_completed = or_(Match.status.is_(None), Match.status != "completed")
 
     if reason == END_COMPLETED:
         return or_(Match.end_reason == END_COMPLETED,
                    and_(untagged, Match.status == "completed", has_result))
     if reason == END_AUTO:
-        return or_(Match.end_reason == END_AUTO,
-                   and_(untagged, Match.status.in_(DEAD_STATUSES)))
+        return or_(Match.end_reason == END_AUTO, and_(untagged, is_dead))
     if reason == END_UNKNOWN:
-        return and_(untagged,
-                    or_(Match.status.is_(None),
-                        Match.status.notin_(DEAD_STATUSES)),
-                    ~has_result)
+        # Everything left over: a completed row with nothing to show for it,
+        # AND any other non-dead status, which derive_end_reason falls through
+        # to unknown regardless of whether it has a winner. Without that second
+        # branch such a row renders as Unrecorded but belongs to no bucket, so
+        # no chip ever selects it.
+        return and_(untagged, not_dead,
+                    or_(not_completed, ~has_result))
     return Match.end_reason == reason
