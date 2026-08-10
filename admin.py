@@ -4187,6 +4187,65 @@ def _block_miniapp_during_maintenance():
         return None
 
 
+def _rookie_has_membership(telegram_id):
+    """True if this Telegram id holds an active membership (Rookie or higher).
+
+    Only called while Rookie mode is on and the request is a Mini App API that
+    isn't otherwise exempt, so the extra query never runs on the common path.
+    """
+    if telegram_id is None:
+        return False
+    from models import User as _User
+    from services import rookie_gate
+    db = get_session()
+    try:
+        user = (db.query(_User)
+                .filter(_User.telegram_id == int(telegram_id)).first())
+        return rookie_gate.has_access(user)
+    finally:
+        db.close()
+
+
+@app.before_request
+def _block_miniapp_without_membership():
+    """Lock the Mini App for non-members while Rookie mode is on.
+
+    The bot's middleware blocks the commands; without this the same player
+    could open the Mini App and keep spinning, buying and claiming. Gating in a
+    before-request hook covers every Mini App API — including ones added later —
+    instead of relying on each endpoint to remember the check.
+
+    Unlike maintenance mode there is no live-match exemption: a non-member has
+    no match in flight to protect, because starting one was already blocked.
+    """
+    try:
+        from services import rookie_gate
+        from services.maintenance_service import is_miniapp_path
+        # Cheapest checks first — this hook runs on every request, and the
+        # common case is Rookie mode off.
+        if not is_miniapp_path(request.path):
+            return None
+        from services.config_service import get_config
+        cfg = get_config()
+        if not rookie_gate.is_rookie_mode_active(cfg):
+            return None
+        telegram_id = _init_data_telegram_id()
+        if not rookie_gate.should_block_miniapp_path(
+                request.path,
+                has_membership=_rookie_has_membership(telegram_id),
+                telegram_id=telegram_id, cfg=cfg):
+            return None
+        return {
+            "ok": False,
+            "error": "rookie_required",
+            "message": rookie_gate.rookie_required_alert(),
+        }, 403
+    except Exception:
+        # A broken gate must never take the Mini App down.
+        logger.exception("rookie gate failed (non-fatal)")
+        return None
+
+
 def _webapp_auth(allow_not_debuted=False):
     """Verify Telegram initData from Authorization header.
 
@@ -15715,6 +15774,36 @@ def admin_maintenance():
                     db.commit()
                     flash("✅ Maintenance settings saved", "success")
 
+                elif action in ("rookie_enable", "rookie_disable",
+                                "rookie_save_message"):
+                    # Rookie mode — the membership gate. Independent of
+                    # maintenance: maintenance pauses the bot for everyone,
+                    # Rookie mode keeps it running for members only.
+                    msg = (request.form.get("rookie_message", "") or "").strip()[:2000]
+                    row.rookie_message = msg or None
+                    if action == "rookie_enable":
+                        row.rookie_mode = True
+                    elif action == "rookie_disable":
+                        row.rookie_mode = False
+                    row.updated_at = datetime.utcnow()
+                    row.updated_by = session.get("admin", "admin")
+                    db.commit()
+                    _refresh_cfg(db)  # bot + Mini App see it on the next update
+                    log_admin(db, f"rookie_{action.split('_', 1)[1]}",
+                              target_type="config", target_name="rookie_mode",
+                              detail=f"rookie_mode={row.rookie_mode}, "
+                                     f"msg={'custom' if msg else 'default'}")
+                    db.commit()
+                    if action == "rookie_enable":
+                        flash("🔒 Rookie mode <b>ENABLED</b>. Only members "
+                              "(Rookie and up) can use the bot and Mini App.",
+                              "info")
+                    elif action == "rookie_disable":
+                        flash("✅ Rookie mode <b>DISABLED</b>. The bot is open "
+                              "to everyone again.", "success")
+                    else:
+                        flash("✅ Rookie message saved", "success")
+
                 elif action == "save_tournament_access":
                     # Manage the Challenge League Tournament command allowlist —
                     # independent of maintenance state. Empty = open to everyone.
@@ -15775,6 +15864,8 @@ def admin_maintenance():
             "maintenance_started_at": row.maintenance_started_at,
             "maintenance_bypass_ids": row.maintenance_bypass_ids or "",
             "tournament_allowed_ids": row.tournament_allowed_ids or "",
+            "rookie_mode": row.rookie_mode or False,
+            "rookie_message": row.rookie_message,
         }
         # Convert UTC → IST for the datetime-local input value
         until_ist_str = ""
@@ -15792,9 +15883,44 @@ def admin_maintenance():
                                cfg=cfg, active=active,
                                until_ist_str=until_ist_str,
                                preview=preview,
-                               squad_limits=_squad_limits_panel(db))
+                               squad_limits=_squad_limits_panel(db),
+                               **_rookie_panel(db, cfg))
     finally:
         db.close()
+
+
+def _rookie_panel(db, cfg):
+    """Data for the Maintenance page's Rookie-mode panel.
+
+    The member count answers the question an admin actually has before flipping
+    the switch — "how many players am I about to lock out?" — and is counted the
+    same way the gate reads it (an expired tier is not a membership).
+    """
+    from datetime import datetime as _dt
+    from models import User as _User
+    from services import rookie_gate, subscription_service
+
+    members = total = 0
+    try:
+        total = db.query(_User).count()
+        now = _dt.utcnow()
+        members = (db.query(_User)
+                   .filter(_User.subscription_tier.in_(
+                       list(subscription_service.VALID_TIERS)))
+                   .filter(or_(_User.subscription_expires_at.is_(None),
+                               _User.subscription_expires_at > now))
+                   .count())
+    except Exception:
+        logger.exception("rookie member count failed (non-fatal)")
+
+    return {
+        "rookie_members": members,
+        "rookie_total_users": total,
+        "rookie_tier_label": subscription_service.tier_label(
+            rookie_gate.ROOKIE_TIER),
+        "rookie_free_commands": sorted(rookie_gate.FREE_COMMANDS),
+        "rookie_preview": rookie_gate.rookie_required_message(cfg),
+    }
 
 
 # ── Squad + trait limit enforcement ──────────────────────────────────

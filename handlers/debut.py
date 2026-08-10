@@ -15,8 +15,26 @@ from services.miniapp_buttons import miniapp_button
 logger = logging.getLogger(__name__)
 
 
-def _build_post_debut_onboarding_text(players_count: int) -> str:
-    """Return the short starter roadmap shown after a successful /debut."""
+def _build_post_debut_onboarding_text(players_count: int,
+                                      rookie_mode: bool = False) -> str:
+    """Return the short starter roadmap shown after a successful /debut.
+
+    While Rookie mode is on (``services/rookie_gate.py``) the roadmap would be
+    a list of commands the new player cannot run yet, so they get the one step
+    that actually applies instead: get a membership.
+    """
+    if rookie_mode:
+        from services import rookie_gate
+        return (
+            "🏁 <b>Your account is live!</b>\n"
+            f"You have {players_count} players ready to play — but the bot is "
+            "<b>members-only</b> right now.\n\n"
+            f"🔒 <b>{rookie_gate.rookie_price_label()}</b> unlocks every "
+            "command and the Mini App. Every higher membership includes that "
+            "access, plus its own perks.\n\n"
+            "Send /membership to see the plans and your status, then ask an "
+            "admin to activate it. Your squad is safe until then."
+        )
     return (
         "🏁 <b>Rookie Roadmap</b>\n"
         "Your account is live, but Cricket Bot has a lot to explore. "
@@ -182,8 +200,19 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Follow the account creation with a short, actionable starter guide so
         # new users know which system to try next. Keep the text deliverable even
         # if Telegram rejects the optional Mini App button.
-        onboarding_text = _build_post_debut_onboarding_text(len(players))
-        onboarding_markup = _build_post_debut_onboarding_markup(update.effective_chat)
+        try:
+            from services import rookie_gate
+            rookie_mode = rookie_gate.is_rookie_mode_active()
+        except Exception:
+            logger.exception("Rookie mode check failed (non-fatal)")
+            rookie_mode = False
+        onboarding_text = _build_post_debut_onboarding_text(
+            len(players), rookie_mode=rookie_mode)
+        # The Mini App is locked for a non-member, so don't hand them a button
+        # into it — it would open straight onto the membership lock screen.
+        onboarding_markup = (
+            None if rookie_mode
+            else _build_post_debut_onboarding_markup(update.effective_chat))
         try:
             await update.message.reply_text(
                 onboarding_text,

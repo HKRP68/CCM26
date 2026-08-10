@@ -3145,6 +3145,12 @@ async function api(path, body, timeoutMs = 25000) {
     if (resp.status === 503 && data && data.error === 'maintenance') {
       showMaintenanceScreen(data);
     }
+    // Rookie mode: the Mini App is members-only. Same treatment as
+    // maintenance — one lock screen instead of every caller toasting its own
+    // error — but it is a paywall, so it says so and offers no retry loop.
+    if (resp.status === 403 && data && data.error === 'rookie_required') {
+      showMembershipScreen(data);
+    }
     return { ok: resp.ok && data.ok, status: resp.status, data };
   } catch (e) {
     const aborted = e?.name === 'AbortError';
@@ -3175,7 +3181,10 @@ function maintenanceHtml(message) {
     .replace(/\n/g, '<br>');
 }
 
-function showMaintenanceScreen(data = {}) {
+// One full-screen lock, whatever the reason: maintenance (the game is paused)
+// or Rookie mode (the game is members-only). Both hide the app chrome so the
+// failing requests behind them can't be interacted with.
+function showLockScreen(icon, bodyHtml, retryLabel) {
   if (maintenanceShown) return;
   maintenanceShown = true;
   try { stopMatchPolling(); } catch (e) {}
@@ -3183,15 +3192,31 @@ function showMaintenanceScreen(data = {}) {
   overlay.id = 'maintenance-overlay';
   overlay.innerHTML = `
     <div class="maint-card">
-      <div class="maint-icon">🛠️</div>
-      <div class="maint-body">${maintenanceHtml(data.message) || 'The game is under maintenance. We will be back shortly!'}</div>
-      <button class="maint-retry" onclick="location.reload()">↻ Try again</button>
+      <div class="maint-icon">${icon}</div>
+      <div class="maint-body">${bodyHtml}</div>
+      ${retryLabel ? `<button class="maint-retry" onclick="location.reload()">${retryLabel}</button>` : ''}
     </div>`;
   document.body.appendChild(overlay);
   try {
     document.getElementById('bottom-nav').style.display = 'none';
     document.getElementById('balance-pill').style.display = 'none';
   } catch (e) {}
+}
+
+function showMaintenanceScreen(data = {}) {
+  showLockScreen('🛠️',
+    maintenanceHtml(data.message) || 'The game is under maintenance. We will be back shortly!',
+    '↻ Try again');
+}
+
+// Rookie mode. Reloading won't help until a membership is activated, so the
+// button points at the bot — where /membership explains the plans — instead of
+// inviting the player to retry a request that will keep failing.
+function showMembershipScreen(data = {}) {
+  showLockScreen('🔒',
+    maintenanceHtml(data.message)
+      || 'Members only — activate a membership to play. Send /membership in the bot for details.',
+    '');
 }
 
 function playerCardUrl(playerId) {

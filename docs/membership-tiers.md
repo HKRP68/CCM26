@@ -1,6 +1,6 @@
 # Membership tiers
 
-Four paid tiers, granted manually by an admin (there is no self-serve payment).
+Five paid tiers, granted manually by an admin (there is no self-serve payment).
 Everything below is configured in **`config.SUBSCRIPTION_TIERS`** and read
 through `services/subscription_service.py` — no server-side feature code, admin
 page or upsell message hard-codes a tier name, so adding or retuning a tier is a
@@ -9,25 +9,35 @@ alert in `static/cricket/app.js`, which has no access to the config; the
 server's own 403 message is built from `tiers_with_perk("autoplay")`.)
 
 Declaration order in `SUBSCRIPTION_TIERS` **is** the rank
-(`bronze < silver < platinum < diamond`); `tier_rank()` reads it.
+(`rookie < bronze < silver < platinum < diamond`); `tier_rank()` reads it.
+
+🐣 **Rookie** is the odd one out: it sells *access*, not perks. It only matters
+while **Rookie mode** is on, and every higher tier outranks it — so a Bronze or
+Diamond member already has that access. See
+[rookie-mode.md](rookie-mode.md).
 
 ## What each tier gets
 
-| Perk | 🥉 Bronze | 🥈 Silver | 🏆 Platinum | 💎 Diamond |
-|---|---|---|---|---|
-| Price / 30 days | ₹19 | ₹59 | ₹99 | ₹149 |
-| Instant coins | 29,000 | 49,000 | 1,000,000 | 2,000,000 |
-| Instant gems | 150 | 499 | 1,000 | 1,500 |
-| Instant quest points | — | 499 | 1,000 | 1,500 |
-| Instant packs | — | Star Pack | Legend Pack | Legend Pack + Ultimate Legend Pack |
-| `/cmumysterybox` | every 15 days | every 8 days | every 4 days | every 2 days |
-| `/cmuweekly` (85+ card, 7-day cd) | — | — | ✅ | ✅ |
-| `/cmuchest` coin chests | — | — | 3 per 10 days (60k–99k) | 5 per 7 days (70k–110k) |
-| Player Market discount | — | — | 5% off | 10% off |
-| Mini App daily login reward | 1× | 1× | 1× | **2×** |
-| Cooldown reduction | — | −5 min/hr | −10 min/hr | −15 min/hr |
-| `/autobuild` + `/wpmbot` | ✅ | ✅ | ✅ | ✅ |
-| Mini App Autoplay | — | ✅ | ✅ | ✅ |
+| Perk | 🐣 Rookie | 🥉 Bronze | 🥈 Silver | 🏆 Platinum | 💎 Diamond |
+|---|---|---|---|---|---|
+| Price / 30 days | ₹15 | ₹19 | ₹59 | ₹99 | ₹149 |
+| Bot access in Rookie mode | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Instant coins | 10,000 | 29,000 | 49,000 | 1,000,000 | 2,000,000 |
+| Instant gems | 50 | 150 | 499 | 1,000 | 1,500 |
+| Instant quest points | — | — | 499 | 1,000 | 1,500 |
+| Instant packs | — | — | Star Pack | Legend Pack | Legend Pack + Ultimate Legend Pack |
+| `/cmumysterybox` | — | every 15 days | every 8 days | every 4 days | every 2 days |
+| `/cmuweekly` (85+ card, 7-day cd) | — | — | — | ✅ | ✅ |
+| `/cmuchest` coin chests | — | — | — | 3 per 10 days (60k–99k) | 5 per 7 days (70k–110k) |
+| Player Market discount | — | — | — | 5% off | 10% off |
+| Mini App daily login reward | 1× | 1× | 1× | 1× | **2×** |
+| Cooldown reduction | — | — | −5 min/hr | −10 min/hr | −15 min/hr |
+| `/autobuild` + `/wpmbot` | — | ✅ | ✅ | ✅ | ✅ |
+| Mini App Autoplay | — | — | ✅ | ✅ | ✅ |
+
+Rookie's row is deliberately almost empty: at ₹15 it must not undercut the ₹19
+tier on rewards. The Mystery Box is gated on `mysterybox_cooldown_days` being
+non-zero (`has_mysterybox`), which is what keeps Rookie out of it.
 
 ### Player Market pricing
 
@@ -87,6 +97,10 @@ source tier never granted.
 
 | Upgrade | Coins | Gems | QP | Packs |
 |---|---|---|---|---|
+| 🐣 Rookie → 🥉 Bronze | 19,000 | 100 | — | — |
+| 🐣 Rookie → 🥈 Silver | 39,000 | 425 | 450 | Star Pack |
+| 🐣 Rookie → 🏆 Platinum | 505,000 | 700 | 750 | Legend Pack |
+| 🐣 Rookie → 💎 Diamond | 1,015,000 | 975 | 1,025 | Legend Pack, Ultimate Legend Pack |
 | 🥉 Bronze → 🥈 Silver | 10,000 | 175 | 250 | Star Pack |
 | 🥉 Bronze → 🏆 Platinum | 485,000 | 425 | 500 | Legend Pack |
 | 🥉 Bronze → 💎 Diamond | 985,000 | 675 | 750 | Legend Pack, Ultimate Legend Pack |
@@ -111,6 +125,7 @@ from `SUBSCRIPTION_TIERS`, so a new tier appears with no template change.
 **Telegram (owner only)** — `/grant`:
 
 ```
+/grant Rookie <telegram_id>            activate Rookie
 /grant Bronze <telegram_id>            activate Bronze
 /grant Diamond <telegram_id>           activate Diamond
 /grant Silver2Diamond <telegram_id>    upgrade → Diamond
@@ -118,7 +133,7 @@ from `SUBSCRIPTION_TIERS`, so a new tier appears with no template change.
 /grant Upgrade Diamond <telegram_id>   upgrade the member's active tier → Diamond
 ```
 
-Tier names, single-letter shorthands (`b`/`s`/`p`/`d`, e.g. `p2d`) and the
+Tier names, single-letter shorthands (`r`/`b`/`s`/`p`/`d`, e.g. `p2d`) and the
 `->`/`to`/`2` separators are all accepted. Only the *target* matters — the
 source is always the member's live tier.
 
@@ -127,7 +142,8 @@ source is always the member's live tier.
 | Perk | Enforced in |
 |---|---|
 | Instant / upgrade bundles | `subscription_service.grant_instant_rewards`, `grant_upgrade_rewards` |
-| Mystery Box cadence | `handlers/cmumysterybox.py` via `mysterybox_cooldown_seconds` |
+| Bot + Mini App access (Rookie mode) | `services/rookie_gate.py` via `has_tier_at_least` — bot middleware in `bot.py`, Flask `before_request` in `admin.py` |
+| Mystery Box cadence | `handlers/cmumysterybox.py` via `has_mysterybox` + `mysterybox_cooldown_seconds` |
 | Weekly card, coin chests | `handlers/premium_drops.py` via `has_weekly_card`, `coin_chest_config` |
 | Market discount | `subscription_service.market_price` / `market_sell_price` (bot `/playermarket`, Mini App market API, `services/global_market.buy_player`) |
 | Daily login multiplier | `services/login_streak_service.claim_login_reward` via `daily_login_multiplier` |

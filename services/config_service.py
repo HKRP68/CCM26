@@ -61,6 +61,10 @@ DEFAULTS = {
     "maintenance_until": None,
     "maintenance_started_at": None,
     "maintenance_bypass_ids": None,
+    # Rookie mode — the membership gate. OFF by default: the bot stays open to
+    # everyone until an admin turns it on. See services/rookie_gate.py.
+    "rookie_mode": False,
+    "rookie_message": None,
     "tournament_allowed_ids": None,
     # Match gameplay style. Telegram restores the original in-chat buttons;
     # webapp opts every newly started match into the Mini App board.

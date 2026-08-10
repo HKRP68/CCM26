@@ -77,7 +77,8 @@ async def wpmbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from services import subscription_service
         if not subscription_service.has_premium_commands(user):
             await update.message.reply_text(
-                subscription_service.premium_required_message("/wpmbot"),
+                subscription_service.premium_required_message(
+                    "/wpmbot", perk="premium_commands"),
                 parse_mode="HTML")
             return
 

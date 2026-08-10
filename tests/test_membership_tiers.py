@@ -80,9 +80,9 @@ class TierLadderTests(unittest.TestCase):
     def setUp(self):
         self.svc = _load_service()
 
-    def test_all_four_tiers_exist_cheapest_first(self):
+    def test_all_five_tiers_exist_cheapest_first(self):
         self.assertEqual(list(self.svc.VALID_TIERS),
-                         ["bronze", "silver", "platinum", "diamond"])
+                         ["rookie", "bronze", "silver", "platinum", "diamond"])
 
     def test_ranks_follow_price(self):
         ranks = [self.svc.tier_rank(t) for t in self.svc.VALID_TIERS]
@@ -93,17 +93,92 @@ class TierLadderTests(unittest.TestCase):
 
     def test_prices(self):
         from config import SUBSCRIPTION_TIERS
+        self.assertEqual(SUBSCRIPTION_TIERS["rookie"]["price_inr"], 15)
         self.assertEqual(SUBSCRIPTION_TIERS["bronze"]["price_inr"], 19)
         self.assertEqual(SUBSCRIPTION_TIERS["diamond"]["price_inr"], 149)
 
     def test_upgrade_targets_are_the_higher_tiers(self):
+        self.assertEqual(self.svc.upgrade_targets("rookie"),
+                         ["bronze", "silver", "platinum", "diamond"])
         self.assertEqual(self.svc.upgrade_targets("bronze"),
                          ["silver", "platinum", "diamond"])
         self.assertEqual(self.svc.upgrade_targets("platinum"), ["diamond"])
         self.assertEqual(self.svc.upgrade_targets("diamond"), [])
         # A free user can be "upgraded" into anything (falls back to activate).
         self.assertEqual(self.svc.upgrade_targets("none"),
-                         ["bronze", "silver", "platinum", "diamond"])
+                         ["rookie", "bronze", "silver", "platinum", "diamond"])
+
+    def test_every_paid_tier_clears_the_rookie_access_bar(self):
+        # Rookie mode asks one question of every user — "do you rank at least
+        # Rookie?" — so every paid tier must answer yes, and free users no.
+        for tier in self.svc.VALID_TIERS:
+            self.assertTrue(self.svc.has_tier_at_least(_member(tier), "rookie"),
+                            f"{tier} must include Rookie access")
+        self.assertFalse(self.svc.has_tier_at_least(_member("none"), "rookie"))
+        self.assertFalse(self.svc.has_tier_at_least(None, "rookie"))
+
+    def test_an_expired_membership_loses_rookie_access(self):
+        lapsed = _member("diamond")
+        lapsed.subscription_expires_at = datetime.utcnow() - timedelta(days=1)
+        self.assertFalse(self.svc.has_tier_at_least(lapsed, "rookie"))
+
+
+class RookiePerksTests(unittest.TestCase):
+    """Rookie sells ACCESS. It must not quietly acquire the perks the tiers
+    above it are priced on, or ₹15 buys what ₹19-₹149 are charging for."""
+
+    def setUp(self):
+        self.svc = _load_service()
+        self.user = _member("rookie")
+
+    def test_it_is_the_cheapest_tier(self):
+        from config import SUBSCRIPTION_TIERS
+        prices = [cfg["price_inr"] for cfg in SUBSCRIPTION_TIERS.values()]
+        self.assertEqual(prices, sorted(prices))
+        self.assertEqual(min(prices), SUBSCRIPTION_TIERS["rookie"]["price_inr"])
+
+    def test_instant_bundle_is_the_smallest_on_the_ladder(self):
+        from config import SUBSCRIPTION_TIERS
+        instant = SUBSCRIPTION_TIERS["rookie"]["instant"]
+        self.assertEqual(instant["coins"], 10000)
+        self.assertLess(instant["coins"],
+                        SUBSCRIPTION_TIERS["bronze"]["instant"]["coins"])
+
+    def test_activation_credits_the_bundle(self):
+        u = _member("none")
+        self.svc.activate(None, u, "rookie")
+        self.assertEqual(u.subscription_tier, "rookie")
+        self.assertEqual(u.total_coins, 10000)
+        self.assertEqual(u.total_gems, 50)
+
+    def test_no_mystery_box(self):
+        self.assertFalse(self.svc.has_mysterybox(self.user))
+        self.assertTrue(self.svc.has_mysterybox(_member("bronze")))
+
+    def test_none_of_the_paid_perks(self):
+        self.assertFalse(self.svc.has_premium_commands(self.user))
+        self.assertFalse(self.svc.has_autoplay(self.user))
+        self.assertFalse(self.svc.has_weekly_card(self.user))
+        self.assertIsNone(self.svc.coin_chest_config(self.user))
+        self.assertEqual(self.svc.market_discount_pct(self.user), 0)
+        self.assertEqual(self.svc.daily_login_multiplier(self.user), 1)
+        self.assertEqual(self.svc.cooldown_seconds(self.user, 3600), 3600)
+
+    def test_upsells_never_advertise_rookie_for_a_perk_it_lacks(self):
+        for feature, perk in (("/autobuild", "premium_commands"),
+                              ("The Mystery Box", "mysterybox_cooldown_days"),
+                              ("Autoplay", "autoplay"),
+                              ("Coin Chests", "coin_chests")):
+            msg = self.svc.premium_required_message(feature, perk=perk)
+            self.assertNotIn("Rookie", msg,
+                             f"{feature} upsell offers Rookie, which lacks it")
+
+    def test_min_tier_with_perk_reads_the_ladder(self):
+        self.assertEqual(self.svc.min_tier_with_perk("premium_commands"),
+                         "bronze")
+        self.assertEqual(self.svc.min_tier_with_perk("autoplay"), "silver")
+        self.assertEqual(self.svc.min_tier_with_perk("coin_chests"), "platinum")
+        self.assertIsNone(self.svc.min_tier_with_perk("not_a_perk"))
 
 
 class BronzePerksTests(unittest.TestCase):
@@ -262,6 +337,19 @@ class UpgradePathTests(unittest.TestCase):
                 self.assertLess(self.svc.upgrade_rewards(frm, to)["coins"],
                                 SUBSCRIPTION_TIERS[to]["instant"]["coins"],
                                 f"{frm}→{to} pays out like a second subscription")
+
+    def test_hopping_never_pays_more_than_going_direct_from_rookie(self):
+        # Rookie is the bottom of the ladder, so every route out of it has to
+        # obey the same rule as the rest — otherwise stepping up one tier at a
+        # time farms coins the direct upgrade doesn't pay.
+        for to in ("bronze", "silver", "platinum", "diamond"):
+            for via in self.svc.upgrade_targets("rookie"):
+                if self.svc.tier_rank(via) >= self.svc.tier_rank(to):
+                    continue
+                self.assertLessEqual(
+                    self._coins("rookie", via) + self._coins(via, to),
+                    self._coins("rookie", to),
+                    f"rookie → {via} → {to} pays more than rookie → {to}")
 
     def test_hopping_never_pays_more_than_going_direct(self):
         # bronze → silver → platinum → diamond vs bronze → diamond

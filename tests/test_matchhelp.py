@@ -180,7 +180,12 @@ class MenuRegistrationTests(unittest.TestCase):
                     and getattr(node.targets[0], "id", None) == "BOT_MENU_COMMANDS"):
                 menu = ast.literal_eval(node.value)
         names = [c for c, _d in menu]
-        hidden = frozen("PRIVATE_ONLY_COMMANDS") | frozen("DM_ONLY_COMMANDS")
+        # DM_ONLY_COMMANDS is imported from services.dm_only rather than
+        # written out in bot.py, so read it from the service the way
+        # bot._menu_for_scope does — matching on bot.py's text finds nothing
+        # and would count DM-only commands as published in groups.
+        from services.dm_only import DM_ONLY_COMMANDS
+        hidden = frozen("PRIVATE_ONLY_COMMANDS") | set(DM_ONLY_COMMANDS)
         return ([c for c in names if c not in hidden],
                 [c for c in names if c not in frozen("GROUP_ONLY_COMMANDS")])
 
