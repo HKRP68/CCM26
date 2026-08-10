@@ -30,9 +30,10 @@ def _member(tier="rookie", days_left=20):
 
 
 class DummyMessage:
-    def __init__(self, text):
+    def __init__(self, text, chat_type="private"):
         self.text = text
         self.entities = []
+        self.chat = SimpleNamespace(type=chat_type)
 
 
 class DummyCallback:
@@ -41,11 +42,14 @@ class DummyCallback:
 
 
 class DummyUpdate:
-    def __init__(self, text=None, callback_data=None, user_id=555):
-        self.message = DummyMessage(text) if text is not None else None
+    def __init__(self, text=None, callback_data=None, user_id=555,
+                 chat_type="private"):
+        self.message = (DummyMessage(text, chat_type)
+                        if text is not None else None)
         self.callback_query = (DummyCallback(callback_data)
                                if callback_data is not None else None)
         self.effective_user = SimpleNamespace(id=user_id)
+        self.effective_chat = SimpleNamespace(type=chat_type)
 
 
 def _block(update, has_membership=False, **kw):
@@ -109,7 +113,32 @@ class NonMemberTests(unittest.TestCase):
     def test_the_referral_code_typed_after_debut_still_gets_through(self):
         # /debut asks the new user to type their code; the gate must not eat
         # the answer to a question it just allowed the bot to ask.
-        self.assertFalse(_block(DummyUpdate("AB12CD"), allow_text=True))
+        self.assertFalse(_block(DummyUpdate("ABCD23"), allow_text=True))
+
+    def test_the_referral_exemption_is_no_wider_than_its_handler(self):
+        # `awaiting_referral_code` survives until a code is redeemed or Skip is
+        # tapped, so a player who answers with neither would otherwise hold a
+        # permanent pass into every text-driven handler.
+        for text, chat_type, why in (
+                ("ABCD23", "group", "a code in a group — the handler is DM-only"),
+                ("what is going on", "private", "unrelated DM chatter"),
+                ("ABCD2", "private", "too short to be a code"),
+                ("hey everyone", "group", "group chatter"),
+        ):
+            self.assertTrue(
+                _block(DummyUpdate(text, chat_type=chat_type), allow_text=True),
+                f"exempted {why}")
+
+    def test_the_code_pattern_matches_the_redeem_handler(self):
+        # Two copies of one rule: if they drift, the gate either eats valid
+        # codes or waves through text the handler will ignore.
+        from handlers.redeem import _looks_like_code
+        for text in ("ABCD23", "abcd23", "/ABCD23", "23456A",
+                     "ABCD2", "ABCD234", "ABCD2O", "ABCD 23", "", "hello!"):
+            self.assertEqual(
+                rookie_gate.looks_like_referral_code(text),
+                bool(_looks_like_code(text)),
+                f"gate and redeem handler disagree about {text!r}")
 
     def test_the_group_welcome_for_a_new_member_still_fires(self):
         # Somebody joining a group is an event about the chat, not a player
@@ -327,6 +356,15 @@ class AdminPanelWiringTests(unittest.TestCase):
                     / "templates" / "admin_maintenance.html").read_text()
         for action in ("rookie_enable", "rookie_disable", "rookie_save_message"):
             self.assertIn(f'value="{action}"', template)
+
+    def test_the_miniapp_lock_returns_the_admins_own_message(self):
+        # A custom message saved on the website must reach the Mini App too,
+        # not just Telegram — the alert helper always renders the default.
+        src = (Path(__file__).resolve().parent.parent / "admin.py").read_text()
+        hook = src.split("def _block_miniapp_without_membership", 1)[1]
+        hook = hook.split("\ndef ", 1)[0]
+        self.assertIn("rookie_required_message(cfg)", hook)
+        self.assertNotIn("rookie_required_alert()", hook)
 
     def test_the_miniapp_hook_is_registered(self):
         src = (Path(__file__).resolve().parent.parent / "admin.py").read_text()

@@ -22,6 +22,7 @@ and unit-testable — and keeps the "mode is off" fast path free of DB work.
 from __future__ import annotations
 
 import logging
+import re
 
 from services.command_token import command_name_from_update
 
@@ -127,6 +128,39 @@ def is_service_message(message) -> bool:
                for field in _SERVICE_MESSAGE_FIELDS)
 
 
+# The ONE plain-text message a non-member may send: the referral code /debut
+# just asked them for. The conditions mirror the handler that consumes it
+# (``handlers.redeem.text_code_handler`` — private chat, and text shaped like a
+# code), because an exemption wider than its handler is simply a hole: the
+# ``awaiting_referral_code`` flag survives until a code is redeemed or Skip is
+# tapped, so a player who answers with neither would otherwise keep a permanent
+# pass into every text-driven handler (WordChase, Bluff, XI quick-select…).
+# ``tests/test_rookie_gate.py`` pins this pattern against the redeem handler's.
+_REFERRAL_CODE_RE = re.compile(r"^[A-HJ-NP-Z2-9]{6}$")
+
+
+def looks_like_referral_code(text: str) -> bool:
+    """True if ``text`` is shaped like a referral code (6 chars, our alphabet)."""
+    return bool(_REFERRAL_CODE_RE.match((text or "").strip().upper().lstrip("/")))
+
+
+def is_referral_code_reply(update) -> bool:
+    """True for a private-chat message whose text is shaped like a code.
+
+    The caller supplies the other half of the answer — whether the bot is
+    actually waiting for one (``allow_text``).
+    """
+    message = getattr(update, "message", None)
+    if message is None:
+        return False
+    chat_type = getattr(getattr(message, "chat", None), "type", None)
+    if chat_type is None:
+        chat_type = getattr(getattr(update, "effective_chat", None), "type", None)
+    if chat_type != "private":
+        return False
+    return looks_like_referral_code(getattr(message, "text", "") or "")
+
+
 # ── Bot updates ─────────────────────────────────────────────────────
 
 def should_block_update(update, *, has_membership, bot_username=None,
@@ -142,9 +176,8 @@ def should_block_update(update, *, has_membership, bot_username=None,
       - Telegram service message (someone joined/left the chat) → allowed, so
         the group welcome that invites new players still fires
       - Doorway command (``FREE_COMMANDS``) → allowed
-      - ``allow_text`` (the caller knows this plain message is part of a flow
-        the gate already allowed, e.g. typing a referral code after /debut)
-        → allowed
+      - ``allow_text`` (the bot is waiting for the referral code /debut asked
+        for) AND the message actually looks like one, sent in a DM → allowed
       - Everything else — commands, buttons and chatter alike → blocked
 
     Unlike maintenance mode, in-flight callback queries are NOT exempt: Rookie
@@ -173,7 +206,9 @@ def should_block_update(update, *, has_membership, bot_username=None,
         return not is_free_command(name)
 
     # Plain (non-command) message: blocked, but silently — see should_reply.
-    return not allow_text
+    # The single exception is the referral code the bot is waiting on, and only
+    # when it really looks like one (see is_referral_code_reply).
+    return not (allow_text and is_referral_code_reply(update))
 
 
 def should_reply(update, bot_username=None) -> bool:

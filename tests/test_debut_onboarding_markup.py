@@ -75,6 +75,15 @@ def _load_debut_with_stubs(monkeypatch):
     return _build_post_debut_onboarding_markup
 
 
+def _load_debut_text_builders(monkeypatch):
+    """Same stubs, but hand back the two text builders instead."""
+    _load_debut_with_stubs(monkeypatch)
+    from handlers.debut import (
+        _build_debut_command_list, _build_post_debut_onboarding_text,
+    )
+    return _build_debut_command_list, _build_post_debut_onboarding_text
+
+
 def _only_button(markup):
     return markup.inline_keyboard[0][0]
 
@@ -113,3 +122,36 @@ def test_post_debut_onboarding_group_without_deep_link_config_has_no_markup(monk
     build_markup = _load_debut_with_stubs(monkeypatch)
 
     assert build_markup(SimpleNamespace(type="group", id=-123)) is None
+
+
+# ── Rookie mode: /debut must not advertise commands it has just locked ──
+
+def test_debut_command_list_is_unchanged_when_the_bot_is_open(monkeypatch):
+    build_list, _build_guide = _load_debut_text_builders(monkeypatch)
+
+    text = build_list(rookie_mode=False)
+
+    for command in ("/claim", "/myroster", "/daily", "/gspin"):
+        assert command in text
+
+
+def test_debut_command_list_drops_locked_commands_in_rookie_mode(monkeypatch):
+    """A brand-new account can run none of these until it has a membership."""
+    build_list, _build_guide = _load_debut_text_builders(monkeypatch)
+
+    text = build_list(rookie_mode=True)
+
+    for command in ("/claim", "/daily", "/gspin", "/myroster"):
+        assert command not in text
+    assert "/membership" in text
+
+
+def test_post_debut_guide_points_at_the_membership_in_rookie_mode(monkeypatch):
+    _build_list, build_guide = _load_debut_text_builders(monkeypatch)
+
+    open_text = build_guide(11, rookie_mode=False)
+    locked_text = build_guide(11, rookie_mode=True)
+
+    assert "/claim" in open_text          # the normal starter roadmap
+    assert "/claim" not in locked_text
+    assert "/membership" in locked_text

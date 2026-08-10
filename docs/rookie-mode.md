@@ -40,10 +40,17 @@ renamed alias can't quietly lock the front door:
 | `/botstatus` `/ping` | answers "is the bot down, or am I locked out?" |
 
 Two buttons stay tappable for the same reason (`FREE_CALLBACK_PREFIXES`): the
-**Skip** button on that referral prompt, and the inert filler button. A brand
-new player typing their referral code as plain text is let through too — the
-gate reads the same `awaiting_referral_code` flag the redeem handler sets, so it
-never eats the answer to a question the bot just asked.
+**Skip** button on that referral prompt, and the inert filler button.
+
+A brand-new player typing their referral code as plain text is let through too,
+so the gate never eats the answer to a question the bot just asked — but only
+under exactly the conditions the handler that consumes it requires: the
+`awaiting_referral_code` flag is set, the chat is a DM, **and** the text is
+shaped like a code. The flag survives until a code is redeemed or Skip is
+tapped, so a wider exemption would hand anyone who answers with neither a
+permanent pass into every text-driven handler (WordChase, Bluff, XI
+quick-select). `tests/test_rookie_gate.py` pins the gate's code pattern against
+`handlers.redeem`'s, so the two copies of that rule cannot drift.
 
 Everything else is stopped. Plain (non-command) messages are stopped
 **silently**, so a locked-down bot doesn't reply to every line of group chatter.
@@ -92,9 +99,13 @@ Website → Maintenance page, 🐣 Rookie Mode panel:
 
 * **Enable / Disable** — the switch. The confirm dialog spells out what
   non-members lose.
-* **Custom lock message** — replaces the default upsell (Telegram HTML). Left
-  blank, the default quotes the live price list out of
-  `config.SUBSCRIPTION_TIERS` and points players at `/membership`.
+* **Custom lock message** — replaces the default upsell (Telegram HTML), in the
+  bot *and* in the Mini App lock screen. Left blank, the default quotes the live
+  price list out of `config.SUBSCRIPTION_TIERS` and points players at
+  `/membership`. Both front ends render it through the same
+  escape-then-allow-`<b>`/`<i>`/`<br>` path, so an admin-written message can
+  never inject markup. (The short plain-text `rookie_required_alert()` is still
+  what a Telegram callback answer shows — those alerts render text, not HTML.)
 * **Member count** — "X of Y registered players hold an active membership",
   counted exactly the way the gate counts it (an expired tier is not a
   membership), so the number answers "how many am I about to lock out?" before

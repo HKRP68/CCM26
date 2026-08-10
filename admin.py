@@ -4235,10 +4235,15 @@ def _block_miniapp_without_membership():
                 has_membership=_rookie_has_membership(telegram_id),
                 telegram_id=telegram_id, cfg=cfg):
             return None
+        # The admin's own lock message, exactly as the maintenance gate returns
+        # theirs — otherwise a custom message saved on the website would show
+        # in Telegram but never in the Mini App. Both front ends render it
+        # through the same escape-then-allow-<b>/<i>/<br> path, so the message
+        # cannot inject markup.
         return {
             "ok": False,
             "error": "rookie_required",
-            "message": rookie_gate.rookie_required_alert(),
+            "message": rookie_gate.rookie_required_message(cfg),
         }, 403
     except Exception:
         # A broken gate must never take the Mini App down.
