@@ -1,0 +1,105 @@
+{#
+  The live half of the Live Matches page. Rendered inline by
+  admin_live_matches.html and again on its own by /live-matches/panel, which is
+  what the page's auto-refresh swaps in — so the card markup exists once.
+  Styles live in the parent page.
+#}
+<div id="live-meta" data-live="{{ live_now }}" data-lobby="{{ lobby_count }}" hidden></div>
+
+{% if not live %}
+  <div class="lm-empty">
+    <div class="lm-empty-icon">🌙</div>
+    <p><strong>Nothing in play.</strong></p>
+    <p class="lm-muted">No match is live and no invite is waiting.</p>
+  </div>
+{% else %}
+
+  {% for group, heading, blurb in [
+       ('live',  '🔴 In play',   'Ball-by-ball is running.'),
+       ('lobby', '🕓 Setting up', 'Invite sent, toss called or openers being picked — no ball bowled yet.')] %}
+    {% set bucket = live | selectattr('phase', 'equalto', group) | list %}
+    {% if bucket %}
+      <div class="lm-group-head">
+        <h3>{{ heading }} <span class="lm-count">{{ bucket | length }}</span></h3>
+        <span class="lm-muted">{{ blurb }}</span>
+      </div>
+
+      <div class="lm-grid">
+      {% for m in bucket %}
+        <article class="lm-card lm-card--{{ m.phase }}">
+          <div class="lm-card-top">
+            <div>
+              <div class="lm-teams">
+                {{ m.u1 }} <span class="lm-muted">vs</span> {{ m.u2 }}
+              </div>
+              <div class="lm-sub">
+                Match #{{ m.id }}
+                {% if m.chat_id %}· chat <code>{{ m.chat_id }}</code>{% endif %}
+              </div>
+            </div>
+            <span class="lm-status lm-status--{{ m.phase }}">{{ m.status }}</span>
+          </div>
+
+          <div class="lm-pills">
+            <span class="lm-pill lm-pill--{{ m.type_family }}"
+                  {% if m.type_inferred %}title="Inferred — this match started before the mode was recorded."{% endif %}>
+              {% if m.type_inferred %}~{% endif %}{{ m.type_label }}
+            </span>
+            {% if m.tournament_id %}<span class="lm-pill lm-pill--tour">🏆 Tournament</span>{% endif %}
+            <span class="lm-pill lm-pill--plain">{{ m.overs }} ov</span>
+          </div>
+
+          {% if m.score %}
+            <div class="lm-score">
+              <div class="lm-sub">Innings {{ m.innings or 1 }} · {{ m.bat_team }}</div>
+              <div class="lm-score-line">
+                {{ m.score }}
+                <span class="lm-score-overs">({{ m.overs_played or '0.0' }} ov)</span>
+              </div>
+              {% if m.target %}
+                <div class="lm-sub">Chasing <strong>{{ m.target }}</strong></div>
+              {% endif %}
+            </div>
+          {% endif %}
+
+          <div class="lm-facts">
+            <div>📍 {{ m.stadium }}</div>
+            <div>🌱 {{ m.pitch }}</div>
+            <div>🏏 Ball #{{ m.ball_seq }}</div>
+            <div>
+              {% if m.next_action %}⏳ <code>{{ m.next_action }}</code>{% else %}⏳ —{% endif %}
+            </div>
+          </div>
+
+          <div class="lm-card-foot">
+            <span>Started {{ m.created_at | ist('%d %b %H:%M') if m.created_at else '—' }}</span>
+            {% if m.last_modified %}
+              {# A lobby row can carry a MatchState timestamp too, but no ball
+                 has been bowled yet — call that what it is. The label is a data
+                 attribute because the poll's relative-time pass rewrites this
+                 text every second. #}
+              {% set ago_label = 'last ball' if m.phase == 'live' else 'last activity' %}
+              <span class="lm-ago" data-label="{{ ago_label }}"
+                    data-since="{{ m.last_modified.isoformat() }}Z">
+                {{ ago_label }} {{ m.last_modified | ist('%H:%M:%S') }}
+              </span>
+            {% endif %}
+          </div>
+
+          {% if (m.u1_id and m.u1_id > 0) or (m.u2_id and m.u2_id > 0) %}
+            <div class="lm-card-actions">
+              {% if m.u1_id and m.u1_id > 0 %}
+                <a href="{{ url_for('user_detail', user_id=m.u1_id) }}" class="btn btn-ghost btn-sm">{{ m.u1 }}</a>
+              {% endif %}
+              {% if m.u2_id and m.u2_id > 0 %}
+                <a href="{{ url_for('user_detail', user_id=m.u2_id) }}" class="btn btn-ghost btn-sm">{{ m.u2 }}</a>
+              {% endif %}
+            </div>
+          {% endif %}
+        </article>
+      {% endfor %}
+      </div>
+    {% endif %}
+  {% endfor %}
+
+{% endif %}

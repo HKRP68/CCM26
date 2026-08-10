@@ -23,6 +23,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import User, Match, BotTeam, BotTeamPlayer, Player
 from services.button_timeout import schedule_button_timeout
+from services.match_outcome import TYPE_BOTVSBOT
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +222,7 @@ async def bvb_pickB_callback(update, context):
         # Create match: both user1 and user2 are the bot user
         m = Match(
             user1_id=bot_user.id, user2_id=bot_user.id,
+            match_type=TYPE_BOTVSBOT,
             overs=overs,
             stadium=random.choice([
                 "M.A. Chidambaram Stadium", "Wankhede Stadium",

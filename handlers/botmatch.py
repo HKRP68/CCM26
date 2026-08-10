@@ -16,6 +16,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import User, BotTeam, BotTeamPlayer, Player, Match
 from services.bot_ai import BOT_TG_ID
+from services.match_outcome import TYPE_BOTMATCH
 from handlers.vsbot import _get_or_create_bot_user as _ensure_bot_user
 
 logger = logging.getLogger(__name__)
@@ -188,6 +189,7 @@ async def botmatch_pick_b_callback(update: Update, context: ContextTypes.DEFAULT
         match = Match(
             user1_id=bot_user.id,
             user2_id=bot_user.id,
+            match_type=TYPE_BOTMATCH,
             overs=overs,
             status="in_progress",
             stadium=random.choice(["MCG", "Lord's", "Eden Gardens", "Wankhede", "The Oval"]),

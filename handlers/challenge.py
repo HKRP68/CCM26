@@ -14,6 +14,7 @@ from database import get_session
 from models import ChallengeLeague, ChallengePlayer, ChallengeTeam, FantasyLeague, Match, User
 from services import xi_rules
 from services.match_constants import MATCH_EXPIRE, PITCH_TYPES, random_match_settings
+from services.match_outcome import TYPE_CHALLENGE
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from services.xi_memory_service import load_last_xi, save_last_xi
 from handlers.match import (
@@ -2425,6 +2426,7 @@ async def challenge_toss_callback(update: Update, context: ContextTypes.DEFAULT_
         settings = random_match_settings()
         match = Match(
             user1_id=challenger.id, user2_id=target.id, status="toss",
+            match_type=TYPE_CHALLENGE,
             overs=lobby["overs"], toss_winner_id=winner_id,
             toss_decision=decision,
             batting_first_id=winner_id if decision == "bat" else opponent_id,

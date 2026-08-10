@@ -27,6 +27,9 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import ChallengePlayer, Match, User
 from services.match_constants import MATCH_EXPIRE, random_match_settings
+from services.match_outcome import (
+    mark_end, TYPE_CIPL, END_AUTO, END_COMPLETED,
+)
 from services.match_state_store import (
     get_state as _gs_store,
     save_state as _ss_store,
@@ -658,6 +661,7 @@ async def _close_idle_bot_match(context, mid, state):
         if match and match.status not in ("completed", "abandoned"):
             match.status = "abandoned"
             match.completed_at = datetime.utcnow()
+            mark_end(match, END_AUTO)
         session.commit()
     except Exception:
         session.rollback()
@@ -720,6 +724,9 @@ async def _forfeit_live_match(context, mid, state, expected):
         if match and match.status not in ("completed", "abandoned"):
             match.status = "completed"
             match.completed_at = datetime.utcnow()
+            # The idle timer ended this, not a player. The forfeit winner
+            # still shows in the Winner column.
+            mark_end(match, END_AUTO)
             match.winner_id = win_uid
             match.loser_id = idle_uid
             match.margin_type = "forfeit"
@@ -994,6 +1001,7 @@ def _cancel_orphan_match_row(mid):
         if not match or match.status not in ("active", "playing", "in_progress"):
             return
         match.status = "cancelled"
+        mark_end(match, END_AUTO)
         session.commit()
     except Exception:
         session.rollback()
@@ -1209,6 +1217,7 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         conditions = draft.get("conditions") or {}
         match = Match(
             user1_id=host.id, user2_id=target.id, status="active",
+            match_type=TYPE_CIPL,
             overs=overs, toss_winner_id=winner.id, toss_decision=decision,
             batting_first_id=bat_user.id, bowling_first_id=bowl_user.id,
             stadium=settings["stadium"], pitch_type=chosen_pitch,
@@ -2435,6 +2444,7 @@ async def _complete_match(context, mid, state):
             if match:
                 match.status = "completed"
                 match.completed_at = datetime.utcnow()
+                mark_end(match, END_COMPLETED)
                 match.inn1_runs = state.get("inn1_runs")
                 match.inn1_wickets = state.get("inn1_wickets")
                 match.inn2_runs = state.get("total_runs")

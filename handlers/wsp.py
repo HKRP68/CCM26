@@ -24,6 +24,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import User, Match
 from services.match_constants import random_match_settings
+from services.match_outcome import TYPE_WSP
 from handlers.match import (
     _active_cric_match_in_chat, _active_cric_match_for_user,
     _cric_lobby_for_user, _user_label, _mention, _user_busy_message,
@@ -312,6 +313,7 @@ async def wsp_decision_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
         match = Match(
             user1_id=host.id, user2_id=guest.id, status="toss",
+            match_type=TYPE_WSP,
             overs=lobby["overs"], toss_winner_id=winner_id,
             toss_decision=decision,
             batting_first_id=winner_id if decision == "bat" else opponent_id,
