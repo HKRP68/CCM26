@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from database import SessionLocal
 from models import Match as MatchModel, MatchState
+from services.match_outcome import mark_end, END_COMPLETED
 from config import WINNER_REWARD_PER_OVER, LOSER_REWARD_PER_OVER, get_max_overs_per_bowler
 
 logger = logging.getLogger(__name__)
@@ -426,6 +427,7 @@ class MatchManager:
             match_row = session.query(MatchModel).get(self.match_id)
             if match_row:
                 match_row.status = "completed"
+                mark_end(match_row, END_COMPLETED)
                 match_row.winner_id = winner_uid
                 match_row.loser_id = loser_uid
                 match_row.margin_type = margin_type

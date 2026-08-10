@@ -25,6 +25,7 @@ from models import (
     User, Player, UserRoster, Match, BotTeam, BotTeamPlayer, UserStats,
 )
 from services.bot_ai import BOT_TG_ID
+from services.match_outcome import TYPE_VSBOT
 from services.button_timeout import schedule_button_timeout
 
 logger = logging.getLogger(__name__)
@@ -455,7 +456,7 @@ async def vsbot_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         m = Match(
             user1_id=user.id, user2_id=bot_user.id,
-            status="toss", stadium=st["stadium"],
+            status="toss", match_type=TYPE_VSBOT, stadium=st["stadium"],
             pitch_type=st["pitch_type"], weather=st["weather"],
             temperature=st["temperature"],
             umpire1=st["umpire1"], umpire2=st["umpire2"],

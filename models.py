@@ -415,6 +415,10 @@ class Match(Base):
     user1_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     user2_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     status = Column(String(30), default="pending")
+    # Which game mode created this row — /cric, /vsbot, CIPL, … See
+    # ``services.match_outcome.MATCH_TYPE_LABELS``. NULL on rows written before
+    # the column existed; the admin views infer a coarse label for those.
+    match_type = Column(String(30), nullable=True)
     overs = Column(Integer, default=20)
     toss_winner_id = Column(Integer, nullable=True)
     toss_decision = Column(String(10), nullable=True)
@@ -447,6 +451,13 @@ class Match(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
+    # How the match finished — see ``services.match_outcome.END_REASONS``.
+    # ``status`` alone can't answer this: every terminal path but the cleanup
+    # job writes "completed", so a forfeit, an /endmatch and a /clearmatches
+    # sweep are indistinguishable without it.
+    end_reason = Column(String(30), nullable=True)
+    # The user who pressed /endmatch or /clearmatches, when a person ended it.
+    ended_by_id = Column(Integer, nullable=True)
 
     user1 = relationship("User", foreign_keys=[user1_id])
     user2 = relationship("User", foreign_keys=[user2_id])
@@ -454,6 +465,8 @@ class Match(Base):
     __table_args__ = (
         Index("ix_matches_status", "status"),
         Index("ix_matches_winner", "winner_id"),
+        Index("ix_matches_end_reason", "end_reason"),
+        Index("ix_matches_match_type", "match_type"),
     )
 
 

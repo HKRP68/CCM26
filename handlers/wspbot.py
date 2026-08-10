@@ -22,6 +22,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import User, Match, BotTeam, BotTeamPlayer, Player
 from services.bot_ai import BOT_TG_ID
+from services.match_outcome import TYPE_WSPBOT
 from services.button_timeout import schedule_button_timeout
 from handlers.vsbot import _get_or_create_bot_user, _build_bot_team_xi, _pitch_hint_vsbot
 
@@ -170,7 +171,7 @@ async def wspbot_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         now = datetime.utcnow()
         m = Match(
             user1_id=user.id, user2_id=bot_user.id,
-            status="toss", stadium=st["stadium"],
+            status="toss", match_type=TYPE_WSPBOT, stadium=st["stadium"],
             pitch_type=st["pitch_type"], weather=st["weather"],
             temperature=st["temperature"],
             umpire1=st["umpire1"], umpire2=st["umpire2"],

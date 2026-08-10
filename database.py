@@ -547,6 +547,11 @@ def _migrate_add_columns():
         "inn2_wickets": "INTEGER",
         "potm_player_id": "INTEGER",
         "potm_impact": "INTEGER",
+        # Mode the match was started in, and how it finished — see
+        # services/match_outcome.py.
+        "match_type": "VARCHAR(30)",
+        "end_reason": "VARCHAR(30)",
+        "ended_by_id": "INTEGER",
     }
 
     def _try_add(table, col, coltype):
@@ -1046,6 +1051,30 @@ def _migrate_add_columns():
         failures = _run_isolated(pgs_index_sql)
         if not failures:
             _record_migration_signature("pgs_player_index", sig)
+        for sql, e in failures:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"migration step skipped ({sql[:60]}…): {e}")
+
+    # ─────────────────────────────────────────────────────────────
+    # The admin Live Matches page filters completed matches by end reason and
+    # mode. Both columns were added to an existing table, and create_all()
+    # never adds an index to a table that already exists, so the __table_args__
+    # entries on Match only cover fresh installs — the filters would scan
+    # otherwise.
+    # ─────────────────────────────────────────────────────────────
+    match_outcome_index_sql = [
+        "CREATE INDEX IF NOT EXISTS ix_matches_end_reason "
+        "ON matches (end_reason)",
+        "CREATE INDEX IF NOT EXISTS ix_matches_match_type "
+        "ON matches (match_type)",
+    ]
+    done, sig = _migration_signature_matches("match_outcome_indexes",
+                                             match_outcome_index_sql)
+    if not done:
+        failures = _run_isolated(match_outcome_index_sql)
+        if not failures:
+            _record_migration_signature("match_outcome_indexes", sig)
         for sql, e in failures:
             import logging
             logging.getLogger(__name__).warning(

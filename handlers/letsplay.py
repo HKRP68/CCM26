@@ -33,6 +33,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import Match, User, UserRoster, Player, PlayerTrait, Trait
 from services.match_constants import PITCH_TYPES, MATCH_EXPIRE, random_match_settings
+from services.match_outcome import TYPE_LETSPLAY
 from services.telegram_user_service import sync_telegram_user, resolve_command_target
 from services.match_state_store import save_state, cleanup_state, A_PICK_CIPL_BOWLER
 from services import cipl_match
@@ -1519,7 +1520,7 @@ async def _launch_match(context, draft, decision, winner_side):
         pitch_type = draft.get("pitch_type") or settings["pitch_type"]
         match = Match(
             user1_id=host.id, user2_id=guest.id, status="active",
-            overs=LETSPLAY_OVERS,
+            match_type=TYPE_LETSPLAY, overs=LETSPLAY_OVERS,
             toss_winner_id=(host.id if winner_side == "host" else guest.id),
             toss_decision=decision,
             batting_first_id=bat_info["user_id"], bowling_first_id=bowl_info["user_id"],

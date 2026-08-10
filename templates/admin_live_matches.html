@@ -2,83 +2,371 @@
 {% block title %}Live Matches{% endblock %}
 {% block content %}
 
-<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
-  <h2>⚡ Live Matches <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ total }})</span></h2>
-  <div>
-    <button onclick="location.reload()" class="btn btn-ghost btn-sm">🔄 Refresh</button>
+<style>
+  /* A neutral inset. --bg-secondary is the brand cream in light mode, which is
+     too loud sitting behind a live score. */
+  .lm-page { --lm-well: rgba(56, 63, 73, .06); }
+  [data-theme="dark"] .lm-page { --lm-well: rgba(0, 0, 0, .25); }
+
+  .lm-muted { color: var(--muted); }
+
+  .lm-head {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 1rem; flex-wrap: wrap; margin-bottom: .35rem;
+  }
+  .lm-head h2 { margin: 0; }
+  .lm-head-actions { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+
+  .lm-tally { display: flex; gap: .45rem; flex-wrap: wrap; margin: .6rem 0 1.1rem; }
+  .lm-tally b { font-variant-numeric: tabular-nums; }
+
+  /* ── live cards ─────────────────────────────────────────────── */
+  .lm-group-head {
+    display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap;
+    margin: 1.1rem 0 .55rem;
+  }
+  .lm-group-head h3 { margin: 0; font-size: .95rem; }
+  .lm-group-head .lm-muted { font-size: .76rem; }
+  .lm-count {
+    background: var(--bg-secondary); border: 1px solid var(--border);
+    border-radius: 999px; padding: .05rem .45rem;
+    font-size: .72rem; color: var(--muted); font-weight: 700;
+  }
+
+  .lm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: .85rem; }
+
+  .lm-card {
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-left: 3px solid var(--border);
+    border-radius: var(--radius-lg); padding: .9rem;
+    box-shadow: var(--shadow-sm);
+  }
+  .lm-card--live  { border-left-color: #00C9A7; }
+  .lm-card--lobby { border-left-color: #FBBF24; }
+
+  .lm-card-top { display: flex; justify-content: space-between; align-items: start; gap: .6rem; }
+  .lm-teams { font-weight: 800; font-size: 1.02rem; line-height: 1.25; }
+  .lm-sub { color: var(--muted); font-size: .76rem; }
+
+  .lm-status {
+    padding: .15rem .5rem; border-radius: 999px; font-size: .68rem;
+    text-transform: uppercase; letter-spacing: .06em; font-weight: 800; white-space: nowrap;
+  }
+  .lm-status--live  { background: rgba(0,201,167,.15);  color: #00A88C; border: 1px solid rgba(0,201,167,.5); }
+  .lm-status--lobby { background: rgba(251,191,36,.15); color: #B98309; border: 1px solid rgba(251,191,36,.5); }
+  [data-theme="dark"] .lm-status--live  { color: #00C9A7; }
+  [data-theme="dark"] .lm-status--lobby { color: #FBBF24; }
+
+  .lm-pills { display: flex; gap: .3rem; flex-wrap: wrap; margin: .55rem 0; }
+  .lm-pill {
+    font-size: .68rem; font-weight: 800; letter-spacing: .04em;
+    padding: .12rem .45rem; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--muted); background: var(--bg-secondary);
+    white-space: nowrap;
+  }
+  .lm-pill--pvp      { border-color: rgba(48,127,196,.5);  color: #307fc4; background: rgba(48,127,196,.10); }
+  .lm-pill--ai       { border-color: rgba(148,109,214,.5); color: #7d54c9; background: rgba(148,109,214,.12); }
+  .lm-pill--spectate { border-color: var(--border); }
+  .lm-pill--tour     { border-color: rgba(192,25,53,.45); color: var(--accent); background: var(--accent-light); }
+  [data-theme="dark"] .lm-pill--ai { color: #b28cf0; }
+
+  .lm-score {
+    margin: .55rem 0; padding: .5rem .6rem;
+    background: var(--lm-well); border-radius: var(--radius-md);
+  }
+  .lm-score-line { font-size: 1.35rem; font-weight: 800; color: #00A88C; line-height: 1.2; }
+  [data-theme="dark"] .lm-score-line { color: #00C9A7; }
+  .lm-score-overs { color: var(--muted); font-size: .82rem; font-weight: 500; }
+
+  .lm-facts {
+    display: grid; grid-template-columns: 1fr 1fr; gap: .2rem .5rem;
+    font-size: .76rem; color: var(--muted);
+  }
+  .lm-facts code { font-size: .95em; }
+
+  .lm-card-foot {
+    display: flex; justify-content: space-between; gap: .5rem; flex-wrap: wrap;
+    margin-top: .7rem; padding-top: .5rem; border-top: 1px dashed var(--border);
+    font-size: .73rem; color: var(--muted);
+  }
+  .lm-card-actions { display: flex; gap: .35rem; flex-wrap: wrap; margin-top: .55rem; }
+
+  .lm-empty {
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 2rem; text-align: center;
+  }
+  .lm-empty-icon { font-size: 2rem; }
+  .lm-empty p { margin: .3rem 0; }
+
+  /* ── completed table ────────────────────────────────────────── */
+  .lm-filters {
+    background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: .85rem; margin-bottom: .9rem;
+  }
+  .lm-filter-row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
+  .lm-filter-row input[type="text"] { width: 230px; }
+  .lm-filter-row input, .lm-filter-row select { padding: .45rem .6rem; font-size: .84rem; width: auto; }
+
+  .lm-chips { display: flex; gap: .4rem; flex-wrap: wrap; margin-top: .7rem; padding-top: .7rem; border-top: 1px dashed var(--border); }
+  .lm-chip {
+    display: inline-flex; align-items: center; gap: .35rem;
+    padding: .3rem .65rem; border-radius: 999px; text-decoration: none;
+    border: 1px solid var(--border); background: var(--bg-secondary);
+    color: var(--muted); font-size: .76rem; font-weight: 700;
+  }
+  .lm-chip:hover { border-color: var(--brand); color: var(--brand); }
+  .lm-chip b { font-variant-numeric: tabular-nums; }
+  .lm-chip--on { background: var(--brand-light); border-color: var(--brand); color: var(--brand); }
+
+  .lm-reason { display: inline-flex; align-items: center; gap: .35rem; font-weight: 700; white-space: nowrap; }
+  .lm-reason--good  { color: #0E9F6E; }
+  .lm-reason--warn  { color: #B98309; }
+  .lm-reason--bad   { color: var(--accent); }
+  .lm-reason--muted { color: var(--muted); }
+  /* The brand red is a deep #c01935 — fine on the light page, too dim against
+     the dark one for a whole status column. */
+  [data-theme="dark"] .lm-reason--good { color: #34D399; }
+  [data-theme="dark"] .lm-reason--warn { color: #FBBF24; }
+  [data-theme="dark"] .lm-reason--bad  { color: #F87171; }
+  [data-theme="dark"] .lm-pill--tour   { color: #F87171; border-color: rgba(248,113,113,.45); }
+
+  .lm-inferred { cursor: help; opacity: .65; font-weight: 400; }
+  .lm-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .lm-nowrap { white-space: nowrap; }
+  .lm-dash { color: var(--muted); }
+
+  .lm-legend {
+    margin-top: .85rem; font-size: .74rem; color: var(--muted);
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: .2rem .9rem;
+  }
+
+  @media (max-width: 640px) {
+    .lm-grid { grid-template-columns: 1fr; }
+    .lm-filter-row input[type="text"] { width: 100%; }
+  }
+</style>
+
+<div class="lm-page">
+<div class="lm-head">
+  <h2>⚡ Live Matches</h2>
+  <div class="lm-head-actions">
+    <label class="lm-muted" style="display:flex;align-items:center;gap:.35rem;font-size:.75rem;text-transform:none;letter-spacing:0;margin:0;">
+      <input type="checkbox" id="lm-auto" style="width:auto;margin:0;" checked> auto-refresh
+    </label>
+    <button type="button" id="lm-refresh" class="btn btn-ghost btn-sm">🔄 Refresh</button>
     <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
   </div>
 </div>
 
-<p style="color:var(--muted);font-size:.85rem;margin-bottom:1rem;">
-  Matches that are currently <strong>active</strong> or have a <strong>pending</strong> invite. Refresh manually to see updates — this page does not auto-poll.
+<div class="lm-tally">
+  <span class="lm-pill lm-pill--pvp">In play <b id="lm-tally-live">{{ live_now }}</b></span>
+  <span class="lm-pill">Setting up <b id="lm-tally-lobby">{{ lobby_count }}</b></span>
+  <span class="lm-pill">Finished <b>{{ total }}</b>{% if search or reason or mtype %} matching{% endif %}</span>
+  <span class="lm-pill lm-muted" id="lm-updated">updated just now</span>
+</div>
+
+<div id="lm-live-panel">
+  {% include "_live_match_cards.html" %}
+</div>
+
+<hr class="pitch-line">
+
+<h2 style="margin-bottom:.25rem;">🗒 Completed Matches</h2>
+<p class="lm-muted" style="font-size:.82rem;margin:0 0 .9rem;">
+  Every match that is no longer playable, and how it got there.
 </p>
 
-{% if not live %}
-<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:2rem;text-align:center;color:var(--muted);">
-  <p style="font-size:2rem;margin:0;">🌙</p>
-  <p>No live matches right now.</p>
-</div>
+<form class="lm-filters" method="get" action="{{ url_for('admin_live_matches') }}">
+  <div class="lm-filter-row">
+    <input type="text" name="q" value="{{ search }}" placeholder="Match #id or player name…">
+    <select name="type">
+      <option value="">All modes</option>
+      {% for key, label in type_labels | dictsort(by='value') %}
+        <option value="{{ key }}" {% if mtype == key %}selected{% endif %}>{{ label }} ({{ key }})</option>
+      {% endfor %}
+      <option value="__untagged__" {% if mtype == '__untagged__' %}selected{% endif %}>Mode not recorded</option>
+    </select>
+    {% if reason %}<input type="hidden" name="reason" value="{{ reason }}">{% endif %}
+    <button type="submit" class="btn btn-primary btn-sm">Search</button>
+    {% if search or reason or mtype %}
+      <a href="{{ url_for('admin_live_matches') }}" class="btn btn-ghost btn-sm">Clear</a>
+    {% endif %}
+  </div>
+
+  <div class="lm-chips">
+    <a class="lm-chip {% if not reason %}lm-chip--on{% endif %}"
+       href="{{ url_for('admin_live_matches', **base_args) }}">All</a>
+    {% for key in reason_keys %}
+      <a class="lm-chip {% if reason == key %}lm-chip--on{% endif %}"
+         title="{{ reason_hints[key] }}"
+         href="{{ url_for('admin_live_matches', reason=key, **base_args) }}">
+        <span>{{ reason_icons[key] }}</span>{{ reason_labels[key] }} <b>{{ reason_counts[key] }}</b>
+      </a>
+    {% endfor %}
+  </div>
+</form>
+
+{% if not rows %}
+  <div class="lm-empty">
+    <div class="lm-empty-icon">🔍</div>
+    <p><strong>No matches found.</strong></p>
+    <p class="lm-muted">
+      {% if search or reason or mtype %}Nothing matches these filters.{% else %}No match has finished yet.{% endif %}
+    </p>
+  </div>
 {% else %}
 
-<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:1rem;">
-{% for m in live %}
-  <div style="background:var(--card,#181f2a);border:1px solid var(--border,#2a3142);border-radius:10px;padding:1rem;{% if m.status == 'pending' %}border-left:3px solid #FBBF24;{% else %}border-left:3px solid #00C9A7;{% endif %}">
-    <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:.5rem;">
-      <div>
-        <div style="font-weight:700;font-size:1.05rem;">
-          {{ m.u1 }} <span style="color:var(--muted);font-weight:400;">vs</span> {{ m.u2 }}
-        </div>
-        <div style="color:var(--muted);font-size:.78rem;">
-          Match #{{ m.id }} · chat {{ m.chat_id or '—' }}
-        </div>
-      </div>
-      <span style="background:{% if m.status == 'pending' %}rgba(251,191,36,.15);color:#FBBF24;border:1px solid rgba(251,191,36,.5){% else %}rgba(0,201,167,.15);color:#00C9A7;border:1px solid rgba(0,201,167,.5){% endif %};padding:.15rem .5rem;border-radius:999px;font-size:.7rem;text-transform:uppercase;letter-spacing:.5px;font-weight:600;">{{ m.status }}</span>
-    </div>
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Match No</th>
+        <th>Host</th>
+        <th>Guest</th>
+        <th>Match Type</th>
+        <th>Winner</th>
+        <th>Status</th>
+        <th>Ended</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="lm-num"><strong>#{{ r.id }}</strong></td>
+        <td>
+          {% if r.host_id and r.host_id > 0 %}
+            <a href="{{ url_for('user_detail', user_id=r.host_id) }}">{{ r.host }}</a>
+          {% else %}{{ r.host }}{% endif %}
+        </td>
+        <td>
+          {% if r.guest_id and r.guest_id > 0 %}
+            <a href="{{ url_for('user_detail', user_id=r.guest_id) }}">{{ r.guest }}</a>
+          {% else %}{{ r.guest }}{% endif %}
+        </td>
+        <td class="lm-nowrap">
+          <span class="lm-pill lm-pill--{{ r.type_family }}"
+                {% if r.type_inferred %}title="Inferred from the players — this match ran before the mode was recorded."{% endif %}>
+            {% if r.type_inferred %}<span class="lm-inferred">~</span>{% endif %}{{ r.type_label }}
+          </span>
+          {% if r.tournament_id %}<span class="lm-pill lm-pill--tour">🏆</span>{% endif %}
+        </td>
+        <td>
+          {% if r.winner_id and r.winner_id > 0 %}
+            <a href="{{ url_for('user_detail', user_id=r.winner_id) }}">{{ r.winner }}</a>
+          {% elif r.winner %}{{ r.winner }}
+          {% else %}<span class="lm-dash">— no result</span>{% endif %}
+          {% if r.result %}<div class="lm-sub">{{ r.result }}</div>{% endif %}
+          {% if r.score %}<div class="lm-sub lm-num">{{ r.score }}</div>{% endif %}
+        </td>
+        <td>
+          <span class="lm-reason lm-reason--{{ r.reason_tone }}" title="{{ reason_hints.get(r.reason, '') }}">
+            {{ r.reason_icon }} {{ r.reason_label }}{% if r.reason_inferred %}<span class="lm-inferred" title="Inferred from the row — this match ended before end reasons were recorded.">*</span>{% endif %}
+          </span>
+          {% if r.ended_by %}<div class="lm-sub">by {{ r.ended_by }}</div>{% endif %}
+          {% if r.raw_status != 'completed' %}<div class="lm-sub"><code>{{ r.raw_status }}</code></div>{% endif %}
+        </td>
+        <td class="lm-nowrap lm-sub">
+          {{ r.ended_at | ist('%d %b %H:%M') if r.ended_at else '—' }}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 
-    {% if m.status == 'active' and m.score %}
-    <div style="margin:.5rem 0;padding:.5rem;background:rgba(0,0,0,.2);border-radius:6px;">
-      <div style="font-size:.78rem;color:var(--muted);">Innings {{ m.innings or 1 }} · {{ m.bat_team }}</div>
-      <div style="font-size:1.4rem;font-weight:700;color:#00C9A7;">
-        {{ m.score }} <span style="color:var(--muted);font-size:.85rem;font-weight:400;">({{ m.overs_played or '0.0' }} ov)</span>
-      </div>
-      {% if m.target %}<div style="font-size:.78rem;color:var(--muted);">Target: <strong>{{ m.target }}</strong></div>{% endif %}
-    </div>
+<div class="pagination">
+  {% set page_args = dict(request.args) %}
+  {% set _ = page_args.pop('page', None) %}
+  {% if page > 1 %}<a href="{{ url_for('admin_live_matches', page=page-1, **page_args) }}">◀</a>{% endif %}
+  {% for p in range(1, total_pages + 1) %}
+    {% if p == page %}<span class="current">{{ p }}</span>
+    {% elif p <= 2 or p >= total_pages - 1 or (p >= page - 1 and p <= page + 1) %}
+      <a href="{{ url_for('admin_live_matches', page=p, **page_args) }}">{{ p }}</a>
+    {% elif p == 3 and page > 4 %}<span class="info">…</span>
     {% endif %}
-
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.25rem;font-size:.78rem;color:var(--muted);">
-      <div>📍 {{ m.stadium }}</div>
-      <div>🌱 {{ m.pitch }}</div>
-      <div>⏱ {{ m.overs }} overs</div>
-      <div>🏏 Ball #{{ m.ball_seq }}</div>
-    </div>
-
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:.75rem;padding-top:.5rem;border-top:1px dashed var(--border);font-size:.75rem;color:var(--muted);">
-      <span>
-        Started {{ m.created_at | ist('%d %b %H:%M') if m.created_at else '—' }}
-      </span>
-      <span>
-        {% if m.last_modified %}Last ball: {{ m.last_modified | ist('%H:%M:%S') }}{% endif %}
-      </span>
-    </div>
-
-    {% if m.next_action %}
-    <div style="margin-top:.4rem;font-size:.7rem;color:var(--muted);">
-      Waiting on: <code>{{ m.next_action }}</code>
-    </div>
-    {% endif %}
-
-    <div style="display:flex;gap:.4rem;margin-top:.6rem;">
-      {% if m.u1_id and m.u1_id > 0 %}
-        <a href="{{ url_for('user_detail', user_id=m.u1_id) }}" class="btn btn-ghost btn-sm">View {{ m.u1 }}</a>
-      {% endif %}
-      {% if m.u2_id and m.u2_id > 0 %}
-        <a href="{{ url_for('user_detail', user_id=m.u2_id) }}" class="btn btn-ghost btn-sm">View {{ m.u2 }}</a>
-      {% endif %}
-    </div>
-  </div>
-{% endfor %}
+  {% endfor %}
+  {% if page < total_pages %}<a href="{{ url_for('admin_live_matches', page=page+1, **page_args) }}">▶</a>{% endif %}
+  <span class="info">{{ total }} match{{ '' if total == 1 else 'es' }}</span>
 </div>
 
 {% endif %}
+
+<div class="lm-legend">
+  {% for key in reason_keys %}
+    <div><span class="lm-reason lm-reason--{{ reason_tones[key] }}">{{ reason_icons[key] }} {{ reason_labels[key] }}</span> — {{ reason_hints[key] }}</div>
+  {% endfor %}
+  <div><span class="lm-inferred">~</span> / <span class="lm-inferred">*</span> — reconstructed from an older row, not recorded at the time.</div>
+</div>
+</div>
+
+<script>
+(function () {
+  var panel   = document.getElementById('lm-live-panel');
+  var updated = document.getElementById('lm-updated');
+  var auto    = document.getElementById('lm-auto');
+  var manual  = document.getElementById('lm-refresh');
+  var REFRESH_MS = 15000;
+  var timer = null, inFlight = false, lastFetch = Date.now();
+
+  // "3m ago" beats a wall-clock time for spotting a match that has quietly
+  // stalled, and it keeps ticking between polls.
+  function relativeTimes() {
+    var now = Date.now();
+    panel.querySelectorAll('.lm-ago[data-since]').forEach(function (el) {
+      var t = Date.parse(el.getAttribute('data-since'));
+      if (isNaN(t)) return;
+      var s = Math.max(0, Math.round((now - t) / 1000));
+      var txt = s < 60 ? s + 's ago'
+              : s < 3600 ? Math.floor(s / 60) + 'm ago'
+              : Math.floor(s / 3600) + 'h ago';
+      el.textContent = 'last ball ' + txt;
+    });
+    var age = Math.round((now - lastFetch) / 1000);
+    updated.textContent = age < 5 ? 'updated just now' : 'updated ' + age + 's ago';
+  }
+
+  function refresh() {
+    if (inFlight || document.hidden) return;
+    inFlight = true;
+    fetch('{{ url_for("admin_live_matches_panel") }}', { credentials: 'same-origin' })
+      .then(function (res) {
+        // A expired admin session answers with a redirect to the login page;
+        // dropping that HTML into the panel would look like the matches
+        // vanished. Stop polling and say so instead.
+        if (res.redirected || !res.ok) throw new Error('session');
+        return res.text();
+      })
+      .then(function (html) {
+        panel.innerHTML = html;
+        var meta = document.getElementById('live-meta');
+        if (meta) {
+          document.getElementById('lm-tally-live').textContent = meta.dataset.live;
+          document.getElementById('lm-tally-lobby').textContent = meta.dataset.lobby;
+        }
+        lastFetch = Date.now();
+        relativeTimes();
+      })
+      .catch(function () {
+        auto.checked = false;
+        stop();
+        updated.textContent = 'auto-refresh stopped — reload the page';
+      })
+      .finally(function () { inFlight = false; });
+  }
+
+  function start() { stop(); timer = setInterval(refresh, REFRESH_MS); }
+  function stop()  { if (timer) { clearInterval(timer); timer = null; } }
+
+  auto.addEventListener('change', function () { auto.checked ? start() : stop(); });
+  manual.addEventListener('click', refresh);
+  document.addEventListener('visibilitychange', function () {
+    if (!document.hidden && auto.checked) refresh();
+  });
+
+  setInterval(relativeTimes, 1000);
+  relativeTimes();
+  if (auto.checked) start();
+})();
+</script>
+
 {% endblock %}

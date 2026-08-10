@@ -2006,6 +2006,7 @@ def main():
             async def _stuck_match_cleanup(ctx):
                 from database import get_session as _gs
                 from models import Match, MatchState
+                from services.match_outcome import mark_end, END_AUTO
                 from datetime import datetime as _dt, timedelta as _td
                 s = _gs()
                 try:
@@ -2022,6 +2023,7 @@ def main():
                     for m in pending:
                         m.status = "expired"
                         m.completed_at = now
+                        mark_end(m, END_AUTO)
                         expired_invites += 1
 
                     # Active matches with no MatchState updates in 24h
@@ -2040,6 +2042,7 @@ def main():
                             m.completed_at = now
                             m.margin_type = "abandoned"
                             m.margin_value = 0
+                            mark_end(m, END_AUTO)
                             abandoned += 1
 
                     if expired_invites or abandoned:

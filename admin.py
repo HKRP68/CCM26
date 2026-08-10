@@ -29,6 +29,12 @@ from database import get_session, init_db
 from services.perf_log import perf_span as _perf_span, perf_timed as _perf_timed
 from services.telegram_user_service import user_lookup_filter
 from services.player_service import not_career
+from services.match_outcome import (
+    mark_end, derive_end_reason, end_reason_filter, match_type_label,
+    match_type_family, END_REASONS, END_REASON_LABELS, END_REASON_HINTS,
+    END_REASON_TONES, END_REASON_ICONS, END_ENDED_BY_ADMIN,
+    MATCH_TYPE_LABELS,
+)
 from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     PlayerGameStats, AdminLog, Match, UserAchievement,
                     Trait, PlayerTrait, TraitInventory, TraitMarket, TraitDaily,
@@ -43,6 +49,14 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer,
                     Tournament, TournamentTeam, TournamentMatch, TournamentPlayerStats,
                     TournamentGroup)
+
+# A match that has actually started, versus one still forming (invite sent,
+# toss not called, openers not picked). Both are "not finished", but only the
+# first has a score worth watching — the Live Matches page groups them apart,
+# and the dashboard tiles count the same two sets so the numbers agree.
+LIVE_NOW_STATUSES = ("playing", "active", "in_progress")
+LOBBY_STATUSES = ("pending", "accepted", "toss", "selecting")
+UNFINISHED_MATCH_STATUSES = LIVE_NOW_STATUSES + LOBBY_STATUSES
 
 app = Flask(__name__)
 
@@ -503,11 +517,14 @@ def dashboard():
         from models import Match
         now = datetime.utcnow()
 
-        # Operations counts
+        # Operations counts. These mirror the Live Matches page exactly — the
+        # tile used to count only "active"/"pending", so a /cric game at the
+        # toss or a /vsbot game in "in_progress" showed on that page while the
+        # dashboard still read zero.
         live_matches = db.query(func.count(Match.id)).filter(
-            Match.status == "active").scalar() or 0
+            Match.status.in_(LIVE_NOW_STATUSES)).scalar() or 0
         pending_matches = db.query(func.count(Match.id)).filter(
-            Match.status == "pending").scalar() or 0
+            Match.status.in_(LOBBY_STATUSES)).scalar() or 0
         today_0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
         completed_today = db.query(func.count(Match.id)).filter(
             Match.status == "completed", Match.completed_at >= today_0).scalar() or 0
@@ -3121,6 +3138,8 @@ def admin_force_end_match(user_id, match_id):
             return redirect(url_for("user_detail", user_id=user_id))
 
         match.status = "abandoned"
+        match.completed_at = datetime.utcnow()
+        mark_end(match, END_ENDED_BY_ADMIN)
         # Drop the match state so the bot doesn't try to revive it
         ms = db.query(MatchState).filter(MatchState.match_id == match_id).first()
         if ms:
@@ -14111,49 +14130,263 @@ def admin_sounds():
 # LIVE MATCHES — operations view
 # ═══════════════════════════════════════════════════════════════════════
 
+COMPLETED_PAGE_SIZE = 40
+
+
+def _match_people(db, matches):
+    """Batch-load every user referenced by ``matches`` into ``{id: user}``.
+
+    The old page issued two ``User`` lookups per match inside the render loop;
+    at a page of 40 completed matches (each with up to four distinct user ids)
+    that is well over a hundred round trips for one screen.
+    """
+    ids = set()
+    for m in matches:
+        for uid in (m.user1_id, m.user2_id,
+                    getattr(m, "winner_id", None), getattr(m, "ended_by_id", None)):
+            if uid and uid > 0:
+                ids.add(uid)
+    if not ids:
+        return {}
+    return {u.id: u for u in db.query(User).filter(User.id.in_(ids)).all()}
+
+
+def _person(people, uid, fallback="?"):
+    """Display name for a user id, with the AI opponent named as such."""
+    if not uid:
+        return fallback
+    if uid == -1:
+        return "AI"
+    u = people.get(uid)
+    if u is None:
+        return fallback
+    if u.telegram_id == -1:
+        return "AI"
+    return u.username or u.first_name or f"#{u.id}"
+
+
+def _is_bot_user(people, uid):
+    if uid == -1:
+        return True
+    u = people.get(uid)
+    return bool(u is not None and u.telegram_id == -1)
+
+
+def _live_match_snapshots(db):
+    """Every unfinished match, newest first, with its live score folded in."""
+    from models import MatchState
+    import json as _json
+
+    matches = (db.query(Match)
+               .filter(Match.status.in_(UNFINISHED_MATCH_STATUSES))
+               .order_by(Match.created_at.desc()).all())
+    if not matches:
+        return []
+
+    people = _match_people(db, matches)
+    states = {}
+    ids = [m.id for m in matches]
+    for ms in db.query(MatchState).filter(MatchState.match_id.in_(ids)).all():
+        states[ms.match_id] = ms
+
+    live = []
+    for m in matches:
+        ms = states.get(m.id)
+        guest_is_bot = _is_bot_user(people, m.user2_id)
+        both_bots = guest_is_bot and _is_bot_user(people, m.user1_id)
+        type_text, type_inferred = match_type_label(m, guest_is_bot, both_bots)
+        snap = {
+            "id": m.id, "status": m.status,
+            "phase": "live" if m.status in LIVE_NOW_STATUSES else "lobby",
+            "u1": _person(people, m.user1_id),
+            "u2": _person(people, m.user2_id),
+            "u1_id": m.user1_id, "u2_id": m.user2_id,
+            "chat_id": m.chat_id, "overs": m.overs,
+            "stadium": m.stadium or "—", "pitch": m.pitch_type or "—",
+            "created_at": m.created_at,
+            "type_label": type_text,
+            "type_inferred": type_inferred,
+            "type_family": match_type_family(m, guest_is_bot, both_bots),
+            "tournament_id": m.tournament_id,
+            "last_modified": ms.last_modified if ms else None,
+            "next_action": ms.next_action if ms else None,
+            "ball_seq": ms.ball_seq if ms else 0,
+        }
+        if ms and ms.state_json:
+            try:
+                st = _json.loads(ms.state_json)
+                snap["innings"] = st.get("innings")
+                snap["score"] = f"{st.get('total_runs',0)}/{st.get('total_wickets',0)}"
+                co = st.get("current_over", 1) - 1
+                cb = st.get("current_ball", 0)
+                snap["overs_played"] = f"{co}.{cb}"
+                snap["target"] = st.get("target")
+                snap["bat_team"] = st.get("bat_team_name", "?")
+                snap["bowl_team"] = st.get("bowl_team_name", "?")
+            except Exception:
+                pass
+        live.append(snap)
+    return live
+
+
+def _completed_match_query(db, q="", mtype=""):
+    """Base query for finished matches, with the search/mode filters applied.
+
+    Kept separate from the end-reason filter so the reason tallies can be
+    counted against the same search without recursing into themselves.
+    """
+    query = db.query(Match).filter(Match.status.notin_(UNFINISHED_MATCH_STATUSES))
+
+    q = (q or "").strip()
+    if q:
+        bare = q.lstrip("#")
+        if bare.isdigit():
+            query = query.filter(Match.id == int(bare))
+        else:
+            from sqlalchemy.orm import aliased
+            u1, u2 = aliased(User), aliased(User)
+            like = f"%{q}%"
+            query = (query
+                     .outerjoin(u1, Match.user1_id == u1.id)
+                     .outerjoin(u2, Match.user2_id == u2.id)
+                     .filter(or_(u1.username.ilike(like), u1.first_name.ilike(like),
+                                 u2.username.ilike(like), u2.first_name.ilike(like))))
+
+    mtype = (mtype or "").strip()
+    if mtype == "__untagged__":
+        query = query.filter(Match.match_type.is_(None))
+    elif mtype:
+        query = query.filter(Match.match_type == mtype)
+    return query
+
+
+def _completed_row(m, people):
+    """One row of the completed-matches table."""
+    guest_is_bot = _is_bot_user(people, m.user2_id)
+    both_bots = guest_is_bot and _is_bot_user(people, m.user1_id)
+    type_text, type_inferred = match_type_label(m, guest_is_bot, both_bots)
+    reason, reason_inferred = derive_end_reason(m)
+
+    margin = (m.margin_type or "").lower()
+    if m.winner_id:
+        winner = _person(people, m.winner_id, "—")
+        if margin in ("runs", "wickets") and m.margin_value:
+            result = f"by {m.margin_value} {margin}"
+        elif margin:
+            result = margin
+        else:
+            result = ""
+    elif margin in ("tie", "tied"):
+        winner, result = "Tied", ""
+    else:
+        winner, result = "", ""
+
+    score = ""
+    if m.inn1_runs is not None and m.inn2_runs is not None:
+        score = (f"{m.inn1_runs}/{m.inn1_wickets or 0} — "
+                 f"{m.inn2_runs}/{m.inn2_wickets or 0}")
+
+    return {
+        "id": m.id,
+        "host": _person(people, m.user1_id), "host_id": m.user1_id,
+        "guest": _person(people, m.user2_id), "guest_id": m.user2_id,
+        "type_label": type_text,
+        "type_inferred": type_inferred,
+        "type_family": match_type_family(m, guest_is_bot, both_bots),
+        "tournament_id": m.tournament_id,
+        "winner": winner, "winner_id": m.winner_id, "result": result,
+        "reason": reason,
+        "reason_inferred": reason_inferred,
+        "reason_label": END_REASON_LABELS.get(reason, reason),
+        "reason_tone": END_REASON_TONES.get(reason, "muted"),
+        "reason_icon": END_REASON_ICONS.get(reason, "•"),
+        "ended_by": _person(people, getattr(m, "ended_by_id", None), ""),
+        "overs": m.overs, "score": score,
+        "raw_status": m.status,
+        "ended_at": m.completed_at or m.created_at,
+    }
+
+
 @app.route("/live-matches")
 @login_required
 def admin_live_matches():
-    """Shows currently-active matches with state snapshot pulled from MatchState."""
+    """Live matches plus a searchable history of how finished matches ended."""
     db = get_session()
     try:
-        from models import Match, MatchState
-        import json as _json
-        matches = (db.query(Match)
-                    .filter(Match.status.in_(("active", "pending")))
-                    .order_by(Match.created_at.desc()).all())
-        live = []
-        for m in matches:
-            ms = db.query(MatchState).filter(MatchState.match_id == m.id).first()
-            u1 = db.query(User).get(m.user1_id) if m.user1_id else None
-            u2 = db.query(User).get(m.user2_id) if m.user2_id else None
-            snap = {
-                "id": m.id, "status": m.status,
-                "u1": ((u1.username or u1.first_name) if u1 else "?"),
-                "u2": (("Bot" if (u2 and u2.telegram_id == -1) or m.user2_id == -1
-                        else (u2.username or u2.first_name)) if u2 else "?"),
-                "u1_id": m.user1_id, "u2_id": m.user2_id,
-                "chat_id": m.chat_id, "overs": m.overs,
-                "stadium": m.stadium or "—", "pitch": m.pitch_type or "—",
-                "created_at": m.created_at,
-                "last_modified": ms.last_modified if ms else None,
-                "next_action": ms.next_action if ms else None,
-                "ball_seq": ms.ball_seq if ms else 0,
-            }
-            if ms and ms.state_json:
-                try:
-                    st = _json.loads(ms.state_json)
-                    snap["innings"] = st.get("innings")
-                    snap["score"] = f"{st.get('total_runs',0)}/{st.get('total_wickets',0)}"
-                    co = st.get("current_over", 1) - 1
-                    cb = st.get("current_ball", 0)
-                    snap["overs_played"] = f"{co}.{cb}"
-                    snap["target"] = st.get("target")
-                    snap["bat_team"] = st.get("bat_team_name", "?")
-                    snap["bowl_team"] = st.get("bowl_team_name", "?")
-                except Exception: pass
-            live.append(snap)
-        return render_template("admin_live_matches.html", live=live, total=len(live))
+        live = _live_match_snapshots(db)
+
+        page = max(1, request.args.get("page", 1, type=int))
+        search = (request.args.get("q") or "").strip()
+        reason = (request.args.get("reason") or "").strip()
+        mtype = (request.args.get("type") or "").strip()
+
+        base = _completed_match_query(db, search, mtype)
+        # Tallies come from the search-filtered set but ignore the reason
+        # filter, so the chips keep showing what else is in there once one is
+        # picked.
+        reason_counts = {}
+        for key in END_REASONS:
+            clause = end_reason_filter(Match, key)
+            reason_counts[key] = (base.filter(clause).count()
+                                  if clause is not None else 0)
+
+        query = base
+        clause = end_reason_filter(Match, reason) if reason else None
+        if clause is not None:
+            query = query.filter(clause)
+        elif reason:
+            reason = ""  # unrecognised value — show everything rather than nothing
+
+        total = query.count()
+        total_pages = max(1, (total + COMPLETED_PAGE_SIZE - 1) // COMPLETED_PAGE_SIZE)
+        page = min(page, total_pages)
+        # NULLS LAST isn't portable, and a row swept by an old cleanup pass can
+        # have no completed_at at all — fall back to when it was created.
+        finished = (query
+                    .order_by(func.coalesce(Match.completed_at,
+                                            Match.created_at).desc(),
+                              Match.id.desc())
+                    .offset((page - 1) * COMPLETED_PAGE_SIZE)
+                    .limit(COMPLETED_PAGE_SIZE).all())
+        people = _match_people(db, finished)
+        rows = [_completed_row(m, people) for m in finished]
+
+        # Carried onto every reason chip. Empty values are dropped so the URLs
+        # stay clean rather than trailing "?q=&type=".
+        base_args = {k: v for k, v in (("q", search), ("type", mtype)) if v}
+
+        return render_template(
+            "admin_live_matches.html",
+            live=live, base_args=base_args,
+            live_now=sum(1 for m in live if m["phase"] == "live"),
+            lobby_count=sum(1 for m in live if m["phase"] == "lobby"),
+            rows=rows, total=total, page=page, total_pages=total_pages,
+            search=search, reason=reason, mtype=mtype,
+            reason_counts=reason_counts,
+            reason_labels=END_REASON_LABELS, reason_hints=END_REASON_HINTS,
+            reason_tones=END_REASON_TONES, reason_icons=END_REASON_ICONS,
+            reason_keys=END_REASONS, type_labels=MATCH_TYPE_LABELS,
+        )
+    finally:
+        db.close()
+
+
+@app.route("/live-matches/panel")
+@login_required
+def admin_live_matches_panel():
+    """The live section on its own, for the page's auto-refresh poll.
+
+    Rendering the same partial the full page includes keeps one copy of the
+    card markup — the alternative (a JSON feed plus a client-side renderer)
+    means maintaining the card layout twice.
+    """
+    db = get_session()
+    try:
+        live = _live_match_snapshots(db)
+        return render_template(
+            "_live_match_cards.html", live=live,
+            live_now=sum(1 for m in live if m["phase"] == "live"),
+            lobby_count=sum(1 for m in live if m["phase"] == "lobby"))
     finally:
         db.close()
 

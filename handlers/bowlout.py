@@ -20,6 +20,7 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import User, UserRoster, Player, Bowlout, BowloutBall
+from services.match_outcome import mark_end, END_COMPLETED
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 
 logger = logging.getLogger(__name__)
@@ -423,6 +424,7 @@ async def _finalize_bowlout(context, bowlout_id, winner_user_id, flavor=None):
                     m.margin_value = abs(u1_hits - u2_hits)
                     m.status = "completed"
                     m.completed_at = datetime.utcnow()
+                    mark_end(m, END_COMPLETED)
             except Exception:
                 logger.exception("Failed to update parent Match winner")
 

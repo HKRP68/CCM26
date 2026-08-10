@@ -66,6 +66,7 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import Match
+from services.match_outcome import mark_end, END_COMPLETED
 from services.bowling_service import get_delivery_options, AVAILABLE_SHOTS
 from services.sim_match import _adapt_player, _normalize_outcome
 
@@ -1691,6 +1692,7 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
         if m:
             m.status = "completed"
             m.completed_at = datetime.utcnow()
+            mark_end(m, END_COMPLETED)
             m.winner_id = winner_uid
             m.loser_id = loser_uid
             m.margin_type = "super over"

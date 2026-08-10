@@ -15,6 +15,9 @@ import logging
 
 from models import Match, User
 from services import match_webapp_access as mwa
+from services.match_outcome import (
+    mark_end, END_AUTO, END_COMPLETED, END_ENDED_BY_USER,
+)
 from services.match_state_store import (
     A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_SHOT, A_PICK_NEW_BATSMAN,
     A_PICK_NEW_BOWLER, A_INNINGS_BREAK, A_COMPLETED, CasAbort,
@@ -2943,6 +2946,7 @@ def finalize_webapp_match(session, match_id):
 
     m.status = "completed"
     m.completed_at = __import__("datetime").datetime.utcnow()
+    mark_end(m, END_COMPLETED)
     m.margin_type = result.get("margin_type")
     m.margin_value = result.get("margin_value")
     if winner_uid:
@@ -3323,6 +3327,13 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit"):
 
     m.status = "completed"
     m.completed_at = __import__("datetime").datetime.utcnow()
+    # Same forfeit result either way, but the two callers are different events:
+    # a player tapping quit, versus the sweep resolving a match nobody is
+    # playing any more. ``reason`` is what tells them apart.
+    if "timeout" in (reason or "").lower():
+        mark_end(m, END_AUTO)
+    else:
+        mark_end(m, END_ENDED_BY_USER, by_user_id=quitter_id)
     m.margin_type = margin_type
     m.winner_id = win_id
     m.loser_id = lose_id
@@ -3375,6 +3386,12 @@ def abandon_match(session, match_id, by_user_id, reason="abandoned"):
         mwa.save_state(match_id, state)
     m.status = "completed"
     m.completed_at = __import__("datetime").datetime.utcnow()
+    # The Mini App's forfeit button, or the sweep timing out a vsbot match —
+    # ``reason`` separates them.
+    if "timeout" in (reason or "").lower():
+        mark_end(m, END_AUTO)
+    else:
+        mark_end(m, END_ENDED_BY_USER, by_user_id=by_user_id)
     m.margin_type = "forfeit"
     m.winner_id = winner_id
     m.loser_id = by_user_id

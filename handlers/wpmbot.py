@@ -29,6 +29,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import User, UserRoster, Match
 from services.bot_ai import BOT_TG_ID
+from services.match_outcome import TYPE_WPMBOT
 from services.button_timeout import schedule_button_timeout
 from services.match_broadcast import coin_call_keyboard, run_coin_toss
 from handlers.vsbot import (
@@ -130,7 +131,7 @@ async def wpmbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         now = datetime.utcnow()
         m = Match(
             user1_id=user.id, user2_id=bot_user.id,
-            status="toss", stadium=st["stadium"],
+            status="toss", match_type=TYPE_WPMBOT, stadium=st["stadium"],
             pitch_type=st["pitch_type"], weather=st["weather"],
             temperature=st["temperature"],
             umpire1=st["umpire1"], umpire2=st["umpire2"],

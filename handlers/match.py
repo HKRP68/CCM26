@@ -16,6 +16,10 @@ from services.match_engine import (
     add_to_timeline, build_live_scorecard, SYM,
 )
 from services.flags import get_flag
+from services.match_outcome import (
+    mark_end, TYPE_CRIC, TYPE_PLAYMATCH,
+    END_AUTO, END_COMPLETED, END_ENDED_BY_USER, END_CLEARED_BY_USER,
+)
 from services.activity_service import log_activity
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from services.batsman_card import generate_batsman_card
@@ -288,7 +292,9 @@ def _expire_stale_pending_matches(session):
                .filter(Match.status.in_(("pending", "toss", "selecting")),
                        Match.expires_at.isnot(None),
                        Match.expires_at < datetime.utcnow())
-               .update({Match.status: "expired"}, synchronize_session=False))
+               .update({Match.status: "expired",
+                        Match.end_reason: END_AUTO},
+                       synchronize_session=False))
     if expired:
         session.commit()
 
@@ -826,6 +832,9 @@ async def _action_timeout(context):
             m.completed_at = datetime.utcnow()
             m.margin_type = "forfeit"
             m.margin_value = 0
+            # Nobody chose to stop this one — the inactivity timer did. The
+            # forfeit winner still shows in the Winner column.
+            mark_end(m, END_AUTO)
             if winner_user:
                 m.winner_id = winner_user.id
                 m.loser_id = idle_user.id if idle_user else None
@@ -1954,6 +1963,7 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
             was_active = m.status in ACTIVE_MATCH_STATUSES
             m.status = "completed"
             m.completed_at = datetime.utcnow()
+            mark_end(m, END_ENDED_BY_USER, by_user_id=(u.id if u else None))
             # If this was a Challenge League Tour match, reset its series slot to
             # pending so the tour stays playable (an early /endmatch records no
             # winner). Gate on the match having been active and the slot still
@@ -2129,15 +2139,18 @@ async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                          exc_info=True)
 
         rows_to_clear = rows
+        clearer_uid = None
         if rows:
+            # Recorded on every cleared row so the ops view can name who wiped
+            # it. Admins are looked up too, even though only the non-admin
+            # branch below needs the id for its permission check.
+            clearer = session.query(User).filter(User.telegram_id == tg.id).first()
+            clearer_uid = clearer.id if clearer is not None else None
             if not is_admin:
-                me = (session.query(User)
-                      .filter(User.telegram_id == tg.id).first())
-                my_uid = me.id if me is not None else None
                 rows_to_clear = [
                     m for m in rows
-                    if my_uid is not None
-                    and (m.user1_id == my_uid or m.user2_id == my_uid)]
+                    if clearer_uid is not None
+                    and (m.user1_id == clearer_uid or m.user2_id == clearer_uid)]
                 if not rows_to_clear:
                     await update.message.reply_text(
                         "🚫 <b>Only the players in the match can clear it.</b>\n"
@@ -2156,6 +2169,7 @@ async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             # No team won — leave the result blank.
             m.winner_id = None
             m.loser_id = None
+            mark_end(m, END_CLEARED_BY_USER, by_user_id=clearer_uid)
             cleared.append(m.id)
         # Cleared matches end with no winner, so any tour slot linked to one can
         # never finish normally — free it back to pending (mirrors removematch) so
@@ -2311,11 +2325,15 @@ async def removematch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         rows = q.all()
         removed = [(m.id, m.chat_id) for m in rows]
         removed_ids = [m.id for m in rows]
+        remover = session.query(User).filter(User.telegram_id == tg.id).first()
         for m in rows:
             m.status = "completed"
             m.completed_at = datetime.utcnow()
             m.winner_id = None
             m.loser_id = None
+            # Same shape as /clearmatches — an admin wiped it, no result.
+            mark_end(m, END_CLEARED_BY_USER,
+                     by_user_id=(remover.id if remover else None))
         # Any tour matches linked to a removed game can never finish normally
         # (no winner is recorded) — reset their TourMatch back to pending so the
         # tour stays playable.
@@ -2786,6 +2804,7 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
             settings["pitch_type"] = lobby["pitch_type"]
         match = Match(
             user1_id=host.id, user2_id=guest.id, status="toss",
+            match_type=TYPE_CRIC,
             overs=lobby["overs"], toss_winner_id=winner_id,
             toss_decision=decision,
             batting_first_id=winner_id if decision == "bat" else opponent_id,
@@ -2985,7 +3004,8 @@ async def _legacy_playmatch_handler(update: Update, context: ContextTypes.DEFAUL
                 parse_mode="HTML")
             return
         st = random_match_settings(); now = datetime.utcnow()
-        m = Match(user1_id=u1.id, user2_id=u2.id, status="pending", stadium=st["stadium"],
+        m = Match(user1_id=u1.id, user2_id=u2.id, status="pending",
+                  match_type=TYPE_PLAYMATCH, stadium=st["stadium"],
                   pitch_type=st["pitch_type"], weather=st["weather"], temperature=st["temperature"],
                   umpire1=st["umpire1"], umpire2=st["umpire2"], chat_id=cid, created_at=now,
                   expires_at=now + timedelta(seconds=MATCH_EXPIRE))
@@ -6094,6 +6114,7 @@ async def _end_innings(ctx, mid):
             if m:
                 m.status = "completed"
                 m.completed_at = datetime.utcnow()
+                mark_end(m, END_COMPLETED)
                 m.winner_id = winner_uid; m.loser_id = loser_uid
                 m.margin_type = margin_type; m.margin_value = margin_val
                 m.inn1_runs = s["inn1_runs"]; m.inn1_wickets = s["inn1_wickets"]
