@@ -77,6 +77,7 @@ async def _undo_buy(update, session, user, payload):
     price = payload.get("price", 0)
     player_name = payload.get("player_name", "—")
     rating = payload.get("rating", 0)
+    gem_bonus = int(payload.get("gem_bonus") or 0)
 
     # Verify the roster entry still exists AND still belongs to this user
     entry = (session.query(UserRoster)
@@ -93,6 +94,21 @@ async def _undo_buy(update, session, user, payload):
             f"<i>The undo window has been cleared.</i>",
             parse_mode="HTML")
         clear_pending(session, user.id)
+        session.commit()
+        return
+
+    # An elite signing paid a gem rebate — undoing the buy has to hand those
+    # gems back, so refuse while they're already spent rather than letting a
+    # buy-and-undo loop mint them. Same rule the release undo uses for coins.
+    if gem_bonus and (user.total_gems or 0) < gem_bonus:
+        await update.message.reply_text(
+            f"⚠️ <b>Can't undo buy</b>\n\n"
+            f"<b>{player_name}</b> paid a <b>{gem_bonus:,}</b> 💎 signing bonus "
+            f"and you only have <b>{user.total_gems or 0:,}</b> 💎 left to "
+            f"return.\n\n"
+            f"<i>Top up the gems before the undo window closes.</i>",
+            parse_mode="HTML")
+        # Don't clear — they can retry once the gems are back.
         session.commit()
         return
 
@@ -146,6 +162,8 @@ async def _undo_buy(update, session, user, payload):
     # Now delete the entry, refund the price, fix counters
     session.delete(entry)
     user.total_coins += price
+    if gem_bonus:
+        user.total_gems = (user.total_gems or 0) - gem_bonus
     user.roster_count = max(0, user.roster_count - 1)
 
     # Re-number remaining roster positions
@@ -155,8 +173,9 @@ async def _undo_buy(update, session, user, payload):
     # Audit log
     from services.activity_service import log_activity
     log_activity(session, user.id, "undo_buy",
-                 f"Undo buy of {player_name} ({rating} OVR) — refunded {price:,}",
-                 coins_change=price,
+                 f"Undo buy of {player_name} ({rating} OVR) — refunded {price:,}"
+                 + (f", reclaimed {gem_bonus:,} gems" if gem_bonus else ""),
+                 coins_change=price, gems_change=-gem_bonus,
                  player_name=player_name, player_rating=rating)
 
     clear_pending(session, user.id)
@@ -164,10 +183,12 @@ async def _undo_buy(update, session, user, payload):
 
     traits_line = (f"\n💎 {traits_returned} trait(s) returned to inventory."
                    if traits_returned else "")
+    bonus_back = (f"\n💎 Signing bonus reclaimed: <b>{gem_bonus:,}</b> gems"
+                  if gem_bonus else "")
     await update.message.reply_text(
         f"↩️ <b>UNDO COMPLETE</b>\n\n"
         f"Removed: <b>{player_name}</b> ({rating} OVR)\n"
-        f"💰 Refunded: <b>{price:,}</b> 🪙\n"
+        f"💰 Refunded: <b>{price:,}</b> 🪙{bonus_back}\n"
         f"💳 Balance: {user.total_coins:,} 🪙\n"
         f"📊 Roster: {user.roster_count}/{MAX_ROSTER}{traits_line}",
         parse_mode="HTML")

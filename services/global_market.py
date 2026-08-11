@@ -496,7 +496,9 @@ def add_player_to_market(session, player_id, custom_price=None,
 def buy_player(session, user, slot_index):
     """Atomic buy of a player from the global market.
 
-    Returns (success, message_or_player_name).
+    Returns (success, message_or_player_name, gem_bonus) — ``gem_bonus`` is the
+    elite-signing rebate credited on this buy, 0 on every failure and on any
+    card not rated above 95.
 
     Race-safe for a limited run: the UPDATE's WHERE clause checks
     purchased_count < quantity, so if two users buy the last copy at the same
@@ -509,25 +511,25 @@ def buy_player(session, user, slot_index):
             .filter(GlobalPlayerMarket.slot_index == slot_index,
                     GlobalPlayerMarket.is_active == True).first())
     if not slot:
-        return False, "Slot not found or inactive."
+        return False, "Slot not found or inactive.", 0
 
     if is_sold_out(slot):
-        return False, "Sold out — try another slot."
+        return False, "Sold out — try another slot.", 0
 
     player = session.query(Player).get(slot.player_id)
     if not player:
-        return False, "Player no longer available."
+        return False, "Player no longer available.", 0
 
     # Block if user owns ANY version of this player
     try:
         from services.version_service import user_owns_any_version
         if user_owns_any_version(session, user.id, player.id):
-            return False, f"You already own a version of <b>{player.name}</b>."
+            return False, f"You already own a version of <b>{player.name}</b>.", 0
     except Exception:
         pass
 
     if user.roster_count >= MAX_ROSTER:
-        return False, f"Roster full ({MAX_ROSTER}). Release players first."
+        return False, f"Roster full ({MAX_ROSTER}). Release players first.", 0
 
     # Free, Bronze and Silver pay the slot's sell price (== base price); the
     # discount is a membership perk (Platinum 5%, Diamond 10%).
@@ -535,7 +537,7 @@ def buy_player(session, user, slot_index):
     price = subscription_service.market_price(user, slot.base_price, slot.final_price)
 
     if user.total_coins < price:
-        return False, f"Not enough coins. Need {price:,}, have {user.total_coins:,}."
+        return False, f"Not enough coins. Need {price:,}, have {user.total_coins:,}.", 0
 
     # Atomic decrement using UPDATE...WHERE — prevents race condition
     where = [GlobalPlayerMarket.id == slot.id]
@@ -548,7 +550,7 @@ def buy_player(session, user, slot_index):
         .values(purchased_count=GlobalPlayerMarket.purchased_count + 1)
     )
     if result.rowcount == 0:
-        return False, "Sold out — someone else just got it."
+        return False, "Sold out — someone else just got it.", 0
 
     # Charge user, add to roster
     user.total_coins -= price
@@ -567,7 +569,13 @@ def buy_player(session, user, slot_index):
         price_paid=price,
     ))
 
-    return True, player.name
+    # Elite signing rebate — gems back on anything rated above 95, sized on the
+    # coins actually paid so a membership discount can't out-earn its own cost.
+    from services.buy_bonus import award_buy_gem_bonus
+    gem_bonus = award_buy_gem_bonus(session, user, player, price,
+                                    source="playermarket")
+
+    return True, player.name, gem_bonus
 
 
 # ════════════════════════════════════════════════════════════════════

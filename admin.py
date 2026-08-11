@@ -4803,7 +4803,7 @@ def webapp_player_detail(player_id):
         if not p or not p.is_active:
             return {"ok": False, "error": "not_found"}, 404
         from services.version_service import user_owns_any_version
-        from config import get_buy_value, get_sell_value
+        from config import get_buy_value, get_sell_value, get_buy_gem_bonus
         owns_any = user_owns_any_version(db, user.id, p.id)
         return {
             "ok": True,
@@ -4822,6 +4822,8 @@ def webapp_player_detail(player_id):
                 "bowl_rating": p.bowl_rating or 0,
                 "price": get_buy_value(p.rating),
                 "sell_value": get_sell_value(p.rating),
+                # Gems paid back on purchase — 0 for anything not elite.
+                "gem_bonus": get_buy_gem_bonus(p.rating),
                 "owned_any_version": owns_any,
                 "blocked": bool(getattr(p, "restricted_from_buypl", False)),
             },
@@ -4902,11 +4904,16 @@ def webapp_buy(player_id):
                          player_name=p.name, player_rating=p.rating)
         except Exception:
             pass
+        # Elite signing rebate — gems back on anything rated above 95.
+        from services.buy_bonus import award_buy_gem_bonus
+        gem_bonus = award_buy_gem_bonus(db, user, p, price, source="miniapp")
+
         try:
             from services.undo_service import record_buy
             record_buy(db, user.id,
                        roster_id=entry.id, player_id=p.id,
-                       player_name=p.name, rating=p.rating, price=price)
+                       player_name=p.name, rating=p.rating, price=price,
+                       gem_bonus=gem_bonus)
         except Exception:
             pass
 
@@ -4915,8 +4922,10 @@ def webapp_buy(player_id):
                               player_name=p.name, rating=p.rating, price=price)
         return {
             "ok": True,
-            "purchased": {"name": p.name, "rating": p.rating, "price": price},
+            "purchased": {"name": p.name, "rating": p.rating, "price": price,
+                          "gem_bonus": gem_bonus},
             "balance": user.total_coins,
+            "gems": user.total_gems or 0,
             "roster_count": user.roster_count,
         }
     except Exception as e:
@@ -6875,6 +6884,7 @@ def webapp_market():
         # Free, Bronze and Silver see and pay the slot's sell price (== base
         # price); the discount is a membership perk (Platinum 5%, Diamond 10%).
         from services import subscription_service
+        from config import get_buy_gem_bonus
 
         results = []
         for s in slots:
@@ -6901,6 +6911,8 @@ def webapp_market():
                 "base_price": sell_price,
                 "final_price": eff_price,
                 "discount_pct": disc,
+                # Gems paid back on purchase, sized on what this buyer pays.
+                "gem_bonus": get_buy_gem_bonus(p.rating, eff_price),
                 "quantity": s.quantity,
                 "purchased_count": s.purchased_count,
                 # quantity 0 = unlimited stock, so this is never True for the
@@ -7001,6 +7013,12 @@ def webapp_market_buy(slot_id):
                          player_name=player.name, player_rating=player.rating)
         except Exception:
             pass
+        # Elite signing rebate — gems back on anything rated above 95, sized on
+        # the coins actually paid (post membership discount).
+        from services.buy_bonus import award_buy_gem_bonus
+        gem_bonus = award_buy_gem_bonus(db, user, player, price,
+                                        source="miniapp_market")
+
         try:
             from services.undo_service import record_buy
             record_buy(db, user.id, player.id, price)
@@ -7016,8 +7034,10 @@ def webapp_market_buy(slot_id):
             "player_name": player.name,
             "rating": player.rating,
             "spent": price,
+            "gem_bonus": gem_bonus,
             "balance": {
                 "coins": user.total_coins or 0,
+                "gems": user.total_gems or 0,
                 "roster_count": user.roster_count or 0,
             },
         }

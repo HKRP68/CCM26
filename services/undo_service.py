@@ -17,8 +17,13 @@ UNDO_WINDOW_SECONDS = 60
 
 
 def record_buy(session, user_id, *, roster_id, player_id, player_name,
-                rating, price):
-    """Record a buy that can be undone within the window."""
+                rating, price, gem_bonus=0):
+    """Record a buy that can be undone within the window.
+
+    ``gem_bonus`` is the elite-signing rebate paid on this buy (0 for most
+    cards). The undo has to take those gems back too, or a buy-and-undo loop
+    prints gems for free.
+    """
     from models import PendingUndo
     now = datetime.utcnow()
     payload = json.dumps({
@@ -27,6 +32,7 @@ def record_buy(session, user_id, *, roster_id, player_id, player_name,
         "player_name": str(player_name),
         "rating": int(rating),
         "price": int(price),
+        "gem_bonus": int(gem_bonus or 0),
     })
     # Upsert — one row per user
     row = (session.query(PendingUndo)

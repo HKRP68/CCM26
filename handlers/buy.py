@@ -524,13 +524,18 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
                      coins_change=-buy_val,
                      player_name=player.name, player_rating=player.rating)
 
+        # Elite signing rebate — gems back on anything rated above 95.
+        from services.buy_bonus import award_buy_gem_bonus, bonus_line
+        gem_bonus = award_buy_gem_bonus(session, user, player, buy_val,
+                                        source="buypl")
+
         # Record for /cmuundo (60-second window)
         try:
             from services.undo_service import record_buy
             record_buy(session, user.id,
                        roster_id=entry.id, player_id=player.id,
                        player_name=player.name, rating=player.rating,
-                       price=buy_val)
+                       price=buy_val, gem_bonus=gem_bonus)
         except Exception:
             logger.exception("record_buy failed (non-fatal)")
 
@@ -541,8 +546,10 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         await query.message.reply_text(
             f"✅ <b>PURCHASED!</b>\n\n"
             f"📛 {player.name} - {player.rating} OVR\n"
-            f"💰 Paid: {buy_val:,} 🪙\n"
-            f"💳 Balance: {user.total_coins:,} 🪙\n"
+            f"💰 Paid: {buy_val:,} 🪙"
+            f"{bonus_line(gem_bonus)}\n"
+            f"💳 Balance: {user.total_coins:,} 🪙"
+            f"{f' · {user.total_gems:,} 💎' if gem_bonus else ''}\n"
             f"📊 Roster: {user.roster_count}/{MAX_ROSTER}\n\n"
             f"<i>↩️ Made a mistake? /cmuundo within 60 seconds to reverse.</i>",
             parse_mode="HTML",

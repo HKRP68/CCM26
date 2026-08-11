@@ -5510,6 +5510,17 @@ function escapeHtml(s) {
   })[c]);
 }
 
+// Elite signings (rated above 95) pay a slice of their price back in gems.
+// The server sizes it — the app only says so where there's a Buy button.
+function gemBonusNote(gems) {
+  if (!gems || gems <= 0) return '';
+  return `<div style="text-align:center;margin-top:0.9rem;padding:0.5rem 0.7rem;
+                      border-radius:12px;background:rgba(124,77,255,0.12);
+                      color:var(--muted);font-size:0.82rem;">
+            💎 <strong style="color:var(--text);">+${formatNum(gems)} gems</strong> back on this signing
+          </div>`;
+}
+
 // ════════════════ Player detail modal ════════════════
 async function openPlayer(id) {
   haptic('light');
@@ -5551,6 +5562,7 @@ async function openPlayer(id) {
       <div><span>Bowl Style</span><strong>${escapeHtml(p.bowl_style || '—')}</strong></div>
     </div>
 
+    ${gemBonusNote(p.gem_bonus)}
     <div style="margin-top:1rem;">${buyBtn}</div>
     ${!p.owned_any_version && !p.blocked ? `<div style="text-align:center;color:var(--muted);font-size:0.78rem;margin-top:0.6rem;">↩️ You can /cmuundo within 60s in the bot</div>` : ''}
   `;
@@ -5574,7 +5586,9 @@ async function buyPlayer(id, price) {
     return;
   }
   hapticNotif('success');
-  toast(`✅ Bought ${data.purchased.name}!`, 'success');
+  const bonus = data.purchased.gem_bonus || 0;
+  toast(`✅ Bought ${data.purchased.name}!` +
+        (bonus ? ` +${formatNum(bonus)} 💎` : ''), 'success');
   closeModal();
   // Refresh
   refreshDashboard();
@@ -5783,7 +5797,7 @@ function marketRow(s) {
     <div class="market-row">
       <div class="market-info">
         <div class="market-name">${escapeHtml(s.name)} <span style="color:${ratingColor(s.rating)};font-weight:800;">${s.rating}</span>${s.version !== 'Base' ? ` <span class="ver-badge">${escapeHtml(s.version)}</span>` : ''}</div>
-        <div class="market-meta">${escapeHtml(s.category)} · ${escapeHtml(s.country)} ${priceLine ? '· ' + priceLine : ''}${s.unlimited ? ' · ♾️ always in stock' : ''}</div>
+        <div class="market-meta">${escapeHtml(s.category)} · ${escapeHtml(s.country)} ${priceLine ? '· ' + priceLine : ''}${s.unlimited ? ' · ♾️ always in stock' : ''}${s.gem_bonus > 0 ? ` · <span style="color:var(--text);font-weight:700;">+${s.gem_bonus.toLocaleString()} 💎</span>` : ''}</div>
       </div>
       <button class="market-buy-btn ${disabled ? 'disabled' : ''}"
               ${disabled ? 'disabled' : ''}
@@ -5803,7 +5817,8 @@ async function buyFromMarket(slotId, name, price) {
     hapticNotif('error');
     return;
   }
-  toast(`Bought ${data.player_name}!`, 'success');
+  toast(`Bought ${data.player_name}!` +
+        (data.gem_bonus ? ` +${formatNum(data.gem_bonus)} 💎` : ''), 'success');
   hapticNotif('success');
   loadMarket();
   refreshDashboard();
