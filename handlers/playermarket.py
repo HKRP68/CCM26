@@ -256,10 +256,8 @@ async def playermarket_select_callback(update: Update, context: ContextTypes.DEF
         # Free, Bronze and Silver pay the slot's sell price (== base price);
         # Platinum gets 5% off it and Diamond 10%.
         user = session.query(User).filter(User.telegram_id == tg.id).first()
-        from services import subscription_service
-        sell_price = subscription_service.market_sell_price(
-            slot.base_price, slot.final_price)
-        price = subscription_service.market_price(user, slot.base_price, slot.final_price)
+        from services.global_market import player_slot_prices
+        sell_price, price = player_slot_prices(user, slot, player)
 
         # Build the player's full card
         try:
@@ -276,6 +274,12 @@ async def playermarket_select_callback(update: Update, context: ContextTypes.DEF
         if price < sell_price:
             disc = int(round((1 - price / sell_price) * 100))
             cap_lines.insert(3, f"<s>{sell_price:,}</s> 🪙  <i>(-{disc}%)</i>")
+        # Elite cards pay gems back on purchase — priced off what this buyer
+        # actually pays, so the line matches their receipt.
+        from services.buy_bonus import teaser_line
+        teaser = teaser_line(player.rating, price, prefix="")
+        if teaser:
+            cap_lines.append(teaser)
         if is_unlimited(slot):
             cap_lines.append("♾️ <i>Unlimited stock — no rush</i>")
         if sold:
@@ -358,7 +362,7 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
             await q.answer(locked, show_alert=True)
             return
 
-        ok, msg = buy_player(session, user, slot)
+        ok, msg, gem_bonus = buy_player(session, user, slot)
         if ok:
             log_activity(session, user.id, "buy_market",
                          f"Bought {msg} from market",
@@ -388,10 +392,13 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
             except Exception:
                 pass
 
+            from services.buy_bonus import bonus_line
             await context.bot.send_message(
                 chat_id=q.message.chat_id,
-                text=(f"🎉 <b>{msg}</b> added to your roster!\n"
-                      f"💰 Balance: <b>{user.total_coins:,}</b> 🪙\n"
+                text=(f"🎉 <b>{msg}</b> added to your roster!"
+                      f"{bonus_line(gem_bonus)}\n"
+                      f"💰 Balance: <b>{user.total_coins:,}</b> 🪙"
+                      f"{f' · <b>{user.total_gems:,}</b> 💎' if gem_bonus else ''}\n"
                       f"📊 Roster: {user.roster_count}/{MAX_ROSTER}"),
                 parse_mode="HTML",
             )

@@ -4803,7 +4803,7 @@ def webapp_player_detail(player_id):
         if not p or not p.is_active:
             return {"ok": False, "error": "not_found"}, 404
         from services.version_service import user_owns_any_version
-        from config import get_buy_value, get_sell_value
+        from config import get_buy_value, get_sell_value, get_buy_gem_bonus
         owns_any = user_owns_any_version(db, user.id, p.id)
         return {
             "ok": True,
@@ -4822,6 +4822,8 @@ def webapp_player_detail(player_id):
                 "bowl_rating": p.bowl_rating or 0,
                 "price": get_buy_value(p.rating),
                 "sell_value": get_sell_value(p.rating),
+                # Gems paid back on purchase — 0 for anything not elite.
+                "gem_bonus": get_buy_gem_bonus(p.rating),
                 "owned_any_version": owns_any,
                 "blocked": bool(getattr(p, "restricted_from_buypl", False)),
             },
@@ -4902,11 +4904,16 @@ def webapp_buy(player_id):
                          player_name=p.name, player_rating=p.rating)
         except Exception:
             pass
+        # Elite signing rebate — gems back on anything rated above 95.
+        from services.buy_bonus import award_buy_gem_bonus
+        gem_bonus = award_buy_gem_bonus(db, user, p, price, source="miniapp")
+
         try:
             from services.undo_service import record_buy
             record_buy(db, user.id,
                        roster_id=entry.id, player_id=p.id,
-                       player_name=p.name, rating=p.rating, price=price)
+                       player_name=p.name, rating=p.rating, price=price,
+                       gem_bonus=gem_bonus)
         except Exception:
             pass
 
@@ -4915,8 +4922,10 @@ def webapp_buy(player_id):
                               player_name=p.name, rating=p.rating, price=price)
         return {
             "ok": True,
-            "purchased": {"name": p.name, "rating": p.rating, "price": price},
+            "purchased": {"name": p.name, "rating": p.rating, "price": price,
+                          "gem_bonus": gem_bonus},
             "balance": user.total_coins,
+            "gems": user.total_gems or 0,
             "roster_count": user.roster_count,
         }
     except Exception as e:
@@ -6874,16 +6883,15 @@ def webapp_market():
 
         # Free, Bronze and Silver see and pay the slot's sell price (== base
         # price); the discount is a membership perk (Platinum 5%, Diamond 10%).
-        from services import subscription_service
+        from services.global_market import player_slot_prices
+        from config import get_buy_gem_bonus
 
         results = []
         for s in slots:
             p = players.get(s.player_id)
             if not p: continue
-            sell_price = subscription_service.market_sell_price(
-                s.base_price, s.final_price)
-            eff_price = subscription_service.market_price(
-                user, s.base_price, s.final_price)
+            # Floored at resale value — see global_market.player_slot_prices.
+            sell_price, eff_price = player_slot_prices(user, s, p)
             # Struck-through original + "-N%" badge, shown only to tiers that
             # actually get a discount.
             disc = (int(round((1 - eff_price / sell_price) * 100))
@@ -6901,6 +6909,8 @@ def webapp_market():
                 "base_price": sell_price,
                 "final_price": eff_price,
                 "discount_pct": disc,
+                # Gems paid back on purchase, sized on what this buyer pays.
+                "gem_bonus": get_buy_gem_bonus(p.rating, eff_price),
                 "quantity": s.quantity,
                 "purchased_count": s.purchased_count,
                 # quantity 0 = unlimited stock, so this is never True for the
@@ -6970,9 +6980,10 @@ def webapp_market_buy(slot_id):
                     "message": f"Your roster is full ({MAX_ROSTER}/{MAX_ROSTER})."}, 400
 
         # Free, Bronze and Silver pay the slot's sell price (== base price);
-        # Platinum gets 5% off it and Diamond 10%.
-        from services import subscription_service
-        price = subscription_service.market_price(user, slot.base_price, slot.final_price)
+        # Platinum gets 5% off it and Diamond 10%. Floored at resale value so
+        # the slot can't be farmed for coins.
+        from services.global_market import player_slot_prices
+        _listed, price = player_slot_prices(user, slot, player)
 
         # Balance
         if (user.total_coins or 0) < price:
@@ -7001,11 +7012,22 @@ def webapp_market_buy(slot_id):
                          player_name=player.name, player_rating=player.rating)
         except Exception:
             pass
-        try:
-            from services.undo_service import record_buy
-            record_buy(db, user.id, player.id, price)
-        except Exception:
-            pass
+        # Elite signing rebate — gems back on anything rated above 95, sized on
+        # the coins actually paid (post membership discount).
+        from services.buy_bonus import award_buy_gem_bonus
+        gem_bonus = award_buy_gem_bonus(db, user, player, price,
+                                        source="miniapp_market")
+
+        # No /cmuundo record: a market buy is not undoable on either surface.
+        # Reversing one would have to give the slot's stock back too
+        # (purchased_count, and the MarketPurchase audit row), which the undo
+        # handler knows nothing about — undoing without that permanently eats a
+        # copy of a limited run. This call used to be
+        # ``record_buy(db, user.id, player.id, price)``, which always raised
+        # TypeError against record_buy's keyword-only signature and was
+        # swallowed, so market buys have never been undoable in practice. It is
+        # gone rather than fixed: the gem rebate above is only safe to credit
+        # here *because* nothing can reverse the purchase and keep the gems.
 
         db.commit()
         post_miniapp_activity(user, "buy_player",
@@ -7016,8 +7038,10 @@ def webapp_market_buy(slot_id):
             "player_name": player.name,
             "rating": player.rating,
             "spent": price,
+            "gem_bonus": gem_bonus,
             "balance": {
                 "coins": user.total_coins or 0,
+                "gems": user.total_gems or 0,
                 "roster_count": user.roster_count or 0,
             },
         }

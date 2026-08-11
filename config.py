@@ -303,68 +303,139 @@ BOWL_HANDS = ["Right", "Left"]
 BOWL_STYLES = ["Fast", "Off Spinner", "Leg Spinner", "Medium Pacer"]
 
 # ── Buy / Sell values by rating ─────────────────────────────────────
-# Buy values raised +30%, sell values cut -40% to tighten the economy.
-BUY_SELL = {
-    100: (6_435_000, 1_962_000),
-    99:  (5_840_000, 1_750_000),
-    98:  (5_160_000, 1_520_000),
-    97:  (4_450_000, 1_290_000),
-    96:  (3_800_000, 1_090_000),
-    95:  (3_340_000,   940_000),
-    94:  (2_800_000,   774_000),
-    93:  (2_350_000,   642_000),
-    92:  (2_020_000,   539_000),
-    91:  (1_810_000,   475_000),
-    90:  (1_640_000,   424_000),
-    89:  (1_520_000,   386_000),
-    88:  (1_255_000,   330_000),
-    87:  (1_066_000,   305_000),
-    86:    (969_000,   277_000),
-    85:    (880_000,   236_000),
-    84:    (463_000,   124_000),
-    83:    (243_000,    65_000),
-    82:    (127_000,    34_100),
-    81:     (66_300,    17_800),
-    80:     (35_100,     8_760),
-    79:     (20_000,     5_000),
-    78:     (11_400,     2_850),
-    77:      (6_540,     1_630),
-    76:      (3_740,       940),
-    75:      (3_300,       760),
-    74:      (2_910,       670),
-    73:      (2_560,       590),
-    72:      (2_260,       520),
-    71:      (1_990,       460),
-    70:      (1_760,       440),
-    69:      (1_550,       390),
-    68:      (1_480,       380),
-    67:      (1_400,       360),
-    66:      (1_340,       340),
-    65:      (1_280,       350),
-    64:      (1_240,       340),
-    63:      (1_170,       320),
-    62:      (1_070,       300),
-    61:      (1_010,       280),
-    60:        (910,       250),
-    59:        (810,       225),
-    58:        (715,       200),
-    57:        (620,       170),
-    56:        (520,       140),
-    55:        (420,       120),
-    54:        (360,       100),
-    53:        (325,        90),
-    52:        (290,        80),
-    51:        (260,        72),
-    50:        (210,        54),
+# One number per rating: what the card costs to buy. Sell is NOT a second
+# hand-maintained column any more — every card returns SELL_VALUE_PCT of its
+# own buy price, so re-tuning a price can never leave the two out of step and
+# the return rate is the same at every rating (buy 100 → sell 55).
+SELL_VALUE_PCT = 55
+
+BUY_VALUES = {
+    100: 6_435_000,
+    99:  5_840_000,
+    98:  5_160_000,
+    97:  4_450_000,
+    96:  3_800_000,
+    95:  3_340_000,
+    94:  2_800_000,
+    93:  2_350_000,
+    92:  2_020_000,
+    91:  1_810_000,
+    90:  1_640_000,
+    89:  1_520_000,
+    88:  1_255_000,
+    87:  1_066_000,
+    86:    969_000,
+    85:    880_000,
+    84:    463_000,
+    83:    243_000,
+    82:    127_000,
+    81:     66_300,
+    80:     35_100,
+    79:     20_000,
+    78:     11_400,
+    77:      6_540,
+    76:      3_740,
+    75:      3_300,
+    74:      2_910,
+    73:      2_560,
+    72:      2_260,
+    71:      1_990,
+    70:      1_760,
+    69:      1_550,
+    68:      1_480,
+    67:      1_400,
+    66:      1_340,
+    65:      1_280,
+    64:      1_240,
+    63:      1_170,
+    62:      1_070,
+    61:      1_010,
+    60:        910,
+    59:        810,
+    58:        715,
+    57:        620,
+    56:        520,
+    55:        420,
+    54:        360,
+    53:        325,
+    52:        290,
+    51:        260,
+    50:        210,
 }
+
+# Every rating 50-100 is listed above; this only covers a card that somehow
+# carries a rating outside that range.
+FALLBACK_BUY_VALUE = 260
+
+
+def sell_value_of(buy_value: int) -> int:
+    """Coins returned for a card that costs ``buy_value`` — SELL_VALUE_PCT of it.
+
+    Rounded half-up, so a card bought for 100 sells for exactly 55 and a cheap
+    card never rounds its way down to nothing.
+    """
+    return (int(buy_value) * SELL_VALUE_PCT + 50) // 100
+
+
+# Back-compat view of the old two-column table (rating → (buy, sell)). Read
+# ``BUY_VALUES`` for prices; this exists so older callers that unpack the pair
+# keep working, and its sell column is now always the 55% figure.
+BUY_SELL = {rating: (buy, sell_value_of(buy))
+            for rating, buy in BUY_VALUES.items()}
+
 
 def get_buy_value(rating: int) -> int:
     """Coin cost to buy a player of the given rating (falls back to base 260)."""
-    return BUY_SELL.get(rating, (260, 72))[0]
+    return BUY_VALUES.get(rating, FALLBACK_BUY_VALUE)
 
 def get_sell_value(rating: int) -> int:
     """Coins returned for selling/releasing a player of the given rating."""
-    return BUY_SELL.get(rating, (260, 72))[1]
+    return sell_value_of(get_buy_value(rating))
+
+
+# ── Gem bonus on elite signings ─────────────────────────────────────
+# Buying a card rated above 95 pays a small gem rebate on top of the card:
+# 0.1% of the coins actually spent, e.g. a 97 OVR at 4,450,000 🪙 → 4,450 💎.
+# Basing it on the coins PAID rather than the list price means a discounted
+# buy (membership perk, admin sale) can't mint more gems than it cost.
+GEM_BONUS_MIN_RATING = 96          # "above 95"
+GEM_BONUS_BPS = 10                 # basis points — 10 bps = 0.1%
+
+
+MARKET_PRICE_FLOOR_MARGIN = 1     # coins the round trip must always cost
+
+
+def market_price_floor(rating: int) -> int:
+    """Cheapest a market slot may charge for this card, discounts included.
+
+    Releasing a card pays ``get_sell_value`` no matter what its owner paid for
+    it, so a slot priced below that is a coin printer: buy it, release it,
+    buy it again — and player-market stock is unlimited by default. The floor
+    keeps the round trip a loss. The trait market has the same rule for the
+    same reason; see ``roll_trait_discount`` and the ``TRAIT_SELL_*`` notes.
+
+    This is a floor on what the buyer is actually charged, so it has to sit
+    below the membership discount rather than above it — 10% off a price that
+    only just clears resale would dip back under it.
+    """
+    return get_sell_value(rating) + MARKET_PRICE_FLOOR_MARGIN
+
+
+def get_buy_gem_bonus(rating: int, price_paid: int = None) -> int:
+    """Gems awarded for buying this card, or 0 if it isn't elite enough.
+
+    ``price_paid`` defaults to the card's list buy value; pass the real charge
+    when the buyer paid something else (market discount, membership tier).
+    """
+    try:
+        rating = int(rating)
+    except (TypeError, ValueError):
+        return 0
+    if rating < GEM_BONUS_MIN_RATING:
+        return 0
+    if price_paid is None:
+        price_paid = get_buy_value(rating)
+    return max(0, int(price_paid)) * GEM_BONUS_BPS // 10_000
 
 def get_tier_colour(rating: int) -> tuple:
     if rating >= 95:   return ("LEGENDARY", "#e6ac00", "#fff8e1")

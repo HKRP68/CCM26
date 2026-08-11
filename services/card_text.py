@@ -41,6 +41,12 @@ def format_player_card(player, acquired_date=None, value_mode="both") -> str:
     value_lines = []
     if value_mode in ("buy", "both"):
         value_lines.append(f"<blockquote>💰 Buy Value: {buy_val:,} 🪙</blockquote>")
+        # Elite cards pay a gem rebate on purchase — say so before they buy,
+        # not just in the receipt.
+        from services.buy_bonus import teaser_line
+        teaser = teaser_line(player.rating, buy_val, prefix="")
+        if teaser:
+            value_lines.append(f"<blockquote>{teaser}</blockquote>")
     if value_mode in ("sell", "both"):
         value_lines.append(f"<blockquote>💰 Sell Value: {sell_val:,} 🪙</blockquote>")
     value_lines.append(f"<blockquote>📅 Acquired: {acq}</blockquote>")

@@ -11,7 +11,11 @@ import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from config import trait_sell_value, trait_trade_fee, TRAIT_MAX_LEVEL
+from config import (
+    trait_sell_value, trait_trade_fee, TRAIT_MAX_LEVEL,
+    GEM_BONUS_BPS, GEM_BONUS_MIN_RATING, SELL_VALUE_PCT,
+    get_buy_gem_bonus, get_buy_value, sell_value_of,
+)
 from services.button_timeout import schedule_button_timeout
 
 logger = logging.getLogger(__name__)
@@ -146,7 +150,14 @@ SECTIONS = {
             "• <b>Lose a match:</b> overs × 150 coins (still rewarded for playing)\n"
             "• <b>/daily:</b> daily login bonus, increases with streak\n"
             "• <b>/gspin:</b> Lucky Card Pick — 58% coin rewards, 13% gems, 5% rare players\n"
-            "• <b>Releasing players:</b> sell value scales with rating\n"
+            f"• <b>Releasing players:</b> every card sells back for "
+            f"<b>{SELL_VALUE_PCT}%</b> of its buy price — buy at 100, sell at "
+            f"{sell_value_of(100)}, at every rating\n"
+            f"• <b>Elite signings:</b> buy anything rated "
+            f"<b>above {GEM_BONUS_MIN_RATING - 1}</b> and you get "
+            f"<b>{GEM_BONUS_BPS / 100:g}%</b> of what you paid back in gems — "
+            f"a 97 OVR at {get_buy_value(97):,} 🪙 pays "
+            f"<b>{get_buy_gem_bonus(97):,}</b> 💎\n"
             "• <b>Achievements unlock:</b> bonus coins/gems on each badge\n\n"
             "<b>🛒 Spending</b>\n"
             "<b>/buypl</b> — buy a player at market price\n"
