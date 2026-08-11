@@ -146,6 +146,76 @@ class AwardTests(unittest.TestCase):
         self.assertEqual(buy_bonus.teaser_line(90), "")
 
 
+class MarketPriceFloorTests(unittest.TestCase):
+    """A slot must never sell for less than releasing the card pays back.
+
+    Releasing pays ``get_sell_value`` whatever the owner paid, so a cheaper
+    slot is a coin printer — buy, release, buy again, on unlimited stock.
+    """
+
+    class Slot:
+        def __init__(self, base, final=None):
+            self.slot_index = 0
+            self.base_price = base
+            self.final_price = base if final is None else final
+
+    class Buyer:
+        """A free member — no membership discount."""
+        subscription_tier = None
+        subscription_expires_at = None
+
+    class Diamond(Buyer):
+        subscription_tier = "diamond"
+
+    def _prices(self, slot, user=None):
+        from services.global_market import player_slot_prices
+        return player_slot_prices(user or self.Buyer(), slot, FakePlayer(97))
+
+    def test_the_floor_sits_just_above_resale(self):
+        from config import MARKET_PRICE_FLOOR_MARGIN, market_price_floor
+        self.assertEqual(market_price_floor(97),
+                         get_sell_value(97) + MARKET_PRICE_FLOOR_MARGIN)
+
+    def test_a_normally_priced_slot_is_untouched(self):
+        listed, price = self._prices(self.Slot(get_buy_value(97)))
+        self.assertEqual(listed, get_buy_value(97))
+        self.assertEqual(price, get_buy_value(97))
+
+    def test_an_underpriced_sale_is_lifted_to_the_floor(self):
+        from config import market_price_floor
+        listed, price = self._prices(self.Slot(get_buy_value(97), 2_000_000))
+        self.assertEqual(price, market_price_floor(97))
+        self.assertEqual(listed, market_price_floor(97))
+        self.assertGreater(price, get_sell_value(97))
+
+    def test_a_custom_listing_price_is_floored_too(self):
+        from config import market_price_floor
+        _listed, price = self._prices(self.Slot(1_000))
+        self.assertEqual(price, market_price_floor(97))
+
+    def test_the_round_trip_always_loses_money(self):
+        """The property the floor exists to protect, at every rating."""
+        from config import market_price_floor
+        for rating in BUY_VALUES:
+            with self.subTest(rating=rating):
+                self.assertGreater(market_price_floor(rating),
+                                   get_sell_value(rating))
+
+    def test_a_membership_discount_cannot_dive_under_the_floor(self):
+        """The floor lands after the discount, not before it."""
+        from config import market_price_floor
+        slot = self.Slot(get_buy_value(97), market_price_floor(97))
+        _listed, price = self._prices(slot, self.Diamond())
+        self.assertGreaterEqual(price, market_price_floor(97))
+
+    def test_a_discount_on_a_normal_price_still_works(self):
+        """The floor must not quietly cancel the membership perk."""
+        slot = self.Slot(get_buy_value(97))
+        _l, free_price = self._prices(slot, self.Buyer())
+        _l, dia_price = self._prices(slot, self.Diamond())
+        self.assertLess(dia_price, free_price)
+
+
 class UndoRecordTests(unittest.TestCase):
     """The undo has to know about the rebate, or buy-and-undo prints gems."""
 

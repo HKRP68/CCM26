@@ -256,10 +256,8 @@ async def playermarket_select_callback(update: Update, context: ContextTypes.DEF
         # Free, Bronze and Silver pay the slot's sell price (== base price);
         # Platinum gets 5% off it and Diamond 10%.
         user = session.query(User).filter(User.telegram_id == tg.id).first()
-        from services import subscription_service
-        sell_price = subscription_service.market_sell_price(
-            slot.base_price, slot.final_price)
-        price = subscription_service.market_price(user, slot.base_price, slot.final_price)
+        from services.global_market import player_slot_prices
+        sell_price, price = player_slot_prices(user, slot, player)
 
         # Build the player's full card
         try:

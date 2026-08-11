@@ -402,6 +402,25 @@ GEM_BONUS_MIN_RATING = 96          # "above 95"
 GEM_BONUS_BPS = 10                 # basis points — 10 bps = 0.1%
 
 
+MARKET_PRICE_FLOOR_MARGIN = 1     # coins the round trip must always cost
+
+
+def market_price_floor(rating: int) -> int:
+    """Cheapest a market slot may charge for this card, discounts included.
+
+    Releasing a card pays ``get_sell_value`` no matter what its owner paid for
+    it, so a slot priced below that is a coin printer: buy it, release it,
+    buy it again — and player-market stock is unlimited by default. The floor
+    keeps the round trip a loss. The trait market has the same rule for the
+    same reason; see ``roll_trait_discount`` and the ``TRAIT_SELL_*`` notes.
+
+    This is a floor on what the buyer is actually charged, so it has to sit
+    below the membership discount rather than above it — 10% off a price that
+    only just clears resale would dip back under it.
+    """
+    return get_sell_value(rating) + MARKET_PRICE_FLOOR_MARGIN
+
+
 def get_buy_gem_bonus(rating: int, price_paid: int = None) -> int:
     """Gems awarded for buying this card, or 0 if it isn't elite enough.
 

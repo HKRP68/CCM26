@@ -6883,17 +6883,15 @@ def webapp_market():
 
         # Free, Bronze and Silver see and pay the slot's sell price (== base
         # price); the discount is a membership perk (Platinum 5%, Diamond 10%).
-        from services import subscription_service
+        from services.global_market import player_slot_prices
         from config import get_buy_gem_bonus
 
         results = []
         for s in slots:
             p = players.get(s.player_id)
             if not p: continue
-            sell_price = subscription_service.market_sell_price(
-                s.base_price, s.final_price)
-            eff_price = subscription_service.market_price(
-                user, s.base_price, s.final_price)
+            # Floored at resale value — see global_market.player_slot_prices.
+            sell_price, eff_price = player_slot_prices(user, s, p)
             # Struck-through original + "-N%" badge, shown only to tiers that
             # actually get a discount.
             disc = (int(round((1 - eff_price / sell_price) * 100))
@@ -6982,9 +6980,10 @@ def webapp_market_buy(slot_id):
                     "message": f"Your roster is full ({MAX_ROSTER}/{MAX_ROSTER})."}, 400
 
         # Free, Bronze and Silver pay the slot's sell price (== base price);
-        # Platinum gets 5% off it and Diamond 10%.
-        from services import subscription_service
-        price = subscription_service.market_price(user, slot.base_price, slot.final_price)
+        # Platinum gets 5% off it and Diamond 10%. Floored at resale value so
+        # the slot can't be farmed for coins.
+        from services.global_market import player_slot_prices
+        _listed, price = player_slot_prices(user, slot, player)
 
         # Balance
         if (user.total_coins or 0) < price:
@@ -7019,11 +7018,16 @@ def webapp_market_buy(slot_id):
         gem_bonus = award_buy_gem_bonus(db, user, player, price,
                                         source="miniapp_market")
 
-        try:
-            from services.undo_service import record_buy
-            record_buy(db, user.id, player.id, price)
-        except Exception:
-            pass
+        # No /cmuundo record: a market buy is not undoable on either surface.
+        # Reversing one would have to give the slot's stock back too
+        # (purchased_count, and the MarketPurchase audit row), which the undo
+        # handler knows nothing about — undoing without that permanently eats a
+        # copy of a limited run. This call used to be
+        # ``record_buy(db, user.id, player.id, price)``, which always raised
+        # TypeError against record_buy's keyword-only signature and was
+        # swallowed, so market buys have never been undoable in practice. It is
+        # gone rather than fixed: the gem rebate above is only safe to credit
+        # here *because* nothing can reverse the purchase and keep the gems.
 
         db.commit()
         post_miniapp_activity(user, "buy_player",

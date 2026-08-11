@@ -493,6 +493,32 @@ def add_player_to_market(session, player_id, custom_price=None,
     return True, next_slot
 
 
+def player_slot_prices(user, slot, player):
+    """(list price, this buyer's price) for a player slot — never below resale.
+
+    The market's asking price is admin-editable, per slot and per listing, and
+    releasing a card always pays ``get_sell_value`` regardless of what its owner
+    paid. A slot priced under that is therefore a coin printer — buy, release,
+    buy again, with unlimited stock — so both figures are floored at
+    ``config.market_price_floor``. The floor lands after the membership
+    discount, because 10% off a price that only just clears resale would dip
+    back under it.
+
+    Every surface that shows or charges a market price goes through here (bot
+    ``/playermarket``, the Mini App market list and both buy endpoints), so the
+    price a buyer is quoted is always the price they are charged.
+    """
+    from config import market_price_floor
+    from services import subscription_service
+
+    floor = market_price_floor(player.rating)
+    listed = max(subscription_service.market_sell_price(
+        slot.base_price, slot.final_price), floor)
+    price = max(subscription_service.market_price(
+        user, slot.base_price, slot.final_price), floor)
+    return listed, price
+
+
 def buy_player(session, user, slot_index):
     """Atomic buy of a player from the global market.
 
@@ -532,9 +558,20 @@ def buy_player(session, user, slot_index):
         return False, f"Roster full ({MAX_ROSTER}). Release players first.", 0
 
     # Free, Bronze and Silver pay the slot's sell price (== base price); the
-    # discount is a membership perk (Platinum 5%, Diamond 10%).
+    # discount is a membership perk (Platinum 5%, Diamond 10%). Floored at
+    # resale value so the slot can't be farmed for coins.
     from services import subscription_service
-    price = subscription_service.market_price(user, slot.base_price, slot.final_price)
+    asked = subscription_service.market_price(
+        user, slot.base_price, slot.final_price)
+    _listed, price = player_slot_prices(user, slot, player)
+    if price > asked:
+        # An admin's sale price (or a discount on top of one) dipped under what
+        # releasing the card pays back. Say so — the markets page still shows
+        # the number they typed.
+        logger.warning(
+            "market slot %s (%s, %s OVR) priced at %s, under its %s resale "
+            "floor — charging the floor instead.",
+            slot.slot_index, player.name, player.rating, asked, price)
 
     if user.total_coins < price:
         return False, f"Not enough coins. Need {price:,}, have {user.total_coins:,}.", 0
@@ -571,6 +608,12 @@ def buy_player(session, user, slot_index):
 
     # Elite signing rebate — gems back on anything rated above 95, sized on the
     # coins actually paid so a membership discount can't out-earn its own cost.
+    #
+    # No /cmuundo record is written here, deliberately: reversing a market buy
+    # would have to hand the slot's stock back (purchased_count, and the
+    # MarketPurchase row above), which the undo handler knows nothing about.
+    # That is also what makes the rebate safe to credit — nothing can reverse
+    # the purchase while leaving the gems behind.
     from services.buy_bonus import award_buy_gem_bonus
     gem_bonus = award_buy_gem_bonus(session, user, player, price,
                                     source="playermarket")
