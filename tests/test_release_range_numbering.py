@@ -220,6 +220,32 @@ class RangeUsesMyRosterNumberingTests(unittest.TestCase):
         asyncio.run(self.rl.releasemultiple_handler(update, context))
         self.assertIn("/myroster", update.message.replies[0])
 
+    def test_a_hyphenated_range_is_not_a_syntax_we_accept(self):
+        """Guards the /howto wording below: the handler splits on spaces, so a
+        documented "A-B" would send the reader straight back to the usage text."""
+        update = self._update()
+        context = MagicMock()
+        context.args = ["2-3"]
+        asyncio.run(self.rl.releasemultiple_handler(update, context))
+        self.assertIn("Usage:", update.message.replies[0])
+
+
+class HowtoDocumentsTheRealSyntaxTests(unittest.TestCase):
+    """/howto has to teach a command line the handler actually parses."""
+
+    def _releasing_text(self):
+        from handlers.howto import SECTIONS
+        return SECTIONS["squad"]["body"]
+
+    def test_it_documents_two_space_separated_positions(self):
+        self.assertIn("/releasemultiple &lt;from&gt; &lt;to&gt;", self._releasing_text())
+
+    def test_it_no_longer_teaches_the_hyphenated_form(self):
+        self.assertNotIn("/releasemultiple A-B", self._releasing_text())
+
+    def test_it_names_the_numbering(self):
+        self.assertIn("/myroster", self._releasing_text())
+
 
 class PagingMatchesTheOrderedRosterTests(unittest.TestCase):
     """/myroster's pages are slices of the very list the range resolves against."""
