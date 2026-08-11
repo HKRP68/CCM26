@@ -11,28 +11,35 @@ from config import get_sell_value, get_buy_value, MAX_ROSTER
 logger = logging.getLogger(__name__)
 
 
-def get_user_roster(session: Session, user_id: int, page: int = 1, page_size: int = 10):
-    """Return paginated roster sorted by order_position (as added).
-    Returns (entries_with_player, total_count, total_pages).
-    """
-    total = (
-        session.query(UserRoster)
-        .filter(UserRoster.user_id == user_id)
-        .count()
-    )
-    total_pages = max(1, (total + page_size - 1) // page_size)
-    page = max(1, min(page, total_pages))
+def get_roster_ordered(session: Session, user_id: int):
+    """The whole roster in /myroster order: ``(UserRoster, Player)`` pairs.
 
-    entries = (
+    This is the numbering the user reads off /myroster — plain roster order, as
+    added — and therefore the numbering they type back at us in
+    ``/releasemultiple <from> <to>``. Both go through here so a position can
+    never mean one thing on the listing and another on the release. Note this
+    is *not* the /pxi order, which re-sorts the top 11 by category.
+    """
+    return (
         session.query(UserRoster, Player)
         .join(Player, UserRoster.player_id == Player.id)
         .filter(UserRoster.user_id == user_id)
         .order_by(UserRoster.order_position.asc(), UserRoster.acquired_date.asc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
         .all()
     )
-    return entries, total, total_pages
+
+
+def get_user_roster(session: Session, user_id: int, page: int = 1, page_size: int = 10):
+    """Return paginated roster sorted by order_position (as added).
+    Returns (entries_with_player, total_count, total_pages).
+    """
+    ordered = get_roster_ordered(session, user_id)
+    total = len(ordered)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = max(1, min(page, total_pages))
+
+    start = (page - 1) * page_size
+    return ordered[start:start + page_size], total, total_pages
 
 
 def get_roster_stats(session: Session, user_id: int) -> dict:

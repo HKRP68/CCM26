@@ -1,5 +1,14 @@
 """Release player handlers — /release (supports name, position, ranges) + /releasemultiple.
 
+Which numbering a position means
+────────────────────────────────
+There are two roster numberings in the bot and they disagree: /myroster lists
+players in plain roster order, while /pxi re-sorts the top 11 by category
+(batsmen → keepers → all-rounders → pacers → spinners). ``/releasemultiple
+<from> <to>`` is a range the user reads off /myroster, so it resolves against
+the /myroster order (``services.roster_service.get_roster_ordered``) — the same
+call that builds the listing, so the two can never drift apart.
+
 One release at a time
 ─────────────────────
 Both commands work the same way: they post a confirmation prompt and the actual
@@ -23,6 +32,7 @@ from config import get_sell_value, get_buy_value, MAX_ROSTER
 from utils.idempotency import claim_once, release
 from services.activity_service import log_activity
 from services.flags import get_flag
+from services.roster_service import get_roster_ordered
 from services.roster_lock import MARKET_REASON, match_lock_alert, match_lock_message
 
 logger = logging.getLogger(__name__)
@@ -301,10 +311,13 @@ def _find_by_arg(session, user_id, arg_str):
     return substr
 
 
-def _fmt_player_line(entry, player):
+def _fmt_player_line(position, player):
+    """One preview line. ``position`` is the /myroster number, not the row's
+    ``order_position`` — those agree in normal data but drift when a gap or a
+    NULL sneaks in, and the number shown has to be the one the user typed."""
     sv = get_sell_value(player.rating)
     flag = get_flag(player.country) if player.country else ""
-    return f"#{entry.order_position}. {player.name} {flag} | {player.rating} OVR | 💸 {sv:,}"
+    return f"#{position}. {player.name} {flag} | {player.rating} OVR | 💸 {sv:,}"
 
 
 # ── /release — smart single/name/position release ────────────────────
@@ -528,13 +541,14 @@ async def release_cancel_callback(update: Update, context: ContextTypes.DEFAULT_
 # ── /releasemultiple — range release ─────────────────────────────────
 
 async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/releasemultiple <from> <to> — release roster positions in range."""
+    """/releasemultiple <from> <to> — release a range of /myroster positions."""
     tg_user = update.effective_user
 
     if not context.args or len(context.args) < 2:
         await update.message.reply_text(
             "Usage: <code>/releasemultiple &lt;from&gt; &lt;to&gt;</code>\n"
-            "Example: <code>/releasemultiple 7 11</code>",
+            "Example: <code>/releasemultiple 7 11</code>\n\n"
+            "<i>Positions are the numbers shown in /myroster.</i>",
             parse_mode="HTML")
         return
 
@@ -570,12 +584,7 @@ async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_
             await update.message.reply_text(locked, parse_mode="HTML")
             return
 
-        from handlers.lineup import _build_display_order
-        raw_entries = (session.query(UserRoster, Player)
-                       .join(Player, UserRoster.player_id == Player.id)
-                       .filter(UserRoster.user_id == user.id)
-                       .order_by(UserRoster.order_position).all())
-        entries = _build_display_order(raw_entries)
+        entries = get_roster_ordered(session, user.id)
 
         if pos_to > len(entries):
             await update.message.reply_text(
@@ -602,10 +611,10 @@ async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_
         total_sell = 0
         lines = []
         captain_in_range = False
-        for entry, player in to_release:
+        for offset, (entry, player) in enumerate(to_release):
             sv = get_sell_value(player.rating)
             total_sell += sv
-            lines.append(_fmt_player_line(entry, player))
+            lines.append(_fmt_player_line(pos_from + offset, player))
             if user.captain_roster_id == entry.id:
                 captain_in_range = True
 
@@ -687,12 +696,7 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
 
         await query.answer()
 
-        from handlers.lineup import _build_display_order
-        raw_entries = (session.query(UserRoster, Player)
-                       .join(Player, UserRoster.player_id == Player.id)
-                       .filter(UserRoster.user_id == user.id)
-                       .order_by(UserRoster.order_position).all())
-        entries = _build_display_order(raw_entries)
+        entries = get_roster_ordered(session, user.id)
 
         if pos_from < 1 or pos_to > len(entries) or pos_from > pos_to:
             release(key)
