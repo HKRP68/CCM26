@@ -30,10 +30,16 @@ def get_roster_ordered(session: Session, user_id: int):
 
 
 def get_user_roster(session: Session, user_id: int, page: int = 1, page_size: int = 10):
-    """Return paginated roster sorted by order_position (as added).
-    Returns (entries_with_player, total_count, total_pages).
+    """One page of the roster in display order.
+
+    Pages are slices of ``services.roster_view.get_display_roster``, so the
+    number beside a card on /myroster is the number /pxi shows and the number
+    /release takes. Returns ``(entries_with_player, total_count, total_pages)``;
+    the caller derives display positions from the page offset.
     """
-    ordered = get_roster_ordered(session, user_id)
+    from services.roster_view import get_display_roster  # circular at import time
+
+    ordered = get_display_roster(session, user_id)
     total = len(ordered)
     total_pages = max(1, (total + page_size - 1) // page_size)
     page = max(1, min(page, total_pages))

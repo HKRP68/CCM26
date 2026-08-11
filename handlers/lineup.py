@@ -16,6 +16,7 @@ from services.telegram_user_service import resolve_command_target, sync_telegram
 from services.flags import get_flag
 from services import xi_rules
 from services.bowling_service import is_spinner as _is_spin, get_bowler_profile_key
+from services.roster_view import build_display_order, XI_SIZE
 from services.fancy_text import small_caps, bold_digits, bold_serif, circled
 from services.miniapp_buttons import miniapp_deep_link
 from services import chemistry
@@ -39,38 +40,10 @@ def _get_ordered_roster(session, user_id):
             .filter(UserRoster.user_id == user_id).order_by(UserRoster.order_position).all())
 
 
-def _build_display_order(roster_list):
-    """Return list of (entry, player) in the same order as displayed by /pxi.
-
-    Display order for top 11: Batsmen → Wicket Keepers → All-rounders → Pacers → Spinners.
-    Positions 12+ stay as bench in raw order.
-
-    So display position 1..11 maps to the same categorized-sorted 11 shown in /pxi,
-    and display position 12+ keeps roster order.
-    """
-    top_11 = roster_list[:11]
-    bench = roster_list[11:]
-
-    batsmen, keepers, allrounders, pacers, spinners = [], [], [], [], []
-    for pair in top_11:
-        _, player = pair
-        cat = player.category
-        if cat == "Batsman":
-            batsmen.append(pair)
-        elif cat == "Wicket Keeper":
-            keepers.append(pair)
-        elif cat == "All-rounder":
-            allrounders.append(pair)
-        elif cat == "Bowler":
-            if _is_spin(player.bowl_style):
-                spinners.append(pair)
-            else:
-                pacers.append(pair)
-        else:
-            batsmen.append(pair)
-
-    # Return in the same order as /pxi displays
-    return batsmen + keepers + allrounders + pacers + spinners + bench
+# The display sort itself now lives in services.roster_view, so /pxi, /myroster
+# and the release commands all number cards from one implementation. Kept under
+# the old private name because several handlers (and their tests) import it.
+_build_display_order = build_display_order
 
 
 def _xi_player_line(serial, entry, player, captain_rid):
@@ -164,11 +137,14 @@ def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False,
 
     if show_bench and bench:
         bench_lines = []
-        for entry, player in bench:
+        # Bench numbering continues the XI's serial rather than reading
+        # order_position, so the number on screen is the display position the
+        # user types at /release — true even if order_position has drifted.
+        for offset, (entry, player) in enumerate(bench, count + 1):
             flag = get_flag(player.country)
             stats = (f"{bold_digits(player.rating)} | {bold_digits(player.bat_rating)}"
                      f" | {bold_digits(player.bowl_rating)}")
-            bench_lines.append(f"{circled(entry.order_position)} {small_caps(player.name)}  {flag}  {stats}")
+            bench_lines.append(f"{circled(offset)} {small_caps(player.name)}  {flag}  {stats}")
         lines.append(f"\n📋 <b>{bold_serif('BENCH')}</b> ({len(bench)})")
         lines.append("<blockquote expandable>" + "\n".join(bench_lines) + "</blockquote>")
 
@@ -177,15 +153,16 @@ def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False,
 
 def format_bench_text(roster_list):
     """Format bench players inside an expandable quote."""
-    bench = roster_list[11:]
+    bench = roster_list[XI_SIZE:]
     if not bench:
         return f"📋 <b>{bold_serif('BENCH')}</b>\n\nNo bench players."
     body = []
-    for entry, player in bench:
+    # Same display numbering as /pxi and /myroster — see format_xi_text.
+    for position, (entry, player) in enumerate(bench, len(roster_list[:XI_SIZE]) + 1):
         flag = get_flag(player.country)
         stats = (f"{bold_digits(player.rating)} | {bold_digits(player.bat_rating)}"
                  f" | {bold_digits(player.bowl_rating)}")
-        body.append(f"{circled(entry.order_position)} {small_caps(player.name)}  {flag}  {stats}")
+        body.append(f"{circled(position)} {small_caps(player.name)}  {flag}  {stats}")
     return (f"📋 <b>{bold_serif('BENCH')}</b> ({len(bench)})\n"
             "<blockquote expandable>" + "\n".join(body) + "</blockquote>")
 

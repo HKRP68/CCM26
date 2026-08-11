@@ -8,20 +8,35 @@ from database import get_session
 from models import User
 from config import MAX_ROSTER, ROSTER_PAGE_SIZE, get_sell_value
 from services.roster_service import get_user_roster, get_roster_stats
+from services.roster_view import zone_of
 
 logger = logging.getLogger(__name__)
 
 
 def _build_roster_message(user, entries, stats, page, total, total_pages):
-    """Build the roster text and keyboard for a given page."""
+    """Build the roster text and keyboard for a given page.
+
+    Cards are listed in the shared display order and numbered with the shared
+    display position, so the number a user reads here is the number /pxi shows
+    and the one /release and /releasemultiple take. A page can straddle the
+    XI/bench line, so the section header is emitted wherever the run changes
+    rather than only at the top.
+    """
     lines = []
     global_idx = (page - 1) * ROSTER_PAGE_SIZE
 
     # Track duplicate player_ids across the FULL roster (not just this page)
     # We already have duplicate count in stats
 
+    zone = None
     for i, (entry, player) in enumerate(entries, 1):
         idx = global_idx + i
+        here = zone_of(idx)
+        if here != zone:
+            header = ("🏏 <b>PLAYING XI</b>" if here == "XI"
+                      else "📋 <b>BENCH</b>")
+            lines.append(header)
+            zone = here
         sell = get_sell_value(player.rating)
         lines.append(
             f"{idx}. {player.name} - {player.rating} OVR | {player.category}\n"
@@ -39,7 +54,9 @@ def _build_roster_message(user, entries, stats, page, total, total_pages):
         f"• Total Value: {stats['total_value']:,} 🪙\n"
         f"• Duplicates: {stats['duplicates']}\n\n"
         f"👥 <b>Players (Page {page}/{total_pages}):</b>\n"
-        f"<blockquote expandable>{roster_text}</blockquote>"
+        f"<blockquote expandable>{roster_text}</blockquote>\n"
+        f"<i>These numbers match /pxi — use them with /release and "
+        f"/releasemultiple.</i>"
     )
 
     # Build navigation + action buttons
