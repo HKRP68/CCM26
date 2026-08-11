@@ -36,6 +36,7 @@ from services.trait_service import (
 )
 from services.flags import get_flag
 from services.roster_lock import match_lock_alert, match_lock_message
+from services.roster_view import get_display_roster, numbered
 from services.trait_trading_service import list_inventory, sell_inventory_trait
 from config import (
     TRAIT_SHOP_DAILY_PURCHASE_LIMIT, TRAIT_REROLL_COST,
@@ -554,20 +555,17 @@ async def trapply_inv_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         trait = session.query(Trait).get(inv.trait_id)
         await q.answer()
 
-        # Show top-11 players (the most likely targets)
-        roster = (session.query(UserRoster, Player)
-                  .join(Player, UserRoster.player_id == Player.id)
-                  .filter(UserRoster.user_id == user.id)
-                  .order_by(UserRoster.order_position)
-                  .limit(15).all())
+        # Show the most likely targets, numbered the way every other surface
+        # numbers a card (/myroster, /pxi, /release) rather than by batting slot.
+        roster = list(numbered(get_display_roster(session, user.id)))[:15]
 
         btns = []
-        for ur, p in roster:
+        for position, ur, p in roster:
             # Show current trait count. The Career Player is flagged because
             # its slots sit outside the squad-wide budget.
             count = session.query(PlayerTrait).filter(PlayerTrait.roster_id == ur.id).count()
             mark = " 🎖" if getattr(p, "is_career", False) else ""
-            label = f"#{ur.order_position} {p.name}{mark} ({count}/{TRAIT_MAX_PER_PLAYER})"
+            label = f"#{position} {p.name}{mark} ({count}/{TRAIT_MAX_PER_PLAYER})"
             btns.append([InlineKeyboardButton(label, callback_data=f"trapply_pl_{inv_id}_{ur.id}")])
 
         btns.append([InlineKeyboardButton("❌ Cancel", callback_data="trcancel")])

@@ -1,5 +1,17 @@
 """Release player handlers — /release (supports name, position, ranges) + /releasemultiple.
 
+Which numbering a position means
+────────────────────────────────
+Both ``/release N`` and ``/releasemultiple N M`` resolve against the shared
+display numbering in ``services.roster_view`` — the same one /pxi and /myroster
+print, XI 1-11 (category-sorted) then bench 12+. A user quoting a number off
+either listing gets the card they are looking at.
+
+That number is deliberately *not* ``UserRoster.order_position``, which is the
+batting slot and differs for most of the XI. Nothing in this module writes to
+``order_position`` except ``_renumber_roster``, which closes the gaps a release
+leaves behind.
+
 One release at a time
 ─────────────────────
 Both commands work the same way: they post a confirmation prompt and the actual
@@ -23,6 +35,8 @@ from config import get_sell_value, get_buy_value, MAX_ROSTER
 from utils.idempotency import claim_once, release
 from services.activity_service import log_activity
 from services.flags import get_flag
+from services.roster_view import (get_display_roster, find_position, zone_of,
+                                  is_in_xi, XI_SIZE)
 from services.roster_lock import MARKET_REASON, match_lock_alert, match_lock_message
 
 logger = logging.getLogger(__name__)
@@ -272,15 +286,10 @@ def _find_by_arg(session, user_id, arg_str):
     """
     arg_str = arg_str.strip()
 
-    # Try position first — use DISPLAY order (matches /pxi numbering)
+    # Try position first — the shared display numbering (/pxi, /myroster).
     if arg_str.isdigit():
         pos = int(arg_str)
-        from handlers.lineup import _build_display_order
-        raw_entries = (session.query(UserRoster, Player)
-                       .join(Player, UserRoster.player_id == Player.id)
-                       .filter(UserRoster.user_id == user_id)
-                       .order_by(UserRoster.order_position).all())
-        display_entries = _build_display_order(raw_entries)
+        display_entries = get_display_roster(session, user_id)
         if 1 <= pos <= len(display_entries):
             return [display_entries[pos - 1]]
         return []
@@ -301,10 +310,27 @@ def _find_by_arg(session, user_id, arg_str):
     return substr
 
 
-def _fmt_player_line(entry, player):
+def _fmt_player_line(position, player):
+    """One preview line, tagged XI or Bench.
+
+    ``position`` is the shared display number — never the row's
+    ``order_position``, which is the batting slot and a different number for
+    most of the XI.
+    """
     sv = get_sell_value(player.rating)
     flag = get_flag(player.country) if player.country else ""
-    return f"#{entry.order_position}. {player.name} {flag} | {player.rating} OVR | 💸 {sv:,}"
+    tag = "🏏" if is_in_xi(position) else "📋"
+    return f"{tag} #{position}. {player.name} {flag} | {player.rating} OVR | 💸 {sv:,}"
+
+
+def _squad_impact(released_count, current_count):
+    """Warn when a release eats into the XI the user needs to play matches."""
+    remaining = current_count - released_count
+    if remaining >= XI_SIZE:
+        return ""
+    short = XI_SIZE - remaining
+    return (f"\n\n⚠️ <b>This leaves you {remaining} player(s)</b> — {short} short "
+            f"of the {XI_SIZE} needed to field a Playing XI.")
 
 
 # ── /release — smart single/name/position release ────────────────────
@@ -363,14 +389,20 @@ async def releasepl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(CAREER_LOCKED_MESSAGE, parse_mode="HTML")
             return
 
+        # Every position shown from here on is the display number, so the name
+        # search and the position command speak the same language.
+        display = get_display_roster(session, user.id)
+
         # Multiple matches — let user pick
         if len(matches) > 1:
             # Show up to 10 choices
             btns = []
             for entry, player in matches[:10]:
                 sv = get_sell_value(player.rating)
+                pos = find_position(display, entry.id)
+                label = f"#{pos} " if pos else ""
                 btns.append([InlineKeyboardButton(
-                    f"#{entry.order_position} {player.name} ({player.rating}) — 💸 {sv:,}",
+                    f"{label}{player.name} ({player.rating}) — 💸 {sv:,}",
                     callback_data=f"rlone_{entry.id}")])
             btns.append([InlineKeyboardButton("❌ Cancel", callback_data="rlcancel")])
 
@@ -389,13 +421,18 @@ async def releasepl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user.captain_roster_id == entry.id:
             captain_warn = "\n\n⚠️ <b>This is your Captain!</b> You'll need to set a new one."
 
+        pos = find_position(display, entry.id)
+        heading = f"#{pos}. " if pos else ""
+        where = f" · {zone_of(pos)}" if pos else ""
+
         text = (
             "🔴 <b>RELEASE PLAYER?</b>\n\n"
-            f"#{entry.order_position}. {player.name} {flag}\n"
+            f"{heading}{player.name} {flag}\n"
             f"⭐ Rating: {player.rating} OVR\n"
-            f"🏷 {player.category}\n\n"
+            f"🏷 {player.category}{where}\n\n"
             f"💸 You will receive: <b>{sv:,}</b> 🪙"
             f"{captain_warn}"
+            f"{_squad_impact(1, len(display))}"
         )
 
         kb = InlineKeyboardMarkup([[
@@ -528,13 +565,15 @@ async def release_cancel_callback(update: Update, context: ContextTypes.DEFAULT_
 # ── /releasemultiple — range release ─────────────────────────────────
 
 async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/releasemultiple <from> <to> — release roster positions in range."""
+    """/releasemultiple <from> <to> — release a range of display positions."""
     tg_user = update.effective_user
 
     if not context.args or len(context.args) < 2:
         await update.message.reply_text(
             "Usage: <code>/releasemultiple &lt;from&gt; &lt;to&gt;</code>\n"
-            "Example: <code>/releasemultiple 7 11</code>",
+            "Example: <code>/releasemultiple 12 15</code>\n\n"
+            "<i>Positions are the numbers shown on /myroster and /pxi — "
+            f"1-{XI_SIZE} is your XI, {XI_SIZE + 1}+ is the bench.</i>",
             parse_mode="HTML")
         return
 
@@ -570,12 +609,7 @@ async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_
             await update.message.reply_text(locked, parse_mode="HTML")
             return
 
-        from handlers.lineup import _build_display_order
-        raw_entries = (session.query(UserRoster, Player)
-                       .join(Player, UserRoster.player_id == Player.id)
-                       .filter(UserRoster.user_id == user.id)
-                       .order_by(UserRoster.order_position).all())
-        entries = _build_display_order(raw_entries)
+        entries = get_display_roster(session, user.id)
 
         if pos_to > len(entries):
             await update.message.reply_text(
@@ -602,10 +636,14 @@ async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_
         total_sell = 0
         lines = []
         captain_in_range = False
-        for entry, player in to_release:
+        xi_in_range = 0
+        for offset, (entry, player) in enumerate(to_release):
+            position = pos_from + offset
             sv = get_sell_value(player.rating)
             total_sell += sv
-            lines.append(_fmt_player_line(entry, player))
+            lines.append(_fmt_player_line(position, player))
+            if is_in_xi(position):
+                xi_in_range += 1
             if user.captain_roster_id == entry.id:
                 captain_in_range = True
 
@@ -616,12 +654,24 @@ async def releasemultiple_handler(update: Update, context: ContextTypes.DEFAULT_
 
         captain_warn = "\n\n⚠️ <b>Captain is in this range!</b>" if captain_in_range else ""
 
+        # Spell out how the range straddles the XI/bench line. Selling bench is
+        # routine; selling out of the XI is the thing worth a second look.
+        bench_in_range = len(to_release) - xi_in_range
+        if xi_in_range and bench_in_range:
+            span = f"🏏 {xi_in_range} from your XI · 📋 {bench_in_range} from the bench"
+        elif xi_in_range:
+            span = f"🏏 All {xi_in_range} from your <b>Playing XI</b>"
+        else:
+            span = f"📋 All {bench_in_range} from your <b>bench</b>"
+
         text = (
             f"🔴 <b>RELEASE {len(to_release)} PLAYERS?</b>\n\n"
-            f"<b>Positions {pos_from} → {pos_to}</b>\n\n"
+            f"<b>Positions {pos_from} → {pos_to}</b>\n"
+            f"{span}\n\n"
             f"{preview}\n\n"
             f"💸 Total: <b>{total_sell:,}</b> 🪙"
             f"{captain_warn}"
+            f"{_squad_impact(len(to_release), len(entries))}"
         )
 
         kb = InlineKeyboardMarkup([[
@@ -687,12 +737,7 @@ async def releasemultiple_confirm_callback(update: Update, context: ContextTypes
 
         await query.answer()
 
-        from handlers.lineup import _build_display_order
-        raw_entries = (session.query(UserRoster, Player)
-                       .join(Player, UserRoster.player_id == Player.id)
-                       .filter(UserRoster.user_id == user.id)
-                       .order_by(UserRoster.order_position).all())
-        entries = _build_display_order(raw_entries)
+        entries = get_display_roster(session, user.id)
 
         if pos_from < 1 or pos_to > len(entries) or pos_from > pos_to:
             release(key)
