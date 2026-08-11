@@ -22,6 +22,13 @@ def _build_roster_message(user, entries, stats, page, total, total_pages):
     XI/bench line, so the section header is emitted wherever the run changes
     rather than only at the top.
     """
+    # ``get_user_roster`` clamps the page it slices, so render the same
+    # effective page. Without this, /myroster 99 pages back the last four cards
+    # but labels them #981-#984 under "Page 99/2" — positions no command takes.
+    # Clamping here rather than in the callers means a new call site can't
+    # reintroduce the mismatch.
+    page = max(1, min(page, total_pages))
+
     lines = []
     global_idx = (page - 1) * ROSTER_PAGE_SIZE
 
@@ -29,7 +36,7 @@ def _build_roster_message(user, entries, stats, page, total, total_pages):
     # We already have duplicate count in stats
 
     zone = None
-    for i, (entry, player) in enumerate(entries, 1):
+    for i, (_entry, player) in enumerate(entries, 1):
         idx = global_idx + i
         here = zone_of(idx)
         if here != zone:

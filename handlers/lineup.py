@@ -140,7 +140,7 @@ def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False,
         # Bench numbering continues the XI's serial rather than reading
         # order_position, so the number on screen is the display position the
         # user types at /release — true even if order_position has drifted.
-        for offset, (entry, player) in enumerate(bench, count + 1):
+        for offset, (_entry, player) in enumerate(bench, count + 1):
             flag = get_flag(player.country)
             stats = (f"{bold_digits(player.rating)} | {bold_digits(player.bat_rating)}"
                      f" | {bold_digits(player.bowl_rating)}")
@@ -158,7 +158,7 @@ def format_bench_text(roster_list):
         return f"📋 <b>{bold_serif('BENCH')}</b>\n\nNo bench players."
     body = []
     # Same display numbering as /pxi and /myroster — see format_xi_text.
-    for position, (entry, player) in enumerate(bench, len(roster_list[:XI_SIZE]) + 1):
+    for position, (_entry, player) in enumerate(bench, len(roster_list[:XI_SIZE]) + 1):
         flag = get_flag(player.country)
         stats = (f"{bold_digits(player.rating)} | {bold_digits(player.bat_rating)}"
                  f" | {bold_digits(player.bowl_rating)}")

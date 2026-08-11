@@ -29,8 +29,39 @@ _PREV_DATABASE_URL = None
 _SAVED_MODULES = {}
 _TMP = None
 _ENGINE = None
+# Every module this file reaches into has to be saved and restored, not just the
+# ones under test: anything imported while the temp DATABASE_URL is active
+# caches a session factory pointing at the temp database, and would keep serving
+# it to later test modules if left in sys.modules.
 _MODULE_NAMES = ("database", "models", "config", "services.roster_service",
-                 "services.roster_view", "handlers.release", "handlers.myroster")
+                 "services.roster_view", "handlers.release", "handlers.myroster",
+                 "handlers.lineup", "handlers.traits",
+                 "services.trait_service", "services.trait_trading_service",
+                 "handlers.tradetrait")
+
+
+def _rebind_parent(name, module):
+    """Point ``package.attr`` at ``module`` (or drop it when ``module`` is None).
+
+    Clearing ``sys.modules["handlers.traits"]`` is not enough on its own: the
+    parent package keeps its own ``traits`` attribute, and ``from handlers
+    import traits`` reads *that*, so a later test module can silently get the
+    instance this file bound to its throwaway database.
+    """
+    if "." not in name:
+        return
+    parent_name, _, attr = name.rpartition(".")
+    parent = sys.modules.get(parent_name)
+    if parent is None:
+        return
+    if module is None:
+        if hasattr(parent, attr):
+            try:
+                delattr(parent, attr)
+            except AttributeError:
+                pass
+    else:
+        setattr(parent, attr, module)
 
 
 def setUpModule():
@@ -40,6 +71,7 @@ def setUpModule():
     _SAVED_MODULES = {name: sys.modules.get(name) for name in _MODULE_NAMES}
     for name in _MODULE_NAMES:
         sys.modules.pop(name, None)
+        _rebind_parent(name, None)
 
     _TMP = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     _TMP.close()
@@ -66,6 +98,7 @@ def tearDownModule():
             sys.modules.pop(name, None)
         else:
             sys.modules[name] = module
+        _rebind_parent(name, module)
     try:
         os.unlink(_TMP.name)
     except OSError:
@@ -283,6 +316,33 @@ class ReleaseSinglePositionTests(_HandlerFixture):
     def test_a_position_past_the_end_is_refused(self):
         self.assertIn("No match", self._prompt(15))
 
+    def test_a_full_squad_release_does_not_cry_wolf(self):
+        """14 cards minus one is still an XI, so there's nothing to warn about."""
+        self.assertNotIn("short", self._prompt(12))
+
+
+class SingleReleaseSquadWarningTests(_HandlerFixture):
+    """A squad of exactly 11 has no slack: selling anyone breaks the XI."""
+
+    def setUp(self):
+        from models import UserRoster
+        super().setUp()
+        # Trim the fixture's three bench cards, leaving the XI on its own.
+        for bare in ("Bench Bill", "Bench Ben", "Bench Bea"):
+            self.session.query(UserRoster).filter(
+                UserRoster.id == self.entry_id[bare]).delete()
+        self.user.roster_count = 11
+        self.session.commit()
+
+    def test_releasing_from_a_bare_xi_warns(self):
+        prompt = self._run(self.rl.releasepl_handler, 5)
+        self.assertIn("short", prompt)
+        self.assertIn("Playing XI", prompt)
+
+    def test_the_warning_counts_what_would_be_left(self):
+        prompt = self._run(self.rl.releasepl_handler, 5)
+        self.assertIn("leaves you 10 player(s)", prompt)
+
 
 class ReleaseMultipleRangeTests(_HandlerFixture):
     def _preview(self, pos_from, pos_to):
@@ -367,6 +427,17 @@ class ReleaseMultipleRangeTests(_HandlerFixture):
         self.assertIn("/pxi", usage)
         self.assertIn("bench", usage.lower())
 
+    def test_a_hyphenated_range_is_rejected_as_usage(self):
+        """Guards the /howto wording: the handler splits on spaces, so a
+        documented "6-8" would send the reader straight back to the usage text."""
+        reply = self._run(self.rl.releasemultiple_handler, "6-8")
+        self.assertIn("Usage:", reply)
+
+    def test_a_rejected_range_opens_no_prompt(self):
+        """A usage reply must not occupy the one-release-at-a-time slot."""
+        self._run(self.rl.releasemultiple_handler, "6-8")
+        self.assertIsNone(self.rl.pending_release(self.tg_id))
+
 
 class BothCommandsAgreeTests(_HandlerFixture):
     """The whole point of the unification: one number, one card."""
@@ -445,6 +516,17 @@ class MyRosterShowsTheSameNumbersTests(_SquadFixture):
         self.assertEqual(total_pages, 2)
         self.assertEqual(len(entries), 4)
 
+    def test_an_out_of_range_page_is_rendered_as_the_page_it_actually_shows(self):
+        """The slice is clamped, so the labels have to be clamped too —
+        otherwise /myroster 99 numbers the last four cards #981-#984, positions
+        no command will accept."""
+        page = self._page(99)
+        self.assertIn("Page 2/2", page)
+        self.assertNotIn("Page 99", page)
+        for position in (11, 12, 13, 14):
+            self.assertIn(f"{position}. ", page)
+        self.assertNotIn("981.", page)
+
 
 class PxiBenchNumberingTests(_SquadFixture):
     """/pxi's bench used to print order_position; it must print the display
@@ -480,6 +562,79 @@ class PxiBenchNumberingTests(_SquadFixture):
         text = format_bench_text(get_roster_ordered(self.session, self.user.id))
         self.assertIn(circled(12), text)
         self.assertNotIn(circled(112), text)
+
+
+class TraitPickerLabelsTests(_SquadFixture):
+    """The trait picker labels its buttons with the shared display number.
+
+    The button's callback carries the roster row id, so tapping was never
+    ambiguous — what mattered was that the number printed on it agreed with
+    /myroster and /pxi instead of showing the batting slot.
+    """
+
+    def _picker_labels(self):
+        from models import Trait, TraitInventory
+        import handlers.traits as ht
+
+        trait = Trait(name=f"Test Trait {self.user.id}", category="Batting",
+                      description="for the picker", effect_key="noop",
+                      rarity="common")
+        self.session.add(trait)
+        self.session.flush()
+        inv = TraitInventory(user_id=self.user.id, trait_id=trait.id, level=1)
+        self.session.add(inv)
+        self.session.commit()
+
+        query = MagicMock()
+        query.data = f"trapply_inv_{inv.id}"
+        query.from_user.id = self.tg_id
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = MagicMock()
+        update.callback_query = query
+        asyncio.run(ht.trapply_inv_callback(update, MagicMock()))
+
+        markup = query.edit_message_text.call_args.kwargs["reply_markup"]
+        return [row[0].text for row in markup.inline_keyboard]
+
+    def test_the_labels_carry_the_display_position(self):
+        labels = self._picker_labels()
+        for position in (1, 6, 7, 11, 12):
+            self.assertIn(f"#{position} {self.full_name(self.display_name(position))}",
+                          labels[position - 1])
+
+    def test_it_is_not_labelled_by_batting_slot(self):
+        """Display 1 is a batsman; batting slot 1 is the pacer who opens."""
+        self.assertIn(f"#1 {self.full_name('Bat Bailey')}", self._picker_labels()[0])
+
+    def test_the_button_still_routes_by_roster_id(self):
+        """The number is a label, not the lookup key — tapping stays exact."""
+        from models import Trait, TraitInventory
+        import handlers.traits as ht
+
+        trait = Trait(name=f"Routing Trait {self.user.id}", category="Batting",
+                      description="for the picker", effect_key="noop",
+                      rarity="common")
+        self.session.add(trait)
+        self.session.flush()
+        inv = TraitInventory(user_id=self.user.id, trait_id=trait.id, level=1)
+        self.session.add(inv)
+        self.session.commit()
+
+        query = MagicMock()
+        query.data = f"trapply_inv_{inv.id}"
+        query.from_user.id = self.tg_id
+        query.answer = AsyncMock()
+        query.edit_message_text = AsyncMock()
+        update = MagicMock()
+        update.callback_query = query
+        asyncio.run(ht.trapply_inv_callback(update, MagicMock()))
+
+        markup = query.edit_message_text.call_args.kwargs["reply_markup"]
+        first = markup.inline_keyboard[0][0]
+        self.assertTrue(first.callback_data.endswith(
+            f"_{self.entry_id[self.display_name(1)]}"),
+            "display position 1 must point at that card's roster row")
 
 
 class HowtoDocumentsTheRealSyntaxTests(unittest.TestCase):
