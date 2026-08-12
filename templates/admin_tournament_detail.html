@@ -24,9 +24,14 @@
 @media (max-width: 900px) { .tour-form-grid { grid-template-columns:1fr; } }
 </style>
 
+{# A Lets Play tournament belongs to its own list page — the Challenge League
+   list deliberately excludes it, so every "back" link here has to follow the
+   tournament's kind rather than assume the league page. #}
+{% set list_ep = 'admin_lp_tournaments_list' if is_lp else 'admin_tournaments_list' %}
+{% set list_label = 'Lets Play Tournaments' if is_lp else 'Tournaments' %}
 <div class="tour-shell">
   <div class="breadcrumbs">
-    <a href="{{ url_for('admin_tournaments_list') }}">Tournaments</a><span>›</span><span>{{ t.name }}</span>
+    <a href="{{ url_for(list_ep) }}">{{ list_label }}</a><span>›</span><span>{{ t.name }}</span>
   </div>
   <div class="tournament-hero">
     <div class="hero-content">
@@ -40,13 +45,13 @@
             <span class="meta-divider">•</span>
             <span class="format-badge-hero">{{ t.format }} · {{ t.overs }} ov</span>
             <span class="meta-divider">•</span>
-            <span class="meta-detail">{{ t.league_name or '—' }}</span>
+            <span class="meta-detail">{% if is_lp %}Lets Play · own rosters{% else %}{{ t.league_name or '—' }}{% endif %}</span>
             {% if t.command_snapshot %}<span class="meta-divider">•</span><span class="meta-detail"><code>{{ t.command_snapshot }}</code></span>{% endif %}
           </div>
         </div>
       </div>
       <div class="hero-actions">
-        <a href="{{ url_for('admin_tournaments_list') }}" class="back-btn"><i class="fas fa-arrow-left"></i> Back</a>
+        <a href="{{ url_for(list_ep) }}" class="back-btn"><i class="fas fa-arrow-left"></i> Back</a>
       </div>
     </div>
     <div class="tour-tabs">
@@ -71,7 +76,7 @@
       <form method="POST" style="display:inline;" onsubmit="return confirm('Mark this tournament completed?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="complete"><button class="btn" type="submit">✅ Complete</button></form>
       <form method="POST" style="display:inline;" onsubmit="return confirm('Cancel this tournament?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="cancel"><button class="btn danger" type="submit">✖ Cancel</button></form>
     </div>
-    <p style="color:var(--muted); font-size:.84rem; margin:.7rem 0 0;">The tournament command only starts matches when this tournament is <strong>active</strong> (status = active and live). Activating it automatically deactivates any other active tournament.</p>
+    <p style="color:var(--muted); font-size:.84rem; margin:.7rem 0 0;">{% if is_lp %}<code>/lptour</code>{% else %}The tournament command{% endif %} only starts matches when this tournament is <strong>active</strong> (status = active and live). Activating it deactivates any other active {% if is_lp %}Lets Play{% else %}Challenge League{% endif %} tournament — the two kinds run independently, so one of each can be live at the same time.</p>
   </section>
 
   <!-- Settings -->
@@ -119,18 +124,62 @@
 
   <!-- Participating teams -->
   <section class="tour-card">
-    <h3 style="margin-top:0;">Participating teams ({{ teams|length }})</h3>
+    <h3 style="margin-top:0;">{% if is_lp %}Players ({{ teams|length }}{% if t.max_teams %}/{{ t.max_teams }}{% endif %}){% else %}Participating teams ({{ teams|length }}){% endif %}</h3>
+    {% if is_lp %}
+    <p style="color:var(--muted); font-size:.84rem; margin:.1rem 0 .7rem;">
+      Each entry is a Telegram user who plays with their own roster. Add them by
+      <strong>Telegram id</strong> — they don't need to have run <code>/debut</code> yet; their
+      name fills in from their account once they do (or press “Refresh names”).
+      Players start their fixtures in chat with <code>/lptour</code>.
+    </p>
+    {% endif %}
     {% if teams %}
     <div class="team-list">
       {% for tt in teams %}
       <div class="team-pill">
+        {% if is_lp %}
+        {% set u = lp_users.get(tt.user_tg_id) %}
+        <span style="min-width:0;">
+          <strong>{{ tt.name }}</strong>
+          <span style="color:var(--muted);">— <code>{{ tt.user_tg_id or '—' }}</code>
+          {% if u %}· {{ u.username or u.first_name or 'registered' }}{% else %}· <em>not registered yet</em>{% endif %}
+          · {{ tt.played }}P {{ tt.won }}W {{ tt.lost }}L {{ tt.points }}pts</span>
+        </span>
+        <span style="display:flex; gap:.4rem; flex-wrap:wrap;">
+          <form method="POST" style="display:flex; gap:.3rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="rename_lp_team">
+            <input type="hidden" name="team_id" value="{{ tt.id }}">
+            <input name="team_name" value="{{ tt.name }}" style="max-width:170px;">
+            <button class="btn" type="submit">Rename</button>
+          </form>
+          <form method="POST" style="display:inline;" onsubmit='return confirm("Remove " + {{ tt.name|tojson }} + " from the tournament?");'><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_team"><input type="hidden" name="team_id" value="{{ tt.id }}"><button class="btn danger" type="submit">Remove</button></form>
+        </span>
+        {% else %}
         <span>{{ tt.name }}{% if tt.short_name %} <span style="color:var(--muted);">({{ tt.short_name }})</span>{% endif %}</span>
-        <form method="POST" style="display:inline;" onsubmit="return confirm('Remove {{ tt.name }} from the tournament?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_team"><input type="hidden" name="team_id" value="{{ tt.id }}"><button class="btn danger" type="submit">Remove</button></form>
+        <form method="POST" style="display:inline;" onsubmit='return confirm("Remove " + {{ tt.name|tojson }} + " from the tournament?");'><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_team"><input type="hidden" name="team_id" value="{{ tt.id }}"><button class="btn danger" type="submit">Remove</button></form>
+        {% endif %}
       </div>
       {% endfor %}
     </div>
     {% else %}
-    <p style="color:var(--muted);">No teams added yet.</p>
+    <p style="color:var(--muted);">{% if is_lp %}Nobody entered yet.{% else %}No teams added yet.{% endif %}</p>
+    {% endif %}
+    {% if is_lp %}
+    <form method="POST" style="margin-top:.7rem; display:flex; gap:.5rem; flex-wrap:wrap; align-items:end;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="add_lp_team">
+      <div><label style="color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; display:block; margin-bottom:.25rem;">Telegram id</label>
+      <input name="user_tg_id" inputmode="numeric" placeholder="123456789" required></div>
+      <div><label style="color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; display:block; margin-bottom:.25rem;">Team name (optional)</label>
+      <input name="team_name" placeholder="auto from their account"></div>
+      <button class="btn btn-primary" type="submit">+ Add player</button>
+    </form>
+    <form method="POST" style="margin-top:.5rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="sync_lp_names">
+      <button class="btn" type="submit">🔄 Refresh names from Telegram accounts</button>
+    </form>
     {% endif %}
     {% if available %}
     <form method="POST" style="margin-top:.7rem; display:flex; gap:.5rem; flex-wrap:wrap; align-items:end;">
@@ -219,9 +268,11 @@
   <section class="tour-card">
     <h3 style="margin-top:0;">Schedule</h3>
     <p style="color:var(--muted); font-size:.84rem; margin:.1rem 0 .7rem;">
-      Generate fixtures from the league format above. Once generated, the tournament command only lets
+      Generate fixtures from the league format above. Once generated,
+      {% if is_lp %}<code>/lptour</code>{% else %}the tournament command{% endif %} only lets
       two teams play if they still have an unplayed scheduled fixture — so a team can't play again after
-      its match (until a remaining / double-RR fixture exists). Edit fixtures on the
+      its match (until a remaining / double-RR fixture exists). Leave it ungenerated for a free-play
+      tournament, where any two entrants may meet any number of times. Edit fixtures on the
       <a href="{{ url_for('admin_tournament_schedule', tournament_id=t.id) }}">Schedule page</a>.
     </p>
     <div class="lifecycle">

@@ -337,6 +337,7 @@ def mark_bot_match(state, bot_user_id, difficulty=None):
     # A practice match must never touch a tournament table or a tour series.
     state["tournament_id"] = None
     state["tournament_team_by_user"] = {}
+    state["tournament_tteam_by_user"] = {}
     state["reserved_fixture_id"] = None
     state["cl_tour_id"] = None
     state["cl_tour_match_id"] = None

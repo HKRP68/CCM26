@@ -2422,7 +2422,13 @@ class UserTeamLastXI(Base):
 
 
 class Tournament(Base):
-    """A Challenge League Tournament. Only one may be ``is_active`` at a time."""
+    """A tournament of one competition family — see ``kind`` below.
+
+    ``kind='challenge'`` is a Challenge League Tournament, contested by
+    ``ChallengeTeam`` squads. ``kind='letsplay'`` is a Lets Play Tournament,
+    contested by Telegram users playing their own rosters. One tournament **per
+    kind** may be ``is_active`` at a time, so one of each can run side by side.
+    """
     __tablename__ = "tournaments"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -2436,10 +2442,22 @@ class Tournament(Base):
     name = Column(String(120), nullable=False)
     description = Column(Text, nullable=True)
 
+    # Which competition family this tournament belongs to:
+    #   "challenge" – Challenge League teams (/cipl & friends). ``league_id`` is
+    #                 set and each TournamentTeam wraps a ``ChallengeTeam``.
+    #   "letsplay"  – Lets Play tournament. There is no league; each
+    #                 TournamentTeam *is* a user, keyed by ``user_tg_id``, and
+    #                 matches are played with the users' own rosters via /lptour.
+    # Rows written before this column existed are NULL and read as "challenge"
+    # (see ``services.tournament_service.KIND_CHALLENGE``).
+    kind = Column(String(20), default="challenge", server_default="challenge",
+                  nullable=False, index=True)
+
     # Lifecycle: draft / scheduled / active / paused / completed / cancelled
     status = Column(String(20), default="draft", nullable=False, index=True)
-    # The single currently-selected tournament whose command is live. At most one
-    # row may be True; activating one deactivates all others.
+    # The single currently-selected tournament whose command is live — one per
+    # ``kind``, so a Challenge League tournament and a Lets Play tournament can
+    # run side by side. Activating one deactivates the others of the same kind.
     is_active = Column(Boolean, default=False, nullable=False, index=True)
 
     format = Column(String(40), default="League", nullable=False)
@@ -2518,7 +2536,15 @@ class TournamentGroup(Base):
 
 
 class TournamentTeam(Base):
-    """A team participating in a tournament, with its running standings."""
+    """A team participating in a tournament, with its running standings.
+
+    Exactly one identity column is set, depending on ``Tournament.kind``:
+    ``challenge_team_id`` for a Challenge League tournament, ``user_tg_id`` for a
+    Lets Play tournament (where the team *is* a Telegram user, playing their own
+    roster). Everything downstream — standings, net run-rate, the schedule
+    generator and the knockout bracket — works off ``TournamentTeam.id`` alone
+    and so is shared by both kinds.
+    """
     __tablename__ = "tournament_teams"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -2526,6 +2552,10 @@ class TournamentTeam(Base):
                            nullable=False, index=True)
     challenge_team_id = Column(Integer, ForeignKey("challenge_teams.id", ondelete="SET NULL"),
                                nullable=True, index=True)
+    # Lets Play tournaments: the Telegram id of the user who *is* this team. Kept
+    # as the identity (rather than ``users.id``) so an admin can enter a squad
+    # before that person has ever run /debut. NULL for Challenge League teams.
+    user_tg_id = Column(BigInteger, nullable=True, index=True)
     # Group assignment for ``groups``-format tournaments; NULL otherwise.
     group_id = Column(Integer, ForeignKey("tournament_groups.id", ondelete="SET NULL"),
                       nullable=True, index=True)
@@ -2552,8 +2582,12 @@ class TournamentTeam(Base):
 
     tournament = relationship("Tournament", back_populates="teams")
 
+    # Both unique indexes are partial in effect rather than in DDL: SQL treats
+    # NULLs as distinct, so the challenge index ignores Lets Play rows (NULL
+    # challenge_team_id) and the user index ignores Challenge League rows.
     __table_args__ = (
         Index("ix_tournament_team_unique", "tournament_id", "challenge_team_id", unique=True),
+        Index("ix_tournament_team_user_unique", "tournament_id", "user_tg_id", unique=True),
     )
 
 

@@ -615,6 +615,13 @@ def _migrate_add_columns():
     _try_add("tournament_matches", "slot1_label", "VARCHAR(60)")
     _try_add("tournament_matches", "slot2_label", "VARCHAR(60)")
 
+    # Lets Play Tournaments: the ``kind`` discriminator on tournaments, and the
+    # Telegram-id identity that makes a TournamentTeam a *user* rather than a
+    # Challenge League team. Pre-existing rows keep NULL kind, which
+    # ``tournament_service`` reads as "challenge".
+    _try_add("tournaments", "kind", "VARCHAR(20) DEFAULT 'challenge'")
+    _try_add("tournament_teams", "user_tg_id", "BIGINT")
+
     # Overseas-player rules: league home country + min/max overseas in the XI,
     # and the per-challenge-player overseas flag.
     _try_add("challenge_leagues", "home_country", "VARCHAR(60)")
@@ -1075,6 +1082,28 @@ def _migrate_add_columns():
         failures = _run_isolated(match_outcome_index_sql)
         if not failures:
             _record_migration_signature("match_outcome_indexes", sig)
+        for sql, e in failures:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"migration step skipped ({sql[:60]}…): {e}")
+
+    # ─────────────────────────────────────────────────────────────
+    # Lets Play Tournaments: one participating row per (tournament, Telegram id).
+    # ``user_tg_id`` was added to an existing table, so the TournamentTeam
+    # __table_args__ index only covers fresh installs — without this, an existing
+    # database would let the same user be added to a tournament twice.
+    # ─────────────────────────────────────────────────────────────
+    lp_tournament_index_sql = [
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_tournament_team_user_unique "
+        "ON tournament_teams (tournament_id, user_tg_id)",
+        "CREATE INDEX IF NOT EXISTS ix_tournaments_kind ON tournaments (kind)",
+    ]
+    done, sig = _migration_signature_matches("lp_tournament_indexes",
+                                             lp_tournament_index_sql)
+    if not done:
+        failures = _run_isolated(lp_tournament_index_sql)
+        if not failures:
+            _record_migration_signature("lp_tournament_indexes", sig)
         for sql, e in failures:
             import logging
             logging.getLogger(__name__).warning(

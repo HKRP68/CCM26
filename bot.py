@@ -336,6 +336,12 @@ MENU_LIMIT = 100   # Telegram's setMyCommands ceiling, per scope
 GROUP_ONLY_COMMANDS = frozenset({
     "bluff", "cartel", "mole", "wordchase", "endchase", "cltour",
     "unscramble", "ju", "eu", "su", "cu", "ewm", "dwm",
+    # Lets Play Tournament. A fixture is two people in a chat, and the table /
+    # fixtures / leaderboards are a public competition everyone in that chat is
+    # following — the same call already made for /cltour. They still RUN in DM;
+    # this only keeps them out of the private slash menu, which is at Telegram's
+    # 100-command ceiling.
+    "lptour", "lpt", "lptable", "lptfixtures", "lptteams", "lptstats",
 })
 
 # Commands that only make sense one-to-one with the bot: deep-link entry
@@ -429,6 +435,12 @@ BOT_MENU_COMMANDS = (
     ("rcl", "Resume a stuck Challenge League (/cipl) match"),
     ("letsplay", "Challenge a user with your own roster (20 overs)"),
     ("lpbot", "Practice a 20-over Lets Play against the bot (unranked)"),
+    ("lptour", "Play your Lets Play Tournament fixture 🏆"),
+    ("lpt", "Lets Play Tournament — table, fixtures & teams 🏆"),
+    ("lptable", "Lets Play Tournament points table"),
+    ("lptfixtures", "Lets Play Tournament fixtures — including yours"),
+    ("lptteams", "Who is in the Lets Play Tournament"),
+    ("lptstats", "Lets Play Tournament Top-10 leaderboards"),
     ("ciplbot", "Practice a league match against the bot (unranked)"),
     ("change", "Change your XI/batting order during match setup"),
     ("botstatus", "Bot ping, uptime & status"),
@@ -851,6 +863,9 @@ async def start_handler(update, context):
         "/catch [bet] [height] - Risk purse coins in the catching game\n"
         "/cm @user - Two-wicket challenge mode\n"
         "/letsplay /lp @user - Reply or tag to play 20 overs with your own roster\n"
+        "/lptour @user - Play your Lets Play Tournament fixture (official result)\n"
+        "/lpt - Lets Play Tournament hub: table, fixtures, teams\n"
+        "/lptable /lptfixtures /lptteams /lptstats - Tournament table, schedule, field, leaders\n"
         "/challengeIPL /cipl - Reply to a user to start an IPL challenge\n"
         "/challengeBBL /cbbl - Reply to a user to start a BBL challenge\n"
         "/challengeINT /cint - Reply to a user to start an international challenge\n"
@@ -1601,6 +1616,49 @@ def main():
         from handlers.botlevel import difficulty_callback
         app.add_handler(CallbackQueryHandler(difficulty_callback,
                                              pattern=r"^botdiff_"))
+
+        # ── Lets Play Tournament ─────────────────────────────────────
+        # A CIPL-style competition whose teams are users, entered by Telegram id.
+        # /lptour plays a fixture through the /letsplay flow registered above;
+        # everything else follows or administers the competition. The ``lptv_``
+        # and ``lptstat_`` callback prefixes deliberately avoid the ``lp_``
+        # namespace the /letsplay match callbacks own.
+        from handlers.lp_tournament import (
+            lptour_handler, lpt_handler, lpt_view_callback,
+            lptable_handler, lptfixtures_handler, lptteams_handler,
+            lptstats_handler, lptstats_callback,
+            lptadmin_handler, lptnew_handler, lptadd_handler, lptremove_handler,
+            lptrename_handler, lptsync_handler, lptschedule_handler,
+            lptknockout_handler, lptstart_handler, lptpause_handler,
+            lptcomplete_handler, lptcancel_handler, lptreset_handler,
+            lptlist_handler, lptuse_handler, lptdelete_handler,
+        )
+        app.add_handler(CommandHandler(["lptour", "lptplay"], lptour_handler))
+        app.add_handler(CommandHandler(["lpt", "lptournament"], lpt_handler))
+        app.add_handler(CallbackQueryHandler(lpt_view_callback, pattern=r"^lptv_"))
+        app.add_handler(CommandHandler(["lptable", "lptpoints"], lptable_handler))
+        app.add_handler(CommandHandler(["lptfixtures", "lptfix"], lptfixtures_handler))
+        app.add_handler(CommandHandler("lptteams", lptteams_handler))
+        app.add_handler(CommandHandler("lptstats", lptstats_handler))
+        app.add_handler(CallbackQueryHandler(lptstats_callback, pattern=r"^lptstat_"))
+        app.add_handler(CommandHandler("lptadmin", lptadmin_handler))
+        app.add_handler(CommandHandler("lptnew", lptnew_handler))
+        app.add_handler(CommandHandler(["lptadd", "lptaddteam"], lptadd_handler))
+        app.add_handler(CommandHandler(["lptremove", "lptremoveteam"],
+                                       lptremove_handler))
+        app.add_handler(CommandHandler("lptrename", lptrename_handler))
+        app.add_handler(CommandHandler("lptsync", lptsync_handler))
+        app.add_handler(CommandHandler("lptschedule", lptschedule_handler))
+        app.add_handler(CommandHandler("lptknockout", lptknockout_handler))
+        app.add_handler(CommandHandler("lptstart", lptstart_handler))
+        app.add_handler(CommandHandler("lptpause", lptpause_handler))
+        app.add_handler(CommandHandler(["lptresume", "lptunpause"], lptstart_handler))
+        app.add_handler(CommandHandler("lptcomplete", lptcomplete_handler))
+        app.add_handler(CommandHandler("lptcancel", lptcancel_handler))
+        app.add_handler(CommandHandler("lptreset", lptreset_handler))
+        app.add_handler(CommandHandler("lptlist", lptlist_handler))
+        app.add_handler(CommandHandler("lptuse", lptuse_handler))
+        app.add_handler(CommandHandler("lptdelete", lptdelete_handler))
 
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))

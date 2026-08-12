@@ -15526,7 +15526,11 @@ def admin_tournaments_list():
                 flash(f"Error: {e}", "error")
             return redirect(url_for("admin_tournaments_list"))
 
+        # Challenge League tournaments only — Lets Play tournaments have their own
+        # page (they have no league and their teams are users, not squads).
         tournaments = (db.query(Tournament)
+                       .filter(tournament_service.kind_filter(
+                           tournament_service.KIND_CHALLENGE))
                        .order_by(Tournament.is_active.desc(), Tournament.updated_at.desc())
                        .all())
         current = [t for t in tournaments if t.status in ("draft", "scheduled", "active", "paused")]
@@ -15761,9 +15765,65 @@ def admin_tournament_detail(tournament_id):
                             short_name=ct.short_name, logo_url=ct.logo_url, sort_order=ct.sort_order))
                         log_admin(db, "tournament_team_add", "tournament", t.id, ct.name)
                         flash(f"✅ Added {ct.name}.", "success")
+                elif action == "add_lp_team":
+                    # Lets Play tournament: the participant *is* a Telegram user.
+                    from services import lp_tournament_service as lp_svc
+                    raw = (request.form.get("user_tg_id") or "").strip()
+                    try:
+                        team, cleared = lp_svc.add_participant(
+                            db, t.id, raw,
+                            name=(request.form.get("team_name") or "").strip() or None)
+                        log_admin(db, "lp_tournament_team_add", "tournament", t.id,
+                                  f"{team.user_tg_id} as {team.name}")
+                        flash(f"✅ Added {team.name} ({team.user_tg_id})."
+                              + (" Unplayed schedule cleared — regenerate it."
+                                 if cleared else ""), "success")
+                    except lp_svc.LPTError as ve:
+                        db.rollback()
+                        flash(f"⚠️ {ve}", "error")
+                elif action == "rename_lp_team":
+                    from services import lp_tournament_service as lp_svc
+                    tt = db.query(TournamentTeam).get(_int_form("team_id"))
+                    if not tt or tt.tournament_id != t.id or not tt.user_tg_id:
+                        flash("Participant not found.", "error")
+                    else:
+                        try:
+                            old, new = lp_svc.rename_participant(
+                                db, t.id, tt.user_tg_id,
+                                request.form.get("team_name"))
+                            log_admin(db, "lp_tournament_team_rename", "tournament",
+                                      t.id, f"{old} → {new}")
+                            flash(f"✅ Renamed {old} to {new}.", "success")
+                        except lp_svc.LPTError as ve:
+                            db.rollback()
+                            flash(f"⚠️ {ve}", "error")
+                elif action == "sync_lp_names":
+                    from services import lp_tournament_service as lp_svc
+                    changed = lp_svc.sync_participant_names(db, t.id)
+                    flash((f"✅ Refreshed {changed} team name(s) from their Telegram "
+                           "accounts.") if changed
+                          else "Every team already has a real name.", "info")
                 elif action == "remove_team":
                     tt = db.query(TournamentTeam).get(_int_form("team_id"))
-                    if tt and tt.tournament_id == t.id:
+                    if not tt or tt.tournament_id != t.id:
+                        flash("Team not found.", "error")
+                    elif tt.user_tg_id:
+                        # Lets Play participant: go through the service so the
+                        # now-stale fixtures go with them instead of being left
+                        # pointing at a deleted team.
+                        from services import lp_tournament_service as lp_svc
+                        try:
+                            nm, cleared = lp_svc.remove_participant(
+                                db, t.id, tt.user_tg_id)
+                            log_admin(db, "lp_tournament_team_remove", "tournament",
+                                      t.id, nm)
+                            flash(f"Removed {nm}."
+                                  + (" Unplayed schedule cleared — regenerate it."
+                                     if cleared else ""), "info")
+                        except lp_svc.LPTError as ve:
+                            db.rollback()
+                            flash(f"⚠️ {ve}", "error")
+                    else:
                         nm = tt.name
                         db.delete(tt)
                         log_admin(db, "tournament_team_remove", "tournament", t.id, nm)
@@ -15820,9 +15880,20 @@ def admin_tournament_detail(tournament_id):
                   .order_by(TournamentGroup.sort_order, TournamentGroup.id).all())
         from services import tournament_service
         lg_played, lg_total = tournament_service.league_progress(db, t.id)
+        # Lets Play participants are Telegram users — resolve the accounts we know
+        # about so the panel can show a handle next to the raw id. A participant
+        # who has never run /debut simply has no row, and shows as "not registered".
+        lp_users = {}
+        tg_ids = [int(tt.user_tg_id) for tt in teams if tt.user_tg_id]
+        if tg_ids:
+            for u in db.query(User).filter(User.telegram_id.in_(tg_ids)).all():
+                lp_users[int(u.telegram_id)] = u
         return render_template("admin_tournament_detail.html", t=t, teams=teams,
                                available=available, groups=groups,
-                               league_played=lg_played, league_total=lg_total)
+                               league_played=lg_played, league_total=lg_total,
+                               lp_users=lp_users,
+                               is_lp=(tournament_service.tournament_kind(t)
+                                      == tournament_service.KIND_LETSPLAY))
     finally:
         db.close()
 
@@ -15964,6 +16035,97 @@ def admin_tournament_match_delete(tournament_id, match_row_id):
     finally:
         db.close()
     return redirect(url_for("admin_tournament_dashboard", tournament_id=tournament_id))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# LETS PLAY TOURNAMENTS — a CIPL-style competition whose teams are users
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Only the list/create step needs its own page: a Lets Play tournament has no
+# Challenge League behind it and its field is entered by Telegram id. Everything
+# after creation — Manage, Schedule, Overview — reuses the shared tournament
+# pages, which work off TournamentTeam rows and never look at what kind of team
+# is behind them.
+
+@app.route("/lptournaments", methods=["GET", "POST"])
+@login_required
+def admin_lp_tournaments_list():
+    """List and create Lets Play tournaments, and pick the active one."""
+    from services import tournament_service
+    from services import lp_tournament_service as lp_svc
+    db = get_session()
+    try:
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            try:
+                if action == "create":
+                    ko = (request.form.get("knockout") or "").strip() or None
+                    t = lp_svc.create_tournament(
+                        db, request.form.get("name"),
+                        league_format=(request.form.get("league_format")
+                                       or "single").strip(),
+                        knockout=ko,
+                        max_teams=_int_form("max_teams", 8),
+                        description=request.form.get("description"),
+                        points_win=_int_form("points_win", 2),
+                        points_tie=_int_form("points_tie", 1),
+                        points_loss=_int_form("points_loss", 0),
+                        points_no_result=_int_form("points_no_result", 1))
+                    # Stays in draft: the field is entered next, and going live
+                    # early would let two players start a fixture that has no
+                    # schedule behind it yet.
+                    lp_svc.activate(db, t.id, keep_draft=True)
+                    log_admin(db, "lp_tournament_create", "tournament", t.id, t.name)
+                    db.commit()
+                    flash(f"✅ Created “{t.name}”. Add players by Telegram id, then "
+                          "generate the schedule and start it.", "success")
+                    return redirect(url_for("admin_tournament_detail",
+                                            tournament_id=t.id))
+                t = lp_svc.get_tournament(db, _int_form("tournament_id") or 0)
+                if not t:
+                    flash("Lets Play tournament not found.", "error")
+                elif action == "activate":
+                    lp_svc.activate(db, t.id)
+                    log_admin(db, "lp_tournament_activate", "tournament", t.id, t.name)
+                    flash(f"✅ “{t.name}” is now the active Lets Play tournament.",
+                          "success")
+                elif action == "deactivate":
+                    tournament_service.deactivate_tournament(db, t.id)
+                    log_admin(db, "lp_tournament_deactivate", "tournament", t.id, t.name)
+                    flash(f"“{t.name}” deactivated.", "info")
+                elif action in {"start", "pause", "complete", "cancel"}:
+                    status = {"start": "active", "pause": "paused",
+                              "complete": "completed", "cancel": "cancelled"}[action]
+                    tournament_service.set_status(db, t.id, status)
+                    log_admin(db, f"lp_tournament_{action}", "tournament", t.id, t.name)
+                    flash(f"✅ “{t.name}” is now {status}.", "success")
+                elif action == "delete":
+                    nm = t.name
+                    db.delete(t)
+                    log_admin(db, "lp_tournament_delete", "tournament", t.id, nm)
+                    flash(f"Removed “{nm}”.", "info")
+                else:
+                    flash("Unknown action.", "error")
+                db.commit()
+            except lp_svc.LPTError as ve:
+                db.rollback()
+                flash(f"⚠️ {ve}", "error")
+            except Exception as e:
+                db.rollback()
+                logger.exception("Lets Play tournament mutation failed")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_lp_tournaments_list"))
+
+        rows = lp_svc.list_tournaments(db)
+        current = [t for t in rows
+                   if t.status in ("draft", "scheduled", "active", "paused")]
+        history = [t for t in rows if t.status in ("completed", "cancelled")]
+        progress = {t.id: tournament_service.league_progress(db, t.id) for t in rows}
+        return render_template("admin_lp_tournaments.html",
+                               current=current, history=history, progress=progress,
+                               knockout_types=lp_svc.KNOCKOUT_TYPES)
+    finally:
+        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════

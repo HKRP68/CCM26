@@ -3,6 +3,10 @@
 {% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_tournament.css') }}">{% endblock %}
 
 {% block content %}
+{# Follow the tournament's kind back to its own list page: a Lets Play
+   tournament is not in the Challenge League list. #}
+{% set list_ep = 'admin_lp_tournaments_list' if t.kind == 'letsplay' else 'admin_tournaments_list' %}
+{% set list_label = 'Lets Play Tournaments' if t.kind == 'letsplay' else 'Tournaments' %}
 {% from "_tournament_macros.html" import team_badge, result_form with context %}
 
 {% macro lb_list(rows, attr, suffix='') %}
@@ -88,7 +92,7 @@
 
 <div class="tour-page">
   <div class="breadcrumbs">
-    <a href="{{ url_for('admin_tournaments_list') }}">Tournaments</a><span>›</span><span>{{ t.name }}</span>
+    <a href="{{ url_for(list_ep) }}">{{ list_label }}</a><span>›</span><span>{{ t.name }}</span>
   </div>
 
   <!-- Hero -->
@@ -112,7 +116,7 @@
         </div>
       </div>
       <div class="hero-actions">
-        <a href="{{ url_for('admin_tournaments_list') }}" class="back-btn"><i class="fas fa-arrow-left"></i> Back</a>
+        <a href="{{ url_for(list_ep) }}" class="back-btn"><i class="fas fa-arrow-left"></i> Back</a>
       </div>
     </div>
 
