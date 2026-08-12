@@ -314,6 +314,57 @@ class SquadLockTests(LPTCase):
             self.lpt.remove_participant(self.session, self.tour.id,
                                         self.users[0].telegram_id)
 
+    def test_a_played_knockout_locks_the_field_too(self):
+        # league_progress only counts the league/group stages, so a
+        # pure-knockout tournament has no league fixture to read. Judging the
+        # lock by that alone would leave a half-played bracket editable, and
+        # clearing the field would delete its remaining rounds and orphan the
+        # feeds_winner_to_id links out of the completed ones.
+        from models import TournamentMatch
+        from services import tournament_service as ts
+        # Start from a bare pure-knockout tournament: drop every fixture the
+        # base fixture set up, then expire so the session forgets the rows it
+        # had already loaded (the bulk delete bypasses the identity map).
+        ts.reset_tournament(self.session, self.tour.id)
+        self.session.commit()
+        (self.session.query(TournamentMatch)
+         .filter_by(tournament_id=self.tour.id)
+         .delete(synchronize_session=False))
+        self.session.commit()
+        self.session.expire_all()
+        self.tour.schedule_generated = False
+        self.tour.knockout_type = "pure_knockout"
+        self.session.commit()
+
+        created = self.lpt.generate_knockout(self.session, self.tour.id,
+                                             "knockout")
+        self.session.commit()
+        self.assertGreater(created, 1)
+        self.assertEqual(ts.league_progress(self.session, self.tour.id), (0, 0))
+
+        first = (self.session.query(TournamentMatch)
+                 .filter_by(tournament_id=self.tour.id, status="scheduled")
+                 .filter(TournamentMatch.team1_id.isnot(None))
+                 .filter(TournamentMatch.team2_id.isnot(None))
+                 .order_by(TournamentMatch.match_no).first())
+        ts.record_manual_result(self.session, first.id,
+                                inn1_runs=170, inn1_wickets=5, inn1_overs=20,
+                                inn2_runs=160, inn2_wickets=9, inn2_overs=20)
+        self.session.commit()
+
+        for action in (
+            lambda: self.lpt.add_participant(self.session, self.tour.id, 6_666_661),
+            lambda: self.lpt.remove_participant(self.session, self.tour.id,
+                                                self.users[2].telegram_id),
+            lambda: self.lpt.generate_schedule(self.session, self.tour.id),
+        ):
+            with self.assertRaises(self.lpt.LPTError):
+                action()
+        # And the rest of the bracket is still standing.
+        self.assertGreater(
+            self.session.query(TournamentMatch)
+            .filter_by(tournament_id=self.tour.id, status="scheduled").count(), 0)
+
     def test_changing_the_field_before_any_result_clears_the_schedule(self):
         from models import TournamentMatch
         from services import tournament_service as ts
@@ -913,6 +964,67 @@ class LptourCommandTests(LPTCase):
         replies = self._run(self.users[0], self.users[1].telegram_id)
         self.assertEqual(self.handed, [])
         self.assertIn("no fixture left", replies[0])
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Abandoning a launch must never wedge the chat
+# ══════════════════════════════════════════════════════════════════════
+
+class AbandonLaunchTests(unittest.TestCase):
+    """``_launch_match``'s "match cancelled" exits have to retire the draft.
+
+    By the time the launch runs, ``letsplay_toss_callback`` has set
+    ``match_launched`` and cancelled the setup timeout. A draft left behind is
+    therefore permanently wedged: ``_draft_is_stale`` refuses to reap a launched
+    draft, so ``_active_letsplay_in_chat`` keeps counting the ``toss`` draft as
+    live and blocks every later /letsplay and /lptour in that chat.
+    """
+
+    def setUp(self):
+        import handlers.letsplay as letsplay
+        self.letsplay = letsplay
+        self.sent = []
+
+        class _Bot:
+            async def send_message(inner, chat_id, text, **kwargs):
+                self.sent.append(text)
+
+        self.context = SimpleNamespace(bot=_Bot(), bot_data={}, job_queue=None)
+        self.draft = {
+            "invite_id": 7, "chat_id": -100_5, "status": "toss",
+            "match_launched": True,
+        }
+        self.context.bot_data[letsplay._dkey(7)] = self.draft
+
+    def test_the_draft_is_dropped_and_the_reason_is_sent(self):
+        asyncio.run(self.letsplay._abandon_launch(
+            self.context, self.draft, "⚠️ Tournament match cancelled — nope"))
+        self.assertNotIn(self.letsplay._dkey(7), self.context.bot_data)
+        self.assertEqual(self.sent, ["⚠️ Tournament match cancelled — nope"])
+
+    def test_the_chat_is_free_again_afterwards(self):
+        self.assertTrue(
+            self.letsplay._active_letsplay_in_chat(self.context, -100_5))
+        asyncio.run(self.letsplay._abandon_launch(self.context, self.draft, "x"))
+        self.assertFalse(
+            self.letsplay._active_letsplay_in_chat(self.context, -100_5))
+
+    def test_a_failed_notification_still_leaves_the_chat_free(self):
+        # The draft is dropped before the message goes out, precisely so that a
+        # send failure cannot be the thing that wedges the chat.
+        class _DeadBot:
+            async def send_message(inner, *a, **kw):
+                raise RuntimeError("Telegram is down")
+
+        self.context.bot = _DeadBot()
+        asyncio.run(self.letsplay._abandon_launch(self.context, self.draft, "x"))
+        self.assertNotIn(self.letsplay._dkey(7), self.context.bot_data)
+        self.assertFalse(
+            self.letsplay._active_letsplay_in_chat(self.context, -100_5))
+
+    def test_a_launched_draft_is_never_reaped_as_stale(self):
+        # The premise of all of the above: nothing else will clean this up.
+        self.assertFalse(self.letsplay._draft_is_stale(self.draft))
 
 
 if __name__ == "__main__":

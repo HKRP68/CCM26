@@ -431,6 +431,15 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if tour_ctx and tour_ctx.get("guest_user_id"):
             # /lptour already resolved (and validated) the opponent.
             guest_user = session.query(User).get(int(tour_ctx["guest_user_id"]))
+            if not guest_user:
+                # Their account went away between /lptour and here. Falling
+                # through would print the generic "challenge another player"
+                # help, which explains nothing about a tournament fixture.
+                await msg.reply_text(
+                    "⚠️ That opponent's account no longer exists, so this "
+                    "fixture can't be played. Ask an admin to update the "
+                    "tournament with /lptremove.")
+                return
         else:
             guest_user, reason = resolve_command_target(
                 session, update, context, "letsplay")
@@ -1486,6 +1495,29 @@ async def letsplay_toss_callback(update: Update, context: ContextTypes.DEFAULT_T
                              "for invite %s", invite_id)
 
 
+async def _abandon_launch(context, draft, message):
+    """Retire a draft whose launch can't go ahead, then say why.
+
+    Every "…match cancelled" exit from :func:`_launch_match` has to come through
+    here. By the time the launch runs, ``letsplay_toss_callback`` has already set
+    ``match_launched`` and cancelled the setup timeout — so a draft left behind is
+    permanently wedged: ``_draft_is_stale`` refuses to reap a launched draft, the
+    toss buttons answer "Match already started", and ``_active_letsplay_in_chat``
+    counts the ``toss`` draft as live, blocking every later /letsplay and /lptour
+    in that chat until the process restarts.
+
+    The draft is dropped *before* the message goes out, because sending it can
+    fail too, and a failed notification must not be what wedges the chat.
+    """
+    _drop_draft(context, draft.get("invite_id"))
+    try:
+        await context.bot.send_message(draft["chat_id"], message,
+                                      parse_mode="HTML")
+    except Exception:
+        logger.exception("letsplay: announcing an abandoned launch failed for "
+                         "invite %s", draft.get("invite_id"))
+
+
 def _release_lpt_fixture(draft):
     """Blocking: hand back the tournament fixture a failed launch reserved.
 
@@ -1526,7 +1558,8 @@ async def _launch_match(context, draft, decision, winner_side):
         host = session.query(User).get(host_info["user_id"])
         guest = session.query(User).get(guest_info["user_id"])
         if not host or not guest:
-            await context.bot.send_message(draft["chat_id"], "⚠️ A player no longer exists.")
+            await _abandon_launch(context, draft,
+                                  "⚠️ A player no longer exists — match cancelled.")
             return
 
         # Launch the EXACT XI each side confirmed (snapshot of roster ids taken
@@ -1550,17 +1583,18 @@ async def _launch_match(context, draft, decision, winner_side):
         for pairs, info in to_check:
             ok, _err = validate_xi(pairs)
             if not ok:
-                await context.bot.send_message(
-                    draft["chat_id"],
-                    f"⚠️ {html.escape(info['name'])}'s XI became invalid — match cancelled.")
+                await _abandon_launch(
+                    context, draft,
+                    f"⚠️ {html.escape(info['name'])}'s XI became invalid — "
+                    "match cancelled.")
                 return
 
         host_xi = _xi_to_engine(session, host_pairs[:11])
         if vs_bot:
             guest_xi = list(draft.get("bot_xi") or [])
             if len(guest_xi) < 11:
-                await context.bot.send_message(
-                    draft["chat_id"],
+                await _abandon_launch(
+                    context, draft,
                     "⚠️ The bot couldn't field an XI — match cancelled.")
                 return
         else:
@@ -1592,10 +1626,10 @@ async def _launch_match(context, draft, decision, winner_side):
                     session, tour, host_team.id, guest_team.id)
             except _lpt.LPTError as exc:
                 session.rollback()
-                await context.bot.send_message(
-                    draft["chat_id"],
-                    f"⚠️ Tournament match cancelled — {html.escape(str(exc))}",
-                    parse_mode="HTML")
+                await _abandon_launch(
+                    context, draft,
+                    f"⚠️ Tournament match cancelled — {html.escape(str(exc))}\n"
+                    "Nothing was recorded — start it again when it's playable.")
                 return
             tournament_id = tour.id
             draft["lpt_reserved_fixture_id"] = fixture_id

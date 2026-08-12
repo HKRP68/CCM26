@@ -15529,7 +15529,7 @@ def admin_tournaments_list():
         # Challenge League tournaments only — Lets Play tournaments have their own
         # page (they have no league and their teams are users, not squads).
         tournaments = (db.query(Tournament)
-                       .filter(tournament_service._kind_filter(
+                       .filter(tournament_service.kind_filter(
                            tournament_service.KIND_CHALLENGE))
                        .order_by(Tournament.is_active.desc(), Tournament.updated_at.desc())
                        .all())

@@ -53,6 +53,7 @@ NO_ACTIVE = ("❌ No Lets Play Tournament is running right now.\n"
 # ════════════════════════════════════════════════════════════════════
 
 async def _reply(update, text, **kwargs):
+    """Reply with this module's defaults: HTML, and no link previews."""
     msg = update.effective_message
     if msg is None:
         return None
@@ -112,6 +113,7 @@ def _target_tg_id(session, update, context, token):
 
 
 async def _require_admin(update):
+    """True if the sender is a bot admin; otherwise says so and returns False."""
     user = update.effective_user
     if not user or not is_admin(user.id):
         await _reply(update, NOT_ADMIN)
@@ -120,6 +122,7 @@ async def _require_admin(update):
 
 
 def _load_active(session):
+    """The live Lets Play tournament, or None."""
     return lpt.active_tournament(session)
 
 

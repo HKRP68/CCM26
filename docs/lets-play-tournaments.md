@@ -22,7 +22,7 @@ they operate on the same rows.
 
 ### From chat (bot admins only)
 
-```
+```text
 /lptnew Summer Smash | double | top4 | 10
 /lptadd 123456789
 /lptadd 987654321 | Mumbai Mavericks
@@ -33,7 +33,7 @@ they operate on the same rows.
 | Command | What it does |
 | --- | --- |
 | `/lptadmin` | The admin reference, printed in chat |
-| `/lptnew <name> [\| format [\| playoffs [\| max]]]` | Create and make active. `format` = `single` (default) / `double`. `playoffs` = `none` (default) / `top4` / `playoffs` / `knockout`. Stays in **draft** |
+| `/lptnew <name> [\| format [\| playoffs [\| max]]]` | Create it and make it the *selected* Lets Play tournament, while leaving its status at **draft** — `/lptstart` is the separate go-live step, and `/lptour` stays refused until then. `format` = `single` (default) / `double`. `playoffs` = `none` (default) / `top4` / `playoffs` / `knockout` |
 | `/lptadd <telegram_id> [\| Team Name]` | Enter a player. A reply or `@username` also works, but the id is the documented way — it works for someone who has never messaged the bot |
 | `/lptremove <telegram_id>` | Take a player out |
 | `/lptrename <telegram_id> \| New Name` | Rename their team |
@@ -105,11 +105,25 @@ On top of that:
 - **Removal is stricter than entry.** Any result at all blocks it, free-play or
   not: the matches that player has already played would be orphaned, and everyone
   who beat them would quietly lose those points.
+- **"A result" means any stage, not just the league.** The lock deliberately does
+  not use `league_progress`, which counts only the `league` and `group` stages: a
+  `pure_knockout` tournament has no league fixtures at all, so a league-only check
+  would read "no results" however far into the bracket it was — and then let the
+  field change under a half-played bracket, deleting the remaining rounds and
+  orphaning the `feeds_winner_to_id` links out of the completed ones.
 - **A fixture is claimed at the toss, not at the invitation.** The reservation
   (`scheduled → live`) happens in the same transaction as the `Match` row, so two
   chats can't play the same fixture and a denied or expired invite costs nothing.
   A forfeit, an abandoned launch or a `/clearmatches` hands it back
   (`live → scheduled`) so the pairing stays playable.
+- **A cancelled launch always retires its draft.** By the time `_launch_match`
+  runs, the toss callback has set `match_launched` and cancelled the setup
+  timeout — and `_draft_is_stale` refuses to reap a launched draft. So every
+  "…match cancelled" exit goes through `_abandon_launch`, which drops the draft
+  *before* sending the reason (a failed notification must not be what wedges the
+  chat). Otherwise the `toss` draft would keep `_active_letsplay_in_chat`
+  returning True and block every later `/letsplay` and `/lptour` in that chat
+  until the process restarted.
 - **A tournament fixture is never stat-farming.** `/letsplay` flags a lopsided
   pairing so no career stats or prize money are recorded. An admin decided who
   plays whom here, so a mismatch is just a hard draw — flagging it would strip a
@@ -160,7 +174,7 @@ table.
 
 ## Data model
 
-```
+```text
 Tournament
   kind              "challenge" | "letsplay"     (NULL reads as "challenge")
   league_id         NULL for letsplay
@@ -199,4 +213,4 @@ typed is never overwritten.
 | `handlers/letsplay.py` | Accepts a `tour_ctx`, re-checks it at launch, reserves the fixture and tags the match state |
 | `admin.py` | `/lptournaments` list + create; the `add_lp_team` / `rename_lp_team` / `sync_lp_names` actions on the shared Manage page |
 | `templates/admin_lp_tournaments.html` | The list + create page |
-| `tests/test_lp_tournament.py` | 66 tests over participants, kind isolation, recording, eligibility, reservation, brackets, rendering and `/lptour` |
+| `tests/test_lp_tournament.py` | 71 tests over participants, kind isolation, recording, eligibility, reservation, brackets, rendering, abandoned launches and `/lptour` |

@@ -1,12 +1,19 @@
-"""Challenge League Tournament service.
+"""Tournament service — shared by both competition families.
 
 Central logic shared by the admin panel and the bot:
   • lifecycle / single-active-tournament rule,
   • recording a completed tournament match (standings + per-player stats),
   • leaderboard / points-table queries for the dashboard.
 
-Only one Tournament may be ``is_active`` at a time; activating one deactivates
-all others. Completed / inactive tournaments retain all their rows untouched.
+``Tournament.kind`` picks the family: ``challenge`` for a Challenge League
+tournament (teams are ``ChallengeTeam`` squads, played with /cipl and friends)
+and ``letsplay`` for a Lets Play tournament (teams *are* Telegram users, played
+with /lptour — see ``services.lp_tournament_service``). Everything in this module
+except the lookup helpers is family-agnostic: it works off ``TournamentTeam.id``.
+
+One Tournament **per kind** may be ``is_active`` at a time, so the two families
+run independently; activating one deactivates the others of its own kind only.
+Completed / inactive tournaments retain all their rows untouched.
 """
 
 import json
@@ -33,8 +40,11 @@ KIND_CHALLENGE = "challenge"
 KIND_LETSPLAY = "letsplay"
 
 
-def _kind_filter(kind):
+def kind_filter(kind):
     """A SQLAlchemy predicate selecting tournaments of ``kind``.
+
+    Public because the admin site filters its own tournament lists by kind, and
+    the legacy-NULL rule below belongs in exactly one place.
 
     ``KIND_CHALLENGE`` also matches legacy rows whose ``kind`` is NULL — every
     tournament that existed before Lets Play tournaments was a Challenge League
@@ -153,7 +163,7 @@ def get_active_tournament(session, kind=KIND_CHALLENGE):
     """
     return (session.query(Tournament)
             .filter(Tournament.is_active == True)  # noqa: E712
-            .filter(_kind_filter(kind))
+            .filter(kind_filter(kind))
             .order_by(Tournament.activated_at.desc(), Tournament.id.desc())
             .first())
 
@@ -171,7 +181,7 @@ def activate_tournament(session, tournament_id):
     # Deactivate the other tournaments of this kind — the single-active rule.
     session.query(Tournament).filter(
         Tournament.id != tour.id, Tournament.is_active == True,  # noqa: E712
-        _kind_filter(tournament_kind(tour)),
+        kind_filter(tournament_kind(tour)),
     ).update({Tournament.is_active: False}, synchronize_session=False)
     tour.is_active = True
     if tour.status in ("draft", "scheduled"):

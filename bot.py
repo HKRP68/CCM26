@@ -341,7 +341,7 @@ GROUP_ONLY_COMMANDS = frozenset({
     # following — the same call already made for /cltour. They still RUN in DM;
     # this only keeps them out of the private slash menu, which is at Telegram's
     # 100-command ceiling.
-    "lptour", "lpt", "lptable", "lptfixtures", "lptstats",
+    "lptour", "lpt", "lptable", "lptfixtures", "lptteams", "lptstats",
 })
 
 # Commands that only make sense one-to-one with the bot: deep-link entry
@@ -439,6 +439,7 @@ BOT_MENU_COMMANDS = (
     ("lpt", "Lets Play Tournament — table, fixtures & teams 🏆"),
     ("lptable", "Lets Play Tournament points table"),
     ("lptfixtures", "Lets Play Tournament fixtures — including yours"),
+    ("lptteams", "Who is in the Lets Play Tournament"),
     ("lptstats", "Lets Play Tournament Top-10 leaderboards"),
     ("ciplbot", "Practice a league match against the bot (unranked)"),
     ("change", "Change your XI/batting order during match setup"),

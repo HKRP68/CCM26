@@ -105,6 +105,7 @@ def team_for_tg(session, tournament_id, user_tg_id):
 
 
 def is_participant(session, tournament_id, user_tg_id):
+    """True if this Telegram id is entered in the tournament."""
     return team_for_tg(session, tournament_id, user_tg_id) is not None
 
 
@@ -209,9 +210,18 @@ def activate(session, tournament_id, *, keep_draft=False):
 
 
 def _has_results(session, tournament_id):
-    """True once at least one league/group fixture has been completed."""
-    played, _total = tournament_service.league_progress(session, tournament_id)
-    return played > 0
+    """True once at least one fixture of *any* stage has been completed.
+
+    Deliberately not ``league_progress``, which only counts the ``league`` and
+    ``group`` stages: a ``pure_knockout`` tournament has no league fixtures at
+    all, so a league-only check would read "no results" however far through the
+    bracket it was — and then let the squad list change out from under a
+    half-played bracket, deleting the remaining rounds and orphaning the
+    ``feeds_winner_to_id`` links out of the completed ones.
+    """
+    return (session.query(TournamentMatch)
+            .filter_by(tournament_id=int(tournament_id), status="completed")
+            .first()) is not None
 
 
 def _structure_is_locked(session, tour):
@@ -515,10 +525,12 @@ _STATUS_LABEL = {
 
 
 def status_label(tour):
+    """A tournament's lifecycle status as a badge players can read."""
     return _STATUS_LABEL.get((tour.status or "").lower(), tour.status or "—")
 
 
 def _nrr_text(value):
+    """Net run rate, always signed — a leading '+' reads as deliberate."""
     return f"{value:+.3f}"
 
 

@@ -2422,7 +2422,13 @@ class UserTeamLastXI(Base):
 
 
 class Tournament(Base):
-    """A Challenge League Tournament. Only one may be ``is_active`` at a time."""
+    """A tournament of one competition family — see ``kind`` below.
+
+    ``kind='challenge'`` is a Challenge League Tournament, contested by
+    ``ChallengeTeam`` squads. ``kind='letsplay'`` is a Lets Play Tournament,
+    contested by Telegram users playing their own rosters. One tournament **per
+    kind** may be ``is_active`` at a time, so one of each can run side by side.
+    """
     __tablename__ = "tournaments"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
