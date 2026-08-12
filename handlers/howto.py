@@ -263,6 +263,55 @@ SECTIONS = {
             "You can't create a new tour while you're in another."
         ),
     },
+    "lptour": {
+        "emoji": "🏅",
+        # The tab label is the section key title-cased, which would read
+        # "Lptour" — and "LP Tour" would be mistaken for the /cmtours series
+        # sitting next to it. Spell this one out.
+        "tab": "LP Tournament",
+        "title": "Lets Play Tournament",
+        "body": (
+            "<b>🏅 Lets Play Tournament</b>\n\n"
+            "A full season played with <b>your own roster</b> — the Challenge "
+            "League tournament, but the teams are people. An admin enters the "
+            "field by Telegram id, the bot draws up a fixture list, and every "
+            "fixture is a normal 20-over Lets Play match with your cards and "
+            "traits. Results feed a points table with net run rate, per-player "
+            "leaderboards, and (if the admin set one) a playoff bracket.\n\n"
+            "<b>🎮 Playing your fixture</b>\n"
+            "<b>/lptour</b> — reply to your opponent's message (or "
+            "<code>/lptour @user</code>).\n"
+            "From there it is exactly <code>/letsplay</code>: they accept, the "
+            "host picks the pitch, both XIs are shown, you toss, and you play "
+            "over by over. The card is badged as an official fixture, and the "
+            "result goes straight into the table when it ends.\n\n"
+            "<b>📊 Following it</b>\n"
+            "<b>/lpt</b> — the tournament's front page, with buttons for the "
+            "table, the fixtures and the field\n"
+            "<b>/lptable</b> — full points table (P W L T · Pts · NRR)\n"
+            "<b>/lptfixtures</b> — the whole schedule, with <i>your</i> "
+            "remaining matches pulled out at the top\n"
+            "<b>/lptteams</b> — who is in it\n"
+            "<b>/lptstats</b> — Top-10 runs, wickets, sixes, average, economy "
+            "and more\n\n"
+            "<b>📋 The rules the bot enforces</b>\n"
+            "• Both of you must be entered in the tournament\n"
+            "• The tournament must be <b>running</b> — a paused, draft or "
+            "finished one starts nothing\n"
+            "• With a schedule generated, you may only play a pairing you still "
+            "have a fixture for, and only once (twice in a double round-robin). "
+            "The fixture is claimed at the toss, so a denied invite costs you "
+            "nothing\n"
+            "• Both sides need a legal Playing XI before the invite is even "
+            "sent — fix yours with /autobuild or /swap\n"
+            "• A tournament fixture is never treated as stat-farming, so a "
+            "lopsided draw still pays out and still counts\n\n"
+            "<b>🤝 Not entered?</b>\n"
+            "Ask an admin to add you. Everything else about the match — coins, "
+            "gems, career stats, quests, streaks — works exactly as it does in "
+            "an ordinary /letsplay."
+        ),
+    },
 }
 
 
@@ -270,7 +319,7 @@ def _build_keyboard(active_section, owner_tg):
     """Build the section-tab keyboard."""
     rows = [[]]
     for key, data in SECTIONS.items():
-        label = f"{data['emoji']} {key.title()}"
+        label = f"{data['emoji']} {data.get('tab') or key.title()}"
         if key == active_section:
             label = "• " + label
         if len(rows[-1]) >= 3:

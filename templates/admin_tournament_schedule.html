@@ -3,13 +3,17 @@
 {% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_tournament.css') }}">{% endblock %}
 
 {% block content %}
+{# Follow the tournament's kind back to its own list page: a Lets Play
+   tournament is not in the Challenge League list. #}
+{% set list_ep = 'admin_lp_tournaments_list' if t.kind == 'letsplay' else 'admin_tournaments_list' %}
+{% set list_label = 'Lets Play Tournaments' if t.kind == 'letsplay' else 'Tournaments' %}
 {% from "_tournament_macros.html" import team_badge, result_form with context %}
 {% set is_ko_only = (t.knockout_type == 'pure_knockout') %}
 {% set is_series = (t.format == 'Custom Series') %}
 
 <div class="tour-page">
   <div class="breadcrumbs">
-    <a href="{{ url_for('admin_tournaments_list') }}">Tournaments</a><span>›</span>
+    <a href="{{ url_for(list_ep) }}">{{ list_label }}</a><span>›</span>
     <a href="{{ url_for('admin_tournament_dashboard', tournament_id=t.id) }}">{{ t.name }}</a><span>›</span><span>Schedule</span>
   </div>
 

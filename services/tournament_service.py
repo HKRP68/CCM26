@@ -25,6 +25,31 @@ logger = logging.getLogger(__name__)
 PLAYABLE_STATUS = "active"
 TERMINAL_STATUSES = ("completed", "cancelled")
 
+# Competition families (``Tournament.kind``). One tournament of each kind may be
+# active at a time, so a Challenge League tournament and a Lets Play tournament
+# can run side by side. Rows written before the column existed are NULL and read
+# as ``KIND_CHALLENGE``.
+KIND_CHALLENGE = "challenge"
+KIND_LETSPLAY = "letsplay"
+
+
+def _kind_filter(kind):
+    """A SQLAlchemy predicate selecting tournaments of ``kind``.
+
+    ``KIND_CHALLENGE`` also matches legacy rows whose ``kind`` is NULL — every
+    tournament that existed before Lets Play tournaments was a Challenge League
+    one, and they must keep behaving that way without a backfill.
+    """
+    from sqlalchemy import or_
+    if kind == KIND_CHALLENGE:
+        return or_(Tournament.kind == KIND_CHALLENGE, Tournament.kind.is_(None))
+    return Tournament.kind == kind
+
+
+def tournament_kind(tour):
+    """The effective kind of a tournament row (NULL reads as "challenge")."""
+    return (getattr(tour, "kind", None) or KIND_CHALLENGE)
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Tournament-command access control
@@ -119,22 +144,34 @@ def is_tournament_command_allowed(telegram_id, cfg=None):
 # Lifecycle
 # ──────────────────────────────────────────────────────────────────────
 
-def get_active_tournament(session):
-    """Return the single currently-active tournament, or None."""
+def get_active_tournament(session, kind=KIND_CHALLENGE):
+    """Return the currently-active tournament of ``kind``, or None.
+
+    ``kind`` defaults to ``KIND_CHALLENGE`` so every existing caller (the
+    Challenge League tournament command, the bot's stats commands) keeps seeing
+    exactly the tournament it did before Lets Play tournaments existed.
+    """
     return (session.query(Tournament)
             .filter(Tournament.is_active == True)  # noqa: E712
+            .filter(_kind_filter(kind))
             .order_by(Tournament.activated_at.desc(), Tournament.id.desc())
             .first())
 
 
 def activate_tournament(session, tournament_id):
-    """Make ``tournament_id`` the one active tournament (deactivating others)."""
+    """Make ``tournament_id`` the active tournament of its kind.
+
+    Only tournaments of the *same* kind are deactivated: the single-active rule
+    is per competition family, so activating a Lets Play tournament never takes
+    a running Challenge League tournament off the air (or vice versa).
+    """
     tour = session.query(Tournament).get(int(tournament_id))
     if not tour:
         return None
-    # Deactivate every other tournament — enforces the single-active rule.
+    # Deactivate the other tournaments of this kind — the single-active rule.
     session.query(Tournament).filter(
-        Tournament.id != tour.id, Tournament.is_active == True  # noqa: E712
+        Tournament.id != tour.id, Tournament.is_active == True,  # noqa: E712
+        _kind_filter(tournament_kind(tour)),
     ).update({Tournament.is_active: False}, synchronize_session=False)
     tour.is_active = True
     if tour.status in ("draft", "scheduled"):
@@ -229,6 +266,24 @@ def participating_team_names(session, tournament_id):
     """Return the set of participating ChallengeTeam names for a tournament."""
     rows = session.query(TournamentTeam).filter_by(tournament_id=int(tournament_id)).all()
     return {(r.name or "").strip() for r in rows if (r.name or "").strip()}
+
+
+def tournament_team_for_user_tg(session, tournament_id, user_tg_id):
+    """The Lets Play participating row for a Telegram id, or None."""
+    if not user_tg_id:
+        return None
+    return (session.query(TournamentTeam)
+            .filter_by(tournament_id=int(tournament_id),
+                       user_tg_id=int(user_tg_id))
+            .first())
+
+
+def participating_user_tg_ids(session, tournament_id):
+    """Return the set of Telegram ids taking part in a Lets Play tournament."""
+    rows = (session.query(TournamentTeam)
+            .filter_by(tournament_id=int(tournament_id))
+            .filter(TournamentTeam.user_tg_id.isnot(None)).all())
+    return {int(r.user_tg_id) for r in rows}
 
 
 def _find_open_fixture(session, tournament_id, team1_id, team2_id):
@@ -686,6 +741,11 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
         return None
 
     team_by_user = {int(k): v for k, v in (state.get("tournament_team_by_user") or {}).items() if v}
+    # Lets Play matches carry the participating row directly ({db user id →
+    # TournamentTeam.id}) because a Lets Play team *is* a user — there is no
+    # ChallengeTeam to look it up through. When present it wins outright.
+    tteam_by_user = {int(k): int(v) for k, v
+                     in (state.get("tournament_tteam_by_user") or {}).items() if v}
 
     inn1_bat_uid = state.get("inn1_bat_team_id")
     inn2_bat_uid = state.get("bat_team_id")
@@ -706,8 +766,17 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
         win_uid = int(inn1_bat_uid) if inn1_runs > inn2_runs else int(inn2_bat_uid)
 
     def tteam(uid):
-        return tournament_team_for_challenge_team(session, tid, team_by_user.get(int(uid))) \
-            if uid is not None else None
+        if uid is None:
+            return None
+        if tteam_by_user:
+            row_id = tteam_by_user.get(int(uid))
+            if not row_id:
+                return None
+            tt = session.query(TournamentTeam).get(row_id)
+            # Guard against a state that outlived its tournament (or points at
+            # another one): a foreign row must never be credited here.
+            return tt if tt and tt.tournament_id == tid else None
+        return tournament_team_for_challenge_team(session, tid, team_by_user.get(int(uid)))
 
     t_inn1 = tteam(inn1_bat_uid)       # team that batted first
     t_inn2 = tteam(inn2_bat_uid)       # team that batted second

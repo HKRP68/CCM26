@@ -20,6 +20,12 @@ Flow:
       both XIs are shown, and a single Start Toss button appears
     → toss (guest calls heads/tails, winner elects bat/bowl)
     → over-by-over match in the chat (shared with /cipl), traits active.
+
+The same flow also plays official **Lets Play Tournament** fixtures: /lptour
+(handlers/lp_tournament.py) checks the tournament rules, then hands a
+``tour_ctx`` to :func:`letsplay_handler`. From the invitation onward the match is
+identical — the only differences are the tournament badge on the cards and the
+result being recorded against the tournament when it ends.
 """
 
 import asyncio
@@ -385,7 +391,16 @@ def _xi_preview(pairs):
 # /letsplay — start an invitation
 # ════════════════════════════════════════════════════════════════════
 
-async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                           tour_ctx=None):
+    """/letsplay — invite another player to a 20-over match with your own roster.
+
+    ``tour_ctx`` is set only when /lptour re-enters here to play an official Lets
+    Play Tournament fixture. It carries ``tournament_id``, ``tournament_name``
+    and the two participating ``TournamentTeam`` ids (already validated by
+    ``services.lp_tournament_service.check_pair``), plus the resolved guest so
+    the target isn't looked up twice. Everything else about the flow is the same.
+    """
     msg = update.effective_message
     tg = update.effective_user
     chat = update.effective_chat
@@ -413,7 +428,12 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                  disable_web_page_preview=True)
             return
 
-        guest_user, reason = resolve_command_target(session, update, context, "letsplay")
+        if tour_ctx and tour_ctx.get("guest_user_id"):
+            # /lptour already resolved (and validated) the opponent.
+            guest_user = session.query(User).get(int(tour_ctx["guest_user_id"]))
+        else:
+            guest_user, reason = resolve_command_target(
+                session, update, context, "letsplay")
         if not guest_user:
             await msg.reply_text(
                 "🏏 <b>Lets Play</b> — challenge another player with your own roster.\n\n"
@@ -508,23 +528,34 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "pitch_type": None,
         "host_confirmed": False, "guest_confirmed": False,
         "created_at": datetime.utcnow().isoformat(),
+        # Official Lets Play Tournament fixture, or None for a friendly.
+        "lpt": dict(tour_ctx) if tour_ctx else None,
     }
     context.bot_data[_dkey(invite_id)] = draft
 
+    lpt = draft["lpt"]
+    heading = ("🏆 <b>LETS PLAY TOURNAMENT — Fixture Invitation</b>"
+               if lpt else "🏏 <b>LETS PLAY — Match Invitation</b>")
     text = (
-        "🏏 <b>LETS PLAY — Match Invitation</b>\n"
+        f"{heading}\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 <b>Host:</b> {_m(host_info)}\n"
+        + (f"🏆 <b>Tournament:</b> {html.escape(str(lpt.get('tournament_name') or ''))}\n"
+           f"🗓️ <b>Fixture:</b> {html.escape(str(lpt.get('host_team_name') or ''))} "
+           f"vs {html.escape(str(lpt.get('guest_team_name') or ''))}\n"
+           "━━━━━━━━━━━━━━━━━━━\n" if lpt else "")
+        + f"👤 <b>Host:</b> {_m(host_info)}\n"
         f"🎯 <b>Guest:</b> {_m(guest_info)}\n"
         "━━━━━━━━━━━━━━━━━━━\n"
-        "🎮 <b>Match type:</b> Lets Play\n"
-        "⏱️ <b>Format:</b> 20 Overs\n"
+        + ("🎮 <b>Match type:</b> Tournament (official)\n" if lpt
+           else "🎮 <b>Match type:</b> Lets Play\n")
+        + "⏱️ <b>Format:</b> 20 Overs\n"
         "📋 <b>Roster:</b> Own Roster\n"
         + (f"📊 <b>Host XI:</b> {host_preview['ovr']} OVR "
            f"(avg {host_preview['avg']:.1f})\n"
            f"⭐ {host_preview['stars']}\n" if host_preview else "")
         + "━━━━━━━━━━━━━━━━━━━\n"
-        f"{_m(guest_info)}, do you accept? <i>(30s)</i>")
+        + ("⚠️ This result counts towards the points table.\n" if lpt else "")
+        + f"{_m(guest_info)}, do you accept? <i>(30s)</i>")
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Accept", callback_data=f"lp_accept_{invite_id}"),
         InlineKeyboardButton("❌ Deny", callback_data=f"lp_deny_{invite_id}"),
@@ -1424,6 +1455,10 @@ async def letsplay_toss_callback(update: Update, context: ContextTypes.DEFAULT_T
             # future /letsplay in this chat. Cancel it (the /cipl path does the
             # same) so the players can simply start again.
             await asyncio.to_thread(_cancel_orphan_match_row, mid)
+            # The tournament fixture this launch claimed is now attached to a
+            # cancelled match, so hand it back — otherwise that pairing could
+            # never be played again.
+            await asyncio.to_thread(_release_lpt_fixture, draft)
             await context.bot.send_message(
                 draft["chat_id"],
                 "⚠️ The match didn't start — nothing was lost. "
@@ -1449,6 +1484,28 @@ async def letsplay_toss_callback(update: Update, context: ContextTypes.DEFAULT_T
         except Exception:
             logger.exception("letsplay toss re-prompt after failed launch failed "
                              "for invite %s", invite_id)
+
+
+def _release_lpt_fixture(draft):
+    """Blocking: hand back the tournament fixture a failed launch reserved.
+
+    Mirrors ``handlers.cipl_play._release_launch_reservations``. No-ops for a
+    friendly match, and for a fixture that is no longer ``live``.
+    """
+    fixture_id = (draft or {}).pop("lpt_reserved_fixture_id", None)
+    if not fixture_id:
+        return
+    session = get_session()
+    try:
+        from services import league_schedule_service
+        league_schedule_service.release_fixture(session, fixture_id)
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("releasing Lets Play tournament fixture %s failed",
+                         fixture_id)
+    finally:
+        session.close()
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1516,6 +1573,34 @@ async def _launch_match(context, draft, decision, winner_side):
         bat_team_name = bat_info["name"]
         bowl_team_name = bowl_info["name"]
 
+        # ── Lets Play Tournament fixture ──
+        # Re-check eligibility at launch (the tournament may have been paused, or
+        # the pairing's fixture taken by another chat, while these two were
+        # picking a pitch) and claim the fixture in the same transaction as the
+        # Match row, so the reservation and the match can never diverge.
+        lpt = draft.get("lpt") or None
+        tournament_id = None
+        if lpt and not vs_bot:
+            from services import lp_tournament_service as _lpt
+            tour = _lpt.get_tournament(session, lpt["tournament_id"])
+            try:
+                if tour is None:
+                    raise _lpt.LPTError("That tournament no longer exists.")
+                host_team, guest_team = _lpt.check_pair(
+                    session, tour, host_info["tg_id"], guest_info["tg_id"])
+                fixture_id = _lpt.reserve_pair_fixture(
+                    session, tour, host_team.id, guest_team.id)
+            except _lpt.LPTError as exc:
+                session.rollback()
+                await context.bot.send_message(
+                    draft["chat_id"],
+                    f"⚠️ Tournament match cancelled — {html.escape(str(exc))}",
+                    parse_mode="HTML")
+                return
+            tournament_id = tour.id
+            draft["lpt_reserved_fixture_id"] = fixture_id
+            draft["lpt_team_ids"] = {host.id: host_team.id, guest.id: guest_team.id}
+
         settings = random_match_settings()
         pitch_type = draft.get("pitch_type") or settings["pitch_type"]
         match = Match(
@@ -1529,6 +1614,7 @@ async def _launch_match(context, draft, decision, winner_side):
             umpire1=settings["umpire1"], umpire2=settings["umpire2"],
             chat_id=draft["chat_id"], created_at=datetime.utcnow(),
             expires_at=datetime.utcnow() + timedelta(seconds=MATCH_EXPIRE),
+            tournament_id=tournament_id,
         )
         session.add(match)
         session.commit()
@@ -1561,6 +1647,17 @@ async def _launch_match(context, draft, decision, winner_side):
         str(bowl_info["tg_id"]): bowl_team_name,
     }
     state["is_letsplay"] = True
+    # Tournament identity, read by the shared completion path in
+    # handlers/cipl_play.py (and by the Super Over decider) to record the result.
+    # ``tournament_tteam_by_user`` maps each side's DB user id straight to its
+    # participating row, because a Lets Play team *is* a user — there is no
+    # ChallengeTeam to resolve it through.
+    if lpt and not draft.get("vs_bot"):
+        state["tournament_id"] = tournament_id
+        state["tournament_tteam_by_user"] = {
+            int(k): int(v) for k, v in (draft.get("lpt_team_ids") or {}).items()}
+        state["reserved_fixture_id"] = draft.get("lpt_reserved_fixture_id")
+        state["lpt_name"] = lpt.get("tournament_name")
     from services.player_stats_service import team_overall, is_stat_farming_mismatch
     state["bat_team_ovr"] = team_overall(bat_xi)
     state["bowl_team_ovr"] = team_overall(bowl_xi)
@@ -1572,10 +1669,14 @@ async def _launch_match(context, draft, decision, winner_side):
         mark_bot_match(state, guest_info["user_id"],
                        difficulty=level_for_match(context.bot_data,
                                                   host_info["user_id"]))
-    elif is_stat_farming_mismatch(bat_xi, bowl_xi):
+    elif not lpt and is_stat_farming_mismatch(bat_xi, bowl_xi):
         # Fair-match stat gate: if the two XIs are too far apart in Team Overall,
         # flag the match so no career stats are recorded (anti stat-farming). The
         # players were already warned on the Playing-XI card before the toss.
+        #
+        # An official tournament fixture is exempt: an admin decided who plays
+        # whom, so a lopsided pairing is just a hard draw, and flagging it would
+        # silently strip career stats and prize money from a real result.
         state["stats_disabled"] = True
     # Rating/trait-aware death-overs resolution (see cipl_match._make_clutch_hook):
     # the last over of a live LetsPlay chase is decided by ratings + clutch traits,
@@ -1601,8 +1702,15 @@ async def _announce(context, state, pitch_type):
     stadium = html.escape(str(state.get("stadium") or "Neutral Venue"))
     pitch = html.escape(str(pitch_type or "Hard"))
     rule = "━" * 15
-    title = "🤖 <b>LETS PLAY vs BOT</b> 🏏" if state.get("is_bot_match") \
-        else "🏏 <b>LETS PLAY</b> 🏏"
+    if state.get("is_bot_match"):
+        title = "🤖 <b>LETS PLAY vs BOT</b> 🏏"
+    elif state.get("tournament_id"):
+        title = "🏆 <b>LETS PLAY TOURNAMENT</b> 🏏"
+    else:
+        title = "🏏 <b>LETS PLAY</b> 🏏"
+    tour_line = ""
+    if state.get("tournament_id") and state.get("lpt_name"):
+        tour_line = f"🏆 <b>{html.escape(str(state['lpt_name']))}</b> — official fixture\n"
     # The AI captain draws a style per match (see services/bot_captain.py) —
     # naming it here shows the player that the bot won't play this one the way
     # it played the last one.
@@ -1632,7 +1740,8 @@ async def _announce(context, state, pitch_type):
     text = (
         f"{title}\n"
         f"{rule}\n"
-        f"⚔️ <b>{bat}</b>  🆚  <b>{bowl}</b>\n"
+        + tour_line
+        + f"⚔️ <b>{bat}</b>  🆚  <b>{bowl}</b>\n"
         f"🏟️ {stadium} • 20 overs\n"
         f"🌱 <b>Pitch:</b> {pitch}\n"
         f"🏏 {bat} batting first\n"
