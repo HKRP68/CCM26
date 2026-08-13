@@ -4,13 +4,18 @@ from config import get_buy_value, get_sell_value
 from services.flags import get_flag
 
 
-def format_player_card(player, acquired_date=None, value_mode="both") -> str:
+def format_player_card(player, acquired_date=None, value_mode="both", *,
+                       session=None, offer=None) -> str:
     """Return the standard player info text block.
 
     ``value_mode`` selects which coin value(s) to show:
       • "buy"  → Buy Value only   (used by /buypl)
       • "sell" → Sell Value only  (used by /playerinfo, /myroster)
       • "both" → Buy + Sell       (default — /claim, /gspin, /daily)
+
+    In "buy" mode the card also advertises the Elite Signing Bonus while that
+    offer is running. Pass the ``session`` you already hold (or an ``offer``
+    you already read) so checking costs one query instead of a new connection.
 
     The Bio block is wrapped in an expandable Telegram quote and each value /
     acquired line sits in its own quote, matching the card layout spec.
@@ -41,10 +46,11 @@ def format_player_card(player, acquired_date=None, value_mode="both") -> str:
     value_lines = []
     if value_mode in ("buy", "both"):
         value_lines.append(f"<blockquote>💰 Buy Value: {buy_val:,} 🪙</blockquote>")
-        # Elite cards pay a gem rebate on purchase — say so before they buy,
-        # not just in the receipt.
+        # Elite cards pay a gem rebate on purchase while the offer is running —
+        # say so before they buy, not just in the receipt. Empty once it closes.
         from services.buy_bonus import teaser_line
-        teaser = teaser_line(player.rating, buy_val, prefix="")
+        teaser = teaser_line(player.rating, buy_val, prefix="",
+                             offer=offer, session=session)
         if teaser:
             value_lines.append(f"<blockquote>{teaser}</blockquote>")
     if value_mode in ("sell", "both"):

@@ -394,10 +394,17 @@ def get_sell_value(rating: int) -> int:
 
 
 # ── Gem bonus on elite signings ─────────────────────────────────────
-# Buying a card rated above 95 pays a small gem rebate on top of the card:
-# 0.1% of the coins actually spent, e.g. a 97 OVR at 4,450,000 🪙 → 4,450 💎.
-# Basing it on the coins PAID rather than the list price means a discounted
-# buy (membership perk, admin sale) can't mint more gems than it cost.
+# Buying a card rated at or above the threshold pays a small gem rebate on top
+# of the card: 0.1% of the coins actually spent, e.g. a 97 OVR at 4,450,000 🪙
+# → 4,450 💎. Basing it on the coins PAID rather than the list price means a
+# discounted buy (membership perk, admin sale) can't mint more gems than it
+# cost.
+#
+# These two are the FALLBACK rate only. The live offer is admin-controlled and
+# time-limited (``game_config.gem_bonus_*``); ``services.buy_bonus`` reads it
+# and passes the current values in. Nothing in the game should reach past that
+# service to these constants — they are what applies when the config can't be
+# read at all.
 GEM_BONUS_MIN_RATING = 96          # "above 95"
 GEM_BONUS_BPS = 10                 # basis points — 10 bps = 0.1%
 
@@ -421,8 +428,15 @@ def market_price_floor(rating: int) -> int:
     return get_sell_value(rating) + MARKET_PRICE_FLOOR_MARGIN
 
 
-def get_buy_gem_bonus(rating: int, price_paid: int = None) -> int:
+def get_buy_gem_bonus(rating: int, price_paid: int = None,
+                      min_rating: int = None, bps: int = None) -> int:
     """Gems awarded for buying this card, or 0 if it isn't elite enough.
+
+    Pure arithmetic — it answers "what would this rate pay?", not "is the offer
+    running?". Whether the bonus applies at all is
+    :func:`services.buy_bonus.current_offer`'s job, and it passes the live
+    ``min_rating`` and ``bps`` in; the module constants are only the fallback
+    for when the config can't be read.
 
     ``price_paid`` defaults to the card's list buy value; pass the real charge
     when the buyer paid something else (market discount, membership tier).
@@ -431,11 +445,13 @@ def get_buy_gem_bonus(rating: int, price_paid: int = None) -> int:
         rating = int(rating)
     except (TypeError, ValueError):
         return 0
-    if rating < GEM_BONUS_MIN_RATING:
+    min_rating = GEM_BONUS_MIN_RATING if min_rating is None else int(min_rating)
+    bps = GEM_BONUS_BPS if bps is None else int(bps)
+    if rating < min_rating or bps <= 0:
         return 0
     if price_paid is None:
         price_paid = get_buy_value(rating)
-    return max(0, int(price_paid)) * GEM_BONUS_BPS // 10_000
+    return max(0, int(price_paid)) * bps // 10_000
 
 def get_tier_colour(rating: int) -> tuple:
     if rating >= 95:   return ("LEGENDARY", "#e6ac00", "#fff8e1")

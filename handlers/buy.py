@@ -189,7 +189,8 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
     page_label = f"<b>Page {current_idx + 1}/{n}</b>" if n > 1 else ""
     if page_label and not restricted:
         caption_lines.append(page_label)
-    caption_lines.append(format_player_card(player, value_mode="buy"))
+    caption_lines.append(
+        format_player_card(player, value_mode="buy", session=session))
     if n > 1 and not restricted:
         version_label = _format_version_label(player)
         caption_lines.append(f"\n🎴 <i>Version: <b>{version_label}</b></i>")
@@ -524,10 +525,13 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
                      coins_change=-buy_val,
                      player_name=player.name, player_rating=player.rating)
 
-        # Elite signing rebate — gems back on anything rated above 95.
-        from services.buy_bonus import award_buy_gem_bonus, bonus_line
+        # Elite signing rebate, while that offer is running. Read once so the
+        # receipt's countdown is the same offer the gems were paid from.
+        from services.buy_bonus import (
+            award_buy_gem_bonus, bonus_line, current_offer)
+        offer = current_offer(session)
         gem_bonus = award_buy_gem_bonus(session, user, player, buy_val,
-                                        source="buypl")
+                                        source="buypl", offer=offer)
 
         # Record for /cmuundo (60-second window)
         try:
@@ -547,7 +551,7 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             f"✅ <b>PURCHASED!</b>\n\n"
             f"📛 {player.name} - {player.rating} OVR\n"
             f"💰 Paid: {buy_val:,} 🪙"
-            f"{bonus_line(gem_bonus)}\n"
+            f"{bonus_line(gem_bonus, offer=offer)}\n"
             f"💳 Balance: {user.total_coins:,} 🪙"
             f"{f' · {user.total_gems:,} 💎' if gem_bonus else ''}\n"
             f"📊 Roster: {user.roster_count}/{MAX_ROSTER}\n\n"
