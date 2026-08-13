@@ -601,12 +601,17 @@ def _save_scenario_engine(state, eng):
 # ════════════════════════════════════════════════════════════════════
 
 def _new_bat_stat():
-    return {"runs": 0, "balls": 0, "fours": 0, "sixes": 0,
+    return {"runs": 0, "balls": 0, "fours": 0, "sixes": 0, "dots": 0,
             "out": False, "how_out": "", "bowled_by": ""}
 
 
 def _new_bowl_stat():
-    return {"balls": 0, "runs": 0, "wickets": 0, "overs_done": 0,
+    # ``dots`` is read by the bowling scorecard and by the dot-ball quests
+    # (services.quest_service, 'dot_balls' / 'career_dot_balls'). The in-chat
+    # and Mini App ball loops have always kept it; this one did not, so a
+    # /letsplay or Challenge League match left those quests on 0 no matter how
+    # many dots were bowled.
+    return {"balls": 0, "runs": 0, "wickets": 0, "overs_done": 0, "dots": 0,
             "this_over_balls": 0, "this_over_runs": 0, "maidens": 0,
             # Wickets this bowler took in their own most recent over — the
             # rhythm half of the approach momentum rule.
@@ -1904,6 +1909,13 @@ def simulate_over(state):
                 bws["this_over_runs"] += runs
                 state["partnership_runs"] = partnership_before + runs
             state["total_wickets"] += 1
+            # A wicket off a no-run delivery is a dot ball for both the bowler
+            # and the dismissed batter — the same rule handlers.match and
+            # services.match_webapp_service apply, so a dot-ball quest counts
+            # the same wherever the match was played.
+            if not runs:
+                bws["dots"] = bws.get("dots", 0) + 1
+                bs["dots"] = bs.get("dots", 0) + 1
             bs["out"] = True
             bs["how_out"] = wtype
             bs["bowled_by"] = bowler["name"]
@@ -1968,6 +1980,10 @@ def simulate_over(state):
                 streaks[srid] = {"boundaries": streak.get("boundaries", 0) + 1}
             else:
                 streaks[srid] = {"boundaries": 0}
+            if not runs:
+                # Genuine dot ball off the bat — credit batter and bowler.
+                bs["dots"] = bs.get("dots", 0) + 1
+                bws["dots"] = bws.get("dots", 0) + 1
             over_timeline.append(str(runs))
             over_events.append({"sym": str(runs), "text": _run_text(runs, striker_name, bowler["name"])})
             # Maiden = full over/set of dots with no runs off it yet.

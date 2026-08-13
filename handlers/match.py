@@ -5911,6 +5911,14 @@ async def _end_innings(ctx, mid):
         s["inn1_wides"] = s.get("wides", 0)
         s["inn1_noballs"] = s.get("noballs", 0)
         s["inn1_legbyes"] = s.get("legbyes", 0)
+        # Per-over runs, archived exactly like every other innings-1 figure —
+        # match_engine.transition_to_second_innings and cipl_match do the same.
+        # Without it the chase kept appending to innings 1's list, so the
+        # Manhattan chart drew one long innings and the powerplay / death-over
+        # quests (services.quest_service._phase_runs) read the wrong overs:
+        # nothing at all for the side batting first, and the *opponent's* first
+        # six overs for the side batting second. The list is reset below.
+        s["inn1_over_runs"] = list(s.get("over_runs") or [])
 
         # Save 1st innings stats to DB immediately (in case 2nd innings abandoned)
         await _save_match_stats(s)
@@ -5943,6 +5951,7 @@ async def _end_innings(ctx, mid):
             "maidens": 0, "this_over_runs": 0,
         } for p in s["bowl_xi"]}
         s["fow"] = []  # reset for 2nd innings
+        s["over_runs"] = []  # the chase starts its own Manhattan/phase list
         # The innings-1 bowler now belongs to the batting side, so he must not
         # stay on as current_bowler. Park a plausible member of the new bowling
         # XI there: the real bowler is chosen below, and this keeps any stray

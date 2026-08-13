@@ -15,10 +15,29 @@ from services.button_timeout import schedule_button_timeout
 logger = logging.getLogger(__name__)
 
 
+BAR_SEGMENTS = 10
+
+
 def _progress_bar(percent):
-    """Return a Unicode progress bar for the given percent (0-100)."""
-    filled = int(percent / 10)
-    return "█" * filled + "░" * (10 - filled)
+    """Return a 10-segment Unicode bar for the given percent (0-100).
+
+    A part-filled segment rounds *down*, so the bar is only solid at 100% — but
+    any progress at all lights at least one segment. Truncating alone drew a
+    completely empty bar for everything under 10%, which made "3/30 dot balls
+    today" look identical to a quest that had never counted a single event: the
+    bar reads as broken precisely when a player has just started one.
+
+    Defensive about its input because ``percent`` comes off a quest row whose
+    target an admin can edit at any time.
+    """
+    try:
+        pct = max(0, min(100, int(percent)))
+    except (TypeError, ValueError):
+        pct = 0
+    filled = pct * BAR_SEGMENTS // 100
+    if pct > 0 and filled == 0:
+        filled = 1
+    return "█" * filled + "░" * (BAR_SEGMENTS - filled)
 
 
 QUESTS_PER_PAGE = 8
