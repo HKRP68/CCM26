@@ -94,6 +94,14 @@ DEFAULTS = {
     "career_custom_names_open": True,
     "career_custom_names_need_approval": True,
     "career_name_blocklist": None,
+    # Elite Signing Bonus — a limited-time offer, not a permanent rule. These
+    # defaults reproduce what shipped hard-coded (on, 96+, 0.1%, no end date);
+    # read them through services/buy_bonus.py, which applies the window.
+    "gem_bonus_enabled": True,
+    "gem_bonus_min_rating": 96,
+    "gem_bonus_bps": 10,
+    "gem_bonus_starts_at": None,
+    "gem_bonus_ends_at": None,
 }
 
 
@@ -196,15 +204,22 @@ def _refresh(session=None):
             session.close()
 
 
-def save_config(session, updates, updated_by=None):
-    """Update config values. updates is a dict of column→value pairs."""
+def save_config(session, updates, updated_by=None, allow_null=()):
+    """Update config values. updates is a dict of column→value pairs.
+
+    A ``None`` value normally means "leave this one alone", so a caller can
+    send a partial form without wiping the fields it didn't ask about. Keys
+    named in ``allow_null`` are the exception: for those, ``None`` is a real
+    value and clears the column. Nullable settings need it — an emptied date
+    field has to be able to actually remove the date.
+    """
     row = session.query(GameConfig).first()
     if not row:
         row = GameConfig()
         session.add(row)
         session.flush()
     for k, v in updates.items():
-        if k in DEFAULTS and v is not None:
+        if k in DEFAULTS and (v is not None or k in allow_null):
             setattr(row, k, v)
     row.updated_at = datetime.utcnow()
     if updated_by:

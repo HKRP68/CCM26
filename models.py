@@ -1285,6 +1285,18 @@ class GameConfig(Base):
     # against the name with everything but letters and digits stripped out, so
     # spacing and punctuation can't be used to slip one through.
     career_name_blocklist = Column(Text, nullable=True)
+    # ── Elite Signing Bonus (limited-time offer) ──
+    # Buying a card rated at or above gem_bonus_min_rating pays gem_bonus_bps
+    # basis points of the coins spent back as gems (10 bps = 0.1%). It is an
+    # offer, not a permanent rule: gem_bonus_enabled is the admin's open/close
+    # switch, and the optional window auto-opens and auto-closes it. A null
+    # start means "already running", a null end means "until I close it".
+    # Reading is centralised in services/buy_bonus.py — never read these raw.
+    gem_bonus_enabled = Column(Boolean, default=True, nullable=False)
+    gem_bonus_min_rating = Column(Integer, default=96, nullable=False)
+    gem_bonus_bps = Column(Integer, default=10, nullable=False)
+    gem_bonus_starts_at = Column(DateTime, nullable=True)
+    gem_bonus_ends_at = Column(DateTime, nullable=True)
     # Updated tracking (existing)
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String(80), nullable=True)

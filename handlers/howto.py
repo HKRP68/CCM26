@@ -13,8 +13,7 @@ from telegram.ext import ContextTypes
 
 from config import (
     trait_sell_value, trait_trade_fee, TRAIT_MAX_LEVEL,
-    GEM_BONUS_BPS, GEM_BONUS_MIN_RATING, SELL_VALUE_PCT,
-    get_buy_gem_bonus, get_buy_value, sell_value_of,
+    SELL_VALUE_PCT, get_buy_value, sell_value_of,
 )
 from services.button_timeout import schedule_button_timeout
 
@@ -156,11 +155,10 @@ SECTIONS = {
             f"• <b>Releasing players:</b> every card sells back for "
             f"<b>{SELL_VALUE_PCT}%</b> of its buy price — buy at 100, sell at "
             f"{sell_value_of(100)}, at every rating\n"
-            f"• <b>Elite signings:</b> buy anything rated "
-            f"<b>above {GEM_BONUS_MIN_RATING - 1}</b> and you get "
-            f"<b>{GEM_BONUS_BPS / 100:g}%</b> of what you paid back in gems — "
-            f"a 97 OVR at {get_buy_value(97):,} 🪙 pays "
-            f"<b>{get_buy_gem_bonus(97):,}</b> 💎\n"
+            # Filled in at render time by _section_body — the Elite Signing
+            # Bonus is a limited-time offer, so the tutorial has to describe
+            # the one running now, and say nothing at all when none is.
+            "{signing_bonus}"
             "• <b>Achievements unlock:</b> bonus coins/gems on each badge\n\n"
             "<b>🛒 Spending</b>\n"
             "<b>/buypl</b> — buy a player at market price\n"
@@ -334,6 +332,40 @@ def _build_keyboard(active_section, owner_tg):
 # /howto
 # ════════════════════════════════════════════════════════════════════
 
+def _signing_bonus_bullet():
+    """The Elite Signing Bonus bullet for the Economy tab, live or absent.
+
+    Returns "" while the offer is closed — a tutorial that advertises a bonus
+    nobody is being paid is worse than one that stays quiet about it.
+    """
+    try:
+        from services.buy_bonus import current_offer, format_time_left
+        offer = current_offer()
+        if not offer.active:
+            return ""
+        example = max(r for r in (97, offer.min_rating) if r >= offer.min_rating)
+        gems = offer.gems_for(example)
+        left = format_time_left(offer.seconds_left)
+        return (f"• <b>Elite signings:</b> buy anything rated "
+                f"<b>{offer.min_rating} or above</b> and you get "
+                f"<b>{offer.percent:g}%</b> of what you paid back in gems — "
+                f"a {example} OVR at {get_buy_value(example):,} 🪙 pays "
+                f"<b>{gems:,}</b> 💎"
+                + (f" · <i>limited time, ends in {left}</i>" if left else "")
+                + "\n")
+    except Exception:
+        logger.exception("signing bonus bullet failed (non-fatal)")
+        return ""
+
+
+def _section_body(section):
+    """The section's text, with any live-data placeholders filled in."""
+    body = SECTIONS[section]["body"]
+    if "{signing_bonus}" in body:
+        body = body.replace("{signing_bonus}", _signing_bonus_bullet())
+    return body
+
+
 async def howto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg = update.effective_user
 
@@ -343,7 +375,7 @@ async def howto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📖 <b>HOW TO PLAY</b>\n\n"
         "Pick a section to learn about that area.\n"
         "━━━━━━━━━━━━━━━━━━━\n\n"
-        + data["body"]
+        + _section_body(section)
     )
     kb = _build_keyboard(section, tg.id)
 
@@ -381,7 +413,7 @@ async def howto_tab_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "📖 <b>HOW TO PLAY</b>\n\n"
         f"Section: {data['emoji']} <b>{data['title']}</b>\n"
         "━━━━━━━━━━━━━━━━━━━\n\n"
-        + data["body"]
+        + _section_body(section)
     )
     kb = _build_keyboard(section, tg.id)
     try:

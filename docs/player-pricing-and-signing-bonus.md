@@ -58,10 +58,11 @@ naming the slot; the admin markets page still shows the number the admin typed.
 The trait market has the same rule for the same reason — see
 `roll_trait_discount` and the `TRAIT_SELL_*` notes in `config.py`.
 
-## 2. Buying above 95 pays gems back
+## 2. The Elite Signing Bonus — a limited-time offer
 
-Signing a card rated **above 95** (i.e. 96+) rebates **0.1% of the coins
-spent**, paid in gems:
+While the offer is running, signing a card at or above its rating threshold
+rebates a slice of the coins spent, paid in gems. At the default terms — **96+
+at 0.1%**:
 
 | OVR | Buy | Gems back |
 |----:|----:|----------:|
@@ -70,11 +71,51 @@ spent**, paid in gems:
 |  96 | 3,800,000 | 3,800 |
 |  95 | 3,340,000 | — |
 
+It is an **offer, not a permanent rule**. An admin runs it from
+**Economy → 💎 Elite Signing Bonus**:
+
+| Control | Meaning |
+|---|---|
+| Offer is open | The switch. Off = nobody is paid, and nothing advertises it. |
+| Minimum rating | Cheapest card that qualifies. 96 means "above 95". |
+| Rate, % of price paid | Stored as basis points, so payouts stay exact integers. |
+| Starts (IST) | Blank = right away. Set it and the offer waits, showing as *Scheduled*. |
+| Ends (IST) | Blank = until you close it. Set it and the offer closes itself. |
+| Close Now | One click, no date editing. Submits even mid-edit (`formnovalidate`). |
+
+The page shows a LIVE / SCHEDULED / CLOSED badge, the time remaining, and a
+worked example at the current terms — deliberately the *cheapest* qualifying
+card, so the number on screen is the smallest bonus those terms hand out.
+
+### Reading it
+
 ```python
-GEM_BONUS_MIN_RATING = 96   # "above 95"
-GEM_BONUS_BPS = 10          # 10 basis points = 0.1%
-get_buy_gem_bonus(rating, price_paid=None)
+services.buy_bonus.current_offer(session) -> Offer
+    .active         # switch AND window already applied
+    .min_rating .bps .percent
+    .seconds_left   # None when open-ended
+    .scheduled      # configured, waiting for its start time
+    .gems_for(rating, price_paid=None)
 ```
+
+`current_offer` is the only correct way to ask. It reads **fresh** rather than
+through `config_service`'s process-local cache, because the admin website and
+the bot usually run as separate processes and opening or closing an offer has
+to take effect on the next buy without a restart — pass the session you already
+hold and it costs one single-row query.
+
+It **fails open** to the baked-in rate (`config.GEM_BONUS_MIN_RATING` /
+`GEM_BONUS_BPS`): a database hiccup should not silently withdraw a bonus
+players have been promised. `config.get_buy_gem_bonus` remains pure arithmetic
+— it answers "what would this rate pay?", never "is the offer running?".
+
+The `game_config` defaults reproduce exactly what shipped hard-coded (on, 96+,
+0.1%, no window), so deploying this changes nothing until an admin touches it.
+
+> `config_service.save_config` skips `None` values so partial forms don't wipe
+> fields they don't send. Nullable settings therefore need
+> `allow_null=("gem_bonus_starts_at", "gem_bonus_ends_at")` — without it,
+> clearing a date field silently keeps the old date.
 
 ### It is sized on coins paid, not on the list price
 
@@ -101,6 +142,30 @@ is the rebate that was credited.
 
 The bonus is credited on the caller's transaction, before its `commit()`, so a
 rolled-back buy never leaves gems behind.
+
+An in-flight buy reads the offer once and passes it to both the award and the
+receipt, so a purchase can't be paid from one offer and described by another if
+an admin closes it mid-transaction.
+
+### Where players see it — and stop seeing it
+
+Everything below renders from the same `Offer`, so closing the offer takes the
+advertising down with it in the same moment:
+
+* **Bot** — a "💎 Elite Signing Bonus" line on the player card (`/buypl`) and on
+  the market screen (`/playermarket`), sized on what *that* buyer will pay, with
+  `· ends in 3h 20m` when the offer has an end time. Receipts show the gems
+  credited plus the new balance.
+* **Mini App** — a banner across the top of the market stating the offer's terms
+  and its clock, a note under the buy button, a `+N 💎` tag on qualifying market
+  rows, and the gems in the success toast. Served by `gem_bonus`,
+  `gem_bonus_ends_in` and `gem_bonus_offer` on the player-detail, market and buy
+  payloads.
+* **`/howto` → Economy** — one bullet describing the running offer and its
+  countdown, rendered per request by `_signing_bonus_bullet()` and **omitted
+  entirely** while the offer is closed. (The rest of the tab is a module-level
+  constant; the bullet is substituted into a `{signing_bonus}` placeholder at
+  render time, since a tutorial built at import time can't know today's terms.)
 
 ### Undo takes the gems back
 

@@ -5510,14 +5510,44 @@ function escapeHtml(s) {
   })[c]);
 }
 
-// Elite signings (rated above 95) pay a slice of their price back in gems.
-// The server sizes it — the app only says so where there's a Buy button.
-function gemBonusNote(gems) {
+// The Elite Signing Bonus is a limited-time offer: high-rated signings pay a
+// slice of their price back in gems while it runs. The server decides whether
+// it is running and how much it pays — a gem_bonus of 0 means "say nothing",
+// which is also what a closed offer sends. The app only renders the countdown.
+function formatTimeLeft(seconds) {
+  if (seconds == null) return '';
+  if (seconds < 60) return 'under a minute';
+  const m = Math.floor(seconds / 60) % 60, h = Math.floor(seconds / 3600);
+  if (h >= 24) {
+    const d = Math.floor(h / 24), rh = h % 24;
+    return rh ? `${d}d ${rh}h` : `${d}d`;
+  }
+  if (h) return m ? `${h}h ${m}m` : `${h}h`;
+  return `${m}m`;
+}
+
+function gemBonusNote(gems, endsIn) {
   if (!gems || gems <= 0) return '';
+  const left = endsIn ? ` · ends in ${formatTimeLeft(endsIn)}` : '';
   return `<div style="text-align:center;margin-top:0.9rem;padding:0.5rem 0.7rem;
                       border-radius:12px;background:rgba(124,77,255,0.12);
                       color:var(--muted);font-size:0.82rem;">
-            💎 <strong style="color:var(--text);">+${formatNum(gems)} gems</strong> back on this signing
+            💎 <strong style="color:var(--text);">+${formatNum(gems)} gems</strong> back on this signing${left}
+          </div>`;
+}
+
+// Market-wide banner for the running offer — the market list is where players
+// browse elite cards, so the offer's terms and its clock belong at the top.
+function gemBonusBanner(offer) {
+  if (!offer || !offer.active) return '';
+  const left = offer.ends_in
+    ? `<span style="font-weight:700;">ends in ${formatTimeLeft(offer.ends_in)}</span>`
+    : 'limited time';
+  return `<div style="margin:0 0 0.8rem;padding:0.6rem 0.8rem;border-radius:12px;
+                      background:rgba(124,77,255,0.14);
+                      border:1px solid rgba(124,77,255,0.35);font-size:0.82rem;">
+            💎 <strong>Elite Signing Bonus</strong> — buy ${offer.min_rating}+ and get
+            ${offer.percent}% of what you pay back in gems · ${left}
           </div>`;
 }
 
@@ -5562,7 +5592,7 @@ async function openPlayer(id) {
       <div><span>Bowl Style</span><strong>${escapeHtml(p.bowl_style || '—')}</strong></div>
     </div>
 
-    ${gemBonusNote(p.gem_bonus)}
+    ${gemBonusNote(p.gem_bonus, p.gem_bonus_ends_in)}
     <div style="margin-top:1rem;">${buyBtn}</div>
     ${!p.owned_any_version && !p.blocked ? `<div style="text-align:center;color:var(--muted);font-size:0.78rem;margin-top:0.6rem;">↩️ You can /cmuundo within 60s in the bot</div>` : ''}
   `;
@@ -5778,11 +5808,13 @@ async function loadMarket() {
       ? "Today's market. Refreshes daily. Prices include discounts."
       : `The current market. Refreshes every ${every}h. Prices include discounts.`;
   }
+  const banner = gemBonusBanner(data.gem_bonus_offer);
   if (!data.slots.length) {
-    list.innerHTML = `<div class="empty"><div class="icon">🌟</div>Market is empty — try again soon</div>`;
+    list.innerHTML = banner +
+      `<div class="empty"><div class="icon">🌟</div>Market is empty — try again soon</div>`;
     return;
   }
-  list.innerHTML = data.slots.map(s => marketRow(s)).join('');
+  list.innerHTML = banner + data.slots.map(s => marketRow(s)).join('');
 }
 
 function marketRow(s) {

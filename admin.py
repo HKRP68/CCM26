@@ -4803,8 +4803,10 @@ def webapp_player_detail(player_id):
         if not p or not p.is_active:
             return {"ok": False, "error": "not_found"}, 404
         from services.version_service import user_owns_any_version
-        from config import get_buy_value, get_sell_value, get_buy_gem_bonus
+        from config import get_buy_value, get_sell_value
+        from services.buy_bonus import current_offer
         owns_any = user_owns_any_version(db, user.id, p.id)
+        offer = current_offer(db)
         return {
             "ok": True,
             "player": {
@@ -4822,8 +4824,10 @@ def webapp_player_detail(player_id):
                 "bowl_rating": p.bowl_rating or 0,
                 "price": get_buy_value(p.rating),
                 "sell_value": get_sell_value(p.rating),
-                # Gems paid back on purchase — 0 for anything not elite.
-                "gem_bonus": get_buy_gem_bonus(p.rating),
+                # Gems paid back on purchase — 0 for anything not elite, and 0
+                # whenever the Elite Signing Bonus offer isn't running.
+                "gem_bonus": offer.gems_for(p.rating),
+                "gem_bonus_ends_in": offer.seconds_left,
                 "owned_any_version": owns_any,
                 "blocked": bool(getattr(p, "restricted_from_buypl", False)),
             },
@@ -6884,7 +6888,8 @@ def webapp_market():
         # Free, Bronze and Silver see and pay the slot's sell price (== base
         # price); the discount is a membership perk (Platinum 5%, Diamond 10%).
         from services.global_market import player_slot_prices
-        from config import get_buy_gem_bonus
+        from services.buy_bonus import current_offer
+        offer = current_offer(db)
 
         results = []
         for s in slots:
@@ -6910,7 +6915,8 @@ def webapp_market():
                 "final_price": eff_price,
                 "discount_pct": disc,
                 # Gems paid back on purchase, sized on what this buyer pays.
-                "gem_bonus": get_buy_gem_bonus(p.rating, eff_price),
+                # 0 while the Elite Signing Bonus offer isn't running.
+                "gem_bonus": offer.gems_for(p.rating, eff_price),
                 "quantity": s.quantity,
                 "purchased_count": s.purchased_count,
                 # quantity 0 = unlimited stock, so this is never True for the
@@ -6924,6 +6930,14 @@ def webapp_market():
         from services.global_market import get_player_refresh_interval_hours
         return {"ok": True, "slots": results, "total": len(results),
                 "refresh_interval_hours": get_player_refresh_interval_hours(db),
+                # The Elite Signing Bonus, so the market can run a banner while
+                # it lasts. min_rating/percent are the offer's own terms.
+                "gem_bonus_offer": {
+                    "active": offer.active,
+                    "min_rating": offer.min_rating,
+                    "percent": offer.percent,
+                    "ends_in": offer.seconds_left,
+                },
                 "balance": {"coins": user.total_coins or 0,
                             "roster_count": user.roster_count or 0,
                             "roster_max": MAX_ROSTER}}
@@ -13411,9 +13425,125 @@ def admin_economy():
                 db.rollback()
                 flash(f"Error: {e}", "error")
         cfg = get_config(db)
-        return render_template("admin_economy.html", cfg=cfg, defaults=DEFAULTS)
+        from services.buy_bonus import current_offer, format_time_left
+        offer = current_offer(db)
+        return render_template("admin_economy.html", cfg=cfg, defaults=DEFAULTS,
+                               offer=offer,
+                               offer_time_left=format_time_left(offer.seconds_left),
+                               offer_example=_signing_bonus_example(offer))
     finally:
         db.close()
+
+
+def _signing_bonus_example(offer):
+    """A worked example for the admin page: "a 97 OVR pays 4,450 💎".
+
+    Uses the cheapest card the offer actually covers, so the number on the page
+    is the smallest bonus it will hand out, not a best case. Returns None when
+    the terms pay nothing at all (rate 0, or a threshold above every card).
+    """
+    from config import BUY_VALUES, get_buy_gem_bonus
+    covered = [r for r in sorted(BUY_VALUES) if r >= offer.min_rating]
+    if not covered:
+        return None
+    rating = covered[0]
+    gems = get_buy_gem_bonus(rating, min_rating=offer.min_rating,
+                             bps=offer.bps)
+    if gems <= 0:
+        return None
+    return {"rating": rating, "price": BUY_VALUES[rating], "gems": gems}
+
+
+@app.route("/economy/signing-bonus", methods=["POST"])
+@login_required
+def admin_signing_bonus():
+    """Open, close, re-price or re-schedule the Elite Signing Bonus offer.
+
+    Its own endpoint rather than another block of fields on the economy form:
+    this is an offer with a lifecycle (open it, let it run, close it), and a
+    bad date here must not be able to lose an admin's reward edits.
+    """
+    db = get_session()
+    try:
+        from services.config_service import save_config
+        form = request.form
+
+        # "Close now" — one button, no need to clear the dates by hand.
+        if form.get("action") == "close":
+            save_config(db, {"gem_bonus_enabled": False},
+                        updated_by=session.get("admin_user", "admin"))
+            db.commit()
+            log_admin(db, "signing_bonus_close", "config", 0, "economy",
+                      "Closed the Elite Signing Bonus")
+            db.commit()
+            flash("🚫 Elite Signing Bonus closed — no further gems are paid.",
+                  "info")
+            return redirect(url_for("admin_economy"))
+
+        try:
+            # A rating outside the card table would silently pay nobody, and a
+            # rate of 0 is just "closed" wearing a different hat — say so
+            # rather than saving a bonus that quietly does nothing.
+            from config import BUY_VALUES
+            min_rating = int(form.get("gem_bonus_min_rating", 96))
+            lo, hi = min(BUY_VALUES), max(BUY_VALUES)
+            if not (lo <= min_rating <= hi):
+                raise ValueError(
+                    f"Rating must be between {lo} and {hi} — no card sits "
+                    f"outside that range.")
+
+            # Entered as a percentage (0.1), stored as basis points (10), so
+            # the payout stays exact integer arithmetic.
+            percent = float(form.get("gem_bonus_percent", 0.1))
+            bps = int(round(percent * 100))
+            if bps <= 0:
+                raise ValueError(
+                    "Rate must be above 0% — use Close if you want it off.")
+            if bps > 10_000:
+                raise ValueError("Rate can't exceed 100% of the price paid.")
+
+            starts_at = form.get("gem_bonus_starts_at") or ""
+            ends_at = form.get("gem_bonus_ends_at") or ""
+            starts_at = _ist_input_to_utc(starts_at) if starts_at else None
+            ends_at = _ist_input_to_utc(ends_at) if ends_at else None
+            if starts_at and ends_at and ends_at <= starts_at:
+                raise ValueError("The offer would end before it starts.")
+
+            save_config(db, {
+                "gem_bonus_enabled": bool(form.get("gem_bonus_enabled")),
+                "gem_bonus_min_rating": min_rating,
+                "gem_bonus_bps": bps,
+                "gem_bonus_starts_at": starts_at,
+                "gem_bonus_ends_at": ends_at,
+            }, updated_by=session.get("admin_user", "admin"),
+                # Clearing a date field has to actually clear it — that is how
+                # an admin turns a timed offer into an open-ended one.
+                allow_null=("gem_bonus_starts_at", "gem_bonus_ends_at"))
+            db.commit()
+            log_admin(db, "signing_bonus_save", "config", 0, "economy",
+                      f"Elite Signing Bonus: {min_rating}+ at {percent:g}%, "
+                      f"{'open' if form.get('gem_bonus_enabled') else 'closed'}")
+            db.commit()
+
+            from services.buy_bonus import current_offer, format_time_left
+            offer = current_offer(db)
+            if offer.active:
+                left = format_time_left(offer.seconds_left)
+                flash(f"✅ Elite Signing Bonus is live — {min_rating}+ earns "
+                      f"{percent:g}% back in gems"
+                      + (f", ending in {left}." if left else "."), "info")
+            elif offer.scheduled:
+                flash(f"🕒 Elite Signing Bonus saved and scheduled — it opens "
+                      f"at the start time you set.", "info")
+            else:
+                flash("💤 Elite Signing Bonus saved, but it is not running "
+                      "(closed, or its end time has passed).", "info")
+        except Exception as e:
+            db.rollback()
+            flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_economy"))
 
 
 @app.route("/economy/reset", methods=["POST"])

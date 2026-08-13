@@ -842,6 +842,16 @@ def _migrate_add_columns():
              "BOOLEAN DEFAULT TRUE")
     _try_add("game_config", "career_name_blocklist", "TEXT")
 
+    # ── Elite Signing Bonus (limited-time offer) ──
+    # Defaults reproduce the behaviour that shipped hard-coded — on, 96+, 0.1%
+    # — so an existing database keeps paying exactly what it paid yesterday
+    # until an admin changes it. No window, so it runs until they close it.
+    _try_add("game_config", "gem_bonus_enabled", "BOOLEAN DEFAULT TRUE")
+    _try_add("game_config", "gem_bonus_min_rating", "INTEGER DEFAULT 96")
+    _try_add("game_config", "gem_bonus_bps", "INTEGER DEFAULT 10")
+    _try_add("game_config", "gem_bonus_starts_at", "TIMESTAMP")
+    _try_add("game_config", "gem_bonus_ends_at", "TIMESTAMP")
+
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so
     # they stay independently fault-tolerant without a round trip each.

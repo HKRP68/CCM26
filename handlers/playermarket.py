@@ -277,7 +277,7 @@ async def playermarket_select_callback(update: Update, context: ContextTypes.DEF
         # Elite cards pay gems back on purchase — priced off what this buyer
         # actually pays, so the line matches their receipt.
         from services.buy_bonus import teaser_line
-        teaser = teaser_line(player.rating, price, prefix="")
+        teaser = teaser_line(player.rating, price, prefix="", session=session)
         if teaser:
             cap_lines.append(teaser)
         if is_unlimited(slot):
@@ -392,11 +392,11 @@ async def playermarket_buy_callback(update: Update, context: ContextTypes.DEFAUL
             except Exception:
                 pass
 
-            from services.buy_bonus import bonus_line
+            from services.buy_bonus import bonus_line, current_offer
             await context.bot.send_message(
                 chat_id=q.message.chat_id,
                 text=(f"🎉 <b>{msg}</b> added to your roster!"
-                      f"{bonus_line(gem_bonus)}\n"
+                      f"{bonus_line(gem_bonus, offer=current_offer(session))}\n"
                       f"💰 Balance: <b>{user.total_coins:,}</b> 🪙"
                       f"{f' · <b>{user.total_gems:,}</b> 💎' if gem_bonus else ''}\n"
                       f"📊 Roster: {user.roster_count}/{MAX_ROSTER}"),
