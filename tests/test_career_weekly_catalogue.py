@@ -132,10 +132,21 @@ EVENT_NEEDS_STAT = {
     "career_potm": None,                # supplied by the finalize, not the loop
 }
 
-# The ball loops behind the two callers of track_user_match_quests. vsbot has
-# no loop of its own — it drives handlers.match — and cipl never reaches the
-# career tracker, so these two are the complete set.
-BALL_LOOPS = ("handlers/match.py", "services/match_webapp_service.py")
+# The ball loops behind every caller of track_user_match_quests. vsbot has no
+# loop of its own — it drives handlers.match — and the Super Over decider hands
+# the tracker the main match's state, so these three are the complete set.
+#
+# cipl_match was left out while /letsplay and Challenge League fired no quest
+# events at all. They have since been wired into the same shared tracker, which
+# means their loop feeds career quests too — and while it sat outside this list
+# nothing noticed that it was the one loop never recording a dot ball.
+BALL_LOOPS = ("handlers/match.py", "services/match_webapp_service.py",
+              "services/cipl_match.py")
+
+# Stats a loop is allowed to record through a shared helper instead of writing
+# the key itself. ``hattrick`` is set by services.match_engine.note_bowler_ball,
+# so a loop that calls it does record hat-tricks.
+SHARED_WRITERS = {"hattrick": "note_bowler_ball("}
 
 
 class CatalogueTests(unittest.TestCase):
@@ -228,8 +239,9 @@ class EngineCoverageTests(unittest.TestCase):
             if stat is None:
                 continue
             for path, source in self.sources.items():
-                self.assertIn(
-                    f'"{stat}"', source,
+                self.assertTrue(
+                    f'"{stat}"' in source
+                    or SHARED_WRITERS.get(stat, "\0") in source,
                     f"{name} needs the '{stat}' stat, which {path} never sets — "
                     f"the quest would be dealt and never progress")
 

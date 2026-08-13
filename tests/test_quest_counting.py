@@ -516,6 +516,151 @@ class HatTrickDetectionTests(unittest.TestCase):
                     f"{path} credits run-outs to the bowler")
 
 
+def _loop_source(path):
+    with open(os.path.join(os.path.dirname(__file__), "..", path)) as fh:
+        return fh.read()
+
+
+class DotBallTests(unittest.TestCase):
+    """'Bowl 30 dot balls today' only counts where the loop records dots.
+
+    ``track_user_match_quests`` reads ``dots`` off each bowler's stat row. A
+    ball loop that never writes it leaves the dot-ball quests on 0 however many
+    dots were actually bowled — and ``career_dot_balls`` with them, which also
+    puts the career weekly streak (every assigned career quest cleared) out of
+    reach for anyone whose matches run through that mode.
+    """
+
+    @staticmethod
+    def _mini_app_state():
+        return HatTrickDetectionTests._mini_app_state()
+
+    def _apply(self, state, outcome):
+        from services.match_webapp_service import _apply_outcome
+        _apply_outcome(state, outcome, "Drive", "Yorker",
+                       state["batting_order"][state["striker_idx"]],
+                       state["bowl_xi"][0])
+
+    def test_the_mini_app_loop_credits_a_dot_to_bowler_and_batter(self):
+        state = self._mini_app_state()
+        striker = state["batting_order"][state["striker_idx"]]
+        self._apply(state, {"type": "run", "runs": 0})
+        self.assertEqual(state["bowl_stats"]["100"]["dots"], 1)
+        self.assertEqual(state["bat_stats"][str(striker["roster_id"])]["dots"], 1)
+
+    def test_runs_off_the_bat_are_not_a_dot(self):
+        state = self._mini_app_state()
+        self._apply(state, {"type": "run", "runs": 2})
+        self.assertEqual(state["bowl_stats"]["100"].get("dots", 0), 0)
+
+    def test_a_wicket_off_a_no_run_ball_is_a_dot(self):
+        state = self._mini_app_state()
+        striker = state["batting_order"][state["striker_idx"]]
+        self._apply(state, {"type": "wicket", "runs": 0, "how": "Bowled"})
+        self.assertEqual(state["bowl_stats"]["100"]["dots"], 1)
+        self.assertEqual(state["bat_stats"][str(striker["roster_id"])]["dots"], 1)
+
+    def test_the_challenge_league_loop_records_dots_over_a_full_innings(self):
+        # /letsplay and Challenge League score their balls in cipl_match, which
+        # kept every other figure the quest tracker reads but not this one.
+        import random
+        from services import cipl_match
+        from services.bot_xi_builder import (
+            LPBOT_SHAPE, _assign_lpbot_traits, _lpbot_player_dict)
+
+        class _P:
+            _n = 0
+
+            def __init__(self, category, rating):
+                _P._n += 1
+                self.id = _P._n
+                self.name = f"{category[:3]}{_P._n}"
+                self.rating = rating
+                self.category = category
+                self.bat_rating = rating if category != "Bowler" else rating - 25
+                self.bowl_rating = (rating if category in ("Bowler", "All-rounder")
+                                    else rating - 40)
+                self.bowl_style = "Fast"
+                self.bowl_hand = "Right"
+                self.bat_hand = "Right"
+
+        def _xi(rating, offset):
+            rows = [_P(c, rating - i) for c, n in LPBOT_SHAPE for i in range(n)]
+            xi = [_lpbot_player_dict(p) for p in rows]
+            _assign_lpbot_traits(xi)
+            for i, p in enumerate(xi):
+                p["roster_id"] = offset + i
+            return xi
+
+        random.seed(7)
+        state = cipl_match.build_cipl_state(
+            match_id=1, overs=20, bat_user_id=1, bowl_user_id=2,
+            bat_user_tg=1, bowl_user_tg=2, bat_xi=_xi(80, 0),
+            bowl_xi=_xi(78, 5000), bat_team_name="A", bowl_team_name="B",
+            chat_id=1, pitch_type="Hard")
+        while not cipl_match.is_innings_over(state):
+            state["current_bowler"] = cipl_match.eligible_bowlers(state)[0]
+            state["batting_approach"] = "balanced"
+            state["bowling_approach"] = "balanced"
+            cipl_match.simulate_over(state)
+
+        bowler_dots = sum(v.get("dots", 0) for v in state["bowl_stats"].values())
+        batter_dots = sum(v.get("dots", 0) for v in state["bat_stats"].values())
+        legal_balls = sum(v.get("balls", 0) for v in state["bowl_stats"].values())
+        self.assertGreater(bowler_dots, 0, "a 20-over innings with no dot balls")
+        self.assertEqual(bowler_dots, batter_dots,
+                         "a dot is one ball — both cards must agree")
+        self.assertLessEqual(bowler_dots, legal_balls)
+
+    def test_every_ball_loop_records_dots(self):
+        # Three loops score balls. A dot-ball quest is only fair if all three
+        # count them — miss one and whether the quest can be cleared depends on
+        # which mode the match happened to be played in.
+        for path in ("handlers/match.py",
+                     "services/match_webapp_service.py",
+                     "services/cipl_match.py"):
+            with self.subTest(loop=path):
+                source = _loop_source(path)
+                self.assertIn('bws["dots"]', source,
+                              f"{path} never credits a bowler with a dot")
+                self.assertIn('bs["dots"]', source,
+                              f"{path} never credits a batter with a dot")
+
+
+class InningsBreakArchiveTests(unittest.TestCase):
+    """The powerplay / death-over quests read the per-over run list.
+
+    ``_phase_runs`` scores innings 1 off ``inn1_over_runs`` and innings 2 off
+    the live ``over_runs``. A break that archives neither leaves the side
+    batting first with nothing to score at all, and hands the side batting
+    second the *opponent's* opening overs — one list holding both innings.
+    """
+
+    def test_each_side_scores_its_own_innings(self):
+        from services.quest_service import _phase_runs
+        state = {
+            "inn1_bat_team_id": 1, "bat_team_id": 2,
+            # 60 in the powerplay, 10 at the death.
+            "inn1_over_runs": [10] * 6 + [1] * 9 + [2] * 5,
+            # 18 in the powerplay, 45 at the death.
+            "over_runs": [3] * 6 + [1] * 9 + [9] * 5,
+        }
+        self.assertEqual(_phase_runs(state, 1), (60, 10))
+        self.assertEqual(_phase_runs(state, 2), (18, 45))
+
+    def test_every_innings_break_archives_and_resets_the_over_list(self):
+        for path in ("handlers/match.py",          # in-chat /wpm, /playmatch
+                     "services/match_engine.py",   # Mini App
+                     "services/cipl_match.py"):    # /letsplay, Challenge League
+            with self.subTest(mode=path):
+                source = _loop_source(path)
+                self.assertIn('"inn1_over_runs"', source,
+                              f"{path} never archives innings 1's over list")
+                self.assertRegex(
+                    source, r'\["over_runs"\]\s*=\s*\[\]',
+                    f"{path} never clears the over list for the chase")
+
+
 # ════════════════════════════════════════════════════════════════════
 # The catalogue
 # ════════════════════════════════════════════════════════════════════
@@ -1174,6 +1319,46 @@ class DailyGuaranteedCatalogueTests(unittest.TestCase):
         for name, _desc, _key, target, _emoji, _tier in lengths:
             with self.subTest(quest=name):
                 self.assertLessEqual(target, 4)
+
+
+# ════════════════════════════════════════════════════════════════════
+# The panel
+# ════════════════════════════════════════════════════════════════════
+
+class ProgressBarTests(unittest.TestCase):
+    """The /myquest bar has to show that a quest has started counting.
+
+    Truncating to whole tenths drew an empty bar for anything under 10%, so the
+    first few dots of a 30-dot quest — or the first 50 runs of a 600-run one —
+    looked exactly like a quest whose trigger never fires at all. That is the
+    other half of "no progress bar": a bar that only ever moves late.
+    """
+
+    @staticmethod
+    def _bar(percent):
+        from handlers.quests import _progress_bar
+        return _progress_bar(percent)
+
+    def test_no_progress_leaves_the_bar_empty(self):
+        self.assertEqual(self._bar(0), "░" * 10)
+
+    def test_any_progress_at_all_lights_a_segment(self):
+        for percent in (1, 3, 9):
+            with self.subTest(percent=percent):
+                self.assertTrue(self._bar(percent).startswith("█"))
+
+    def test_a_part_filled_segment_still_rounds_down(self):
+        # Only a finished quest shows a solid bar — 99% must not read as done.
+        self.assertEqual(self._bar(99).count("█"), 9)
+        self.assertEqual(self._bar(50).count("█"), 5)
+
+    def test_a_finished_quest_fills_the_bar(self):
+        self.assertEqual(self._bar(100), "█" * 10)
+
+    def test_the_bar_is_always_ten_segments(self):
+        for percent in list(range(0, 101, 7)) + [-5, 250, None, "x"]:
+            with self.subTest(percent=percent):
+                self.assertEqual(len(self._bar(percent)), 10)
 
 
 if __name__ == "__main__":

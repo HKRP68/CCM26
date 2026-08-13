@@ -182,3 +182,68 @@ Pinned (`always_assign`) and Career Player quests are never touched.
 Until it runs, everything above is inert — the events fire, but no quest is
 listening for them, and a guaranteed slot with nothing active to draw from
 simply stays empty.
+
+## Every quest, and the ball loop behind it
+
+Two reports — "the dot ball quest never completes" and "the progress bar isn't
+working" — turned out to be three separate things. Worth stating the shape of
+the problem, because the first two look identical from the player's side and
+neither is a fault in the quest catalogue.
+
+A quest bar moves only if **all three** of these hold:
+
+1. the quest's `event_key` is one something in the game fires
+   (`services.quest_service`, or a handler like `/claim`);
+2. the event's underlying figure is recorded by the ball loop of the mode the
+   match was played in; and
+3. the match itself counts — `match_counts_for_quests`, plus the AI daily cap.
+
+(1) has been guarded for a while: `CatalogueTests` in
+`tests/test_quest_counting.py` fails if any seeded quest sits on an event key
+nothing fires, and no quest in `seed_quests_v3.py` is `manual`. Nothing in the
+shipped catalogue is untriggered.
+
+(2) was where the two live bugs were. Three interactive loops score balls, and
+they have to agree on every per-player figure `track_user_match_quests` reads:
+
+| loop | modes |
+| --- | --- |
+| `handlers/match.py` | in-chat `/wpm`, `/playmatch`, `/vsbot` |
+| `services/match_webapp_service.py` | the Mini App |
+| `services/cipl_match.py` | `/letsplay`, Challenge League, CL Tour |
+
+**Dot balls.** `cipl_match` recorded every figure the tracker reads except
+`dots` — so "Bowl 30 dot balls today" and the career `career_dot_balls` quests
+sat on 0 for a whole /letsplay or Challenge League match, however many dots were
+bowled. The bowling scorecard's dots column was blank there for the same reason.
+All three loops now credit a dot to the bowler *and* the batter on a no-run
+legal delivery, including a wicket off a no-run ball.
+
+That gap survived because the career audit
+(`tests/test_career_weekly_catalogue.py`) only scanned two of the three loops:
+`cipl_match` was excluded back when /letsplay fired no quest events at all, and
+was never added when it was wired into the shared tracker. It is in the list
+now, so the next missing stat fails a test instead of a quest.
+
+**Powerplay and death overs.** `_phase_runs` scores a phase off the per-over run
+list: innings 1 from `inn1_over_runs`, innings 2 from the live `over_runs`. The
+Mini App and Challenge League archive that list at the innings break; the in-chat
+loop never did, and never cleared it either. One list therefore held both
+innings, so "Score 45+ in the first 6 overs" read **nothing at all** for the side
+batting first and the *opponent's* opening overs for the side batting second.
+The in-chat break now archives and resets it, which also fixes the Manhattan
+chart and the Arena over-by-over graph for in-chat matches.
+
+(3) is unchanged, and is explained on the `/myquest` panel itself — unranked
+practice, a voided Team Overall mismatch and the AI daily cap are all reasons a
+finished match legitimately moves nothing.
+
+## The progress bar
+
+`/myquest` draws a ten-segment bar and truncated to whole tenths, so anything
+under 10% drew an *empty* bar: the first few dots of a 30-dot quest looked
+exactly like a quest whose trigger never fires — the same picture as the bug
+above, which is why the two were reported together. A part-filled segment still
+rounds down (99% must not read as finished), but any progress at all now lights
+at least one segment. The Mini App draws a percentage-width bar and was never
+affected.
