@@ -18,6 +18,23 @@ A Telegram bot where users collect cricket player cards, build rosters, trade wi
 | `/releasemultiple` | Release duplicate players in bulk | — |
 | `/trade @user` | Trade same-rating players with another user | — |
 
+## Forward-only pause mode
+
+Set `FORWARD_ONLY_MODE=true` and restart the process to pause the gameplay
+bot completely. In this mode it does not register gameplay handlers, track
+users or chats, run background jobs, send automatic notifications, or expose
+the admin panel. The bot silently ignores every update except a configured
+admin's private `/frwd` command.
+
+To broadcast, send the post to the bot's DM and reply to it with `/frwd`.
+The post is copied (without a forwarded-from label) to every active private,
+group, and supergroup chat. Albums are kept together. Configure at least one
+admin ID through `BOT_ADMIN_IDS`, `ADMIN_IDS`, or another supported admin-ID
+environment variable before enabling this mode.
+
+Remove `FORWARD_ONLY_MODE` (or set it to `false`) and restart to restore the
+full bot.
+
 ## Phase 2 Features
 
 ### Roster Management
