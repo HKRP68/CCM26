@@ -2,8 +2,10 @@
 
 Usage in the bot's private chat:
     1. Send the message/media to the bot.
-    2. Reply to that message with /frwd_grp or /frwd_prvt.
+    2. Reply to that message with /frwd, /frwd_grp, or /frwd_prvt.
 
+/frwd copies the replied message to every active chat. It is the one-command
+option intended for a paused, broadcast-only bot.
 /frwd_grp forwards the replied message to active groups/supergroups where the
 bot is present. /frwd_prvt forwards it to active private chats that have talked
 to the bot.
@@ -35,6 +37,7 @@ logger = logging.getLogger(__name__)
 
 GROUP_CHAT_TYPES = ("group", "supergroup")
 PRIVATE_CHAT_TYPES = ("private",)
+ALL_CHAT_TYPES = GROUP_CHAT_TYPES + PRIVATE_CHAT_TYPES
 DEFAULT_DELAY_SECONDS = 0.05
 
 # ── Album (media-group) buffering ────────────────────────────────────
@@ -277,6 +280,17 @@ async def frwd_grp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         command_name="frwd_grp",
         target_label="group",
         chat_types=GROUP_CHAT_TYPES,
+    )
+
+
+async def frwd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Forward the replied DM message to every active private and group chat."""
+    await _handle_forward_command(
+        update,
+        context,
+        command_name="frwd",
+        target_label="active",
+        chat_types=ALL_CHAT_TYPES,
     )
 
 

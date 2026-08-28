@@ -296,7 +296,8 @@ from handlers.cartel import (
 from handlers.feedback import feedback_handler
 from handlers.notifications import notifications_handler, notifications_toggle_callback
 from handlers.forward_broadcast import (
-    frwd_grp_handler, frwd_prvt_handler, track_album_message,
+    frwd_handler, frwd_grp_handler, frwd_prvt_handler, remember_album_message,
+    track_album_message,
 )
 from handlers.tournament_access import (
     tourallow_handler, tourblock_handler, tourallowlist_handler,
@@ -386,6 +387,21 @@ ADMIN_MENU_COMMANDS = (
     ("tourallowlist", "Admin: list users allowed to create tours"),
     ("testwpm", "Admin: Mini App match diagnostic"),
 )
+
+FORWARD_ONLY_MENU_COMMANDS = (
+    ("frwd", "Admin: copy a replied message to every active chat"),
+)
+
+
+def is_forward_only_mode() -> bool:
+    """Whether the bot should accept only an admin's private ``/frwd`` command.
+
+    Set ``FORWARD_ONLY_MODE=true`` when gameplay and all automatic notices need
+    to be paused, while retaining a single, admin-only broadcast doorway.
+    """
+    return os.getenv("FORWARD_ONLY_MODE", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
 BOT_MENU_COMMANDS = (
     ("start", "Show the welcome message and command overview"),
@@ -570,6 +586,26 @@ async def register_bot_menu(application):
     admin DMs each get their own list. Nothing a user can actually run is left
     unadvertised.
     """
+    if is_forward_only_mode():
+        # Clear the player menus left behind by normal mode. Only configured
+        # admins receive the one broadcast command in their private chat.
+        await application.bot.set_my_commands([])
+        await application.bot.set_my_commands(
+            [], scope=BotCommandScopeAllPrivateChats())
+        await application.bot.set_my_commands(
+            [], scope=BotCommandScopeAllGroupChats())
+        for admin_id in _admin_menu_ids():
+            try:
+                await application.bot.set_my_commands(
+                    [BotCommand(name, description)
+                     for name, description in FORWARD_ONLY_MENU_COMMANDS],
+                    scope=BotCommandScopeChat(chat_id=admin_id))
+            except Exception:
+                logger.warning("Could not publish the forward-only menu to %s",
+                               admin_id, exc_info=True)
+        logger.info("Forward-only mode: published /frwd for configured admins")
+        return
+
     # Start the event-loop lag sampler here: post_init runs on the same loop
     # that will serve every update, which is exactly what we want to measure.
     try:
@@ -999,6 +1035,11 @@ def main():
     logger.info("  DATABASE_URL: %s", os.getenv('DATABASE_URL', 'sqlite:///cricket_bot.db'))
     logger.info("  ADMIN_PASSWORD: %s", "set" if os.getenv('ADMIN_PASSWORD') else "using default")
     logger.info("  PORT: %s", os.getenv('PORT', os.getenv('ADMIN_PORT', '5000')))
+    forward_only_mode = is_forward_only_mode()
+    if forward_only_mode:
+        logger.warning(
+            "FORWARD_ONLY_MODE is enabled: gameplay, tracking, jobs, and all "
+            "non-/frwd replies are paused.")
 
     logger.info("Initialising database...")
     try:
@@ -1017,7 +1058,7 @@ def main():
         count = session.query(Player).count()
         session.close()
         logger.info("  Players in DB: %s", count)
-        if count == 0:
+        if count == 0 and not forward_only_mode:
             logger.info("  Seeding 3,165 players...")
             from seed_players import seed
             seed()
@@ -1054,18 +1095,24 @@ def main():
         logger.exception("DB round-trip probe failed (non-fatal)")
 
     # ── Start admin panel FIRST (Render health check needs this) ─────
-    admin_thread = threading.Thread(target=start_admin_panel, daemon=True)
-    admin_thread.start()
+    # Forward-only mode deliberately exposes no admin web activity either.
+    admin_thread = None
     admin_port = os.getenv("ADMIN_PORT", os.getenv("PORT", 5000))
-    logger.info("  Admin panel: starting on port %s", admin_port)
+    if not forward_only_mode:
+        admin_thread = threading.Thread(target=start_admin_panel, daemon=True)
+        admin_thread.start()
+        logger.info("  Admin panel: starting on port %s", admin_port)
 
-    import time
-    time.sleep(2)  # give Flask a moment to bind the port
+        import time
+        time.sleep(2)  # give Flask a moment to bind the port
 
     # ── Start Telegram bot ───────────────────────────────────────────
     if not BOT_TOKEN:
-        logger.warning("BOT_TOKEN not set — bot will NOT run. Admin panel is still running.")
-        admin_thread.join()
+        logger.warning(
+            "BOT_TOKEN not set — bot will NOT run%s.",
+            "; admin panel is still running" if admin_thread else "")
+        if admin_thread:
+            admin_thread.join()
         return
 
     try:
@@ -1084,6 +1131,39 @@ def main():
                .connection_pool_size(connection_pool_size)
                .pool_timeout(pool_timeout)
                .build())
+
+        if forward_only_mode:
+            from services.admin_ids import is_admin
+
+            async def _forward_only_guard(update, context):
+                """Silently discard every update except an admin's DM /frwd.
+
+                Admin album parts are remembered before stopping so forwarding
+                a multi-photo post keeps its original album grouping.
+                """
+                message = update.effective_message
+                user = update.effective_user
+                chat = update.effective_chat
+                is_private_admin = bool(
+                    message and user and chat and chat.type == "private"
+                    and is_admin(user.id))
+                text = (getattr(message, "text", "") or "").split(maxsplit=1)[0]
+                command = text.split("@", 1)[0].lower()
+                if is_private_admin and command == "/frwd":
+                    return
+                if is_private_admin and getattr(message, "media_group_id", None):
+                    remember_album_message(
+                        message.chat_id, message.media_group_id, message.message_id)
+                raise ApplicationHandlerStop
+
+            app.add_handler(TypeHandler(_TGUpdate, _forward_only_guard), group=-100)
+            app.add_handler(CommandHandler("frwd", frwd_handler))
+            logger.info("Forward-only bot is running; only private admin /frwd is enabled.")
+            app.run_polling(
+                drop_pending_updates=True,
+                allowed_updates=["message"],
+            )
+            return
 
         def _is_storage_only_command(update):
             """Compatibility hook: all current commands use normal middleware."""
@@ -2221,8 +2301,9 @@ def main():
         )
 
     except Exception:
-        logger.exception("Bot crashed — admin panel still running")
-        admin_thread.join()
+        logger.exception("Bot crashed")
+        if admin_thread:
+            admin_thread.join()
 
 
 if __name__ == "__main__":

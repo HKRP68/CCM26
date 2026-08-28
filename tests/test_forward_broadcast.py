@@ -172,6 +172,23 @@ class ForwardBroadcastTests(unittest.IsolatedAsyncioTestCase):
         targets.assert_called_once_with(forward_broadcast.PRIVATE_CHAT_TYPES)
         self.assertEqual(context.bot.copied, [(1234, 999, 50)])
 
+    async def test_frwd_command_uses_every_active_chat_type(self):
+        os.environ["BOT_ADMIN_IDS"] = "999"
+        source = DummyMessage(chat_id=999, message_id=50)
+        command = DummyMessage(chat_id=999, message_id=51, reply_to_message=source)
+        update = SimpleNamespace(
+            effective_message=command,
+            effective_user=SimpleNamespace(id=999),
+            effective_chat=SimpleNamespace(type="private"),
+        )
+        context = SimpleNamespace(bot=DummyBot())
+
+        with patch.object(forward_broadcast, "_target_chat_ids", return_value=[-1001, 1234]) as targets:
+            await forward_broadcast.frwd_handler(update, context)
+
+        targets.assert_called_once_with(forward_broadcast.ALL_CHAT_TYPES)
+        self.assertEqual(context.bot.copied, [(-1001, 999, 50), (1234, 999, 50)])
+
 
 if __name__ == "__main__":
     unittest.main()
