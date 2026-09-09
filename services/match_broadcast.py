@@ -63,14 +63,8 @@ def _cricket_webapp_url(match_id, chat_id):
 
 def _cricket_deep_link(match_id, chat_id):
     """Group deep link: startapp=cricket_<matchId>_<chatId>."""
-    bot_username = (os.getenv("BOT_USERNAME", "") or "").strip().lstrip("@")
-    miniapp_name = (os.getenv("MINIAPP_NAME", "") or "").strip()
-    if not bot_username:
-        return None
-    param = f"cricket_{match_id}_{chat_id}"
-    if miniapp_name:
-        return f"https://t.me/{bot_username}/{miniapp_name}?startapp={param}"
-    return f"https://t.me/{bot_username}?startapp={param}"
+    from services.miniapp_buttons import miniapp_deep_link
+    return miniapp_deep_link(f"cricket_{match_id}_{chat_id}")
 
 
 def play_match_url(match_id, chat_id=None):
@@ -91,13 +85,7 @@ def _launch_url(match_id, chat_id=None):
         link = _cricket_deep_link(match_id, chat_id)
         if link:
             return link
-    bot_username = (os.getenv("BOT_USERNAME", "") or "").strip().lstrip("@")
-    miniapp_name = (os.getenv("MINIAPP_NAME", "") or "").strip()
-    if not bot_username:
-        return None
-    if miniapp_name:
-        return f"https://t.me/{bot_username}/{miniapp_name}?startapp=cricket_{match_id}"
-    return f"https://t.me/{bot_username}?startapp=cricket_{match_id}"
+    return _cricket_deep_link(match_id, 0)
 
 
 def play_match_keyboard(match_id, chat_id=None, is_private=False, label=None):
