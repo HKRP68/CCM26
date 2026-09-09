@@ -7,8 +7,8 @@ Telegram only opens https URLs as Mini Apps. Render.com gives you HTTPS
 out of the box; for local dev use a tunnel like ngrok.
 """
 
-import os
 import logging
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import ContextTypes
 
@@ -52,10 +52,10 @@ async def app_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             web_app=WebAppInfo(url=webapp_url),
         )
     else:
-        # Group chat — must use url= button. Both deep-link forms below open
-        # the Mini App directly (no DM bounce); `/app` just opens it on home.
-        bot_username = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
-        miniapp_name = os.getenv("MINIAPP_NAME", "").strip()
+        # Group chat — must use a named-Mini-App deep link. Do not fall back to
+        # t.me/<bot>?startapp=..., as bots without a Main Mini App send users
+        # to the bot DM instead of opening the requested app.
+        from services.miniapp_buttons import miniapp_deep_link
         # Encode the origin group so Mini App actions echo back into this chat.
         _chat_id = update.effective_chat.id if update.effective_chat else None
         # Also persist the origin server-side now, so activity echoes work even
@@ -67,19 +67,12 @@ async def app_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 record_miniapp_origin(update.effective_user.id, _chat_id)
             except Exception:
                 pass
-        _sp = f"home_c{_chat_id}" if (_chat_id is not None and _chat_id < 0) else "home"
-        if bot_username and miniapp_name:
-            # Named Mini App — t.me/<bot>/<app> launches it straight away
-            deep_link = f"https://t.me/{bot_username}/{miniapp_name}?startapp={_sp}"
-        elif bot_username:
-            # Bot's main Mini App (BotFather) — `?startapp` launches the app
-            # directly instead of opening a DM chat
-            deep_link = f"https://t.me/{bot_username}?startapp={_sp}"
-        else:
+        deep_link = miniapp_deep_link("home", origin_chat_id=_chat_id)
+        if not deep_link:
             await update.message.reply_text(
-                "⚠️ Mini App buttons don't work in groups. Open this in a "
-                "private chat with the bot.\n\n"
-                "<i>Admin: set BOT_USERNAME env var for proper group support.</i>",
+                "⚠️ Group Mini App links are not configured.\n\n"
+                "<i>Admin: set both BOT_USERNAME and MINIAPP_NAME to the "
+                "named Mini App configured in BotFather.</i>",
                 parse_mode="HTML",
             )
             return

@@ -19,22 +19,9 @@ def miniapp_button(label, tab, *, is_private=True, origin_chat_id=None):
     if is_private and webapp_url.startswith("https://"):
         return InlineKeyboardButton(label, web_app=WebAppInfo(url=f"{webapp_url}#{tab}"))
 
-    bot_username = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
-    if not bot_username:
+    deep_link = miniapp_deep_link(tab, origin_chat_id=origin_chat_id)
+    if not deep_link:
         return None
-
-    start_param = tab
-    try:
-        if origin_chat_id is not None and int(origin_chat_id) < 0:
-            start_param = f"{tab}_c{int(origin_chat_id)}"
-    except (ValueError, TypeError):
-        pass
-
-    miniapp_name = os.getenv("MINIAPP_NAME", "").strip()
-    if miniapp_name:
-        deep_link = f"https://t.me/{bot_username}/{miniapp_name}?startapp={start_param}"
-    else:
-        deep_link = f"https://t.me/{bot_username}?startapp={start_param}"
     return InlineKeyboardButton(label, url=deep_link)
 
 
@@ -42,11 +29,14 @@ def miniapp_deep_link(tab, *, origin_chat_id=None):
     """Return a t.me deep link (string) that opens the Mini App on ``tab``.
 
     Unlike :func:`miniapp_button`, this returns a plain URL suitable for an
-    HTML ``<a href>`` text link inside a message. Returns ``None`` when
-    BOT_USERNAME is not configured.
+    HTML ``<a href>`` text link inside a message. A named Mini App is required:
+    the ``t.me/<bot>?startapp=...`` fallback opens the bot's DM when the bot
+    does not have a Main Mini App configured, rather than reliably opening the
+    requested Mini App.
     """
     bot_username = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
-    if not bot_username:
+    miniapp_name = os.getenv("MINIAPP_NAME", "").strip()
+    if not bot_username or not miniapp_name:
         return None
 
     start_param = tab
@@ -56,10 +46,7 @@ def miniapp_deep_link(tab, *, origin_chat_id=None):
     except (ValueError, TypeError):
         pass
 
-    miniapp_name = os.getenv("MINIAPP_NAME", "").strip()
-    if miniapp_name:
-        return f"https://t.me/{bot_username}/{miniapp_name}?startapp={start_param}"
-    return f"https://t.me/{bot_username}?startapp={start_param}"
+    return f"https://t.me/{bot_username}/{miniapp_name}?startapp={start_param}"
 
 
 def has_miniapp_url():
