@@ -1479,6 +1479,7 @@ class CommandTests(DraftCase):
         self.handler = handler
         self.replies = []
         self.replies_with_markup = []
+        self.pressed_keyboard = None
         self.announced = []
         self.pinned = []
         self.unpinned = []
@@ -1561,6 +1562,7 @@ class CommandTests(DraftCase):
 
         async def edit_message_text(text, **kwargs):
             edits.append(text)
+            self.pressed_keyboard = kwargs.get("reply_markup")
 
         query = SimpleNamespace(
             data=callback_data, answer=answer,
@@ -1681,6 +1683,87 @@ class CommandTests(DraftCase):
         body = self.press(taken.callback_data, 111)
         self.assertIn("Virat Kohli", body)
         self.assertNotIn("Rashid Khan", body)
+
+    # ── whose buttons are whose ──
+    #
+    # Every draft keyboard belongs to the person whose command posted it. The
+    # lock lives in the callback data, so these assert against
+    # ``services.button_access`` rather than against this module's stubs — the
+    # button has to refuse a stranger on its own, with nothing remembered about
+    # the message it is attached to.
+
+    @staticmethod
+    def _pressed_by(callback_data, user_id):
+        from types import SimpleNamespace
+        from services import button_access
+        return button_access.check_callback_owner(SimpleNamespace(
+            callback_query=SimpleNamespace(
+                data=callback_data,
+                from_user=SimpleNamespace(id=user_id),
+                message=SimpleNamespace(chat_id=-1, message_id=1))))
+
+    def _assert_owned_by(self, keyboard, user_id):
+        from services import button_access
+        buttons = [b for row in keyboard.inline_keyboard for b in row]
+        self.assertTrue(buttons, "expected a keyboard with buttons")
+        for button in buttons:
+            with self.subTest(callback_data=button.callback_data):
+                self.assertEqual(
+                    button_access.owner_from_callback_data(button.callback_data),
+                    user_id)
+                self.assertTrue(self._pressed_by(button.callback_data, user_id))
+                self.assertFalse(self._pressed_by(button.callback_data, CAROL))
+                # 64 bytes is Telegram's hard limit for callback data; the
+                # owner id now shares that budget with a player's name.
+                self.assertLessEqual(len(button.callback_data.encode()), 64)
+
+    def test_the_board_buttons_belong_to_whoever_asked_for_the_board(self):
+        self.go_live()
+        self.run_command(self.handler.dboard_handler, ALICE)
+        self._assert_owned_by(self.last_keyboard(), ALICE)
+
+    def test_the_pool_browser_belongs_to_whoever_ran_dsearch(self):
+        self.go_live()
+        self.run_command(self.handler.dsearch_handler, ALICE)
+        self._assert_owned_by(self.last_keyboard(), ALICE)
+
+    def test_a_filter_press_leaves_the_browser_still_yours(self):
+        """Ownership has to survive a redraw, or it lapses on the first tap."""
+        self.go_live()
+        self.run_command(self.handler.dsearch_handler, ALICE)
+        gold = self.button(self.last_keyboard(), "🥇 Gold")
+        self.press(gold.callback_data, ALICE)
+        self._assert_owned_by(self.pressed_keyboard, ALICE)
+
+    def test_the_pick_buttons_belong_to_whoever_typed_the_name(self):
+        """A pick is irreversible, so only the hands that typed it may finish."""
+        self.go_live()
+        self.load_pool(rows=[["Virat Sharma", "95", "Platinum", "0", "Male",
+                             "Indian", "Batsman", "India", "R", "R", "Medium",
+                             "94", "20"]])
+        body = self.run_command(self.handler.pick_handler, ALICE, ["virat"])
+        self.assertIn("more than one player", body)
+        self._assert_owned_by(self.last_keyboard(), ALICE)
+
+    def test_a_stranger_is_told_which_command_to_run_instead(self):
+        from services import button_access
+        self.go_live()
+        self.run_command(self.handler.dboard_handler, ALICE)
+        board = self.last_keyboard().inline_keyboard[0][0].callback_data
+
+        message = button_access.blocked_message_for(board)
+        self.assertIn("/dboard", message)
+        self.assertNotEqual(message, button_access.BLOCKED_BUTTON_MESSAGE)
+
+    def test_a_board_posted_before_this_shipped_is_not_bricked(self):
+        """Untagged callback data still parses — old messages keep working."""
+        self.assertEqual(self.handler._board_view("dr_view_pool"), "pool")
+        state = self.handler._decode_search(self.draft,
+                                            "dr_srch_~~a~~0~")
+        self.assertIsNotNone(state)
+        self.assertIsNone(state["owner"])
+        self.assertIsNone(state["tier"])
+        self.assertEqual(state["page"], 0)
 
     # ── the pinned pick ──
 

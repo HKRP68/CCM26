@@ -27,9 +27,21 @@ Owner
 
 Callback prefixes are all ``dr_`` (``dr_view_`` for the board's tabs,
 ``dr_pick_`` for the disambiguation buttons, ``dr_srch_`` for the pool
-browser), each of which is in ``services.button_access.SHARED_CALLBACK_PREFIXES``
-— without that the group's button guard would let only whoever ran the command
-press anything.
+browser), and every one of them is **owner-locked to whoever ran the command
+that posted it**. A draft group is a busy room: the pool browser re-filters in
+place, so a second pair of hands on it fights the first; the board's tabs post a
+fresh message each press, so a stranger driving yours is noise in the one chat
+that has to stay readable; and a pick is irreversible. The lock is stateless — each button carries its owner's
+Telegram id in its own callback data (``services.button_access.tag_owner``), so
+it holds across a restart rather than lapsing the moment the process that sent
+the message goes away. ``OWNER_RULES`` there also gives each prefix a refusal
+that names the command to run instead.
+
+Ownership follows the reader, not the message: pressing 🔎 Search on somebody
+else's board is impossible, but a search view opened from your own board is
+yours, and the filters ride in the callback data so it keeps working hours
+later. None of this replaces the per-pick authorisation — ``dr_pick_`` is still
+re-checked against the team on the clock on every press.
 """
 
 import html
@@ -40,6 +52,7 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import DraftPlayer, DraftTeam
+from services import button_access as ba
 from services import draft_service as ds
 from services import draft_scheduler as dsched
 from services.admin_ids import is_admin, is_owner
@@ -223,7 +236,8 @@ async def pick_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         player, candidates = ds.find_available(session, draft.id, query)
         if player is None:
             await _reply(update, _ambiguous_text(query, candidates),
-                         reply_markup=_ambiguous_keyboard(pick, candidates))
+                         reply_markup=_ambiguous_keyboard(pick, candidates,
+                                                          user.id))
             return
 
         done = ds.make_pick(session, draft, pick, player, by_tg_id=user.id)
@@ -265,12 +279,17 @@ def _ambiguous_text(query, candidates):
             f"tap the one you mean:")
 
 
-def _ambiguous_keyboard(pick, candidates):
+PICK_CB = "dr_pick_"
+
+
+def _ambiguous_keyboard(pick, candidates, owner_id):
+    """The "did you mean" buttons, locked to the owner who typed the name."""
     if not candidates or len(candidates) > 5:
         return None
+    head = ba.tag_owner(PICK_CB, owner_id)
     rows = [[InlineKeyboardButton(
         f"{p.name} · {p.rating} · {p.tier}",
-        callback_data=f"dr_pick_{pick.id}_{p.id}")] for p in candidates]
+        callback_data=f"{head}_{pick.id}_{p.id}")] for p in candidates]
     return InlineKeyboardMarkup(rows)
 
 
@@ -279,9 +298,11 @@ async def pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query is None:
         return
+    # The owner tag is checked by the button guard before this ever runs; the
+    # team check below is the authorisation that matters and stays either way.
+    _owner, rest = ba.split_owner(PICK_CB, query.data, "_")
     try:
-        _, _, pick_id, player_id = query.data.split("_", 3)
-        pick_id, player_id = int(pick_id), int(player_id)
+        pick_id, player_id = (int(part) for part in rest.split("_", 1))
     except (ValueError, AttributeError):
         await query.answer("That button is out of date.", show_alert=True)
         return
@@ -338,19 +359,30 @@ async def pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Readouts
 # ════════════════════════════════════════════════════════════════════
 
-def _board_keyboard():
+BOARD_CB = "dr_view_"
+
+
+def _board_keyboard(owner_id):
+    """The board's tabs, locked to the owner who asked for this board."""
+    head = ba.tag_owner(BOARD_CB, owner_id)
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("📋 Order", callback_data="dr_view_order"),
-        InlineKeyboardButton("📦 Available", callback_data="dr_view_pool"),
-        InlineKeyboardButton("👥 Teams", callback_data="dr_view_teams"),
+        InlineKeyboardButton("📋 Order", callback_data=f"{head}_order"),
+        InlineKeyboardButton("📦 Available", callback_data=f"{head}_pool"),
+        InlineKeyboardButton("👥 Teams", callback_data=f"{head}_teams"),
     ], [
         # The pool browser, opened with no filters — the board is where people
         # already are when they wonder whether somebody is still there. It
         # arrives as its own message rather than replacing the board, because
         # the board is what the room is watching.
         InlineKeyboardButton("🔎 Search the pool",
-                             callback_data="dr_view_search"),
+                             callback_data=f"{head}_search"),
     ]])
+
+
+def _board_view(callback_data):
+    """Which tab a board button names, owner tag stripped."""
+    _owner, rest = ba.split_owner(BOARD_CB, callback_data, "_")
+    return rest
 
 
 async def dboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -379,15 +411,23 @@ async def dboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     finally:
         session.close()
-    await _reply(update, text, reply_markup=_board_keyboard())
+    user = update.effective_user
+    await _reply(update, text,
+                 reply_markup=_board_keyboard(user.id if user else None))
 
 
 async def board_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """The board's tabs. Anyone in the draft group may press these."""
+    """The board's tabs — only for the owner whose /dboard posted them.
+
+    The guard in ``services.button_access`` has already turned everyone else
+    away by the time this runs, so the presser here is the board's owner and
+    anything opened from a tab is opened in their name.
+    """
     query = update.callback_query
     if query is None:
         return
-    view = (query.data or "").replace("dr_view_", "", 1)
+    view = _board_view(query.data)
+    presser = getattr(query.from_user, "id", None)
     session = get_session()
     try:
         draft = _load_for_chat(session, update)
@@ -402,7 +442,8 @@ async def board_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         elif view == "teams":
             text = ds.render_teams(session, draft)
         elif view == "search":
-            text, keyboard = _search_view(session, draft, _search_state(draft))
+            text, keyboard = _search_view(
+                session, draft, _search_state(draft, owner=presser))
         else:
             await query.answer()
             return
@@ -427,9 +468,9 @@ async def board_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 # who took him" — with filters that survive a tap, so nobody has to retype
 # ``/dsearch platinum bowler`` to turn one page.
 #
-# Callback data is ``dr_srch_<tier>~<role>~<avail>~<home>~<page>~<query>``.
-# Indices, not names: Telegram allows 64 bytes and a player's name has to fit
-# in there too.
+# Callback data is ``dr_srch_u<owner>~<tier>~<role>~<avail>~<home>~<page>~<query>``.
+# Indices, not names: Telegram allows 64 bytes, and the owner id and a player's
+# name both have to fit in there too — hence the truncation in _encode_search.
 
 SEARCH_CB = "dr_srch_"
 _ROLE_LABEL = {"Batsman": "🏏 Bat", "Bowler": "🎯 Bowl",
@@ -437,9 +478,9 @@ _ROLE_LABEL = {"Batsman": "🏏 Bat", "Bowler": "🎯 Bowl",
 
 
 def _search_state(draft, tier=None, role=None, availability=ds.AVAIL_ANY,
-                  home=None, page=0, query=""):
+                  home=None, page=0, query="", owner=None):
     return {"tier": tier, "role": role, "availability": availability,
-            "home": home, "page": page, "query": query}
+            "home": home, "page": page, "query": query, "owner": owner}
 
 
 def _encode_search(draft, state, **overrides):
@@ -450,7 +491,8 @@ def _encode_search(draft, state, **overrides):
     tier = str(tiers.index(merged["tier"])) if merged["tier"] in tiers else ""
     role = str(roles.index(merged["role"])) if merged["role"] in roles else ""
     home = "" if merged["home"] is None else ("1" if merged["home"] else "0")
-    head = (f"{SEARCH_CB}{tier}~{role}~{merged['availability']}~{home}"
+    head = (f"{ba.tag_owner(SEARCH_CB, merged.get('owner'))}"
+            f"~{tier}~{role}~{merged['availability']}~{home}"
             f"~{int(merged['page'])}~")
     # Whatever is left of the 64 bytes belongs to the name being searched for.
     room = 64 - len(head.encode())
@@ -464,13 +506,15 @@ def _decode_search(draft, data):
     """The state a pressed button carries, or ``None`` if it is not ours."""
     if not (data or "").startswith(SEARCH_CB):
         return None
-    parts = data[len(SEARCH_CB):].split("~", 5)
+    owner, rest = ba.split_owner(SEARCH_CB, data, "~")
+    parts = rest.split("~", 5)
     if len(parts) < 6:
         return None
     tier_raw, role_raw, availability, home_raw, page_raw, query = parts
     tiers, roles = ds.tier_order(draft), list(ds._CATEGORIES)
     return _search_state(
         draft,
+        owner=owner,
         tier=tiers[int(tier_raw)] if tier_raw.isdigit() and int(tier_raw) < len(tiers) else None,
         role=roles[int(role_raw)] if role_raw.isdigit() and int(role_raw) < len(roles) else None,
         availability=availability if availability in (ds.AVAIL_ANY, ds.AVAIL_FREE,
@@ -593,8 +637,10 @@ async def dsearch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         tier, role, availability, home, name = ds.parse_search_query(
             draft, _arg_text(context))
+        asker = update.effective_user
         state = _search_state(draft, tier=tier, role=role,
-                              availability=availability, home=home, query=name)
+                              availability=availability, home=home, query=name,
+                              owner=asker.id if asker else None)
         rows = ds.search_pool(session, draft, tier=tier, role=role,
                               availability=availability, query=name, home=home)
         # One hit for a typed name is a question about that player, not a list.
@@ -619,7 +665,12 @@ def _tier_summary_line(session, draft):
 
 
 async def search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """A filter or page button. Anyone in the draft group may press these."""
+    """A filter or page button — only for the owner whose /dsearch posted it.
+
+    The owner rides in the callback data and is re-encoded into every button of
+    the re-rendered keyboard, so the browser stays theirs for as long as the
+    message lives, not just for as long as this process does.
+    """
     query = update.callback_query
     if query is None:
         return

@@ -1773,10 +1773,11 @@ def main():
         # ── Tournament Draft ─────────────────────────────────────────
         # Teams pick their squads live in one bound group chat; the finished
         # squads are published into a Challenge League and play from there.
-        # The ``dr_`` callback prefix is registered in
-        # services.button_access.SHARED_CALLBACK_PREFIXES — the board's tabs are
-        # for the whole room and the pick buttons belong to the team on the
-        # clock, not to whoever ran the command that posted them.
+        # Every ``dr_`` button is owner-locked to whoever ran the command that
+        # posted it (services.button_access.OWNER_RULES). The lock rides in the
+        # callback data rather than in this process's memory, so it survives a
+        # restart; handlers/draft.py still re-checks each pick against the team
+        # on the clock on top of it.
         from handlers.draft import (
             pick_handler, pick_callback, dboard_handler, board_view_callback,
             dsquad_handler, dqueue_handler, dsearch_handler, search_callback,
