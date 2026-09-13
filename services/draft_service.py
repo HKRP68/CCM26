@@ -1691,6 +1691,233 @@ def render_available(session, draft, *, tier=None, limit=15):
     return "\n".join(lines)
 
 
+# ──────────────────────────────────────────────────────────────────────
+# The pool browser (/dsearch)
+# ──────────────────────────────────────────────────────────────────────
+#
+# ``render_available`` answers "what are the best names left"; this answers
+# "is *this* player still there, and if not, who has him" — the question an
+# owner actually asks two rounds before their pick comes round.
+
+SEARCH_PAGE = 8          # players per page: a phone screen, not a scroll
+AVAIL_ANY, AVAIL_FREE, AVAIL_GONE = "", "y", "n"
+
+
+def pool_flag(player, draft=None):
+    """The player's **own** country flag, falling back to home/overseas.
+
+    A list of ✈️ ✈️ ✈️ says only "not from here"; 🇦🇺 🇦🇫 🏴󠁧󠁢󠁥󠁮󠁧󠁿 says who they are,
+    which is what an owner watching the overseas cap is really reading for.
+    """
+    key = country_key(getattr(player, "country", None))
+    if key and (key in _COUNTRY_FLAG_OVERRIDES or key in _COUNTRY_ISO2):
+        return country_flag(key)
+    return player_flag(player, draft)
+
+
+def search_pool(session, draft, *, tier=None, role=None, availability=AVAIL_ANY,
+                query="", home=None):
+    """The pool, filtered. Best rating first, available before taken.
+
+    Every filter is optional and they stack. ``availability`` is ``AVAIL_FREE``
+    for what is still there, ``AVAIL_GONE`` for what has gone, ``AVAIL_ANY``
+    for both — the default, because a browser that hides the taken players
+    can't answer "who got Kohli".
+    """
+    rows = (session.query(DraftPlayer)
+            .filter(DraftPlayer.draft_id == draft.id).all())
+    text = (query or "").strip().lower()
+    out = []
+    for player in rows:
+        if tier and player.tier != tier:
+            continue
+        if role and normalise_category(player.category) != role:
+            continue
+        if availability == AVAIL_FREE and player.picked_by_team_id is not None:
+            continue
+        if availability == AVAIL_GONE and player.picked_by_team_id is None:
+            continue
+        if home is not None and bool(player.is_indian) is not home:
+            continue
+        if text and not _matches_text(player, text):
+            continue
+        out.append(player)
+    out.sort(key=lambda p: (p.picked_by_team_id is not None,
+                            tier_rank(draft, p.tier) if tier_rank(draft, p.tier)
+                            is not None else 99,
+                            -(p.rating or 0), (p.name or "").lower()))
+    return out
+
+
+def _matches_text(player, text):
+    """Name substring, or the player's country by any of its spellings.
+
+    ``/dsearch australia`` is a question people ask (who is left from where),
+    and answering it "no player is called australia" would be obtuse.
+    """
+    if text in (player.name or "").lower():
+        return True
+    key = country_key(text)
+    return bool(key) and key == country_key(player.country)
+
+
+def parse_search_query(draft, raw):
+    """Turn ``"plat bowler available kohli"`` into the filters it names.
+
+    Owners type what they mean rather than filling in a form, so a tier, a
+    role, an availability word and a home/overseas word are all recognised
+    wherever they appear and everything left over is the name to match.
+    Returns ``(tier, role, availability, home, name_text)``.
+    """
+    tier = role = home = None
+    availability = AVAIL_ANY
+    leftovers = []
+    for token in (raw or "").split():
+        folded = token.strip().lower()
+        if not folded:
+            continue
+        matched_tier = _match_tier(draft, folded)
+        if matched_tier and tier is None:
+            tier = matched_tier
+            continue
+        matched_role = _match_role(folded)
+        if matched_role and role is None:
+            role = matched_role
+            continue
+        if folded in ("available", "free", "left", "open", "unsold", "🟢"):
+            availability = AVAIL_FREE
+            continue
+        if folded in ("taken", "gone", "picked", "sold", "drafted", "🔴"):
+            availability = AVAIL_GONE
+            continue
+        if folded in ("home", "domestic", "local"):
+            home = True
+            continue
+        if folded in ("overseas", "foreign", "away"):
+            home = False
+            continue
+        leftovers.append(token)
+    return tier, role, availability, home, " ".join(leftovers).strip()
+
+
+def _match_tier(draft, folded):
+    """``"plat"`` → ``"Platinum"``. Prefixes count; three letters is enough."""
+    for tier in tier_order(draft):
+        name = tier.lower()
+        if folded == name or (len(folded) >= 3 and name.startswith(folded)):
+            return tier
+    return None
+
+
+def _match_role(folded):
+    role = _CAT_MAP.get(folded, _CAT_MAP.get(folded.replace("-", " ")))
+    if role:
+        return role
+    for known in _CATEGORIES:
+        if folded and known.lower().startswith(folded) and len(folded) >= 3:
+            return known
+    return None
+
+
+def render_search(session, draft, rows, *, tier=None, role=None,
+                  availability=AVAIL_ANY, home=None, query="", page=0):
+    """One page of the pool browser. Returns ``(text, page, pages)``.
+
+    ``page`` comes back clamped, so a stale button on an old message can't ask
+    for page 9 of a list that is now 2 pages long.
+    """
+    pages = max(1, -(-len(rows) // SEARCH_PAGE))
+    page = max(0, min(page, pages - 1))
+    window = rows[page * SEARCH_PAGE:(page + 1) * SEARCH_PAGE]
+
+    bits = [escape(tier) if tier else "All tiers"]
+    if role:
+        bits.append(escape(role))
+    if home is not None:
+        bits.append("home" if home else "overseas")
+    if availability == AVAIL_FREE:
+        bits.append("🟢 available")
+    elif availability == AVAIL_GONE:
+        bits.append("🔴 taken")
+    if query:
+        bits.append(f"“{escape(query)}”")
+
+    head = [f"🔎 <b>Pool</b> — {' · '.join(bits)}"]
+    if not rows:
+        head.append("<i>Nothing in the pool matches that.</i>")
+        return "\n".join(head), 0, 1
+
+    free = sum(1 for p in rows if p.picked_by_team_id is None)
+    head.append(f"{len(rows)} player(s) · 🟢 {free} available · "
+                f"🔴 {len(rows) - free} taken")
+    head.append(RULE)
+
+    holders = _team_names(session, draft)
+    for player in window:
+        taken = player.picked_by_team_id is not None
+        line = (f"{'🔴' if taken else '🟢'} {tier_emoji(player.tier)} "
+                f"<b>{escape(player.name or '')}</b> "
+                f"<code>{player.rating}</code> {pool_flag(player, draft)} "
+                f"{escape(player.category or '')}")
+        if taken:
+            line += f" — {escape(holders.get(player.picked_by_team_id, 'taken'))}"
+        head.append(line)
+
+    if pages > 1:
+        head.append(RULE)
+        head.append(f"<i>Page {page + 1} of {pages}</i>")
+    return "\n".join(head), page, pages
+
+
+def render_search_one(session, draft, player):
+    """The full card for a single match — what one exact name is worth showing."""
+    holders = _team_names(session, draft, short=False)
+    taken = player.picked_by_team_id is not None
+    lines = [f"{'🔴' if taken else '🟢'} <b>{escape(player.name or '')}</b>",
+             player_line(player),
+             player_detail(player, draft)]
+    if taken:
+        lines.append(f"Picked by <b>"
+                     f"{escape(holders.get(player.picked_by_team_id, '—'))}</b>")
+    else:
+        lines.append("<i>Still available.</i>")
+        current = current_pick(session, draft)
+        if current is not None and draft.status == STATUS_LIVE:
+            if tier_allows(draft, current.tier, player.tier):
+                lines.append(f"Fits the {tier_badge(current.tier)} slot on the "
+                             f"clock.")
+            else:
+                lines.append(f"<i>Too high for the {tier_badge(current.tier)} "
+                             f"slot on the clock.</i>")
+    return "\n".join(lines)
+
+
+def _team_names(session, draft, *, short=True):
+    """``{team id: name}`` — short in a list, in full when there is room."""
+    return {team.id: ((team.short_name or team.name) if short
+                      else (team.name or team.short_name)) or "—"
+            for team in teams(session, draft.id)}
+
+
+def tier_summary(session, draft):
+    """``[(tier, available, total)]`` down the ladder, for the browser's header."""
+    counts = {}
+    for player in (session.query(DraftPlayer)
+                   .filter(DraftPlayer.draft_id == draft.id).all()):
+        total, free = counts.get(player.tier, (0, 0))
+        counts[player.tier] = (total + 1,
+                               free + (player.picked_by_team_id is None))
+    out = []
+    for tier in tier_order(draft):
+        if tier in counts:
+            total, free = counts[tier]
+            out.append((tier, free, total))
+    for tier, (total, free) in counts.items():      # tiers off the ladder
+        if tier not in tier_order(draft):
+            out.append((tier, free, total))
+    return out
+
+
 def render_teams(session, draft):
     lines = [f"👥 <b>{escape(draft.name or 'Draft')}</b> — the field"]
     for team in teams(session, draft.id):

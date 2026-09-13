@@ -853,6 +853,14 @@ def _migrate_add_columns():
     _try_add("game_config", "gem_bonus_starts_at", "TIMESTAMP")
     _try_add("game_config", "gem_bonus_ends_at", "TIMESTAMP")
 
+    # ── Tournament Draft: the auto-pinned latest pick ──
+    # The draft tables themselves are created by ``create_all``; these two
+    # arrived after that first release, so an existing database needs them
+    # added. Pinning defaults to on — a draft group wants the latest pick at
+    # the top, and /dpin turns it off.
+    _try_add("player_drafts", "pinned_message_id", "BIGINT")
+    _try_add("player_drafts", "pin_picks", "BOOLEAN DEFAULT TRUE")
+
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so
     # they stay independently fault-tolerant without a round trip each.

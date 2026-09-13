@@ -83,12 +83,98 @@ async def _send(bot, chat_id, text, **kwargs):
     return None
 
 
+# ── The pinned pick ──────────────────────────────────────────────────
+
+def pinning_on(draft):
+    """Whether this draft pins its latest pick. Default on for an older row."""
+    return getattr(draft, "pin_picks", True) is not False
+
+
+async def pin_latest(bot, session, draft, message):
+    """Pin ``message`` as the draft's latest pick, unpinning the one before it.
+
+    A draft group runs for hours and scrolls fast; the pin is how somebody
+    arriving late — or coming back from a nap — sees where the draft is without
+    reading back through the whole room. Exactly one pick is pinned at a time,
+    so the pin always answers "what just happened", not "what happened first".
+
+    Everything here is best-effort: pinning needs a right the bot may not have
+    been given, and a draft must not stop because a group refused a pin. The id
+    is committed on its own because the callers commit at different points (the
+    clock before announcing, ``/pick`` after) and an id nobody stored would
+    leave the previous pin up forever.
+    """
+    message_id = getattr(message, "message_id", None)
+    if message_id is None or not draft.chat_id or not pinning_on(draft):
+        return None
+    previous = getattr(draft, "pinned_message_id", None)
+    try:
+        # Silently: the room is already being told by the announcement itself,
+        # and a pin notification per pick is a hundred pings in one evening.
+        await bot.pin_chat_message(chat_id=draft.chat_id, message_id=message_id,
+                                   disable_notification=True)
+    except (Forbidden, BadRequest) as exc:
+        logger.warning("draft pin refused by chat %s: %s", draft.chat_id, exc)
+        return None
+    except Exception:
+        # A pick that is already in the database must never be undone by a pin,
+        # so this catches everything, not just the Telegram errors.
+        logger.warning("draft pin failed", exc_info=True)
+        return None
+    await _unpin(bot, draft.chat_id, previous)
+    _remember_pin(session, draft, message_id)
+    return message_id
+
+
+async def unpin_latest(bot, session, draft):
+    """Drop the draft's pin — the pick it points at is no longer the latest."""
+    previous = getattr(draft, "pinned_message_id", None)
+    if not previous or not draft.chat_id:
+        return False
+    await _unpin(bot, draft.chat_id, previous)
+    _remember_pin(session, draft, None)
+    return True
+
+
+async def _unpin(bot, chat_id, message_id):
+    if not message_id:
+        return
+    try:
+        await bot.unpin_chat_message(chat_id=chat_id, message_id=message_id)
+    except (Forbidden, BadRequest) as exc:
+        # Already unpinned by hand, or the message was deleted. Not a problem:
+        # the new pin is up either way.
+        logger.debug("draft unpin skipped for %s: %s", chat_id, exc)
+    except Exception:
+        logger.warning("draft unpin failed", exc_info=True)
+
+
+def _remember_pin(session, draft, message_id):
+    try:
+        draft.pinned_message_id = message_id
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("draft pin id not stored")
+
+
 async def announce_pick(bot, session, draft, pick, player):
     """Post a completed pick to the draft group, with the player's card.
 
     The same message whether a person typed ``/pick`` or the clock ran out; the
     only difference is the ⏱ badge ``render_pick`` adds for an auto-pick.
+
+    Whatever ends up carrying the pick — the card, or the text fallback — is
+    then **pinned**, replacing the previous pick's pin. Every path that fills a
+    slot comes through here (``/pick``, the clock, ``/dskip``, ``/dautopick``),
+    which is why the pin lives here and not in four handlers.
     """
+    sent = await _post_pick(bot, session, draft, pick, player)
+    await pin_latest(bot, session, draft, sent)
+    return sent
+
+
+async def _post_pick(bot, session, draft, pick, player):
     from services import draft_service as ds
 
     if not draft.chat_id:
@@ -119,6 +205,8 @@ async def announce_pick(bot, session, draft, pick, player):
         ds.player_line(player),
     ])
     await _send_card(bot, session, draft.chat_id, card, headline)
+    # The body, not the card: it is the message that carries the squad and
+    # whose turn it is, which is what the pin is for.
     return await _send(bot, draft.chat_id, body)
 
 
@@ -180,7 +268,11 @@ async def announce_skip(bot, session, draft, pick):
             f"<i>No player left in the pool could legally join that squad.</i>\n\n"
             + ds.render_turn(session, draft, next_pick,
                              mention=team_mention(session, next_team)))
-    return await _send(bot, draft.chat_id, body)
+    sent = await _send(bot, draft.chat_id, body)
+    # Pinned like a pick: the pin answers "where is the draft", and a passed
+    # slot is as much an answer to that as a filled one.
+    await pin_latest(bot, session, draft, sent)
+    return sent
 
 
 # ── The sweep ────────────────────────────────────────────────────────

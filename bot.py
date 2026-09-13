@@ -347,7 +347,7 @@ GROUP_ONLY_COMMANDS = frozenset({
     # refuses outside the chat the draft is bound to, so advertising them in a
     # DM would only promise an error. It also keeps them out of the private
     # menu, which is one command short of Telegram's 100-per-scope ceiling.
-    "pick", "dboard", "dsquad", "dqueue",
+    "pick", "dboard", "dsquad", "dqueue", "dsearch",
 })
 
 # Commands that only make sense one-to-one with the bot: deep-link entry
@@ -402,6 +402,7 @@ ADMIN_MENU_COMMANDS = (
     ("dresume", "Admin: resume a paused draft"),
     ("dtimer", "Admin: minutes allowed per pick"),
     ("dhome", "Admin: set the draft home country and re-flag the pool"),
+    ("dpin", "Admin: pin the latest draft pick — on/off"),
     ("dco", "Admin: add a co-owner who may pick for a team"),
     ("dskip", "Admin: resolve the pick on the clock now"),
     ("dautopick", "Owner: grant a random pick of the slot's tier"),
@@ -483,6 +484,7 @@ BOT_MENU_COMMANDS = (
     ("dboard", "Tournament Draft: the live board"),
     ("dsquad", "Tournament Draft: a team's drafted squad"),
     ("dqueue", "Tournament Draft: your auto-pick wishlist"),
+    ("dsearch", "Tournament Draft: browse the pool — who's still available"),
     ("ciplbot", "Practice a league match against the bot (unranked)"),
     ("change", "Change your XI/batting order during match setup"),
     ("botstatus", "Bot ping, uptime & status"),
@@ -1777,7 +1779,8 @@ def main():
         # clock, not to whoever ran the command that posted them.
         from handlers.draft import (
             pick_handler, pick_callback, dboard_handler, board_view_callback,
-            dsquad_handler, dqueue_handler,
+            dsquad_handler, dqueue_handler, dsearch_handler, search_callback,
+            dpin_handler,
             dadmin_handler, dnew_handler, dbind_handler, dtimer_handler,
             dco_handler, dstart_handler, dpause_handler, dcancel_handler,
             dskip_handler, dautopick_handler, dundo_handler, dpublish_handler,
@@ -1790,6 +1793,10 @@ def main():
         app.add_handler(CommandHandler(["dboard", "draftboard"], dboard_handler))
         app.add_handler(CallbackQueryHandler(board_view_callback,
                                              pattern=r"^dr_view_"))
+        app.add_handler(CommandHandler(["dsearch", "dfind", "dpool"],
+                                       dsearch_handler))
+        app.add_handler(CallbackQueryHandler(search_callback,
+                                             pattern=r"^dr_srch_"))
         app.add_handler(CommandHandler(["dsquad", "myteam"], dsquad_handler))
         app.add_handler(CommandHandler(["dqueue", "dq"], dqueue_handler))
         app.add_handler(CommandHandler("dadmin", dadmin_handler))
@@ -1801,6 +1808,7 @@ def main():
         app.add_handler(CommandHandler("dcancel", dcancel_handler))
         app.add_handler(CommandHandler("dtimer", dtimer_handler))
         app.add_handler(CommandHandler(["dhome", "dcountry"], dhome_handler))
+        app.add_handler(CommandHandler("dpin", dpin_handler))
         app.add_handler(CommandHandler("dco", dco_handler))
         app.add_handler(CommandHandler("dskip", dskip_handler))
         # Owner-only inside the handler, not here: the gate has to answer the

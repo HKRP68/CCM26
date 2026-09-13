@@ -2910,6 +2910,16 @@ class PlayerDraft(Base):
     pick_deadline_at = Column(DateTime, nullable=True)
     warn_sent = Column(Boolean, default=False, nullable=False)
 
+    # ── The pinned pick ────────────────────────────────────────────────
+    # The draft group's pinned message is kept on the latest pick, so anyone
+    # scrolling in — or arriving hours late — sees where the draft is without
+    # reading back through a thousand messages. ``pinned_message_id`` is the
+    # message currently pinned by the bot (unpinned when the next pick lands);
+    # ``pin_picks`` turns the whole behaviour off for a group that would rather
+    # keep its own pin (/dpin).
+    pinned_message_id = Column(BigInteger, nullable=True)
+    pin_picks = Column(Boolean, default=True, nullable=False)
+
     # ── The rules ──────────────────────────────────────────────────────
     # The tier ladder, highest first, as a JSON list. A pick slot's tier is a
     # CEILING: a Platinum slot accepts Platinum, Gold, Silver or Bronze.

@@ -73,12 +73,13 @@ a team logo.
 | --- | --- | --- |
 | `/pick <player>` (`/pk`) | owner + co-owners | Make the pick that is on the clock |
 | `/dboard` | anyone | The live board — who's up, time left, recent picks, plus buttons for the order, the remaining pool and the field |
+| `/dsearch [filters]` | anyone | Browse the pool — 🟢 available / 🔴 taken, with filter buttons |
 | `/dsquad [team]` | anyone | A squad by tier, with slot progress and the overseas count |
 | `/dqueue <player>` | owner + co-owners | Your wishlist. If your clock runs out the bot picks from it first |
 
 Admin: `/dadmin` (the reference card), `/dnew`, `/dbind`, `/dstart`, `/dpause`,
-`/dresume`, `/dtimer`, `/dhome`, `/dco`, `/dskip`, `/dundo`, `/dcancel`,
-`/dpublish`.
+`/dresume`, `/dtimer`, `/dhome`, `/dpin`, `/dco`, `/dskip`, `/dundo`,
+`/dcancel`, `/dpublish`.
 
 Owner only: `/dautopick` — see *Granting a pick* below.
 
@@ -87,6 +88,55 @@ Owner only: `/dautopick` — see *Granting a pick* below.
 `/dpublish` (or the button on the draft page) writes the squads into a Challenge
 League. Publishing again re-syncs the same league rather than creating a second
 one, so a correction made with `/dundo` can just be republished.
+
+### Browsing the pool — `/dsearch`
+
+`/dboard → 📦 Available` lists the best of what is left. `/dsearch` answers the
+other question, the one owners ask all evening: *is he still there, and if not,
+who took him.*
+
+```text
+/dsearch                     the whole pool, and what is left per tier
+/dsearch gold bowler         a tier and a role
+/dsearch platinum available  only what can still be picked
+/dsearch overseas wk         only the overseas keepers
+/dsearch kohli               one player — his card, and who holds him
+/dsearch australia           a country, because that is a question too
+```
+
+The words go in **any order** and anything the parser doesn't recognise is
+treated as the name to look for — an owner three seconds before their pick types
+what they mean, not a query language. Tiers match on a three-letter prefix
+(`plat`), roles on the usual spellings (`wk`, `keeper`, `ar`, `bat`).
+
+Every row carries **🟢 available** or **🔴 taken**, the tier badge, the rating,
+the player's **own country flag** (a column of ✈️ says only "not from here";
+🇦🇫 🇦🇺 🏴󠁧󠁢󠁥󠁮󠁧󠁿 says who they are, which is what somebody watching the overseas cap
+is reading for) and, for a player who has gone, the team that holds him.
+Available players sort first, then by tier and rating.
+
+The buttons under it re-filter and page **in place** — tier, role, 🟢/🔴, home
+vs. overseas, and ◀️ ▶️ when the list is longer than a page — so nobody retypes
+the command to turn a page. They belong to the room, not to whoever ran the
+command (`dr_srch_` is in `services.button_access.SHARED_CALLBACK_PREFIXES`),
+and the filters ride in the callback data, so the message keeps working hours
+later. A search that matches exactly one name skips the list and shows that
+player's card instead, including whether he fits the slot currently on the
+clock.
+
+### The pinned pick
+
+Every pick — typed, auto-picked by the clock, `/dskip`, `/dautopick`, or a
+passed slot — is **pinned** in the draft group, and the previous pick's pin is
+dropped. A draft runs for hours and scrolls fast; the pin is how somebody
+arriving late sees where it is without reading back through the room. Exactly
+one message is pinned at a time, so the pin always answers *what just happened*.
+
+Pinning is silent (no ping per pick) and needs the bot to have the group's
+**Pin Messages** right — without it the pick still lands and a warning is
+logged, because a draft must never stop over a pin. `/dundo` and `/dcancel`
+drop the pin, and `/dpin off` turns the whole thing off for a group that would
+rather keep its own pin (`/dpin` on its own reports which it is).
 
 ---
 
@@ -203,7 +253,8 @@ the clock forever. Same call, and the same sweeper shape, as
 
 ```text
 PlayerDraft      the draft: status, bound chat_id, pick clock, tier ladder,
-                 overseas cap, role minimums, and the league it published into
+                 overseas cap, role minimums, the pinned pick, and the league
+                 it published into
 DraftTeam        a franchise: name, logo, owner_tg_id, co-owners, pick queue
 DraftPlayer      one pool entry, scoped to the draft. picked_by_team_id NULL
                  = available. source_player_id links to a real card, for the image
@@ -219,8 +270,10 @@ The order sheet and the result log are the same rows on purpose: *"R1 P3 is
 Mumbai's Platinum slot"* and *"R1 P3 was Bumrah"* are the same fact at two points
 in time, and splitting them would let the two drift apart.
 
-New tables only, so `create_all` builds them — there is no `_try_add` migration,
-because nothing was added to an existing table.
+The draft tables are new tables, so `create_all` builds them. The two columns
+that arrived later — `player_drafts.pinned_message_id` and `.pin_picks`, for the
+auto-pinned latest pick — do have `_try_add` lines in `database.py`, because an
+existing database already has the table.
 
 ### What publishing writes
 
@@ -258,7 +311,7 @@ same file the site let them download, and `requirements.txt` gains nothing.
 | `admin.py` | `/drafts` and `/drafts/<id>` |
 | `templates/admin_drafts.html`, `templates/admin_draft_detail.html` | The two admin pages |
 | `migrate_draft_home_country.py` | One-off sweep: re-flags every existing pool's home/overseas players from their country |
-| `tests/test_player_draft.py` | 113 tests over importing, the home country, the ceiling, permissions, the caps, picking, granting, the clock, undo, publishing and rendering |
+| `tests/test_player_draft.py` | 140 tests over importing, the home country, the ceiling, permissions, the caps, picking, granting, searching, pinning, the clock, undo, publishing and rendering |
 
 ---
 

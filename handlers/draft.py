@@ -14,19 +14,22 @@ Command surface
 Players (in the draft group)
   /pick <player>      make the pick that is on the clock (alias /pk)
   /dboard             the live board, with buttons for order / pool / squads
+  /dsearch [filters]  browse the pool — 🟢 available / 🔴 taken, with filter buttons
   /dsquad [team]      a squad by tier, with slot progress
   /dqueue <player>    your wishlist, which the clock picks from if you time out
 
 Admin
-  /dadmin /dnew /dbind /dstart /dpause /dtimer /dhome /dco /dskip /dundo /dpublish
+  /dadmin /dnew /dbind /dstart /dpause /dtimer /dhome /dpin /dco /dskip /dundo
+  /dpublish
 
 Owner
   /dautopick          grant the team on the clock a random pick of its tier
 
 Callback prefixes are all ``dr_`` (``dr_view_`` for the board's tabs,
-``dr_pick_`` for the disambiguation buttons), which is why ``dr_`` has to be in
-``services.button_access.SHARED_CALLBACK_PREFIXES`` — without it the group's
-button guard would let only whoever ran the command press anything.
+``dr_pick_`` for the disambiguation buttons, ``dr_srch_`` for the pool
+browser), each of which is in ``services.button_access.SHARED_CALLBACK_PREFIXES``
+— without that the group's button guard would let only whoever ran the command
+press anything.
 """
 
 import html
@@ -119,13 +122,19 @@ def _load_for_chat(session, update):
     return ds.draft_for_chat(session, chat.id)
 
 
-async def _with_draft(update, work, *, admin=False, allow_dm=False):
+async def _with_draft(update, work, *, admin=False, allow_dm=False,
+                      after=None, context=None):
     """Run ``work(session, draft)`` against this chat's draft.
 
     Centralises what every command has to do: the group gate, the admin check,
     finding the bound draft, turning a ``DraftError`` into a plain reply, and
     closing the session. ``work`` returns the reply text and may mutate — the
     commit happens here, only if ``work`` returns without raising.
+
+    ``after`` is an optional coroutine ``after(bot, session, draft)`` run once
+    the commit has gone through, for the commands whose effect reaches Telegram
+    as well as the database — dropping the draft's pin, say. It runs before the
+    session closes and its failure never un-does the commit.
     """
     chat = update.effective_chat
     if not allow_dm and (chat is None or chat.type not in GROUP_CHAT_TYPES):
@@ -141,6 +150,11 @@ async def _with_draft(update, work, *, admin=False, allow_dm=False):
             return
         text = work(session, draft)
         session.commit()
+        if after is not None and context is not None:
+            try:
+                await after(context.bot, session, draft)
+            except Exception:
+                logger.exception("Draft command follow-up failed")
     except DraftError as exc:
         session.rollback()
         await _reply(update, f"⚠️ {html.escape(str(exc))}")
@@ -329,6 +343,13 @@ def _board_keyboard():
         InlineKeyboardButton("📋 Order", callback_data="dr_view_order"),
         InlineKeyboardButton("📦 Available", callback_data="dr_view_pool"),
         InlineKeyboardButton("👥 Teams", callback_data="dr_view_teams"),
+    ], [
+        # The pool browser, opened with no filters — the board is where people
+        # already are when they wonder whether somebody is still there. It
+        # arrives as its own message rather than replacing the board, because
+        # the board is what the room is watching.
+        InlineKeyboardButton("🔎 Search the pool",
+                             callback_data="dr_view_search"),
     ]])
 
 
@@ -373,12 +394,15 @@ async def board_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         if draft is None:
             await query.answer("No draft is running here.", show_alert=True)
             return
+        keyboard = None
         if view == "order":
             text = ds.render_order(session, draft)
         elif view == "pool":
             text = ds.render_available(session, draft)
         elif view == "teams":
             text = ds.render_teams(session, draft)
+        elif view == "search":
+            text, keyboard = _search_view(session, draft, _search_state(draft))
         else:
             await query.answer()
             return
@@ -390,7 +414,241 @@ async def board_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         session.close()
     await query.answer()
     await query.message.reply_text(text, parse_mode="HTML",
-                                   disable_web_page_preview=True)
+                                   disable_web_page_preview=True,
+                                   reply_markup=keyboard)
+
+
+# ════════════════════════════════════════════════════════════════════
+# /dsearch — the pool browser
+# ════════════════════════════════════════════════════════════════════
+#
+# The board's 📦 Available tab lists the best of what's left. This answers the
+# other question an owner asks all evening — "is *he* still there, and if not,
+# who took him" — with filters that survive a tap, so nobody has to retype
+# ``/dsearch platinum bowler`` to turn one page.
+#
+# Callback data is ``dr_srch_<tier>~<role>~<avail>~<home>~<page>~<query>``.
+# Indices, not names: Telegram allows 64 bytes and a player's name has to fit
+# in there too.
+
+SEARCH_CB = "dr_srch_"
+_ROLE_LABEL = {"Batsman": "🏏 Bat", "Bowler": "🎯 Bowl",
+               "All-rounder": "⚡ AR", "Wicket Keeper": "🧤 WK"}
+
+
+def _search_state(draft, tier=None, role=None, availability=ds.AVAIL_ANY,
+                  home=None, page=0, query=""):
+    return {"tier": tier, "role": role, "availability": availability,
+            "home": home, "page": page, "query": query}
+
+
+def _encode_search(draft, state, **overrides):
+    """One button's callback data, short enough for Telegram's 64 bytes."""
+    merged = dict(state)
+    merged.update(overrides)
+    tiers, roles = ds.tier_order(draft), list(ds._CATEGORIES)
+    tier = str(tiers.index(merged["tier"])) if merged["tier"] in tiers else ""
+    role = str(roles.index(merged["role"])) if merged["role"] in roles else ""
+    home = "" if merged["home"] is None else ("1" if merged["home"] else "0")
+    head = (f"{SEARCH_CB}{tier}~{role}~{merged['availability']}~{home}"
+            f"~{int(merged['page'])}~")
+    # Whatever is left of the 64 bytes belongs to the name being searched for.
+    room = 64 - len(head.encode())
+    query = merged.get("query") or ""
+    while query and len(query.encode()) > room:
+        query = query[:-1]
+    return head + query
+
+
+def _decode_search(draft, data):
+    """The state a pressed button carries, or ``None`` if it is not ours."""
+    if not (data or "").startswith(SEARCH_CB):
+        return None
+    parts = data[len(SEARCH_CB):].split("~", 5)
+    if len(parts) < 6:
+        return None
+    tier_raw, role_raw, availability, home_raw, page_raw, query = parts
+    tiers, roles = ds.tier_order(draft), list(ds._CATEGORIES)
+    return _search_state(
+        draft,
+        tier=tiers[int(tier_raw)] if tier_raw.isdigit() and int(tier_raw) < len(tiers) else None,
+        role=roles[int(role_raw)] if role_raw.isdigit() and int(role_raw) < len(roles) else None,
+        availability=availability if availability in (ds.AVAIL_ANY, ds.AVAIL_FREE,
+                                                      ds.AVAIL_GONE) else ds.AVAIL_ANY,
+        home={"1": True, "0": False}.get(home_raw),
+        page=int(page_raw) if page_raw.isdigit() else 0,
+        query=query)
+
+
+def _mark(label, active):
+    """An active filter says so on the button — there is no other place to."""
+    return f"✅ {label}" if active else label
+
+
+def _search_keyboard(draft, state, pages):
+    rows = []
+
+    tier_buttons = [InlineKeyboardButton(
+        _mark("All", state["tier"] is None),
+        callback_data=_encode_search(draft, state, tier=None, page=0))]
+    for tier in ds.tier_order(draft):
+        tier_buttons.append(InlineKeyboardButton(
+            _mark(f"{ds.tier_emoji(tier)} {tier}", state["tier"] == tier),
+            callback_data=_encode_search(draft, state, tier=tier, page=0)))
+    for start in range(0, len(tier_buttons), 3):
+        rows.append(tier_buttons[start:start + 3])
+
+    role_buttons = [InlineKeyboardButton(
+        _mark("All", state["role"] is None),
+        callback_data=_encode_search(draft, state, role=None, page=0))]
+    for role, label in _ROLE_LABEL.items():
+        role_buttons.append(InlineKeyboardButton(
+            _mark(label, state["role"] == role),
+            callback_data=_encode_search(draft, state, role=role, page=0)))
+    for start in range(0, len(role_buttons), 3):
+        rows.append(role_buttons[start:start + 3])
+
+    rows.append([
+        InlineKeyboardButton(
+            _mark("🟢 Available", state["availability"] == ds.AVAIL_FREE),
+            callback_data=_encode_search(draft, state,
+                                         availability=ds.AVAIL_FREE, page=0)),
+        InlineKeyboardButton(
+            _mark("🔴 Taken", state["availability"] == ds.AVAIL_GONE),
+            callback_data=_encode_search(draft, state,
+                                         availability=ds.AVAIL_GONE, page=0)),
+        InlineKeyboardButton(
+            _mark("Both", state["availability"] == ds.AVAIL_ANY),
+            callback_data=_encode_search(draft, state,
+                                         availability=ds.AVAIL_ANY, page=0)),
+    ])
+
+    home_flag = ds.home_flag(draft)
+    rows.append([
+        InlineKeyboardButton(
+            _mark(f"{home_flag} Home", state["home"] is True),
+            callback_data=_encode_search(draft, state, home=True, page=0)),
+        InlineKeyboardButton(
+            _mark(f"{ds.OVERSEAS_FLAG} Overseas", state["home"] is False),
+            callback_data=_encode_search(draft, state, home=False, page=0)),
+        InlineKeyboardButton(
+            _mark("Both", state["home"] is None),
+            callback_data=_encode_search(draft, state, home=None, page=0)),
+    ])
+
+    if pages > 1:
+        page = state["page"]
+        rows.append([
+            InlineKeyboardButton(
+                "◀️", callback_data=_encode_search(draft, state,
+                                                   page=(page - 1) % pages)),
+            InlineKeyboardButton(f"{page + 1}/{pages}",
+                                 callback_data=_encode_search(draft, state)),
+            InlineKeyboardButton(
+                "▶️", callback_data=_encode_search(draft, state,
+                                                   page=(page + 1) % pages)),
+        ])
+    return InlineKeyboardMarkup(rows)
+
+
+def _search_view(session, draft, state):
+    """``(text, keyboard)`` for one browser state."""
+    rows = ds.search_pool(session, draft, tier=state["tier"], role=state["role"],
+                          availability=state["availability"],
+                          query=state["query"], home=state["home"])
+    text, page, pages = ds.render_search(
+        session, draft, rows, tier=state["tier"], role=state["role"],
+        availability=state["availability"], home=state["home"],
+        query=state["query"], page=state["page"])
+    state["page"] = page
+    if _unfiltered(state):
+        # What is left per tier, which is the first thing anyone opening the
+        # browser wants and is noise once they have narrowed it down.
+        text = _tier_summary_line(session, draft) + text
+    return text, _search_keyboard(draft, state, pages)
+
+
+def _unfiltered(state):
+    return (not any((state["tier"], state["role"], state["query"]))
+            and state["home"] is None
+            and state["availability"] == ds.AVAIL_ANY)
+
+
+async def dsearch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Browse the pool: <code>/dsearch platinum bowler available</code>.
+
+    The words can come in any order and anything the parser doesn't recognise
+    is treated as the name to look for, because an owner three seconds before
+    their pick types what they mean, not a query language.
+    """
+    chat = update.effective_chat
+    if chat is None or chat.type not in GROUP_CHAT_TYPES:
+        await _reply(update, GROUP_ONLY)
+        return
+    session = get_session()
+    try:
+        draft = _load_for_chat(session, update)
+        if draft is None:
+            await _reply(update, NO_DRAFT)
+            return
+        tier, role, availability, home, name = ds.parse_search_query(
+            draft, _arg_text(context))
+        state = _search_state(draft, tier=tier, role=role,
+                              availability=availability, home=home, query=name)
+        rows = ds.search_pool(session, draft, tier=tier, role=role,
+                              availability=availability, query=name, home=home)
+        # One hit for a typed name is a question about that player, not a list.
+        if name and len(rows) == 1:
+            await _reply(update, ds.render_search_one(session, draft, rows[0]))
+            return
+        text, keyboard = _search_view(session, draft, state)
+    except Exception:
+        logger.exception("/dsearch failed")
+        await _reply(update, "⚠️ Couldn't search the pool. Try again.")
+        return
+    finally:
+        session.close()
+    await _reply(update, text, reply_markup=keyboard)
+
+
+def _tier_summary_line(session, draft):
+    """``💎 4/8 · 🥇 6/12`` — what is left per tier, above an unfiltered list."""
+    parts = [f"{ds.tier_emoji(tier)} {free}/{total}"
+             for tier, free, total in ds.tier_summary(session, draft)]
+    return f"{' · '.join(parts)}\n" if parts else ""
+
+
+async def search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """A filter or page button. Anyone in the draft group may press these."""
+    query = update.callback_query
+    if query is None:
+        return
+    session = get_session()
+    try:
+        draft = _load_for_chat(session, update)
+        if draft is None:
+            await query.answer("No draft is running here.", show_alert=True)
+            return
+        state = _decode_search(draft, query.data)
+        if state is None:
+            await query.answer("That button is out of date.", show_alert=True)
+            return
+        text, keyboard = _search_view(session, draft, state)
+    except Exception:
+        logger.exception("draft search callback failed")
+        await query.answer("Something went wrong.", show_alert=True)
+        return
+    finally:
+        session.close()
+    await query.answer()
+    try:
+        await query.edit_message_text(text, parse_mode="HTML",
+                                      disable_web_page_preview=True,
+                                      reply_markup=keyboard)
+    except Exception:
+        # "Message is not modified" when a filter is pressed twice, and the
+        # message can be too old to edit. Neither is worth an error to the room.
+        logger.debug("draft search edit skipped", exc_info=True)
 
 
 async def dsquad_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -461,6 +719,7 @@ Admin → Tournament Panel → 🎯 Player Drafts → your draft.
 <b>Running it</b>
 <code>/dtimer 15</code> — minutes per pick (default 15)
 <code>/dhome England</code> — set the home country and re-flag the whole pool
+<code>/dpin on|off</code> — pin the latest pick at the top of the group (on by default)
 <code>/dco Mumbai | 123456789</code> — add a co-owner who may also /pick
 <code>/dstart</code> <code>/dpause</code> <code>/dresume</code> — lifecycle
 <code>/dskip</code> — resolve the pick on the clock right now, without waiting
@@ -710,7 +969,41 @@ async def dcancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     def work(session, draft):
         ds.set_status(session, draft, ds.STATUS_CANCELLED)
         return "🚫 <b>Draft cancelled.</b>"
-    await _with_draft(update, work, admin=True)
+    # The pinned pick outlives the draft otherwise, still sitting at the top of
+    # a group whose draft is over.
+    await _with_draft(update, work, admin=True, context=context,
+                      after=dsched.unpin_latest)
+
+
+async def dpin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Turn the auto-pinned latest pick on or off for this draft."""
+    wanted = None
+
+    def work(session, draft):
+        nonlocal wanted
+        arg = _arg_text(context).lower()
+        if not arg:
+            state = "on" if dsched.pinning_on(draft) else "off"
+            return (f"📌 Pinning the latest pick is <b>{state}</b>.\n"
+                    f"Every pick replaces the previous pin, so the top of the "
+                    f"chat always shows where the draft is.\n"
+                    f"Change it with <code>/dpin on</code> or "
+                    f"<code>/dpin off</code>.")
+        if arg in ("on", "yes", "enable", "enabled", "1", "true"):
+            draft.pin_picks = True
+            return ("📌 The latest pick will be pinned from now on. The bot needs "
+                    "the <b>Pin Messages</b> admin right in this group.")
+        if arg in ("off", "no", "disable", "disabled", "0", "false"):
+            draft.pin_picks = False
+            wanted = "unpin"
+            return "📌 Picks will no longer be pinned. The current pin is cleared."
+        raise DraftError("Say /dpin on or /dpin off.")
+
+    async def after(bot, session, draft):
+        if wanted == "unpin":
+            await dsched.unpin_latest(bot, session, draft)
+
+    await _with_draft(update, work, admin=True, context=context, after=after)
 
 
 async def _resolve_on_the_clock(update, context, resolve, *, command):
@@ -825,6 +1118,8 @@ async def dundo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.close()
     try:
         draft, last, player = undone
+        # The pin is the pick that just stopped existing.
+        await dsched.unpin_latest(context.bot, session, draft)
         freed = (f"<b>{html.escape(player.name)}</b> is back in the pool."
                  if player is not None else "That slot had been passed.")
         await dsched.announce_turn(
