@@ -861,6 +861,13 @@ def _migrate_add_columns():
     _try_add("player_drafts", "pinned_message_id", "BIGINT")
     _try_add("player_drafts", "pin_picks", "BOOLEAN DEFAULT TRUE")
 
+    # ── Tournament Draft: the post-draft trade window (/dtrade) ──
+    # ``draft_trades`` itself is created by ``create_all`` above; this column
+    # was added to the existing ``player_drafts``. Open by default — a draft
+    # that finished before this shipped should be tradable, and /dtradelock is
+    # how an admin closes the window.
+    _try_add("player_drafts", "trades_open", "BOOLEAN DEFAULT TRUE")
+
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so
     # they stay independently fault-tolerant without a round trip each.
@@ -868,6 +875,10 @@ def _migrate_add_columns():
         # Normalize the legacy milestone key so it remains editable in the dashboard.
         "UPDATE event_media SET event_key = 'century' WHERE event_key = 'hundred'",
         "UPDATE user_quest_progress SET assigned = TRUE WHERE assigned IS NULL",
+        # trades_open is non-nullable in the model and a NULL reads back falsy —
+        # which would quietly close the /dtrade window on every draft that
+        # existed before the column did.
+        "UPDATE player_drafts SET trades_open = TRUE WHERE trades_open IS NULL",
         "ALTER TABLE user_quest_progress ALTER COLUMN assigned SET DEFAULT TRUE",
         "ALTER TABLE user_quest_progress ALTER COLUMN assigned SET NOT NULL",
         # match_format is non-nullable in the model; backfill legacy NULLs and

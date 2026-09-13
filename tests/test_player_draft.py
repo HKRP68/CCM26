@@ -34,19 +34,60 @@ _PREV_DATABASE_URL = None
 _SAVED_MODULES = {}
 _TMP = None
 _ENGINE = None
+# Everything reached from here that caches a reference to ``database`` /
+# ``models``. The handler modules are in the list because
+# ``tests/test_draft_trade.py`` imports them against its OWN temporary
+# database: left cached, ``handlers.draft``'s ``get_session`` and its
+# ``DraftError`` are a different object from the freshly imported ones, so this
+# module's command tests would query the wrong file and fail to catch the
+# refusals it raises. Whichever of the two suites runs second was the one that
+# broke; both now reload the whole set.
 _MODULE_NAMES = ("database", "models", "config",
-                 "services.draft_service", "services.xlsx_reader")
+                 "services.draft_service", "services.draft_trade_service",
+                 "services.draft_scheduler", "services.xlsx_reader",
+                 "handlers.draft", "handlers.draft_trade")
 
 _PID = itertools.count(1)
 
+
+def _unload(names):
+    """Drop these modules so the next import rebuilds them.
+
+    Popping ``sys.modules`` is not enough on its own: ``from handlers import
+    draft`` returns a **cached attribute on the package** when one exists,
+    without consulting ``sys.modules`` at all, so the stale module — and, fatally,
+    the ``get_session`` it bound at import time to a temporary database that no
+    longer exists — would come straight back. The attribute has to go too.
+    """
+    for name in names:
+        sys.modules.pop(name, None)
+        parent, _, child = name.rpartition(".")
+        package = sys.modules.get(parent) if parent else None
+        if package is not None:
+            try:
+                delattr(package, child)
+            except AttributeError:
+                pass
+
+
+def _restore(saved):
+    """Put back whatever ``_unload`` took away, package attributes included."""
+    for name, module in saved.items():
+        parent, _, child = name.rpartition(".")
+        if module is None:
+            _unload([name])
+            continue
+        sys.modules[name] = module
+        package = sys.modules.get(parent) if parent else None
+        if package is not None:
+            setattr(package, child, module)
 
 def setUpModule():
     global _PREV_DATABASE_URL, _SAVED_MODULES, _TMP, _ENGINE
 
     _PREV_DATABASE_URL = os.environ.get("DATABASE_URL")
     _SAVED_MODULES = {name: sys.modules.get(name) for name in _MODULE_NAMES}
-    for name in _MODULE_NAMES:
-        sys.modules.pop(name, None)
+    _unload(_MODULE_NAMES)
 
     _TMP = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     _TMP.close()
@@ -68,11 +109,7 @@ def tearDownModule():
         os.environ.pop("DATABASE_URL", None)
     else:
         os.environ["DATABASE_URL"] = _PREV_DATABASE_URL
-    for name, module in _SAVED_MODULES.items():
-        if module is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = module
+    _restore(_SAVED_MODULES)
     try:
         os.unlink(_TMP.name)
     except OSError:

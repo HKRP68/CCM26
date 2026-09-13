@@ -2934,6 +2934,12 @@ class PlayerDraft(Base):
     # slots to still satisfy the minimums.
     role_minimums_json = Column(Text, nullable=True)
 
+    # ── The trade window ───────────────────────────────────────────────
+    # Whether owners may swap drafted players with /dtrade once the draft is
+    # finished. On by default; an admin closes the window with /dtradelock
+    # before a fixture so squads can't change under a live match.
+    trades_open = Column(Boolean, default=True, nullable=False)
+
     # ── Publication ────────────────────────────────────────────────────
     # The Challenge League this draft was published into. SET NULL so deleting
     # the league leaves the draft's own record of what happened intact.
@@ -2953,6 +2959,8 @@ class PlayerDraft(Base):
     picks = relationship("DraftPick", back_populates="draft",
                          cascade="all, delete-orphan",
                          foreign_keys="DraftPick.draft_id")
+    trades = relationship("DraftTrade", back_populates="draft",
+                          cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_player_draft_chat_unique", "chat_id", unique=True),
@@ -3086,4 +3094,56 @@ class DraftPick(Base):
     __table_args__ = (
         Index("ix_draft_pick_unique", "draft_id", "round_no", "pick_no", unique=True),
         Index("ix_draft_pick_order_unique", "draft_id", "overall_no", unique=True),
+    )
+
+
+class DraftTrade(Base):
+    """A ``/dtrade`` between two franchises: the offer, and then the record of it.
+
+    **The whole offer lives here, not in process memory.** ``/trade`` keeps its
+    in-flight state in ``context.bot_data`` and loses every open trade to a
+    redeploy; a draft group's trade window is open for days across a host that
+    restarts often, so the half-built offer — who is trading with whom, which
+    players each side has ticked, who has confirmed — is a row that survives it.
+    The buttons carry only this row's id, so a message pressed after a restart
+    picks up exactly where it was.
+
+    ``players_a_json`` / ``players_b_json`` are JSON lists of ``DraftPlayer``
+    ids: the players ``team_a`` sends to ``team_b`` and vice versa. They are
+    kept after completion, which is what makes this table the trade log
+    ``/dtrades`` prints — the pick rows are deliberately never rewritten, so
+    this is the only place a squad change after the draft is recorded.
+    """
+    __tablename__ = "draft_trades"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    draft_id = Column(Integer, ForeignKey("player_drafts.id", ondelete="CASCADE"),
+                      nullable=False, index=True)
+    # The team that opened the trade, and the team it was opened with.
+    team_a_id = Column(Integer, ForeignKey("draft_teams.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    team_b_id = Column(Integer, ForeignKey("draft_teams.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    players_a_json = Column(Text, nullable=True)
+    players_b_json = Column(Text, nullable=True)
+    # building_a | building_b | offered | completed | cancelled | expired
+    status = Column(String(20), default="building_a", nullable=False, index=True)
+    # Telegram ids, so a co-owner's confirmation is recorded as theirs rather
+    # than as the owner's. NULL means that side has not confirmed yet.
+    confirmed_a_by = Column(BigInteger, nullable=True)
+    confirmed_b_by = Column(BigInteger, nullable=True)
+    opened_by_tg_id = Column(BigInteger, nullable=True)
+    closed_by_tg_id = Column(BigInteger, nullable=True)
+    chat_id = Column(BigInteger, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    draft = relationship("PlayerDraft", back_populates="trades")
+    team_a = relationship("DraftTeam", foreign_keys=[team_a_id])
+    team_b = relationship("DraftTeam", foreign_keys=[team_b_id])
+
+    __table_args__ = (
+        Index("ix_draft_trade_live", "draft_id", "status"),
     )

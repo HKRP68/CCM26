@@ -1134,13 +1134,18 @@ def overseas_count(session, team_id):
                     DraftPlayer.is_indian.is_(False)).count())
 
 
-def role_gap(session, draft, team_id):
-    """``{role: how many more this team still needs}`` for unmet minimums."""
+def role_shortfall(draft, players):
+    """``{role: how many more this squad needs}`` for a list of players.
+
+    The rule, without a database behind it, so a squad that does not exist yet
+    can be asked the same question — which is what a trade has to do before it
+    moves anybody (``services/draft_trade_service.py``).
+    """
     minimums = role_minimums(draft)
     if not minimums:
         return {}
     have = {}
-    for player in squad(session, team_id):
+    for player in players:
         have[player.category] = have.get(player.category, 0) + 1
     gap = {}
     for role, needed in minimums.items():
@@ -1153,6 +1158,11 @@ def role_gap(session, draft, team_id):
         if short > 0:
             gap[role] = short
     return gap
+
+
+def role_gap(session, draft, team_id):
+    """``{role: how many more this team still needs}`` for unmet minimums."""
+    return role_shortfall(draft, squad(session, team_id))
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1421,6 +1431,19 @@ def undo_last(session, draft):
         player = (session.query(DraftPlayer)
                   .filter(DraftPlayer.id == last.draft_player_id).first())
         if player is not None:
+            # A pick row is never rewritten by a trade — "R3 P2 was Mumbai's
+            # pick of Tim David" stays true after Mumbai trades him away. So a
+            # player who has since moved is not this team's to hand back, and
+            # undoing here would take him off whoever holds him now.
+            if (player.picked_by_team_id is not None
+                    and player.picked_by_team_id != last.team_id):
+                holder = (session.query(DraftTeam)
+                          .filter(DraftTeam.id == player.picked_by_team_id).first())
+                raise DraftError(
+                    f"{player.name} has been traded to "
+                    f"{holder.name if holder else 'another team'} since that "
+                    f"pick. Reverse the trade first — undoing now would take "
+                    f"him off a squad that did not make this pick.")
             player.picked_by_team_id = None
             player.picked_at = None
     last.draft_player_id = None

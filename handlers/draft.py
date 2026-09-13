@@ -17,10 +17,14 @@ Players (in the draft group)
   /dsearch [filters]  browse the pool — 🟢 available / 🔴 taken, with filter buttons
   /dsquad [team]      a squad by tier, with slot progress
   /dqueue <player>    your wishlist, which the clock picks from if you time out
+  /dtrade <team>      once the draft is over: swap players with another
+                      franchise — any player for any player, no rating rule
+                      (handlers/draft_trade.py)
+  /dtrades            every trade that has been done
 
 Admin
   /dadmin /dnew /dbind /dstart /dpause /dtimer /dhome /dpin /dco /dskip /dundo
-  /dpublish
+  /dpublish /dtradelock
 
 Owner
   /dautopick          grant the team on the clock a random pick of its tier
@@ -263,7 +267,11 @@ async def pick_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await dsched.announce_pick(context.bot, session, draft, done, player)
         if draft.status == ds.STATUS_COMPLETED:
             await _reply(update, "🏁 <b>Draft complete.</b> Every slot is filled — "
-                                 "an admin can publish the squads with /dpublish.")
+                                 "an admin can publish the squads with /dpublish.\n"
+                                 "The <b>trade window is open</b>: swap players "
+                                 "with another franchise using "
+                                 "<code>/dtrade &lt;team&gt;</code> — any player "
+                                 "for any player, no rating rule.")
     finally:
         session.close()
 
@@ -713,7 +721,19 @@ async def dsquad_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 raise DraftError(f"No team here matches “{wanted}”.")
             raise DraftError("You don't own a team in this draft — name one, "
                              "e.g. /dsquad Mumbai.")
-        return ds.render_squad(session, draft, team)
+        body = ds.render_squad(session, draft, team)
+        # The squad readout is where an owner is standing when they notice they
+        # have three keepers and no death bowler, so it is where the trade
+        # window is worth advertising. /dtrade is not in the group slash menu —
+        # that list is at Telegram's ceiling — so this pointer is how most
+        # owners find it.
+        from services import draft_trade_service as dts
+        if draft.status == ds.STATUS_COMPLETED and dts.trades_open(draft):
+            body += ("\n\n🔁 Trade window open — "
+                     "<code>/dtrade &lt;team&gt;</code> swaps players with "
+                     "another franchise (any player for any player). "
+                     "Done so far: /dtrades")
+        return body
     await _with_draft(update, work)
 
 
@@ -781,6 +801,9 @@ Admin → Tournament Panel → 🎯 Player Drafts → your draft.
 
 <b>Finishing</b>
 <code>/dpublish</code> — write the squads into a Challenge League so they can play
+<code>/dtradelock on|off</code> — close or reopen the post-draft trade window
+  (<code>/dtrade</code>). Close it before a match day so a team sheet cannot
+  change under a live fixture.
 
 <b>The rules the bot enforces</b>
 • A slot's tier is a <b>ceiling</b> — a Platinum slot takes Platinum or below.
@@ -792,7 +815,11 @@ Admin → Tournament Panel → 🎯 Player Drafts → your draft.
   that would make a role minimum unreachable is refused while it can still be fixed.
 • Only the Owner Tag ID and co-owners may pick for a team. Admins use /dskip.
 • When a clock runs out the bot picks: the owner's /dqueue first, otherwise the
-  player closest to the average rating of what's legal in that tier."""
+  player closest to the average rating of what's legal in that tier.
+• Once the draft is <b>complete</b>, owners may trade with <code>/dtrade</code>.
+  There is <b>no rating rule</b> — any player for any player — but the counts
+  must match and the squad rules above (tier slots, the overseas cap, role
+  minimums) are re-checked on both squads before anybody moves."""
 
 
 async def dadmin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
