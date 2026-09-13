@@ -4012,12 +4012,15 @@ async def _show_delivery(ctx, cid, mid):
         _start_action_timer(ctx, mid, s["bowl_user_tg"], "select delivery")
     except Exception:
         logger.exception(f"_show_delivery failed for match {mid}")
+        # Schedule the retry BEFORE the notice: the notice goes out over the
+        # same channel that just failed, and when it fails too the match used
+        # to be left with no prompt and no recovery — waiting for a /resume.
+        _schedule_recovery(ctx, mid, "delivery prompt")
         try:
             await ctx.bot.send_message(
                 cid,
                 "⚠️ Couldn't show delivery buttons. Retrying automatically…",
                 parse_mode="HTML")
-            _schedule_recovery(ctx, mid, "delivery prompt")
         except Exception:
             pass
 
@@ -4186,12 +4189,12 @@ async def _show_shot(ctx, cid, mid):
     except Exception:
         logger.exception(f"_show_shot failed for match {mid}")
         # Last-ditch: send a plain text fallback so user knows what to do
+        _schedule_recovery(ctx, mid, "shot prompt")   # before the notice
         try:
             await ctx.bot.send_message(
                 cid,
                 "⚠️ Couldn't show shot buttons. Retrying automatically…",
                 parse_mode="HTML")
-            _schedule_recovery(ctx, mid, "shot prompt")
         except Exception:
             pass
 
@@ -5250,12 +5253,12 @@ async def _show_new_batsman(ctx, mid):
         _start_action_timer(ctx, mid, s["bat_user_tg"], "select batsman")
     except Exception:
         logger.exception(f"_show_new_batsman failed for match {mid}")
+        _schedule_recovery(ctx, mid, "batsman picker")   # before the notice
         try:
             await ctx.bot.send_message(
                 s["chat_id"],
                 "⚠️ Couldn't show batsman picker. Retrying automatically…",
                 parse_mode="HTML")
-            _schedule_recovery(ctx, mid, "batsman picker")
         except Exception:
             pass
 
@@ -5292,12 +5295,12 @@ async def new_batsman_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await asyncio.gather(_card(), render_screen(context, mid))
     except Exception:
         logger.exception(f"new_batsman_callback next-step failed for match {mid}")
+        _schedule_recovery(context, mid, "new batsman")   # before the notice
         try:
             await context.bot.send_message(
                 s["chat_id"],
                 "⚠️ Hit a hiccup. Reconnecting automatically…",
                 parse_mode="HTML")
-            _schedule_recovery(context, mid, "new batsman")
         except Exception:
             pass
 
@@ -5330,12 +5333,12 @@ async def _show_new_over_bowler(ctx, mid):
         _start_action_timer(ctx, mid, s["bowl_user_tg"], "select bowler")
     except Exception:
         logger.exception(f"_show_new_over_bowler failed for match {mid}")
+        _schedule_recovery(ctx, mid, "bowler picker")   # before the notice
         try:
             await ctx.bot.send_message(
                 s["chat_id"],
                 "⚠️ Couldn't show bowler picker. Retrying automatically…",
                 parse_mode="HTML")
-            _schedule_recovery(ctx, mid, "bowler picker")
         except Exception:
             pass
 

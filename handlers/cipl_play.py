@@ -564,6 +564,111 @@ def _arm_timer(context, mid, expected_action):
         _on_timeout, CIPL_TIMEOUT, name=f"cipl_to_{mid}", data=data)
 
 
+def timer_armed(context, mid):
+    """True while this match has an inactivity timer scheduled.
+
+    The timer is what drives a waiting turn to a conclusion, so its absence on a
+    match that is sitting still is the signal that the flow has been dropped —
+    a process restart (the jobs live in memory), a send that raised, a step that
+    blew up between cancelling the old clock and arming the new one. The
+    heartbeat uses this to decide whether a match needs resuming, so it never
+    interrupts a turn that is still being counted down.
+    """
+    jq = getattr(context, "job_queue", None)
+    if not jq:
+        return False
+    try:
+        return bool(jq.get_jobs_by_name(f"cipl_to_{mid}"))
+    except Exception:
+        logger.exception("cipl timer lookup failed for match %s", mid)
+        return False
+
+
+# ── Automatic recovery (so a dropped prompt never needs a manual /rcl) ──
+#
+# Every pick in the over flow is shown by a Telegram send that can fail, and the
+# callback that triggered it has already cancelled the previous clock. Without a
+# retry the match simply stopped: no buttons in the chat, no timer to move it
+# on, and the only way out was a captain typing /rcl. These retries re-send the
+# outstanding prompt on the match's behalf.
+
+CIPL_RECOVERY_DELAYS = (2.0, 5.0, 15.0, 45.0)
+
+
+def _schedule_cipl_recovery(context, mid, delays=CIPL_RECOVERY_DELAYS):
+    """Retry the outstanding prompt in the background. Idempotent per match."""
+    key = f"cipl_recovery_{mid}"
+    existing = context.bot_data.get(key)
+    if existing is not None and not existing.done():
+        return existing
+
+    async def _runner():
+        for delay in delays:
+            await asyncio.sleep(delay)
+            state = await _gs(context, mid)
+            if not is_cipl_state(state):
+                return                      # match ended or was cleared
+            if state.get("prompt_delivered"):
+                return                      # a prompt landed on its own
+            try:
+                if await cipl_resume(context, mid):
+                    return
+            except Exception:
+                logger.exception("cipl recovery attempt failed for match %s", mid)
+
+    try:
+        task = asyncio.create_task(_runner(), name=key)
+    except RuntimeError:
+        logger.exception("cipl recovery could not be scheduled for match %s", mid)
+        return None
+    context.bot_data[key] = task
+
+    def _clear(done_task):
+        if context.bot_data.get(key) is done_task:
+            context.bot_data.pop(key, None)
+
+    task.add_done_callback(_clear)
+    return task
+
+
+async def _mark_prompt_delivered(context, mid, state, delivered, action):
+    """Persist the outstanding pick, arm its clock, and retry a failed send.
+
+    Called by every prompt in the over flow, on both the happy and the failed
+    path. Arming the clock is deliberately NOT conditional on the send having
+    worked: a match with no clock is a match that waits for someone to type
+    /rcl, whereas a match whose prompt never arrived is one the retry below (and
+    the timeout, which re-prompts rather than forfeiting an unseen turn) can
+    still rescue.
+    """
+    state["prompt_delivered"] = bool(delivered)
+    await _ss(context, mid, state, next_action=action)
+    _arm_timer(context, mid, action)
+    if not delivered:
+        _schedule_cipl_recovery(context, mid)
+
+
+async def _recover_from_error(context, mid, where):
+    """A step of the over flow raised — put the clock back and retry the prompt.
+
+    Call from an ``except`` block. The pick that got us here has already been
+    saved, so the resume re-reads the pointer and re-sends whatever is actually
+    outstanding.
+    """
+    logger.exception("cipl: %s failed for match %s", where, mid)
+    try:
+        state = await _gs(context, mid)
+        if is_cipl_state(state):
+            state["prompt_delivered"] = False
+            await _ss(context, mid, state)
+        action = await _get_next_action(context, mid)
+        if action and action != A_COMPLETED:
+            _arm_timer(context, mid, action)
+        _schedule_cipl_recovery(context, mid)
+    except Exception:
+        logger.exception("cipl: recovery scheduling failed for match %s", mid)
+
+
 def _idle_actor(state, expected):
     """Return (idle_uid, idle_tg, idle_name, win_uid, win_tg, win_name) for a
     live-match timeout, based on whose turn it is to act."""
@@ -589,6 +694,8 @@ async def _on_remind(context):
         state = await _gs(context, mid)
         if not state:
             return
+        if not state.get("prompt_delivered", True):
+            return  # no picker in the chat to be late for — see _on_timeout
         _, idle_tg, idle_name, _, _, _ = _idle_actor(state, expected)
         secs = max(0, CIPL_TIMEOUT - CIPL_REMIND)
         prev = state.pop("action_remind_msg_id", None)
@@ -626,6 +733,18 @@ async def _on_timeout(context):
             return  # the user already acted
         state = await _gs(context, mid)
         if not state:
+            return
+        # The prompt this clock was counting down never reached the chat —
+        # there was nothing to tap, so nobody is idle. Re-send it and start the
+        # turn properly instead of punishing a player for a failed send.
+        if not state.get("prompt_delivered", True):
+            logger.warning("cipl: timeout on an undelivered prompt for match %s "
+                           "— re-sending it instead of forfeiting", mid)
+            try:
+                await _resume_locked(context, mid)
+            except Exception:
+                logger.exception("cipl timeout re-prompt failed for match %s", mid)
+                _arm_timer(context, mid, expected)
             return
         try:
             if _is_bot_match(state):
@@ -1552,9 +1671,14 @@ async def _prompt_bowler(context, mid, state=None, first=False):
     text = (f"{_approach_card(state)}\n\n"
             f"🎳 {_mention_tg(state, state['bowl_user_tg'])}, pick your bowler "
             f"for {_unit_word(state)} {state['current_over']}:{part_time_note}")
-    await _new_action_message(context, state, text, rows)
-    await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
-    _arm_timer(context, mid, A_PICK_CIPL_BOWLER)
+    try:
+        await _new_action_message(context, state, text, rows)
+        delivered = True
+    except Exception:
+        logger.exception("cipl: bowler prompt send failed for match %s", mid)
+        delivered = False
+    await _mark_prompt_delivered(context, mid, state, delivered,
+                                 A_PICK_CIPL_BOWLER)
 
 
 async def _bot_take_the_ball(context, mid, state):
@@ -1609,9 +1733,15 @@ async def _prompt_bowl_approach(context, mid, state, auto=False):
             f"🎳 Bowler: <b>{bowler['name']}</b>{note}\n"
             f"{_mention_tg(state, state['bowl_user_tg'])}, choose your "
             f"<b>Bowling Approach</b>:")
-    await _edit_action_message(context, state, text, rows)
-    await _ss(context, mid, state, next_action=A_PICK_BOWL_APPROACH)
-    _arm_timer(context, mid, A_PICK_BOWL_APPROACH)
+    try:
+        await _edit_action_message(context, state, text, rows)
+        delivered = True
+    except Exception:
+        logger.exception("cipl: bowling-approach prompt send failed for match %s",
+                         mid)
+        delivered = False
+    await _mark_prompt_delivered(context, mid, state, delivered,
+                                 A_PICK_BOWL_APPROACH)
 
 
 async def _prompt_bat_approach(context, mid, state, auto=False):
@@ -1632,9 +1762,15 @@ async def _prompt_bat_approach(context, mid, state, auto=False):
             f"🎳 Bowler: <b>{state['current_bowler']['name']}</b>\n"
             f"🏏 {_mention_tg(state, state['bat_user_tg'])}, choose your "
             f"<b>Batting Approach</b>:")
-    await _edit_action_message(context, state, text, rows)
-    await _ss(context, mid, state, next_action=A_PICK_BAT_APPROACH)
-    _arm_timer(context, mid, A_PICK_BAT_APPROACH)
+    try:
+        await _edit_action_message(context, state, text, rows)
+        delivered = True
+    except Exception:
+        logger.exception("cipl: batting-approach prompt send failed for match %s",
+                         mid)
+        delivered = False
+    await _mark_prompt_delivered(context, mid, state, delivered,
+                                 A_PICK_BAT_APPROACH)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1708,46 +1844,56 @@ async def cipl_resume(context, mid, state=None):
     # callback or the inactivity timer (both of which lock) and rewind the flow
     # to an older action. Re-read state under the lock for the same reason.
     async with get_match_lock(mid):
-        state = await _gs(context, mid)
-        if not is_cipl_state(state):
-            return False
-        # While a Super Over is live the main over-by-over flow is suspended —
-        # never re-prompt it (that could run another main-match over after the
-        # regulation overs and overwrite the tie with a wrong result).
-        if _super_over_active(context, mid):
-            return False
-        action = await _get_next_action(context, mid)
-        if action == A_COMPLETED:
-            # Finished match whose cleanup didn't land — clear it so /rcl stops
-            # finding the corpse (and can never re-prompt an over on it).
-            cleanup_state(context, mid)
-            release_match_lock(mid)
-            return False
-        # The innings has already used its full quota (20 overs / 100 balls, all
-        # out, or the chase won). /rcl must NEVER re-prompt a pick here: doing so
-        # played a 21st over whenever an end-of-innings handler had failed
-        # part-way (a dropped Telegram send left next_action on the consumed
-        # approach pick). Drive the terminal step instead.
-        if _innings_quota_used(state):
-            return await _resume_finished_innings(context, mid, state)
-        try:
-            # Re-render the outstanding pick. Keep action_msg_id so an approach
-            # resume edits the existing prompt IN PLACE (no duplicate), and a
-            # bowler resume replaces it via _new_action_message (which deletes the
-            # old picker first). Either way the buttons reappear even if the
-            # previous prompt was deleted — the edit falls back to a fresh send.
-            if action == A_PICK_BOWL_APPROACH and state.get("current_bowler"):
-                await _prompt_bowl_approach(context, mid, state)
-            elif action == A_PICK_BAT_APPROACH and state.get("current_bowler"):
-                await _prompt_bat_approach(context, mid, state)
-            else:
-                # A_PICK_CIPL_BOWLER, an unknown action, or a missing bowler all
-                # resume cleanly from the start of the over (bowler selection).
-                await _prompt_bowler(context, mid, state, first=True)
-            return True
-        except Exception:
-            logger.exception("cipl_resume failed for match %s", mid)
-            return False
+        return await _resume_locked(context, mid)
+
+
+async def _resume_locked(context, mid):
+    """``cipl_resume`` with the match lock already held by the caller.
+
+    Split out so the inactivity timeout — which runs inside the lock — can
+    re-send a prompt that never reached the chat instead of deadlocking on a
+    second acquire of a non-reentrant lock.
+    """
+    state = await _gs(context, mid)
+    if not is_cipl_state(state):
+        return False
+    # While a Super Over is live the main over-by-over flow is suspended —
+    # never re-prompt it (that could run another main-match over after the
+    # regulation overs and overwrite the tie with a wrong result).
+    if _super_over_active(context, mid):
+        return False
+    action = await _get_next_action(context, mid)
+    if action == A_COMPLETED:
+        # Finished match whose cleanup didn't land — clear it so /rcl stops
+        # finding the corpse (and can never re-prompt an over on it).
+        cleanup_state(context, mid)
+        release_match_lock(mid)
+        return False
+    # The innings has already used its full quota (20 overs / 100 balls, all
+    # out, or the chase won). /rcl must NEVER re-prompt a pick here: doing so
+    # played a 21st over whenever an end-of-innings handler had failed
+    # part-way (a dropped Telegram send left next_action on the consumed
+    # approach pick). Drive the terminal step instead.
+    if _innings_quota_used(state):
+        return await _resume_finished_innings(context, mid, state)
+    try:
+        # Re-render the outstanding pick. Keep action_msg_id so an approach
+        # resume edits the existing prompt IN PLACE (no duplicate), and a
+        # bowler resume replaces it via _new_action_message (which deletes the
+        # old picker first). Either way the buttons reappear even if the
+        # previous prompt was deleted — the edit falls back to a fresh send.
+        if action == A_PICK_BOWL_APPROACH and state.get("current_bowler"):
+            await _prompt_bowl_approach(context, mid, state)
+        elif action == A_PICK_BAT_APPROACH and state.get("current_bowler"):
+            await _prompt_bat_approach(context, mid, state)
+        else:
+            # A_PICK_CIPL_BOWLER, an unknown action, or a missing bowler all
+            # resume cleanly from the start of the over (bowler selection).
+            await _prompt_bowler(context, mid, state, first=True)
+        return True
+    except Exception:
+        logger.exception("cipl_resume failed for match %s", mid)
+        return False
 
 
 async def _resume_finished_innings(context, mid, state):
@@ -1931,7 +2077,10 @@ async def cipl_bowler_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         _cancel_timer(context, mid)
         state["current_bowler"] = bowler
         await _ss(context, mid, state)
-        await _prompt_bowl_approach(context, mid, state)
+        try:
+            await _prompt_bowl_approach(context, mid, state)
+        except Exception:
+            await _recover_from_error(context, mid, "bowling-approach prompt")
 
 
 async def cipl_bowlapp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1968,7 +2117,10 @@ async def cipl_bowlapp_callback(update: Update, context: ContextTypes.DEFAULT_TY
         _cancel_timer(context, mid)
         state["bowling_approach"] = BOWLING_APPROACHES[idx][0]
         await _ss(context, mid, state)
-        await _prompt_bat_approach(context, mid, state)
+        try:
+            await _prompt_bat_approach(context, mid, state)
+        except Exception:
+            await _recover_from_error(context, mid, "batting-approach prompt")
 
 
 async def cipl_batapp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2005,7 +2157,10 @@ async def cipl_batapp_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         _cancel_timer(context, mid)
         state["batting_approach"] = BATTING_APPROACHES[idx][0]
         await _ss(context, mid, state)
-        await _run_over(context, mid, state)
+        try:
+            await _run_over(context, mid, state)
+        except Exception:
+            await _recover_from_error(context, mid, "over simulation")
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -2369,9 +2524,16 @@ async def _innings_break(context, mid, state):
             f"🎯 <b>{state['bat_team_name']}</b> need <b>{target}</b> to win "
             f"in {state['overs']} overs.")
     kb = _miniapp_row(state)
-    sent = await context.bot.send_message(
-        state["chat_id"], text, parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(kb) if kb else None)
+    # The break card is cosmetic. A failed send must not stop the chase from
+    # starting below — that left the match sitting on an innings break with no
+    # picker and no clock, waiting for someone to type /rcl.
+    try:
+        sent = await context.bot.send_message(
+            state["chat_id"], text, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(kb) if kb else None)
+    except Exception:
+        logger.exception("cipl innings-break card send failed for match %s", mid)
+        sent = None
     # Keep the break card up through the first over of the chase (the target also
     # rides along in every over header), then let the normal previous-over delete
     # sweep it away the moment over 2 begins — so the chat doesn't accumulate it.
