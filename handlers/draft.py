@@ -18,7 +18,10 @@ Players (in the draft group)
   /dqueue <player>    your wishlist, which the clock picks from if you time out
 
 Admin
-  /dadmin /dnew /dbind /dstart /dpause /dtimer /dco /dskip /dundo /dpublish
+  /dadmin /dnew /dbind /dstart /dpause /dtimer /dhome /dco /dskip /dundo /dpublish
+
+Owner
+  /dautopick          grant the team on the clock a random pick of its tier
 
 Callback prefixes are all ``dr_`` (``dr_view_`` for the board's tabs,
 ``dr_pick_`` for the disambiguation buttons), which is why ``dr_`` has to be in
@@ -36,7 +39,7 @@ from database import get_session
 from models import DraftPlayer, DraftTeam
 from services import draft_service as ds
 from services import draft_scheduler as dsched
-from services.admin_ids import is_admin
+from services.admin_ids import is_admin, is_owner
 from services.draft_service import DraftError
 
 logger = logging.getLogger(__name__)
@@ -44,6 +47,8 @@ logger = logging.getLogger(__name__)
 GROUP_CHAT_TYPES = ("group", "supergroup")
 
 NOT_ADMIN = "⛔ Only bot admins can manage a draft."
+NOT_OWNER = ("⛔ Only the bot owner can grant a pick with <code>/dautopick</code>. "
+             "Admins have <code>/dskip</code>.")
 GROUP_ONLY = ("❌ Draft commands only work in the group the draft is bound to.\n"
               "An admin binds one with <code>/dbind</code>.")
 NO_DRAFT = ("❌ No draft is running in this chat.\n"
@@ -88,6 +93,20 @@ async def _require_admin(update):
     user = update.effective_user
     if not user or not is_admin(user.id):
         await _reply(update, NOT_ADMIN)
+        return False
+    return True
+
+
+async def _require_owner(update):
+    """Owner-only, a strictly narrower gate than ``_require_admin``.
+
+    ``/dautopick`` hands a team a player nobody on that team chose. That is a
+    heavier thing than unsticking the clock, so it sits with the bot owner
+    rather than with every admin.
+    """
+    user = update.effective_user
+    if not user or not is_owner(user.id):
+        await _reply(update, NOT_OWNER)
         return False
     return True
 
@@ -441,9 +460,12 @@ Admin → Tournament Panel → 🎯 Player Drafts → your draft.
 
 <b>Running it</b>
 <code>/dtimer 15</code> — minutes per pick (default 15)
+<code>/dhome England</code> — set the home country and re-flag the whole pool
 <code>/dco Mumbai | 123456789</code> — add a co-owner who may also /pick
 <code>/dstart</code> <code>/dpause</code> <code>/dresume</code> — lifecycle
 <code>/dskip</code> — resolve the pick on the clock right now, without waiting
+<code>/dautopick</code> — <b>owner only</b>: grant the team on the clock a random
+  player from its allotted tier (for a squad whose owner is offline)
 <code>/dundo</code> — roll the last pick back onto the clock
 <code>/dcancel</code> — stop the draft
 
@@ -453,6 +475,9 @@ Admin → Tournament Panel → 🎯 Player Drafts → your draft.
 <b>The rules the bot enforces</b>
 • A slot's tier is a <b>ceiling</b> — a Platinum slot takes Platinum or below.
   Picking below spends the slot; there is no refund.
+• A player is <b>home</b> when their pool row's country is the draft's home
+  country, and <b>overseas</b> otherwise — the sheet's country column decides.
+  Check it with <code>/dhome</code>.
 • The overseas cap and any role minimums are checked on every pick, and a pick
   that would make a role minimum unreachable is refused while it can still be fixed.
 • Only the Owner Tag ID and co-owners may pick for a team. Admins use /dskip.
@@ -561,6 +586,51 @@ async def dtimer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _with_draft(update, work, admin=True)
 
 
+async def dhome_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show or set the draft's home country, re-flagging the pool against it.
+
+    A player is home when their **pool row's country** is this country, and
+    overseas otherwise. Running it on a live draft is the supported way to fix a
+    pool that was flagged under a different home country — the pool itself can't
+    be re-uploaded once picking has started.
+    """
+    def work(session, draft):
+        arg = _arg_text(context)
+        if arg.lower() in ("sync", "resync", "refresh"):
+            arg = draft.home_country or ds.DEFAULT_HOME_COUNTRY
+        if not arg:
+            home, overseas, unknown, wrong = ds.home_status_counts(session, draft)
+            lines = [f"{ds.home_flag(draft)} Home country: "
+                     f"<b>{html.escape(draft.home_country or ds.DEFAULT_HOME_COUNTRY)}</b>",
+                     f"Pool: {ds.home_flag(draft)} {home} home · "
+                     f"{ds.OVERSEAS_FLAG} {overseas} overseas "
+                     f"· max {draft.max_overseas} overseas per squad"]
+            if unknown:
+                lines.append(f"⚠️ {unknown} player(s) have no country the bot can "
+                             f"read — their flag is left as it is.")
+            if wrong:
+                lines.append(f"⚠️ {wrong} player(s) are flagged against a different "
+                             f"country than their pool row says. "
+                             f"<code>/dhome sync</code> fixes them.")
+            lines.append("\nChange it with <code>/dhome &lt;country&gt;</code> — "
+                         "the whole pool is re-flagged from its country column.")
+            return "\n".join(lines)
+
+        country, changed, unknown = ds.set_home_country(session, draft, arg)
+        home, overseas, _unknown, _wrong = ds.home_status_counts(session, draft)
+        out = [f"{ds.home_flag(draft)} Home country set to "
+               f"<b>{html.escape(country)}</b>.",
+               f"Re-flagged <b>{changed}</b> player(s) — the pool is now "
+               f"{home} home · {ds.OVERSEAS_FLAG} {overseas} overseas."]
+        if unknown:
+            out.append(f"⚠️ {unknown} player(s) have no readable country and were "
+                       f"left alone.")
+        out.append("<i>Squads already picked keep their players; the overseas cap "
+                   "is counted from the new flags on every pick from here.</i>")
+        return "\n".join(out)
+    await _with_draft(update, work, admin=True)
+
+
 async def dco_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Add (or list) the co-owners allowed to pick for a team."""
     def work(session, draft):
@@ -643,14 +713,14 @@ async def dcancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _with_draft(update, work, admin=True)
 
 
-async def dskip_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Resolve the pick on the clock now, exactly as the timer would.
+async def _resolve_on_the_clock(update, context, resolve, *, command):
+    """Resolve the slot on the clock with ``resolve(session, draft, pick, ...)``.
 
-    The admin's way to unstick a draft. It is recorded as an auto-pick, because
-    that is what it is — it must never read as the owner's own choice.
+    Shared by ``/dskip`` and ``/dautopick``: the two differ only in who may run
+    them and in which player the slot ends up with. Both announce exactly like a
+    typed pick — the ⏱ badge ``render_pick`` adds is the only difference, and it
+    is the whole point: the board must never read as the owner's own choice.
     """
-    if not await _require_admin(update):
-        return
     chat = update.effective_chat
     if chat is None or chat.type not in GROUP_CHAT_TYPES:
         await _reply(update, GROUP_ONLY)
@@ -669,8 +739,8 @@ async def dskip_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if pick is None:
             await _reply(update, "🏁 Every slot is already filled.")
             return
-        done, player = ds.resolve_expired(session, draft, pick,
-                                          by_tg_id=update.effective_user.id)
+        done, player = resolve(session, draft, pick,
+                               by_tg_id=update.effective_user.id)
         session.commit()
         resolved = (draft, done, player)
     except DraftError as exc:
@@ -679,7 +749,7 @@ async def dskip_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     except Exception:
         session.rollback()
-        logger.exception("/dskip failed")
+        logger.exception("%s failed", command)
         await _reply(update, "⚠️ Something went wrong. Try again.")
         return
     finally:
@@ -693,6 +763,35 @@ async def dskip_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await dsched.announce_pick(context.bot, session, draft, done, player)
     finally:
         session.close()
+
+
+async def dskip_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Resolve the pick on the clock now, exactly as the timer would.
+
+    The admin's way to unstick a draft. It is recorded as an auto-pick, because
+    that is what it is — it must never read as the owner's own choice.
+    """
+    if not await _require_admin(update):
+        return
+    await _resolve_on_the_clock(update, context, ds.resolve_expired,
+                                command="/dskip")
+
+
+async def dautopick_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Grant the team on the clock a random player from its allotted tier.
+
+    For a squad whose owner isn't in the room: they still get a player of the
+    tier their slot is worth, drawn at random from what is legal for them rather
+    than from ``auto_pick``'s deterministic middle-of-the-band — run that over
+    every absent team and they all end up with the same shape of squad.
+
+    Owner-only, and one slot per command: granting picks is not something to do
+    by accident, and the room sees each one land.
+    """
+    if not await _require_owner(update):
+        return
+    await _resolve_on_the_clock(update, context, ds.resolve_random,
+                                command="/dautopick")
 
 
 async def dundo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -5,7 +5,7 @@ had was a way to *fill* the squads, short of an admin typing every player into
 every team by hand. A draft is that missing front end:
 
   • an admin uploads a **player pool** (a spreadsheet carrying tier, icon
-    eligibility, gender and Indian status alongside the usual ratings) and a
+    eligibility, gender and country alongside the usual ratings) and a
     **pick order** (Round, Pick, Tier, Team, Owner, Owner Tag ID);
   • the draft is bound to one Telegram group, and owners type ``/pick`` there
     when their slot comes up;
@@ -20,6 +20,12 @@ pick. One useful consequence is that a team's tier quota enforces itself: a
 Platinum player fits *only* in a Platinum slot, so a team with two Platinum slots
 can never end up with three Platinum players.
 
+**The overseas rule.** A player is *home* when the country on their pool row is
+the draft's ``home_country``, and overseas otherwise — the pool's own country
+column decides, not a label, so a draft whose home country is England counts
+English players as home without anybody re-typing the sheet. ``is_indian`` is
+the (now badly named) column that carries the answer.
+
 Contract, matching ``services.lp_tournament_service``: every function takes the
 session first, **nothing here commits**, and every refusal is a ``DraftError``
 carrying **plain text** (never HTML) written for whoever triggered it. The
@@ -29,6 +35,7 @@ bodies and escape as they go.
 
 import json
 import logging
+import random
 from datetime import datetime, timedelta
 from html import escape
 
@@ -104,6 +111,95 @@ _HAND_MAP = {"r": "Right", "right": "Right", "rh": "Right", "rhb": "Right",
 _TRUE_WORDS = {"1", "y", "yes", "true", "t", "on", "icon", "eligible"}
 _FALSE_WORDS = {"0", "n", "no", "false", "f", "off", "", "-"}
 
+# ── Home country ──────────────────────────────────────────────────────
+#
+# A pool player is "home" when the country on their sheet row is the draft's
+# ``home_country``, and overseas otherwise. The **country column is the source
+# of truth**: an ``indian_status`` column is a per-sheet label that means
+# nothing once a draft's home country isn't India, and a pool uploaded without
+# one used to flag every single player as home — which is how a draft ends up
+# with eleven "Indians" from four different countries.
+#
+# The folding below exists because the country column is typed by hand: "IND",
+# "Ind.", "Indian" and "India" are one country, and comparing them raw makes
+# three of those four overseas.
+
+# Cells that name no country at all. These leave the flag alone rather than
+# guessing, so a value corrected by hand survives a re-sync.
+_UNKNOWN_COUNTRIES = {"unknown", "unkown", "n a", "na", "none", "null", "nil",
+                      "tbd", "tba", "other", "others", "?", "--"}
+
+# Demonyms and short codes → the canonical country name they fold onto. Only
+# the cricketing nations: this is a draft pool, not a gazetteer.
+_COUNTRY_ALIASES = {
+    "ind": "india", "indian": "india", "bharat": "india",
+    "aus": "australia", "australian": "australia", "aussie": "australia",
+    "eng": "england", "english": "england", "englishman": "england",
+    "pak": "pakistan", "pakistani": "pakistan",
+    "sa": "south africa", "rsa": "south africa", "south african": "south africa",
+    "proteas": "south africa",
+    "nz": "new zealand", "new zealander": "new zealand", "kiwi": "new zealand",
+    "blackcaps": "new zealand", "black caps": "new zealand",
+    "sl": "sri lanka", "sri lankan": "sri lanka", "lankan": "sri lanka",
+    "ban": "bangladesh", "bd": "bangladesh", "bangladeshi": "bangladesh",
+    "afg": "afghanistan", "afghan": "afghanistan", "afghani": "afghanistan",
+    "wi": "west indies", "windies": "west indies", "west indian": "west indies",
+    "caribbean": "west indies",
+    "zim": "zimbabwe", "zimbabwean": "zimbabwe",
+    "ire": "ireland", "irish": "ireland",
+    "sco": "scotland", "scot": "scotland", "scottish": "scotland",
+    "ned": "netherlands", "nl": "netherlands", "holland": "netherlands",
+    "dutch": "netherlands",
+    "nep": "nepal", "nepali": "nepal", "nepalese": "nepal",
+    "uae": "united arab emirates", "emirati": "united arab emirates",
+    "usa": "united states", "us": "united states", "american": "united states",
+    "united states of america": "united states",
+    "can": "canada", "canadian": "canada",
+    "ken": "kenya", "kenyan": "kenya",
+    "nam": "namibia", "namibian": "namibia",
+    "oma": "oman", "omani": "oman",
+    "png": "papua new guinea", "papuan": "papua new guinea",
+    "sgp": "singapore", "singaporean": "singapore",
+    "hk": "hong kong",
+    "welsh": "wales",
+}
+
+# The flag shown for a home player. ISO-3166 pairs are turned into regional
+# indicators; the four that have no country code of their own are spelled out.
+_COUNTRY_ISO2 = {
+    "india": "IN", "australia": "AU", "pakistan": "PK", "south africa": "ZA",
+    "new zealand": "NZ", "sri lanka": "LK", "bangladesh": "BD",
+    "afghanistan": "AF", "zimbabwe": "ZW", "ireland": "IE",
+    "netherlands": "NL", "nepal": "NP", "united arab emirates": "AE",
+    "united states": "US", "canada": "CA", "kenya": "KE", "namibia": "NA",
+    "oman": "OM", "papua new guinea": "PG", "singapore": "SG",
+    "hong kong": "HK", "malaysia": "MY", "japan": "JP", "italy": "IT",
+    "germany": "DE", "france": "FR", "uganda": "UG", "jersey": "JE",
+    "bermuda": "BM", "qatar": "QA", "kuwait": "KW", "bahrain": "BH",
+    "saudi arabia": "SA", "thailand": "TH", "china": "CN",
+}
+_COUNTRY_FLAG_OVERRIDES = {
+    "england": "\U0001F3F4\U000E0067\U000E0062\U000E0065\U000E006E\U000E0067\U000E007F",
+    "scotland": "\U0001F3F4\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F",
+    "wales": "\U0001F3F4\U000E0067\U000E0062\U000E0077\U000E006C\U000E0073\U000E007F",
+    "west indies": "\U0001F3DD",
+}
+
+DEFAULT_HOME_COUNTRY = "India"
+DEFAULT_HOME_FLAG = "\U0001F3E0"   # 🏠 — a home country we have no flag for
+OVERSEAS_FLAG = "\u2708\uFE0F"      # ✈️
+
+# Words that state home/overseas without naming a country. These stay generic:
+# "Overseas" means overseas whatever the draft's home country is.
+_OVERSEAS_WORDS = {"overseas", "foreign", "foreigner", "abroad", "away",
+                   "international", "import", "non domestic", "non local"}
+_DOMESTIC_WORDS = {"domestic", "home", "local", "native", "national"}
+
+# Canonical names typed without their space ("newzealand", "srilanka").
+_COUNTRY_COMPACT = {name.replace(" ", ""): name for name in
+                    set(_COUNTRY_ALIASES.values()) | set(_COUNTRY_ISO2)
+                    | set(_COUNTRY_FLAG_OVERRIDES)}
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Small parsers
@@ -150,24 +246,108 @@ def _as_int(raw, default=0):
         return default
 
 
-def _is_indian_value(raw, home_country="India"):
-    """Normalise the sheet's ``indian_status`` column to a boolean.
+def country_key(raw):
+    """Fold a country cell onto one comparable spelling.
 
-    Accepts the three shapes people actually type: a word ("Indian" /
-    "Overseas"), a country name, or a flag (1/0, yes/no).
+    ``"IND"``, ``"Ind."``, ``"Indian"`` and ``" india "`` are the same country
+    and must compare equal, or a pool typed by three different people ends up
+    with three different nationalities. Returns ``""`` for a blank cell or one
+    that names no country ("Unknown", "N/A", "-").
     """
     text = str(raw or "").strip().lower()
     if not text:
+        return ""
+    folded = " ".join("".join(
+        ch if (ch.isalnum() or ch.isspace()) else " " for ch in text).split())
+    if not folded or folded in _UNKNOWN_COUNTRIES or folded in _FALSE_WORDS:
+        return ""
+    if folded in _COUNTRY_ALIASES:
+        return _COUNTRY_ALIASES[folded]
+    compact = folded.replace(" ", "")
+    return (_COUNTRY_ALIASES.get(compact)
+            or _COUNTRY_COMPACT.get(compact)
+            or folded)
+
+
+def clean_home_country(raw):
+    """A draft's ``home_country`` as it is stored: trimmed, bounded, never blank.
+
+    Kept as the admin typed it (the column is shown back to them) rather than
+    folded — ``country_key`` does the comparing.
+    """
+    return (str(raw or "").strip()[:60] or DEFAULT_HOME_COUNTRY)
+
+
+def is_home_country(country, home_country):
+    """``True``/``False`` for "is this the draft's home country", or ``None``.
+
+    ``None`` means the question can't be answered — one side is blank or names
+    no country — and every caller treats that as "leave it alone" rather than
+    guessing, because guessing is what flagged an entire pool as Indian.
+    """
+    home = country_key(home_country)
+    theirs = country_key(country)
+    if not home or not theirs:
+        return None
+    return theirs == home
+
+
+def country_flag(country):
+    """The flag emoji for a country, or ``🏠`` when it isn't one we know."""
+    key = country_key(country)
+    if not key:
+        return DEFAULT_HOME_FLAG
+    if key in _COUNTRY_FLAG_OVERRIDES:
+        return _COUNTRY_FLAG_OVERRIDES[key]
+    iso = _COUNTRY_ISO2.get(key)
+    if not iso:
+        return DEFAULT_HOME_FLAG
+    return "".join(chr(0x1F1E6 + ord(ch) - ord("A")) for ch in iso)
+
+
+def home_flag(draft):
+    """The flag a draft's *home* players wear. Overseas always wear ✈️."""
+    return country_flag(getattr(draft, "home_country", None))
+
+
+def player_flag(player, draft=None):
+    return OVERSEAS_FLAG if not player.is_indian else home_flag(draft)
+
+
+def is_home_player(status_raw, home_country=DEFAULT_HOME_COUNTRY, country=""):
+    """Whether a pool row is a *home* player for this draft.
+
+    The row's **country decides** whenever it names one: that is the fact the
+    spreadsheet actually carries, and it is the only thing that stays correct
+    when a draft's home country isn't India.
+
+    The ``indian_status`` column is the fallback for a sheet that has no usable
+    country — the three shapes people type there: a word ("Overseas",
+    "Domestic"), a flag (1/0, yes/no), or a country name. A row with neither is
+    counted as home, which is what the column defaults to.
+    """
+    decided = is_home_country(country, home_country)
+    if decided is not None:
+        return decided
+
+    text = " ".join(str(status_raw or "").strip().lower()
+                    .replace("-", " ").replace("_", " ").split())
+    if not text:
         return True
-    if text in ("overseas", "foreign", "foreigner", "non-indian", "non indian"):
+    if text in _OVERSEAS_WORDS:
         return False
-    if text in ("indian", "india", "domestic", "home", "local"):
+    if text in _DOMESTIC_WORDS:
         return True
     if text in _TRUE_WORDS:
         return True
     if text in _FALSE_WORDS:
         return False
-    return text == (home_country or "India").strip().lower()
+    # "non-Indian", "not India" — a negated country is overseas either way.
+    for prefix in ("non ", "not "):
+        if text.startswith(prefix):
+            return False
+    decided = is_home_country(text, home_country)
+    return True if decided is None else decided
 
 
 def normalise_category(raw):
@@ -352,7 +532,8 @@ def tier_badge(tier):
 # ──────────────────────────────────────────────────────────────────────
 
 def create_draft(session, name, *, pick_seconds=900, tiers=None,
-                 home_country="India", max_overseas=11, role_minimums=None):
+                 home_country=DEFAULT_HOME_COUNTRY, max_overseas=11,
+                 role_minimums=None):
     clean = (name or "").strip()
     if not clean:
         raise DraftError("Give the draft a name.")
@@ -360,7 +541,7 @@ def create_draft(session, name, *, pick_seconds=900, tiers=None,
         name=clean[:MAX_DRAFT_NAME],
         status=STATUS_SETUP,
         pick_seconds=clamp_pick_seconds(pick_seconds),
-        home_country=(home_country or "India").strip()[:60] or "India",
+        home_country=clean_home_country(home_country),
         max_overseas=max(0, min(99, _as_int(max_overseas, 11))),
         role_minimums_json=_dumps(role_minimums or {}),
     )
@@ -568,8 +749,9 @@ def import_pool(session, draft, rows, *, replace=False):
             "rating": rating,
             "icon_eligible": _as_bool(_cell(row, mapping, "icon_eligible")),
             "gender": (_cell(row, mapping, "gender") or "")[:10] or None,
-            "is_indian": _is_indian_value(_cell(row, mapping, "indian_status"),
-                                          draft.home_country),
+            "is_indian": is_home_player(_cell(row, mapping, "indian_status"),
+                                        draft.home_country,
+                                        _cell(row, mapping, "country")),
             "category": normalise_category(_cell(row, mapping, "category"))[:30],
             "country": (_cell(row, mapping, "country") or "Unknown")[:60],
             "bat_hand": normalise_hand(_cell(row, mapping, "bat_hand"))[:10],
@@ -593,6 +775,63 @@ def import_pool(session, draft, rows, *, replace=False):
 
     session.flush()
     return added, updated, errors
+
+
+def home_status_counts(session, draft):
+    """``(home, overseas, unknown, wrong)`` for the whole pool.
+
+    ``unknown`` counts rows whose country names nothing we can read; ``wrong``
+    counts rows whose stored flag disagrees with their country — the number a
+    re-sync would move, and the one worth showing an admin before they run it.
+    """
+    home = overseas = unknown = wrong = 0
+    for player in (session.query(DraftPlayer)
+                   .filter(DraftPlayer.draft_id == draft.id).all()):
+        if player.is_indian:
+            home += 1
+        else:
+            overseas += 1
+        decided = is_home_country(player.country, draft.home_country)
+        if decided is None:
+            unknown += 1
+        elif decided != bool(player.is_indian):
+            wrong += 1
+    return home, overseas, unknown, wrong
+
+
+def resync_home_status(session, draft):
+    """Re-flag the whole pool from each player's country. Returns ``(changed, unknown)``.
+
+    ``import_pool`` already gets this right, but a draft whose home country was
+    set (or corrected) after the pool went in carries rows decided under the old
+    answer — including a live draft, which cannot simply be re-imported because
+    replacing the pool is refused once picking has started.
+
+    Rows whose country names nothing readable are left exactly as they are, so a
+    flag an admin fixed by hand is not undone by a re-sync.
+    """
+    changed = unknown = 0
+    for player in (session.query(DraftPlayer)
+                   .filter(DraftPlayer.draft_id == draft.id).all()):
+        decided = is_home_country(player.country, draft.home_country)
+        if decided is None:
+            unknown += 1
+            continue
+        if bool(player.is_indian) != decided:
+            player.is_indian = decided
+            changed += 1
+    session.flush()
+    return changed, unknown
+
+
+def set_home_country(session, draft, raw):
+    """Set the draft's home country and re-flag the pool against it.
+
+    The two always move together: a home country nobody re-synced against is
+    just a label, and the squad each team ends up with depends on the flags.
+    """
+    draft.home_country = clean_home_country(raw)
+    return (draft.home_country,) + resync_home_status(session, draft)
 
 
 def _catalogue_by_name(session):
@@ -1087,34 +1326,78 @@ def auto_pick(session, draft, pick):
                           DraftPlayer.picked_by_team_id.is_(None)).first())
         if player is None:
             continue
-        try:
-            validate_pick(session, draft, pick, player)
-        except DraftError:
-            continue
-        return player
+        if is_legal_pick(session, draft, pick, player):
+            return player
 
-    start_rank = tier_rank(draft, pick.tier)
-    if start_rank is None:
-        return None
-    for tier in tier_order(draft)[start_rank:]:
-        legal = []
-        for player in available(session, draft.id, tier=tier):
-            try:
-                validate_pick(session, draft, pick, player)
-            except DraftError:
-                continue
-            legal.append(player)
-        if not legal:
-            continue
+    for _tier, legal in legal_by_tier(session, draft, pick):
         mean = sum(p.rating or 0 for p in legal) / len(legal)
         return sorted(legal, key=lambda p: (abs((p.rating or 0) - mean),
                                             -(p.rating or 0), p.name or ""))[0]
     return None
 
 
+def is_legal_pick(session, draft, pick, player):
+    """``validate_pick`` as a yes/no, for the paths that filter rather than refuse."""
+    try:
+        validate_pick(session, draft, pick, player)
+    except DraftError:
+        return False
+    return True
+
+
+def legal_by_tier(session, draft, pick):
+    """Yield ``(tier, [legal players])`` down the ladder from the slot's tier.
+
+    The slot's own tier comes first and the ladder is only stepped down when it
+    has nothing legal left — which the ceiling rule already permits, and which
+    is what keeps one impossible slot from wedging the draft. Tiers with nothing
+    legal are skipped, so a caller can take the first pair it is given.
+    """
+    start_rank = tier_rank(draft, pick.tier)
+    if start_rank is None:
+        return
+    for tier in tier_order(draft)[start_rank:]:
+        legal = [player for player in available(session, draft.id, tier=tier)
+                 if is_legal_pick(session, draft, pick, player)]
+        if legal:
+            yield tier, legal
+
+
+def random_pick(session, draft, pick, *, rng=None):
+    """A **random** legal player from the slot's allotted tier, or ``None``.
+
+    What ``/dautopick`` grants a team that isn't in the room. ``auto_pick`` is
+    deliberately deterministic — the clock's choice has to be explainable
+    afterwards — but running that same rule over every offline team hands them
+    all the middle of the band, pick after pick. An admin granting a pick wants
+    the tier honoured and the name inside it left to chance, so this ignores the
+    queue (an owner who lined one up is not the absent owner this is for) and
+    draws uniformly from what is legal.
+    """
+    for _tier, legal in legal_by_tier(session, draft, pick):
+        return (rng or random).choice(legal)
+    return None
+
+
 def resolve_expired(session, draft, pick, *, by_tg_id=None):
     """Auto-pick (or skip) one expired slot. Returns ``(pick, player_or_None)``."""
-    player = auto_pick(session, draft, pick)
+    return _resolve_with(session, draft, pick, auto_pick(session, draft, pick),
+                         by_tg_id=by_tg_id)
+
+
+def resolve_random(session, draft, pick, *, by_tg_id=None, rng=None):
+    """Grant one slot a random legal player. Returns ``(pick, player_or_None)``.
+
+    Recorded as an auto-pick like ``/dskip``'s, because that is what it is: the
+    team on the clock did not choose this player and the board must not say
+    they did.
+    """
+    return _resolve_with(session, draft, pick,
+                         random_pick(session, draft, pick, rng=rng),
+                         by_tg_id=by_tg_id)
+
+
+def _resolve_with(session, draft, pick, player, *, by_tg_id=None):
     if player is None:
         return skip_pick(session, draft, pick), None
     return make_pick(session, draft, pick, player,
@@ -1239,9 +1522,9 @@ def bowling_line(player):
     return " ".join(x for x in (hand, style) if x)
 
 
-def player_detail(player):
-    flag = "🇮🇳" if player.is_indian else "✈️"
-    bits = [escape(player.category or ""), f"{flag} {escape(player.country or '')}"]
+def player_detail(player, draft=None):
+    bits = [escape(player.category or ""),
+            f"{player_flag(player, draft)} {escape(player.country or '')}"]
     if player.bat_hand:
         bits.append(escape(f"{player.bat_hand}-hand bat"))
     bowling = bowling_line(player)
@@ -1272,7 +1555,7 @@ def render_squad(session, draft, team):
         picked = by_tier.get(tier, [])
         out.append(f"{tier_badge(tier)} — {len(picked)}/{slots.get(tier, 0)}")
         for player in picked:
-            flag = "🇮🇳" if player.is_indian else "✈️"
+            flag = player_flag(player, draft)
             out.append(f"   • {escape(player.name or '')} "
                        f"<code>{player.rating}</code> {flag} "
                        f"{escape(player.category or '')}")
@@ -1282,7 +1565,8 @@ def render_squad(session, draft, team):
     out.append(RULE)
     overseas = overseas_count(session, team.id)
     cap = draft.max_overseas if draft.max_overseas is not None else 11
-    out.append(f"🇮🇳 {len(rows) - overseas} home · ✈️ {overseas}/{cap} overseas")
+    out.append(f"{home_flag(draft)} {len(rows) - overseas} home · "
+               f"{OVERSEAS_FLAG} {overseas}/{cap} overseas")
     gap = role_gap(session, draft, team.id)
     if gap:
         out.append("⚠️ Still needs " +
@@ -1312,7 +1596,7 @@ def render_pick(session, draft, pick, player, *, next_pick=None, next_mention=No
         f"R{pick.round_no} P{pick.pick_no} · {tier_badge(pick.tier)} slot",
         "",
         player_line(player),
-        player_detail(player),
+        player_detail(player, draft),
     ]
     # Spending a Platinum slot on a Gold player is legal and irreversible, so it
     # is said out loud rather than left for the owner to notice three picks later.
@@ -1330,7 +1614,8 @@ def render_pick(session, draft, pick, player, *, next_pick=None, next_mention=No
     overseas = overseas_count(session, pick.team_id)
     cap = draft.max_overseas if draft.max_overseas is not None else 11
     lines.append("")
-    lines.append(f"🇮🇳 {len(rows) - overseas} home · ✈️ {overseas}/{cap} overseas")
+    lines.append(f"{home_flag(draft)} {len(rows) - overseas} home · "
+                 f"{OVERSEAS_FLAG} {overseas}/{cap} overseas")
     lines.append(RULE)
     lines.append(render_turn(session, draft, next_pick, mention=next_mention))
     return "\n".join(lines)
@@ -1397,7 +1682,7 @@ def render_available(session, draft, *, tier=None, limit=15):
         return f"{title}\nNothing left."
     lines = [f"{title} — {len(pool)} player(s)"]
     for player in pool[:limit]:
-        flag = "🇮🇳" if player.is_indian else "✈️"
+        flag = player_flag(player, draft)
         lines.append(f"{tier_emoji(player.tier)} {escape(player.name or '')} "
                      f"<code>{player.rating}</code> {flag} "
                      f"{escape(player.category or '')}")

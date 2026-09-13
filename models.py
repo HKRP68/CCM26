@@ -2988,8 +2988,8 @@ class DraftPlayer(Base):
     """One player in a draft's pool. NULL ``picked_by_team_id`` means available.
 
     The pool is scoped to its draft rather than shared with ``players`` because
-    the uploaded sheet carries tier, icon eligibility, gender and Indian status,
-    none of which the master catalogue models — and because a draft's pool is a
+    the uploaded sheet carries tier, icon eligibility, gender and the country the
+    overseas rule is decided on, none of which the master catalogue models — and because a draft's pool is a
     curated list for one competition, not an edit to the global card database.
     ``source_player_id`` links back when the name matches a real card, which is
     what lets the bot post that card's image when the player is picked.
@@ -3004,9 +3004,13 @@ class DraftPlayer(Base):
     tier = Column(String(20), nullable=False, index=True)
     icon_eligible = Column(Boolean, default=False, nullable=False)
     gender = Column(String(10), nullable=True)
-    # The sheet's ``indian_status``, normalised. Every consumer asks a yes/no
+    # Whether this player is a *home* player for the draft: their ``country``
+    # matched ``PlayerDraft.home_country`` at import (the sheet's
+    # ``indian_status`` is only a fallback for a row with no readable country).
+    # Named for the India-only rule it started as; every consumer asks a yes/no
     # question, and ChallengePlayer.is_overseas — which this feeds on publish —
-    # is already a boolean.
+    # is already a boolean. ``draft_service.resync_home_status`` recomputes it
+    # when a draft's home country changes.
     is_indian = Column(Boolean, default=True, nullable=False)
     category = Column(String(30), default="Batsman", nullable=False)
     country = Column(String(60), default="Unknown", nullable=False)

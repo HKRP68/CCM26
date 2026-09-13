@@ -391,8 +391,8 @@ ADMIN_MENU_COMMANDS = (
     ("tourblock", "Admin: block a user from creating tours"),
     ("tourallowlist", "Admin: list users allowed to create tours"),
     ("testwpm", "Admin: Mini App match diagnostic"),
-    # Tournament Draft. Ten commands is a lot for a player menu that is already
-    # at Telegram's ceiling — but the admin bucket is published only into
+    # Tournament Draft. A dozen commands is a lot for a player menu that is
+    # already at Telegram's ceiling — but the admin bucket is published only into
     # admins' own DMs and is exempt from the clamp, so they cost nothing there.
     ("dadmin", "Admin: Tournament Draft reference"),
     ("dnew", "Admin: create a draft and bind it to this group"),
@@ -401,8 +401,10 @@ ADMIN_MENU_COMMANDS = (
     ("dpause", "Admin: pause the draft clock"),
     ("dresume", "Admin: resume a paused draft"),
     ("dtimer", "Admin: minutes allowed per pick"),
+    ("dhome", "Admin: set the draft home country and re-flag the pool"),
     ("dco", "Admin: add a co-owner who may pick for a team"),
     ("dskip", "Admin: resolve the pick on the clock now"),
+    ("dautopick", "Owner: grant a random pick of the slot's tier"),
     ("dundo", "Admin: roll the last draft pick back"),
     ("dpublish", "Admin: publish drafted squads as a Challenge League"),
     ("dcancel", "Admin: cancel the draft"),
@@ -1778,7 +1780,8 @@ def main():
             dsquad_handler, dqueue_handler,
             dadmin_handler, dnew_handler, dbind_handler, dtimer_handler,
             dco_handler, dstart_handler, dpause_handler, dcancel_handler,
-            dskip_handler, dundo_handler, dpublish_handler,
+            dskip_handler, dautopick_handler, dundo_handler, dpublish_handler,
+            dhome_handler,
         )
         # Not "/p": that is already /purse, registered above, and PTB runs
         # the first handler that matches — the alias would be dead.
@@ -1797,8 +1800,12 @@ def main():
         app.add_handler(CommandHandler("dpause", dpause_handler))
         app.add_handler(CommandHandler("dcancel", dcancel_handler))
         app.add_handler(CommandHandler("dtimer", dtimer_handler))
+        app.add_handler(CommandHandler(["dhome", "dcountry"], dhome_handler))
         app.add_handler(CommandHandler("dco", dco_handler))
         app.add_handler(CommandHandler("dskip", dskip_handler))
+        # Owner-only inside the handler, not here: the gate has to answer the
+        # person who typed it rather than look like a command that doesn't exist.
+        app.add_handler(CommandHandler(["dautopick", "dauto"], dautopick_handler))
         app.add_handler(CommandHandler("dundo", dundo_handler))
         app.add_handler(CommandHandler("dpublish", dpublish_handler))
 

@@ -29,7 +29,14 @@ bat_hand, bowl_hand, bowl_style, bat_rating, bowl_rating
 
 * `tier` must be on the draft's ladder (default `Platinum, Gold, Silver, Bronze`).
   Anything else is reported as a skipped row rather than quietly becoming a fifth tier.
-* `indian_status` accepts `Indian` / `Overseas`, a country name, or `1` / `0`.
+* `country` decides **home or overseas**: a player is home when their country
+  is the draft's `home_country` (settings, or `/dhome`), overseas otherwise.
+  Spellings fold — `India`, `IND`, `Ind.` and `Indian` are one country.
+* `indian_status` is only a *fallback*, for a row whose country is missing or
+  unreadable (`Unknown`, blank). It accepts `Overseas` / `Domestic`, a country
+  name, or `1` / `0`. A row with neither is counted as home.
+  Sheets that carry both are fine: the country column wins, which is what keeps
+  an India-centric sheet correct when it is re-used for an England draft.
 * `icon_eligible` accepts `1` / `0` / `yes` / `no`.
 * `category` is folded onto the engine's four roles — `wk`, `keeper`,
   `all rounder`, `bat`, `bowl` all land where you'd expect.
@@ -70,7 +77,10 @@ a team logo.
 | `/dqueue <player>` | owner + co-owners | Your wishlist. If your clock runs out the bot picks from it first |
 
 Admin: `/dadmin` (the reference card), `/dnew`, `/dbind`, `/dstart`, `/dpause`,
-`/dresume`, `/dtimer`, `/dco`, `/dskip`, `/dundo`, `/dcancel`, `/dpublish`.
+`/dresume`, `/dtimer`, `/dhome`, `/dco`, `/dskip`, `/dundo`, `/dcancel`,
+`/dpublish`.
+
+Owner only: `/dautopick` — see *Granting a pick* below.
 
 ### Finishing
 
@@ -95,6 +105,22 @@ cap to configure — the ceiling already is one.
 
 **The overseas cap** (`max_overseas`, with `home_country` deciding who counts)
 refuses the pick that would break it, naming the limit.
+
+**Who counts as overseas is the pool's own country column**, compared with the
+draft's `home_country` — not a label. A pool uploaded without an
+`indian_status` column used to flag *every* player as home, which meant a squad
+of eleven "Indians" from four countries and a cap that never refused anything.
+
+Changing the home country re-flags the whole pool, from the draft page or with
+`/dhome England` in the group. `/dhome` on its own reports the split and says
+how many rows disagree with their country; `/dhome sync` re-flags without
+changing the country, which is how a draft **already running** gets corrected —
+its pool cannot be re-uploaded, because replacing it is refused once picking has
+started. `migrate_draft_home_country.py` does the same sweep across every draft
+in the database (`--dry-run` first). Players whose country reads as nothing
+(`Unknown`, blank) are left exactly as they are, so a flag fixed by hand
+survives; squads already picked keep their players, and the recount applies to
+the picks still to come.
 
 **Role minimums are checked as reachability, not as a finished squad.** If a
 squad owes a keeper and has one slot left, the non-keeper pick is refused *at
@@ -141,6 +167,29 @@ ping `warn_seconds` before it expires. When it runs out the bot picks:
 Auto-pick runs `validate_pick` on every candidate, so the clock can never do
 something an owner would have been refused for.
 
+### Granting a pick — `/dautopick`
+
+`/dautopick` (**bot owner only**, one slot per command) resolves the pick on the
+clock right now with a **random** legal player of the slot's allotted tier — for
+a squad whose owner simply isn't in the room, where waiting out a 15-minute
+clock every round is the only alternative.
+
+It differs from `/dskip` in exactly two ways, and both are the point:
+
+* **Who may run it.** `/dskip` unsticks a draft with the clock's own rule, so
+  every bot admin has it. `/dautopick` hands a team a player *nobody chose*, so
+  it sits with the owner.
+* **How the player is chosen.** Randomly, from what is legal in the tier — and
+  the queue is ignored, because this is for the owner who said nothing. Running
+  the clock's deterministic middle-of-the-band over every absent team hands them
+  all the same shape of squad, pick after pick.
+
+Everything else is identical: the tier ceiling, the overseas cap and the role
+minimums are all checked (it draws only from players `validate_pick` accepts),
+the ladder is stepped down when the tier is empty, a slot with nothing legal is
+passed rather than retried, and it is recorded and announced as an **auto-pick**
+— the board must never read as the owner's own choice.
+
 **The clock is a column, not a job.** The deadline lives in
 `player_drafts.pick_deadline_at` and `services/draft_scheduler.py` reconciles it
 every 15 seconds. The host redeploys often, and an in-process `run_once` does not
@@ -162,8 +211,8 @@ DraftPick        one slot in the order AND the record of the pick that filled it
 ```
 
 The pool is its own table rather than a view over `players` because the uploaded
-sheet carries `tier`, `icon_eligible`, `gender` and `indian_status`, none of which
-the master catalogue models — and because a draft's pool is a curated list for one
+sheet carries `tier`, `icon_eligible`, `gender` and the country the overseas rule
+is decided on, none of which the master catalogue models — and because a draft's pool is a curated list for one
 competition, not an edit to the global card database.
 
 The order sheet and the result log are the same rows on purpose: *"R1 P3 is
@@ -208,7 +257,8 @@ same file the site let them download, and `requirements.txt` gains nothing.
 | `models.py` | `PlayerDraft`, `DraftTeam`, `DraftPlayer`, `DraftPick` |
 | `admin.py` | `/drafts` and `/drafts/<id>` |
 | `templates/admin_drafts.html`, `templates/admin_draft_detail.html` | The two admin pages |
-| `tests/test_player_draft.py` | 80 tests over importing, the ceiling, permissions, the caps, picking, the clock, undo, publishing and rendering |
+| `migrate_draft_home_country.py` | One-off sweep: re-flags every existing pool's home/overseas players from their country |
+| `tests/test_player_draft.py` | 113 tests over importing, the home country, the ceiling, permissions, the caps, picking, granting, the clock, undo, publishing and rendering |
 
 ---
 
