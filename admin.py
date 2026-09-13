@@ -48,7 +48,8 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
                     ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer,
                     Tournament, TournamentTeam, TournamentMatch, TournamentPlayerStats,
-                    TournamentGroup)
+                    TournamentGroup,
+                    PlayerDraft, DraftTeam, DraftPlayer, DraftPick)
 
 # A match that has actually started, versus one still forming (invite sent,
 # toss not called, openers not picked). Both are "not finished", but only the
@@ -16254,6 +16255,281 @@ def admin_lp_tournaments_list():
         return render_template("admin_lp_tournaments.html",
                                current=current, history=history, progress=progress,
                                knockout_types=lp_svc.KNOCKOUT_TYPES)
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# TOURNAMENT DRAFT — upload the pool and the order, watch the picks land
+# ═══════════════════════════════════════════════════════════════════════
+
+# A pool sheet is a few hundred rows of short strings; anything much past this
+# is a mistake or a zip bomb. Checked per route rather than by setting Flask's
+# MAX_CONTENT_LENGTH, which is app-wide and would silently change the limit on
+# every other upload route (card templates, fonts, broadcast documents).
+_DRAFT_UPLOAD_MAX_BYTES = 2 * 1024 * 1024
+
+
+def _draft_or_404(db, draft_id):
+    from services import draft_service as draft_svc
+    row = draft_svc.get_draft(db, draft_id)
+    if row is None:
+        from flask import abort
+        abort(404)
+    return row
+
+
+def _read_sheet(file_storage, pasted_text):
+    """Rows from an uploaded .xlsx/.csv **or** pasted CSV, whichever is there.
+
+    Mirrors /commentary/import, the existing route that already accepts either,
+    because an admin who has the file should not have to open it and copy it out.
+    """
+    import csv as _csv
+    from services.xlsx_reader import read_rows, XlsxError
+
+    if file_storage and getattr(file_storage, "filename", ""):
+        data = file_storage.read()
+        if len(data) > _DRAFT_UPLOAD_MAX_BYTES:
+            raise ValueError("That file is over 2 MB. Export just the sheet you "
+                             "need, or upload it as CSV.")
+        name = (file_storage.filename or "").lower()
+        if name.endswith(".xlsx") or name.endswith(".xlsm"):
+            try:
+                return read_rows(data)
+            except XlsxError as exc:
+                raise ValueError(str(exc))
+        text = data.decode("utf-8-sig", errors="replace")
+    elif (pasted_text or "").strip():
+        text = pasted_text
+    else:
+        raise ValueError("Upload a file or paste some rows.")
+
+    # Sniff the delimiter so a tab-separated paste out of Excel works too.
+    sample = text[:4096]
+    delimiter = "\t" if sample.count("\t") > sample.count(",") else ","
+    return [[(cell or "").strip() for cell in row]
+            for row in _csv.reader(io.StringIO(text), delimiter=delimiter)
+            if any((cell or "").strip() for cell in row)]
+
+
+def _flash_import(label, added, updated, errors):
+    if added or updated:
+        flash(f"✅ {label}: {added} added, {updated} updated.", "success")
+    if errors:
+        shown = "; ".join(errors[:8])
+        more = f" …and {len(errors) - 8} more." if len(errors) > 8 else ""
+        flash(f"⚠️ {len(errors)} row(s) skipped — {shown}{more}", "error")
+    elif not added and not updated:
+        flash("Nothing changed — every row was already there.", "info")
+
+
+@app.route("/drafts", methods=["GET", "POST"])
+@login_required
+def admin_drafts_list():
+    """List and create Tournament Drafts."""
+    from services import draft_service as draft_svc
+    db = get_session()
+    try:
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            try:
+                if action == "create":
+                    draft = draft_svc.create_draft(
+                        db, request.form.get("name"),
+                        pick_seconds=_int_form("pick_minutes", 15) * 60,
+                        tiers=[t.strip() for t in
+                               (request.form.get("tiers") or "").split(",")
+                               if t.strip()] or None,
+                        home_country=request.form.get("home_country") or "India",
+                        max_overseas=_int_form("max_overseas", 11))
+                    log_admin(db, "draft_create", "draft", draft.id, draft.name)
+                    db.commit()
+                    flash(f"✅ Created “{draft.name}”. Upload the player pool and "
+                          f"the draft order next.", "success")
+                    return redirect(url_for("admin_draft_detail",
+                                            draft_id=draft.id))
+                draft = draft_svc.get_draft(db, _int_form("draft_id") or 0)
+                if draft is None:
+                    flash("Draft not found.", "error")
+                elif action == "delete":
+                    name = draft.name
+                    db.delete(draft)
+                    log_admin(db, "draft_delete", "draft", draft.id, name)
+                    flash(f"Removed “{name}”.", "info")
+                elif action in {"pause", "cancel", "complete"}:
+                    status = {"pause": draft_svc.STATUS_PAUSED,
+                              "cancel": draft_svc.STATUS_CANCELLED,
+                              "complete": draft_svc.STATUS_COMPLETED}[action]
+                    draft_svc.set_status(db, draft, status)
+                    log_admin(db, f"draft_{action}", "draft", draft.id, draft.name)
+                    flash(f"✅ “{draft.name}” is now {status}.", "success")
+                else:
+                    flash("Unknown action.", "error")
+                db.commit()
+            except draft_svc.DraftError as ve:
+                db.rollback()
+                flash(f"⚠️ {ve}", "error")
+            except Exception as e:
+                db.rollback()
+                logger.exception("Draft mutation failed")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_drafts_list"))
+
+        rows = draft_svc.list_drafts(db)
+        summary = {}
+        for draft in rows:
+            made = draft_svc.picks_made(db, draft.id)
+            summary[draft.id] = {
+                "teams": len(draft_svc.teams(db, draft.id)),
+                "pool": db.query(DraftPlayer).filter(
+                    DraftPlayer.draft_id == draft.id).count(),
+                "made": made,
+                "total": made + len(draft_svc.pending_picks(db, draft.id)),
+            }
+        return render_template("admin_drafts.html", drafts=rows, summary=summary,
+                               default_tiers=", ".join(draft_svc.DEFAULT_TIER_ORDER))
+    finally:
+        db.close()
+
+
+@app.route("/drafts/<int:draft_id>", methods=["GET", "POST"])
+@login_required
+def admin_draft_detail(draft_id):
+    """One draft: settings, the player pool, the teams, the order, the board."""
+    from services import draft_service as draft_svc
+    db = get_session()
+    try:
+        draft = _draft_or_404(db, draft_id)
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            try:
+                if action == "settings":
+                    draft.name = (request.form.get("name")
+                                  or draft.name).strip()[:120]
+                    draft.pick_seconds = draft_svc.clamp_pick_seconds(
+                        _int_form("pick_minutes", 15) * 60)
+                    draft.warn_seconds = max(0, min(draft.pick_seconds - 1,
+                                                    _int_form("warn_seconds", 120)))
+                    draft.home_country = (request.form.get("home_country")
+                                          or "India").strip()[:60] or "India"
+                    draft.max_overseas = max(0, min(99, _int_form("max_overseas", 11)))
+                    chat_raw = (request.form.get("chat_id") or "").strip()
+                    if chat_raw:
+                        draft_svc.bind_chat(db, draft, int(chat_raw))
+                    else:
+                        draft.chat_id = None
+                    draft_svc.set_tier_order(
+                        draft, [t.strip() for t in
+                                (request.form.get("tiers") or "").split(",")])
+                    draft_svc.set_role_minimums(draft, {
+                        role: _int_form(f"role_{index}", 0)
+                        for index, role in enumerate(draft_svc._CATEGORIES)})
+                    log_admin(db, "draft_settings", "draft", draft.id, draft.name)
+                    flash("✅ Settings saved.", "success")
+
+                elif action == "import_pool":
+                    rows = _read_sheet(request.files.get("pool_file"),
+                                       request.form.get("pool_text"))
+                    added, updated, errors = draft_svc.import_pool(
+                        db, draft, rows, replace=_checked("replace_pool"))
+                    log_admin(db, "draft_import_pool", "draft", draft.id,
+                              draft.name, f"+{added} ~{updated} !{len(errors)}")
+                    _flash_import("Player pool", added, updated, errors)
+
+                elif action == "import_order":
+                    rows = _read_sheet(request.files.get("order_file"),
+                                       request.form.get("order_text"))
+                    picks, made_teams, errors = draft_svc.import_order(
+                        db, draft, rows, replace=_checked("replace_order"))
+                    log_admin(db, "draft_import_order", "draft", draft.id,
+                              draft.name, f"{picks} picks, {made_teams} teams")
+                    _flash_import("Draft order", picks, 0, errors)
+                    if made_teams:
+                        flash(f"👥 Created {made_teams} team(s) from the sheet.",
+                              "info")
+
+                elif action == "team":
+                    team = (db.query(DraftTeam)
+                            .filter(DraftTeam.id == _int_form("team_id"),
+                                    DraftTeam.draft_id == draft.id).first())
+                    if team is None:
+                        flash("Team not found.", "error")
+                    else:
+                        team.name = (request.form.get("team_name")
+                                     or team.name).strip()[:120]
+                        team.short_name = (request.form.get("short_name")
+                                           or "").strip()[:30] or None
+                        team.owner_name = (request.form.get("owner_name")
+                                           or "").strip()[:120] or None
+                        team.owner_tg_id = _int_form("owner_tg_id") or None
+                        draft_svc.set_co_owners(
+                            db, team,
+                            (request.form.get("co_owners") or "")
+                            .replace(";", ",").replace(" ", ",").split(","))
+                        logo = _save_challenge_team_logo(
+                            request.files.get("team_logo"))
+                        if logo:
+                            team.logo_url = logo
+                        log_admin(db, "draft_team_save", "draft", draft.id,
+                                  team.name)
+                        flash(f"✅ Saved {team.name}.", "success")
+
+                elif action == "publish":
+                    league = draft_svc.publish_to_league(db, draft)
+                    log_admin(db, "draft_publish", "draft", draft.id, draft.name,
+                              f"league #{league.id}")
+                    flash(f"✅ Published as the Challenge League “{league.name}” "
+                          f"(#{league.id}). The squads are ready to play.",
+                          "success")
+
+                elif action == "undo":
+                    last, player = draft_svc.undo_last(db, draft)
+                    log_admin(db, "draft_undo", "draft", draft.id, draft.name,
+                              f"R{last.round_no}P{last.pick_no}")
+                    flash(f"↩️ Rolled back R{last.round_no} P{last.pick_no}"
+                          + (f" — {player.name} is back in the pool."
+                             if player else "."), "info")
+                else:
+                    flash("Unknown action.", "error")
+                db.commit()
+            except draft_svc.DraftError as ve:
+                db.rollback()
+                flash(f"⚠️ {ve}", "error")
+            except ValueError as ve:
+                db.rollback()
+                flash(f"⚠️ {ve}", "error")
+            except Exception as e:
+                db.rollback()
+                logger.exception("Draft detail mutation failed")
+                flash(f"Error: {e}", "error")
+            return redirect(url_for("admin_draft_detail", draft_id=draft.id))
+
+        team_rows = draft_svc.teams(db, draft.id)
+        pool = (db.query(DraftPlayer)
+                .filter(DraftPlayer.draft_id == draft.id)
+                .order_by(DraftPlayer.rating.desc(), DraftPlayer.name).all())
+        picks = (db.query(DraftPick)
+                 .filter(DraftPick.draft_id == draft.id)
+                 .order_by(DraftPick.overall_no).all())
+        pool_by_id = {p.id: p for p in pool}
+        team_by_id = {t.id: t for t in team_rows}
+        tier_counts = {}
+        for player in pool:
+            bucket = tier_counts.setdefault(player.tier, [0, 0])
+            bucket[0] += 1
+            if player.picked_by_team_id is None:
+                bucket[1] += 1
+        return render_template(
+            "admin_draft_detail.html", draft=draft, teams=team_rows, pool=pool,
+            picks=picks, pool_by_id=pool_by_id, team_by_id=team_by_id,
+            tier_counts=tier_counts, svc=draft_svc,
+            tiers=draft_svc.tier_order(draft),
+            categories=draft_svc._CATEGORIES,
+            minimums=draft_svc.role_minimums(draft),
+            pool_columns=", ".join(draft_svc.POOL_COLUMNS),
+            order_columns=", ".join(draft_svc.ORDER_COLUMNS),
+            unlinked=sum(1 for p in pool if not p.source_player_id))
     finally:
         db.close()
 

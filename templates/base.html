@@ -480,6 +480,7 @@ hr.pitch-line { border: none; height: 1px; background: linear-gradient(90deg, tr
     <div class="section-label">Tournament Panel</div>
     <a href="{{ url_for('admin_tournaments_list') }}" class="{{ 'active' if request.endpoint == 'admin_tournaments_list' }}">🏆 Challenge League Tournaments</a>
     <a href="{{ url_for('admin_lp_tournaments_list') }}" class="{{ 'active' if request.endpoint == 'admin_lp_tournaments_list' }}">🏏 Lets Play Tournaments</a>
+    <a href="{{ url_for('admin_drafts_list') }}" class="{{ 'active' if request.endpoint in ('admin_drafts_list','admin_draft_detail') }}">🎯 Player Drafts</a>
 
     <div class="section-label">Economy & Rewards</div>
     <a href="{{ url_for('admin_economy') }}" class="{{ 'active' if request.endpoint == 'admin_economy' }}">💰 Economy</a>
