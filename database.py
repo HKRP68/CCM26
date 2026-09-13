@@ -205,6 +205,7 @@ def init_db():
         FantasyRoleRule, EventMedia,
         Giveaway, GiveawayEntry,
         StoredAsset,
+        PlayerDraft, DraftTeam, DraftPlayer, DraftPick,
     )
     import logging
     import time as _time

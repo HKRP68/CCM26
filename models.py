@@ -2860,3 +2860,216 @@ class RosterOverflowClaim(Base):
     source = Column(String(20), default="reward", nullable=False)  # daily|free_pack|pack|gspin
     sell_value = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# TOURNAMENT DRAFT — teams pick their squads, live, pick by pick
+# ══════════════════════════════════════════════════════════════════════
+#
+# A draft is the front end the Challenge League never had: an admin uploads a
+# player pool and a pick order, owners type /pick in a bound group chat, and the
+# finished squads are published into a real ChallengeLeague so they can play.
+#
+# These tables are deliberately separate from ``tournaments``. A draft needs a
+# pool of *candidate* players carrying tier / icon / gender / Indian status
+# (none of which exist on ``players``), an order sheet, and a pick clock — all
+# of which would otherwise become draft-only columns on every Challenge League
+# and Lets Play tournament row. The draft has its own lifecycle that *ends* by
+# producing a league, so it gets its own tables and a one-way publish step.
+
+
+class PlayerDraft(Base):
+    """One draft: a player pool, a pick order, and a clock.
+
+    ``chat_id`` is the bound draft group. Every announcement goes there and
+    ``/pick`` is refused anywhere else — a draft is a public event, and a pick
+    made in a DM that nobody sees is how an order gets disputed.
+    """
+    __tablename__ = "player_drafts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(120), nullable=False)
+    # setup | live | paused | completed | cancelled
+    status = Column(String(20), default="setup", nullable=False, index=True)
+    # The bound draft group chat. Unique so two drafts can't both own one chat
+    # and leave /pick ambiguous; NULL until an admin runs /dbind.
+    chat_id = Column(BigInteger, nullable=True)
+
+    # ── The clock ──────────────────────────────────────────────────────
+    # Seconds a team gets to make its pick, and how long before the deadline the
+    # "you're running out of time" ping fires. Both admin-editable per draft.
+    pick_seconds = Column(Integer, default=900, nullable=False)
+    warn_seconds = Column(Integer, default=120, nullable=False)
+    # The pick currently on the clock, and when it expires. The deadline lives
+    # in the database rather than in a job because the host redeploys often and
+    # an in-process timer would not survive it — services/draft_scheduler.py
+    # reconciles this column instead. See services/giveaway_scheduler.py for the
+    # same call made for giveaways.
+    current_pick_id = Column(Integer, ForeignKey("draft_picks.id", ondelete="SET NULL"),
+                             nullable=True)
+    pick_deadline_at = Column(DateTime, nullable=True)
+    warn_sent = Column(Boolean, default=False, nullable=False)
+
+    # ── The rules ──────────────────────────────────────────────────────
+    # The tier ladder, highest first, as a JSON list. A pick slot's tier is a
+    # CEILING: a Platinum slot accepts Platinum, Gold, Silver or Bronze.
+    tier_order_json = Column(Text, nullable=True)
+    # Overseas rule. A pool player is "overseas" when is_indian is False; the
+    # column pair mirrors ChallengeLeague.home_country / max_overseas so the
+    # published league inherits the same rule. 11 means no cap.
+    home_country = Column(String(60), default="India", nullable=False)
+    max_overseas = Column(Integer, default=11, nullable=False)
+    # {"Wicket Keeper": 1, "Bowler": 4} — minimum squad composition by role.
+    # Enforced as *reachability*: a pick is refused when it would leave too few
+    # slots to still satisfy the minimums.
+    role_minimums_json = Column(Text, nullable=True)
+
+    # ── Publication ────────────────────────────────────────────────────
+    # The Challenge League this draft was published into. SET NULL so deleting
+    # the league leaves the draft's own record of what happened intact.
+    league_id = Column(Integer, ForeignKey("challenge_leagues.id", ondelete="SET NULL"),
+                       nullable=True, index=True)
+    published_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    teams = relationship("DraftTeam", back_populates="draft",
+                         cascade="all, delete-orphan")
+    pool = relationship("DraftPlayer", back_populates="draft",
+                        cascade="all, delete-orphan")
+    # current_pick_id points into draft_picks, which points back at this row —
+    # name the join explicitly so SQLAlchemy doesn't have to guess between them.
+    picks = relationship("DraftPick", back_populates="draft",
+                         cascade="all, delete-orphan",
+                         foreign_keys="DraftPick.draft_id")
+
+    __table_args__ = (
+        Index("ix_player_draft_chat_unique", "chat_id", unique=True),
+    )
+
+
+class DraftTeam(Base):
+    """A franchise in a draft, owned by a Telegram user.
+
+    ``owner_tg_id`` is the identity (not ``users.id``) for the same reason
+    TournamentTeam uses it: an admin builds the field from a list of Telegram
+    ids, and some of those people have never messaged the bot.
+    """
+    __tablename__ = "draft_teams"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    draft_id = Column(Integer, ForeignKey("player_drafts.id", ondelete="CASCADE"),
+                      nullable=False, index=True)
+    name = Column(String(120), nullable=False)
+    short_name = Column(String(30), nullable=True)
+    logo_url = Column(String(500), nullable=True)
+    owner_tg_id = Column(BigInteger, nullable=True, index=True)
+    owner_name = Column(String(120), nullable=True)
+    # Extra Telegram ids allowed to pick for this team, as a JSON list. Anyone
+    # not the owner and not in here is refused, admins included.
+    co_owner_ids_json = Column(Text, nullable=True)
+    # The owner's wishlist, a JSON list of DraftPlayer ids. Auto-pick drains it
+    # before falling back to the tier average, so being away from the phone
+    # doesn't have to mean losing the player you wanted.
+    queue_json = Column(Text, nullable=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    draft = relationship("PlayerDraft", back_populates="teams")
+
+    __table_args__ = (
+        Index("ix_draft_team_unique", "draft_id", "name", unique=True),
+    )
+
+
+class DraftPlayer(Base):
+    """One player in a draft's pool. NULL ``picked_by_team_id`` means available.
+
+    The pool is scoped to its draft rather than shared with ``players`` because
+    the uploaded sheet carries tier, icon eligibility, gender and Indian status,
+    none of which the master catalogue models — and because a draft's pool is a
+    curated list for one competition, not an edit to the global card database.
+    ``source_player_id`` links back when the name matches a real card, which is
+    what lets the bot post that card's image when the player is picked.
+    """
+    __tablename__ = "draft_players"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    draft_id = Column(Integer, ForeignKey("player_drafts.id", ondelete="CASCADE"),
+                      nullable=False, index=True)
+    name = Column(String(150), nullable=False, index=True)
+    rating = Column(Integer, default=70, nullable=False)
+    tier = Column(String(20), nullable=False, index=True)
+    icon_eligible = Column(Boolean, default=False, nullable=False)
+    gender = Column(String(10), nullable=True)
+    # The sheet's ``indian_status``, normalised. Every consumer asks a yes/no
+    # question, and ChallengePlayer.is_overseas — which this feeds on publish —
+    # is already a boolean.
+    is_indian = Column(Boolean, default=True, nullable=False)
+    category = Column(String(30), default="Batsman", nullable=False)
+    country = Column(String(60), default="Unknown", nullable=False)
+    bat_hand = Column(String(10), default="Right", nullable=False)
+    bowl_hand = Column(String(10), default="Right", nullable=False)
+    bowl_style = Column(String(30), default="Medium Pacer", nullable=False)
+    bat_rating = Column(Integer, default=0, nullable=False)
+    bowl_rating = Column(Integer, default=0, nullable=False)
+    source_player_id = Column(Integer, ForeignKey("players.id", ondelete="SET NULL"),
+                              nullable=True, index=True)
+    picked_by_team_id = Column(Integer, ForeignKey("draft_teams.id", ondelete="SET NULL"),
+                               nullable=True, index=True)
+    picked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    draft = relationship("PlayerDraft", back_populates="pool")
+    team = relationship("DraftTeam")
+    source_player = relationship("Player")
+
+    __table_args__ = (
+        Index("ix_draft_player_unique", "draft_id", "name", unique=True),
+        Index("ix_draft_player_available", "draft_id", "picked_by_team_id"),
+    )
+
+
+class DraftPick(Base):
+    """One slot in the pick order — and, once taken, the record of the pick.
+
+    The order sheet and the result log are the same rows on purpose: "R1 P3 is
+    Mumbai's Platinum slot" and "R1 P3 was Bumrah" are the same fact at two
+    points in time, and splitting them would let the two drift apart.
+    """
+    __tablename__ = "draft_picks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    draft_id = Column(Integer, ForeignKey("player_drafts.id", ondelete="CASCADE"),
+                      nullable=False, index=True)
+    round_no = Column(Integer, default=1, nullable=False)
+    pick_no = Column(Integer, default=1, nullable=False)
+    # The flattened running order. Rounds and pick numbers are what people say
+    # out loud ("R1 P3"); this is what the clock actually walks.
+    overall_no = Column(Integer, default=1, nullable=False)
+    # The slot's tier CEILING — this tier or anything below it on the ladder.
+    tier = Column(String(20), nullable=False)
+    team_id = Column(Integer, ForeignKey("draft_teams.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    draft_player_id = Column(Integer, ForeignKey("draft_players.id", ondelete="SET NULL"),
+                             nullable=True)
+    picked_by_tg_id = Column(BigInteger, nullable=True)
+    # True when the clock made this pick rather than a person.
+    is_auto = Column(Boolean, default=False, nullable=False)
+    # pending | done | skipped ("skipped" = the clock expired and no legal
+    # player was left, which must advance the draft rather than wedge it)
+    status = Column(String(20), default="pending", nullable=False, index=True)
+    picked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    draft = relationship("PlayerDraft", back_populates="picks",
+                         foreign_keys=[draft_id])
+    team = relationship("DraftTeam")
+    player = relationship("DraftPlayer", foreign_keys=[draft_player_id])
+
+    __table_args__ = (
+        Index("ix_draft_pick_unique", "draft_id", "round_no", "pick_no", unique=True),
+        Index("ix_draft_pick_order_unique", "draft_id", "overall_no", unique=True),
+    )

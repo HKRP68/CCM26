@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% block title %}{{ draft.name }} — Draft{% endblock %}
+
+{% block content %}
+<style>
+.dd-shell { display:flex; flex-direction:column; gap:1rem; }
+.dd-card { background:var(--card); border:1px solid var(--border); border-radius:16px; padding:1rem; box-shadow:0 10px 24px rgba(0,0,0,.18); }
+.dd-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:.8rem; align-items:end; }
+.dd-grid label { color:var(--muted); display:block; font-size:.78rem; text-transform:uppercase; letter-spacing:.06em; margin-bottom:.25rem; }
+.dd-grid input, .dd-grid select, .dd-grid textarea { width:100%; }
+.dd-note { color:var(--muted); font-size:.85rem; line-height:1.6; }
+.dd-note code { color:var(--accent); }
+.dd-tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:.8rem; }
+.dd-tile { background:var(--bg-soft); border:1px solid var(--border); border-radius:14px; padding:.85rem; }
+.dd-table { width:100%; border-collapse:collapse; font-size:.86rem; }
+.dd-table th, .dd-table td { text-align:left; padding:.4rem .5rem; border-bottom:1px solid var(--border); white-space:nowrap; }
+.dd-table th { color:var(--muted); font-size:.74rem; text-transform:uppercase; letter-spacing:.05em; }
+.dd-scroll { max-height:460px; overflow:auto; }
+.pill { border-radius:999px; padding:.18rem .5rem; font-size:.72rem; border:1px solid var(--border); }
+.dim { color:var(--muted); }
+.danger { border-color:rgba(239,68,68,.4) !important; color:#fca5a5 !important; }
+@media (max-width: 900px) { .dd-grid { grid-template-columns:1fr; } }
+</style>
+
+<div class="dd-shell">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
+    <h2 style="margin:0;">🎯 {{ draft.name }} <span class="pill">{{ draft.status }}</span></h2>
+    <a class="btn btn-ghost" href="{{ url_for('admin_drafts_list') }}">← All drafts</a>
+  </div>
+
+  <!-- ── Settings ────────────────────────────────────────────────── -->
+  <div class="dd-card">
+    <h3 style="margin-top:0;">Settings</h3>
+    <form method="POST" class="dd-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="settings">
+      <div style="grid-column:span 2;"><label>Name</label><input type="text" name="name" value="{{ draft.name }}"></div>
+      <div><label>Draft group chat id</label><input type="text" name="chat_id" value="{{ draft.chat_id or '' }}" placeholder="-1001234567890"></div>
+      <div><label>Minutes per pick</label><input type="number" name="pick_minutes" min="1" max="120" value="{{ (draft.pick_seconds // 60) }}"></div>
+      <div><label>Warn at (seconds left)</label><input type="number" name="warn_seconds" min="0" max="3600" value="{{ draft.warn_seconds }}"></div>
+      <div style="grid-column:span 2;"><label>Tier ladder — highest first, comma separated</label><input type="text" name="tiers" value="{{ tiers|join(', ') }}"></div>
+      <div><label>Home country</label><input type="text" name="home_country" value="{{ draft.home_country }}"></div>
+      <div><label>Max overseas per squad</label><input type="number" name="max_overseas" min="0" max="99" value="{{ draft.max_overseas }}"></div>
+      {% for role in categories %}
+      <div><label>Min {{ role }}</label><input type="number" name="role_{{ loop.index0 }}" min="0" max="15" value="{{ minimums.get(role, 0) }}"></div>
+      {% endfor %}
+      <div><button class="btn btn-primary" type="submit">Save settings</button></div>
+    </form>
+    <p class="dd-note" style="margin-bottom:0;">
+      A slot's tier is a <strong>ceiling</strong>: a {{ tiers[0] }} slot accepts
+      {{ tiers|join(', ') }}. Picking below the slot's tier is allowed and simply
+      spends the slot. Role minimums are enforced as <em>reachability</em> — a
+      pick is refused once it would leave too few slots to still meet them.
+    </p>
+  </div>
+
+  <!-- ── Player pool ─────────────────────────────────────────────── -->
+  <div class="dd-card">
+    <h3 style="margin-top:0;">Player pool — {{ pool|length }} player(s)</h3>
+    <p class="dd-note">
+      Upload an <strong>.xlsx</strong> or <strong>.csv</strong>, or paste rows below.
+      Columns are matched <strong>by header name</strong>, so order doesn't matter:<br>
+      <code>{{ pool_columns }}</code><br>
+      <code>indian_status</code> accepts Indian/Overseas, a country, or 1/0.
+      <code>icon_eligible</code> accepts 1/0 or yes/no. Re-uploading updates
+      players already in the pool, so a corrected sheet can just be uploaded again.
+    </p>
+    {% if tier_counts %}
+    <p class="dd-note">
+      {% for tier in tiers %}{% if tier in tier_counts %}
+      <span class="pill">{{ tier }}: {{ tier_counts[tier][1] }} left / {{ tier_counts[tier][0] }}</span>
+      {% endif %}{% endfor %}
+      {% if unlinked %}<span class="pill" style="border-color:rgba(253,230,138,.4);color:#fde68a;">⚠️ {{ unlinked }} not matched to a card — those picks post without an image</span>{% endif %}
+    </p>
+    {% endif %}
+    <form method="POST" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="import_pool">
+      <div class="dd-grid">
+        <div style="grid-column:span 2;"><label>Spreadsheet file</label><input type="file" name="pool_file" accept=".xlsx,.xlsm,.csv,.tsv,.txt"></div>
+        <div><label><input type="checkbox" name="replace_pool"> Replace the whole pool</label></div>
+      </div>
+      <label class="dim" style="display:block;margin:.6rem 0 .25rem;">…or paste CSV / TSV</label>
+      <textarea name="pool_text" rows="5" style="width:100%;font-family:monospace;font-size:.85rem;" placeholder="{{ pool_columns }}"></textarea>
+      <div style="margin-top:.6rem;"><button class="btn btn-primary" type="submit">📤 Import pool</button></div>
+    </form>
+    {% if pool %}
+    <div class="dd-scroll" style="margin-top:1rem;">
+      <table class="dd-table">
+        <tr><th>Player</th><th>OVR</th><th>Tier</th><th>Role</th><th>Country</th><th>Status</th><th>Drafted by</th></tr>
+        {% for p in pool %}
+        <tr>
+          <td>{{ p.name }}{% if p.icon_eligible %} ⭐{% endif %}</td>
+          <td>{{ p.rating }}</td>
+          <td>{{ p.tier }}</td>
+          <td>{{ p.category }}</td>
+          <td>{{ p.country }}{% if not p.is_indian %} ✈️{% endif %}</td>
+          <td>{% if p.source_player_id %}<span class="dim">card #{{ p.source_player_id }}</span>{% else %}<span class="dim">no card</span>{% endif %}</td>
+          <td>{% if p.picked_by_team_id %}{{ team_by_id[p.picked_by_team_id].name if p.picked_by_team_id in team_by_id else '—' }}{% else %}<span class="dim">available</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ── Draft order ─────────────────────────────────────────────── -->
+  <div class="dd-card">
+    <h3 style="margin-top:0;">Draft order — {{ picks|length }} slot(s)</h3>
+    <p class="dd-note">
+      Columns (matched by header name): <code>{{ order_columns }}</code><br>
+      Teams are created from this sheet as they first appear, so Team Name,
+      Owner Name and Owner Tag ID travel with the picks. The running order is
+      rebuilt from Round&nbsp;No and Pick&nbsp;Number, so the rows can be in any
+      order. The order can't be changed once picking has started — roll picks
+      back with <strong>Undo</strong> below first.
+    </p>
+    <form method="POST" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="import_order">
+      <div class="dd-grid">
+        <div style="grid-column:span 2;"><label>Spreadsheet file</label><input type="file" name="order_file" accept=".xlsx,.xlsm,.csv,.tsv,.txt"></div>
+        <div><label><input type="checkbox" name="replace_order"> Replace the whole order</label></div>
+      </div>
+      <label class="dim" style="display:block;margin:.6rem 0 .25rem;">…or paste CSV / TSV</label>
+      <textarea name="order_text" rows="5" style="width:100%;font-family:monospace;font-size:.85rem;" placeholder="{{ order_columns }}"></textarea>
+      <div style="margin-top:.6rem;"><button class="btn btn-primary" type="submit">📤 Import order</button></div>
+    </form>
+  </div>
+
+  <!-- ── Teams ───────────────────────────────────────────────────── -->
+  <div class="dd-card">
+    <h3 style="margin-top:0;">Teams &amp; owners</h3>
+    {% if not teams %}
+      <p class="dim">No teams yet — import a draft order and they'll be created from it.</p>
+    {% else %}
+    <div class="dd-tiles">
+      {% for t in teams %}
+      <div class="dd-tile">
+        <form method="POST" enctype="multipart/form-data">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="team">
+          <input type="hidden" name="team_id" value="{{ t.id }}">
+          <div class="dd-grid">
+            <div style="grid-column:span 2;"><label>Team name</label><input type="text" name="team_name" value="{{ t.name }}"></div>
+            <div><label>Short code</label><input type="text" name="short_name" value="{{ t.short_name or '' }}" maxlength="30"></div>
+            <div><label>Owner name</label><input type="text" name="owner_name" value="{{ t.owner_name or '' }}"></div>
+            <div><label>Owner Tag ID</label><input type="text" name="owner_tg_id" value="{{ t.owner_tg_id or '' }}" placeholder="123456789"></div>
+            <div style="grid-column:span 2;"><label>Co-owner Telegram ids (comma separated)</label><input type="text" name="co_owners" value="{{ svc.co_owner_ids(t)|join(', ') }}"></div>
+            <div style="grid-column:span 2;"><label>Team logo</label><input type="file" name="team_logo" accept=".png,.jpg,.jpeg,.webp,.gif"></div>
+          </div>
+          {% if t.logo_url %}<div style="margin-top:.5rem;"><img src="{{ t.logo_url }}" alt="{{ t.name }} logo" style="height:52px;border-radius:8px;"></div>{% endif %}
+          <div style="margin-top:.6rem;"><button class="btn btn-primary" type="submit">Save {{ t.name }}</button></div>
+        </form>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ── The board ───────────────────────────────────────────────── -->
+  <div class="dd-card">
+    <h3 style="margin-top:0;">The board</h3>
+    {% if not picks %}
+      <p class="dim">No slots yet.</p>
+    {% else %}
+    <div class="dd-scroll">
+      <table class="dd-table">
+        <tr><th>#</th><th>Round</th><th>Pick</th><th>Tier</th><th>Team</th><th>Player</th><th></th></tr>
+        {% for pk in picks %}
+        <tr {% if pk.id == draft.current_pick_id %}style="background:rgba(34,197,94,.1);"{% endif %}>
+          <td>{{ pk.overall_no }}</td>
+          <td>R{{ pk.round_no }}</td>
+          <td>P{{ pk.pick_no }}</td>
+          <td>{{ pk.tier }}</td>
+          <td>{{ team_by_id[pk.team_id].name if pk.team_id in team_by_id else '—' }}</td>
+          <td>
+            {% if pk.draft_player_id and pk.draft_player_id in pool_by_id %}
+              {{ pool_by_id[pk.draft_player_id].name }}
+              <span class="dim">({{ pool_by_id[pk.draft_player_id].rating }} · {{ pool_by_id[pk.draft_player_id].tier }})</span>
+            {% elif pk.status == 'skipped' %}<span class="dim">— passed —</span>
+            {% elif pk.id == draft.current_pick_id %}<span style="color:#86efac;">on the clock</span>
+            {% else %}<span class="dim">pending</span>{% endif %}
+          </td>
+          <td>{% if pk.is_auto %}<span class="pill">⏱ auto</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+    <form method="POST" style="margin-top:.8rem;" onsubmit="return confirm('Roll the most recent pick back onto the clock?');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="undo">
+      <button class="btn danger" type="submit">↩️ Undo last pick</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <!-- ── Publish ─────────────────────────────────────────────────── -->
+  <div class="dd-card">
+    <h3 style="margin-top:0;">Publish</h3>
+    <p class="dd-note">
+      Writes every drafted squad into a Challenge League, so the teams can play
+      straight away and be entered into a Challenge League Tournament. Only a
+      <strong>completed</strong> draft can be published; publishing again
+      re-syncs the same league rather than creating a second one.
+    </p>
+    {% if draft.league_id %}
+    <p class="dd-note">✅ Published as league <strong>#{{ draft.league_id }}</strong>{% if draft.published_at %} on {{ draft.published_at.strftime('%Y-%m-%d %H:%M') }} UTC{% endif %} — <a href="{{ url_for('admin_challenge_data') }}">open Challenge Data</a>.</p>
+    {% endif %}
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="publish">
+      <button class="btn btn-primary" type="submit" {% if draft.status != 'completed' %}disabled title="Finish the draft first"{% endif %}>📘 Publish as a Challenge League</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

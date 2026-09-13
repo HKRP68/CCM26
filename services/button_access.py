@@ -30,6 +30,12 @@ _current_button_owner: contextvars.ContextVar[Optional[int]] = contextvars.Conte
 # second participant, and match-control buttons where the match state itself
 # validates whose turn/action it is.
 SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
+    # Tournament Draft: the board's tabs are for the whole room to read, and the
+    # disambiguation buttons belong to whichever team is on the clock — not to
+    # whoever happened to run the command that posted them. handlers/draft.py
+    # re-checks the clicker against the pick's team on every press.
+    "dr_view_",
+    "dr_pick_",
     "cric_join",
     "cric_join_",
     "cric_join:",

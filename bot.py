@@ -343,6 +343,11 @@ GROUP_ONLY_COMMANDS = frozenset({
     # this only keeps them out of the private slash menu, which is at Telegram's
     # 100-command ceiling.
     "lptour", "lpt", "lptable", "lptfixtures", "lptteams", "lptstats",
+    # Tournament Draft. A draft IS a group event — every one of these handlers
+    # refuses outside the chat the draft is bound to, so advertising them in a
+    # DM would only promise an error. It also keeps them out of the private
+    # menu, which is one command short of Telegram's 100-per-scope ceiling.
+    "pick", "dboard", "dsquad", "dqueue",
 })
 
 # Commands that only make sense one-to-one with the bot: deep-link entry
@@ -386,6 +391,21 @@ ADMIN_MENU_COMMANDS = (
     ("tourblock", "Admin: block a user from creating tours"),
     ("tourallowlist", "Admin: list users allowed to create tours"),
     ("testwpm", "Admin: Mini App match diagnostic"),
+    # Tournament Draft. Ten commands is a lot for a player menu that is already
+    # at Telegram's ceiling — but the admin bucket is published only into
+    # admins' own DMs and is exempt from the clamp, so they cost nothing there.
+    ("dadmin", "Admin: Tournament Draft reference"),
+    ("dnew", "Admin: create a draft and bind it to this group"),
+    ("dbind", "Admin: bind a draft to this group"),
+    ("dstart", "Admin: start (or resume) the draft"),
+    ("dpause", "Admin: pause the draft clock"),
+    ("dresume", "Admin: resume a paused draft"),
+    ("dtimer", "Admin: minutes allowed per pick"),
+    ("dco", "Admin: add a co-owner who may pick for a team"),
+    ("dskip", "Admin: resolve the pick on the clock now"),
+    ("dundo", "Admin: roll the last draft pick back"),
+    ("dpublish", "Admin: publish drafted squads as a Challenge League"),
+    ("dcancel", "Admin: cancel the draft"),
 )
 
 FORWARD_ONLY_MENU_COMMANDS = (
@@ -457,6 +477,10 @@ BOT_MENU_COMMANDS = (
     ("lptfixtures", "Lets Play Tournament fixtures — including yours"),
     ("lptteams", "Who is in the Lets Play Tournament"),
     ("lptstats", "Lets Play Tournament Top-10 leaderboards"),
+    ("pick", "Tournament Draft: pick a player when you're on the clock 🎯"),
+    ("dboard", "Tournament Draft: the live board"),
+    ("dsquad", "Tournament Draft: a team's drafted squad"),
+    ("dqueue", "Tournament Draft: your auto-pick wishlist"),
     ("ciplbot", "Practice a league match against the bot (unranked)"),
     ("change", "Change your XI/batting order during match setup"),
     ("botstatus", "Bot ping, uptime & status"),
@@ -902,6 +926,8 @@ async def start_handler(update, context):
         "/lptour @user - Play your Lets Play Tournament fixture (official result)\n"
         "/lpt - Lets Play Tournament hub: table, fixtures, teams\n"
         "/lptable /lptfixtures /lptteams /lptstats - Tournament table, schedule, field, leaders\n"
+        "/pick <player> - Tournament Draft: make your pick when you're on the clock\n"
+        "/dboard /dsquad /dqueue - Draft board, your squad, your auto-pick wishlist\n"
         "/challengeIPL /cipl - Reply to a user to start an IPL challenge\n"
         "/challengeBBL /cbbl - Reply to a user to start a BBL challenge\n"
         "/challengeINT /cint - Reply to a user to start an international challenge\n"
@@ -1740,6 +1766,42 @@ def main():
         app.add_handler(CommandHandler("lptuse", lptuse_handler))
         app.add_handler(CommandHandler("lptdelete", lptdelete_handler))
 
+        # ── Tournament Draft ─────────────────────────────────────────
+        # Teams pick their squads live in one bound group chat; the finished
+        # squads are published into a Challenge League and play from there.
+        # The ``dr_`` callback prefix is registered in
+        # services.button_access.SHARED_CALLBACK_PREFIXES — the board's tabs are
+        # for the whole room and the pick buttons belong to the team on the
+        # clock, not to whoever ran the command that posted them.
+        from handlers.draft import (
+            pick_handler, pick_callback, dboard_handler, board_view_callback,
+            dsquad_handler, dqueue_handler,
+            dadmin_handler, dnew_handler, dbind_handler, dtimer_handler,
+            dco_handler, dstart_handler, dpause_handler, dcancel_handler,
+            dskip_handler, dundo_handler, dpublish_handler,
+        )
+        # Not "/p": that is already /purse, registered above, and PTB runs
+        # the first handler that matches — the alias would be dead.
+        app.add_handler(CommandHandler(["pick", "pk", "dpick"], pick_handler))
+        app.add_handler(CallbackQueryHandler(pick_callback, pattern=r"^dr_pick_"))
+        app.add_handler(CommandHandler(["dboard", "draftboard"], dboard_handler))
+        app.add_handler(CallbackQueryHandler(board_view_callback,
+                                             pattern=r"^dr_view_"))
+        app.add_handler(CommandHandler(["dsquad", "myteam"], dsquad_handler))
+        app.add_handler(CommandHandler(["dqueue", "dq"], dqueue_handler))
+        app.add_handler(CommandHandler("dadmin", dadmin_handler))
+        app.add_handler(CommandHandler("dnew", dnew_handler))
+        app.add_handler(CommandHandler("dbind", dbind_handler))
+        app.add_handler(CommandHandler("dstart", dstart_handler))
+        app.add_handler(CommandHandler(["dresume", "dunpause"], dstart_handler))
+        app.add_handler(CommandHandler("dpause", dpause_handler))
+        app.add_handler(CommandHandler("dcancel", dcancel_handler))
+        app.add_handler(CommandHandler("dtimer", dtimer_handler))
+        app.add_handler(CommandHandler("dco", dco_handler))
+        app.add_handler(CommandHandler("dskip", dskip_handler))
+        app.add_handler(CommandHandler("dundo", dundo_handler))
+        app.add_handler(CommandHandler("dpublish", dpublish_handler))
+
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))
         app.add_handler(CommandHandler("eu", unscramble_exit_handler))
@@ -2112,6 +2174,15 @@ def main():
             start_giveaway_scheduler(app)
         except Exception:
             logger.exception("Failed to start giveaway scheduler")
+
+        # The draft pick clock. DB-backed and swept rather than a run_once per
+        # pick, because a redeploy mid-draft would otherwise strand every team
+        # on the clock — same reasoning as the giveaway sweeper above.
+        try:
+            from services.draft_scheduler import start_draft_scheduler
+            start_draft_scheduler(app)
+        except Exception:
+            logger.exception("Failed to start the draft clock")
 
         # Schedule periodic tour expiry (every hour)
         try:
