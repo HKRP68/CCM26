@@ -5,6 +5,12 @@ registered against the originating Telegram user id.  A pre-callback middleware
 uses that registration to stop other users from driving someone else's personal
 UI.  URL/WebApp-only keyboards are ignored, and explicitly shared callback
 prefixes (join/spectate/accept-style match buttons) remain open to everyone.
+
+Commands whose buttons must stay personal even across a restart can opt into a
+stronger, stateless lock instead: see ``OWNER_RULES`` and :func:`tag_owner`,
+which write the owner's id into the callback data itself and let the command
+say something more useful than "this button is not for you" when somebody else
+presses.
 """
 
 from __future__ import annotations
@@ -30,15 +36,11 @@ _current_button_owner: contextvars.ContextVar[Optional[int]] = contextvars.Conte
 # second participant, and match-control buttons where the match state itself
 # validates whose turn/action it is.
 SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
-    # Tournament Draft: the board's tabs are for the whole room to read, and the
-    # disambiguation buttons belong to whichever team is on the clock — not to
-    # whoever happened to run the command that posted them. handlers/draft.py
-    # re-checks the clicker against the pick's team on every press.
-    "dr_view_",
-    "dr_pick_",
-    # /dsearch's filter and page buttons: the pool is the whole room's to read,
-    # and the message stays useful long after whoever posted it stopped looking.
-    "dr_srch_",
+    # (Tournament Draft's dr_view_ / dr_pick_ / dr_srch_ buttons used to be
+    # listed here. They are now owner-locked to whoever ran the command that
+    # posted them — see OWNER_RULES below — because a draft group is a busy
+    # room and a board somebody else re-filters under you is worse than
+    # typing /dboard again.)
     "cric_join",
     "cric_join_",
     "cric_join:",
@@ -179,6 +181,125 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "gwjoin_",
 )
 
+# ════════════════════════════════════════════════════════════════════
+# Owner rules — locks that survive a restart
+# ════════════════════════════════════════════════════════════════════
+#
+# The registry further down is process-local: a restart empties it, and every
+# message sent before the restart then falls through to "unregistered, so let
+# everybody press it".  That is a fine trade for a roster page, but not for a
+# command whose whole point is that the buttons are yours — a draft board hours
+# into an evening is exactly the message people are still pressing.
+#
+# A prefix listed here carries its owner's Telegram id *in the callback data*
+# (``<prefix>u<tg id><rest>``, written by :func:`tag_owner`), so the lock is
+# stateless: the button itself says who it belongs to, and a restart, a second
+# process or a pruned cache changes nothing.  Each rule also carries the line a
+# non-owner is shown, because "this button is not for you" tells nobody what to
+# do instead.
+#
+# Untagged data under the same prefix (buttons sent before a deploy) reads back
+# as "no owner" and falls through to the registry, so nothing is bricked.
+
+OWNER_TAG = "u"
+_MAX_OWNER_DIGITS = 16
+
+OWNER_RULES: dict[str, str] = {
+    # Tournament Draft. The pool browser re-filters *in place*, so a second
+    # pair of hands on it genuinely fights the first — two owners three seconds
+    # before a pick, one flipping to Gold while the other is mid-page. The
+    # board's tabs post a fresh message instead, so a stranger driving yours is
+    # noise in the one chat that has to stay readable. Everything they reach is
+    # public draft state and the commands are free, so being told to run your
+    # own costs nothing.
+    "dr_view_": ("🎯 That board belongs to whoever sent /dboard. "
+                 "Send /dboard for your own copy."),
+    "dr_srch_": ("🔎 That pool browser belongs to whoever sent /dsearch. "
+                 "Send /dsearch for your own — the filters are per-person."),
+    # The disambiguation buttons under /pick: a pick is irreversible and needs
+    # an admin to undo, so the one pair of hands that may finish it is the pair
+    # that typed the name. handlers/draft.py re-checks the clicker against the
+    # team on the clock as well.
+    "dr_pick_": ("⛔ Those buttons belong to whoever typed /pick. "
+                 "Type /pick <player> yourself."),
+}
+
+
+def tag_owner(prefix: str, owner_user_id: Optional[int]) -> str:
+    """``("dr_view_", 111)`` → ``"dr_view_u111"``; untagged when owner is None.
+
+    Anything that is not a positive integer comes back as the bare prefix: a
+    minus sign would not read back as digits, and half-written data is worse
+    than no tag at all (no tag simply falls through to the registry).
+    """
+    if owner_user_id is None:
+        return prefix
+    try:
+        owner = int(owner_user_id)
+    except (TypeError, ValueError):
+        return prefix
+    if owner <= 0 or len(str(owner)) > _MAX_OWNER_DIGITS:
+        return prefix
+    return f"{prefix}{OWNER_TAG}{owner}"
+
+
+def split_owner(prefix: str, callback_data: Any,
+                separator: str = "") -> tuple[Optional[int], str]:
+    """Split tagged callback data into ``(owner id, the fields after the tag)``.
+
+    ``separator`` is the single character the command writes between the owner
+    tag and its own fields; it is consumed here when — and only when — a tag was
+    actually found.  That matters for formats whose first field can be empty
+    (``dr_srch_u7~~~a~~0~``): untagged data from before a deploy comes back
+    byte-for-byte unchanged, so the caller parses both with one code path.
+    """
+    data = callback_data if isinstance(callback_data, str) else ""
+    if not data.startswith(prefix):
+        return None, ""
+    rest = data[len(prefix):]
+    if not rest.startswith(OWNER_TAG):
+        return None, rest
+    digits = ""
+    for char in rest[len(OWNER_TAG):]:
+        if not char.isdigit() or len(digits) >= _MAX_OWNER_DIGITS:
+            break
+        digits += char
+    if not digits:
+        return None, rest
+    rest = rest[len(OWNER_TAG) + len(digits):]
+    if separator and rest.startswith(separator):
+        rest = rest[len(separator):]
+    return int(digits), rest
+
+
+def _matching_owner_rule(callback_data: Any) -> Optional[str]:
+    """The longest OWNER_RULES prefix this callback data starts with."""
+    if not isinstance(callback_data, str) or not callback_data:
+        return None
+    matches = [prefix for prefix in OWNER_RULES if callback_data.startswith(prefix)]
+    return max(matches, key=len) if matches else None
+
+
+def owner_from_callback_data(callback_data: Any) -> Optional[int]:
+    """The owner a self-describing button names, or None if it names nobody."""
+    prefix = _matching_owner_rule(callback_data)
+    if prefix is None:
+        return None
+    return split_owner(prefix, callback_data)[0]
+
+
+def blocked_message_for(callback_data: Any) -> str:
+    """What to show the user who just pressed somebody else's button.
+
+    Plain text, not HTML: Telegram renders a callback answer verbatim, and the
+    200-character cap is enforced here so a long rule can never turn a refusal
+    into a Bad Request that leaves the button looking dead instead.
+    """
+    prefix = _matching_owner_rule(callback_data)
+    message = BLOCKED_BUTTON_MESSAGE if prefix is None else OWNER_RULES[prefix]
+    return message[:200]
+
+
 _SEND_METHODS = (
     "send_message",
     "send_photo",
@@ -288,6 +409,15 @@ def check_callback_owner(update: Any) -> bool:
     if is_shared_callback_data(getattr(query, "data", None)):
         return True
 
+    clicking_user_id = getattr(getattr(query, "from_user", None), "id", None)
+
+    # A self-describing button (OWNER_RULES) is authoritative: it names its
+    # owner, so the answer does not depend on this process having been the one
+    # that sent it.
+    tagged_owner = owner_from_callback_data(getattr(query, "data", None))
+    if tagged_owner is not None:
+        return clicking_user_id == tagged_owner
+
     message = getattr(query, "message", None)
     chat_id, message_id = _extract_chat_message_id(message)
     if chat_id is None or message_id is None:
@@ -299,7 +429,6 @@ def check_callback_owner(update: Any) -> bool:
         # are not bricked after a restart.
         return True
 
-    clicking_user_id = getattr(getattr(query, "from_user", None), "id", None)
     return clicking_user_id == owner
 
 
@@ -309,7 +438,8 @@ async def button_access_guard(update: Any, context: Any) -> None:
         return
     query = update.callback_query
     try:
-        await query.answer(BLOCKED_BUTTON_MESSAGE, show_alert=True)
+        await query.answer(blocked_message_for(getattr(query, "data", None)),
+                           show_alert=True)
     except Exception:
         logger.exception("Failed to answer blocked callback query")
     from telegram.ext import ApplicationHandlerStop

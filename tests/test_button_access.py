@@ -200,5 +200,113 @@ class ButtonAccessTests(unittest.TestCase):
         self.assertTrue(button_access.check_callback_owner(update))
 
 
+class OwnerTagTests(unittest.TestCase):
+    """Self-describing buttons: the callback data names its own owner."""
+
+    def tearDown(self):
+        button_access._OWNER_BY_MESSAGE.clear()
+
+    def test_tag_and_split_round_trip(self):
+        tagged = button_access.tag_owner("dr_view_", 1234567890)
+
+        self.assertEqual(tagged, "dr_view_u1234567890")
+        self.assertEqual(button_access.split_owner("dr_view_", tagged + "_order", "_"),
+                         (1234567890, "order"))
+
+    def test_untagged_data_reads_back_byte_for_byte(self):
+        # Buttons sent before this shipped carry no tag. They must decode with
+        # the same call the tagged ones use, separator untouched — an empty
+        # leading field (dr_srch_~~a~~0~) is data, not a separator.
+        self.assertEqual(button_access.split_owner("dr_srch_", "dr_srch_~~a~~0~", "~"),
+                         (None, "~~a~~0~"))
+        self.assertEqual(button_access.split_owner("dr_view_", "dr_view_order", "_"),
+                         (None, "order"))
+
+    def test_separator_is_consumed_only_once_after_a_tag(self):
+        # The tagged twin of the case above: exactly one separator belongs to
+        # the tag, and the empty first field behind it has to survive.
+        self.assertEqual(button_access.split_owner("dr_srch_", "dr_srch_u7~~~a~~0~", "~"),
+                         (7, "~~a~~0~"))
+
+    def test_tag_owner_without_an_owner_leaves_data_untagged(self):
+        self.assertEqual(button_access.tag_owner("dr_srch_", None), "dr_srch_")
+        self.assertIsNone(
+            button_access.owner_from_callback_data("dr_srch_~~a~~0~"))
+
+    def test_non_owner_is_blocked_without_any_registration(self):
+        # The point of the tag: no register_button_owner call, no surviving
+        # process state — the button alone decides. This is what a restart
+        # used to throw away.
+        owner = DummyUpdate(DummyQuery(111, "dr_view_u111_pool"))
+        stranger = DummyUpdate(DummyQuery(222, "dr_view_u111_pool"))
+
+        self.assertTrue(button_access.check_callback_owner(owner))
+        self.assertFalse(button_access.check_callback_owner(stranger))
+
+    def test_tag_wins_over_a_stale_registration(self):
+        # If the two ever disagree, the button's own claim is authoritative.
+        button_access.register_button_owner(100, 200, 999)
+        update = DummyUpdate(DummyQuery(111, "dr_pick_u111_57_42"))
+
+        self.assertTrue(button_access.check_callback_owner(update))
+
+    def test_draft_buttons_are_no_longer_shared(self):
+        # They used to be in SHARED_CALLBACK_PREFIXES, which made every board
+        # and pool browser drivable by the whole room.
+        for callback_data in ("dr_view_u111_order", "dr_srch_u111~~~a~~0~",
+                              "dr_pick_u111_57_42"):
+            with self.subTest(callback_data=callback_data):
+                self.assertFalse(
+                    button_access.is_shared_callback_data(callback_data))
+
+    def test_every_draft_prefix_explains_what_to_do_instead(self):
+        messages = {
+            "dr_view_u111_order": "/dboard",
+            "dr_srch_u111~~~a~~0~": "/dsearch",
+            "dr_pick_u111_57_42": "/pick",
+        }
+        for callback_data, command in messages.items():
+            with self.subTest(callback_data=callback_data):
+                message = button_access.blocked_message_for(callback_data)
+                self.assertIn(command, message)
+                self.assertNotEqual(message, button_access.BLOCKED_BUTTON_MESSAGE)
+                # Telegram caps a callback answer at 200 characters and renders
+                # it as plain text, not HTML.
+                self.assertLessEqual(len(message), 200)
+                self.assertNotIn("<", message.replace("<player>", ""))
+
+    def test_unknown_prefix_keeps_the_generic_message(self):
+        self.assertEqual(button_access.blocked_message_for("roster_page_2"),
+                         button_access.BLOCKED_BUTTON_MESSAGE)
+
+    def test_legacy_untagged_draft_buttons_are_not_bricked(self):
+        # A board posted before the deploy has no tag, so it falls back to the
+        # registry — and an unregistered one stays usable, as before.
+        self.assertTrue(button_access.check_callback_owner(
+            DummyUpdate(DummyQuery(222, "dr_view_order"))))
+
+        button_access.register_button_owner(100, 200, 111)
+        self.assertFalse(button_access.check_callback_owner(
+            DummyUpdate(DummyQuery(222, "dr_view_order"))))
+
+    def test_unusable_owner_ids_degrade_to_no_tag(self):
+        # A tag that could not be read back (a minus sign, a non-number) must
+        # not be written at all — an untagged button still has the registry.
+        for bad in (None, 0, -5, "nope", object()):
+            with self.subTest(owner=bad):
+                self.assertEqual(button_access.tag_owner("dr_view_", bad),
+                                 "dr_view_")
+
+    def test_owner_digits_are_bounded(self):
+        # A hand-crafted callback can't make the parser chew an unbounded run
+        # of digits, and a nonsense tag degrades to "no owner" rather than
+        # locking the button to somebody who does not exist.
+        long_tag = "dr_view_u" + "9" * 40 + "_order"
+        owner, _rest = button_access.split_owner("dr_view_", long_tag, "_")
+        self.assertEqual(len(str(owner)), button_access._MAX_OWNER_DIGITS)
+        self.assertEqual(button_access.split_owner("dr_view_", "dr_view_uu_order", "_"),
+                         (None, "uu_order"))
+
+
 if __name__ == "__main__":
     unittest.main()

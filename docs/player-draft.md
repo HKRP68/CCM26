@@ -72,8 +72,8 @@ a team logo.
 | Command | Who | What |
 | --- | --- | --- |
 | `/pick <player>` (`/pk`) | owner + co-owners | Make the pick that is on the clock |
-| `/dboard` | anyone | The live board — who's up, time left, recent picks, plus buttons for the order, the remaining pool and the field |
-| `/dsearch [filters]` | anyone | Browse the pool — 🟢 available / 🔴 taken, with filter buttons |
+| `/dboard` | anyone | The live board — who's up, time left, recent picks, plus buttons for the order, the remaining pool and the field (the buttons are [yours alone](#whose-buttons-are-whose)) |
+| `/dsearch [filters]` | anyone | Browse the pool — 🟢 available / 🔴 taken, with filter buttons ([yours alone](#whose-buttons-are-whose)) |
 | `/dsquad [team]` | anyone | A squad by tier, with slot progress and the overseas count |
 | `/dqueue <player>` | owner + co-owners | Your wishlist. If your clock runs out the bot picks from it first |
 
@@ -117,9 +117,11 @@ Available players sort first, then by tier and rating.
 
 The buttons under it re-filter and page **in place** — tier, role, 🟢/🔴, home
 vs. overseas, and ◀️ ▶️ when the list is longer than a page — so nobody retypes
-the command to turn a page. They belong to the room, not to whoever ran the
-command (`dr_srch_` is in `services.button_access.SHARED_CALLBACK_PREFIXES`),
-and the filters ride in the callback data, so the message keeps working hours
+the command to turn a page. They belong to **whoever ran the command**, not to
+the room (see [Whose buttons are whose](#whose-buttons-are-whose) below): a
+browser that re-filters under you because somebody else pressed a tier is worse
+than sending `/dsearch` again, and the command is free. The filters and the
+owner both ride in the callback data, so the message keeps working hours
 later. A search that matches exactly one name skips the list and shows that
 player's card instead, including whether he fits the slot currently on the
 clock.
@@ -195,6 +197,42 @@ and needs an admin to undo. More than five matches asks for more of the name.
 **`/pick` only works in the bound group.** A draft is a public event the room has
 to be able to see and argue with; a pick made quietly in a DM is how an order
 gets disputed.
+
+### Whose buttons are whose
+
+**Every draft button belongs to the person who ran the command that posted it.**
+Someone else pressing it is told so, and told what to send instead — "🎯 That
+board belongs to whoever sent /dboard. Send /dboard for your own copy."
+
+This is not about secrecy: everything the buttons reach is public draft state,
+and the commands are free. It is about a busy room, and the three keyboards earn
+the rule in three different ways.
+
+The **pool browser** re-filters *in place*, so a second pair of hands on it
+genuinely fights the first — you are halfway through Platinum bowlers when
+somebody else flips it to 🔴 Taken, and neither of you gets to read anything
+three seconds before a pick. The **board's tabs** post a fresh message each
+press, so a stranger driving yours drops an unasked-for readout into the one
+chat that has to stay legible while picks are landing. The **`/pick`
+disambiguation buttons** are locked for a harder reason than either: a pick is
+irreversible and needs an admin to undo, so the hands that may finish it are the
+hands that typed the name.
+
+A copy per reader costs one command and nothing else, which is why the answer to
+a refusal is the command itself rather than an apology.
+
+The lock is **stateless**. Each button carries its owner's Telegram id inside
+its own callback data (`dr_view_u<id>_pool`, `dr_srch_u<id>~…`,
+`dr_pick_u<id>_<pick>_<player>`), which is why it still holds hours later and
+across a bot restart — the generic owner guard in `services.button_access`
+remembers senders in memory only, and a draft board late in an evening is
+exactly the message people are still pressing when a deploy lands. Buttons
+posted *before* this shipped carry no id and fall back to that guard, so
+nothing already on screen is bricked.
+
+None of it replaces authorisation. `dr_pick_` is still re-checked against the
+team on the clock on every press, so owning the message is necessary, not
+sufficient — the rules above about who may pick are unchanged.
 
 ---
 
