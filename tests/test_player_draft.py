@@ -278,6 +278,201 @@ class PoolImportTests(DraftCase):
         self.assertIn("already started", str(caught.exception))
 
 
+class HomeCountryTests(DraftCase):
+    """Who counts as *home*, which is decided by the pool's country column.
+
+    It used to be decided by an ``indian_status`` label, which meant a sheet
+    without that column flagged the entire pool as home — eleven "Indians" from
+    four countries, and an overseas cap that never refused anything — and a
+    draft whose home country wasn't India read labels that meant nothing
+    against it.
+    """
+
+    # The bug, in one sheet: no indian_status column at all.
+    NO_STATUS_HEADER = ["name", "rating", "tier", "category", "country"]
+    NO_STATUS_ROWS = [
+        ["Home One", "90", "Gold", "Batsman", "India"],
+        ["Home Two", "88", "Gold", "Batsman", "IND"],
+        ["Home Three", "86", "Gold", "Batsman", "Indian"],
+        ["Away One", "89", "Gold", "Bowler", "Afghanistan"],
+        ["Away Two", "87", "Gold", "Bowler", "England"],
+    ]
+
+    def load_countries(self, rows=None):
+        return self.ds.import_pool(
+            self.session, self.draft,
+            [list(self.NO_STATUS_HEADER)] +
+            [list(r) for r in (rows if rows is not None else self.NO_STATUS_ROWS)])
+
+    def flags(self):
+        from models import DraftPlayer
+        return {p.name: p.is_indian for p in
+                self.session.query(DraftPlayer)
+                .filter(DraftPlayer.draft_id == self.draft.id).all()}
+
+    def test_a_pool_with_no_status_column_is_flagged_by_country(self):
+        self.load_countries()
+        self.assertEqual(self.flags(), {"Home One": True, "Home Two": True,
+                                        "Home Three": True, "Away One": False,
+                                        "Away Two": False})
+
+    def test_the_home_country_is_the_drafts_own_not_india(self):
+        self.draft.home_country = "England"
+        self.load_countries()
+        self.assertEqual(self.flags(), {"Home One": False, "Home Two": False,
+                                        "Home Three": False, "Away One": False,
+                                        "Away Two": True})
+
+    def test_the_country_column_beats_a_label_that_no_longer_applies(self):
+        """An India-centric sheet re-used for an England draft."""
+        self.draft.home_country = "England"
+        self.load_pool(rows=[
+            ["Buttler", "92", "Gold", "0", "M", "Indian", "Batsman", "England",
+             "R", "R", "Medium", "92", "10"],
+            ["Kohli", "97", "Gold", "0", "M", "Indian", "Batsman", "India",
+             "R", "R", "Medium", "97", "10"],
+        ])
+        self.assertTrue(self.player("Buttler").is_indian)
+        self.assertFalse(self.player("Kohli").is_indian)
+
+    def test_spellings_of_one_country_fold_together(self):
+        for spelling in ("India", "india", " IND ", "Ind.", "Indian", "bharat"):
+            self.assertIs(self.ds.is_home_country(spelling, "India"), True,
+                          spelling)
+        for spelling in ("RSA", "South African", "south  africa"):
+            self.assertIs(self.ds.is_home_country(spelling, "South Africa"),
+                          True, spelling)
+        self.assertIs(self.ds.is_home_country("England", "India"), False)
+
+    def test_a_country_nobody_can_read_is_not_guessed_at(self):
+        """``None`` is the answer that stops a blank cell flagging a whole pool."""
+        for blank in ("", "   ", "Unknown", "N/A", "-", "TBD"):
+            self.assertIsNone(self.ds.is_home_country(blank, "India"), blank)
+        self.assertIsNone(self.ds.is_home_country("India", ""))
+
+    def test_an_unreadable_country_falls_back_to_the_status_column(self):
+        self.load_pool(rows=[
+            ["No Country A", "80", "Gold", "0", "M", "Overseas", "Batsman",
+             "Unknown", "R", "R", "Medium", "80", "10"],
+            ["No Country B", "80", "Gold", "0", "M", "Domestic", "Batsman",
+             "", "R", "R", "Medium", "80", "10"],
+        ])
+        self.assertFalse(self.player("No Country A").is_indian)
+        self.assertTrue(self.player("No Country B").is_indian)
+
+    def test_a_row_with_neither_is_counted_as_home(self):
+        """What the column defaults to — and the only case left that guesses."""
+        self.load_pool(rows=[
+            ["Mystery", "80", "Gold", "0", "M", "", "Batsman", "",
+             "R", "R", "Medium", "80", "10"]])
+        self.assertTrue(self.player("Mystery").is_indian)
+
+    def test_the_overseas_cap_counts_the_countries_not_the_labels(self):
+        """The bug's real cost: a cap that never refused anything."""
+        self.draft.max_overseas = 1
+        self.load_countries()
+        self.load_order(rows=[["1", "1", "Gold", "Solo", "Sam", "111"],
+                              ["1", "2", "Gold", "Solo", "Sam", "111"]])
+        self.draft.chat_id = -100_111
+        self.ds.start(self.session, self.draft)
+        self.pick("Away One", by=111)
+        with self.assertRaises(self.ds.DraftError) as caught:
+            self.ds.validate_pick(self.session, self.draft,
+                                  self.ds.current_pick(self.session, self.draft),
+                                  self.player("Away Two"))
+        self.assertIn("overseas", str(caught.exception))
+
+
+class HomeCountryResyncTests(DraftCase):
+    """Fixing a draft that is already running, without re-uploading its pool.
+
+    Replacing the pool is refused once picking has started, so a draft imported
+    under the old rule needs a way to be corrected in place. ``/dhome`` and
+    ``migrate_draft_home_country.py`` both call ``resync_home_status``.
+    """
+
+    def wrongly_flagged(self):
+        """The pool as the old importer left it: everybody home."""
+        self.load_pool()
+        from models import DraftPlayer
+        (self.session.query(DraftPlayer)
+         .filter(DraftPlayer.draft_id == self.draft.id)
+         .update({"is_indian": True}, synchronize_session=False))
+        self.session.flush()
+
+    def test_it_re_flags_the_pool_from_the_countries(self):
+        self.wrongly_flagged()
+        changed, unknown = self.ds.resync_home_status(self.session, self.draft)
+        self.assertEqual((changed, unknown), (3, 0))
+        self.assertFalse(self.player("Rashid Khan").is_indian)
+        self.assertFalse(self.player("Jos Buttler").is_indian)
+        self.assertFalse(self.player("Tim David").is_indian)
+        self.assertTrue(self.player("Virat Kohli").is_indian)
+
+    def test_running_it_twice_changes_nothing_the_second_time(self):
+        self.wrongly_flagged()
+        self.ds.resync_home_status(self.session, self.draft)
+        self.assertEqual(self.ds.resync_home_status(self.session, self.draft),
+                         (0, 0))
+
+    def test_a_player_with_no_readable_country_is_left_alone(self):
+        """So a flag an admin fixed by hand survives the sweep."""
+        self.load_pool(rows=[
+            ["Stateless", "80", "Gold", "0", "M", "Overseas", "Batsman",
+             "Unknown", "R", "R", "Medium", "80", "10"]])
+        self.assertFalse(self.player("Stateless").is_indian)
+        changed, unknown = self.ds.resync_home_status(self.session, self.draft)
+        self.assertEqual((changed, unknown), (0, 1))
+        self.assertFalse(self.player("Stateless").is_indian)
+
+    def test_changing_the_home_country_re_flags_everyone(self):
+        self.load_pool()
+        country, changed, _unknown = self.ds.set_home_country(
+            self.session, self.draft, " england ")
+        self.assertEqual(country, "england")
+        self.assertEqual(changed, 6)
+        self.assertTrue(self.player("Jos Buttler").is_indian)
+        self.assertFalse(self.player("Virat Kohli").is_indian)
+
+    def test_a_blank_home_country_falls_back_rather_than_emptying(self):
+        self.load_pool()
+        country, _changed, _unknown = self.ds.set_home_country(
+            self.session, self.draft, "   ")
+        self.assertEqual(country, self.ds.DEFAULT_HOME_COUNTRY)
+
+    def test_the_counts_report_what_a_resync_would_move(self):
+        self.wrongly_flagged()
+        home, overseas, unknown, wrong = self.ds.home_status_counts(
+            self.session, self.draft)
+        self.assertEqual((home, overseas, unknown, wrong), (8, 0, 0, 3))
+        self.ds.resync_home_status(self.session, self.draft)
+        self.assertEqual(self.ds.home_status_counts(self.session, self.draft),
+                         (5, 3, 0, 0))
+
+    def test_squads_already_picked_keep_their_players(self):
+        """Re-flagging changes who counts as overseas, not who is on a team."""
+        self.wrongly_flagged()
+        self.load_order()
+        self.draft.chat_id = -100_222
+        self.ds.start(self.session, self.draft)
+        self.pick("Virat Kohli", by=ALICE)
+        self.pick("Jasprit Bumrah", by=BOB)
+        self.pick("Rashid Khan", by=ALICE)
+        mumbai = self.team("Mumbai Mavericks")
+        self.assertEqual(self.ds.overseas_count(self.session, mumbai.id), 0)
+        self.ds.resync_home_status(self.session, self.draft)
+        self.assertEqual(self.ds.overseas_count(self.session, mumbai.id), 1)
+        self.assertEqual({p.name for p in self.ds.squad(self.session, mumbai.id)},
+                         {"Virat Kohli", "Rashid Khan"})
+
+    def test_the_home_flag_follows_the_draft(self):
+        self.assertEqual(self.ds.home_flag(self.draft), "🇮🇳")
+        self.draft.home_country = "Australia"
+        self.assertEqual(self.ds.home_flag(self.draft), "🇦🇺")
+        self.draft.home_country = "Atlantis"
+        self.assertEqual(self.ds.home_flag(self.draft), self.ds.DEFAULT_HOME_FLAG)
+
+
 class OrderImportTests(DraftCase):
 
     def test_teams_are_created_from_the_sheet(self):
@@ -731,6 +926,130 @@ class AutoPickTests(DraftCase):
         self.assertIsNotNone(player)
 
 
+class RandomGrantTests(DraftCase):
+    """``/dautopick`` — the owner granting an absent team a pick of its tier.
+
+    The clock's ``auto_pick`` is deliberately deterministic so its choice can be
+    explained afterwards. Granting picks to offline teams with that same rule
+    hands every one of them the middle of the band, so this one is random —
+    which makes the rules it must *still* obey the thing worth pinning: the
+    allotted tier, the overseas cap, the role minimums, and never wedging.
+    """
+
+    def test_it_picks_from_the_allotted_tier(self):
+        self.go_live()
+        gold = self.slot(2, 1)
+        for _ in range(20):
+            chosen = self.ds.random_pick(self.session, self.draft, gold)
+            self.assertEqual(chosen.tier, "Gold")
+
+    def test_it_is_actually_random_within_the_tier(self):
+        """Otherwise it is just a second, slower ``auto_pick``."""
+        self.go_live()
+        gold = self.slot(2, 1)
+        seen = {self.ds.random_pick(self.session, self.draft, gold).name
+                for _ in range(60)}
+        self.assertGreater(len(seen), 1)
+        self.assertEqual(seen, {"Rashid Khan", "Jos Buttler", "Sanju Samson"})
+
+    def test_it_never_returns_an_illegal_player(self):
+        self.draft.max_overseas = 0
+        self.go_live()
+        gold = self.slot(2, 1)
+        for _ in range(20):
+            chosen = self.ds.random_pick(self.session, self.draft, gold)
+            self.assertTrue(chosen.is_indian)
+
+    def test_it_obeys_a_role_minimum_that_is_about_to_become_unreachable(self):
+        """One slot left and a keeper still owed: chance gets no say."""
+        self.ds.set_role_minimums(self.draft, {"Wicket Keeper": 1})
+        self.load_pool(rows=[
+            ["Keeper G", "80", "Gold", "0", "M", "Indian", "wk", "India",
+             "R", "R", "-", "80", "10"],
+            ["Bat A", "82", "Gold", "0", "M", "Indian", "Batsman", "India",
+             "R", "R", "Medium", "82", "10"],
+            ["Bat B", "81", "Gold", "0", "M", "Indian", "Batsman", "India",
+             "R", "R", "Medium", "81", "10"],
+            ["Bat C", "79", "Gold", "0", "M", "Indian", "Batsman", "India",
+             "R", "R", "Medium", "79", "10"],
+        ])
+        self.load_order(rows=[["1", "1", "Gold", "Solo", "Sam", "111"],
+                              ["2", "1", "Gold", "Solo", "Sam", "111"]])
+        self.draft.chat_id = -100_777
+        self.ds.start(self.session, self.draft)
+        self.pick("Bat A", by=111)
+        last = self.ds.current_pick(self.session, self.draft)
+        for _ in range(20):
+            chosen = self.ds.random_pick(self.session, self.draft, last)
+            self.assertEqual(chosen.name, "Keeper G")
+
+    def test_it_steps_down_the_ladder_when_the_slot_tier_is_empty(self):
+        self.go_live()
+        self.pick("Virat Kohli", by=ALICE)
+        self.pick("Jasprit Bumrah", by=BOB)         # Platinum now exhausted
+        platinum_slot = self.slot(1, 1)
+        platinum_slot.status = "pending"            # re-open it artificially
+        self.session.flush()
+        chosen = self.ds.random_pick(self.session, self.draft, platinum_slot)
+        self.assertEqual(chosen.tier, "Gold")
+
+    def test_it_ignores_the_owners_queue(self):
+        """The queue is the clock's courtesy to an owner who said what they want.
+
+        This command is for the owner who said nothing, and a granted pick that
+        quietly followed a queue would be indistinguishable from one they made.
+        """
+        self.go_live()
+        mumbai = self.team("Mumbai Mavericks")
+        self.ds.queue_add(self.session, self.draft, mumbai,
+                          self.player("Jasprit Bumrah"))
+        platinum = self.ds.current_pick(self.session, self.draft)
+        names = {self.ds.random_pick(self.session, self.draft, platinum).name
+                 for _ in range(40)}
+        self.assertEqual(names, {"Virat Kohli", "Jasprit Bumrah"})
+
+    def test_a_granted_pick_is_recorded_as_an_auto_pick(self):
+        """The board must never read as the owner's own choice."""
+        pick = self.go_live()
+        resolved, player = self.ds.resolve_random(self.session, self.draft, pick,
+                                                  by_tg_id=999)
+        self.assertTrue(resolved.is_auto)
+        self.assertEqual(resolved.status, "done")
+        self.assertEqual(resolved.picked_by_tg_id, 999)
+        self.assertIsNotNone(player)
+        self.assertEqual(player.picked_by_team_id, resolved.team_id)
+
+    def test_it_moves_the_clock_on(self):
+        pick = self.go_live()
+        self.ds.resolve_random(self.session, self.draft, pick)
+        nxt = self.ds.current_pick(self.session, self.draft)
+        self.assertEqual((nxt.round_no, nxt.pick_no), (1, 2))
+
+    def test_nothing_legal_left_passes_the_slot_instead_of_wedging(self):
+        self.draft.max_overseas = 0
+        self.load_pool(rows=[
+            ["Only Overseas", "80", "Gold", "0", "M", "Overseas", "Batsman",
+             "England", "R", "R", "Medium", "80", "10"]])
+        self.load_order(rows=[["1", "1", "Gold", "Solo", "Sam", "111"]])
+        self.draft.chat_id = -100_666
+        pick = self.ds.start(self.session, self.draft)
+        self.assertIsNone(self.ds.random_pick(self.session, self.draft, pick))
+        resolved, player = self.ds.resolve_random(self.session, self.draft, pick)
+        self.assertIsNone(player)
+        self.assertEqual(resolved.status, "skipped")
+
+    def test_a_seeded_run_is_reproducible(self):
+        """``rng`` is injectable so a grant can be replayed in a test."""
+        import random
+        self.go_live()
+        gold = self.slot(2, 1)
+        first = self.ds.random_pick(self.session, self.draft, gold,
+                                    rng=random.Random(7)).name
+        second = self.ds.random_pick(self.session, self.draft, gold,
+                                     rng=random.Random(7)).name
+        self.assertEqual(first, second)
+
+
 class ClockTests(DraftCase):
 
     def test_starting_puts_the_first_slot_on_a_deadline(self):
@@ -961,6 +1280,492 @@ class PublishTests(DraftCase):
             [cp.name for cp in self.session.query(ChallengePlayer)
              .filter(ChallengePlayer.team_id == mumbai.id).all()],
             ["Virat Kohli"])
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The pool browser
+# ══════════════════════════════════════════════════════════════════════
+
+class SearchTests(DraftCase):
+    """``/dsearch`` — "is he still there, and if not, who took him".
+
+    The board's Available tab lists the best of what's left; this is the other
+    question, asked all evening, about one player or one shape of player.
+    """
+
+    def rows(self, **kwargs):
+        return self.ds.search_pool(self.session, self.draft, **kwargs)
+
+    def names(self, **kwargs):
+        return [p.name for p in self.rows(**kwargs)]
+
+    def test_it_shows_taken_players_too_marked_as_taken(self):
+        """Hiding them would leave "who got Kohli" unanswerable."""
+        self.go_live()
+        self.pick("Virat Kohli", by=ALICE)
+        body, _page, _pages = self.ds.render_search(
+            self.session, self.draft, self.rows())
+        self.assertIn("🔴", body)
+        self.assertIn("🟢", body)
+        self.assertIn("Virat Kohli", body)
+
+    def test_a_taken_player_is_shown_with_who_holds_him(self):
+        self.go_live()
+        self.pick("Virat Kohli", by=ALICE)
+        body, _page, _pages = self.ds.render_search(
+            self.session, self.draft, self.rows(query="kohli"))
+        team = self.team("Mumbai Mavericks")
+        self.assertIn(team.short_name or team.name, body)
+
+    def test_available_players_come_first(self):
+        self.go_live()
+        self.pick("Virat Kohli", by=ALICE)       # the pool's best rating
+        self.assertNotEqual(self.names()[0], "Virat Kohli")
+        self.assertEqual(self.names()[-1], "Virat Kohli")
+
+    def test_the_filters_stack(self):
+        self.load_pool()
+        self.assertEqual(self.names(tier="Gold", role="Bowler"),
+                         ["Rashid Khan"])
+
+    def test_availability_narrows_both_ways(self):
+        self.go_live()
+        self.pick("Virat Kohli", by=ALICE)
+        self.assertEqual(self.names(availability=self.ds.AVAIL_GONE),
+                         ["Virat Kohli"])
+        self.assertNotIn("Virat Kohli",
+                         self.names(availability=self.ds.AVAIL_FREE))
+
+    def test_home_and_overseas_are_filters_of_their_own(self):
+        self.load_pool()
+        self.assertEqual(set(self.names(home=False)),
+                         {"Rashid Khan", "Jos Buttler", "Tim David"})
+        self.assertNotIn("Rashid Khan", self.names(home=True))
+
+    def test_a_query_matches_a_country_as_well_as_a_name(self):
+        """"Who is left from Australia" is a question people actually ask."""
+        self.load_pool()
+        self.assertEqual(self.names(query="australia"), ["Tim David"])
+        self.assertEqual(self.names(query="kohli"), ["Virat Kohli"])
+
+    def test_the_query_language_is_just_words_in_any_order(self):
+        self.load_pool()
+        parsed = self.ds.parse_search_query(self.draft, "bowler plat available")
+        self.assertEqual(parsed, ("Platinum", "Bowler", self.ds.AVAIL_FREE,
+                                  None, ""))
+        parsed = self.ds.parse_search_query(self.draft, "gold rashid")
+        self.assertEqual(parsed, ("Gold", None, self.ds.AVAIL_ANY, None,
+                                  "rashid"))
+        parsed = self.ds.parse_search_query(self.draft, "overseas taken wk")
+        self.assertEqual(parsed, (None, "Wicket Keeper", self.ds.AVAIL_GONE,
+                                  False, ""))
+
+    def test_an_unknown_word_is_a_name_not_a_filter(self):
+        self.load_pool()
+        _tier, _role, _avail, _home, name = self.ds.parse_search_query(
+            self.draft, "bumrah")
+        self.assertEqual(name, "bumrah")
+        self.assertEqual(self.names(query=name), ["Jasprit Bumrah"])
+
+    def test_a_page_past_the_end_is_clamped_not_empty(self):
+        """A stale button must not hand somebody a blank list."""
+        self.load_pool()
+        _body, page, pages = self.ds.render_search(
+            self.session, self.draft, self.rows(), page=99)
+        self.assertEqual(page, pages - 1)
+
+    def test_every_player_appears_on_exactly_one_page(self):
+        self.load_pool()
+        rows = self.rows()
+        seen = []
+        pages = max(1, -(-len(rows) // self.ds.SEARCH_PAGE))
+        for page in range(pages):
+            body, _p, _n = self.ds.render_search(self.session, self.draft, rows,
+                                                 page=page)
+            seen += [p.name for p in rows if p.name in body]
+        self.assertEqual(sorted(seen), sorted(p.name for p in rows))
+
+    def test_nothing_matching_says_so_rather_than_showing_an_empty_list(self):
+        self.load_pool()
+        body, _page, _pages = self.ds.render_search(
+            self.session, self.draft, self.rows(query="nobody"))
+        self.assertIn("Nothing in the pool matches", body)
+
+    def test_one_players_card_says_where_he_stands(self):
+        self.go_live()
+        body = self.ds.render_search_one(self.session, self.draft,
+                                         self.player("Virat Kohli"))
+        self.assertIn("Still available", body)
+        self.assertIn("Platinum", body)
+        self.pick("Virat Kohli", by=ALICE)
+        body = self.ds.render_search_one(self.session, self.draft,
+                                         self.player("Virat Kohli"))
+        self.assertIn("Picked by", body)
+        self.assertIn("Mumbai Mavericks", body)
+
+    def test_a_players_own_country_flag_is_shown_not_just_a_plane(self):
+        """A column of ✈️ says "not from here"; 🇦🇫 says who they are."""
+        self.load_pool()
+        self.assertEqual(self.ds.pool_flag(self.player("Virat Kohli"),
+                                           self.draft), "🇮🇳")
+        self.assertEqual(self.ds.pool_flag(self.player("Rashid Khan"),
+                                           self.draft), "🇦🇫")
+        self.assertEqual(self.ds.pool_flag(self.player("Tim David"),
+                                           self.draft), "🇦🇺")
+
+    def test_an_unknown_country_falls_back_to_home_or_overseas(self):
+        self.load_pool(rows=[
+            ["Nowhere Man", "80", "Gold", "0", "M", "Overseas", "Batsman",
+             "Unknown", "R", "R", "Medium", "80", "10"]])
+        self.assertEqual(self.ds.pool_flag(self.player("Nowhere Man"),
+                                           self.draft), self.ds.OVERSEAS_FLAG)
+
+    def test_the_tier_summary_counts_what_is_left(self):
+        self.go_live()
+        self.pick("Virat Kohli", by=ALICE)
+        summary = dict((tier, (free, total)) for tier, free, total
+                       in self.ds.tier_summary(self.session, self.draft))
+        self.assertEqual(summary["Platinum"], (1, 2))
+        self.assertEqual(summary["Gold"], (3, 3))
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The commands themselves
+# ══════════════════════════════════════════════════════════════════════
+
+import contextlib as _contextlib
+import os as _os
+
+
+@_contextlib.contextmanager
+def _env(**values):
+    saved = {key: _os.environ.get(key) for key in values}
+    _os.environ.update(values)
+    try:
+        yield
+    finally:
+        for key, old in saved.items():
+            if old is None:
+                _os.environ.pop(key, None)
+            else:
+                _os.environ[key] = old
+
+
+def _owner_ids(raw):
+    """``services.admin_ids`` reads these on every check, so the env is enough."""
+    return _env(OWNER_IDS=raw, BOT_OWNER_IDS=raw)
+
+
+def _admin_ids(raw):
+    return _env(BOT_ADMIN_IDS=raw, ADMIN_IDS=raw, ADMIN_USER_IDS=raw,
+                SUDO_USERS=raw, OWNER_IDS=raw, ADMIN_CHAT_ID=raw)
+
+
+class CommandTests(DraftCase):
+    """``handlers/draft.py``, driven with a stub Update.
+
+    Only the commands whose *gate* is the point — ``/dautopick`` is the one
+    draft command an ordinary bot admin may not run — plus enough of ``/dhome``
+    to prove its reply builds against a real pool. Every rule underneath is
+    tested through the service, which is where the rules live.
+    """
+
+    def setUp(self):
+        super().setUp()
+        try:
+            from handlers import draft as handler
+        except Exception as exc:        # python-telegram-bot not installed
+            self.skipTest(f"handlers.draft unavailable: {exc}")
+        self.handler = handler
+        self.replies = []
+        self.replies_with_markup = []
+        self.announced = []
+        self.pinned = []
+        self.unpinned = []
+
+    def _update(self, user_id, args=(), chat_type="supergroup"):
+        from types import SimpleNamespace
+
+        async def reply_text(text, **kwargs):
+            self.replies.append(text)
+            self.replies_with_markup.append((text, kwargs.get("reply_markup")))
+            return SimpleNamespace(message_id=1)
+
+        async def send_message(chat_id=None, text="", **kwargs):
+            self.announced.append(text)
+            return SimpleNamespace(message_id=100 + len(self.announced))
+
+        async def pin_chat_message(chat_id=None, message_id=None, **kwargs):
+            self.pinned.append(message_id)
+            return True
+
+        async def unpin_chat_message(chat_id=None, message_id=None, **kwargs):
+            self.unpinned.append(message_id)
+            return True
+
+        update = SimpleNamespace(
+            effective_chat=SimpleNamespace(id=self.draft.chat_id,
+                                           type=chat_type),
+            effective_user=SimpleNamespace(id=user_id, username="u",
+                                           first_name="U"),
+            effective_message=SimpleNamespace(reply_text=reply_text))
+        context = SimpleNamespace(
+            args=list(args),
+            bot=SimpleNamespace(send_message=send_message,
+                                pin_chat_message=pin_chat_message,
+                                unpin_chat_message=unpin_chat_message))
+        return update, context
+
+    def run_command(self, command, user_id, args=(), chat_type="supergroup"):
+        """Run one command handler and return everything it replied.
+
+        The handler opens its own session, so this commits first and expires
+        after — otherwise the test would be reading its own stale rows.
+        """
+        import asyncio
+        self.session.commit()
+        update, context = self._update(user_id, args, chat_type)
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(command(update, context))
+        finally:
+            loop.close()
+        self.session.expire_all()
+        return "\n".join(self.replies)
+
+    def last_keyboard(self):
+        for _text, keyboard in reversed(self.replies_with_markup):
+            if keyboard is not None:
+                return keyboard
+        return None
+
+    @staticmethod
+    def button(keyboard, label):
+        """The button whose label contains ``label``, ignoring the ✅ marker."""
+        for row in keyboard.inline_keyboard:
+            for button in row:
+                if label in button.text:
+                    return button
+        return None
+
+    def press(self, callback_data, user_id, expect_alert=False):
+        """Press one inline button; returns the edited text (or the alert)."""
+        import asyncio
+        from types import SimpleNamespace
+        self.session.commit()
+        edits, alerts = [], []
+
+        async def answer(text=None, **kwargs):
+            if text:
+                alerts.append(text)
+
+        async def edit_message_text(text, **kwargs):
+            edits.append(text)
+
+        query = SimpleNamespace(
+            data=callback_data, answer=answer,
+            edit_message_text=edit_message_text,
+            from_user=SimpleNamespace(id=user_id),
+            message=SimpleNamespace(reply_text=None))
+        update = SimpleNamespace(
+            callback_query=query,
+            effective_chat=SimpleNamespace(id=self.draft.chat_id,
+                                           type="supergroup"),
+            effective_user=SimpleNamespace(id=user_id))
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                self.handler.search_callback(update, SimpleNamespace(args=[])))
+        finally:
+            loop.close()
+        self.session.expire_all()
+        return "\n".join(alerts if expect_alert else edits)
+
+    # ── /dautopick is owner-only ──
+
+    def test_dautopick_refuses_a_plain_admin(self):
+        """A bot admin has /dskip. Granting a team a player is the owner's call."""
+        self.go_live()
+        with _admin_ids("111,222"), _owner_ids("999"):
+            body = self.run_command(self.handler.dautopick_handler, 111)
+        self.assertIn("Only the bot owner", body)
+        self.assertEqual(self.slot(1, 1).status, "pending")
+
+    def test_dautopick_grants_the_owner_a_pick(self):
+        self.go_live()
+        with _owner_ids("999"):
+            self.run_command(self.handler.dautopick_handler, 999)
+        first = self.slot(1, 1)
+        self.assertEqual(first.status, "done")
+        self.assertTrue(first.is_auto)
+        self.assertEqual(first.picked_by_tg_id, 999)
+        self.assertIsNotNone(first.draft_player_id)
+        # The room is told, and told that it was an auto-pick.
+        self.assertIn("AUTO-PICK", "\n".join(self.announced))
+
+    def test_dautopick_outside_the_bound_group_is_refused(self):
+        self.go_live()
+        with _owner_ids("999"):
+            body = self.run_command(self.handler.dautopick_handler, 999,
+                                    chat_type="private")
+        self.assertIn("only work in the group", body)
+        self.assertEqual(self.slot(1, 1).status, "pending")
+
+    def test_dautopick_says_so_when_the_draft_is_not_live(self):
+        self.go_live()
+        self.ds.pause(self.session, self.draft)
+        with _owner_ids("999"):
+            body = self.run_command(self.handler.dautopick_handler, 999)
+        self.assertIn("Paused", body)
+        self.assertEqual(self.slot(1, 1).status, "pending")
+
+    # ── /dsearch ──
+
+    def test_dsearch_lists_the_pool_with_buttons(self):
+        self.go_live()
+        body = self.run_command(self.handler.dsearch_handler, 111)
+        self.assertIn("Pool", body)
+        self.assertIn("🟢", body)
+        labels = [b.text for row in self.last_keyboard().inline_keyboard
+                  for b in row]
+        self.assertIn("💎 Platinum", labels)
+        self.assertIn("🟢 Available", labels)
+
+    def test_dsearch_filters_from_the_words_typed(self):
+        self.go_live()
+        body = self.run_command(self.handler.dsearch_handler, 111,
+                                ["gold", "bowler"])
+        self.assertIn("Rashid Khan", body)
+        self.assertNotIn("Virat Kohli", body)
+
+    def test_dsearch_on_one_name_answers_about_that_player(self):
+        self.go_live()
+        self.pick("Virat Kohli", by=ALICE)
+        body = self.run_command(self.handler.dsearch_handler, 111, ["kohli"])
+        self.assertIn("Picked by", body)
+        self.assertIn("Mumbai Mavericks", body)
+
+    def test_a_filter_button_redraws_the_same_message(self):
+        """The point of the buttons: nobody retypes /dsearch to turn a page."""
+        self.go_live()
+        self.run_command(self.handler.dsearch_handler, 111)
+        keyboard = self.last_keyboard()
+        gold = self.button(keyboard, "🥇 Gold")
+        edited = self.press(gold.callback_data, 111)
+        self.assertIn("Rashid Khan", edited)
+        self.assertNotIn("Virat Kohli", edited)
+
+    def test_a_page_button_walks_the_list(self):
+        self.go_live()
+        # One more than a page holds, so there is a second page to turn to.
+        self.load_pool(rows=[
+            [f"Extra {n}", "70", "Bronze", "0", "M", "Indian", "Batsman",
+             "India", "R", "R", "Medium", "70", "10"]
+            for n in range(self.ds.SEARCH_PAGE)])
+        self.run_command(self.handler.dsearch_handler, 111)
+        nxt = self.button(self.last_keyboard(), "▶️")
+        self.assertIsNotNone(nxt, "a pool over one page long should paginate")
+        second = self.press(nxt.callback_data, 111)
+        self.assertIn("Page 2", second)
+
+    def test_a_button_from_an_older_pool_is_refused_not_crashed(self):
+        self.go_live()
+        self.assertIn("out of date", self.press("dr_srch_nonsense", 111,
+                                                expect_alert=True))
+
+    def test_the_taken_filter_shows_only_what_has_gone(self):
+        self.go_live()
+        self.pick("Virat Kohli", by=ALICE)
+        self.run_command(self.handler.dsearch_handler, 111)
+        taken = self.button(self.last_keyboard(), "🔴 Taken")
+        body = self.press(taken.callback_data, 111)
+        self.assertIn("Virat Kohli", body)
+        self.assertNotIn("Rashid Khan", body)
+
+    # ── the pinned pick ──
+
+    def test_a_pick_is_pinned_and_the_previous_pin_dropped(self):
+        self.go_live()
+        with _owner_ids("999"):
+            self.run_command(self.handler.dautopick_handler, 999)
+            first = list(self.pinned)
+            self.assertEqual(len(first), 1)
+            self.run_command(self.handler.dautopick_handler, 999)
+        self.assertEqual(len(self.pinned), 2)
+        self.assertEqual(self.unpinned, [first[0]])
+        self.session.refresh(self.draft)
+        self.assertEqual(self.draft.pinned_message_id, self.pinned[-1])
+
+    def test_dpin_off_stops_pinning_and_clears_the_pin(self):
+        self.go_live()
+        with _owner_ids("999"), _admin_ids("999"):
+            self.run_command(self.handler.dautopick_handler, 999)
+            pinned = list(self.pinned)
+            body = self.run_command(self.handler.dpin_handler, 999, ["off"])
+            self.assertIn("no longer be pinned", body)
+            self.assertEqual(self.unpinned, pinned)
+            self.run_command(self.handler.dautopick_handler, 999)
+        self.assertEqual(self.pinned, pinned)      # nothing new was pinned
+        self.session.refresh(self.draft)
+        self.assertFalse(self.draft.pin_picks)
+
+    def test_dpin_reports_the_state_and_turns_back_on(self):
+        self.go_live()
+        with _admin_ids("111"):
+            self.assertIn("<b>on</b>",
+                          self.run_command(self.handler.dpin_handler, 111))
+            self.replies.clear()
+            self.run_command(self.handler.dpin_handler, 111, ["off"])
+            self.replies.clear()
+            self.assertIn("will be pinned",
+                          self.run_command(self.handler.dpin_handler, 111, ["on"]))
+        self.session.refresh(self.draft)
+        self.assertTrue(self.draft.pin_picks)
+
+    def test_undo_drops_the_pin_for_the_pick_it_rolled_back(self):
+        self.go_live()
+        with _owner_ids("999"), _admin_ids("999"):
+            self.run_command(self.handler.dautopick_handler, 999)
+            pinned = list(self.pinned)
+            self.run_command(self.handler.dundo_handler, 999)
+        self.assertEqual(self.unpinned, pinned)
+        self.session.refresh(self.draft)
+        self.assertIsNone(self.draft.pinned_message_id)
+
+    # ── /dhome ──
+
+    def test_dhome_reports_the_pool_then_sets_the_country(self):
+        self.go_live()
+        with _admin_ids("111"):
+            body = self.run_command(self.handler.dhome_handler, 111)
+            self.assertIn("India", body)
+            self.assertIn("5 home", body)
+            self.replies.clear()
+            body = self.run_command(self.handler.dhome_handler, 111, ["England"])
+        self.assertIn("England", body)
+        self.assertEqual(self.draft.home_country, "England")
+        self.assertTrue(self.player("Jos Buttler").is_indian)
+        self.assertFalse(self.player("Virat Kohli").is_indian)
+
+    def test_dhome_sync_fixes_a_pool_flagged_under_the_old_rule(self):
+        """The live-draft repair path: no re-upload, same home country."""
+        from models import DraftPlayer
+        self.go_live()
+        (self.session.query(DraftPlayer)
+         .filter(DraftPlayer.draft_id == self.draft.id)
+         .update({"is_indian": True}, synchronize_session=False))
+        with _admin_ids("111"):
+            body = self.run_command(self.handler.dhome_handler, 111, ["sync"])
+        self.assertIn("Re-flagged", body)
+        self.assertEqual(self.draft.home_country, "India")
+        self.assertFalse(self.player("Rashid Khan").is_indian)
+
+    def test_dhome_refuses_a_non_admin(self):
+        self.go_live()
+        with _admin_ids("111"):
+            body = self.run_command(self.handler.dhome_handler, 222, ["England"])
+        self.assertIn("Only bot admins", body)
+        self.assertEqual(self.draft.home_country, "India")
 
 
 # ══════════════════════════════════════════════════════════════════════

@@ -16411,8 +16411,11 @@ def admin_draft_detail(draft_id):
                         _int_form("pick_minutes", 15) * 60)
                     draft.warn_seconds = max(0, min(draft.pick_seconds - 1,
                                                     _int_form("warn_seconds", 120)))
-                    draft.home_country = (request.form.get("home_country")
-                                          or "India").strip()[:60] or "India"
+                    # Through the service, not onto the column: the pool's
+                    # home/overseas flags are decided against this country, so
+                    # changing it here has to re-flag them or the two disagree.
+                    _country, _reflagged, _unreadable = draft_svc.set_home_country(
+                        db, draft, request.form.get("home_country"))
                     draft.max_overseas = max(0, min(99, _int_form("max_overseas", 11)))
                     chat_raw = (request.form.get("chat_id") or "").strip()
                     if chat_raw:
@@ -16427,6 +16430,13 @@ def admin_draft_detail(draft_id):
                         for index, role in enumerate(draft_svc._CATEGORIES)})
                     log_admin(db, "draft_settings", "draft", draft.id, draft.name)
                     flash("✅ Settings saved.", "success")
+                    if _reflagged:
+                        flash(f"🌍 Re-flagged {_reflagged} pool player(s) against "
+                              f"{_country}.", "info")
+                    if _unreadable:
+                        flash(f"⚠️ {_unreadable} pool player(s) have no country the "
+                              f"bot can read — their home/overseas flag was left "
+                              f"as it is.", "info")
 
                 elif action == "import_pool":
                     rows = _read_sheet(request.files.get("pool_file"),

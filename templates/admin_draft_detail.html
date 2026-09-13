@@ -39,7 +39,7 @@
       <div><label>Minutes per pick</label><input type="number" name="pick_minutes" min="1" max="120" value="{{ (draft.pick_seconds // 60) }}"></div>
       <div><label>Warn at (seconds left)</label><input type="number" name="warn_seconds" min="0" max="3600" value="{{ draft.warn_seconds }}"></div>
       <div style="grid-column:span 2;"><label>Tier ladder — highest first, comma separated</label><input type="text" name="tiers" value="{{ tiers|join(', ') }}"></div>
-      <div><label>Home country</label><input type="text" name="home_country" value="{{ draft.home_country }}"></div>
+      <div><label>Home country</label><input type="text" name="home_country" value="{{ draft.home_country }}" placeholder="India"></div>
       <div><label>Max overseas per squad</label><input type="number" name="max_overseas" min="0" max="99" value="{{ draft.max_overseas }}"></div>
       {% for role in categories %}
       <div><label>Min {{ role }}</label><input type="number" name="role_{{ loop.index0 }}" min="0" max="15" value="{{ minimums.get(role, 0) }}"></div>
@@ -52,6 +52,13 @@
       spends the slot. Role minimums are enforced as <em>reachability</em> — a
       pick is refused once it would leave too few slots to still meet them.
     </p>
+    <p class="dd-note" style="margin-bottom:0;">
+      A player is <strong>home</strong> when the country on their pool row is the
+      <strong>home country</strong> above, and <strong>overseas</strong> otherwise.
+      Saving a different home country re-flags the whole pool against it — including
+      a draft that is already running, whose pool can no longer be replaced. Players
+      whose country reads as nothing (blank, “Unknown”) keep the flag they have.
+    </p>
   </div>
 
   <!-- ── Player pool ─────────────────────────────────────────────── -->
@@ -61,7 +68,10 @@
       Upload an <strong>.xlsx</strong> or <strong>.csv</strong>, or paste rows below.
       Columns are matched <strong>by header name</strong>, so order doesn't matter:<br>
       <code>{{ pool_columns }}</code><br>
-      <code>indian_status</code> accepts Indian/Overseas, a country, or 1/0.
+      <code>country</code> decides home vs. overseas, against the home country above
+      (<code>India</code>, <code>IND</code> and <code>Indian</code> are the same country).
+      <code>indian_status</code> is only a fallback for a row with no readable
+      country, and accepts Overseas/Domestic, a country, or 1/0.
       <code>icon_eligible</code> accepts 1/0 or yes/no. Re-uploading updates
       players already in the pool, so a corrected sheet can just be uploaded again.
     </p>

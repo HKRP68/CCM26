@@ -36,6 +36,9 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # re-checks the clicker against the pick's team on every press.
     "dr_view_",
     "dr_pick_",
+    # /dsearch's filter and page buttons: the pool is the whole room's to read,
+    # and the message stays useful long after whoever posted it stopped looking.
+    "dr_srch_",
     "cric_join",
     "cric_join_",
     "cric_join:",
