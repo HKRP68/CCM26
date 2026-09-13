@@ -46,7 +46,8 @@ from datetime import datetime, timedelta
 from html import escape
 
 from models import (
-    ChallengePlayer, ChallengeTeam, DraftPlayer, DraftTeam, DraftTrade,
+    ChallengePlayer, ChallengeTeam, DraftPlayer, DraftSquadEdit, DraftTeam,
+    DraftTrade,
 )
 from services import draft_service as ds
 from services.draft_service import DraftError
@@ -391,59 +392,14 @@ def players_for(session, trade, side):
 # The rules — checked against a squad the trade has not made yet
 # ──────────────────────────────────────────────────────────────────────
 
-def _tiers_in_order(draft, *groups):
-    """The tier ladder, with any tier a row actually carries appended after it.
-
-    A pool tier is normalised to the ladder on import, so the tail is normally
-    empty. It exists so a hand-edited row cannot make the fit check silently
-    ignore a player — an unknown tier is counted, at the bottom, for the slots
-    and for the squad alike.
-    """
-    order = list(ds.tier_order(draft))
-    seen = set(order)
-    for group in groups:
-        for tier in group:
-            if tier not in seen:
-                seen.add(tier)
-                order.append(tier)
-    return order
-
-
-def tier_overflow_at(draft, slots, players):
-    """``(overflow, tier)`` — how far a squad exceeds its slots, and where.
-
-    A slot's tier is a **ceiling**, so the question is not "does each tier
-    match" but "can these players be laid into these slots at all". With a
-    nested ladder that has one answer: walk the ladder from the top, and the
-    best *k* tiers of players must fit in the best *k* tiers of slots. The
-    worst prefix is the overflow, and zero means the squad is one this team
-    could have drafted.
-
-    A Platinum slot spent on a Gold player leaves that slot able to house a
-    Gold player for ever after — which is exactly right: the team paid Platinum
-    money for it, and a trade that fills it back up with Gold is not a
-    loophole, it is the slot working as specified.
-    """
-    by_tier = {}
-    for player in players:
-        by_tier[player.tier] = by_tier.get(player.tier, 0) + 1
-    worst, where = 0, None
-    have = held = 0
-    for tier in _tiers_in_order(draft, slots.keys(), by_tier.keys()):
-        held += by_tier.get(tier, 0)
-        have += slots.get(tier, 0)
-        if held - have > worst:
-            worst, where = held - have, tier
-    return max(0, worst), where
-
-
-def tier_overflow(draft, slots, players):
-    """How many players a squad holds that its slots could not have bought."""
-    return tier_overflow_at(draft, slots, players)[0]
-
-
-def overseas_in(players):
-    return sum(1 for p in players if not p.is_indian)
+# The squad rules themselves live in ``draft_service`` beside ``tier_slots``
+# and ``role_shortfall``: they are what a *squad* has to satisfy, not something
+# trading invented, and one implementation is what stops a trade refusing
+# something ``/dsquad`` calls legal. Re-exported here because this is where the
+# checks below read most naturally.
+tier_overflow_at = ds.tier_overflow_at
+tier_overflow = ds.tier_overflow
+overseas_in = ds.overseas_in
 
 
 def _squad_after(session, team_id, out_players, in_players):
@@ -454,36 +410,39 @@ def _squad_after(session, team_id, out_players, in_players):
 
 
 def _check_side(session, draft, team, out_players, in_players):
-    """Raise ``DraftError`` if this half of the trade breaks that squad.
+    """The rule this half of the trade would break, or ``None``.
+
+    Both squads are measured with ``draft_service.squad_health`` — the same
+    count ``/dsquad`` prints — so a trade can never refuse something the
+    readout calls legal, or wave through something it marks with a ⚠️.
 
     Every check is *relative*: a squad that is already short (a slot the clock
     passed, a cap an admin lowered afterwards) stays tradable, it just may not
-    get shorter. Absolute checks would lock exactly the franchises that most
-    need to fix themselves out of the only tool for it.
+    get worse. Absolute checks would lock exactly the franchises that most need
+    to fix themselves out of the only tool for it. Squad size is not checked at
+    all — a trade is N-for-N, so it cannot change.
     """
-    before = tradable_squad(session, team.id)
-    after = _squad_after(session, team.id, out_players, in_players)
+    before = ds.squad_health(session, draft, team.id)
+    after = ds.squad_health(session, draft, team.id,
+                            players=_squad_after(session, team.id,
+                                                 out_players, in_players))
 
-    cap = draft.max_overseas if draft.max_overseas is not None else 11
-    was, now = overseas_in(before), overseas_in(after)
-    if now > cap and now > was:
-        return (f"{team.name} would have {now} overseas players and the cap is "
-                f"{cap}. Send an overseas player the other way, or take a home "
-                f"player back.")
+    cap = after["overseas_cap"]
+    if after["overseas"] > cap and after["overseas"] > before["overseas"]:
+        return (f"{team.name} would have {after['overseas']} overseas players "
+                f"and the cap is {cap}. Send an overseas player the other way, "
+                f"or take a home player back.")
 
-    slots = ds.tier_slots(session, draft.id, team.id)
-    was_over, _where = tier_overflow_at(draft, slots, before)
-    now_over, where = tier_overflow_at(draft, slots, after)
-    if now_over > 0 and now_over > was_over:
-        band = f"{where}-or-better" if where else "top-tier"
-        return (f"{team.name} would hold {now_over} more {band} player(s) than "
-                f"it has {band} slots. A slot takes its own tier or below — "
-                f"send one of those out too, or take a lower tier back.")
+    if after["overflow"] > 0 and after["overflow"] > before["overflow"]:
+        band = (f"{after['overflow_tier']}-or-better"
+                if after["overflow_tier"] else "top-tier")
+        return (f"{team.name} would hold {after['overflow']} more {band} "
+                f"player(s) than it has {band} slots. A slot takes its own "
+                f"tier or below — send one of those out too, or take a lower "
+                f"tier back.")
 
-    was_gap = ds.role_shortfall(draft, before)
-    now_gap = ds.role_shortfall(draft, after)
-    worse = {role: need for role, need in now_gap.items()
-             if need > was_gap.get(role, 0)}
+    worse = {role: need for role, need in after["shortfall"].items()
+             if need > before["shortfall"].get(role, 0)}
     if worse:
         wanted = ", ".join(f"{n}× {role}" for role, n in sorted(worse.items()))
         return (f"{team.name} would be short of {wanted}. This draft sets a "
@@ -561,50 +520,188 @@ def execute(session, trade, *, by_tg_id=None):
 
 
 def sync_league(session, draft):
-    """Move the published ``ChallengePlayer`` rows to follow a trade.
+    """Reconcile the published Challenge League with the drafted squads.
 
     A published draft is a live Challenge League, and the league is what the
-    match engine reads — so a trade that only moved ``DraftPlayer`` rows would
-    show in ``/dsquad`` and change nothing anybody plays with. Republishing
-    would not fix it either: ``publish_to_league`` adds and updates, so the
-    player would arrive at their new team and stay at the old one as well.
+    match engine reads — so a squad change that only moved ``DraftPlayer`` rows
+    would show in ``/dsquad`` and change nothing anybody plays with.
+    Republishing would not fix it either: ``publish_to_league`` adds and
+    updates but never removes, so a traded player would arrive at their new
+    team and **stay at the old one as well**.
+
+    All three directions, because ``/dadd`` and ``/ddrop`` produce the two a
+    trade never does:
+
+    * **moved** — the row changes ``team_id`` (a trade, or ``/dadd``);
+    * **added** — a player with no row yet gets one (``/dadd`` after publish);
+    * **dropped** — a pool player no longer on any squad loses their row.
+
+    A ``ChallengePlayer`` whose name is **not in this draft's pool at all** is
+    left strictly alone: an admin may have added them by hand on the Challenge
+    Data page, and this is a reconcile against the draft, not a claim to own
+    every row in the league.
 
     Does nothing for an unpublished draft; the publish step will read the
-    post-trade squads. Returns how many rows moved.
+    squads as they then stand. Returns ``(moved, added, dropped)``.
     """
     if not draft.league_id:
-        return 0
+        return (0, 0, 0)
     league_teams = (session.query(ChallengeTeam)
                     .filter(ChallengeTeam.league_id == draft.league_id).all())
+    if not league_teams:
+        return (0, 0, 0)
     teams_by_name = {(ct.name or "").lower(): ct for ct in league_teams}
-    # One read of the league's players, keyed by the name ``publish_to_league``
-    # matches on — rather than a query per player per team, which on a ten-team
-    # draft is a few hundred round trips for one swap.
+    # One read of the league's players, keyed by the name
+    # ``publish_to_league`` matches on — rather than a query per player per
+    # team, which on a ten-team draft is a few hundred round trips for one swap.
     published = {}
-    if league_teams:
-        for cp in (session.query(ChallengePlayer)
-                   .filter(ChallengePlayer.team_id.in_(
-                       [ct.id for ct in league_teams])).all()):
-            published[(cp.name or "").lower()] = cp
+    for cp in (session.query(ChallengePlayer)
+               .filter(ChallengePlayer.team_id.in_(
+                   [ct.id for ct in league_teams])).all()):
+        published[(cp.name or "").lower()] = cp
 
-    moved = 0
+    moved = added = dropped = 0
+    still_drafted = set()
     for team in ds.teams(session, draft.id):
         ct = teams_by_name.get((team.name or "")[:120].lower())
         if ct is None:
             continue
         for order, player in enumerate(ds.squad_sorted(session, draft, team.id)):
-            cp = published.get((player.name or "")[:150].lower())
+            key = (player.name or "")[:150].lower()
+            still_drafted.add(key)
+            cp = published.get(key)
             if cp is None:
-                continue
-            if cp.team_id != ct.id:
+                cp = ChallengePlayer(team_id=ct.id,
+                                     name=(player.name or "")[:150])
+                session.add(cp)
+                published[key] = cp
+                added += 1
+            elif cp.team_id != ct.id:
                 cp.team_id = ct.id
                 moved += 1
+            cp.source_player_id = player.source_player_id
+            cp.details_json = ds.challenge_details_json(player)
+            cp.is_overseas = not bool(player.is_indian)
             cp.sort_order = order
-    if moved:
-        logger.info("draft %s: %d published player(s) moved by a trade",
-                    draft.id, moved)
+
+    # Anyone in this draft's pool who is no longer on a squad loses their row.
+    # Scoped to the pool on purpose — a hand-added league player is not ours
+    # to delete.
+    in_pool = {(name or "").lower() for (name,) in
+               session.query(DraftPlayer.name)
+               .filter(DraftPlayer.draft_id == draft.id).all()}
+    for key, cp in list(published.items()):
+        if key in still_drafted or key not in in_pool:
+            continue
+        session.delete(cp)
+        dropped += 1
+
+    if moved or added or dropped:
+        logger.info("draft %s league re-sync: %d moved, %d added, %d dropped",
+                    draft.id, moved, added, dropped)
     session.flush()
-    return moved
+    return (moved, added, dropped)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Admin overrides — /dadd and /ddrop
+# ──────────────────────────────────────────────────────────────────────
+#
+# These deliberately enforce **nothing**. An admin untangling a mess has to be
+# able to pass through an illegal squad to reach a legal one — drop the extra
+# keeper, then add the quick — and a gate that refuses the first half makes the
+# tool useless at exactly the moment it is needed. A trade is two owners
+# agreeing, so it is checked; this is an admin correcting the record, so it is
+# *reported* instead: every call returns the squads it touched so the command
+# can print their rule state, and every call is announced in the group and
+# written to ``DraftSquadEdit``.
+
+def _record_edit(session, draft, player, from_team, to_team, by_tg_id):
+    edit = DraftSquadEdit(
+        draft_id=draft.id,
+        draft_player_id=player.id,
+        player_name=(player.name or "")[:150],
+        from_team_id=from_team.id if from_team else None,
+        to_team_id=to_team.id if to_team else None,
+        from_team_name=(from_team.name or "")[:120] if from_team else None,
+        to_team_name=(to_team.name or "")[:120] if to_team else None,
+        by_tg_id=by_tg_id,
+    )
+    session.add(edit)
+    session.flush()
+    return edit
+
+
+def _holder(session, player):
+    if not player.picked_by_team_id:
+        return None
+    return (session.query(DraftTeam)
+            .filter(DraftTeam.id == player.picked_by_team_id).first())
+
+
+def admin_assign(session, draft, team, player, *, by_tg_id=None):
+    """Put ``player`` on ``team``, whether they were free or on another squad.
+
+    One verb for add and move, because from the admin's side they are the same
+    instruction — *this player belongs to that team now* — and making them type
+    a different command depending on a state they may not have checked is a way
+    to get the wrong one.
+    """
+    if player is None:
+        raise DraftError("No such player in this draft's pool.")
+    if player.draft_id != draft.id:
+        raise DraftError(f"{player.name} is not in this draft's pool.")
+    if team is None or team.draft_id != draft.id:
+        raise DraftError("That team is not in this draft.")
+    if draft.status == ds.STATUS_CANCELLED:
+        raise DraftError("This draft was cancelled.")
+    was = _holder(session, player)
+    if was is not None and was.id == team.id:
+        raise DraftError(f"{player.name} is already on {team.name}.")
+
+    player.picked_by_team_id = team.id
+    player.picked_at = player.picked_at or datetime.utcnow()
+    session.flush()
+    # A player who has just been given to a team must not still be sitting in
+    # somebody's auto-pick wishlist for a live draft.
+    ds._drop_from_queues(session, draft.id, player.id)
+    edit = _record_edit(session, draft, player, was, team, by_tg_id)
+    sync_league(session, draft)
+    return edit, [t for t in (was, team) if t is not None]
+
+
+def admin_release(session, draft, player, *, by_tg_id=None):
+    """Send ``player`` back to the pool from whatever squad holds them."""
+    if player is None:
+        raise DraftError("No such player in this draft's pool.")
+    if player.draft_id != draft.id:
+        raise DraftError(f"{player.name} is not in this draft's pool.")
+    if draft.status == ds.STATUS_CANCELLED:
+        raise DraftError("This draft was cancelled.")
+    was = _holder(session, player)
+    if was is None:
+        raise DraftError(f"{player.name} is already in the pool — "
+                         f"nobody has them.")
+
+    player.picked_by_team_id = None
+    player.picked_at = None
+    session.flush()
+    edit = _record_edit(session, draft, player, was, None, by_tg_id)
+    sync_league(session, draft)
+    return edit, [was]
+
+
+def squad_edits(session, draft, limit=10):
+    return (session.query(DraftSquadEdit)
+            .filter(DraftSquadEdit.draft_id == draft.id)
+            .order_by(DraftSquadEdit.created_at.desc(),
+                      DraftSquadEdit.id.desc())
+            .limit(limit).all())
+
+
+def edit_count(session, draft):
+    return (session.query(DraftSquadEdit)
+            .filter(DraftSquadEdit.draft_id == draft.id).count())
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -753,30 +850,108 @@ def render_done(session, draft, trade, a_players, b_players):
                  f"{a_total} OVR ⇄ {b_total} OVR")
     if draft.league_id:
         lines.append("<i>The published league squads have been updated.</i>")
-    lines.append("Squads: /dsquad · Every trade: /dtrades")
+    lines.append("Squads: /dsquad · Every change: /dtrades")
+    return "\n".join(lines)
+
+
+ACTION_LABEL = {"added": "➕ added", "released": "➖ released to the pool",
+                "moved": "↔️ moved"}
+
+
+def render_edit(session, draft, edit, *, by=None):
+    """The group announcement for one ``/dadd`` or ``/ddrop``.
+
+    A draft is a public event, and an admin quietly moving a player between two
+    franchises is precisely how a league ends up disputed. There is no rule
+    stopping the move, so the room seeing it is what stands in for one.
+    """
+    who = f" by {by}" if by else ""
+    if edit.action == "added":
+        head = (f"➕ <b>{escape(edit.player_name)}</b> added to "
+                f"<b>{escape((edit.to_team_name or '').upper())}</b>")
+    elif edit.action == "released":
+        head = (f"➖ <b>{escape(edit.player_name)}</b> released by "
+                f"<b>{escape((edit.from_team_name or '').upper())}</b> "
+                f"— back in the pool")
+    else:
+        head = (f"↔️ <b>{escape(edit.player_name)}</b>: "
+                f"<b>{escape((edit.from_team_name or '').upper())}</b> → "
+                f"<b>{escape((edit.to_team_name or '').upper())}</b>")
+    return [f"🛠 <b>ADMIN SQUAD EDIT</b>{who}", ds.RULE, head]
+
+
+def render_edit_result(session, draft, edit, teams, *, by=None):
+    """The announcement, followed by the rule state of every squad it touched.
+
+    An override that enforces nothing has to *report* everything: the admin who
+    just moved a player is the one person who can undo it, and they should not
+    have to run ``/dsquad`` twice to find out what they have done.
+    """
+    settled = draft.status in (ds.STATUS_COMPLETED, ds.STATUS_CANCELLED)
+    lines = render_edit(session, draft, edit, by=by)
+    for team in teams:
+        health = ds.squad_health(session, draft, team.id)
+        lines.append("")
+        lines.append(f"🏏 <b>{escape((team.name or '').upper())}</b>")
+        lines += ds.render_squad_rules(draft, health, settled=settled)[1:]
+    lines.append("")
+    lines.append("Full squads: /dsquad · Every change: /dtrades")
     return "\n".join(lines)
 
 
 def render_log(session, draft, limit=10):
+    """Every post-draft squad change: the trades, then the admin overrides.
+
+    Pick rows are never rewritten by either, so this is the only place a squad
+    change after the draft is on the record.
+    """
     rows = completed_trades(session, draft, limit=limit)
     total = trade_count(session, draft)
-    if not rows:
+    edits = squad_edits(session, draft, limit=limit)
+    edits_total = edit_count(session, draft)
+
+    if not rows and not edits:
         state = ("open" if trades_open(draft) else "closed")
-        return (f"🔁 <b>Trades</b> — none yet.\n"
-                f"The window is <b>{state}</b>. An owner starts one with "
+        return (f"🔁 <b>Squad changes</b> — none yet.\n"
+                f"The trade window is <b>{state}</b>. An owner starts one with "
                 f"<code>/dtrade &lt;team&gt;</code>.")
-    lines = [f"🔁 <b>Trades</b> — {total} completed", ds.RULE]
-    for trade in rows:
-        a_players = players_for(session, trade, "a")
-        b_players = players_for(session, trade, "b")
-        when = trade.completed_at.strftime("%d %b %H:%M") if trade.completed_at else ""
-        lines.append(f"<b>{escape(trade.team_a.name or '')}</b> ⇄ "
-                     f"<b>{escape(trade.team_b.name or '')}</b>"
-                     + (f" · <i>{when}</i>" if when else ""))
-        lines.append(f"   → {_moved(b_players)}")
-        lines.append(f"   ← {_moved(a_players)}")
-    if total > len(rows):
-        lines.append(f"<i>…and {total - len(rows)} earlier trade(s).</i>")
+
+    lines = []
+    if rows:
+        lines.append(f"🔁 <b>Trades</b> — {total} completed")
+        lines.append(ds.RULE)
+        for trade in rows:
+            a_players = players_for(session, trade, "a")
+            b_players = players_for(session, trade, "b")
+            when = (trade.completed_at.strftime("%d %b %H:%M")
+                    if trade.completed_at else "")
+            lines.append(f"<b>{escape(trade.team_a.name or '')}</b> ⇄ "
+                         f"<b>{escape(trade.team_b.name or '')}</b>"
+                         + (f" · <i>{when}</i>" if when else ""))
+            lines.append(f"   → {_moved(b_players)}")
+            lines.append(f"   ← {_moved(a_players)}")
+        if total > len(rows):
+            lines.append(f"<i>…and {total - len(rows)} earlier trade(s).</i>")
+
+    if edits:
+        if lines:
+            lines.append("")
+        lines.append(f"🛠 <b>Admin squad edits</b> — {edits_total}")
+        lines.append(ds.RULE)
+        for edit in edits:
+            when = edit.created_at.strftime("%d %b %H:%M") if edit.created_at else ""
+            where = {
+                "added": f"→ <b>{escape(edit.to_team_name or '')}</b>",
+                "released": f"← <b>{escape(edit.from_team_name or '')}</b>, "
+                            f"back in the pool",
+            }.get(edit.action,
+                  f"<b>{escape(edit.from_team_name or '')}</b> → "
+                  f"<b>{escape(edit.to_team_name or '')}</b>")
+            lines.append(f"{ACTION_LABEL[edit.action].split()[0]} "
+                         f"{escape(edit.player_name)} {where}"
+                         + (f" · <i>{when}</i>" if when else ""))
+        if edits_total > len(edits):
+            lines.append(f"<i>…and {edits_total - len(edits)} earlier edit(s).</i>")
     return "\n".join(lines)
 
 

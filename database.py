@@ -862,10 +862,11 @@ def _migrate_add_columns():
     _try_add("player_drafts", "pin_picks", "BOOLEAN DEFAULT TRUE")
 
     # ── Tournament Draft: the post-draft trade window (/dtrade) ──
-    # ``draft_trades`` itself is created by ``create_all`` above; this column
-    # was added to the existing ``player_drafts``. Open by default — a draft
-    # that finished before this shipped should be tradable, and /dtradelock is
-    # how an admin closes the window.
+    # ``draft_trades`` and ``draft_squad_edits`` are new tables and are built by
+    # ``create_all`` above; this column was added to the existing
+    # ``player_drafts``. Open by default — a draft that finished before this
+    # shipped should be tradable, and /dtradelock is how an admin closes the
+    # window.
     _try_add("player_drafts", "trades_open", "BOOLEAN DEFAULT TRUE")
 
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by

@@ -1880,6 +1880,88 @@ class CommandTests(DraftCase):
         self.assertEqual(self.draft.home_country, "India")
         self.assertFalse(self.player("Rashid Khan").is_indian)
 
+    # ── /dadd and /ddrop ──
+
+    def test_dadd_refuses_a_non_admin(self):
+        self.go_live()
+        with _admin_ids("999"):
+            body = self.run_command(self.handler.dadd_handler, 111,
+                                    ["Mumbai", "|", "Virat Kohli"])
+        self.assertIn("Only bot admins", body)
+        self.assertIsNone(self.player("Virat Kohli").picked_by_team_id)
+
+    def test_dadd_puts_a_player_on_a_squad_and_reports_the_rules(self):
+        self.go_live()
+        with _admin_ids("999"):
+            body = self.run_command(self.handler.dadd_handler, 999,
+                                    ["Mumbai", "|", "Virat Kohli"])
+        self.assertIn("ADMIN SQUAD EDIT", body)
+        self.assertIn("Virat Kohli", body)
+        self.assertIn("Squad rules", body)
+        self.assertEqual(self.player("Virat Kohli").picked_by_team_id,
+                         self.team("Mumbai Mavericks").id)
+
+    def test_dadd_moves_a_player_and_reports_both_squads(self):
+        self.go_live()
+        self.pick("Virat Kohli", by=ALICE)
+        self.session.commit()
+        with _admin_ids("999"):
+            body = self.run_command(self.handler.dadd_handler, 999,
+                                    ["Chennai", "|", "Virat Kohli"])
+        self.assertIn("MUMBAI MAVERICKS", body)
+        self.assertIn("CHENNAI KINGS", body)
+        self.assertEqual(self.player("Virat Kohli").picked_by_team_id,
+                         self.team("Chennai Kings").id)
+
+    def test_dadd_without_the_pipe_says_how(self):
+        self.go_live()
+        with _admin_ids("999"):
+            body = self.run_command(self.handler.dadd_handler, 999,
+                                    ["Virat Kohli"])
+        self.assertIn("Usage", body)
+
+    def test_dadd_on_an_ambiguous_name_refuses_rather_than_guessing(self):
+        self.load_pool(rows=[
+            ["Kohli One", "80", "Gold", "0", "M", "Indian", "Batsman", "India",
+             "R", "R", "Medium", "80", "10"],
+            ["Kohli Two", "80", "Gold", "0", "M", "Indian", "Batsman", "India",
+             "R", "R", "Medium", "80", "10"]])
+        self.load_order(rows=[["1", "1", "Gold", "Mumbai Mavericks",
+                               "Alice", "111"]])
+        self.draft.chat_id = -100_000 - self.draft.id
+        self.ds.start(self.session, self.draft)
+        self.session.commit()
+        with _admin_ids("999"):
+            body = self.run_command(self.handler.dadd_handler, 999,
+                                    ["Mumbai", "|", "Kohli"])
+        self.assertIn("more than one player", body)
+        self.assertIsNone(self.player("Kohli One").picked_by_team_id)
+
+    def test_ddrop_sends_a_player_back_to_the_pool(self):
+        self.go_live()
+        self.pick("Virat Kohli", by=ALICE)
+        self.session.commit()
+        with _admin_ids("999"):
+            body = self.run_command(self.handler.ddrop_handler, 999,
+                                    ["Virat Kohli"])
+        self.assertIn("back in the pool", body)
+        self.assertIsNone(self.player("Virat Kohli").picked_by_team_id)
+
+    def test_ddrop_only_matches_a_player_somebody_actually_has(self):
+        """A name that is sitting free in the pool is not a drop."""
+        self.go_live()
+        with _admin_ids("999"):
+            body = self.run_command(self.handler.ddrop_handler, 999,
+                                    ["Virat Kohli"])
+        self.assertIn("No drafted player matches", body)
+
+    def test_an_admin_edit_is_refused_outside_the_bound_group(self):
+        self.go_live()
+        with _admin_ids("999"):
+            body = self.run_command(self.handler.ddrop_handler, 999,
+                                    ["Virat Kohli"], chat_type="private")
+        self.assertIn("only work in the group", body)
+
     def test_dhome_refuses_a_non_admin(self):
         self.go_live()
         with _admin_ids("111"):
@@ -1948,7 +2030,7 @@ class RenderTests(DraftCase):
                                     self.team("Mumbai Mavericks"))
         self.assertIn("Squad 1/3", body)
         self.assertIn("Platinum — 0/1", body)
-        self.assertIn("1/2 overseas", body)
+        self.assertIn("Overseas <code>1/2</code>", body)
 
     def test_the_squad_readout_names_an_unmet_minimum(self):
         self.draft.role_minimums_json = '{"Wicket Keeper": 1}'
@@ -1957,6 +2039,190 @@ class RenderTests(DraftCase):
                                     self.team("Mumbai Mavericks"))
         self.assertIn("Still needs", body)
         self.assertIn("Wicket Keeper", body)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The squad-rules block
+# ══════════════════════════════════════════════════════════════════════
+
+class SquadRulesTests(DraftCase):
+    """Every rule a squad is judged by, on the readout, with a mark on the ones
+    it is not meeting.
+
+    The two marks are the point. ``⏳`` is short but still reachable — the
+    ordinary state of every squad in round one, and not a fault. ``⚠️`` is
+    broken: a rule no further pick can satisfy. One symbol for both would
+    either cry wolf at every team all evening or say nothing until it was too
+    late to act on.
+    """
+
+    def body(self, team="Mumbai Mavericks"):
+        return self.ds.render_squad(self.session, self.draft, self.team(team))
+
+    def fill(self, *names):
+        """Run Mumbai's three slots out, Chennai auto-picking in between."""
+        for name in names:
+            self.pick(name, by=ALICE)
+            nxt = self.ds.current_pick(self.session, self.draft)
+            if nxt is not None:
+                self.ds.resolve_expired(self.session, self.draft, nxt)
+        self.session.commit()
+
+    # ── every rule gets a line, broken or not ──
+
+    def test_every_role_is_listed_even_with_no_minimum(self):
+        """A rule you only see once you break it is one you cannot plan around."""
+        self.go_live()
+        body = self.body()
+        for role in ("Batsman", "Bowler", "All-rounder", "Wicket Keeper"):
+            self.assertIn(role, body)
+
+    def test_a_role_with_a_minimum_is_counted_against_it(self):
+        """The shape the request asked for: have/need, marked when unmet."""
+        self.go_live()
+        self.fill("Virat Kohli", "Rashid Khan", "Rinku Singh")
+        self.ds.set_role_minimums(self.draft, {"Bowler": 2})
+        self.session.commit()
+        self.assertIn("🎯 Bowler <code>1/2</code> ⚠️", self.body())
+
+    def test_a_role_with_no_minimum_is_a_bare_count_not_a_fraction(self):
+        """``Batsman 2/0`` would read as a failure. It is not a rule at all."""
+        self.go_live()
+        self.pick("Virat Kohli", by=ALICE)
+        self.assertIn("🏏 Batsman <code>1</code>", self.body())
+
+    def test_a_met_minimum_carries_no_mark(self):
+        self.go_live()
+        self.fill("Jasprit Bumrah", "Rashid Khan", "Rinku Singh")
+        self.ds.set_role_minimums(self.draft, {"Bowler": 1})
+        self.session.commit()
+        body = self.body()
+        self.assertIn("🎯 Bowler <code>2/1</code>", body)
+        self.assertNotIn(f"<code>2/1</code> {self.ds.WARN}", body)
+
+    # ── the two marks ──
+
+    def test_mid_draft_an_unfilled_squad_is_pending_not_broken(self):
+        self.draft.role_minimums_json = '{"Wicket Keeper": 1}'
+        self.go_live()
+        body = self.body()
+        self.assertIn("all clear", body)
+        self.assertIn(self.ds.PENDING, body)
+        self.assertIn(f"🧤 Wicket Keeper <code>0/1</code> {self.ds.PENDING}",
+                      body)
+
+    def test_once_the_draft_is_over_the_same_gap_is_broken(self):
+        self.go_live()
+        self.fill("Virat Kohli", "Rashid Khan", "Rinku Singh")
+        # The minimum arrives late, which is the one route to a squad that is
+        # short of one — mid-draft, validate_pick makes it unreachable-proof.
+        self.ds.set_role_minimums(self.draft, {"Wicket Keeper": 1})
+        self.session.commit()
+        body = self.body()
+        self.assertIn("Squad rules: 1 broken", body)
+        self.assertIn(f"🧤 Wicket Keeper <code>0/1</code> {self.ds.WARN}", body)
+
+    def test_a_clean_finished_squad_says_all_clear(self):
+        self.go_live()
+        self.fill("Virat Kohli", "Rashid Khan", "Rinku Singh")
+        self.assertIn("all clear", self.body())
+        self.assertNotIn(self.ds.WARN, self.body())
+
+    # ── the caps ──
+
+    def test_going_over_the_overseas_cap_is_marked(self):
+        self.go_live()
+        self.fill("Rashid Khan", "Jos Buttler", "Rinku Singh")
+        # Two overseas players against a cap of one. validate_pick refuses to
+        # let a squad get there, so the only route is a cap tightened after the
+        # picks — which is exactly when an owner needs to be told.
+        self.draft.max_overseas = 1
+        self.session.commit()
+        body = self.body()
+        self.assertIn(f"Overseas <code>2/1</code> {self.ds.WARN}", body)
+        self.assertIn("broken", body)
+
+    def test_a_tier_over_its_own_slots_is_not_a_fault_on_its_own(self):
+        """A spare Platinum slot houses a second Gold player quite legally —
+        marking that would accuse a squad of something the draft allows."""
+        self.load_pool()
+        self.load_order(rows=[
+            ["1", "1", "Platinum", "Mumbai Mavericks", "Alice", "111"],
+            ["2", "1", "Gold", "Mumbai Mavericks", "Alice", "111"]])
+        self.draft.chat_id = -100_321
+        self.ds.start(self.session, self.draft)
+        self.pick("Rashid Khan", by=ALICE)      # Gold into the Platinum slot
+        self.pick("Jos Buttler", by=ALICE)      # Gold into the Gold slot
+        self.session.commit()
+        body = self.body()
+        self.assertIn("all clear", body)
+        self.assertNotIn(self.ds.WARN, body)
+
+    def test_the_prefix_the_ladder_overflows_at_is_marked(self):
+        self.load_pool()
+        self.load_order(rows=[
+            ["1", "1", "Gold", "Mumbai Mavericks", "Alice", "111"],
+            ["2", "1", "Silver", "Mumbai Mavericks", "Alice", "111"]])
+        self.draft.chat_id = -100_322
+        self.ds.start(self.session, self.draft)
+        self.pick("Rashid Khan", by=ALICE)
+        self.pick("Rinku Singh", by=ALICE)
+        self.session.commit()
+        # Slots are Gold 1 + Silver 1 and the squad matches, so it is clean…
+        self.assertIn("all clear", self.body())
+        # …until a second Gold player arrives where only one Gold slot exists.
+        self.player("Jos Buttler").picked_by_team_id = self.team("Mumbai").id
+        self.session.commit()
+        body = self.body()
+        self.assertIn("Gold-or-better", body)
+        self.assertIn("broken", body)
+
+    def test_an_oversized_squad_is_named_as_such(self):
+        self.go_live()
+        self.fill("Virat Kohli", "Rashid Khan", "Rinku Singh")
+        self.player("Jos Buttler").picked_by_team_id = self.team("Mumbai").id
+        self.session.commit()
+        self.assertIn(f"👥 Squad <code>4/3</code> {self.ds.WARN}", self.body())
+
+    # ── squad_problems, the list the marks are derived from ──
+
+    def test_problems_and_marks_cannot_disagree(self):
+        """The header count is the length of squad_problems, and every ⚠️ row
+        is one of its entries. They are computed from one function so a future
+        rule cannot be marked on the readout and missing from the count."""
+        self.go_live()
+        self.fill("Virat Kohli", "Rashid Khan", "Rinku Singh")
+        self.ds.set_role_minimums(self.draft, {"Wicket Keeper": 1, "Bowler": 3})
+        self.session.commit()
+        health = self.ds.squad_health(self.session, self.draft,
+                                      self.team("Mumbai").id)
+        problems = self.ds.squad_problems(health, settled=True)
+        self.assertEqual(len(problems), 2)
+        body = self.body()
+        self.assertIn(f"Squad rules: {len(problems)} broken", body)
+        self.assertEqual(body.count(self.ds.WARN),
+                         2               # the two marked role rows
+                         + 1             # the header
+                         + 1)            # the "Still needs" tail
+
+    def test_mid_draft_nothing_reachable_is_counted_as_a_problem(self):
+        self.draft.role_minimums_json = '{"Wicket Keeper": 1}'
+        self.go_live()
+        health = self.ds.squad_health(self.session, self.draft,
+                                      self.team("Mumbai").id)
+        self.assertEqual(self.ds.squad_problems(health, settled=False), [])
+        self.assertNotEqual(self.ds.squad_problems(health, settled=True), [])
+
+    def test_health_can_be_asked_about_a_squad_that_does_not_exist_yet(self):
+        """Which is what a trade has to do before it moves anybody."""
+        self.go_live()
+        self.pick("Virat Kohli", by=ALICE)
+        self.session.commit()
+        hypothetical = self.ds.squad_health(
+            self.session, self.draft, self.team("Mumbai").id,
+            players=[self.player("Jos Buttler"), self.player("Rinku Singh")])
+        self.assertEqual(hypothetical["size"], 2)
+        self.assertEqual(hypothetical["overseas"], 1)
 
     def test_the_board_names_who_is_on_the_clock(self):
         self.go_live()

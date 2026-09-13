@@ -77,11 +77,12 @@ a team logo.
 | `/dsquad [team]` | anyone | A squad by tier, with slot progress and the overseas count |
 | `/dqueue <player>` | owner + co-owners | Your wishlist. If your clock runs out the bot picks from it first |
 | `/dtrade <team>` | owner + co-owners | **After the draft:** swap players with another franchise — [any player for any player](#trading-after-the-draft--dtrade) |
-| `/dtrades` | anyone | Every trade that has been done |
+| `/dtrades` | anyone | Every squad change since the draft — trades and admin edits |
 
 Admin: `/dadmin` (the reference card), `/dnew`, `/dbind`, `/dstart`, `/dpause`,
 `/dresume`, `/dtimer`, `/dhome`, `/dpin`, `/dco`, `/dskip`, `/dundo`,
-`/dcancel`, `/dpublish`, `/dtradelock`.
+`/dcancel`, `/dpublish`, `/dtradelock`, and
+[`/dadd` / `/ddrop`](#editing-a-squad-by-hand--dadd-and-ddrop).
 
 `/dtrade` and `/dtrades` are **not** in the group slash menu: that list sits
 exactly at Telegram's 100-command ceiling and publishing them would push two
@@ -176,13 +177,15 @@ adds and updates, so the player would arrive at the new team and *stay at the
 old one as well*. Admins close the window with `/dtradelock on` before a match
 day, so a team sheet cannot change under a live fixture.
 
-**Pick rows are never rewritten.** *"R1 P3 was Mumbai's Platinum slot, and Mumbai
-spent it on Bumrah"* stays true however many times Bumrah is traded afterwards —
+**Pick rows are never rewritten**, by a trade or by an admin edit. *"R1 P3 was
+Mumbai's Platinum slot, and Mumbai spent it on Bumrah"* stays true however many
+times Bumrah changes hands afterwards —
 and it is also where `tier_slots` reads a team's quota from, which has to keep
 describing the order sheet rather than the current squad. The consequence is
 that `/dundo` refuses to reach *through* a trade: undoing a pick whose player
 has since moved would take him off a squad that never made it, so it says so and
-names the team holding him.
+names the team holding him. It is also why `/dtrades` exists: with the pick rows
+frozen, that log is the only record of what happened to a squad after the draft.
 
 ### Browsing the pool — `/dsearch`
 
@@ -275,6 +278,85 @@ that pick* — while there is still a slot to obey the rule with. Checking the
 finished squad instead would produce a complaint nobody can act on. An
 all-rounder counts towards a bowler minimum, because the XI rules already treat
 them that way and refusing here would be a rule the squad sheet never stated.
+
+### What `/dsquad` says about the rules
+
+Every rule above gets a line on the squad readout, whether or not the squad is
+currently breaking it — a rule you only see once you have broken it is one you
+cannot plan around, and `🎯 Bowler 3/4` three picks out is worth far more than
+the same line once there is nothing left to do about it.
+
+```text
+⚠️ Squad rules: 2 broken
+👥 Squad 3/3
+🏏 Batsman 2
+🎯 Bowler 1/2 ⚠️
+⚡ All-rounder 0
+🧤 Wicket Keeper 0/1 ⚠️
+   all-rounders count toward the bowler minimum
+🇮🇳 Home 2 · ✈️ Overseas 1/1
+```
+
+**Two marks, because there are two different things to say.** `⚠️` means
+*broken*: a rule no further pick can satisfy. `⏳` means *short but still
+reachable* — the ordinary state of every squad in round one, and not a fault.
+One symbol for both would either cry wolf at every team all evening or say
+nothing at all until it was too late to act.
+
+A row with no minimum is a **bare count**, not `2/0`, which reads like a
+failure when it is not a rule at all. A tier over its own slot count is **not**
+marked on its own: a spare Platinum slot houses a second Gold player quite
+legally, so only the prefix the ladder actually overflows at gets the mark,
+with the reason spelled out underneath it.
+
+The count in the header is the length of `squad_problems`, and a row carries
+`⚠️` if and only if that list contains it — both come from one
+`draft_service.squad_health`, which is also what `/dtrade` checks a trade
+against and what `/dadd` prints back. A rule cannot end up marked on the
+readout and missing from a refusal.
+
+### Editing a squad by hand — `/dadd` and `/ddrop`
+
+```text
+/dadd Mumbai | Virat Kohli    put a player on a squad (moves him if
+                              another team has him)
+/ddrop Virat Kohli            send a player back to the pool
+```
+
+Admin only, and they work at any point — a mis-typed name in round two is the
+commonest reason to need them, and waiting for the draft to finish is not a fix.
+
+**They enforce nothing.** Every other route into a squad is gated: `/pick` obeys
+the tier ceiling, the overseas cap and the role minimums; `/dtrade` re-checks
+all three against the squad the trade would produce. These two obey none of it,
+on purpose — an admin untangling a mess has to be able to pass *through* an
+illegal squad to reach a legal one (drop the extra keeper, then add the quick),
+and a gate that refuses the first half makes the tool useless at the one moment
+it is needed.
+
+What stands in for the gate is the report. Each edit:
+
+* is **announced in the draft group** — a squad nobody remembers agreeing to is
+  exactly how a league ends up disputed, so the room seeing it is the brake;
+* is written to **`DraftSquadEdit`** and shown in `/dtrades`, with the player,
+  both teams and the admin who typed it;
+* prints the **full rule state of every squad it touched**, so the one person
+  who can undo it sees what they have just broken — or fixed — without running
+  `/dsquad` twice.
+
+`/dadd` is one verb for *add* and *move* because from the admin's side they are
+the same instruction — "this player belongs to that team now" — and making them
+choose a command based on a state they may not have checked is a way to get the
+wrong one. `/ddrop` takes no team argument: a player is on exactly one squad, so
+naming it would only be a second thing to get wrong.
+
+A published league keeps up with both. `sync_league` reconciles all three
+directions — moved, added, and dropped — so a player signed after `/dpublish`
+gets a `ChallengePlayer` row (carrying the same `details_json` contract
+publishing writes, not a second copy that can drift from it) and a released one
+loses theirs. A league player whose name is **not in this draft's pool** is left
+strictly alone: an admin may have added them by hand on the Challenge Data page,
+and this is a reconcile against the draft, not a claim to own every row.
 
 **Only the Owner Tag ID and co-owners may pick**, and only for the team actually
 on the clock. Bot admins are deliberately *not* included: an admin who needs to
@@ -402,6 +484,7 @@ DraftPlayer      one pool entry, scoped to the draft. picked_by_team_id NULL
                  = available. source_player_id links to a real card, for the image
 DraftPick        one slot in the order AND the record of the pick that filled it
 DraftTrade       one /dtrade: the half-built offer, then the record of the swap
+DraftSquadEdit   one admin override: a player added, moved or sent to the pool
 ```
 
 The pool is its own table rather than a view over `players` because the uploaded
@@ -418,6 +501,14 @@ which players, who has confirmed — rather than in process memory, so a redeplo
 mid-offer costs nothing. The two id lists are kept after completion, which is
 what makes the table the `/dtrades` log: since pick rows are never rewritten,
 this is the only place a squad change *after* the draft is on the record.
+
+`DraftSquadEdit` is a separate table from `DraftTrade` because it is a
+different fact. A trade is two consenting franchises and needs an offer, two
+selections and two confirmations; an admin edit is one row with no state machine
+at all. Sharing one table would mean a `kind` column plus three columns that
+mean different things depending on it. `from_team_id` and `to_team_id` are NULL
+for the pool, which is what makes the three actions one shape: NULL → team is an
+add, team → NULL a release, team → team a move.
 
 The draft tables are new tables, so `create_all` builds them. The columns that
 arrived later — `player_drafts.pinned_message_id` and `.pin_picks` for the
@@ -456,17 +547,17 @@ same file the site let them download, and `requirements.txt` gains nothing.
 | File | Role |
 | --- | --- |
 | `services/draft_service.py` | The pool, the order, the ceiling rule, the clock, validation, auto-pick, the renderers, and publishing |
-| `services/draft_trade_service.py` | `/dtrade`: the offer, the squad-legality rules that replace the rating rule, the swap, and the league re-sync |
+| `services/draft_trade_service.py` | `/dtrade`: the offer, the swap, `/dadd` and `/ddrop`, and the league re-sync |
 | `services/draft_scheduler.py` | The restart-safe pick clock, and the announcements it and `/pick` both use |
 | `services/xlsx_reader.py` | Stdlib `.xlsx` reader |
 | `handlers/draft.py` | `/pick` and every other draft command, plus the `dr_` callbacks |
 | `handlers/draft_trade.py` | `/dtrade`, `/dtrades`, `/dtradecancel`, `/dtradelock`, and the `dt_` callbacks |
-| `models.py` | `PlayerDraft`, `DraftTeam`, `DraftPlayer`, `DraftPick`, `DraftTrade` |
+| `models.py` | `PlayerDraft`, `DraftTeam`, `DraftPlayer`, `DraftPick`, `DraftTrade`, `DraftSquadEdit` |
 | `admin.py` | `/drafts` and `/drafts/<id>` |
 | `templates/admin_drafts.html`, `templates/admin_draft_detail.html` | The two admin pages |
 | `migrate_draft_home_country.py` | One-off sweep: re-flags every existing pool's home/overseas players from their country |
-| `tests/test_player_draft.py` | 146 tests over importing, the home country, the ceiling, permissions, the caps, picking, granting, searching, pinning, the clock, undo, publishing and rendering |
-| `tests/test_draft_trade.py` | 69 tests over the trade window, the missing rating rule, the squad rules that replace it, the tier fit, permissions, restart-safety, the league re-sync and the commands |
+| `tests/test_player_draft.py` | 168 tests over importing, the home country, the ceiling, permissions, the caps, picking, granting, searching, pinning, the clock, undo, publishing, the squad-rules readout, `/dadd` / `/ddrop`, and rendering |
+| `tests/test_draft_trade.py` | 83 tests over the trade window, the missing rating rule, the squad rules that replace it, the tier fit, permissions, restart-safety, the admin overrides, the league re-sync and the commands |
 
 ---
 

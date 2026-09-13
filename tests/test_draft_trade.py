@@ -858,7 +858,234 @@ class PublishedLeagueTests(TradeCase):
     def test_an_unpublished_draft_is_simply_skipped(self):
         self.load()
         self.finish()
-        self.assertEqual(self.dts.sync_league(self.session, self.draft), 0)
+        self.assertEqual(self.dts.sync_league(self.session, self.draft),
+                         (0, 0, 0))
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The admin's hands on a squad — /dadd and /ddrop
+# ══════════════════════════════════════════════════════════════════════
+
+class AdminEditTests(TradeCase):
+    """These enforce **nothing**, which is the whole design.
+
+    Every other route into a squad is gated — `/pick` by the ceiling, the cap
+    and the minimums, `/dtrade` by all three re-checked against the squad it
+    would produce. An admin untangling a mess has to be able to pass *through*
+    an illegal squad to reach a legal one (drop the extra keeper, then add the
+    quick), and a gate that refuses the first half makes the tool useless at
+    the one moment it is needed. What replaces the gate is the record: the
+    group is told, a row is written, and both squads' rule state is printed
+    back.
+    """
+
+    ADMIN = 999
+
+    def test_a_free_player_can_be_added_to_any_squad(self):
+        self.load()
+        self.finish()
+        # Sanju Samson went undrafted.
+        edit, teams = self.dts.admin_assign(
+            self.session, self.draft, self.team("Mumbai"),
+            self.player("Sanju Samson"), by_tg_id=self.ADMIN)
+        self.session.commit()
+        self.assertEqual(edit.action, "added")
+        self.assertIn("Sanju Samson", self.squad_names("Mumbai"))
+        self.assertEqual([t.name for t in teams], ["Mumbai Mavericks"])
+
+    def test_a_player_on_another_squad_is_moved_not_refused(self):
+        """One verb for add and move: from the admin's side they are the same
+        instruction, and making them pick a command based on a state they may
+        not have checked is a way to get the wrong one."""
+        self.load()
+        self.finish()
+        edit, teams = self.dts.admin_assign(
+            self.session, self.draft, self.team("Mumbai"),
+            self.player("Jasprit Bumrah"), by_tg_id=self.ADMIN)
+        self.session.commit()
+        self.assertEqual(edit.action, "moved")
+        self.assertIn("Jasprit Bumrah", self.squad_names("Mumbai"))
+        self.assertNotIn("Jasprit Bumrah", self.squad_names("Chennai"))
+        self.assertEqual(sorted(t.name for t in teams),
+                         ["Chennai Kings", "Mumbai Mavericks"])
+
+    def test_a_player_can_be_released_to_the_pool(self):
+        self.load()
+        self.finish()
+        edit, teams = self.dts.admin_release(
+            self.session, self.draft, self.player("Virat Kohli"),
+            by_tg_id=self.ADMIN)
+        self.session.commit()
+        self.assertEqual(edit.action, "released")
+        self.assertNotIn("Virat Kohli", self.squad_names("Mumbai"))
+        self.assertIsNone(self.player("Virat Kohli").picked_by_team_id)
+        self.assertEqual([t.name for t in teams], ["Mumbai Mavericks"])
+
+    def test_no_squad_rule_stops_an_admin(self):
+        """Four Platinum players into a squad with one Platinum slot. /pick and
+        /dtrade both refuse this; /dadd must not, or an admin can never take a
+        squad apart to put it back together."""
+        self.load()
+        self.finish()
+        self.dts.admin_assign(self.session, self.draft, self.team("Mumbai"),
+                              self.player("Jasprit Bumrah"))
+        self.dts.admin_assign(self.session, self.draft, self.team("Mumbai"),
+                              self.player("Sanju Samson"))
+        self.session.commit()
+        health = self.ds.squad_health(self.session, self.draft,
+                                      self.team("Mumbai").id)
+        self.assertEqual(health["size"], 6)
+        self.assertTrue(self.ds.squad_problems(health))
+
+    def test_the_edit_is_on_the_record(self):
+        self.load()
+        self.finish()
+        self.dts.admin_assign(self.session, self.draft, self.team("Mumbai"),
+                              self.player("Jasprit Bumrah"),
+                              by_tg_id=self.ADMIN)
+        self.session.commit()
+        rows = self.dts.squad_edits(self.session, self.draft)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0].player_name, rows[0].by_tg_id),
+                         ("Jasprit Bumrah", self.ADMIN))
+        self.assertEqual((rows[0].from_team_name, rows[0].to_team_name),
+                         ("Chennai Kings", "Mumbai Mavericks"))
+
+    def test_the_names_survive_the_pool_row(self):
+        """The log has to still read after a pool row is deleted, which is why
+        the team and player names are copied onto the edit."""
+        from models import DraftPlayer
+        self.load()
+        self.finish()
+        self.dts.admin_release(self.session, self.draft,
+                               self.player("Virat Kohli"))
+        self.session.commit()
+        self.session.query(DraftPlayer).filter(
+            DraftPlayer.name == "Virat Kohli").delete()
+        self.session.commit()
+        self.assertIn("Virat Kohli",
+                      self.dts.render_log(self.session, self.draft))
+
+    def test_the_log_carries_trades_and_edits_together(self):
+        self.load()
+        self.finish()
+        self.swap(["Virat Kohli"], ["Mukesh Kumar"])
+        self.dts.admin_assign(self.session, self.draft, self.team("Mumbai"),
+                              self.player("Sanju Samson"))
+        self.session.commit()
+        log = self.dts.render_log(self.session, self.draft)
+        self.assertIn("Trades", log)
+        self.assertIn("Admin squad edits", log)
+        self.assertIn("Sanju Samson", log)
+
+    def test_refusals_that_are_still_refusals(self):
+        self.load()
+        self.finish()
+        with self.assertRaises(self.ds.DraftError):      # already there
+            self.dts.admin_assign(self.session, self.draft,
+                                  self.team("Mumbai"),
+                                  self.player("Virat Kohli"))
+        with self.assertRaises(self.ds.DraftError):      # nobody has him
+            self.dts.admin_release(self.session, self.draft,
+                                   self.player("Sanju Samson"))
+        with self.assertRaises(self.ds.DraftError):      # no such player
+            self.dts.admin_assign(self.session, self.draft,
+                                  self.team("Mumbai"), None)
+
+    def test_it_works_mid_draft_too(self):
+        """A mis-typed name in round two is the commonest reason to need it,
+        and waiting for the draft to finish is not a fix."""
+        self.load()
+        self.take("Virat Kohli", by=ALICE)
+        self.session.commit()
+        self.dts.admin_assign(self.session, self.draft, self.team("Chennai"),
+                              self.player("Virat Kohli"))
+        self.session.commit()
+        self.assertIn("Virat Kohli", self.squad_names("Chennai"))
+
+    def test_an_added_player_leaves_every_auto_pick_queue(self):
+        """Otherwise the clock picks a player who already has a squad."""
+        self.load()
+        self.take("Virat Kohli", by=ALICE)
+        self.ds.queue_add(self.session, self.draft, self.team("Chennai"),
+                          self.player("Rashid Khan"))
+        self.session.commit()
+        self.dts.admin_assign(self.session, self.draft, self.team("Mumbai"),
+                              self.player("Rashid Khan"))
+        self.session.commit()
+        self.assertEqual(self.ds.queue_ids(self.team("Chennai")), [])
+
+    # ── the published league keeps up ──
+
+    def test_an_added_player_reaches_a_published_league(self):
+        from models import ChallengePlayer, ChallengeTeam
+        self.load()
+        self.finish()
+        league = self.ds.publish_to_league(self.session, self.draft)
+        self.session.commit()
+        self.dts.admin_assign(self.session, self.draft, self.team("Mumbai"),
+                              self.player("Sanju Samson"))
+        self.session.commit()
+        cp = (self.session.query(ChallengePlayer)
+              .join(ChallengeTeam, ChallengeTeam.id == ChallengePlayer.team_id)
+              .filter(ChallengeTeam.league_id == league.id,
+                      ChallengePlayer.name == "Sanju Samson").one())
+        self.assertEqual(cp.is_overseas, False)
+        self.assertIn('"tier":"Gold"', cp.details_json)
+
+    def test_a_released_player_leaves_a_published_league(self):
+        from models import ChallengePlayer, ChallengeTeam
+        self.load()
+        self.finish()
+        league = self.ds.publish_to_league(self.session, self.draft)
+        self.session.commit()
+        self.dts.admin_release(self.session, self.draft,
+                               self.player("Virat Kohli"))
+        self.session.commit()
+        rows = (self.session.query(ChallengePlayer)
+                .join(ChallengeTeam, ChallengeTeam.id == ChallengePlayer.team_id)
+                .filter(ChallengeTeam.league_id == league.id,
+                        ChallengePlayer.name == "Virat Kohli").all())
+        self.assertEqual(rows, [])
+
+    def test_a_hand_added_league_player_is_never_deleted(self):
+        """The re-sync answers for this draft's pool, not for every row in the
+        league — an admin may have added someone on the Challenge Data page."""
+        from models import ChallengePlayer, ChallengeTeam
+        self.load()
+        self.finish()
+        league = self.ds.publish_to_league(self.session, self.draft)
+        ct = (self.session.query(ChallengeTeam)
+              .filter(ChallengeTeam.league_id == league.id,
+                      ChallengeTeam.name == "Mumbai Mavericks").one())
+        self.session.add(ChallengePlayer(team_id=ct.id, name="Guest Player"))
+        self.session.commit()
+        self.dts.admin_release(self.session, self.draft,
+                               self.player("Virat Kohli"))
+        self.session.commit()
+        self.assertEqual(
+            self.session.query(ChallengePlayer)
+            .filter(ChallengePlayer.name == "Guest Player").count(), 1)
+
+    def test_the_engine_can_still_read_a_player_added_after_publishing(self):
+        """The details blob /dadd writes is the same contract publishing
+        writes, not a second copy that can drift from it."""
+        from models import ChallengePlayer, ChallengeTeam
+        from services.cipl_match import cp_to_player_dict
+        self.load()
+        self.finish()
+        league = self.ds.publish_to_league(self.session, self.draft)
+        self.session.commit()
+        self.dts.admin_assign(self.session, self.draft, self.team("Mumbai"),
+                              self.player("Sanju Samson"))
+        self.session.commit()
+        cp = (self.session.query(ChallengePlayer)
+              .join(ChallengeTeam, ChallengeTeam.id == ChallengePlayer.team_id)
+              .filter(ChallengeTeam.league_id == league.id,
+                      ChallengePlayer.name == "Sanju Samson").one())
+        blob = cp_to_player_dict(cp)
+        self.assertEqual(blob["name"], "Sanju Samson")
+        self.assertEqual(blob["rating"], 88)
 
 
 # ══════════════════════════════════════════════════════════════════════

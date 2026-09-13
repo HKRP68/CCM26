@@ -408,6 +408,8 @@ ADMIN_MENU_COMMANDS = (
     ("dautopick", "Owner: grant a random pick of the slot's tier"),
     ("dundo", "Admin: roll the last draft pick back"),
     ("dtradelock", "Admin: close or reopen the draft trade window"),
+    ("dadd", "Admin: put a player on a draft squad"),
+    ("ddrop", "Admin: send a drafted player back to the pool"),
     ("dpublish", "Admin: publish drafted squads as a Challenge League"),
     ("dcancel", "Admin: cancel the draft"),
 )
@@ -1794,7 +1796,7 @@ def main():
             dadmin_handler, dnew_handler, dbind_handler, dtimer_handler,
             dco_handler, dstart_handler, dpause_handler, dcancel_handler,
             dskip_handler, dautopick_handler, dundo_handler, dpublish_handler,
-            dhome_handler,
+            dhome_handler, dadd_handler, ddrop_handler,
         )
         # Not "/p": that is already /purse, registered above, and PTB runs
         # the first handler that matches — the alias would be dead.
@@ -1826,6 +1828,13 @@ def main():
         app.add_handler(CommandHandler(["dautopick", "dauto"], dautopick_handler))
         app.add_handler(CommandHandler("dundo", dundo_handler))
         app.add_handler(CommandHandler("dpublish", dpublish_handler))
+        # The admin's hands on a squad. These enforce no squad rule at all —
+        # an admin untangling a mess has to be able to pass through an illegal
+        # squad to reach a legal one — so instead each one announces itself in
+        # the draft group, is recorded, and reports the rule state of every
+        # squad it touched. handlers/draft.py has the reasoning.
+        app.add_handler(CommandHandler(["dadd", "dsign"], dadd_handler))
+        app.add_handler(CommandHandler(["ddrop", "drelease"], ddrop_handler))
 
         # /dtrade — the post-draft trade window. Shaped like /trade, but with
         # no same-OVR rule: any player for any player, package deals included,
