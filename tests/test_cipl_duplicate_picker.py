@@ -51,7 +51,10 @@ class _FakeContext:
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # A fresh loop per call: asyncio.run() elsewhere in the suite closes the
+    # process-wide loop, and get_event_loop() then raises here — which silently
+    # took this whole module out of the run.
+    return asyncio.run(coro)
 
 
 class NewActionMessageTests(unittest.TestCase):

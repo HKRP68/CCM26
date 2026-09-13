@@ -13,6 +13,7 @@ The heartbeat runs as a single global job that scans all matches every 30s.
 That way we don't need to manage per-match jobs (lower complexity, fewer leaks).
 """
 
+import asyncio
 import logging
 import random
 from datetime import datetime, timedelta
@@ -25,6 +26,14 @@ HEARTBEAT_INTERVAL = 30        # seconds between scans
 RERENDER_THRESHOLD = 90        # seconds idle before we re-render the screen
 AUTODECIDE_THRESHOLD = 300     # seconds idle (5 min) before AI auto-decides
 HEARTBEAT_JOB_NAME = "match_heartbeat_global"
+
+# Challenge League / Lets Play recovery: shortest gap between two heartbeat
+# resumes of the SAME match. Only reached when the match has no clock of its
+# own to re-arm (no job queue) — otherwise the resume arms one and this never
+# bites.
+CIPL_RESUME_COOLDOWN = 300
+CIPL_RESUME_TIMEOUT = 20       # seconds to wait on one match's lock
+_CIPL_RESUME_KEY = "_hb_cipl_resumed_{mid}"
 
 
 async def _heartbeat_tick(context: ContextTypes.DEFAULT_TYPE):
@@ -107,12 +116,13 @@ async def _heartbeat_tick(context: ContextTypes.DEFAULT_TYPE):
             if mem.get("played_via") == "webapp":
                 continue
 
-            # Challenge League (/cipl) matches run their own 90s auto-pick timer
-            # and a manual /rcl resume. Don't let the heartbeat re-render or
-            # auto-decide them with the regular-match logic (it doesn't
-            # understand CIPL actions and would spam prompts / placeholder
-            # "resuming" messages). A stalled CIPL match is recovered with /rcl.
+            # Challenge League (/cipl) and Lets Play matches run their own
+            # over-by-over state machine with its own inactivity clock. The
+            # regular-match logic below doesn't understand their actions, so
+            # they get their own recovery — it resumes them exactly the way
+            # /rcl does, instead of leaving that to a captain.
             if mem.get("mode") == "cipl_approach":
+                await _recover_cipl(context, mid)
                 continue
 
             if idle_seconds >= AUTODECIDE_THRESHOLD:
@@ -124,6 +134,53 @@ async def _heartbeat_tick(context: ContextTypes.DEFAULT_TYPE):
 
     except Exception:
         logger.exception("heartbeat_tick top-level error")
+
+
+async def _recover_cipl(context, mid):
+    """Resume a Challenge League / Lets Play match that has lost its clock.
+
+    Those matches drive themselves with an inactivity timer armed for whichever
+    pick is outstanding. The timer is an in-memory job, so it does not survive a
+    process restart, and a send that raised mid-over could leave the match with
+    neither a live picker nor a clock. The match then simply stopped until a
+    captain typed /rcl — which is why players were typing it over and over.
+
+    An armed timer means the turn is still being counted down, so this leaves
+    the match alone; only a match with no clock is resumed. The resume re-arms
+    the clock itself, so at most one of these runs per stall.
+    """
+    try:
+        from handlers.cipl_play import timer_armed, cipl_resume
+    except Exception:
+        logger.exception("cipl recovery unavailable")
+        return
+
+    if timer_armed(context, mid):
+        return  # the match's own clock is running this turn — don't interfere
+
+    # Without a job queue there is no clock to re-arm, so the resume below is
+    # the only thing moving the match on. Space those out so a chat both
+    # players have walked away from isn't re-prompted every tick.
+    last = context.bot_data.get(_CIPL_RESUME_KEY.format(mid=mid))
+    now = datetime.utcnow()
+    if last and (now - last).total_seconds() < CIPL_RESUME_COOLDOWN:
+        return
+    context.bot_data[_CIPL_RESUME_KEY.format(mid=mid)] = now
+
+    # The resume waits on the match's own lock. Bound that wait: one match whose
+    # lock is held by a hung task must not stop the sweep from reaching every
+    # other match.
+    try:
+        resumed = await asyncio.wait_for(cipl_resume(context, mid),
+                                         timeout=CIPL_RESUME_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning("cipl heartbeat resume timed out for match %s", mid)
+        return
+    except Exception:
+        logger.exception("cipl heartbeat resume failed for match %s", mid)
+        return
+    if resumed:
+        logger.info("heartbeat resumed stalled Challenge League match %s", mid)
 
 
 async def _try_rerender(context, mid):
@@ -308,7 +365,31 @@ def start_heartbeat(application):
         import asyncio
         async def _loop():
             class _FakeContext:
-                def __init__(self, app): self.application = app
+                """A PTB-shaped context for the fallback loop.
+
+                The tick and everything it reaches — the state store, the
+                renderers, the Challenge League resume — read ``bot_data``,
+                ``bot`` and ``job_queue`` off the context. Exposing only
+                ``application`` made the very first state lookup raise
+                AttributeError, so this fallback heartbeat never actually
+                recovered anything.
+                """
+
+                def __init__(self, app):
+                    self.application = app
+
+                @property
+                def bot_data(self):
+                    return self.application.bot_data
+
+                @property
+                def bot(self):
+                    return self.application.bot
+
+                @property
+                def job_queue(self):
+                    return getattr(self.application, "job_queue", None)
+
             ctx = _FakeContext(app)
             while True:
                 try:
