@@ -17,10 +17,16 @@ Players (in the draft group)
   /dsearch [filters]  browse the pool — 🟢 available / 🔴 taken, with filter buttons
   /dsquad [team]      a squad by tier, with slot progress
   /dqueue <player>    your wishlist, which the clock picks from if you time out
+  /dtrade <team>      once the draft is over: swap players with another
+                      franchise — any player for any player, no rating rule
+                      (handlers/draft_trade.py)
+  /dtrades            every trade that has been done
 
 Admin
   /dadmin /dnew /dbind /dstart /dpause /dtimer /dhome /dpin /dco /dskip /dundo
-  /dpublish
+  /dpublish /dtradelock
+  /dadd <team> | <player>   put a player on a squad (or move him to it)
+  /ddrop <player>           send a player back to the pool
 
 Owner
   /dautopick          grant the team on the clock a random pick of its tier
@@ -263,7 +269,11 @@ async def pick_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await dsched.announce_pick(context.bot, session, draft, done, player)
         if draft.status == ds.STATUS_COMPLETED:
             await _reply(update, "🏁 <b>Draft complete.</b> Every slot is filled — "
-                                 "an admin can publish the squads with /dpublish.")
+                                 "an admin can publish the squads with /dpublish.\n"
+                                 "The <b>trade window is open</b>: swap players "
+                                 "with another franchise using "
+                                 "<code>/dtrade &lt;team&gt;</code> — any player "
+                                 "for any player, no rating rule.")
     finally:
         session.close()
 
@@ -713,7 +723,19 @@ async def dsquad_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 raise DraftError(f"No team here matches “{wanted}”.")
             raise DraftError("You don't own a team in this draft — name one, "
                              "e.g. /dsquad Mumbai.")
-        return ds.render_squad(session, draft, team)
+        body = ds.render_squad(session, draft, team)
+        # The squad readout is where an owner is standing when they notice they
+        # have three keepers and no death bowler, so it is where the trade
+        # window is worth advertising. /dtrade is not in the group slash menu —
+        # that list is at Telegram's ceiling — so this pointer is how most
+        # owners find it.
+        from services import draft_trade_service as dts
+        if draft.status == ds.STATUS_COMPLETED and dts.trades_open(draft):
+            body += ("\n\n🔁 Trade window open — "
+                     "<code>/dtrade &lt;team&gt;</code> swaps players with "
+                     "another franchise (any player for any player). "
+                     "Done so far: /dtrades")
+        return body
     await _with_draft(update, work)
 
 
@@ -779,8 +801,20 @@ Admin → Tournament Panel → 🎯 Player Drafts → your draft.
 <code>/dundo</code> — roll the last pick back onto the clock
 <code>/dcancel</code> — stop the draft
 
+<b>Editing a squad by hand</b>
+<code>/dadd Mumbai | Virat Kohli</code> — put a player on a squad (moves him if
+  another team has him)
+<code>/ddrop Virat Kohli</code> — send a player back to the pool
+These two enforce <b>no</b> squad rule — an admin has to be able to pass through
+an illegal squad to fix one. Instead every edit is announced here, recorded in
+<code>/dtrades</code>, and followed by the full rule state of each squad it
+touched.
+
 <b>Finishing</b>
 <code>/dpublish</code> — write the squads into a Challenge League so they can play
+<code>/dtradelock on|off</code> — close or reopen the post-draft trade window
+  (<code>/dtrade</code>). Close it before a match day so a team sheet cannot
+  change under a live fixture.
 
 <b>The rules the bot enforces</b>
 • A slot's tier is a <b>ceiling</b> — a Platinum slot takes Platinum or below.
@@ -792,7 +826,11 @@ Admin → Tournament Panel → 🎯 Player Drafts → your draft.
   that would make a role minimum unreachable is refused while it can still be fixed.
 • Only the Owner Tag ID and co-owners may pick for a team. Admins use /dskip.
 • When a clock runs out the bot picks: the owner's /dqueue first, otherwise the
-  player closest to the average rating of what's legal in that tier."""
+  player closest to the average rating of what's legal in that tier.
+• Once the draft is <b>complete</b>, owners may trade with <code>/dtrade</code>.
+  There is <b>no rating rule</b> — any player for any player — but the counts
+  must match and the squad rules above (tier slots, the overseas cap, role
+  minimums) are re-checked on both squads before anybody moves."""
 
 
 async def dadmin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1179,6 +1217,124 @@ async def dundo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    f"{freed}\n\n")
     finally:
         session.close()
+
+
+# ════════════════════════════════════════════════════════════════════
+# /dadd and /ddrop — the admin's hands on a squad
+# ════════════════════════════════════════════════════════════════════
+#
+# Every other way a player joins a squad is gated: /pick obeys the tier
+# ceiling, the overseas cap and the role minimums; /dtrade re-checks all three
+# against the squad the trade would produce. These two obey **nothing**, and
+# that is the point — an admin untangling a mess has to be able to pass through
+# an illegal squad to reach a legal one (drop the extra keeper, then add the
+# quick), and a gate that refuses the first half makes the tool useless at
+# exactly the moment it is needed.
+#
+# What stands in for the gate is the report. Each command announces itself in
+# the draft group (a squad nobody remembers agreeing to is how a league gets
+# disputed), writes a DraftSquadEdit row, and prints the full rule state of
+# every squad it touched — so an admin sees what they have just broken, or
+# fixed, without running /dsquad twice.
+
+async def _squad_edit(update, context, work, *, command):
+    """Run one admin squad edit and announce it, with both squads' rule state.
+
+    ``work(session, draft)`` returns ``(edit, teams)``. Shared by /dadd and
+    /ddrop because the whole of the difference between them is that one line.
+    """
+    chat = update.effective_chat
+    if chat is None or chat.type not in GROUP_CHAT_TYPES:
+        await _reply(update, GROUP_ONLY)
+        return
+    if not await _require_admin(update):
+        return
+    user = update.effective_user
+    session = get_session()
+    done = None
+    try:
+        draft = _load_for_chat(session, update)
+        if draft is None:
+            await _reply(update, NO_DRAFT)
+            return
+        edit, teams = work(session, draft)
+        from services import draft_trade_service as dts
+        body = dts.render_edit_result(
+            session, draft, edit, teams,
+            by=dsched.mention(session, user.id if user else None,
+                              (user.first_name if user else None) or "Admin"))
+        session.commit()
+        done = body
+    except DraftError as exc:
+        session.rollback()
+        await _reply(update, f"⚠️ {html.escape(str(exc))}")
+        return
+    except Exception:
+        session.rollback()
+        logger.exception("%s failed", command)
+        await _reply(update, "⚠️ Something went wrong. Try again.")
+        return
+    finally:
+        session.close()
+    await _reply(update, done)
+
+
+def _pool_choice(candidates, query):
+    """The refusal for a name that matched nothing, or more than one thing."""
+    if not candidates:
+        return f"No player in this draft's pool matches “{query}”."
+    names = ", ".join(c.name or "" for c in candidates[:6])
+    more = "" if len(candidates) <= 6 else f" (+{len(candidates) - 6} more)"
+    return f"“{query}” matches more than one player: {names}{more}. Be exact."
+
+
+async def dadd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/dadd &lt;team&gt; | &lt;player&gt;</code> — put a player on a squad.
+
+    One verb for *add* and *move*, because from the admin's side they are the
+    same instruction — "this player belongs to that team now" — and making them
+    choose a different command based on a state they may not have checked is a
+    way to get the wrong one.
+    """
+    from services import draft_trade_service as dts
+
+    def work(session, draft):
+        team_name, player_name = _split_pipes(_arg_text(context), 2)
+        if not team_name or not player_name:
+            raise DraftError("Usage: /dadd <team> | <player name>")
+        team = ds.find_team(session, draft.id, team_name)
+        if team is None:
+            raise DraftError(f"No team here matches “{team_name}”.")
+        player, candidates = ds.find_in_pool(session, draft.id, player_name)
+        if player is None:
+            raise DraftError(_pool_choice(candidates, player_name))
+        return dts.admin_assign(session, draft, team, player,
+                                by_tg_id=update.effective_user.id)
+    await _squad_edit(update, context, work, command="/dadd")
+
+
+async def ddrop_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/ddrop &lt;player&gt;</code> — send a player back to the pool.
+
+    No team argument: a player is on exactly one squad, so naming it would only
+    be a second thing to get wrong.
+    """
+    from services import draft_trade_service as dts
+
+    def work(session, draft):
+        player_name = _arg_text(context)
+        if not player_name:
+            raise DraftError("Usage: /ddrop <player name>")
+        player, candidates = ds.find_in_pool(session, draft.id, player_name,
+                                             drafted=True)
+        if player is None:
+            if not candidates:
+                raise DraftError(f"No drafted player matches “{player_name}”. "
+                                 f"Only a player on a squad can be released.")
+            raise DraftError(_pool_choice(candidates, player_name))
+        return dts.admin_release(session, draft, player,
+                                 by_tg_id=update.effective_user.id)
+    await _squad_edit(update, context, work, command="/ddrop")
 
 
 async def dpublish_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

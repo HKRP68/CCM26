@@ -149,6 +149,17 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "t2p_",
     "tcfrm_",
     "tcancel_",
+    # /dtrade — the post-draft franchise trade, and shared for the same reason
+    # as /trade above: one message walks from "the opening team ticks its
+    # players" to "the other team ticks theirs" to "both owners confirm", but it
+    # was first sent while handling the opening owner's command. The draft's
+    # other buttons (dr_*) are owner-locked precisely because nobody else should
+    # drive them; these are the opposite — a trade the second franchise cannot
+    # touch is not a trade. handlers/draft_trade.py authorises every press
+    # against the team the presser owns AND the step the offer is on, which is
+    # the stronger check anyway: it survives a restart, and it lets a co-owner
+    # take over mid-offer.
+    "dt_",
     # /tradetrait — the trait-for-trait twin of /trade above, and shared for the
     # same reason: one message is edited from "user1 picks" (tt1_) to "user2
     # picks" (tt2_) to "both confirm" (ttcfrm_), but it was first sent while

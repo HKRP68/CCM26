@@ -1134,13 +1134,18 @@ def overseas_count(session, team_id):
                     DraftPlayer.is_indian.is_(False)).count())
 
 
-def role_gap(session, draft, team_id):
-    """``{role: how many more this team still needs}`` for unmet minimums."""
+def role_shortfall(draft, players):
+    """``{role: how many more this squad needs}`` for a list of players.
+
+    The rule, without a database behind it, so a squad that does not exist yet
+    can be asked the same question — which is what a trade has to do before it
+    moves anybody (``services/draft_trade_service.py``).
+    """
     minimums = role_minimums(draft)
     if not minimums:
         return {}
     have = {}
-    for player in squad(session, team_id):
+    for player in players:
         have[player.category] = have.get(player.category, 0) + 1
     gap = {}
     for role, needed in minimums.items():
@@ -1153,6 +1158,160 @@ def role_gap(session, draft, team_id):
         if short > 0:
             gap[role] = short
     return gap
+
+
+def role_gap(session, draft, team_id):
+    """``{role: how many more this team still needs}`` for unmet minimums."""
+    return role_shortfall(draft, squad(session, team_id))
+
+
+def _tiers_in_order(draft, *groups):
+    """The tier ladder, with any tier a row actually carries appended after it.
+
+    A pool tier is normalised to the ladder on import, so the tail is normally
+    empty. It exists so a hand-edited row cannot make the fit check silently
+    ignore a player — an unknown tier is counted, at the bottom, for the slots
+    and for the squad alike.
+    """
+    order = list(tier_order(draft))
+    seen = set(order)
+    for group in groups:
+        for tier in group:
+            if tier not in seen:
+                seen.add(tier)
+                order.append(tier)
+    return order
+
+
+def tier_overflow_at(draft, slots, players):
+    """``(overflow, tier)`` — how far a squad exceeds its slots, and where.
+
+    A slot's tier is a **ceiling**, so the question is not "does each tier
+    match" but "can these players be laid into these slots at all". With a
+    nested ladder that has one answer: walk the ladder from the top, and the
+    best *k* tiers of players must fit in the best *k* tiers of slots. The
+    worst prefix is the overflow, and zero means this is a squad the team
+    could have drafted.
+
+    A Platinum slot spent on a Gold player leaves that slot able to house a
+    Gold player for ever after — which is exactly right: the team paid Platinum
+    money for it, and filling it back up with Gold is not a loophole, it is the
+    slot working as specified.
+
+    While a draft is still running a squad is *expected* to be under its slots;
+    this only ever reports the other direction.
+    """
+    by_tier = {}
+    for player in players:
+        by_tier[player.tier] = by_tier.get(player.tier, 0) + 1
+    worst, where = 0, None
+    have = held = 0
+    for tier in _tiers_in_order(draft, slots.keys(), by_tier.keys()):
+        held += by_tier.get(tier, 0)
+        have += slots.get(tier, 0)
+        if held - have > worst:
+            worst, where = held - have, tier
+    return max(0, worst), where
+
+
+def tier_overflow(draft, slots, players):
+    """How many players a squad holds that its slots could not have bought."""
+    return tier_overflow_at(draft, slots, players)[0]
+
+
+def overseas_in(players):
+    return sum(1 for p in players if not p.is_indian)
+
+
+def overseas_cap(draft):
+    return draft.max_overseas if draft.max_overseas is not None else 11
+
+
+ROLE_EMOJI = {"Batsman": "🏏", "Bowler": "🎯",
+              "All-rounder": "⚡", "Wicket Keeper": "🧤"}
+
+
+def squad_health(session, draft, team_id, players=None):
+    """Every squad rule, counted against one squad — **counted, not judged**.
+
+    One place answers "what shape is this squad in", so the readout an owner
+    sees, the refusal a trade gives and the report an admin's ``/dadd`` prints
+    can never disagree about it. Pass ``players`` to ask the same question of a
+    squad that does not exist yet, which is what a trade has to do before it
+    moves anybody.
+
+    ``roles`` carries ``need`` as 0 for a role with no minimum, so a caller can
+    render every role and mark only the ones that are actually a rule. The
+    bowler count includes all-rounders **when there is a bowler minimum**,
+    because that is what the rule counts (see :func:`role_shortfall`); with no
+    minimum in play the raw count is the more honest number.
+    """
+    rows = list(players) if players is not None else squad(session, team_id)
+    slots = tier_slots(session, draft.id, team_id)
+    minimums = role_minimums(draft)
+
+    counts = {}
+    for player in rows:
+        counts[player.category] = counts.get(player.category, 0) + 1
+
+    roles = []
+    for role in _CATEGORIES:
+        need = int(minimums.get(role) or 0)
+        have = counts.get(role, 0)
+        if role == "Bowler" and need:
+            have += counts.get("All-rounder", 0)
+        roles.append((role, have, need))
+
+    by_tier = {}
+    for player in rows:
+        by_tier[player.tier] = by_tier.get(player.tier, 0) + 1
+    tiers = [(tier, by_tier.get(tier, 0), slots.get(tier, 0))
+             for tier in _tiers_in_order(draft, slots.keys(), by_tier.keys())
+             if slots.get(tier, 0) or by_tier.get(tier, 0)]
+
+    overflow, overflow_tier = tier_overflow_at(draft, slots, rows)
+    return {
+        "players": rows,
+        "size": len(rows),
+        "slots": sum(slots.values()),
+        "roles": roles,
+        "shortfall": role_shortfall(draft, rows),
+        "overseas": overseas_in(rows),
+        "overseas_cap": overseas_cap(draft),
+        "tiers": tiers,
+        "overflow": overflow,
+        "overflow_tier": overflow_tier,
+        "counts_all_rounders": bool(minimums.get("Bowler")),
+    }
+
+
+def squad_problems(health, *, settled=True):
+    """The squad rules this squad **breaks**, as plain-text lines.
+
+    ``settled`` is the difference between a finished squad and one still being
+    drafted. Mid-draft a squad is supposed to be under its slots and short of
+    its minimums — that is what the remaining picks are for — so only the rules
+    a pick can no longer fix (too many players, too many overseas, more
+    top-tier players than top-tier slots) count as broken.
+    """
+    problems = []
+    if health["size"] > health["slots"]:
+        problems.append(f"{health['size']} players for {health['slots']} slots "
+                        f"— {health['size'] - health['slots']} too many")
+    if health["overseas"] > health["overseas_cap"]:
+        problems.append(f"{health['overseas']} overseas players, cap is "
+                        f"{health['overseas_cap']}")
+    if health["overflow"]:
+        band = (f"{health['overflow_tier']}-or-better"
+                if health["overflow_tier"] else "top-tier")
+        problems.append(f"{health['overflow']} more {band} player(s) than "
+                        f"{band} slots")
+    if settled:
+        if health["size"] < health["slots"]:
+            problems.append(f"{health['slots'] - health['size']} slot(s) unfilled")
+        for role, need in sorted(health["shortfall"].items()):
+            problems.append(f"{need}× {role} short of the minimum")
+    return problems
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1168,7 +1327,7 @@ def available(session, draft_id, tier=None):
     return query.order_by(DraftPlayer.rating.desc(), DraftPlayer.name).all()
 
 
-def find_available(session, draft_id, query_text):
+def _match_name(rows, query_text):
     """``(exact_match_or_None, candidates)`` for a typed player name.
 
     Exact wins outright; otherwise prefix matches beat substring matches. An
@@ -1176,6 +1335,43 @@ def find_available(session, draft_id, query_text):
     guessing "Kohli" wrong costs a team its pick and cannot be taken back
     without an admin.
     """
+    text = (query_text or "").strip().lower()
+    if not text:
+        return None, []
+    exact = [p for p in rows if (p.name or "").lower() == text]
+    if len(exact) == 1:
+        return exact[0], []
+    prefix = [p for p in rows if (p.name or "").lower().startswith(text)]
+    if len(prefix) == 1:
+        return prefix[0], []
+    if prefix:
+        return None, prefix
+    contains = [p for p in rows if text in (p.name or "").lower()]
+    if len(contains) == 1:
+        return contains[0], []
+    return None, contains
+
+
+def find_in_pool(session, draft_id, query_text, *, drafted=None):
+    """Name-match anywhere in the pool, not only among the available players.
+
+    ``drafted`` narrows it: ``True`` for players who are on some squad (what
+    ``/ddrop`` can act on), ``False`` for the free ones, ``None`` for both —
+    which is what ``/dadd`` wants, since "put him on Mumbai" is the same
+    instruction whether he is free or currently somebody else's.
+    """
+    query = (session.query(DraftPlayer)
+             .filter(DraftPlayer.draft_id == draft_id))
+    if drafted is True:
+        query = query.filter(DraftPlayer.picked_by_team_id.isnot(None))
+    elif drafted is False:
+        query = query.filter(DraftPlayer.picked_by_team_id.is_(None))
+    rows = query.order_by(DraftPlayer.rating.desc(), DraftPlayer.name).all()
+    return _match_name(rows, query_text)
+
+
+def find_available(session, draft_id, query_text):
+    """``(exact_match_or_None, candidates)`` among the players still free."""
     text = (query_text or "").strip().lower()
     if not text:
         return None, []
@@ -1421,6 +1617,19 @@ def undo_last(session, draft):
         player = (session.query(DraftPlayer)
                   .filter(DraftPlayer.id == last.draft_player_id).first())
         if player is not None:
+            # A pick row is never rewritten by a trade — "R3 P2 was Mumbai's
+            # pick of Tim David" stays true after Mumbai trades him away. So a
+            # player who has since moved is not this team's to hand back, and
+            # undoing here would take him off whoever holds him now.
+            if (player.picked_by_team_id is not None
+                    and player.picked_by_team_id != last.team_id):
+                holder = (session.query(DraftTeam)
+                          .filter(DraftTeam.id == player.picked_by_team_id).first())
+                raise DraftError(
+                    f"{player.name} has been traded to "
+                    f"{holder.name if holder else 'another team'} since that "
+                    f"pick. Reverse the trade first — undoing now would take "
+                    f"him off a squad that did not make this pick.")
             player.picked_by_team_id = None
             player.picked_at = None
     last.draft_player_id = None
@@ -1535,13 +1744,105 @@ def player_detail(player, draft=None):
     return " · ".join(b for b in bits if b)
 
 
+WARN = "⚠️"
+PENDING = "⏳"
+OK_MARK = "✅"
+
+
+def _counter(have, need, mark=""):
+    """``"4/5 ⚠️"`` — a count against its rule, with whatever mark it earned.
+
+    ``need`` of 0 means there is no rule for this row, so it prints as a bare
+    count rather than as ``3/0``, which reads like a failure.
+    """
+    body = f"{have}/{need}" if need else f"{have}"
+    return f"<code>{body}</code>" + (f" {mark}" if mark else "")
+
+
+def tier_mark(health, tier):
+    """``"⚠️"`` for the one tier the ladder actually overflows at, else ``""``.
+
+    A single tier over its own slot count is **not** a fault: a spare Platinum
+    slot houses a second Gold player quite legally, which is the ceiling rule
+    working as specified. Only the prefix the fit check fails at is marked, so
+    the mark never accuses a squad of something the draft allows.
+    """
+    return (WARN if health["overflow"] and tier == health["overflow_tier"]
+            else "")
+
+
+def render_squad_rules(draft, health, *, settled=True, tiers=True):
+    """The squad-rules block: every rule this squad is measured by, and a mark
+    on each one it is not meeting.
+
+    An owner asking "is my squad legal" should not have to work it out from a
+    list of names. Every rule gets a line whether or not it is currently a
+    problem — a rule you only see once you break it is one you cannot plan
+    around, and "🎯 Bowler 3/4" three picks out is worth far more than the same
+    line once there is nothing left to do about it.
+
+    **Two marks, because there are two different things to say.** ``⚠️`` means
+    broken: a rule no further pick can satisfy. ``⏳`` means short but still
+    reachable — the ordinary state of every squad mid-draft, and not a fault.
+    Collapsing them into one symbol would either cry wolf at every team in
+    round one or say nothing at all until it was too late to act. A row carries
+    ``⚠️`` if and only if :func:`squad_problems` is counting it.
+
+    ``tiers=False`` drops the per-tier counts for a caller that has already
+    listed them — ``render_squad`` prints them above each tier's players, which
+    is a better place for them than a second copy three lines later. The
+    overflow note stays either way, because that one is a rule rather than a
+    count.
+    """
+    problems = squad_problems(health, settled=settled)
+    out = [RULE]
+    out.append(f"{WARN} <b>Squad rules: {len(problems)} broken</b>"
+               if problems else f"{OK_MARK} <b>Squad rules: all clear</b>")
+
+    size, slots_total = health["size"], health["slots"]
+    size_mark = (WARN if size > slots_total
+                 else (WARN if settled and size < slots_total
+                       else (PENDING if size < slots_total else "")))
+    out.append(f"👥 Squad {_counter(size, slots_total, size_mark)}")
+
+    for role, have, need in health["roles"]:
+        short = role in health["shortfall"]
+        mark = (WARN if short and settled else (PENDING if short else ""))
+        out.append(f"{ROLE_EMOJI.get(role, '•')} {escape(role)} "
+                   f"{_counter(have, need, mark)}")
+    if health["counts_all_rounders"]:
+        out.append("   <i>all-rounders count toward the bowler minimum</i>")
+
+    over_mark = WARN if health["overseas"] > health["overseas_cap"] else ""
+    out.append(f"{home_flag(draft)} Home "
+               f"<code>{size - health['overseas']}</code> · "
+               f"{OVERSEAS_FLAG} Overseas "
+               f"{_counter(health['overseas'], health['overseas_cap'], over_mark)}")
+
+    # A single tier over its own slot count is NOT a fault: a spare
+    # Platinum slot houses a second Gold player quite legally. Only the
+    # prefix the ladder actually overflows at is marked.
+    if tiers:
+        for tier, have, slots_here in health["tiers"]:
+            out.append(f"{tier_badge(tier)} "
+                       f"{_counter(have, slots_here, tier_mark(health, tier))}")
+    if health["overflow"]:
+        band = health["overflow_tier"] or "top-tier"
+        out.append(f"   {WARN} <i>a {escape(band)} slot takes {escape(band)} or "
+                   f"below, so {escape(band)}-or-better players cannot "
+                   f"outnumber {escape(band)}-or-better slots</i>")
+    return out
+
+
 def render_squad(session, draft, team):
-    """A team's squad, grouped by tier, with slot progress per tier."""
+    """A team's squad, grouped by tier, then every squad rule it is judged by."""
     rows = squad_sorted(session, draft, team.id)
+    health = squad_health(session, draft, team.id, players=rows)
     slots = tier_slots(session, draft.id, team.id)
-    total_slots = sum(slots.values())
+    settled = draft.status in (STATUS_COMPLETED, STATUS_CANCELLED)
+
     out = [f"🏏 <b>{escape((team.name or '').upper())}</b>",
-           f"Squad {len(rows)}/{total_slots}"]
+           f"Squad {len(rows)}/{health['slots']}"]
     if team.owner_name:
         out.append(f"Owner: {escape(team.owner_name)}")
     out.append(RULE)
@@ -1549,11 +1850,13 @@ def render_squad(session, draft, team):
     by_tier = {}
     for player in rows:
         by_tier.setdefault(player.tier, []).append(player)
-    for tier in tier_order(draft):
+    for tier in _tiers_in_order(draft, slots.keys(), by_tier.keys()):
         if tier not in slots and tier not in by_tier:
             continue
         picked = by_tier.get(tier, [])
-        out.append(f"{tier_badge(tier)} — {len(picked)}/{slots.get(tier, 0)}")
+        mark = tier_mark(health, tier)
+        out.append(f"{tier_badge(tier)} — {len(picked)}/{slots.get(tier, 0)}"
+                   + (f" {mark}" if mark else ""))
         for player in picked:
             flag = player_flag(player, draft)
             out.append(f"   • {escape(player.name or '')} "
@@ -1562,14 +1865,12 @@ def render_squad(session, draft, team):
         if not picked:
             out.append("   <i>none yet</i>")
 
-    out.append(RULE)
-    overseas = overseas_count(session, team.id)
-    cap = draft.max_overseas if draft.max_overseas is not None else 11
-    out.append(f"{home_flag(draft)} {len(rows) - overseas} home · "
-               f"{OVERSEAS_FLAG} {overseas}/{cap} overseas")
-    gap = role_gap(session, draft, team.id)
+    out += render_squad_rules(draft, health, settled=settled, tiers=False)
+    # The old one-line summary, kept because it is the sentence an owner
+    # mid-draft actually acts on: it names the roles to go and pick.
+    gap = health["shortfall"]
     if gap:
-        out.append("⚠️ Still needs " +
+        out.append(f"{WARN if settled else PENDING} Still needs " +
                    ", ".join(f"{n}× {escape(r)}" for r, n in sorted(gap.items())))
     return "\n".join(out)
 
@@ -1950,6 +2251,17 @@ def _ensure_default_mode(session):
     session.add(mode)
     session.flush()
     return mode
+
+
+def challenge_details_json(player):
+    """The ``details_json`` blob a ChallengePlayer carries, for one pool player.
+
+    Public because ``services/draft_trade_service.py`` has to write the same
+    blob when an admin's ``/dadd`` puts a player into an already-published
+    league — a second copy of this key set is exactly the drift the test that
+    runs a published row back through ``cp_to_player_dict`` exists to catch.
+    """
+    return _details_json(player)
 
 
 def _details_json(player):

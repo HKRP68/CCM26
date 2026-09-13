@@ -346,7 +346,10 @@ async def _tick_one(context, session, draft, now):
     if draft.status == ds.STATUS_COMPLETED:
         await _send(context.bot, draft.chat_id,
                     "🏁 <b>Draft complete.</b> Every slot is filled — "
-                    "an admin can now publish the squads with /dpublish.")
+                    "an admin can now publish the squads with /dpublish.\n"
+                    "The <b>trade window is open</b>: swap players with "
+                    "another franchise using <code>/dtrade &lt;team&gt;</code>"
+                    " — any player for any player, no rating rule.")
 
 
 # ── Registration ─────────────────────────────────────────────────────

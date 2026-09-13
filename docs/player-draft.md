@@ -76,10 +76,19 @@ a team logo.
 | `/dsearch [filters]` | anyone | Browse the pool — 🟢 available / 🔴 taken, with filter buttons ([yours alone](#whose-buttons-are-whose)) |
 | `/dsquad [team]` | anyone | A squad by tier, with slot progress and the overseas count |
 | `/dqueue <player>` | owner + co-owners | Your wishlist. If your clock runs out the bot picks from it first |
+| `/dtrade <team>` | owner + co-owners | **After the draft:** swap players with another franchise — [any player for any player](#trading-after-the-draft--dtrade) |
+| `/dtrades` | anyone | Every squad change since the draft — trades and admin edits |
 
 Admin: `/dadmin` (the reference card), `/dnew`, `/dbind`, `/dstart`, `/dpause`,
 `/dresume`, `/dtimer`, `/dhome`, `/dpin`, `/dco`, `/dskip`, `/dundo`,
-`/dcancel`, `/dpublish`.
+`/dcancel`, `/dpublish`, `/dtradelock`, and
+[`/dadd` / `/ddrop`](#editing-a-squad-by-hand--dadd-and-ddrop).
+
+`/dtrade` and `/dtrades` are **not** in the group slash menu: that list sits
+exactly at Telegram's 100-command ceiling and publishing them would push two
+existing player commands off the end. The draft group is told about them where
+it matters instead — the "draft complete" announcement, the footer of
+`/dsquad`, `/dadmin`, and the completed-trade card's own pointer to `/dtrades`.
 
 Owner only: `/dautopick` — see *Granting a pick* below.
 
@@ -88,6 +97,95 @@ Owner only: `/dautopick` — see *Granting a pick* below.
 `/dpublish` (or the button on the draft page) writes the squads into a Challenge
 League. Publishing again re-syncs the same league rather than creating a second
 one, so a correction made with `/dundo` can just be republished.
+
+### Trading after the draft — `/dtrade`
+
+The last slot is filled and somebody is looking at three keepers and no death
+bowler. `/dtrade` is how they fix it, and the point of it is a rule it **does
+not** have.
+
+```text
+/dtrade Chennai      open a trade with that franchise
+/dtrades             every trade that has been done
+/dtradecancel        call off your team's open offer
+/dtradelock on|off   admin: close or reopen the window
+```
+
+The flow is `/trade`'s — one message in the group, each side ticks its players
+in turn, both owners confirm — and the buttons work the same way. What is
+different is everything underneath.
+
+**There is no rating rule.** `/trade` insists the two cards have the *exact
+same OVR*, because it moves cards between two collections and neither captain
+may gain value. A franchise is not a collection: the whole reason to trade is
+that one squad has a spare keeper and the other has a spare quick, and "the
+numbers must match" makes that trade impossible. A 97 for a 74 is a legal
+`/dtrade`.
+
+What replaces the rating rule is **daylight**, not a cheaper restriction. The
+offer card prints both sides' OVR totals and names the side the deal favours
+before either owner taps:
+
+```text
+4-for-4 · 97 OVR ⇄ 74 OVR
+📈 Chennai Kings gains +23 OVR — heavily in their favour.
+   There is no rating rule here: if both owners tap, it stands.
+```
+
+…and the whole thing lands in `/dtrades` permanently. A lopsided trade is
+allowed; a *quiet* one is not.
+
+**What still holds.** "Any player for any player" is only a good rule if the
+squad it produces is still a squad the draft could have built, so every rule the
+draft enforced on every pick is re-checked against the squad the trade *would*
+produce — on both sides, before anybody moves:
+
+* **The counts match.** A squad's size is its slot count in the order sheet, so
+  a trade is N-for-N. Two-for-two and three-for-three are ordinary trades — one
+  thing `/trade` can never do — but two-for-one would leave a franchise a player
+  short of a legal XI.
+* **The tier quota holds.** A slot takes its own tier or below, which is the
+  rule that caps a team's Platinum count at its number of Platinum slots; a
+  trade must not be the way around it. The check is *Hall's condition on the
+  ladder*: walking from the top, the best **k** tiers of players must fit in the
+  best **k** tiers of slots. That is also what keeps it fair in the other
+  direction — a Platinum slot spent on a Silver player is still a Platinum slot,
+  so the team that picked below its ceiling can trade back up into it.
+* **The overseas cap holds**, and **role minimums hold**.
+* **Never worse than it already was.** A squad that is already short — a slot the
+  clock passed, a minimum an admin set late — may still trade; it just may not
+  make the shortfall deeper. Every check compares the after against the before
+  rather than against perfection, because an absolute check would freeze exactly
+  the franchises that most need the trade window out of it.
+
+**Who may trade:** the Owner Tag ID and co-owners, the same people `/pick`
+lets act for a team. One open offer per team at a time, and an offer expires
+after 30 minutes.
+
+**An offer is a database row, not a dict in memory.** `/trade` keeps its
+in-flight state in `context.bot_data` and loses every open trade to a redeploy.
+A draft's trade window is open for days on a host that restarts often, so a
+half-built `/dtrade` is a `DraftTrade` row: the buttons still work afterwards,
+and a co-owner can pick up where the owner left off. It is the same call the
+[pick clock](#the-clock) makes.
+
+**A published draft follows the trade.** If `/dpublish` has already run, the
+matching `ChallengePlayer` rows move between `ChallengeTeam`s as part of the
+swap — otherwise `/dsquad` and the squads people actually play with would
+silently disagree. Republishing could not fix that on its own: `publish_to_league`
+adds and updates, so the player would arrive at the new team and *stay at the
+old one as well*. Admins close the window with `/dtradelock on` before a match
+day, so a team sheet cannot change under a live fixture.
+
+**Pick rows are never rewritten**, by a trade or by an admin edit. *"R1 P3 was
+Mumbai's Platinum slot, and Mumbai spent it on Bumrah"* stays true however many
+times Bumrah changes hands afterwards —
+and it is also where `tier_slots` reads a team's quota from, which has to keep
+describing the order sheet rather than the current squad. The consequence is
+that `/dundo` refuses to reach *through* a trade: undoing a pick whose player
+has since moved would take him off a squad that never made it, so it says so and
+names the team holding him. It is also why `/dtrades` exists: with the pick rows
+frozen, that log is the only record of what happened to a squad after the draft.
 
 ### Browsing the pool — `/dsearch`
 
@@ -181,6 +279,85 @@ finished squad instead would produce a complaint nobody can act on. An
 all-rounder counts towards a bowler minimum, because the XI rules already treat
 them that way and refusing here would be a rule the squad sheet never stated.
 
+### What `/dsquad` says about the rules
+
+Every rule above gets a line on the squad readout, whether or not the squad is
+currently breaking it — a rule you only see once you have broken it is one you
+cannot plan around, and `🎯 Bowler 3/4` three picks out is worth far more than
+the same line once there is nothing left to do about it.
+
+```text
+⚠️ Squad rules: 2 broken
+👥 Squad 3/3
+🏏 Batsman 2
+🎯 Bowler 1/2 ⚠️
+⚡ All-rounder 0
+🧤 Wicket Keeper 0/1 ⚠️
+   all-rounders count toward the bowler minimum
+🇮🇳 Home 2 · ✈️ Overseas 1/1
+```
+
+**Two marks, because there are two different things to say.** `⚠️` means
+*broken*: a rule no further pick can satisfy. `⏳` means *short but still
+reachable* — the ordinary state of every squad in round one, and not a fault.
+One symbol for both would either cry wolf at every team all evening or say
+nothing at all until it was too late to act.
+
+A row with no minimum is a **bare count**, not `2/0`, which reads like a
+failure when it is not a rule at all. A tier over its own slot count is **not**
+marked on its own: a spare Platinum slot houses a second Gold player quite
+legally, so only the prefix the ladder actually overflows at gets the mark,
+with the reason spelled out underneath it.
+
+The count in the header is the length of `squad_problems`, and a row carries
+`⚠️` if and only if that list contains it — both come from one
+`draft_service.squad_health`, which is also what `/dtrade` checks a trade
+against and what `/dadd` prints back. A rule cannot end up marked on the
+readout and missing from a refusal.
+
+### Editing a squad by hand — `/dadd` and `/ddrop`
+
+```text
+/dadd Mumbai | Virat Kohli    put a player on a squad (moves him if
+                              another team has him)
+/ddrop Virat Kohli            send a player back to the pool
+```
+
+Admin only, and they work at any point — a mis-typed name in round two is the
+commonest reason to need them, and waiting for the draft to finish is not a fix.
+
+**They enforce nothing.** Every other route into a squad is gated: `/pick` obeys
+the tier ceiling, the overseas cap and the role minimums; `/dtrade` re-checks
+all three against the squad the trade would produce. These two obey none of it,
+on purpose — an admin untangling a mess has to be able to pass *through* an
+illegal squad to reach a legal one (drop the extra keeper, then add the quick),
+and a gate that refuses the first half makes the tool useless at the one moment
+it is needed.
+
+What stands in for the gate is the report. Each edit:
+
+* is **announced in the draft group** — a squad nobody remembers agreeing to is
+  exactly how a league ends up disputed, so the room seeing it is the brake;
+* is written to **`DraftSquadEdit`** and shown in `/dtrades`, with the player,
+  both teams and the admin who typed it;
+* prints the **full rule state of every squad it touched**, so the one person
+  who can undo it sees what they have just broken — or fixed — without running
+  `/dsquad` twice.
+
+`/dadd` is one verb for *add* and *move* because from the admin's side they are
+the same instruction — "this player belongs to that team now" — and making them
+choose a command based on a state they may not have checked is a way to get the
+wrong one. `/ddrop` takes no team argument: a player is on exactly one squad, so
+naming it would only be a second thing to get wrong.
+
+A published league keeps up with both. `sync_league` reconciles all three
+directions — moved, added, and dropped — so a player signed after `/dpublish`
+gets a `ChallengePlayer` row (carrying the same `details_json` contract
+publishing writes, not a second copy that can drift from it) and a released one
+loses theirs. A league player whose name is **not in this draft's pool** is left
+strictly alone: an admin may have added them by hand on the Challenge Data page,
+and this is a reconcile against the draft, not a claim to own every row.
+
 **Only the Owner Tag ID and co-owners may pick**, and only for the team actually
 on the clock. Bot admins are deliberately *not* included: an admin who needs to
 unstick a draft uses `/dskip`, which is recorded as an auto-pick — because that
@@ -200,9 +377,17 @@ gets disputed.
 
 ### Whose buttons are whose
 
-**Every draft button belongs to the person who ran the command that posted it.**
-Someone else pressing it is told so, and told what to send instead — "🎯 That
-board belongs to whoever sent /dboard. Send /dboard for your own copy."
+**Every `dr_` draft button belongs to the person who ran the command that posted
+it.** Someone else pressing it is told so, and told what to send instead — "🎯
+That board belongs to whoever sent /dboard. Send /dboard for your own copy."
+
+(`/dtrade`'s `dt_` buttons are the deliberate exception, and the opposite case:
+a trade the second franchise cannot touch is not a trade. They are listed as
+shared in `services.button_access`, and every press is authorised in
+`handlers/draft_trade.py` against the team the presser owns **and** the step the
+offer is actually on — the stronger check anyway, since it survives a restart
+and lets a co-owner take over mid-offer. `/trade`'s `t1p_`/`t2p_` buttons work
+the same way for the same reason.)
 
 This is not about secrecy: everything the buttons reach is public draft state,
 and the commands are free. It is about a busy room, and the three keyboards earn
@@ -232,7 +417,8 @@ nothing already on screen is bricked.
 
 None of it replaces authorisation. `dr_pick_` is still re-checked against the
 team on the clock on every press, so owning the message is necessary, not
-sufficient — the rules above about who may pick are unchanged.
+sufficient — the rules above about who may pick are unchanged, and the same is
+true of every `dt_` press.
 
 ---
 
@@ -297,6 +483,8 @@ DraftTeam        a franchise: name, logo, owner_tg_id, co-owners, pick queue
 DraftPlayer      one pool entry, scoped to the draft. picked_by_team_id NULL
                  = available. source_player_id links to a real card, for the image
 DraftPick        one slot in the order AND the record of the pick that filled it
+DraftTrade       one /dtrade: the half-built offer, then the record of the swap
+DraftSquadEdit   one admin override: a player added, moved or sent to the pool
 ```
 
 The pool is its own table rather than a view over `players` because the uploaded
@@ -308,10 +496,27 @@ The order sheet and the result log are the same rows on purpose: *"R1 P3 is
 Mumbai's Platinum slot"* and *"R1 P3 was Bumrah"* are the same fact at two points
 in time, and splitting them would let the two drift apart.
 
-The draft tables are new tables, so `create_all` builds them. The two columns
-that arrived later — `player_drafts.pinned_message_id` and `.pin_picks`, for the
-auto-pinned latest pick — do have `_try_add` lines in `database.py`, because an
-existing database already has the table.
+`DraftTrade` is where the whole in-flight offer lives — which side has ticked
+which players, who has confirmed — rather than in process memory, so a redeploy
+mid-offer costs nothing. The two id lists are kept after completion, which is
+what makes the table the `/dtrades` log: since pick rows are never rewritten,
+this is the only place a squad change *after* the draft is on the record.
+
+`DraftSquadEdit` is a separate table from `DraftTrade` because it is a
+different fact. A trade is two consenting franchises and needs an offer, two
+selections and two confirmations; an admin edit is one row with no state machine
+at all. Sharing one table would mean a `kind` column plus three columns that
+mean different things depending on it. `from_team_id` and `to_team_id` are NULL
+for the pool, which is what makes the three actions one shape: NULL → team is an
+add, team → NULL a release, team → team a move.
+
+The draft tables are new tables, so `create_all` builds them. The columns that
+arrived later — `player_drafts.pinned_message_id` and `.pin_picks` for the
+auto-pinned latest pick, and `.trades_open` for the trade window — do have
+`_try_add` lines in `database.py`, because an existing database already has the
+table. `trades_open` is also backfilled to `TRUE`, because it is non-nullable in
+the model and a `NULL` reads back falsy — which would quietly close the window
+on every draft that finished before the column existed.
 
 ### What publishing writes
 
@@ -342,14 +547,17 @@ same file the site let them download, and `requirements.txt` gains nothing.
 | File | Role |
 | --- | --- |
 | `services/draft_service.py` | The pool, the order, the ceiling rule, the clock, validation, auto-pick, the renderers, and publishing |
+| `services/draft_trade_service.py` | `/dtrade`: the offer, the swap, `/dadd` and `/ddrop`, and the league re-sync |
 | `services/draft_scheduler.py` | The restart-safe pick clock, and the announcements it and `/pick` both use |
 | `services/xlsx_reader.py` | Stdlib `.xlsx` reader |
 | `handlers/draft.py` | `/pick` and every other draft command, plus the `dr_` callbacks |
-| `models.py` | `PlayerDraft`, `DraftTeam`, `DraftPlayer`, `DraftPick` |
+| `handlers/draft_trade.py` | `/dtrade`, `/dtrades`, `/dtradecancel`, `/dtradelock`, and the `dt_` callbacks |
+| `models.py` | `PlayerDraft`, `DraftTeam`, `DraftPlayer`, `DraftPick`, `DraftTrade`, `DraftSquadEdit` |
 | `admin.py` | `/drafts` and `/drafts/<id>` |
 | `templates/admin_drafts.html`, `templates/admin_draft_detail.html` | The two admin pages |
 | `migrate_draft_home_country.py` | One-off sweep: re-flags every existing pool's home/overseas players from their country |
-| `tests/test_player_draft.py` | 140 tests over importing, the home country, the ceiling, permissions, the caps, picking, granting, searching, pinning, the clock, undo, publishing and rendering |
+| `tests/test_player_draft.py` | 168 tests over importing, the home country, the ceiling, permissions, the caps, picking, granting, searching, pinning, the clock, undo, publishing, the squad-rules readout, `/dadd` / `/ddrop`, and rendering |
+| `tests/test_draft_trade.py` | 83 tests over the trade window, the missing rating rule, the squad rules that replace it, the tier fit, permissions, restart-safety, the admin overrides, the league re-sync and the commands |
 
 ---
 
@@ -357,7 +565,11 @@ same file the site let them download, and `requirements.txt` gains nothing.
 
 * **A snake-order generator** — `/dsnake 4` would build the whole order sheet from
   the team list instead of a hundred hand-typed rows.
-* **Pick trading** between teams mid-draft.
+* **Pick trading** between teams *mid-draft*. `/dtrade` moves players once the
+  draft is over; trading the slots themselves, while the clock is running, is a
+  different feature — a pending `DraftPick` would have to change hands, and the
+  reachability checks that make role minimums enforceable are written against a
+  running order that does not move.
 * **Auction mode** — purse, bids, RTM cards. The pool and team tables would carry
   it; the bidding loop is the new part.
 * **Icon and gender quotas.** `icon_eligible` and `gender` are imported and shown

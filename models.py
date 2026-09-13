@@ -2934,6 +2934,12 @@ class PlayerDraft(Base):
     # slots to still satisfy the minimums.
     role_minimums_json = Column(Text, nullable=True)
 
+    # ── The trade window ───────────────────────────────────────────────
+    # Whether owners may swap drafted players with /dtrade once the draft is
+    # finished. On by default; an admin closes the window with /dtradelock
+    # before a fixture so squads can't change under a live match.
+    trades_open = Column(Boolean, default=True, nullable=False)
+
     # ── Publication ────────────────────────────────────────────────────
     # The Challenge League this draft was published into. SET NULL so deleting
     # the league leaves the draft's own record of what happened intact.
@@ -2953,6 +2959,10 @@ class PlayerDraft(Base):
     picks = relationship("DraftPick", back_populates="draft",
                          cascade="all, delete-orphan",
                          foreign_keys="DraftPick.draft_id")
+    trades = relationship("DraftTrade", back_populates="draft",
+                          cascade="all, delete-orphan")
+    squad_edits = relationship("DraftSquadEdit", back_populates="draft",
+                               cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_player_draft_chat_unique", "chat_id", unique=True),
@@ -3087,3 +3097,110 @@ class DraftPick(Base):
         Index("ix_draft_pick_unique", "draft_id", "round_no", "pick_no", unique=True),
         Index("ix_draft_pick_order_unique", "draft_id", "overall_no", unique=True),
     )
+
+
+class DraftTrade(Base):
+    """A ``/dtrade`` between two franchises: the offer, and then the record of it.
+
+    **The whole offer lives here, not in process memory.** ``/trade`` keeps its
+    in-flight state in ``context.bot_data`` and loses every open trade to a
+    redeploy; a draft group's trade window is open for days across a host that
+    restarts often, so the half-built offer — who is trading with whom, which
+    players each side has ticked, who has confirmed — is a row that survives it.
+    The buttons carry only this row's id, so a message pressed after a restart
+    picks up exactly where it was.
+
+    ``players_a_json`` / ``players_b_json`` are JSON lists of ``DraftPlayer``
+    ids: the players ``team_a`` sends to ``team_b`` and vice versa. They are
+    kept after completion, which is what makes this table the trade log
+    ``/dtrades`` prints — the pick rows are deliberately never rewritten, so
+    this is the only place a squad change after the draft is recorded.
+    """
+    __tablename__ = "draft_trades"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    draft_id = Column(Integer, ForeignKey("player_drafts.id", ondelete="CASCADE"),
+                      nullable=False, index=True)
+    # The team that opened the trade, and the team it was opened with.
+    team_a_id = Column(Integer, ForeignKey("draft_teams.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    team_b_id = Column(Integer, ForeignKey("draft_teams.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    players_a_json = Column(Text, nullable=True)
+    players_b_json = Column(Text, nullable=True)
+    # building_a | building_b | offered | completed | cancelled | expired
+    status = Column(String(20), default="building_a", nullable=False, index=True)
+    # Telegram ids, so a co-owner's confirmation is recorded as theirs rather
+    # than as the owner's. NULL means that side has not confirmed yet.
+    confirmed_a_by = Column(BigInteger, nullable=True)
+    confirmed_b_by = Column(BigInteger, nullable=True)
+    opened_by_tg_id = Column(BigInteger, nullable=True)
+    closed_by_tg_id = Column(BigInteger, nullable=True)
+    chat_id = Column(BigInteger, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    draft = relationship("PlayerDraft", back_populates="trades")
+    team_a = relationship("DraftTeam", foreign_keys=[team_a_id])
+    team_b = relationship("DraftTeam", foreign_keys=[team_b_id])
+
+    __table_args__ = (
+        Index("ix_draft_trade_live", "draft_id", "status"),
+    )
+
+
+class DraftSquadEdit(Base):
+    """One admin override: a player put on a squad, moved, or sent to the pool.
+
+    ``/dadd`` and ``/ddrop`` bypass every squad rule on purpose — an admin
+    fixing a mess has to be able to pass *through* an illegal squad to get to a
+    legal one (drop first, add second), and a rule that refuses the first half
+    of that makes the tool useless. What replaces the gate is the record: the
+    move is announced in the draft group and kept here, so a squad nobody
+    remembers agreeing to can always be traced to the admin who typed it.
+
+    A separate table from ``DraftTrade`` because it is a different fact. A
+    trade is two consenting franchises and needs an offer, two selections and
+    two confirmations; this is one row with no state machine at all. Sharing
+    one table would mean a ``kind`` column plus three columns that mean
+    different things depending on it.
+
+    ``from_team_id`` and ``to_team_id`` are NULL for the pool, which is what
+    makes the three actions one shape: NULL → team is an add, team → NULL is a
+    release, team → team is a move.
+    """
+    __tablename__ = "draft_squad_edits"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    draft_id = Column(Integer, ForeignKey("player_drafts.id", ondelete="CASCADE"),
+                      nullable=False, index=True)
+    draft_player_id = Column(Integer, ForeignKey("draft_players.id",
+                                                 ondelete="SET NULL"),
+                             nullable=True, index=True)
+    # Kept alongside the id so the log still reads after a pool row is deleted.
+    player_name = Column(String(150), nullable=False)
+    from_team_id = Column(Integer, ForeignKey("draft_teams.id", ondelete="SET NULL"),
+                          nullable=True)
+    to_team_id = Column(Integer, ForeignKey("draft_teams.id", ondelete="SET NULL"),
+                        nullable=True)
+    from_team_name = Column(String(120), nullable=True)
+    to_team_name = Column(String(120), nullable=True)
+    by_tg_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    draft = relationship("PlayerDraft", back_populates="squad_edits")
+
+    __table_args__ = (
+        Index("ix_draft_squad_edit_draft", "draft_id", "created_at"),
+    )
+
+    @property
+    def action(self):
+        """``"added"`` / ``"released"`` / ``"moved"``, from the two team ids."""
+        if self.from_team_id is None and self.to_team_id is not None:
+            return "added"
+        if self.to_team_id is None and self.from_team_id is not None:
+            return "released"
+        return "moved"

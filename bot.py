@@ -407,6 +407,9 @@ ADMIN_MENU_COMMANDS = (
     ("dskip", "Admin: resolve the pick on the clock now"),
     ("dautopick", "Owner: grant a random pick of the slot's tier"),
     ("dundo", "Admin: roll the last draft pick back"),
+    ("dtradelock", "Admin: close or reopen the draft trade window"),
+    ("dadd", "Admin: put a player on a draft squad"),
+    ("ddrop", "Admin: send a drafted player back to the pool"),
     ("dpublish", "Admin: publish drafted squads as a Challenge League"),
     ("dcancel", "Admin: cancel the draft"),
 )
@@ -485,6 +488,13 @@ BOT_MENU_COMMANDS = (
     ("dsquad", "Tournament Draft: a team's drafted squad"),
     ("dqueue", "Tournament Draft: your auto-pick wishlist"),
     ("dsearch", "Tournament Draft: browse the pool — who's still available"),
+    # /dtrade and /dtrades are NOT here. The group menu is exactly at
+    # Telegram's 100-command ceiling, and _clamped drops the tail rather than
+    # letting setMyCommands reject the whole call — so publishing them would
+    # cost two existing player commands their menu entry. They are group-only
+    # commands anyway, and the draft group is told about them where it matters:
+    # the "draft complete" announcement, the footer of /dsquad, /dadmin, and
+    # the completed-trade card's own pointer to /dtrades.
     ("ciplbot", "Practice a league match against the bot (unranked)"),
     ("change", "Change your XI/batting order during match setup"),
     ("botstatus", "Bot ping, uptime & status"),
@@ -932,6 +942,7 @@ async def start_handler(update, context):
         "/lptable /lptfixtures /lptteams /lptstats - Tournament table, schedule, field, leaders\n"
         "/pick <player> - Tournament Draft: make your pick when you're on the clock\n"
         "/dboard /dsquad /dqueue - Draft board, your squad, your auto-pick wishlist\n"
+        "/dtrade /dtrades - Trade players with another franchise once the draft is done\n"
         "/challengeIPL /cipl - Reply to a user to start an IPL challenge\n"
         "/challengeBBL /cbbl - Reply to a user to start a BBL challenge\n"
         "/challengeINT /cint - Reply to a user to start an international challenge\n"
@@ -1785,7 +1796,7 @@ def main():
             dadmin_handler, dnew_handler, dbind_handler, dtimer_handler,
             dco_handler, dstart_handler, dpause_handler, dcancel_handler,
             dskip_handler, dautopick_handler, dundo_handler, dpublish_handler,
-            dhome_handler,
+            dhome_handler, dadd_handler, ddrop_handler,
         )
         # Not "/p": that is already /purse, registered above, and PTB runs
         # the first handler that matches — the alias would be dead.
@@ -1817,6 +1828,33 @@ def main():
         app.add_handler(CommandHandler(["dautopick", "dauto"], dautopick_handler))
         app.add_handler(CommandHandler("dundo", dundo_handler))
         app.add_handler(CommandHandler("dpublish", dpublish_handler))
+        # The admin's hands on a squad. These enforce no squad rule at all —
+        # an admin untangling a mess has to be able to pass through an illegal
+        # squad to reach a legal one — so instead each one announces itself in
+        # the draft group, is recorded, and reports the rule state of every
+        # squad it touched. handlers/draft.py has the reasoning.
+        app.add_handler(CommandHandler(["dadd", "dsign"], dadd_handler))
+        app.add_handler(CommandHandler(["ddrop", "drelease"], ddrop_handler))
+
+        # /dtrade — the post-draft trade window. Shaped like /trade, but with
+        # no same-OVR rule: any player for any player, package deals included,
+        # checked only against the squad rules the draft itself enforced. Its
+        # dt_ buttons are SHARED (services.button_access), not owner-locked
+        # like the dr_ ones — the second franchise has to be able to drive the
+        # same message, and handlers/draft_trade.py authorises every press
+        # against the team the presser owns and the step the offer is on.
+        from handlers.draft_trade import (
+            dtrade_handler, dtrades_handler, dtradecancel_handler,
+            dtradelock_handler, trade_button_callback as dtrade_button_callback,
+        )
+        app.add_handler(CommandHandler(["dtrade", "dswap"], dtrade_handler))
+        app.add_handler(CommandHandler(["dtrades", "dtradelog"],
+                                       dtrades_handler))
+        app.add_handler(CommandHandler(["dtradecancel", "dtradex"],
+                                       dtradecancel_handler))
+        app.add_handler(CommandHandler("dtradelock", dtradelock_handler))
+        app.add_handler(CallbackQueryHandler(dtrade_button_callback,
+                                             pattern=r"^dt_"))
 
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))
