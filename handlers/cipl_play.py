@@ -1299,6 +1299,26 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
                         "pick a scheduled opponent.")
                     return
                 draft["reserved_fixture_id"] = _fx.id
+                # The fixture is the authority on its surface. Setup already
+                # announced this pitch, but re-read it from the row we actually
+                # reserved so the match can never be played on a pitch the
+                # fixture didn't fix (an admin edit between setup and the toss,
+                # or a second open fixture for the same pair).
+                if _lss.pitch_locked(_tour) and (_fx.pitch_type or "").strip():
+                    locked = _fx.pitch_type.strip()
+                    if locked != draft.get("pitch_type"):
+                        # Regenerate the conditions too — they are derived from
+                        # the surface, and a stale set would have the live match
+                        # playing one pitch while the weather models another.
+                        try:
+                            from services.pitch_report import build_pitch_report
+                            _, draft["conditions"] = build_pitch_report(locked)
+                        except Exception:
+                            logger.exception("Could not rebuild conditions for "
+                                             "the fixture's locked pitch")
+                            draft["conditions"] = {}
+                    draft["pitch_type"] = locked
+                    draft["pitch_locked"] = True
 
         bat_side = "host" if bat_is_host else "target"
         bowl_side = "target" if bat_is_host else "host"

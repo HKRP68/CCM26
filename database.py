@@ -616,6 +616,23 @@ def _migrate_add_columns():
     _try_add("tournament_matches", "slot1_label", "VARCHAR(60)")
     _try_add("tournament_matches", "slot2_label", "VARCHAR(60)")
 
+    # Tournament ownership, per-fixture venue and tournament-level overseas
+    # rules (the "Challenge League Tournament rules" feature). Every column is
+    # nullable or defaulted, so existing tournaments keep their old behaviour
+    # until an admin opts in.
+    _try_add("tournaments", "min_overseas", "INTEGER")
+    _try_add("tournaments", "max_overseas", "INTEGER")
+    _try_add("tournaments", "enforce_team_owner", "BOOLEAN DEFAULT FALSE")
+    _try_add("tournaments", "pitch_mode", "VARCHAR(20) DEFAULT 'host'")
+    _try_add("tournament_teams", "owner_tg_id", "BIGINT")
+    _try_add("tournament_teams", "owner_name", "VARCHAR(120)")
+    _try_add("tournament_teams", "home_pitch", "VARCHAR(20)")
+    _try_add("tournament_matches", "pitch_type", "VARCHAR(20)")
+    _try_add("tournament_matches", "home_team_id", "INTEGER")
+    _try_add("tournament_matches", "venue", "VARCHAR(120)")
+    # Public tournament-info command for a league (/iplfixtures & friends).
+    _try_add("challenge_leagues", "fixtures_command", "VARCHAR(60)")
+
     # Lets Play Tournaments: the ``kind`` discriminator on tournaments, and the
     # Telegram-id identity that makes a TournamentTeam a *user* rather than a
     # Challenge League team. Pre-existing rows keep NULL kind, which
@@ -1135,6 +1152,28 @@ def _migrate_add_columns():
         failures = _run_isolated(lp_tournament_index_sql)
         if not failures:
             _record_migration_signature("lp_tournament_indexes", sig)
+        for sql, e in failures:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"migration step skipped ({sql[:60]}…): {e}")
+
+    # ─────────────────────────────────────────────────────────────
+    # Tournament team ownership: the owner lookup runs on every tournament
+    # team-pick, so the column added above needs its index on existing
+    # databases too (the model's ``index=True`` only covers fresh installs).
+    # ─────────────────────────────────────────────────────────────
+    tournament_owner_index_sql = [
+        "CREATE INDEX IF NOT EXISTS ix_tournament_teams_owner_tg_id "
+        "ON tournament_teams (owner_tg_id)",
+        "CREATE INDEX IF NOT EXISTS ix_challenge_leagues_fixtures_command "
+        "ON challenge_leagues (fixtures_command)",
+    ]
+    done, sig = _migration_signature_matches("tournament_owner_indexes",
+                                             tournament_owner_index_sql)
+    if not done:
+        failures = _run_isolated(tournament_owner_index_sql)
+        if not failures:
+            _record_migration_signature("tournament_owner_indexes", sig)
         for sql, e in failures:
             import logging
             logging.getLogger(__name__).warning(

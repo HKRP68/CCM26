@@ -296,6 +296,159 @@ def participating_user_tg_ids(session, tournament_id):
     return {int(r.user_tg_id) for r in rows}
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Team ownership  —  "this franchise belongs to one person"
+# ──────────────────────────────────────────────────────────────────────
+
+def owner_enforced(tour):
+    """True when this tournament restricts each team to its owner."""
+    return bool(getattr(tour, "enforce_team_owner", False))
+
+
+def team_owners(session, tournament_id):
+    """``{team name: owner Telegram id}`` for every owned team in a tournament.
+
+    Teams with no owner are left out entirely, so ``name in owners`` doubles as
+    "is this team claimed by somebody".
+    """
+    rows = (session.query(TournamentTeam)
+            .filter_by(tournament_id=int(tournament_id))
+            .filter(TournamentTeam.owner_tg_id.isnot(None)).all())
+    return {(r.name or "").strip(): int(r.owner_tg_id)
+            for r in rows if (r.name or "").strip()}
+
+
+def owned_team_names(session, tournament_id, user_tg_id):
+    """The set of team names this Telegram user owns in the tournament."""
+    if not user_tg_id:
+        return set()
+    rows = (session.query(TournamentTeam)
+            .filter_by(tournament_id=int(tournament_id),
+                       owner_tg_id=int(user_tg_id)).all())
+    return {(r.name or "").strip() for r in rows if (r.name or "").strip()}
+
+
+def may_use_team(session, tour, team_name, user_tg_id):
+    """(allowed, message) — may ``user_tg_id`` pick ``team_name`` in ``tour``?
+
+    Unenforced tournaments, and teams nobody has claimed, are always allowed:
+    turning ownership on must never lock players out of the teams an admin
+    simply hasn't assigned yet.
+    """
+    if not tour or not owner_enforced(tour):
+        return True, None
+    name = (team_name or "").strip()
+    if not name:
+        return True, None
+    row = (session.query(TournamentTeam)
+           .filter_by(tournament_id=int(tour.id))
+           .filter(TournamentTeam.name == name).first())
+    if row is None or not row.owner_tg_id:
+        return True, None
+    if user_tg_id is not None and int(row.owner_tg_id) == int(user_tg_id):
+        return True, None
+    who = (row.owner_name or "").strip()
+    return False, (f"{name} belongs to {who or 'another owner'}. "
+                   "You can only play with your own team.")
+
+
+def set_team_owner(session, tournament_team_id, owner_tg_id, owner_name=None):
+    """Assign (or clear, with ``owner_tg_id`` None) a team's owner. Caller commits."""
+    row = session.query(TournamentTeam).get(int(tournament_team_id))
+    if row is None:
+        return None
+    if owner_tg_id in (None, "", 0):
+        row.owner_tg_id = None
+        row.owner_name = None
+    else:
+        row.owner_tg_id = int(owner_tg_id)
+        row.owner_name = (owner_name or "").strip()[:120] or row.owner_name
+    session.flush()
+    return row
+
+
+def draft_owner_for_team(session, league_id, team_name):
+    """``(owner_tg_id, owner_name)`` for a team, read from the draft that made it.
+
+    A Challenge League published from a Tournament Draft carries the franchise
+    owners in ``DraftTeam``; the league's own ``ChallengeTeam`` rows do not. When
+    a team is added to a tournament we follow the league back to its draft and
+    inherit the owner, so a draft tournament needs no re-typing of ids. Returns
+    ``(None, None)`` when the league did not come from a draft.
+    """
+    name = (team_name or "").strip()
+    if not league_id or not name:
+        return None, None
+    try:
+        from models import PlayerDraft, DraftTeam
+        draft = (session.query(PlayerDraft)
+                 .filter(PlayerDraft.league_id == int(league_id))
+                 .order_by(PlayerDraft.id.desc()).first())
+        if draft is None:
+            return None, None
+        dt = (session.query(DraftTeam)
+              .filter(DraftTeam.draft_id == draft.id,
+                      DraftTeam.name == name).first())
+        if dt is None or not dt.owner_tg_id:
+            return None, None
+        return int(dt.owner_tg_id), (dt.owner_name or None)
+    except Exception:
+        logger.exception("draft_owner_for_team failed for league %s", league_id)
+        return None, None
+
+
+def sync_owners_from_draft(session, tournament_id):
+    """Fill in missing team owners from the league's draft. Caller commits.
+
+    Returns the number of teams that gained an owner. Existing owners are never
+    overwritten — an admin's manual assignment outranks the draft.
+    """
+    tour = session.query(Tournament).get(int(tournament_id))
+    if not tour or not tour.league_id:
+        return 0
+    changed = 0
+    for tt in (session.query(TournamentTeam)
+               .filter_by(tournament_id=int(tournament_id)).all()):
+        if tt.owner_tg_id:
+            continue
+        tg_id, owner_name = draft_owner_for_team(session, tour.league_id, tt.name)
+        if tg_id:
+            tt.owner_tg_id = tg_id
+            tt.owner_name = (owner_name or "").strip()[:120] or None
+            changed += 1
+    if changed:
+        session.flush()
+    return changed
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Overseas-in-XI limits
+# ──────────────────────────────────────────────────────────────────────
+
+def overseas_limits(session, tour, league=None):
+    """``(min_overseas, max_overseas)`` in force for a tournament.
+
+    The tournament's own columns win when set; each falls back independently to
+    the league's rule, and then to 0 / 11 ("no cap"). ``None`` is the only value
+    that means "inherit" — an explicit 0 is a real limit.
+    """
+    lo = hi = None
+    if tour is not None:
+        lo = getattr(tour, "min_overseas", None)
+        hi = getattr(tour, "max_overseas", None)
+    if (lo is None or hi is None) and tour is not None and league is None and tour.league_id:
+        league = session.query(ChallengeLeague).get(int(tour.league_id))
+    if lo is None:
+        lo = getattr(league, "min_overseas", None)
+    if hi is None:
+        hi = getattr(league, "max_overseas", None)
+    lo = 0 if lo is None else max(0, min(11, int(lo)))
+    hi = 11 if hi is None else max(0, min(11, int(hi)))
+    if hi < lo:
+        hi = lo
+    return lo, hi
+
+
 def _find_open_fixture(session, tournament_id, team1_id, team2_id):
     """Earliest uncompleted scheduled fixture for an (unordered) pair, or None.
 

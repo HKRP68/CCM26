@@ -943,6 +943,8 @@ async def start_handler(update, context):
         "/pick <player> - Tournament Draft: make your pick when you're on the clock\n"
         "/dboard /dsquad /dqueue - Draft board, your squad, your auto-pick wishlist\n"
         "/dtrade /dtrades - Trade players with another franchise once the draft is done\n"
+        "/ctour - Challenge League Tournament hub: table, fixtures, teams\n"
+        "/cttable /ctfixtures /ctteams - Tournament table, schedule (done matches struck through), field\n"
         "/challengeIPL /cipl - Reply to a user to start an IPL challenge\n"
         "/challengeBBL /cbbl - Reply to a user to start a BBL challenge\n"
         "/challengeINT /cint - Reply to a user to start an international challenge\n"
@@ -1525,6 +1527,26 @@ def main():
         app.add_handler(CommandHandler("statstour", statstour_handler))
         app.add_handler(CommandHandler("tournamentstats", tournamentstats_handler))
         app.add_handler(CallbackQueryHandler(tournamentstats_callback, pattern=r"^tstat_"))
+
+        # ── Challenge League Tournament: the public follow-along views ──
+        # Read-only. Starting a match is still the league's own gated tournament
+        # command; these only show the table, the schedule and the field. The
+        # ``ctv_`` callback prefix is outside the ``cl_`` namespace the Challenge
+        # League match callbacks own.
+        from handlers.cl_tournament import (
+            ctour_handler, cttable_handler, ctfixtures_handler,
+            ctteams_handler, ct_view_callback,
+        )
+        # Deliberately absent from BOT_MENU_COMMANDS: both slash menus are at
+        # Telegram's 100-command-per-scope ceiling, and pushing one over silently
+        # truncates somebody else's command off the tail. They are advertised in
+        # /help, from the tournament hub's own buttons, and by whatever alias a
+        # league sets as its ``fixtures_command``.
+        app.add_handler(CommandHandler(["ctour", "ctournament"], ctour_handler))
+        app.add_handler(CommandHandler(["cttable", "ctpoints"], cttable_handler))
+        app.add_handler(CommandHandler(["ctfixtures", "ctfix"], ctfixtures_handler))
+        app.add_handler(CommandHandler("ctteams", ctteams_handler))
+        app.add_handler(CallbackQueryHandler(ct_view_callback, pattern=r"^ctv_"))
         app.add_handler(CommandHandler(["cmuleaderboard", "leaderboard", "lb", "top"], leaderboard_handler))
         app.add_handler(CommandHandler(["myprofile", "profile", "me"], myprofile_handler))
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))

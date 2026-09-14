@@ -389,6 +389,15 @@ def generate_knockout(session, tournament_id):
 
     tour.knockout_generated = True
     session.flush()
+    # Knockout matches get a locked surface too when the tournament uses one —
+    # a bracket match is still a fixture, and players are told where they play.
+    # Slots that are still TBD have no home team yet, so those fall back to a
+    # random surface, which is exactly what a neutral-venue final is.
+    try:
+        from services import league_schedule_service
+        league_schedule_service.assign_fixture_venues(session, tid)
+    except Exception:
+        logger.exception("Could not assign knockout fixture venues for %s", tid)
     logger.info("Generated %s knockout matches for tournament %s (%s)",
                 len(created), tid, ktype)
     return len(created)

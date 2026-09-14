@@ -2330,6 +2330,11 @@ class ChallengeLeague(Base):
     # Official tournament command for this league (e.g. "/cipl_tournament"). When a
     # match is started with this command it is recognised as a tournament match.
     tournament_command = Column(String(60), nullable=True, index=True)
+    # Public, read-only tournament info command for this league (e.g.
+    # "/iplfixtures"). Anyone may run it; it opens the active tournament's
+    # hub card (overview / points table / fixtures / teams). Kept separate from
+    # ``tournament_command`` because that one *starts* a match and is gated.
+    fixtures_command = Column(String(60), nullable=True, index=True)
     image_url = Column(String(500), nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -2504,6 +2509,30 @@ class Tournament(Base):
     min_balls_for_sr = Column(Integer, default=20, nullable=False)
     min_balls_for_econ = Column(Integer, default=12, nullable=False)
 
+    # ── Tournament rules that override the league's own settings ──────────
+    # Overseas-in-XI limits for *this* tournament. NULL means "inherit the
+    # league's ``min_overseas`` / ``max_overseas``", so an existing tournament
+    # keeps behaving exactly as it did before these columns existed. An
+    # explicit 0 is a real value ("no overseas allowed"), which is why these
+    # are nullable rather than defaulted.
+    min_overseas = Column(Integer, nullable=True)
+    max_overseas = Column(Integer, nullable=True)
+
+    # Team ownership. When true, a participating team may only be picked by the
+    # Telegram user set as its owner (``TournamentTeam.owner_tg_id``) — this is
+    # what makes a draft-style tournament work, where each franchise belongs to
+    # one person. Teams left without an owner stay open to anyone.
+    enforce_team_owner = Column(Boolean, default=False, nullable=False)
+
+    # How the surface for a tournament match is decided:
+    #   "host"    – the host picks it during setup (the original behaviour)
+    #   "fixture" – each fixture carries its own ``pitch_type``, assigned when
+    #               the schedule is generated; nobody may change it
+    #   "home"    – same as "fixture", but the generator seeds each fixture from
+    #               the home team's ``home_pitch`` where one is set
+    pitch_mode = Column(String(20), default="host", server_default="host",
+                        nullable=False)
+
     activated_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -2575,6 +2604,21 @@ class TournamentTeam(Base):
     short_name = Column(String(30), nullable=True)
     logo_url = Column(String(500), nullable=True)
 
+    # ── Ownership ─────────────────────────────────────────────────────────
+    # The Telegram id of the person who owns this franchise. When the
+    # tournament has ``enforce_team_owner`` set, only this user may pick the
+    # team in the team picker — everyone else is refused. NULL means the team
+    # is unowned and stays open to anybody. Telegram id (not ``users.id``) for
+    # the same reason ``user_tg_id`` is: an admin assigns owners from a list of
+    # ids, and some of those people have never run /debut.
+    owner_tg_id = Column(BigInteger, nullable=True, index=True)
+    owner_name = Column(String(120), nullable=True)
+
+    # This team's home surface. Used by the schedule generator when the
+    # tournament's ``pitch_mode`` is "home": every fixture the team hosts is
+    # played on it. NULL falls back to a random surface.
+    home_pitch = Column(String(20), nullable=True)
+
     # Standings
     played = Column(Integer, default=0, nullable=False)
     won = Column(Integer, default=0, nullable=False)
@@ -2631,6 +2675,20 @@ class TournamentMatch(Base):
     # qualifier2 | final. Only league/group rows contribute league points.
     stage = Column(String(30), default="league", nullable=False)
     result_text = Column(String(300), nullable=True)
+
+    # ── Venue & conditions fixed for this fixture ─────────────────────────
+    # The surface this fixture must be played on. Assigned when the schedule is
+    # generated (see ``services.league_schedule_service.assign_fixture_venues``)
+    # and, while the tournament's ``pitch_mode`` is not "host", enforced during
+    # setup: the host's pitch picker is skipped and this surface is used. NULL
+    # means "not fixed" — the host picks, exactly as before.
+    pitch_type = Column(String(20), nullable=True)
+    # Which of the two sides is at home. Always one of team1_id / team2_id (the
+    # generator defaults it to team1); shown in the fixture list and used to
+    # seed the pitch in "home" pitch mode.
+    home_team_id = Column(Integer, ForeignKey("tournament_teams.id", ondelete="SET NULL"),
+                          nullable=True)
+    venue = Column(String(120), nullable=True)
 
     # Knockout bracket wiring (Phase 2): where this fixture's winner/loser advances,
     # plus human labels for slots that are still "To Be Decided".

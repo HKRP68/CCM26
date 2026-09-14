@@ -114,6 +114,39 @@
         <div><label>Min balls (Strike rate)</label><input type="number" name="min_balls_for_sr" value="{{ t.min_balls_for_sr }}"></div>
         <div><label>Min balls (Economy)</label><input type="number" name="min_balls_for_econ" value="{{ t.min_balls_for_econ }}"></div>
       </div>
+      {% if not is_lp %}
+      <div class="tour-form-grid" style="margin-top:.6rem;">
+        <div><label>Min overseas in XI</label>
+          <input type="number" name="min_overseas" min="0" max="11"
+                 value="{{ '' if t.min_overseas is none else t.min_overseas }}"
+                 placeholder="league default">
+        </div>
+        <div><label>Max overseas in XI</label>
+          <input type="number" name="max_overseas" min="0" max="11"
+                 value="{{ '' if t.max_overseas is none else t.max_overseas }}"
+                 placeholder="league default">
+        </div>
+        <div><label>Pitch</label>
+          <select name="pitch_mode">
+            <option value="host" {{ 'selected' if (t.pitch_mode or 'host') == 'host' else '' }}>Host picks (default)</option>
+            <option value="fixture" {{ 'selected' if t.pitch_mode == 'fixture' else '' }}>Fixed per fixture — random</option>
+            <option value="home" {{ 'selected' if t.pitch_mode == 'home' else '' }}>Fixed per fixture — home team's pitch</option>
+          </select>
+        </div>
+        <div><label>Team ownership</label>
+          <label style="text-transform:none; letter-spacing:0; font-size:.9rem; color:var(--text);">
+            <input type="checkbox" name="enforce_team_owner" {{ 'checked' if t.enforce_team_owner else '' }}>
+            Only a team's owner may play with it
+          </label>
+        </div>
+      </div>
+      <p style="color:var(--muted); font-size:.82rem; margin:.5rem 0 0;">
+        Leave the overseas boxes <strong>empty</strong> to inherit the league's rule; a typed
+        <code>0</code> is a real limit (no overseas players). With a fixed pitch the host's pitch
+        picker is skipped and the surface stamped on the fixture is used — change one below on the
+        <a href="{{ url_for('admin_tournament_schedule', tournament_id=t.id) }}">Schedule</a> page.
+      </p>
+      {% endif %}
       <div style="margin-top:.6rem;">
         <label style="color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.06em;">Description</label>
         <textarea name="description" rows="2" style="width:100%;">{{ t.description or '' }}</textarea>
@@ -156,8 +189,34 @@
           <form method="POST" style="display:inline;" onsubmit='return confirm("Remove " + {{ tt.name|tojson }} + " from the tournament?");'><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_team"><input type="hidden" name="team_id" value="{{ tt.id }}"><button class="btn danger" type="submit">Remove</button></form>
         </span>
         {% else %}
-        <span>{{ tt.name }}{% if tt.short_name %} <span style="color:var(--muted);">({{ tt.short_name }})</span>{% endif %}</span>
-        <form method="POST" style="display:inline;" onsubmit='return confirm("Remove " + {{ tt.name|tojson }} + " from the tournament?");'><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_team"><input type="hidden" name="team_id" value="{{ tt.id }}"><button class="btn danger" type="submit">Remove</button></form>
+        <span style="min-width:0;">{{ tt.name }}{% if tt.short_name %} <span style="color:var(--muted);">({{ tt.short_name }})</span>{% endif %}
+          <span style="color:var(--muted);">— 👤
+            {%- if tt.owner_tg_id %} {{ tt.owner_name or tt.owner_tg_id }} (<code>{{ tt.owner_tg_id }}</code>)
+            {%- else %} <em>unowned</em>{% endif %}
+            {%- if tt.home_pitch %} · 🌱 {{ tt.home_pitch }}{% endif %}</span>
+        </span>
+        <span style="display:flex; gap:.4rem; flex-wrap:wrap;">
+          <form method="POST" style="display:flex; gap:.3rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="set_team_owner">
+            <input type="hidden" name="team_id" value="{{ tt.id }}">
+            <input name="owner_tg_id" inputmode="numeric" placeholder="Telegram id"
+                   value="{{ tt.owner_tg_id or '' }}" style="max-width:130px;" title="Blank clears the owner">
+            <input name="owner_name" placeholder="display name"
+                   value="{{ tt.owner_name or '' }}" style="max-width:130px;">
+            <button class="btn" type="submit">Set owner</button>
+          </form>
+          <form method="POST" style="display:flex; gap:.3rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="set_team_home_pitch">
+            <input type="hidden" name="team_id" value="{{ tt.id }}">
+            <select name="home_pitch" onchange="this.form.submit()" title="Home pitch">
+              <option value="">— no home pitch —</option>
+              {% for pt in pitch_types %}<option value="{{ pt }}" {{ 'selected' if tt.home_pitch == pt else '' }}>{{ pt }}</option>{% endfor %}
+            </select>
+          </form>
+          <form method="POST" style="display:inline;" onsubmit='return confirm("Remove " + {{ tt.name|tojson }} + " from the tournament?");'><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_team"><input type="hidden" name="team_id" value="{{ tt.id }}"><button class="btn danger" type="submit">Remove</button></form>
+        </span>
         {% endif %}
       </div>
       {% endfor %}
@@ -191,6 +250,17 @@
     </form>
     {% elif t.league_id %}
     <p style="color:var(--muted); margin-top:.6rem;">All teams from this league are already participating.</p>
+    {% endif %}
+    {% if not is_lp %}
+    <form method="POST" style="margin-top:.6rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="sync_owners">
+      <button class="btn" type="submit">👤 Inherit owners from the draft</button>
+    </form>
+    <p style="color:var(--muted); font-size:.82rem; margin:.45rem 0 0;">
+      When this league was published from a Tournament Draft, each franchise already has an owner.
+      This fills in any team that doesn't have one yet — it never overwrites an owner you set by hand.
+    </p>
     {% endif %}
   </section>
 
