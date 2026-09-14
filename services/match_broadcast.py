@@ -206,8 +206,14 @@ async def reveal_toss_result(edit_fn, attempts=4):
 
 async def send_match_ready_message(context, chat_id, match, bat_team, bowl_team,
                                    bat_mention, bowl_mention, rules_note=None,
-                                   toss_note=None):
-    """Post the 'Match Ready' card with all details + the Play Match button."""
+                                   toss_note=None, traits_note=None):
+    """Post the 'Match Ready' card with all details + the Play Match button.
+
+    ``traits_note`` carries the result of the pre-toss Trait Vote
+    (services.trait_vote_service) when the mode runs one, so the answer both
+    captains gave is on the card they open the match from — nobody has to
+    remember it, or scroll back for it, when a trait does or does not fire.
+    """
     # A private chat with the bot uses a positive user-id chat_id; groups are
     # negative. Web App buttons only work in private chats, so pick the right
     # button type for the chat we're posting into.
@@ -220,7 +226,8 @@ async def send_match_ready_message(context, chat_id, match, bat_team, bowl_team,
         f"🌤️ <b>Pitch:</b> {match.pitch_type or 'Balanced'}\n"
         f"⏱️ <b>Overs:</b> {match.overs}\n"
         + (f"🪙 <b>Toss:</b> {toss_note}\n" if toss_note else "")
-        + (f"🎯 <b>Rules:</b> {rules_note}\n" if rules_note else "") +
+        + (f"🎯 <b>Rules:</b> {rules_note}\n" if rules_note else "")
+        + (f"{traits_note}\n" if traits_note else "") +
         "━━━━━━━━━━━━━━━━━━━\n"
         f"🏏 <b>Batting first:</b> {bat_team}\n   {bat_mention}\n"
         f"🎳 <b>Bowling first:</b> {bowl_team}\n   {bowl_mention}\n"

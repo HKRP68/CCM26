@@ -113,6 +113,7 @@ from handlers.ipl16 import ipl160_handler
 from handlers.match import (
     playmatch_handler, wpm_handler, cric_join_callback,
     cric_cancel_lobby_callback, cric_coin_callback, cric_decision_callback,
+    cric_traits_callback,
     match_accept_callback, match_deny_callback,
     overs_text_handler, overs_button_callback, overs_custom_callback,
     toss_decision_callback,
@@ -1754,10 +1755,12 @@ def main():
         from handlers.letsplay import (
             letsplay_handler, letsplay_invite_callback, letsplay_pitch_callback,
             letsplay_starttoss_callback, letsplay_coin_callback,
-            letsplay_toss_callback,
+            letsplay_toss_callback, letsplay_traits_callback,
         )
         app.add_handler(CommandHandler(["letsplay", "lp"], letsplay_handler))
         app.add_handler(CallbackQueryHandler(letsplay_invite_callback, pattern=r"^lp_(accept|deny)_"))
+        # The pre-toss Trait Vote — both captains answer before the pitch.
+        app.add_handler(CallbackQueryHandler(letsplay_traits_callback, pattern=r"^lp_traits_"))
         app.add_handler(CallbackQueryHandler(letsplay_pitch_callback, pattern=r"^lp_pitch_"))
         app.add_handler(CallbackQueryHandler(letsplay_starttoss_callback, pattern=r"^lp_starttoss_"))
         app.add_handler(CallbackQueryHandler(letsplay_coin_callback, pattern=r"^lp_coin_"))
@@ -2137,6 +2140,8 @@ def main():
         # ── Match callbacks ──────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(cric_join_callback, pattern=r"^cric_join$"))
         app.add_handler(CallbackQueryHandler(cric_cancel_lobby_callback, pattern=r"^cric_cancel_lobby$"))
+        # The pre-toss Trait Vote — both captains answer before the coin call.
+        app.add_handler(CallbackQueryHandler(cric_traits_callback, pattern=r"^cric_traits:"))
         app.add_handler(CallbackQueryHandler(cric_coin_callback, pattern=r"^cric_coin:"))
         app.add_handler(CallbackQueryHandler(cric_decision_callback, pattern=r"^cric_decision:"))
         app.add_handler(CallbackQueryHandler(match_accept_callback, pattern=r"^matchacc_"))

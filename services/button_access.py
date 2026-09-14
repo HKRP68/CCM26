@@ -47,6 +47,10 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "cric_cancel_lobby",
     "cric_cancel_lobby_",
     "cric_decision:",
+    # The /wpm Trait Vote: posted while handling the GUEST's join, but BOTH
+    # captains have to be able to answer it. cric_traits_callback checks each
+    # click against the lobby's host/guest telegram ids.
+    "cric_traits:",
     "match_accept_",
     "match_deny_",
     "pm_accept_",
@@ -105,6 +109,7 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "lp_accept_",
     "lp_deny_",
     "lp_pitch_",
+    "lp_traits_",
     "lp_starttoss_",
     "lp_coin_",
     "lp_toss_",

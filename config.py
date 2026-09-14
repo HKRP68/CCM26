@@ -606,6 +606,50 @@ TRAIT_RATING_BONUS_MAX_PER_TEAM = 5.0
 # it. Set this True to make the boost part of the gap instead.
 TRAIT_RATING_BONUS_COUNTS_FOR_FAIRNESS = False
 
+# ── Trait Vote — do both captains want traits in this match? ──────────
+#
+# Traits are equipped days in advance and paid for in gems, so a match between
+# two squads is also a match between two trait investments. Not every player
+# wants that: a captain who has spent nothing on traits is asking for a contest
+# of cards, and a captain who has spent a fortune is asking for the opposite.
+# Rather than pick one of them, /wpm and /letsplay put it to both captains
+# before the toss and let the two answers decide.
+#
+#   Yes + Yes  → traits ON   (what every match did before this existed)
+#   No  + No   → traits OFF  (cards only: no ball-engine nudges, no Trait Boost)
+#   split      → TRAIT_VOTE_SPLIT_RULE decides — see below
+#
+# Set False to take the question away entirely: no prompt is shown and every
+# match plays with traits, exactly as it did before the vote existed.
+TRAIT_VOTE_ENABLED = True
+
+# Seconds each captain has to answer before the vote is settled without them.
+# A lobby that stalls here is a lobby nobody is playing in, so the prompt is
+# deliberately short-lived and says so.
+TRAIT_VOTE_TIMEOUT = 45
+
+# The vote a captain who never answered is counted as. "yes" keeps a stalled
+# lobby on the behaviour the game has always had, and — because a missing vote
+# can only ever agree with traits — nobody can turn traits off by saying nothing.
+TRAIT_VOTE_DEFAULT = "yes"
+
+# How a split (one Yes, one No) is settled:
+#
+#   "underdog"   the weaker XI's answer stands. Team Overall WITH the Trait
+#                Boost is the measure, because the boost is exactly the
+#                advantage the weaker side is being asked to accept. This is
+#                the default: it is the only rule that is both deterministic
+#                (the same two squads always get the same answer) and arguable
+#                in the stronger captain's face — the side with less to gain
+#                from traits is the side that decides whether they are used.
+#   "traits_on"  a split always plays with traits.
+#   "traits_off" a split always plays without them.
+#   "random"     a coin flip, re-rolled per match.
+#
+# An "underdog" split between two exactly equal XIs falls back to
+# TRAIT_VOTE_DEFAULT, because there is no underdog to defer to.
+TRAIT_VOTE_SPLIT_RULE = "underdog"
+
 # ── Rarity ────────────────────────────────────────────────────────
 # Every trait carries a rarity, and it decides three things:
 #   • how often the shared market rolls it (``weight``),

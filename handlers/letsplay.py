@@ -252,12 +252,18 @@ def _roster_traits(session, roster_id):
         return []
 
 
-def _xi_to_engine(session, pairs):
+def _xi_to_engine(session, pairs, with_traits=True):
     """Convert ordered (UserRoster, Player) pairs into engine player dicts.
 
     ``roster_id`` is the UserRoster id (stable, owns the traits + career stats);
     ``player_id`` is the master Player id (career stats are keyed by
     user+player). Selection order == batting order.
+
+    ``with_traits`` is False when both captains voted to play this match without
+    traits (services.trait_vote_service). /letsplay carries traits inline on the
+    engine dicts, so leaving them off here is what turns them off everywhere the
+    XI travels — the ball engine, the ⚡ Trait Boost on every card, and the Super
+    Over that decides a tie. Nothing is unequipped; the next match is unaffected.
     """
     out = []
     for entry, player in pairs:
@@ -277,7 +283,7 @@ def _xi_to_engine(session, pairs):
             # handlers.match._pd carries them).
             "country": player.country or "",
             "version": player.version or "",
-            "traits": _roster_traits(session, entry.id),
+            "traits": _roster_traits(session, entry.id) if with_traits else [],
         })
     return out
 
@@ -670,7 +676,7 @@ async def _on_invite_timeout(context: ContextTypes.DEFAULT_TYPE):
 # Setup timer — covers the pitch / XI / toss stages after acceptance
 # ════════════════════════════════════════════════════════════════════
 
-_SETUP_STATUSES = ("pitch", "showxi", "toss")
+_SETUP_STATUSES = ("traitvote", "pitch", "showxi", "toss")
 
 
 def _rearm_setup_timeout(context, invite_id):
@@ -743,15 +749,223 @@ async def letsplay_invite_callback(update: Update, context: ContextTypes.DEFAULT
         _drop_draft(context, invite_id)
         return
 
-    # Accepted → host picks the pitch. Start the rolling setup timer that now
-    # guards the pitch/XI/toss stages.
-    draft["status"] = "pitch"
+    # Accepted → both captains say whether traits play, then the host picks the
+    # pitch. Start the rolling setup timer that guards every stage from here on.
+    draft["status"] = "traitvote"
     _rearm_setup_timeout(context, invite_id)
     await q.edit_message_text(
-        f"✅ {_m(draft['guest'])} accepted the challenge!\n\n"
-        f"👤 {_m(draft['host'])} — pick the pitch below.",
+        f"✅ {_m(draft['guest'])} accepted the challenge!",
         parse_mode="HTML")
+    if await _prompt_trait_vote(context, draft):
+        return
+    # Nothing to vote on — straight to the pitch, exactly as before.
+    draft["status"] = "pitch"
     await _prompt_pitch(context, draft)
+
+
+# ════════════════════════════════════════════════════════════════════
+# Trait Vote — both captains, before the pitch
+#
+# The rule lives in services/trait_vote_service.py and is shared with /wpm:
+# Yes+Yes plays with traits, No+No without, and a split defers to the weaker
+# XI. What is local to /letsplay is where the question sits in the setup — ahead
+# of the pitch, so the Playing XI card that follows can already show the answer
+# (a card quoting a ⚡ Trait Boost this match will not apply is a card that lies).
+# ════════════════════════════════════════════════════════════════════
+
+def _trait_vote_keyboard(invite_id):
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("⚡ Yes — with Traits",
+                             callback_data=f"lp_traits_{invite_id}_yes"),
+        InlineKeyboardButton("🚫 No — without",
+                             callback_data=f"lp_traits_{invite_id}_no"),
+    ]])
+
+
+def _draft_side_xi(session, draft, side):
+    """One side's Playing XI as engine dicts with traits — for the vote prompt.
+
+    The bot side (/lpbot) already holds its XI in memory with traits inline; a
+    human side is read from the roster. Either way this is only used to measure
+    the two sides and to decide whether the question is worth asking, so a side
+    that cannot be read at all counts as an XI with nothing to declare.
+    """
+    if side == "guest" and draft.get("vs_bot"):
+        return list(draft.get("bot_xi") or [])
+    try:
+        pairs = _get_ordered_roster(session, draft[side]["user_id"])[:11]
+        # Only the rating and the traits are read here, and the traits come in
+        # one batched query rather than the eleven ``_xi_to_engine`` would make
+        # for an XI that is being measured, not played.
+        from services.trait_rating_service import roster_traits
+        tmap = roster_traits(session, [entry.id for entry, _p in pairs])
+        return [{"roster_id": int(entry.id), "name": player.name,
+                 "rating": player.rating or 0,
+                 "traits": tmap.get(int(entry.id), [])}
+                for entry, player in pairs]
+    except Exception:
+        logger.exception("letsplay trait vote: XI load failed for %s", side)
+        return []
+
+
+async def _prompt_trait_vote(context, draft):
+    """Put the traits question to both captains. True when it was asked.
+
+    False means there was nothing to ask — the vote is switched off, this is a
+    practice match against the bot, or neither squad has a trait equipped — and
+    the caller goes on to the pitch.
+    """
+    from services import trait_vote_service as tvs
+    # An official tournament fixture is not the place to renegotiate the rules:
+    # the two captains in front of this fixture would be playing under different
+    # ones from the pair who played the last, and the standings would compare
+    # results from two different games. Tournament fixtures keep traits on.
+    if not tvs.is_enabled() or draft.get("vs_bot") or draft.get("lpt"):
+        return False
+    session = get_session()
+    try:
+        host_xi = _draft_side_xi(session, draft, "host")
+        guest_xi = _draft_side_xi(session, draft, "guest")
+    except Exception:
+        logger.exception("letsplay trait vote: setup failed; skipping the vote")
+        return False
+    finally:
+        session.close()
+    if not (tvs.has_any_traits(host_xi) or tvs.has_any_traits(guest_xi)):
+        return False
+
+    draft["trait_vote"] = {
+        "host": None, "guest": None,
+        "host_strength": tvs.team_strength(host_xi),
+        "guest_strength": tvs.team_strength(guest_xi),
+    }
+    vote = draft["trait_vote"]
+    try:
+        sent = await context.bot.send_message(
+            draft["chat_id"],
+            tvs.prompt_text(_m(draft["host"]), _m(draft["guest"]),
+                            vote["host_strength"], vote["guest_strength"]),
+            parse_mode="HTML",
+            reply_markup=_trait_vote_keyboard(draft["invite_id"]))
+    except Exception:
+        # The question never reached the chat, so there is nothing to answer.
+        # Drop the vote rather than strand the draft on buttons nobody has.
+        logger.exception("letsplay trait vote prompt failed; skipping the vote")
+        draft.pop("trait_vote", None)
+        return False
+    if sent and getattr(sent, "message_id", None):
+        draft["trait_vote_msg_id"] = sent.message_id
+    _arm_trait_vote_timeout(context, draft["invite_id"])
+    return True
+
+
+def _arm_trait_vote_timeout(context, invite_id):
+    from services import trait_vote_service as tvs
+    if not getattr(context, "job_queue", None):
+        return
+    _cancel_trait_vote_timeout(context, invite_id)
+    context.job_queue.run_once(
+        _on_trait_vote_timeout, tvs.vote_timeout(),
+        name=f"lp_traitvote_to_{invite_id}", data={"invite_id": invite_id})
+
+
+def _cancel_trait_vote_timeout(context, invite_id):
+    if not getattr(context, "job_queue", None):
+        return
+    for j in context.job_queue.get_jobs_by_name(f"lp_traitvote_to_{invite_id}"):
+        j.schedule_removal()
+
+
+async def _on_trait_vote_timeout(context: ContextTypes.DEFAULT_TYPE):
+    """Settle a vote nobody finished — a missing answer takes the default."""
+    invite_id = context.job.data["invite_id"]
+    draft = _get_draft(context, invite_id)
+    if not draft or draft.get("status") != "traitvote" or not draft.get("trait_vote"):
+        return  # already settled, cancelled, or moved on
+    try:
+        await _settle_trait_vote(context, draft)
+    except Exception:
+        logger.exception("letsplay trait vote expiry failed for %s", invite_id)
+
+
+async def _settle_trait_vote(context, draft):
+    """Resolve the two answers, show the result, and move on to the pitch."""
+    from services import trait_vote_service as tvs
+    invite_id = draft["invite_id"]
+    vote = draft.pop("trait_vote", None)
+    if not vote:
+        # Both captains tapped at the same moment and each handler saw a
+        # complete vote. The first one here owns the settlement; a second pass
+        # would re-resolve it and prompt for the pitch twice.
+        return
+    result = tvs.resolve(vote.get("host"), vote.get("guest"),
+                         vote.get("host_strength"), vote.get("guest_strength"))
+    draft["traits_enabled"] = bool(result.enabled)
+    _cancel_trait_vote_timeout(context, invite_id)
+    text = tvs.result_text(result, _m(draft["host"]), _m(draft["guest"]),
+                           vote.get("host"), vote.get("guest"))
+    msg_id = draft.pop("trait_vote_msg_id", None)
+    try:
+        if msg_id:
+            await context.bot.edit_message_text(
+                text, chat_id=draft["chat_id"], message_id=msg_id,
+                parse_mode="HTML", reply_markup=None)
+        else:
+            await context.bot.send_message(draft["chat_id"], text, parse_mode="HTML")
+    except Exception:
+        logger.exception("letsplay trait vote result render failed (non-fatal)")
+    draft["status"] = "pitch"
+    _rearm_setup_timeout(context, invite_id)
+    await _prompt_pitch(context, draft)
+
+
+async def letsplay_traits_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """lp_traits_{id}_{yes|no} — one answer per captain, kept secret until both
+    are in."""
+    q = update.callback_query
+    try:
+        _, _, invite_id, answer = q.data.split("_")
+        invite_id = int(invite_id)
+    except Exception:
+        await q.answer("Invalid action.", show_alert=True)
+        return
+    draft = _get_draft(context, invite_id)
+    vote = (draft or {}).get("trait_vote")
+    if not draft or draft.get("status") != "traitvote" or not vote:
+        await q.answer("This vote is already settled.", show_alert=True)
+        return
+
+    from services import trait_vote_service as tvs
+    answer = tvs.normalize_vote(answer)
+    if not answer:
+        await q.answer("Invalid choice.", show_alert=True)
+        return
+    if q.from_user.id == draft["host"]["tg_id"]:
+        side = "host"
+    elif q.from_user.id == draft["guest"]["tg_id"]:
+        side = "guest"
+    else:
+        await q.answer("Only the two captains in this match can vote.", show_alert=True)
+        return
+    if vote.get(side):
+        await q.answer("You have already voted — answers are locked in.", show_alert=True)
+        return
+
+    vote[side] = answer
+    await q.answer("Locked in. Your answer stays hidden until both are in.")
+    _touch_deadline(draft, SETUP_TIMEOUT)
+    if vote.get("host") and vote.get("guest"):
+        await _settle_trait_vote(context, draft)
+        return
+    try:
+        await q.edit_message_text(
+            tvs.prompt_text(_m(draft["host"]), _m(draft["guest"]),
+                            vote.get("host_strength"), vote.get("guest_strength"),
+                            host_voted=bool(vote.get("host")),
+                            guest_voted=bool(vote.get("guest"))),
+            parse_mode="HTML", reply_markup=_trait_vote_keyboard(invite_id))
+    except Exception:
+        logger.exception("letsplay trait vote refresh failed (non-fatal)")
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -928,12 +1142,20 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
                   f"to flip the coin!" if vs_bot
                   else f"🔒 When ready, {_m(draft['guest'])} taps <b>Start Toss</b> "
                        f"to flip the coin!")
-    host_traits = _side_trait_map(session, host_pairs)
-    guest_traits = _side_trait_map(session, guest_pairs)
+    # A match the captains voted to play without traits shows none of them: no
+    # badges on the cards and no ⚡ Trait Boost in the Team Overall line. The
+    # card has to agree with the match it is introducing.
+    traits_on = draft.get("traits_enabled", True)
+    host_traits = _side_trait_map(session, host_pairs) if traits_on else {}
+    guest_traits = _side_trait_map(session, guest_pairs) if traits_on else {}
+    from services.trait_vote_service import status_line as _trait_status
     parts = [
         title,
         "━━━━━━━━━━━━━━━━━━━",
         f"🌱 <b>Pitch:</b> {_PITCH_EMOJI.get(pitch, '🏏')} {pitch} • 20 overs",
+        # Only when the captains actually answered the question — a match that
+        # never held a vote reads exactly as it did before the vote existed.
+        (_trait_status(traits_on) if "traits_enabled" in draft else ""),
         "<i>Batting order = the one you saved with /sbo (or by rating, high → "
         "low, if you never set one). Tweak it for this match below.</i>",
         "",
@@ -1666,7 +1888,11 @@ async def _launch_match(context, draft, decision, winner_side):
                     "match cancelled.")
                 return
 
-        host_xi = _xi_to_engine(session, host_pairs[:11])
+        # The pre-toss Trait Vote. Absent (the vote was skipped, or switched
+        # off) means traits play — what /letsplay always did.
+        from services import trait_vote_service as tvs
+        traits_on = draft.get("traits_enabled", True)
+        host_xi = _xi_to_engine(session, host_pairs[:11], with_traits=traits_on)
         if vs_bot:
             guest_xi = list(draft.get("bot_xi") or [])
             if len(guest_xi) < 11:
@@ -1674,8 +1900,13 @@ async def _launch_match(context, draft, decision, winner_side):
                     context, draft,
                     "⚠️ The bot couldn't field an XI — match cancelled.")
                 return
+            if not traits_on:
+                # The /lpbot XI is built in memory with its traits inline, so it
+                # is stripped rather than re-queried.
+                guest_xi = tvs.strip_traits(guest_xi)
         else:
-            guest_xi = _xi_to_engine(session, guest_pairs[:11])
+            guest_xi = _xi_to_engine(session, guest_pairs[:11],
+                                     with_traits=traits_on)
         session.commit()
 
         bat_is_host = (bat_info["user_id"] == host_info["user_id"])
@@ -1758,6 +1989,12 @@ async def _launch_match(context, draft, decision, winner_side):
         str(bowl_info["tg_id"]): bowl_team_name,
     }
     state["is_letsplay"] = True
+    # Both captains agreed to play this one without traits. The XIs above
+    # already carry none, so this flag is the record of *why* — read by the
+    # match cards, and by anything that later asks whether a trait should have
+    # fired. Only ever written as False; absent means traits are in play.
+    if not traits_on:
+        state["traits_enabled"] = False
     # Tournament identity, read by the shared completion path in
     # handlers/cipl_play.py (and by the Super Over decider) to record the result.
     # ``tournament_tteam_by_user`` maps each side's DB user id straight to its
@@ -1860,6 +2097,13 @@ async def _announce(context, state, pitch_type):
                          f"{bowl} {bowl_chem}\n")
     except Exception:
         logger.exception("letsplay: chemistry announcement line failed")
+    # The match starts without traits only when both captains agreed to it, and
+    # the card they follow the match from is where that agreement belongs — a
+    # trait that never fires is otherwise indistinguishable from a bug.
+    traits_line = ""
+    if state.get("traits_enabled") is False:
+        from services.trait_vote_service import status_line as _trait_status
+        traits_line = f"{_trait_status(False)}\n"
     text = (
         f"{title}\n"
         f"{rule}\n"
@@ -1868,6 +2112,7 @@ async def _announce(context, state, pitch_type):
         f"🏟️ {stadium} • 20 overs\n"
         f"🌱 <b>Pitch:</b> {pitch}\n"
         f"🏏 {bat} batting first\n"
+        + traits_line
         + chem_line
         + bot_line
         + ("🎯 <i>Unranked practice — no stats, coins or gems</i>\n"

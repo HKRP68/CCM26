@@ -618,7 +618,8 @@ def use_impact_player(session, match_id, user_id, in_roster_id, out_roster_id):
     return True, f"Impact Player confirmed: {incoming.get('name')} replaces {outgoing.get('name')}.", rec
 
 def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=False,
-                          difficulty=None, enforce_fair_stats=False):
+                          difficulty=None, enforce_fair_stats=False,
+                          traits_enabled=True):
     """Create the initial live state for a Mini-App-played match, right after
     the toss. Openers/bowler are placeholders until the teams pick them.
     Returns (ok, msg). Safe to call once; no-op if state already exists.
@@ -639,6 +640,13 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
     between the two XIs voids career stats (anti stat-farming). Never set for
     bot matches or tournaments. The two Team Overalls are always stored in state
     (``bat_team_ovr`` / ``bowl_team_ovr``) so callers can surface a warning.
+
+    traits_enabled: False when both captains agreed, before the toss, to play
+    this match without traits (services.trait_vote_service). It is stored on the
+    live state and read by ``handlers.match._ball_traits`` for every delivery and
+    by the Team Overall figures below, so one flag turns off both halves of the
+    trait system — the ball-engine nudges AND the ⚡ Trait Boost on the card.
+    Nothing is unequipped: the traits are back the next match.
     """
     from services.match_engine import create_match_state
     from models import UserRoster, Player
@@ -716,6 +724,11 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
     s["batting_order"] = []
     s["current_bowler"] = None
     s["played_via"] = "webapp"
+    # The pre-toss Trait Vote. Only ever written as False — an absent flag means
+    # "with traits", which is what every state written before the vote existed
+    # says, and what every mode that does not hold a vote means.
+    if not traits_enabled:
+        s["traits_enabled"] = False
     if challenge_rules:
         s["is_challenge"] = True
         s["wicket_limit"] = 2
@@ -1063,6 +1076,10 @@ def build_snapshot(session, match_id, user_id, state_override=None):
         # is currently batting). host = user1, guest = user2.
         "host_name": state.get("host_name"),
         "guest_name": state.get("guest_name"),
+        # Result of the pre-toss Trait Vote, so the board can badge a match the
+        # two captains chose to play without traits. Absent on the state means
+        # traits are in play.
+        "traits_enabled": state.get("traits_enabled") is not False,
     }
 
     # Role-specific option payloads — both pickers available at once.
