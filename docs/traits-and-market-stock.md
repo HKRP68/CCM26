@@ -35,6 +35,13 @@ card and the other 33 traits stop being decisions.
 > Career Player exempt and carrying its own 3 slots; and the trait market moved
 > off the player market's daily hour onto its own interval + start hour, set
 > from the website. See [`squad-and-trait-limits.md`](./squad-and-trait-limits.md).
+>
+> **Also since**: an equipped trait is now worth rating points on the team card
+> as well as probability nudges in the ball loop — a doubling ladder from +0.2
+> at Lv.1 to +3.2 at Lv.5, shown on the Playing XI card before the toss and by
+> `/traitboost`. It is deliberately kept out of both the ball engine (which
+> traits already move) and the anti stat-farming gap. See
+> [`trait-rating-boost.md`](./trait-rating-boost.md).
 
 ---
 

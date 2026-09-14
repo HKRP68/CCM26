@@ -132,6 +132,7 @@ from handlers.sim import sim_handler
 # Trait handlers
 from handlers.traits import (
     traits_handler, traitshop_handler, traitapply_handler, traitlist_handler,
+    traitboost_handler,
     traitupgrade_handler, traitreplace_handler, removetrait_handler,
     selltrait_handler,
     traitbuy_callback, traitreroll_callback, traitshop_cancel_callback,
@@ -521,6 +522,7 @@ BOT_MENU_COMMANDS = (
     ("eu", "Leave the Unscramble lobby"),
     ("cu", "Cancel the Unscramble lobby (host only)"),
     ("traits", "View your traits and inventory"),
+    ("traitboost", "What your traits add to your XI's Team Overall"),
     ("traitlist", "Browse every trait in the game"),
     ("traitshop", "Browse the daily trait shop"),
     ("traitapply", "Apply a trait to a player"),
@@ -712,6 +714,7 @@ def _dm_only_handlers():
         "setbo": setbo_handler,
         "recentmatches": recentmatches_handler,
         "traits": traits_handler,
+        "traitboost": traitboost_handler,
         "traitshop": traitshop_handler,
         "traitapply": traitapply_handler,
         "traitupgrade": traitupgrade_handler,
@@ -946,6 +949,7 @@ async def start_handler(update, context):
         "/ctour - Challenge League Tournament hub: table, fixtures, teams\n"
         "/cttable /ctfixtures /ctteams - Tournament table, schedule (done matches struck through), field\n"
         "/ctinjuries - Who is ruled out injured, and for how many more matches 🚑\n"
+        "/clsd <team> - One team's schedule: standing, form, next matches, results\n"
         "/challengeIPL /cipl - Reply to a user to start an IPL challenge\n"
         "/challengeBBL /cbbl - Reply to a user to start a BBL challenge\n"
         "/challengeINT /cint - Reply to a user to start an international challenge\n"
@@ -968,6 +972,7 @@ async def start_handler(update, context):
         "/myprofile /me - Your profile\n"
         "/traits /tt - Your traits & inventory\n"
         "/traitlist /tlist - Every trait, effect and price\n"
+        "/traitboost - What your equipped traits add to your XI's Team Overall ⚡\n"
         "/traitshop /tshop - Daily trait shop\n"
         "/traitapply /tapply - Apply trait to player\n"
         "/traitupgrade /tup - Level up a trait\n"
@@ -1537,6 +1542,7 @@ def main():
         from handlers.cl_tournament import (
             ctour_handler, cttable_handler, ctfixtures_handler,
             ctteams_handler, ctinjuries_handler, ct_view_callback,
+            clsd_handler, clsd_pick_callback,
         )
         # Deliberately absent from BOT_MENU_COMMANDS: both slash menus are at
         # Telegram's 100-command-per-scope ceiling, and pushing one over silently
@@ -1550,6 +1556,16 @@ def main():
         app.add_handler(CommandHandler(["ctinjuries", "ctinjury"],
                                        ctinjuries_handler))
         app.add_handler(CallbackQueryHandler(ct_view_callback, pattern=r"^ctv_"))
+        # /clsd <TEAM NAME> — one team's schedule: where they stand, their form,
+        # what they play next and every result so far. Takes the team NAME (not
+        # ownership) so a captain can scout the side they are about to face, and
+        # it reads the live Lets Play tournament too when no Challenge League one
+        # is running. ``ctsd_`` is its own callback prefix because the ``ctv_``
+        # handler reads everything after the first underscore as a view name.
+        app.add_handler(CommandHandler(
+            ["clsd", "clschedule", "ctsd"], clsd_handler))
+        app.add_handler(CallbackQueryHandler(clsd_pick_callback,
+                                             pattern=r"^ctsd_"))
         app.add_handler(CommandHandler(["cmuleaderboard", "leaderboard", "lb", "top"], leaderboard_handler))
         app.add_handler(CommandHandler(["myprofile", "profile", "me"], myprofile_handler))
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
@@ -1899,6 +1915,11 @@ def main():
         # group, so unlike the inventory commands it is not DM-gated.
         app.add_handler(CommandHandler(
             ["traitlist", "tlist", "traitcatalogue"], traitlist_handler))
+        # /traitboost — what the traits on your XI add to its Team Overall.
+        # It reads out your own squad, so it answers in DM like the rest of the
+        # inventory commands.
+        app.add_handler(CommandHandler(
+            ["traitboost", "tboost"], dm_only("traitboost", traitboost_handler)))
         app.add_handler(CommandHandler(
             ["traitshop", "tshop"], dm_only("traitshop", traitshop_handler)))
         app.add_handler(CommandHandler(

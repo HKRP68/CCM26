@@ -56,6 +56,7 @@ DM_ONLY_COMMANDS = {
     "setbo": "Batting order",
     "recentmatches": "Recent matches",
     "traits": "Traits",
+    "traitboost": "Trait Boost",
     "traitshop": "Trait shop",
     "traitapply": "Apply a trait",
     "traitupgrade": "Upgrade a trait",

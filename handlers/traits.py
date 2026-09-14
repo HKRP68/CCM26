@@ -2,6 +2,7 @@
 
 Commands:
   /traits             — show all your players and their traits + inventory
+  /traitboost         — what your equipped traits add to your XI's Team Overall
   /traitshop          — daily 5-slot gem shop
   /traitbuy <slot>    — buy trait from shop slot
   /traitreroll        — reroll the shop (30 gems)
@@ -157,12 +158,106 @@ async def traits_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines.append("💰 /selltrait — sell an inventory trait for gems")
         lines.append("💠 /tradetrait @user — swap a trait, same level both ways")
         lines.append("📖 /traitlist — the full catalogue and what each one does")
+        lines.append("⚡ /traitboost — what your traits add to your Team Overall")
 
         await update.message.reply_text("\n".join(lines), parse_mode="HTML")
 
     except Exception:
         logger.exception("traits_handler error")
         await update.message.reply_text("⚠️ Error loading traits.")
+    finally:
+        session.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# /traitboost — what your equipped traits are worth on the team card
+# ═══════════════════════════════════════════════════════════════════════
+#
+# The Playing XI card shows this number for both sides once a match is being
+# set up. This is the same reckoning for your own XI, on demand — so the answer
+# to "is levelling this trait worth 1,500 gems?" can be checked before the
+# gems are spent rather than after the toss.
+
+
+async def traitboost_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/traitboost — your XI's Trait Boost, card by card."""
+    from services.trait_rating_service import (
+        BOOST_EMOJI, format_bonus, level_bonus, player_bonus, team_rating_card)
+    from config import (TRAIT_RATING_BONUS, TRAIT_RATING_BONUS_MAX_PER_PLAYER,
+                        TRAIT_RATING_BONUS_MAX_PER_TEAM)
+    tg = update.effective_user
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.telegram_id == tg.id).first()
+        if not user:
+            await update.message.reply_text("❌ Do /debut first!")
+            return
+
+        rows = (session.query(UserRoster, Player)
+                .join(Player, UserRoster.player_id == Player.id)
+                .filter(UserRoster.user_id == user.id,
+                        UserRoster.order_position >= 1,
+                        UserRoster.order_position <= 11)
+                .order_by(UserRoster.order_position).all())
+        if not rows:
+            await update.message.reply_text(
+                "❌ You have no Playing XI yet. Build one with /autobuild.")
+            return
+
+        from services.trait_rating_service import roster_traits
+        traits_by_roster = roster_traits(session, [int(e.id) for e, _p in rows])
+
+        xi = [{"name": p.name, "rating": p.rating,
+               "traits": traits_by_roster.get(int(e.id), [])}
+              for e, p in rows]
+        card = team_rating_card(xi)
+
+        ladder = " · ".join(f"Lv.{lv} {format_bonus(level_bonus(lv))}"
+                            for lv in sorted(TRAIT_RATING_BONUS))
+        lines = [
+            f"{BOOST_EMOJI} <b>TRAIT BOOST — YOUR XI</b>",
+            "━━━━━━━━━━━━━━━━━━━",
+            f"📊 Team Overall: <b>{card['base']}</b> → "
+            f"<b>{card['effective']:.1f}</b> ({format_bonus(card['bonus'])})",
+            "",
+        ]
+        for i, (entry, player) in enumerate(rows, start=1):
+            equipped = traits_by_roster.get(int(entry.id), [])
+            bonus = player_bonus(equipped)
+            if equipped:
+                badges = " ".join(
+                    f"{_esc(t.get('emoji') or '')}{_esc(t.get('display_name'))} "
+                    f"Lv.{t.get('level')}" for t in equipped)
+                lines.append(
+                    f"{i:>2}. {_esc(player.name)} <b>{player.rating}</b> "
+                    f"{BOOST_EMOJI}{format_bonus(bonus)} — {badges}")
+            else:
+                lines.append(f"{i:>2}. {_esc(player.name)} <b>{player.rating}</b> "
+                             "<i>— no traits</i>")
+        bare = sum(1 for e, _p in rows if not traits_by_roster.get(int(e.id)))
+        lines += [
+            "",
+            "━━━━━━━━━━━━━━━━━━━",
+            f"<b>The ladder:</b> {ladder}",
+            "<i>Each level is worth double the one below, so levelling a trait "
+            "you already own beats buying another cheap one.</i>",
+            f"<i>Stacked traits on one card give diminishing returns "
+            f"(max {BOOST_EMOJI}+{TRAIT_RATING_BONUS_MAX_PER_PLAYER:.1f} per "
+            f"card, +{TRAIT_RATING_BONUS_MAX_PER_TEAM:.1f} per XI). Team "
+            "Overall is an average of eleven, so spreading traits across the "
+            "XI moves it further than piling them on one card.</i>",
+        ]
+        if bare:
+            lines.append(
+                f"<i>{bare} of your XI carry no traits — /traitshop, then "
+                "/traitapply.</i>")
+        lines.append("<i>The boost shows on the team card. It never changes "
+                     "whether a match counts for career stats.</i>")
+
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    except Exception:
+        logger.exception("traitboost_handler error")
+        await update.message.reply_text("⚠️ Error loading your trait boost.")
     finally:
         session.close()
 

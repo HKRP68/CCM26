@@ -560,6 +560,52 @@ TRAIT_MAX_ELITE_PER_PLAYER = 1
 # TRAIT_MAX_PER_SQUAD + TRAIT_MAX_PER_PLAYER == 21 equipped traits.
 TRAIT_MAX_PER_SQUAD = 18
 
+# ── Trait Rating Boost — what an equipped trait is worth on the team card ──
+#
+# A trait has always changed the *simulation* (services.trait_engine nudges the
+# per-ball probabilities) and never the *number on the card*. So a captain who
+# spent 3,050 gems levelling a trait to Lv.5 opened the Playing XI card before
+# the toss and saw the same Team Overall as the day they bought it — the
+# investment was invisible at exactly the moment it is being weighed up.
+#
+# TRAIT_RATING_BONUS closes that: every equipped trait adds rating points to the
+# card, doubling with each level so the top of the ladder is worth climbing.
+#
+#     Lv.1 +0.2   Lv.2 +0.4   Lv.3 +0.8   Lv.4 +1.6   Lv.5 +3.2
+#
+# The doubling is the point. A linear ladder makes Lv.5 five times Lv.1 and the
+# sensible build is five Lv.1 traits; doubling makes one Lv.5 worth more than
+# four Lv.1s (3.2 > 0.8), so levelling a trait you already own competes with
+# buying another one. That is the decision the trait economy exists to create.
+TRAIT_RATING_BONUS = {1: 0.2, 2: 0.4, 3: 0.8, 4: 1.6, 5: 3.2}
+
+# Stacking uses the same diminishing returns as the ball engine
+# (TRAIT_STACK_WEIGHTS, strongest first), for the same reason: three traits on
+# one card must be worth less than three traits spread across three cards, or
+# the per-card limit is the only thing shaping a squad.
+#
+# Ceiling on one card's boost. Three Lv.5 traits stack to
+# 3.2 + (0.7 × 3.2) + (0.5 × 3.2) = 7.04, which would move a single card
+# further than the gap between a good XI and a great one.
+TRAIT_RATING_BONUS_MAX_PER_PLAYER = 6.0
+
+# Ceiling on a whole XI's boost (it is an average of the eleven, so this bites
+# only on a squad where nearly every card is carrying high-level traits).
+# Sized under STATS_FAIRNESS_OVR_GAP on purpose: no amount of trait investment
+# may, on its own, open a gap wide enough to look like stat farming.
+TRAIT_RATING_BONUS_MAX_PER_TEAM = 5.0
+
+# Does the boost count toward the anti stat-farming Team Overall gap?
+#
+# No, by default, and deliberately. That gate (services.player_stats_service.
+# STATS_FAIRNESS_OVR_GAP) exists to catch a strong XI farming career stats off a
+# deliberately weak one. Traits are bought with gems and equipped in advance;
+# counting them would mean a captain who levelled their traits could silently
+# lose career stats for doing exactly what the game asked of them. The gate
+# therefore stays on the printed card ratings, and the boost is shown next to
+# it. Set this True to make the boost part of the gap instead.
+TRAIT_RATING_BONUS_COUNTS_FOR_FAIRNESS = False
+
 # ── Rarity ────────────────────────────────────────────────────────
 # Every trait carries a rarity, and it decides three things:
 #   • how often the shared market rolls it (``weight``),

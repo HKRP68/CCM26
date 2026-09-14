@@ -122,6 +122,7 @@ League Tournament:
 | `/ctfixtures` (`/ctfix`) | the schedule |
 | `/ctteams` | the field, who owns each team, and how many co-owners (🤝) |
 | `/ctinjuries` (`/ctinjury`) | the treatment room — see [tournament-injuries.md](tournament-injuries.md) |
+| `/clsd <TEAM NAME>` (`/clschedule`, `/ctsd`) | one team's whole tournament — see §5 |
 
 A league can publish its **own alias** for the hub:
 `ChallengeLeague.fixtures_command` (e.g. `/iplfixtures`), set next to the
@@ -157,8 +158,67 @@ top — the thing a team owner actually opens this for.
 
 ---
 
+## 5. One team's schedule — `/clsd <TEAM NAME>`
+
+`/ctfixtures` is the competition seen from above: every fixture, in order, with
+the viewer's own pulled to the top. That is the wrong shape for the question a
+team owner actually opens the bot for — *what do we play next, and how are we
+doing?* — because their three remaining matches are scattered through forty
+lines belonging to everybody else, and "Your next matches" only exists for
+someone an admin has already assigned to a team.
+
+`/clsd` answers that question for one **named** team:
+
+```text
+🗓️ Alpha 👈 your team — Summer Trophy
+📊 #2 · 5P 3W 2L 0T · 6 pts · NRR +0.412
+📈 Form: 🔴 🟢 🟢 🟡 🟢  (oldest → latest)
+👤 Ana 🤝 +1
+🏟️ Home pitch: 🌱 Green
+
+Next up (2 to play)
+M7  ⚪ 🏠 vs Delta · 🌱 Dusty
+M11 ⚪ ✈️ at Bravo
+
+Results
+M1  ✅ WON 🏠 vs Bravo — Alpha won by 12 runs
+M4  ❌ LOST ✈️ at Charlie — Charlie won by 4 wickets
+
+🏠 home · ✈️ away · 🌱 the pitch this match must be played on.
+```
+
+Four things about it are deliberate:
+
+* **Every line is written from that team's side.** A completed fixture reads
+  `WON` or `LOST`, not "team1 beat team2", and `🏠 vs` / `✈️ at` rather than
+  "the home flag is on the left". Both are the same underlying row read from one
+  dressing room instead of from above.
+* **It takes the name, not ownership.** A captain can scout the side they are
+  about to face, and a chat can look up any team without every team in the field
+  having been assigned an owner first. Ownership only decides whether the card
+  is badged *your team* — and whether a bare `/clsd` (no name) goes straight to
+  your own.
+* **The name is matched the way people type it.** Case and stray spaces are
+  ignored; `MI` finds *Mumbai Indians* through the admin's `short_name` or the
+  initials; a prefix resolves when it is unambiguous. When a query genuinely
+  could mean two teams it offers buttons rather than guessing — guessing shows
+  somebody the wrong schedule and they act on it. Typing a full name that is
+  also the prefix of another team still lands on the one that was typed.
+* **It reads the Lets Play tournament too.** Both kinds store their teams and
+  fixtures in the same two tables, so one card serves both and a player in a
+  chat running a Lets Play tournament gets an answer rather than "no tournament
+  is active".
+
+Like the other follow-along commands it is read-only, open to anyone, and out of
+Telegram's slash menu — both scopes are at the 100-command ceiling.
+
+---
+
 ## Tests
 
+* `tests/test_tournament_team_schedule.py` — `/clsd`: finding the team somebody
+  typed (case, initials, prefixes, ambiguity), form read from that team's side,
+  and the card itself.
 * `tests/test_tournament_rules.py` — the rules: ownership and co-ownership,
   draft inheritance, the three pitch modes, overseas inheritance, and the
   rendered card.

@@ -2488,6 +2488,9 @@ def _approach_card(state):
     chem = _chem_line(state)
     if chem:
         lines += [rule, chem]
+    boost = _trait_boost_line(state)
+    if boost:
+        lines += ([rule] if not chem else []) + [boost]
     card = "\n".join(lines)
     card += _commentary_block(state)
     return card
@@ -2528,6 +2531,42 @@ def _chem_line(state):
     # implied by the scale players know from /cmuchem.
     return (f"🧪 CHEM  {bat_code} {bat.split('/')[0]}  ·  "
             f"{bowl_code} {bowl.split('/')[0]}")
+
+
+def _trait_boost_line(state):
+    """``⚡ OVR  MI 84 → 85.2  ·  CSK 83 → 83.4`` for the board, or ''.
+
+    The Trait Boost is quoted on the Playing XI card before the toss; this is the
+    same two numbers carried into the match, so the traits a captain paid for
+    stay visible while they are being spent rather than disappearing at the toss.
+    Nothing is printed when neither side has a trait equipped — an all-zero line
+    is noise on an already dense board.
+
+    Scoped exactly like ``_chem_line``, and for the same reason: only sides
+    playing their own roster XI have traits at all. Challenge League squads are
+    league rosters handed to both captains, so there is nothing to boost.
+
+    Computed from the XIs rather than read from ``state``, so a match that was
+    already in flight when this shipped shows the line too instead of a blank —
+    the boost is a pure function of the eleven cards and their traits.
+    """
+    if not state.get("is_letsplay"):
+        return ""
+    try:
+        from services.trait_rating_service import team_rating_card
+        bat = team_rating_card(state.get("bat_xi") or [])
+        bowl = team_rating_card(state.get("bowl_xi") or [])
+    except Exception:
+        logger.exception("letsplay trait boost line failed")
+        return ""
+    if not (bat["bonus"] or bowl["bonus"]):
+        return ""
+    bat_code = html.escape(str(state.get("bat_team_code")
+                               or state.get("bat_team_name") or "Bat"))
+    bowl_code = html.escape(str(state.get("bowl_team_code")
+                                or state.get("bowl_team_name") or "Bowl"))
+    return (f"⚡ OVR  {bat_code} {bat['base']} → {bat['effective']:.1f}  ·  "
+            f"{bowl_code} {bowl['base']} → {bowl['effective']:.1f}")
 
 
 async def _innings_break(context, mid, state):
