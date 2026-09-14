@@ -42,10 +42,42 @@ def overall_gap(xi_a: Iterable[Dict[str, Any]], xi_b: Iterable[Dict[str, Any]]) 
     return abs(team_overall(xi_a) - team_overall(xi_b))
 
 
+def team_overall_effective(xi: Iterable[Dict[str, Any]]) -> float:
+    """Team Overall WITH the Trait Boost applied (see
+    ``services.trait_rating_service``) — the number shown on match cards.
+
+    This is a display figure. ``team_overall`` stays the printed card average
+    and is what the stat-farming gate below compares, so levelling a trait can
+    never silently cost a captain their career stats.
+    """
+    from services.trait_rating_service import team_effective_overall
+    return team_effective_overall(list(xi or []))
+
+
+def team_overall_card(xi: Iterable[Dict[str, Any]]) -> Dict[str, float]:
+    """``{base, bonus, effective}`` for one XI — what every card renders."""
+    from services.trait_rating_service import team_rating_card
+    return team_rating_card(list(xi or []))
+
+
 def is_stat_farming_mismatch(xi_a: Iterable[Dict[str, Any]],
                              xi_b: Iterable[Dict[str, Any]]) -> bool:
-    """True when the two XIs are too mismatched to earn career stats."""
-    return overall_gap(xi_a, xi_b) >= STATS_FAIRNESS_OVR_GAP
+    """True when the two XIs are too mismatched to earn career stats.
+
+    Compared on the *printed card* ratings, not the Trait-Boosted ones. Traits
+    are bought with gems and equipped days in advance; counting their boost here
+    would mean a captain who did exactly what the trait economy asked of them
+    could lose career stats for it. ``config.
+    TRAIT_RATING_BONUS_COUNTS_FOR_FAIRNESS`` flips that for an operator who
+    wants the boost inside the gap instead.
+    """
+    from services.trait_rating_service import counts_for_fairness, fairness_overall
+    if counts_for_fairness():
+        gap = abs(fairness_overall(list(xi_a or []))
+                  - fairness_overall(list(xi_b or [])))
+    else:
+        gap = overall_gap(xi_a, xi_b)
+    return gap >= STATS_FAIRNESS_OVR_GAP
 
 
 def _rid_key(roster_id: Any) -> Any:

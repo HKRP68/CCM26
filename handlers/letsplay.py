@@ -292,18 +292,54 @@ def _cat_tag(category):
     return ""
 
 
-def _row_fields(row):
+def _row_fields(row, trait_map=None):
     """Normalise one XI row to ``(name, rating, category, traits)``.
 
     A row is either a ``(UserRoster, Player)`` pair (a human side, read from the
     DB) or an engine player dict (the /lpbot opponent, built in memory by
     ``services.bot_xi_builder``). Both render on the same card.
+
+    ``trait_map`` is ``{roster_id: [trait dicts]}``, loaded once for the whole
+    card by ``services.trait_rating_service.roster_traits``. Without it a human
+    side reads as untraited — which is how the card used to render every human
+    XI, hiding both the trait badges and the Trait Boost the cards have earned.
     """
     if isinstance(row, dict):
         return (str(row.get("name") or "Player"), row.get("rating") or 0,
                 row.get("category") or "", row.get("traits") or [])
-    _entry, player = row
-    return (str(player.name), player.rating, player.category or "", [])
+    entry, player = row
+    traits = (trait_map or {}).get(int(entry.id), []) if trait_map else []
+    return (str(player.name), player.rating, player.category or "", traits)
+
+
+def _side_trait_map(session, pairs):
+    """``{roster_id: [trait dicts]}`` for the human rows of one side's XI.
+
+    The /lpbot opponent carries its traits inline on its engine dicts, so it has
+    no roster ids to look up and contributes nothing here.
+    """
+    if session is None:
+        return {}
+    ids = [int(r[0].id) for r in (pairs or []) if not isinstance(r, dict)]
+    if not ids:
+        return {}
+    from services.trait_rating_service import roster_traits
+    return roster_traits(session, ids)
+
+
+def _side_rating_card(pairs, trait_map=None):
+    """``{base, bonus, effective}`` for one side of the Playing XI card.
+
+    Built from the same ``_row_fields`` view the card renders, so the Team
+    Overall quoted in the Trait Boost line can never drift from the per-player
+    ratings printed above it.
+    """
+    from services.trait_rating_service import team_rating_card
+    xi = []
+    for row in (pairs or [])[:11]:
+        name, rating, category, traits = _row_fields(row, trait_map)
+        xi.append({"name": name, "rating": rating, "traits": traits})
+    return team_rating_card(xi)
 
 
 def _trait_tag(traits):
@@ -314,16 +350,22 @@ def _trait_tag(traits):
     return (" " + "".join(emojis)) if emojis else ""
 
 
-def _format_batting_order(pairs, header, bench_pairs=None):
+def _format_batting_order(pairs, header, bench_pairs=None, trait_map=None):
     """Numbered 1-11 batting order for the XI card, with an optional bench list.
 
     Bench players are numbered from 12 upward (same scheme as /change) so a user
     can read a bench slot straight off the card and swap it in.
+
+    A card carrying traits prints its Trait Boost next to its rating
+    (``84 ⚡+1.6``); an untraited card prints exactly what it always did, so a
+    squad with no traits sees no new noise.
     """
+    from services.trait_rating_service import format_player_rating, player_bonus
     lines = [header]
     for i, row in enumerate(pairs[:11], start=1):
-        name, rating, category, traits = _row_fields(row)
-        lines.append(f"{i:>2}. {html.escape(name)} <i>({rating})</i>"
+        name, rating, category, traits = _row_fields(row, trait_map)
+        shown = format_player_rating(rating, player_bonus(traits))
+        lines.append(f"{i:>2}. {html.escape(name)} <i>({shown})</i>"
                      f"{_cat_tag(category)}{_trait_tag(traits)}")
     if bench_pairs is not None:
         if bench_pairs:
@@ -865,11 +907,15 @@ def _bot_or_user_xi(session, draft, side):
 
 
 def _show_xi_text(draft, host_pairs, guest_pairs,
-                  host_bench=None, guest_bench=None):
+                  host_bench=None, guest_bench=None, session=None):
     """The 'both XIs locked' card shown before the toss.
 
     Shows each side's Playing XI (batting order) plus its bench, and explains how
     to swap a bench player into the XI with /change before the toss.
+
+    ``session`` is optional and only used to load equipped traits, so the card
+    can print each side's Trait Boost. Both callers have one open; without it
+    the card renders exactly as it did before the boost existed.
     """
     pitch = draft.get("pitch_type", "Hard")
     vs_bot = bool(draft.get("vs_bot"))
@@ -882,6 +928,8 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
                   f"to flip the coin!" if vs_bot
                   else f"🔒 When ready, {_m(draft['guest'])} taps <b>Start Toss</b> "
                        f"to flip the coin!")
+    host_traits = _side_trait_map(session, host_pairs)
+    guest_traits = _side_trait_map(session, guest_pairs)
     parts = [
         title,
         "━━━━━━━━━━━━━━━━━━━",
@@ -891,12 +939,14 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
         "",
         _format_batting_order(
             host_pairs, f"👤 <b>{html.escape(draft['host']['name'])}</b> (Host)",
-            bench_pairs=host_bench),
+            bench_pairs=host_bench, trait_map=host_traits),
         "",
-        _format_batting_order(guest_pairs, guest_header, bench_pairs=guest_bench),
+        _format_batting_order(guest_pairs, guest_header, bench_pairs=guest_bench,
+                              trait_map=guest_traits),
         "",
         "━━━━━━━━━━━━━━━━━━━",
-        _stats_fairness_note(host_pairs, guest_pairs, vs_bot=vs_bot),
+        _stats_fairness_note(host_pairs, guest_pairs, vs_bot=vs_bot,
+                             host_traits=host_traits, guest_traits=guest_traits),
         "✏️ Reorder your batting with <code>/change &lt;a&gt; &lt;b&gt;</code> "
         "(both 1–11, e.g. <code>/change 3 1</code>), or swap in a bench player "
         "(e.g. <code>/change 2 13</code>).",
@@ -905,36 +955,61 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
     return "\n".join(p for p in parts if p)
 
 
-def _stats_fairness_note(host_pairs, guest_pairs, vs_bot=False):
+def _stats_fairness_note(host_pairs, guest_pairs, vs_bot=False,
+                         host_traits=None, guest_traits=None):
     """A Team Overall line for the Playing-XI card, warning when the gap is wide
-    enough that career stats won't be recorded (anti stat-farming)."""
+    enough that career stats won't be recorded (anti stat-farming), plus the
+    Trait Boost each side's equipped traits are worth.
+
+    The two numbers answer different questions and are printed as two lines on
+    purpose. The gap decides whether career stats count, and it is measured on
+    the printed card ratings (see ``player_stats_service.is_stat_farming_mismatch``
+    — traits are bought with gems, so they must never cost a captain their
+    stats). The boost is what those traits add to the team the captain is about
+    to field, which is the thing they came to this card to weigh up.
+    """
     from services.player_stats_service import (
         STATS_FAIRNESS_OVR_GAP, team_overall)
+    from services.trait_rating_service import counts_for_fairness, format_team_line
+    host_card = _side_rating_card(host_pairs, host_traits)
+    guest_card = _side_rating_card(guest_pairs, guest_traits)
     host_ovr = team_overall([{"rating": _row_fields(r)[1]} for r in host_pairs[:11]])
     guest_ovr = team_overall([{"rating": _row_fields(r)[1]} for r in guest_pairs[:11]])
     if vs_bot:
         # Nothing is at stake in a practice match, so the anti stat-farming gap
         # warning is irrelevant — say plainly that this one doesn't count.
-        return (
+        boost = format_team_line("You", host_card, "Bot", guest_card)
+        return "\n".join(p for p in (
             f"📊 <b>Team Overall:</b> You <b>{host_ovr}</b> vs Bot "
-            f"<b>{guest_ovr}</b>\n"
+            f"<b>{guest_ovr}</b>",
+            boost,
             "🎯 <b>Practice match — unranked.</b> No career stats, no coins or "
-            "gems, no Win/Loss and no streak. Just cricket.\n"
-            "━━━━━━━━━━━━━━━━━━━")
+            "gems, no Win/Loss and no streak. Just cricket.",
+            "━━━━━━━━━━━━━━━━━━━") if p)
+    boost = format_team_line("Host", host_card, "Guest", guest_card)
+    # The footnote only earns its line when there is a boost to explain AND the
+    # boost is outside the gap — otherwise it is answering a question nobody
+    # reading this card has asked.
+    boost_note = ("<i>⚡ Trait Boost is what your equipped traits add to the "
+                  "team card. It does not change the gap above — traits never "
+                  "cost you career stats.</i>"
+                  if boost and not counts_for_fairness() else None)
     gap = abs(host_ovr - guest_ovr)
     if gap >= STATS_FAIRNESS_OVR_GAP:
-        return (
-            f"⚠️ <b>This match WON'T count.</b>\n"
+        return "\n".join(p for p in (
+            "⚠️ <b>This match WON'T count.</b>",
             f"Team Overall gap is too wide — Host <b>{host_ovr}</b> vs "
             f"Guest <b>{guest_ovr}</b> (<b>{gap}</b> apart, limit "
             f"{STATS_FAIRNESS_OVR_GAP}). No career stats, no Win/Loss or streak, "
             "and no coins or gems — it keeps things fair. Play on for fun, or "
-            "even up the XIs with <code>/change</code>.\n"
-            "━━━━━━━━━━━━━━━━━━━")
-    return (
+            "even up the XIs with <code>/change</code>.",
+            boost, boost_note,
+            "━━━━━━━━━━━━━━━━━━━") if p)
+    return "\n".join(p for p in (
         f"📊 <b>Team Overall:</b> Host <b>{host_ovr}</b> vs Guest "
-        f"<b>{guest_ovr}</b> — stats will count. ✅\n"
-        "━━━━━━━━━━━━━━━━━━━")
+        f"<b>{guest_ovr}</b> — stats will count. ✅",
+        boost, boost_note,
+        "━━━━━━━━━━━━━━━━━━━") if p)
 
 
 async def _prompt_show_xi(context, draft):
@@ -964,7 +1039,8 @@ async def _prompt_show_xi(context, draft):
             guest_ids = (None if draft.get("vs_bot")
                          else [int(e.id) for e, _p in guest_pairs])
             text = _show_xi_text(draft, host_pairs, guest_pairs,
-                                 host_bench=host_bench, guest_bench=guest_bench)
+                                 host_bench=host_bench, guest_bench=guest_bench,
+                                 session=session)
         session.commit()
     except Exception:
         logger.exception("letsplay: failed to build auto XIs")
@@ -1060,7 +1136,8 @@ async def _rerender_show_xi(context, draft):
         guest_xi, guest_bench, _g = _bot_or_user_xi(session, draft, "guest")
         if host_xi is not None and guest_xi is not None:
             text = _show_xi_text(draft, host_xi, guest_xi,
-                                 host_bench=host_bench, guest_bench=guest_bench)
+                                 host_bench=host_bench, guest_bench=guest_bench,
+                                 session=session)
         session.commit()
     except Exception:
         logger.exception("letsplay: re-render show XI failed")
@@ -1695,6 +1772,18 @@ async def _launch_match(context, draft, decision, winner_side):
     from services.player_stats_service import team_overall, is_stat_farming_mismatch
     state["bat_team_ovr"] = team_overall(bat_xi)
     state["bowl_team_ovr"] = team_overall(bowl_xi)
+    # Trait Boost, carried alongside (never instead of) the card Team Overall.
+    # ``*_team_ovr`` stays the printed-card average because the fair-match
+    # warning quotes it next to the gap it is measured from; the boosted figure
+    # is what the match cards show. Both XIs carry their traits inline
+    # (``_xi_to_engine`` / ``bot_xi_builder``), so this needs no extra query.
+    from services.trait_rating_service import team_bonus
+    state["bat_team_trait_boost"] = team_bonus(bat_xi)
+    state["bowl_team_trait_boost"] = team_bonus(bowl_xi)
+    state["bat_team_ovr_eff"] = round(
+        state["bat_team_ovr"] + state["bat_team_trait_boost"], 1)
+    state["bowl_team_ovr_eff"] = round(
+        state["bowl_team_ovr"] + state["bowl_team_trait_boost"], 1)
     if draft.get("vs_bot"):
         # /lpbot: unranked practice, and the AI captain plays the bot's turns.
         # Nothing is at stake, so the anti stat-farming gap check is moot.

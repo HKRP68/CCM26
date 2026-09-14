@@ -9,6 +9,8 @@ for a player to see the schedule. These commands close that gap:
                   struck through
     /ctteams      the field, with each team's owner
     /ctinjuries   the treatment room, when the tournament has injuries on
+    /clsd <team>  one team's whole tournament: where they stand, their form,
+                  what they play next and every result so far
 
 Every one of them is read-only and open to anyone; starting a match is still the
 league's own (gated) tournament command. A league may also publish its own alias
@@ -17,17 +19,25 @@ for the hub — ``ChallengeLeague.fixtures_command`` — which routes here from
 """
 
 import logging
+from html import escape
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from database import get_session
 from services import cl_tournament_view as ctv
+from services import tournament_service
 
 logger = logging.getLogger(__name__)
 
 NO_ACTIVE = ("❌ No Challenge League Tournament is currently active.\n"
              "An admin activates one from the tournament panel.")
+
+# /clsd searches the Lets Play tournament too, so its "nothing running" line
+# must not name only the Challenge League — a player in a chat with neither
+# would otherwise go looking for a Challenge League that was never the point.
+NO_ACTIVE_ANY = ("❌ No tournament is currently running.\n"
+                 "An admin activates one from the tournament panel.")
 
 # Callback prefix. ``ctv_`` is deliberately outside the ``cl_`` namespace the
 # Challenge League match callbacks own, and the ``lptv_`` one Lets Play uses.
@@ -106,6 +116,181 @@ async def ctteams_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ctinjuries_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/ctinjuries — who is ruled out, and for how many more matches."""
     await _show(update, "injuries")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# /clsd <TEAM NAME> — one team's schedule
+# ══════════════════════════════════════════════════════════════════════
+#
+# /ctfixtures is the competition from above: every fixture, in order. That is
+# the wrong shape for the question a team owner actually asks — "what do WE
+# play next, and how are we doing?" — because their three remaining matches are
+# scattered through forty lines belonging to everyone else.
+#
+# /clsd answers that question for one named team, and it takes the NAME rather
+# than requiring ownership so a captain can scout the side they are about to
+# face, and so a chat can look up any team without every member of it being
+# assigned an owner first.
+#
+# It reads whichever tournament is live: the Challenge League one, and failing
+# that the Lets Play one. Both store their teams and fixtures in the same two
+# tables (``TournamentTeam`` / ``TournamentMatch``), so one card serves both,
+# and a player typing /clsd in a chat running a Lets Play tournament gets an
+# answer rather than "no tournament is active".
+
+# Callback prefix for the disambiguation buttons. Deliberately NOT ``ctv_``:
+# that handler reads everything after the first underscore as a view name.
+SD_PREFIX = "ctsd_"
+
+
+def _live_tournaments(session):
+    """Every live tournament a /clsd lookup should search, best bet first."""
+    out = []
+    challenge = ctv.active_tournament(session)
+    if challenge:
+        out.append(challenge)
+    try:
+        from services import lp_tournament_service
+        letsplay = lp_tournament_service.active_tournament(session)
+    except Exception:
+        logger.exception("/clsd: Lets Play tournament lookup failed")
+        letsplay = None
+    if letsplay:
+        out.append(letsplay)
+    return out
+
+
+def _resolve(session, query):
+    """``(tour, team, candidates)`` for a typed team name.
+
+    Searches each live tournament in turn and returns the first *resolved* hit.
+    Ambiguity in one tournament does not stop the search — a query that is
+    ambiguous in the Challenge League but names exactly one Lets Play team
+    should still find that team — but it is remembered, so a query that resolves
+    nowhere can still show the near misses rather than a bare "not found".
+    """
+    near = (None, [])
+    for tour in _live_tournaments(session):
+        team, candidates = ctv.find_team(session, tour.id, query)
+        if team is not None:
+            return tour, team, []
+        if candidates and not near[1]:
+            near = (tour, candidates)
+    return near[0], None, near[1]
+
+
+def _pick_keyboard(candidates, limit=8):
+    """Buttons for the teams a query could have meant."""
+    rows = [[InlineKeyboardButton(
+        (tt.name or "—")[:40], callback_data=f"{SD_PREFIX}{tt.id}")]
+        for tt in candidates[:limit]]
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+def _team_list_text(session, tours):
+    """The 'which team?' prompt, listing what there is to ask about.
+
+    Team and tournament names are typed by admins, so they are escaped: one
+    stray ``&`` in a franchise name makes Telegram reject the whole message, and
+    the prompt that explains how to use the command is the worst place to lose.
+    """
+    lines = ["🗓️ <b>Team schedule</b>",
+             "Usage: <code>/clsd &lt;team name&gt;</code> — e.g. "
+             "<code>/clsd Mumbai Indians</code>"]
+    for tour in tours:
+        rows = ctv.teams(session, tour.id)
+        if not rows:
+            continue
+        lines += ["", f"<b>{escape(tour.name or '—')}</b>",
+                  " · ".join(escape(tt.name or "—") for tt in rows[:20])]
+    return "\n".join(lines)
+
+
+async def clsd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/clsd <TEAM NAME> — one team's fixtures, form and results."""
+    session = get_session()
+    try:
+        tours = _live_tournaments(session)
+        if not tours:
+            await _reply(update, NO_ACTIVE_ANY)
+            return
+        viewer = update.effective_user.id if update.effective_user else None
+        query = " ".join(context.args or []).strip()
+
+        if not query:
+            # No name typed. If the viewer runs a team, that is almost certainly
+            # the one they meant, so show it rather than making them type it.
+            for tour in tours:
+                for tt in ctv.teams(session, tour.id):
+                    if viewer is not None and tournament_service.is_team_member(
+                            tt, viewer):
+                        await _reply(update, ctv.render_team_schedule(
+                            session, tour, tt, viewer_tg_id=viewer))
+                        return
+            await _reply(update, _team_list_text(session, tours),
+                         reply_markup=_pick_keyboard(
+                             [tt for tour in tours
+                              for tt in ctv.teams(session, tour.id)]))
+            return
+
+        tour, team, candidates = _resolve(session, query)
+        if team is not None:
+            await _reply(update, ctv.render_team_schedule(
+                session, tour, team, viewer_tg_id=viewer))
+            return
+        if candidates:
+            await _reply(
+                update,
+                f"🤔 <b>{escape(query)}</b> could be "
+                f"{len(candidates)} teams. Which one?",
+                reply_markup=_pick_keyboard(candidates))
+            return
+        await _reply(
+            update,
+            f"❌ No team called <b>{escape(query)}</b> is in the tournament.\n\n"
+            + _team_list_text(session, tours))
+    except Exception:
+        logger.exception("/clsd failed")
+        await _reply(update, "⚠️ Could not load that team's schedule right now.")
+    finally:
+        session.close()
+
+
+async def clsd_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """``ctsd_<tournament_team_id>`` — show the team picked from the prompt.
+
+    The id is re-read from the database rather than trusted from the button, so
+    a stale card (the tournament ended, the team was removed) says so instead of
+    rendering a card for a team that is no longer in the competition.
+    """
+    q = update.callback_query
+    raw = (q.data or "")[len(SD_PREFIX):]
+    session = get_session()
+    try:
+        try:
+            team_id = int(raw)
+        except ValueError:
+            await q.answer("Unknown team.", show_alert=True)
+            return
+        from models import Tournament, TournamentTeam
+        team = session.query(TournamentTeam).get(team_id)
+        tour = session.query(Tournament).get(team.tournament_id) if team else None
+        if not team or not tour:
+            await q.answer("That team is no longer in the tournament.",
+                           show_alert=True)
+            return
+        text = ctv.render_team_schedule(session, tour, team,
+                                        viewer_tg_id=q.from_user.id)
+        await q.answer()
+        try:
+            await q.edit_message_text(text, parse_mode="HTML",
+                                      disable_web_page_preview=True)
+        except Exception:
+            logger.debug("/clsd pick edit skipped", exc_info=True)
+    except Exception:
+        logger.exception("/clsd pick callback failed")
+    finally:
+        session.close()
 
 
 async def ct_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

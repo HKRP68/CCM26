@@ -166,6 +166,198 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=40):
     return "\n".join(out)
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Finding one team by the name a player typed
+# ──────────────────────────────────────────────────────────────────────
+#
+# ``/clsd <TEAM NAME>`` is typed by hand, in a chat, usually on a phone. It has
+# to cope with case, with the short name everybody actually uses ("MI"), and
+# with a half-typed name — and when it genuinely cannot tell two teams apart it
+# has to say so rather than guess, because guessing shows somebody the wrong
+# schedule and they act on it.
+
+def _norm(text):
+    """Casefold and squeeze whitespace — the form names are compared in."""
+    return " ".join(str(text or "").split()).casefold()
+
+
+def _initials(name):
+    """``"Mumbai Indians"`` → ``"mi"``, so the short form people say out loud
+    finds the team even when nobody entered a ``short_name``."""
+    parts = [p for p in str(name or "").split() if p]
+    return "".join(p[0] for p in parts).casefold() if len(parts) > 1 else ""
+
+
+def find_team(session, tournament_id, query):
+    """``(team, candidates)`` for a typed team name.
+
+    Exactly one of the two is meaningful: a resolved ``team`` with an empty
+    ``candidates``, or ``None`` plus every team the query could have meant (which
+    is empty when it matched nothing at all). Matching runs strongest-first —
+    exact name, exact short name or initials, prefix, then substring — and stops
+    at the first round that matches, so typing the full name of a team whose name
+    is also the prefix of another still lands on the one that was typed.
+    """
+    rows = teams(session, tournament_id)
+    q = _norm(query)
+    if not q:
+        return None, rows
+
+    def _pick(predicate):
+        return [tt for tt in rows if predicate(tt)]
+
+    for predicate in (
+            lambda tt: _norm(tt.name) == q,
+            lambda tt: _norm(tt.short_name) == q or _initials(tt.name) == q,
+            lambda tt: _norm(tt.name).startswith(q),
+            lambda tt: q in _norm(tt.name)):
+        hits = _pick(predicate)
+        if len(hits) == 1:
+            return hits[0], []
+        if hits:
+            return None, hits
+    return None, []
+
+
+def team_form(session, tournament_id, team_id, limit=5):
+    """The team's last ``limit`` results, most recent first: ``['W', 'L', …]``.
+
+    'T' covers a tie and 'N' a no-result — a completed fixture with no winner is
+    one or the other, and neither is a loss.
+    """
+    rows = (session.query(TournamentMatch)
+            .filter_by(tournament_id=int(tournament_id), status="completed")
+            .filter((TournamentMatch.team1_id == int(team_id))
+                    | (TournamentMatch.team2_id == int(team_id)))
+            .order_by(TournamentMatch.round_no.desc(),
+                      TournamentMatch.match_no.desc(),
+                      TournamentMatch.id.desc()).limit(int(limit)).all())
+    out = []
+    for fx in rows:
+        if fx.winner_team_id == int(team_id):
+            out.append("W")
+        elif fx.winner_team_id:
+            out.append("L")
+        else:
+            out.append("T")
+    return out
+
+
+_FORM_EMOJI = {"W": "🟢", "L": "🔴", "T": "🟡", "N": "⚪"}
+
+
+def _standing_of(session, tour, team_id):
+    """``(position, row)`` in the points table, or ``(None, None)``."""
+    table = tournament_service.points_table(session, tour.id)
+    for i, tt in enumerate(table, 1):
+        if tt.id == int(team_id):
+            return i, tt
+    return None, None
+
+
+def render_team_schedule(session, tour, team, viewer_tg_id=None, limit=40):
+    """One team's whole tournament on a single card — the ``/clsd`` answer.
+
+    The fixture list (``render_fixtures``) is the competition seen from above:
+    every match, in order, with the viewer's own pulled to the top. This is the
+    competition seen from inside one dressing room — where that team stands, how
+    it has been going, who it plays next and on what, and every result it has
+    already posted, each one marked won or lost *from this team's side* rather
+    than by which name sits on the left.
+    """
+    name = escape(team.name or "—")
+    fixtures = (session.query(TournamentMatch)
+                .filter_by(tournament_id=tour.id)
+                .filter((TournamentMatch.team1_id == team.id)
+                        | (TournamentMatch.team2_id == team.id))
+                .order_by(TournamentMatch.round_no, TournamentMatch.match_no,
+                          TournamentMatch.id).all())
+    rows = teams(session, tour.id)
+    names = {tt.id: (tt.name or "—") for tt in rows}
+
+    # Whether this is the viewer's own team is decided up front: it belongs on
+    # the card whether or not the team has any fixtures yet, and an owner
+    # opening their brand-new franchise is exactly the person who needs telling
+    # which one they are looking at.
+    mine = (viewer_tg_id is not None
+            and tournament_service.is_team_member(team, viewer_tg_id))
+    out = [f"🗓️ <b>{name}</b>{' 👈 <b>your team</b>' if mine else ''}"
+           f" — {escape(tour.name)}"]
+
+    # ── Where they stand ──
+    pos, standing = _standing_of(session, tour, team.id)
+    if standing is not None and (standing.played or 0) >= 0:
+        out.append(
+            f"📊 <b>#{pos}</b> · {standing.played or 0}P "
+            f"{standing.won or 0}W {standing.lost or 0}L {standing.tied or 0}T · "
+            f"<b>{standing.points or 0}</b> pts · NRR {_nrr_text(standing._nrr)}")
+    form = team_form(session, tour.id, team.id)
+    if form:
+        out.append("📈 <b>Form:</b> "
+                   + " ".join(_FORM_EMOJI.get(f, "⚪") for f in reversed(form))
+                   + "  <i>(oldest → latest)</i>")
+    owner = (team.owner_name or "").strip()
+    extras = len(tournament_service.co_owner_ids(team))
+    if owner or extras:
+        who = f"👤 {escape(owner)}" if owner else "👤 <i>no owner</i>"
+        out.append(who + (f" 🤝 +{extras}" if extras else ""))
+    home_pitch = (team.home_pitch or "").strip()
+    if home_pitch:
+        out.append(f"🏟️ <b>Home pitch:</b> 🌱 {escape(home_pitch)}")
+
+    if not fixtures:
+        out += ["", "No fixtures are scheduled for this team yet — this "
+                    "tournament is free-play: any two participating teams can "
+                    "start a match."]
+        return "\n".join(out)
+
+    def _line(fx):
+        """One fixture, written from this team's point of view."""
+        other_id = fx.team2_id if fx.team1_id == team.id else fx.team1_id
+        other = escape(names.get(other_id) or
+                       (fx.slot2_label if fx.team1_id == team.id
+                        else fx.slot1_label) or "TBD")
+        at_home = fx.home_team_id == team.id
+        venue = "🏠 vs" if at_home else ("✈️ at" if fx.home_team_id else "vs")
+        stage = _STAGE_LABEL.get(fx.stage or "league", (fx.stage or "").title())
+        tag = f"M{fx.match_no}" if fx.match_no else stage
+        if fx.status == "completed":
+            if fx.winner_team_id == team.id:
+                mark = "✅ <b>WON</b>"
+            elif fx.winner_team_id:
+                mark = "❌ <b>LOST</b>"
+            else:
+                mark = "🤝 <b>TIED</b>"
+            body = f"{mark} {venue} {other} — {escape(fx.result_text or 'done')}"
+        elif fx.status == "live":
+            body = f"🔴 {venue} {other} — <i>in progress</i>"
+        else:
+            body = f"⚪ {venue} {other}"
+            pitch = (fx.pitch_type or "").strip()
+            if pitch:
+                body += f" · 🌱 {escape(pitch)}"
+        return f"<code>{tag}</code> {body}"
+
+    upcoming = [fx for fx in fixtures if fx.status != "completed"]
+    played = [fx for fx in fixtures if fx.status == "completed"]
+
+    if upcoming:
+        out += ["", f"<b>Next up</b> ({len(upcoming)} to play)"]
+        out += [_line(fx) for fx in upcoming[:limit]]
+        if len(upcoming) > limit:
+            out.append(f"<i>…and {len(upcoming) - limit} more.</i>")
+    else:
+        out += ["", "<b>Next up</b>", "<i>Nothing left to play — "
+                "every fixture is done.</i>"]
+    if played:
+        out += ["", "<b>Results</b>"]
+        out += [_line(fx) for fx in played[-limit:]]
+
+    out += ["", "<i>🏠 home · ✈️ away · 🌱 the pitch this match must be played "
+                "on.</i>"]
+    return "\n".join(out)
+
+
 def render_teams(session, tour):
     """The field of teams, with owners, as an HTML message body."""
     rows = teams(session, tour.id)
