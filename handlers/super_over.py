@@ -1662,6 +1662,9 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
     })
     win = so["teams"][winner_uid]
     lose = so["teams"][loser_uid]
+    # Injury news from the tournament recording below, rendered while its session
+    # is open and appended to the winner announcement.
+    injury_news = ""
 
     # Super Over winning margin (runs if the winner batted first and defended,
     # wickets if they chased it down). A countback win has no run margin to
@@ -1728,9 +1731,17 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
             main_state = so.get("main") or {}
             if main_state.get("tournament_id"):
                 from services import tournament_service
-                tournament_service.record_tournament_match(
+                tm = tournament_service.record_tournament_match(
                     session, main_state, winner_user_id=winner_uid,
                     result_text=f"{win['name']} won (Super Over)")
+                # Injuries (when the tournament has them on) ride back on the
+                # recorded row. Render inside the session — the rows are detached
+                # by the time the announcement below is built.
+                report = getattr(tm, "_injury_report", None) if tm else None
+                if report:
+                    from services import injury_service
+                    injury_news = injury_service.render_report(
+                        session, main_state["tournament_id"], report)
         except Exception:
             logger.exception("tournament Super Over recording failed (%s)", mid)
         # Record the CL Tour series result — a Super Over decides a tied tour
@@ -1810,7 +1821,8 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
         "win the Super Over!\n\n"
         f"🏆 Match Winner: <b>{html.escape(win['name'])}</b>"
         f"{countback_block}"
-        f"{mvp_block}",
+        f"{mvp_block}"
+        + (f"\n\n{injury_news}" if injury_news else ""),
         parse_mode="HTML")
 
     # Super Over scorecard image (titled "SUPER OVER").

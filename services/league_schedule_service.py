@@ -14,11 +14,36 @@ Design notes
 * "A team can't play again once its match is done" is enforced by the bot gating
   on ``remaining_opponent_names`` / ``find_open_fixture``: a pair can only be
   played while an uncompleted scheduled fixture exists for it.
+* A fixture also carries its *venue*: which side is at home, and — when the
+  tournament's ``pitch_mode`` says so — the one surface it may be played on.
+  See ``assign_fixture_venues`` and ``locked_pitch_for_pair``.
+* ``services.pitch_report`` is imported at module level on purpose: it is pure
+  Python (no database, no models), so it does not cost the pure-import property
+  the note below protects.
 """
 
 import logging
+import random
+
+from services.pitch_report import PITCH_TYPES
 
 logger = logging.getLogger(__name__)
+
+# Surfaces the fixture generator may draw from. Same list the host's pitch
+# picker offers, so a fixture-locked surface is always one players recognise.
+FIXTURE_PITCHES = list(PITCH_TYPES)
+
+# ``Tournament.pitch_mode`` values.
+PITCH_MODE_HOST = "host"        # host picks during setup (original behaviour)
+PITCH_MODE_FIXTURE = "fixture"  # each fixture carries its own surface
+PITCH_MODE_HOME = "home"        # ditto, seeded from the home team's home_pitch
+PITCH_MODES = (PITCH_MODE_HOST, PITCH_MODE_FIXTURE, PITCH_MODE_HOME)
+
+
+def pitch_locked(tour):
+    """True when fixtures — not the host — decide the surface for ``tour``."""
+    return (getattr(tour, "pitch_mode", PITCH_MODE_HOST) or PITCH_MODE_HOST) \
+        in (PITCH_MODE_FIXTURE, PITCH_MODE_HOME)
 
 # NOTE: SQLAlchemy / model imports are intentionally deferred into the DB-facing
 # functions below so the pure ``round_robin_rounds`` helper (and its unit tests)
@@ -58,6 +83,158 @@ def round_robin_rounds(team_ids, double=False):
     if double:
         rounds = rounds + [[(b, a) for (a, b) in pairs] for pairs in rounds]
     return rounds
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Per-fixture venue: home side + the surface the match must be played on
+# ──────────────────────────────────────────────────────────────────────
+
+def _home_pitch_map(session, tournament_id):
+    """``{TournamentTeam.id: home_pitch}`` for teams that declared one."""
+    from models import TournamentTeam
+    rows = (session.query(TournamentTeam)
+            .filter_by(tournament_id=int(tournament_id)).all())
+    return {r.id: (r.home_pitch or "").strip() for r in rows
+            if (r.home_pitch or "").strip() in FIXTURE_PITCHES}
+
+
+def pick_pitch(mode, home_team_id=None, home_pitches=None, rng=None):
+    """The surface for one fixture, given the tournament's ``pitch_mode``.
+
+    In ``home`` mode the home side's declared ``home_pitch`` wins; a team that
+    never declared one falls back to a random surface, so a half-configured
+    tournament still produces a complete, playable schedule.
+    """
+    rng = rng or random
+    if mode == PITCH_MODE_HOME and home_team_id and home_pitches:
+        declared = home_pitches.get(home_team_id)
+        if declared:
+            return declared
+    return rng.choice(FIXTURE_PITCHES)
+
+
+def assign_fixture_venues(session, tournament_id, *, overwrite=False):
+    """Give every unplayed fixture a home side and a surface. Caller commits.
+
+    Only fixtures that are still ``scheduled`` are touched — a live or completed
+    match has already been played on whatever surface it was given, and rewriting
+    that would rewrite history. ``overwrite`` re-rolls the *pitch* only: a
+    home side an admin chose — including a deliberate "neutral venue" — is never
+    overwritten, so re-rolling pitches can't silently undo the home/away edits.
+    Returns the number of fields changed.
+    """
+    from models import Tournament, TournamentMatch
+    tid = int(tournament_id)
+    tour = session.query(Tournament).get(tid)
+    if not tour:
+        return 0
+    mode = (tour.pitch_mode or PITCH_MODE_HOST)
+    home_pitches = _home_pitch_map(session, tid) if mode == PITCH_MODE_HOME else {}
+    changed = 0
+    for fx in (session.query(TournamentMatch)
+               .filter_by(tournament_id=tid, status="scheduled").all()):
+        # The home side defaults to slot 1 — the round-robin generator already
+        # alternates the slots between legs, so this gives a balanced home/away
+        # split for free. A dangling reference (the team was swapped out) is
+        # always repaired; an empty one is only filled on the ordinary pass, so
+        # an explicit re-roll of the pitches leaves "neutral venue" alone.
+        dangling = (fx.home_team_id is not None
+                    and fx.home_team_id not in (fx.team1_id, fx.team2_id))
+        if dangling or (fx.home_team_id is None and not overwrite):
+            new_home = fx.team1_id or fx.team2_id
+            if new_home != fx.home_team_id:
+                fx.home_team_id = new_home
+                changed += 1
+        if mode == PITCH_MODE_HOST:
+            # The host picks during setup. Leave existing stamps alone on a
+            # normal pass, but an explicit overwrite (an admin switching the
+            # mode back) clears them, so a stale surface can't resurface if the
+            # mode is later flipped again.
+            if overwrite and fx.pitch_type:
+                fx.pitch_type = None
+                changed += 1
+            continue
+        if overwrite or not (fx.pitch_type or "").strip():
+            fx.pitch_type = pick_pitch(mode, fx.home_team_id, home_pitches)
+            changed += 1
+    if changed:
+        session.flush()
+    return changed
+
+
+def set_fixture_pitch(session, fixture_id, pitch):
+    """Pin (or clear, with a falsy ``pitch``) one fixture's surface. Caller commits."""
+    from models import TournamentMatch
+    fx = session.query(TournamentMatch).get(int(fixture_id))
+    if not fx:
+        return None
+    if fx.status == "completed":
+        raise ValueError("That match has already been played — its pitch is history.")
+    name = (pitch or "").strip()
+    if name and name not in FIXTURE_PITCHES:
+        raise ValueError("Unknown pitch %r. Choose one of: %s"
+                         % (pitch, ", ".join(FIXTURE_PITCHES)))
+    fx.pitch_type = name or None
+    session.flush()
+    return fx
+
+
+def set_fixture_home(session, fixture_id, team_id):
+    """Set which side is at home. Must be one of the fixture's two teams. Caller commits."""
+    from models import TournamentMatch
+    fx = session.query(TournamentMatch).get(int(fixture_id))
+    if not fx:
+        return None
+    if fx.status == "completed":
+        raise ValueError("That match has already been played.")
+    if not team_id:
+        fx.home_team_id = None
+        session.flush()
+        return fx
+    tid = int(team_id)
+    if tid not in (fx.team1_id, fx.team2_id):
+        raise ValueError("The home team must be one of the two teams in the fixture.")
+    fx.home_team_id = tid
+    session.flush()
+    return fx
+
+
+def fixture_for_pair(session, tournament_id, name1, name2):
+    """The earliest open fixture between two team *names*, or None.
+
+    Name-based because the bot's team picker works in names; used during setup
+    to read the fixture's locked surface and home side before the match is
+    actually reserved at the toss.
+    """
+    tid = int(tournament_id)
+    a = _team_id_by_name(session, tid, name1)
+    b = _team_id_by_name(session, tid, name2)
+    if not a or not b:
+        return None
+    return find_open_fixture(session, tid, a, b)
+
+
+def locked_pitch_for_pair(session, tour, name1, name2):
+    """``(pitch, home_team_name)`` fixed for this pairing, or ``(None, None)``.
+
+    Returns nothing when the tournament lets the host choose, when there is no
+    generated schedule, or when the fixture was never given a surface — every one
+    of which means "fall back to the host's pitch picker".
+    """
+    if not tour or not pitch_locked(tour):
+        return None, None
+    if not (tour.schedule_generated or tour.knockout_generated):
+        return None, None
+    fx = fixture_for_pair(session, tour.id, name1, name2)
+    if fx is None:
+        return None, None
+    pitch = (fx.pitch_type or "").strip() or None
+    home = None
+    if fx.home_team_id:
+        from models import TournamentTeam
+        row = session.query(TournamentTeam).get(int(fx.home_team_id))
+        home = (row.name or "").strip() if row else None
+    return pitch, home
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -112,6 +289,10 @@ def generate_schedule(session, tournament_id):
                 match_no += 1
                 session.add(TournamentMatch(
                     tournament_id=tid, team1_id=a, team2_id=b,
+                    # Slot 1 hosts. The circle method already mirrors the slots
+                    # in a double round-robin, so each pair gets one home leg
+                    # each without any extra bookkeeping.
+                    home_team_id=a,
                     status="scheduled", stage=stage, group_id=group_id,
                     round_no=rno, match_no=match_no))
                 created += 1
@@ -140,6 +321,9 @@ def generate_schedule(session, tournament_id):
                          "(and, for groups, at least two teams per group).")
     tour.schedule_generated = True
     session.flush()
+    # Give every new fixture its surface (a no-op while pitch_mode is "host").
+    # The rows were just created, so nothing existing is overwritten.
+    assign_fixture_venues(session, tid)
     logger.info("Generated %s fixtures for tournament %s (%s)", created, tid, fmt)
     return created
 
@@ -180,6 +364,7 @@ def generate_series(session, tournament_id, matches):
     if tour:
         tour.schedule_generated = True
     session.flush()
+    assign_fixture_venues(session, tid)
     logger.info("Generated %s-match series for tournament %s", n, tid)
     return n
 
@@ -224,11 +409,16 @@ def add_fixture(session, tournament_id, team1_id, team2_id, group_id=None, round
     max_no = (session.query(func.max(TournamentMatch.match_no))
               .filter_by(tournament_id=tid).scalar()) or 0
     tm = TournamentMatch(
-        tournament_id=tid, team1_id=t1, team2_id=t2,
+        tournament_id=tid, team1_id=t1, team2_id=t2, home_team_id=t1,
         status="scheduled", stage=stage, group_id=gid,
         round_no=int(round_no or 0), match_no=max_no + 1)
     session.add(tm)
     session.flush()
+    # Fill this one fixture's surface without disturbing the rest of the schedule.
+    mode = (tour.pitch_mode or PITCH_MODE_HOST) if tour else PITCH_MODE_HOST
+    if mode != PITCH_MODE_HOST:
+        tm.pitch_type = pick_pitch(mode, t1, _home_pitch_map(session, tid))
+        session.flush()
     return tm
 
 
@@ -257,6 +447,7 @@ def swap_fixture_team(session, fixture_id, slot, new_team_id):
         raise ValueError("Only scheduled fixtures can be edited "
                          "(this one is %s)." % tm.status)
     new_id = _require_team(session, tm.tournament_id, new_team_id) if new_team_id else None
+    old_id = tm.team1_id if int(slot) == 1 else tm.team2_id
     if int(slot) == 1:
         if new_id and tm.team2_id == new_id:
             raise ValueError("A fixture needs two different teams.")
@@ -265,6 +456,10 @@ def swap_fixture_team(session, fixture_id, slot, new_team_id):
         if new_id and tm.team1_id == new_id:
             raise ValueError("A fixture needs two different teams.")
         tm.team2_id = new_id
+    # The home side must stay one of the two teams in the fixture: follow the
+    # swap when the replaced team was at home, rather than leaving a dangling id.
+    if tm.home_team_id == old_id:
+        tm.home_team_id = new_id or tm.team1_id or tm.team2_id
     session.flush()
     return tm
 

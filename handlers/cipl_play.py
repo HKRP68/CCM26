@@ -1299,6 +1299,26 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
                         "pick a scheduled opponent.")
                     return
                 draft["reserved_fixture_id"] = _fx.id
+                # The fixture is the authority on its surface. Setup already
+                # announced this pitch, but re-read it from the row we actually
+                # reserved so the match can never be played on a pitch the
+                # fixture didn't fix (an admin edit between setup and the toss,
+                # or a second open fixture for the same pair).
+                if _lss.pitch_locked(_tour) and (_fx.pitch_type or "").strip():
+                    locked = _fx.pitch_type.strip()
+                    if locked != draft.get("pitch_type"):
+                        # Regenerate the conditions too — they are derived from
+                        # the surface, and a stale set would have the live match
+                        # playing one pitch while the weather models another.
+                        try:
+                            from services.pitch_report import build_pitch_report
+                            _, draft["conditions"] = build_pitch_report(locked)
+                        except Exception:
+                            logger.exception("Could not rebuild conditions for "
+                                             "the fixture's locked pitch")
+                            draft["conditions"] = {}
+                    draft["pitch_type"] = locked
+                    draft["pitch_locked"] = True
 
         bat_side = "host" if bat_is_host else "target"
         bowl_side = "target" if bat_is_host else "host"
@@ -2579,6 +2599,8 @@ async def _complete_match(context, mid, state):
     def _finalize_match_db():
         # Per-over Win/Loss prize handed out below (None on a tie / award failure).
         prize = None
+        # Injury news for the chat card, rendered while the session is open.
+        injury_news = ""
         session = get_session()
         try:
             try:
@@ -2649,7 +2671,15 @@ async def _complete_match(context, mid, state):
             try:
                 if state.get("tournament_id"):
                     from services import tournament_service
-                    tournament_service.record_tournament_match(session, state)
+                    tm = tournament_service.record_tournament_match(session, state)
+                    # Injuries (when the tournament has them on) ride back on the
+                    # recorded row. Render here, inside the session — the rows are
+                    # detached by the time the chat card is built.
+                    report = getattr(tm, "_injury_report", None) if tm else None
+                    if report:
+                        from services import injury_service
+                        injury_news = injury_service.render_report(
+                            session, state["tournament_id"], report)
             except Exception:
                 logger.exception("tournament match recording failed for %s", mid)
 
@@ -2698,9 +2728,9 @@ async def _complete_match(context, mid, state):
             logger.exception("cipl match finalization failed for match %s", mid)
         finally:
             session.close()
-        return prize
+        return prize, injury_news
 
-    prize_info = await asyncio.to_thread(_finalize_match_db)
+    prize_info, injury_news = await asyncio.to_thread(_finalize_match_db)
 
     # Snapshot the final scorecard + Arena board ON the event loop. This persists
     # a MatchScorecard row AND schedules the Telegram text-archive upload, which
@@ -2763,6 +2793,11 @@ async def _complete_match(context, mid, state):
             f"🤝 {result['loser']}: +{prize_info['l_coins']:,} coins, "
             f"+{prize_info['l_gems']} 💎")
     text = f"🏁 <b>Match Over</b>\n<blockquote expandable>{body}</blockquote>"
+    # Injury news sits outside the expandable quote: a player being ruled out of
+    # the next two matches is the thing both captains most need to see, and
+    # burying it inside a collapsed recap means nobody reads it until selection.
+    if injury_news:
+        text += f"\n\n{injury_news}"
     # Build the end-of-match keyboard defensively: this runs BEFORE the result
     # message and the Match Summary card, so anything raising here would cost
     # the player both of them (and leave the live state uncleaned).

@@ -2330,6 +2330,11 @@ class ChallengeLeague(Base):
     # Official tournament command for this league (e.g. "/cipl_tournament"). When a
     # match is started with this command it is recognised as a tournament match.
     tournament_command = Column(String(60), nullable=True, index=True)
+    # Public, read-only tournament info command for this league (e.g.
+    # "/iplfixtures"). Anyone may run it; it opens the active tournament's
+    # hub card (overview / points table / fixtures / teams). Kept separate from
+    # ``tournament_command`` because that one *starts* a match and is gated.
+    fixtures_command = Column(String(60), nullable=True, index=True)
     image_url = Column(String(500), nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
@@ -2504,6 +2509,44 @@ class Tournament(Base):
     min_balls_for_sr = Column(Integer, default=20, nullable=False)
     min_balls_for_econ = Column(Integer, default=12, nullable=False)
 
+    # ── Tournament rules that override the league's own settings ──────────
+    # Overseas-in-XI limits for *this* tournament. NULL means "inherit the
+    # league's ``min_overseas`` / ``max_overseas``", so an existing tournament
+    # keeps behaving exactly as it did before these columns existed. An
+    # explicit 0 is a real value ("no overseas allowed"), which is why these
+    # are nullable rather than defaulted.
+    min_overseas = Column(Integer, nullable=True)
+    max_overseas = Column(Integer, nullable=True)
+
+    # Team ownership. When true, a participating team may only be picked by the
+    # Telegram user set as its owner (``TournamentTeam.owner_tg_id``) — this is
+    # what makes a draft-style tournament work, where each franchise belongs to
+    # one person. Teams left without an owner stay open to anyone.
+    enforce_team_owner = Column(Boolean, default=False, nullable=False)
+
+    # How the surface for a tournament match is decided:
+    #   "host"    – the host picks it during setup (the original behaviour)
+    #   "fixture" – each fixture carries its own ``pitch_type``, assigned when
+    #               the schedule is generated; nobody may change it
+    #   "home"    – same as "fixture", but the generator seeds each fixture from
+    #               the home team's ``home_pitch`` where one is set
+    pitch_mode = Column(String(20), default="host", server_default="host",
+                        nullable=False)
+
+    # ── Injuries ──────────────────────────────────────────────────────────
+    # A cricket injury system, off by default. When on, a completed tournament
+    # match can leave a player carrying a knock that rules them out of their
+    # team's next few tournament matches — they cannot be picked in the XI until
+    # they are fit again. See ``services.injury_service``.
+    injuries_enabled = Column(Boolean, default=False, nullable=False)
+    # Percentage chance, per team per completed match, that somebody picks up an
+    # injury. 0 turns generation off while leaving existing injuries in force.
+    injury_chance = Column(Integer, default=12, nullable=False)
+    # The hard ceiling on how many matches a single injury may rule a player out
+    # for. Clamped to 1..5 when read; 3 is the default the severity ladder is
+    # built around.
+    injury_max_matches = Column(Integer, default=3, nullable=False)
+
     activated_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -2518,6 +2561,8 @@ class Tournament(Base):
                            cascade="all, delete-orphan")
     player_stats = relationship("TournamentPlayerStats", back_populates="tournament",
                                 cascade="all, delete-orphan")
+    injuries = relationship("TournamentInjury", back_populates="tournament",
+                            cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_tournament_status_active", "status", "is_active"),
@@ -2575,6 +2620,27 @@ class TournamentTeam(Base):
     short_name = Column(String(30), nullable=True)
     logo_url = Column(String(500), nullable=True)
 
+    # ── Ownership ─────────────────────────────────────────────────────────
+    # The Telegram id of the person who owns this franchise. When the
+    # tournament has ``enforce_team_owner`` set, only this user may pick the
+    # team in the team picker — everyone else is refused. NULL means the team
+    # is unowned and stays open to anybody. Telegram id (not ``users.id``) for
+    # the same reason ``user_tg_id`` is: an admin assigns owners from a list of
+    # ids, and some of those people have never run /debut.
+    owner_tg_id = Column(BigInteger, nullable=True, index=True)
+    owner_name = Column(String(120), nullable=True)
+    # Extra Telegram ids allowed to play this team, as a JSON list — a franchise
+    # can be run by more than one person. Mirrors ``DraftTeam.co_owner_ids_json``
+    # (and is inherited from it when the league came from a draft). A co-owner is
+    # the owner's equal for every check the tournament makes; the owner is only
+    # distinguished by being the name shown on the team.
+    co_owner_ids_json = Column(Text, nullable=True)
+
+    # This team's home surface. Used by the schedule generator when the
+    # tournament's ``pitch_mode`` is "home": every fixture the team hosts is
+    # played on it. NULL falls back to a random surface.
+    home_pitch = Column(String(20), nullable=True)
+
     # Standings
     played = Column(Integer, default=0, nullable=False)
     won = Column(Integer, default=0, nullable=False)
@@ -2631,6 +2697,20 @@ class TournamentMatch(Base):
     # qualifier2 | final. Only league/group rows contribute league points.
     stage = Column(String(30), default="league", nullable=False)
     result_text = Column(String(300), nullable=True)
+
+    # ── Venue & conditions fixed for this fixture ─────────────────────────
+    # The surface this fixture must be played on. Assigned when the schedule is
+    # generated (see ``services.league_schedule_service.assign_fixture_venues``)
+    # and, while the tournament's ``pitch_mode`` is not "host", enforced during
+    # setup: the host's pitch picker is skipped and this surface is used. NULL
+    # means "not fixed" — the host picks, exactly as before.
+    pitch_type = Column(String(20), nullable=True)
+    # Which of the two sides is at home. Always one of team1_id / team2_id (the
+    # generator defaults it to team1); shown in the fixture list and used to
+    # seed the pitch in "home" pitch mode.
+    home_team_id = Column(Integer, ForeignKey("tournament_teams.id", ondelete="SET NULL"),
+                          nullable=True)
+    venue = Column(String(120), nullable=True)
 
     # Knockout bracket wiring (Phase 2): where this fixture's winner/loser advances,
     # plus human labels for slots that are still "To Be Decided".
@@ -2703,6 +2783,64 @@ class TournamentPlayerStats(Base):
     __table_args__ = (
         Index("ix_tournament_player_lookup", "tournament_id", "user_id", "player_id"),
         Index("ix_tournament_player_roster", "tournament_id", "user_id", "roster_id"),
+    )
+
+
+class TournamentInjury(Base):
+    """A player carrying a knock, ruled out of their team's next few matches.
+
+    Created when a tournament match finishes (see ``services.injury_service``)
+    and counted down one per subsequent match that team plays. While
+    ``matches_remaining`` is above zero the player is filtered out of the XI
+    picker for that team, so an injured player simply cannot be selected.
+
+    Identity is ``roster_id`` — the ``ChallengePlayer`` row, which is what the XI
+    picker works in. ``player_id`` is the master catalogue id where one exists
+    and is kept for display and history only; a challenge player with no source
+    card still gets injured like anyone else.
+
+    Injuries are per tournament, not global: the same card is fit everywhere
+    else, including in another tournament running at the same time.
+    """
+    __tablename__ = "tournament_injuries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="CASCADE"),
+                           nullable=False, index=True)
+    tournament_team_id = Column(Integer, ForeignKey("tournament_teams.id", ondelete="CASCADE"),
+                                nullable=False, index=True)
+    # ChallengePlayer.id — the identity the Playing XI picker selects on.
+    roster_id = Column(Integer, nullable=False, index=True)
+    player_id = Column(Integer, ForeignKey("players.id", ondelete="SET NULL"),
+                       nullable=True, index=True)
+    player_name = Column(String(150), nullable=True)
+
+    # Flavour + rules. ``severity`` is one of niggle | strain | serious and only
+    # decides how long ``matches_out`` is; ``injury_type`` is the human name
+    # ("Hamstring Strain") and ``how`` says what they were doing when it happened.
+    injury_type = Column(String(80), nullable=False)
+    severity = Column(String(20), default="niggle", nullable=False)
+    how = Column(String(120), nullable=True)
+
+    matches_out = Column(Integer, default=1, nullable=False)
+    matches_remaining = Column(Integer, default=1, nullable=False, index=True)
+
+    # Where it happened, for the injury report and for undo.
+    match_id = Column(Integer, ForeignKey("matches.id", ondelete="SET NULL"),
+                      nullable=True, index=True)
+    tournament_match_id = Column(Integer, ForeignKey("tournament_matches.id", ondelete="SET NULL"),
+                                 nullable=True, index=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    recovered_at = Column(DateTime, nullable=True)
+
+    tournament = relationship("Tournament", back_populates="injuries")
+
+    __table_args__ = (
+        # The lookup the XI picker makes on every squad open: "who is out for
+        # this team right now".
+        Index("ix_tournament_injury_team_active", "tournament_team_id",
+              "matches_remaining"),
     )
 
 

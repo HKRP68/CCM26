@@ -8,6 +8,41 @@
 {% set list_ep = 'admin_lp_tournaments_list' if t.kind == 'letsplay' else 'admin_tournaments_list' %}
 {% set list_label = 'Lets Play Tournaments' if t.kind == 'letsplay' else 'Tournaments' %}
 {% from "_tournament_macros.html" import team_badge, result_form with context %}
+
+{# Per-fixture venue: which side is at home, and the surface the match must be
+   played on. The pitch selector only appears when the tournament actually fixes
+   the pitch — in "host picks" mode a stamped surface would mean nothing. #}
+{% macro venue_controls(fx) %}
+<div style="display:flex; gap:.4rem; flex-wrap:wrap; align-items:center; width:100%;">
+  {% if fx.team1_id and fx.team2_id %}
+  <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" style="display:flex; gap:.3rem; align-items:center;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="set_fixture_home">
+    <input type="hidden" name="fixture_id" value="{{ fx.id }}">
+    <span title="Home team">🏠</span>
+    <select name="home_team_id" onchange="this.form.submit()">
+      <option value="">neutral</option>
+      {% for tid in [fx.team1_id, fx.team2_id] %}
+      {% set tt = tt_map.get(tid) %}
+      {% if tt %}<option value="{{ tt.id }}" {{ 'selected' if fx.home_team_id == tt.id else '' }}>{{ tt.name }}</option>{% endif %}
+      {% endfor %}
+    </select>
+  </form>
+  {% endif %}
+  {% if pitch_locked %}
+  <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" style="display:flex; gap:.3rem; align-items:center;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="set_fixture_pitch">
+    <input type="hidden" name="fixture_id" value="{{ fx.id }}">
+    <span title="The only pitch this match may be played on">🌱</span>
+    <select name="pitch_type" onchange="this.form.submit()">
+      <option value="">— not fixed —</option>
+      {% for pt in pitch_types %}<option value="{{ pt }}" {{ 'selected' if fx.pitch_type == pt else '' }}>{{ pt }}</option>{% endfor %}
+    </select>
+  </form>
+  {% endif %}
+</div>
+{% endmacro %}
 {% set is_ko_only = (t.knockout_type == 'pure_knockout') %}
 {% set is_series = (t.format == 'Custom Series') %}
 
@@ -57,6 +92,15 @@
           <button class="action-btn accent-btn" type="submit" style="width:auto;"><i class="fas fa-wand-magic-sparkles"></i> Generate / regenerate</button>
         </form>
         {% endif %}
+        {% if pitch_locked %}
+        <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"
+              onsubmit="return confirm('Re-roll the pitch on every unplayed fixture?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="assign_venues">
+          <input type="hidden" name="overwrite_venues" value="on">
+          <button class="action-btn" type="submit" style="width:auto;"><i class="fas fa-seedling"></i> Re-roll pitches</button>
+        </form>
+        {% endif %}
       </div>
     </div>
     <div class="tour-tabs">
@@ -86,7 +130,7 @@
       <div class="fixture-card {{ fx.status }}">
         <div class="fixture-header">
           <span class="round-badge">{% if fx.group_id and g_map.get(fx.group_id) %}{{ g_map[fx.group_id].name }}{% else %}Match {{ fx.match_no }}{% endif %}</span>
-          <span class="status-badge {{ fx.status }}">{{ fx.status }}</span>
+          <span class="status-badge {{ fx.status }}">{{ fx.status }}{% if fx.pitch_type %} · 🌱 {{ fx.pitch_type }}{% endif %}</span>
         </div>
         {% if fx.status != 'scheduled' %}
           <div class="teams-versus">
@@ -118,6 +162,7 @@
             </form>
           </div>
           <div class="fixture-footer">
+            {{ venue_controls(fx) }}
             {% if fx.team1_id and fx.team2_id %}
             <details class="rr-toggle"><summary>✍️ Record result</summary>{{ result_form(fx) }}</details>
             {% endif %}
@@ -160,6 +205,7 @@
         {% if fx.result_text %}<div class="result-banner"><i class="fas fa-trophy"></i> {{ fx.result_text }}</div>{% endif %}
         {% if fx.status == 'scheduled' %}
         <div class="fixture-footer">
+          {{ venue_controls(fx) }}
           {% if fx.team1_id and fx.team2_id %}
           <details class="rr-toggle"><summary>✍️ Record result</summary>{{ result_form(fx) }}</details>
           {% endif %}

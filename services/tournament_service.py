@@ -214,7 +214,7 @@ def set_status(session, tournament_id, status):
 
 
 def reset_tournament(session, tournament_id):
-    """Clear all results, player stats and standings — keep config/teams.
+    """Clear all results, player stats, standings and injuries — keep config/teams.
 
     If a schedule was generated (fixtures have ``match_no > 0``), those fixtures
     are reverted to ``scheduled`` with their results cleared so the schedule is
@@ -247,6 +247,14 @@ def reset_tournament(session, tournament_id):
         fx.scorecard_json = None
         fx.completed_at = None
     session.query(TournamentPlayerStats).filter_by(tournament_id=tid).delete(synchronize_session=False)
+    # Injuries were caused by the results being wiped here, so they go with them
+    # — otherwise a replayed tournament starts with a treatment room full of
+    # players hurt in matches that no longer exist.
+    try:
+        from services import injury_service
+        injury_service.clear_for_tournament(session, tid)
+    except Exception:
+        logger.exception("Clearing injuries failed for tournament %s", tid)
     for tt in session.query(TournamentTeam).filter_by(tournament_id=tid).all():
         tt.played = tt.won = tt.lost = tt.tied = tt.no_result = tt.points = 0
         tt.runs_for = tt.balls_for = tt.runs_against = tt.balls_against = 0
@@ -294,6 +302,309 @@ def participating_user_tg_ids(session, tournament_id):
             .filter_by(tournament_id=int(tournament_id))
             .filter(TournamentTeam.user_tg_id.isnot(None)).all())
     return {int(r.user_tg_id) for r in rows}
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Team ownership  —  "this franchise belongs to these people"
+# ──────────────────────────────────────────────────────────────────────
+#
+# A team has one *owner* and any number of *co-owners*. They are equals for
+# every check made here — a co-owner may pick the team, play its fixtures and
+# see it in their own fixture list — and the owner is distinguished only by
+# being the name shown on the team. This mirrors ``DraftTeam``, whose co-owner
+# list these are inherited from when the league came from a Tournament Draft.
+
+def owner_enforced(tour):
+    """True when this tournament restricts each team to the people who run it."""
+    return bool(getattr(tour, "enforce_team_owner", False))
+
+
+def co_owner_ids(team):
+    """A team's co-owner Telegram ids as a list of ints.
+
+    A hand-edited JSON column degrades to "no co-owners" rather than taking a
+    live team picker down — the same call ``draft_service.co_owner_ids`` makes.
+    """
+    raw = getattr(team, "co_owner_ids_json", None)
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except Exception:
+        logger.warning("Unreadable co_owner_ids_json on tournament team %s",
+                       getattr(team, "id", "?"))
+        return []
+    if not isinstance(value, list):
+        return []
+    out = []
+    for item in value:
+        try:
+            num = int(item)
+        except (TypeError, ValueError):
+            continue
+        if num > 0 and num not in out:
+            out.append(num)
+    return out
+
+
+def team_member_ids(team):
+    """Every Telegram id that may play this team: the owner and its co-owners."""
+    ids = []
+    if getattr(team, "owner_tg_id", None):
+        ids.append(int(team.owner_tg_id))
+    for num in co_owner_ids(team):
+        if num not in ids:
+            ids.append(num)
+    return ids
+
+
+def is_team_member(team, user_tg_id):
+    """True when this Telegram user owns or co-owns the team."""
+    if team is None or user_tg_id is None:
+        return False
+    return int(user_tg_id) in team_member_ids(team)
+
+
+def team_is_claimed(team):
+    """True when anybody at all runs this team."""
+    return bool(team_member_ids(team))
+
+
+def team_owners(session, tournament_id):
+    """``{team name: [Telegram ids]}`` for every claimed team in a tournament.
+
+    Owner first, then co-owners. Teams nobody runs are left out entirely, so
+    ``name in owners`` doubles as "is this team claimed".
+    """
+    rows = (session.query(TournamentTeam)
+            .filter_by(tournament_id=int(tournament_id)).all())
+    out = {}
+    for r in rows:
+        name = (r.name or "").strip()
+        members = team_member_ids(r)
+        if name and members:
+            out[name] = members
+    return out
+
+
+def owned_team_names(session, tournament_id, user_tg_id):
+    """The set of team names this Telegram user owns *or co-owns*."""
+    if not user_tg_id:
+        return set()
+    rows = (session.query(TournamentTeam)
+            .filter_by(tournament_id=int(tournament_id)).all())
+    return {(r.name or "").strip() for r in rows
+            if (r.name or "").strip() and is_team_member(r, user_tg_id)}
+
+
+def may_use_team(session, tour, team_name, user_tg_id):
+    """(allowed, message) — may ``user_tg_id`` pick ``team_name`` in ``tour``?
+
+    Unenforced tournaments, and teams nobody has claimed, are always allowed:
+    turning ownership on must never lock players out of the teams an admin
+    simply hasn't assigned yet.
+    """
+    if not tour or not owner_enforced(tour):
+        return True, None
+    name = (team_name or "").strip()
+    if not name:
+        return True, None
+    row = (session.query(TournamentTeam)
+           .filter_by(tournament_id=int(tour.id))
+           .filter(TournamentTeam.name == name).first())
+    if row is None or not team_is_claimed(row):
+        return True, None
+    if is_team_member(row, user_tg_id):
+        return True, None
+    who = (row.owner_name or "").strip()
+    return False, (f"{name} belongs to {who or 'another owner'}. "
+                   "You can only play with a team you own or co-own.")
+
+
+def set_team_owner(session, tournament_team_id, owner_tg_id, owner_name=None):
+    """Assign (or clear, with ``owner_tg_id`` None) a team's owner. Caller commits.
+
+    Clearing the owner leaves the co-owners in place — they are the people who
+    still run the team, and dropping them silently would hand a claimed team
+    back to the whole chat.
+    """
+    row = session.query(TournamentTeam).get(int(tournament_team_id))
+    if row is None:
+        return None
+    if owner_tg_id in (None, "", 0):
+        row.owner_tg_id = None
+        row.owner_name = None
+    else:
+        new_id = int(owner_tg_id)
+        row.owner_tg_id = new_id
+        row.owner_name = (owner_name or "").strip()[:120] or row.owner_name
+        # Promoting a co-owner must not leave them listed twice.
+        remaining = [i for i in co_owner_ids(row) if i != new_id]
+        row.co_owner_ids_json = _dump_ids(remaining)
+    session.flush()
+    return row
+
+
+def _dump_ids(ids):
+    """Serialise a co-owner list, storing NULL rather than an empty array."""
+    return json.dumps([int(i) for i in ids], separators=(",", ":")) if ids else None
+
+
+def set_co_owners(session, tournament_team_id, tg_ids):
+    """Replace a team's co-owner list wholesale. Caller commits.
+
+    Ignores blanks, duplicates, non-numbers and the owner's own id, so the
+    website can post a raw comma-separated box straight through. Returns the
+    cleaned list.
+    """
+    row = session.query(TournamentTeam).get(int(tournament_team_id))
+    if row is None:
+        return None
+    owner = int(row.owner_tg_id or 0)
+    cleaned = []
+    for raw in (tg_ids or []):
+        try:
+            value = int(str(raw).strip())
+        except (TypeError, ValueError):
+            continue
+        if value > 0 and value != owner and value not in cleaned:
+            cleaned.append(value)
+    row.co_owner_ids_json = _dump_ids(cleaned)
+    session.flush()
+    return cleaned
+
+
+def add_co_owner(session, tournament_team_id, tg_id):
+    """Let one more Telegram id play this team. Caller commits.
+
+    Returns the new co-owner list, or None when the team is missing. Raises
+    ``ValueError`` for an id that is already the owner or already a co-owner.
+    """
+    row = session.query(TournamentTeam).get(int(tournament_team_id))
+    if row is None:
+        return None
+    try:
+        value = int(str(tg_id).strip())
+    except (TypeError, ValueError):
+        raise ValueError("A co-owner is a positive Telegram user id.")
+    if value <= 0:
+        raise ValueError("A co-owner is a positive Telegram user id.")
+    if value == int(row.owner_tg_id or 0):
+        raise ValueError("That id is already the team's owner.")
+    ids = co_owner_ids(row)
+    if value in ids:
+        raise ValueError("That id is already a co-owner of this team.")
+    ids.append(value)
+    row.co_owner_ids_json = _dump_ids(ids)
+    session.flush()
+    return ids
+
+
+def remove_co_owner(session, tournament_team_id, tg_id):
+    """Drop one co-owner. Caller commits. Returns the remaining list."""
+    row = session.query(TournamentTeam).get(int(tournament_team_id))
+    if row is None:
+        return None
+    try:
+        value = int(str(tg_id).strip())
+    except (TypeError, ValueError):
+        return co_owner_ids(row)
+    ids = [i for i in co_owner_ids(row) if i != value]
+    row.co_owner_ids_json = _dump_ids(ids)
+    session.flush()
+    return ids
+
+
+def draft_owner_for_team(session, league_id, team_name):
+    """``(owner_tg_id, owner_name, co_owner_ids)`` read from the draft that made it.
+
+    A Challenge League published from a Tournament Draft carries the franchise
+    owners — and their co-owners — in ``DraftTeam``; the league's own
+    ``ChallengeTeam`` rows do not. When a team is added to a tournament we follow
+    the league back to its draft and inherit them, so a draft tournament needs no
+    re-typing of ids. Returns ``(None, None, [])`` when the league did not come
+    from a draft.
+    """
+    name = (team_name or "").strip()
+    if not league_id or not name:
+        return None, None, []
+    try:
+        from models import PlayerDraft, DraftTeam
+        draft = (session.query(PlayerDraft)
+                 .filter(PlayerDraft.league_id == int(league_id))
+                 .order_by(PlayerDraft.id.desc()).first())
+        if draft is None:
+            return None, None, []
+        dt = (session.query(DraftTeam)
+              .filter(DraftTeam.draft_id == draft.id,
+                      DraftTeam.name == name).first())
+        if dt is None:
+            return None, None, []
+        # ``co_owner_ids`` reads the same column shape on either model.
+        extras = [i for i in co_owner_ids(dt) if i != int(dt.owner_tg_id or 0)]
+        if not dt.owner_tg_id and not extras:
+            return None, None, []
+        owner = int(dt.owner_tg_id) if dt.owner_tg_id else None
+        return owner, (dt.owner_name or None), extras
+    except Exception:
+        logger.exception("draft_owner_for_team failed for league %s", league_id)
+        return None, None, []
+
+
+def sync_owners_from_draft(session, tournament_id):
+    """Fill in missing team owners + co-owners from the league's draft.
+
+    Caller commits. Returns the number of teams that gained somebody. A team
+    that already has an owner or a co-owner is left alone entirely — an admin's
+    manual assignment outranks the draft.
+    """
+    tour = session.query(Tournament).get(int(tournament_id))
+    if not tour or not tour.league_id:
+        return 0
+    changed = 0
+    for tt in (session.query(TournamentTeam)
+               .filter_by(tournament_id=int(tournament_id)).all()):
+        if team_is_claimed(tt):
+            continue
+        tg_id, owner_name, extras = draft_owner_for_team(
+            session, tour.league_id, tt.name)
+        if not tg_id and not extras:
+            continue
+        tt.owner_tg_id = tg_id
+        tt.owner_name = (owner_name or "").strip()[:120] or None
+        tt.co_owner_ids_json = _dump_ids(extras)
+        changed += 1
+    if changed:
+        session.flush()
+    return changed
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Overseas-in-XI limits
+# ──────────────────────────────────────────────────────────────────────
+
+def overseas_limits(session, tour, league=None):
+    """``(min_overseas, max_overseas)`` in force for a tournament.
+
+    The tournament's own columns win when set; each falls back independently to
+    the league's rule, and then to 0 / 11 ("no cap"). ``None`` is the only value
+    that means "inherit" — an explicit 0 is a real limit.
+    """
+    lo = hi = None
+    if tour is not None:
+        lo = getattr(tour, "min_overseas", None)
+        hi = getattr(tour, "max_overseas", None)
+    if (lo is None or hi is None) and tour is not None and league is None and tour.league_id:
+        league = session.query(ChallengeLeague).get(int(tour.league_id))
+    if lo is None:
+        lo = getattr(league, "min_overseas", None)
+    if hi is None:
+        hi = getattr(league, "max_overseas", None)
+    lo = 0 if lo is None else max(0, min(11, int(lo)))
+    hi = 11 if hi is None else max(0, min(11, int(hi)))
+    if hi < lo:
+        hi = lo
+    return lo, hi
 
 
 def _find_open_fixture(session, tournament_id, team1_id, team2_id):
@@ -853,6 +1164,21 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     # this one). Flush so the new match row is visible to the rebuild queries.
     session.flush()
     recompute_tournament(session, tid)
+
+    # ── Injuries ──
+    # Count one match off everyone already sidelined, then roll for new knocks.
+    # A no-op unless the tournament has them switched on. The report rides back
+    # on the returned row (a transient attribute, not a column) so the chat card
+    # can print the injury news without a second trip to the database.
+    try:
+        from services import injury_service
+        tm._injury_report = injury_service.process_match(
+            session, tour, tm, lines,
+            user_by_team={t.id: uid for t, uid in
+                          ((t_inn1, inn1_bat_uid), (t_inn2, inn2_bat_uid)) if t})
+    except Exception:
+        logger.exception("Injury processing failed for tournament %s", tid)
+        tm._injury_report = {"new": [], "recovered": []}
 
     # If this was a knockout match, advance the winner/loser into the next round.
     try:

@@ -219,6 +219,36 @@ def is_tournament_command(command_name, session):
     return _tournament_command_map(session).get(command)
 
 
+def _fixtures_command_map(session):
+    """Return ``{command: ChallengeLeague}`` for every league's fixtures command.
+
+    A league may publish its own alias for the public tournament hub (e.g.
+    ``/iplfixtures``) so players don't have to remember a generic command. Unlike
+    the tournament command this one starts nothing — it only opens a read-only
+    card — so it is not gated.
+    """
+    out = {}
+    try:
+        for league in (session.query(ChallengeLeague)
+                       .filter(ChallengeLeague.is_active == True)  # noqa: E712
+                       .all()):
+            cmd = (getattr(league, "fixtures_command", None) or "")
+            cmd = cmd.strip().lower().lstrip("/").split("@", 1)[0]
+            if cmd:
+                out[cmd] = league
+    except Exception:
+        logger.exception("Failed to load tournament fixtures command map")
+    return out
+
+
+def is_fixtures_command(command_name, session):
+    """Return the ``ChallengeLeague`` whose fixtures command matches, or None."""
+    command = (command_name or "").lower().lstrip("/").split("@", 1)[0]
+    if not command:
+        return None
+    return _fixtures_command_map(session).get(command)
+
+
 def _active_tournament_command(session, tour):
     """Best-effort tournament command string for an active tournament."""
     if tour.league_id:
@@ -488,6 +518,43 @@ def _team_keyboard(draft_id, teams, unavailable_teams=None, team_codes=None):
     return InlineKeyboardMarkup(rows)
 
 
+def _allowed_teams_for(draft, side):
+    """The team names ``side`` ("host"/"target") may pick, or None for "any".
+
+    Owner-locked tournaments restrict each participant to the teams they own or
+    co-own (plus any team nobody runs — see ``_handle_tournament_command``).
+    Everything else returns None so the picker behaves exactly as before.
+    """
+    if not draft.get("owner_locked"):
+        return None
+    key = "host_allowed_teams" if side == "host" else "target_allowed_teams"
+    allowed = draft.get(key)
+    return set(allowed) if allowed is not None else None
+
+
+def _team_keyboard_for(draft, draft_id):
+    """The team keyboard for whoever the draft is currently waiting on.
+
+    Hides the teams the current picker may not choose: the host's team when the
+    league forbids a mirror match, and — in an owner-locked tournament — every
+    team they neither own nor co-own. Hiding is a convenience;
+    ``challenge_team_callback`` re-checks both rules before accepting a pick.
+    """
+    teams = draft.get("teams") or []
+    turn = draft.get("turn") or "host"
+    side = "host" if turn == "host" else "target"
+    unavailable = set()
+    if turn != "host" and not _same_team_allowed_for_draft(draft):
+        host_team = draft.get("host_team")
+        if host_team:
+            unavailable.add(host_team)
+    allowed = _allowed_teams_for(draft, side)
+    if allowed is not None:
+        unavailable |= {t for t in teams if t not in allowed}
+    return _team_keyboard(draft_id, teams, sorted(unavailable),
+                          team_codes=draft.get("team_codes"))
+
+
 def _team_selection_status(draft):
     lines = []
     host_team = draft.get("host_team")
@@ -543,6 +610,17 @@ def _pitch_keyboard(draft_id, allow_deny=True):
     return InlineKeyboardMarkup(rows)
 
 
+def _deny_only_keyboard(draft_id):
+    """Just the guest's Deny Match button.
+
+    Used when a tournament fixture fixes the surface: there is no pitch to pick,
+    but the guest must still be able to refuse the match, and the Deny button
+    normally lives on the pitch prompt.
+    """
+    return InlineKeyboardMarkup([[InlineKeyboardButton(
+        "❌ Deny Match", callback_data=f"cl_denymatch_{draft_id}")]])
+
+
 def _pitch_prompt(draft):
     host = draft.get("host") or {}
     mention = _mention(host.get("tg_id"), host.get("name") or "Host")
@@ -587,6 +665,90 @@ async def _send_challenge_xi_prompt(context, draft, message_obj):
         logger.exception("Failed to send challenge created Playing XI message")
 
 
+def _apply_pitch(draft, pitch):
+    """Fix ``pitch`` on the draft and return the confirmation card for the chat.
+
+    Also generates this surface's dynamic conditions + Pitch Report. The same
+    conditions dict is threaded into the live match (handlers/cipl_play.py) so
+    the weather actually nudges ball outcomes — not just flavour text.
+    """
+    draft["pitch_type"] = pitch
+    try:
+        from services.pitch_report import build_pitch_report
+        report_text, conditions = build_pitch_report(pitch)
+        draft["conditions"] = conditions
+    except Exception:
+        logger.exception("Failed to build pitch report")
+        report_text = None
+
+    header = (
+        f"🏆 <b>{_league_battle_title(draft.get('league_name'))}</b>\n"
+        "═════════════════════════════\n"
+        f"🟢 {draft.get('host_team')}  🆚  {draft.get('target_team')}\n"
+    )
+    locked_note = ""
+    if draft.get("pitch_locked"):
+        home = draft.get("home_team")
+        locked_note = ("\n🔒 <i>Fixed by the tournament fixture"
+                       + (f" — {_esc(home)} are at home" if home else "")
+                       + ". Nobody picks the surface for this match.</i>")
+    if report_text:
+        return header + "\n" + report_text + locked_note
+    desc = _PITCH_DESC.get(pitch)
+    return (header + f"🌱 <b>Pitch:</b> {pitch}"
+            + (f" — {desc}" if desc else "") + locked_note)
+
+
+def _resolve_fixture_venue(draft):
+    """``(pitch, home_team_name)`` fixed by this tournament fixture, or ``(None, None)``.
+
+    Read at the moment both teams are known — the fixture itself is only
+    *reserved* later, at the toss, so this looks up the pair's earliest open
+    fixture. Anything unexpected (no tournament, no schedule, host-picked pitch)
+    comes back empty and the host's pitch picker runs as it always has.
+    """
+    if not draft.get("is_tournament") or not draft.get("tournament_id"):
+        return None, None
+    session = get_session()
+    try:
+        from models import Tournament
+        from services import league_schedule_service
+        tour = session.query(Tournament).get(int(draft["tournament_id"]))
+        return league_schedule_service.locked_pitch_for_pair(
+            session, tour, draft.get("host_team"), draft.get("target_team"))
+    except Exception:
+        logger.exception("Failed to resolve the fixture's locked pitch")
+        return None, None
+    finally:
+        session.close()
+
+
+async def _after_pitch_selected(context, draft, draft_id, message_obj):
+    """Everything that follows the surface being settled: bot XI, then XI prompts."""
+    # Vs the bot: lock in its Playing XI now so the only thing left is the
+    # human's own XI selection, which runs exactly as it does in /cipl.
+    if draft.get("vs_bot") and not _autoconfirm_bot_xi(draft):
+        await _disarm_selection_timer(context, draft)
+        _release_draft_chat_lock(context.bot_data, draft)
+        context.bot_data.pop(_challenge_team_draft_key(draft_id), None)
+        if message_obj is not None:
+            try:
+                await message_obj.reply_text(
+                    f"❌ The bot's team ({draft.get('target_team')}) doesn't have a "
+                    f"squad it can field an XI from. Try /ciplbot again.")
+            except Exception:
+                logger.exception("ciplbot: failed to report a missing bot squad")
+        return
+
+    await _send_challenge_xi_prompt(context, draft, message_obj)
+    # Both players now pick their Playing XI — arm the clock on both sides (only
+    # the human side exists in a bot match).
+    waiting = [draft.get("host_tg_id")]
+    if not draft.get("vs_bot"):
+        waiting.append(draft.get("target_tg_id"))
+    await _arm_selection_timer(context, draft, waiting, "xi")
+
+
 async def challenge_pitch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """cl_pitch_{draft_id}_{idx} — host selects the pitch, then XI selection opens."""
     query = update.callback_query
@@ -617,35 +779,8 @@ async def challenge_pitch_callback(update: Update, context: ContextTypes.DEFAULT
         return
 
     pitch = PITCH_TYPES[pitch_idx]
-    draft["pitch_type"] = pitch
     await query.answer(f"Pitch: {pitch}")
-
-    # Generate the dynamic conditions + Pitch Report for this surface. The same
-    # conditions dict is threaded into the live match (handlers/cipl_play.py) so
-    # the weather actually nudges ball outcomes — not just flavour text.
-    try:
-        from services.pitch_report import build_pitch_report
-        report_text, conditions = build_pitch_report(pitch)
-        draft["conditions"] = conditions
-    except Exception:
-        logger.exception("Failed to build pitch report")
-        report_text = None
-
-    if report_text:
-        confirm = (
-            f"🏆 <b>{_league_battle_title(draft.get('league_name'))}</b>\n"
-            "═════════════════════════════\n"
-            f"🟢 {draft.get('host_team')}  🆚  {draft.get('target_team')}\n\n"
-            f"{report_text}"
-        )
-    else:
-        desc = _PITCH_DESC.get(pitch)
-        confirm = (
-            f"🏆 <b>{_league_battle_title(draft.get('league_name'))}</b>\n"
-            "═════════════════════════════\n"
-            f"🟢 {draft.get('host_team')}  🆚  {draft.get('target_team')}\n"
-            f"🌱 <b>Pitch:</b> {pitch}" + (f" — {desc}" if desc else "")
-        )
+    confirm = _apply_pitch(draft, pitch)
     try:
         await query.edit_message_text(confirm, parse_mode="HTML")
     except Exception:
@@ -654,27 +789,8 @@ async def challenge_pitch_callback(update: Update, context: ContextTypes.DEFAULT
         except Exception:
             logger.exception("Failed to update pitch confirmation message")
 
-    # Vs the bot: lock in its Playing XI now so the only thing left is the
-    # human's own XI selection, which runs exactly as it does in /cipl.
-    if draft.get("vs_bot") and not _autoconfirm_bot_xi(draft):
-        await _disarm_selection_timer(context, draft)
-        _release_draft_chat_lock(context.bot_data, draft)
-        context.bot_data.pop(_challenge_team_draft_key(draft_id), None)
-        try:
-            await query.message.reply_text(
-                f"❌ The bot's team ({draft.get('target_team')}) doesn't have a "
-                f"squad it can field an XI from. Try /ciplbot again.")
-        except Exception:
-            logger.exception("ciplbot: failed to report a missing bot squad")
-        return
-
-    await _send_challenge_xi_prompt(context, draft, getattr(query, "message", None))
-    # Both players now pick their Playing XI — arm the clock on both sides (only
-    # the human side exists in a bot match).
-    waiting = [draft.get("host_tg_id")]
-    if not draft.get("vs_bot"):
-        waiting.append(draft.get("target_tg_id"))
-    await _arm_selection_timer(context, draft, waiting, "xi")
+    await _after_pitch_selected(context, draft, draft_id,
+                                getattr(query, "message", None))
 
 
 async def challenge_deny_match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -911,7 +1027,8 @@ def _load_team_players_with_retry(draft, side, attempts=2):
 
     Returns ``(players, team_id, league_cfg)`` where ``league_cfg`` is ``None`` or a
     dict of the league's overseas/format settings read while the session is open (so
-    no detached-instance access happens after it closes). Raises
+    no detached-instance access happens after it closes), plus ``injured_out`` — the
+    players this side is missing, already removed from ``players``. Raises
     ``_TeamPlayersLoadError`` only when every attempt failed with an error — never for
     a genuinely empty roster (which comes back as an empty ``players`` list). This lets
     the squad-open path show a "tap again" hint on a transient blip instead of a
@@ -935,6 +1052,40 @@ def _load_team_players_with_retry(draft, side, attempts=2):
                     "overseas_max": int(max_raw) if max_raw is not None else 11,
                     "ball_format": getattr(league, "match_format", "T20") or "T20",
                 }
+                # A tournament may tighten (or relax) the league's overseas rule
+                # for its own matches; its limits win where they are set.
+                if draft.get("is_tournament") and draft.get("tournament_id"):
+                    from models import Tournament
+                    from services import tournament_service
+                    tour = session.query(Tournament).get(int(draft["tournament_id"]))
+                    if tour is not None:
+                        lo, hi = tournament_service.overseas_limits(
+                            session, tour, league)
+                        league_cfg["overseas_min"] = lo
+                        league_cfg["overseas_max"] = hi
+            # Injured players are taken out of the squad entirely rather than
+            # shown and refused: the picker's numbering, the typed quick-select
+            # and the bot's XI builder all work off this one list, so removing
+            # them here is what makes "ruled out" actually mean ruled out.
+            # ``out`` is carried back so the prompt can name who is missing.
+            out_list = []
+            if draft.get("is_tournament") and draft.get("tournament_id") and team_id:
+                from models import Tournament
+                from services import injury_service
+                tour = session.query(Tournament).get(int(draft["tournament_id"]))
+                hurt_ids, hurt_rows = injury_service.unavailable_for_team(
+                    session, tour, team_id)
+                if hurt_ids:
+                    out_list = [
+                        {"name": r.player_name or "Player",
+                         "injury": r.injury_type,
+                         "matches": int(r.matches_remaining or 0)}
+                        for r in hurt_rows]
+                    players = [p for p in players
+                               if int(getattr(p, "id")) not in hurt_ids]
+            if league_cfg is None:
+                league_cfg = {}
+            league_cfg["injured_out"] = out_list
             return players, team_id, league_cfg
         except Exception as exc:  # transient DB failure — retry with a fresh session
             last_exc = exc
@@ -1037,6 +1188,24 @@ def _challenge_overseas_limits(draft):
     return lo, hi
 
 
+def _injury_note(draft, side):
+    """Lines naming the players this side is missing, or [] when nobody is out.
+
+    The injured are already gone from the squad list, so without this the
+    captain just finds a shorter list of names and no explanation.
+    """
+    rows = (draft.get("injured_out") or {}).get(side) or []
+    if not rows:
+        return []
+    out = ["", "🚑 <b>Unavailable (injured):</b>"]
+    for row in rows:
+        n = int(row.get("matches") or 0)
+        span = "1 more match" if n == 1 else f"{n} more matches"
+        out.append(f"• {_esc(row.get('name') or 'Player')} — "
+                   f"{_esc(row.get('injury') or 'injured')}, out {span}")
+    return out
+
+
 def _challenge_rule_checkbox(passed):
     return "☑️" if passed else "☐"
 
@@ -1107,6 +1276,7 @@ def _challenge_xi_text(draft, side, team_name, players, selected_ids):
             f"(min {min_overseas} / max {max_overseas})"
         )
     lines.append("• Selection order becomes batting order")
+    lines.extend(_injury_note(draft, side))
     if selected_players:
         lines.extend(["", "<b>Batting order:</b>"])
         lines.extend(f"{idx}. {player.name} ({_challenge_player_category(player)})" for idx, player in enumerate(selected_players, start=1))
@@ -1229,7 +1399,7 @@ def _local_static_path(image_url):
     return None
 
 
-async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None, is_tournament=False, vs_bot=False):
+async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None, is_tournament=False, vs_bot=False, owner_locked=False, host_teams=None, guest_teams=None):
     # ``effective_message`` rather than ``update.message`` so this also works when
     # the picker is opened from a button (the /ciplbot Rematch), where
     # ``update.message`` is None.
@@ -1288,6 +1458,11 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
         # whole draft → toss → play flow so the result is recorded against it.
         "is_tournament": bool(is_tournament),
         "tournament_id": tournament_id,
+        # Owner-locked tournament: the teams each side is allowed to pick,
+        # resolved once here so the picker and its re-renders agree.
+        "owner_locked": bool(owner_locked),
+        "host_allowed_teams": list(host_teams) if host_teams is not None else None,
+        "target_allowed_teams": list(guest_teams) if guest_teams is not None else None,
         # /ciplbot: the "target" is the AI opponent. It picks its own team and
         # Playing XI, calls nothing, and the match is unranked practice.
         "vs_bot": bool(vs_bot),
@@ -1319,7 +1494,7 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
     if league_record is not None:
         draft["league_id"] = league_record.id
     caption = _team_picker_prompt(draft, "host")
-    markup = _team_keyboard(draft_id, teams, team_codes=team_codes)
+    markup = _team_keyboard_for(draft, draft_id)
     image_url = _league_image_url(league_record)
     local_path = _local_static_path(image_url)
     sent = None
@@ -1702,11 +1877,42 @@ async def _handle_tournament_command(update, context, session, league):
             "❌ One or both teams are not participating in the active tournament.")
         return
 
+    # Owner-locked tournaments: each side may only field a team they own or
+    # co-own. Check it here, before a picker is even opened, so a player with no
+    # team is told why rather than discovering it one tap later.
+    owner_locked = tournament_service.owner_enforced(active)
+    host_owned = guest_owned = None
+    if owner_locked:
+        claimed = tournament_service.team_owners(session, active.id)
+        host_owned = tournament_service.owned_team_names(
+            session, active.id, challenger.telegram_id) & set(teams)
+        guest_owned = tournament_service.owned_team_names(
+            session, active.id, target.telegram_id) & set(teams)
+        # A team nobody runs stays open to anyone, so a half-assigned tournament
+        # never locks its own players out.
+        free = {t for t in teams if t not in claimed}
+        host_owned |= free
+        guest_owned |= free
+        if not host_owned:
+            await update.message.reply_text(
+                "🔒 This tournament is owner-locked and you don't own or co-own "
+                "a team in it.\n"
+                "Ask an admin to add you — see /ctteams for the field.")
+            return
+        if not guest_owned:
+            await update.message.reply_text(
+                f"🔒 {_user_label(target)} doesn't own or co-own a team in this "
+                "tournament, so they can't play it.")
+            return
+
     await _send_league_team_picker(
         update, context, challenger=challenger, target=target,
         league_key=league_key, league_name=league_name,
         league_record=league, teams=teams, session=session,
-        tournament_id=active.id, is_tournament=True)
+        tournament_id=active.id, is_tournament=True,
+        owner_locked=owner_locked,
+        host_teams=sorted(host_owned) if host_owned is not None else None,
+        guest_teams=sorted(guest_owned) if guest_owned is not None else None)
 
 
 async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1731,6 +1937,14 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
         tournament_league = is_tournament_command(command_name, session)
         if tournament_league is not None:
             await _handle_tournament_command(update, context, session, tournament_league)
+            return
+
+        # A league's public fixtures/info alias: read-only, open to everyone.
+        if is_fixtures_command(command_name, session) is not None:
+            session.close()
+            session = None
+            from handlers.cl_tournament import ctour_handler
+            await ctour_handler(update, context)
             return
 
         league_key, league_name = is_challenge_league_command(command_name, session)
@@ -1901,6 +2115,16 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.answer("This team is already selected. Please choose another team.", show_alert=True)
         return
 
+    # Owner lock. The keyboard already hides the teams this player can't use, but
+    # a stale card (or a replayed callback) can still deliver one, so refuse it
+    # here as well — this is the authoritative check.
+    allowed = _allowed_teams_for(draft, player_key)
+    if allowed is not None and selected_team not in allowed:
+        await query.answer(
+            f"🔒 {selected_team} isn't yours. In this tournament you can only "
+            "play with a team you own or co-own.", show_alert=True)
+        return
+
     # Schedule gating: in a tournament with a generated schedule, the two chosen
     # teams must still have an uncompleted scheduled fixture between them. This is
     # what enforces "a team can't play again once its match is done".
@@ -1955,20 +2179,14 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_caption(
             caption=message,
             parse_mode="HTML",
-            reply_markup=_team_keyboard(
-                draft_id, teams, [] if same_team_allowed else [draft.get("host_team")],
-                team_codes=draft.get("team_codes"),
-            ),
+            reply_markup=_team_keyboard_for(draft, draft_id),
         )
     except Exception:
         try:
             await query.edit_message_text(
                 message,
                 parse_mode="HTML",
-                reply_markup=_team_keyboard(
-                    draft_id, teams, [] if same_team_allowed else [draft.get("host_team")],
-                    team_codes=draft.get("team_codes"),
-                ),
+                reply_markup=_team_keyboard_for(draft, draft_id),
             )
         except Exception:
             logger.exception("Failed to update league team picker message")
@@ -1980,7 +2198,27 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
         # match-start sweep removes it from the chat.
         if message_obj is not None:
             _track_setup_msg(draft, message_obj)
-            # New step: the host now picks the pitch before Playing XI selection.
+            # A tournament fixture can pin the surface this match must be played
+            # on. When it does, nobody picks: the pitch is announced and setup
+            # goes straight to the Playing XI.
+            locked_pitch, home_team = _resolve_fixture_venue(draft)
+            if locked_pitch:
+                draft["pitch_locked"] = True
+                draft["home_team"] = home_team
+                confirm = _apply_pitch(draft, locked_pitch)
+                try:
+                    sent = await message_obj.reply_text(
+                        confirm, parse_mode="HTML",
+                        # The guest's only say is still to refuse the match; the
+                        # Deny button therefore moves onto this card.
+                        reply_markup=(None if draft.get("vs_bot") else
+                                      _deny_only_keyboard(draft_id)))
+                    _track_setup_msg(draft, sent)
+                except Exception:
+                    logger.exception("Failed to announce the fixture's locked pitch")
+                await _after_pitch_selected(context, draft, draft_id, message_obj)
+                return
+            # Otherwise the host picks the pitch before Playing XI selection.
             # Vs the bot there is no guest who could deny the match.
             try:
                 sent = await message_obj.reply_text(
@@ -2507,14 +2745,28 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
             "⚠️ Couldn't load the squad just now. Please tap Select XI again.",
             show_alert=True)
         return
-    if league_cfg is not None:
+    if league_cfg:
         # Cache the league's overseas limits + match format on the draft so the
-        # picker render and confirm callbacks enforce them without re-hitting the DB.
-        draft["overseas_min"] = league_cfg["overseas_min"]
-        draft["overseas_max"] = league_cfg["overseas_max"]
-        draft["ball_format"] = league_cfg["ball_format"]
+        # picker render and confirm callbacks enforce them without re-hitting the
+        # DB. ``.get`` throughout: a league that failed to resolve still returns a
+        # dict carrying the injury list, and must not clobber earlier values.
+        for key in ("overseas_min", "overseas_max", "ball_format"):
+            if key in league_cfg:
+                draft[key] = league_cfg[key]
+        # Who this side is missing, for the note on the picker.
+        draft.setdefault("injured_out", {})[side] = league_cfg.get("injured_out") or []
     if not players:
         await query.answer(f"No players are configured for {team_name} yet.", show_alert=True)
+        return
+    hurt = (draft.get("injured_out") or {}).get(side) or []
+    if len(players) < 11 and hurt:
+        # Injuries have eaten into the squad past a fieldable XI. The generator
+        # refuses to cause this, so it means an admin ruled somebody out by hand
+        # — say so plainly rather than letting the captain hunt for an 11th name.
+        await query.answer(
+            f"🚑 {team_name} only has {len(players)} fit players — "
+            f"{len(hurt)} are injured. An admin needs to clear an injury or add "
+            "to the squad before this match can be played.", show_alert=True)
         return
 
     selection = _challenge_xi_selection(draft, side)
