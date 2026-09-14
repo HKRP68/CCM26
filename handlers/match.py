@@ -2616,6 +2616,207 @@ async def cric_cancel_lobby_callback(update: Update, context: ContextTypes.DEFAU
     await q.edit_message_text("❌ Match lobby has been cancelled.")
 
 
+# ═══════════════════ Trait Vote (/wpm, before the toss) ═════════════
+# Both captains say whether traits play in this match; the two answers decide
+# (services.trait_vote_service owns the rule). The vote lives on the lobby dict
+# in bot_data — there is no Match row yet — and is handed to the engine at
+# launch as ``traits_enabled`` on the live state.
+
+def _trait_vote_keyboard():
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("⚡ Yes — with Traits", callback_data="cric_traits:yes"),
+        InlineKeyboardButton("🚫 No — without", callback_data="cric_traits:no"),
+    ]])
+
+
+def _xi_with_traits(session, uid):
+    """This user's Playing XI as engine dicts, each carrying its equipped traits.
+
+    ``_gxi`` builds the XI the match will actually field; the traits are loaded
+    in one batched query on top, because the vote prompt has to quote each
+    side's Team Overall *with* the Trait Boost — that boost is the advantage the
+    two captains are voting about.
+    """
+    xi = _gxi(session, uid)
+    try:
+        from services.trait_rating_service import roster_traits
+        tmap = roster_traits(session, [p.get("roster_id") for p in xi])
+        for p in xi:
+            p["traits"] = tmap.get(int(p.get("roster_id") or 0), [])
+    except Exception:
+        logger.exception("trait vote: XI trait load failed for user %s", uid)
+    return xi
+
+
+async def _send_cric_toss_prompt(context, cid, lobby, edit_message_id=None,
+                                 header=""):
+    """Show the heads/tails call for a joined /wpm lobby.
+
+    Reached either straight from the join (no trait vote to hold) or once the
+    vote has been settled, in which case ``header`` carries its result so the
+    two are read together rather than as two separate messages.
+    """
+    from services.match_broadcast import coin_call_keyboard
+    body = (
+        f"{header}\n\n" if header else ""
+    ) + (
+        "🪙 <b>TOSS</b> 🪙\n"
+        "═════════════════════════════\n"
+        f"• Host: {lobby.get('host_label', 'Host')}\n"
+        f"• Guest: {lobby.get('guest_label', 'Guest')}\n\n"
+        f"{lobby.get('guest_label', 'Guest')}, call it in the air!\n"
+        "<b>Heads</b> or <b>Tails?</b>"
+    )
+    markup = coin_call_keyboard("cric_coin:heads", "cric_coin:tails")
+    msg_id = edit_message_id or lobby.get("lobby_msg_id")
+    if msg_id:
+        await context.bot.edit_message_text(
+            body, chat_id=cid, message_id=msg_id,
+            parse_mode="HTML", reply_markup=markup)
+        return
+    sent = await context.bot.send_message(cid, body, parse_mode="HTML",
+                                          reply_markup=markup)
+    if sent:
+        lobby["lobby_msg_id"] = sent.message_id
+
+
+def _cancel_trait_vote_timer(context, cid):
+    """Remove the pending trait-vote expiry job for a chat."""
+    try:
+        if context.job_queue:
+            for j in context.job_queue.get_jobs_by_name(f"traitvote_{cid}"):
+                j.schedule_removal()
+    except Exception:
+        logger.exception("Failed to cancel trait vote timer")
+
+
+async def _start_trait_vote(context, cid, lobby, session, host, guest):
+    """Put the traits question to both captains. Returns True when it was asked.
+
+    False means there was nothing to ask — the vote is switched off, or neither
+    squad has a single trait equipped — and the caller should go on to the toss.
+    """
+    from services import trait_vote_service as tvs
+    # A tour fixture keeps the tour's rules: two captains must not be able to
+    # play an official fixture under rules the pair before them did not.
+    if not tvs.is_enabled() or lobby.get("tour_match_id"):
+        return False
+    try:
+        host_xi = _xi_with_traits(session, host.id)
+        guest_xi = _xi_with_traits(session, guest.id)
+    except Exception:
+        logger.exception("trait vote: XI load failed; skipping the vote")
+        return False
+    if not (tvs.has_any_traits(host_xi) or tvs.has_any_traits(guest_xi)):
+        return False
+
+    lobby["trait_vote"] = {
+        "host": None, "guest": None,
+        "host_strength": tvs.team_strength(host_xi),
+        "guest_strength": tvs.team_strength(guest_xi),
+    }
+    vote = lobby["trait_vote"]
+    text = tvs.prompt_text(
+        lobby.get("host_label", "Host"), lobby.get("guest_label", "Guest"),
+        vote["host_strength"], vote["guest_strength"])
+    try:
+        await context.bot.edit_message_text(
+            text, chat_id=cid, message_id=lobby.get("lobby_msg_id"),
+            parse_mode="HTML", reply_markup=_trait_vote_keyboard())
+    except Exception:
+        # The question never reached the chat, so there is nothing to answer.
+        # Drop the vote rather than leave the lobby waiting on buttons that do
+        # not exist — the caller falls through to the toss.
+        logger.exception("trait vote prompt render failed; skipping the vote")
+        lobby.pop("trait_vote", None)
+        return False
+    try:
+        if context.job_queue:
+            context.job_queue.run_once(
+                _expire_trait_vote, tvs.vote_timeout(), name=f"traitvote_{cid}",
+                data={"chat_id": cid})
+    except Exception:
+        logger.exception("Failed to schedule /wpm trait vote expiry")
+    return True
+
+
+async def _settle_trait_vote(context, cid, lobby):
+    """Resolve the two answers, stamp the lobby, and move on to the toss."""
+    from services import trait_vote_service as tvs
+    vote = lobby.pop("trait_vote", None)
+    if not vote:
+        # Both captains tapped at the same moment and each handler saw a
+        # complete vote. Whichever got here first owns the settlement; the
+        # second must not re-resolve it and re-post the toss.
+        return
+    host_label = lobby.get("host_label", "Host")
+    guest_label = lobby.get("guest_label", "Guest")
+    result = tvs.resolve(vote.get("host"), vote.get("guest"),
+                         vote.get("host_strength"), vote.get("guest_strength"))
+    lobby["traits_enabled"] = bool(result.enabled)
+    _cancel_trait_vote_timer(context, cid)
+    header = tvs.result_text(result, host_label, guest_label,
+                             vote.get("host"), vote.get("guest"))
+    await _send_cric_toss_prompt(context, cid, lobby, header=header)
+
+
+async def _expire_trait_vote(ctx):
+    """Settle a trait vote nobody finished — missing answers take the default."""
+    cid = ctx.job.data["chat_id"]
+    lobby = ctx.bot_data.get(_cric_lobby_key(cid))
+    if not lobby or not lobby.get("trait_vote"):
+        return  # already settled, or the lobby is gone
+    try:
+        await _settle_trait_vote(ctx, cid, lobby)
+    except Exception:
+        logger.exception("trait vote expiry failed for chat %s", cid)
+
+
+async def cric_traits_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """cric_traits:yes / cric_traits:no — one answer per captain, kept secret
+    until both are in."""
+    q = update.callback_query
+    cid = q.message.chat_id
+    lobby = context.bot_data.get(_cric_lobby_key(cid))
+    vote = (lobby or {}).get("trait_vote")
+    if not lobby or not vote:
+        await q.answer("This vote is already settled.", show_alert=True)
+        return
+
+    from services import trait_vote_service as tvs
+    answer = tvs.normalize_vote(q.data.split(":", 1)[-1])
+    if not answer:
+        await q.answer("Invalid choice.", show_alert=True)
+        return
+
+    if q.from_user.id == lobby.get("host_tg_id"):
+        side = "host"
+    elif q.from_user.id == lobby.get("guest_tg_id"):
+        side = "guest"
+    else:
+        await q.answer("Only the two captains in this match can vote.", show_alert=True)
+        return
+    if vote.get(side):
+        await q.answer("You have already voted — answers are locked in.", show_alert=True)
+        return
+
+    vote[side] = answer
+    await q.answer("Locked in. Your answer stays hidden until both are in.")
+    if vote.get("host") and vote.get("guest"):
+        await _settle_trait_vote(context, cid, lobby)
+        return
+    # One down, one to go — refresh the prompt without revealing the answer.
+    try:
+        await q.edit_message_text(
+            tvs.prompt_text(
+                lobby.get("host_label", "Host"), lobby.get("guest_label", "Guest"),
+                vote.get("host_strength"), vote.get("guest_strength"),
+                host_voted=bool(vote.get("host")), guest_voted=bool(vote.get("guest"))),
+            parse_mode="HTML", reply_markup=_trait_vote_keyboard())
+    except Exception:
+        logger.exception("trait vote prompt refresh failed (non-fatal)")
+
+
 async def cric_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     cid = q.message.chat_id
@@ -2679,17 +2880,19 @@ async def cric_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         })
         # Lobby is now joined — stop the auto-expiry job.
         _cancel_lobby_timer(context, cid)
+        lobby["lobby_msg_id"] = q.message.message_id
         await q.answer("Joined match lobby!")
-        from services.match_broadcast import coin_call_keyboard
-        await q.edit_message_text(
-            "🪙 <b>TOSS</b> 🪙\n"
-            "═════════════════════════════\n"
-            f"• Host: {_user_label(host)}\n"
-            f"• Guest: {_user_label(guest)}\n\n"
-            f"{_user_label(guest)}, call it in the air!\n"
-            "<b>Heads</b> or <b>Tails?</b>",
-            parse_mode="HTML",
-            reply_markup=coin_call_keyboard("cric_coin:heads", "cric_coin:tails"))
+        # Both captains are in: ask whether traits play before the toss. When
+        # there is nothing to ask (vote off, or neither squad carries a trait)
+        # the lobby goes straight to the toss exactly as it always did.
+        asked = False
+        try:
+            asked = await _start_trait_vote(context, cid, lobby, session, host, guest)
+        except Exception:
+            logger.exception("trait vote prompt failed; falling through to the toss")
+        if not asked:
+            await _send_cric_toss_prompt(context, cid, lobby,
+                                         edit_message_id=q.message.message_id)
     except Exception:
         session.rollback()
         logger.exception("/wpm lobby join failed")
@@ -2860,7 +3063,11 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         # Team Overall gap between the two XIs voids career stats (anti-farming).
         ok, message = init_match_for_webapp(
             session, match.id,
-            enforce_fair_stats=not bool(lobby.get("tour_match_id")))
+            enforce_fair_stats=not bool(lobby.get("tour_match_id")),
+            # The traits question both captains answered in the lobby. Absent
+            # (vote switched off, or neither squad had a trait) means ON, which
+            # is what every /wpm match did before the vote existed.
+            traits_enabled=lobby.get("traits_enabled", True))
         if not ok:
             # Reset a linked TourMatch back to pending so it can be replayed
             # (the Match is about to be deleted).
@@ -2884,9 +3091,15 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         toss_note = (f"{_user_label(winner)} won & chose to "
                      f"{'bat' if decision == 'bat' else 'bowl'}")
         from services.match_broadcast import send_match_ready_message
+        from services import trait_vote_service as tvs
+        traits_on = lobby.get("traits_enabled", True)
         await send_match_ready_message(
             context, cid, match, bat_team, bowl_team,
-            _mention(bat_user), _mention(bowl_user), toss_note=toss_note)
+            _mention(bat_user), _mention(bowl_user), toss_note=toss_note,
+            # Only worth a line when the captains actually answered the question
+            # — a match that never held a vote reads exactly as it always did.
+            traits_note=(tvs.status_line(traits_on)
+                         if "traits_enabled" in lobby else None))
         # Fair-match stat gate: if the two XIs are too far apart in Team Overall
         # the match earns no career stats — warn both players up front so nobody
         # farms stats against a weak opponent expecting them to count.
@@ -4642,6 +4855,30 @@ def _traits_for(s, roster_id):
     return cache[key]
 
 
+def _ball_traits(s, player):
+    """The traits this player brings to this delivery — or none, by agreement.
+
+    ``traits_enabled`` is False only when both captains settled on a match
+    without traits before the toss (services.trait_vote_service). It is checked
+    here, on the one path every /wpm ball takes — the chat flow, the Mini App
+    (services.match_webapp_service calls straight into ``_calc``) and the vsbot
+    auto-play all funnel through it — so the agreement cannot be honoured in one
+    of them and quietly missed in another.
+
+    Synthetic players (the AI bot's XI) carry their traits inline on the dict
+    and have no PlayerTrait rows to look up; real players fall through to the
+    per-match cached lookup.
+    """
+    if not traits_enabled_for(s):
+        return []
+    return player.get("traits") or _traits_for(s, player.get("roster_id"))
+
+
+def traits_enabled_for(s):
+    """Do traits play in this match state? Absent means yes."""
+    return (s or {}).get("traits_enabled") is not False
+
+
 def _fielding_quality_for(s):
     """Fielding quality (35-95) of the current bowling side, cached per innings.
 
@@ -5018,13 +5255,10 @@ def _calc(s, striker, bowler, shot, delivery):
     eff_bat = striker["bat_rating"] + bat_form_mod + bat_chem_mod
     eff_bowl = bowler["bowl_rating"] + bowl_form_mod + bowl_chem_mod
 
-    # Fetch traits for striker and bowler (per-match cached — traits don't
-    # change mid-match, so this is a DB hit only on the first ball each faces).
-    # Bot/synthetic players carry their traits inline on the player dict (they
-    # have negative synthetic roster_ids with no PlayerTrait rows). Real players
-    # have no "traits" key and fall through to the per-match DB lookup.
-    striker_traits = striker.get("traits") or _traits_for(s, striker.get("roster_id"))
-    bowler_traits = bowler.get("traits") or _traits_for(s, bowler.get("roster_id"))
+    # Traits for striker and bowler — per-match cached, and empty for the whole
+    # match when both captains voted to play without them (see _ball_traits).
+    striker_traits = _ball_traits(s, striker)
+    bowler_traits = _ball_traits(s, bowler)
 
     # Build trait context for activation conditions
     bs = _stats_get(s.get("bat_stats"), striker.get("roster_id"))

@@ -36,6 +36,11 @@ card and the other 33 traits stop being decisions.
 > off the player market's daily hour onto its own interval + start hour, set
 > from the website. See [`squad-and-trait-limits.md`](./squad-and-trait-limits.md).
 >
+> **Also since**: a head-to-head between two personal rosters (/wpm, /letsplay)
+> asks both captains, before the toss, whether traits play in that match at all
+> — Yes+Yes plays with them, No+No without, and a split defers to the weaker XI.
+> See [`trait-vote.md`](./trait-vote.md).
+>
 > **Also since**: an equipped trait is now worth rating points on the team card
 > as well as probability nudges in the ball loop — a doubling ladder from +0.2
 > at Lv.1 to +3.2 at Lv.5, shown on the Playing XI card before the toss and by
