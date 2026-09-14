@@ -146,6 +146,13 @@ class TeamPickLockTests(unittest.TestCase):
         self._pick("Charlie", HOST_TG)
         self.assertEqual(self.draft.get("host_team"), "Charlie")
 
+    def test_a_co_owner_reaches_the_picker_through_the_same_allowed_list(self):
+        # Ownership is resolved once, into the draft's allowed lists; a co-owned
+        # team arrives there exactly as an owned one does.
+        self.draft["host_allowed_teams"] = ["Alpha", "Charlie"]
+        self._pick("Charlie", HOST_TG)
+        self.assertEqual(self.draft.get("host_team"), "Charlie")
+
     def test_the_keyboard_hides_what_the_picker_may_not_choose(self):
         kb = self.challenge._team_keyboard_for(self.draft, self.draft["draft_id"])
         labels = [b.text for row in kb.inline_keyboard for b in row]

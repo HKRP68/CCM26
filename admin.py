@@ -15635,16 +15635,17 @@ def admin_tournaments_list():
                         for cid in request.form.getlist("team_ids"):
                             ct = db.query(ChallengeTeam).get(int(cid)) if cid else None
                             if ct and ct.league_id == league.id:
-                                # Owners come free when the league was published
-                                # from a Tournament Draft.
-                                owner_tg, owner_nm = (
+                                # Owners (and their co-owners) come free when the
+                                # league was published from a Tournament Draft.
+                                owner_tg, owner_nm, co_ids = (
                                     tournament_service.draft_owner_for_team(
                                         db, league.id, ct.name))
                                 db.add(TournamentTeam(
                                     tournament_id=t.id, challenge_team_id=ct.id,
                                     name=ct.name, short_name=ct.short_name,
                                     logo_url=ct.logo_url, sort_order=ct.sort_order,
-                                    owner_tg_id=owner_tg, owner_name=owner_nm))
+                                    owner_tg_id=owner_tg, owner_name=owner_nm,
+                                    co_owner_ids_json=tournament_service._dump_ids(co_ids)))
                         db.flush()
                         # One-step setup: build the structure the chosen format implies.
                         setup_msg = ""
@@ -15938,6 +15939,20 @@ def admin_tournament_detail(tournament_id):
                         flash(f"✅ {tt.name}: "
                               + (f"owner set to {tt.owner_tg_id}."
                                  if tt.owner_tg_id else "owner cleared."), "success")
+                elif action == "set_co_owners":
+                    tt = db.query(TournamentTeam).get(_int_form("team_id"))
+                    if not tt or tt.tournament_id != t.id:
+                        flash("Team not found in this tournament.", "error")
+                    else:
+                        ids = tournament_service.set_co_owners(
+                            db, tt.id,
+                            (request.form.get("co_owners") or "")
+                            .replace("\n", ",").split(","))
+                        log_admin(db, "tournament_team_co_owners", "tournament",
+                                  t.id, f"{tt.name} → {len(ids)} co-owner(s)")
+                        flash(f"✅ {tt.name}: "
+                              + (f"{len(ids)} co-owner(s) set." if ids
+                                 else "co-owners cleared."), "success")
                 elif action == "set_team_home_pitch":
                     from services.league_schedule_service import FIXTURE_PITCHES
                     tt = db.query(TournamentTeam).get(_int_form("team_id"))
@@ -16017,20 +16032,26 @@ def admin_tournament_detail(tournament_id):
                         flash("Team already participating.", "info")
                     else:
                         # A league published from a Tournament Draft already knows
-                        # who owns each franchise — inherit it so a draft
-                        # tournament needs no re-typing of Telegram ids.
-                        owner_tg, owner_nm = tournament_service.draft_owner_for_team(
-                            db, t.league_id, ct.name)
+                        # who owns each franchise — inherit the owner and their
+                        # co-owners so a draft tournament needs no re-typing of
+                        # Telegram ids.
+                        owner_tg, owner_nm, co_ids = (
+                            tournament_service.draft_owner_for_team(
+                                db, t.league_id, ct.name))
                         db.add(TournamentTeam(
                             tournament_id=t.id, challenge_team_id=ct.id, name=ct.name,
                             short_name=ct.short_name, logo_url=ct.logo_url,
                             owner_tg_id=owner_tg, owner_name=owner_nm,
+                            co_owner_ids_json=tournament_service._dump_ids(co_ids),
                             sort_order=ct.sort_order))
                         log_admin(db, "tournament_team_add", "tournament", t.id, ct.name)
-                        flash(f"✅ Added {ct.name}."
-                              + (f" Owner inherited from the draft: "
-                                 f"{owner_nm or owner_tg}." if owner_tg else ""),
-                              "success")
+                        inherited = ""
+                        if owner_tg:
+                            inherited = (f" Owner inherited from the draft: "
+                                         f"{owner_nm or owner_tg}.")
+                        if co_ids:
+                            inherited += f" Plus {len(co_ids)} co-owner(s)."
+                        flash(f"✅ Added {ct.name}.{inherited}", "success")
                 elif action == "add_lp_team":
                     # Lets Play tournament: the participant *is* a Telegram user.
                     from services import lp_tournament_service as lp_svc
@@ -16155,10 +16176,14 @@ def admin_tournament_detail(tournament_id):
             for u in db.query(User).filter(User.telegram_id.in_(tg_ids)).all():
                 lp_users[int(u.telegram_id)] = u
         from services.league_schedule_service import FIXTURE_PITCHES
+        # Co-owner lists are a JSON column; decode once here so the template
+        # never has to parse JSON of its own.
+        co_owners = {tt.id: tournament_service.co_owner_ids(tt) for tt in teams}
         return render_template("admin_tournament_detail.html", t=t, teams=teams,
                                available=available, groups=groups,
                                league_played=lg_played, league_total=lg_total,
                                lp_users=lp_users, pitch_types=FIXTURE_PITCHES,
+                               co_owners=co_owners,
                                is_lp=(tournament_service.tournament_kind(t)
                                       == tournament_service.KIND_LETSPLAY))
     finally:

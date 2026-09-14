@@ -189,10 +189,13 @@
           <form method="POST" style="display:inline;" onsubmit='return confirm("Remove " + {{ tt.name|tojson }} + " from the tournament?");'><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_team"><input type="hidden" name="team_id" value="{{ tt.id }}"><button class="btn danger" type="submit">Remove</button></form>
         </span>
         {% else %}
+        {% set co_ids = co_owners.get(tt.id, []) %}
         <span style="min-width:0;">{{ tt.name }}{% if tt.short_name %} <span style="color:var(--muted);">({{ tt.short_name }})</span>{% endif %}
           <span style="color:var(--muted);">— 👤
             {%- if tt.owner_tg_id %} {{ tt.owner_name or tt.owner_tg_id }} (<code>{{ tt.owner_tg_id }}</code>)
+            {%- elif co_ids %} <em>no owner</em>
             {%- else %} <em>unowned</em>{% endif %}
+            {%- if co_ids %} · 🤝 {{ co_ids|length }} co-owner{{ '' if co_ids|length == 1 else 's' }}{% endif %}
             {%- if tt.home_pitch %} · 🌱 {{ tt.home_pitch }}{% endif %}</span>
         </span>
         <span style="display:flex; gap:.4rem; flex-wrap:wrap;">
@@ -205,6 +208,15 @@
             <input name="owner_name" placeholder="display name"
                    value="{{ tt.owner_name or '' }}" style="max-width:130px;">
             <button class="btn" type="submit">Set owner</button>
+          </form>
+          <form method="POST" style="display:flex; gap:.3rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="set_co_owners">
+            <input type="hidden" name="team_id" value="{{ tt.id }}">
+            <input name="co_owners" value="{{ co_ids|join(', ') }}"
+                   placeholder="co-owner ids" style="max-width:170px;"
+                   title="Comma-separated Telegram ids. A co-owner may play this team just like the owner. Blank clears them.">
+            <button class="btn" type="submit">Set co-owners</button>
           </form>
           <form method="POST" style="display:flex; gap:.3rem;">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -258,8 +270,10 @@
       <button class="btn" type="submit">👤 Inherit owners from the draft</button>
     </form>
     <p style="color:var(--muted); font-size:.82rem; margin:.45rem 0 0;">
-      When this league was published from a Tournament Draft, each franchise already has an owner.
-      This fills in any team that doesn't have one yet — it never overwrites an owner you set by hand.
+      A team is run by one <strong>owner</strong> plus any number of <strong>co-owners</strong> —
+      all equals when the tournament is owner-locked, so any of them may pick the team and play its
+      fixtures. When this league was published from a Tournament Draft, each franchise already has
+      both; this fills in any team nobody runs yet, and never overwrites an assignment you made by hand.
     </p>
     {% endif %}
   </section>

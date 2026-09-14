@@ -2,8 +2,9 @@
 
 What these cover:
 
-  • a team belongs to one person — an owner-locked tournament refuses every
-    other player, and a team nobody claimed stays open to everybody
+  • a team belongs to the people who run it — one owner plus any number of
+    co-owners, all equals — an owner-locked tournament refuses every other
+    player, and a team nobody claimed stays open to everybody
   • a draft tournament inherits its franchise owners from the draft, so nobody
     re-types a list of Telegram ids
   • the schedule stamps each fixture with a home side and the one surface it may
@@ -174,6 +175,91 @@ class TeamOwnershipTests(TournamentCase):
             self.ts.owned_team_names(self.session, self.tour.id, 999), set())
 
 
+class CoOwnershipTests(TournamentCase):
+    """A franchise can be run by several people; all of them are equals."""
+
+    def setUp(self):
+        super().setUp()
+        self.tour.enforce_team_owner = True
+        self.alpha = self.by_name("Alpha")
+        self.ts.set_team_owner(self.session, self.alpha.id, 111, "Ana")
+        self.ts.set_co_owners(self.session, self.alpha.id, [222, 333])
+        self.session.commit()
+
+    def test_a_co_owner_may_play_the_team(self):
+        for who in (111, 222, 333):
+            ok, msg = self.ts.may_use_team(self.session, self.tour, "Alpha", who)
+            self.assertTrue(ok, f"{who} should be able to play Alpha: {msg}")
+
+    def test_an_outsider_still_cannot(self):
+        ok, msg = self.ts.may_use_team(self.session, self.tour, "Alpha", 444)
+        self.assertFalse(ok)
+        self.assertIn("co-own", msg)
+
+    def test_a_co_owner_sees_the_team_as_theirs(self):
+        self.assertEqual(
+            self.ts.owned_team_names(self.session, self.tour.id, 222), {"Alpha"})
+
+    def test_members_list_puts_the_owner_first(self):
+        self.assertEqual(self.ts.team_member_ids(self.alpha), [111, 222, 333])
+
+    def test_the_form_box_is_cleaned_of_junk_and_duplicates(self):
+        ids = self.ts.set_co_owners(
+            self.session, self.alpha.id,
+            [" 222 ", "222", "abc", "", "-5", "0", "111", "444"])
+        self.session.commit()
+        # 111 is the owner and 222 is repeated; the rest of the noise is dropped.
+        self.assertEqual(ids, [222, 444])
+
+    def test_clearing_the_co_owners_stores_null_not_an_empty_list(self):
+        self.ts.set_co_owners(self.session, self.alpha.id, [])
+        self.session.commit()
+        self.assertIsNone(self.alpha.co_owner_ids_json)
+        self.assertEqual(self.ts.co_owner_ids(self.alpha), [])
+
+    def test_add_and_remove_one_at_a_time(self):
+        self.ts.add_co_owner(self.session, self.alpha.id, 444)
+        self.session.commit()
+        self.assertIn(444, self.ts.co_owner_ids(self.alpha))
+        self.ts.remove_co_owner(self.session, self.alpha.id, 222)
+        self.session.commit()
+        self.assertEqual(self.ts.co_owner_ids(self.alpha), [333, 444])
+
+    def test_adding_the_owner_or_a_duplicate_is_refused(self):
+        with self.assertRaises(ValueError):
+            self.ts.add_co_owner(self.session, self.alpha.id, 111)
+        with self.assertRaises(ValueError):
+            self.ts.add_co_owner(self.session, self.alpha.id, 222)
+
+    def test_promoting_a_co_owner_does_not_leave_them_listed_twice(self):
+        self.ts.set_team_owner(self.session, self.alpha.id, 222, "Bo")
+        self.session.commit()
+        self.assertEqual(self.ts.co_owner_ids(self.alpha), [333])
+        self.assertEqual(self.ts.team_member_ids(self.alpha), [222, 333])
+
+    def test_clearing_the_owner_leaves_the_co_owners_running_the_team(self):
+        # Dropping them too would hand a claimed team back to the whole chat.
+        self.ts.set_team_owner(self.session, self.alpha.id, None)
+        self.session.commit()
+        self.assertTrue(self.ts.team_is_claimed(self.alpha))
+        ok, _ = self.ts.may_use_team(self.session, self.tour, "Alpha", 333)
+        self.assertTrue(ok)
+        ok, _ = self.ts.may_use_team(self.session, self.tour, "Alpha", 444)
+        self.assertFalse(ok)
+
+    def test_a_broken_json_column_reads_as_no_co_owners(self):
+        # A hand-edited column must not take the team picker down mid-match.
+        self.alpha.co_owner_ids_json = "{not json"
+        self.session.commit()
+        self.assertEqual(self.ts.co_owner_ids(self.alpha), [])
+        self.assertEqual(self.ts.team_member_ids(self.alpha), [111])
+
+    def test_team_owners_lists_everyone_who_runs_each_team(self):
+        owners = self.ts.team_owners(self.session, self.tour.id)
+        self.assertEqual(owners["Alpha"], [111, 222, 333])
+        self.assertNotIn("Bravo", owners, "an unclaimed team is not listed")
+
+
 class DraftOwnerInheritanceTests(TournamentCase):
     """A league published from a Tournament Draft already knows its owners."""
 
@@ -184,7 +270,8 @@ class DraftOwnerInheritanceTests(TournamentCase):
         self.session.add(draft)
         self.session.flush()
         self.session.add(DraftTeam(draft_id=draft.id, name="Alpha",
-                                   owner_tg_id=4242, owner_name="Ana"))
+                                   owner_tg_id=4242, owner_name="Ana",
+                                   co_owner_ids_json="[61, 62]"))
         self.session.add(DraftTeam(draft_id=draft.id, name="Bravo",
                                    owner_tg_id=5353, owner_name="Bo"))
         self.session.commit()
@@ -192,14 +279,15 @@ class DraftOwnerInheritanceTests(TournamentCase):
 
     def test_owner_is_read_back_from_the_draft(self):
         self._make_draft()
-        tg_id, name = self.ts.draft_owner_for_team(self.session, self.league.id,
-                                                   "Alpha")
+        tg_id, name, extras = self.ts.draft_owner_for_team(
+            self.session, self.league.id, "Alpha")
         self.assertEqual((tg_id, name), (4242, "Ana"))
+        self.assertEqual(extras, [61, 62])
 
     def test_a_league_with_no_draft_has_no_owners_to_inherit(self):
         self.assertEqual(
             self.ts.draft_owner_for_team(self.session, self.league.id, "Alpha"),
-            (None, None))
+            (None, None, []))
 
     def test_sync_fills_the_blanks_and_never_overwrites(self):
         self._make_draft()
@@ -214,6 +302,23 @@ class DraftOwnerInheritanceTests(TournamentCase):
         self.assertEqual(self.by_name("Alpha").owner_tg_id, 4242)
         self.assertEqual(self.by_name("Bravo").owner_tg_id, 999)
         self.assertIsNone(self.by_name("Charlie").owner_tg_id)
+
+    def test_co_owners_come_across_with_the_owner(self):
+        self._make_draft()
+        self.ts.sync_owners_from_draft(self.session, self.tour.id)
+        self.session.commit()
+        self.assertEqual(self.ts.co_owner_ids(self.by_name("Alpha")), [61, 62])
+
+    def test_a_team_run_only_by_co_owners_is_left_alone_by_sync(self):
+        # Somebody already runs Charlie, even though it has no owner — the draft
+        # must not quietly take it over.
+        self._make_draft()
+        self.ts.set_co_owners(self.session, self.by_name("Charlie").id, [31337])
+        self.session.commit()
+        self.ts.sync_owners_from_draft(self.session, self.tour.id)
+        self.session.commit()
+        self.assertIsNone(self.by_name("Charlie").owner_tg_id)
+        self.assertEqual(self.ts.co_owner_ids(self.by_name("Charlie")), [31337])
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -461,6 +566,13 @@ class FixtureCardTests(TournamentCase):
         self.assertIn("Your next matches", self._render(viewer=777))
         self.assertNotIn("Your next matches", self._render(viewer=888))
 
+    def test_a_co_owner_sees_the_teams_matches_as_their_own(self):
+        self.ts.set_team_owner(self.session, self.by_name("Alpha").id, 777, "Ana")
+        self.ts.set_co_owners(self.session, self.by_name("Alpha").id, [888])
+        self.lss.generate_schedule(self.session, self.tour.id)
+        self.session.commit()
+        self.assertIn("Your next matches", self._render(viewer=888))
+
     def test_no_schedule_says_so_rather_than_showing_an_empty_list(self):
         self.assertIn("free-play", self._render())
 
@@ -473,6 +585,13 @@ class FixtureCardTests(TournamentCase):
         self.assertIn("Ana", text)
         self.assertIn("unowned", text)
         self.assertIn("Owner-locked", text)
+
+    def test_the_team_card_counts_the_co_owners(self):
+        from services import cl_tournament_view as ctv
+        self.ts.set_team_owner(self.session, self.by_name("Alpha").id, 777, "Ana")
+        self.ts.set_co_owners(self.session, self.by_name("Alpha").id, [888, 999])
+        self.session.commit()
+        self.assertIn("🤝 +2", ctv.render_teams(self.session, self.tour))
 
 
 if __name__ == "__main__":

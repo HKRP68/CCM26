@@ -521,8 +521,8 @@ def _team_keyboard(draft_id, teams, unavailable_teams=None, team_codes=None):
 def _allowed_teams_for(draft, side):
     """The team names ``side`` ("host"/"target") may pick, or None for "any".
 
-    Owner-locked tournaments restrict each participant to the teams they own
-    (plus any team nobody has claimed — see ``_handle_tournament_command``).
+    Owner-locked tournaments restrict each participant to the teams they own or
+    co-own (plus any team nobody runs — see ``_handle_tournament_command``).
     Everything else returns None so the picker behaves exactly as before.
     """
     if not draft.get("owner_locked"):
@@ -537,8 +537,8 @@ def _team_keyboard_for(draft, draft_id):
 
     Hides the teams the current picker may not choose: the host's team when the
     league forbids a mirror match, and — in an owner-locked tournament — every
-    team that isn't theirs. Hiding is a convenience; ``challenge_team_callback``
-    re-checks both rules before accepting a pick.
+    team they neither own nor co-own. Hiding is a convenience;
+    ``challenge_team_callback`` re-checks both rules before accepting a pick.
     """
     teams = draft.get("teams") or []
     turn = draft.get("turn") or "host"
@@ -1834,31 +1834,32 @@ async def _handle_tournament_command(update, context, session, league):
             "❌ One or both teams are not participating in the active tournament.")
         return
 
-    # Owner-locked tournaments: each side may only field a team they own. Check
-    # it here, before a picker is even opened, so a player who owns nothing is
-    # told why rather than discovering it one tap later.
+    # Owner-locked tournaments: each side may only field a team they own or
+    # co-own. Check it here, before a picker is even opened, so a player with no
+    # team is told why rather than discovering it one tap later.
     owner_locked = tournament_service.owner_enforced(active)
     host_owned = guest_owned = None
     if owner_locked:
-        owners = tournament_service.team_owners(session, active.id)
+        claimed = tournament_service.team_owners(session, active.id)
         host_owned = tournament_service.owned_team_names(
             session, active.id, challenger.telegram_id) & set(teams)
         guest_owned = tournament_service.owned_team_names(
             session, active.id, target.telegram_id) & set(teams)
-        # A team nobody has claimed stays open to anyone, so a half-assigned
-        # tournament never locks its own players out.
-        free = {t for t in teams if t not in owners}
+        # A team nobody runs stays open to anyone, so a half-assigned tournament
+        # never locks its own players out.
+        free = {t for t in teams if t not in claimed}
         host_owned |= free
         guest_owned |= free
         if not host_owned:
             await update.message.reply_text(
-                "🔒 This tournament is owner-locked and you don't own a team in it.\n"
-                "Ask an admin to assign you one — see /ctteams for the field.")
+                "🔒 This tournament is owner-locked and you don't own or co-own "
+                "a team in it.\n"
+                "Ask an admin to add you — see /ctteams for the field.")
             return
         if not guest_owned:
             await update.message.reply_text(
-                f"🔒 {_user_label(target)} doesn't own a team in this tournament, "
-                "so they can't play it.")
+                f"🔒 {_user_label(target)} doesn't own or co-own a team in this "
+                "tournament, so they can't play it.")
             return
 
     await _send_league_team_picker(
@@ -2078,7 +2079,7 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
     if allowed is not None and selected_team not in allowed:
         await query.answer(
             f"🔒 {selected_team} isn't yours. In this tournament you can only "
-            "play with the team you own.", show_alert=True)
+            "play with a team you own or co-own.", show_alert=True)
         return
 
     # Schedule gating: in a tournament with a generated schedule, the two chosen

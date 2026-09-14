@@ -8,6 +8,8 @@ nothing here starts, edits or records a match.
 The fixture list is the piece players actually open. Each line shows the surface
 the match must be played on and which side is at home, and a match that has been
 played is struck through with its result, so a glance says what is left to do.
+"Your next matches" means the teams the viewer owns *or co-owns* — a franchise
+can be run by several people, and all of them need to see what they have to play.
 """
 
 import logging
@@ -112,9 +114,11 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=40):
                    "free-play: any two participating teams can start a match."]
         return "\n".join(header)
 
+    # "Yours" means owner *or* co-owner: a franchise can be run by more than
+    # one person, and they all need to see the matches they have to play.
     mine = {tt.id for tt in rows
-            if viewer_tg_id is not None and tt.owner_tg_id
-            and int(tt.owner_tg_id) == int(viewer_tg_id)}
+            if viewer_tg_id is not None
+            and tournament_service.is_team_member(tt, viewer_tg_id)}
 
     def _slot(team_id, label, home_id):
         if team_id and team_id in names:
@@ -168,14 +172,22 @@ def render_teams(session, tour):
         owner = (tt.owner_name or "").strip()
         if tt.owner_tg_id and not owner:
             owner = str(tt.owner_tg_id)
-        suffix = f" · 👤 {escape(owner)}" if owner else (
-            " · <i>unowned</i>" if owned else "")
+        extras = len(tournament_service.co_owner_ids(tt))
+        if owner:
+            suffix = f" · 👤 {escape(owner)}"
+        elif extras:
+            suffix = " · 👤 <i>no owner</i>"
+        else:
+            suffix = " · <i>unowned</i>" if owned else ""
+        if extras:
+            suffix += f" 🤝 +{extras}"
         home = (tt.home_pitch or "").strip()
         if home:
             suffix += f" · 🌱 {escape(home)}"
         out.append(f"{i}. <b>{escape(tt.name or '—')}</b>{suffix}")
     if owned:
-        out += ["", "<i>🔒 Owner-locked: only a team's owner may play with it.</i>"]
+        out += ["", "<i>🔒 Owner-locked: only a team's owner and its co-owners "
+                    "(🤝) may play with it.</i>"]
     return "\n".join(out)
 
 
@@ -202,7 +214,7 @@ def render_overview(session, tour):
         out.append("<b>Pitch:</b> fixed per fixture — see 🗓️ Fixtures")
     if tournament_service.owner_enforced(tour):
         out.append("<b>Team rule:</b> 🔒 owner-locked — only a team's owner "
-                   "may play with it")
+                   "and co-owners may play with it")
     if tour.description:
         out += ["", f"<i>{escape(tour.description)}</i>"]
     if table:

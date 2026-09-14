@@ -7,38 +7,53 @@ behaves exactly as it did before.
 
 | Rule | Column | Default |
 | --- | --- | --- |
-| A team may only be played by its owner | `tournaments.enforce_team_owner` | off |
+| A team may only be played by the people who run it | `tournaments.enforce_team_owner` | off |
 | Each fixture fixes the pitch it is played on | `tournaments.pitch_mode` | `host` (the host picks) |
 | Overseas-in-XI limits for this tournament | `tournaments.min_overseas` / `max_overseas` | inherit the league |
 
 ---
 
-## 1. One team, one owner
+## 1. One team, one owner — and any number of co-owners
 
-`TournamentTeam` carries `owner_tg_id` + `owner_name` — a **Telegram id**, for
-the same reason a Lets Play participant is one: an admin assigns owners from a
-list of ids, and some of those people have never run `/debut`.
+`TournamentTeam` carries `owner_tg_id` + `owner_name`, plus
+`co_owner_ids_json`: a JSON list of extra **Telegram ids** who run the same
+team. Telegram ids, for the same reason a Lets Play participant is one: an admin
+assigns them from a list, and some of those people have never run `/debut`.
+
+**The owner and its co-owners are equals** for every check the tournament makes
+— any of them may pick the team, play its fixtures, and see its remaining
+matches under "Your next matches". The owner is distinguished only by being the
+name shown on the team. This mirrors `DraftTeam`, which has had co-owners since
+the draft's own `/pick` flow.
 
 With **Team ownership** ticked on the tournament's Manage page:
 
-* the tournament command refuses anyone who owns no team in the field, and
-  refuses a challenge whose *opponent* owns none either — checked before a
-  picker is even opened, so nobody finds out one tap later;
+* the tournament command refuses anyone who neither owns nor co-owns a team in
+  the field, and refuses a challenge whose *opponent* has none either — checked
+  before a picker is even opened, so nobody finds out one tap later;
 * the team picker only shows the teams that player may field;
 * the pick itself is re-checked when it arrives, so a stale card or a replayed
   button can't get around the hidden keyboard.
 
-A team **nobody has claimed stays open to everybody**. That is deliberate: a
+A team **nobody runs stays open to everybody**. That is deliberate: a
 half-assigned tournament must never lock its own players out of the teams an
-admin simply hasn't got to yet.
+admin simply hasn't got to yet. "Nobody runs it" means no owner *and* no
+co-owners — so clearing a team's owner leaves its co-owners in charge rather
+than handing the team back to the whole chat, and promoting a co-owner to owner
+drops them from the co-owner list instead of listing them twice.
+
+Admins set co-owners from the same row as the owner on the Manage page: a
+comma-separated box of Telegram ids. Blanks, duplicates, non-numbers and the
+owner's own id are all ignored, so the raw box can be pasted straight in.
 
 ### Draft tournaments get their owners for free
 
-A Challenge League published from a Tournament Draft already knows who owns each
-franchise — `DraftTeam.owner_tg_id`. Adding a team to a tournament inherits it,
-and **👤 Inherit owners from the draft** on the Manage page back-fills a
-tournament that was built before the owners existed. It never overwrites an
-owner set by hand.
+A Challenge League published from a Tournament Draft already knows who runs each
+franchise — `DraftTeam.owner_tg_id` and `DraftTeam.co_owner_ids_json`. Adding a
+team to a tournament inherits both, and **👤 Inherit owners from the draft** on
+the Manage page back-fills a tournament that was built before them. It never
+overwrites an assignment made by hand — a team that already has an owner *or* a
+co-owner is left alone entirely.
 
 ---
 
@@ -105,7 +120,7 @@ League Tournament:
 | `/ctour` (`/ctournament`) | the hub — overview, with tabs for the rest |
 | `/cttable` (`/ctpoints`) | points table with net run rate |
 | `/ctfixtures` (`/ctfix`) | the schedule |
-| `/ctteams` | the field, and who owns each team |
+| `/ctteams` | the field, who owns each team, and how many co-owners (🤝) |
 
 A league can publish its **own alias** for the hub:
 `ChallengeLeague.fixtures_command` (e.g. `/iplfixtures`), set next to the
@@ -136,14 +151,15 @@ M3  ⚪ Alpha 🏠 vs Delta · 🌱 Dusty
 
 A completed fixture is **struck through** and carries its result; a live one is
 flagged in progress; an unplayed one shows the surface it is pinned to. When the
-viewer owns a team, their own remaining fixtures are pulled out on top — the
-thing a team owner actually opens this for.
+viewer owns *or co-owns* a team, their own remaining fixtures are pulled out on
+top — the thing a team owner actually opens this for.
 
 ---
 
 ## Tests
 
-* `tests/test_tournament_rules.py` — the rules: ownership, draft inheritance,
-  the three pitch modes, overseas inheritance, and the rendered card.
+* `tests/test_tournament_rules.py` — the rules: ownership and co-ownership,
+  draft inheritance, the three pitch modes, overseas inheritance, and the
+  rendered card.
 * `tests/test_tournament_team_lock.py` — the bot flow: the picker refusing a
   team that isn't yours, and the fixture's surface being found from team names.

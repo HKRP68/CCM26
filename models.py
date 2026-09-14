@@ -2613,6 +2613,12 @@ class TournamentTeam(Base):
     # ids, and some of those people have never run /debut.
     owner_tg_id = Column(BigInteger, nullable=True, index=True)
     owner_name = Column(String(120), nullable=True)
+    # Extra Telegram ids allowed to play this team, as a JSON list — a franchise
+    # can be run by more than one person. Mirrors ``DraftTeam.co_owner_ids_json``
+    # (and is inherited from it when the league came from a draft). A co-owner is
+    # the owner's equal for every check the tournament makes; the owner is only
+    # distinguished by being the name shown on the team.
+    co_owner_ids_json = Column(Text, nullable=True)
 
     # This team's home surface. Used by the schedule generator when the
     # tournament's ``pitch_mode`` is "home": every fixture the team hosts is
