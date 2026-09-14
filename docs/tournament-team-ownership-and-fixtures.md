@@ -121,6 +121,7 @@ League Tournament:
 | `/cttable` (`/ctpoints`) | points table with net run rate |
 | `/ctfixtures` (`/ctfix`) | the schedule |
 | `/ctteams` | the field, who owns each team, and how many co-owners (🤝) |
+| `/ctinjuries` (`/ctinjury`) | the treatment room — see [tournament-injuries.md](tournament-injuries.md) |
 
 A league can publish its **own alias** for the hub:
 `ChallengeLeague.fixtures_command` (e.g. `/iplfixtures`), set next to the
@@ -128,7 +129,7 @@ tournament command on the league's admin page. Unlike the tournament command —
 which *starts* a match and is gated to approved players — the fixtures command
 is read-only and ungated.
 
-These four are deliberately **not** in Telegram's slash menu: both menu scopes
+These are deliberately **not** in Telegram's slash menu: both menu scopes
 are at Telegram's 100-commands-per-scope ceiling, and pushing one over silently
 truncates somebody else's command off the tail. They are advertised in `/help`,
 from the hub's own buttons, and by whatever alias a league sets.

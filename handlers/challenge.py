@@ -1027,7 +1027,8 @@ def _load_team_players_with_retry(draft, side, attempts=2):
 
     Returns ``(players, team_id, league_cfg)`` where ``league_cfg`` is ``None`` or a
     dict of the league's overseas/format settings read while the session is open (so
-    no detached-instance access happens after it closes). Raises
+    no detached-instance access happens after it closes), plus ``injured_out`` — the
+    players this side is missing, already removed from ``players``. Raises
     ``_TeamPlayersLoadError`` only when every attempt failed with an error — never for
     a genuinely empty roster (which comes back as an empty ``players`` list). This lets
     the squad-open path show a "tap again" hint on a transient blip instead of a
@@ -1062,6 +1063,29 @@ def _load_team_players_with_retry(draft, side, attempts=2):
                             session, tour, league)
                         league_cfg["overseas_min"] = lo
                         league_cfg["overseas_max"] = hi
+            # Injured players are taken out of the squad entirely rather than
+            # shown and refused: the picker's numbering, the typed quick-select
+            # and the bot's XI builder all work off this one list, so removing
+            # them here is what makes "ruled out" actually mean ruled out.
+            # ``out`` is carried back so the prompt can name who is missing.
+            out_list = []
+            if draft.get("is_tournament") and draft.get("tournament_id") and team_id:
+                from models import Tournament
+                from services import injury_service
+                tour = session.query(Tournament).get(int(draft["tournament_id"]))
+                hurt_ids, hurt_rows = injury_service.unavailable_for_team(
+                    session, tour, team_id)
+                if hurt_ids:
+                    out_list = [
+                        {"name": r.player_name or "Player",
+                         "injury": r.injury_type,
+                         "matches": int(r.matches_remaining or 0)}
+                        for r in hurt_rows]
+                    players = [p for p in players
+                               if int(getattr(p, "id")) not in hurt_ids]
+            if league_cfg is None:
+                league_cfg = {}
+            league_cfg["injured_out"] = out_list
             return players, team_id, league_cfg
         except Exception as exc:  # transient DB failure — retry with a fresh session
             last_exc = exc
@@ -1164,6 +1188,24 @@ def _challenge_overseas_limits(draft):
     return lo, hi
 
 
+def _injury_note(draft, side):
+    """Lines naming the players this side is missing, or [] when nobody is out.
+
+    The injured are already gone from the squad list, so without this the
+    captain just finds a shorter list of names and no explanation.
+    """
+    rows = (draft.get("injured_out") or {}).get(side) or []
+    if not rows:
+        return []
+    out = ["", "🚑 <b>Unavailable (injured):</b>"]
+    for row in rows:
+        n = int(row.get("matches") or 0)
+        span = "1 more match" if n == 1 else f"{n} more matches"
+        out.append(f"• {_esc(row.get('name') or 'Player')} — "
+                   f"{_esc(row.get('injury') or 'injured')}, out {span}")
+    return out
+
+
 def _challenge_rule_checkbox(passed):
     return "☑️" if passed else "☐"
 
@@ -1234,6 +1276,7 @@ def _challenge_xi_text(draft, side, team_name, players, selected_ids):
             f"(min {min_overseas} / max {max_overseas})"
         )
     lines.append("• Selection order becomes batting order")
+    lines.extend(_injury_note(draft, side))
     if selected_players:
         lines.extend(["", "<b>Batting order:</b>"])
         lines.extend(f"{idx}. {player.name} ({_challenge_player_category(player)})" for idx, player in enumerate(selected_players, start=1))
@@ -2702,14 +2745,28 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
             "⚠️ Couldn't load the squad just now. Please tap Select XI again.",
             show_alert=True)
         return
-    if league_cfg is not None:
+    if league_cfg:
         # Cache the league's overseas limits + match format on the draft so the
-        # picker render and confirm callbacks enforce them without re-hitting the DB.
-        draft["overseas_min"] = league_cfg["overseas_min"]
-        draft["overseas_max"] = league_cfg["overseas_max"]
-        draft["ball_format"] = league_cfg["ball_format"]
+        # picker render and confirm callbacks enforce them without re-hitting the
+        # DB. ``.get`` throughout: a league that failed to resolve still returns a
+        # dict carrying the injury list, and must not clobber earlier values.
+        for key in ("overseas_min", "overseas_max", "ball_format"):
+            if key in league_cfg:
+                draft[key] = league_cfg[key]
+        # Who this side is missing, for the note on the picker.
+        draft.setdefault("injured_out", {})[side] = league_cfg.get("injured_out") or []
     if not players:
         await query.answer(f"No players are configured for {team_name} yet.", show_alert=True)
+        return
+    hurt = (draft.get("injured_out") or {}).get(side) or []
+    if len(players) < 11 and hurt:
+        # Injuries have eaten into the squad past a fieldable XI. The generator
+        # refuses to cause this, so it means an admin ruled somebody out by hand
+        # — say so plainly rather than letting the captain hunt for an 11th name.
+        await query.answer(
+            f"🚑 {team_name} only has {len(players)} fit players — "
+            f"{len(hurt)} are injured. An admin needs to clear an injury or add "
+            "to the squad before this match can be played.", show_alert=True)
         return
 
     selection = _challenge_xi_selection(draft, side)

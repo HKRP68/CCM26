@@ -48,7 +48,7 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
                     ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer,
                     Tournament, TournamentTeam, TournamentMatch, TournamentPlayerStats,
-                    TournamentGroup,
+                    TournamentGroup, TournamentInjury,
                     PlayerDraft, DraftTeam, DraftPlayer, DraftPick)
 
 # A match that has actually started, versus one still forming (invite sent,
@@ -15627,6 +15627,9 @@ def admin_tournaments_list():
                             min_overseas=_overseas_form("min_overseas"),
                             max_overseas=_overseas_form("max_overseas"),
                             enforce_team_owner=_checked("enforce_team_owner"),
+                            injuries_enabled=_checked("injuries_enabled"),
+                            injury_chance=max(0, min(100, _int_form("injury_chance", 12))),
+                            injury_max_matches=max(1, min(5, _int_form("injury_max_matches", 3))),
                             pitch_mode=pitch_mode,
                             status="draft",
                         )
@@ -15797,6 +15800,13 @@ def admin_tournament_detail(tournament_id):
                         t.min_overseas, t.max_overseas = t.max_overseas, t.min_overseas
                         flash("Min overseas was above max — the two were swapped.", "info")
                     t.enforce_team_owner = _checked("enforce_team_owner")
+                    t.injuries_enabled = _checked("injuries_enabled")
+                    t.injury_chance = max(0, min(100, _int_form(
+                        "injury_chance", t.injury_chance if t.injury_chance
+                        is not None else 12)))
+                    t.injury_max_matches = max(1, min(5, _int_form(
+                        "injury_max_matches", t.injury_max_matches
+                        if t.injury_max_matches is not None else 3)))
                     from services.league_schedule_service import (
                         PITCH_MODES, assign_fixture_venues)
                     pm = (request.form.get("pitch_mode") or "host").strip()
@@ -15953,6 +15963,43 @@ def admin_tournament_detail(tournament_id):
                         flash(f"✅ {tt.name}: "
                               + (f"{len(ids)} co-owner(s) set." if ids
                                  else "co-owners cleared."), "success")
+                elif action == "heal_injury":
+                    from services import injury_service
+                    row = db.query(TournamentInjury).get(_int_form("injury_id"))
+                    if not row or row.tournament_id != t.id:
+                        flash("Injury not found in this tournament.", "error")
+                    else:
+                        injury_service.heal(db, row.id)
+                        log_admin(db, "tournament_injury_heal", "tournament", t.id,
+                                  f"{row.player_name} ({row.injury_type})")
+                        flash(f"✅ {row.player_name} is declared fit.", "success")
+                elif action == "add_injury":
+                    from services import injury_service
+                    tt = db.query(TournamentTeam).get(_int_form("team_id"))
+                    cp = (db.query(ChallengePlayer).get(_int_form("roster_id"))
+                          if _int_form("roster_id") else None)
+                    if not tt or tt.tournament_id != t.id:
+                        flash("Team not found in this tournament.", "error")
+                    elif not cp or cp.team_id != tt.challenge_team_id:
+                        flash("That player is not in that team's squad.", "error")
+                    else:
+                        injury_service.add_manual(
+                            db, t.id, tt.id, cp.id,
+                            injury_type=(request.form.get("injury_type")
+                                         or "Knock").strip(),
+                            matches=_int_form("matches", 1),
+                            player_name=cp.name,
+                            player_id=cp.source_player_id)
+                        log_admin(db, "tournament_injury_add", "tournament", t.id,
+                                  f"{cp.name} ({tt.name})")
+                        flash(f"🚑 {cp.name} ruled out.", "success")
+                elif action == "clear_injuries":
+                    from services import injury_service
+                    n = injury_service.clear_for_tournament(db, t.id)
+                    log_admin(db, "tournament_injury_clear", "tournament", t.id, t.name)
+                    flash(f"✅ Cleared {n} injury record(s) — everyone is fit."
+                          if n else "There were no injuries to clear.",
+                          "success" if n else "info")
                 elif action == "set_team_home_pitch":
                     from services.league_schedule_service import FIXTURE_PITCHES
                     tt = db.query(TournamentTeam).get(_int_form("team_id"))
@@ -16166,6 +16213,8 @@ def admin_tournament_detail(tournament_id):
         groups = (db.query(TournamentGroup).filter_by(tournament_id=t.id)
                   .order_by(TournamentGroup.sort_order, TournamentGroup.id).all())
         from services import tournament_service
+        is_lp_kind = (tournament_service.tournament_kind(t)
+                      == tournament_service.KIND_LETSPLAY)
         lg_played, lg_total = tournament_service.league_progress(db, t.id)
         # Lets Play participants are Telegram users — resolve the accounts we know
         # about so the panel can show a handle next to the raw id. A participant
@@ -16176,16 +16225,35 @@ def admin_tournament_detail(tournament_id):
             for u in db.query(User).filter(User.telegram_id.in_(tg_ids)).all():
                 lp_users[int(u.telegram_id)] = u
         from services.league_schedule_service import FIXTURE_PITCHES
+        from services import injury_service
         # Co-owner lists are a JSON column; decode once here so the template
         # never has to parse JSON of its own.
         co_owners = {tt.id: tournament_service.co_owner_ids(tt) for tt in teams}
+        # The treatment room, plus each team's squad for the "rule out" picker.
+        injuries = injury_service.active_injuries(db, t.id)
+        # {ChallengeTeam.id: [{id, name}]} for the "rule out a player" picker,
+        # keyed by challenge team because that is what a ChallengePlayer belongs
+        # to; the template maps participating row → challenge team alongside.
+        squads = {}
+        if not is_lp_kind:
+            cids = [tt.challenge_team_id for tt in teams if tt.challenge_team_id]
+            if cids:
+                for cp in (db.query(ChallengePlayer)
+                           .filter(ChallengePlayer.team_id.in_(cids))
+                           .order_by(ChallengePlayer.sort_order,
+                                     ChallengePlayer.name).all()):
+                    squads.setdefault(str(cp.team_id), []).append(
+                        {"id": cp.id, "name": cp.name})
+        team_challenge = {str(tt.id): str(tt.challenge_team_id or "")
+                          for tt in teams}
         return render_template("admin_tournament_detail.html", t=t, teams=teams,
                                available=available, groups=groups,
                                league_played=lg_played, league_total=lg_total,
                                lp_users=lp_users, pitch_types=FIXTURE_PITCHES,
-                               co_owners=co_owners,
-                               is_lp=(tournament_service.tournament_kind(t)
-                                      == tournament_service.KIND_LETSPLAY))
+                               co_owners=co_owners, injuries=injuries,
+                               squads_json=json.dumps(squads),
+                               team_challenge_json=json.dumps(team_challenge),
+                               is_lp=is_lp_kind)
     finally:
         db.close()
 

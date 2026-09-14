@@ -945,6 +945,7 @@ async def start_handler(update, context):
         "/dtrade /dtrades - Trade players with another franchise once the draft is done\n"
         "/ctour - Challenge League Tournament hub: table, fixtures, teams\n"
         "/cttable /ctfixtures /ctteams - Tournament table, schedule (done matches struck through), field\n"
+        "/ctinjuries - Who is ruled out injured, and for how many more matches 🚑\n"
         "/challengeIPL /cipl - Reply to a user to start an IPL challenge\n"
         "/challengeBBL /cbbl - Reply to a user to start a BBL challenge\n"
         "/challengeINT /cint - Reply to a user to start an international challenge\n"
@@ -1535,7 +1536,7 @@ def main():
         # League match callbacks own.
         from handlers.cl_tournament import (
             ctour_handler, cttable_handler, ctfixtures_handler,
-            ctteams_handler, ct_view_callback,
+            ctteams_handler, ctinjuries_handler, ct_view_callback,
         )
         # Deliberately absent from BOT_MENU_COMMANDS: both slash menus are at
         # Telegram's 100-command-per-scope ceiling, and pushing one over silently
@@ -1546,6 +1547,8 @@ def main():
         app.add_handler(CommandHandler(["cttable", "ctpoints"], cttable_handler))
         app.add_handler(CommandHandler(["ctfixtures", "ctfix"], ctfixtures_handler))
         app.add_handler(CommandHandler("ctteams", ctteams_handler))
+        app.add_handler(CommandHandler(["ctinjuries", "ctinjury"],
+                                       ctinjuries_handler))
         app.add_handler(CallbackQueryHandler(ct_view_callback, pattern=r"^ctv_"))
         app.add_handler(CommandHandler(["cmuleaderboard", "leaderboard", "lb", "top"], leaderboard_handler))
         app.add_handler(CommandHandler(["myprofile", "profile", "me"], myprofile_handler))

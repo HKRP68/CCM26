@@ -175,12 +175,21 @@
               <input type="checkbox" name="enforce_team_owner"> Only a team's owner may play with it
             </label>
           </div>
+          <div><label>🚑 Injuries</label>
+            <label style="text-transform:none;letter-spacing:0;">
+              <input type="checkbox" name="injuries_enabled"> Players can be ruled out of matches
+            </label>
+          </div>
+          <div><label>Injury chance (%)</label><input type="number" name="injury_chance" value="12" min="0" max="100"></div>
+          <div><label>Max matches out</label><input type="number" name="injury_max_matches" value="3" min="1" max="5"></div>
         </div>
         <p class="fmt-desc" style="margin:.5rem 0 0;">
           Leave the overseas boxes <strong>empty</strong> to inherit the league's rule — a typed
           <code>0</code> means “no overseas players at all”. A fixed pitch is stamped on every
           fixture when the schedule is generated and the host's pitch picker is skipped.
           Owners are inherited automatically from the Tournament Draft this league came from.
+          With <strong>injuries</strong> on, finishing a match can rule a player out of their team's
+          next few matches — they can't be picked in the XI until they're fit.
         </p>
         <div style="margin-top:.6rem;">
           <label class="field-label">Description</label>

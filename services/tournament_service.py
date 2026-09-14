@@ -214,7 +214,7 @@ def set_status(session, tournament_id, status):
 
 
 def reset_tournament(session, tournament_id):
-    """Clear all results, player stats and standings — keep config/teams.
+    """Clear all results, player stats, standings and injuries — keep config/teams.
 
     If a schedule was generated (fixtures have ``match_no > 0``), those fixtures
     are reverted to ``scheduled`` with their results cleared so the schedule is
@@ -247,6 +247,14 @@ def reset_tournament(session, tournament_id):
         fx.scorecard_json = None
         fx.completed_at = None
     session.query(TournamentPlayerStats).filter_by(tournament_id=tid).delete(synchronize_session=False)
+    # Injuries were caused by the results being wiped here, so they go with them
+    # — otherwise a replayed tournament starts with a treatment room full of
+    # players hurt in matches that no longer exist.
+    try:
+        from services import injury_service
+        injury_service.clear_for_tournament(session, tid)
+    except Exception:
+        logger.exception("Clearing injuries failed for tournament %s", tid)
     for tt in session.query(TournamentTeam).filter_by(tournament_id=tid).all():
         tt.played = tt.won = tt.lost = tt.tied = tt.no_result = tt.points = 0
         tt.runs_for = tt.balls_for = tt.runs_against = tt.balls_against = 0
@@ -1156,6 +1164,21 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     # this one). Flush so the new match row is visible to the rebuild queries.
     session.flush()
     recompute_tournament(session, tid)
+
+    # ── Injuries ──
+    # Count one match off everyone already sidelined, then roll for new knocks.
+    # A no-op unless the tournament has them switched on. The report rides back
+    # on the returned row (a transient attribute, not a column) so the chat card
+    # can print the injury news without a second trip to the database.
+    try:
+        from services import injury_service
+        tm._injury_report = injury_service.process_match(
+            session, tour, tm, lines,
+            user_by_team={t.id: uid for t, uid in
+                          ((t_inn1, inn1_bat_uid), (t_inn2, inn2_bat_uid)) if t})
+    except Exception:
+        logger.exception("Injury processing failed for tournament %s", tid)
+        tm._injury_report = {"new": [], "recovered": []}
 
     # If this was a knockout match, advance the winner/loser into the next round.
     try:

@@ -8,6 +8,7 @@ for a player to see the schedule. These commands close that gap:
     /ctfixtures   the fixture list: pitch, home side, and the played ones
                   struck through
     /ctteams      the field, with each team's owner
+    /ctinjuries   the treatment room, when the tournament has injuries on
 
 Every one of them is read-only and open to anyone; starting a match is still the
 league's own (gated) tournament command. A league may also publish its own alias
@@ -33,15 +34,26 @@ NO_ACTIVE = ("❌ No Challenge League Tournament is currently active.\n"
 CB_PREFIX = "ctv_"
 
 
-def _keyboard(active="overview"):
-    """The hub's tab row, marking whichever view is showing."""
-    def _b(view, label):
-        return InlineKeyboardButton(("● " if view == active else "") + label,
-                                    callback_data=CB_PREFIX + view)
-    return InlineKeyboardMarkup([
-        [_b("table", "📊 Table"), _b("fixtures", "🗓️ Fixtures")],
-        [_b("teams", "👥 Teams"), _b("overview", "🏠 Overview")],
-    ])
+_LABELS = {
+    "table": "📊 Table", "fixtures": "🗓️ Fixtures", "teams": "👥 Teams",
+    "injuries": "🚑 Injuries", "overview": "🏠 Overview",
+}
+
+
+def _keyboard(tour, active="overview"):
+    """The hub's tab row, marking whichever view is showing.
+
+    The Injuries tab only appears when the tournament has an injury system —
+    a tab that always answers "there isn't one" is just noise.
+    """
+    from services import cl_tournament_view as _ctv
+    views = [v for v in ("table", "fixtures", "teams", "injuries", "overview")
+             if v in _ctv.views_for(tour)]
+    buttons = [InlineKeyboardButton(("● " if v == active else "") + _LABELS[v],
+                                    callback_data=CB_PREFIX + v)
+               for v in views]
+    return InlineKeyboardMarkup([buttons[i:i + 2]
+                                 for i in range(0, len(buttons), 2)])
 
 
 async def _reply(update, text, reply_markup=None):
@@ -63,7 +75,7 @@ async def _show(update, view):
             return
         viewer = update.effective_user.id if update.effective_user else None
         text = ctv.render(session, tour, view, viewer_tg_id=viewer)
-        await _reply(update, text, reply_markup=_keyboard(view))
+        await _reply(update, text, reply_markup=_keyboard(tour, view))
     except Exception:
         logger.exception("Challenge League Tournament view %r failed", view)
         await _reply(update, "⚠️ Could not load the tournament right now.")
@@ -91,6 +103,11 @@ async def ctteams_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _show(update, "teams")
 
 
+async def ctinjuries_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/ctinjuries — who is ruled out, and for how many more matches."""
+    await _show(update, "injuries")
+
+
 async def ct_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """``ctv_<view>`` — switch the hub card between its four views.
 
@@ -112,7 +129,7 @@ async def ct_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await q.edit_message_text(text, parse_mode="HTML",
                                       disable_web_page_preview=True,
-                                      reply_markup=_keyboard(view))
+                                      reply_markup=_keyboard(tour, view))
         except Exception:
             # Tapping the view you are already on is a no-op edit, which Telegram
             # rejects — that is not an error worth showing anybody.

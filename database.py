@@ -627,6 +627,11 @@ def _migrate_add_columns():
     _try_add("tournament_teams", "owner_tg_id", "BIGINT")
     _try_add("tournament_teams", "owner_name", "VARCHAR(120)")
     _try_add("tournament_teams", "co_owner_ids_json", "TEXT")
+    # Injury system (the ``tournament_injuries`` table itself comes from
+    # create_all above; these are the per-tournament switches).
+    _try_add("tournaments", "injuries_enabled", "BOOLEAN DEFAULT FALSE")
+    _try_add("tournaments", "injury_chance", "INTEGER DEFAULT 12")
+    _try_add("tournaments", "injury_max_matches", "INTEGER DEFAULT 3")
     _try_add("tournament_teams", "home_pitch", "VARCHAR(20)")
     _try_add("tournament_matches", "pitch_type", "VARCHAR(20)")
     _try_add("tournament_matches", "home_team_id", "INTEGER")
