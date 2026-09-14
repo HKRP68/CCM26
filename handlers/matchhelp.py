@@ -96,16 +96,27 @@ def _phase_block():
 
 
 def _pitch_block():
-    """Every pitch, its par band and how it changes for the chase — from config."""
-    from engine import ground_config, pitch_state
-    order = ("Flat", "Hard", "Even", "Bouncy", "Dry", "Green", "Dusty")
+    """Every pitch a host can pick: what it is, its par band, who it pays and
+    how it changes for the chase — all read from the engine, none of it typed.
+
+    Listed batting-friendly → bowler-friendly (the reverse of the registry's own
+    order), because the surfaces a captain is weighing at the toss are the ones
+    at the top of a page, not the bottom.
+    """
+    from engine import ground_config, pitch_registry, pitch_state
     rows = []
-    for pitch in order:
+    for pitch in reversed(pitch_registry.SELECTABLE):
         dyn = ground_config.get_scoring_dynamics(pitch) or {}
         par_lo, par_hi = dyn.get("par_low"), dyn.get("par_high")
         note = pitch_state.evolution_note(pitch) or ""
         par = f"par {par_lo}-{par_hi}" if par_lo else "par varies"
-        rows.append(f"<b>{pitch}</b> — {par}\n<i>2nd innings: {note}</i>")
+        prof = pitch_registry.profile(pitch)
+        toss = "BOWL" if prof.toss == "bowl" else "BAT"
+        rows.append(
+            f"<b>{pitch}</b> — {par} · favours {prof.favours.lower()}\n"
+            f"{prof.blurb}\n"
+            f"<i>2nd innings: {note}</i>\n"
+            f"<i>Toss (day): {toss} — {prof.toss_reason}</i>")
     return "\n\n".join(rows)
 
 

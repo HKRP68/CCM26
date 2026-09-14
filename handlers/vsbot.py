@@ -21,6 +21,7 @@ from telegram.ext import ContextTypes
 from sqlalchemy import func
 
 from database import get_session
+from engine import pitch_registry
 from models import (
     User, Player, UserRoster, Match, BotTeam, BotTeamPlayer, UserStats,
 )
@@ -238,14 +239,8 @@ def _queue_bot_action(context, mid, action_name, action):
 
 
 def _pitch_hint_vsbot(pitch_type):
-    return {
-        "Flat":  "Batters' paradise — high scores expected.",
-        "Hard":  "Bouncy, true bounce — rewards aggressive shots.",
-        "Even":  "Neutral, balanced track — bat and ball share honours.",
-        "Green": "Seam movement up front — bowlers will love early overs.",
-        "Dry":   "Slow and low — tough to time the ball cleanly.",
-        "Dusty": "Spinners will turn it square as it wears.",
-    }.get(pitch_type, "A balanced wicket.")
+    """One-line tactical hint about the pitch — see handlers.match._pitch_hint."""
+    return pitch_registry.blurb(pitch_type)
 
 
 # ════════════════════════════════════════════════════════════════════

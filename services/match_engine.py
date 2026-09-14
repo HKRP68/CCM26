@@ -3,6 +3,8 @@
 import html
 import random
 
+from engine import pitch_registry
+
 
 def _active_players(players):
     return [
@@ -308,7 +310,7 @@ def build_live_scorecard(s):
         from services.probability_engine import calc_pitch_wear
         wear = calc_pitch_wear(s.get("innings", 1), s.get("current_over", 1), s.get("overs", 20))
         if wear >= 30:
-            pitch_type = s.get("pitch_type", "Flat")
+            pitch_type = pitch_registry.normalise(s.get("pitch_type"))
             if wear >= 60:
                 wear_label = "Heavily Worn 🟫"
             elif wear >= 45:

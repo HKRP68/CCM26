@@ -24,6 +24,8 @@ Usage
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from engine import pitch_registry
+
 
 # ---------------------------------------------------------------------------
 # Phase descriptor
@@ -128,45 +130,55 @@ class FormatConfig:
 # T20 FormatConfig
 # ---------------------------------------------------------------------------
 
-# Neutral (Hard pitch) first-innings curve. Topped out at ~190 to match the
-# calibrated engine output (Hard averages ~195 in Monte Carlo), so the GSME /
-# pressure engines read par correctly against the higher scoring.
+# Neutral first-innings curve, in runs on the EVEN surface — the one pitch in
+# engine.pitch_registry that is defined as neutral. It used to be labelled the
+# "Hard pitch" curve while Hard's own par factor was 0.96, so the curve was not
+# actually any pitch's. It tops out at 196, the Even par band's midpoint in
+# config/ground_conditions.yaml, and every other surface is that curve times its
+# own factor below.
 _T20_PAR_SCORES: Dict[int, float] = {
     0:   0.0,
-    1:   7.5,
-    2:  15.5,
-    3:  24.0,
-    4:  33.0,
-    5:  41.5,
-    6:  52.0,   # End of powerplay
-    7:  60.0,
-    8:  68.5,
-    9:  78.0,
-    10: 87.5,
-    11: 97.0,
-    12: 107.0,
-    13: 116.5,
-    14: 126.0,
-    15: 135.5,
-    16: 146.5,
-    17: 158.0,
-    18: 170.0,
-    19: 181.0,
-    20: 190.0,
+    1:   7.7,
+    2:  16.0,
+    3:  24.8,
+    4:  34.0,
+    5:  42.8,
+    6:  53.6,   # End of powerplay
+    7:  61.9,
+    8:  70.7,
+    9:  80.5,
+    10: 90.3,
+    11: 100.1,
+    12: 110.4,
+    13: 120.2,
+    14: 130.0,
+    15: 139.8,
+    16: 151.1,
+    17: 163.0,
+    18: 175.4,
+    19: 186.7,
+    20: 196.0,
 }
 
-# Per-pitch multipliers on the neutral curve (top ~190), aligned to the
-# calibrated full-pipeline means: Green~123 Dusty~144 Dry~155 Bouncy~159
-# Even~172 Hard~183 Flat~209 Dead~260. Factor ≈ target_mean / 190.
+# Per-pitch multipliers on the neutral (Even) curve, one per surface in
+# engine.pitch_registry. Factor = that pitch's par-band midpoint in
+# config/ground_conditions.yaml ÷ 196 (Even's own midpoint), so the whole table
+# is derived from one place instead of hand-kept.
+#
+# These were still the pre-v3.0 numbers (Green 0.65 → a 123 par) long after
+# section 5A moved par: the engine was producing ~164 on Green while every
+# consumer of this table — GSME, the pressure engine, the DLS curve — judged it
+# against 123, i.e. read every Green innings as 40 runs ahead of par from the
+# first over.
 _T20_PITCH_PAR_FACTORS: Dict[str, float] = {
-    "Green":  0.65,
-    "Dusty":  0.76,
-    "Dry":    0.82,
-    "Bouncy": 0.84,
-    "Even":   0.91,
-    "Hard":   0.96,
-    "Flat":   1.10,
-    "Dead":   1.37,
+    "Dusty":  0.81,
+    "Green":  0.88,
+    "Dry":    0.90,
+    "Bouncy": 0.95,
+    "Even":   1.00,
+    "Hard":   1.12,
+    "Flat":   1.19,
+    "Dead":   1.28,
 }
 
 _T20 = FormatConfig(
@@ -182,53 +194,49 @@ _T20 = FormatConfig(
     par_scores=_T20_PAR_SCORES,
     pitch_par_factors=_T20_PITCH_PAR_FACTORS,
     expected_rr={
-        "Powerplay": 7.5,
-        "Middle":    8.0,
-        "Death":    10.5,
+        # The neutral (Even) par curve's own phase rates, over this config's own
+        # phase windows: 0→53.6 across the six powerplay overs, 53.6→151.1
+        # across the ten middle overs, 151.1→196 across the last four. They used
+        # to sum to 167 against a curve that ended at 190, so the pressure
+        # engine judged every innings behind a rate the same engine's par table
+        # said it was on.
+        "Powerplay": 8.9,
+        "Middle":    9.8,
+        "Death":    11.2,
     },
     extras_per_innings=5,
     target_scores={
-        "Green":  123,
-        "Dusty":  144,
-        "Dry":    155,
-        "Bouncy": 159,
-        "Even":   172,
-        "Hard":   183,
-        "Flat":   209,
-        "Dead":   260,
+        # The par-band midpoints from config/ground_conditions.yaml, measured
+        # with `python -m tools.pitch_calibration`.
+        "Dusty":  159,
+        "Green":  172,
+        "Dry":    176,
+        "Bouncy": 186,
+        "Even":   196,
+        "Hard":   219,
+        "Flat":   233,
+        "Dead":   250,
     },
-    correct_toss_choice={
-        "Green":  "bowl",  # Seam/swing → bowl first
-        "Dry":    "bat",   # Spin worsens with wear → bat first
-        "Dusty":  "bat",   # Turner deteriorates → bat first
-        "Bouncy": "bowl",  # Pace/bounce best with new ball → bowl first
-        "Even":   "bat",   # Neutral track; slight first-innings edge → bat first
-        "Hard":   "bat",   # Good batting surface → bat first
-        "Flat":   "bowl",  # Run-fest; dew helps chaser → bowl first
-        "Dead":   "bowl",  # Extreme batting; chaser advantaged → bowl first
-    },
-    correct_toss_choice_dn={
-        # D/N T20: shorter game but dew still tilts towards chasing.
-        # Bowling first = your team bats second under lights with dew.
-        "Green":  "bowl",   # Already bowl; unchanged
-        "Dry":    "bowl",   # Dew neutralises spin in 2nd innings → bowl first
-        "Dusty":  "bowl",   # Dew kills turn → bowl first
-        "Bouncy": "bowl",   # Already bowl; unchanged
-        "Even":   "bowl",   # Dew tilts the neutral track to the chaser → bowl first
-        "Hard":   "bowl",   # Chase with dew advantage → bowl first
-        "Flat":   "bowl",   # Already bowl; unchanged
-        "Dead":   "bowl",   # Already bowl; unchanged
-    },
+    # Toss calls come from engine.pitch_registry so the Pitch Report card, the
+    # bot captains and this table cannot disagree — they used to, on Flat.
+    correct_toss_choice={p: pitch_registry.toss_call(p)
+                        for p in pitch_registry.PITCHES},
+    # Under lights, dew in the second innings makes bowling first correct on
+    # every surface.
+    correct_toss_choice_dn={p: pitch_registry.toss_call(p, "Night")
+                            for p in pitch_registry.PITCHES},
     rrr_baseline={
-        # "Neutral" RPO for each pitch in T20 context.
-        # GSME divides actual RRR by this to get a normalised aggression index.
-        "Green":  6.2,
-        "Dusty":  7.2,
-        "Dry":    7.8,
-        "Bouncy": 8.0,
-        "Even":   8.6,
-        "Hard":   9.2,
-        "Flat":  10.5,
+        # "Neutral" RPO for each pitch in T20 context — each pitch's par over
+        # 20 overs. GSME divides the actual RRR by this to get a normalised
+        # aggression index, so it has to track the par table or a chase on a
+        # turner reads as relaxed and a chase on a road as desperate.
+        "Dusty":  8.0,
+        "Green":  8.6,
+        "Dry":    8.8,
+        "Bouncy": 9.3,
+        "Even":   9.8,
+        "Hard":  11.0,
+        "Flat":  11.7,
         "Dead":  12.5,
     },
 )
@@ -297,13 +305,21 @@ _LISTA_PAR_SCORES: Dict[int, float] = {
     50: 290.0,
 }
 
+# Per-pitch multipliers on the ListA curve (Hard = 1.00 ≈ 290). Dusty and
+# Bouncy were absent, so a 50-over match on either was judged against the Hard
+# curve — a raging turner read as a 290 pitch. Unlike the T20 table these are
+# not Monte-Carlo measured: tools/pitch_calibration.py is a T20 harness, so
+# these stay ordered with the T20 factors rather than claiming a figure nobody
+# has run.
 _LISTA_PITCH_PAR_FACTORS: Dict[str, float] = {
-    "Green": 0.76,   # ~220 expected
-    "Dry":   0.80,   # ~232 expected
-    "Even":  0.95,   # ~275 expected (neutral)
-    "Hard":  1.00,   # ~290 expected (baseline)
-    "Flat":  1.10,   # ~319 expected
-    "Dead":  1.18,   # ~342 expected
+    "Dusty":  0.72,   # ~209 expected
+    "Green":  0.76,   # ~220 expected
+    "Dry":    0.80,   # ~232 expected
+    "Bouncy": 0.86,   # ~249 expected
+    "Even":   0.95,   # ~275 expected (neutral)
+    "Hard":   1.00,   # ~290 expected (baseline)
+    "Flat":   1.10,   # ~319 expected
+    "Dead":   1.18,   # ~342 expected
 }
 
 _LISTA = FormatConfig(
@@ -328,46 +344,41 @@ _LISTA = FormatConfig(
     },
     extras_per_innings=12,   # More deliveries → proportionally more extras
     target_scores={
-        "Green": 220,
-        "Dry":   230,
-        "Even":  275,   # Neutral surface (par factor 0.95)
-        "Hard":  285,
-        "Flat":  320,
-        "Dead":  340,
+        "Dusty":  209,
+        "Green":  220,
+        "Dry":    230,
+        "Bouncy": 249,
+        "Even":   275,   # Neutral surface (par factor 0.95)
+        "Hard":   290,   # Baseline
+        "Flat":   320,
+        "Dead":   340,
     },
+    # A surface's character does not change with the format, so the day call
+    # starts from engine.pitch_registry. Two surfaces legitimately differ over
+    # 50 overs: on a road with no dew a 320 is a real asset and defending it
+    # beats chasing it, which is not true over 20.
     correct_toss_choice={
-        # ListA day-match toss logic (pitch wear only, no dew)
-        "Green": "bowl",   # New-ball seam threat; pitch stays decent all day
-        "Dry":   "bat",    # Pitch deteriorates; spin brutal in 2nd innings
-        "Even":  "bat",    # Neutral surface; slight first-innings edge
-        "Hard":  "bowl",   # Balanced; slight chase advantage
-        "Flat":  "bowl",   # High totals still chaseable
-        "Dead":  "bat",    # Set a huge total; spinners can do nothing anyway
+        **{p: pitch_registry.toss_call(p) for p in pitch_registry.PITCHES},
+        "Flat": "bat",
+        "Dead": "bat",
     },
-    correct_toss_choice_dn={
-        # D/N ListA: dew from over 25 of the 2nd innings tips all pitches
-        # towards bowling first.  Your team bats 2nd at night with dew:
-        #   - Spin grips less (Dry advantage lost)
-        #   - Ball becomes slippery (more wides/extras)
-        #   - Outfield faster from moisture (Four chance ↑)
-        "Green": "bowl",   # Already bowl; dew makes chase even easier
-        "Dry":   "bowl",   # Overrides day "bat" — dew kills spin in overs 25-50
-        "Even":  "bowl",   # Dew tilts the neutral surface to the chaser
-        "Hard":  "bowl",   # Already bowl; unchanged
-        "Flat":  "bowl",   # Already bowl; unchanged
-        "Dead":  "bowl",   # Overrides day "bat" — batting paradise + dew = huge chase
-    },
+    # D/N ListA: dew from about over 25 of the second innings tips every
+    # surface towards bowling first — spin grips less, the ball is slippery and
+    # the outfield quickens.
+    correct_toss_choice_dn={p: pitch_registry.toss_call(p, "Night")
+                            for p in pitch_registry.PITCHES},
     rrr_baseline={
-        # "Neutral" RPO for each pitch in ListA (ODI) context.
-        # ODI scoring rates are significantly lower than T20; Hard pitch
-        # averages ~5.7-6.0 RPO in the first innings.
-        # A required rate above these baselines represents escalating pressure.
-        "Green": 4.8,   # Seam-friendly: low-scoring; 5+ RPO is already urgent
-        "Dry":   5.0,   # Spin-friendly: modest target, 5+ RPO is challenging
-        "Even":  5.5,   # Neutral baseline between Dry and Hard
-        "Hard":  6.0,   # Balanced baseline for ODI cricket
-        "Flat":  7.0,   # High-scoring; 7+ RPO still challenging even on flat deck
-        "Dead":  7.5,   # Batting paradise; 8+ RPO is genuinely hard to sustain
+        # "Neutral" RPO for each pitch in ListA (ODI) context — each pitch's
+        # target over 50 overs. ODI rates are far lower than T20, so a required
+        # rate above these represents escalating pressure.
+        "Dusty":  4.2,
+        "Green":  4.4,
+        "Dry":    4.6,
+        "Bouncy": 5.0,
+        "Even":   5.5,
+        "Hard":   5.8,
+        "Flat":   6.4,
+        "Dead":   6.8,
     },
 )
 

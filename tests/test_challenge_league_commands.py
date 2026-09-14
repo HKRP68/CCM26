@@ -64,7 +64,8 @@ def _load_challenge_with_stubs():
     match_constants = types.ModuleType("services.match_constants")
     match_constants.MATCH_EXPIRE = 60
     match_constants.random_match_settings = lambda: {}
-    match_constants.PITCH_TYPES = ["Dry", "Dusty", "Hard", "Even", "Flat", "Green", "Bouncy"]
+    from engine.pitch_registry import SELECTABLE as _SELECTABLE
+    match_constants.PITCH_TYPES = list(_SELECTABLE)
     sys.modules["services.match_constants"] = match_constants
 
     telegram_user_service = types.ModuleType("services.telegram_user_service")

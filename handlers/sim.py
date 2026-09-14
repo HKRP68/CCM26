@@ -38,6 +38,7 @@ from services.sim_match import (
     simulate_match, render_innings_card, render_result, render_match_summary_image,
 )
 from services.match_formats import resolve_format, get_format, custom_format
+from engine import pitch_registry
 from services.ground_conditions import list_pitches, get_pitch_meta
 from services.sim_team import append_distinct_base_players, distinct_base_players
 
@@ -367,7 +368,7 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             opponent_name = "🤖 Sim XI"
 
-        pitches = list_pitches() or ["Flat", "Hard", "Green", "Dry", "Dead"]
+        pitches = list_pitches() or list(pitch_registry.SELECTABLE)
         pitch = random.choice(pitches)
         pitch_meta = get_pitch_meta(pitch)
         toss_winner = random.choice([team_name, opponent_name])

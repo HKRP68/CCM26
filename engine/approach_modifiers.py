@@ -410,8 +410,12 @@ _PITCH_RULES = {
     "Dry": {"bat": {"aggressive": _runs(-2), "rotate": _runs(+1)},
             "bowl": {"variation": _wkt(+0.10)}},
     # Green: seam does enough early that blocking and playing straight both
-    # score less; once the shine goes the attackers cash in.
-    "Green": {"bat_phase": {("defensive", "powerplay"): _runs(-1),
+    # score less; once the shine goes the attackers cash in. Attacking the
+    # stumps is also the plan the surface is *for* — it had no bowling rule at
+    # all, which left the one pitch built for wicket-taking bowling saying
+    # nothing about how to bowl on it.
+    "Green": {"bowl": {"aggressive": _wkt(+0.12)},
+              "bat_phase": {("defensive", "powerplay"): _runs(-1),
                             ("balanced", "powerplay"): _runs(-1),
                             ("aggressive", "middle"): _runs(+2),
                             ("aggressive", "death"): _runs(+2)}},

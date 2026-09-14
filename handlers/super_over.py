@@ -70,16 +70,21 @@ from services.match_outcome import mark_end, END_COMPLETED
 from services.bowling_service import get_delivery_options, AVAILABLE_SHOTS
 from services.sim_match import _adapt_player, _normalize_outcome
 
+from engine import pitch_registry
+
 logger = logging.getLogger(__name__)
 
-# Engine pitch vocabulary is {"Green","Flat","Dry","Hard","Dead"}; map the
-# Challenge League surfaces onto it (unknowns fall back to a neutral default in
-# the engine anyway).
-_PITCH_MAP = {
-    "Hard": "Hard", "Flat": "Flat", "Green": "Green", "Dry": "Dry",
-    "Dusty": "Dry", "Dust": "Dry", "Bouncy": "Hard", "Dead": "Dead",
-    "Even": "Hard",
-}
+# The engine models every surface in engine.pitch_registry, so a Super Over is
+# played on the pitch the match was played on. This used to fold the league
+# surfaces onto a five-name vocabulary — Dusty became Dry, and Bouncy and Even
+# both became Hard — which was true when the engine knew five pitches and has
+# not been since. Only the "Dust" spelling still needs a map entry.
+_PITCH_ALIASES = {"Dust": "Dusty"}
+
+
+def _engine_pitch(pitch):
+    """Resolve a stored pitch name to one the outcome engine models."""
+    return pitch_registry.normalise(_PITCH_ALIASES.get(pitch, pitch))
 
 # Short delay (seconds) between showing a ball's result and the next prompt so
 # the chat reads like a live broadcast rather than an instant jump.
@@ -142,7 +147,8 @@ def _mention(tg_id, name):
 
 
 def _pitch_for_engine(pitch):
-    return _PITCH_MAP.get((pitch or "Hard"), "Hard")
+    """The surface the Super Over is played on — the match's own."""
+    return _engine_pitch(pitch)
 
 
 def _xi_players(xi):

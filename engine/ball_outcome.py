@@ -10,6 +10,7 @@ from engine.ground_config import (
 )
 from engine.game_state_engine import apply_game_state_to_probs
 from engine.format_config import FormatConfig
+from engine import pitch_registry
 
 logger = logging.getLogger(__name__)
 
@@ -28,22 +29,18 @@ FREE_HIT_BOUNDARY_BOOST = 1.75
 #   • Detailed commentary templates
 #   • Enhanced boundary & wicket chances in the final 4 overs (17–20)
 #
-# Pitch average ranges (T20 context):
-#   - Green: 150–160 runs (pace gets help, but strike rotation keeps it competitive)
-#   - Flat : 180–200 runs (batting paradise)
-#   - Dry  : 120–150 runs (favors spin bowlers)
-#   - Hard : 150–180 runs (balanced, slight batting edge)
-#   - Dead : 200–240 runs (batting festival; very few wickets)
+# Pitch par bands are NOT listed here. They live in one place —
+# config/ground_conditions.yaml's `scoring_dynamics` — and are measured with
+# `python -m tools.pitch_calibration`. This header used to carry its own copy
+# ("Green: 150-160, Dry: 120-150 …") which disagreed both with the constants
+# forty lines below it and with the config the engine actually loads.
 #
 # The logic below ensures:
 #   – Pitch contributes 60% to each outcome probability
 #   – Player ratings (batting, bowling, fielding) contribute 40%
 #   – In overs 17–20, boundary (4s/6s) chances and wicket chances are boosted
-#     based on pitch type:
-#       * Flat/Dead: highest boundary boost (aim ~3 boundaries/over)
-#       * Hard       : moderate boundary boost (aim ~2 boundaries/over)
-#       * Green/Dry  : minimal boundary boost (max ~1 boundary/over)
-#     Wicket chance also increases slightly in these death overs.
+#     based on how batting-friendly the surface is (engine.pitch_registry
+#     orders the eight surfaces from rankest turner to deadest road).
 #
 # Print-based logging is included to trace computations at each step.
 # -----------------------------------------------------------------------------
@@ -66,85 +63,125 @@ commentary_templates = {
 # -----------------------------------------------------------------------------
 # 2) Pitch-influence definitions (60% weight)
 # -----------------------------------------------------------------------------
+# Fallback batting-friendliness index, used only when ground_conditions.yaml is
+# unavailable. See that file's header for what the number actually does: it
+# scales every non-wicket bucket and the result is renormalised, so in the T20
+# pipeline it is a survival dial rather than a run multiplier. Kept ordered and
+# close to 1.0 to match the config — the old table ran 0.98…1.30 with Green,
+# the rankest bowling surface in the game, carrying a HIGHER index than Flat.
 PITCH_RUN_FACTOR = {
-    "Green":  0.98,   # seaming/swing → par ~123 (bowler's dream)
-    "Dusty":  1.04,   # sharp turn → par ~144
-    "Dry":    1.00,   # slow turn → par ~155
-    "Bouncy": 1.12,   # pace-friendly carry → par ~159
-    "Even":   1.06,   # neutral, balanced → par ~172
-    "Hard":   1.10,   # true bounce (batting edge) → par ~183
-    "Flat":   1.20 * 0.90,   # batting paradise → par ~209
-    "Dead":   1.30    # batting festival → ~260
+    "Dusty":  0.86,
+    "Green":  0.90,
+    "Dry":    0.94,
+    "Bouncy": 0.98,
+    "Even":   1.02,
+    "Hard":   1.07,
+    "Flat":   1.13,
+    "Dead":   1.22,
 }
 
 # ---------------------------------------------------------------------
 # 2) Pitch-influence definitions (60% weight)
 # ---------------------------------------------------------------------
 
+# Fallback wicket factors, mirroring config/ground_conditions.yaml — WHO the
+# surface pays, by bowling type. Every surface lists all seven types the
+# engine knows so nobody silently lands on `default`, and the signs are the
+# cricket: the green top pays the swing bowler before the express quick, the
+# turner pays every spinner, the road pays the wrist spinner last of all.
 PITCH_WICKET_FACTOR = {
-    "Green": {
-        "Fast":         1.18,   # pace gets help, but no longer triggers collapses
-        "Fast-medium":  1.10,
+    "Dusty": {  # raging turner — the quicks bowl cutters and hope
+        "Fast":         0.68,
+        "Fast-medium":  0.74,
+        "Medium-fast":  0.82,
+        "Off spin":     1.52,
+        "Finger spin":  1.46,
+        "Leg spin":     1.62,
+        "Wrist spin":   1.56,
+        "default":      0.78,
+    },
+    "Green": {  # seam and swing; spin is decoration
+        "Fast":         1.42,
+        "Fast-medium":  1.55,
+        "Medium-fast":  1.25,
+        "Off spin":     0.62,
+        "Finger spin":  0.60,
+        "Leg spin":     0.66,
+        "Wrist spin":   0.64,
+        "default":      0.62,
+    },
+    "Dry": {    # slow turn, same shape with the volume down
+        "Fast":         0.80,
+        "Fast-medium":  0.84,
+        "Medium-fast":  0.90,
+        "Off spin":     1.28,
+        "Finger spin":  1.24,
+        "Leg spin":     1.34,
+        "Wrist spin":   1.30,
+        "default":      0.88,
+    },
+    "Bouncy": { # steep bounce — express pace, and bounce beats finger spin
+        "Fast":         1.58,
+        "Fast-medium":  1.30,
         "Medium-fast":  1.05,
-        "default":      0.55    # spinners/pacers that don’t fit above
+        "Off spin":     0.74,
+        "Finger spin":  0.72,
+        "Leg spin":     0.88,
+        "Wrist spin":   0.90,
+        "default":      0.80,
     },
-    "Dry": {
-        "Leg spin":     1.15,   # leggies turn square, highest threat
-        "Wrist spin":   1.13,   # similar to leggies on a turning track
-        "Off spin":     1.11,   # very effective but slightly easier than a leggie
-        "Finger spin":  1.08,   # orthodox left-arm; still strong, but a bit less than right-arm
-        "default":      0.70    # pace bowlers on a dry turner
-    },
-    "Hard": {
-        "Fast":         1.10,   # pace gets decent bounce & seam, but still batsmen can score
+    "Even": {   # neutral: nobody shut out, nobody handed anything
+        "Fast":         1.06,
         "Fast-medium":  1.05,
         "Medium-fast":  1.00,
-        "default":      0.90    # spin/other styles on a true track
+        "Off spin":     1.02,
+        "Finger spin":  1.01,
+        "Leg spin":     1.04,
+        "Wrist spin":   1.03,
+        "default":      1.00,
     },
-    "Dusty": {
-        "Leg spin":     1.18,   # worn turner — spinners influential
-        "Wrist spin":   1.16,
-        "Off spin":     1.14,
-        "Finger spin":  1.10,
-        "default":      0.82    # pace bowlers on a dusty turner
-    },
-    "Bouncy": {
-        "Fast":         1.28,   # extra bounce rewards genuine pace
-        "Fast-medium":  1.13,
-        "Medium-fast":  1.08,
-        "default":      0.80    # spinners on a hard, bouncy deck
-    },
-    "Flat": {
-        # Almost no one “takes” wickets easily on Flat—batsmen dominate.
-        "default":      0.88
-    },
-    "Even": {
-        # Neutral surface — pace and spin share the wickets evenly.
-        "Fast":         1.03,
-        "Fast-medium":  1.01,
+    "Hard": {   # true carry rewards pace; spin has to earn it
+        "Fast":         1.14,
+        "Fast-medium":  1.08,
         "Medium-fast":  1.00,
-        "Leg spin":     1.02,
-        "Off spin":     1.01,
-        "default":      0.95
+        "Off spin":     0.90,
+        "Finger spin":  0.88,
+        "Leg spin":     0.94,
+        "Wrist spin":   0.92,
+        "default":      0.92,
     },
-    "Dead": {
-        # Very tough for bowlers on Dead track—wickets are rare
-        "Fast":         0.60,
-        "Fast-medium":  0.60,
-        "Medium-fast":  0.60,
+    "Flat": {   # a road — change of pace is the only currency left
+        "Fast":         0.96,
+        "Fast-medium":  0.94,
+        "Medium-fast":  0.88,
+        "Off spin":     0.84,
+        "Finger spin":  0.82,
+        "Leg spin":     0.92,
+        "Wrist spin":   0.94,
+        "default":      0.88,
+    },
+    "Dead": {   # nothing works; wrist spin least badly
+        "Fast":         0.64,
+        "Fast-medium":  0.62,
+        "Medium-fast":  0.58,
         "Off spin":     0.60,
-        "Leg spin":     0.60,
-        "Finger spin":  0.60,
-        "Wrist spin":   0.60,
-        "default":      0.60
-    }
+        "Finger spin":  0.58,
+        "Leg spin":     0.70,
+        "Wrist spin":   0.72,
+        "default":      0.62,
+    },
 }
 
 def get_pitch_run_multiplier(pitch: str, config=None) -> float:
-    """
-    Returns the run-friendly multiplier for the given pitch.
-    Uses ground_conditions.yaml if available, falls back to hardcoded constants.
-    Pass *config* to use a user-specific snapshot instead of the global config.
+    """Batting-friendliness index for *pitch* (config first, constants second).
+
+    Mind what this is applied to. :func:`compute_pitch_skill_factor` multiplies
+    it into EVERY non-wicket bucket — Dot and Extras included — and the weights
+    are then normalised, so in the T20 pipeline it does not change what a
+    scoring shot is worth; it changes how often a wicket falls. The runs per
+    ball live in the scoring matrix. The super-over engine is the one caller
+    that blends it against player skill directly, which is why the values are
+    kept near 1.0 and ordered with the par bands.
     """
     factor = _gc_run_factor(pitch, config=config)
     if factor is None:
@@ -152,9 +189,11 @@ def get_pitch_run_multiplier(pitch: str, config=None) -> float:
     return factor
 
 def get_pitch_wicket_multiplier(pitch: str, bowling_type: str, config=None) -> float:
-    """
-    Returns the wicket-friendly multiplier for the given pitch and bowling type.
-    Uses ground_conditions.yaml if available, falls back to hardcoded constants.
+    """How much this surface pays a bowler of *bowling_type*.
+
+    This is where a pitch's identity lives: it is the only lookup that can say
+    "a green top is worth more to the swing bowler than to the quick". Uses
+    ground_conditions.yaml when available and the constants above otherwise.
     Pass *config* to use a user-specific snapshot instead of the global config.
     """
     wf = _gc_wicket_factors(pitch, config=config)
@@ -169,92 +208,92 @@ def get_pitch_wicket_multiplier(pitch: str, bowling_type: str, config=None) -> f
 # -----------------------------------------------------------------------------
 # 3) Pitch-specific outcome probabilities (realistic scoring patterns)
 # -----------------------------------------------------------------------------
+# Fallback scoring matrices, mirroring config/ground_conditions.yaml. Each is
+# the surface's own ball-by-ball shape before any player, phase or approach
+# layer: Dot says how hard it is to get off strike, Four+Six how freely the
+# boundary comes, Wicket how much the surface gives the bowlers in aggregate.
+# Ordered bowler-friendly → batting-friendly, matching engine.pitch_registry.
 PITCH_SCORING_MATRIX = {
-    # Calibrated to per-pitch first-innings means (par): Green~123 Dusty~144
-    # Dry~155 Bouncy~159 Even~172 Hard~183 Flat~209. Kept in sync with the
-    # authoritative ground_conditions.yaml pitch_profiles (this dict is the
-    # fallback used only when the YAML config is unavailable).
-    "Green": {
-        "Dot":     0.394,  # Seaming/swing — pace dominates, hard to score
-        "Single":  0.330,
-        "Double":  0.081,
-        "Three":   0.005,
-        "Four":    0.056,
-        "Six":     0.026,
-        "Wicket":  0.048,
-        "Extras":  0.060
+    "Dusty": {  # Strangle — a single is always on, a boundary never is
+        "Dot":      0.3691,
+        "Single":   0.3776,
+        "Double":   0.0566,
+        "Three":    0.0060,
+        "Four":     0.0831,
+        "Six":      0.0340,
+        "Wicket":   0.0283,
+        "Extras":   0.0453,
     },
-    "Dusty": {
-        "Dot":     0.348,  # Sharp turn — spin-attack, low-scoring dogfight
-        "Single":  0.340,
-        "Double":  0.092,
-        "Three":   0.006,
-        "Four":    0.078,
-        "Six":     0.042,
-        "Wicket":  0.044,
-        "Extras":  0.050
+    "Green": {  # Boom or bust — you cannot rotate, so the runs are fours
+        "Dot":      0.3823,
+        "Single":   0.2966,
+        "Double":   0.0551,
+        "Three":    0.0051,
+        "Four":     0.1271,
+        "Six":      0.0466,
+        "Wicket":   0.0279,
+        "Extras":   0.0593,
     },
-    "Dry": {
-        "Dot":     0.324,  # Slow turn — spin bites in the middle overs
-        "Single":  0.350,
-        "Double":  0.101,
-        "Three":   0.006,
-        "Four":    0.085,
-        "Six":     0.044,
-        "Wicket":  0.040,
-        "Extras":  0.050
+    "Dry": {    # Nudge and work; the big shot is a mug's game
+        "Dot":      0.3189,
+        "Single":   0.3731,
+        "Double":   0.0700,
+        "Three":    0.0062,
+        "Four":     0.1127,
+        "Six":      0.0428,
+        "Wicket":   0.0297,
+        "Extras":   0.0466,
     },
-    "Bouncy": {
-        "Dot":     0.336,  # Extra bounce — pace-friendly, tricky strokeplay
-        "Single":  0.350,
-        "Double":  0.099,
-        "Three":   0.006,
-        "Four":    0.079,
-        "Six":     0.045,
-        "Wicket":  0.040,
-        "Extras":  0.045
+    "Bouncy": { # Awkward to get off strike, but mistimed pulls carry
+        "Dot":      0.3625,
+        "Single":   0.3261,
+        "Double":   0.0683,
+        "Three":    0.0068,
+        "Four":     0.1175,
+        "Six":      0.0531,
+        "Wicket":   0.0240,
+        "Extras":   0.0417,
     },
-    "Even": {
-        "Dot":     0.323,  # Neutral, balanced — the standard T20 track
-        "Single":  0.350,
-        "Double":  0.106,
-        "Three":   0.006,
-        "Four":    0.086,
-        "Six":     0.053,
-        "Wicket":  0.036,
-        "Extras":  0.040
+    "Even": {   # The standard international track
+        "Dot":      0.3397,
+        "Single":   0.3543,
+        "Double":   0.0723,
+        "Three":    0.0061,
+        "Four":     0.1157,
+        "Six":      0.0506,
+        "Wicket":   0.0251,
+        "Extras":   0.0362,
     },
-    "Hard": {
-        "Dot":     0.335,  # True bounce, good carry — slight batting edge
-        "Single":  0.350,
-        "Double":  0.099,
-        "Three":   0.006,
-        "Four":    0.088,
-        "Six":     0.053,
-        "Wicket":  0.034,
-        "Extras":  0.035
+    "Hard": {   # True carry — the drive and the pull both pay
+        "Dot":      0.3227,
+        "Single":   0.3485,
+        "Double":   0.0758,
+        "Three":    0.0057,
+        "Four":     0.1288,
+        "Six":      0.0606,
+        "Wicket":   0.0238,
+        "Extras":   0.0341,
     },
-    "Flat": {
-        "Dot":     0.351,  # Batting paradise — 200+ thrillers
-        "Single":  0.340,
-        "Double":  0.097,
-        "Three":   0.006,
-        "Four":    0.091,
-        "Six":     0.060,
-        "Wicket":  0.030,
-        "Extras":  0.025
+    "Flat": {   # A road: every scoring option is open
+        "Dot":      0.3110,
+        "Single":   0.3409,
+        "Double":   0.0813,
+        "Three":    0.0058,
+        "Four":     0.1394,
+        "Six":      0.0697,
+        "Wicket":   0.0248,
+        "Extras":   0.0271,
     },
-    "Dead": {
-        # Batting paradise (200+ average, ~4-5 wickets)
-        "Dot":     0.18,
-        "Single":  0.320,
-        "Double":  0.145,
-        "Three":   0.005,  # ~0.6 threes per innings (very rare)
-        "Four":    0.19,
-        "Six":     0.10,
-        "Wicket":  0.03,
-        "Extras":  0.03
-    }
+    "Dead": {   # Shirtfront — boundary hitting is the default shot
+        "Dot":      0.2563,
+        "Single":   0.3283,
+        "Double":   0.0926,
+        "Three":    0.0051,
+        "Four":     0.1726,
+        "Six":      0.0926,
+        "Wicket":   0.0272,
+        "Extras":   0.0253,
+    },
 }
 
 # Fallback matrix for unknown pitch types (CORRECTED)
@@ -323,41 +362,47 @@ LISTA_DEATH_MATRIX = {
     "Extras": 0.048,
 }
 
-# Per-pitch run scaling for ListA (applied on top of phase matrices)
-# These reflect how pitch character shifts scoring across 50 overs.
-# Must be consistent with _LISTA_PITCH_PAR_FACTORS in format_config.py:
-#   Hard ≈ 0.98 → ~285 runs  (par factor 1.00)
-#   Flat ≈ 1.21 → ~320 runs  (par factor 1.10)
-#   Dead ≈ 1.18 → ~340 runs  (par factor 1.18) ← was 0.68 (contradicted par)
-#   Green ≈ 0.68 → ~220 runs (par factor 0.76)
-#   Dry   ≈ 0.72 → ~230 runs (par factor 0.80)
+# Per-pitch run scaling for ListA (applied on top of the phase matrices). Unlike
+# the T20 run_factor this one is applied to the run buckets only — Wicket and
+# Extras keep their proportions — so here the name is literal.
+#
+# Ordered with _LISTA_PITCH_PAR_FACTORS in format_config.py. Dusty and Bouncy
+# were missing and fell through to 1.0, which sat between Even (0.92) and Hard
+# (0.98): a raging turner scored more over 50 overs than a neutral track.
 LISTA_RUN_FACTORS = {
-    "Green": 0.68,   # Strong bowler-friendly suppression
-    "Dry":   0.72,   # Spin-friendly
-    "Even":  0.92,   # Neutral, balanced
-    "Hard":  0.98,   # Baseline 280-320 target band
-    "Flat":  1.21,   # High-scoring 320-360 target band
-    "Dead":  1.18,   # Batting festival — aligns with par factor 1.18 (~340 runs)
+    "Dusty":  0.64,   # Turner: the hardest 50-over surface to bat on
+    "Green":  0.68,   # Strong bowler-friendly suppression
+    "Dry":    0.72,   # Spin-friendly
+    "Bouncy": 0.82,   # Pace bites, but the ball comes on to the bat
+    "Even":   0.92,   # Neutral, balanced
+    "Hard":   0.98,   # Baseline 280-320 target band
+    "Flat":   1.21,   # High-scoring 320-360 target band
+    "Dead":   1.28,   # Batting festival (~340) — was 1.18, i.e. BELOW Flat's
+                      # 1.21 while its own target sits 20 runs above Flat's
 }
 
-# ListA pitch-specific nudges for strike rotation profile.
-# Applied before final normalization of raw weights.
-# Dead removed: it is now a batting paradise (run_factor 1.18) — dots must NOT
-# be boosted. Green/Dry remain: tight bowling on seam/spin surfaces is realistic.
+# ListA pitch-specific nudges for the strike-rotation profile, applied before
+# the final normalisation of raw weights. Only the surfaces where tight bowling
+# genuinely builds dot-ball pressure over 50 overs get one; a road never does.
 LISTA_DOT_SINGLE_FACTORS = {
-    "Green": {"Dot": 1.22, "Single": 1.06},
-    "Dry":   {"Dot": 1.20, "Single": 1.08},
+    "Dusty":  {"Dot": 1.24, "Single": 1.10},
+    "Green":  {"Dot": 1.22, "Single": 1.06},
+    "Dry":    {"Dot": 1.20, "Single": 1.08},
+    "Bouncy": {"Dot": 1.10, "Single": 1.02},
 }
 
-# ListA-only wicket scaling by pitch (applied as a final scaling layer).
-# Dead corrected: batting paradise → very low wicket rate (like Flat, even lower).
-# Green/Dry: bowling-friendly → higher wicket rate.
+# ListA-only wicket scaling by pitch, applied as a final scaling layer. One
+# entry per surface — Dusty, Bouncy and Even used to be absent and defaulted to
+# Hard's 1.00, so a 50-over innings on a turner lost wickets at a neutral rate.
 LISTA_WICKET_PITCH_MULT = {
-    "Green": 1.18,
-    "Dry":   1.12,
-    "Hard":  1.00,
-    "Flat":  0.70,
-    "Dead":  0.58,   # Batting festival: wickets rarer than Flat
+    "Dusty":  1.22,   # Footmarks over 100 overs: the spinners own the match
+    "Green":  1.18,
+    "Dry":    1.12,
+    "Bouncy": 1.08,
+    "Even":   1.02,
+    "Hard":   1.00,   # Baseline
+    "Flat":   0.70,
+    "Dead":   0.58,   # Batting festival: wickets rarer than Flat
 }
 
 
@@ -432,9 +477,12 @@ def _apply_lista_pitch_wear(weights: dict, pitch: str,
     Progressive pitch wear for ListA (0-300 balls, normalised to [0,1]).
 
     Unlike T20 (where wear is mild), ListA wear has a pronounced late phase:
+      - Dusty : 100 overs of footmarks; the sharpest deterioration in the game.
       - Green : seam fades after over 20 (wear ~0.40). Batting improves.
       - Dry   : spin gets genuinely unplayable by over 30+ (wear ~0.60).
                 Wickets and dots escalate sharply.
+      - Bouncy: the steep bounce settles; batting gets easier.
+      - Even  : honest, steady deterioration.
       - Hard  : modest steady deterioration across the innings.
       - Flat/Dead: minor wear; pitch remains batting-friendly throughout.
 
@@ -446,7 +494,24 @@ def _apply_lista_pitch_wear(weights: dict, pitch: str,
     w = dict(weights)
     pw = pitch_wear
 
-    if pitch == "Dry":
+    if pitch == "Dusty":
+        # 100 overs of footmarks: by the back half the spinners own the match
+        w["Wicket"] = w.get("Wicket", 0) * (1.0 + 0.55 * pw)
+        w["Dot"]    = w.get("Dot",    0) * (1.0 + 0.24 * pw)
+        w["Six"]    = w.get("Six",    0) * (1.0 - 0.30 * pw)
+        w["Four"]   = w.get("Four",   0) * (1.0 - 0.15 * pw)
+
+    elif pitch == "Bouncy":
+        # The bounce goes out of it; batting gets easier as the innings runs on
+        w["Wicket"] = w.get("Wicket", 0) * (1.0 - 0.12 * pw)
+        w["Four"]   = w.get("Four",   0) * (1.0 + 0.08 * pw)
+
+    elif pitch == "Even":
+        # Honest, steady deterioration
+        w["Wicket"] = w.get("Wicket", 0) * (1.0 + 0.15 * pw)
+        w["Dot"]    = w.get("Dot",    0) * (1.0 + 0.07 * pw)
+
+    elif pitch == "Dry":
         # Spin track becomes brutal in second half of innings
         # Wickets  : up to +45% by over 50
         # Dots     : up to +20% by over 50
@@ -588,11 +653,21 @@ def _apply_pitch_wear(raw_weights: dict, pitch_type: str, pitch_wear: float) -> 
     pitch_wear is a float in [0.0, 1.0] representing how worn the surface is
     (0.0 = fresh, 1.0 = fully worn after 120 balls of the innings).
 
+    This is the generic *drift*: the slow, monotone change a surface undergoes
+    as it is bowled on. The per-pitch second-innings *identity* — "the middle
+    overs become a graveyard", "only after over 16" — is a separate layer in
+    engine.pitch_state, deliberately, so the two never double-count. Every
+    surface in engine.pitch_registry has a row here; Dusty, Bouncy and Even used
+    to have none and simply did not wear.
+
     Effects by pitch type:
-      Dry   – spin deterioration → wickets and dots increase with wear
-      Green – old ball eases seam movement → batting gets slightly easier
-      Flat/Dead – batting-friendly surface gets even more so
-      Hard  – slight deterioration; wickets and dots creep up
+      Dusty  – footmarks deepen: the sharpest deterioration in the game
+      Dry    – cracks open → wickets and dots increase with wear
+      Green  – grass burns off → seam fades and batting gets EASIER
+      Bouncy – the vicious bounce settles; the pull and hook come back on
+      Even   – moderate, honest wear
+      Hard   – slight deterioration; pace carry drops a little
+      Flat/Dead – barely changes; already batting-friendly
 
     Weights are re-normalised after adjustment so they remain proportional.
     """
@@ -602,10 +677,27 @@ def _apply_pitch_wear(raw_weights: dict, pitch_type: str, pitch_wear: float) -> 
     adjusted = dict(raw_weights)
     w = pitch_wear  # shorthand
 
-    if pitch_type == "Dry":
+    if pitch_type == "Dusty":
+        # Footmarks deepen all innings: the hardest surface to bat on late
+        adjusted["Wicket"] = adjusted.get("Wicket", 0) * (1.0 + 0.35 * w)
+        adjusted["Dot"]    = adjusted.get("Dot",    0) * (1.0 + 0.18 * w)
+        adjusted["Six"]    = adjusted.get("Six",    0) * (1.0 - 0.12 * w)
+
+    elif pitch_type == "Dry":
         # Spin track worsens for batting: wickets and dots go up
         adjusted["Wicket"] = adjusted.get("Wicket", 0) * (1.0 + 0.30 * w)
         adjusted["Dot"]    = adjusted.get("Dot",    0) * (1.0 + 0.15 * w)
+
+    elif pitch_type == "Bouncy":
+        # The steep bounce settles out of it; pull and hook become safe shots
+        adjusted["Wicket"] = adjusted.get("Wicket", 0) * (1.0 - 0.12 * w)
+        adjusted["Four"]   = adjusted.get("Four",   0) * (1.0 + 0.06 * w)
+        adjusted["Six"]    = adjusted.get("Six",    0) * (1.0 + 0.08 * w)
+
+    elif pitch_type == "Even":
+        # Moderate wear: a good length starts to grip
+        adjusted["Wicket"] = adjusted.get("Wicket", 0) * (1.0 + 0.12 * w)
+        adjusted["Dot"]    = adjusted.get("Dot",    0) * (1.0 + 0.08 * w)
 
     elif pitch_type == "Green":
         # Seam movement reduces as ball gets older; batting becomes easier
@@ -1279,9 +1371,12 @@ def calculate_outcome(
 
             if in_death:
                 if outcome in ("Four", "Six"):
-                    if pitch in ("Flat", "Dead", "Hard"):
+                    # Which boost a surface gets is its registry classification,
+                    # not a hardcoded list: the old `else` branch was commented
+                    # "Green or Dry" but also swallowed Dusty, Bouncy and Even.
+                    if pitch_registry.favours(pitch) == "Batting":
                         boundary_boost = _death_cfg.get("boundary_boost_batting_pitch", 2.2)
-                    else:  # Green or Dry
+                    else:   # every surface that still offers the bowlers something
                         boundary_boost = _death_cfg.get("boundary_boost_bowling_pitch", 1.8)
                     logger.debug(f"  DeathOver: BOUNDARY ({outcome}) on {pitch} by factor {boundary_boost}")
                     weight *= boundary_boost

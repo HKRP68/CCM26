@@ -1,77 +1,42 @@
-"""Ground-conditions loader (adapted from SimCricketX engine/ground_config.py).
+"""Pitch metadata for the auto-sim (/sim) — an adapter, not a second opinion.
 
-Reads data/ground_conditions.yaml for pitch metadata — descriptions, run
-factors, ideal toss choice and phase boosts — used by the auto-sim (/sim) to
-make pitches feel distinct beyond the raw outcome table in probability_engine.
+This module used to read its own copy of the pitch model from
+``data/ground_conditions.yaml``, a stale five-surface file whose numbers had
+diverged from ``config/ground_conditions.yaml`` (the one the match engine
+actually loads) — different scoring matrices, a different Green run factor, and
+no Dusty, Bouncy or Even at all, so three of the seven surfaces a host can pick
+had no metadata here. It also carried a private ``_IDEAL_TOSS`` table that
+disagreed with ``engine.format_config`` about what to do on a road.
 
-PyYAML is optional: if it (or the file) is unavailable, a built-in default
-profile set is used so the bot keeps working before a redeploy.
+It now reads the same config the engine reads and the same identities
+``engine.pitch_registry`` defines, so /sim describes the surface the match is
+actually played on.
 """
 
 import logging
-import os
+
+from engine import ground_config, pitch_registry
 
 logger = logging.getLogger(__name__)
 
-_DATA_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                          "data", "ground_conditions.yaml")
 
-# Built-in fallback (mirrors the key numbers in ground_conditions.yaml). Run
-# factor: <1 bowling-friendly, >1 batting-friendly. ideal_toss derives from it.
-_FALLBACK = {
-    "Green": {"description": "Seamer-friendly surface — pace dominates, low scoring",
-              "run_factor": 0.85, "ideal_toss": "bowl", "favours": "Pace"},
-    "Dry":   {"description": "Spin-friendly surface — spinners thrive, tough to score",
-              "run_factor": 0.85, "ideal_toss": "bat", "favours": "Spin"},
-    "Hard":  {"description": "True bounce with carry — balanced, slight batting edge",
-              "run_factor": 1.10, "ideal_toss": "bat", "favours": "Balanced"},
-    "Even":  {"description": "Neutral, balanced surface — bat and ball share honours",
-              "run_factor": 1.06, "ideal_toss": "bat", "favours": "Balanced"},
-    "Flat":  {"description": "Even bounce — batting paradise, bowlers need skill",
-              "run_factor": 1.08, "ideal_toss": "bowl", "favours": "Batting"},
-    "Dead":  {"description": "Lifeless track — batting festival guaranteed",
-              "run_factor": 1.30, "ideal_toss": "bowl", "favours": "Batting"},
-}
-
-# Pitch-correct toss choice (from SimCricketX format_config.correct_toss_choice).
-# "bat" = bat first; "bowl" = bowl first.
-_IDEAL_TOSS = {"Green": "bowl", "Dry": "bat", "Hard": "bat",
-               "Even": "bat", "Flat": "bowl", "Dead": "bowl"}
-
-_cache = None
-
-
-def _load():
-    global _cache
-    if _cache is not None:
-        return _cache
-    profiles = {}
-    try:
-        import yaml  # optional dependency
-        with open(_DATA_PATH, "r", encoding="utf-8") as f:
-            raw = yaml.safe_load(f) or {}
-        for name, prof in (raw.get("pitch_profiles") or {}).items():
-            rf = float(prof.get("run_factor", 1.0))
-            profiles[name] = {
-                "description": prof.get("description", ""),
-                "run_factor": rf,
-                "ideal_toss": _IDEAL_TOSS.get(name, "bat" if rf <= 1.0 else "bowl"),
-                "favours": _favours_from(prof.get("wicket_factors") or {}),
-            }
-        if raw.get("phase_boosts"):
-            profiles["__phase_boosts__"] = raw["phase_boosts"]
-    except Exception as e:
-        logger.info("ground_conditions.yaml unavailable (%s); using fallback", e)
-
-    # Merge fallback for any pitch the YAML didn't define.
-    for name, prof in _FALLBACK.items():
-        profiles.setdefault(name, prof)
-    _cache = profiles
-    return _cache
+def _run_factor(name):
+    """Batting-friendliness index from the config, with a registry-ordered
+    fallback if no config is on disk."""
+    factor = ground_config.get_run_factor(name)
+    if factor is not None:
+        return float(factor)
+    # Config missing: derive an index from the par ordering rather than invent
+    # numbers that could drift from it.
+    return round(0.86 + 0.05 * pitch_registry.order(name), 2)
 
 
 def _favours_from(wicket_factors):
-    """Heuristic 'favours' label from the wicket-factor map."""
+    """Heuristic 'favours' label from a config wicket-factor map.
+
+    Kept for callers that hold a raw profile dict; the registry's own
+    :func:`~engine.pitch_registry.favours` is the answer everywhere else.
+    """
     if not wicket_factors:
         return "Balanced"
     pace = max((v for k, v in wicket_factors.items()
@@ -86,11 +51,23 @@ def _favours_from(wicket_factors):
 
 
 def list_pitches():
-    """Pitch names usable by the sim (those the outcome engine also supports)."""
-    from services.probability_engine import PITCH_MODS
-    return [p for p in _load() if not p.startswith("__") and p in PITCH_MODS]
+    """Pitch names the sim may draw from — the surfaces a host can pick."""
+    return list(pitch_registry.SELECTABLE)
 
 
 def get_pitch_meta(name):
-    """Return {description, run_factor, ideal_toss, favours} for a pitch."""
-    return _load().get(name) or _FALLBACK.get(name) or _FALLBACK["Hard"]
+    """Return ``{description, run_factor, ideal_toss, favours, par}`` for a pitch.
+
+    ``ideal_toss`` is the registry's day-match call, which is the same table
+    ``engine.format_config.correct_toss_choice`` is built from.
+    """
+    pitch = pitch_registry.normalise(name)
+    profile = pitch_registry.profile(pitch)
+    cfg = ground_config.get_pitch_profile(pitch) or {}
+    return {
+        "description": cfg.get("description") or profile.blurb,
+        "run_factor": _run_factor(pitch),
+        "ideal_toss": profile.toss,
+        "favours": profile.favours,
+        "par": pitch_registry.par(pitch),
+    }

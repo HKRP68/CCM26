@@ -7,6 +7,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from database import get_session
+from engine import pitch_registry
 from models import User, Player, UserRoster, Match, PlayerGameStats
 from services.match_constants import random_match_settings, MATCH_EXPIRE
 from services.bowling_service import get_delivery_options, is_spinner, AVAILABLE_SHOTS
@@ -3460,15 +3461,13 @@ async def _confirm_overs(context, cid, mid, overs):
 
 
 def _pitch_hint(pitch_type):
-    """One-line tactical hint about the pitch."""
-    return {
-        "Flat":  "Batters' paradise — high scores expected.",
-        "Hard":  "Bouncy, true bounce — rewards aggressive shots.",
-        "Even":  "Neutral, balanced track — bat and ball share honours.",
-        "Green": "Seam movement up front — bowlers will love early overs.",
-        "Dry":   "Slow and low — tough to time the ball cleanly.",
-        "Dusty": "Spinners will turn it square as it wears.",
-    }.get(pitch_type, "A balanced wicket.")
+    """One-line tactical hint about the pitch.
+
+    Read from engine.pitch_registry rather than typed here: this table and the
+    identical one in handlers/vsbot.py both listed six of the seven selectable
+    surfaces, so whoever drew Bouncy was told "a balanced wicket".
+    """
+    return pitch_registry.blurb(pitch_type)
 
 
 # ═══════════════════════════ TOSS ════════════════════════════════════
@@ -5229,7 +5228,9 @@ def _calc(s, striker, bowler, shot, delivery):
                 variation = parts
                 length = "Good"
 
-    pitch = s.get("pitch_type", "Flat")
+    # An absent pitch resolves to the neutral surface, not to the flattest
+    # road in the table (engine.pitch_registry.DEFAULT).
+    pitch = pitch_registry.normalise(s.get("pitch_type"))
     over = s["current_over"]
     total_overs = s["overs"]
     innings = s.get("innings", 1)

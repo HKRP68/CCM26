@@ -226,7 +226,7 @@ BOT_QUEST_MATCH_DAILY_CAP = _bot_quest_cap()
 try:
     from services.match_constants import PITCH_TYPES as _PITCH_TYPES
 except Exception:  # pragma: no cover - import cycle / partial deploy safety
-    _PITCH_TYPES = ["Dry", "Dusty", "Hard", "Even", "Flat", "Green", "Bouncy"]
+    from engine.pitch_registry import SELECTABLE as _PITCH_TYPES
 
 
 def pitch_event_key(pitch_type) -> str | None:
