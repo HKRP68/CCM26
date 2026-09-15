@@ -547,12 +547,13 @@ def render_table(session, tour):
            "",
            "<code>#  TEAM            P  W  L  T Pts   NRR</code>"]
     for i, tt in enumerate(rows, 1):
-        name = (tt.name or "—")[:14].ljust(14)
+        name = tournament_service.table_name_cell(tt)
         out.append(
             f"<code>{str(i).rjust(2)} {escape(name)} "
             f"{str(tt.played or 0).rjust(2)} {str(tt.won or 0).rjust(2)} "
             f"{str(tt.lost or 0).rjust(2)} {str(tt.tied or 0).rjust(2)} "
             f"{str(tt.points or 0).rjust(3)} {_nrr_text(tt._nrr).rjust(6)}</code>")
+    out += tournament_service.points_adjust_footnote(rows)
     champion = tournament_service.tournament_champion(session, tour.id)
     if champion:
         out += ["", f"🥇 <b>Champion:</b> {escape(champion.name or '—')}"]

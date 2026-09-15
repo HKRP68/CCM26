@@ -350,6 +350,11 @@
 .rr-form label { display: block; color: var(--muted); font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; margin-bottom: .2rem; }
 .rr-team { font-weight: 700; color: var(--text); min-width: 130px; align-self: center; font-size: .85rem; }
 .rr-toggle > summary { cursor: pointer; color: var(--accent); font-size: .82rem; font-weight: 600; }
+/* Points adjustment, tucked under the standings row it changes. */
+.pts-adjust { margin: -.35rem 0 .6rem; padding: 0 .6rem .2rem 3.1rem; }
+.pts-adjust > summary { font-size: .76rem; color: var(--muted); }
+.pts-adjust > summary strong { color: var(--accent); }
+@media (max-width: 640px) { .pts-adjust { padding-left: .6rem; } }
 
 /* ===================== RESPONSIVE ===================== */
 @media (max-width: 1024px) {

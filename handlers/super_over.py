@@ -400,6 +400,33 @@ def _build_super_over_card(so):
         return None
 
 
+def _release_reserved_fixture(session, state, mid):
+    """Hand a reserved tournament fixture back when nothing was recorded.
+
+    ``reserve_fixture`` flips a fixture from 'scheduled' to 'live' the moment two
+    teams launch their tournament match, and the recording step is what flips it
+    to 'completed'. When recording produces nothing there is no third step, so
+    without this the fixture stays 'live' and every view of the tournament — the
+    admin dashboard, /ctfixtures, /lptfixtures — keeps calling a finished match
+    "in progress". Reverting it to 'scheduled' also lets the pair replay it, or
+    an admin enter the result by hand.
+
+    Caller commits; a failure here is logged and swallowed, because it must never
+    take down the finalisation around it.
+    """
+    fixture_id = (state or {}).get("reserved_fixture_id")
+    if not fixture_id:
+        return
+    try:
+        from services import league_schedule_service
+        league_schedule_service.release_fixture(session, fixture_id)
+        logger.warning("Super Over %s recorded nothing; released fixture %s",
+                       mid, fixture_id)
+    except Exception:
+        logger.exception("Super Over: releasing fixture %s failed (%s)",
+                         fixture_id, mid)
+
+
 def _persist_main_stats(mid, state):
     session = get_session()
     try:
@@ -1733,13 +1760,26 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
             logger.exception("Super Over final scorecard snapshot failed (%s)", mid)
         # Record the tournament result if the main match was an official tournament
         # match — the Super Over winner is the tournament winner.
+        #
+        # This reads "main_state", the finished live match state, and NOT "main":
+        # that one is only the two-line scoreline built for the tie announcement,
+        # and it carries no tournament_id, no match_id and no per-player stats.
+        # Reading it meant every Super-Over-decided tournament match was silently
+        # dropped — the standings never moved and the fixture stayed 'live'
+        # forever, which is exactly what the tournament dashboard showed.
         try:
-            main_state = so.get("main") or {}
+            main_state = so.get("main_state") or {}
             if main_state.get("tournament_id"):
                 from services import tournament_service
                 tm = tournament_service.record_tournament_match(
                     session, main_state, winner_user_id=winner_uid,
                     result_text=f"{win['name']} won (Super Over)")
+                if tm is None:
+                    # Nothing was recorded (no open fixture, or a duplicate).
+                    # Free the fixture this match reserved so it goes back to
+                    # 'scheduled' and can be replayed or entered by hand, rather
+                    # than sitting on the dashboard as a match still in progress.
+                    _release_reserved_fixture(session, main_state, mid)
                 # Injuries (when the tournament has them on) ride back on the
                 # recorded row. Render inside the session — the rows are detached
                 # by the time the announcement below is built.
@@ -1751,9 +1791,8 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
         except Exception:
             logger.exception("tournament Super Over recording failed (%s)", mid)
         # Record the CL Tour series result — a Super Over decides a tied tour
-        # match, so the winner here is the series winner. The CL Tour tags live on
-        # the saved live state under "main_state" ("main" above is only the
-        # scoreline dict, which carries no cl_tour_match_id).
+        # match, so the winner here is the series winner. Like the tournament
+        # block above, the tags live on the saved live state under "main_state".
         try:
             cl_state = so.get("main_state") or {}
             if cl_state.get("cl_tour_match_id"):

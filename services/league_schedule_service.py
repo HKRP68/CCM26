@@ -541,9 +541,101 @@ def reserve_fixture_by_names(session, tournament_id, name1, name2):
     return reserve_fixture(session, tid, a, b)
 
 
+def bind_fixture_match(session, fixture_id, match_id):
+    """Record which live ``Match`` is playing a reserved fixture. Caller commits.
+
+    ``reserve_fixture`` claims the row before the match exists, so the fixture
+    sits 'live' with nothing on it pointing at the game being played. Writing the
+    match id here closes that gap, and is what lets ``heal_live_fixtures`` tell a
+    fixture whose match is still in progress from one whose match ended without
+    ever recording a result.
+
+    Only fills a fixture that is actually reserved and unbound, so it can never
+    overwrite the match id of a completed result.
+    """
+    from models import TournamentMatch
+    if not fixture_id or not match_id:
+        return None
+    fx = session.query(TournamentMatch).get(int(fixture_id))
+    if fx is None or fx.status != "live" or fx.match_id:
+        return None
+    fx.match_id = int(match_id)
+    session.flush()
+    return fx
+
+
+# ``Match`` statuses that mean the game is over. Healing keys off this list
+# rather than off "not currently active" on purpose: an unrecognised status is
+# left alone, so a flow that parks a match in some state this module has never
+# heard of can never have its fixture pulled out from under it.
+_MATCH_ENDED = ("completed", "abandoned", "expired", "cancelled", "forfeit")
+
+
+def heal_live_fixtures(session, tournament_id=None, grace_minutes=180):
+    """Revert fixtures stuck on 'live' to 'scheduled'. Returns the healed rows.
+
+    A fixture goes 'live' when two teams launch their match and 'completed' when
+    the result is recorded. Any path that ends a match without recording — a
+    crash mid-innings, a bot restart, a recording that found no open fixture —
+    leaves it on 'live', where every view of the tournament keeps reporting a
+    finished match as still in progress.
+
+    A fixture is only healed when the match behind it has demonstrably ended:
+
+    * its bound ``Match`` row is gone, or has reached a terminal status; or
+    * it has no bound match at all and has been 'live' longer than
+      ``grace_minutes`` (old fixtures reserved before match binding existed, and
+      matches that died between reserving and launching).
+
+    A completed fixture is never touched, and neither is one whose match is still
+    being played, however long it has been running. Caller commits.
+    """
+    from datetime import datetime, timedelta
+    from models import Match, TournamentMatch
+
+    q = (session.query(TournamentMatch)
+         .filter(TournamentMatch.status == "live"))
+    if tournament_id is not None:
+        q = q.filter(TournamentMatch.tournament_id == int(tournament_id))
+    live = q.all()
+    if not live:
+        return []
+
+    cutoff = datetime.utcnow() - timedelta(minutes=max(0, int(grace_minutes)))
+    match_ids = {fx.match_id for fx in live if fx.match_id}
+    matches = {}
+    if match_ids:
+        matches = {m.id: m for m in
+                   session.query(Match).filter(Match.id.in_(match_ids)).all()}
+
+    healed = []
+    for fx in live:
+        if fx.match_id:
+            m = matches.get(fx.match_id)
+            if m is not None and (m.status or "") not in _MATCH_ENDED:
+                continue  # still being played — leave it alone
+            reason = "match missing" if m is None else f"match {m.status}"
+        else:
+            started = fx.created_at or datetime.utcnow()
+            if started > cutoff:
+                continue  # just reserved; give the match time to start
+            reason = f"no match bound for over {grace_minutes} minutes"
+        fx.status = "scheduled"
+        fx.match_id = None
+        fx._heal_reason = reason  # transient, for the caller's report
+        healed.append(fx)
+        logger.info("Healed stale live fixture %s in tournament %s (%s)",
+                    fx.id, fx.tournament_id, reason)
+    if healed:
+        session.flush()
+    return healed
+
+
 def release_fixture(session, fixture_id):
     """Revert a reserved fixture (live -> scheduled) when a match is abandoned.
 
+    Clears the bound match id along with the status: the fixture is open again,
+    and the match that reserved it is not the one that will eventually fill it.
     No-ops if the fixture isn't currently ``live`` (e.g. already completed or
     released). Caller commits.
     """
@@ -553,7 +645,8 @@ def release_fixture(session, fixture_id):
     (session.query(TournamentMatch)
      .filter(TournamentMatch.id == int(fixture_id),
              TournamentMatch.status == "live")
-     .update({TournamentMatch.status: "scheduled"}, synchronize_session=False))
+     .update({TournamentMatch.status: "scheduled", TournamentMatch.match_id: None},
+             synchronize_session=False))
     session.flush()
 
 

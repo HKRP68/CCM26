@@ -628,6 +628,26 @@ def _find_open_fixture(session, tournament_id, team1_id, team2_id):
 # Recording a completed match
 # ──────────────────────────────────────────────────────────────────────
 
+def _reserved_fixture(session, tournament_id, fixture_id, team1_id, team2_id):
+    """The fixture a match reserved at launch, when it is still fillable.
+
+    Returns None — so the caller falls back to a search by team pair — unless the
+    row exists, belongs to this tournament, is not already completed, and is for
+    this exact pair of teams. Those checks matter: ``reserved_fixture_id`` rides
+    in match state that can outlive an admin editing the schedule underneath it.
+    """
+    if not fixture_id:
+        return None
+    tm = session.query(TournamentMatch).get(int(fixture_id))
+    if tm is None or tm.tournament_id != int(tournament_id):
+        return None
+    if tm.status == "completed":
+        return None
+    if {tm.team1_id, tm.team2_id} != {int(team1_id), int(team2_id)}:
+        return None
+    return tm
+
+
 def _legal_balls(stats_map):
     """Sum legal balls faced/bowled from a roster-keyed stats map."""
     total = 0
@@ -901,11 +921,119 @@ def recompute_standings(session, tournament_id):
                 lose.lost += 1
                 lose.points += pl
 
+    # Manual adjustments last, so a penalty or an award survives every rebuild.
+    # ``points`` is derived from the results; ``points_adjust`` is the only part
+    # of it a human sets, and it is re-applied here each time rather than being
+    # written into ``points`` once and lost on the next recompute.
+    for tt in teams.values():
+        tt.points += int(tt.points_adjust or 0)
+
 
 def recompute_tournament(session, tournament_id):
     """Rebuild both standings and player stats from the recorded matches."""
     recompute_standings(session, tournament_id)
     recompute_player_stats(session, tournament_id)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Manual points adjustments
+# ──────────────────────────────────────────────────────────────────────
+#
+# Real competitions dock points (slow over rate, a code-of-conduct breach, a
+# forfeit) and occasionally award them (a walkover, a washed-out fixture nobody
+# will replay). ``TournamentTeam.points`` cannot carry that: it is rebuilt from
+# the recorded matches every time one is recorded or removed, so anything typed
+# straight into it disappears at the next result. The adjustment therefore lives
+# in its own column and ``recompute_standings`` adds it back on every rebuild.
+
+# Wide enough for any sane penalty, narrow enough that a typo ("-200") is caught
+# rather than silently rewriting the table.
+MAX_POINTS_ADJUST = 100
+
+
+def adjust_points(session, tournament_team_id, delta=None, *, set_to=None,
+                  note=None):
+    """Change one team's manual points adjustment. Caller commits.
+
+    Pass ``delta`` to move the adjustment by that many points (``+2`` twice ends
+    at ``+4``), or ``set_to`` to replace it outright (``0`` clears it). ``note``
+    records why, and is what the table shows next to the team; passing None on a
+    ``delta`` keeps whatever note is already there.
+
+    Returns the ``TournamentTeam``. Raises ``ValueError`` with a message written
+    for whoever asked when the team is unknown or the total is out of range.
+    """
+    tt = session.query(TournamentTeam).get(int(tournament_team_id))
+    if tt is None:
+        raise ValueError("That team is not in this tournament.")
+    if (delta is None) == (set_to is None):
+        raise ValueError("Give either a change (+2 / -2) or a value to set.")
+
+    current = int(tt.points_adjust or 0)
+    try:
+        new_value = int(set_to) if set_to is not None else current + int(delta)
+    except (TypeError, ValueError):
+        raise ValueError("Points must be a whole number, like -2 or +4.")
+    if abs(new_value) > MAX_POINTS_ADJUST:
+        raise ValueError(
+            f"An adjustment of {new_value:+d} is outside the allowed "
+            f"±{MAX_POINTS_ADJUST} range.")
+
+    tt.points_adjust = new_value
+    if note is not None:
+        note = " ".join(str(note).split())[:200]
+        tt.points_adjust_note = note or None
+    if new_value == 0:
+        # No adjustment, no reason to keep a reason for one.
+        tt.points_adjust_note = None
+    session.flush()
+    recompute_standings(session, tt.tournament_id)
+    logger.info("Points adjustment for tournament team %s: %s → %+d (%s)",
+                tt.id, current, new_value, tt.points_adjust_note or "no reason given")
+    return tt
+
+
+def clear_points_adjust(session, tournament_team_id):
+    """Drop a team's manual adjustment entirely. Caller commits."""
+    return adjust_points(session, tournament_team_id, set_to=0)
+
+
+def table_name_cell(team, width=14):
+    """A team's name for the fixed-width points table, starred when adjusted.
+
+    The star is what keeps the footnote honest: a side sitting on 8 points with
+    a −2 against them should not look identical to one that simply won four.
+    """
+    name = (team.name or "—")
+    if int(getattr(team, "points_adjust", 0) or 0):
+        return (name[:width - 1] + "*").ljust(width)
+    return name[:width].ljust(width)
+
+
+def points_adjust_footnote(rows):
+    """Lines explaining every adjustment among ``rows``, or an empty list.
+
+    Rendered under the table, because a points column nobody can account for is
+    worse than no points column: it reads as a bug.
+    """
+    marked = [tt for tt in rows if int(getattr(tt, "points_adjust", 0) or 0)]
+    if not marked:
+        return []
+    from html import escape as _escape
+    lines = ["", "<i>* points adjusted by an admin:</i>"]
+    for tt in marked:
+        reason = tt.points_adjust_note or "no reason recorded"
+        lines.append(f"<i>   {_escape(tt.name or '—')} "
+                     f"{int(tt.points_adjust):+d} — {_escape(reason)}</i>")
+    return lines
+
+
+def adjusted_teams(session, tournament_id):
+    """Every team in the tournament currently carrying an adjustment."""
+    return (session.query(TournamentTeam)
+            .filter(TournamentTeam.tournament_id == int(tournament_id),
+                    TournamentTeam.points_adjust != 0)
+            .order_by(TournamentTeam.name).all())
 
 
 def delete_tournament_match(session, tournament_match_id):
@@ -1054,7 +1182,12 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
         return None
 
     match_id = state.get("match_id")
-    if match_id and session.query(TournamentMatch).filter_by(match_id=match_id).first():
+    # Idempotency is on a *completed* row: a fixture is bound to its match id the
+    # moment the match launches (``bind_fixture_match``), so "a row already
+    # carries this match id" on its own only means "this match is under way" —
+    # the very fixture we are about to fill in.
+    if match_id and (session.query(TournamentMatch)
+                     .filter_by(match_id=match_id, status="completed").first()):
         return None  # already recorded
 
     tour = session.query(Tournament).get(tid)
@@ -1123,7 +1256,16 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     tm = None
     fixture_required = bool(tour.schedule_generated or tour.knockout_generated)
     if fixture_required and t_inn1 and t_inn2:
-        tm = _find_open_fixture(session, tid, t_inn1.id, t_inn2.id)
+        # The fixture this match actually reserved at launch wins over a search
+        # by team pair. In a double round-robin a pair has two fixtures, and the
+        # pair search returns the earliest open one — which after a replay or an
+        # out-of-order night is not necessarily the leg being played, so the
+        # result would land on the wrong row (wrong round, wrong home side,
+        # wrong pitch).
+        tm = _reserved_fixture(session, tid, state.get("reserved_fixture_id"),
+                               t_inn1.id, t_inn2.id)
+        if tm is None:
+            tm = _find_open_fixture(session, tid, t_inn1.id, t_inn2.id)
     if fixture_required and tm is None:
         logger.warning(
             "No open tournament fixture for tournament %s (%s vs %s); not recording.",

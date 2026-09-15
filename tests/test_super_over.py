@@ -1074,3 +1074,95 @@ def test_the_super_over_leaks_more_extras_than_an_ordinary_over():
     finally:
         pe.calculate_outcome = orig
     assert seen["extras_mult"] == SO_EXTRAS_MULT > 1.0
+
+
+# ── The tournament result a Super Over decides ────────────────────────
+#
+# A tied tournament match goes to a Super Over, and the Super Over's winner is
+# the tournament's winner — so _finalize is the *only* place that result can be
+# recorded. It used to read so["main"], the two-line scoreline built for the tie
+# announcement, which carries no tournament_id: every Super-Over-decided
+# tournament match was silently dropped, the standings never moved, and the
+# fixture sat on 'live' forever, which is what the dashboard showed.
+
+def _tournament_tied_state(tournament_id=77, fixture_id=404):
+    state = _tied_state()
+    state["tournament_id"] = tournament_id
+    state["reserved_fixture_id"] = fixture_id
+    state["tournament_tteam_by_user"] = {HOST_UID: 11, GUEST_UID: 22}
+    # Something only the live state has, so a test can tell the two apart.
+    state["inn1_bat_team_id"] = HOST_UID
+    state["inn1_bowl_team_id"] = GUEST_UID
+    return state
+
+
+def _run_tournament_super_over(seed, record_result):
+    """Play a tied tournament match out and capture the recording call."""
+    import services.tournament_service as ts
+    import services.league_schedule_service as lss
+
+    random.seed(seed)
+    _patch_finalize(so_mod)
+    calls, released = [], []
+
+    def fake_record(session, state, winner_user_id=None, result_text=None):
+        calls.append({"state": state, "winner_user_id": winner_user_id,
+                      "result_text": result_text})
+        return record_result
+
+    saved_record, saved_release = (ts.record_tournament_match,
+                                   lss.release_fixture)
+    ts.record_tournament_match = fake_record
+    lss.release_fixture = lambda session, fixture_id: released.append(fixture_id)
+    try:
+        ctx = FakeContext()
+        state = _tournament_tied_state()
+        mid = state["match_id"]
+        asyncio.run(start_super_over(ctx, mid, state))
+        asyncio.run(_play_match(ctx, mid))
+    finally:
+        ts.record_tournament_match = saved_record
+        lss.release_fixture = saved_release
+    return calls, released
+
+
+def test_super_over_records_the_tournament_result():
+    calls, released = _run_tournament_super_over(7, record_result=object())
+    assert len(calls) == 1, "the tournament result was never recorded"
+    recorded = calls[0]["state"]
+    # The live match state, not the scoreline dict: it is the only one that
+    # carries the tournament identity and the per-player stats.
+    assert recorded["tournament_id"] == 77
+    assert recorded["match_id"] == 9001
+    assert recorded["tournament_tteam_by_user"] == {HOST_UID: 11, GUEST_UID: 22}
+    # The Super Over winner overrides the tied scoreline.
+    assert calls[0]["winner_user_id"] in (HOST_UID, GUEST_UID)
+    assert "Super Over" in (calls[0]["result_text"] or "")
+    # Recording succeeded, so the fixture is filled, not handed back.
+    assert released == []
+
+
+def test_a_super_over_that_records_nothing_frees_the_fixture():
+    # No open fixture (or a duplicate) → nothing is recorded. The fixture that
+    # match reserved must not be left showing as live for the rest of the season.
+    calls, released = _run_tournament_super_over(11, record_result=None)
+    assert len(calls) == 1
+    assert released == [404]
+
+
+def test_a_casual_tied_match_records_no_tournament_result():
+    import services.tournament_service as ts
+
+    random.seed(3)
+    _patch_finalize(so_mod)
+    calls = []
+    saved = ts.record_tournament_match
+    ts.record_tournament_match = lambda *a, **k: calls.append(a)
+    try:
+        ctx = FakeContext()
+        state = _tied_state()          # no tournament_id
+        asyncio.run(start_super_over(ctx, state["match_id"], state))
+        asyncio.run(_play_match(ctx, state["match_id"]))
+    finally:
+        ts.record_tournament_match = saved
+    assert calls == []
