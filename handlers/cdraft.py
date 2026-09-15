@@ -395,6 +395,7 @@ def _lobby_text(draft, target_label=None):
     host = draft.get("host") or {}
     who = (f"Only {_esc(target_label)} can join."
            if target_label else "Anyone in this chat can join.")
+    settings = draft.get("cdraft_settings") or {}
     return "\n".join([
         "🎯 <b>CHALLENGE DRAFT</b>",
         "═════════════════════════════",
@@ -404,7 +405,10 @@ def _lobby_text(draft, target_label=None):
         f"{cdraft_service.PAIR_SPREAD} OVR of each other</b> — the captain on the "
         f"clock takes one, the other goes to their opponent.",
         "",
-        "• No squads, no career cards — straight from the full player pool.",
+        "• No squads, no career cards — straight from the player pool.",
+        # Both captains should know what they are drafting from before either
+        # of them commits to eleven picks.
+        f"• 🎱 Pool: {_esc(cdraft_service.settings_summary(settings))}",
         "• Both XIs end up 4 batsmen, a keeper, 2 all-rounders, 4 bowlers.",
         "• Then pitch, toss, and a normal Challenge League match.",
         "",
@@ -479,13 +483,22 @@ async def cdraft_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             invited_id = target_tg.id
             invited_label = _user_label(invited)
 
-        # Deal the slots up front: a catalogue that cannot supply eleven legal
-        # pairs should say so now, not after somebody has joined.
+        # Deal the slots up front: a pool that cannot supply eleven legal pairs
+        # should say so now, not after somebody has joined. The rating band and
+        # the allowed editions come from the admin's settings (the Match
+        # Gameplay page / /cdraftset), falling back to the CDRAFT_* defaults.
+        settings = cdraft_service.load_settings()
         try:
-            slots = cdraft_service.build_slots(seed=random.randrange(1 << 30))
+            slots = cdraft_service.build_slots(
+                seed=random.randrange(1 << 30),
+                top=settings["rating_max"], bottom=settings["rating_min"],
+                versions=settings["versions"])
         except cdraft_service.CdraftPoolError as exc:
             logger.warning("cdraft: could not deal a draft: %s", exc)
-            await message.reply_text(f"❌ {_esc(str(exc))}")
+            await message.reply_text(
+                f"❌ {_esc(str(exc))}\n\n"
+                "An admin can widen the pool with /cdraftset or on the Match "
+                "Gameplay settings page.")
             return
 
         draft_id = random.randint(100000, 999999)
@@ -524,6 +537,9 @@ async def cdraft_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "host_team": _team_name_for(_user_label(host)),
             "target_team": None,
             "cdraft": cdraft_service.new_state(slots),
+            # Kept so the lobby card can name the pool this draft was dealt
+            # from, even if an admin changes the settings mid-draft.
+            "cdraft_settings": settings,
             "created_at": datetime.utcnow().isoformat(),
         }
         context.bot_data[_challenge_team_draft_key(draft_id)] = draft

@@ -201,7 +201,207 @@ def pool_card(data):
         "bat_hand": data.get("bat_hand") or "Right",
         "bowl_hand": data.get("bowl_hand") or "Right",
         "bowl_style": data.get("bowl_style") or "",
+        # Carried so a drafted card can name its edition in the slot card. The
+        # allowed-version rule is applied to the raw pool entry, before this.
+        "version": data.get("version") or "",
     }
+
+
+# ════════════════════════════════════════════════════════════════════
+# Which versions may be drafted
+# ════════════════════════════════════════════════════════════════════
+
+# The labels an admin ticks are free text out of ``Player.version``, except for
+# this one: "Base" is a *state*, not a label. A base card may carry the literal
+# string, an empty one, or none at all — what actually marks it is having no
+# parent card. Matching all three is what the admin panel's own Players filter
+# does (see the version filter in admin.py), so the tick box means the same
+# thing in both places.
+BASE_LABEL = "Base"
+_BASE_ALIASES = ("", "base")
+
+
+def parse_allowed_versions(raw):
+    """The stored ``cdraft_versions_json`` as a list of labels, or ``None``.
+
+    ``None`` means *every* version is allowed, which is what an unset, empty or
+    unreadable setting has to mean: the alternative — a draft that can never
+    start — is a worse answer to a malformed row than simply not filtering.
+    Accepts a JSON array or a comma-separated string, so a value typed straight
+    into the database by hand still works.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, (list, tuple, set)):
+        labels = list(raw)
+    else:
+        text = str(raw).strip()
+        if not text:
+            return None
+        if text[0] in "[{":
+            # Meant to be JSON. If it will not parse, fall back to "everything
+            # allowed" rather than to a list of nonsense labels — a tick list
+            # that matches no card is a mode that can never start, which is a
+            # far worse answer to a corrupt value than not filtering.
+            try:
+                parsed = json.loads(text)
+            except (TypeError, ValueError):
+                logger.warning("cdraft: unreadable version list %r; "
+                               "allowing every version", text)
+                return None
+        else:
+            parsed = text.split(",")
+        labels = parsed if isinstance(parsed, list) else [parsed]
+    cleaned = []
+    seen = set()
+    for label in labels:
+        name = str(label or "").strip()
+        if not name or name.casefold() in seen:
+            continue
+        seen.add(name.casefold())
+        cleaned.append(name)
+    return cleaned or None
+
+
+def dump_allowed_versions(labels):
+    """Labels back to a ``cdraft_versions_json`` value. ``None`` = all allowed."""
+    cleaned = parse_allowed_versions(labels)
+    return json.dumps(cleaned) if cleaned else None
+
+
+def is_base_card(card):
+    """True when this catalogue entry is somebody's base card."""
+    if card.get("parent_player_id"):
+        return False
+    return str(card.get("version") or "").strip().casefold() in _BASE_ALIASES
+
+
+def version_allowed(card, versions):
+    """Is this catalogue entry one of the ticked versions?
+
+    ``versions is None`` allows everything. Otherwise a card matches on an exact
+    (case-insensitive) label, or on being a base card when ``Base`` is ticked.
+    """
+    if not versions:
+        return True
+    wanted = {str(v).strip().casefold() for v in versions}
+    if is_base_card(card):
+        return BASE_LABEL.casefold() in wanted
+    return str(card.get("version") or "").strip().casefold() in wanted
+
+
+def filter_pool(pool, versions):
+    """The catalogue entries a draft with these settings may deal."""
+    if not versions:
+        return list(pool)
+    return [card for card in pool if version_allowed(card, versions)]
+
+
+# How many DIFFERENT cricketers each role needs before a draft can be dealt:
+# two per slot of that role, because both cards in a pair share the slot's role
+# and no cricketer may appear twice in one draft.
+ROLE_REQUIREMENTS = {
+    role: SLOT_ROLES.count(role) * 2
+    for role in (ROLE_BATSMAN, ROLE_KEEPER, ROLE_ALLROUNDER, ROLE_BOWLER)
+}
+
+
+def pool_feasibility(pool=None, versions=None):
+    """``{role: (have, need)}`` — can these settings actually deal a draft?
+
+    ``have`` counts DISTINCT cricketers by name, because that is what the deal
+    de-duplicates on: five cards of one player are one usable pick, not five.
+    Used by the admin page to warn at save time and by /cdraftset to print the
+    pool, so an admin finds out before a group does.
+    """
+    if pool is None:
+        from services import player_cache
+        pool = player_cache.get_all_active()
+    names = {role: set() for role in ROLE_REQUIREMENTS}
+    for entry in filter_pool(pool, versions):
+        try:
+            rating = int(entry.get("rating") or 0)
+        except (TypeError, ValueError):
+            continue
+        if rating <= 0:
+            continue
+        role = normalise_role(entry.get("category"))
+        names[role].add(str(entry.get("name") or "").casefold())
+    return {role: (len(names[role]), need)
+            for role, need in ROLE_REQUIREMENTS.items()}
+
+
+def feasibility_shortfalls(feasibility):
+    """The roles that cannot fill their slots, worst first. Empty when fine."""
+    short = [(role, have, need) for role, (have, need) in feasibility.items()
+             if have < need]
+    short.sort(key=lambda row: row[1] - row[2])
+    return short
+
+
+# ════════════════════════════════════════════════════════════════════
+# Admin settings
+# ════════════════════════════════════════════════════════════════════
+
+# Bounds the stored settings are clamped to. Wide on purpose — they exist to
+# stop a typo (a floor of 5, a ceiling of 900) producing a draft nobody can
+# explain, not to second-guess a deliberate choice.
+RATING_FLOOR_LIMIT = 40
+RATING_CEILING_LIMIT = 100
+
+
+def load_settings(config=None):
+    """The admin's pool settings: ``{rating_min, rating_max, versions}``.
+
+    Reads the single-row ``GameConfig`` the website and /cdraftset both write,
+    and falls back to the environment defaults for anything unset — so an
+    install that never opens the admin panel behaves exactly as it did before
+    the settings existed.
+
+    Repairs rather than rejects: a min above a max is swapped, out-of-range ends
+    are clamped. A draft refusing to start because a number was typed backwards
+    would be a worse failure than quietly dealing the range that was meant.
+    """
+    if config is None:
+        try:
+            from services.config_service import get_config
+            config = get_config()
+        except Exception:
+            logger.exception("cdraft: could not read the pool settings; "
+                             "falling back to the defaults")
+            config = {}
+
+    def _rating(key, fallback):
+        try:
+            value = config.get(key)
+        except AttributeError:
+            value = None
+        if value in (None, ""):
+            return fallback
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return fallback
+
+    low = _rating("cdraft_rating_min", RATING_BOTTOM)
+    high = _rating("cdraft_rating_max", RATING_TOP)
+    if low > high:
+        low, high = high, low
+    low = max(RATING_FLOOR_LIMIT, min(RATING_CEILING_LIMIT, low))
+    high = max(RATING_FLOOR_LIMIT, min(RATING_CEILING_LIMIT, high))
+    try:
+        versions = parse_allowed_versions(config.get("cdraft_versions_json"))
+    except AttributeError:
+        versions = None
+    return {"rating_min": low, "rating_max": high, "versions": versions}
+
+
+def settings_summary(settings):
+    """One line naming the pool, for the lobby card and /cdraftset."""
+    versions = settings.get("versions")
+    label = ", ".join(versions) if versions else "all versions"
+    return (f"{settings.get('rating_min', RATING_BOTTOM)}–"
+            f"{settings.get('rating_max', RATING_TOP)} OVR · {label}")
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -221,14 +421,18 @@ def normalise_role(value):
     return ROLE_BATSMAN
 
 
-def _pool_by_role(pool=None):
-    """``{role: [card dict, …]}`` for the whole active, non-career catalogue."""
+def _pool_by_role(pool=None, versions=None):
+    """``{role: [card dict, …]}`` for the catalogue a draft may deal from.
+
+    The version rule is applied here, on the raw pool entries, so no disallowed
+    card ever reaches the dealing code at all.
+    """
     if pool is None:
         from services import player_cache
         pool = player_cache.get_all_active()
     by_role = {ROLE_BATSMAN: [], ROLE_KEEPER: [],
                ROLE_ALLROUNDER: [], ROLE_BOWLER: []}
-    for entry in pool:
+    for entry in filter_pool(pool, versions):
         try:
             card = pool_card(entry)
         except (KeyError, TypeError, ValueError):
@@ -265,20 +469,45 @@ def _choose_pair(candidates, target, used_names, rng, spread=PAIR_SPREAD):
     return None
 
 
-def build_slots(pool=None, seed=None, top=None, bottom=None, spread=PAIR_SPREAD):
+def _search_windows(target, floor, ceiling):
+    """Rating windows to try for one slot, best first.
+
+    The admin's floor and ceiling bound a *band*, not merely slots 11 and 1, so
+    a slot whose exact target is empty looks elsewhere **inside that band**
+    first — widening a point at a time, clamped at both ends — and only leaves
+    the band once every rating in it has been tried. A thin rating therefore
+    borrows from the rest of the pool the admin allowed, and breaks their range
+    only when the whole of it has nothing for this role.
+    """
+    yield target, target
+    for widen in range(1, max(ceiling - target, target - floor) + 1):
+        yield max(target - widen, floor), min(target + widen, ceiling)
+    # The allowed band is exhausted. Rather than fail, reach outside it —
+    # nearest rating first. This is the "relax the rating, never the version"
+    # rule: the tick list above still holds, only the numbers give.
+    for widen in range(1, _MAX_WIDEN + 1):
+        yield target - widen, target + widen
+
+
+def build_slots(pool=None, seed=None, top=None, bottom=None, spread=PAIR_SPREAD,
+                versions=None):
     """Deal the eleven slots.
 
     Each slot is ``{"role", "target_rating", "cards": [a, b]}`` where both cards
     carry that slot's role and sit within ``spread`` OVR of each other. No
     cricketer appears twice across the whole draft.
 
-    Raises ``CdraftPoolError`` when a role genuinely cannot supply a pair — the
-    role is never swapped for another, because that is what would let a squad
-    end up without a keeper or short of bowling options.
+    ``versions`` is the admin's allowed-version tick list (``None`` = all).
+    Unlike the rating ladder it is **absolute**: when a band is thin the search
+    widens the rating, but it never reaches for a version that was not ticked.
+    A role the allowed pool genuinely cannot supply raises ``CdraftPoolError``
+    rather than being swapped for another role, because that is what would let a
+    squad end up without a keeper or short of bowling options.
     """
     rng = random.Random(seed)
-    by_role = _pool_by_role(pool)
+    by_role = _pool_by_role(pool, versions)
     targets = slot_ratings(top, bottom)
+    floor, ceiling = targets[-1], targets[0]
     used_names = set()
     slots = []
 
@@ -286,19 +515,17 @@ def build_slots(pool=None, seed=None, top=None, bottom=None, spread=PAIR_SPREAD)
         target = targets[index]
         candidates = by_role.get(role) or []
         pair = None
-        # Start at the target and widen symmetrically. The first window that can
-        # produce a pair wins, so a draft stays close to its ladder while still
-        # finishing on a thin catalogue.
-        for widen in range(0, _MAX_WIDEN + 1):
-            lo, hi = target - widen, target + widen
+        for lo, hi in _search_windows(target, floor, ceiling):
             window = [c for c in candidates if lo <= c["rating"] <= hi]
             pair = _choose_pair(window, target, used_names, rng, spread)
             if pair:
                 break
         if not pair:
+            allowed = (", ".join(versions) if versions else "all versions")
             raise CdraftPoolError(
                 f"The card pool has no pair of {role}s for slot {index + 1} "
-                f"(needs two different players within {spread} OVR of each other)."
+                f"(needs two different players within {spread} OVR of each "
+                f"other). Allowed versions: {allowed}."
             )
         for card in pair:
             used_names.add(card["name"].casefold())

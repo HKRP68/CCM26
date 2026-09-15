@@ -13587,6 +13587,72 @@ SCORECARD_COLOR_PRESETS = [
 ]
 
 
+# ── Challenge Draft pool helpers (Match Gameplay page) ─────────────────────
+# The /cdraft player pool is two settings: a rating band and a tick list of the
+# editions that may be dealt. These four helpers are what the page needs; the
+# rules themselves live in services/cdraft_service.py so the website and the
+# bot's /cdraftset can never disagree about what a setting means.
+
+def _cdraft_pool_rows(db):
+    """Active, non-career catalogue rows as the dicts cdraft_service reads."""
+    from services.player_service import not_career
+    rows = (not_career(db.query(Player.id, Player.name, Player.version,
+                                Player.parent_player_id, Player.category,
+                                Player.rating))
+            .filter(Player.is_active == True)  # noqa: E712
+            .all())
+    return [{"id": r.id, "name": r.name, "version": r.version,
+             "parent_player_id": r.parent_player_id, "category": r.category,
+             "rating": r.rating} for r in rows]
+
+
+def _cdraft_version_counts(db, rows=None):
+    """``[(label, card count), …]`` for the tick list, Base first.
+
+    ``Base`` is always offered even when no row literally carries the string:
+    it is a state (a card with no parent), not a label — the same reading the
+    Players tab's own version filter uses.
+
+    ``rows`` lets one request reuse a single catalogue read across the tick
+    list and the feasibility check instead of scanning the table twice.
+    """
+    from services import cdraft_service
+    counts = {}
+    for card in (_cdraft_pool_rows(db) if rows is None else rows):
+        if cdraft_service.is_base_card(card):
+            label = cdraft_service.BASE_LABEL
+        else:
+            label = str(card.get("version") or "").strip()
+        if not label:
+            continue
+        counts[label] = counts.get(label, 0) + 1
+    base = cdraft_service.BASE_LABEL
+    rest = sorted((l for l in counts if l != base), key=str.casefold)
+    return ([(base, counts.get(base, 0))]
+            + [(label, counts[label]) for label in rest])
+
+
+def _cdraft_allowed_set(db):
+    """The currently ticked editions, case-folded. Empty set = all allowed."""
+    from services import cdraft_service
+    from services.config_service import get_config
+    allowed = cdraft_service.load_settings(get_config(db))["versions"]
+    return {label.casefold() for label in (allowed or ())}
+
+
+def _cdraft_resolve_versions(rows, submitted):
+    """Ticked boxes back to the catalogue's own spelling. ``(labels, unknown)``."""
+    from handlers.cdraft_admin import resolve_versions
+    available = [label for label, _count in _cdraft_version_counts(None, rows)]
+    return resolve_versions(submitted or [], available)
+
+
+def _cdraft_feasibility(rows, versions):
+    """Can these settings deal a draft? ``{role: (have, need)}``."""
+    from services import cdraft_service
+    return cdraft_service.pool_feasibility(rows, versions)
+
+
 @app.route("/settings/matches", methods=["GET", "POST"])
 @login_required
 def admin_match_settings():
@@ -13605,19 +13671,61 @@ def admin_match_settings():
                 flash("Challenge max overs must be a whole number from 1 to 20.", "error")
                 return redirect(url_for("admin_match_settings"))
             allow_same_team_challenge = request.form.get("allow_same_team_challenge") == "on"
+            # ── Challenge Draft pool ──
+            # The two ends of /cdraft's rating ladder, and the editions it may
+            # deal. Ticking nothing means "all allowed": the other reading
+            # ("none") is just a mode that can never start.
+            from services import cdraft_service
+            try:
+                cdraft_rating_min = int(request.form.get("cdraft_rating_min",
+                                                         cdraft_service.RATING_BOTTOM))
+                cdraft_rating_max = int(request.form.get("cdraft_rating_max",
+                                                         cdraft_service.RATING_TOP))
+            except ValueError:
+                flash("Challenge Draft ratings must be whole numbers.", "error")
+                return redirect(url_for("admin_match_settings"))
+            lo, hi = cdraft_service.RATING_FLOOR_LIMIT, cdraft_service.RATING_CEILING_LIMIT
+            cdraft_rating_min = max(lo, min(hi, cdraft_rating_min))
+            cdraft_rating_max = max(lo, min(hi, cdraft_rating_max))
+            if cdraft_rating_min > cdraft_rating_max:
+                cdraft_rating_min, cdraft_rating_max = cdraft_rating_max, cdraft_rating_min
+            # One catalogue read, reused by the tick-list match below and the
+            # feasibility warning after the save.
+            cdraft_rows = _cdraft_pool_rows(db)
+            ticked, _unknown = _cdraft_resolve_versions(
+                cdraft_rows, request.form.getlist("cdraft_versions"))
+            cdraft_versions_json = cdraft_service.dump_allowed_versions(ticked)
             save_config(db, {
                 "match_style": match_style,
                 "challenge_max_overs": challenge_max_overs,
                 "allow_same_team_challenge": allow_same_team_challenge,
-            }, updated_by=session.get("admin_user", "admin"))
+                "cdraft_rating_min": cdraft_rating_min,
+                "cdraft_rating_max": cdraft_rating_max,
+                "cdraft_versions_json": cdraft_versions_json,
+            }, updated_by=session.get("admin_user", "admin"),
+                allow_null=("cdraft_versions_json",))
             db.commit()
             log_admin(db, "match_style_save", "config", 0, "matches",
                       f"match_style={match_style} challenge_max_overs={challenge_max_overs} "
-                      f"allow_same_team_challenge={allow_same_team_challenge}")
+                      f"allow_same_team_challenge={allow_same_team_challenge} "
+                      f"cdraft_rating={cdraft_rating_min}-{cdraft_rating_max} "
+                      f"cdraft_versions={cdraft_versions_json or 'all'}")
             db.commit()
             flash("✅ Match gameplay style saved for all new matches.", "info")
+            if cdraft_versions_json is None:
+                flash("🎯 Challenge Draft: every edition is allowed.", "info")
+            # Say now if these settings cannot deal a draft. A warning, not a
+            # rejection — an admin may well be ticking editions before the
+            # cards for them have been imported.
+            for role, have, need in cdraft_service.feasibility_shortfalls(
+                    _cdraft_feasibility(cdraft_rows, ticked)):
+                flash(f"⚠️ Challenge Draft: only {have} different {role}s match "
+                      f"these settings — /cdraft needs {need} and will refuse "
+                      f"to start.", "error")
             return redirect(url_for("admin_match_settings"))
-        return render_template("admin_match_settings.html", cfg=get_config(db))
+        return render_template("admin_match_settings.html", cfg=get_config(db),
+                               cdraft_versions=_cdraft_version_counts(db),
+                               cdraft_allowed=_cdraft_allowed_set(db))
     except Exception as e:
         db.rollback()
         logger.exception("match settings save failed")

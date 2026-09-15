@@ -147,22 +147,82 @@ for league squads, for the same reason: these are not cards anyone collected.
 | --- | --- |
 | `services/cdraft_service.py` | The draft: the slot template, the snake, dealing the pairs, applying a pick, the `DraftCard` shim. No Telegram, no SQLAlchemy — unit-tested on its own, like `services/xi_rules.py`. |
 | `handlers/cdraft.py` | The Telegram surface: the lobby, the slot cards, the pick buttons, the pick clock. |
-| `tests/test_cdraft.py` | Both — including `test_every_draft_produces_two_legal_xis`, which is the mode's central claim checked over many random drafts against both rulebooks. |
+| `handlers/cdraft_admin.py` | `/cdraftset` — the pool settings from a DM. |
+| `admin.py` → `admin_match_settings` | The same settings on the website, plus the `_cdraft_*` helpers that build the version tick list and the feasibility warning. |
+| `tests/test_cdraft.py` | The draft — including `test_every_draft_produces_two_legal_xis`, the mode's central claim checked over many random drafts against both rulebooks. |
+| `tests/test_cdraft_admin.py` | The settings — `/cdraftset`, and source-level checks on the route, the template and the config plumbing. |
 
 ---
 
-## Settings
+## The pool — what an admin controls
 
-All optional; the defaults are what the mode runs on.
+Two settings decide which cards a draft may deal. Both live in `GameConfig`, so
+the website and the bot always agree, and both are editable either way.
+
+### On the website
+
+**Admin → 🏏 Match Gameplay → 🎯 Challenge Draft pool**
+
+* **Lowest / Highest rating** — the two ends of the ladder. Slot 1 is dealt
+  around the highest, slot 11 around the lowest.
+* **Allowed versions** — a checkbox per edition that exists in your `players`
+  table, with a card count beside each. **Tick nothing and every edition is
+  allowed**, including any you add later; tick some and a draft deals nothing
+  else.
+
+Saving runs a feasibility check and warns you — by role — if the settings can't
+fill all eleven slots, so you find out before a group does.
+
+### From Telegram
+
+```text
+/cdraftset                        the current pool, and whether it can be dealt
+/cdraftset min 80                 the rating floor  (slot 11's target)
+/cdraftset max 92                 the rating ceiling (slot 1's target)
+/cdraftset range 80 92            both at once
+/cdraftset versions Base, Legend  only these editions may be dealt
+/cdraftset versions all           clear the list — every edition allowed
+/cdraftset reset                  back to the defaults
+```
+
+Admin-only. Edition names are matched against the catalogue case-insensitively;
+a name that isn't there is rejected with the valid list rather than stored — a
+typo that silently emptied the pool would only surface as a draft nobody can
+start. With no arguments it prints the current pool plus how many *different*
+cricketers each role has against how many it needs (8 batsmen, 8 bowlers,
+4 all-rounders, 2 keepers — two per slot, since a pair is two different players).
+
+### Rating gives, versions don't
+
+The two settings are not equally binding, and the difference is deliberate:
+
+* A **rating** that has no pair for some role looks elsewhere **inside the
+  band** first, a point at a time, and only leaves the band once every rating
+  in it has been tried. So a thin rating borrows from the rest of the pool you
+  allowed, and breaks your range only when the whole of it has nothing.
+* A **version** you untick is *never* dealt. If the allowed editions genuinely
+  can't supply a role, `/cdraft` refuses and names the role, rather than
+  reaching for a card you excluded.
+
+Both squads are dealt from the same pool, so narrowing it never favours one
+captain.
+
+### Environment fallbacks
+
+The `CDRAFT_*` variables are the defaults used when nothing is stored, so an
+install that never opens the admin panel behaves exactly as it always has. The
+stored settings win wherever they are set.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `CDRAFT_RATING_TOP` | `88` | Target OVR of slot 1. |
-| `CDRAFT_RATING_BOTTOM` | `78` | Target OVR of slot 11. |
+| `CDRAFT_RATING_TOP` | `88` | Slot 1's target OVR, until set on the website. |
+| `CDRAFT_RATING_BOTTOM` | `78` | Slot 11's target OVR, until set on the website. |
 | `CDRAFT_PAIR_SPREAD` | `1` | Max OVR gap between the two cards in one slot. |
 | `CDRAFT_PICK_SECONDS` | `60` | Seconds per pick before the bot picks for you. |
 | `CDRAFT_MAX_AUTO_PICKS` | `3` | Lapsed picks in a row that end the draft. |
 
-If a rating band is thin the search widens from the target until it finds a pair,
-so a small catalogue still produces a full draft — just closer together on the
-ladder than the settings ask for.
+Adding a setting here is the repo's usual four steps, and all four are pinned by
+`tests/test_cdraft_admin.py::ConfigPlumbingTests`: the column on
+`models.GameConfig`, the key in `services/config_service.DEFAULTS` (`save_config`
+silently ignores keys that aren't in it), the `_try_add("game_config", …)` line
+in `database._migrate_add_columns`, and the form field.

@@ -16,26 +16,35 @@ from services import cdraft_service, xi_rules
 
 
 def make_pool(ratings=range(70, 96), per_rating=4,
-              categories=("Batsman", "Wicket Keeper", "All-rounder", "Bowler")):
+              categories=("Batsman", "Wicket Keeper", "All-rounder", "Bowler"),
+              versions=("Base",)):
     """A synthetic catalogue: ``per_rating`` cards of every category at every
-    rating, each with a distinct name."""
+    rating in every version, each with a distinct name.
+
+    A card is a base card when it has no ``parent_player_id``, which is what the
+    real table looks like — so anything not versioned "Base" here also gets a
+    parent, as the catalogue's variant rows do."""
     pool, pid = [], 1
-    for category in categories:
-        for rating in ratings:
-            for copy in range(per_rating):
-                pool.append({
-                    "id": pid,
-                    "name": f"{category[:3]}{rating}_{copy}",
-                    "country": "India",
-                    "category": category,
-                    "rating": rating,
-                    "bat_rating": rating - 2,
-                    "bowl_rating": rating - 5,
-                    "bat_hand": "Right",
-                    "bowl_hand": "Right",
-                    "bowl_style": "Fast",
-                })
-                pid += 1
+    for version in versions:
+        is_base = version.casefold() in ("", "base")
+        for category in categories:
+            for rating in ratings:
+                for copy in range(per_rating):
+                    pool.append({
+                        "id": pid,
+                        "name": f"{category[:3]}{rating}_{copy}_{version}",
+                        "version": version,
+                        "parent_player_id": None if is_base else 1,
+                        "country": "India",
+                        "category": category,
+                        "rating": rating,
+                        "bat_rating": rating - 2,
+                        "bowl_rating": rating - 5,
+                        "bat_hand": "Right",
+                        "bowl_hand": "Right",
+                        "bowl_style": "Fast",
+                    })
+                    pid += 1
     return pool
 
 
@@ -162,6 +171,195 @@ class BuildSlotsTests(unittest.TestCase):
         import inspect
         from services import player_cache
         self.assertIn("not_career", inspect.getsource(player_cache._refresh))
+
+
+class AllowedVersionTests(unittest.TestCase):
+    """The tick list an admin sets on the website / with /cdraftset."""
+
+    def test_no_list_allows_everything(self):
+        card = {"name": "X", "version": "TOTY", "parent_player_id": 9}
+        self.assertTrue(cdraft_service.version_allowed(card, None))
+        self.assertTrue(cdraft_service.version_allowed(card, []))
+
+    def test_an_exact_label_matches_case_insensitively(self):
+        card = {"name": "X", "version": "IPL 2026", "parent_player_id": 9}
+        self.assertTrue(cdraft_service.version_allowed(card, ["ipl 2026"]))
+        self.assertTrue(cdraft_service.version_allowed(card, ["IPL 2026"]))
+        self.assertFalse(cdraft_service.version_allowed(card, ["IPL 2025"]))
+
+    def test_base_covers_every_way_a_base_card_is_written(self):
+        """A base card may carry the label, an empty string, or nothing at all
+        — what actually marks it is having no parent card."""
+        for version in ("Base", "base", "", None):
+            card = {"name": "X", "version": version, "parent_player_id": None}
+            with self.subTest(version=version):
+                self.assertTrue(cdraft_service.is_base_card(card))
+                self.assertTrue(cdraft_service.version_allowed(card, ["Base"]))
+                self.assertFalse(cdraft_service.version_allowed(card, ["Legend"]))
+
+    def test_a_card_with_a_parent_is_never_a_base_card(self):
+        card = {"name": "X", "version": "", "parent_player_id": 42}
+        self.assertFalse(cdraft_service.is_base_card(card))
+        self.assertFalse(cdraft_service.version_allowed(card, ["Base"]))
+
+    def test_the_codec_round_trips_and_folds_duplicates(self):
+        raw = cdraft_service.dump_allowed_versions(["Base", "base", "Legend"])
+        self.assertEqual(cdraft_service.parse_allowed_versions(raw),
+                         ["Base", "Legend"])
+
+    def test_an_unset_or_empty_list_means_every_version(self):
+        for raw in (None, "", "   ", "[]", []):
+            with self.subTest(raw=raw):
+                self.assertIsNone(cdraft_service.parse_allowed_versions(raw))
+        self.assertIsNone(cdraft_service.dump_allowed_versions([]))
+
+    def test_a_comma_separated_value_typed_by_hand_still_works(self):
+        self.assertEqual(
+            cdraft_service.parse_allowed_versions(" Base , Legend "),
+            ["Base", "Legend"])
+
+    def test_unreadable_json_falls_back_to_allowing_everything(self):
+        """A tick list matching no card is a mode that can never start — the
+        worse of the two answers to a corrupt value."""
+        self.assertIsNone(cdraft_service.parse_allowed_versions('["Base"'))
+        self.assertIsNone(cdraft_service.parse_allowed_versions("{oops}"))
+
+
+class VersionFilteredDraftTests(unittest.TestCase):
+
+    def setUp(self):
+        self.pool = make_pool(versions=("Base", "Legend", "TOTY"))
+
+    def test_only_ticked_versions_are_ever_dealt(self):
+        for seed in range(8):
+            slots = cdraft_service.build_slots(
+                pool=self.pool, seed=seed, versions=["Base", "Legend"])
+            dealt = {c["version"] for slot in slots for c in slot["cards"]}
+            with self.subTest(seed=seed):
+                self.assertEqual(dealt, {"Base", "Legend"})
+
+    def test_a_single_ticked_version_still_fills_all_eleven_slots(self):
+        slots = cdraft_service.build_slots(pool=self.pool, seed=3,
+                                           versions=["TOTY"])
+        self.assertEqual(len(slots), 11)
+        self.assertTrue(all(c["version"] == "TOTY"
+                            for slot in slots for c in slot["cards"]))
+
+    def test_the_version_list_is_never_relaxed_to_fill_a_slot(self):
+        """Keepers exist in the catalogue, but not in the ticked version. The
+        draft refuses rather than reaching for an untickled edition — a squad
+        with no keeper could not field a legal XI."""
+        pool = (make_pool(categories=("Batsman", "All-rounder", "Bowler"),
+                          versions=("Legend",))
+                + make_pool(categories=("Wicket Keeper",), versions=("TOTY",)))
+        with self.assertRaises(cdraft_service.CdraftPoolError) as caught:
+            cdraft_service.build_slots(pool=pool, seed=1, versions=["Legend"])
+        self.assertIn("Wicket Keeper", str(caught.exception))
+        self.assertIn("Legend", str(caught.exception))
+        # ...and the same pool deals fine once that edition is ticked too.
+        self.assertEqual(len(cdraft_service.build_slots(
+            pool=pool, seed=1, versions=["Legend", "TOTY"])), 11)
+
+    def test_a_thin_rating_borrows_from_inside_the_band_before_leaving_it(self):
+        """The floor is a floor, not just slot 11's target. With nothing in the
+        80s, slot 11 reaches UP into the allowed band rather than down to the
+        70-rated cards that sit below the admin's floor."""
+        pool = (make_pool(ratings=range(86, 90), versions=("Base",))
+                + make_pool(ratings=range(70, 74), versions=("Base",)))
+        slots = cdraft_service.build_slots(pool=pool, seed=2, top=88, bottom=80)
+        dealt = [c["rating"] for slot in slots for c in slot["cards"]]
+        self.assertTrue(all(r >= 80 for r in dealt),
+                        f"dealt below the floor: {sorted(dealt)[:4]}")
+
+    def test_it_leaves_the_band_only_when_the_band_is_empty(self):
+        """Nothing at all inside 80-88: rather than fail, it reaches outside."""
+        pool = make_pool(ratings=range(70, 76), versions=("Base",))
+        slots = cdraft_service.build_slots(pool=pool, seed=2, top=88, bottom=80)
+        self.assertEqual(len(slots), 11)
+        self.assertTrue(all(70 <= c["rating"] <= 75
+                            for slot in slots for c in slot["cards"]))
+
+
+class FeasibilityTests(unittest.TestCase):
+    """What warns the admin before a group finds out."""
+
+    def test_the_requirement_is_two_different_players_per_slot(self):
+        self.assertEqual(cdraft_service.ROLE_REQUIREMENTS, {
+            cdraft_service.ROLE_BATSMAN: 8,
+            cdraft_service.ROLE_KEEPER: 2,
+            cdraft_service.ROLE_ALLROUNDER: 4,
+            cdraft_service.ROLE_BOWLER: 8,
+        })
+
+    def test_a_healthy_pool_reports_no_shortfall(self):
+        feasibility = cdraft_service.pool_feasibility(make_pool(), None)
+        self.assertEqual(cdraft_service.feasibility_shortfalls(feasibility), [])
+
+    def test_versions_narrow_what_counts(self):
+        pool = make_pool(ratings=range(80, 82), per_rating=1,
+                         versions=("Base", "Legend"))
+        both = cdraft_service.pool_feasibility(pool, None)
+        base_only = cdraft_service.pool_feasibility(pool, ["Base"])
+        self.assertEqual(both[cdraft_service.ROLE_KEEPER][0], 4)
+        self.assertEqual(base_only[cdraft_service.ROLE_KEEPER][0], 2)
+
+    def test_five_cards_of_one_cricketer_are_one_usable_pick(self):
+        """The deal de-dupes by name, so the count has to as well."""
+        pool = [{"id": i, "name": "MS Dhoni", "version": v,
+                 "parent_player_id": None if v == "Base" else 1,
+                 "category": "Wicket Keeper", "rating": 88}
+                for i, v in enumerate(("Base", "Gold", "Icon", "TOTY", "Prime"),
+                                      start=1)]
+        feasibility = cdraft_service.pool_feasibility(pool, None)
+        self.assertEqual(feasibility[cdraft_service.ROLE_KEEPER], (1, 2))
+        self.assertIn(cdraft_service.ROLE_KEEPER,
+                      [r for r, _h, _n in
+                       cdraft_service.feasibility_shortfalls(feasibility)])
+
+
+class SettingsTests(unittest.TestCase):
+    """load_settings reads GameConfig and falls back to the env defaults."""
+
+    def test_an_empty_config_gives_the_env_defaults(self):
+        settings = cdraft_service.load_settings({})
+        self.assertEqual(settings["rating_min"], cdraft_service.RATING_BOTTOM)
+        self.assertEqual(settings["rating_max"], cdraft_service.RATING_TOP)
+        self.assertIsNone(settings["versions"])
+
+    def test_stored_values_win(self):
+        settings = cdraft_service.load_settings({
+            "cdraft_rating_min": 80, "cdraft_rating_max": 92,
+            "cdraft_versions_json": '["Base", "Legend"]'})
+        self.assertEqual(settings["rating_min"], 80)
+        self.assertEqual(settings["rating_max"], 92)
+        self.assertEqual(settings["versions"], ["Base", "Legend"])
+
+    def test_a_backwards_range_is_repaired_not_rejected(self):
+        settings = cdraft_service.load_settings({
+            "cdraft_rating_min": 92, "cdraft_rating_max": 80})
+        self.assertEqual((settings["rating_min"], settings["rating_max"]),
+                         (80, 92))
+
+    def test_out_of_range_and_junk_values_are_survivable(self):
+        settings = cdraft_service.load_settings({
+            "cdraft_rating_min": -5, "cdraft_rating_max": 900})
+        self.assertEqual(settings["rating_min"],
+                         cdraft_service.RATING_FLOOR_LIMIT)
+        self.assertEqual(settings["rating_max"],
+                         cdraft_service.RATING_CEILING_LIMIT)
+        junk = cdraft_service.load_settings({"cdraft_rating_min": "eighty"})
+        self.assertEqual(junk["rating_min"], cdraft_service.RATING_BOTTOM)
+
+    def test_the_summary_names_the_pool(self):
+        self.assertEqual(
+            cdraft_service.settings_summary(
+                {"rating_min": 80, "rating_max": 90,
+                 "versions": ["Base", "Legend"]}),
+            "80–90 OVR · Base, Legend")
+        self.assertEqual(
+            cdraft_service.settings_summary(
+                {"rating_min": 78, "rating_max": 88, "versions": None}),
+            "78–88 OVR · all versions")
 
 
 class PickTests(unittest.TestCase):
@@ -511,6 +709,12 @@ class CdraftFlowTests(unittest.IsolatedAsyncioTestCase):
             patch.object(module, "_user_label",
                          lambda u: f"@{u.username}"),
             patch("services.player_cache.get_all_active", make_pool),
+            # The admin's pool settings normally come from GameConfig; pin them
+            # so these tests never depend on ambient database state.
+            patch.object(cdraft_service, "load_settings",
+                         lambda config=None: {"rating_min": 78,
+                                              "rating_max": 88,
+                                              "versions": None}),
         ]
         for p in self._patches:
             p.start()
@@ -556,6 +760,8 @@ class CdraftFlowTests(unittest.IsolatedAsyncioTestCase):
         from handlers.challenge import _challenge_draft_chat_key
         update = await self._open_lobby()
         self.assertIn("CHALLENGE DRAFT", update.effective_message.replies[0])
+        # Both captains see what they will be drafting from before anyone joins.
+        self.assertIn("78–88 OVR", update.effective_message.replies[0])
         draft = self._draft()
         self.assertEqual(draft["turn"], "join")
         self.assertEqual(draft["mode"], "cdraft")

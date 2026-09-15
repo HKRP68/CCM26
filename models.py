@@ -1244,6 +1244,17 @@ class GameConfig(Base):
     match_style = Column(String(20), default="telegram", nullable=False)
     challenge_max_overs = Column(Integer, default=2, nullable=False)
     allow_same_team_challenge = Column(Boolean, default=False, nullable=False)
+    # ── Challenge Draft pool (/cdraft, editable on the Match Gameplay page
+    # and with /cdraftset) ──
+    # The two ends of the draft's rating ladder: slot 1 is dealt around the max
+    # and slot 11 around the min. A slot whose exact rating is empty looks
+    # elsewhere inside this band before leaving it.
+    cdraft_rating_min = Column(Integer, default=78, nullable=False)
+    cdraft_rating_max = Column(Integer, default=88, nullable=False)
+    # JSON array of the Player.version labels a draft may deal, e.g.
+    # ["Base", "Legend"]. NULL or empty means EVERY version is allowed — the
+    # alternative reading ("none") would be a mode that can never start.
+    cdraft_versions_json = Column(Text, nullable=True)
     # ── Player card rendering (admin-editable from /card-template page) ──
     # Which card design is active for all players: the built-in procedural
     # tier card ("tier") or the admin-uploaded template card ("template").

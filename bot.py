@@ -410,6 +410,7 @@ ADMIN_MENU_COMMANDS = (
     ("tourallow", "Admin: allow a user to create tours"),
     ("tourblock", "Admin: block a user from creating tours"),
     ("tourallowlist", "Admin: list users allowed to create tours"),
+    ("cdraftset", "Admin: set the /cdraft rating range and allowed editions"),
     ("testwpm", "Admin: Mini App match diagnostic"),
     # Tournament Draft. A dozen commands is a lot for a player menu that is
     # already at Telegram's ceiling — but the admin bucket is published only into
@@ -1706,6 +1707,10 @@ def main():
         app.add_handler(CommandHandler("tourallow", tourallow_handler))
         app.add_handler(CommandHandler("tourblock", tourblock_handler))
         app.add_handler(CommandHandler("tourallowlist", tourallowlist_handler))
+
+        # ── Admin: the Challenge Draft player pool ───────────────────
+        from handlers.cdraft_admin import cdraftset_handler
+        app.add_handler(CommandHandler("cdraftset", cdraftset_handler))
 
         # ── Admin: manually seed a player card file_id ───────────────
         app.add_handler(CommandHandler("setcardid", setcardid_handler))

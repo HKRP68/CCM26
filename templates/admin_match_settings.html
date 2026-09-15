@@ -43,6 +43,50 @@
     <span style="display:block; color:var(--muted); margin:.25rem 0 0 1.5rem;">When disabled, the second player must choose a different IPL/league team.</span>
   </label>
 
+  <hr style="border:none; border-top:1px solid var(--border); margin:1.6rem 0 1.2rem;">
+
+  <h2 style="margin:0 0 .35rem; font-size:1.05rem;">🎯 Challenge Draft pool</h2>
+  <p style="color:var(--muted); margin:0 0 1.1rem; font-size:.9rem;">
+    What <code>/cdraft</code> may deal. Each of the 11 slots offers two players of the
+    same role: slot 1 is dealt around the highest rating and slot 11 around the lowest.
+    Career Players are never dealt. Also settable from Telegram with
+    <code>/cdraftset</code>.
+  </p>
+
+  <div style="display:flex; gap:1.2rem; flex-wrap:wrap; margin-bottom:1.2rem;">
+    <label style="display:block;">
+      <strong>Lowest rating</strong>
+      <span style="display:block; color:var(--muted); font-size:.8rem;">slot 11</span>
+      <input type="number" name="cdraft_rating_min" min="40" max="100"
+             value="{{ cfg.cdraft_rating_min or 78 }}" style="max-width:120px; margin-top:.3rem;">
+    </label>
+    <label style="display:block;">
+      <strong>Highest rating</strong>
+      <span style="display:block; color:var(--muted); font-size:.8rem;">slot 1</span>
+      <input type="number" name="cdraft_rating_max" min="40" max="100"
+             value="{{ cfg.cdraft_rating_max or 88 }}" style="max-width:120px; margin-top:.3rem;">
+    </label>
+  </div>
+
+  <label style="display:block; margin:0 0 .4rem;"><strong>Allowed versions</strong></label>
+  <p style="color:var(--muted); margin:0 0 .7rem; font-size:.85rem;">
+    Tick the editions a draft may deal. <strong>Tick nothing and every edition is
+    allowed</strong> — including any you add later. A version you untick is never dealt,
+    even when the rating band runs thin.
+  </p>
+  <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(220px, 1fr)); gap:.4rem .9rem; margin-bottom:1.2rem;">
+    {% for label, count in cdraft_versions %}
+      <label style="display:block;">
+        <input type="checkbox" name="cdraft_versions" value="{{ label }}"
+               {% if label|lower in cdraft_allowed %}checked{% endif %}>
+        {{ label }}
+        <span style="color:var(--muted); font-size:.82rem;">({{ count }} card{{ '' if count == 1 else 's' }})</span>
+      </label>
+    {% else %}
+      <p style="color:var(--muted);">No players in the catalogue yet.</p>
+    {% endfor %}
+  </div>
+
   <div style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:.8rem 1rem; margin-bottom:1.2rem; color:var(--muted); font-size:.85rem;">
     ℹ️ Saving changes the default for matches started afterward. Matches already in progress keep their current flow.
   </div>
