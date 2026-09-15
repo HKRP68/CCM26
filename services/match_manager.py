@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import json
 import logging
+
+from engine import pitch_registry
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -144,7 +146,7 @@ class MatchManager:
         match_type: str = "pvp",
         chat_id: int,
         total_overs: int,
-        pitch: str = "Flat",
+        pitch: str = pitch_registry.DEFAULT,
         host: Dict[str, Any],
         guest: Dict[str, Any],
         host_xi: Optional[List[Dict]] = None,
@@ -363,8 +365,11 @@ class MatchManager:
             self.total_overs,
         )
 
-        valid_pitches = {"Green", "Dry", "Dusty", "Hard", "Flat"}
-        pitch_type = self.pitch if self.pitch in valid_pitches else "Flat"
+        # The engine models every surface in engine.pitch_registry; this used to
+        # hold its own five-name allowlist and send Bouncy and Even to "Flat",
+        # i.e. play the two surfaces it did not recognise as the flattest road
+        # in the table. normalise() falls back to the neutral surface instead.
+        pitch_type = pitch_registry.normalise(self.pitch)
 
         return calculate_outcome(
             bowl_style, bowl_hand,
@@ -495,7 +500,7 @@ def deserialize_match(data: Dict[str, Any]) -> MatchManager:
         match_type=data.get("match_type", "pvp"),
         chat_id=data["chat_id"],
         total_overs=data["total_overs"],
-        pitch=data.get("pitch", "Flat"),
+        pitch=pitch_registry.normalise(data.get("pitch")),
         host=data["host"],
         guest=data["guest"],
     )
@@ -543,7 +548,7 @@ def load_active_matches_from_db() -> None:
                 match_type="vsbot" if state.get("is_vsbot") else "pvp",
                 chat_id=state.get("chat_id", 0),
                 total_overs=state.get("overs", 20),
-                pitch=state.get("pitch_type", "Flat"),
+                pitch=pitch_registry.normalise(state.get("pitch_type")),
                 host=host,
                 guest=guest,
             )

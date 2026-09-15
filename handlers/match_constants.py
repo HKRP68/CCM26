@@ -1,6 +1,8 @@
 """Match constants."""
 import random
 
+from engine import pitch_registry
+
 STADIUMS = [
     "Eden Gardens", "Wankhede Stadium", "Lord's Cricket Ground",
     "Melbourne Cricket Ground", "Sydney Cricket Ground", "Adelaide Oval",
@@ -21,7 +23,10 @@ UMPIRES = [
     "Jayaraman Madanagopal", "Sam Nogajski", "Langton Rusere", "Asif Yaqoob",
 ]
 
-PITCH_TYPES = ["Dry", "Dusty", "Hard", "Even", "Flat", "Green", "Bouncy"]
+# The surfaces a host may pick, ordered bowler-friendly → batting-friendly so
+# the picker reads as a difficulty ramp. Sourced from engine.pitch_registry —
+# never re-list them here, or the pickers and the engine drift apart again.
+PITCH_TYPES = list(pitch_registry.SELECTABLE)
 WEATHER = ["Mostly Sunny", "Sunny", "Cloudy", "Partly Cloudy", "Overcast"]
 MATCH_EXPIRE = 30  # seconds
 

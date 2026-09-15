@@ -141,9 +141,15 @@ class ModifierTests(unittest.TestCase):
         self.assertEqual(cc.bowler_modifier({"bowl_rating": 60}, is_emergency=True), 8)
 
     def test_pitch_modifier(self):
+        # Classified by each surface's par band against the neutral one, so
+        # "Even" is the surface that scores 0 — not "Hard", whose v3.0 par band
+        # (212-226) sits well above Even's (190-202).
         self.assertEqual(cc.pitch_modifier("Green"), -3)
+        self.assertEqual(cc.pitch_modifier("Dusty"), -3)
         self.assertEqual(cc.pitch_modifier("Flat"), 3)
-        self.assertEqual(cc.pitch_modifier("Hard"), 0)
+        self.assertEqual(cc.pitch_modifier("Hard"), 3)
+        self.assertEqual(cc.pitch_modifier("Even"), 0)
+        self.assertEqual(cc.pitch_modifier("Nope"), 0)
 
 
 class SteerTests(unittest.TestCase):

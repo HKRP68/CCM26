@@ -46,59 +46,38 @@ Design principles
 
 import logging
 
+from engine.format_config import FORMAT_REGISTRY as _FORMATS
 from engine.format_config import FormatConfig  # noqa: F401 — used in type hints
+from engine import pitch_registry
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # T20 par score curve – cumulative runs expected after N complete overs.
-# Based on IPL / international T20 first-innings averages (neutral pitch).
+#
+# These are the LEGACY fallback tables, used only when no FormatConfig is passed
+# (unit tests and a couple of older call paths). The authoritative curve and
+# per-pitch factors live in engine.format_config and are what _par_score_at uses
+# whenever it is given a FormatConfig — including for T20, which it previously
+# was not: the old `fmt is not None and fmt.name != "T20"` guard meant every T20
+# match silently ignored FormatConfig and read this five-pitch table instead, so
+# Dusty, Bouncy and Even were all judged against Hard's par.
+#
+# Kept in step with engine.format_config._T20_PAR_SCORES / _T20_PITCH_PAR_FACTORS
+# (tests/test_pitch_registry.py fails if they drift apart).
 # ---------------------------------------------------------------------------
-_PAR_SCORES: dict = {
-    0:   0.0,
-    1:   7.0,
-    2:  14.5,
-    3:  22.0,
-    4:  30.5,
-    5:  38.5,
-    6:  48.0,   # End of powerplay
-    7:  55.5,
-    8:  63.5,
-    9:  72.0,
-    10: 81.0,
-    11: 90.0,
-    12: 99.0,
-    13: 108.0,
-    14: 116.5,
-    15: 125.5,
-    16: 135.5,
-    17: 146.5,
-    18: 157.5,
-    19: 167.5,
-    20: 176.0,
-}
+_T20_FMT = _FORMATS["T20"]
 
-# Per-pitch par-score adjustment factors (1.0 = neutral, >1 = high-scoring)
-_PITCH_PAR_FACTOR: dict = {
-    "Green": 0.88,
-    "Dry":   0.88,
-    "Hard":  1.00,
-    "Flat":  1.14,
-    "Dead":  1.22,
-}
+_PAR_SCORES: dict = dict(_T20_FMT.par_scores)
+
+# Per-pitch par-score adjustment factors (1.0 = neutral, >1 = high-scoring).
+_PITCH_PAR_FACTOR: dict = dict(_T20_FMT.pitch_par_factors)
 
 # Pitch-aware RRR baseline (Feature 15) — T20 fallback only.
-# The authoritative baselines now live in FormatConfig.rrr_baseline so that
-# each format uses correctly calibrated values.  This dict is only consulted
-# when no FormatConfig is provided (legacy / unit-test paths).
-# T20 values: Hard ≈ 8.5 RPO is neutral on a good pitch.
-_PITCH_RRR_BASELINE: dict = {
-    "Green": 7.5,
-    "Dry":   7.5,
-    "Hard":  8.5,
-    "Flat":  10.5,
-    "Dead":  11.5,
-}
+# The authoritative baselines live in FormatConfig.rrr_baseline; this is only
+# consulted when no FormatConfig is provided (legacy / unit-test paths).
+_PITCH_RRR_BASELINE: dict = dict(_T20_FMT.rrr_baseline)
+
 
 # ---------------------------------------------------------------------------
 # Momentum delta per outcome label
@@ -131,15 +110,17 @@ MULT_MAX = 3.00
 # Private helpers
 # ---------------------------------------------------------------------------
 
-def _par_score_at(over: int, ball: int, pitch: str = "Hard", fmt=None) -> float:
+def _par_score_at(over: int, ball: int, pitch: str = pitch_registry.DEFAULT,
+                  fmt=None) -> float:
     """
     Interpolate pitch-adjusted expected score at an exact over.ball point.
 
     When *fmt* is a FormatConfig instance its own par_scores and
-    pitch_par_factors are used (supports both T20 and ListA curves).
-    Passing fmt=None falls back to the built-in T20 tables above.
+    pitch_par_factors are used — for every format including T20, which used to
+    be excluded by name and so never saw its own config. Passing fmt=None falls
+    back to the T20 tables mirrored above.
     """
-    if fmt is not None and fmt.name != "T20":
+    if fmt is not None:
         par_table    = fmt.par_scores
         pitch_table  = fmt.pitch_par_factors
         _max_over    = fmt.overs
@@ -156,7 +137,7 @@ def _par_score_at(over: int, ball: int, pitch: str = "Hard", fmt=None) -> float:
     return base_score * factor
 
 
-def get_par_score(over: int, fmt, pitch: str = "Hard") -> float:
+def get_par_score(over: int, fmt, pitch: str = pitch_registry.DEFAULT) -> float:
     """
     Public helper: pitch-adjusted expected cumulative score at the start of
     *over* (ball 0).  Dispatches to T20 or ListA par curve via FormatConfig.

@@ -6,16 +6,23 @@ over quota, the powerplay/death over windows and the expected run rate per phase
 """
 
 # key -> config. quota follows the standard ~20% rule (overs // 5).
+#
+# expected_rr is the neutral-surface rate per phase. The T20 numbers mirror
+# engine.format_config's T20 curve (par 196 on Even, split 8.9 / 9.8 / 11.2
+# across its own phase windows); they were 7.5 / 8.0 / 10.5, which projected a
+# 167 innings and so shaped the sim's aggression against a rate thirty runs
+# below what the engine actually produces. This module is deliberately
+# dependency-free, so the numbers are copied rather than imported.
 FORMATS = {
     "T10": {
         "label": "T10", "overs": 10, "max_bowler_overs": 2,
         "powerplay_end": 3, "death_start": 8,
-        "expected_rr": {"Powerplay": 9.0, "Middle": 9.5, "Death": 12.0},
+        "expected_rr": {"Powerplay": 10.0, "Middle": 10.6, "Death": 12.6},
     },
     "T20": {
         "label": "T20", "overs": 20, "max_bowler_overs": 4,
         "powerplay_end": 6, "death_start": 16,
-        "expected_rr": {"Powerplay": 7.5, "Middle": 8.0, "Death": 10.5},
+        "expected_rr": {"Powerplay": 8.9, "Middle": 9.8, "Death": 11.2},
     },
     # NOTE: longer formats (ODI/Test) need the ball-outcome model retuned for
     # 50-over wicket rates — the current model is T20-tuned and collapses sides
@@ -49,7 +56,7 @@ def custom_format(overs):
         "max_bowler_overs": max(1, -(-overs // 5)),  # ceil(overs/5)
         "powerplay_end": max(1, round(overs * 0.3)),
         "death_start": overs - max(1, round(overs * 0.2)) + 1,
-        "expected_rr": {"Powerplay": 7.5, "Middle": 8.0, "Death": 10.5},
+        "expected_rr": {"Powerplay": 8.9, "Middle": 9.8, "Death": 11.2},
     }
 
 

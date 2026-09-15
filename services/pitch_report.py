@@ -17,16 +17,20 @@ Design rules (from the conditions spec):
     multiplier is capped to ±25% so player ratings stay dominant.
   • Dew is night-only and must not appear in every night match.
 
-The module keeps its own small pitch base table so it works for all six league
-surfaces (Dry, Dusty, Hard, Flat, Green, Bouncy) regardless of which names the
-outcome engine recognises.
+Every fact about a surface — which surfaces exist, what each one is, its base
+Pacers/Spinners/Batters ratings, its typical grass cover and what the toss
+winner should do on it — comes from :mod:`engine.pitch_registry`. This module
+used to keep its own copies, and they had drifted: its table told a captain to
+BAT on a road while ``engine.format_config`` told the same captain to BOWL.
 """
 
 import random
 from html import escape
 
-# Surfaces offered in Challenge Leagues.
-PITCH_TYPES = ["Dry", "Dusty", "Hard", "Even", "Flat", "Green", "Bouncy"]
+from engine import pitch_registry
+
+# Surfaces offered in Challenge Leagues (bowler-friendly → batting-friendly).
+PITCH_TYPES = list(pitch_registry.SELECTABLE)
 
 # Weather set (matches the conditions spec).
 WEATHERS = [
@@ -34,46 +38,19 @@ WEATHERS = [
     "Hot and Dry", "Light Rain Earlier", "Windy",
 ]
 
-# Short, friendly one-liners per surface (independent of the sim engine, which
-# only knows Green/Dry/Hard/Flat/Dead).
-_PITCH_BLURB = {
-    "Dry": "Spin-friendly, tough to score",
-    "Dusty": "Big turn — spinners thrive",
-    "Hard": "True bounce, balanced contest",
-    "Flat": "Batting paradise, run-fest",
-    "Green": "Seam movement, pace dominates",
-    "Bouncy": "Extra carry, pace & bounce",
-    "Even": "Neutral, balanced contest",
-}
+# Short one-liner, base effectiveness and typical grass cover all come from the
+# registry, so a surface added there is complete here with no further edit.
+_PITCH_BLURB = {p: pitch_registry.blurb(p) for p in pitch_registry.PITCHES}
 
-# Base effectiveness (0-5) before conditions are layered on.
-_PITCH_BASE = {
-    #          pacers spin batters
-    "Dry":    (2, 4, 2),
-    "Dusty":  (1, 5, 2),
-    "Hard":   (3, 3, 4),
-    "Flat":   (2, 2, 5),
-    "Green":  (5, 1, 2),
-    "Bouncy": (4, 2, 3),
-    "Even":   (3, 3, 3),
-}
+# Base effectiveness (0-5) before conditions are layered on: (pacers, spinners,
+# batters).
+_PITCH_BASE = {p: pitch_registry.effectiveness(p) for p in pitch_registry.PITCHES}
 
-# Default surface a toss should be won to do — overridden by conditions below.
-_PITCH_TOSS = {
-    "Dry": "bat", "Dusty": "bat", "Hard": "bat",
-    "Flat": "bat", "Green": "bowl", "Bouncy": "bowl", "Even": "bat",
-}
+# Default call the toss should be won for — overridden by the conditions below.
+_PITCH_TOSS = {p: pitch_registry.toss_call(p) for p in pitch_registry.PITCHES}
 
 # Typical grass cover per surface (a weighted pick is taken around this).
-_PITCH_GRASS = {
-    "Green": ["Heavy", "Heavy", "Medium"],
-    "Bouncy": ["Medium", "Medium", "Heavy"],
-    "Hard": ["Medium", "Little", "Medium"],
-    "Flat": ["Little", "Little", "No Grass"],
-    "Dry": ["Little", "No Grass", "Little"],
-    "Dusty": ["No Grass", "No Grass", "Little"],
-    "Even": ["Little", "Medium", "Little"],
-}
+_PITCH_GRASS = {p: list(pitch_registry.grass_draw(p)) for p in pitch_registry.PITCHES}
 
 _EFF_LABEL = {0: "Minimal", 1: "Low", 2: "Moderate", 3: "Good",
               4: "High", 5: "Excellent"}
@@ -88,7 +65,7 @@ def generate_conditions(pitch_type, rng=None):
     ``rng`` (``random.Random``) for deterministic output in tests.
     """
     r = rng or random
-    pitch = pitch_type if pitch_type in _PITCH_BASE else "Hard"
+    pitch = pitch_registry.normalise(pitch_type)
 
     day_night = r.choice(["Day", "Day", "Night"])  # day matches a touch likelier
     if day_night == "Night":
@@ -187,7 +164,7 @@ def _clamp(v, lo=0, hi=5):
 
 def pitch_effectiveness(pitch_type, conditions):
     """Return ``{'pacers','spinners','batters'}`` → ``(score 0-5, label)``."""
-    pitch = pitch_type if pitch_type in _PITCH_BASE else "Hard"
+    pitch = pitch_registry.normalise(pitch_type)
     pace, spin, bat = _PITCH_BASE[pitch]
 
     w = conditions.get("weather")
@@ -265,12 +242,9 @@ def pitch_effectiveness(pitch_type, conditions):
 
 def best_toss_decision(pitch_type, conditions):
     """Return ``(decision, reason)`` where decision is 'bat' or 'bowl'."""
-    pitch = pitch_type if pitch_type in _PITCH_TOSS else "Hard"
+    pitch = pitch_registry.normalise(pitch_type)
     decision = _PITCH_TOSS[pitch]
-    reason = {
-        "bat": "the surface only worsens — post a total first",
-        "bowl": "use the fresh surface before it eases",
-    }[decision]
+    reason = pitch_registry.toss_reason(pitch)
 
     w = conditions.get("weather")
     dew = conditions.get("dew")

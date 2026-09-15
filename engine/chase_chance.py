@@ -23,6 +23,8 @@ Public API:
     powerplay_modifier / deterioration_modifier / nothing_to_lose_modifier
 """
 
+from engine import pitch_registry
+
 # Chasing chance (%) by runs-needed band × wickets-lost band.
 #   columns: 0 = 0-3 lost, 1 = 4-5 lost, 2 = 6-7 lost, 3 = 8-9 lost
 CHASE_MATRIX = {
@@ -127,11 +129,37 @@ def bowler_modifier(bowler, is_emergency=False, is_death_phase=False,
     return mod
 
 
-_SLOW_PITCHES = {"Green", "Dry", "Dusty", "Bouncy"}
-_FLAT_PITCHES = {"Flat", "Dead"}
+# Which surfaces help or hurt a chase. This one asks a single question — are
+# runs freely available here? — so it is classified by each surface's par band
+# against the neutral one, not by which discipline the surface favours. How the
+# surface *changes* for the side batting second is a separate, non-overlapping
+# question, answered by deterioration_modifier below.
+#
+# The sets were hand-written and had drifted: "Bouncy" sat with Green and Dry in
+# the slow set while carrying its own name in a comment about slow surfaces, and
+# nothing said what Even or Hard were.
+_NEUTRAL = "Even"
+
+
+def _par_classified():
+    neutral = pitch_registry.par(_NEUTRAL) or 196.0
+    flat, slow = set(), set()
+    for name in pitch_registry.PITCHES:
+        par = pitch_registry.par(name)
+        if par is None:
+            continue
+        if par > neutral + 5:
+            flat.add(name)
+        elif par < neutral - 5:
+            slow.add(name)
+    return frozenset(flat), frozenset(slow)
+
+
+_FLAT_PITCHES, _SLOW_PITCHES = _par_classified()
 
 
 def pitch_modifier(pitch):
+    """+3 chasing where runs are freely available, -3 where they are not."""
     if pitch in _FLAT_PITCHES:
         return 3
     if pitch in _SLOW_PITCHES:
@@ -160,10 +188,12 @@ MPI_PRESSURE_CAP = 12.0
 POWERPLAY_BONUS = 10            # 60+ in the chasing side's powerplay
 POWERPLAY_RUNS = 60
 DETERIORATION_PENALTY = -5      # batting last on a surface that has broken up
-DETERIORATING_PITCHES = {"Dusty", "Dry"}
+# The surfaces whose second innings is genuinely worse to bat on — the same two
+# that engine.pitch_state gives a late-innings deterioration rule to.
+DETERIORATING_PITCHES = frozenset({"Dusty", "Dry"})
 NTL_BONUS = 5                   # nothing to lose: swing at a monster target
 NTL_TARGET = 260
-NTL_PITCHES = {"Flat", "Dead"}
+NTL_PITCHES = frozenset({"Flat", "Dead"})   # only a road makes 260 routine
 
 
 def mpi_modifier(momentum=0.0, pressure=0.0):

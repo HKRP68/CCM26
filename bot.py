@@ -240,6 +240,12 @@ from handlers.matchhelp import (
     matchhelp_close_callback,
 )
 
+# /pitchstats — what the surfaces did in real /letsplay and Challenge League matches
+from handlers.pitchstats import (
+    pitchstats_handler,
+    pitchstats_callback,
+)
+
 # /howto handler
 from handlers.howto import (
     howto_handler,
@@ -544,6 +550,12 @@ BOT_MENU_COMMANDS = (
     ("achievements", "View your achievements"),
     ("howto", "Open the help guide"),
     ("matchhelp", "How to play LetsPlay & CIPL"),
+    # /pitchstats is deliberately NOT here. The private menu is at Telegram's
+    # 100-command ceiling exactly, and _clamped drops the TAIL of the list when
+    # it overflows — so publishing this one would silently unpublish
+    # /fantasyguide instead. The command works from the keyboard either way and
+    # is advertised in /start's command list and by /matchhelp; give it a menu
+    # slot by retiring another entry from this list, not by growing it.
     ("invite", "Invite friends and view referrals"),
     ("redeem", "Redeem a reward code"),
     ("botvsbot", "Configure a bot-versus-bot match"),
@@ -951,6 +963,9 @@ async def start_handler(update, context):
         "/cttable /ctfixtures /ctteams - Tournament table, schedule (done matches struck through), field\n"
         "/ctinjuries - Who is ruled out injured, and for how many more matches 🚑\n"
         "/clsd <team> - One team's schedule: standing, form, next matches, results\n"
+        "/pitchstats /ps [pitch] - What each pitch actually does in Lets Play & "
+        "League matches: runs/over, wickets/over, bat-first vs chasing win %, "
+        "and which approaches earn\n"
         "/challengeIPL /cipl - Reply to a user to start an IPL challenge\n"
         "/challengeBBL /cbbl - Reply to a user to start a BBL challenge\n"
         "/challengeINT /cint - Reply to a user to start an international challenge\n"
@@ -2063,6 +2078,12 @@ def main():
                                              pattern=r"^mhelp_go_"))
         app.add_handler(CallbackQueryHandler(matchhelp_close_callback,
                                              pattern=r"^mhelp_close_"))
+
+        # ── /pitchstats — the surfaces' real record ──────────────────
+        app.add_handler(CommandHandler(["pitchstats", "pstats", "ps"],
+                                       pitchstats_handler))
+        app.add_handler(CallbackQueryHandler(pitchstats_callback,
+                                             pattern=r"^pst\|"))
 
         # ── /chemhelp Chemistry guide ───────────────────────────────
         app.add_handler(CommandHandler(["chemhelp", "chemguide"], chemhelp_handler))

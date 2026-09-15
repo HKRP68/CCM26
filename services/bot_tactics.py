@@ -48,7 +48,10 @@ import math
 from engine.approach_modifiers import (
     BATTING_APPROACHES, BOWLING_APPROACHES, apply_approach_modifiers,
 )
-from engine.ball_outcome import DEFAULT_SCORING_MATRIX, PITCH_SCORING_MATRIX
+from engine.ball_outcome import (DEFAULT_SCORING_MATRIX, PITCH_SCORING_MATRIX,
+                                 get_pitch_run_multiplier,
+                                 get_pitch_wicket_multiplier)
+from engine import pitch_registry
 from services import cipl_match
 
 logger = logging.getLogger(__name__)
@@ -257,6 +260,34 @@ def match_up_edge(state, bowler=None):
     return max(-1.4, min(1.4, raw))
 
 
+def _bowling_type(bowler):
+    """The engine's bowling-type name for *bowler* (defaults to medium pace)."""
+    from services.sim_match import _BOWL_TYPE_MAP
+    style = (bowler or {}).get("bowl_style") or (bowler or {}).get("bowling_type") or ""
+    return _BOWL_TYPE_MAP.get(style, "Medium-fast")
+
+
+def _pitch_matrix(pitch, bowler=None):
+    """The surface's per-ball odds as this bowler will find them.
+
+    The scoring matrix alone is only a third of the pitch model. ``ball_outcome``
+    also multiplies every non-wicket bucket by the surface's run factor and the
+    Wicket bucket by what the surface pays *this kind of bowler*, then
+    renormalises — and between them those two decide how often a wicket falls.
+    Reading the matrix on its own left the solver judging every surface as if it
+    took wickets at one rate from everybody, so it could not tell that a seamer
+    on a green top is a different proposition from a spinner on the same pitch,
+    and priced a wicket-buying plan identically on a green top and on a road.
+    """
+    base = dict(PITCH_SCORING_MATRIX.get(pitch) or DEFAULT_SCORING_MATRIX)
+    run_factor = get_pitch_run_multiplier(pitch) or 1.0
+    wicket_factor = get_pitch_wicket_multiplier(pitch, _bowling_type(bowler)) or 1.0
+    scaled = {k: (v * wicket_factor if k == "Wicket" else v * run_factor)
+              for k, v in base.items()}
+    total = sum(scaled.values()) or 1.0
+    return {k: v / total for k, v in scaled.items()}
+
+
 def ball_probabilities(state, bowler=None):
     """Per-ball outcome probabilities *before* either captain's approach.
 
@@ -267,8 +298,9 @@ def ball_probabilities(state, bowler=None):
     rates closely enough that the 25 approach match-ups rank the way they
     actually play out — which is the only thing the solver needs.
     """
-    pitch = (state or {}).get("pitch_type") or "Hard"
-    base = dict(PITCH_SCORING_MATRIX.get(pitch) or DEFAULT_SCORING_MATRIX)
+    pitch = pitch_registry.normalise((state or {}).get("pitch_type"))
+    bowl = bowler if bowler is not None else ((state or {}).get("current_bowler") or {})
+    base = _pitch_matrix(pitch, bowl)
 
     edge = match_up_edge(state, bowler)
     mult = {

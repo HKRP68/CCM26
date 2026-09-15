@@ -22,6 +22,8 @@ Pipeline:
 import random
 import logging
 
+from engine import pitch_registry
+
 logger = logging.getLogger(__name__)
 
 
@@ -140,14 +142,39 @@ LENGTH_MODS = {
 # PITCH MODIFIERS
 # ═══════════════════════════════════════════════════════════════════════
 
+# Additive percentage-point shifts on BASE, one entry per surface in
+# engine.pitch_registry. Bouncy used to be missing from this table, and the
+# lookup below fell back to "Flat" — so a captain who picked the bounciest deck
+# in the game got the flattest road in the table. The fallback is now the
+# registry's neutral surface and every surface has a row.
+#
+# The cricket is the same story config/ground_conditions.yaml tells the /cipl
+# engine, at this engine's louder scale: the turner strangles, the green top is
+# boom-or-bust, the bouncy deck trades dots for sixes, the road gives
+# everything. WHO takes the wickets is PITCH_BOWLER_SYNERGY's job, below.
 PITCH_MODS = {
-    "Green":  {"W": +1.5, "dot": +2, "4": -1, "6": -1, "1": -0.5},   # seam-friendly
-    "Dry":    {"dot": +0.5, "W": +0.3, "6": -0.5},                    # neutral-bowler
-    "Dusty":  {"W": +0.5, "dot": +1, "1": +0.5, "6": -0.5},           # spin grip
-    "Hard":   {"4": +0.5, "6": +0.5, "1": +0.3, "W": -0.3, "dot": -0.5},  # bouncy
-    "Even":   {},                                                        # neutral, balanced
-    "Flat":   {"4": +0.5, "6": +0.5, "1": +0.5, "dot": -0.5, "W": -0.3},  # batting-friendly
-    "Dead":   {"4": +1.0, "6": +1.0, "1": +0.5, "dot": -1.0, "W": -0.8},  # lifeless, run-fest
+    # Raging turner: a single is always on, a boundary never is.
+    "Dusty":  {"dot": +2.0, "W": +1.3, "1": +1.0, "4": -2.5, "6": -2.0,
+               "wide": +0.2},
+    # Green top: you cannot rotate against the moving ball, so the runs that do
+    # come are boundaries — off the edge as often as the middle.
+    "Green":  {"dot": +2.5, "W": +1.2, "1": -2.0, "4": +0.5, "6": -1.8,
+               "wide": +0.6, "noball": +0.3, "legbye": +0.4},
+    # Slow, low turner: nudge and work; the big shot is a mug's game.
+    "Dry":    {"dot": +1.2, "W": +0.8, "1": +1.2, "4": -1.2, "6": -1.5},
+    # Steep bounce: awkward to get off strike, but a mistimed pull still carries.
+    "Bouncy": {"dot": +1.0, "W": +0.9, "1": -1.0, "4": +0.3, "6": +0.5,
+               "noball": +0.3},
+    # Neutral surface — the baseline everything else is measured against.
+    "Even":   {},
+    # True bounce and carry: the ball comes on, the drive and the pull pay.
+    "Hard":   {"dot": -0.8, "W": -0.4, "1": -0.3, "4": +1.0, "6": +0.8},
+    # Road: even bounce, no movement, fast outfield.
+    "Flat":   {"dot": -1.5, "W": -0.9, "1": -0.5, "4": +1.8, "6": +1.4,
+               "wide": -0.2},
+    # Shirtfront: boundary hitting is the default scoring shot.
+    "Dead":   {"dot": -3.0, "W": -1.6, "2": +0.5, "4": +3.2, "6": +2.6,
+               "wide": -0.3},
 }
 
 
@@ -164,8 +191,11 @@ def _pitch_wear_mods(pitch_type, wear):
 
     Logic:
     - As wear increases, dots & wickets go up slightly, fours/sixes go down.
-    - Effect is doubled on Dusty (already spin-friendly) and Dry (gets dustier).
-    - Hard/Flat resist wear better.
+    - How much depends on the surface, and the multipliers below are the same
+      innings-2 story ``engine.pitch_state.INNINGS2_EVOLUTION`` tells the /cipl
+      engine: a turner's footmarks deepen, a dry track cracks, a green top
+      *flattens out* as the grass burns off (so its multiplier is negative —
+      wear makes a green top easier, not harder), and a road barely changes.
     - All wear effects are subtle — typical ±0.5 to ±1.0 at peak wear.
     """
     if wear <= 5:
@@ -178,11 +208,17 @@ def _pitch_wear_mods(pitch_type, wear):
         "6":   -1.2 * factor,
         "1":   +0.5 * factor,
     }
-    # Pitch-specific multipliers
+    # Pitch-specific multipliers — one per surface in engine.pitch_registry.
     multiplier = {
-        "Dusty": 1.4, "Dry": 1.3,
-        "Green": 1.0, "Flat": 0.6, "Hard": 0.5,
-    }.get(pitch_type, 1.0)
+        "Dusty":  1.5,   # footmarks deepen; the middle overs become a graveyard
+        "Dry":    1.3,   # cracks open and the death overs turn into a lottery
+        "Bouncy": 0.7,   # the vicious bounce settles out of it
+        "Even":   0.9,   # moderate, honest wear
+        "Hard":   0.5,   # pace carry drops a little, nothing more
+        "Flat":   0.3,   # a road stays a road
+        "Dead":   0.2,   # nothing to wear out
+        "Green": -0.8,   # grass burns off: the surface FLATTENS as it wears
+    }.get(pitch_type, 0.9)
     return {k: v * multiplier for k, v in base.items()}
 
 
@@ -202,14 +238,49 @@ def calc_pitch_wear(innings, current_over, total_overs):
 
 
 
+# WHO the surface pays, by bowler type. The signs mirror the wicket_factors in
+# config/ground_conditions.yaml so the two engines field the same cricket: a
+# green top is the seamer's, a turner is the spinners', a road is nobody's — and
+# on a road the spinner is the one who still buys a wicket, which is why Flat
+# and Dead cost the pacer more than the spinner.
 PITCH_BOWLER_SYNERGY = {
-    ("Green",  "Fast Pacer"):    {"W": +1.0, "dot": +1},
-    ("Green",  "Medium Pacer"):  {"W": +0.5, "dot": +0.5},
-    ("Dusty",  "Off Spinner"):   {"W": +0.8, "dot": +1},
-    ("Dusty",  "Leg Spinner"):   {"W": +1.0, "dot": +1},
-    ("Hard",   "Fast Pacer"):    {"W": +0.3, "6": +0.3},
+    # Green top — seam and swing; spin is decoration.
+    ("Green",  "Fast Pacer"):    {"W": +1.2, "dot": +1.0},
+    ("Green",  "Medium Pacer"):  {"W": +1.4, "dot": +1.0},   # the swing bowler's day
+    ("Green",  "Off Spinner"):   {"W": -0.8, "4": +0.5},
+    ("Green",  "Leg Spinner"):   {"W": -0.7, "4": +0.5},
+    # Raging turner — every spinner is a threat, the quicks bowl cutters.
+    ("Dusty",  "Off Spinner"):   {"W": +1.4, "dot": +1.2},
+    ("Dusty",  "Leg Spinner"):   {"W": +1.6, "dot": +1.0},
+    ("Dusty",  "Fast Pacer"):    {"W": -0.8, "1": +0.5},
+    ("Dusty",  "Medium Pacer"):  {"W": -0.4, "dot": +0.3},   # cutters do a job
+    # Slow turner — the same shape with the volume down.
+    ("Dry",    "Off Spinner"):   {"W": +0.9, "dot": +0.8},
+    ("Dry",    "Leg Spinner"):   {"W": +1.0, "dot": +0.6},
+    ("Dry",    "Fast Pacer"):    {"W": -0.5, "1": +0.4},
+    ("Dry",    "Medium Pacer"):  {"W": -0.2, "dot": +0.3},
+    # Bouncy — express pace is worth more here than anywhere.
+    ("Bouncy", "Fast Pacer"):    {"W": +1.5, "dot": +0.8, "6": +0.3},
+    ("Bouncy", "Medium Pacer"):  {"W": +0.4},
+    ("Bouncy", "Off Spinner"):   {"W": -0.6, "6": +0.5},
+    ("Bouncy", "Leg Spinner"):   {"W": -0.2, "6": +0.4},     # bounce beats turn
+    # Even — nobody is shut out and nobody is handed anything.
+    ("Even",   "Fast Pacer"):    {"W": +0.2},
+    ("Even",   "Leg Spinner"):   {"W": +0.2},
+    # Hard — pace is rewarded for hitting the deck, spin has to earn it.
+    ("Hard",   "Fast Pacer"):    {"W": +0.5, "6": +0.3},
+    ("Hard",   "Off Spinner"):   {"W": -0.4, "4": +0.4},
+    ("Hard",   "Leg Spinner"):   {"W": -0.2, "4": +0.3},
+    # Flat — change of pace is the only currency left.
+    ("Flat",   "Fast Pacer"):    {"W": -0.5, "4": +0.5},
+    ("Flat",   "Medium Pacer"):  {"W": -0.3, "4": +0.5},
     ("Flat",   "Off Spinner"):   {"4": +0.5, "6": +0.3, "dot": -0.5},
-    ("Flat",   "Leg Spinner"):   {"4": +0.3, "6": +0.5, "dot": -0.5},
+    ("Flat",   "Leg Spinner"):   {"W": +0.2, "6": +0.3, "dot": -0.3},
+    # Dead — nothing works; wrist spin least badly.
+    ("Dead",   "Fast Pacer"):    {"W": -0.8, "4": +0.8},
+    ("Dead",   "Medium Pacer"):  {"W": -0.7, "4": +0.8},
+    ("Dead",   "Off Spinner"):   {"W": -0.6, "6": +0.5},
+    ("Dead",   "Leg Spinner"):   {"W": -0.3, "6": +0.4},
 }
 
 
@@ -739,7 +810,9 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
         _apply_mods(probs, LENGTH_MODS.get(length, {}))
 
     # Layer 4: Pitch
-    pitch = pitch_type if pitch_type in PITCH_MODS else "Flat"
+    # An unrecognised surface resolves to the registry's neutral track, not to
+    # whichever surface happens to sit first in the table.
+    pitch = pitch_type if pitch_type in PITCH_MODS else pitch_registry.DEFAULT
     _apply_mods(probs, PITCH_MODS.get(pitch, {}))
 
     # Layer 4b: Pitch wear (deterioration over the match)

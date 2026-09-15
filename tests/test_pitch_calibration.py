@@ -26,25 +26,30 @@ from tools import pitch_calibration as pc
 # ── Deterministic getter unit tests ─────────────────────────────────────
 
 def test_get_chase_win_pct_band_edges():
-    """The Unified T20 Engine v3.0 section 9 Step 1 grid, band by band.
+    """Band selection is exact, and the bands step down at the documented edges.
 
     Bands are <=150, <=170, <=190, <=210, <=230, <=250, <=270, 271+ on every
-    pitch — the doc's own columns — so the edges are exact, not approximate.
+    pitch, so the *edges* are exact even though the values in them are now
+    derived rather than transcribed: each grid is a logistic in runs relative to
+    that pitch's own par (see docs/pitch-types.md), because the doc's original
+    grid was keyed on absolute totals from before section 5A moved par and had
+    drifted up to fifty runs off on the bowling surfaces.
     """
-    # Flat: [96][90][78][62][48][34][22][12]
-    assert ground_config.get_chase_win_pct("Flat", 150) == 96
-    assert ground_config.get_chase_win_pct("Flat", 151) == 90
-    assert ground_config.get_chase_win_pct("Flat", 190) == 78
-    assert ground_config.get_chase_win_pct("Flat", 210) == 62
-    assert ground_config.get_chase_win_pct("Flat", 230) == 48
-    assert ground_config.get_chase_win_pct("Flat", 271) == 12
-    assert ground_config.get_chase_win_pct("Flat", 400) == 12
-    # Dusty is the doc's hardest chase, Flat its easiest — at every target.
+    flat = [ground_config.get_chase_win_pct("Flat", t)
+            for t in (150, 170, 190, 210, 230, 250, 270, 400)]
+    # Selection lands on the band whose max the total is <=, not the next one.
+    assert ground_config.get_chase_win_pct("Flat", 150) == flat[0]
+    assert ground_config.get_chase_win_pct("Flat", 151) == flat[1]
+    assert ground_config.get_chase_win_pct("Flat", 231) == flat[5]
+    assert ground_config.get_chase_win_pct("Flat", 271) == flat[7]
+    assert ground_config.get_chase_win_pct("Flat", 400) == flat[7]
+    # Dusty is the hardest chase in the game, Dead the easiest — at every total.
     for total in (150, 190, 230, 300):
-        assert (ground_config.get_chase_win_pct("Dusty", total)
-                < ground_config.get_chase_win_pct("Flat", total))
-    assert ground_config.get_chase_win_pct("Dusty", 150) == 85
-    assert ground_config.get_chase_win_pct("Dusty", 151) == 76
+        pcts = {p: ground_config.get_chase_win_pct(p, total)
+                for p in ("Dusty", "Green", "Dry", "Bouncy", "Even", "Hard",
+                          "Flat", "Dead")}
+        assert pcts["Dusty"] == min(pcts.values()), pcts
+        assert pcts["Dead"] == max(pcts.values()), pcts
     # Unknown pitch → safe default.
     assert ground_config.get_chase_win_pct("Nope", 180) == 50
 

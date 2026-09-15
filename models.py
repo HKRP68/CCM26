@@ -3342,3 +3342,102 @@ class DraftSquadEdit(Base):
         if self.to_team_id is None and self.from_team_id is not None:
             return "released"
         return "moved"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# PITCH STATISTICS — what the surfaces actually did, in real matches
+# ══════════════════════════════════════════════════════════════════════
+# Written at match end for /letsplay and Challenge League matches only (see
+# services/pitch_stats.py) and read by /pitchstats. Practice matches against
+# the AI captain are excluded: they are unranked, and a bot's approach picks
+# would drown the human record they are meant to describe.
+
+
+class PitchMatchStat(Base):
+    """One finished match, reduced to what a pitch report needs.
+
+    The ``matches`` row already carries the pitch, the scores and the winner, so
+    this table exists for the two things it cannot answer: how many BALLS each
+    innings lasted (a chase won in 17.2 makes runs/overs a lie) and how the
+    innings split by phase. Both come from the live state, which is thrown away
+    when the match ends.
+    """
+    __tablename__ = "pitch_match_stats"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(Integer, ForeignKey("matches.id", ondelete="CASCADE"),
+                      unique=True, nullable=False, index=True)
+    pitch_type = Column(String(30), nullable=False, index=True)
+    # "letsplay" | "challenge" — the two modes /pitchstats counts. Kept as its
+    # own column rather than joined from matches.match_type so the stats query
+    # never has to touch the (much larger) matches table.
+    mode = Column(String(20), nullable=False, index=True)
+    is_tournament = Column(Boolean, default=False, nullable=False)
+    ball_format = Column(String(20), default="T20")
+    overs = Column(Integer, default=20)
+
+    inn1_runs = Column(Integer, default=0)
+    inn1_wickets = Column(Integer, default=0)
+    inn1_balls = Column(Integer, default=0)
+    inn2_runs = Column(Integer, default=0)
+    inn2_wickets = Column(Integer, default=0)
+    inn2_balls = Column(Integer, default=0)
+
+    # "bat_first" | "bat_second" | "tie" — who won, in the only terms a pitch
+    # has an opinion about. A Super Over is recorded as the side that won it.
+    result = Column(String(16), nullable=False, default="tie")
+
+    # What the toss winner elected, and whether that matched the surface's own
+    # recommendation in engine.pitch_registry.
+    toss_decision = Column(String(10), nullable=True)
+    toss_by_the_book = Column(Boolean, nullable=True)
+    # True when the side that won the toss also won the match.
+    toss_winner_won = Column(Boolean, nullable=True)
+
+    # Phase splits, both innings combined.
+    pp_runs = Column(Integer, default=0)
+    pp_wickets = Column(Integer, default=0)
+    pp_balls = Column(Integer, default=0)
+    mid_runs = Column(Integer, default=0)
+    mid_wickets = Column(Integer, default=0)
+    mid_balls = Column(Integer, default=0)
+    death_runs = Column(Integer, default=0)
+    death_wickets = Column(Integer, default=0)
+    death_balls = Column(Integer, default=0)
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        Index("ix_pitch_match_pitch_mode", "pitch_type", "mode"),
+    )
+
+
+class PitchApproachStat(Base):
+    """Rolling totals for one (pitch, phase, batting intent, bowling plan) cell.
+
+    A rollup rather than a row per over: the whole table is at most
+    pitches x phases x 5 x 5 x modes, so the answer to "what does Ultra Attack
+    into Variation actually do on a turner" is one indexed read instead of a
+    scan over every over ever bowled.
+    """
+    __tablename__ = "pitch_approach_stats"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pitch_type = Column(String(30), nullable=False, index=True)
+    mode = Column(String(20), nullable=False, index=True)
+    phase = Column(String(16), nullable=False)      # powerplay | middle | death
+    bat_approach = Column(String(20), nullable=False)
+    bowl_approach = Column(String(20), nullable=False)
+
+    overs = Column(Integer, default=0)
+    balls = Column(Integer, default=0)
+    runs = Column(Integer, default=0)
+    wickets = Column(Integer, default=0)
+
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("pitch_type", "mode", "phase", "bat_approach",
+                         "bowl_approach", name="uq_pitch_approach_cell"),
+        Index("ix_pitch_approach_lookup", "pitch_type", "mode"),
+    )

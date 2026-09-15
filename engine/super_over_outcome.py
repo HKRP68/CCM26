@@ -76,7 +76,7 @@ def calculate_super_over_outcome(
             "bowling_type": one of allowed styles or "",
             "bowling_hand": "Left" | "Right"
         }
-        pitch (str): one of {"Green", "Flat", "Dry", "Hard", "Dead"}.
+        pitch (str): any surface in engine.pitch_registry.
         streak (dict): e.g. {"boundaries": int} representing number of
                         boundaries hit so far in this over by the current batter.
         over_number (int): zero-based index of the current over in the match.
