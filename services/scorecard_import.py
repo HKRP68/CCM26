@@ -13,8 +13,35 @@ grammar can be tested on its own; :func:`plan_import` resolves what it parsed
 against a real fixture and reports every guess it made; :func:`record_import`
 writes it.
 
-The format
-----------
+The bot's own file
+------------------
+The quickest path needs no typing at all: ``MatchNo<id>.txt``, the scorecard
+this bot archives for every match it plays (see
+``services.match_webapp_service._build_text_scorecard`` and
+``handlers.match._text_innings_block``), is read exactly as it is —
+column-aligned tables, ``Total:`` lines, extras, fall of wickets and all::
+
+    RAJASTHAN CAMELBACK CHARGERS INNINGS  —  @someone
+    -------------------------------------------------------------------
+    Batsman               Status                      R    B   4s   6s      SR
+    -------------------------------------------------------------------
+    Abhishek Sharma       Caught                     11   13    1    0   84.60
+    Amelia Kerr           not out                    34   24    2    1  141.70
+
+    Total: 147/5 (20.0 Overs)
+
+    -------------------------------------------------------------------
+    Bowler                        O     M     R     W    Econ
+    -------------------------------------------------------------------
+    Glenn Maxwell                 4     0    34     1    8.50
+
+A Super Over rides in that file as two further innings between the same two
+sides. They are read, reported, and left out of the scoreline and the player
+figures — a Super Over is a separate contest, and that is how the bot records
+one itself. The ``Result:`` line is what carries its winner.
+
+The hand-written format
+-----------------------
 Two innings blocks, each headed by the batting side and its score::
 
     Innings 1: Mumbai Indians 187/5 (20)
@@ -45,8 +72,10 @@ Deliberately forgiving, because this is typed by a person:
   ``20.3`` in the usual cricket notation;
 * a batting line is ``Name runs (balls)`` plus optional ``6x4``/``2x6`` and a
   dismissal, **or** a comma/pipe-separated ``Name, runs, balls, fours, sixes,
-  out``;
-* a bowling line is ``Name O-M-R-W``, ``Name O M R W`` or the comma form.
+  out``, **or** the column-aligned ``Name | Status | R B 4s 6s SR`` above;
+* a bowling line is ``Name O-M-R-W``, ``Name O M R W``, the comma form, or the
+  column-aligned ``Name | O M R W Econ``;
+* an innings' score may sit on its header or on a ``Total:`` line inside it.
 
 A batter counts as out unless the line says otherwise (``not out``, ``n.o.`` or
 a trailing ``*``) — the safe default, because assuming not-out would quietly
@@ -62,14 +91,19 @@ logger = logging.getLogger(__name__)
 # is a half-finished match, not an import.
 INNINGS_PER_MATCH = 2
 
-# Section headings inside an innings block.
-_BAT_HEADINGS = {"batting", "batsmen", "batters", "bat", "batting card"}
-_BOWL_HEADINGS = {"bowling", "bowlers", "bowl", "bowling card"}
-# Lines that carry information this importer has no column for. Skipped rather
-# than rejected, so pasting a full scorecard works without editing it down.
-_IGNORED_PREFIXES = ("extras", "total", "fall of wickets", "fow", "did not bat",
-                     "dnb", "toss", "venue", "pitch", "umpire", "match",
-                     "player of the match", "potm", "overs")
+# Section headings inside an innings block. Matched on the first word, so the
+# bot's own column header — "Batsman  Status  R  B  4s  6s  SR" — opens the
+# batting section exactly as a bare "Batting" does.
+_BAT_HEADINGS = ("batting", "batsmen", "batsman", "batters", "batter", "bat")
+_BOWL_HEADINGS = ("bowling", "bowlers", "bowler", "bowl")
+# Headings after which every line is skipped until the next section or innings.
+# These introduce *lists* — "1-25 (3.2)", a run of names — that carry nothing
+# this importer has a column for, and that no player grammar will accept.
+_SKIP_HEADINGS = ("fall of wickets", "fow", "did not bat", "dnb", "partnerships")
+# Single lines with nothing to record on them.
+_IGNORED_PREFIXES = ("extras", "toss", "venue", "pitch", "stadium", "umpire",
+                     "match", "player of the match", "potm", "overs",
+                     "super over", "target", "run rate", "rr:")
 
 # Words that mark how a batter got out. Everything from the first one onward is
 # the dismissal, not part of the name or the figures.
@@ -82,7 +116,20 @@ _NOT_OUT_RE = re.compile(r"(\bnot\s*out\b|\bnotout\b|\bn\.?o\.?\b)", re.I)
 _SCORE_RE = re.compile(
     r"(?P<runs>\d{1,4})\s*(?:[/-]\s*(?P<wkts>10|[0-9]))?"
     r"(?:\s*(?:\(|\bin\b)\s*(?P<overs>\d{1,3}(?:\.\d)?)\s*(?:overs?|ov\b|ovs\b)?\s*\)?)?"
-    r"\s*$")
+    r"\s*$", re.I)
+# "Total: 147/5 (20.0 Overs)" and "Total: 187/5 (20.0 Overs, RR: 9.35)" — the
+# line that carries an innings' score in the bot's own scorecard file, where the
+# header above it names only the team. Anything else inside the brackets (a run
+# rate, a target) is read past rather than tripped over.
+_TOTAL_RE = re.compile(
+    r"^totals?\s*[:\-]?\s*(?P<runs>\d{1,4})(?:\s*[/-]\s*(?P<wkts>10|[0-9]))?"
+    r"(?:\s*\(\s*(?P<overs>\d{1,3}(?:\.\d)?)\s*(?:overs?|ov\b|ovs\b)?[^)]*\))?",
+    re.I)
+# "RAJASTHAN CAMELBACK CHARGERS INNINGS  —  @handle" — how every innings in the
+# bot's own ``MatchNo<id>.txt`` is headed. The score is not on this line; it
+# arrives below, on the "Total:" line.
+_INNINGS_SUFFIX_RE = re.compile(
+    r"^(?P<team>.+?)\s+innings\b\s*(?:[—\-–:]+\s*(?P<tag>@?[^\s]+))?\s*$", re.I)
 # "Innings 1", "[2nd Innings]", "Inn 1" — the label, wherever it sits.
 _INNINGS_LABEL_RE = re.compile(
     r"^\W*(?:(?P<pre>[12])(?:st|nd)?\s*)?inn(?:ing)?s?\b\W*(?P<post>[12])?\W*",
@@ -96,6 +143,22 @@ _SIXES_RE = re.compile(r"(\d{1,2})\s*[x*]\s*6\b|\b(\d{1,2})\s*(?:sixes|6s)\b", r
 _FIGURES_RE = re.compile(
     r"(?P<overs>\d{1,2}(?:\.\d)?)\s*[-/\s]\s*(?P<maidens>\d{1,2})\s*[-/\s]\s*"
     r"(?P<runs>\d{1,3})\s*[-/\s]\s*(?P<wickets>10|[0-9])\s*$")
+
+# ── The column-aligned forms the bot's own scorecard file uses ────────
+#
+# Both are "a name, then five numbers", and the last of the five is a rate with
+# a decimal point. What separates a batter's row from a bowler's is only which
+# table it is under, so these are only ever tried in section order — and they
+# are matched against the *raw* line, because the column gaps are the one thing
+# that says where the name ends and the status begins.
+_TABULAR_BAT_RE = re.compile(
+    r"^(?P<prefix>\S.*?)\s{2,}(?P<runs>\d{1,3})\s+(?P<balls>\d{1,3})\s+"
+    r"(?P<fours>\d{1,2})\s+(?P<sixes>\d{1,2})\s+(?P<sr>\d{1,4}\.\d+)\s*$")
+_TABULAR_BOWL_RE = re.compile(
+    r"^(?P<prefix>\S.*?)\s{2,}(?P<overs>\d{1,2}(?:\.\d)?)\s+(?P<maidens>\d{1,2})\s+"
+    r"(?P<runs>\d{1,3})\s+(?P<wickets>10|\d)\s+(?P<econ>\d{1,4}\.\d+)\s*$")
+# A status column that means the batter never went out to the middle.
+_DID_NOT_BAT_RE = re.compile(r"\b(did\s*not\s*bat|dnb|absent)\b", re.I)
 
 
 class ScorecardError(Exception):
@@ -137,6 +200,58 @@ def _split_fields(line):
 # Line grammars
 # ──────────────────────────────────────────────────────────────────────
 
+# Status words for the one case column gaps can't resolve: a
+# name long enough to be padded to a single space before its status.
+_STATUS_WORDS = ("did not bat", "hit wicket", "retired hurt", "retired out",
+                 "not out", "run out", "obstructing the field", "stumped",
+                 "caught", "bowled", "retired", "absent", "lbw", "dnb", "out")
+
+
+def _split_columns(text):
+    """A column-aligned row split on its gaps: two or more spaces.
+
+    Falls back to a status-word split when the row has no gap left — a name
+    padded to the full column width leaves a single space before the status —
+    and to "it is all the name" when that finds nothing either.
+    """
+    parts = [p.strip() for p in re.split(r"\s{2,}", str(text or "").strip())
+             if p.strip()]
+    if len(parts) > 1 or not parts:
+        return parts or [""]
+    only = parts[0]
+    low = only.casefold()
+    for word in _STATUS_WORDS:
+        at = low.rfind(word)
+        if at > 0 and at + len(word) == len(low):
+            return [only[:at].strip(), only[at:].strip()]
+    return [only]
+
+
+def _parse_tabular_batting(line):
+    """One row of a column-aligned batting table, or None.
+
+    The shape is ``Name | Status | R B 4s 6s SR`` — what
+    ``services.match_webapp_service._build_text_scorecard`` writes, which is the
+    file people already have for every match the bot has played. A "did not bat"
+    status comes back as a real row of zeroes rather than being dropped: whether
+    that counts as an innings is decided once, in ``_build_lines``, by whether
+    the player faced a ball or got out.
+    """
+    hit = _TABULAR_BAT_RE.match(str(line).rstrip())
+    if not hit:
+        return None
+    columns = _split_columns(hit.group("prefix"))
+    name = columns[0]
+    if not name:
+        return None
+    status = " ".join(columns[1:])
+    return {"name": name,
+            "runs": _int(hit.group("runs")), "balls": _int(hit.group("balls")),
+            "fours": _int(hit.group("fours")), "sixes": _int(hit.group("sixes")),
+            "out": not (_NOT_OUT_RE.search(status)
+                        or _DID_NOT_BAT_RE.search(status))}
+
+
 def parse_batting_line(line):
     """One batting line → a dict, or None when the line isn't one.
 
@@ -148,6 +263,10 @@ def parse_batting_line(line):
     raw = _clean(line)
     if not raw:
         return None
+
+    tabular = _parse_tabular_batting(line)
+    if tabular is not None:
+        return tabular
 
     # ``*`` right after the runs is the scorecard shorthand for not out. It is
     # stripped by _clean at the ends of the line, so test the raw text too.
@@ -211,6 +330,15 @@ def parse_bowling_line(line):
     if not raw:
         return None
 
+    hit = _TABULAR_BOWL_RE.match(str(line).rstrip())
+    if hit:
+        name = _split_columns(hit.group("prefix"))[0]
+        if name:
+            return {"name": name, "overs": hit.group("overs"),
+                    "maidens": _int(hit.group("maidens")),
+                    "runs": _int(hit.group("runs")),
+                    "wickets": min(10, _int(hit.group("wickets")))}
+
     fields = _split_fields(raw)
     if fields and len(fields) >= 5 and fields[0]:
         overs = fields[1].strip()
@@ -247,6 +375,17 @@ def _parse_innings_header(line):
     raw = _clean(line).rstrip(".")
     if not raw:
         return None, False
+
+    # "RAJASTHAN CAMELBACK CHARGERS INNINGS  —  @handle": the bot's own file
+    # heads an innings with the team alone and puts the score on a "Total:" line
+    # underneath. The word INNINGS makes it unmistakable, so it is labelled.
+    suffix = _INNINGS_SUFFIX_RE.match(raw)
+    if suffix:
+        team = _clean(suffix.group("team")).rstrip(":-–— ").strip()
+        if team:
+            return {"number": None, "team": team, "runs": None, "wickets": None,
+                    "overs": "", "batting": [], "bowling": []}, True
+
     number, labelled = None, False
     label = _INNINGS_LABEL_RE.match(raw)
     if label:
@@ -287,7 +426,34 @@ def _bare_innings_label(line):
 
 
 def _is_heading(line, headings):
-    return _clean(line).rstrip(":").casefold() in headings
+    """True when the line opens one of these sections.
+
+    Matched on the first word rather than the whole line, so the bot's column
+    header — ``Batsman  Status  R  B  4s  6s  SR`` — opens the batting section
+    exactly as a bare ``Batting`` does.
+    """
+    text = _clean(line).rstrip(":").casefold()
+    if not text:
+        return False
+    # ``h + ":"`` covers the inline form — "Did Not Bat: Henry, King" heads a
+    # list just as much as a bare "Did Not Bat" does.
+    return any(text == h or text.startswith(h + " ") or text.startswith(h + ":")
+               for h in headings)
+
+
+def _parse_total_line(line):
+    """``"Total: 147/5 (20.0 Overs)"`` → ``(runs, wickets, overs)``, or None.
+
+    A missing wickets column reads as all out, the same way a bare total does
+    anywhere else on a card.
+    """
+    hit = _TOTAL_RE.match(_clean(line))
+    if not hit:
+        return None
+    wkts = hit.group("wkts")
+    return (_int(hit.group("runs")),
+            10 if wkts is None else _int(wkts),
+            hit.group("overs") or "")
 
 
 def _is_ignorable(line):
@@ -338,17 +504,28 @@ def parse_scorecard(text):
             result_text = found_result
             continue
 
-        # An explicit "Innings N" always opens a new block, wherever it appears —
-        # and is checked before the skip list below, so a side really called
-        # "Total Cricket Club" can still head an innings.
+        # An explicit "Innings N" (or "TEAM INNINGS") always opens a new block,
+        # wherever it appears — and is checked before the skip list below, so a
+        # side really called "Total Cricket Club" can still head an innings.
         header, labelled = _parse_innings_header(line)
         if labelled and header is not None:
             _open_innings(header)
             pending_number, section = None, None
             continue
 
-        # "Total: 187/5 (20)" ends in a scoreline too, and would otherwise be
-        # read as another innings headed by a team called "Total".
+        # "Total: 147/5 (20.0 Overs)" is where an innings headed by its team
+        # alone gets its score. Read before the skip list, which would otherwise
+        # throw the line away as one more line of trimmings.
+        if innings:
+            total = _parse_total_line(line)
+            if total is not None:
+                current = innings[-1]
+                if current["runs"] is None:
+                    current["runs"], current["wickets"], current["overs"] = total
+                continue
+
+        # "Total: 187/5 (20)" on a card that already had its score, a run of
+        # names under "Did Not Bat", the venue, the toss — nothing to record.
         if _is_ignorable(line):
             continue
         # A card that puts the label on its own line ("Innings 1" / "Mumbai
@@ -363,6 +540,14 @@ def parse_scorecard(text):
             continue
         if _is_heading(line, _BOWL_HEADINGS):
             section = "bowling"
+            continue
+        if _is_heading(line, _SKIP_HEADINGS):
+            # A list of fall-of-wickets entries or names follows. None of it has
+            # a column here, and none of it parses as a player, so everything up
+            # to the next section or innings is skipped rather than refused.
+            section = "skip"
+            continue
+        if section == "skip":
             continue
 
         if not innings:
@@ -379,15 +564,18 @@ def parse_scorecard(text):
         # parses, and a new innings is what is left when nothing does.
         current = innings[-1]
         try:
-            parsed = (parse_bowling_line(line) if section == "bowling"
-                      else parse_batting_line(line))
+            # The raw line, not the cleaned one: a column-aligned card says where
+            # a name ends and its status begins with the width of the gap, and
+            # squeezing the whitespace throws that away.
+            parsed = (parse_bowling_line(raw_line) if section == "bowling"
+                      else parse_batting_line(raw_line))
             if parsed:
                 current["bowling" if section == "bowling" else "batting"].append(parsed)
                 continue
             # An un-headed card: a bowling line is still recognisable by its
             # figures, so nobody has to add "Bowling" by hand.
             if section != "bowling":
-                parsed = parse_bowling_line(line)
+                parsed = parse_bowling_line(raw_line)
                 if parsed:
                     current["bowling"].append(parsed)
                     continue
@@ -401,23 +589,50 @@ def parse_scorecard(text):
             f"Line {lineno} isn't a batting or bowling line: {line!r}\n"
             "Batting: <name> <runs> (<balls>) — Bowling: <name> O-M-R-W")
 
-    if len(innings) != INNINGS_PER_MATCH:
+    if len(innings) < INNINGS_PER_MATCH:
         raise ScorecardError(
             f"Expected {INNINGS_PER_MATCH} innings, found {len(innings)}. Each "
             "innings starts with a line like "
-            "'Innings 1: Mumbai Indians 187/5 (20)'.")
+            "'Innings 1: Mumbai Indians 187/5 (20)', or "
+            "'MUMBAI INDIANS INNINGS' with a 'Total:' line under it.")
 
     # Honour explicit "Innings 2 … / Innings 1 …" ordering when both are numbered.
-    numbers = [i["number"] for i in innings]
+    numbers = [i["number"] for i in innings[:INNINGS_PER_MATCH]]
     if sorted(n for n in numbers if n) == [1, 2]:
-        innings.sort(key=lambda i: i["number"])
-    if _norm(innings[0]["team"]) == _norm(innings[1]["team"]):
+        innings[:INNINGS_PER_MATCH] = sorted(
+            innings[:INNINGS_PER_MATCH], key=lambda i: i["number"])
+
+    # Anything past the second innings is the Super Over: the bot's own file
+    # appends its innings to the same list, headed by the same two sides. The
+    # match is the first two — a Super Over is a separate contest, and the bot
+    # keeps it out of the scoreline and the batting figures when it records one
+    # itself. It is handed back so the caller can say it was left out, because
+    # silently dropping half a file is how an import stops being trustworthy.
+    extra = innings[INNINGS_PER_MATCH:]
+    innings = innings[:INNINGS_PER_MATCH]
+
+    sides = {_norm(innings[0]["team"]), _norm(innings[1]["team"])}
+    if len(sides) == 1:
         raise ScorecardError(
             f"Both innings are headed {innings[0]['team']!r} — name the two "
             "sides differently so each innings can be matched to a team.")
+    for block in extra:
+        if _norm(block["team"]) not in sides:
+            raise ScorecardError(
+                f"This card has {len(innings) + len(extra)} innings and "
+                f"{block['team']!r} is a third side. Two innings make a match; "
+                "anything after them has to be the same two teams playing a "
+                "Super Over.")
+
     for position, block in enumerate(innings, 1):
         block["number"] = position
-    return {"innings": innings, "result_text": result_text}
+        if block["runs"] is None:
+            raise ScorecardError(
+                f"No score found for {block['team']!r}. Put it on the innings "
+                "header ('Innings 1: Mumbai Indians 187/5 (20)') or on a "
+                "'Total: 187/5 (20)' line inside the innings.")
+    return {"innings": innings, "extra_innings": extra,
+            "result_text": result_text}
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -587,6 +802,17 @@ def plan_import(session, fixture, parsed):
     # run rate. The pair is unchanged, so nothing else about the fixture moves.
     swap_sides = resolved[0].id == fixture.team2_id
 
+    # A Super Over's innings ride in the same file, and are not part of the
+    # match: they never reach the scoreline, the net run rate or the batting
+    # figures — exactly as when the bot records a Super Over itself. Say so,
+    # rather than quietly reading half the file.
+    for block in parsed.get("extra_innings") or []:
+        warnings.append(
+            f"Super Over innings ({block['team']} {block['runs']}/"
+            f"{block['wickets']}) left out of the scoreline and the player "
+            "stats — a Super Over is a separate contest. It still decides the "
+            "winner through the result line.")
+
     winner_team_id, tie = _decide_winner(parsed, innings_out, resolved, warnings)
     result_text = parsed.get("result_text") or (
         "Match Tied" if tie else
@@ -673,7 +899,11 @@ def _build_lines(session, blocks, resolved, warnings):
         bowling_team = resolved[1 - position]
         for entry in block["batting"]:
             line = _line_for(batting_team, entry["name"])
-            line["batted"] = True
+            # An innings is a ball faced or a dismissal — the same test the live
+            # match uses. A row printed for somebody who never went out to the
+            # middle must not count against their average.
+            if entry["balls"] or entry["out"]:
+                line["batted"] = True
             line["bat_runs"] += entry["runs"]
             line["bat_balls"] += entry["balls"]
             line["bat_fours"] += entry["fours"]
@@ -739,6 +969,12 @@ def record_import(session, plan):
                 len(plan["lines"]))
     return fixture
 
+
+# What the bot's own archived scorecard looks like, and the shortest thing
+# somebody can type by hand. Both are read; the first is the one people already
+# have, because the bot writes it for every match it plays.
+BOT_FILE_HINT = ("MatchNo<id>.txt — the scorecard file the bot already archives "
+                 "for every match — is read as it is. Just reply to it.")
 
 TEMPLATE = """Innings 1: <Team A> 187/5 (20)
 Batting

@@ -504,5 +504,241 @@ class ImportRefusalTests(ImportCase):
         self.assertTrue(all("net run rate" in w for w in plan["warnings"]))
 
 
+# ══════════════════════════════════════════════════════════════════════
+# The bot's own archived scorecard file
+# ══════════════════════════════════════════════════════════════════════
+#
+# MatchNo<id>.txt is the file admins actually have — the bot writes one for
+# every match it plays. Reading it is the whole point of the import, so these
+# feed the *writer's* real output straight back into the reader rather than a
+# hand-copied sample: if the archive format moves, this fails.
+
+def _bot_file(result_text=None, super_over=None, extra=()):
+    """A MatchNo<id>.txt built by the real writer."""
+    from services.match_webapp_service import _build_text_scorecard
+
+    def _inn(number, team, runs, wickets, overs, batting, bowling):
+        return {"number": number, "bat_team": team, "runs": runs,
+                "wickets": wickets, "overs": overs,
+                "batting": [{"name": n, "how_out": how, "out": how is not None,
+                             "runs": r, "balls": b, "fours": f, "sixes": s,
+                             "sr": round(r / b * 100, 2) if b else 0.0}
+                            for n, how, r, b, f, s in batting],
+                "bowling": [{"name": n, "overs": o, "maidens": m, "runs": r,
+                             "wickets": w, "econ": 7.0}
+                            for n, o, m, r, w in bowling]}
+
+    innings = [
+        _inn(1, "Mumbai Indians", 147, 5, "20.0",
+             [("Rohit Sharma", "Caught", 62, 41, 6, 2),
+              ("Ishan Kishan", None, 45, 30, 4, 1),
+              ("Suryakumar Yadav", "LBW", 40, 20, 3, 2)],
+             [("Deepak Chahar", "4", 0, 31, 1),
+              ("Ravindra Jadeja", "3.4", 1, 28, 2)]),
+        _inn(2, "Chennai Super Kings", 147, 5, "20.0",
+             [("Ruturaj Gaikwad", "Bowled", 55, 38, 5, 1),
+              ("MS Dhoni", None, 30, 12, 1, 3)],
+             [("Jasprit Bumrah", "4", 0, 24, 3)]),
+    ]
+    innings += list(extra)
+    return _build_text_scorecard(11113, innings, result_text=result_text,
+                                 super_over=super_over)
+
+
+SUPER_OVER_INNINGS = (
+    {"number": 3, "bat_team": "Mumbai Indians", "runs": 14, "wickets": 1,
+     "overs": "1.0",
+     "batting": [{"name": "Rohit Sharma", "how_out": "Out", "runs": 7, "balls": 3,
+                  "fours": 0, "sixes": 1, "sr": 233.3}],
+     "bowling": [{"name": "Deepak Chahar", "overs": "1.0", "maidens": 0,
+                  "runs": 14, "wickets": 1, "econ": 14.0}]},
+    {"number": 4, "bat_team": "Chennai Super Kings", "runs": 15, "wickets": 0,
+     "overs": "0.5",
+     "batting": [{"name": "MS Dhoni", "out": False, "runs": 14, "balls": 4,
+                  "fours": 0, "sixes": 2, "sr": 350.0}],
+     "bowling": [{"name": "Jasprit Bumrah", "overs": "0.5", "maidens": 0,
+                  "runs": 15, "wickets": 0, "econ": 18.0}]},
+)
+
+
+class BotFileGrammarTests(unittest.TestCase):
+    def test_the_archived_file_reads_end_to_end(self):
+        parsed = parse_scorecard(_bot_file(result_text="Mumbai Indians won by 7 runs"))
+        first, second = parsed["innings"]
+        self.assertEqual(first["team"], "MUMBAI INDIANS")
+        self.assertEqual((first["runs"], first["wickets"], first["overs"]),
+                         (147, 5, "20.0"))
+        self.assertEqual([b["name"] for b in first["batting"]],
+                         ["Rohit Sharma", "Ishan Kishan", "Suryakumar Yadav"])
+        self.assertEqual([b["name"] for b in first["bowling"]],
+                         ["Deepak Chahar", "Ravindra Jadeja"])
+        self.assertEqual(second["team"], "CHENNAI SUPER KINGS")
+
+    def test_the_status_column_decides_out_or_not_out(self):
+        first = parse_scorecard(_bot_file())["innings"][0]
+        by_name = {b["name"]: b for b in first["batting"]}
+        self.assertTrue(by_name["Rohit Sharma"]["out"])        # "Caught"
+        self.assertFalse(by_name["Ishan Kishan"]["out"])       # "not out"
+        self.assertTrue(by_name["Suryakumar Yadav"]["out"])    # "LBW"
+
+    def test_boundaries_and_figures_come_off_the_columns(self):
+        first = parse_scorecard(_bot_file())["innings"][0]
+        rohit = first["batting"][0]
+        self.assertEqual((rohit["runs"], rohit["balls"]), (62, 41))
+        self.assertEqual((rohit["fours"], rohit["sixes"]), (6, 2))
+        jadeja = first["bowling"][1]
+        self.assertEqual((jadeja["overs"], jadeja["maidens"]), ("3.4", 1))
+        self.assertEqual((jadeja["runs"], jadeja["wickets"]), (28, 2))
+
+    def test_a_super_over_is_read_and_set_aside(self):
+        parsed = parse_scorecard(_bot_file(
+            result_text="Chennai Super Kings won the match by 2 wickets (Super Over)",
+            super_over={"winner": "Chennai Super Kings"},
+            extra=SUPER_OVER_INNINGS))
+        # The match is the first two innings; the Super Over is not part of it.
+        self.assertEqual([i["runs"] for i in parsed["innings"]], [147, 147])
+        self.assertEqual([i["runs"] for i in parsed["extra_innings"]], [14, 15])
+        self.assertIn("Super Over", parsed["result_text"])
+
+    def test_a_third_side_is_refused_rather_than_silently_dropped(self):
+        extra = [dict(SUPER_OVER_INNINGS[0], bat_team="Rajasthan Royals")]
+        with self.assertRaises(ScorecardError) as caught:
+            parse_scorecard(_bot_file(extra=extra))
+        # The writer shouts team names, so the refusal quotes what it read.
+        self.assertIn("RAJASTHAN ROYALS", str(caught.exception))
+
+    def test_an_innings_with_no_total_line_is_refused(self):
+        card = _bot_file()
+        card = card.replace("Total: 147/5 (20.0 Overs)", "", 1)
+        with self.assertRaises(ScorecardError) as caught:
+            parse_scorecard(card)
+        self.assertIn("No score found", str(caught.exception))
+
+
+CRIC_CARD = """Match Summary: Mumbai Indians vs Chennai Super Kings
+Match Number: #77
+Pitch: Green
+Stadium: Lord's
+Result: Mumbai Indians won the match by 12 runs
+Player of the Match: Rohit Sharma (62(41)) — Mumbai Indians
+
+MUMBAI INDIANS INNINGS
+-----------------------------------------------------------------------------------------------
+Batsman               Status                                  R    B   4s   6s      SR
+-----------------------------------------------------------------------------------------------
+Rohit Sharma          c Dhoni b Jadeja                       62   41    6    2  151.20
+Ishan Kishan          not out                                45   30    4    1  150.00
+
+Extras: 12 (wd 3, nb 1, b 0, lb 8)
+Total: 147/5 (20.0 Overs, RR: 7.35)
+
+Did Not Bat: Suryakumar Yadav, Jasprit Bumrah
+
+--------------------------------------------------------------------
+Bowler                        O     M     R     W    Econ
+--------------------------------------------------------------------
+Deepak Chahar               4.0     0    28     2    7.00
+
+--------------------------------------------------------------------
+Fall of Wickets
+--------------------------------------------------------------------
+1-25  (3.2)
+2-60  (8.1)
+=======================================================
+
+CHENNAI SUPER KINGS INNINGS
+-----------------------------------------------------------------------------------------------
+Batsman               Status                                  R    B   4s   6s      SR
+-----------------------------------------------------------------------------------------------
+Ruturaj Gaikwad       run out                                55   38    5    1  144.70
+
+Extras: 5 (wd 2, nb 0, b 0, lb 3)
+Total: 135/8 (20.0 Overs, RR: 6.75)
+
+--------------------------------------------------------------------
+Bowler                        O     M     R     W    Econ
+--------------------------------------------------------------------
+Jasprit Bumrah              4.0     1    24     3    6.00
+=======================================================
+"""
+
+
+class CricCardTests(unittest.TestCase):
+    """The /cric archive: same tables, plus extras, DNB and fall of wickets."""
+
+    def test_the_trimmings_are_skipped_not_refused(self):
+        parsed = parse_scorecard(CRIC_CARD)
+        first, second = parsed["innings"]
+        self.assertEqual(first["team"], "MUMBAI INDIANS")
+        self.assertEqual([b["name"] for b in first["batting"]],
+                         ["Rohit Sharma", "Ishan Kishan"])
+        self.assertEqual([b["name"] for b in second["bowling"]], ["Jasprit Bumrah"])
+
+    def test_a_total_with_a_run_rate_still_reads(self):
+        first, second = parse_scorecard(CRIC_CARD)["innings"]
+        self.assertEqual((first["runs"], first["wickets"], first["overs"]),
+                         (147, 5, "20.0"))
+        self.assertEqual((second["runs"], second["wickets"]), (135, 8))
+
+    def test_the_stadium_and_potm_lines_do_not_start_an_innings(self):
+        self.assertEqual(len(parse_scorecard(CRIC_CARD)["innings"]), 2)
+
+
+class BotFileImportTests(ImportCase):
+    """The archived file, recorded onto a real fixture."""
+
+    def test_a_super_over_file_records_the_match_and_its_winner(self):
+        card = _bot_file(
+            result_text="Chennai Super Kings won the match by 2 wickets (Super Over)",
+            super_over={"winner": "Chennai Super Kings"},
+            extra=SUPER_OVER_INNINGS)
+        plan = self.si.plan_import(self.session, self.fixture,
+                                   parse_scorecard(card))
+        self.assertTrue(any("Super Over innings" in w for w in plan["warnings"]))
+        self.si.record_import(self.session, plan)
+        self.session.commit()
+
+        fx = self._fixture()
+        # The scoreline is the tied main match, not the Super Over.
+        self.assertEqual((fx.inn1_runs, fx.inn2_runs), (147, 147))
+        self.assertEqual((fx.inn1_balls, fx.inn2_balls), (120, 120))
+        # …and the winner is the one the result line names.
+        self.assertEqual(fx.winner_team_id,
+                         self.tteams["Chennai Super Kings"].id)
+        csk = self.tteams["Chennai Super Kings"]
+        self.session.refresh(csk)
+        self.assertEqual((csk.won, csk.tied, csk.points), (1, 0, 2))
+
+    def test_super_over_runs_stay_out_of_the_player_stats(self):
+        card = _bot_file(
+            result_text="Chennai Super Kings won the match by 2 wickets (Super Over)",
+            extra=SUPER_OVER_INNINGS)
+        self._import(card)
+        # Rohit made 62 in the match and 7 more in the Super Over.
+        self.assertEqual(self._stat("Rohit Sharma").bat_runs, 62)
+        # Bumrah took 3 in the match and none in the Super Over.
+        self.assertEqual(self._stat("Jasprit Bumrah").bowl_wickets, 3)
+
+    def test_figures_land_on_the_right_side(self):
+        self._import(_bot_file(result_text="Mumbai Indians won by 7 runs"))
+        # Chahar bowled in Mumbai's innings, so he is a Chennai player.
+        self.assertEqual(self._stat("Deepak Chahar").team_name,
+                         "Chennai Super Kings")
+        self.assertEqual(self._stat("Rohit Sharma").team_name, "Mumbai Indians")
+        self.assertEqual(self._stat("Ishan Kishan").bat_outs, 0)  # "not out"
+
+
+class DidNotBatTests(unittest.TestCase):
+    def test_a_did_not_bat_row_reads_as_a_row_of_zeroes(self):
+        # Whether that counts as an innings is decided later, by whether the
+        # player faced a ball or got out — not by dropping the row here.
+        line = parse_batting_line(
+            "Alana King            did not bat                             "
+            "0    0    0    0    0.00")
+        self.assertIsNotNone(line)
+        self.assertEqual(line["runs"], 0)
+        self.assertFalse(line["out"])
+
+
 if __name__ == "__main__":
     unittest.main()
