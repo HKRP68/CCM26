@@ -1303,5 +1303,85 @@ class OverseasXiValidationTests(unittest.TestCase):
         self.assertEqual(error, "")
 
 
+class CdraftSquadSourceTests(unittest.TestCase):
+    """A /cdraft squad reaches the Playing XI step without a league team.
+
+    The mode's whole integration is that ``_query_team_players`` hands back the
+    drafted cards instead of a ``ChallengeTeam``'s roster; everything above it
+    is then unchanged. These tests pin that branch, and that the ordinary league
+    path is untouched by it.
+    """
+
+    def _drafted(self):
+        from services import cdraft_service
+        slots = cdraft_service.build_slots(
+            pool=[{"id": i, "name": f"P{i}", "country": "India",
+                   "category": cat, "rating": 85, "bat_rating": 83,
+                   "bowl_rating": 80, "bat_hand": "Right",
+                   "bowl_hand": "Right", "bowl_style": "Fast"}
+                  for i, cat in enumerate(
+                      ["Batsman"] * 12 + ["Wicket Keeper"] * 4
+                      + ["All-rounder"] * 6 + ["Bowler"] * 12, start=1)],
+            seed=1)
+        state = cdraft_service.new_state(slots)
+        while not cdraft_service.is_complete(state):
+            side = cdraft_service.current_side(state)
+            slot = cdraft_service.current_slot(state)
+            cdraft_service.apply_pick(state, state["index"], side,
+                                      slot["cards"][0]["id"])
+        return state
+
+    def test_the_drafted_squad_is_returned_without_touching_the_database(self):
+        state = self._drafted()
+        draft = {"mode": "cdraft", "cdraft": state,
+                 "host_team": "@a XI", "target_team": "@b XI"}
+
+        class Exploding:
+            def query(self, *args, **kwargs):
+                raise AssertionError("a /cdraft squad must not be queried")
+
+        for side in ("host", "target"):
+            players = challenge._query_team_players(Exploding(), draft, side)
+            self.assertEqual(len(players), 11)
+            self.assertEqual(
+                [p.id for p in players],
+                [int(c["id"]) for c in state["squads"][side]])
+
+    def test_the_drafted_squad_passes_the_challenge_xi_rules(self):
+        state = self._drafted()
+        draft = {"mode": "cdraft", "cdraft": state}
+        players = challenge._query_team_players(DummySession(), draft, "host")
+        valid, error = challenge._challenge_xi_validation(players, 0, 11)
+        self.assertTrue(valid, error)
+
+    def test_a_league_draft_still_goes_to_the_database(self):
+        draft = {"host_team": "Mumbai", "target_team": "Chennai"}
+        self.assertEqual(
+            challenge._query_team_players(DummySession(), draft, "host"), [])
+
+    def test_a_drafted_squad_has_no_xi_memory_to_resolve(self):
+        """No league means no ChallengeTeam id, so the saved-XI lookup is
+        skipped — every drafted squad is a one-off."""
+        draft = {"mode": "cdraft", "cdraft": self._drafted()}
+        self.assertIsNone(
+            challenge._resolve_team_id(DummySession(), draft, "host"))
+
+    def test_the_one_tap_button_can_be_relabelled_for_a_draft(self):
+        players = [SimpleNamespace(id=i, name=f"P{i}") for i in range(1, 12)]
+        markup = challenge._challenge_xi_player_keyboard(
+            1, "host", players, [], saved_available=True,
+            saved_label="✅ Use draft order")
+        self.assertEqual(markup.inline_keyboard[0][0].text, "✅ Use draft order")
+        self.assertEqual(markup.inline_keyboard[0][0].callback_data,
+                         "cl_useprev_1_host")
+
+    def test_the_saved_xi_button_keeps_its_wording_without_an_override(self):
+        players = [SimpleNamespace(id=i, name=f"P{i}") for i in range(1, 12)]
+        markup = challenge._challenge_xi_player_keyboard(
+            1, "host", players, [], saved_available=True, team_code="MI")
+        self.assertEqual(markup.inline_keyboard[0][0].text,
+                         "⚡ Use my last MI XI")
+
+
 if __name__ == "__main__":
     unittest.main()

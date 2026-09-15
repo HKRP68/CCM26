@@ -985,6 +985,15 @@ def _query_team_players(session, draft, side):
     """Load a team's players for ``side``. Returns a (possibly empty) list when the
     team genuinely has no roster, but lets DB errors propagate so the caller can tell
     a real "no players" apart from a transient load failure (see below)."""
+    # A /cdraft squad was built pick by pick from the master card catalogue, not
+    # loaded from a league team. The drafted cards already present a
+    # ChallengePlayer's surface (see services.cdraft_service.DraftCard), so
+    # everything above this function — the XI picker, the rulebook, the engine
+    # conversion — is unchanged by where the eleven came from.
+    if draft.get("mode") == "cdraft":
+        from services import cdraft_service
+        return cdraft_service.squad_cards(draft.get("cdraft") or {}, side)
+
     team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
     if not team_name:
         return []
@@ -1304,18 +1313,22 @@ def _challenge_xi_confirmed_text(draft, side, team_name, players, selected_ids):
 
 
 def _challenge_xi_player_keyboard(draft_id, side, players, selected_ids,
-                                  saved_available=False, team_code=""):
+                                  saved_available=False, team_code="",
+                                  saved_label=None):
     """Numbered name buttons (2/row), e.g. "1. Dhoni". A ✅ marks picked players;
     the button text carries the roster number + name, the callback carries
     player_id so the toggle handler is unchanged. Confirm XI shows only at 11.
 
     When ``saved_available`` is set and nothing is picked yet, a one-tap
     "⚡ Use my last {CODE} XI" button is shown on top — it loads (and, if fully
-    valid, instantly confirms) the user's last saved XI for this team."""
+    valid, instantly confirms) the user's last saved XI for this team.
+    ``saved_label`` overrides that wording where the one-tap XI is not a saved
+    one — /cdraft offers the order the captain just drafted."""
     selected_set = {int(pid) for pid in selected_ids}
     rows = []
     if saved_available and not selected_ids:
-        label = f"⚡ Use my last {team_code} XI" if team_code else "⚡ Use my last XI"
+        label = saved_label or (f"⚡ Use my last {team_code} XI" if team_code
+                                else "⚡ Use my last XI")
         rows.append([InlineKeyboardButton(
             label, callback_data=f"cl_useprev_{draft_id}_{side}")])
     row = []
@@ -2326,7 +2339,8 @@ async def _expire_challenge_draft(ctx):
 # player never acts the challenge is cancelled (no fine during setup).
 
 def _selection_phase_label(phase):
-    return {"team": "team", "pitch": "pitch", "xi": "Playing XI"}.get(phase, "selection")
+    return {"team": "team", "pitch": "pitch", "xi": "Playing XI",
+            "draft": "draft pick"}.get(phase, "selection")
 
 
 def _mention_for_tg(draft, tg_id):
@@ -2773,7 +2787,18 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
     selected_ids = selection.setdefault("player_ids", [])
     # Surface the user's last saved XI for this team as a one-tap option. Only the
     # players still on the roster are offered (stale picks are dropped).
-    saved_subset = _valid_saved_subset(load_last_xi(query.from_user.id, team_id), players) if team_id else []
+    #
+    # A /cdraft squad has no saved history — it is eleven cards this captain
+    # just drafted — so the one-tap option offers the draft's own batting order
+    # instead. It is a legal XI by construction, so the button selects AND
+    # confirms in a single press.
+    if draft.get("mode") == "cdraft":
+        from services import cdraft_service
+        saved_subset = _valid_saved_subset(
+            cdraft_service.squad_in_batting_order(draft.get("cdraft") or {}, side),
+            players)
+    else:
+        saved_subset = _valid_saved_subset(load_last_xi(query.from_user.id, team_id), players) if team_id else []
     draft.setdefault("saved_xi", {})[side] = saved_subset
     team_code = _team_short_code(team_name, draft.get("league_key"))
     draft.setdefault("xi_started", {})[side] = True
@@ -2785,7 +2810,9 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode="HTML",
             reply_markup=_challenge_xi_player_keyboard(
                 draft_id, side, players, selected_ids,
-                saved_available=bool(saved_subset), team_code=team_code),
+                saved_available=bool(saved_subset), team_code=team_code,
+                saved_label=("✅ Use draft order"
+                             if draft.get("mode") == "cdraft" else None)),
         )
         _store_xi_message_ref(selection, sent)
     except Exception:
@@ -2835,7 +2862,14 @@ async def challenge_xi_useprev_callback(update: Update, context: ContextTypes.DE
     # the draft was rebuilt in between.
     saved_subset = (draft.get("saved_xi") or {}).get(side)
     if saved_subset is None:
-        saved_subset = _valid_saved_subset(load_last_xi(query.from_user.id, team_id), players) if team_id else []
+        if draft.get("mode") == "cdraft":
+            from services import cdraft_service
+            saved_subset = _valid_saved_subset(
+                cdraft_service.squad_in_batting_order(
+                    draft.get("cdraft") or {}, side),
+                players)
+        else:
+            saved_subset = _valid_saved_subset(load_last_xi(query.from_user.id, team_id), players) if team_id else []
     if not saved_subset:
         await query.answer("No saved XI to load for this team yet.", show_alert=True)
         return
