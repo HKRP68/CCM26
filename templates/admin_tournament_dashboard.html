@@ -200,6 +200,12 @@
   <div class="section-card">
     <div class="section-header"><div><h2 class="section-title"><i class="fas fa-star"></i> Tournament Leaders</h2></div></div>
     <div class="leaderboards-grid">
+      {# MVP leads the grid: it is the only board here that ranks the whole
+         tournament rather than one column of it, so it answers "who has
+         mattered most?" before the nine boards that answer "who has the most
+         of one thing?". The line under each name is why they are there. #}
+      <div class="leaderboard-widget"><div class="widget-header"><i class="fas fa-trophy" style="color:var(--accent);"></i><h4>Most Valuable Player</h4></div>
+        {% if leaders.mvp %}{% for r in leaders.mvp %}<div class="lb-row"><span class="lb-name">{{ r.name or 'Player' }}{% if r.team_name %} <small>· {{ r.team_name }}</small>{% endif %}<br><small style="color:var(--muted);">{{ r.matches }} mat · {{ r.bat_runs }} runs · {{ r.bowl_wickets }} wkts{% if r.awards %} · ⭐ {{ r.awards }}{% endif %}</small></span><span class="lb-val">{{ '%g'|format(r.points) }}</span></div>{% endfor %}{% else %}<div class="empty" style="color:var(--muted);font-size:.85rem;">No data yet.</div>{% endif %}</div>
       <div class="leaderboard-widget"><div class="widget-header"><i class="fas fa-baseball-bat-ball" style="color:var(--accent);"></i><h4>Most Runs</h4></div>{{ lb_list(leaders.most_runs, 'bat_runs') }}</div>
       <div class="leaderboard-widget"><div class="widget-header"><i class="fas fa-bullseye" style="color:var(--accent);"></i><h4>Most Wickets</h4></div>{{ lb_list(leaders.most_wickets, 'bowl_wickets') }}</div>
       <div class="leaderboard-widget"><div class="widget-header"><i class="fas fa-6" style="color:var(--accent);"></i><h4>Most Sixes</h4></div>{{ lb_list(leaders.most_sixes, 'bat_sixes') }}</div>

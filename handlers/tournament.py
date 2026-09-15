@@ -3,6 +3,13 @@
 - ``/statstour <player name>`` — a player's stats in the active tournament.
 - ``/tournamentstats`` — Top-10 stat leaderboards with category buttons (only the
   user who opened the command can switch categories).
+
+The first of those categories is 🏅 **MVP**: one impact-point total for a whole
+tournament rather than one column of it, so an all-rounder who keeps winning
+matches with 40-odd and two wickets ranks where they belong. Its own card, with
+the batting/bowling split and the scoring rubric, is ``/mvp``
+(``handlers.tournament_mvp``); the scoring itself lives in
+``services.tournament_mvp``.
 """
 
 import logging
@@ -22,6 +29,7 @@ NO_ACTIVE = "❌ No Challenge League Tournament is currently active."
 
 # (callback key, button label). "runs" is the default view.
 _CATEGORIES = [
+    ("mvp", "🏅 MVP"),
     ("runs", "🏏 Most Runs"),
     ("wkts", "🎯 Most Wickets"),
     ("sixes", "6️⃣ Most Sixes"),
@@ -70,6 +78,11 @@ def _leaders_for(session, tour, category):
         out = [(r.name, r.team_name, f"{v:.1f}") for r, v in leaders["best_strike_rate"]]
     elif category == "econ":
         out = [(r.name, r.team_name, f"{v:.2f}") for r, v in leaders["best_economy"]]
+    elif category == "mvp":
+        # MVP is the one board whose number means nothing on its own, so each
+        # row carries the season behind it — the total is what ranks them, the
+        # line under it is why.
+        out = [(r.name, r.team_name, f"{r.points:g} pts") for r in leaders["mvp"]]
     return out
 
 
@@ -86,6 +99,9 @@ def _render(tour, category, rows):
             rank = medals.get(i, f"{i}.")
             team_s = f" · {html.escape(team)}" if team else ""
             lines.append(f"{rank} {html.escape(name or 'Player')}{team_s} — <b>{val}</b>")
+    if category == "mvp":
+        lines += ["", "<i>Impact points across the whole tournament — "
+                      "/mvp for the full card.</i>"]
     return "\n".join(lines)
 
 
