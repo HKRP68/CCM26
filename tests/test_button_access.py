@@ -85,6 +85,35 @@ class ButtonAccessTests(unittest.TestCase):
         self.assertFalse(button_access.is_shared_callback_data("roster_page_1"))
         self.assertTrue(button_access.is_shared_callback_data("gwjoin_42"))
 
+    def test_cdraft_buttons_are_shared_for_two_captains(self):
+        """The reported "/cdraft user can't join" bug.
+
+        The lobby is posted while handling the HOST's /cdraft, so it registers to
+        the host — and the person who has to press Join is the guest. Each slot
+        card is likewise sent while handling the previous picker's tap, while the
+        snake order hands the next pick to the other captain. handlers/cdraft.py
+        authorises every press against the draft state, so the guard must let
+        both captains through and let the handler decide.
+        """
+        button_access.register_button_owner(100, 200, 111)
+        for data in ("cdj_123456", "cdc_123456", "cdp_123456_0_77"):
+            with self.subTest(data=data):
+                self.assertTrue(button_access.is_shared_callback_data(data))
+                self.assertTrue(button_access.check_callback_owner(
+                    DummyUpdate(DummyQuery(222, data))))
+
+    def test_challenge_xi_controls_are_shared_so_a_restart_cannot_brick_them(self):
+        """These worked only while the in-process registry happened to name the
+        right captain; after a restart it is empty and they fell through to
+        "anyone may press". Each already checks the clicker's telegram id, which
+        is the stronger, restart-proof check."""
+        button_access.register_button_owner(100, 200, 111)
+        for data in ("cl_useprev_1_host", "cl_clear_1_target", "cl_edit_1_host"):
+            with self.subTest(data=data):
+                self.assertTrue(button_access.is_shared_callback_data(data))
+                self.assertTrue(button_access.check_callback_owner(
+                    DummyUpdate(DummyQuery(222, data))))
+
     def test_pbo_invite_buttons_are_shared_for_invitee_validation(self):
         button_access.register_button_owner(100, 200, 111)
 

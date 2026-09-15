@@ -181,11 +181,16 @@ def _slot_text(draft):
 
 
 def _slot_keyboard(draft_id, index, slot):
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            f"{label} {card['name']} ({card['rating']})",
-            callback_data=f"cdp_{draft_id}_{index}_{card['id']}")
-    ] for label, card in zip(_PICK_LABELS, slot["cards"])])
+    rows = [[InlineKeyboardButton(
+        f"{label} {card['name']} ({card['rating']})",
+        callback_data=f"cdp_{draft_id}_{index}_{card['id']}")]
+        for label, card in zip(_PICK_LABELS, slot["cards"])]
+    # The way out of a draft in progress. Without it the only exits are one
+    # captain letting three picks lapse or the setup backstop firing, so two
+    # people who agree to abandon have to sit and wait for one of those.
+    rows.append([InlineKeyboardButton(
+        "❌ Cancel Draft", callback_data=f"cdc_{draft_id}")])
+    return InlineKeyboardMarkup(rows)
 
 
 def _pick_recap(draft, side, chosen, other, auto):
@@ -371,15 +376,20 @@ async def _finish_draft(ctx, draft):
     await _arm_selection_timer(ctx, draft, [draft.get("host_tg_id")], "pitch")
 
 
-async def _abandon(ctx, draft, message):
-    """Tear a draft down and free the chat."""
+async def _abandon(ctx, draft, message=None):
+    """Tear a draft down and free the chat.
+
+    ``message`` is posted to the chat when given. It is omitted by the caller
+    that has already said so by editing the card the button was on — two
+    messages for one cancellation is noise.
+    """
     draft_id = draft.get("draft_id")
     _cancel_pick_timer(ctx, draft_id)
     _cancel_lobby_expiry(ctx, draft_id)
     _release_draft_chat_lock(ctx.bot_data, draft)
     ctx.bot_data.pop(_challenge_team_draft_key(draft_id), None)
     chat_id = draft.get("chat_id")
-    if chat_id is None:
+    if chat_id is None or message is None:
         return
     try:
         await ctx.bot.send_message(chat_id, message, parse_mode="HTML")
@@ -567,7 +577,13 @@ async def cdraft_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cdraft_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """cdc_{draft_id} — the host calls the lobby off."""
+    """cdc_{draft_id} — call the draft off.
+
+    In the lobby that is the host's call alone: nobody has invested anything
+    yet, and the host is the one holding the chat. Once picking has started both
+    captains have, so either may end it. Nobody else in the group can, at either
+    stage.
+    """
     query = update.callback_query
     try:
         draft_id = int(query.data.split("_")[1])
@@ -578,22 +594,54 @@ async def cdraft_cancel_callback(update: Update, context: ContextTypes.DEFAULT_T
     if not draft or draft.get("mode") != "cdraft":
         await query.answer("This draft is no longer active.", show_alert=True)
         return
-    if query.from_user.id != draft.get("host_tg_id"):
-        await query.answer("Only the host can cancel this draft.", show_alert=True)
+
+    turn = draft.get("turn")
+    if turn not in ("join", "draft"):
+        # From the pitch step on, the Challenge League flow owns this draft and
+        # its own selection timers handle an abandoned setup.
+        await query.answer("The draft is done — this match is already being set up.",
+                           show_alert=True)
         return
-    if draft.get("turn") != "join":
-        await query.answer("The draft has already started.", show_alert=True)
+
+    presser = query.from_user.id
+    allowed = [draft.get("host_tg_id")]
+    if turn == "draft":
+        allowed.append(draft.get("target_tg_id"))
+    if presser not in [tg for tg in allowed if tg]:
+        await query.answer(
+            "Only the host can cancel this draft." if turn == "join"
+            else "Only the two captains can cancel this draft.", show_alert=True)
         return
-    _cancel_pick_timer(context, draft_id)
-    _cancel_lobby_expiry(context, draft_id)
-    _release_draft_chat_lock(context.bot_data, draft)
-    context.bot_data.pop(_challenge_team_draft_key(draft_id), None)
+
+    if turn == "join":
+        _cancel_pick_timer(context, draft_id)
+        _cancel_lobby_expiry(context, draft_id)
+        _release_draft_chat_lock(context.bot_data, draft)
+        context.bot_data.pop(_challenge_team_draft_key(draft_id), None)
+        await query.answer("Draft cancelled.")
+        try:
+            await query.edit_message_text("❌ <b>Challenge Draft cancelled.</b>",
+                                          parse_mode="HTML")
+        except Exception:
+            logger.debug("cdraft: could not edit the cancelled lobby", exc_info=True)
+        return
+
+    # Mid-draft. _abandon stops the pick clock, releases the per-chat lock and
+    # drops the draft; the slot card is edited here so its buttons go with it.
+    side = "host" if presser == draft.get("host_tg_id") else "target"
+    who = (draft.get(side) or {}).get("name") or "A captain"
     await query.answer("Draft cancelled.")
+    # The card this button is on IS the live slot, so editing it is what removes
+    # the pick buttons; _abandon then cleans up without posting a second notice.
+    draft.get("cdraft", {}).pop("msg_id", None)
     try:
-        await query.edit_message_text("❌ <b>Challenge Draft cancelled.</b>",
-                                      parse_mode="HTML")
+        await query.edit_message_text(
+            f"❌ <b>Challenge Draft cancelled</b> by {_esc(who)}.\n"
+            f"<i>The chat is free for a new /cdraft.</i>",
+            parse_mode="HTML")
     except Exception:
-        logger.debug("cdraft: could not edit the cancelled lobby", exc_info=True)
+        logger.debug("cdraft: could not edit the cancelled slot card", exc_info=True)
+    await _abandon(context, draft)
 
 
 async def cdraft_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

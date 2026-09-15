@@ -23,7 +23,7 @@ Career Players (`/cmucareer`) are never dealt. The pool is
 | Step | Who | What happens |
 | --- | --- | --- |
 | Lobby | anyone | A second player taps **🙋 Join Draft**. The host can **❌ Cancel** until then. |
-| Slots 1–11 | both | Each slot offers two cards. The captain on the clock takes one; the other goes straight to their opponent. |
+| Slots 1–11 | both | Each slot offers two cards. The captain on the clock takes one; the other goes straight to their opponent. Either captain can **❌ Cancel Draft**. |
 | Pitch | host | The usual surface picker, with the Pitch Report. |
 | Playing XI | both | The eleven drafted cards, with **✅ Use draft order** for one tap. |
 | Toss → match | both | Identical to `/cipl` from here — coin, elect, over by over. |
@@ -32,6 +32,38 @@ A captain has **60 seconds** a pick. Miss it and the bot takes the stronger card
 for you and moves on; miss three in a row and the draft is called off. The
 pick clock is the only clock during the draft — the normal setup timers take
 back over at the pitch step.
+
+Every slot card also carries **❌ Cancel Draft**, so two captains who want out
+don't have to wait for the clock to run them out.
+
+### Who can press what
+
+A draft happens in a busy group, so every button is checked twice: the global
+guard in `services/button_access.py` decides whether a callback is *personal*
+(only the user whose command posted it may press) or *shared*, and a shared
+button's handler then authorises the press itself against the draft state.
+All of `/cdraft`'s buttons are shared, because every one of them is pressed by
+somebody other than the person whose tap posted the card — and the handlers do
+the real check:
+
+| Button | Who may press it |
+| --- | --- |
+| 🙋 **Join Draft** | anyone in the chat — or only the player you replied to, when `/cdraft` was a reply. Never the host. |
+| ❌ **Cancel** (lobby) | the host only |
+| ❌ **Cancel Draft** (mid-draft) | either captain — not the rest of the group |
+| 🅰️ / 🅱️ **pick** | only the captain on the clock, and only for the slot on the clock |
+
+Anyone else gets told whose turn it is, rather than a bare refusal. The same
+holds through the pitch, Playing XI and toss steps, which are the Challenge
+League's own shared buttons.
+
+> This is the one part of the mode that is easy to get wrong, because it is
+> split across two files. A button whose prefix is missing from
+> `SHARED_CALLBACK_PREFIXES` is silently unpressable by the other captain — the
+> bug that made the first release of `/cdraft` impossible to start.
+> `tests/test_cdraft.py::ButtonOwnershipTests` walks the keyboards the flow
+> actually builds and fails if any of them is not shared, so a new button
+> cannot ship with that hole.
 
 ---
 
