@@ -1378,6 +1378,13 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
             if link_match_to_cl_tour(session, draft["cl_tour_match_id"], match.id) is None:
                 raise RuntimeError(
                     f"CL tour match {draft['cl_tour_match_id']} not found")
+        # Same idea for the tournament fixture reserved above: bind it to this
+        # Match in the launch transaction, so a fixture left on 'live' can always
+        # be traced back to the game that was meant to fill it (see
+        # ``league_schedule_service.heal_live_fixtures``).
+        if draft.get("reserved_fixture_id"):
+            from services import league_schedule_service as _lss
+            _lss.bind_fixture_match(session, draft["reserved_fixture_id"], match.id)
         session.commit()
         launch_committed = True
         # The live Match row now exists — only now does the chat belong to an
@@ -2711,6 +2718,15 @@ async def _complete_match(context, mid, state):
                 if state.get("tournament_id"):
                     from services import tournament_service
                     tm = tournament_service.record_tournament_match(session, state)
+                    if tm is None and state.get("reserved_fixture_id"):
+                        # Nothing was recorded, so nothing flipped the fixture to
+                        # 'completed' — hand it back rather than leaving it 'live'
+                        # and showing as in progress for the rest of the season.
+                        from services import league_schedule_service as _lss
+                        _lss.release_fixture(session, state["reserved_fixture_id"])
+                        logger.warning(
+                            "Match %s recorded no tournament result; released "
+                            "fixture %s", mid, state["reserved_fixture_id"])
                     # Injuries (when the tournament has them on) ride back on the
                     # recorded row. Render here, inside the session — the rows are
                     # detached by the time the chat card is built.

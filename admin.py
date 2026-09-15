@@ -16281,6 +16281,11 @@ def admin_tournament_dashboard(tournament_id):
         if now - _tournament_recompute_at.get(t.id, 0) > _TOURNAMENT_RECOMPUTE_TTL:
             try:
                 tournament_service.recompute_tournament(db, t.id)
+                # Also put back any fixture stuck on 'live' after its match ended
+                # without recording a result — otherwise this page reports a
+                # finished match as still in progress for the rest of the season.
+                from services import league_schedule_service
+                league_schedule_service.heal_live_fixtures(db, t.id)
                 db.commit()
                 _tournament_recompute_at[t.id] = now
             except Exception:
@@ -16371,6 +16376,51 @@ def admin_tournament_schedule(tournament_id):
                                league_played=league_played, league_total=league_total)
     finally:
         db.close()
+
+
+@app.route("/tournaments/<int:tournament_id>/points", methods=["POST"])
+@login_required
+def admin_tournament_points(tournament_id):
+    """Dock or award points for one team, with the reason recorded.
+
+    The adjustment is stored in its own column rather than written into
+    ``points``: that one is derived from the recorded matches and is rebuilt
+    every time a result is added or removed, so a hand-edit of it would silently
+    vanish. See ``tournament_service.adjust_points``.
+    """
+    from services import tournament_service
+    db = get_session()
+    try:
+        tt = db.query(TournamentTeam).get(_int_form("team_id"))
+        if not tt or tt.tournament_id != tournament_id:
+            flash("Team not found in this tournament.", "error")
+        else:
+            raw = (request.form.get("points_adjust") or "").strip()
+            try:
+                value = int(raw)
+            except ValueError:
+                flash("Points adjustment must be a whole number, like -2.", "error")
+                return redirect(url_for("admin_tournament_dashboard",
+                                        tournament_id=tournament_id))
+            tournament_service.adjust_points(
+                db, tt.id, set_to=value,
+                note=request.form.get("points_adjust_note") or "")
+            log_admin(db, "tournament_points_adjust", "tournament", tournament_id,
+                      f"{tt.name}: {value:+d}")
+            db.commit()
+            _tournament_recompute_at.pop(tournament_id, None)
+            flash(f"✅ {tt.name}: adjustment set to {value:+d}.", "success")
+    except ValueError as ve:
+        db.rollback()
+        flash(f"⚠️ {ve}", "error")
+    except Exception as e:
+        db.rollback()
+        logger.exception("tournament points adjust failed")
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_tournament_dashboard",
+                            tournament_id=tournament_id) + "#points-table")
 
 
 @app.route("/tournaments/<int:tournament_id>/matches/<int:match_row_id>/delete", methods=["POST"])

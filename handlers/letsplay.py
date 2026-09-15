@@ -1959,6 +1959,14 @@ async def _launch_match(context, draft, decision, winner_side):
             tournament_id=tournament_id,
         )
         session.add(match)
+        # Bind the reserved Lets Play fixture to this Match in the same
+        # transaction, so a fixture left on 'live' can be traced back to the game
+        # that was meant to fill it (see ``league_schedule_service``).
+        session.flush()
+        if draft.get("lpt_reserved_fixture_id"):
+            from services import league_schedule_service as _lss
+            _lss.bind_fixture_match(
+                session, draft["lpt_reserved_fixture_id"], match.id)
         session.commit()
         match_id = match.id
         stadium = match.stadium

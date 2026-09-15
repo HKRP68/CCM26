@@ -420,6 +420,11 @@ ADMIN_MENU_COMMANDS = (
     ("ddrop", "Admin: send a drafted player back to the pool"),
     ("dpublish", "Admin: publish drafted squads as a Challenge League"),
     ("dcancel", "Admin: cancel the draft"),
+    # Running tournament: the points table, and matches played off the bot.
+    ("tpoints", "Admin: dock or award points on the tournament table"),
+    ("tpointsclear", "Admin: clear a team's points adjustment"),
+    ("taddmatch", "Admin: record a fixture from a replied scorecard file"),
+    ("tfixsync", "Admin: un-stick fixtures still showing as live"),
 )
 
 FORWARD_ONLY_MENU_COMMANDS = (
@@ -1840,6 +1845,26 @@ def main():
         app.add_handler(CommandHandler("lptuse", lptuse_handler))
         app.add_handler(CommandHandler("lptdelete", lptdelete_handler))
 
+        # ── Tournament admin: the table, and matches played off the bot ──
+        # One set of commands for whichever tournament is running — Challenge
+        # League or Lets Play — because both sit on the same engine. Bot-admin
+        # only, and deliberately outside the read-only ``ctv_``/``lptv_``
+        # namespaces. Absent from BOT_MENU_COMMANDS for the same reason the
+        # follow-along commands are: both slash menus are at Telegram's
+        # 100-command ceiling.
+        from handlers.tournament_admin import (
+            tpoints_handler, tpointsclear_handler, taddmatch_handler,
+            taddmatch_callback, tfixsync_handler, CB_IMPORT,
+        )
+        app.add_handler(CommandHandler(["tpoints", "tpts"], tpoints_handler))
+        app.add_handler(CommandHandler(["tpointsclear", "tptsclear"],
+                                       tpointsclear_handler))
+        app.add_handler(CommandHandler(["taddmatch", "addmatch"],
+                                       taddmatch_handler))
+        app.add_handler(CallbackQueryHandler(taddmatch_callback,
+                                             pattern=r"^" + CB_IMPORT))
+        app.add_handler(CommandHandler(["tfixsync", "tfixheal"], tfixsync_handler))
+
         # ── Tournament Draft ─────────────────────────────────────────
         # Teams pick their squads live in one bound group chat; the finished
         # squads are published into a Challenge League and play from there.
@@ -2385,6 +2410,20 @@ def main():
                         logger.info(
                             f"Match cleanup: {expired_invites} stale invites "
                             f"expired, {abandoned} stuck matches abandoned")
+
+                    # A tournament fixture goes 'live' when its match starts and
+                    # 'completed' when the result is recorded. Any path that ends
+                    # a match without recording — including the ones just
+                    # abandoned above — leaves it on 'live', where the dashboard
+                    # and every fixture list keep calling a finished match "in
+                    # progress". Put those back to 'scheduled' so they can be
+                    # replayed or entered by hand.
+                    from services import league_schedule_service as _lss
+                    healed = _lss.heal_live_fixtures(s)
+                    if healed:
+                        s.commit()
+                        logger.info("Match cleanup: %d stale tournament "
+                                    "fixture(s) released", len(healed))
                 except Exception:
                     s.rollback()
                     logger.exception("Stuck-match cleanup job failed")

@@ -2647,7 +2647,20 @@ class TournamentTeam(Base):
     lost = Column(Integer, default=0, nullable=False)
     tied = Column(Integer, default=0, nullable=False)
     no_result = Column(Integer, default=0, nullable=False)
+    # Points as the table shows them: the points earned from recorded matches
+    # PLUS ``points_adjust``. Never written by hand — ``recompute_standings``
+    # rebuilds it from the matches every time one is recorded or removed.
     points = Column(Integer, default=0, nullable=False)
+
+    # ── Manual points adjustment ──────────────────────────────────────────
+    # A deduction or award an admin applies on top of what the results earned:
+    # −2 for a slow over rate, +2 for a walkover, and so on. It lives in its own
+    # column precisely because ``points`` is derived — a hand-edit of ``points``
+    # would be wiped by the next recompute, while this survives and is re-applied
+    # every time. ``points_adjust_note`` is the reason, shown wherever the
+    # adjustment is (so a table nobody can explain never appears).
+    points_adjust = Column(Integer, default=0, server_default="0", nullable=False)
+    points_adjust_note = Column(String(200), nullable=True)
 
     # Net run-rate data
     runs_for = Column(Integer, default=0, nullable=False)

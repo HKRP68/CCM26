@@ -42,6 +42,29 @@
         <div class="stat-group"><div class="stat-label-mini">Pts</div><div class="stat-value-pts">{{ tt.points }}</div></div>
       </div>
     </div>
+    {# The adjustment sits under the row it changes, so the number in the table
+       is never unexplained: what was applied, why, and the form to change it. #}
+    <details class="rr-toggle pts-adjust">
+      <summary>
+        {% if tt.points_adjust %}<strong>{{ '%+d'|format(tt.points_adjust) }} pts</strong>
+          — {{ tt.points_adjust_note or 'no reason recorded' }}
+        {% else %}⚖️ Adjust points{% endif %}
+      </summary>
+      <form method="POST" action="{{ url_for('admin_tournament_points', tournament_id=t.id) }}" class="rr-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="team_id" value="{{ tt.id }}">
+        <div class="rr-row">
+          <span class="rr-team">{{ tt.name }}</span>
+          <div><label>Adjustment</label>
+            <input type="number" name="points_adjust" value="{{ tt.points_adjust or 0 }}" step="1" style="width:90px;"></div>
+          <div style="flex:1;min-width:180px;"><label>Reason</label>
+            <input type="text" name="points_adjust_note" maxlength="200"
+                   value="{{ tt.points_adjust_note or '' }}" placeholder="slow over rate" style="width:100%;"></div>
+          <button class="action-btn accent-btn" type="submit" style="width:auto;">Save</button>
+        </div>
+        <p style="color:var(--muted);font-size:.76rem;margin:0;">Added on top of the points the results earned, and re-applied every time the table is rebuilt. Set it to <code>0</code> to clear it.</p>
+      </form>
+    </details>
     {% endfor %}
   </div>
 {% endmacro %}
@@ -142,10 +165,10 @@
 
   <!-- Points table + Schedule -->
   <div class="dashboard-content">
-    <div class="section-card standings-section">
+    <div class="section-card standings-section" id="points-table">
       <div class="section-header"><div>
         <h2 class="section-title"><i class="fas fa-ranking-star"></i> Points Table</h2>
-        <div class="section-subtitle">Top 4 highlighted</div></div>
+        <div class="section-subtitle">Top 4 highlighted · open a row to dock or award points</div></div>
       </div>
       {% if group_tables %}
         {% for g, rows in group_tables %}

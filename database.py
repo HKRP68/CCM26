@@ -646,6 +646,13 @@ def _migrate_add_columns():
     _try_add("tournaments", "kind", "VARCHAR(20) DEFAULT 'challenge'")
     _try_add("tournament_teams", "user_tg_id", "BIGINT")
 
+    # Manual points adjustment: a penalty or award an admin applies on top of
+    # what the results earned. Kept separate from ``points`` because that column
+    # is derived — ``recompute_standings`` rebuilds it from the recorded matches
+    # and would wipe any hand-edit, while this is re-applied on every rebuild.
+    _try_add("tournament_teams", "points_adjust", "INTEGER DEFAULT 0")
+    _try_add("tournament_teams", "points_adjust_note", "VARCHAR(200)")
+
     # Overseas-player rules: league home country + min/max overseas in the XI,
     # and the per-challenge-player overseas flag.
     _try_add("challenge_leagues", "home_country", "VARCHAR(60)")
