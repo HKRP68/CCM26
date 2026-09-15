@@ -602,6 +602,76 @@ class BattingOrderTests(unittest.TestCase):
                             for r in roles[first_bowler:]))
 
 
+class ButtonOwnershipTests(unittest.TestCase):
+    """Every button this mode posts must survive the global owner guard.
+
+    ``services/button_access.py`` blocks any inline button pressed by somebody
+    other than the user whose update posted the message, unless the callback
+    prefix is listed as shared. /cdraft shipped without that listing, and the
+    guest's Join tap was refused — the mode could not start at all.
+
+    Rather than restate a prefix list that can drift, this walks the keyboards
+    the flow actually builds. A button added anywhere in it then fails here
+    instead of shipping unpressable.
+    """
+
+    @staticmethod
+    def _callback_data(markup):
+        return [button.callback_data
+                for row in markup.inline_keyboard for button in row
+                if getattr(button, "callback_data", None)]
+
+    def _assert_all_shared(self, markup, what):
+        from services.button_access import is_shared_callback_data
+        data = self._callback_data(markup)
+        self.assertTrue(data, f"{what} has no callback buttons to check")
+        for value in data:
+            with self.subTest(what=what, callback_data=value):
+                self.assertTrue(
+                    is_shared_callback_data(value),
+                    f"{what} button {value!r} is not in "
+                    f"SHARED_CALLBACK_PREFIXES — the other captain's tap on it "
+                    f"will be refused with 'This button is not for you'")
+
+    def test_the_lobby_and_slot_cards_are_pressable_by_both_captains(self):
+        from handlers import cdraft as module
+        slots = cdraft_service.build_slots(pool=make_pool(), seed=1)
+        self._assert_all_shared(module._lobby_keyboard(123456), "the lobby")
+        for index, slot in enumerate(slots):
+            self._assert_all_shared(module._slot_keyboard(123456, index, slot),
+                                    f"slot {index + 1}")
+
+    def test_the_challenge_league_leg_is_pressable_by_both_captains(self):
+        """Everything from the pitch step on, which /cdraft hands over to."""
+        from handlers import challenge
+        draft = {"draft_id": 123456, "host_team": "@a XI",
+                 "target_team": "@b XI", "vs_bot": False}
+        players = [SimpleNamespace(id=i, name=f"P{i}") for i in range(1, 12)]
+        cases = {
+            "the pitch picker": challenge._pitch_keyboard(123456, allow_deny=False),
+            "the XI prompt": challenge._challenge_xi_keyboard(123456, draft),
+            "the XI picker": challenge._challenge_xi_player_keyboard(
+                123456, "host", players, [], saved_available=True,
+                saved_label="✅ Use draft order"),
+            "the XI picker, mid-selection": challenge._challenge_xi_player_keyboard(
+                123456, "host", players, [p.id for p in players]),
+            "the confirmed XI view": challenge._challenge_xi_postselect_keyboard(
+                123456, "host", confirmed=True),
+            "the unconfirmed XI view": challenge._challenge_xi_postselect_keyboard(
+                123456, "host", confirmed=False),
+            "the match-ready card": challenge._challenge_start_match_keyboard(123456),
+        }
+        for what, markup in cases.items():
+            self._assert_all_shared(markup, what)
+
+    def test_a_slot_card_carries_a_way_out_of_the_draft(self):
+        from handlers import cdraft as module
+        slot = cdraft_service.build_slots(pool=make_pool(), seed=1)[0]
+        data = self._callback_data(module._slot_keyboard(123456, 0, slot))
+        self.assertEqual(sum(1 for d in data if d.startswith("cdc_")), 1)
+        self.assertEqual(sum(1 for d in data if d.startswith("cdp_")), 2)
+
+
 class FakeBot:
     """Just enough Telegram to run the handler: every message gets an id, and
     edits are recorded against it."""
@@ -689,14 +759,18 @@ def _fake_user(tg_id, uid):
 class CdraftFlowTests(unittest.IsolatedAsyncioTestCase):
     """The command, the join and eleven picks, driven through the real handlers."""
 
-    HOST_TG, GUEST_TG, CHAT = 111, 222, -100
+    # STRANGER is a third person in the group who is not in the draft. Once the
+    # buttons are shared with the owner guard, these handlers are the only thing
+    # keeping them out, so every one of them is checked against this id.
+    HOST_TG, GUEST_TG, STRANGER_TG, CHAT = 111, 222, 333, -100
 
     def setUp(self):
         from handlers import cdraft as module
         self.module = module
         self.context = FakeContext()
         users = {self.HOST_TG: _fake_user(self.HOST_TG, 1),
-                 self.GUEST_TG: _fake_user(self.GUEST_TG, 2)}
+                 self.GUEST_TG: _fake_user(self.GUEST_TG, 2),
+                 self.STRANGER_TG: _fake_user(self.STRANGER_TG, 3)}
         self._patches = [
             patch.object(module, "get_session",
                          lambda: SimpleNamespace(close=lambda: None)),
@@ -720,14 +794,28 @@ class CdraftFlowTests(unittest.IsolatedAsyncioTestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    async def _open_lobby(self):
+    async def _open_lobby(self, invite_tg=None):
+        """Open a lobby. ``invite_tg`` sends /cdraft as a reply to that person,
+        which is how a draft is opened for one named player."""
+        reply_to = None
+        if invite_tg is not None:
+            reply_to = SimpleNamespace(from_user=SimpleNamespace(
+                id=invite_tg, username=f"u{invite_tg}",
+                first_name=f"U{invite_tg}", is_bot=False))
         update = SimpleNamespace(
-            effective_message=FakeMessage(self.CHAT),
+            effective_message=FakeMessage(self.CHAT, reply_to=reply_to),
             effective_chat=SimpleNamespace(id=self.CHAT, type="supergroup"),
             effective_user=SimpleNamespace(id=self.HOST_TG, username="u111",
                                            first_name="U111", is_bot=False))
         await self.module.cdraft_handler(update, self.context)
         return update
+
+    async def _cancel(self, tg_id):
+        draft = self._draft()
+        query = FakeQuery(f"cdc_{draft['draft_id']}", tg_id, self.CHAT)
+        await self.module.cdraft_cancel_callback(
+            SimpleNamespace(callback_query=query), self.context)
+        return query
 
     def _draft(self):
         """The live draft dict — found under the Challenge League's own key,
@@ -794,9 +882,12 @@ class CdraftFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(draft["target_tg_id"], self.GUEST_TG)
         self.assertEqual(draft["target_team"], "@u222 XI")
         self.assertIn("Slot 1/11", self.context.bot.sent[-1].text)
-        # The host is on the clock, and only their two cards are offered.
-        buttons = self.context.bot.sent[-1].reply_markup.inline_keyboard
-        self.assertEqual(len(buttons), 2)
+        # Exactly the slot's two cards are offered, plus the way out.
+        data = [b.callback_data
+                for row in self.context.bot.sent[-1].reply_markup.inline_keyboard
+                for b in row]
+        self.assertEqual(sum(1 for d in data if d.startswith("cdp_")), 2)
+        self.assertEqual(sum(1 for d in data if d.startswith("cdc_")), 1)
         # The abandoned-setup backstop must not be left running over an active
         # draft — eleven picks can outlast it.
         self.assertFalse(self.context.job_queue.get_jobs_by_name(
@@ -905,21 +996,95 @@ class CdraftFlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_host_can_cancel_a_lobby_nobody_joined(self):
         from handlers.challenge import _challenge_draft_chat_key
         await self._open_lobby()
-        draft_id = self._draft()["draft_id"]
-        query = FakeQuery(f"cdc_{draft_id}", self.HOST_TG, self.CHAT)
-        await self.module.cdraft_cancel_callback(
-            SimpleNamespace(callback_query=query), self.context)
+        query = await self._cancel(self.HOST_TG)
         self.assertIn("cancelled", query.edits[-1])
         self.assertNotIn(_challenge_draft_chat_key(self.CHAT), self.context.bot_data)
 
-    async def test_only_the_host_can_cancel(self):
+    async def test_only_the_host_can_cancel_the_lobby(self):
         await self._open_lobby()
-        draft_id = self._draft()["draft_id"]
-        query = FakeQuery(f"cdc_{draft_id}", self.GUEST_TG, self.CHAT)
-        await self.module.cdraft_cancel_callback(
-            SimpleNamespace(callback_query=query), self.context)
+        for presser in (self.GUEST_TG, self.STRANGER_TG):
+            with self.subTest(presser=presser):
+                query = await self._cancel(presser)
+                self.assertTrue(query.answers[-1][1])
+                self.assertEqual(self._draft()["turn"], "join")
+
+    async def test_either_captain_can_cancel_a_draft_in_progress(self):
+        from handlers.challenge import _challenge_draft_chat_key
+        for canceller in (self.HOST_TG, self.GUEST_TG):
+            with self.subTest(canceller=canceller):
+                self.context = FakeContext()
+                await self._open_lobby()
+                await self._join()
+                await self._pick(self.HOST_TG)      # a slot or two in
+                query = await self._cancel(canceller)
+                self.assertIn("cancelled", query.edits[-1].lower())
+                # The chat is free again and the draft is gone.
+                self.assertNotIn(_challenge_draft_chat_key(self.CHAT),
+                                 self.context.bot_data)
+                self.assertFalse([k for k in self.context.bot_data
+                                  if k.startswith("challenge_team_draft_")])
+                # ...and the pick clock went with it.
+                self.assertFalse(self.context.job_queue.jobs)
+
+    async def test_a_bystander_cannot_cancel_a_draft_in_progress(self):
+        await self._open_lobby()
+        await self._join()
+        query = await self._cancel(self.STRANGER_TG)
+        self.assertTrue(query.answers[-1][1])
+        self.assertEqual(self._draft()["turn"], "draft")
+
+    async def test_cancelling_says_it_once_not_twice(self):
+        """The slot card the button sits on is edited; a second chat message
+        saying the same thing would just be noise."""
+        await self._open_lobby()
+        await self._join()
+        before = len(self.context.bot.sent)
+        await self._cancel(self.GUEST_TG)
+        self.assertEqual(len(self.context.bot.sent), before)
+
+    async def test_the_draft_cannot_be_cancelled_once_the_match_is_being_set_up(self):
+        await self._open_lobby()
+        await self._join()
+        draft = self._draft()
+        state = draft["cdraft"]
+        tg_for = {"host": self.HOST_TG, "target": self.GUEST_TG}
+        while not cdraft_service.is_complete(state):
+            await self._pick(tg_for[cdraft_service.current_side(state)])
+        self.assertEqual(draft["turn"], "complete")
+        query = await self._cancel(self.HOST_TG)
+        self.assertTrue(query.answers[-1][1])
+        self.assertIn("already being set up", query.answers[-1][0])
+
+    async def test_a_bystander_cannot_make_a_pick(self):
+        """Once the owner guard shares these buttons, this check is the only
+        thing keeping the rest of the group off the draft."""
+        await self._open_lobby()
+        await self._join()
+        state = self._draft()["cdraft"]
+        query = await self._pick(self.STRANGER_TG)
+        self.assertTrue(query.answers[-1][1])
+        self.assertEqual(state["index"], 0)
+        self.assertEqual(state["squads"]["host"], [])
+        self.assertEqual(state["squads"]["target"], [])
+
+    async def test_an_invited_lobby_admits_only_the_invitee(self):
+        await self._open_lobby(invite_tg=self.GUEST_TG)
+        query = await self._join(tg_id=self.STRANGER_TG)
         self.assertTrue(query.answers[-1][1])
         self.assertEqual(self._draft()["turn"], "join")
+        await self._join(tg_id=self.GUEST_TG)
+        self.assertEqual(self._draft()["turn"], "draft")
+
+    async def test_an_open_lobby_admits_the_first_taker(self):
+        await self._open_lobby()
+        await self._join(tg_id=self.STRANGER_TG)
+        draft = self._draft()
+        self.assertEqual(draft["turn"], "draft")
+        self.assertEqual(draft["target_tg_id"], self.STRANGER_TG)
+        # ...and the seat is then taken.
+        query = await self._join(tg_id=self.GUEST_TG)
+        self.assertTrue(query.answers[-1][1])
+        self.assertEqual(draft["target_tg_id"], self.STRANGER_TG)
 
     async def test_a_second_challenge_cannot_open_over_a_live_draft(self):
         await self._open_lobby()

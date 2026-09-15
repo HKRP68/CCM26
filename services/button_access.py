@@ -127,6 +127,26 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # only the guest may deny — so both sides must reach those handlers.
     "cl_pitch_",
     "cl_denymatch_",
+    # The XI picker's own controls. These are sent while handling that captain's
+    # own cl_xi_ tap, so the registry names them — until a restart empties it,
+    # after which they fall through to "unregistered, anyone may press". Each
+    # already checks the clicker against the side's telegram id, which is the
+    # stronger, restart-proof check, so state the rule here rather than leaning
+    # on process memory for it.
+    "cl_useprev_",
+    "cl_clear_",
+    "cl_edit_",
+    # /cdraft (Challenge Draft): the lobby's Join and Cancel, and the per-slot
+    # pick. Every one of them is pressed by somebody OTHER than the user whose
+    # update posted the card — the lobby is sent while handling the host's
+    # /cdraft but it is the guest who joins, and each slot card is sent while
+    # handling the previous picker's tap while the snake order hands the next
+    # pick to the other captain. A slot posted by the auto-pick job has no
+    # originating user at all. handlers/cdraft.py authorises every press against
+    # the draft state by telegram id, which is what actually decides here.
+    "cdj_",
+    "cdc_",
+    "cdp_",
     "pbo_accept_",
     "pbo_decline_",
     "pboacc_",
