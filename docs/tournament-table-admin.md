@@ -120,7 +120,46 @@ account for reads as a bug, so it is never shown without the explanation.
 
 `/taddmatch <match number>`, sent as a **reply** to a text file (or to a plain
 message) holding the scorecard. The match number is the one on `/ctfixtures` or
-`/lptfixtures`.
+`/lptfixtures`; put the tournament's id first (`/taddmatch #8 42`) when two
+tournaments are running.
+
+### The bot's own file needs no editing
+
+The quickest path is the file that already exists: **`MatchNo<id>.txt`**, the
+scorecard this bot archives for every match it plays. Reply to it and it is read
+as it is — column-aligned tables, `Total:` lines, extras, `Did Not Bat`, fall of
+wickets and all. Both writers are covered:
+`services/match_webapp_service.py::_build_text_scorecard` (Mini App, `/cipl`,
+Super Over) and `handlers/match.py::_text_innings_block` (`/cric`).
+
+```
+RAJASTHAN CAMELBACK CHARGERS INNINGS  —  @someone
+-------------------------------------------------------------------------
+Batsman               Status                      R    B   4s   6s      SR
+-------------------------------------------------------------------------
+Abhishek Sharma       Caught                     11   13    1    0   84.60
+Amelia Kerr           not out                    34   24    2    1  141.70
+
+Total: 147/5 (20.0 Overs)
+
+-------------------------------------------------------------------------
+Bowler                        O     M     R     W    Econ
+-------------------------------------------------------------------------
+Glenn Maxwell                 4     0    34     1    8.50
+```
+
+Two things about that file are worth naming:
+
+* **The innings header carries no score.** It names the team; the `Total:` line
+  below it carries the runs, wickets and overs. Both forms are read.
+* **A Super Over rides in the same file** as two further innings between the
+  same two sides. The match is the first two: the Super Over never reaches the
+  scoreline, the net run rate or the batting and bowling figures — exactly how
+  the bot records one itself — and the `Result:` line is what carries its
+  winner. The preview says so rather than dropping half the file silently. A
+  *third* side after the second innings is refused, not guessed at.
+
+### Or write it by hand
 
 ```
 Innings 1: Mumbai Indians 187/5 (20)
@@ -151,19 +190,29 @@ Deliberately forgiving, because a person types this.
 
 * **Batting** — `Name runs (balls)`, optionally `6x4` / `2x6` (or two bare
   numbers) and a dismissal. Also `Name, runs, balls, fours, sixes, out`, comma
-  or pipe separated. `runs (balls)` is what tells a name from a figure, so the
-  parentheses are required in the compact form.
-* **Bowling** — `Name O-M-R-W`, `Name O M R W`, or the comma form. Maidens are
-  read and discarded; there is no column for them.
+  or pipe separated. Also the column-aligned `Name | Status | R B 4s 6s SR`
+  above. `runs (balls)` is what tells a name from a figure, so the parentheses
+  are required in the compact form.
+* **Bowling** — `Name O-M-R-W`, `Name O M R W`, the comma form, or the
+  column-aligned `Name | O M R W Econ`. Maidens are read and discarded; there is
+  no column for them.
+* The two column-aligned forms are the same shape — a name then five numbers —
+  so only the table they sit under tells them apart, and they are read from the
+  **raw** line: the width of the gap is what says where a name ends and its
+  status begins.
 * **Not out** — `not out`, `n.o.`, or a trailing `*` on the runs. Anything else
   counts as out: assuming not-out would quietly inflate batting averages.
 * **Innings header** — `Innings 1:` / `[2nd Innings]` / `1st Innings`, or the
   label on its own line above the scoreline. An **unlabelled** header must show
   wickets (`187/5`), because `Bravo 151 (20)` is indistinguishable from a batter
   who faced 20 balls.
+* **Score** — on the innings header, or on a `Total: 147/5 (20.0 Overs)` line
+  inside the innings. A run rate or anything else in those brackets is read
+  past. An innings that ends with no score at all is refused by name.
 * Overs may be `(20)`, `in 20 overs` or `19.3` in the usual cricket notation.
-  `Extras`, `Total`, `Fall of wickets`, `Did not bat` and similar lines are
-  skipped, so a whole card can be pasted without editing it down.
+  `Extras`, `Toss`, `Stadium`, `Player of the Match` and similar lines are
+  skipped; `Fall of Wickets` and `Did Not Bat` skip everything under them until
+  the next section. So a whole card pastes in without editing it down.
 * A line that is meant to be a player but can't be read stops the import and
   names itself, rather than dropping that player silently.
 
