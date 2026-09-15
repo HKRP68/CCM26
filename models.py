@@ -2857,6 +2857,42 @@ class TournamentInjury(Base):
     )
 
 
+class TournamentMatchReminder(Base):
+    """One nudge sent about one unplayed fixture — the log, and the cooldown.
+
+    A reminder tags people and lands in their DMs, so it is exactly the feature
+    that becomes spam the third time it fires. This row is what stops that: the
+    sender checks the last reminder for a fixture and refuses to send another
+    inside the cooldown window unless it is overridden on purpose.
+
+    It doubles as the audit trail. ``sent_by_tg_id`` is whoever ran the command
+    and ``chat_id`` the group it was announced in, so "who pinged the whole
+    league at 3am" has an answer. Rows are kept after the fixture is played —
+    the fixture's own row is what gets deleted with the tournament.
+    """
+    __tablename__ = "tournament_match_reminders"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="CASCADE"),
+                           nullable=False, index=True)
+    tournament_match_id = Column(Integer, ForeignKey("tournament_matches.id", ondelete="CASCADE"),
+                                 nullable=False, index=True)
+    # Who sent it, and where it was announced. ``chat_id`` is NULL for a
+    # reminder sent from a DM (the DMs still go out; there is just no group).
+    sent_by_tg_id = Column(BigInteger, nullable=True, index=True)
+    chat_id = Column(BigInteger, nullable=True)
+    # Delivery outcome, for the report and for "did this actually reach anyone?".
+    recipients = Column(Integer, default=0, nullable=False)
+    delivered = Column(Integer, default=0, nullable=False)
+    failed = Column(Integer, default=0, nullable=False)
+    sent_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    __table_args__ = (
+        # The cooldown lookup: "when was this fixture last reminded about?"
+        Index("ix_tournament_reminder_fixture", "tournament_match_id", "sent_at"),
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════
 # FANTASY LEAGUE — admin-controlled weekly fantasy cricket competition
 # ══════════════════════════════════════════════════════════════════════

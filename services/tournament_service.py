@@ -752,7 +752,7 @@ def _better_figure(new_w, new_r, cur_w, cur_r):
     return new_r < cur_r
 
 
-def _player_identity(line):
+def player_identity(line):
     """Stable per-player key for tournament-wide aggregation.
 
     Aggregation is by **player on a team**, never by the controlling user — in a
@@ -769,6 +769,10 @@ def _player_identity(line):
     if pid is not None:
         return ("p", pid)
     return ("n", (line.get("name") or "").strip().lower())
+
+
+# Kept as the in-module spelling the older call sites use.
+_player_identity = player_identity
 
 
 def _apply_line(acc, line):
@@ -1405,14 +1409,14 @@ def _stat_rows(session, tournament_id):
         tournament_id=int(tournament_id)).all()
 
 
-def _innings_lines(session, tournament_id):
-    """Yield every per-match player scorecard line for the tournament.
+def match_scorecards(session, tournament_id):
+    """Yield ``(TournamentMatch, [line, ...])`` for every match with a scorecard.
 
-    Unlike the aggregated ``TournamentPlayerStats`` rows (one per player), these
-    are *per innings*, so a single batsman's separate knocks (e.g. 120, 118 and
-    110 across three matches) each surface as their own entry. Used to build the
-    per-innings Highest Score and Best Bowling Figures boards, which should rank
-    individual performances rather than collapse each player to a single best.
+    The match row comes with the lines because some boards need the *context* a
+    bare line doesn't carry — who won, which side each player was on — and
+    re-reading the match per line would be a query per player. A scorecard that
+    won't parse, or that isn't a list of dicts, is skipped rather than allowed to
+    take a whole leaderboard down with it.
     """
     tid = int(tournament_id)
     matches = (session.query(TournamentMatch)
@@ -1429,11 +1433,22 @@ def _innings_lines(session, tournament_id):
         if not isinstance(lines, list):
             logger.warning("scorecard_json on tournament_match %s is not a list", m.id)
             continue
-        for line in lines:
-            # Defensive: a stored scorecard could contain non-dict entries; skip
-            # them so a single malformed line can't crash the leaderboard build.
-            if isinstance(line, dict):
-                yield line
+        # Defensive: a stored scorecard could contain non-dict entries; drop them
+        # so a single malformed line can't crash the leaderboard build.
+        yield m, [line for line in lines if isinstance(line, dict)]
+
+
+def _innings_lines(session, tournament_id):
+    """Yield every per-match player scorecard line for the tournament.
+
+    Unlike the aggregated ``TournamentPlayerStats`` rows (one per player), these
+    are *per innings*, so a single batsman's separate knocks (e.g. 120, 118 and
+    110 across three matches) each surface as their own entry. Used to build the
+    per-innings Highest Score and Best Bowling Figures boards, which should rank
+    individual performances rather than collapse each player to a single best.
+    """
+    for _match, lines in match_scorecards(session, tournament_id):
+        yield from lines
 
 
 def _innings_highest_scores(session, tournament_id, limit):
@@ -1518,6 +1533,7 @@ def batting_average(row):
 
 def stat_leaders(session, tournament_id, limit=10):
     """Return a dict of leaderboard lists for the dashboard."""
+    from services import tournament_mvp  # imported here: it imports this module
     rows = _stat_rows(session, tournament_id)
     tour = session.query(Tournament).get(int(tournament_id))
     min_sr = (tour.min_balls_for_sr if tour else 20) or 0
@@ -1562,4 +1578,8 @@ def stat_leaders(session, tournament_id, limit=10):
         "top_average": [(r, round(batting_average(r), 2)) for r in top(
             lambda r: batting_average(r) or 0.0,
             filt=lambda r: batting_average(r) is not None)],
+        # The one board that ranks a whole tournament rather than one column:
+        # batting, bowling, results and Player of the Match awards in a single
+        # impact-point total. See ``services.tournament_mvp``.
+        "mvp": tournament_mvp.mvp_table(session, tournament_id, limit=limit),
     }

@@ -968,6 +968,10 @@ async def start_handler(update, context):
         "/cttable /ctfixtures /ctteams - Tournament table, schedule (done matches struck through), field\n"
         "/ctinjuries - Who is ruled out injured, and for how many more matches 🚑\n"
         "/clsd <team> - One team's schedule: standing, form, next matches, results\n"
+        "/mvp - Tournament Most Valuable Player: batting + bowling + wins + POTM "
+        "awards in one impact-point total\n"
+        "/remindmatch [team] [vs team] - Nudge two teams to play what they still "
+        "owe: posts here and DMs both sides' owners (admins, or your own team)\n"
         "/pitchstats /ps [pitch] - What each pitch actually does in Lets Play & "
         "League matches: runs/over, wickets/over, bat-first vs chasing win %, "
         "and which approaches earn\n"
@@ -1587,6 +1591,30 @@ def main():
             ["clsd", "clschedule", "ctsd"], clsd_handler))
         app.add_handler(CallbackQueryHandler(clsd_pick_callback,
                                              pattern=r"^ctsd_"))
+
+        # ── /mvp — Most Valuable Player across the whole tournament ──
+        # The one board that ranks a tournament rather than one column of it:
+        # batting, bowling, wins and Player of the Match awards in a single
+        # impact-point total, with Overall / Batting / Bowling tabs. Reads the
+        # live Lets Play tournament too when no Challenge League one is running.
+        from handlers.tournament_mvp import mvp_handler, mvp_callback
+        app.add_handler(CommandHandler(
+            ["mvp", "tourmvp", "ctmvp"], mvp_handler))
+        app.add_handler(CallbackQueryHandler(mvp_callback, pattern=r"^mvp_"))
+
+        # ── /remindmatch — nudge two teams to play what they still owe ──
+        # Posts in the chat it was run in AND DMs every owner/co-owner of both
+        # sides. Gated: bot admins may chase any fixture, a team owner only
+        # their own. Always previews first — tagging a dozen people is not a
+        # thing to do by typo — and a reminded fixture goes quiet for 12 hours.
+        from handlers.match_reminders import (
+            remindmatch_handler, remindmatch_callback,
+        )
+        app.add_handler(CommandHandler(
+            ["remindmatch", "remindmatches", "matchreminder", "nudge"],
+            remindmatch_handler))
+        app.add_handler(CallbackQueryHandler(remindmatch_callback,
+                                             pattern=r"^mrem_"))
         app.add_handler(CommandHandler(["cmuleaderboard", "leaderboard", "lb", "top"], leaderboard_handler))
         app.add_handler(CommandHandler(["myprofile", "profile", "me"], myprofile_handler))
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
