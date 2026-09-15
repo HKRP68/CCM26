@@ -1797,6 +1797,26 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
                 safe_track(session, winner_uid, "super_over_won", 1)
         except Exception:
             logger.exception("Super Over quest tracking failed (%s)", mid)
+
+        # ── Pitch record ──
+        # A tie returns before the ordinary finalize, so this is the only place
+        # a Super-Over-decided match can reach /pitchstats. The main match's
+        # state is what gets recorded — the tie-breaker over is a separate
+        # contest and does not belong in a surface's run rate — with the Super
+        # Over's winner standing in as the result. record_match is idempotent
+        # on match_id, so this is safe even if the main path also wrote a row.
+        try:
+            from services import pitch_stats
+            main_state = so.get("main_state") or {}
+            if m and main_state:
+                pitch_stats.record_match(
+                    session, m, main_state,
+                    {"tie": False, "winner": win["name"], "loser": lose["name"],
+                     "winner_id": winner_uid,
+                     "margin_type": margin_type, "margin": margin})
+        except Exception:
+            logger.exception("Super Over pitch stats recording failed (%s)", mid)
+
         session.commit()
     except Exception:
         session.rollback()

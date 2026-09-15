@@ -2761,6 +2761,19 @@ async def _complete_match(context, mid, state):
             except Exception:
                 logger.exception("cipl match-end quest tracking failed for %s", mid)
 
+            # ── Pitch record ──
+            # What this surface did, for /pitchstats. Written here because the
+            # two things it needs — the balls each innings actually lasted and
+            # the over-by-over approach duel — live only in the state, which
+            # cleanup_state takes away as soon as this returns. Records nothing
+            # for a practice match against the AI captain.
+            try:
+                from services import pitch_stats
+                if match:
+                    pitch_stats.record_match(session, match, state, result)
+            except Exception:
+                logger.exception("pitch stats recording failed for %s", mid)
+
             session.commit()
         except Exception:
             session.rollback()

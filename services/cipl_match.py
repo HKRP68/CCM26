@@ -2129,6 +2129,11 @@ def simulate_over(state):
             "bowler": bowler.get("name", ""),
             "runs": over_runs,
             "wickets": over_wkts,
+            # Legal balls actually bowled this over. The over is usually whole,
+            # but the last one of an innings often is not, and services.
+            # pitch_stats rates every approach per six balls — so it needs the
+            # denominator rather than assuming one.
+            "balls": balls_this_over,
             "combo": combo_name,
             # The over's ball marks. Kept only because the match analysis report
             # lists the duel over by over; ``last_over_timeline`` above holds the
@@ -2432,6 +2437,9 @@ def end_first_innings(state):
     state["inn1_runs"] = state["total_runs"]
     state["inn1_wickets"] = state["total_wickets"]
     state["inn1_overs"] = format_overs(state)
+    # The same figure as a ball count. ``inn1_overs`` is a display string
+    # ("19.4") and The Hundred's is a ball count, so neither is arithmetic.
+    state["inn1_balls"] = balls_bowled(state)
     state["inn1_bat_team"] = state["bat_team_name"]
     state["inn1_bowl_team"] = state["bowl_team_name"]
     # Alias used by the Mini App scorecard (services.match_webapp_service.build_scorecard)

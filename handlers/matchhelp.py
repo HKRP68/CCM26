@@ -232,6 +232,9 @@ PAGES = [
         _pitch_block() + "\n\n"
         "<i>The pitch does not reset at the interval — it carries its wear into "
         "the chase. Read the 2nd-innings line before you decide at the toss.</i>"
+        "\n\n<b>/pitchstats</b> shows what each surface has <i>actually</i> done "
+        "in real matches — runs and wickets per over, the bat-first vs chasing "
+        "split, and which approaches are earning on it."
     )),
     ("momentum", "📈", "Momentum & the chase", _momentum_block),
     ("squad", "💎", "Squad, order & traits", lambda: (
