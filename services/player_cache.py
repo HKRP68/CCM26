@@ -42,6 +42,11 @@ def _player_to_dict(p):
     return {
         "id": p.id,
         "name": p.name,
+        # Edition, and the base card it descends from (NULL on a base card).
+        # Both are what /cdraft's allowed-version setting is applied to, so it
+        # can filter the pool without going back to the database.
+        "version": getattr(p, "version", None),
+        "parent_player_id": getattr(p, "parent_player_id", None),
         "country": p.country,
         "category": p.category,
         "rating": p.rating,

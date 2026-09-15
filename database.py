@@ -741,6 +741,12 @@ def _migrate_add_columns():
     _try_add("game_config", "match_style", "VARCHAR(20) DEFAULT 'telegram' NOT NULL")
     _try_add("game_config", "challenge_max_overs", "INTEGER DEFAULT 2 NOT NULL")
     _try_add("game_config", "allow_same_team_challenge", "BOOLEAN DEFAULT FALSE NOT NULL")
+    # Challenge Draft (/cdraft) pool. The defaults match the CDRAFT_* env
+    # fallbacks, so an existing deployment drafts exactly as it did before the
+    # settings were addable. NULL versions means every edition is allowed.
+    _try_add("game_config", "cdraft_rating_min", "INTEGER DEFAULT 78 NOT NULL")
+    _try_add("game_config", "cdraft_rating_max", "INTEGER DEFAULT 88 NOT NULL")
+    _try_add("game_config", "cdraft_versions_json", "TEXT")
     # Rookie mode — the membership gate (services/rookie_gate.py). Defaults to
     # OFF so an existing deployment keeps its open-to-everyone behaviour until
     # an admin turns the gate on from the website.

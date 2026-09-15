@@ -356,6 +356,9 @@ GROUP_ONLY_COMMANDS = frozenset({
     # DM would only promise an error. It also keeps them out of the private
     # menu, which is one command short of Telegram's 100-per-scope ceiling.
     "pick", "dboard", "dsquad", "dqueue", "dsearch",
+    # Challenge Draft. It needs a second player to tap Join, so it refuses in a
+    # private chat outright.
+    "cdraft",
 })
 
 # Commands that only make sense one-to-one with the bot: deep-link entry
@@ -376,6 +379,15 @@ PRIVATE_ONLY_COMMANDS = frozenset({
     # (they answer about you, in a chat full of other people). /fantasy itself
     # stays in the group menu.
     "myfantasy", "fantasyleaderboard", "fantasystats",
+    # Career Player identity edit. It waits on a TYPED name (see
+    # docs/career-name-and-country-changes.md), which is the same reason
+    # /redeem and /feedback are here — a typed capture in a busy group catches
+    # whatever else is being said. Nothing is lost: it still runs anywhere, the
+    # ✏️ button under the career card opens the same flow, and its parent
+    # /cmucareer stays in the group menu. Moving it also frees the one group
+    # slot /cdraft needs; that menu sits exactly at Telegram's 100-per-scope
+    # ceiling, and going over makes setMyCommands reject the whole list.
+    "cmuchange",
 })
 
 # The stat and inventory readouts that answer in DM only. Their handlers are
@@ -398,6 +410,7 @@ ADMIN_MENU_COMMANDS = (
     ("tourallow", "Admin: allow a user to create tours"),
     ("tourblock", "Admin: block a user from creating tours"),
     ("tourallowlist", "Admin: list users allowed to create tours"),
+    ("cdraftset", "Admin: set the /cdraft rating range and allowed editions"),
     ("testwpm", "Admin: Mini App match diagnostic"),
     # Tournament Draft. A dozen commands is a lot for a player menu that is
     # already at Telegram's ceiling — but the admin bucket is published only into
@@ -525,6 +538,7 @@ BOT_MENU_COMMANDS = (
     ("catch", "Catch coins using your purse"),
     ("bal", "Check your catch-game balance"),
     ("cm", "Start a two-wicket challenge match"),
+    ("cdraft", "Draft an XI pick-by-pick, then play the match"),
     ("challengeipl", "Challenge another user to an IPL match"),
     ("challengebbl", "Challenge another user to a BBL match"),
     ("challengeint", "Challenge another user to an international match"),
@@ -957,6 +971,9 @@ async def start_handler(update, context):
         "/purse /p - Check balance\n"
         "/catch [bet] [height] - Risk purse coins in the catching game\n"
         "/cm @user - Two-wicket challenge mode\n"
+        "/cdraft - Challenge Draft: someone joins, then you both build an XI "
+        "pick by pick from the full player pool (11 slots, two same-role cards "
+        "a slot — you take one, your opponent gets the other), and play it out\n"
         "/letsplay /lp @user - Reply or tag to play 20 overs with your own roster\n"
         "/lptour @user - Play your Lets Play Tournament fixture (official result)\n"
         "/lpt - Lets Play Tournament hub: table, fixtures, teams\n"
@@ -1691,6 +1708,10 @@ def main():
         app.add_handler(CommandHandler("tourblock", tourblock_handler))
         app.add_handler(CommandHandler("tourallowlist", tourallowlist_handler))
 
+        # ── Admin: the Challenge Draft player pool ───────────────────
+        from handlers.cdraft_admin import cdraftset_handler
+        app.add_handler(CommandHandler("cdraftset", cdraftset_handler))
+
         # ── Admin: manually seed a player card file_id ───────────────
         app.add_handler(CommandHandler("setcardid", setcardid_handler))
 
@@ -1737,6 +1758,17 @@ def main():
         app.add_handler(CommandHandler("catch", catch_handler))
         app.add_handler(CommandHandler("bal", bal_handler))
         app.add_handler(CommandHandler("cm", challenge_handler))
+        # /cdraft — Challenge Draft. Two players build an XI pick by pick from
+        # the master card pool, then the match runs as a Challenge League
+        # fixture (the cl_* / cipl_* callbacks below take it from the pitch on).
+        from handlers.cdraft import (
+            cdraft_handler, cdraft_join_callback, cdraft_cancel_callback,
+            cdraft_pick_callback,
+        )
+        app.add_handler(CommandHandler(["cdraft", "challengedraft"], cdraft_handler))
+        app.add_handler(CallbackQueryHandler(cdraft_join_callback, pattern=r"^cdj_"))
+        app.add_handler(CallbackQueryHandler(cdraft_cancel_callback, pattern=r"^cdc_"))
+        app.add_handler(CallbackQueryHandler(cdraft_pick_callback, pattern=r"^cdp_"))
         # /change <out> <in> — swap a Playing XI player. Runs in group 0 (before
         # the group-1 league command regex, which safely ignores it). The router
         # serves both the Challenge League (/cm, /cipl) and /letsplay drafts.

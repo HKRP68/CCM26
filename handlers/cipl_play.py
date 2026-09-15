@@ -424,9 +424,15 @@ def build_xi_from_draft(session, draft, side):
     selected_ids = [int(pid) for pid in selection.get("player_ids", [])]
     if not selected_ids:
         return []
-    rows = (session.query(ChallengePlayer)
-            .filter(ChallengePlayer.id.in_(selected_ids))
-            .all())
+    if draft.get("mode") == "cdraft":
+        # A /cdraft squad lives on the draft itself — there are no
+        # ChallengePlayer rows to query.
+        from services import cdraft_service
+        rows = cdraft_service.squad_cards(draft.get("cdraft") or {}, side)
+    else:
+        rows = (session.query(ChallengePlayer)
+                .filter(ChallengePlayer.id.in_(selected_ids))
+                .all())
     by_id = {int(r.id): r for r in rows}
     ordered = [by_id[pid] for pid in selected_ids if pid in by_id]
     return [cipl_match.cp_to_player_dict(cp) for cp in ordered]
