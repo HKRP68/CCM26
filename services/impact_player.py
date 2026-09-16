@@ -85,6 +85,28 @@ def summary(state):
     return summaries
 
 
+# How an Impact substitute is marked wherever a name is shown. One constant so
+# the Telegram scorecard, the HTML analysis and the Mini App cannot drift into
+# three different suffixes.
+IMPACT_SUFFIX = " -IP"
+
+
+def is_impact(player):
+    """True for a player who came on as an Impact substitute."""
+    return bool(isinstance(player, dict) and player.get("impact_replacement"))
+
+
+def display_name(player, name=None):
+    """Player name with the ``-IP`` suffix when they came on as a substitute.
+
+    ``name`` overrides the dict's own name for callers that have already
+    formatted or escaped it.
+    """
+    base = name if name is not None else (player or {}).get("name", "")
+    base = str(base or "")
+    return base + IMPACT_SUFFIX if is_impact(player) else base
+
+
 def is_active(player):
     return not isinstance(player, dict) or player.get("active", True) is not False
 
@@ -365,6 +387,16 @@ def cipl_use(state, user_id, in_roster_id, out_roster_id, next_action,
         return False, "Pick a substitute from outside your Playing XI.", None
     if not outgoing:
         return False, opts.get("blocked_note") or opts["message"], None
+
+    # Mark the substitute BEFORE they are filed anywhere. apply_to_identity_list
+    # stamps its own copy for the XI list, but batting_order gets this dict —
+    # and every surface that renders a name (the chat scorecard, the summary
+    # card image) reads the order, not the XI. Without this they show the
+    # substitute as an ordinary player.
+    incoming = dict(incoming)
+    incoming["active"] = True
+    incoming["impact_replacement"] = True
+    incoming["replaced_roster_id"] = out_roster_id
 
     xi_key = f"{side}_xi"
     if apply_to_identity_list(state.get(xi_key) or [], out_roster_id, incoming) is None:

@@ -10335,6 +10335,7 @@ def _top_performers_for_summary(arena_state):
                 continue
             batter = {
                 "name": player.get("name", "—"),
+                "impact": bool(player.get("impact_replacement")),
                 "rating": player.get("rating", "—"),
                 "team": team_name,
                 "runs": int(row.get("runs", 0) or 0),
@@ -10360,6 +10361,7 @@ def _top_performers_for_summary(arena_state):
             wickets = int(row.get("wickets", 0) or 0)
             bowler = {
                 "name": player.get("name", "—"),
+                "impact": bool(player.get("impact_replacement")),
                 "rating": player.get("rating", "—"),
                 "team": team_name,
                 "overs": f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6),

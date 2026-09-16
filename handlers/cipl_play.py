@@ -490,13 +490,37 @@ async def _delete_prev_over(context, state):
     state["action_msg_id"] = None
 
 
-def _with_view_match(state, keyboard):
-    """Append the View Match row so EVERY over message carries the link."""
+def _with_view_match(state, keyboard, extras=True):
+    """Append the View Match + Impact Player row to EVERY over message.
+
+    Both live here rather than only on the over summary because this runs for
+    the bowler prompt and both approach prompts too — which is exactly when a
+    captain wants the swap. It also means the button is never more than one
+    message away, even though the over summary carrying it is deleted when the
+    next over starts.
+    """
     kb = list(keyboard or [])
-    extra = _miniapp_row(state)
-    if extra:
-        kb += extra
+    if extras:
+        kb += _view_and_impact_rows(state)
     return kb
+
+
+def _view_and_impact_rows(state, mid=None):
+    """``[[📊 View Match, 🔄 Impact Player]]`` — one row where both fit.
+
+    The Impact button sits beside View Match rather than on its own row. When
+    no Mini App host is configured _miniapp_row returns None, so it falls back
+    to a row of its own instead of disappearing with it.
+    """
+    rows = [list(r) for r in (_miniapp_row(state) or [])]
+    impact = _impact_button(state, mid)
+    if impact is None:
+        return rows
+    if rows:
+        rows[0].append(impact)
+    else:
+        rows = [[impact]]
+    return rows
 
 
 async def _clear_action_reminder(context, state):
@@ -510,7 +534,7 @@ async def _clear_action_reminder(context, state):
             pass
 
 
-async def _new_action_message(context, state, text, keyboard):
+async def _new_action_message(context, state, text, keyboard, extras=True):
     await _clear_action_reminder(context, state)
     # Remove any previous action/picker message BEFORE sending the new one. A
     # re-prompt (a /rcl resume, or the edit-in-place fallback in
@@ -527,7 +551,7 @@ async def _new_action_message(context, state, text, keyboard):
         except ValueError:
             pass
         state["action_msg_id"] = None
-    kb = _with_view_match(state, keyboard)
+    kb = _with_view_match(state, keyboard, extras=extras)
     sent = await context.bot.send_message(
         state["chat_id"], text, parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(kb) if kb else None)
@@ -537,10 +561,10 @@ async def _new_action_message(context, state, text, keyboard):
     return sent
 
 
-async def _edit_action_message(context, state, text, keyboard):
+async def _edit_action_message(context, state, text, keyboard, extras=True):
     await _clear_action_reminder(context, state)
     mid_msg = state.get("action_msg_id")
-    kb = _with_view_match(state, keyboard)
+    kb = _with_view_match(state, keyboard, extras=extras)
     markup = InlineKeyboardMarkup(kb) if kb else None
     if mid_msg:
         try:
@@ -550,7 +574,7 @@ async def _edit_action_message(context, state, text, keyboard):
             return
         except Exception:
             pass
-    await _new_action_message(context, state, text, keyboard)
+    await _new_action_message(context, state, text, keyboard, extras=extras)
 
 
 async def _post_tracked(context, state, text, keyboard=None):
@@ -583,13 +607,12 @@ def _miniapp_row(state):
         return None
 
 
-def _impact_row(state, mid=None):
-    """The "Impact Player" button, or None when neither side has one left.
+def _impact_button(state, mid=None):
+    """The Impact Player button, or None when neither side has a swap left.
 
-    Appended to the over summary and the innings-break card — the two places
-    both captains are looking between overs. The button is shown while *either*
-    side still has a swap available; ownership is enforced on the callback,
-    because a shared message cannot have a per-viewer keyboard.
+    Shown while *either* captain still has one: the message is shared, so it
+    cannot carry a per-viewer keyboard. Ownership is settled on the callback —
+    whoever taps it gets their own side's picker (see _impact_guard).
     """
     try:
         usage = (state.get("impact_players") or {}).get("usage") or {}
@@ -599,21 +622,16 @@ def _impact_row(state, mid=None):
                for uid in sides if uid is not None and uid != bot_uid):
             return None
         mid = mid if mid is not None else state.get("match_id")
-        return [[InlineKeyboardButton("🔄 Impact Player",
-                                      callback_data=f"cipl_imp_{mid}")]]
+        return InlineKeyboardButton("🔄 Impact Player",
+                                    callback_data=f"cipl_imp_{mid}")
     except Exception:
         logger.exception("cipl impact-player button build failed")
         return None
 
 
 def _between_overs_row(state, mid=None):
-    """View Match + Impact Player, for the messages posted between overs."""
-    rows = _miniapp_row(state) or []
-    rows = [list(r) for r in rows]
-    extra = _impact_row(state, mid)
-    if extra:
-        rows.extend(extra)
-    return rows or None
+    """View Match + Impact Player, for messages posted between overs."""
+    return _view_and_impact_rows(state, mid) or None
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1859,11 +1877,9 @@ async def _bot_consider_impact(context, mid, state):
         if not ok:
             return
         await _ss(context, mid, state)
-        await _post_tracked(
-            context, state,
-            f"🔄 <b>Impact Player — {html.escape(str(rec.get('team_name') or 'Bot'))}</b>\n"
-            f"⬅️ {html.escape(str(rec.get('out_player') or ''))}   "
-            f"➡️ <b>{html.escape(str(rec.get('in_player') or ''))}</b>")
+        # No standalone post: _impact_summary_lines carries every swap onto the
+        # next over summary, where it stays next to the scoreboard instead of
+        # scrolling away in a busy chat.
     except Exception:
         logger.exception("bot impact player swap failed for match %s", mid)
 
@@ -1897,7 +1913,10 @@ async def _bot_take_the_ball(context, mid, state):
             f"hands the ball to <b>{html.escape(str(bowler['name']))}</b> "
             f"({cipl_match.display_rating(bowler, 'bowl_rating')}) for "
             f"{_unit_word(state)} {state['current_over']}…")
-    await _new_action_message(context, state, text, None)
+    # No extras on this one: it is the bot's "hands the ball to X" note, not a
+    # prompt anyone acts on, and the human's approach prompt that follows it
+    # carries View Match + Impact Player.
+    await _new_action_message(context, state, text, None, extras=False)
     await asyncio.sleep(BOT_THINK_DELAY)
     await _prompt_bowl_approach(context, mid, state)
 
@@ -2453,6 +2472,49 @@ def _user_id_for_tg(state, tg_id):
     return None
 
 
+def _impact_unavailable_text(opts, next_action):
+    """Why the swap is off the table right now, in words that say what to do.
+
+    ``cipl_options`` already explains "already used" and "no substitutes"; the
+    one it cannot phrase well is a captain arriving between the approach picks
+    and the next bowler prompt, where the generic "only between overs" line
+    reads as a refusal rather than "wait a moment".
+    """
+    # Already used, or this IS a legal window and the blocker is something
+    # concrete (no substitutes left) — cipl_options phrases both better.
+    if opts.get("used") or opts.get("legal_break"):
+        return opts.get("message", "Impact Player is unavailable.")
+    if next_action == A_COMPLETED:
+        return "That match is over."
+    return ("⏳ The over is being bowled — tap 🔄 Impact Player, or send "
+            "/impact again, once the next bowler prompt appears.")
+
+
+async def _send_impact_step1(context, state, mid, owner_tg, opts):
+    """Post step 1 of the picker — who comes off.
+
+    Shared by the 🔄 button and /impact so the two entry points cannot drift,
+    and so /impact lands straight on the picker instead of replying with a
+    second button to tap.
+    """
+    rows, row = [], []
+    for p in opts["replaceable_players"]:
+        row.append(InlineKeyboardButton(
+            f"{p['name']} ({cipl_match.display_rating(p)})",
+            callback_data=_imp_cb("cipl_impo_", owner_tg, mid,
+                                  p["roster_id"])))
+        if len(row) == 2:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+    rows.extend(_impact_cancel_kb(mid, owner_tg))
+    await _post_tracked(
+        context, state,
+        f"🔄 <b>Impact Player</b> — {html.escape(str(opts['legal_break']))}\n\n"
+        f"Step 1 of 3: who comes <b>off</b>?", keyboard=rows)
+    await _ss(context, mid, state)
+
+
 async def cipl_impact_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Step 1 — who leaves the field."""
     q = update.callback_query
@@ -2466,23 +2528,7 @@ async def cipl_impact_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if not state:
             return
         await q.answer()
-        owner_tg = q.from_user.id
-        rows, row = [], []
-        for p in opts["replaceable_players"]:
-            row.append(InlineKeyboardButton(
-                f"{p['name']} ({cipl_match.display_rating(p)})",
-                callback_data=_imp_cb("cipl_impo_", owner_tg, mid,
-                                      p["roster_id"])))
-            if len(row) == 2:
-                rows.append(row); row = []
-        if row:
-            rows.append(row)
-        rows.extend(_impact_cancel_kb(mid, owner_tg))
-        await _post_tracked(
-            context, state,
-            f"🔄 <b>Impact Player</b> — {html.escape(str(opts['legal_break']))}\n\n"
-            f"Step 1 of 3: who comes <b>off</b>?", keyboard=rows)
-        await _ss(context, mid, state)
+        await _send_impact_step1(context, state, mid, q.from_user.id, opts)
 
 
 async def cipl_impact_out_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2674,29 +2720,37 @@ async def impact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     if not msg or not chat:
         return
-    mid = await _find_cipl_match_in_chat(context, chat.id)
-    if not mid:
+    # _find_cipl_match_in_chat returns (match_id, state) — unpack it. Binding
+    # the tuple to `mid` made the truthiness check pass and then looked up a
+    # match id that cannot exist, so /impact answered "no live match" every
+    # single time. See rcl_handler for the same call done right.
+    mid, state = await _find_cipl_match_in_chat(context, chat.id)
+    if mid is None or not is_cipl_state(state):
         await msg.reply_text("No live over-by-over match in this chat.")
         return
-    state = await _gs(context, mid)
-    if not state:
-        await msg.reply_text("No live over-by-over match in this chat.")
-        return
-    user_id = _user_id_for_tg(state, update.effective_user.id)
-    if user_id is None:
+    if _user_id_for_tg(state, update.effective_user.id) is None:
         await msg.reply_text("Only the two captains can use Impact Player.")
         return
-    na = await _get_next_action(context, mid)
-    opts = impact_player.cipl_options(state, user_id, na)
-    if not opts.get("can_use"):
-        await msg.reply_text(opts.get("message", "Impact Player is unavailable."))
-        return
-    await msg.reply_text(
-        "🔄 <b>Impact Player</b> is available — tap to pick.",
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(
-            [[InlineKeyboardButton("🔄 Impact Player",
-                                   callback_data=f"cipl_imp_{mid}")]]))
+    # Everything else under the match lock, and re-read there: /rcl, the
+    # inactivity timer and the other captain's approach tap all take the same
+    # lock, so this cannot read a half-finished over.
+    async with get_match_lock(mid):
+        state = await _gs(context, mid)
+        if not is_cipl_state(state):
+            await msg.reply_text("No live over-by-over match in this chat.")
+            return
+        user_id = _user_id_for_tg(state, update.effective_user.id)
+        if user_id is None:
+            await msg.reply_text("Only the two captains can use Impact Player.")
+            return
+        na = await _get_next_action(context, mid)
+        opts = impact_player.cipl_options(state, user_id, na)
+        if not opts.get("can_use"):
+            await msg.reply_text(_impact_unavailable_text(opts, na),
+                                 parse_mode="HTML")
+            return
+        await _send_impact_step1(context, state, mid,
+                                 update.effective_user.id, opts)
 
 
 # Celebration clips/messages are posted on a background task so a slow Telegram
@@ -2915,16 +2969,42 @@ def _render_over_summary(state, summary):
 
 
 def _impact_summary_lines(state):
-    """One line per Impact swap, so the change of XI is visible on the board."""
+    """Impact Player status for the over summary.
+
+    One line per swap already made, then a line naming who still has theirs —
+    the one-per-team rule is otherwise invisible until a captain taps the button
+    and is told they have already used it. This is also where the AI captain's
+    swap is reported, so it rides with the scoreboard instead of scrolling away
+    as a message of its own.
+    """
     out = []
     for rec in impact_player.summary(state):
         out.append(
             f"🔄 <i>Impact Player ({html.escape(str(rec.get('team_name') or 'Team'))}): "
             f"{html.escape(str(rec.get('in_player') or ''))} for "
             f"{html.escape(str(rec.get('out_player') or ''))}</i>")
+
+    remaining = _impact_remaining_names(state)
+    if remaining:
+        out.append("🔄 <i>Impact Player still available: "
+                   + ", ".join(html.escape(n) for n in remaining) + "</i>")
+
     if out:
         out.insert(0, "")
     return out
+
+
+def _impact_remaining_names(state):
+    """Team names that have not used their Impact Player yet."""
+    usage = (state.get("impact_players") or {}).get("usage") or {}
+    names = []
+    for uid, name in ((state.get("bat_team_id"), state.get("bat_team_name")),
+                      (state.get("bowl_team_id"), state.get("bowl_team_name"))):
+        if uid is None:
+            continue
+        if not (usage.get(str(uid)) or {}).get("used"):
+            names.append(str(name or "Team"))
+    return names
 
 
 def _sym_key(s):
@@ -2937,7 +3017,9 @@ def _sym_key(s):
 def _bat_line(player, bat_stats):
     st = bat_stats.get(str(player["roster_id"]), {})
     star = "" if st.get("out") else "*"
-    return (f"{player['name']} {st.get('runs', 0)}{star} "
+    # Escaped: this goes into an HTML message, and a player name is user-set.
+    name = html.escape(impact_player.display_name(player))
+    return (f"{name} {st.get('runs', 0)}{star} "
             f"({st.get('balls', 0)}b, {st.get('fours', 0)}×4, {st.get('sixes', 0)}×6)")
 
 
@@ -2962,7 +3044,7 @@ def _compact_bat_line(player, bat_stats):
     """``Rohit Sharma 56(27)*`` — runs(balls), trailing ``*`` while not out."""
     st = bat_stats.get(str(player["roster_id"]), {})
     star = "" if st.get("out") else "*"
-    return (f"{html.escape(str(player['name']))} "
+    return (f"{html.escape(impact_player.display_name(player))} "
             f"{st.get('runs', 0)}({st.get('balls', 0)}){star}")
 
 
@@ -3582,7 +3664,8 @@ def _summary_rows(bat_stats, bat_xi, bowl_stats, bowl_xi, bpu=6):
         st = bat_stats.get(str(p["roster_id"]), {})
         if st.get("balls", 0) > 0 or st.get("out"):
             bats.append({"name": p["name"], "runs": st.get("runs", 0),
-                         "balls": st.get("balls", 0), "out": st.get("out", False)})
+                         "balls": st.get("balls", 0), "out": st.get("out", False),
+                         "impact": impact_player.is_impact(p)})
     bats.sort(key=lambda b: b["runs"], reverse=True)
     bowls = []
     for p in bowl_xi or []:
@@ -3592,7 +3675,8 @@ def _summary_rows(bat_stats, bat_xi, bowl_stats, bowl_xi, bpu=6):
             # The Hundred shows bowler workload in balls; T20 in overs.balls.
             overs = f"{balls}b" if bpu != 6 else f"{balls // 6}.{balls % 6}"
             bowls.append({"name": p["name"], "wickets": st.get("wickets", 0),
-                          "runs": st.get("runs", 0), "overs": overs})
+                          "runs": st.get("runs", 0), "overs": overs,
+                          "impact": impact_player.is_impact(p)})
     bowls.sort(key=lambda b: b["wickets"], reverse=True)
     return bats[:4], bowls[:4]
 

@@ -26,7 +26,9 @@ Playing XI comes on for someone in it.
 | Batting position | `impact_player.cipl_batting_slots` / `insert_into_batting_order` |
 | Innings-break order rebuild | `impact_player.rebuild_batting_order`, called from `cipl_match.end_first_innings` |
 | Substitute pool (bench) | `state["bat_bench"]` / `state["bowl_bench"]`, filled at launch |
-| Chat UI | `handlers/cipl_play.py` — `cipl_imp*` callbacks, `_impact_row`, `/impact` |
+| Chat UI | `handlers/cipl_play.py` — `cipl_imp*` callbacks, `_impact_button`, `/impact` |
+| Where the button rides | `_with_view_match` → `_view_and_impact_rows` — every prompt, beside View Match |
+| Marking a substitute | `impact_player.is_impact` / `display_name` / `IMPACT_SUFFIX` |
 | Button ownership | `services/button_access.py` — `cipl_imp_` in `SHARED_CALLBACK_PREFIXES`, the picker prefixes in `OWNER_RULES` |
 | AI captain | `services/bot_captain.py` — `pick_impact_swap` |
 
@@ -79,6 +81,45 @@ A side that swaps while **bowling** has no batting order yet. The choice is
 stored on `impact_players.usage[uid]["bat_position"]` and applied when
 `end_first_innings` builds one.
 
+### Where the button lives
+
+`_with_view_match` appends View Match to **every** prompt message (it is what
+`_new_action_message` and `_edit_action_message` both run), so the Impact button
+goes there too, on the same row. That puts it on the bowler prompt and both
+approach prompts — the whole window in which a swap is legal — rather than only
+on the over summary, which is deleted the moment the next over starts.
+
+Pass `extras=False` to either sender for a message that is not a prompt anyone
+acts on. The bot's "hands the ball to X" note does this: it is informational and
+transient, and the human's approach prompt right behind it carries the button.
+`tests/test_bot_match_flow.py` pins that.
+
+`/impact` opens step 1 of the picker directly, through the same
+`_send_impact_step1` helper the button uses, so the two entry points cannot
+drift. It takes the match lock and re-reads state inside it, so it can never act
+on a half-finished over.
+
+> **The bug this replaced:** `impact_handler` bound the `(match_id, state)` tuple
+> from `_find_cipl_match_in_chat` to one name. A non-empty tuple is truthy, so
+> the guard passed and the lookup then used a match id that cannot exist —
+> `/impact` answered "No live over-by-over match in this chat" *every time, in
+> every chat*. The callbacks were tested; the command was not.
+> `tests/test_impact_command.py` now covers it.
+
+### One swap per team, for the whole match
+
+The record is `state["impact_players"]["usage"][str(user_id)]` — inside the match
+state, keyed by user id, seeded for both innings' team ids by `usage_for`. Every
+reload path preserves it:
+
+- JSON persistence — keys are `str(user_id)` precisely so the round-trip is lossless;
+- `end_first_innings` never touches `impact_players`;
+- `cipl_resume` / `_resume_locked` only re-read and re-render, so `/rcl` cannot refill it;
+- every confirm runs inside `get_match_lock(mid)`, so two fast taps serialise.
+
+`OneUseSurvivesEverythingTests` in `tests/test_cipl_impact_player.py` drives each
+of those for real rather than asserting on the dict.
+
 ### Button ownership
 
 Two messages, two different rules — and getting either backwards is a
@@ -121,6 +162,27 @@ everything that reads it for *who is on the field* filters through
 
 Things that read the XI for *who contributed* (`_summary_rows`,
 `_innings_scorecard`) deliberately keep both, filtered by balls faced/bowled.
+
+### Marking a substitute on the scorecards
+
+A substitute carries `impact_replacement: True`. `cipl_use` stamps that on the
+dict **before** filing it, so it lands on `batting_order` as well as the XI list
+— every text scorecard renders from the order, not the XI, so a flag that only
+reached the XI would show up nowhere.
+
+| Surface | How it shows | Where |
+|---|---|---|
+| Telegram text | `-IP` after the name | `_bat_line` / `_compact_bat_line` → `impact_player.display_name` |
+| Summary card image | the whole row turns **green** | `match_summary_card._draw_rows`, flag carried by `_normalise_batters` / `_normalise_bowlers` |
+| HTML analysis + Mini App scorecard tab | `-IP` after the name | `match_webapp_service.build_scorecard`, which feeds both |
+| Mini App scorecard rows | a green `-IP` tag | `app.js:impactTag` + `.tb-row-impact` |
+
+The image rows are 4-tuples `(name, value1, value2, is_impact)`; `_draw_rows`
+still accepts the old 3-tuple shape so an un-updated caller degrades to "no
+tint" rather than an IndexError mid-render.
+
+**Changing `app.js` or `style.css` means bumping the `?v=` query on both tags in
+`static/cricket/index.html`** — Telegram's WebView otherwise pins the old file.
 
 ---
 
@@ -197,6 +259,11 @@ python -m pytest tests/ -q          # full suite
 * `tests/test_impact_button_ownership.py` — that the other captain is not locked
   out of the shared 🔄 button, that the picker stays personal even with an empty
   registry, and that the callback data round-trips inside Telegram's 64-byte cap.
+* `tests/test_impact_command.py` — `/impact` opens the picker at every approach
+  step, each captain gets their own side, and the button sits beside View Match
+  on every prompt.
+* `tests/test_impact_scorecard_marking.py` — the impact flag survives the card's
+  tuple flattening, and the card still renders.
 * `tests/test_impact_player.py` — the pre-existing Mini App suite; it must stay
   green, since `match_webapp_service` now aliases the shared helpers.
 
