@@ -1,16 +1,18 @@
 """`/cdraftset` — the Challenge Draft player pool, from Telegram.
 
-Which cards `/cdraft` deals is two settings: the **rating band** the ladder runs
-across, and the **editions** (``Player.version``) that may be dealt at all. Both
+Which cards `/cdraft` deals is three settings: the **rating band** every slot
+draws its own target from, how far apart the **two cards in one slot** may be,
+and the **editions** (``Player.version``) that may be dealt at all. All three
 live in ``GameConfig`` and are editable on the admin website's Match Gameplay
-page; this is the same two settings from a DM, so an owner can retune a draft
+page; this is the same settings from a DM, so an owner can retune a draft
 without opening the panel.
 
 ```text
 /cdraftset                        the current pool, and whether it can be dealt
-/cdraftset min 80                 the rating floor  (slot 11's target)
-/cdraftset max 92                 the rating ceiling (slot 1's target)
+/cdraftset min 80                 the band's floor
+/cdraftset max 92                 the band's ceiling
 /cdraftset range 80 92            both at once
+/cdraftset spread 1               how far apart the two cards in a slot may be
 /cdraftset versions Base, Legend  only these editions may be dealt
 /cdraftset versions all           clear the list — every edition allowed
 /cdraftset reset                  back to the defaults
@@ -39,9 +41,10 @@ NOT_ADMIN = "⛔ Only bot admins can use this command."
 USAGE = (
     "🎯 <b>/cdraftset</b> — the Challenge Draft pool\n\n"
     "<code>/cdraftset</code> — show the current pool\n"
-    "<code>/cdraftset min 80</code> — rating floor (slot 11)\n"
-    "<code>/cdraftset max 92</code> — rating ceiling (slot 1)\n"
+    "<code>/cdraftset min 80</code> — the band's floor\n"
+    "<code>/cdraftset max 92</code> — the band's ceiling\n"
     "<code>/cdraftset range 80 92</code> — both at once\n"
+    "<code>/cdraftset spread 1</code> — ± OVR between the two cards in a slot\n"
     "<code>/cdraftset versions Base, Legend</code> — only these editions\n"
     "<code>/cdraftset versions all</code> — every edition allowed\n"
     "<code>/cdraftset reset</code> — back to the defaults"
@@ -129,7 +132,9 @@ def _pool_report(session):
     lines = [
         "🎯 <b>Challenge Draft pool</b>",
         "═════════════════════════════",
-        f"📊 <b>Rating:</b> {settings['rating_min']}–{settings['rating_max']} OVR",
+        f"📊 <b>Rating:</b> {settings['rating_min']}–{settings['rating_max']} OVR "
+        f"<i>(each slot draws at random inside this band)</i>",
+        f"🎚️ <b>Pair spread:</b> ±{settings['pair_spread']} OVR within a slot",
         f"🃏 <b>Editions:</b> "
         + (", ".join(versions) if versions else "all (nothing restricted)"),
         "",
@@ -189,6 +194,7 @@ async def cdraftset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "reset":
             row.cdraft_rating_min = cdraft_service.RATING_BOTTOM
             row.cdraft_rating_max = cdraft_service.RATING_TOP
+            row.cdraft_pair_spread = cdraft_service.PAIR_SPREAD
             row.cdraft_versions_json = None
             _commit(session)
             await message.reply_text(
@@ -222,6 +228,26 @@ async def cdraftset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _commit(session)
             await message.reply_text(
                 f"✅ Draft rating set to <b>{low}–{high} OVR</b>.\n\n"
+                + _pool_report(session), parse_mode="HTML")
+            return
+
+        if action == "spread":
+            try:
+                spread = int(str(args[1]).strip())
+            except (IndexError, ValueError):
+                await message.reply_text(
+                    f"❌ Give a whole number from "
+                    f"{cdraft_service.SPREAD_LIMIT_LOW} to "
+                    f"{cdraft_service.SPREAD_LIMIT_HIGH}.\n\n" + USAGE,
+                    parse_mode="HTML")
+                return
+            spread = max(cdraft_service.SPREAD_LIMIT_LOW,
+                         min(cdraft_service.SPREAD_LIMIT_HIGH, spread))
+            row.cdraft_pair_spread = spread
+            _commit(session)
+            await message.reply_text(
+                f"✅ The two cards in a slot must now be within "
+                f"<b>{spread} OVR</b> of each other.\n\n"
                 + _pool_report(session), parse_mode="HTML")
             return
 

@@ -1275,11 +1275,19 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         bowl_team_name = target_team if bat_is_host else host_team
 
         # Coloured marker + short code for the broadcast-style scorecard card.
+        # The draft's own team_codes map wins where it has an entry: a league
+        # builds that map with this very resolver (so it changes nothing there),
+        # while a mode that invents its team names — /cdraft's "Shanka Draft XI"
+        # — can supply a code a person recognises instead of the initials the
+        # resolver would derive from it.
         league_key = draft.get("league_key")
+        draft_codes = draft.get("team_codes") or {}
         bat_team_code, bat_team_emoji = _resolve_team_identity(
             bat_team_name, league_key, session)
         bowl_team_code, bowl_team_emoji = _resolve_team_identity(
             bowl_team_name, league_key, session)
+        bat_team_code = draft_codes.get(bat_team_name) or bat_team_code
+        bowl_team_code = draft_codes.get(bowl_team_name) or bowl_team_code
 
         # ── Challenge League Tournament tagging ──
         # An official tournament match is recorded against the active tournament.
@@ -1540,6 +1548,18 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         # Carry CL Tour identity so the series score updates when the match ends.
         state["cl_tour_id"] = draft.get("cl_tour_id")
         state["cl_tour_match_id"] = draft.get("cl_tour_match_id")
+        # What this match IS, for the announcement card. Only league_key used to
+        # come across, and only for a bot match, so every card announced itself
+        # as IPL whatever it actually was.
+        state["league_key"] = draft.get("league_key")
+        state["league_name"] = draft.get("league_name")
+        state["tournament_name"] = (draft.get("tournament_name")
+                                    if draft.get("is_tournament") else None)
+        state["cl_tour_match_no"] = draft.get("cl_tour_match_no")
+        state["cl_tour_match_count"] = draft.get("cl_tour_match_count")
+        # A mode that is not a league names itself (e.g. Challenge Draft).
+        if draft.get("mode") == "cdraft":
+            state["mode_name"] = draft.get("league_name") or "Challenge Draft"
     # /ciplbot: unranked practice, and the AI captain owns one side's turns.
     # This clears the tournament/tour identity set just above, so a practice
     # match can never be recorded against a real competition.
@@ -1549,8 +1569,8 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
                        difficulty=level_for_match(context.bot_data,
                                                   draft.get("host_user_id")))
         state["user_names"][str(BOT_TG_ID_)] = "🤖 Bot"
-        # Remembered so the Rematch button reopens the same league.
-        state["league_key"] = draft.get("league_key")
+        # (league_key, which the Rematch button reads to reopen the same
+        # league, is carried for every match above.)
     await _ss(context, match.id, state, next_action=A_PICK_CIPL_BOWLER)
     # Clear the pre-match setup chatter (keep the toss result) and pin a polished
     # announcement carrying the Watch Match button.
@@ -1589,6 +1609,31 @@ async def _cleanup_setup_and_announce(context, state, draft):
     except Exception:
         # No pin rights (bot not an admin) — the announcement still stands.
         logger.info("cipl announcement pin skipped (no rights) for chat %s", chat_id)
+
+
+def _competition_line(state):
+    """The headline naming what this match actually is.
+
+    This used to be the literal "High-Voltage IPL Battle", which meant a /cbbl
+    match, a tournament final and a Challenge Draft all announced themselves as
+    IPL. Each kind of match gets a shape that reads naturally rather than being
+    forced through one template — and a league keeps the exact wording it always
+    had, so /cipl does not change at all.
+    """
+    league = html.escape(str(state.get("league_name") or "").strip())
+    if state.get("mode_name"):
+        return f"🎯 <b>{html.escape(str(state['mode_name']))}</b>"
+    if state.get("tournament_name"):
+        return f"🏆 <b>{html.escape(str(state['tournament_name']))}</b>"
+    if state.get("cl_tour_id"):
+        no, count = state.get("cl_tour_match_no"), state.get("cl_tour_match_count")
+        series = f"{league} Tour" if league else "Challenge League Tour"
+        if no and count:
+            return f"🏆 <b>{series}</b> · Match {no}/{count}"
+        return f"🏆 <b>{series}</b>"
+    # A league, or anything that reached here without naming itself. "IPL" is
+    # the historical default and the overwhelmingly common case.
+    return f"⚡ <b>High-Voltage {league or 'IPL'} Battle</b> ⚡"
 
 
 def _match_start_announcement(state):
@@ -1631,7 +1676,7 @@ def _match_start_announcement(state):
     # carry it.
     return (
         f"🏆 <b>{bat_code}</b> 🆚 <b>{bowl_code}</b>\n"
-        f"⚡ <b>High-Voltage IPL Battle</b> ⚡\n"
+        f"{_competition_line(state)}\n"
         f"{rule}\n"
         f"🏟️ {stadium} • {overs_label}\n"
         f"🌱 <b>Pitch:</b> {pitch}\n"

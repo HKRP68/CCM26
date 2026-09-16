@@ -13681,6 +13681,8 @@ def admin_match_settings():
                                                          cdraft_service.RATING_BOTTOM))
                 cdraft_rating_max = int(request.form.get("cdraft_rating_max",
                                                          cdraft_service.RATING_TOP))
+                cdraft_pair_spread = int(request.form.get("cdraft_pair_spread",
+                                                          cdraft_service.PAIR_SPREAD))
             except ValueError:
                 flash("Challenge Draft ratings must be whole numbers.", "error")
                 return redirect(url_for("admin_match_settings"))
@@ -13689,6 +13691,9 @@ def admin_match_settings():
             cdraft_rating_max = max(lo, min(hi, cdraft_rating_max))
             if cdraft_rating_min > cdraft_rating_max:
                 cdraft_rating_min, cdraft_rating_max = cdraft_rating_max, cdraft_rating_min
+            cdraft_pair_spread = max(cdraft_service.SPREAD_LIMIT_LOW,
+                                     min(cdraft_service.SPREAD_LIMIT_HIGH,
+                                         cdraft_pair_spread))
             # One catalogue read, reused by the tick-list match below and the
             # feasibility warning after the save.
             cdraft_rows = _cdraft_pool_rows(db)
@@ -13701,6 +13706,7 @@ def admin_match_settings():
                 "allow_same_team_challenge": allow_same_team_challenge,
                 "cdraft_rating_min": cdraft_rating_min,
                 "cdraft_rating_max": cdraft_rating_max,
+                "cdraft_pair_spread": cdraft_pair_spread,
                 "cdraft_versions_json": cdraft_versions_json,
             }, updated_by=session.get("admin_user", "admin"),
                 allow_null=("cdraft_versions_json",))
@@ -13709,6 +13715,7 @@ def admin_match_settings():
                       f"match_style={match_style} challenge_max_overs={challenge_max_overs} "
                       f"allow_same_team_challenge={allow_same_team_challenge} "
                       f"cdraft_rating={cdraft_rating_min}-{cdraft_rating_max} "
+                      f"cdraft_pair_spread={cdraft_pair_spread} "
                       f"cdraft_versions={cdraft_versions_json or 'all'}")
             db.commit()
             flash("✅ Match gameplay style saved for all new matches.", "info")

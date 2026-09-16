@@ -64,7 +64,8 @@ class CdraftSetCommandTests(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.row = SimpleNamespace(cdraft_rating_min=78, cdraft_rating_max=88,
-                                   cdraft_versions_json=None)
+                                   cdraft_versions_json=None,
+                                   cdraft_pair_spread=1)
         self.committed = []
         self.stored = {}
 
@@ -85,6 +86,7 @@ class CdraftSetCommandTests(unittest.IsolatedAsyncioTestCase):
                          lambda config=None: real_load_settings({
                              "cdraft_rating_min": self.row.cdraft_rating_min,
                              "cdraft_rating_max": self.row.cdraft_rating_max,
+                             "cdraft_pair_spread": self.row.cdraft_pair_spread,
                              "cdraft_versions_json": self.row.cdraft_versions_json,
                          })),
         ]
@@ -150,6 +152,22 @@ class CdraftSetCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("whole number", reply)
         self.assertFalse(self.committed)
 
+    async def test_spread_sets_the_gap_allowed_inside_a_slot(self):
+        await self._run("spread", "2")
+        self.assertEqual(self.row.cdraft_pair_spread, 2)
+        self.assertTrue(self.committed)
+
+    async def test_spread_is_clamped_to_keep_the_two_squads_fair(self):
+        await self._run("spread", "99")
+        self.assertEqual(self.row.cdraft_pair_spread,
+                         cdraft_service.SPREAD_LIMIT_HIGH)
+
+    async def test_a_non_numeric_spread_is_refused(self):
+        reply = await self._run("spread", "wide")
+        self.assertIn("whole number", reply)
+        self.assertEqual(self.row.cdraft_pair_spread, 1)
+        self.assertFalse(self.committed)
+
     async def test_versions_stores_the_catalogues_spelling(self):
         await self._run("versions", "base,", "legend")
         self.assertEqual(
@@ -179,9 +197,11 @@ class CdraftSetCommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_reset_restores_the_defaults(self):
         self.row.cdraft_rating_min, self.row.cdraft_rating_max = 60, 99
         self.row.cdraft_versions_json = '["TOTY"]'
+        self.row.cdraft_pair_spread = 4
         await self._run("reset")
         self.assertEqual(self.row.cdraft_rating_min, cdraft_service.RATING_BOTTOM)
         self.assertEqual(self.row.cdraft_rating_max, cdraft_service.RATING_TOP)
+        self.assertEqual(self.row.cdraft_pair_spread, cdraft_service.PAIR_SPREAD)
         self.assertIsNone(self.row.cdraft_versions_json)
 
     async def test_an_unrecognised_subcommand_prints_the_usage(self):
@@ -193,7 +213,8 @@ class CdraftSetCommandTests(unittest.IsolatedAsyncioTestCase):
 class ConfigPlumbingTests(unittest.TestCase):
     """The two places a new config value is most often half-added."""
 
-    KEYS = ("cdraft_rating_min", "cdraft_rating_max", "cdraft_versions_json")
+    KEYS = ("cdraft_rating_min", "cdraft_rating_max", "cdraft_versions_json",
+            "cdraft_pair_spread")
 
     def test_every_key_has_a_default(self):
         """save_config silently ignores keys that aren't in DEFAULTS, so a

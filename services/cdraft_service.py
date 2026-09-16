@@ -95,8 +95,9 @@ def _env_int(name, default, lo, hi):
     return max(lo, min(hi, value))
 
 
-# The rating ladder: slot 1 is dealt the marquee pair and slot 11 the last of
-# the good ones. Both ends are configurable so a group can run a draft at
+# The rating BAND a draft is dealt from. Every slot draws its own target at
+# random from inside it, so no slot is pinned to either end and no two drafts
+# have the same shape. Both ends are configurable so a group can run a draft at
 # whatever strength its catalogue actually holds.
 RATING_TOP = _env_int("CDRAFT_RATING_TOP", 88, 50, 100)
 RATING_BOTTOM = _env_int("CDRAFT_RATING_BOTTOM", 78, 40, 100)
@@ -126,14 +127,25 @@ class CdraftPoolError(Exception):
     """
 
 
-def slot_ratings(top=None, bottom=None, count=SLOT_COUNT):
-    """The target OVR for each slot, stepping evenly from ``top`` to ``bottom``."""
+def slot_ratings(top=None, bottom=None, count=SLOT_COUNT, rng=None):
+    """A target OVR for each slot, drawn at random from ``[bottom, top]``.
+
+    The admin's two numbers bound a *band*, not the ends of a staircase: each
+    slot draws independently, so slot 1 is not pinned to the ceiling, slot 11 is
+    not pinned to the floor, and no two drafts come out the same shape. (This
+    used to step evenly from top to bottom, which made every draft identical and
+    made the highest rating in the band a certainty rather than a chance.)
+
+    Fairness is untouched by this — the two cards in a slot are still the same
+    role within the pair spread of each other, so whatever a slot draws, it
+    draws for both captains at once.
+    """
     top = RATING_TOP if top is None else top
     bottom = RATING_BOTTOM if bottom is None else bottom
-    if count <= 1:
-        return [top]
-    span = top - bottom
-    return [int(round(top - span * i / (count - 1))) for i in range(count)]
+    if bottom > top:
+        bottom, top = top, bottom
+    rng = rng or random
+    return [rng.randint(bottom, top) for _ in range(max(0, count))]
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -349,9 +361,16 @@ def feasibility_shortfalls(feasibility):
 RATING_FLOOR_LIMIT = 40
 RATING_CEILING_LIMIT = 100
 
+# The pair spread has a hard ceiling rather than a wide one: it is the single
+# mechanic that makes the two squads provably fair, and at a large value a slot
+# genuinely can hand one captain the better card.
+SPREAD_LIMIT_LOW = 0
+SPREAD_LIMIT_HIGH = 5
+
 
 def load_settings(config=None):
-    """The admin's pool settings: ``{rating_min, rating_max, versions}``.
+    """The admin's pool settings:
+    ``{rating_min, rating_max, pair_spread, versions}``.
 
     Reads the single-row ``GameConfig`` the website and /cdraftset both write,
     and falls back to the environment defaults for anything unset — so an
@@ -371,7 +390,7 @@ def load_settings(config=None):
                              "falling back to the defaults")
             config = {}
 
-    def _rating(key, fallback):
+    def _number(key, fallback):
         try:
             value = config.get(key)
         except AttributeError:
@@ -383,17 +402,20 @@ def load_settings(config=None):
         except (TypeError, ValueError):
             return fallback
 
-    low = _rating("cdraft_rating_min", RATING_BOTTOM)
-    high = _rating("cdraft_rating_max", RATING_TOP)
+    low = _number("cdraft_rating_min", RATING_BOTTOM)
+    high = _number("cdraft_rating_max", RATING_TOP)
     if low > high:
         low, high = high, low
     low = max(RATING_FLOOR_LIMIT, min(RATING_CEILING_LIMIT, low))
     high = max(RATING_FLOOR_LIMIT, min(RATING_CEILING_LIMIT, high))
+    spread = max(SPREAD_LIMIT_LOW, min(SPREAD_LIMIT_HIGH,
+                                       _number("cdraft_pair_spread", PAIR_SPREAD)))
     try:
         versions = parse_allowed_versions(config.get("cdraft_versions_json"))
     except AttributeError:
         versions = None
-    return {"rating_min": low, "rating_max": high, "versions": versions}
+    return {"rating_min": low, "rating_max": high, "pair_spread": spread,
+            "versions": versions}
 
 
 def settings_summary(settings):
@@ -498,16 +520,22 @@ def build_slots(pool=None, seed=None, top=None, bottom=None, spread=PAIR_SPREAD,
     cricketer appears twice across the whole draft.
 
     ``versions`` is the admin's allowed-version tick list (``None`` = all).
-    Unlike the rating ladder it is **absolute**: when a band is thin the search
-    widens the rating, but it never reaches for a version that was not ticked.
-    A role the allowed pool genuinely cannot supply raises ``CdraftPoolError``
-    rather than being swapped for another role, because that is what would let a
-    squad end up without a keeper or short of bowling options.
+    Unlike the rating band it is **absolute**: when a rating is thin the search
+    widens, but it never reaches for a version that was not ticked. A role the
+    allowed pool genuinely cannot supply raises ``CdraftPoolError`` rather than
+    being swapped for another role, because that is what would let a squad end up
+    without a keeper or short of bowling options.
     """
     rng = random.Random(seed)
     by_role = _pool_by_role(pool, versions)
-    targets = slot_ratings(top, bottom)
-    floor, ceiling = targets[-1], targets[0]
+    # The band comes from the SETTINGS, not from the targets drawn out of it:
+    # the draws are random and unsorted, so the lowest and highest of them are
+    # not the band's ends and using them would quietly shrink the search.
+    floor = RATING_BOTTOM if bottom is None else bottom
+    ceiling = RATING_TOP if top is None else top
+    if floor > ceiling:
+        floor, ceiling = ceiling, floor
+    targets = slot_ratings(ceiling, floor, rng=rng)
     used_names = set()
     slots = []
 

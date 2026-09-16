@@ -1255,6 +1255,9 @@ class GameConfig(Base):
     # ["Base", "Legend"]. NULL or empty means EVERY version is allowed — the
     # alternative reading ("none") would be a mode that can never start.
     cdraft_versions_json = Column(Text, nullable=True)
+    # How far apart the TWO CARDS OFFERED IN ONE SLOT may be on OVR. This is the
+    # mechanic that makes the two squads provably fair, so it is kept small.
+    cdraft_pair_spread = Column(Integer, default=1, nullable=False)
     # ── Player card rendering (admin-editable from /card-template page) ──
     # Which card design is active for all players: the built-in procedural
     # tier card ("tier") or the admin-uploaded template card ("template").

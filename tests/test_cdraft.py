@@ -95,11 +95,38 @@ class SlotTemplateTests(unittest.TestCase):
         # A snake, not strict alternation: somebody picks twice in a row.
         self.assertTrue(any(a == b for a, b in zip(order, order[1:])))
 
-    def test_the_rating_ladder_descends_from_top_to_bottom(self):
-        ratings = cdraft_service.slot_ratings(top=90, bottom=80)
-        self.assertEqual(ratings[0], 90)
-        self.assertEqual(ratings[-1], 80)
-        self.assertEqual(ratings, sorted(ratings, reverse=True))
+    def test_every_slot_rating_is_drawn_from_inside_the_band(self):
+        for seed in range(20):
+            rng = random.Random(seed)
+            ratings = cdraft_service.slot_ratings(top=99, bottom=84, rng=rng)
+            with self.subTest(seed=seed):
+                self.assertEqual(len(ratings), 11)
+                self.assertTrue(all(84 <= r <= 99 for r in ratings), ratings)
+
+    def test_the_ratings_are_random_not_a_ladder(self):
+        """The reported bug: the two settings are a min and a max, so slot 1
+        must not always be the ceiling and slot 11 must not always be the
+        floor — which is exactly what stepping evenly between them produced."""
+        firsts, lasts = set(), set()
+        for seed in range(40):
+            ratings = cdraft_service.slot_ratings(top=99, bottom=84,
+                                                  rng=random.Random(seed))
+            firsts.add(ratings[0])
+            lasts.add(ratings[-1])
+        self.assertGreater(len(firsts), 1, "slot 1 is pinned to one rating")
+        self.assertGreater(len(lasts), 1, "slot 11 is pinned to one rating")
+        self.assertNotEqual(firsts, {99}, "slot 1 is always the maximum")
+        self.assertNotEqual(lasts, {84}, "slot 11 is always the minimum")
+
+    def test_a_backwards_band_still_deals(self):
+        ratings = cdraft_service.slot_ratings(top=80, bottom=90,
+                                              rng=random.Random(1))
+        self.assertTrue(all(80 <= r <= 90 for r in ratings), ratings)
+
+    def test_a_single_point_band_deals_that_rating(self):
+        ratings = cdraft_service.slot_ratings(top=85, bottom=85,
+                                              rng=random.Random(1))
+        self.assertEqual(ratings, [85] * 11)
 
 
 class BuildSlotsTests(unittest.TestCase):
@@ -155,6 +182,29 @@ class BuildSlotsTests(unittest.TestCase):
         self.assertEqual(len(slots), 11)
         for slot in slots:
             self.assertTrue(all(60 <= c["rating"] <= 63 for c in slot["cards"]))
+
+    def test_the_pair_spread_setting_reaches_the_deal(self):
+        """At 0 a slot may only offer two players on the same OVR."""
+        pool = make_pool()
+        for spread in (0, 1, 3):
+            slots = cdraft_service.build_slots(pool=pool, seed=6, spread=spread)
+            for index, slot in enumerate(slots):
+                first, second = slot["cards"]
+                with self.subTest(spread=spread, slot=index + 1):
+                    self.assertLessEqual(
+                        abs(first["rating"] - second["rating"]), spread)
+
+    def test_the_search_band_comes_from_the_settings_not_the_draws(self):
+        """The targets are random and unsorted, so the lowest and highest of
+        them are not the band's ends. Using them would quietly shrink the
+        search to whatever happened to land in slots 1 and 11."""
+        # Nothing inside 78-88 at all; everything sits at 95+. A band that came
+        # from the draws could not reach it, and the deal would fail.
+        pool = make_pool(ratings=range(95, 99))
+        slots = cdraft_service.build_slots(pool=pool, seed=4, top=88, bottom=78)
+        self.assertEqual(len(slots), 11)
+        self.assertTrue(all(95 <= c["rating"] <= 98
+                            for s in slots for c in s["cards"]))
 
     def test_a_role_the_pool_cannot_supply_refuses_rather_than_substituting(self):
         """A squad with no keeper cannot field a legal XI, so a missing role is
@@ -324,15 +374,29 @@ class SettingsTests(unittest.TestCase):
         settings = cdraft_service.load_settings({})
         self.assertEqual(settings["rating_min"], cdraft_service.RATING_BOTTOM)
         self.assertEqual(settings["rating_max"], cdraft_service.RATING_TOP)
+        self.assertEqual(settings["pair_spread"], cdraft_service.PAIR_SPREAD)
         self.assertIsNone(settings["versions"])
 
     def test_stored_values_win(self):
         settings = cdraft_service.load_settings({
             "cdraft_rating_min": 80, "cdraft_rating_max": 92,
+            "cdraft_pair_spread": 2,
             "cdraft_versions_json": '["Base", "Legend"]'})
         self.assertEqual(settings["rating_min"], 80)
         self.assertEqual(settings["rating_max"], 92)
+        self.assertEqual(settings["pair_spread"], 2)
         self.assertEqual(settings["versions"], ["Base", "Legend"])
+
+    def test_the_pair_spread_is_clamped(self):
+        """It is the one mechanic that makes the two squads provably fair, so a
+        typed 50 must not quietly become a slot that hands somebody the better
+        card."""
+        self.assertEqual(
+            cdraft_service.load_settings({"cdraft_pair_spread": 50})["pair_spread"],
+            cdraft_service.SPREAD_LIMIT_HIGH)
+        self.assertEqual(
+            cdraft_service.load_settings({"cdraft_pair_spread": -3})["pair_spread"],
+            cdraft_service.SPREAD_LIMIT_LOW)
 
     def test_a_backwards_range_is_repaired_not_rejected(self):
         settings = cdraft_service.load_settings({
@@ -788,6 +852,7 @@ class CdraftFlowTests(unittest.IsolatedAsyncioTestCase):
             patch.object(cdraft_service, "load_settings",
                          lambda config=None: {"rating_min": 78,
                                               "rating_max": 88,
+                                              "pair_spread": 1,
                                               "versions": None}),
         ]
         for p in self._patches:
@@ -880,7 +945,12 @@ class CdraftFlowTests(unittest.IsolatedAsyncioTestCase):
         draft = self._draft()
         self.assertEqual(draft["turn"], "draft")
         self.assertEqual(draft["target_tg_id"], self.GUEST_TG)
-        self.assertEqual(draft["target_team"], "@u222 XI")
+        # Teams are named after the captains, with a short code the live match
+        # header can show as-is.
+        self.assertEqual(draft["target_team"], "U222 Draft XI")
+        self.assertEqual(draft["team_codes"]["U222 Draft XI"], "U222")
+        self.assertEqual(draft["host_team"], "U111 Draft XI")
+        self.assertEqual(draft["team_codes"]["U111 Draft XI"], "U111")
         self.assertIn("Slot 1/11", self.context.bot.sent[-1].text)
         # Exactly the slot's two cards are offered, plus the way out.
         data = [b.callback_data

@@ -104,7 +104,14 @@ def _track_setup_msg(draft, message):
         ids.append(mid)
 
 
-def _league_battle_title(league_name):
+def _league_battle_title(league_name, mode=None):
+    """The heading over a challenge's setup cards.
+
+    A mode that is not a league (``/cdraft``) names itself: "League Battles ·
+    Challenge Draft" would be announcing a league that does not exist.
+    """
+    if mode == "cdraft":
+        return league_name or "Challenge Draft"
     return f"League Battles · {league_name}" if league_name else "League Battles"
 
 
@@ -625,7 +632,7 @@ def _pitch_prompt(draft):
     host = draft.get("host") or {}
     mention = _mention(host.get("tg_id"), host.get("name") or "Host")
     lines = [
-        f"🏆 <b>{_league_battle_title(draft.get('league_name'))}</b>",
+        f"🏆 <b>{_league_battle_title(draft.get('league_name'), draft.get('mode'))}</b>",
         "═════════════════════════════",
         f"🟢 {draft.get('host_team')}  🆚  {draft.get('target_team')}",
         "",
@@ -682,7 +689,7 @@ def _apply_pitch(draft, pitch):
         report_text = None
 
     header = (
-        f"🏆 <b>{_league_battle_title(draft.get('league_name'))}</b>\n"
+        f"🏆 <b>{_league_battle_title(draft.get('league_name'), draft.get('mode'))}</b>\n"
         "═════════════════════════════\n"
         f"🟢 {draft.get('host_team')}  🆚  {draft.get('target_team')}\n"
     )
@@ -902,9 +909,12 @@ def _challenge_created_text(draft, session=None):
     target_code = _team_short_code(target_team, draft.get("league_key"), session)
     host_team_line = f"{_team_emoji(host_team)} <b>{host_team}</b> ({host_code})" if host_code else f"{_team_emoji(host_team)} <b>{host_team}</b>"
     target_team_line = f"{_team_emoji(target_team)} <b>{target_team}</b> ({target_code})" if target_code else f"{_team_emoji(target_team)} <b>{target_team}</b>"
-    lines = [
-        f"🏏 <b>{(draft.get('league_name') or 'IPL').upper()} — CHALLENGE</b>",
-    ]
+    # A league is "IPL — CHALLENGE"; a mode that is not a league already says
+    # what it is, so appending "— CHALLENGE" would only repeat itself.
+    title = (draft.get("league_name") or "IPL").upper()
+    if draft.get("mode") != "cdraft":
+        title = f"{title} — CHALLENGE"
+    lines = [f"🏏 <b>{title}</b>"]
     # CL Tour matches show their series position right under the title.
     if draft.get("cl_tour_id"):
         lines.append(
@@ -1412,7 +1422,7 @@ def _local_static_path(image_url):
     return None
 
 
-async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None, is_tournament=False, vs_bot=False, owner_locked=False, host_teams=None, guest_teams=None):
+async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None, tournament_name=None, is_tournament=False, vs_bot=False, owner_locked=False, host_teams=None, guest_teams=None):
     # ``effective_message`` rather than ``update.message`` so this also works when
     # the picker is opened from a button (the /ciplbot Rematch), where
     # ``update.message`` is None.
@@ -1471,6 +1481,9 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
         # whole draft → toss → play flow so the result is recorded against it.
         "is_tournament": bool(is_tournament),
         "tournament_id": tournament_id,
+        # The tournament's own name, so the live match card can announce the
+        # competition instead of the league it is played under.
+        "tournament_name": tournament_name,
         # Owner-locked tournament: the teams each side is allowed to pick,
         # resolved once here so the picker and its re-renders agree.
         "owner_locked": bool(owner_locked),
@@ -1922,7 +1935,7 @@ async def _handle_tournament_command(update, context, session, league):
         update, context, challenger=challenger, target=target,
         league_key=league_key, league_name=league_name,
         league_record=league, teams=teams, session=session,
-        tournament_id=active.id, is_tournament=True,
+        tournament_id=active.id, tournament_name=active.name, is_tournament=True,
         owner_locked=owner_locked,
         host_teams=sorted(host_owned) if host_owned is not None else None,
         guest_teams=sorted(guest_owned) if guest_owned is not None else None)
