@@ -9,7 +9,17 @@ to whoever already typed it, which is never the person holding things up.
     /remindmatch                  everything still unplayed
     /remindmatch SRH              one team's remaining fixtures
     /remindmatch SRH vs RR        just that pair
-    /remindmatch SRH force        ignore the 12-hour cooldown (admins)
+    /remindmatch SRH force        ignore the 12-hour cooldown
+
+**Bot admins only** — the whole command, its aliases and its buttons. The thing
+it does is make the bot tag people and slide into their DMs, which is not a
+capability to hand to whoever can type, and a league where anyone could nudge
+anyone becomes one where the nudges are ignored. The check is
+``services.admin_ids.is_admin``, and it runs three times: on the command, again
+when the plan is built, and again on the Send tap — a callback arrives as its
+own update, so an admin who lost their rights between the preview and the tap
+must not still be able to fire it. A refused caller gets one line and nothing
+else, not even a "no such team", because error messages are replies too.
 
 It never fires straight away. The first message back is a **preview**: who will
 be pinged, in which fixtures, and what is being held back by the cooldown, with
@@ -23,15 +33,8 @@ On Send, two things go out:
   • every owner and co-owner of both sides gets a DM with their own fixtures —
     one DM per person, however many teams they run.
 
-Who may run it:
-
-  • **bot admins** — anything in the tournament;
-  • **anyone who owns or co-owns a team** — that team's own fixtures, which is
-    the person with the actual reason to chase the match.
-
-Nobody else can make the bot ping somebody, and a reminded fixture goes quiet
-for ``COOLDOWN`` (see ``services.match_reminder_service``) so the second nudge
-still means something.
+A reminded fixture then goes quiet for ``COOLDOWN`` (see
+``services.match_reminder_service``) so the second nudge still means something.
 """
 
 import asyncio
@@ -55,8 +58,7 @@ CB_PREFIX = "mrem_"
 NO_ACTIVE = ("❌ No tournament is currently running.\n"
              "An admin activates one from the tournament panel.")
 
-NOT_ALLOWED = ("⛔ You can only send reminders for a team you own or co-own.\n"
-               "Bot admins can remind any fixture in the tournament.")
+NOT_ALLOWED = "⛔ Only bot admins can send match reminders."
 
 # How many stalled pairs one run will chase. A tournament that has stalled
 # completely is a conversation with an admin, not forty DMs.
@@ -126,14 +128,6 @@ def _resolve_team(session, tours, query):
     return near[0], None, near[1]
 
 
-def _my_teams(session, tour, tg_id):
-    """The teams in this tournament that this person owns or co-owns."""
-    if tg_id is None:
-        return []
-    return [tt for tt in ctv.teams(session, tour.id)
-            if tournament_service.is_team_member(tt, tg_id)]
-
-
 def _tournament_command(session, tour):
     """The command these two would actually type to play the match."""
     try:
@@ -201,20 +195,17 @@ def build_plan(session, tg_id, team_id=None, opponent_id=None, force=False,
     if tour is None:
         return _Plan(None, [], "", error=NO_ACTIVE)
 
-    admin = is_admin(tg_id)
-    mine = _my_teams(session, tour, tg_id)
-    if not admin and not mine:
+    # Admin-only, and re-checked here rather than only at the command: the Send
+    # button arrives as its own update, and an admin who lost their rights
+    # between the preview and the tap must not still be able to fire it.
+    if not is_admin(tg_id):
         return _Plan(tour, [], "", error=NOT_ALLOWED)
-    if force and not admin:
-        force = False  # silently: a non-admin's cooldown is not negotiable
 
     if team_id is not None:
         team = session.query(TournamentTeam).get(int(team_id))
         if not team or team.tournament_id != tour.id:
             return _Plan(tour, [], "",
                          error="❌ That team is no longer in the tournament.")
-        if not admin and not tournament_service.is_team_member(team, tg_id):
-            return _Plan(tour, [], "", error=NOT_ALLOWED)
         opponent = (session.query(TournamentTeam).get(int(opponent_id))
                     if opponent_id is not None else None)
         fixtures = mrs.pending_fixtures(
@@ -222,19 +213,9 @@ def build_plan(session, tg_id, team_id=None, opponent_id=None, force=False,
             opponent_id=opponent.id if opponent else None)
         scope = (f"{team.name} vs {opponent.name}" if opponent
                  else f"{team.name}")
-    elif admin:
+    else:
         fixtures = mrs.pending_fixtures(session, tour.id)
         scope = "every unplayed fixture"
-    else:
-        # A team owner who named nobody means "my matches".
-        fixtures = []
-        seen = set()
-        for team in mine:
-            for fixture in mrs.pending_fixtures(session, tour.id, team_id=team.id):
-                if fixture.id not in seen:
-                    seen.add(fixture.id)
-                    fixtures.append(fixture)
-        scope = ", ".join(tt.name or "—" for tt in mine)
 
     nudges = mrs.build_nudges(session, tour, fixtures,
                               command=_tournament_command(session, tour),
@@ -259,8 +240,7 @@ def render_preview(session, plan):
                     "", "<b>Quiet until</b>"]
             out += [f"• {escape(n.title)} — "
                     f"{n.skipped_until:%d %b %H:%M} UTC" for n in plan.quiet[:10]]
-            out += ["", "<i>Add <code>force</code> to send anyway "
-                        "(bot admins).</i>"]
+            out += ["", "<i>Add <code>force</code> to send anyway.</i>"]
         else:
             out.append("✅ Nothing is waiting to be played — "
                        "every fixture is done or under way.")
@@ -291,11 +271,14 @@ def render_preview(session, plan):
         out.append(f"<i>Only the first {MAX_PAIRS} pairs are chased in one run.</i>")
     out += ["", "<i>Tap Send to post this in the chat and DM everyone named "
                 "above.</i>"]
+    if not plan.force:
+        out.append("<i>Add <code>force</code> to override the 12-hour "
+                   "cooldown.</i>")
     return "\n".join(out)
 
 
 def _keyboard(opener, team_id, opponent_id, force, tour_id):
-    """Send / Cancel, bound to whoever opened the preview.
+    """Send / Cancel, bound to the admin who opened the preview.
 
     Everything the Send needs is in the button — the plan is re-resolved from
     the database on the tap, never restored from a card that may be hours old.
@@ -319,6 +302,12 @@ async def remindmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if message is None:
         return
     tg_id = update.effective_user.id if update.effective_user else None
+    # Refused before anything is looked up. A non-admin must not be able to use
+    # the error messages to probe the field either — "no team called X" is a
+    # reply, and replies are what a refused command must not hand out.
+    if not is_admin(tg_id):
+        await message.reply_text(NOT_ALLOWED)
+        return
     session = get_session()
     try:
         tours = _live_tournaments(session)
@@ -415,8 +404,11 @@ async def remindmatch_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         except ValueError:
             await q.answer("Invalid selection.", show_alert=True)
             return
+        if not is_admin(q.from_user.id):
+            await q.answer(NOT_ALLOWED, show_alert=True)
+            return
         if q.from_user.id != opener:
-            await q.answer("Only the person who opened this can use these buttons.",
+            await q.answer("Only the admin who opened this can use these buttons.",
                            show_alert=True)
             return
         await q.answer("Cancelled.")
@@ -435,8 +427,11 @@ async def remindmatch_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     except (TypeError, ValueError):
         await q.answer("Invalid selection.", show_alert=True)
         return
+    if not is_admin(q.from_user.id):
+        await q.answer(NOT_ALLOWED, show_alert=True)
+        return
     if q.from_user.id != opener:
-        await q.answer("Only the person who opened this can use these buttons.",
+        await q.answer("Only the admin who opened this can use these buttons.",
                        show_alert=True)
         return
 
@@ -530,5 +525,5 @@ def _report(plan, delivered, failed, group_ok, chat_id):
     if chat_id is not None and not group_ok:
         out.append("⚠️ The group post could not be sent.")
     out += ["", "<i>These fixtures now go quiet for 12 hours. "
-                "Add <code>force</code> to override (bot admins).</i>"]
+                "Add <code>force</code> to override.</i>"]
     return "\n".join(out)

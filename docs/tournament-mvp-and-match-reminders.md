@@ -8,7 +8,7 @@ people holding up a fixture that they are holding up a fixture.
 | --- | --- | --- |
 | `/mvp` (`/tourmvp`, `/ctmvp`) | Most Valuable Player, Overall / Batting / Bowling | anyone |
 | `/tournamentstats` → 🏅 MVP | the same board as a tab on the stats card | anyone |
-| `/remindmatch [team] [vs team] [force]` | nudge two teams to play what they owe | bot admins; team owners for their own team |
+| `/remindmatch [team] [vs team] [force]` | nudge two teams to play what they owe | **bot admins only** |
 
 ---
 
@@ -155,7 +155,7 @@ names needs telling instantly that this one is on them.
 /remindmatch                  everything still unplayed
 /remindmatch SRH              one team's remaining fixtures
 /remindmatch SRH vs RR        just that pair
-/remindmatch SRH force        ignore the cooldown (bot admins)
+/remindmatch SRH force        ignore the cooldown
 ```
 
 Team names are matched exactly as `/clsd` matches them — case, `short_name`,
@@ -191,8 +191,7 @@ it, so most of the design is restraint:
    and the preview *says* it is being held back rather than quietly sending less
    than it was asked to. A pair is quiet only while **every** fixture in it is
    quiet — a newly scheduled second leg is worth a nudge even if the first was
-   mentioned this morning. Bot admins can override with `force`; a team owner
-   cannot, because their own cooldown is not negotiable.
+   mentioned this morning. `force` overrides it deliberately.
 2. **One message per person.** Someone who co-owns two stalled teams gets one DM
    carrying both fixtures, not two DMs. Both legs of a double round-robin pair go
    into one card, because two teams owing each other two matches is one
@@ -207,15 +206,30 @@ it, so most of the design is restraint:
 
 ### Who may send one
 
-| | Scope |
-| --- | --- |
-| Bot admin | any fixture in the tournament |
-| Team owner or **co-owner** | that team's own fixtures |
-| Everybody else | nothing — the bot will not ping people on their say-so |
+**Bot admins, and nobody else.** Every alias (`/remindmatches`,
+`/matchreminder`, `/nudge`) and both buttons are gated the same way. Owning or
+co-owning a side in the fixture buys nothing here: what this command does is
+make the bot tag people and slide into their DMs, and a league where anyone can
+nudge anyone is a league where the nudges get ignored.
 
-A co-owner is the owner's equal here, as everywhere else in the tournament. The
-person chasing their own outstanding fixture is exactly the person with a reason
-to, which is why the command isn't admin-only.
+The check is `services.admin_ids.is_admin` — the same one behind `/tourallow`
+and the rest of the admin commands — and it runs three times:
+
+| Where | Why it is not redundant |
+| --- | --- |
+| on the command | refused before anything is looked up |
+| when the plan is built | the one gate both the command and the button pass through |
+| on the **Send** tap | a callback arrives as its own update, so an admin who lost their rights between the preview and the tap must not still be able to fire it |
+
+A refused caller gets **one line and nothing else** — not "no team called X",
+which would answer a question they were not allowed to ask. Everyone else still
+sees the fixture list the normal way: `/ctfixtures` and `/clsd <team>` are
+read-only and open to anyone.
+
+`/remindmatch` is published to the **admin slash menu** (`ADMIN_MENU_COMMANDS`),
+which goes only into admins' own DMs and is exempt from the 100-command clamp —
+so it is discoverable to exactly the people who can run it and costs the player
+menus nothing.
 
 ### Team badges
 
@@ -246,7 +260,7 @@ badge has to be.
 | `templates/admin_tournament_dashboard.html` | the MVP widget on the admin dashboard |
 | `services/tournament_service.py` | `match_scorecards`, `player_identity`, `stat_leaders["mvp"]` |
 | `services/match_reminder_service.py` | finding pending fixtures, contacts, badges, the cards, the cooldown |
-| `handlers/match_reminders.py` | `/remindmatch`: permissions, preview, group post, DM fan-out, report |
+| `handlers/match_reminders.py` | `/remindmatch`: the admin gate, preview, group post, DM fan-out, report |
 | `models.py` | `TournamentMatchReminder` — the cooldown's memory and the audit trail |
 
 ## Tests
@@ -256,4 +270,6 @@ badge has to be.
   and the table moving when a match is deleted.
 * `tests/test_match_reminders.py` — what gets chased and what is left alone, who
   is reached (owners *and* co-owners, once each), the card, pair grouping, the
-  cooldown and its override, and who is allowed to send one at all.
+  cooldown and its override, and the admin gate — including that a team owner is
+  refused, that a refusal leaks nothing about the field, and that an admin who
+  loses their rights between the preview and the tap cannot send.

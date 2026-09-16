@@ -425,6 +425,7 @@ ADMIN_MENU_COMMANDS = (
     ("tpointsclear", "Admin: clear a team's points adjustment"),
     ("taddmatch", "Admin: record a fixture from a replied scorecard file"),
     ("tfixsync", "Admin: un-stick fixtures still showing as live"),
+    ("remindmatch", "Admin: nudge two teams to play their pending fixture"),
 )
 
 FORWARD_ONLY_MENU_COMMANDS = (
@@ -970,8 +971,8 @@ async def start_handler(update, context):
         "/clsd <team> - One team's schedule: standing, form, next matches, results\n"
         "/mvp - Tournament Most Valuable Player: batting + bowling + wins + POTM "
         "awards in one impact-point total\n"
-        "/remindmatch [team] [vs team] - Nudge two teams to play what they still "
-        "owe: posts here and DMs both sides' owners (admins, or your own team)\n"
+        "/remindmatch [team] [vs team] - Admin: nudge two teams to play what "
+        "they still owe — posts here and DMs both sides' owners and co-owners\n"
         "/pitchstats /ps [pitch] - What each pitch actually does in Lets Play & "
         "League matches: runs/over, wickets/over, bat-first vs chasing win %, "
         "and which approaches earn\n"
@@ -1604,8 +1605,9 @@ def main():
 
         # ── /remindmatch — nudge two teams to play what they still owe ──
         # Posts in the chat it was run in AND DMs every owner/co-owner of both
-        # sides. Gated: bot admins may chase any fixture, a team owner only
-        # their own. Always previews first — tagging a dozen people is not a
+        # sides. Bot admins only, on every alias and on the buttons too: making
+        # the bot tag people and DM them is not a capability to hand to whoever
+        # can type. Always previews first — tagging a dozen people is not a
         # thing to do by typo — and a reminded fixture goes quiet for 12 hours.
         from handlers.match_reminders import (
             remindmatch_handler, remindmatch_callback,
