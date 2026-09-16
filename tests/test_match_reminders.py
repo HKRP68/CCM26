@@ -11,8 +11,9 @@ So the tests here are mostly about restraint:
     person once however many teams they run, and nobody else;
   • **what it leaves alone** — matches already played, fixtures reminded about
     in the last twelve hours, and knockout slots that don't have two teams yet;
-  • **who may send one** — bot admins anywhere, a team owner only for their own
-    team, and nobody else at all.
+  • **who may send one** — bot admins, and nobody else: not a team owner, not a
+    co-owner of a side in the fixture, checked again on the Send tap because a
+    callback arrives as its own update.
 
 Plus the card itself, because it is what people actually read.
 """
@@ -402,27 +403,42 @@ class PermissionTests(ReminderCase):
         self.assertIsNone(plan.error)
         self.assertEqual(len(plan.sending), 2)
 
-    def test_a_team_owner_chases_their_own_fixtures(self):
-        plan = self.plan(self.owner_srh)
-        self.assertIsNone(plan.error)
-        self.assertEqual(len(plan.sending), 2)   # SRH plays both of them
+    def test_a_team_owner_cannot_make_the_bot_ping_anyone(self):
+        """Owning a franchise is not a licence to DM the league. Running one of
+        the teams in the fixture buys nothing here — the command is admins'."""
+        for who in (self.owner_srh, self.co_srh, self.owner_rr):
+            plan = self.plan(who)
+            self.assertIn("bot admins", plan.error)
+            self.assertEqual(plan.sending, [])
 
-    def test_a_co_owner_is_the_owners_equal_here_too(self):
-        self.assertIsNone(self.plan(self.co_srh).error)
-
-    def test_somebody_who_runs_nothing_cannot_make_the_bot_ping_anyone(self):
+    def test_nor_can_anybody_else(self):
         plan = self.plan(self.outsider)
-        self.assertIn("own or co-own", plan.error)
+        self.assertIn("bot admins", plan.error)
         self.assertEqual(plan.sending, [])
 
-    def test_an_owner_cannot_chase_a_team_that_is_not_theirs(self):
-        plan = self.plan(self.owner_rr, team_id=self.teams["CSK"].id)
-        self.assertIn("own or co-own", plan.error)
+    def test_a_refusal_is_the_whole_reply_it_does_not_leak_the_field(self):
+        """A refused caller gets one line — not "no team called X", which would
+        answer a question they were not allowed to ask."""
+        plan = self.plan(self.outsider, team_id=self.teams["CSK"].id)
+        self.assertIn("bot admins", plan.error)
+        self.assertNotIn("Chennai", plan.error)
 
-    def test_an_owner_cannot_force_past_the_cooldown(self):
-        """A non-admin's cooldown is not negotiable."""
-        self.assertFalse(self.plan(self.owner_srh, force=True).force)
+    def test_a_non_admin_cannot_fire_a_preview_an_admin_left_open(self):
+        """The Send button arrives as its own update. Re-checking the caller on
+        the tap is what stops the card being handed to somebody else."""
+        plan = self.plan(self.admin)
+        self.assertIsNone(plan.error)          # the admin's own preview is fine
+        self.assertIn("bot admins", self.plan(self.owner_srh).error)
+
+    def test_an_admin_who_lost_their_rights_cannot_send_either(self):
+        plan = self.plan(self.admin)
+        self.assertIsNone(plan.error)
+        os.environ["BOT_ADMIN_IDS"] = str(next(_TG))   # rights revoked
+        self.assertIn("bot admins", self.plan(self.admin).error)
+
+    def test_an_admin_can_force_past_the_cooldown(self):
         self.assertTrue(self.plan(self.admin, force=True).force)
+        self.assertFalse(self.plan(self.admin).force)
 
     def test_the_preview_says_who_would_be_pinged_before_anything_is_sent(self):
         plan = self.plan(self.admin)
