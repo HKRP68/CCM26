@@ -15,6 +15,7 @@ import logging
 
 from models import Match, User
 from services import match_webapp_access as mwa
+from services import impact_player
 from services.match_outcome import (
     mark_end, END_AUTO, END_COMPLETED, END_ENDED_BY_USER,
 )
@@ -215,44 +216,11 @@ def _emit_new_bowler(state, p):
         })
 
 
-def _impact_usage(state):
-    impact = state.setdefault("impact_players", {})
-    usage = impact.setdefault("usage", {})
-    for uid in (state.get("bat_team_id"), state.get("bowl_team_id"),
-                state.get("inn1_bat_team_id"), state.get("inn1_bowl_team_id")):
-        if uid is not None:
-            usage.setdefault(str(uid), {"used": False})
-    return impact, usage
-
-
-def _impact_player_summary(state):
-    _impact_usage(state)
-    usage = (state.get("impact_players") or {}).get("usage") or {}
-    summaries = []
-    for uid_s, rec in usage.items():
-        if not isinstance(rec, dict) or not rec.get("used"):
-            continue
-        try:
-            uid = int(uid_s)
-        except (TypeError, ValueError):
-            uid = uid_s
-        team = rec.get("team_name")
-        if not team:
-            if uid == state.get("bat_team_id"):
-                team = state.get("bat_team_name")
-            elif uid == state.get("bowl_team_id"):
-                team = state.get("bowl_team_name")
-            elif uid == state.get("inn1_bat_team_id"):
-                team = state.get("inn1_team")
-        summaries.append({
-            "user_id": uid,
-            "team_name": team or "Team",
-            "in_player": rec.get("in_player"),
-            "out_player": rec.get("out_player"),
-            "used_at": rec.get("used_at"),
-            "innings": rec.get("innings"),
-        })
-    return summaries
+# The mode-agnostic half of Impact Player lives in services.impact_player so the
+# Mini App and the over-by-over engine (handlers.cipl_play) cannot drift apart.
+# Only the phase-specific option/use pair below is Mini-App-only.
+_impact_usage = impact_player.usage_for
+_impact_player_summary = impact_player.summary
 
 
 IMPACT_INNINGS_BREAK_SETUP_PHASES = (
@@ -322,12 +290,8 @@ def _current_over_label(state):
     return f"{max(0, state.get('current_over', 1) - 1)}.{state.get('current_ball', 0)} ov"
 
 
-def _is_active_player(player):
-    return not isinstance(player, dict) or player.get("active", True) is not False
-
-
-def _active_players(players):
-    return [p for p in (players or []) if _is_active_player(p)]
+_is_active_player = impact_player.is_active
+_active_players = impact_player.active_players
 
 
 # Categories permitted to bowl in bot matches (/wpmbot, /vsbot). Batsmen and
@@ -407,37 +371,8 @@ def _bot_bowler_pool(state, players, prev_rid):
     return players
 
 
-def _replace_player_in_list(players, out_rid, incoming):
-    for i, p in enumerate(players or []):
-        if p.get("roster_id") == out_rid:
-            players[i] = incoming
-            return i
-    return None
-
-
-def _apply_impact_to_identity_list(players, out_rid, incoming):
-    """Keep the outgoing player's identity for stat lookup, but mark inactive.
-
-    Impact substitutions can occur after the outgoing player has already batted
-    or bowled. Scorecard and career persistence resolve stat rows through these
-    XI lists, so replacing the dict in-place can orphan existing stats.
-    """
-    for i, p in enumerate(players or []):
-        if p.get("roster_id") == out_rid and _is_active_player(p):
-            inactive = dict(p)
-            inactive["active"] = False
-            inactive["impact_replaced"] = True
-            inactive["replaced_by_roster_id"] = incoming.get("roster_id")
-            players[i] = inactive
-
-            if not any(pl.get("roster_id") == incoming.get("roster_id") for pl in players):
-                replacement = dict(incoming)
-                replacement["active"] = True
-                replacement["impact_replacement"] = True
-                replacement["replaced_roster_id"] = out_rid
-                players.append(replacement)
-            return i
-    return None
+_replace_player_in_list = impact_player.replace_in_list
+_apply_impact_to_identity_list = impact_player.apply_to_identity_list
 
 
 def get_impact_player_options(session, match_id, user_id):

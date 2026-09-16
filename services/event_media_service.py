@@ -35,6 +35,16 @@ EVENT_KEYS = [
     # Existing chat-animation events retained for backwards compatibility.
     ("hattrick",   "🎯 Hat-trick",      "Bowler takes 3 wickets in 3 balls"),
     ("maiden_over","🎯 Maiden Over",    "Bowler bowls a maiden over"),
+    # Milestone keys fired by the over-by-over engine (services/milestones.py).
+    ("three_fer",      "🎳 Three-fer",     "Bowler takes a 3rd wicket"),
+    ("five_fer",       "🏅 Five-wicket haul", "Bowler takes a 5th wicket"),
+    ("team_100",       "💯 Team 100",      "Team total passes 100"),
+    ("team_150",       "🔢 Team 150",      "Team total passes 150"),
+    ("team_200",       "🚀 Team 200",      "Team total passes 200"),
+    ("partnership_50", "🤝 50 Partnership", "A stand reaches 50"),
+    ("partnership_100","🤝 100 Partnership","A stand reaches 100"),
+    ("match_won",      "🏆 Match Won",     "A side wins the match"),
+    ("impact_player",  "🔄 Impact Player", "A team uses its Impact Player"),
 ]
 # Cooldown in seconds — same (chat, event) can't fire twice within this window
 COOLDOWN_SECONDS = 8
@@ -61,6 +71,39 @@ def _pick_random(items, weight_fn):
     return items[-1]
 
 
+# Placeholders an admin may use in a caption. Substituted with str.replace and
+# NOT str.format — admin-written text may contain stray braces, which would make
+# format() raise, and a milestone celebration must never break a live match.
+# This mirrors services.commentary_service._render for the same reason.
+CAPTION_FIELDS = (
+    "player", "team", "opponent", "runs", "balls", "score", "overs",
+    "bowler", "figures", "wickets", "partnership", "margin",
+)
+
+
+def render_caption(text, fields=None):
+    """Fill an admin caption's placeholders. Unknown ones are left as written."""
+    out = text or ""
+    for key, value in (fields or {}).items():
+        out = out.replace("{" + str(key) + "}", str(value))
+    return out.strip()
+
+
+def _send_kind(pick):
+    """Which Telegram send method suits this row.
+
+    Defaults to send_animation — what every pre-caption row was sent with — so
+    existing media keeps behaving exactly as before.
+    """
+    source = str(getattr(pick, "source", "") or "").lower()
+    media_type = (getattr(pick, "media_type", "") or "").strip().lower()
+    if source.endswith((".mp4", ".mov")) or media_type == "video":
+        return "video"
+    if source.endswith((".jpg", ".jpeg", ".png", ".webp")) or media_type == "photo":
+        return "photo"
+    return "animation"
+
+
 def _on_cooldown(ctx, chat_id, event_key):
     """Return True if we just fired this event in this chat recently."""
     key = f"emcd_{chat_id}_{event_key}"
@@ -72,16 +115,26 @@ def _on_cooldown(ctx, chat_id, event_key):
     return False
 
 
-async def fire_event_media(context, chat_id, event_key):
-    """Send a random GIF for the given event_key to the chat.
+async def fire_event_media(context, chat_id, event_key, fields=None,
+                           cooldown=True):
+    """Send the configured celebration for ``event_key`` to the chat.
+
+    A row may carry media, a caption, or both:
+      * media + caption -> the clip/photo with the caption under it
+      * media only      -> what this has always done
+      * caption only    -> a plain text message, so an admin can configure a
+                           milestone message without having to find an image
+
+    ``fields`` fills the caption's placeholders (see CAPTION_FIELDS).
+    ``cooldown=False`` is for milestones, which are rare and must not be
+    swallowed by the anti-spam window meant for 6-6-6 overs.
 
     Silent on any error — never break the match flow.
     """
     if not event_key:
         return
 
-    # Cooldown check first (cheap)
-    if _on_cooldown(context, chat_id, event_key):
+    if cooldown and _on_cooldown(context, chat_id, event_key):
         return
 
     # Query DB for enabled media
@@ -102,21 +155,40 @@ async def fire_event_media(context, chat_id, event_key):
                 return
             source_type = pick.source_type
             source = pick.source
+            caption = render_caption(getattr(pick, "caption", None), fields)
+            kind = _send_kind(pick)
         finally:
             session.close()
     except Exception:
         logger.exception(f"fire_event_media({event_key}) DB error")
         return
 
-    # Send animation
+    # A caption with no media is still worth sending.
+    if not source:
+        if caption:
+            try:
+                await context.bot.send_message(chat_id=chat_id, text=caption,
+                                               parse_mode="HTML")
+            except Exception:
+                logger.exception(f"caption-only send failed for event {event_key}")
+        return
+
+    send = {
+        "photo": context.bot.send_photo,
+        "video": context.bot.send_video,
+        "animation": context.bot.send_animation,
+    }[kind]
+    arg = {"photo": "photo", "video": "video", "animation": "animation"}[kind]
+    kwargs = {"chat_id": chat_id}
+    if caption:
+        kwargs["caption"] = caption
+        kwargs["parse_mode"] = "HTML"
+
     try:
-        if source_type == "url":
-            # Telegram fetches the URL directly
-            await context.bot.send_animation(chat_id=chat_id, animation=source)
-        elif source_type == "telegram":
-            # source IS a Telegram file_id obtained by previously uploading
-            # the file to our storage channel. Telegram serves it directly.
-            await context.bot.send_animation(chat_id=chat_id, animation=source)
+        if source_type in ("url", "telegram"):
+            # 'url'      -> Telegram fetches it directly
+            # 'telegram' -> source IS a file_id from our storage channel
+            await send(**{arg: source}, **kwargs)
         elif source_type == "file":
             # Local file path — open and send. Note: on Render free tier, the
             # disk wipes on every deploy, so this is unreliable. Admins should
@@ -128,9 +200,9 @@ async def fire_event_media(context, chat_id, event_key):
                 logger.warning(f"Event media file missing: {full_path}")
                 return
             with open(full_path, "rb") as f:
-                await context.bot.send_animation(chat_id=chat_id, animation=f)
+                await send(**{arg: f}, **kwargs)
     except Exception:
-        logger.exception(f"send_animation failed for event {event_key}")
+        logger.exception(f"send_{kind} failed for event {event_key}")
 
 
 def detect_media_dimensions(file_bytes, filename):

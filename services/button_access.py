@@ -81,6 +81,14 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "cipl_bowler_",
     "cipl_bowlapp_",
     "cipl_batapp_",
+    # The Impact Player entry button rides on the over summary / innings-break
+    # card, which is sent while handling ONE captain's approach tap — so the
+    # registry would own it to that captain and lock the other one out of their
+    # own substitution. Both must reach it; cipl_play._impact_guard checks the
+    # clicker against bat_user_tg / bowl_user_tg and hands each captain their
+    # own options. The picker it opens is personal, and those buttons carry an
+    # owner tag instead (see OWNER_RULES below).
+    "cipl_imp_",
     # Super Over (tied /cipl, /c[league], /letsplay): the player-selection and
     # ball-by-ball prompts are shared between the two captains — the bowling side
     # picks delivery/length while the batting side picks the shot, all on the same
@@ -258,6 +266,19 @@ OWNER_RULES: dict[str, str] = {
     # team on the clock as well.
     "dr_pick_": ("⛔ Those buttons belong to whoever typed /pick. "
                  "Type /pick <player> yourself."),
+    # The Impact Player picker. Unlike the shared 🔄 button that opens it, each
+    # captain's picker lists their OWN squad and spends their ONE irreversible
+    # substitution, so the other captain must not be able to drive it — not even
+    # after a restart has emptied the registry, which is why these are owner-
+    # tagged rather than left to it. Both captains get their own via 🔄/-impact.
+    "cipl_impo_": ("⛔ That Impact Player picker belongs to the other captain. "
+                   "Tap 🔄 Impact Player, or send /impact, for your own."),
+    "cipl_impi_": ("⛔ That Impact Player picker belongs to the other captain. "
+                   "Tap 🔄 Impact Player, or send /impact, for your own."),
+    "cipl_impp_": ("⛔ That Impact Player picker belongs to the other captain. "
+                   "Tap 🔄 Impact Player, or send /impact, for your own."),
+    "cipl_impx_": ("⛔ That Impact Player picker belongs to the other captain. "
+                   "Tap 🔄 Impact Player, or send /impact, for your own."),
 }
 
 

@@ -13951,6 +13951,14 @@ def admin_scorecard_preview():
 # EVENT MEDIA — GIFs sent for in-match events (six, four, wicket, etc.)
 # ═══════════════════════════════════════════════════════════════════════
 
+# Placeholders an admin may drop into a milestone caption. Kept beside the
+# route so the help text on the page and the substitution in
+# services/event_media_service.render_caption cannot drift apart.
+def _media_caption_from_form():
+    from flask import request as _rq
+    return (_rq.form.get("caption") or "").strip() or None
+
+
 @app.route("/media")
 @login_required
 def admin_media_list():
@@ -14054,6 +14062,7 @@ def admin_media_detail(event_key):
                             )
                             if up["success"]:
                                 em = EventMedia(
+                                    caption=_media_caption_from_form(),
                                     event_key=event_key,
                                     source_type="telegram",
                                     source=up["file_id"],
@@ -14089,6 +14098,7 @@ def admin_media_detail(event_key):
                             with open(full_path, "wb") as f:
                                 f.write(file_bytes)
                             em = EventMedia(
+                                caption=_media_caption_from_form(),
                                 event_key=event_key,
                                 source_type="file",
                                 source=_os.path.join(event_key, unique),
@@ -14121,6 +14131,7 @@ def admin_media_detail(event_key):
                         except (TypeError, ValueError):
                             url_width = url_height = None
                         em = EventMedia(
+                            caption=_media_caption_from_form(),
                             event_key=event_key, source_type="url",
                             source=url_input, label=label or None,
                             weight=weight, enabled=True, duration_ms=duration_ms,
@@ -14189,6 +14200,9 @@ def admin_media_detail(event_key):
                             pass
                         em.size_mode = normalize_size_mode(request.form.get("size_mode"))
                         em.max_mobile_width = clamp_mobile_width(request.form.get("max_mobile_width"))
+                        # The milestone message sent with this media. Blank
+                        # clears it, which restores the silent-clip behaviour.
+                        em.caption = (request.form.get("caption") or "").strip() or None
                         try:
                             em.original_width = int(request.form.get("original_width") or 0) or None
                             em.original_height = int(request.form.get("original_height") or 0) or None
@@ -14212,9 +14226,10 @@ def admin_media_detail(event_key):
                 .order_by(EventMedia.enabled.desc(),
                           EventMedia.uploaded_at.desc())
                 .all())
+        from services.event_media_service import CAPTION_FIELDS
         return render_template("admin_media_detail.html",
                                event_key=event_key, event_meta=event_meta,
-                               rows=rows)
+                               rows=rows, caption_fields=CAPTION_FIELDS)
     finally:
         db.close()
 

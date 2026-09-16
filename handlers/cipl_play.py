@@ -43,6 +43,8 @@ from services.match_state_store import (
     A_COMPLETED,
 )
 from services import cipl_match
+from services import impact_player
+from services import milestones
 from engine.approach_modifiers import (
     BATTING_APPROACHES, BOWLING_APPROACHES,
 )
@@ -438,6 +440,41 @@ def build_xi_from_draft(session, draft, side):
     return [cipl_match.cp_to_player_dict(cp) for cp in ordered]
 
 
+def build_bench_from_draft(session, draft, side):
+    """Squad members left out of ``side``'s XI, as engine player dicts.
+
+    The Impact Player substitute pool. Kept next to build_xi_from_draft because
+    this is the one place that already knows all three squad sources — a
+    /cdraft squad living on the draft, a league's ChallengeTeam rows, and (in
+    handlers/letsplay.py) a user's own roster. Never raises: a bench that
+    cannot be resolved just means no substitutes, not a failed launch.
+    """
+    try:
+        from handlers.challenge import _challenge_xi_selection
+        selection = _challenge_xi_selection(draft, side)
+        selected_ids = {int(pid) for pid in selection.get("player_ids", [])}
+
+        if draft.get("mode") == "cdraft":
+            from services import cdraft_service
+            rows = cdraft_service.squad_cards(draft.get("cdraft") or {}, side)
+        else:
+            team_name = draft.get("host_team" if side == "host" else "target_team")
+            team_id = _resolve_challenge_team_id(
+                team_name, draft.get("league_key"), session)
+            if team_id is None:
+                return []
+            from models import ChallengePlayer
+            rows = (session.query(ChallengePlayer)
+                    .filter(ChallengePlayer.team_id == team_id)
+                    .order_by(ChallengePlayer.sort_order.asc())
+                    .all())
+        bench = [r for r in rows if int(r.id) not in selected_ids]
+        return [cipl_match.cp_to_player_dict(cp) for cp in bench]
+    except Exception:
+        logger.exception("cipl: could not build the Impact Player bench for %s", side)
+        return []
+
+
 # ════════════════════════════════════════════════════════════════════
 # Message management (delete previous over, edit/send action message)
 # ════════════════════════════════════════════════════════════════════
@@ -544,6 +581,39 @@ def _miniapp_row(state):
     except Exception:
         logger.exception("cipl view-match button build failed")
         return None
+
+
+def _impact_row(state, mid=None):
+    """The "Impact Player" button, or None when neither side has one left.
+
+    Appended to the over summary and the innings-break card — the two places
+    both captains are looking between overs. The button is shown while *either*
+    side still has a swap available; ownership is enforced on the callback,
+    because a shared message cannot have a per-viewer keyboard.
+    """
+    try:
+        usage = (state.get("impact_players") or {}).get("usage") or {}
+        sides = [state.get("bat_team_id"), state.get("bowl_team_id")]
+        bot_uid = state.get("bot_user_id") if _is_bot_match(state) else None
+        if all(bool((usage.get(str(uid)) or {}).get("used"))
+               for uid in sides if uid is not None and uid != bot_uid):
+            return None
+        mid = mid if mid is not None else state.get("match_id")
+        return [[InlineKeyboardButton("🔄 Impact Player",
+                                      callback_data=f"cipl_imp_{mid}")]]
+    except Exception:
+        logger.exception("cipl impact-player button build failed")
+        return None
+
+
+def _between_overs_row(state, mid=None):
+    """View Match + Impact Player, for the messages posted between overs."""
+    rows = _miniapp_row(state) or []
+    rows = [list(r) for r in rows]
+    extra = _impact_row(state, mid)
+    if extra:
+        rows.extend(extra)
+    return rows or None
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1338,6 +1408,10 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         bowl_side = "target" if bat_is_host else "host"
         bat_xi = build_xi_from_draft(session, draft, bat_side)
         bowl_xi = build_xi_from_draft(session, draft, bowl_side)
+        # Impact Player substitute pools, snapshotted now — the draft is gone by
+        # the time an over is bowled. See services/impact_player.py.
+        bat_bench = build_bench_from_draft(session, draft, bat_side)
+        bowl_bench = build_bench_from_draft(session, draft, bowl_side)
         if len(bat_xi) < 2 or len(bowl_xi) < 2:
             await _fail("Playing XI missing — restart the challenge.")
             return
@@ -1468,7 +1542,8 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
                                pitch_type,
                                bat_team_code=bat_team_code, bowl_team_code=bowl_team_code,
                                bat_team_emoji=bat_team_emoji, bowl_team_emoji=bowl_team_emoji,
-                               draft=draft, ball_format=ball_format)
+                               draft=draft, ball_format=ball_format,
+                               bat_bench=bat_bench, bowl_bench=bowl_bench)
     except Exception:
         logger.exception("/cipl match hand-off failed for match %s", match_obj.id)
         await _recover_failed_handoff(context, draft, draft_id,
@@ -1523,7 +1598,7 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
                            bat_xi, bowl_xi, bat_team_name, bowl_team_name,
                            pitch_type, bat_team_code="", bowl_team_code="",
                            bat_team_emoji="🏏", bowl_team_emoji="🏏", draft=None,
-                           ball_format="T20"):
+                           ball_format="T20", bat_bench=None, bowl_bench=None):
     state = cipl_match.build_cipl_state(
         match_id=match.id, overs=match.overs,
         bat_user_id=bat_user.id, bowl_user_id=bowl_user.id,
@@ -1534,7 +1609,8 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         is_private=chat_id > 0, stadium=match.stadium,
         bat_team_code=bat_team_code, bowl_team_code=bowl_team_code,
         bat_team_emoji=bat_team_emoji, bowl_team_emoji=bowl_team_emoji,
-        conditions=(draft or {}).get("conditions"), ball_format=ball_format)
+        conditions=(draft or {}).get("conditions"), ball_format=ball_format,
+        bat_bench=bat_bench, bowl_bench=bowl_bench)
     state["user_names"] = {
         str(bat_user.telegram_id): bat_user.username or bat_user.first_name or "Player",
         str(bowl_user.telegram_id): bowl_user.username or bowl_user.first_name or "Player",
@@ -1759,6 +1835,39 @@ async def _prompt_bowler(context, mid, state=None, first=False):
                                  A_PICK_CIPL_BOWLER)
 
 
+async def _bot_consider_impact(context, mid, state):
+    """Give the AI captain its one Impact Player swap, if it wants it now.
+
+    Called at the top of the bot's turn, which is the same window a human gets.
+    Never raises and never blocks the over: a failed swap just means the bot
+    plays on with the XI it has.
+    """
+    if not _is_bot_match(state):
+        return
+    bot_uid = state.get("bot_user_id")
+    if bot_uid is None or impact_player.cipl_side(state, bot_uid) is None:
+        return
+    try:
+        from services import bot_captain
+        na = await _get_next_action(context, mid)
+        choice = bot_captain.pick_impact_swap(state, bot_uid, na)
+        if not choice:
+            return
+        in_rid, out_rid, pos = choice
+        ok, _msg, rec = impact_player.cipl_use(
+            state, bot_uid, in_rid, out_rid, na, bat_position=pos)
+        if not ok:
+            return
+        await _ss(context, mid, state)
+        await _post_tracked(
+            context, state,
+            f"🔄 <b>Impact Player — {html.escape(str(rec.get('team_name') or 'Bot'))}</b>\n"
+            f"⬅️ {html.escape(str(rec.get('out_player') or ''))}   "
+            f"➡️ <b>{html.escape(str(rec.get('in_player') or ''))}</b>")
+    except Exception:
+        logger.exception("bot impact player swap failed for match %s", mid)
+
+
 async def _bot_take_the_ball(context, mid, state):
     """The AI captain picks its bowler for the over, then its approach.
 
@@ -1772,6 +1881,7 @@ async def _bot_take_the_ball(context, mid, state):
     # The AI captain solves a 5x5 game per candidate bowler, which is ~150ms of
     # pure Python. Cheap in absolute terms, but it must not sit on the event
     # loop while every other live match waits its turn.
+    await _bot_consider_impact(context, mid, state)
     bowler = await asyncio.to_thread(bot_captain.pick_bowler, state)
     if bowler is None:
         # Nothing legal to bowl — the innings has nowhere left to go.
@@ -1825,6 +1935,7 @@ async def _prompt_bowl_approach(context, mid, state, auto=False):
 async def _prompt_bat_approach(context, mid, state, auto=False):
     if _bot_bats(state):
         from services import bot_captain
+        await _bot_consider_impact(context, mid, state)
         state["batting_approach"] = await asyncio.to_thread(
             bot_captain.pick_batting_approach, state)
         await _ss(context, mid, state)
@@ -2245,6 +2356,379 @@ async def cipl_batapp_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 # Over execution + progression
 # ════════════════════════════════════════════════════════════════════
 
+# ════════════════════════════════════════════════════════════════════
+# Impact Player — one swap per side, between overs or at the innings break
+# ════════════════════════════════════════════════════════════════════
+#
+# The Mini App is spectate-only for these matches (see
+# services.crickidex_arena: cipl_view_only), so the picker lives in the chat.
+# Three taps — who goes out, who comes in, where they bat — then confirm.
+#
+# The window is simply "before the over is simulated": an over runs in one go,
+# so there is no mid-over moment to protect, and the innings break is just the
+# bowler pick before the first over of the chase.
+
+
+def _imp_cb(prefix, owner_tg, *parts):
+    """Owner-tagged callback data for the Impact Player picker.
+
+    ``("cipl_impo_", 11, 7, 9)`` -> ``"cipl_impo_u11_7_9"``. The owner id rides
+    in the data so the lock is stateless: a restart empties the button-owner
+    registry, and without the tag every picker in flight would fall open to the
+    other captain (services/button_access.check_callback_owner).
+    """
+    from services.button_access import tag_owner
+    tagged = tag_owner(prefix, owner_tg)
+    return "_".join([tagged] + [str(x) for x in parts])
+
+
+def _imp_parse(prefix, data, count):
+    """Read back ``_imp_cb`` data as ``count`` ints, or None if it is malformed.
+
+    Untagged data (a button from before this shipped) still parses, and is then
+    caught by the per-captain checks in the handler.
+    """
+    from services.button_access import split_owner
+    _owner, rest = split_owner(prefix, data or "", separator="_")
+    parts = [p for p in rest.split("_") if p != ""]
+    if len(parts) != count:
+        return None
+    try:
+        return [int(p) for p in parts]
+    except (TypeError, ValueError):
+        return None
+
+
+async def _impact_edit(q, text, keyboard):
+    """Edit the picker's OWN message (the one the tapped button sits on).
+
+    Deliberately not _edit_action_message: that targets state["action_msg_id"],
+    which is the bowler/approach prompt. Editing it here would wipe the prompt
+    the other captain is waiting on.
+    """
+    try:
+        await q.edit_message_text(
+            text, parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None)
+    except Exception:
+        logger.debug("impact picker edit failed", exc_info=True)
+
+
+def _impact_cancel_kb(mid, owner_tg):
+    return [[InlineKeyboardButton(
+        "✖️ Cancel", callback_data=_imp_cb("cipl_impx_", owner_tg, mid))]]
+
+
+async def _impact_guard(context, q, mid):
+    """Shared entry checks. Returns ``(state, opts)`` or ``(None, None)``."""
+    state = await _gs(context, mid)
+    if not state or not is_cipl_state(state):
+        await q.answer("Match not found.", show_alert=True)
+        return None, None
+    if _super_over_active(context, mid):
+        await q.answer("🔥 Super Over in progress.", show_alert=True)
+        return None, None
+    user_id = _user_id_for_tg(state, q.from_user.id)
+    if user_id is None:
+        await q.answer("Only the two captains can use Impact Player.",
+                       show_alert=True)
+        return None, None
+    na = await _get_next_action(context, mid)
+    opts = impact_player.cipl_options(state, user_id, na)
+    if not opts.get("ok"):
+        await q.answer(opts.get("message", "Unavailable."), show_alert=True)
+        return None, None
+    if not opts.get("can_use"):
+        await q.answer(opts.get("message", "Unavailable."), show_alert=True)
+        return None, None
+    return state, opts
+
+
+def _user_id_for_tg(state, tg_id):
+    """Map a Telegram id to the DB user id of the side they captain."""
+    if tg_id == state.get("bat_user_tg"):
+        return state.get("bat_team_id")
+    if tg_id == state.get("bowl_user_tg"):
+        return state.get("bowl_team_id")
+    return None
+
+
+async def cipl_impact_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Step 1 — who leaves the field."""
+    q = update.callback_query
+    try:
+        mid = int(q.data.split("_")[2])
+    except Exception:
+        await q.answer("Invalid selection.", show_alert=True)
+        return
+    async with get_match_lock(mid):
+        state, opts = await _impact_guard(context, q, mid)
+        if not state:
+            return
+        await q.answer()
+        owner_tg = q.from_user.id
+        rows, row = [], []
+        for p in opts["replaceable_players"]:
+            row.append(InlineKeyboardButton(
+                f"{p['name']} ({cipl_match.display_rating(p)})",
+                callback_data=_imp_cb("cipl_impo_", owner_tg, mid,
+                                      p["roster_id"])))
+            if len(row) == 2:
+                rows.append(row); row = []
+        if row:
+            rows.append(row)
+        rows.extend(_impact_cancel_kb(mid, owner_tg))
+        await _post_tracked(
+            context, state,
+            f"🔄 <b>Impact Player</b> — {html.escape(str(opts['legal_break']))}\n\n"
+            f"Step 1 of 3: who comes <b>off</b>?", keyboard=rows)
+        await _ss(context, mid, state)
+
+
+async def cipl_impact_out_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Step 2 — who comes on."""
+    q = update.callback_query
+    parsed = _imp_parse("cipl_impo_", q.data, 2)
+    if parsed is None:
+        await q.answer("Invalid selection.", show_alert=True)
+        return
+    mid, out_rid = parsed
+    async with get_match_lock(mid):
+        state, opts = await _impact_guard(context, q, mid)
+        if not state:
+            return
+        outgoing = next((p for p in opts["replaceable_players"]
+                         if p["roster_id"] == out_rid), None)
+        if not outgoing:
+            await q.answer(opts.get("blocked_note") or opts["message"],
+                           show_alert=True)
+            return
+        await q.answer()
+        owner_tg = q.from_user.id
+        rows, row = [], []
+        for p in opts["incoming_options"]:
+            row.append(InlineKeyboardButton(
+                f"{p['name']} ({cipl_match.display_rating(p)})",
+                callback_data=_imp_cb("cipl_impi_", owner_tg, mid, out_rid,
+                                      p["roster_id"])))
+            if len(row) == 2:
+                rows.append(row); row = []
+        if row:
+            rows.append(row)
+        rows.extend(_impact_cancel_kb(mid, owner_tg))
+        await _impact_edit(
+            q,
+            f"🔄 <b>Impact Player</b>\n\n"
+            f"Off: <b>{html.escape(str(outgoing['name']))}</b>\n"
+            f"Step 2 of 3: who comes <b>on</b>?", rows)
+
+
+async def cipl_impact_in_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Step 3 — where the substitute bats.
+
+    Asked for both sides. A side that is bowling has no batting order yet, so
+    the answer is stored and applied when end_first_innings builds one — that
+    is the case where "just append" would otherwise bat the substitute at 12.
+    """
+    q = update.callback_query
+    parsed = _imp_parse("cipl_impi_", q.data, 3)
+    if parsed is None:
+        await q.answer("Invalid selection.", show_alert=True)
+        return
+    mid, out_rid, in_rid = parsed
+    async with get_match_lock(mid):
+        state, opts = await _impact_guard(context, q, mid)
+        if not state:
+            return
+        incoming = next((p for p in opts["incoming_options"]
+                         if p["roster_id"] == in_rid), None)
+        outgoing = next((p for p in opts["replaceable_players"]
+                         if p["roster_id"] == out_rid), None)
+        if not incoming or not outgoing:
+            await q.answer(opts.get("blocked_note") or opts["message"],
+                           show_alert=True)
+            return
+        await q.answer()
+
+        if opts["side"] == "bat":
+            slots = impact_player.cipl_batting_slots(state, out_rid)
+        else:
+            # This side bats next innings; quote its order as it will be then.
+            future = impact_player.active_players(state.get("bowl_xi") or [])
+            future = [p for p in future if p.get("roster_id") != out_rid]
+            slots = [(i, ("Open" if i < 2 else f"Before {future[i]['name']}"))
+                     for i in range(len(future))]
+            slots.append((len(future), "Last"))
+
+        owner_tg = q.from_user.id
+        rows, row = [], []
+        for k, label in slots:
+            row.append(InlineKeyboardButton(
+                f"#{k + 1} · {label}",
+                callback_data=_imp_cb("cipl_impp_", owner_tg, mid, out_rid,
+                                      in_rid, k)))
+            if len(row) == 2:
+                rows.append(row); row = []
+        if row:
+            rows.append(row)
+        rows.extend(_impact_cancel_kb(mid, owner_tg))
+        when = ("bats" if opts["side"] == "bat" else "bats next innings")
+        await _impact_edit(
+            q,
+            f"🔄 <b>Impact Player</b>\n\n"
+            f"Off: <b>{html.escape(str(outgoing['name']))}</b>\n"
+            f"On: <b>{html.escape(str(incoming['name']))}</b>\n\n"
+            f"Step 3 of 3: where {when} "
+            f"<b>{html.escape(str(incoming['name']))}</b>?", rows)
+
+
+async def cipl_impact_pos_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Confirm the swap."""
+    q = update.callback_query
+    parsed = _imp_parse("cipl_impp_", q.data, 4)
+    if parsed is None:
+        await q.answer("Invalid selection.", show_alert=True)
+        return
+    mid, out_rid, in_rid, pos = parsed
+    async with get_match_lock(mid):
+        state = await _gs(context, mid)
+        if not state or not is_cipl_state(state):
+            await q.answer("Match not found.", show_alert=True)
+            return
+        user_id = _user_id_for_tg(state, q.from_user.id)
+        if user_id is None:
+            await q.answer("Only the two captains can use Impact Player.",
+                           show_alert=True)
+            return
+        # Re-check the window against the CURRENT action, not the one that drew
+        # the keyboard: the other captain may have started the over in between.
+        na = await _get_next_action(context, mid)
+        ok, msg, rec = impact_player.cipl_use(
+            state, user_id, in_rid, out_rid, na, bat_position=pos)
+        if not ok:
+            await q.answer(msg, show_alert=True)
+            return
+        await q.answer("Impact Player confirmed.")
+        await _ss(context, mid, state)
+        try:
+            _fire_milestones_async(context, state["chat_id"], [("impact_player", {
+                "team": rec.get("team_name") or "",
+                "player": rec.get("in_player") or "",
+                "opponent": rec.get("out_player") or "",
+                "score": _score_or_blank(state),
+                "overs": "", "runs": "",
+            })])
+        except Exception:
+            logger.exception("impact player media failed for match %s", mid)
+        try:
+            await _impact_edit(
+                q,
+                f"🔄 <b>Impact Player — {html.escape(str(rec.get('team_name') or 'Team'))}</b>\n\n"
+                f"⬅️ Off: {html.escape(str(rec.get('out_player') or ''))}\n"
+                f"➡️ On: <b>{html.escape(str(rec.get('in_player') or ''))}</b>"
+                f"{_impact_slot_line(rec)}", None)
+        except Exception:
+            logger.exception("cipl impact confirmation render failed for %s", mid)
+
+
+def _score_or_blank(state):
+    try:
+        return cipl_match.format_score(state)
+    except Exception:
+        return ""
+
+
+def _impact_slot_line(rec):
+    pos = rec.get("bat_position")
+    if pos is None:
+        return ""
+    where = "next innings" if rec.get("side") == "bowl" else "this innings"
+    return f"\n🏏 Batting #{int(pos) + 1} {where}"
+
+
+async def cipl_impact_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    parsed = _imp_parse("cipl_impx_", q.data, 1)
+    if parsed is None:
+        await q.answer()
+        return
+    mid = parsed[0]
+    state = await _gs(context, mid)
+    if state and _user_id_for_tg(state, q.from_user.id) is None:
+        await q.answer("Not your match.", show_alert=True)
+        return
+    await q.answer("Cancelled.")
+    try:
+        await q.edit_message_text("🔄 Impact Player — cancelled.")
+    except Exception:
+        pass
+
+
+async def impact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/impact — open the picker without a button.
+
+    The over summary carrying the button is deleted the moment the next over
+    starts (_delete_prev_over), so a button-only entry point would vanish.
+    """
+    msg = update.effective_message
+    chat = update.effective_chat
+    if not msg or not chat:
+        return
+    mid = await _find_cipl_match_in_chat(context, chat.id)
+    if not mid:
+        await msg.reply_text("No live over-by-over match in this chat.")
+        return
+    state = await _gs(context, mid)
+    if not state:
+        await msg.reply_text("No live over-by-over match in this chat.")
+        return
+    user_id = _user_id_for_tg(state, update.effective_user.id)
+    if user_id is None:
+        await msg.reply_text("Only the two captains can use Impact Player.")
+        return
+    na = await _get_next_action(context, mid)
+    opts = impact_player.cipl_options(state, user_id, na)
+    if not opts.get("can_use"):
+        await msg.reply_text(opts.get("message", "Impact Player is unavailable."))
+        return
+    await msg.reply_text(
+        "🔄 <b>Impact Player</b> is available — tap to pick.",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🔄 Impact Player",
+                                   callback_data=f"cipl_imp_{mid}")]]))
+
+
+# Celebration clips/messages are posted on a background task so a slow Telegram
+# upload never delays the next bowler prompt — same pattern as
+# handlers/match.py:_fire_event_media_async, which does this for the
+# ball-by-ball mode.
+_MILESTONE_TASKS = set()
+
+
+def _fire_milestones_async(context, chat_id, events):
+    """Post each milestone's configured message/image. Never raises."""
+    if not events:
+        return None
+
+    async def _runner():
+        try:
+            from services.event_media_service import fire_event_media
+            for key, fields in events:
+                # cooldown off: milestones are rare, and the 8s anti-spam window
+                # exists for 6-6-6 overs. Two batters reaching fifty in the same
+                # over must both be announced.
+                await fire_event_media(context, chat_id, key, fields=fields,
+                                       cooldown=False)
+        except Exception:
+            logger.exception("milestone media hook failed (non-fatal)")
+
+    task = asyncio.create_task(_runner(), name=f"cipl_milestones_{chat_id}")
+    _MILESTONE_TASKS.add(task)
+    task.add_done_callback(_MILESTONE_TASKS.discard)
+    return task
+
+
 async def _run_over(context, mid, state):
     # Hard stop on the format limit. Once the innings quota is used — 20 overs,
     # or 100 balls (20 sets) in The Hundred — no further over may be simulated,
@@ -2270,6 +2754,7 @@ async def _run_over(context, mid, state):
     # The over simulation is CPU-bound pure Python (6 balls + pressure/scenario
     # engines). Run it in a worker thread so it can't block the event loop — and
     # every other user's command/button — for the duration of the over.
+    before_milestones = milestones.snapshot(state)
     summary = await asyncio.to_thread(cipl_match.simulate_over, state)
 
     # Feed the over back to the AI captain: what the human picked, and what it
@@ -2296,9 +2781,15 @@ async def _run_over(context, mid, state):
     try:
         await _post_tracked(context, state,
                             _render_over_summary(state, summary),
-                            keyboard=_miniapp_row(state))
+                            keyboard=_between_overs_row(state, mid))
     except Exception:
         logger.exception("cipl over summary post failed for match %s", mid)
+
+    try:
+        _fire_milestones_async(context, state["chat_id"],
+                               milestones.detect(state, before_milestones, summary))
+    except Exception:
+        logger.exception("cipl milestone dispatch failed for match %s", mid)
 
     if innings_over:
         await _finish_innings(context, mid, state)
@@ -2419,7 +2910,21 @@ def _render_over_summary(state, summary):
             lines.append("🎳 Traits: " + ", ".join(html.escape(t) for t in bowl_t))
         if bat_t:
             lines.append("🏏 Traits: " + ", ".join(html.escape(t) for t in bat_t))
+    lines.extend(_impact_summary_lines(state))
     return "\n".join(lines)
+
+
+def _impact_summary_lines(state):
+    """One line per Impact swap, so the change of XI is visible on the board."""
+    out = []
+    for rec in impact_player.summary(state):
+        out.append(
+            f"🔄 <i>Impact Player ({html.escape(str(rec.get('team_name') or 'Team'))}): "
+            f"{html.escape(str(rec.get('in_player') or ''))} for "
+            f"{html.escape(str(rec.get('out_player') or ''))}</i>")
+    if out:
+        out.insert(0, "")
+    return out
 
 
 def _sym_key(s):
@@ -2640,7 +3145,7 @@ async def _innings_break(context, mid, state):
     text = (f"🛑 <b>Innings Break</b>\n\n{summary_text}\n\n"
             f"🎯 <b>{state['bat_team_name']}</b> need <b>{target}</b> to win "
             f"in {state['overs']} overs.")
-    kb = _miniapp_row(state)
+    kb = _between_overs_row(state, mid)
     # The break card is cosmetic. A failed send must not stop the chase from
     # starting below — that left the match sitting on an innings break with no
     # picker and no clock, waiting for someone to type /rcl.
@@ -2898,6 +3403,19 @@ async def _complete_match(context, mid, state):
         result_line = (f"🏆 {win_m} ({result['winner']}) beat "
                        f"{lose_m} ({result['loser']}) "
                        f"by {result['margin']} {result['margin_type']}!")
+
+    # The admin-configured win celebration, if one is set up.
+    if not result["tie"]:
+        try:
+            key, fields = milestones.match_won_event(
+                state,
+                result_line=f"{result['winner']} beat {result['loser']}",
+                winner_name=result["winner"],
+                margin=f"{result['margin']} {result['margin_type']}")
+            fields["opponent"] = result["loser"]
+            _fire_milestones_async(context, state["chat_id"], [(key, fields)])
+        except Exception:
+            logger.exception("cipl match_won milestone failed for match %s", mid)
 
     # Win/result message FIRST, then the Match Summary image — same order and
     # card as /wpm, /wpmbot and /cm. The match-end recap body sits inside an

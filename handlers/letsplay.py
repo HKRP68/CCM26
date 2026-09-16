@@ -1893,6 +1893,9 @@ async def _launch_match(context, draft, decision, winner_side):
         from services import trait_vote_service as tvs
         traits_on = draft.get("traits_enabled", True)
         host_xi = _xi_to_engine(session, host_pairs[:11], with_traits=traits_on)
+        # Everyone outside the XI is the Impact Player substitute pool. The /lpbot
+        # opponent gets none: its XI is built in memory with exactly 11.
+        host_bench = _xi_to_engine(session, host_pairs[11:], with_traits=traits_on)
         if vs_bot:
             guest_xi = list(draft.get("bot_xi") or [])
             if len(guest_xi) < 11:
@@ -1904,14 +1907,19 @@ async def _launch_match(context, draft, decision, winner_side):
                 # The /lpbot XI is built in memory with its traits inline, so it
                 # is stripped rather than re-queried.
                 guest_xi = tvs.strip_traits(guest_xi)
+            guest_bench = []
         else:
             guest_xi = _xi_to_engine(session, guest_pairs[:11],
                                      with_traits=traits_on)
+            guest_bench = _xi_to_engine(session, guest_pairs[11:],
+                                        with_traits=traits_on)
         session.commit()
 
         bat_is_host = (bat_info["user_id"] == host_info["user_id"])
         bat_xi = host_xi if bat_is_host else guest_xi
         bowl_xi = guest_xi if bat_is_host else host_xi
+        bat_bench = host_bench if bat_is_host else guest_bench
+        bowl_bench = guest_bench if bat_is_host else host_bench
         bat_team_name = bat_info["name"]
         bowl_team_name = bowl_info["name"]
 
@@ -1991,7 +1999,8 @@ async def _launch_match(context, draft, decision, winner_side):
         chat_id=draft["chat_id"], pitch_type=pitch_type,
         is_private=draft["chat_id"] > 0, stadium=stadium,
         bat_team_code=_team_code(bat_team_name), bowl_team_code=_team_code(bowl_team_name),
-        bat_team_emoji="🏏", bowl_team_emoji="🏏")
+        bat_team_emoji="🏏", bowl_team_emoji="🏏",
+        bat_bench=bat_bench, bowl_bench=bowl_bench)
     state["user_names"] = {
         str(bat_info["tg_id"]): bat_team_name,
         str(bowl_info["tg_id"]): bowl_team_name,

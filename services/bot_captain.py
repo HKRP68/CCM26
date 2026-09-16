@@ -988,3 +988,82 @@ def bowling_label(key):
 def elect_toss_decision():
     """Bat or bowl after winning the toss — a straight 50/50, as specified."""
     return random.choice(("bat", "bowl"))
+
+
+# ════════════════════════════════════════════════════════════════════
+# Impact Player
+# ════════════════════════════════════════════════════════════════════
+#
+# Deliberately a couple of fixed rules rather than another game-theoretic
+# solve: the swap is one irreversible decision per match, and a captain who
+# uses it at a sensible moment for a sensible reason is already playing it
+# about as well as a human does. Returns (in_rid, out_rid, position) or None.
+
+# How far behind the required rate the bot must be before it spends its swap on
+# a batter (runs per over).
+IMPACT_CHASE_DEFICIT = 2.0
+
+
+def _bat_value(p):
+    return float(p.get("bat_rating") or p.get("rating") or 0)
+
+
+def _bowl_value(p):
+    return float(p.get("bowl_rating") or p.get("rating") or 0)
+
+
+def pick_impact_swap(state, user_id, next_action):
+    """Should the AI captain use its Impact Player now, and for whom?
+
+    Two triggers, both cheap to reason about:
+
+    * **Bowling, at the innings break** — the second innings is a clean slate,
+      so bring the best bench bowler in for the weakest bowling option in the
+      XI. This is also the only moment the substitute gets a full quota.
+    * **Batting, chasing and falling behind** — once the required rate is
+      IMPACT_CHASE_DEFICIT above the current rate, swap the best bench batter
+      in for the weakest batter still to come, at the top of the remaining
+      order so they actually get to face the ball.
+    """
+    from services import cipl_match, impact_player
+
+    opts = impact_player.cipl_options(state, user_id, next_action)
+    if not opts.get("ok") or not opts.get("can_use"):
+        return None
+    bench = opts["incoming_options"]
+    replaceable = opts["replaceable_players"]
+    if not bench or not replaceable:
+        return None
+
+    if opts["side"] == "bowl":
+        if not (state.get("innings") == 2 and (state.get("current_over") or 1) <= 1):
+            return None
+        incoming = max(bench, key=_bowl_value)
+        outgoing = min(replaceable, key=_bowl_value)
+        if _bowl_value(incoming) <= _bowl_value(outgoing):
+            return None
+        # They bat next innings only if there is one — position is harmless here.
+        return incoming["roster_id"], outgoing["roster_id"], None
+
+    # Batting: only worth a swap while there is still an innings left to save.
+    chase = cipl_match.chase(state)
+    if not chase or chase.get("runs_required", 0) <= 0:
+        return None
+    if chase.get("balls_remaining", 0) < 12:
+        return None
+    if chase["rrr"] - cipl_match.current_run_rate(state) < IMPACT_CHASE_DEFICIT:
+        return None
+
+    # Only players yet to bat are worth replacing — someone already dismissed
+    # frees no slot in the order.
+    nb = state.get("next_batsman_idx") or 0
+    order = state.get("batting_order") or []
+    to_come = {p.get("roster_id") for p in order[nb:]}
+    candidates = [p for p in replaceable if p.get("roster_id") in to_come]
+    if not candidates:
+        return None
+    incoming = max(bench, key=_bat_value)
+    outgoing = min(candidates, key=_bat_value)
+    if _bat_value(incoming) <= _bat_value(outgoing):
+        return None
+    return incoming["roster_id"], outgoing["roster_id"], nb
