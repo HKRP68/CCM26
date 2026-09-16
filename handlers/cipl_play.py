@@ -2369,6 +2369,36 @@ async def cipl_batapp_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 # bowler pick before the first over of the chase.
 
 
+def _imp_cb(prefix, owner_tg, *parts):
+    """Owner-tagged callback data for the Impact Player picker.
+
+    ``("cipl_impo_", 11, 7, 9)`` -> ``"cipl_impo_u11_7_9"``. The owner id rides
+    in the data so the lock is stateless: a restart empties the button-owner
+    registry, and without the tag every picker in flight would fall open to the
+    other captain (services/button_access.check_callback_owner).
+    """
+    from services.button_access import tag_owner
+    tagged = tag_owner(prefix, owner_tg)
+    return "_".join([tagged] + [str(x) for x in parts])
+
+
+def _imp_parse(prefix, data, count):
+    """Read back ``_imp_cb`` data as ``count`` ints, or None if it is malformed.
+
+    Untagged data (a button from before this shipped) still parses, and is then
+    caught by the per-captain checks in the handler.
+    """
+    from services.button_access import split_owner
+    _owner, rest = split_owner(prefix, data or "", separator="_")
+    parts = [p for p in rest.split("_") if p != ""]
+    if len(parts) != count:
+        return None
+    try:
+        return [int(p) for p in parts]
+    except (TypeError, ValueError):
+        return None
+
+
 async def _impact_edit(q, text, keyboard):
     """Edit the picker's OWN message (the one the tapped button sits on).
 
@@ -2384,8 +2414,9 @@ async def _impact_edit(q, text, keyboard):
         logger.debug("impact picker edit failed", exc_info=True)
 
 
-def _impact_cancel_kb(mid):
-    return [[InlineKeyboardButton("✖️ Cancel", callback_data=f"cipl_impx_{mid}")]]
+def _impact_cancel_kb(mid, owner_tg):
+    return [[InlineKeyboardButton(
+        "✖️ Cancel", callback_data=_imp_cb("cipl_impx_", owner_tg, mid))]]
 
 
 async def _impact_guard(context, q, mid):
@@ -2435,16 +2466,18 @@ async def cipl_impact_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if not state:
             return
         await q.answer()
+        owner_tg = q.from_user.id
         rows, row = [], []
         for p in opts["replaceable_players"]:
             row.append(InlineKeyboardButton(
                 f"{p['name']} ({cipl_match.display_rating(p)})",
-                callback_data=f"cipl_impo_{mid}_{p['roster_id']}"))
+                callback_data=_imp_cb("cipl_impo_", owner_tg, mid,
+                                      p["roster_id"])))
             if len(row) == 2:
                 rows.append(row); row = []
         if row:
             rows.append(row)
-        rows.extend(_impact_cancel_kb(mid))
+        rows.extend(_impact_cancel_kb(mid, owner_tg))
         await _post_tracked(
             context, state,
             f"🔄 <b>Impact Player</b> — {html.escape(str(opts['legal_break']))}\n\n"
@@ -2455,12 +2488,11 @@ async def cipl_impact_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 async def cipl_impact_out_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Step 2 — who comes on."""
     q = update.callback_query
-    try:
-        _, _, mid, out_rid = q.data.split("_")
-        mid, out_rid = int(mid), int(out_rid)
-    except Exception:
+    parsed = _imp_parse("cipl_impo_", q.data, 2)
+    if parsed is None:
         await q.answer("Invalid selection.", show_alert=True)
         return
+    mid, out_rid = parsed
     async with get_match_lock(mid):
         state, opts = await _impact_guard(context, q, mid)
         if not state:
@@ -2472,16 +2504,18 @@ async def cipl_impact_out_callback(update: Update, context: ContextTypes.DEFAULT
                            show_alert=True)
             return
         await q.answer()
+        owner_tg = q.from_user.id
         rows, row = [], []
         for p in opts["incoming_options"]:
             row.append(InlineKeyboardButton(
                 f"{p['name']} ({cipl_match.display_rating(p)})",
-                callback_data=f"cipl_impi_{mid}_{out_rid}_{p['roster_id']}"))
+                callback_data=_imp_cb("cipl_impi_", owner_tg, mid, out_rid,
+                                      p["roster_id"])))
             if len(row) == 2:
                 rows.append(row); row = []
         if row:
             rows.append(row)
-        rows.extend(_impact_cancel_kb(mid))
+        rows.extend(_impact_cancel_kb(mid, owner_tg))
         await _impact_edit(
             q,
             f"🔄 <b>Impact Player</b>\n\n"
@@ -2497,12 +2531,11 @@ async def cipl_impact_in_callback(update: Update, context: ContextTypes.DEFAULT_
     is the case where "just append" would otherwise bat the substitute at 12.
     """
     q = update.callback_query
-    try:
-        _, _, mid, out_rid, in_rid = q.data.split("_")
-        mid, out_rid, in_rid = int(mid), int(out_rid), int(in_rid)
-    except Exception:
+    parsed = _imp_parse("cipl_impi_", q.data, 3)
+    if parsed is None:
         await q.answer("Invalid selection.", show_alert=True)
         return
+    mid, out_rid, in_rid = parsed
     async with get_match_lock(mid):
         state, opts = await _impact_guard(context, q, mid)
         if not state:
@@ -2527,16 +2560,18 @@ async def cipl_impact_in_callback(update: Update, context: ContextTypes.DEFAULT_
                      for i in range(len(future))]
             slots.append((len(future), "Last"))
 
+        owner_tg = q.from_user.id
         rows, row = [], []
         for k, label in slots:
             row.append(InlineKeyboardButton(
                 f"#{k + 1} · {label}",
-                callback_data=f"cipl_impp_{mid}_{out_rid}_{in_rid}_{k}"))
+                callback_data=_imp_cb("cipl_impp_", owner_tg, mid, out_rid,
+                                      in_rid, k)))
             if len(row) == 2:
                 rows.append(row); row = []
         if row:
             rows.append(row)
-        rows.extend(_impact_cancel_kb(mid))
+        rows.extend(_impact_cancel_kb(mid, owner_tg))
         when = ("bats" if opts["side"] == "bat" else "bats next innings")
         await _impact_edit(
             q,
@@ -2550,12 +2585,11 @@ async def cipl_impact_in_callback(update: Update, context: ContextTypes.DEFAULT_
 async def cipl_impact_pos_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Confirm the swap."""
     q = update.callback_query
-    try:
-        _, _, mid, out_rid, in_rid, pos = q.data.split("_")
-        mid, out_rid, in_rid, pos = int(mid), int(out_rid), int(in_rid), int(pos)
-    except Exception:
+    parsed = _imp_parse("cipl_impp_", q.data, 4)
+    if parsed is None:
         await q.answer("Invalid selection.", show_alert=True)
         return
+    mid, out_rid, in_rid, pos = parsed
     async with get_match_lock(mid):
         state = await _gs(context, mid)
         if not state or not is_cipl_state(state):
@@ -2614,11 +2648,11 @@ def _impact_slot_line(rec):
 
 async def cipl_impact_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    try:
-        mid = int(q.data.split("_")[2])
-    except Exception:
+    parsed = _imp_parse("cipl_impx_", q.data, 1)
+    if parsed is None:
         await q.answer()
         return
+    mid = parsed[0]
     state = await _gs(context, mid)
     if state and _user_id_for_tg(state, q.from_user.id) is None:
         await q.answer("Not your match.", show_alert=True)

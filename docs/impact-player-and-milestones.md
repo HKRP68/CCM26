@@ -27,6 +27,7 @@ Playing XI comes on for someone in it.
 | Innings-break order rebuild | `impact_player.rebuild_batting_order`, called from `cipl_match.end_first_innings` |
 | Substitute pool (bench) | `state["bat_bench"]` / `state["bowl_bench"]`, filled at launch |
 | Chat UI | `handlers/cipl_play.py` — `cipl_imp*` callbacks, `_impact_row`, `/impact` |
+| Button ownership | `services/button_access.py` — `cipl_imp_` in `SHARED_CALLBACK_PREFIXES`, the picker prefixes in `OWNER_RULES` |
 | AI captain | `services/bot_captain.py` — `pick_impact_swap` |
 
 ### The window
@@ -77,6 +78,32 @@ is what the third picker step offers. Two cases behave differently:
 A side that swaps while **bowling** has no batting order yet. The choice is
 stored on `impact_players.usage[uid]["bat_position"]` and applied when
 `end_first_innings` builds one.
+
+### Button ownership
+
+Two messages, two different rules — and getting either backwards is a
+live-match bug.
+
+The **🔄 entry button** rides on the over summary and the innings-break card.
+Those are sent while handling *one* captain's approach tap, so
+`services/button_access` registers the message to that captain — which would
+lock the other captain out of their own substitution. `cipl_imp_` is therefore
+listed in `SHARED_CALLBACK_PREFIXES`, exactly like `cipl_bowler_` /
+`cipl_bowlapp_` / `cipl_batapp_`, and `_impact_guard` checks the clicker
+against `bat_user_tg` / `bowl_user_tg` and hands each captain their own
+options. Both captains press the same button and each gets their own picker.
+
+The **picker itself** is personal: it lists one captain's squad and spends
+their one irreversible swap. Its buttons carry the owner's Telegram id in the
+callback data (`_imp_cb` / `_imp_parse`, via `button_access.tag_owner`), which
+makes the lock stateless — a restart empties the owner registry, and without
+the tag every picker in flight would fall open to the other captain. The four
+picker prefixes also have `OWNER_RULES` entries, so pressing someone else's
+picker says how to get your own rather than the generic refusal.
+
+Note `"cipl_impo_"` does **not** start with `"cipl_imp_"` (the character after
+`imp` is `o`, not `_`), so the shared entry prefix cannot accidentally
+un-protect the picker. There is a test pinning that.
 
 ### Bookkeeping that is easy to get wrong
 
@@ -167,6 +194,9 @@ python -m pytest tests/ -q          # full suite
 * `tests/test_event_media_caption.py` — caption substitution (including stray
   braces), send-method selection, backwards compatibility for caption-less rows,
   and that every key the detector emits has an admin UI entry.
+* `tests/test_impact_button_ownership.py` — that the other captain is not locked
+  out of the shared 🔄 button, that the picker stays personal even with an empty
+  registry, and that the callback data round-trips inside Telegram's 64-byte cap.
 * `tests/test_impact_player.py` — the pre-existing Mini App suite; it must stay
   green, since `match_webapp_service` now aliases the shared helpers.
 
