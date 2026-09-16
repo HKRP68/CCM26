@@ -1680,6 +1680,11 @@ class EventMedia(Base):
     label = Column(String(120), nullable=True)
     weight = Column(Integer, default=1)
     enabled = Column(Boolean, default=True)
+    # Admin-written message sent with the media (HTML). Supports {player},
+    # {team}, {runs} and friends — substituted by event_media_service.render_caption,
+    # which uses str.replace rather than str.format because admin text may
+    # contain stray braces. NULL/empty keeps the original silent-GIF behaviour.
+    caption = Column(Text, nullable=True)
     duration_ms = Column(Integer, default=3000)
     # MiniApp display controls. By default the browser sizes the box from the
     # uploaded GIF dimensions; fixed_16_9 is an admin-selected fallback mode.

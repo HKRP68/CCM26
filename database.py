@@ -674,6 +674,7 @@ def _migrate_add_columns():
     _try_add("event_media", "original_height", "INTEGER")
     _try_add("event_media", "max_mobile_width", "INTEGER DEFAULT 440")
     _try_add("event_media", "media_type", "VARCHAR(10) DEFAULT 'image'")
+    _try_add("event_media", "caption", "TEXT")
 
     # GameConfig: new simulation-tuning columns
     new_gameconfig_cols = {

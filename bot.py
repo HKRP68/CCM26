@@ -403,6 +403,7 @@ DM_ONLY_MENU_COMMANDS = frozenset(DM_ONLY_COMMANDS)
 ADMIN_MENU_COMMANDS = (
     ("grant", "Owner: grant a subscription tier to a user"),
     ("setcardid", "Admin: pin a Telegram photo as a player's card"),
+    ("setmilestone", "Admin: set in-match milestone messages and media"),
     ("clearmatches", "Admin: clear stuck matches in this chat"),
     ("removematch", "Admin: remove one stuck match by id"),
     ("frwd_grp", "Admin: forward a replied message to all groups"),
@@ -1810,12 +1811,26 @@ def main():
         from handlers.cipl_play import (
             cipl_coin_callback, cipl_toss_callback, cipl_bowler_callback,
             cipl_bowlapp_callback, cipl_batapp_callback, rcl_handler,
+            cipl_impact_callback, cipl_impact_out_callback,
+            cipl_impact_in_callback, cipl_impact_pos_callback,
+            cipl_impact_cancel_callback, impact_handler,
         )
         app.add_handler(CallbackQueryHandler(cipl_coin_callback, pattern=r"^cipl_coin_"))
         app.add_handler(CallbackQueryHandler(cipl_toss_callback, pattern=r"^cipl_toss_"))
         app.add_handler(CallbackQueryHandler(cipl_bowler_callback, pattern=r"^cipl_bowler_"))
         app.add_handler(CallbackQueryHandler(cipl_bowlapp_callback, pattern=r"^cipl_bowlapp_"))
         app.add_handler(CallbackQueryHandler(cipl_batapp_callback, pattern=r"^cipl_batapp_"))
+        # Impact Player — one swap per side, between overs or at the innings
+        # break. Shared by /letsplay and every Challenge League mode, since both
+        # run on the same over-by-over engine. Longer prefixes are registered
+        # first: r"^cipl_imp_" cannot match "cipl_impo_", but keeping the order
+        # explicit makes that intentional rather than lucky.
+        app.add_handler(CallbackQueryHandler(cipl_impact_out_callback, pattern=r"^cipl_impo_"))
+        app.add_handler(CallbackQueryHandler(cipl_impact_in_callback, pattern=r"^cipl_impi_"))
+        app.add_handler(CallbackQueryHandler(cipl_impact_pos_callback, pattern=r"^cipl_impp_"))
+        app.add_handler(CallbackQueryHandler(cipl_impact_cancel_callback, pattern=r"^cipl_impx_"))
+        app.add_handler(CallbackQueryHandler(cipl_impact_callback, pattern=r"^cipl_imp_"))
+        app.add_handler(CommandHandler(["impact", "ip"], impact_handler))
         # /rcl — resume a stuck Challenge League match from where it left off
         app.add_handler(CommandHandler(["rcl", "resumecl"], rcl_handler))
         # Super Over (tied /cipl, /c[league] and /letsplay matches) — interactive
@@ -2364,6 +2379,20 @@ def main():
             filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
             bluff_answer_message,
         ), group=2)
+
+        # /setmilestone — admin-configured in-match milestone messages + media.
+        # A dedicated group so the reply catcher sees the admin's next message
+        # (text OR an uploaded clip) without competing with the social games.
+        from handlers.setmilestone import (
+            setmilestone_handler, milestone_callback, milestone_reply_handler,
+        )
+        app.add_handler(CommandHandler(["setmilestone", "sms"], setmilestone_handler))
+        app.add_handler(CallbackQueryHandler(milestone_callback, pattern=r"^msm_"))
+        app.add_handler(MessageHandler(
+            (filters.TEXT | filters.ANIMATION | filters.PHOTO | filters.VIDEO
+             | filters.Document.ALL) & filters.ChatType.PRIVATE,
+            milestone_reply_handler,
+        ), group=6)
 
         # ── Text handler for over selection (must be LAST) ───────────
         app.add_handler(MessageHandler(

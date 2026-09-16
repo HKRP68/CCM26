@@ -30,6 +30,7 @@ from engine.game_state_engine import (
 from engine import approach_modifiers
 from engine import momentum as momentum_engine
 from engine import pitch_state
+from services import impact_player
 from engine.approach_modifiers import batting_label, bowling_label
 from services.match_engine import note_bowler_ball
 from services.sim_match import (
@@ -624,7 +625,7 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
                      pitch_type="Hard", is_private=False, stadium=None,
                      bat_team_code="", bowl_team_code="",
                      bat_team_emoji="🏏", bowl_team_emoji="🏏", conditions=None,
-                     ball_format="T20"):
+                     ball_format="T20", bat_bench=None, bowl_bench=None):
     """Build the initial state dict for a Challenge League approach match."""
     bat_stats = {str(p["roster_id"]): _new_bat_stat() for p in bat_xi}
     bowl_stats = {str(p["roster_id"]): _new_bowl_stat() for p in bowl_xi}
@@ -644,6 +645,12 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         "bat_user_tg": bat_user_tg, "bowl_user_tg": bowl_user_tg,
         "bat_team_name": bat_team_name, "bowl_team_name": bowl_team_name,
         "bat_xi": bat_xi, "bowl_xi": bowl_xi,
+        # Squad members outside the XI, snapshotted here so Impact Player has a
+        # substitute pool without re-querying. It has to be a snapshot: the three
+        # squad sources behind this one engine (UserRoster for /letsplay,
+        # ChallengePlayer for a league, the draft dict for /cdraft) are all out
+        # of reach by the time an over is bowled. See services/impact_player.py.
+        "bat_bench": list(bat_bench or []), "bowl_bench": list(bowl_bench or []),
         "batting_order": list(bat_xi),
         "current_over": 1, "current_ball": 0,
         "total_runs": 0, "total_wickets": 0, "extras_total": 0,
@@ -755,7 +762,10 @@ def eligible_bowlers(state):
 
     Within each tier, highest bowl_rating first.
     """
-    xi = state.get("bowl_xi") or []
+    # active_players, not the raw list: after an Impact swap the XI carries the
+    # outgoing player as an inactive entry, and they must never be handed the
+    # ball again.
+    xi = impact_player.active_players(state.get("bowl_xi") or [])
     # Which bowler is blocked from taking the next unit. In T20 it is simply the
     # previous over's bowler (no back-to-back overs). In The Hundred a bowler may
     # bowl two consecutive sets (a 10-ball spell), so only block them once that
@@ -1589,7 +1599,8 @@ def simulate_over(state):
     bowl_adapted = _adapt_player(bowler)
     # Fielding side quality — activates dropped catches / misfields in the
     # engine (computed once per over; the XI doesn't change mid-over).
-    fielding_q = _fielding_quality(state.get("bowl_xi"))
+    fielding_q = _fielding_quality(
+        impact_player.active_players(state.get("bowl_xi")))
     bws = state["bowl_stats"].setdefault(bowler_rid, _new_bowl_stat())
     bws["this_over_balls"] = 0
     bws["this_over_runs"] = 0
@@ -2388,7 +2399,9 @@ def _pick_fielder(state, bowler, allow_bowler=False):
     """Pick a plausible fielder name from the bowling XI for the scorecard
     dismissal line. The engine only emits a wicket *type*, not a fielder, so
     we attribute the catch/run-out to a random fieldsman."""
-    xi = state.get("bowl_xi") or []
+    # active only: a player replaced by an Impact substitute has left the field
+    # and must never appear on a "c Smith b Jones" line.
+    xi = impact_player.active_players(state.get("bowl_xi") or [])
     bowler_rid = bowler.get("roster_id") if bowler else None
     pool = [p for p in xi
             if allow_bowler or p.get("roster_id") != bowler_rid]
@@ -2486,7 +2499,17 @@ def end_first_innings(state):
     state["bat_team_emoji"], state["bowl_team_emoji"] = (
         state.get("bowl_team_emoji", "🏏"), state.get("bat_team_emoji", "🏏"))
     state["bat_xi"], state["bowl_xi"] = state["bowl_xi"], state["bat_xi"]
-    state["batting_order"] = list(state["bat_xi"])
+    state["bat_bench"], state["bowl_bench"] = (
+        state.get("bowl_bench") or [], state.get("bat_bench") or [])
+    # NOT list(bat_xi): a side that used its Impact Player while bowling carries
+    # the outgoing player as an inactive entry with the substitute appended
+    # last, so a straight copy would open the chase with someone who has left
+    # the field and bury the substitute at number 12. rebuild_batting_order
+    # drops the inactive entry and seats the substitute where the captain asked.
+    state["batting_order"] = impact_player.rebuild_batting_order(
+        state["bat_xi"],
+        (state.get("impact_players") or {}).get("usage") or {},
+        state.get("bat_team_id"))
 
     state["bat_stats"] = {str(p["roster_id"]): _new_bat_stat() for p in state["bat_xi"]}
     state["bowl_stats"] = {str(p["roster_id"]): _new_bowl_stat() for p in state["bowl_xi"]}
