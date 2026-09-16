@@ -2351,7 +2351,9 @@ def build_scorecard(match_id, user_id):
             if not st.get("balls") and not st.get("out") and not st.get("runs"):
                 continue  # didn't bat
             rows.append({
-                "name": p["name"], "runs": st.get("runs", 0),
+                "name": impact_player.display_name(p),
+                "impact": impact_player.is_impact(p),
+                "runs": st.get("runs", 0),
                 "balls": st.get("balls", 0), "fours": st.get("fours", 0),
                 "sixes": st.get("sixes", 0), "out": st.get("out", False),
                 "how_out": st.get("how_out", "") or ("not out" if not st.get("out") else "out"),
@@ -2371,7 +2373,9 @@ def build_scorecard(match_id, user_id):
                 overs = f"{st.get('overs_done', 0)}.{st.get('this_over_balls', 0)}" if st.get("this_over_balls") else str(st.get("overs_done", 0))
             econ = round(st.get("runs", 0) / (st.get("balls", 1) / 6), 2) if st.get("balls") else 0
             rows.append({
-                "name": p["name"], "overs": overs,
+                "name": impact_player.display_name(p),
+                "impact": impact_player.is_impact(p),
+                "overs": overs,
                 "runs": st.get("runs", 0), "wickets": st.get("wickets", 0),
                 "maidens": st.get("maidens", 0), "econ": econ,
             })

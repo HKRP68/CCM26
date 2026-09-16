@@ -275,5 +275,139 @@ class BenchSnapshotTests(unittest.TestCase):
         self.assertEqual(s["bowl_bench"], [])
 
 
+class OneUseSurvivesEverythingTests(unittest.TestCase):
+    """One swap per team, for the WHOLE match.
+
+    The usage record lives in the match state, so anything that reloads,
+    re-renders or re-serialises that state is a chance to hand a captain a
+    second swap. These drive the real paths rather than asserting on the dict.
+    """
+
+    def _used_a_swap(self):
+        s = _state()
+        ok, msg, _ = impact_player.cipl_use(s, 1, 50, 9, A_PICK_CIPL_BOWLER)
+        self.assertTrue(ok, msg)
+        return s
+
+    def test_it_survives_the_json_round_trip_persistence_actually_does(self):
+        # State is stored as JSON. If the usage keys did not survive that trip
+        # (they are str(user_id) for exactly this reason) every restart would
+        # refill both teams' swaps.
+        import json
+        s = self._used_a_swap()
+        reloaded = json.loads(json.dumps(s, default=str))
+        opts = impact_player.cipl_options(reloaded, 1, A_PICK_CIPL_BOWLER)
+        self.assertTrue(opts["used"])
+        self.assertFalse(opts["can_use"])
+        ok, msg, _ = impact_player.cipl_use(
+            reloaded, 1, 51, 8, A_PICK_CIPL_BOWLER)
+        self.assertFalse(ok)
+        self.assertIn("already used", msg)
+
+    def test_rcl_cannot_hand_out_a_second(self):
+        # /rcl runs _resume_locked, which only re-reads state and re-renders a
+        # prompt. Drive it for real with the sends stubbed out.
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import handlers.cipl_play as cp
+
+        s = self._used_a_swap()
+        ctx = SimpleNamespace(bot=None, bot_data={}, job_queue=None)
+
+        async def _gs(c, m):
+            return s
+
+        async def _na(c, m):
+            return A_PICK_CIPL_BOWLER
+
+        async def _prompt(context, mid, state=None, first=False):
+            return None
+
+        with patch.object(cp, "_gs", _gs), \
+             patch.object(cp, "_get_next_action", _na), \
+             patch.object(cp, "_prompt_bowler", _prompt), \
+             patch.object(cp, "_super_over_active", lambda c, m: False), \
+             patch.object(cp, "_innings_quota_used", lambda st: False):
+            asyncio.run(cp._resume_locked(ctx, 7))
+
+        opts = impact_player.cipl_options(s, 1, A_PICK_CIPL_BOWLER)
+        self.assertTrue(opts["used"], "/rcl refilled the swap")
+        self.assertFalse(opts["can_use"])
+
+    def test_both_sides_are_tracked_independently(self):
+        s = _state()
+        self.assertTrue(impact_player.cipl_use(
+            s, 1, 50, 9, A_PICK_CIPL_BOWLER)[0])
+        # The bowling side still has theirs...
+        self.assertTrue(impact_player.cipl_options(
+            s, 2, A_PICK_CIPL_BOWLER)["can_use"])
+        self.assertTrue(impact_player.cipl_use(
+            s, 2, 150, 105, A_PICK_CIPL_BOWLER)[0])
+        # ...and now neither does, in either innings.
+        cipl_match.end_first_innings(s)
+        for uid in (1, 2):
+            opts = impact_player.cipl_options(s, uid, A_PICK_CIPL_BOWLER)
+            self.assertTrue(opts["used"], f"user {uid} was refilled")
+            self.assertFalse(opts["can_use"])
+
+    def test_the_button_disappears_once_both_have_used_theirs(self):
+        import handlers.cipl_play as cp
+        s = _state()
+        impact_player.cipl_use(s, 1, 50, 9, A_PICK_CIPL_BOWLER)
+        self.assertIsNotNone(cp._impact_button(s, 7), "one side still has one")
+        impact_player.cipl_use(s, 2, 150, 105, A_PICK_CIPL_BOWLER)
+        self.assertIsNone(cp._impact_button(s, 7))
+
+
+class ImpactMarkingTests(unittest.TestCase):
+    """A substitute is marked wherever their name appears."""
+
+    def _swapped(self):
+        s = _state()
+        ok, msg, _ = impact_player.cipl_use(
+            s, 1, 50, 9, A_PICK_CIPL_BOWLER, bat_position=4)
+        self.assertTrue(ok, msg)
+        s["bat_stats"]["50"] = {"runs": 44, "balls": 21, "fours": 4,
+                                "sixes": 2, "out": False}
+        return s
+
+    def test_only_the_substitute_is_marked(self):
+        self.assertEqual(
+            impact_player.display_name({"name": "Sub", "impact_replacement": True}),
+            "Sub -IP")
+        self.assertEqual(impact_player.display_name({"name": "Regular"}),
+                         "Regular")
+        # The player who was replaced keeps their own name — they batted.
+        self.assertEqual(
+            impact_player.display_name({"name": "Dropped", "active": False,
+                                        "impact_replaced": True}),
+            "Dropped")
+
+    def test_the_flag_reaches_the_batting_order_not_just_the_xi(self):
+        # Every text scorecard renders from batting_order, so a flag that only
+        # lands on the XI list shows up nowhere.
+        s = self._swapped()
+        sub = next(p for p in s["batting_order"] if p["roster_id"] == 50)
+        self.assertTrue(impact_player.is_impact(sub))
+
+    def test_the_chat_scorecard_line_carries_it(self):
+        import handlers.cipl_play as cp
+        s = self._swapped()
+        sub = next(p for p in s["batting_order"] if p["roster_id"] == 50)
+        self.assertIn("-IP", cp._bat_line(sub, s["bat_stats"]))
+        self.assertIn("-IP", cp._compact_bat_line(sub, s["bat_stats"]))
+
+    def test_the_summary_card_rows_carry_it(self):
+        import handlers.cipl_play as cp
+        s = self._swapped()
+        bats, _bowls = cp._summary_rows(
+            s["bat_stats"], s["batting_order"], s["bowl_stats"], s["bowl_xi"])
+        sub_row = next(b for b in bats if b["name"] == "SuperSub")
+        self.assertTrue(sub_row["impact"])
+        self.assertTrue(all(not b["impact"] for b in bats
+                            if b["name"] != "SuperSub"))
+
+
 if __name__ == "__main__":
     unittest.main()

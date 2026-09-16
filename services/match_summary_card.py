@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 RED = (255, 70, 50)
 BLUE = (0, 170, 255)
 GOLD = (255, 207, 76)
+# Impact substitutes get a green row instead of their side's colour, so a
+# changed XI is obvious on the card without reading the names.
+IMPACT_GREEN = (34, 197, 94)
 TEXT = (242, 243, 246)
 CARD_BG = (7, 11, 18)
 PANEL_BG = (8, 12, 18)
@@ -285,23 +288,28 @@ def _draw_stadium(draw, text_settings, stadium):
     sx, sy = _xy(text_settings, "stadium", x + (w - tw) // 2, y + 7)
     _draw_shadowed_text(draw, (sx, sy), txt, f, fill=(255, 237, 174), tracking=5)
 
+# Rows are 4-tuples: (name, value1, value2, is_impact). The flag rides along
+# because _draw_rows tints an Impact substitute's row green, and these two
+# flatteners are the only place the source dicts survive to.
 def _normalise_batters(rows):
     out = []
     for b in (rows or [])[:4]:
         runs = b.get("runs", 0)
         star = "*" if not b.get("out", False) else ""
-        out.append((b.get("name", "—"), f"{runs}{star}", str(b.get("balls", 0))))
+        out.append((b.get("name", "—"), f"{runs}{star}", str(b.get("balls", 0)),
+                    bool(b.get("impact"))))
     while len(out) < 4:
-        out.append(("—", "—", "—"))
+        out.append(("—", "—", "—", False))
     return out
 
 
 def _normalise_bowlers(rows):
     out = []
     for b in (rows or [])[:4]:
-        out.append((b.get("name", "—"), f"{b.get('wickets', 0)}-{b.get('runs', 0)}", str(b.get("overs", "0"))))
+        out.append((b.get("name", "—"), f"{b.get('wickets', 0)}-{b.get('runs', 0)}",
+                    str(b.get("overs", "0")), bool(b.get("impact"))))
     while len(out) < 4:
-        out.append(("—", "—", "—"))
+        out.append(("—", "—", "—", False))
     return out
 
 
@@ -311,15 +319,22 @@ def _draw_rows(draw, x, y, w, rows, *, color, right_accent, text_settings, potm_
     name_f = _font_for(text_settings, "row_name", 34, italic=True, family="body")
     num_f = _font_for(text_settings, "row_number", 36, family="display")
     mini_f = _font_for(text_settings, "potm_badge", 18, family="body")
-    for i, (name, val1, val2) in enumerate(rows[:4]):
+    for i, row in enumerate(rows[:4]):
+        # Tolerate the old 3-tuple shape so a caller that has not been updated
+        # still renders (just without the Impact tint).
+        name, val1, val2 = row[0], row[1], row[2]
+        is_impact = bool(row[3]) if len(row) > 3 else False
         ry = y + i * row_h
-        tint = (color[0], color[1], color[2], 46)
+        row_color = IMPACT_GREEN if is_impact else color
+        # A heavier tint for an Impact row: at the side-colour's 46 alpha the
+        # green reads as a muddy version of the team colour rather than green.
+        tint = (row_color[0], row_color[1], row_color[2], 92 if is_impact else 46)
         draw.rectangle([x, ry, x + w, ry + row_h], fill=tint)
         draw.line([(x, ry + row_h), (x + w, ry + row_h)], fill=(255, 255, 255, 28))
         if right_accent:
-            draw.rectangle([x + w - 7, ry, x + w, ry + row_h], fill=(*color, 225))
+            draw.rectangle([x + w - 7, ry, x + w, ry + row_h], fill=(*row_color, 225))
         else:
-            draw.rectangle([x, ry, x + 7, ry + row_h], fill=(*color, 225))
+            draw.rectangle([x, ry, x + 7, ry + row_h], fill=(*row_color, 225))
 
         name_txt = _fit_text(draw, str(name).upper(), name_f, w - 320)
         nx, ny = _xy(text_settings, "row_name", x + 28, ry + 13)

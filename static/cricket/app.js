@@ -72,6 +72,13 @@ function isActiveXIPlayer(player) {
   return player?.active !== false;
 }
 
+// "-IP" after the name of a player who came on as an Impact substitute. Its own
+// span rather than part of the name string, because names are interpolated raw
+// throughout this file.
+function impactTag(player) {
+  return player?.impact_replacement ? '<span class="tb-row-impact">-IP</span>' : '';
+}
+
 // ═══════════════ Gameplay audio (in-game SFX + crowd ambience) ═══════════════
 // Sound config arrives in the /api/match payload as eventSounds (admin-editable
 // via the /sounds panel). Two independent player toggles, both default ON:
@@ -2395,7 +2402,7 @@ function renderScorecardPanel() {
     row.className = `tb-row ${isActive ? 'batting-active' : ''}`;
     row.innerHTML = `
       <span class="tb-row-name">
-        <span class="tb-row-name-text">${player.name}</span>
+        <span class="tb-row-name-text">${player.name}</span>${impactTag(player)}
         <span class="tb-row-status ${statusClass}">${statusText}</span>
       </span>
       <span class="tb-num-val">${runs}</span>
@@ -2424,6 +2431,9 @@ function renderScorecardPanel() {
 
   const ytbPlayers = (activeScorecardTab === activeScorecardTab) && activeTeam.xi.filter(p => {
     if (!p.id) return false;
+    // Someone replaced by an Impact substitute before they batted has left the
+    // field — they are not waiting to come in.
+    if (!isActiveXIPlayer(p)) return false;
     const pid = p.id.toString();
     const st = statsPool[pid] || {};
     const isOut = st.isOut;
@@ -2432,7 +2442,9 @@ function renderScorecardPanel() {
     return !isAtCrease && !isOut && !hasBatted;
   });
   document.getElementById('scorecard-yet-to-bat').innerText =
-    (ytbPlayers && ytbPlayers.length > 0) ? ytbPlayers.map(p => p.name).join(', ') : 'None';
+    (ytbPlayers && ytbPlayers.length > 0)
+      ? ytbPlayers.map(p => p.name + (p.impact_replacement ? ' -IP' : '')).join(', ')
+      : 'None';
 
   renderImpactPlayerSummary('scorecard-impact-list', matchState.impactPlayer?.summary || matchState.result?.impactPlayers || []);
 

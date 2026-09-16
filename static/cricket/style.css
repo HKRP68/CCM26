@@ -1407,6 +1407,17 @@ body {
 .tb-row-name-text { color: var(--text-primary); }
 .tb-row.batting-active .tb-row-name-text { color: var(--warning-accent); }
 
+/* "-IP" beside an Impact substitute's name on the scorecard. Green to match the
+   green row the summary-card image gives them, and muted enough to read as a
+   qualifier rather than part of the name. */
+.tb-row-impact {
+  font-size: 9px;
+  font-weight: 700;
+  color: #22c55e;
+  margin-left: 4px;
+  letter-spacing: 0.02em;
+}
+
 .tb-row-status {
   font-size: 9px;
   color: var(--text-muted);
