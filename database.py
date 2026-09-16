@@ -747,6 +747,7 @@ def _migrate_add_columns():
     _try_add("game_config", "cdraft_rating_min", "INTEGER DEFAULT 78 NOT NULL")
     _try_add("game_config", "cdraft_rating_max", "INTEGER DEFAULT 88 NOT NULL")
     _try_add("game_config", "cdraft_versions_json", "TEXT")
+    _try_add("game_config", "cdraft_pair_spread", "INTEGER DEFAULT 1 NOT NULL")
     # Rookie mode — the membership gate (services/rookie_gate.py). Defaults to
     # OFF so an existing deployment keeps its open-to-everyone behaviour until
     # an admin turns the gate on from the website.

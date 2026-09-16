@@ -95,7 +95,19 @@ means here.
 | Slot | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Role | Bat | Bowl | Bat | All | Bowl | Bat | WK | Bowl | Bat | All | Bowl |
-| ~OVR | 88 | 87 | 86 | 85 | 84 | 83 | 82 | 81 | 80 | 79 | 78 |
+
+The **roles** are fixed. The **ratings are not**: every slot draws its own
+target at random from the admin's band, so no slot is pinned to either end and
+no two drafts come out the same shape.
+
+```text
+a draft at 84–99
+Slot   1   2   3   4   5   6   7   8   9  10  11
+OVR   91  84  97  88  99  85  93  86  95  89  90
+
+the next one
+OVR   85  86  86  95  89  93  92  90  85  89  97
+```
 
 Four batsmen, one keeper, two all-rounders, four bowlers — **4/1/2/4**, the same
 shape the AI opponent's XI is built to (`services.bot_xi_builder.LPBOT_SHAPE`),
@@ -114,9 +126,9 @@ different keepers, `/cdraft` says so and refuses to start rather than deal a
 squad that could not take the field.
 
 **Why the roles are interleaved.** Blocking them (four batsmen first, four
-bowlers last) would put every bowler in the game ~10 OVR below every batsman, in
-every draft, for both sides. Spreading them down the ladder keeps the
-marquee-first feel without building that bias into the mode.
+bowlers last) would put every bowler in the game below every batsman whenever
+the ratings happened to trend downward, for both sides. Spreading the roles out
+keeps that bias from being built into the mode.
 
 ### The pick order is a snake
 
@@ -126,14 +138,16 @@ Picks  H  G  G  H  H  G  G  H  H  G  G
 ```
 
 Strict alternation would give the host every odd slot — six picks, with the
-advantage stacked on the best cards at the top of the ladder. The snake splits it
-**5 to the host, 6 to the guest**: the host's compensation is picking first, and
-the guest's is the last pick.
+advantage stacked on the earliest slots. The snake splits it **5 to the host,
+6 to the guest**: the host's compensation is picking first, and the guest's is
+the last pick.
 
 ### Fairness, concretely
 
-* Both cards in a pair share a role and sit within `CDRAFT_PAIR_SPREAD` OVR, so
-  no slot can hand one captain the better player.
+* Both cards in a pair share a role and sit within the **pair spread** (±1 by
+  default) of each other, so no slot can hand one captain the better player.
+  Random ratings do not change this: a slot's rating is drawn once and applies
+  to both cards, so whatever it draws, it draws for both captains at once.
 * Both squads finish on the same 4/1/2/4 shape.
 * Total squad OVR therefore lands within a point a slot of each other — in
   practice, a handful of points across all eleven.
@@ -173,6 +187,38 @@ is a one-off anyway) and the **overseas rule** (no home country, so the limits
 stay at 0/11). Team Chemistry does not apply either — the same call already made
 for league squads, for the same reason: these are not cards anyone collected.
 
+### Teams, and what the match card says
+
+A draft has no franchises, so each captain's team is named after them:
+**"Shanka Draft XI"**, built from their Telegram first name (their handle if
+they have no first name). The live match header needs a short code, and left to
+itself `_team_short_code` would reduce that to the initials `SDX` — so the draft
+supplies its own, `SHANKA`, through the `team_codes` map the draft dict already
+carries. A league builds that same map with the very resolver the header would
+have used, so this changes nothing for `/cipl`.
+
+The pinned match card names the competition rather than always saying "IPL"
+(`handlers/cipl_play._competition_line`):
+
+```text
+🏆 WHATEVER 🆚 SHANKA
+🎯 Challenge Draft
+━━━━━━━━━━━━━━━
+🏟️ Sheikh Zayed Cricket Stadium • 20 overs
+```
+
+| Match | Line |
+| --- | --- |
+| `/cipl`, `/cbbl`, any league | `⚡ High-Voltage {league} Battle ⚡` |
+| Tournament | `🏆 {tournament name}` |
+| CL Tour | `🏆 {league} Tour · Match {n}/{m}` |
+| `/cdraft` | `🎯 Challenge Draft` |
+
+What the line needs travels on the match state, set in `begin_cipl_match`:
+`league_name`, `tournament_name`, `cl_tour_*` and `mode_name`. Before this only
+`league_key` reached the state, and only for a bot match — which is why every
+card, in every league and every tournament, announced itself as IPL.
+
 ### Files
 
 | File | Role |
@@ -183,6 +229,7 @@ for league squads, for the same reason: these are not cards anyone collected.
 | `admin.py` → `admin_match_settings` | The same settings on the website, plus the `_cdraft_*` helpers that build the version tick list and the feasibility warning. |
 | `tests/test_cdraft.py` | The draft — including `test_every_draft_produces_two_legal_xis`, the mode's central claim checked over many random drafts against both rulebooks. |
 | `tests/test_cdraft_admin.py` | The settings — `/cdraftset`, and source-level checks on the route, the template and the config plumbing. |
+| `tests/test_cipl_announcement.py` | The match card's competition line, for all four kinds of match — including that a league's wording is byte-identical to what it always was. |
 
 ---
 
@@ -195,8 +242,10 @@ the website and the bot always agree, and both are editable either way.
 
 **Admin → 🏏 Match Gameplay → 🎯 Challenge Draft pool**
 
-* **Lowest / Highest rating** — the two ends of the ladder. Slot 1 is dealt
-  around the highest, slot 11 around the lowest.
+* **Lowest / Highest rating** — the band every slot draws its own rating from.
+  Not a ladder: no slot is pinned to either end.
+* **Pair spread** — how far apart the two cards offered in one slot may be on
+  OVR. Keep it small; at 0 a slot always offers two players on the same rating.
 * **Allowed versions** — a checkbox per edition that exists in your `players`
   table, with a card count beside each. **Tick nothing and every edition is
   allowed**, including any you add later; tick some and a draft deals nothing
@@ -209,9 +258,10 @@ fill all eleven slots, so you find out before a group does.
 
 ```text
 /cdraftset                        the current pool, and whether it can be dealt
-/cdraftset min 80                 the rating floor  (slot 11's target)
-/cdraftset max 92                 the rating ceiling (slot 1's target)
+/cdraftset min 80                 the band's floor
+/cdraftset max 92                 the band's ceiling
 /cdraftset range 80 92            both at once
+/cdraftset spread 1               ± OVR between the two cards in a slot
 /cdraftset versions Base, Legend  only these editions may be dealt
 /cdraftset versions all           clear the list — every edition allowed
 /cdraftset reset                  back to the defaults
@@ -232,6 +282,8 @@ The two settings are not equally binding, and the difference is deliberate:
   band** first, a point at a time, and only leaves the band once every rating
   in it has been tried. So a thin rating borrows from the rest of the pool you
   allowed, and breaks your range only when the whole of it has nothing.
+  (The band always comes from your settings, never from whichever ratings the
+  eleven slots happened to draw.)
 * A **version** you untick is *never* dealt. If the allowed editions genuinely
   can't supply a role, `/cdraft` refuses and names the role, rather than
   reaching for a card you excluded.
@@ -247,9 +299,9 @@ stored settings win wherever they are set.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `CDRAFT_RATING_TOP` | `88` | Slot 1's target OVR, until set on the website. |
-| `CDRAFT_RATING_BOTTOM` | `78` | Slot 11's target OVR, until set on the website. |
-| `CDRAFT_PAIR_SPREAD` | `1` | Max OVR gap between the two cards in one slot. |
+| `CDRAFT_RATING_TOP` | `88` | The band's ceiling, until set on the website. |
+| `CDRAFT_RATING_BOTTOM` | `78` | The band's floor, until set on the website. |
+| `CDRAFT_PAIR_SPREAD` | `1` | Max OVR gap in one slot, until set on the website. |
 | `CDRAFT_PICK_SECONDS` | `60` | Seconds per pick before the bot picks for you. |
 | `CDRAFT_MAX_AUTO_PICKS` | `3` | Lapsed picks in a row that end the draft. |
 

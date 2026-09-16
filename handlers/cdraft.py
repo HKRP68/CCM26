@@ -115,9 +115,37 @@ def _arm_lobby_expiry(ctx, draft, message_id):
         logger.exception("cdraft: could not schedule the setup backstop")
 
 
-def _team_name_for(label):
-    """A franchise name for a player: "@alice" → "@alice XI"."""
-    return f"{label} XI"
+def _player_name(user):
+    """The name a captain's team is built from.
+
+    First name first, then the handle — the opposite of
+    ``services.display_name.manager_name``, and deliberately so: that one is
+    right for a stats listing, where the handle is the identifier people search
+    by. Here the name is going on a team, so it wants the name a person goes by.
+    """
+    for value in (getattr(user, "first_name", None),
+                  getattr(user, "username", None)):
+        text = str(value or "").strip().lstrip("@")
+        if text:
+            return text
+    return "Player"
+
+
+def _team_name_for(user):
+    """A captain's team: "Shanka Draft XI"."""
+    return f"{_player_name(user)} Draft XI"
+
+
+# Telegram shows the short code in the live match header ("🏆 SHANKA 🆚 RUDRA"),
+# so it has to stay readable. Left to itself, _team_short_code would reduce
+# "Shanka Draft XI" to the initials SDX.
+TEAM_CODE_LENGTH = 8
+
+
+def _team_code_for(user):
+    """The short code for a captain's team: "SHANKA"."""
+    name = "".join(ch for ch in _player_name(user) if ch.isalnum())
+    return (name[:TEAM_CODE_LENGTH] or "PLAYER").upper()
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -412,8 +440,9 @@ def _lobby_text(draft, target_label=None):
         f"👑 <b>Host:</b> {_mention(host.get('tg_id'), host.get('name') or 'Host')}",
         "",
         f"Eleven slots. Each one offers <b>two players of the same role, within "
-        f"{cdraft_service.PAIR_SPREAD} OVR of each other</b> — the captain on the "
-        f"clock takes one, the other goes to their opponent.",
+        f"{settings.get('pair_spread', cdraft_service.PAIR_SPREAD)} OVR of each "
+        f"other</b> — the captain on the clock takes one, the other goes to "
+        f"their opponent.",
         "",
         "• No squads, no career cards — straight from the player pool.",
         # Both captains should know what they are drafting from before either
@@ -502,7 +531,7 @@ async def cdraft_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             slots = cdraft_service.build_slots(
                 seed=random.randrange(1 << 30),
                 top=settings["rating_max"], bottom=settings["rating_min"],
-                versions=settings["versions"])
+                spread=settings["pair_spread"], versions=settings["versions"])
         except cdraft_service.CdraftPoolError as exc:
             logger.warning("cdraft: could not deal a draft: %s", exc)
             await message.reply_text(
@@ -536,7 +565,10 @@ async def cdraft_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "target_allowed_teams": None,
             "vs_bot": False,
             "teams": [],
-            "team_codes": {},
+            # The live match header reads its short codes out of here (see
+            # cipl_play._launch_after_toss), so the captains' own names reach it
+            # instead of the initials _team_short_code would derive.
+            "team_codes": {_team_name_for(host): _team_code_for(host)},
             "overseas_min": 0,
             "overseas_max": 11,
             "ball_format": "T20",
@@ -544,7 +576,7 @@ async def cdraft_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "host": {"user_id": host.id, "tg_id": host.telegram_id,
                      "name": _user_label(host)},
             "target": {},
-            "host_team": _team_name_for(_user_label(host)),
+            "host_team": _team_name_for(host),
             "target_team": None,
             "cdraft": cdraft_service.new_state(slots),
             # Kept so the lobby card can name the pool this draft was dealt
@@ -689,7 +721,9 @@ async def cdraft_join_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         draft["target_tg_id"] = guest.telegram_id
         draft["target"] = {"user_id": guest.id, "tg_id": guest.telegram_id,
                            "name": guest_label}
-        draft["target_team"] = _team_name_for(guest_label)
+        draft["target_team"] = _team_name_for(guest)
+        draft.setdefault("team_codes", {})[draft["target_team"]] = \
+            _team_code_for(guest)
     finally:
         session.close()
 

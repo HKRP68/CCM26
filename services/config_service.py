@@ -72,13 +72,15 @@ DEFAULTS = {
     "match_style": "telegram",
     "challenge_max_overs": 2,
     "allow_same_team_challenge": False,
-    # Challenge Draft (/cdraft) player pool. The rating ladder's two ends, and
-    # the JSON list of Player.version labels a draft may deal (NULL/empty = all).
+    # Challenge Draft (/cdraft) player pool: the rating BAND every slot draws
+    # from, the JSON list of Player.version labels a draft may deal (NULL/empty
+    # = all), and how far apart the two cards offered in one slot may be.
     # Read through services.cdraft_service.load_settings, which falls back to
     # the CDRAFT_* environment defaults for anything unset here.
     "cdraft_rating_min": 78,
     "cdraft_rating_max": 88,
     "cdraft_versions_json": None,
+    "cdraft_pair_spread": 1,
     # Player card rendering style + admin-uploaded template settings
     "card_style": "tier",
     "card_template_image_path": None,
