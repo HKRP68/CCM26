@@ -26,9 +26,13 @@ of its own with no relationship to the coin economy in ``config.BUY_VALUES``.
 
 Contract, matching ``services.draft_service``: every function takes the session
 first, **nothing here commits**, and every refusal is an ``AuctionError``
-carrying **plain text** (never HTML) written for whoever triggered it. The
-``render_*`` helpers at the bottom are the opposite — they build HTML message
-bodies and escape as they go.
+carrying **plain text** (never HTML) written for whoever triggered it.
+
+Two things here do produce HTML, and both escape what they interpolate: the
+``render_*`` helpers at the bottom, and the ``headline`` on every
+``AuctionEvent`` — because a headline *is* the sentence the group is sent, and
+writing it once at the point the thing happened is what stops the announcement
+and the website's log describing the same event differently.
 """
 
 import json
