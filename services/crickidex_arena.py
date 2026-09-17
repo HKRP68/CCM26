@@ -530,12 +530,22 @@ def _serialize_match_state_impl(session, match, viewer_user):
     win_probability = None
     if innings_no == 2 and target is not None and balls_bowled < total_balls:
         try:
+            info = None
             from engine import chase_chance as cc
             runs_needed = max(0, int(target) - int(cur_runs))
             balls_left = max(0, total_balls - balls_bowled)
             # Skip once the chase is already settled (runs_needed clamped to 0),
             # so a won chase with balls left doesn't emit a stale 99/1 payload.
-            if runs_needed > 0 and balls_left > 0:
+            # The calibrated chase model (engine.chase_model) is what the
+            # simulation is steered onto at the death and the honest estimate
+            # before it, so it has to be what the broadcast bar shows too —
+            # otherwise the bar and the match disagree in front of everybody.
+            from services import cipl_match as _cm
+            info = (_cm.chase_chance_now(state)
+                    if _cm.chase_model_display(state) else None)
+            if info:
+                pass
+            elif runs_needed > 0 and balls_left > 0:
                 order = state.get("batting_order") or []
                 striker_p = _by_idx(order, state.get("striker_idx", 0)) or {}
                 non_striker_p = _by_idx(order, state.get("non_striker_idx", 1)) or {}
@@ -555,6 +565,7 @@ def _serialize_match_state_impl(session, match, viewer_user):
                         len(window) if window else None),
                 )
                 info = cc.apply_feasibility(info, runs_needed, balls_left)
+            if info:
                 win_probability = {
                     "batting": info["chasing_chance"],
                     "bowling": info["defending_chance"],

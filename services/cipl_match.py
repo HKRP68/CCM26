@@ -19,6 +19,7 @@ import random
 
 from engine.ball_outcome import calculate_outcome
 from engine import chase_chance
+from engine import chase_model
 from engine import ground_config
 from engine.pressure_engine import PressureEngine
 from engine.game_state_engine import (
@@ -198,6 +199,25 @@ CHASE_STEER_STRENGTH = 0.30
 # rating/trait-aware death resolution kicks in (in addition to any scenario-engine
 # finale phase). One over by default.
 CLUTCH_WINDOW_BALLS = 6
+
+# Calibrated chase model (engine.chase_model). Steers the last
+# ``CHASE_MODEL_BALLS`` legal balls of a live chase, in BOTH /letsplay and
+# Challenge League — the same situation used to resolve very differently in the
+# two modes (12 off 6 at rating parity was 68% in one and 48% in the other)
+# because only /letsplay ran the clutch amplifier. The controller owns the
+# window outright: the layers that used to steer it (the final-over drama
+# uplift, the chase-chance matrix steer, the clutch hook and the scripted
+# scenario finale) all stand down while it is on, so they cannot double-count.
+# Env kill-switch so a bad calibration can be turned off without a deploy.
+CHASE_MODEL_CONTROL = os.getenv("CC_CHASE_MODEL", "1") not in ("0", "false", "False")
+
+# How much of the chase the model steers. Five overs, matching the window the
+# old matrix steer already used, so exactly one model owns the death instead of
+# two taking turns. There is no shorter window with a clean handover: against
+# real results the matrix runs ~34 points generous at 6-12 balls and ~40 points
+# harsh at 24-30, so a narrower window only shrinks the seam rather than
+# closing it.
+CHASE_MODEL_BALLS = 30
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1050,8 +1070,13 @@ def _make_clutch_hook(runs_needed, balls_left, wickets_left, is_final_ball):
     active clutch traits (Finisher / Clutch / Death / Yorker) still decide the
     ball. It only tilts intent by how much the chase needs:
 
-      • required-per-ball ``rpb`` high  → go big: Six/Four up, Dot down, a modest
-        Wicket bump (risk of going for it).
+      • required-per-ball ``rpb`` high  → go big: Six/Four up, Singles down, and
+        Dot AND Wicket up — swinging for the fence misses more often than
+        milking a single does. (This used to cut dots while raising boundaries,
+        which is free runs and is where the old inflated last-over win rates
+        came from. The calibrated model in engine.chase_model now owns the
+        closing overs; this hook only covers a scripted scenario finale that
+        starts before them, and carries the same physics so the two agree.)
       • ``rpb`` low                     → play safe: Dot up, Six/Wicket down.
       • ``is_final_ball``               → maximum six-or-bust spread.
 
@@ -1066,9 +1091,9 @@ def _make_clutch_hook(runs_needed, balls_left, wickets_left, is_final_ball):
 
     six = 1.0 + 0.75 * intent          # up to 1.75
     four = 1.0 + 0.45 * intent         # up to 1.45
-    wkt = 1.0 + 0.35 * intent          # up to 1.35 (going for it → risk)
-    dot = 1.0 - 0.40 * intent          # down to 0.60
-    single = 1.0 - 0.15 * intent
+    wkt = 1.0 + 0.45 * intent          # up to 1.45 (going for it → risk)
+    dot = 1.0 + 0.30 * intent          # up to 1.30 (the swing that misses)
+    single = 1.0 - 0.40 * intent       # nobody is nudging it into the gap
 
     if rpb < 0.7:
         # Cruising home — protect wickets, milk singles, no need to slog.
@@ -1079,8 +1104,8 @@ def _make_clutch_hook(runs_needed, balls_left, wickets_left, is_final_ball):
         # bounds. Ratings/traits still pick who wins the moment.
         six = max(six, 1.85)
         four = max(four, 1.45)
-        wkt = max(wkt, 1.45)
-        dot = min(dot, 0.55)
+        wkt = max(wkt, 1.55)
+        dot = max(dot, 1.35)
 
     def _hook(raw_weights):
         rw = dict(raw_weights)
@@ -1452,16 +1477,172 @@ def _powerplay_runs(state):
     return sum(int(r or 0) for r in (state.get("over_runs") or [])[:pp])
 
 
+def _clamp_pct(v):
+    """Keep a surfaced win% off the 0/100 rails — no chase is certain until the
+    winning runs are hit, the same convention engine.chase_chance holds to."""
+    return max(1.0, min(99.0, float(v)))
+
+
+def chase_balls_left(state):
+    """Legal balls left in the innings — the controller's window and the axis
+    the calibrated table is keyed on. Derived from ``balls_bowled``, which
+    counts legal deliveries only, so a wide never shortens the window."""
+    return total_balls(state) - balls_bowled(state)
+
+
+def _live_chase(state):
+    """``(runs needed, legal balls left)`` for a live 2nd-innings chase, or None.
+
+    Tolerant of a partial state: read-only callers such as the broadcast win bar
+    hand this whatever they are holding, and a missing ball counter should mean
+    "not a last over", not a crash.
+    """
+    try:
+        if state.get("innings") != 2 or not state.get("target"):
+            return None
+        balls_left = chase_balls_left(state)
+        runs_needed = int(state["target"]) - int(state["total_runs"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if balls_left <= 0 or runs_needed <= 0:
+        return None
+    return runs_needed, balls_left
+
+
+def _chase_inputs(state, fielding_quality=None):
+    """Everything :func:`engine.chase_model.target_probabilities` needs, read off
+    a live 2nd-innings state. Returns None when this is not a live chase.
+
+    Shared deliberately between the controller and :func:`chase_chance_now`, so
+    the win% the analysis report charts is the same number the simulation was
+    steered onto rather than a second opinion from a different model.
+    """
+    live = _live_chase(state)
+    if not live:
+        return None
+    runs_needed, balls_left = live
+
+    order = state.get("batting_order", []) or []
+    s_idx, ns_idx = state.get("striker_idx", 0), state.get("non_striker_idx", 1)
+    striker = order[s_idx] if s_idx < len(order) else {}
+    non_striker = order[ns_idx] if ns_idx < len(order) else {}
+    bowler = state.get("current_bowler") or {}
+    bs = state.get("bat_stats", {}).get(str(striker.get("roster_id")), {})
+
+    # Who walks in on a wicket — the continuation after a dismissal is priced
+    # on them, so a side with a rabbit to come really is worse off at the death.
+    nxt = state.get("next_batsman_idx", 2)
+    next_in = order[nxt] if nxt < len(order) else {}
+
+    return {
+        "runs_needed": runs_needed,
+        "balls_left": balls_left,
+        "striker_bat": int(striker.get("bat_rating", 50) or 50),
+        "next_bat": int(next_in.get("bat_rating", 50) or 50) if next_in else None,
+        "non_striker_bat": int(non_striker.get("bat_rating", 50) or 50),
+        "bowler_rating": int(bowler.get("bowl_rating", 50) or 50),
+        "wickets_in_hand": (state.get("wicket_limit", WICKET_LIMIT)
+                            - int(state.get("total_wickets", 0))),
+        "striker_balls": int(bs.get("balls", 0) or 0),
+        "striker_traits": striker.get("traits"),
+        "bowler_traits": bowler.get("traits"),
+        "pitch": state.get("pitch_type"),
+        "momentum": state.get("momentum", 0.0),
+        "pressure": state.get("pressure", 0.0),
+        "conditions": state.get("conditions"),
+        "fielding_quality": fielding_quality,
+        "part_time_bowler": is_part_time_bowler(bowler),
+    }
+
+
+def chase_model_active(state):
+    """True when the calibrated controller owns this delivery: the final
+    ``balls_per_unit`` legal balls of a live chase, with wickets still in hand.
+
+    Keyed on balls left in the INNINGS rather than on the over number, so a
+    rain-shortened innings, a Hundred set (5 balls) and an over that starts with
+    fewer balls left than a full unit all land in the right place by themselves.
+    """
+    if not CHASE_MODEL_CONTROL:
+        return False
+    if int(state.get("total_wickets", 0)) >= state.get("wicket_limit", WICKET_LIMIT):
+        return False
+    live = _live_chase(state)
+    return bool(live) and live[1] <= CHASE_MODEL_BALLS
+
+
+def chase_model_display(state):
+    """True when the model, not the matrix, should supply the live win%.
+
+    Wider than :func:`chase_model_active`: the model steers the last five overs
+    but is the honest estimate for the whole second innings, and the chart has
+    no reason to fall back to a model that reads a routine chase as 20%.
+    """
+    return CHASE_MODEL_CONTROL and bool(_live_chase(state))
+
+
+def _make_chase_hook(state, fielding_quality=None, free_hit=False):
+    """The calibrated last-over controller as a weight hook, or None.
+
+    Composed LAST, so it receives the fully-composed natural weights — ratings,
+    traits, pitch, conditions, approach, pressure and every bounded nudge above
+    are already priced in. What it solves for is the residual between what those
+    weights would produce and what real cricket produces, which is why it is a
+    correction rather than an override.
+
+    Wrapped like :func:`_make_environment_hook`: any failure degrades to "no
+    controller" rather than killing a delivery.
+    """
+    try:
+        inputs = _chase_inputs(state, fielding_quality)
+        if not inputs:
+            return None
+        return chase_model.make_chase_hook(inputs, free_hit=free_hit,
+                                           window=CHASE_MODEL_BALLS)
+    except Exception:
+        logger.exception("last-over controller build failed; ignoring this ball")
+        return None
+
+
 def chase_chance_now(state):
-    """Live chasing-chance estimate for the current 2nd-innings situation (matrix
-    + player/pitch/momentum modifiers), or None when not a live chase. Used for
-    steering and safe to surface read-only — it never decides the result."""
+    """Live chasing-chance estimate for the current 2nd-innings situation, or
+    None when not a live chase. Safe to surface read-only — it never decides the
+    result.
+
+    Answered by the calibrated chase model (engine.chase_model) for the whole
+    second innings — the same model the simulation is steered by at the death,
+    so the number shown is never a second opinion on the match being played.
+
+    The runs-needed x wickets matrix in engine.chase_chance remains only as the
+    fallback for CC_CHASE_MODEL=0. It cannot see the clock: it reads any ask up
+    to 15 runs as 86% however many balls are left, and collapses everything
+    above 51 into one row, so it pinned a routine chase at 20% from ball one.
+    """
     if state.get("innings") != 2 or not state.get("target"):
         return None
     balls_left = total_balls(state) - balls_bowled(state)
     runs_needed = int(state["target"]) - int(state["total_runs"])
     if balls_left <= 0 or runs_needed <= 0:
         return None
+    # Same dict shape as final_chase_chance, so chase_history, the analysis
+    # report and the arena win bar are all unchanged.
+    if chase_model_display(state):
+        inputs = _chase_inputs(state)
+        if inputs:
+            probs = chase_model.target_probabilities(**inputs)
+            chasing = int(round(_clamp_pct(probs["win"])))
+            return {
+                "runs_needed": runs_needed,
+                "wickets_lost": int(state["total_wickets"]),
+                "wickets_remaining": inputs["wickets_in_hand"],
+                "base_chasing_chance": int(round(chase_model.target_probabilities(
+                    runs_needed, balls_left)["win"])),
+                "total_modifier": round(
+                    chase_model.situational_shift(**inputs), 2),
+                "chasing_chance": chasing,
+                "defending_chance": 100 - chasing,
+                "source": "chase_model",
+            }
     order = state.get("batting_order", []) or []
     s_idx, ns_idx = state.get("striker_idx", 0), state.get("non_striker_idx", 1)
     striker = order[s_idx] if s_idx < len(order) else {}
@@ -1726,23 +1907,39 @@ def simulate_over(state):
             and (scenario_phase == "finale" or balls_left <= CLUTCH_WINDOW_BALLS)
         )
 
+        # ── Calibrated last over ──
+        # ── Calibrated chase ──
+        # For the last CHASE_MODEL_BALLS of a live chase the model
+        # (engine.chase_model) owns the delivery in BOTH modes. Everything that
+        # used to steer this window stands down below, so exactly one model
+        # decides how often a chase of this size against these players comes
+        # off. The layers that stand down are gated rather than deleted, so
+        # CC_CHASE_MODEL=0 degrades to the old behaviour instead of to nothing.
+        chase_active = chase_model_active(state)
+
         # ── Scenario engine hook ──
         # Finale phase scripts the delivery outright; free-play/convergence
         # phases instead nudge the pressure effects toward the target corridor.
         # Skipped entirely for a LetsPlay clutch finale (no scripted override).
         scenario_override = (scenario_eng.get_override_outcome(striker, bowler)
-                             if (scenario_eng and not letsplay_finale) else None)
+                             if (scenario_eng and not letsplay_finale
+                                 and not chase_active) else None)
         if scenario_override:
             oc = _normalize_outcome(scenario_override)
         else:
-            if scenario_eng and not letsplay_finale:
+            if scenario_eng and not letsplay_finale and not chase_active:
                 _merge_pressure(pressure_effects, scenario_eng.get_scenario_bias({}))
 
             # Chase-chance steering — a controlled nudge toward the matrix-estimated
             # chasing chance. Skipped while a dramatic-finish scenario is actively
             # steering (those matches are curated by the ScenarioEngine), so the
             # two systems never fight.
-            if (scenario_eng is None or scenario_phase == "inactive") \
+            # Both layers stand down inside the controller's window: the
+            # spec baseline and the matrix both answer "how likely is this
+            # chase", which is exactly what the controller is now solving for,
+            # and stacking them would only spend its authority undoing them.
+            if (not chase_active) \
+                    and (scenario_eng is None or scenario_phase == "inactive") \
                     and innings == 2 and target:
                 # Layer 1: spec total-band baseline — tilt the whole chase toward
                 # the pitch's Chase Win% for this target (the "who wins" lever),
@@ -1787,8 +1984,11 @@ def simulate_over(state):
                 state["total_wickets"] - wkts_before)
             # A little extra drama in the innings' final over (more boundaries /
             # late wickets), nudged up further when a live chase is on.
+            # Still serves the 1st innings' final over and an already-decided
+            # chase; retired where the controller is in charge, since its fixed
+            # multipliers were tuned by feel against no outcome distribution.
             drama_hook = _make_last_over_drama_hook(
-                state["current_over"] >= overs_total,
+                state["current_over"] >= overs_total and not chase_active,
                 bool(target) and not chased)
             # Pitch Rule Engine layers: Sub-100 floor guard, the anti-capitulation
             # fighting-match corridor (2nd innings), and the per-innings variance
@@ -1812,12 +2012,16 @@ def simulate_over(state):
                     runs_needed, balls_left,
                     state.get("wicket_limit", WICKET_LIMIT) - state["total_wickets"],
                     balls_left == 1)
-                if letsplay_finale else None)
+                if (letsplay_finale and not chase_active) else None)
+            # The calibrated controller, LAST in the chain so it sees the
+            # finished natural weights and corrects them onto the target.
+            chase_hook = (_make_chase_hook(state, fielding_q, is_free_hit_ball)
+                          if chase_active else None)
             weight_hook = _compose_hooks(trait_hook, env_hook,
                                          wicket_hook, drama_hook,
                                          floor_hook, corridor_hook, variance_hook,
                                          dps_hook, mpi_hook, dot_hook,
-                                         clutch_hook)
+                                         clutch_hook, chase_hook)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
                 streak=streak, over_number=eng_over_idx, batter_runs=bs["runs"],

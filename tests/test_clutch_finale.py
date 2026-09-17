@@ -6,8 +6,10 @@ Covers:
   * Change B — the LetsPlay clutch hook scales with chase intent, and the death
     overs are resolved by ratings + traits (a strong finisher genuinely beats a
     rabbit; the Finisher trait lifts the six-rate) instead of a scripted value.
-  * Scope — CIPL (no ``clutch_finale`` flag) still runs the scripted scenario
-    finale; LetsPlay bypasses it.
+  * Scope — a scripted scenario finale that starts before the death still runs
+    for CIPL (and is still bypassed by LetsPlay). The closing overs themselves
+    now belong to the calibrated chase model for BOTH modes, which is covered
+    by tests/test_chase_model.py.
 """
 
 import random
@@ -123,14 +125,19 @@ class ClutchHookTests(unittest.TestCase):
     BASE = {"Dot": 30.0, "Single": 25.0, "Double": 8.0, "Three": 1.0,
             "Four": 12.0, "Six": 8.0, "Wicket": 6.0, "Extras": 2.0}
 
-    def test_high_intent_boosts_boundaries_and_cuts_dots(self):
-        # Need 18 off 6 → all-out intent.
+    def test_high_intent_boosts_boundaries_and_costs_dots(self):
+        # Need 18 off 6 → all-out intent. Aggression is not free: the same
+        # swing that clears the rope misses more often, so Dot and Wicket go UP
+        # with intent and the nudged single goes down. (This assertion used to
+        # read the other way; see the note in _make_clutch_hook and the
+        # calibration tests in tests/test_last_over.py.)
         hook = cm._make_clutch_hook(18, 6, 5, is_final_ball=False)
         out = hook(dict(self.BASE))
         self.assertGreater(out["Six"], self.BASE["Six"])
         self.assertGreater(out["Four"], self.BASE["Four"])
-        self.assertLess(out["Dot"], self.BASE["Dot"])
+        self.assertGreater(out["Dot"], self.BASE["Dot"])
         self.assertGreater(out["Wicket"], self.BASE["Wicket"])  # risk of going big
+        self.assertLess(out["Single"], self.BASE["Single"])
 
     def test_cruise_plays_safe(self):
         # Need 2 off 12 → cruising; protect wickets, milk singles.
@@ -142,9 +149,10 @@ class ClutchHookTests(unittest.TestCase):
 
     def test_final_ball_is_six_or_bust(self):
         hi = cm._make_clutch_hook(6, 1, 5, is_final_ball=True)(dict(self.BASE))
-        # Final ball spread is maximal: strongest six + hardest dot suppression.
+        # Six or bust, and "bust" is the other half of it — the widest spread of
+        # the innings in BOTH directions.
         self.assertGreaterEqual(hi["Six"] / self.BASE["Six"], 1.8)
-        self.assertLessEqual(hi["Dot"] / self.BASE["Dot"], 0.6)
+        self.assertGreaterEqual(hi["Dot"] / self.BASE["Dot"], 1.3)
 
     def test_weights_never_negative(self):
         hook = cm._make_clutch_hook(30, 6, 1, is_final_ball=True)
@@ -187,17 +195,16 @@ class ClutchFinaleRespectsRatingsAndTraits(unittest.TestCase):
 # --------------------------------------------------------------------------- #
 
 class ClutchFinaleScopeTests(unittest.TestCase):
-    def _armed(self, clutch):
+    def _armed(self, clutch, over=20, finish_ball=120):
         s = _last_over_state(need=18, clutch=clutch)
-        # Arm a scripted scenario finishing on the very last ball.
+        s["current_over"] = over
         s["scenario"] = {"type": "controlled_finish", "active": True,
-                         "finish_ball": 120, "finale_script": None,
+                         "finish_ball": finish_ball, "finale_script": None,
                          "finale_ball_index": 0, "convergence_logged": False,
                          "endgame_checked_overs": []}
         return s
 
-    def test_cipl_still_runs_scripted_override(self):
-        # No clutch flag → the scenario engine's scripted finale drives the over.
+    def _overrides(self, state):
         calls = [0]
         orig = cm.ScenarioEngine.get_override_outcome
 
@@ -208,30 +215,28 @@ class ClutchFinaleScopeTests(unittest.TestCase):
         cm.ScenarioEngine.get_override_outcome = wrap
         try:
             random.seed(5)
-            s = self._armed(clutch=False)
-            cm.simulate_over(s)
+            cm.simulate_over(state)
         finally:
             cm.ScenarioEngine.get_override_outcome = orig
-        self.assertGreater(calls[0], 0)
+        return calls[0]
+
+    def test_cipl_still_runs_scripted_override_before_the_death(self):
+        # Outside the chase model's window (the last CHASE_MODEL_BALLS of a live
+        # chase) the scenario engine is untouched, so a finale that closes out
+        # before the death still drives its own over.
+        s = self._armed(clutch=False, over=13, finish_ball=78)
+        self.assertGreater(self._overrides(s), 0)
         self.assertGreater(s["scenario"]["finale_ball_index"], 0)
 
-    def test_letsplay_bypasses_scripted_override(self):
-        calls = [0]
-        orig = cm.ScenarioEngine.get_override_outcome
-
-        def wrap(self, b, bo):
-            calls[0] += 1
-            return orig(self, b, bo)
-
-        cm.ScenarioEngine.get_override_outcome = wrap
-        try:
-            random.seed(5)
-            s = self._armed(clutch=True)
-            cm.simulate_over(s)
-        finally:
-            cm.ScenarioEngine.get_override_outcome = orig
-        self.assertEqual(calls[0], 0)
-        self.assertEqual(s["scenario"]["finale_ball_index"], 0)
+    def test_the_death_is_never_scripted_in_either_mode(self):
+        # Ratings decide the closing overs now — in Challenge League as well as
+        # in LetsPlay, which is the point of the calibrated chase model.
+        for over in (17, 20):
+            for clutch in (False, True):
+                s = self._armed(clutch=clutch, over=over)
+                self.assertEqual(self._overrides(s), 0,
+                                 msg="over %d, clutch=%s" % (over, clutch))
+                self.assertEqual(s["scenario"]["finale_ball_index"], 0)
 
 
 if __name__ == "__main__":
