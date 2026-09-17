@@ -472,6 +472,7 @@ def _lobby_text(draft, target_label=None):
         f"• 🎱 Pool: {_esc(cdraft_service.settings_summary(settings))}",
         "• Both XIs end up 4 batsmen, a keeper, 2 all-rounders, 4 bowlers.",
         "• Then pitch, toss, and a normal Challenge League match.",
+        "• 🔥 A tie goes to a Super Over — played out of the same eleven.",
         "",
         f"🙋 {who}",
     ])

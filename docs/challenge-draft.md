@@ -181,6 +181,26 @@ untouched, because a drafted card wears a `ChallengePlayer`'s clothes:
 `player_id` both land on the master card and Player-of-the-Match and global
 player stats are recorded against it like any other match.
 
+### A tie goes to a Super Over
+
+Nothing in `/cdraft` implements this, and nothing should. A drafted match
+finishes through `handlers/cipl_play.py` → `_complete_match` like every other
+over-by-over match, and the tie branch there sends any non-bot match to
+`handlers/super_over.py`. A Challenge Draft always has two humans (the command
+refuses a private chat and waits for someone to join), so it is never the bot
+match that branch excludes.
+
+The Super Over reads each side's eleven off `state['bat_xi']` /
+`state['bowl_xi']`, which by then are engine player dicts like any other — so a
+`DraftCard` is indistinguishable from a `ChallengePlayer` there, exactly as it
+is everywhere else. The squad being exactly eleven is the only thing worth
+checking, because selection needs three batters and a bowler out of it on every
+replay; `tests/test_cdraft_super_over.py` plays real drafted squads through a
+tie to a winner over several deals to pin that.
+
+The lobby card says so, so captains know a level score will not simply be
+declared a draw.
+
 Two things are deliberately absent, both because there is no league behind the
 squad: **XI memory** (`_resolve_team_id` returns `None`, and every drafted squad
 is a one-off anyway) and the **overseas rule** (no home country, so the limits
@@ -229,6 +249,7 @@ card, in every league and every tournament, announced itself as IPL.
 | `admin.py` → `admin_match_settings` | The same settings on the website, plus the `_cdraft_*` helpers that build the version tick list and the feasibility warning. |
 | `tests/test_cdraft.py` | The draft — including `test_every_draft_produces_two_legal_xis`, the mode's central claim checked over many random drafts against both rulebooks. |
 | `tests/test_cdraft_admin.py` | The settings — `/cdraftset`, and source-level checks on the route, the template and the config plumbing. |
+| `tests/test_cdraft_super_over.py` | A tied drafted match — the handoff out of `_complete_match`, and the Super Over played out on real drafted squads. |
 | `tests/test_cipl_announcement.py` | The match card's competition line, for all four kinds of match — including that a league's wording is byte-identical to what it always was. |
 
 ---

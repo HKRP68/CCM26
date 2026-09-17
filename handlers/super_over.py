@@ -1,4 +1,12 @@
-"""Super Over for tied Challenge League (/cipl, /c[league]) and /letsplay matches.
+"""Super Over for a tied match in every two-human over-by-over mode.
+
+That is /cipl and /c[league], /letsplay, and /cdraft — the last of which needs
+nothing of its own here: a Challenge Draft builds an ordinary league draft dict,
+so it finishes through ``cipl_play._complete_match`` like the rest, and the tie
+branch there has no mode condition to exclude it. The only thing a drafted
+squad changes is where its players came from, and this module reads them off
+``state['bat_xi']`` / ``state['bowl_xi']`` like any other XI. Pinned by
+tests/test_cdraft_super_over.py.
 
 When a Challenge-League-style match (the over-by-over "approach" engine shared by
 /cipl and /letsplay) ends level, this module takes over and plays a Super Over
