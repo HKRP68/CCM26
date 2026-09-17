@@ -403,6 +403,28 @@ def _bench_pairs(full_pairs, xi_ids):
     return [(e, p) for e, p in full_pairs if int(e.id) not in xi_set]
 
 
+def _bench_pairs_for_launch(session, user_id, xi_pairs):
+    """The Impact Player substitute pool: this roster, minus the XI taking the field.
+
+    It cannot be read off the XI snapshot. ``host_xi_roster_ids`` holds exactly
+    the eleven a captain confirmed, so ``pairs[11:]`` on a snapshot-built list is
+    always empty — which is why every /letsplay match answered the Impact Player
+    button with "No substitutes available outside your Playing XI" even when the
+    captain had a full bench. The bench is whatever the live roster holds beyond
+    those eleven, so it is read fresh here.
+
+    Never raises: no bench just means no substitutes, not a failed launch (the
+    same contract as ``cipl_play.build_bench_from_draft``).
+    """
+    try:
+        return _bench_pairs(_get_ordered_roster(session, user_id),
+                            [e.id for e, _p in (xi_pairs or [])])
+    except Exception:
+        logger.exception("letsplay: could not build the Impact Player bench "
+                         "for user %s", user_id)
+        return []
+
+
 def _pairs_from_roster_ids(session, user_id, roster_ids):
     """Rebuild ordered (UserRoster, Player) pairs from a snapshot of roster ids.
 
@@ -1892,10 +1914,15 @@ async def _launch_match(context, draft, decision, winner_side):
         # off) means traits play — what /letsplay always did.
         from services import trait_vote_service as tvs
         traits_on = draft.get("traits_enabled", True)
-        host_xi = _xi_to_engine(session, host_pairs[:11], with_traits=traits_on)
-        # Everyone outside the XI is the Impact Player substitute pool. The /lpbot
-        # opponent gets none: its XI is built in memory with exactly 11.
-        host_bench = _xi_to_engine(session, host_pairs[11:], with_traits=traits_on)
+        host_xi_pairs = host_pairs[:11]
+        host_xi = _xi_to_engine(session, host_xi_pairs, with_traits=traits_on)
+        # Everyone outside the XI is the Impact Player substitute pool, read off
+        # the live roster rather than sliced out of host_pairs — that list is the
+        # confirmed XI snapshot and holds exactly eleven. The /lpbot opponent
+        # gets none: its XI is built in memory with exactly 11.
+        host_bench = _xi_to_engine(
+            session, _bench_pairs_for_launch(session, host.id, host_xi_pairs),
+            with_traits=traits_on)
         if vs_bot:
             guest_xi = list(draft.get("bot_xi") or [])
             if len(guest_xi) < 11:
@@ -1909,10 +1936,13 @@ async def _launch_match(context, draft, decision, winner_side):
                 guest_xi = tvs.strip_traits(guest_xi)
             guest_bench = []
         else:
-            guest_xi = _xi_to_engine(session, guest_pairs[:11],
+            guest_xi_pairs = guest_pairs[:11]
+            guest_xi = _xi_to_engine(session, guest_xi_pairs,
                                      with_traits=traits_on)
-            guest_bench = _xi_to_engine(session, guest_pairs[11:],
-                                        with_traits=traits_on)
+            guest_bench = _xi_to_engine(
+                session,
+                _bench_pairs_for_launch(session, guest.id, guest_xi_pairs),
+                with_traits=traits_on)
         session.commit()
 
         bat_is_host = (bat_info["user_id"] == host_info["user_id"])

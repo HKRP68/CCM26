@@ -72,6 +72,22 @@ _ROLE_EMOJI = {
 _PICK_LABELS = ("🅰️", "🅱️")
 
 
+# What a button says when its draft has genuinely gone from bot_data. The old
+# wording ("This draft is no longer active.") left captains guessing mid-draft;
+# this names the three things that actually end a draft and what to do next.
+DRAFT_GONE_MESSAGE = (
+    "This draft has ended — it was cancelled, it timed out, or the bot "
+    "restarted. Start a fresh one with /cdraft."
+)
+
+# Picking is over but the draft itself is alive and in the Challenge League's
+# hands (pitch → Playing XI → toss). A stale slot button must not claim the
+# draft is dead when the match is being set up right now.
+PICKING_OVER_MESSAGE = (
+    "The picking is over — this match is already being set up."
+)
+
+
 def _pick_job_name(draft_id):
     return f"cdraft_pick_{draft_id}"
 
@@ -356,6 +372,12 @@ async def _advance(ctx, draft):
     if cdraft_service.is_complete(state):
         await _finish_draft(ctx, draft)
         return
+    # Belt and braces: the backstop is dropped when the guest joins, but it is
+    # the one job that could tear a *live* draft down (eleven picks at a minute
+    # each outlast CHALLENGE_DRAFT_EXPIRE), and every button would then report
+    # the draft as gone. Re-cancelling per slot costs nothing and makes that
+    # impossible however the job survived the join.
+    _cancel_lobby_expiry(ctx, draft.get("draft_id"))
     chat_id = draft.get("chat_id")
     slot = cdraft_service.current_slot(state)
     try:
@@ -450,6 +472,7 @@ def _lobby_text(draft, target_label=None):
         f"• 🎱 Pool: {_esc(cdraft_service.settings_summary(settings))}",
         "• Both XIs end up 4 batsmen, a keeper, 2 all-rounders, 4 bowlers.",
         "• Then pitch, toss, and a normal Challenge League match.",
+        "• 🔥 A tie goes to a Super Over — played out of the same eleven.",
         "",
         f"🙋 {who}",
     ])
@@ -624,7 +647,7 @@ async def cdraft_cancel_callback(update: Update, context: ContextTypes.DEFAULT_T
         return
     draft = context.bot_data.get(_challenge_team_draft_key(draft_id))
     if not draft or draft.get("mode") != "cdraft":
-        await query.answer("This draft is no longer active.", show_alert=True)
+        await query.answer(DRAFT_GONE_MESSAGE, show_alert=True)
         return
 
     turn = draft.get("turn")
@@ -687,7 +710,7 @@ async def cdraft_join_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     draft = context.bot_data.get(_challenge_team_draft_key(draft_id))
     if not draft or draft.get("mode") != "cdraft":
-        await query.answer("This draft is no longer active.", show_alert=True)
+        await query.answer(DRAFT_GONE_MESSAGE, show_alert=True)
         return
     if draft.get("turn") != "join":
         await query.answer("Somebody has already joined this draft.",
@@ -762,8 +785,12 @@ async def cdraft_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     draft = context.bot_data.get(_challenge_team_draft_key(draft_id))
-    if not draft or draft.get("mode") != "cdraft" or draft.get("turn") != "draft":
-        await query.answer("This draft is no longer active.", show_alert=True)
+    if not draft or draft.get("mode") != "cdraft":
+        await query.answer(DRAFT_GONE_MESSAGE, show_alert=True)
+        return
+    if draft.get("turn") != "draft":
+        # The draft is alive — it has simply handed over to the pitch/XI step.
+        await query.answer(PICKING_OVER_MESSAGE, show_alert=True)
         return
     state = draft["cdraft"]
     side = cdraft_service.current_side(state)

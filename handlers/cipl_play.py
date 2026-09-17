@@ -613,13 +613,17 @@ def _impact_button(state, mid=None):
     Shown while *either* captain still has one: the message is shared, so it
     cannot carry a per-viewer keyboard. Ownership is settled on the callback —
     whoever taps it gets their own side's picker (see _impact_guard).
+
+    "Has one left" means unused *and* holding a substitute. A side with nobody
+    outside its XI — a /cdraft squad is dealt exactly eleven — can never make
+    the swap, so offering them a button whose only answer is "No substitutes
+    available outside your Playing XI" is worse than not offering it.
     """
     try:
-        usage = (state.get("impact_players") or {}).get("usage") or {}
         sides = [state.get("bat_team_id"), state.get("bowl_team_id")]
         bot_uid = state.get("bot_user_id") if _is_bot_match(state) else None
-        if all(bool((usage.get(str(uid)) or {}).get("used"))
-               for uid in sides if uid is not None and uid != bot_uid):
+        if not any(impact_player.cipl_available_to(state, uid)
+                   for uid in sides if uid is not None and uid != bot_uid):
             return None
         mid = mid if mid is not None else state.get("match_id")
         return InlineKeyboardButton("🔄 Impact Player",
