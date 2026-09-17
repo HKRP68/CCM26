@@ -536,14 +536,13 @@ def _serialize_match_state_impl(session, match, viewer_user):
             balls_left = max(0, total_balls - balls_bowled)
             # Skip once the chase is already settled (runs_needed clamped to 0),
             # so a won chase with balls left doesn't emit a stale 99/1 payload.
-            # Inside the final over the calibrated controller
-            # (engine.last_over) is what the simulation is actually being
-            # steered onto, so it has to be what the broadcast bar shows too —
-            # otherwise the bar and the match disagree at the one moment
-            # everybody is watching it.
+            # The calibrated chase model (engine.chase_model) is what the
+            # simulation is steered onto at the death and the honest estimate
+            # before it, so it has to be what the broadcast bar shows too —
+            # otherwise the bar and the match disagree in front of everybody.
             from services import cipl_match as _cm
             info = (_cm.chase_chance_now(state)
-                    if _cm.last_over_active(state) else None)
+                    if _cm.chase_model_display(state) else None)
             if info:
                 pass
             elif runs_needed > 0 and balls_left > 0:

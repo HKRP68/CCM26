@@ -1,4 +1,4 @@
-"""Tests for the calibrated last-over model (engine/last_over.py) and its
+"""Tests for the calibrated chase model (engine/chase_model.py) and its
 wiring into services/cipl_match.py.
 
 The point of the module is that the final over of a chase lands on real-cricket
@@ -17,7 +17,7 @@ import os
 import random
 import unittest
 
-from engine import last_over as lo
+from engine import chase_model as lo
 from services import cipl_match as cm
 
 SLOW = os.getenv("SLOW_TESTS") == "1"
@@ -68,6 +68,98 @@ class TableTests(unittest.TestCase):
                     p = lo.PAR_TABLE[edge][b][r]
                     self.assertGreater(p, 0.0)
                     self.assertLess(p, 100.0)
+
+
+class WholeInningsTests(unittest.TestCase):
+    """The surface spans the whole second innings, not just the final over.
+
+    The hand-written anchors only correct the last over; from 12 balls out the
+    backward induction stands on its own. These are the real T20 reference
+    points it has to land on for that claim to be worth anything.
+    """
+
+    # (balls left, runs needed, real T20 win% for a par contest with wickets
+    # in hand). Spread across required rates of 8, 12 and 15 an over so the
+    # whole shape is pinned, not one slice of it.
+    REFERENCE = [
+        (6, 8, 85), (6, 12, 60), (6, 16, 30), (6, 20, 13),
+        (12, 16, 72), (12, 24, 33), (12, 30, 15),
+        (18, 24, 78), (18, 36, 33), (18, 45, 10),
+        (24, 32, 80), (24, 48, 33), (24, 60, 8),
+        (30, 40, 82), (30, 60, 33), (30, 75, 7),
+        (60, 80, 85), (60, 120, 25),
+        (90, 120, 70), (114, 160, 50),
+    ]
+
+    def test_tracks_real_cricket_across_every_horizon(self):
+        errs = []
+        for balls, need, real in self.REFERENCE:
+            got = lo.PAR_TABLE[0][balls][need]
+            errs.append(got - real)
+            self.assertAlmostEqual(
+                got, real, delta=8.0,
+                msg="%d off %d (%.1f rpo): %.1f%%, real ~%d%%"
+                    % (need, balls, need * 6.0 / balls, got, real))
+        rms = (sum(e * e for e in errs) / len(errs)) ** 0.5
+        self.assertLess(rms, 4.0, msg="RMS error %.1f across the surface" % rms)
+
+    def test_an_ordinary_chase_is_not_a_lost_cause(self):
+        # The bug that started this: the old runs x wickets matrix pinned a
+        # routine chase at 20% from ball one, because every ask above 51 runs
+        # collapsed into its last row. 160 off 114 is a coin flip.
+        self.assertGreater(lo.PAR_TABLE[0][114][160], 35.0)
+        self.assertLess(lo.PAR_TABLE[0][114][160], 65.0)
+
+    def test_no_cliff_at_the_anchor_seam(self):
+        # The correction applies at 6 balls and not at 7, so the join is where a
+        # discontinuity would show. A 45-point step is exactly the artefact this
+        # work exists to remove.
+        #
+        # Measured against the neighbouring steps rather than a fixed number: an
+        # extra delivery is genuinely worth a lot when the ask is steep, so "12
+        # points" is not by itself evidence of a seam. What would be evidence is
+        # the seam step standing out from the steps either side of it.
+        n = lo.ANCHOR_BALLS
+        for edge in lo.TABLE_EDGES:
+            for r in range(1, 60):
+                row = lo.PAR_TABLE[edge]
+                seam = row[n + 1][r] - row[n][r]
+                neighbours = max(row[n][r] - row[n - 1][r],
+                                 row[n + 2][r] - row[n + 1][r])
+                # The floor keeps the ratio rule from firing where both steps
+                # are small. The observed worst is 10.4, in the most
+                # extrapolated bucket at a near-certain ask; 12 is still four
+                # times smaller than the 45-point drop this guards against.
+                self.assertLessEqual(
+                    seam, max(neighbours * 1.6, 12.0),
+                    msg="edge %d, %d needed: seam step %+.1f against "
+                        "neighbouring steps of %+.1f" % (edge, r, seam, neighbours))
+
+    def test_a_thinning_batting_side_is_priced(self):
+        # Flat batting depth was what made a full-innings chase read as 83%.
+        self.assertGreater(lo.WICKET_DEGRADE, 0.0)
+        self.assertGreater(
+            lo.target_probabilities(60, 60, wickets_in_hand=8)["win"],
+            lo.target_probabilities(60, 60, wickets_in_hand=1)["win"])
+
+
+class BuildCostTests(unittest.TestCase):
+    def test_importing_the_module_does_not_build_the_table(self):
+        # The first cut of this shipped a 2.13s import — paid by the bot, every
+        # worker and every test run — because the surface was inducted at module
+        # load. It is deterministic, so it is built once per process on demand.
+        import importlib
+        import time
+        mod = importlib.import_module("engine.chase_model")
+        importlib.reload(mod)
+        t0 = time.time()
+        importlib.reload(mod)
+        self.assertLess(time.time() - t0, 0.5)
+
+    def test_the_table_is_built_once_and_cached(self):
+        first = lo.tables()
+        self.assertIs(lo.tables(), first)
+        self.assertIs(lo.PAR_TABLE, first[0])
 
 
 # --------------------------------------------------------------------------- #
@@ -365,13 +457,13 @@ class SolverTests(unittest.TestCase):
                 self.assertLessEqual(m, lo.EXEC_MULT_CEIL + 1e-9)
 
     def test_hook_declines_when_there_is_nothing_to_steer(self):
-        self.assertIsNone(lo.make_last_over_hook(dict(self.PAR, runs_needed=0)))
-        self.assertIsNone(lo.make_last_over_hook(dict(self.PAR, balls_left=0)))
-        self.assertIsNone(lo.make_last_over_hook(dict(self.PAR, wickets_in_hand=0)))
-        self.assertIsNone(lo.make_last_over_hook(dict(self.PAR, runs_needed=99)))
+        self.assertIsNone(lo.make_chase_hook(dict(self.PAR, runs_needed=0)))
+        self.assertIsNone(lo.make_chase_hook(dict(self.PAR, balls_left=0)))
+        self.assertIsNone(lo.make_chase_hook(dict(self.PAR, wickets_in_hand=0)))
+        self.assertIsNone(lo.make_chase_hook(dict(self.PAR, runs_needed=99)))
 
     def test_hook_returns_usable_weights(self):
-        hook = lo.make_last_over_hook(dict(self.PAR))
+        hook = lo.make_chase_hook(dict(self.PAR))
         out = hook(dict(BASE_WEIGHTS))
         self.assertEqual(set(out), set(BASE_WEIGHTS))
         for v in out.values():
@@ -387,7 +479,7 @@ class SolverTests(unittest.TestCase):
             inputs = dict(self.PAR, runs_needed=r, balls_left=b)
             want = lo.target_probabilities(
                 **{k: v for k, v in inputs.items() if k != "next_bat"})["win"] / 100.0
-            out = lo.make_last_over_hook(inputs)(dict(BASE_WEIGHTS))
+            out = lo.make_chase_hook(inputs)(dict(BASE_WEIGHTS))
             got = lo.one_ball_outlook(
                 lo.continuation(inputs), lo._normalise_capped(out), r, b,
                 inputs["wickets_in_hand"])[0]
@@ -396,7 +488,7 @@ class SolverTests(unittest.TestCase):
                                        % (r, b, got, want))
 
     def test_the_model_never_touches_the_rng(self):
-        # engine.last_over must not draw: one extra random() call would shift
+        # engine.chase_model must not draw: one extra random() call would shift
         # the stream for every seeded test in the suite and silently
         # re-baseline dozens of unrelated ones.
         names = ("random", "choice", "choices", "randint", "uniform")
@@ -412,7 +504,7 @@ class SolverTests(unittest.TestCase):
         for n in names:
             setattr(random, n, _spy(n, originals[n]))
         try:
-            lo.make_last_over_hook(dict(self.PAR))(dict(BASE_WEIGHTS))
+            lo.make_chase_hook(dict(self.PAR))(dict(BASE_WEIGHTS))
             lo.target_probabilities(12, 6, striker_bat=90)
         finally:
             for n, fn in originals.items():
@@ -433,7 +525,7 @@ def _mk(rid, name, cat, bat, bowl, style="Fast", traits=None):
     return d
 
 
-def last_over_state(bat=75, bowl=75, need=12, clutch=True, pitch="Even",
+def chase_state(bat=75, bowl=75, need=12, clutch=True, pitch="Even",
                     wickets=4, over=20, striker_traits=None, bowler_traits=None):
     """A 2nd-innings state parked at the start of the final over of a chase."""
     bat_xi = [_mk(1, "B1", "Batsman", bat, 30, traits=striker_traits)] \
@@ -459,12 +551,54 @@ def last_over_state(bat=75, bowl=75, need=12, clutch=True, pitch="Even",
     return s
 
 
+def play_out(s):
+    """Run a state to the end of the innings through the real over loop.
+
+    Deliberately terminated on ``is_innings_over`` rather than on the over
+    number: ``simulate_over`` does not advance the pointer past the last over,
+    so a ``current_over <= 20`` loop silently re-bowls a finished innings. That
+    mistake produced "36 off 12 wins 100% of the time" during development, which
+    is why every multi-over measurement here asserts balls consumed.
+    """
+    start = cm.balls_bowled(s)
+    guard = 0
+    while not cm.is_innings_over(s):
+        guard += 1
+        if guard > 25:
+            raise AssertionError("over loop did not terminate")
+        s["current_bowler"] = s["bowl_xi"][s["current_over"] % 2]
+        s["batting_approach"] = "aggressive"
+        s["bowling_approach"] = "balanced"
+        cm.simulate_over(s)
+    return cm.balls_bowled(s) - start
+
+
+def monte_overs(n, bat, bowl, need, overs, **kw):
+    """(win%, tie%, sixes/chase, wickets/chase, balls/chase) over ``overs``."""
+    wins = ties = sixes = wkts = balls = 0
+    for k in range(n):
+        random.seed(k * 104729 + need)
+        s = chase_state(bat=bat, bowl=bowl, need=need, over=21 - overs, **kw)
+        start, w0 = s["total_runs"], s["total_wickets"]
+        balls += play_out(s)
+        got = s["total_runs"] - start
+        if got >= need:
+            wins += 1
+        elif got == need - 1:
+            ties += 1
+        wkts += s["total_wickets"] - w0
+        sixes += sum(1 for b in (s.get("ball_history") or [])
+                     if int(b.get("runs", 0) or 0) == 6)
+    return (100.0 * wins / n, 100.0 * ties / n,
+            sixes / float(n), wkts / float(n), balls / float(n))
+
+
 def monte(n=300, **kw):
     """(win rate, tie rate) over ``n`` seeded simulations of the final over."""
     wins = ties = 0
     for k in range(n):
         random.seed(k * 7919 + kw.get("need", 12))
-        s = last_over_state(**kw)
+        s = chase_state(**kw)
         start = s["total_runs"]
         need = s["target"] - start
         cm.simulate_over(s)
@@ -478,66 +612,85 @@ def monte(n=300, **kw):
 
 class ActivationTests(unittest.TestCase):
     def test_active_in_the_final_over_of_a_live_chase(self):
-        self.assertTrue(cm.last_over_active(last_over_state(over=20)))
+        self.assertTrue(cm.chase_model_active(chase_state(over=20)))
 
-    def test_inactive_earlier_in_the_innings(self):
-        self.assertFalse(cm.last_over_active(last_over_state(over=19)))
+    def test_active_across_the_whole_death(self):
+        # Five overs, not one: overs 16-20 of a live chase.
+        for over in (16, 17, 18, 19, 20):
+            self.assertTrue(cm.chase_model_active(chase_state(over=over)),
+                            msg="over %d" % over)
+
+    def test_inactive_before_the_death(self):
+        self.assertFalse(cm.chase_model_active(chase_state(over=15)))
+        self.assertFalse(cm.chase_model_active(chase_state(over=8)))
 
     def test_inactive_in_the_first_innings(self):
-        s = last_over_state()
+        s = chase_state()
         s["innings"] = 1
         s["target"] = None
-        self.assertFalse(cm.last_over_active(s))
+        self.assertFalse(cm.chase_model_active(s))
 
     def test_inactive_once_the_chase_is_done(self):
-        s = last_over_state(need=12)
+        s = chase_state(need=12)
         s["total_runs"] = s["target"]
-        self.assertFalse(cm.last_over_active(s))
+        self.assertFalse(cm.chase_model_active(s))
 
     def test_inactive_when_all_out(self):
-        s = last_over_state()
+        s = chase_state()
         s["total_wickets"] = s.get("wicket_limit", cm.WICKET_LIMIT)
-        self.assertFalse(cm.last_over_active(s))
+        self.assertFalse(cm.chase_model_active(s))
 
     def test_window_follows_the_format_not_the_over_number(self):
         # The Hundred's unit is 5 balls, so its window is the last 5.
-        s = last_over_state()
+        s = chase_state()
         s["ball_format"] = "The100"
         s["current_over"] = 20
         s["current_ball"] = 0
         self.assertEqual(cm.balls_per_unit(s), 5)
-        self.assertEqual(cm.last_over_balls_left(s), 5)
-        self.assertTrue(cm.last_over_active(s))
+        self.assertEqual(cm.chase_balls_left(s), 5)
+        self.assertTrue(cm.chase_model_active(s))
 
     def test_respects_a_non_default_wicket_limit(self):
-        s = last_over_state(wickets=2)
+        s = chase_state(wickets=2)
         s["wicket_limit"] = 2
-        self.assertFalse(cm.last_over_active(s))
+        self.assertFalse(cm.chase_model_active(s))
 
     def test_kill_switch(self):
-        s = last_over_state()
-        orig = cm.LAST_OVER_CONTROL
-        cm.LAST_OVER_CONTROL = False
+        s = chase_state()
+        orig = cm.CHASE_MODEL_CONTROL
+        cm.CHASE_MODEL_CONTROL = False
         try:
-            self.assertFalse(cm.last_over_active(s))
+            self.assertFalse(cm.chase_model_active(s))
         finally:
-            cm.LAST_OVER_CONTROL = orig
+            cm.CHASE_MODEL_CONTROL = orig
 
 
 class LiveWinProbabilityTests(unittest.TestCase):
     def test_chase_chance_now_defers_to_the_controller_in_the_window(self):
-        info = cm.chase_chance_now(last_over_state(need=12, over=20))
-        self.assertEqual(info.get("source"), "last_over")
+        info = cm.chase_chance_now(chase_state(need=12, over=20))
+        self.assertEqual(info.get("source"), "chase_model")
         # The chart has to show the number the simulation is being steered onto.
         want = lo.target_probabilities(
-            **cm._last_over_inputs(last_over_state(need=12, over=20)))["win"]
+            **cm._chase_inputs(chase_state(need=12, over=20)))["win"]
         self.assertAlmostEqual(info["chasing_chance"], want, delta=1.5)
         self.assertEqual(info["chasing_chance"] + info["defending_chance"], 100)
 
-    def test_chase_chance_now_uses_the_matrix_outside_the_window(self):
-        info = cm.chase_chance_now(last_over_state(need=40, over=18))
-        self.assertNotEqual(info.get("source"), "last_over")
-        self.assertIn("base_chasing_chance", info)
+    def test_the_model_supplies_the_win_pct_for_the_whole_innings(self):
+        # Wider than the steer window on purpose. The old matrix pinned any ask
+        # above 51 runs at 20% from ball one, so a side chasing 161 with ten
+        # wickets standing read as a heavy underdog for fifteen overs. The
+        # chart has no reason to fall back to that.
+        for over in (1, 8, 15, 18, 20):
+            info = cm.chase_chance_now(chase_state(need=60, over=over))
+            self.assertEqual(info.get("source"), "chase_model",
+                             msg="over %d" % over)
+            self.assertIn("base_chasing_chance", info)
+
+    def test_a_routine_chase_is_not_a_lost_cause_on_the_chart(self):
+        s = chase_state(need=160, over=1, wickets=0)
+        s["total_runs"] = 0
+        s["target"] = 160
+        self.assertGreater(cm.chase_chance_now(s)["chasing_chance"], 30)
 
 
 class ScopeTests(unittest.TestCase):
@@ -545,7 +698,7 @@ class ScopeTests(unittest.TestCase):
     either mode. Ratings decide it, which is the whole point of the change."""
 
     def _armed(self, clutch, over=20, finish_ball=120):
-        s = last_over_state(need=18, clutch=clutch, over=over)
+        s = chase_state(need=18, clutch=clutch, over=over)
         s["scenario"] = {"type": "controlled_finish", "active": True,
                          "finish_ball": finish_ball, "finale_script": None,
                          "finale_ball_index": 0, "convergence_logged": False,
@@ -574,9 +727,10 @@ class ScopeTests(unittest.TestCase):
     def test_letsplay_last_over_is_not_scripted(self):
         self.assertEqual(self._count_overrides(self._armed(clutch=True)), 0)
 
-    def test_scripted_finales_still_run_before_the_last_over(self):
-        # A finale that closes out in the 19th over is untouched.
-        s = self._armed(clutch=False, over=19, finish_ball=114)
+    def test_scripted_finales_still_run_before_the_death(self):
+        # Outside the model's five-over window the scenario engine is untouched,
+        # so a finale that closes out before over 16 still drives its own over.
+        s = self._armed(clutch=False, over=13, finish_ball=78)
         self.assertGreater(self._count_overrides(s), 0)
 
 
@@ -676,6 +830,51 @@ class CalibrationTests(unittest.TestCase):
                                 % (need, tie, want))
         _, easy = monte(self.N, bat=95, bowl=80, need=5)
         self.assertLess(easy, 5.0)
+
+    def test_multi_over_chases_track_the_model(self):
+        # The model steers five overs now, not one, so the claim has to hold
+        # over the whole window and not just at the wire.
+        for overs, need, real in ((2, 24, 33), (3, 36, 33), (5, 60, 33)):
+            win, _, _, _, balls = monte_overs(self.N, 75, 75, need, overs)
+            self.assertLessEqual(balls, overs * 6,
+                                 msg="%d overs consumed %.1f balls" % (overs, balls))
+            want = lo.target_probabilities(
+                need, overs * 6, striker_bat=75, non_striker_bat=75,
+                bowler_rating=75, wickets_in_hand=6, striker_balls=0)["win"]
+            self.assertAlmostEqual(
+                win, want, delta=self.TOL,
+                msg="%d off %d: simulated %.1f%%, model %.1f%% (real ~%d%%)"
+                    % (need, overs * 6, win, want, real))
+
+    def test_drama_adds_events_without_moving_the_odds(self):
+        # The whole point of the dial. Paired on identical seeds: the win rate
+        # must not move (the controller re-solves against the shaped
+        # distribution) while sixes and wickets both rise. A drama term that
+        # shifted the win rate would be a bug, not a feature.
+        cases = [(12, 1), (18, 1), (24, 2), (40, 5)]
+        original = lo.DRAMA
+        try:
+            lo.DRAMA = 0.0
+            off = [monte_overs(self.N, 75, 75, n, o) for n, o in cases]
+            lo.DRAMA = 0.25
+            on = [monte_overs(self.N, 75, 75, n, o) for n, o in cases]
+        finally:
+            lo.DRAMA = original
+        shift = sum(b[0] - a[0] for a, b in zip(off, on)) / len(cases)
+        self.assertLess(abs(shift), 4.0,
+                        msg="drama moved the win rate by %+.1f points" % shift)
+        self.assertGreater(sum(b[2] for b in on), sum(a[2] for a in off))
+        self.assertGreater(sum(b[3] for b in on), sum(a[3] for a in off))
+
+    def test_drama_can_be_turned_off(self):
+        self.assertEqual(lo.drama_strength(6, 30), lo.DRAMA)
+        self.assertLess(lo.drama_strength(30, 30), lo.DRAMA)
+        original = lo.DRAMA
+        try:
+            lo.DRAMA = 0.0
+            self.assertEqual(lo.drama_strength(6, 30), 0.0)
+        finally:
+            lo.DRAMA = original
 
     @unittest.skipUnless(SLOW, "set SLOW_TESTS=1 for the full grid")
     def test_full_band_grid(self):

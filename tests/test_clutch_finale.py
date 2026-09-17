@@ -6,11 +6,10 @@ Covers:
   * Change B — the LetsPlay clutch hook scales with chase intent, and the death
     overs are resolved by ratings + traits (a strong finisher genuinely beats a
     rabbit; the Finisher trait lifts the six-rate) instead of a scripted value.
-  * Scope — a scripted scenario finale that starts before the innings' final
-    unit still runs for CIPL (and is still bypassed by LetsPlay). The final
-    unit itself now belongs to the calibrated controller in
-    engine.last_over for BOTH modes, which is covered by
-    tests/test_last_over.py.
+  * Scope — a scripted scenario finale that starts before the death still runs
+    for CIPL (and is still bypassed by LetsPlay). The closing overs themselves
+    now belong to the calibrated chase model for BOTH modes, which is covered
+    by tests/test_chase_model.py.
 """
 
 import random
@@ -221,20 +220,23 @@ class ClutchFinaleScopeTests(unittest.TestCase):
             cm.ScenarioEngine.get_override_outcome = orig
         return calls[0]
 
-    def test_cipl_still_runs_scripted_override_before_the_last_over(self):
-        # A finale that closes out in the 19th over is untouched by the
-        # controller, so CIPL's scripted drama still drives it.
-        s = self._armed(clutch=False, over=19, finish_ball=114)
+    def test_cipl_still_runs_scripted_override_before_the_death(self):
+        # Outside the chase model's window (the last CHASE_MODEL_BALLS of a live
+        # chase) the scenario engine is untouched, so a finale that closes out
+        # before the death still drives its own over.
+        s = self._armed(clutch=False, over=13, finish_ball=78)
         self.assertGreater(self._overrides(s), 0)
         self.assertGreater(s["scenario"]["finale_ball_index"], 0)
 
-    def test_last_over_is_never_scripted_in_either_mode(self):
-        # Ratings decide the final over now — in Challenge League as well as in
-        # LetsPlay, which is the point of the calibrated controller.
-        for clutch in (False, True):
-            s = self._armed(clutch=clutch)
-            self.assertEqual(self._overrides(s), 0)
-            self.assertEqual(s["scenario"]["finale_ball_index"], 0)
+    def test_the_death_is_never_scripted_in_either_mode(self):
+        # Ratings decide the closing overs now — in Challenge League as well as
+        # in LetsPlay, which is the point of the calibrated chase model.
+        for over in (17, 20):
+            for clutch in (False, True):
+                s = self._armed(clutch=clutch, over=over)
+                self.assertEqual(self._overrides(s), 0,
+                                 msg="over %d, clutch=%s" % (over, clutch))
+                self.assertEqual(s["scenario"]["finale_ball_index"], 0)
 
 
 if __name__ == "__main__":

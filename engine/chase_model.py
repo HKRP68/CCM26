@@ -1,37 +1,55 @@
-"""Calibrated last-over model for a live chase.
+"""Calibrated win-probability model for a chase.
 
-The final over is the one the whole match gets judged on, and it used to be
-steered by hand-tuned multiplier hooks that were never checked against an
-outcome distribution. Measured on the old engine, an elite pair needing 24 off
-6 won a third of the time and needing 18 off 6 won two thirds — real T20 is
-about 5% and 20% — while a tailender needing 5 off 6 won only 70% against a
-real ~87%. Worse, /letsplay and Challenge League disagreed with each other on
-identical situations, because only one of them ran the clutch amplifier.
+One model owns the chase: it steers the closing overs and supplies the live
+win% for the whole second innings.
 
-This module replaces all of that with one authority: a win/tie probability
-surface keyed on (rating edge, balls left, runs needed), plus a closed-loop
-controller that steers each delivery's weights until the simulation actually
-lands on it.
+Two things it replaced, both measured rather than assumed.
 
-The important thing it gets right that the old hooks did not: **aggression
-costs dot balls and wickets.** A batter swinging for six misses more often, so
-intent raises the Dot weight as well as the Six weight. The old clutch hook
-raised boundaries while *lowering* dots, which is most of where the inflation
-came from.
+**The closing overs were not cricket.** They used to be steered by hand-tuned
+multiplier hooks that were never checked against an outcome distribution. An
+elite pair needing 24 off 6 won a third of the time and needing 18 off 6 won
+two thirds — real T20 is about 5% and 20% — while a tailender needing 5 off 6
+won only 70% against a real ~87%. /letsplay and Challenge League also disagreed
+with each other on identical situations, because only one of them ran the
+clutch amplifier. The thing the old hooks got backwards, and the single biggest
+correction here: **aggression costs dot balls and wickets.** A batter swinging
+for six misses more often, so intent raises the Dot weight along with the Six.
+The clutch hook raised boundaries while *lowering* dots, which is free runs.
+
+**The old runs x wickets matrix could not see the clock.** ``engine.chase_chance``
+keys on runs needed and wickets lost and only feels the balls left through a
+feasibility scale, so it flattened at 86% for any ask up to 15 runs however many
+balls remained (it read 20 off 6 as better than even money) and collapsed every
+ask above 51 runs into one row (a side chasing 161 with ten wickets standing
+read as a 20% underdog, and stayed pinned there for fifteen overs). This surface
+is keyed on balls left throughout, so it answers both ends of the innings.
 
 Public API
 ----------
 ``target_probabilities(runs_needed, balls_left, **factors) -> dict``
     The authority: ``{"win", "tie", "lose"}`` in percent, for the batting side.
 
-``make_last_over_hook(inputs, free_hit=False) -> callable``
+``make_chase_hook(inputs, free_hit=False, window=None) -> callable``
     A ``weight_hook`` for ``engine.ball_outcome.calculate_outcome``. It sees the
     fully-composed natural weights (ratings, traits, pitch, conditions, approach
     and pressure are already in them) and tilts them until THIS delivery's
     one-ball outlook against the model equals what the model asked for.
 
 ``PAR_TABLE`` / ``TIE_TABLE``
-    ``[edge_bucket][balls_left][runs_needed] -> percent``. Built at import.
+    ``[edge_bucket][balls_left][runs_needed] -> percent``, spanning the whole
+    second innings. Inducted on first use, not at import (see ``tables()``).
+
+How the surface is built
+------------------------
+The hand-written anchors (``WIN_ANCHORS_6``) calibrate the FINAL OVER and
+nothing else. Every longer horizon comes out of the backward induction on its
+own, which is why the table is generated rather than typed: against twenty real
+reference points from 6 to 114 balls it lands within about 3 points RMS. Two
+things had to be right for that to hold — the induction has to price a batting
+side thinning out (``WICKET_DEGRADE``), or a full-innings chase reads as 83%
+instead of ~50%, and the anchor correction must NOT be carried forward at the
+same required rate, because a short horizon gets to be lucky and a long one has
+to be good (carrying it made 24 off 12 read as 55% against a real ~33%).
 
 Why one ball and not the whole over
 -----------------------------------
@@ -50,6 +68,7 @@ for every seeded test in the suite.
 """
 
 import math
+import os
 
 # ── The eight outcomes the ball engine samples over ───────────────────────
 # Same keys, same run values as engine.ball_outcome.calculate_outcome.
@@ -69,11 +88,19 @@ WICKET_SHARE_CAP = 0.12
 EXTRA_FREE_BALL_SHARE = 0.65
 
 # Runs axis of the tables. Beyond this the chance decays geometrically.
-MAX_RUNS = 40
+# 220 covers any total this format can set.
+MAX_RUNS = 220
 TAIL_DECAY = 0.72
 FLOOR_PCT = 0.1
 
-MAX_BALLS = 6
+# The table spans the whole second innings: it steers the death (see
+# CHASE_MODEL_BALLS in services.cipl_match) and supplies the live win% for
+# every over before that.
+MAX_BALLS = 120
+
+# The horizon the hand-written anchors are defined at, which is NOT the size of
+# the table. Everything else is generated from them.
+ANCHOR_BALLS = 6
 
 # The most that can come off a ball is a six, and off the last ball a no-ball
 # six. Past that the chase is not unlikely, it is arithmetically gone — the same
@@ -146,6 +173,38 @@ _TIE_BANDS = {
 # pair against a part-timer and a rabbit against prime Bumrah both have
 # somewhere to land instead of clipping to an anchor.
 TABLE_EDGES = (-40, -25, 0, 15, 30)
+
+
+def _extrapolated_anchor_row(near, far, edge):
+    """A 6-ball anchor row for an edge bucket nobody hand-wrote, in logit space.
+
+    The outer two buckets used to be produced by extrapolating the FINISHED
+    surfaces, which meant their 6-ball column came from anchored values and
+    their 7-ball column from raw ones. Extrapolation amplified the difference
+    between the two constructions and opened a 26-point step across the seam in
+    the +30 bucket. Extrapolating the anchor row instead means all five buckets
+    go through exactly the same build, so the join behaves the same in each.
+    """
+    span = (edge - near) / float(near - far)
+    row = []
+    for a, b in zip(WIN_ANCHORS_6[near], WIN_ANCHORS_6[far]):
+        la, lb = _logit(a / 100.0), _logit(b / 100.0)
+        row.append(_clamp(_sigmoid(la + (la - lb) * span) * 100.0, FLOOR_PCT, 99.9))
+    for i in range(1, len(row)):          # more to get is never easier
+        row[i] = min(row[i], row[i - 1])
+    return row
+
+
+def _extrapolated_tie_bands(near, far, edge):
+    span = (edge - near) / float(near - far)
+    return tuple((hi, _clamp(pct + (pct - _TIE_BANDS[far][i][1]) * span, 0.05, 12.0))
+                 for i, (hi, pct) in enumerate(_TIE_BANDS[near]))
+
+
+WIN_ANCHORS_6[30] = _extrapolated_anchor_row(15, 0, 30)
+WIN_ANCHORS_6[-40] = _extrapolated_anchor_row(-25, 0, -40)
+_TIE_BANDS[30] = _extrapolated_tie_bands(15, 0, 30)
+_TIE_BANDS[-40] = _extrapolated_tie_bands(-25, 0, -40)
 
 
 def _tie_anchor(edge, runs):
@@ -256,7 +315,17 @@ def _normalise_capped(weights, free_hit=False):
 # striker's weights, and it re-solves every ball, so the partner enters through
 # ``effective_batting`` in the target rather than through the DP.
 
-MAX_DP_WICKETS = 5
+MAX_DP_WICKETS = 10
+
+# How much worse the batting gets as it thins out, as an execution tilt, and
+# the point at which it starts to bite. Losing your third wicket barely changes
+# how a side bats; losing your eighth changes everything, so this is flat until
+# DEGRADE_FROM and steep after. Without it the surface bats identically two
+# down and eight down — invisible over six balls, and badly wrong over a full
+# innings, where nobody ever runs out of partners and a chase of 160 read as
+# 83% instead of ~50%.
+WICKET_DEGRADE = 0.70
+DEGRADE_FROM = 5
 
 # Scoring outcomes and their run values, pulled out of the DP's inner loop.
 # Dot and Wicket are handled separately (they move a different axis) and
@@ -354,34 +423,128 @@ def solve_over(dist_for, runs_needed, balls_left, wickets_in_hand):
 # 4. Build the table
 # ══════════════════════════════════════════════════════════════════════
 
-_TABLE_EXEC_LIMIT = 1.6
+# The execution tilt each edge bucket's column is generated at, fitted so the
+# RAW induction at the anchor horizon reproduces that bucket's anchor row.
+#
+# This used to be a hand-set linear map (edge / 25 * 0.62) spanning -0.99 to
+# +0.74. The fit is far flatter — the induction's sensitivity to the rating edge
+# was about 70% stronger than the anchors actually call for. Below the anchor
+# horizon the correction hid that, but above it the raw sensitivity took over
+# and opened a 25-point step across the seam in the outer buckets. Fitting the
+# map means the correction has almost nothing left to do, which is the point:
+# the two halves of the surface now agree on what a rating edge is worth.
+_EDGE_EXECUTION = {-40: -0.598, -25: -0.383, 0: 0.0, 15: 0.208, 30: 0.430}
 
 
 def _edge_execution(edge):
-    """Map a rating edge onto the execution tilt used to generate its column."""
-    return _clamp(float(edge) / 25.0 * 0.62, -_TABLE_EXEC_LIMIT, _TABLE_EXEC_LIMIT)
+    """The execution tilt used to generate this edge bucket's column."""
+    if edge in _EDGE_EXECUTION:
+        return _EDGE_EXECUTION[edge]
+    keys = sorted(_EDGE_EXECUTION)
+    e = _clamp(float(edge), keys[0], keys[-1])
+    for lo_k, hi_k in zip(keys, keys[1:]):
+        if lo_k <= e <= hi_k:
+            f = (e - lo_k) / float(hi_k - lo_k)
+            return (_EDGE_EXECUTION[lo_k]
+                    + (_EDGE_EXECUTION[hi_k] - _EDGE_EXECUTION[lo_k]) * f)
+    return _EDGE_EXECUTION[keys[-1]]
+
+
+def _reference_ball_cache(edge):
+    """Tilted reference distributions for this edge, keyed on rounded intent.
+
+    Intent takes only a handful of distinct values across the whole surface, and
+    ``tilt`` costs eight ``math.exp`` plus a normalise, so this is the difference
+    between a build you notice and one you do not. Each entry is unpacked into a
+    fixed tuple so the induction's inner loop never probes a dict.
+    """
+    ex = _edge_execution(edge)
+    cache = {}
+
+    def _at(runs, balls, wickets):
+        thin = max(0, DEGRADE_FROM - wickets)
+        key = (round(intent_for(runs, balls), 3), thin)
+        hit = cache.get(key)
+        if hit is None:
+            d = tilt(_REFERENCE_BALL, key[0], ex - WICKET_DEGRADE * thin)
+            extras = d["Extras"]
+            free = extras * EXTRA_FREE_BALL_SHARE
+            hit = (d["Dot"], d["Single"], d["Double"], d["Three"], d["Four"],
+                   d["Six"], d["Wicket"], free, extras - free)
+            cache[key] = hit
+        return hit
+
+    return _at
 
 
 def _raw_surface(edge):
-    """DP win/tie for every (balls, runs) at this edge, before correction."""
-    ex = _edge_execution(edge)
+    """DP win/tie for every (balls, runs) at this edge, before correction.
 
-    def dist_for(r, b):
-        return tilt(_REFERENCE_BALL, intent_for(r, b), ex)
+    One rolling induction over the whole surface, not one full induction per
+    cell. The per-cell form (a ``solve_over`` call for each of the B x R cells,
+    each rebuilding its own B x R x W table) is quartic in balls x runs: it cost
+    2.1s at 6 balls x 40 runs and 17.6s at 12 x 60, and never finished at a
+    full-innings grid. Keeping each layer as it is produced makes it linear.
+    """
+    dist_at = _reference_ball_cache(edge)
+    wkts = MAX_DP_WICKETS
+    nruns = MAX_RUNS + 1
+
+    # The innings-over layer, shared by "no balls left" and "no wickets left":
+    # nothing more to get is a win, one short is a TIE, anything else a loss.
+    term_win = [1.0] + [0.0] * MAX_RUNS
+    term_tie = [0.0] * nruns
+    term_tie[1] = 1.0
+
+    prev_win = [term_win] * (wkts + 1)
+    prev_tie = [term_tie] * (wkts + 1)
 
     win = {}
     tie = {}
     for b in range(1, MAX_BALLS + 1):
-        for r in range(1, MAX_RUNS + 1):
-            w, t = solve_over(dist_for, r, b, MAX_DP_WICKETS)
-            win[(b, r)] = w
-            tie[(b, r)] = t
+        cur_win = [term_win]
+        cur_tie = [term_tie]
+        for w in range(1, wkts + 1):
+            nw, nt = prev_win[w], prev_tie[w]          # ball gone, wicket intact
+            lw, lt = prev_win[w - 1], prev_tie[w - 1]  # ball gone, wicket down
+            row_w = [1.0] + [0.0] * MAX_RUNS
+            row_t = [0.0] * nruns
+            for r in range(1, nruns):
+                (p_dot, p_1, p_2, p_3, p_4, p_6, p_wkt,
+                 p_free, p_legal) = dist_at(r, b, w)
+                i1 = r - 1
+                i2 = r - 2 if r > 2 else 0
+                i3 = r - 3 if r > 3 else 0
+                i4 = r - 4 if r > 4 else 0
+                i6 = r - 6 if r > 6 else 0
+                row_w[r] = (p_dot * nw[r] + p_wkt * lw[r]
+                            + p_1 * nw[i1] + p_2 * nw[i2] + p_3 * nw[i3]
+                            + p_4 * nw[i4] + p_6 * nw[i6]
+                            + p_legal * nw[i1]
+                            + p_free * row_w[i1])
+                row_t[r] = (p_dot * nt[r] + p_wkt * lt[r]
+                            + p_1 * nt[i1] + p_2 * nt[i2] + p_3 * nt[i3]
+                            + p_4 * nt[i4] + p_6 * nt[i6]
+                            + p_legal * nt[i1]
+                            + p_free * row_t[i1])
+            cur_win.append(row_w)
+            cur_tie.append(row_t)
+        prev_win, prev_tie = cur_win, cur_tie
+        top_w, top_t = cur_win[wkts], cur_tie[wkts]
+        for r in range(1, nruns):
+            pw = top_w[r]
+            pw = 0.0 if pw < 0.0 else (1.0 if pw > 1.0 else pw)
+            pt = top_t[r]
+            hi = 1.0 - pw
+            win[(b, r)] = pw
+            tie[(b, r)] = 0.0 if pt < 0.0 else (hi if pt > hi else pt)
     return win, tie
 
 
-def _equivalent_six_ball_ask(runs, balls):
-    """The 6-ball ask with the same required rate, for reading the anchors."""
-    return int(_clamp(round(runs * MAX_BALLS / float(balls)), 1, MAX_RUNS))
+def _equivalent_anchor_ask(runs, balls):
+    """The ``ANCHOR_BALLS``-ball ask at the same required rate, for reading the
+    anchors from a column of a different length."""
+    return int(_clamp(round(runs * ANCHOR_BALLS / float(balls)), 1, MAX_RUNS))
 
 
 def _build_anchored(edge):
@@ -398,18 +561,31 @@ def _build_anchored(edge):
     win_off = {}
     tie_scale = {}
     for r in range(1, MAX_RUNS + 1):
-        win_off[r] = _logit(_win_anchor(edge, r) / 100.0) - _logit(raw_win[(MAX_BALLS, r)])
-        raw_t = raw_tie[(MAX_BALLS, r)]
+        win_off[r] = (_logit(_win_anchor(edge, r) / 100.0)
+                      - _logit(raw_win[(ANCHOR_BALLS, r)]))
+        raw_t = raw_tie[(ANCHOR_BALLS, r)]
         tie_scale[r] = (_tie_anchor(edge, r) / 100.0 / raw_t) if raw_t > 1e-6 else 1.0
 
     win_tbl = {}
     tie_tbl = {}
     for b in range(1, MAX_BALLS + 1):
-        taper = b / float(MAX_BALLS)
+        # The hand-written anchors correct the FINAL OVER and nothing else.
+        # Below the anchor horizon the correction fades out, because a single
+        # delivery is almost entirely determined by the distribution and needs
+        # no help; above it the correction is simply off, because the induction
+        # is already right out there.
+        #
+        # That is a fitted result, not an assumption. Against twenty real
+        # reference points from 6 to 114 balls, the raw induction lands within
+        # about 6 points everywhere from 12 balls out, and carrying the 6-ball
+        # correction forward at the same required rate actively broke it (24 off
+        # 12 went to 55% against a real ~33%) — the two asks are not equivalent,
+        # because a short horizon gets to be lucky and a long one has to be good.
+        taper = (b / float(ANCHOR_BALLS)) if b <= ANCHOR_BALLS else 0.0
         wrow = {}
         trow = {}
         for r in range(1, MAX_RUNS + 1):
-            eq = _equivalent_six_ball_ask(r, b)
+            eq = _equivalent_anchor_ask(r, b)
             p = _sigmoid(_logit(raw_win[(b, r)]) + win_off[eq] * taper)
             # The tie correction is NOT tapered the way the win correction is.
             # The win offset closes a gap that shrinks as the horizon does — a
@@ -452,36 +628,43 @@ def _monotonise(tbl):
     return tbl
 
 
-def _extrapolate(inner, outer_edge, near, far):
-    """Logit-space extrapolation for the two outer edge buckets."""
-    span = (outer_edge - near) / float(near - far)
-    out = {}
-    for b, row in inner[near].items():
-        new = {}
-        for r, p in row.items():
-            ln = _logit(p / 100.0)
-            lf = _logit(inner[far][b][r] / 100.0)
-            new[r] = _clamp(_sigmoid(ln + (ln - lf) * span) * 100.0, FLOOR_PCT, 99.9)
-        out[b] = new
-    return out
-
-
 def _build_tables():
+    """Every edge bucket through the same pipeline — the outer two differ only
+    in that their 6-ball anchor row was extrapolated rather than hand-written."""
     win = {}
     tie = {}
-    for edge in ANCHOR_EDGES:
+    for edge in TABLE_EDGES:
         win[edge], tie[edge] = _build_anchored(edge)
-    # The outer buckets are extrapolated, and logit extrapolation of two
-    # monotone rows is not itself guaranteed monotone, so they get the same
-    # sweep the anchored ones do.
-    win[30] = _monotonise(_extrapolate(win, 30, 15, 0))
-    win[-40] = _monotonise(_extrapolate(win, -40, -25, 0))
-    tie[30] = {b: dict(row) for b, row in tie[15].items()}
-    tie[-40] = {b: dict(row) for b, row in tie[-25].items()}
     return win, tie
 
 
-PAR_TABLE, TIE_TABLE = _build_tables()
+# Built on first use, not at import. The surface spans the whole second
+# innings (120 balls x 220 runs x 10 wickets x 5 edge buckets) and costs a
+# couple of seconds to induct, which is not something every process start, test
+# run and CLI invocation should pay for. It is deterministic, so building it
+# once per process on the first chase is enough — and that happens inside
+# ``asyncio.to_thread`` with the rest of the over, off the event loop.
+_TABLES = None
+
+
+def tables():
+    """``(PAR_TABLE, TIE_TABLE)``, inducting them on first use."""
+    global _TABLES
+    if _TABLES is None:
+        _TABLES = _build_tables()
+    return _TABLES
+
+
+def __getattr__(name):
+    # PEP 562: lets ``chase_model.PAR_TABLE`` keep working as an attribute for
+    # callers and tests without forcing the build at import. Module-internal
+    # references go through tables() directly — a bare global name does not
+    # reach here.
+    if name == "PAR_TABLE":
+        return tables()[0]
+    if name == "TIE_TABLE":
+        return tables()[1]
+    raise AttributeError("module %r has no attribute %r" % (__name__, name))
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -636,8 +819,9 @@ def target_probabilities(runs_needed, balls_left, striker_bat=75,
         return {"win": 0.0, "tie": 0.0, "lose": 100.0}
 
     edge = effective_batting(striker_bat, non_striker_bat) - float(bowler_rating or 50)
-    win = _lookup(PAR_TABLE, edge, balls_left, runs_needed)
-    tie = _lookup(TIE_TABLE, edge, balls_left, runs_needed)
+    par_table, tie_table = tables()
+    win = _lookup(par_table, edge, balls_left, runs_needed)
+    tie = _lookup(tie_table, edge, balls_left, runs_needed)
 
     shift = situational_shift(**factors)
     if shift:
@@ -651,6 +835,43 @@ def target_probabilities(runs_needed, balls_left, striker_bat=75,
 # ══════════════════════════════════════════════════════════════════════
 # 6. The controller
 # ══════════════════════════════════════════════════════════════════════
+
+# ── Drama ────────────────────────────────────────────────────────────────
+# Honest odds are the point of this model, but a flat simulation is not a game.
+# Widening the steer window from one over to five also retires the scenario
+# engine's scripted finale across those overs, and that theatre has to be paid
+# back deliberately rather than just lost.
+#
+# This buys it back as VARIANCE, never as bias. It uses the same shape as
+# INTENT_K — Six, Four, Dot and Wicket up, Single and Double down, so more
+# happens per ball in both directions — and it is applied BEFORE
+# solve_execution, exactly where the tie shaping goes. The controller then
+# re-solves against the shaped distribution, so P(win) still lands on target.
+#
+# It works because the two vectors are not parallel: drama moves along the
+# "events versus nudged singles" axis while EXEC_K trades batting-good against
+# bowling-good outcomes. The solve puts the odds back without undoing the spread.
+#
+# Measured at 0.25 against the dial off, paired on identical seeds: the win rate
+# moves +0.12 points (noise), sixes and wickets both rise in every cell. The tie
+# rate does NOT rise with it — it drifts slightly DOWN over short windows, which
+# was not the prediction and is worth knowing: the extra spread is as likely to
+# carry a side past the target as to leave it exactly one short.
+# One constant to retune, and CHASE_MODEL_DRAMA=0 to kill it.
+DRAMA = _clamp(float(os.getenv("CHASE_MODEL_DRAMA", "0.25")), 0.0, 1.0)
+DRAMA_FULL_BALLS = 6      # full strength inside the final over
+DRAMA_MIN_FACTOR = 0.4    # and this much of it at the far edge of the window
+
+
+def drama_strength(balls_left, window):
+    """Ramp the drama with the phase, so the noise builds toward the finish."""
+    if DRAMA <= 0.0 or balls_left <= 0:
+        return 0.0
+    if balls_left <= DRAMA_FULL_BALLS or window <= DRAMA_FULL_BALLS:
+        return DRAMA
+    over = (balls_left - DRAMA_FULL_BALLS) / float(window - DRAMA_FULL_BALLS)
+    return DRAMA * max(DRAMA_MIN_FACTOR, 1.0 - (1.0 - DRAMA_MIN_FACTOR) * over)
+
 
 BISECTION_STEPS = 12
 # How close the natural distribution has to be before the controller stands
@@ -815,7 +1036,7 @@ def _tie_shape(weights, cont, runs_needed, balls_left, wickets_in_hand, want_tie
     return out
 
 
-def make_last_over_hook(inputs, free_hit=False):
+def make_chase_hook(inputs, free_hit=False, window=None):
     """Build the ``weight_hook`` that steers this delivery onto the target.
 
     ``inputs`` is the keyword set :func:`target_probabilities` takes, plus an
@@ -839,14 +1060,19 @@ def make_last_over_hook(inputs, free_hit=False):
     want = target_probabilities(**inputs)
     tw = _clamp(want["win"] / 100.0, 0.0005, 0.9995)
     tt = _clamp(want["tie"] / 100.0, 0.0, 0.5)
+    drama = drama_strength(balls_left, window or balls_left)
 
     def _hook(raw_weights):
         base = {o: max(0.0, float(raw_weights.get(o, 0.0) or 0.0)) for o in OUTCOMES}
         if sum(base.values()) <= 0.0:
             return raw_weights
-        # Shape the Super Over rate first, then solve the win rate on the
-        # shaped distribution, so the win target is the one that lands exactly.
+        # Shape the Super Over rate and widen the spread first, then solve the
+        # win rate on the shaped distribution, so the win target is the one
+        # that lands exactly and drama costs nothing in accuracy.
         shaped = _tie_shape(base, cont, runs_needed, balls_left, wickets, tt)
+        if drama:
+            shaped = {o: shaped[o] * math.exp(INTENT_K[o] * drama)
+                      for o in OUTCOMES}
         dist = _normalise_capped(shaped, free_hit=free_hit)
         ex, intent = solve_execution(dist, cont, runs_needed, balls_left,
                                      wickets, tw, free_hit=free_hit)
