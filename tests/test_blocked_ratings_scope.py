@@ -71,14 +71,45 @@ def _install_stubs():
     config.get_sell_value = lambda r: r * 50
     sys.modules["config"] = config
 
-    for name in ("services.player_service", "services.pack_service"):
+    for name in ("services.player_service", "services.pack_service",
+                 "services.pack_odds"):
         sys.modules.pop(name, None)
     from services import pack_service, player_service, rating_block_service
     return pack_service, player_service, rating_block_service
 
 
+# ``services.pack_odds`` is on the list because the pack pick reaches it to find
+# out whether the pack carries per-rating odds. It binds ``models.Player`` at
+# import, so leaving the copy that imported under these stubs in ``sys.modules``
+# hands the next test file a Player class that is not its own — which SQLAlchemy
+# turns into "FROM players, players" and an ambiguous-column error.
+def _sync_package_attr(name, module):
+    """Put the parent package's attribute back in step with ``sys.modules``.
+
+    Dropping ``sys.modules["services.pack_service"]`` is not enough on its own:
+    the ``services`` package object still carries ``pack_service`` as an
+    attribute, and ``from services import pack_service`` reads that attribute
+    in preference to importing anything. So the module built against the stubs
+    in this file would be handed to the next test file that asks for it, taking
+    the stub ``Player`` with it — and every query there comes back
+    "ambiguous column name: players.id", a very long way from the cause.
+    """
+    if "." not in name:
+        return
+    parent, _, child = name.rpartition(".")
+    package = sys.modules.get(parent)
+    if package is None:
+        return
+    if module is None:
+        if hasattr(package, child):
+            delattr(package, child)
+    else:
+        setattr(package, child, module)
+
+
 _STUBBED_MODULES = ("sqlalchemy", "sqlalchemy.orm", "models", "config",
-                    "services.player_service", "services.pack_service")
+                    "services.player_service", "services.pack_service",
+                    "services.pack_odds")
 
 
 class Block:
@@ -149,6 +180,7 @@ class PackIgnoresBlockedRatingsTests(unittest.TestCase):
                 sys.modules.pop(key, None)
             else:
                 sys.modules[key] = value
+            _sync_package_attr(key, value)
 
     def _pack(self, mode="rating", versions=None):
         return SimpleNamespace(

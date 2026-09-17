@@ -3,41 +3,103 @@
 {% block content %}
 
 <style>
-  .cost-note {
-    margin: .2rem 0 .8rem; font-size: .8rem; color: var(--muted);
-    border-left: 3px solid var(--border); padding-left: .6rem;
+  .pack-step { background: var(--card-bg); border: 1px solid var(--border);
+               border-radius: var(--radius-lg); padding: 1.25rem 1.35rem;
+               margin-bottom: 1.1rem; box-shadow: var(--shadow-sm); }
+  .pack-step > h2 { margin: 0 0 .25rem; font-size: 1.05rem; display: flex;
+                    align-items: baseline; gap: .55rem; flex-wrap: wrap; }
+  .pack-step > h2 .step-no { font-family: 'Bebas Neue', sans-serif;
+                             font-size: 1.5rem; line-height: 1; color: var(--brand); }
+  .step-note { color: var(--muted); font-size: .82rem; line-height: 1.6;
+               margin: .1rem 0 1rem; }
+  .step-note strong { color: var(--text); }
+
+  /* An author `display` beats the UA rule behind the `hidden` attribute, so
+     every block this page shows and hides — all of them grids or flex rows —
+     would stay on screen without this. */
+  [hidden] { display: none !important; }
+
+  .grid { display: grid; gap: .85rem; }
+  .grid-id { grid-template-columns: minmax(0,1fr) 110px 100px; }
+  .grid-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  .grid-band { grid-template-columns: 130px 130px 110px; align-items: end; }
+  @media (max-width: 720px) {
+    .grid-id, .grid-3, .grid-band { grid-template-columns: 1fr 1fr; }
   }
-  .autoprice {
-    margin-top: 1rem; padding: .85rem 1rem;
-    background: var(--bg); border: 1px solid var(--border);
-    border-left: 3px solid #FBBF24; border-radius: 8px; font-size: .85rem;
-  }
-  .autoprice-head {
-    display: flex; justify-content: space-between; align-items: center;
-    gap: 1rem; flex-wrap: wrap;
-  }
+
+  /* Pack type — a choice, not a dropdown you have to open to see. */
+  .type-pick { display: flex; gap: .6rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .type-pick label { flex: 1 1 180px; margin: 0; padding: .75rem .9rem;
+                     border: 1px solid var(--border); border-radius: var(--radius-lg);
+                     cursor: pointer; text-transform: none; letter-spacing: 0;
+                     font-size: .86rem; font-weight: 800; color: var(--text);
+                     background: var(--bg); transition: border-color .15s, background .15s; }
+  .type-pick label:hover { border-color: var(--brand); }
+  /* Hidden to look at, not hidden from the keyboard: display:none would take
+     the radios out of the tab order and out of a screen reader, leaving the
+     pack type unreachable without a mouse. */
+  .type-pick input { position: absolute; width: 1px; height: 1px;
+                     margin: -1px; padding: 0; overflow: hidden; border: 0;
+                     clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+  .type-pick label.on { border-color: var(--brand); background: var(--brand-light); }
+  .type-pick label:focus-within { border-color: var(--brand);
+                                  box-shadow: 0 0 0 4px var(--focus-ring); }
+  .type-pick .type-sub { display: block; margin-top: .2rem; font-size: .75rem;
+                         font-weight: 600; color: var(--muted); }
+
+  .span-line { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+               background: var(--bg); border: 1px solid var(--border);
+               border-radius: var(--radius-lg); padding: .7rem .9rem;
+               font-size: .85rem; margin-bottom: .85rem; }
+  .span-line b { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+  /* Odds table — same language as the /claim rarity page. */
+  .odds { margin-top: .4rem; }
+  .odds-head { display: flex; justify-content: space-between; align-items: center;
+               gap: .8rem; flex-wrap: wrap; margin-bottom: .7rem; }
+  .odds-fills { display: flex; gap: .4rem; flex-wrap: wrap; }
+  .odds-table td { padding: .45rem .6rem; }
+  .odds-table th { padding: .6rem; }
+  .odds-table input[type=number] { padding: .4rem .5rem; font-size: .85rem; }
+  .odds-table tr.dead td { opacity: .55; }
+  .cell-num { text-align: center; }
+  .w-prob { width: 120px; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+          font-size: .82rem; }
+  .muted-sm { color: var(--muted); font-size: .76rem; }
+  .pill { display: inline-block; padding: .16rem .5rem; border-radius: var(--radius-full);
+          font-size: .7rem; font-weight: 800; letter-spacing: .03em; }
+  .pill-ok { background: var(--green-dim); color: var(--green); }
+  .pill-warn { background: var(--red-dim); color: var(--accent); }
+  .pill-idle { background: var(--brand-light); color: var(--muted); }
+  .odds-foot td { border-top: 2px solid var(--border); font-weight: 800; }
+  .sim-panel { margin-top: .8rem; font-size: .82rem; color: var(--muted); }
+  .sim-panel table { margin-top: .4rem; }
+  .sim-bar { display: inline-block; height: 8px; border-radius: 4px;
+             background: var(--brand); vertical-align: middle; min-width: 2px; }
+
+  /* Price */
+  .autoprice { margin-bottom: 1rem; padding: .9rem 1rem; background: var(--bg);
+               border: 1px solid var(--border); border-left: 4px solid var(--brand);
+               border-radius: var(--radius-lg); font-size: .85rem; }
+  .autoprice-head { display: flex; justify-content: space-between; align-items: center;
+                    gap: 1rem; flex-wrap: wrap; }
   .autoprice-status { color: var(--muted); font-size: .78rem; }
   .autoprice-lines { margin: .6rem 0; color: var(--muted); }
   .autoprice-lines div { padding: .12rem 0; }
   .autoprice-lines b { color: var(--text); }
   .autoprice-total { margin: .5rem 0; }
-  .autoprice-total strong { font-size: 1.1rem; color: var(--text); }
+  .autoprice-total strong { font-size: 1.15rem; color: var(--text); }
   .autoprice-sub { color: var(--muted); font-size: .78rem; font-weight: normal; }
-  .autoprice-apply {
-    display: flex; align-items: center; gap: .5rem;
-    flex-wrap: wrap; margin-top: .6rem;
-  }
-  .ap-btn {
-    background: var(--card); color: var(--text);
-    border: 1px solid var(--border); border-radius: 999px;
-    padding: .35rem .8rem; font-weight: 700; font-size: .82rem; cursor: pointer;
-  }
-  .ap-btn:hover:not(:disabled) { border-color: #FBBF24; color: #FBBF24; }
-  .ap-btn:disabled { opacity: .45; cursor: not-allowed; }
-  .ap-warn {
-    margin-top: .5rem; padding: .4rem .6rem; border-radius: 6px;
-    background: rgba(196,30,58,.12); color: #f7a1ae; font-size: .8rem;
-  }
+  .autoprice-apply { display: flex; align-items: center; gap: .5rem;
+                     flex-wrap: wrap; margin-top: .6rem; }
+  .ap-warn { margin-top: .5rem; padding: .4rem .6rem; border-radius: var(--radius-md);
+             background: var(--red-dim); color: var(--accent); font-size: .8rem; }
+  .cost-label { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+  .cost-label a { color: var(--brand); font-size: .7rem; text-decoration: none; }
+
+  .save-row { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center;
+              margin-top: 1.2rem; }
 </style>
 
 <a href="{{ url_for('admin_packs_list') }}" style="color:var(--muted); text-decoration:none;">← Back to Packs</a>
@@ -45,240 +107,675 @@
 <h1>{{ '✏️ Edit Pack' if pack else '➕ New Pack' }}</h1>
 
 {% if pack %}
-<div style="background:var(--card); padding:.75rem 1rem; border-radius:8px; margin-bottom:1rem; font-size:.85rem; border:1px solid var(--border);">
-  <strong>Pool counts</strong> with current settings:
-  Main pool = <span style="color:{% if main_pool == 0 %}var(--red){% else %}var(--green){% endif %};">{{ main_pool }}</span>,
-  Bonus pool = <span style="color:{% if bonus_pool == 0 %}var(--red){% else %}var(--green){% endif %};">{{ bonus_pool }}</span>
-  &nbsp;·&nbsp; <em>Save changes to refresh.</em>
+<div class="span-line">
+  <strong>Pool right now</strong>
+  Main = <b style="color:{% if main_pool == 0 %}var(--accent){% else %}var(--green){% endif %};">{{ main_pool }}</b>,
+  Bonus = <b style="color:{% if bonus_pool == 0 %}var(--accent){% else %}var(--green){% endif %};">{{ bonus_pool }}</b>
+  <span class="muted-sm">— counted from the saved settings. The odds tables below count live.</span>
 </div>
 {% endif %}
 
-<form method="POST" style="background:var(--card); padding:1.5rem; border:1px solid var(--border); border-radius:10px; max-width:900px;">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-
-  <h3 style="margin-top:0;">Basic info</h3>
-  <div style="display:grid; grid-template-columns:80px 1fr 80px; gap:.8rem;">
-    <div>
-      <label>Slot #</label>
-      <input type="number" name="slot_number" min="1" max="99" required
-             value="{{ pack.slot_number if pack else '' }}"
-             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    </div>
-    <div>
-      <label>Name</label>
-      <input type="text" name="name" required maxlength="100"
-             value="{{ pack.name if pack else '' }}"
-             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    </div>
-    <div>
-      <label>Emoji</label>
-      <input type="text" name="emoji" maxlength="10"
-             value="{{ pack.emoji if pack else '📦' }}"
-             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+{#
+  One odds table per slot. Rows are rendered here rather than fetched so the
+  saved odds are right with no JavaScript and the page never flashes an empty
+  table; the script re-renders the same markup when the band changes.
+#}
+{% macro odds_table(slot, data) %}
+<div class="odds" id="{{ slot }}-odds" data-slot="{{ slot }}"
+     data-min="{{ data.min_rating }}" data-max="{{ data.max_rating }}">
+  <div class="odds-head">
+    <div class="muted-sm" data-span-note>{{ data.span_note }}</div>
+    <div class="odds-fills">
+      <button type="button" class="btn btn-ghost btn-sm" data-fill="even">Even odds</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-fill="pool"
+              title="Weight each rating by how many cards sit at it — what a version pack did before it had odds.">Weight by pool</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-fill="steep"
+              title="Halve the odds at each step up — the shape most packs use.">Steep</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-fill="clear"
+              title="Back to even odds — a cleared table is stored as no odds at all.">Clear</button>
+      <button type="button" class="btn btn-blue btn-sm" data-simulate>🎲 Simulate 1,000</button>
     </div>
   </div>
 
-  <div style="margin-top:.8rem;">
-    <label>Description</label>
-    <textarea name="description" rows="2" maxlength="500"
-              style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text); font-family:inherit;">{{ pack.description if pack else '' }}</textarea>
+  <div class="table-wrap">
+    <table class="odds-table">
+      <thead>
+        <tr>
+          <th class="cell-num">Rating</th>
+          <th class="cell-num">Card value</th>
+          <th class="cell-num">Pool</th>
+          <th class="cell-num w-prob">Probability %</th>
+          <th class="cell-num">Real share</th>
+          <th class="cell-num">Odds</th>
+          <th class="cell-num">Expected value</th>
+        </tr>
+      </thead>
+      <tbody data-rows>
+        {% for row in data.rows %}
+        <tr data-odds-row data-rating="{{ row.rating }}" data-pool="{{ row.pool }}"
+            data-value="{{ row.buy_value }}"{% if not row.pool %} class="dead"{% endif %}>
+          <td class="cell-num mono"><b>{{ row.rating }}</b></td>
+          <td class="cell-num mono">{{ '{:,}'.format(row.buy_value) }} 🪙</td>
+          <td class="cell-num">
+            {% if row.pool %}<span class="mono">{{ row.pool }}</span>
+            {% else %}<span class="pill pill-warn" title="No card sits at this rating, so it can't be pulled whatever weight it carries">0 cards</span>{% endif %}
+          </td>
+          <td class="cell-num">
+            {# step is decimal text on purpose: str(1e-05) renders as "1e-05" #}
+            <input type="number" class="cell-num mono" data-prob
+                   name="{{ slot }}_weight_{{ row.rating }}"
+                   value="{{ row.weight|pct }}" min="0" max="100"
+                   step="{{ min_weight|pct }}">
+          </td>
+          <td class="cell-num mono" data-share>—</td>
+          <td class="cell-num mono muted-sm" data-oddscell>—</td>
+          <td class="cell-num mono" data-ev>—</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr class="odds-foot">
+          <td colspan="3" class="cell-num muted-sm">
+            <span data-pool-total>{{ data.pool_total }}</span> card(s) in reach
+          </td>
+          <td class="cell-num mono" data-total>—</td>
+          <td colspan="2" class="muted-sm" data-total-hint></td>
+          <td class="cell-num mono" data-ev-total>—</td>
+        </tr>
+      </tfoot>
+    </table>
   </div>
+  <div class="sim-panel" data-sim hidden></div>
+</div>
+{% endmacro %}
 
-  <h3 style="margin-top:1.5rem;">Cost <span style="color:var(--muted); font-weight:normal; font-size:.85rem;">(set exactly one)</span></h3>
-  <p class="cost-note">
-    A buyer is charged the <strong>first</strong> non-zero of coins → quest points → gems,
-    but must hold <strong>all</strong> of them to buy at all. Two prices set means the
-    second is a requirement nobody ever pays — so price a pack in one currency.
-  </p>
-  <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:.8rem;">
-    <div>
-      <label>Coins 🪙</label>
-      <input type="number" name="cost_coins" id="cost_coins" min="0"
-             value="{{ pack.cost_coins if pack else 0 }}"
-             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    </div>
-    <div>
-      <label>Quest Points 🎯</label>
-      <input type="number" name="cost_quest_points" id="cost_quest_points" min="0"
-             value="{{ pack.cost_quest_points if pack else 0 }}"
-             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    </div>
-    <div>
-      <label>Gems 💎</label>
-      <input type="number" name="cost_gems" id="cost_gems" min="0"
-             value="{{ pack.cost_gems if pack else 0 }}"
-             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    </div>
-  </div>
+<form method="POST" id="pack-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  {#
+    Set once the admin narrows a version pack's band by hand. Without it the
+    band is rewritten from the version's cards on every save, which would undo
+    the narrowing the moment anything else on the form changed.
+  #}
+  <input type="hidden" name="main_span_locked" id="main_span_locked"
+         value="{% if pack and pack.main_filter_mode == 'version' and odds.main.span_source != 'versions' %}1{% endif %}">
 
-  <!-- Auto-price: what this pack's own filters are worth, priced live -->
-  <div class="autoprice" id="autoprice">
-    <div class="autoprice-head">
-      <strong>💡 Suggested price</strong>
-      <span class="autoprice-sub">— priced live from the slot settings below</span>
-      <span class="autoprice-status" id="ap-status">working it out…</span>
-    </div>
-    <div class="autoprice-body" id="ap-body" hidden>
-      <div class="autoprice-lines" id="ap-lines"></div>
-      <div class="autoprice-total">
-        Pack value: <strong id="ap-value">—</strong> 🪙
-        <span class="autoprice-sub">— what the cards inside are worth at list price</span>
+  <!-- ───────────────────────────────────────────────────────────── -->
+  <div class="pack-step">
+    <h2><span class="step-no">1</span> Pack</h2>
+    <p class="step-note">
+      The slot number is the pack's place in the <code>/buypack</code> list, and no two
+      packs can share one.
+    </p>
+    <div class="grid grid-id">
+      <div>
+        <label for="pack-name">Name</label>
+        <input id="pack-name" type="text" name="name" required maxlength="100"
+               value="{{ pack.name if pack else '' }}">
       </div>
-      <div class="autoprice-apply">
-        <span>Round up and use:</span>
-        <button type="button" class="ap-btn" id="ap-use-coins" data-target="cost_coins">— 🪙</button>
-        <button type="button" class="ap-btn" id="ap-use-qp" data-target="cost_quest_points">— 🎯</button>
-        <button type="button" class="ap-btn" id="ap-use-gems" data-target="cost_gems">— 💎</button>
+      <div>
+        <label for="pack-slot">Slot #</label>
+        <input id="pack-slot" type="number" name="slot_number" min="1" max="99" required
+               value="{{ pack.slot_number if pack else '' }}">
       </div>
-      <p class="autoprice-sub" id="ap-rates"></p>
-      <div id="ap-warnings"></div>
+      <div>
+        <label for="pack-emoji">Emoji</label>
+        <input id="pack-emoji" type="text" name="emoji" maxlength="10"
+               value="{{ pack.emoji if pack else '📦' }}">
+      </div>
+    </div>
+    <div style="margin-top:.85rem;">
+      <label for="pack-desc">Description</label>
+      <textarea id="pack-desc" name="description" rows="2" maxlength="500">{{ pack.description if pack else '' }}</textarea>
     </div>
   </div>
 
-  <h3 style="margin-top:1.5rem;">Main player slot</h3>
-  <div style="display:grid; grid-template-columns:1fr 100px 100px 80px; gap:.8rem; align-items:end;">
-    <div>
-      <label>Filter mode</label>
-      <select name="main_filter_mode"
-              style="width:100%; padding:.55rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-        <option value="rating" {% if pack and pack.main_filter_mode == 'rating' %}selected{% endif %}>rating — by rating range only</option>
-        <option value="version" {% if pack and pack.main_filter_mode == 'version' %}selected{% endif %}>version — by version name only</option>
-        <option value="both" {% if pack and pack.main_filter_mode == 'both' %}selected{% endif %}>both — rating AND version</option>
-      </select>
-    </div>
-    <div>
-      <label>Min rating</label>
-      <input type="number" name="main_min_rating" min="50" max="100" required
-             value="{{ pack.main_min_rating if pack else 85 }}"
-             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    </div>
-    <div>
-      <label>Max rating</label>
-      <input type="number" name="main_max_rating" min="50" max="100" required
-             value="{{ pack.main_max_rating if pack else 87 }}"
-             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    </div>
-    <div>
-      <label>Count</label>
-      <input type="number" name="main_count" min="1" max="10" required
-             value="{{ pack.main_count if pack else 1 }}"
-             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    </div>
-  </div>
+  <!-- ───────────────────────────────────────────────────────────── -->
+  <div class="pack-step">
+    <h2><span class="step-no">2</span> What the main slot pulls</h2>
+    <p class="step-note">
+      The main card is the one the pack is sold on — it is guaranteed, and the
+      bonus cards come on top of it.
+    </p>
 
-  {% set chosen = (pack.main_versions_json|fromjson) if (pack and pack.main_versions_json) else [] %}
-  {% set chosen_lower = chosen|map('lower')|list %}
-  {% set known_lower = version_catalogue|map(attribute='name')|map('lower')|list %}
-  <div style="margin-top:.8rem;">
-    <label>Versions
-      <span style="color:var(--muted); font-weight:normal;">(pick one or more — hold Ctrl / ⌘ for several)</span>
-    </label>
-    <select name="main_versions" id="main_versions" multiple size="8"
-            style="width:100%; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text); font-family:inherit;">
-      {% for v in version_catalogue %}
-        <option value="{{ v.name }}" {% if v.name|lower in chosen_lower %}selected{% endif %}>
-          {{ v.name }}{% if v.cards %} — {{ v.cards }} card{{ '' if v.cards == 1 else 's' }} · {{ v.min_rating }}-{{ v.max_rating }} OVR · avg {{ '{:,}'.format(v.avg_value) }} 🪙{% else %} — no cards yet{% endif %}
-        </option>
-      {% endfor %}
-      {# A pack may point at a version whose cards were all deactivated or
-         renamed. It still has to show, and stay selected, or saving the form
-         for an unrelated reason would silently drop it. #}
-      {% for name in chosen %}
-        {% if name|lower not in known_lower %}
-          <option value="{{ name }}" selected>{{ name }} — ⚠️ no active cards</option>
-        {% endif %}
-      {% endfor %}
-    </select>
-    <small style="color:var(--muted);" id="versions-hint"></small>
-  </div>
-
-  <div style="margin-top:.8rem;">
-    <label>Rating weights <span style="color:var(--muted); font-weight:normal;">(comma-separated, one per rating in range — leave empty for uniform)</span></label>
-    <input type="text" name="main_weights"
-           placeholder="e.g. 60, 30, 10"
-           value="{% if pack and pack.main_weights_json %}{% set ws = pack.main_weights_json|fromjson %}{{ ws|join(', ') }}{% endif %}"
-           style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    <small style="color:var(--muted);">For range 85-87, "60, 30, 10" means 60% chance of 85, 30% of 86, 10% of 87.</small>
-  </div>
-
-  <h3 style="margin-top:1.5rem;">Bonus player slot(s)</h3>
-  <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:.8rem;">
-    <div>
-      <label>Min rating</label>
-      <input type="number" name="bonus_min_rating" min="50" max="100" required
-             value="{{ pack.bonus_min_rating if pack else 74 }}"
-             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    </div>
-    <div>
-      <label>Max rating</label>
-      <input type="number" name="bonus_max_rating" min="50" max="100" required
-             value="{{ pack.bonus_max_rating if pack else 80 }}"
-             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    </div>
-    <div>
-      <label>Count</label>
-      <input type="number" name="bonus_count" min="0" max="10" required
-             value="{{ pack.bonus_count if pack else 2 }}"
-             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    </div>
-  </div>
-
-  <h3 style="margin-top:1.5rem;">Limits & status</h3>
-  <div style="display:grid; grid-template-columns:1fr auto; gap:1rem; align-items:center;">
-    <div>
-      <label>Daily purchase limit per user <span style="color:var(--muted); font-weight:normal;">(0 = unlimited)</span></label>
-      <input type="number" name="daily_limit" min="0" max="999"
-             value="{{ pack.daily_limit if pack else 0 }}"
-             style="width:120px; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    </div>
-    <div style="padding:.6rem 1rem; background:var(--bg); border-radius:5px; align-self:end;">
-      <label style="display:flex; align-items:center; gap:.5rem; cursor:pointer; margin:0;">
-        <input type="checkbox" name="is_active"
-               {% if pack is none or pack.is_active %}checked{% endif %}>
-        <span>Active</span>
+    {% set mode = pack.main_filter_mode if pack else 'rating' %}
+    <div class="type-pick" id="type-pick">
+      <label class="{{ 'on' if mode == 'version' }}">
+        <input type="radio" name="main_filter_mode" value="version"
+               {% if mode == 'version' %}checked{% endif %}>
+        By version
+        <span class="type-sub">A card from a set — Legend, Star, a World Cup drop</span>
+      </label>
+      <label class="{{ 'on' if mode == 'rating' }}">
+        <input type="radio" name="main_filter_mode" value="rating"
+               {% if mode == 'rating' %}checked{% endif %}>
+        By rating
+        <span class="type-sub">Any base card inside a rating band</span>
+      </label>
+      <label class="{{ 'on' if mode == 'both' }}">
+        <input type="radio" name="main_filter_mode" value="both"
+               {% if mode == 'both' %}checked{% endif %}>
+        Version + rating
+        <span class="type-sub">A version, narrowed to part of its range</span>
       </label>
     </div>
+
+    {% set chosen = (pack.main_versions_json|fromjson) if (pack and pack.main_versions_json) else [] %}
+    {% set chosen_lower = chosen|map('lower')|list %}
+    {% set known_lower = version_catalogue|map(attribute='name')|map('lower')|list %}
+    <div id="version-block">
+      <label for="main_versions">Version
+        <span style="text-transform:none; letter-spacing:0; font-weight:600;">— pick one or more, hold Ctrl / ⌘ for several</span>
+      </label>
+      <select name="main_versions" id="main_versions" multiple size="7">
+        {% for v in version_catalogue %}
+          <option value="{{ v.name }}" {% if v.name|lower in chosen_lower %}selected{% endif %}>
+            {{ v.name }}{% if v.cards %} — {{ v.cards }} card{{ '' if v.cards == 1 else 's' }} · {{ v.min_rating }}-{{ v.max_rating }} OVR · avg {{ '{:,}'.format(v.avg_value) }} 🪙{% else %} — no cards yet{% endif %}
+          </option>
+        {% endfor %}
+        {# A pack may point at a version whose cards were all deactivated or
+           renamed. It still has to show, and stay selected, or saving the form
+           for an unrelated reason would silently drop it. #}
+        {% for name in chosen %}
+          {% if name|lower not in known_lower %}
+            <option value="{{ name }}" selected>{{ name }} — ⚠️ no active cards</option>
+          {% endif %}
+        {% endfor %}
+      </select>
+      <small class="muted-sm" id="versions-hint"></small>
+    </div>
+
+    <div class="span-line" id="span-readout" hidden>
+      <span>Rating span</span>
+      <b id="span-text">—</b>
+      <span class="muted-sm">— taken from the cards this version actually has.</span>
+      <button type="button" class="btn btn-ghost btn-sm" id="narrow-span">Narrow this</button>
+    </div>
+
+    <div class="grid grid-band" id="band-block">
+      <div>
+        <label for="main_min_rating">Min rating</label>
+        <input id="main_min_rating" type="number" name="main_min_rating" min="50" max="100"
+               required value="{{ pack.main_min_rating if pack else 85 }}">
+      </div>
+      <div>
+        <label for="main_max_rating">Max rating</label>
+        <input id="main_max_rating" type="number" name="main_max_rating" min="50" max="100"
+               required value="{{ pack.main_max_rating if pack else 87 }}">
+      </div>
+      <div>
+        <label for="main_count">How many</label>
+        <input id="main_count" type="number" name="main_count" min="1" max="10" required
+               value="{{ pack.main_count if pack else 1 }}">
+      </div>
+    </div>
+    <div class="grid grid-band" id="count-only-block" hidden>
+      <div>
+        <label for="main_count_mirror">How many</label>
+        <input id="main_count_mirror" type="number" min="1" max="10" disabled
+               value="{{ pack.main_count if pack else 1 }}">
+      </div>
+    </div>
   </div>
 
-  <div style="margin-top:1.5rem; display:flex; gap:.5rem;">
-    <button type="submit"
-            style="background:var(--accent); color:#000; border:none; padding:.7rem 1.5rem; border-radius:6px; font-weight:600; cursor:pointer;">
-      💾 Save
-    </button>
-    <a href="{{ url_for('admin_packs_list') }}"
-       style="background:var(--card); color:var(--text); border:1px solid var(--border); padding:.7rem 1.5rem; border-radius:6px; text-decoration:none;">
-      Cancel
-    </a>
+  <!-- ───────────────────────────────────────────────────────────── -->
+  <div class="pack-step">
+    <h2><span class="step-no">3</span> Main odds</h2>
+    <p class="step-note">
+      One row per rating this pack can reach. The numbers are <strong>relative
+      weights</strong>, so they don't have to add up to 100 — a bigger number simply
+      means a bigger share of the pulls, and the real share is worked out for you as
+      you type. Leave the column at zero for even odds.
+      <strong>A rating with no card behind it can't be pulled</strong> whatever you put
+      against it; its share goes to the rest.
+    </p>
+    {{ odds_table('main', odds.main) }}
+  </div>
+
+  <!-- ───────────────────────────────────────────────────────────── -->
+  <div class="pack-step">
+    <h2><span class="step-no">4</span> Price</h2>
+    <p class="step-note">
+      A buyer is charged the <strong>first</strong> non-zero of coins → quest points →
+      gems, but must hold <strong>all</strong> of them to buy at all. Two prices set
+      means the second is a requirement nobody ever pays — so price a pack in one
+      currency.
+    </p>
+
+    <div class="autoprice" id="autoprice">
+      <div class="autoprice-head">
+        <strong>💡 What this pack is worth</strong>
+        <span class="autoprice-status" id="ap-status">working it out…</span>
+      </div>
+      <div class="autoprice-body" id="ap-body" hidden>
+        <div class="autoprice-lines" id="ap-lines"></div>
+        <div class="autoprice-total">
+          Pack value: <strong id="ap-value">—</strong> 🪙
+          <span class="autoprice-sub">— what the cards inside are worth at list price</span>
+        </div>
+        <div class="autoprice-apply">
+          <span class="autoprice-sub">Round up and use:</span>
+          <button type="button" class="btn btn-ghost btn-sm" id="ap-use-coins" data-target="cost_coins">— 🪙</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="ap-use-qp" data-target="cost_quest_points">— 🎯</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="ap-use-gems" data-target="cost_gems">— 💎</button>
+        </div>
+        <p class="autoprice-sub" id="ap-rates"></p>
+        <div id="ap-warnings"></div>
+      </div>
+    </div>
+
+    <div class="grid grid-3">
+      <div>
+        <label class="cost-label" for="cost_coins">
+          Coins 🪙
+          <span class="pill pill-idle" id="coins-auto" hidden>auto</span>
+          <a href="#" id="coins-reseed" hidden>↺ re-seed</a>
+        </label>
+        <input id="cost_coins" type="number" name="cost_coins" min="0"
+               value="{{ pack.cost_coins if pack else 0 }}"
+               {% if pack and pack.cost_coins %}data-owned="1"{% endif %}>
+      </div>
+      <div>
+        <label for="cost_quest_points">Quest Points 🎯</label>
+        <input id="cost_quest_points" type="number" name="cost_quest_points" min="0"
+               value="{{ pack.cost_quest_points if pack else 0 }}">
+      </div>
+      <div>
+        <label for="cost_gems">Gems 💎</label>
+        <input id="cost_gems" type="number" name="cost_gems" min="0"
+               value="{{ pack.cost_gems if pack else 0 }}">
+      </div>
+    </div>
+  </div>
+
+  <!-- ───────────────────────────────────────────────────────────── -->
+  <div class="pack-step">
+    <h2><span class="step-no">5</span> Bonus cards</h2>
+    <p class="step-note">
+      Extras handed over with the main card, always drawn from base cards in a rating
+      band. Set the count to 0 for a single-card pack.
+    </p>
+    <div class="grid grid-band">
+      <div>
+        <label for="bonus_min_rating">Min rating</label>
+        <input id="bonus_min_rating" type="number" name="bonus_min_rating" min="50" max="100"
+               required value="{{ pack.bonus_min_rating if pack else 74 }}">
+      </div>
+      <div>
+        <label for="bonus_max_rating">Max rating</label>
+        <input id="bonus_max_rating" type="number" name="bonus_max_rating" min="50" max="100"
+               required value="{{ pack.bonus_max_rating if pack else 80 }}">
+      </div>
+      <div>
+        <label for="bonus_count">How many</label>
+        <input id="bonus_count" type="number" name="bonus_count" min="0" max="10" required
+               value="{{ pack.bonus_count if pack else 2 }}">
+      </div>
+    </div>
+
+    <details style="margin-top:1rem;" {% if pack and pack.bonus_weights_json %}open{% endif %}>
+      <summary style="cursor:pointer; font-weight:800; font-size:.86rem;">
+        Bonus odds <span class="muted-sm" style="font-weight:600;">— even across the band unless you set them</span>
+      </summary>
+      <div style="margin-top:.8rem;">
+        {{ odds_table('bonus', odds.bonus) }}
+      </div>
+    </details>
+  </div>
+
+  <!-- ───────────────────────────────────────────────────────────── -->
+  <div class="pack-step">
+    <h2><span class="step-no">6</span> Limits &amp; status</h2>
+    <div class="grid" style="grid-template-columns:200px auto; align-items:end;">
+      <div>
+        <label for="daily_limit">Daily limit per user
+          <span style="text-transform:none; letter-spacing:0; font-weight:600;">(0 = unlimited)</span>
+        </label>
+        <input id="daily_limit" type="number" name="daily_limit" min="0" max="999"
+               value="{{ pack.daily_limit if pack else 0 }}">
+      </div>
+      <div style="padding:.6rem 1rem; background:var(--bg); border-radius:var(--radius-lg);">
+        <label style="display:flex; align-items:center; gap:.5rem; cursor:pointer; margin:0;
+                      text-transform:none; letter-spacing:0; font-size:.86rem; color:var(--text);">
+          <input type="checkbox" name="is_active" style="width:auto;"
+                 {% if pack is none or pack.is_active %}checked{% endif %}>
+          <span>Active — listed in /buypack</span>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div class="save-row">
+    <button type="submit" class="btn btn-primary">💾 Save</button>
+    <a href="{{ url_for('admin_packs_list') }}" class="btn btn-ghost">Cancel</a>
   </div>
 </form>
 
 <script>
-// ── Auto-price ─────────────────────────────────────────────────────────
-// The suggestion is what the cards this pack can pull are worth at list price,
-// computed server-side from the very same filters the pack draws from. It
-// re-runs as the filters change, because pricing a pack you have not saved yet
-// is exactly when you need the number.
+// ──────────────────────────────────────────────────────────────────────
+// The pack builder.
+//
+// Three things move together on this page, so they share one script:
+//   • which fields apply, which follows the pack type;
+//   • the odds tables, whose rows come from the server (the ratings a pack can
+//     reach and what sits at each) but whose shares and odds are worked out
+//     here as you type, exactly as the /claim rarity page does;
+//   • the price, which is what the odds are worth, so it re-reads them.
+// ──────────────────────────────────────────────────────────────────────
 (function () {
-  const form = document.querySelector('form[method="POST"]');
-  const panel = document.getElementById('autoprice');
-  if (!form || !panel) return;
+  const form = document.getElementById('pack-form');
+  if (!form) return;
 
+  const fmt = (n) => Number(n || 0).toLocaleString();
+  const fmtPct = (v) => {
+    if (!(v > 0)) return '0';
+    const s = v.toFixed(5).replace(/0+$/, '').replace(/\.$/, '');
+    return s || '0';
+  };
+  const fmtOdds = (share) => {
+    if (!(share > 0)) return 'never';
+    const oneIn = 100 / share;
+    return oneIn < 10 ? `1 in ${oneIn.toFixed(1)}`
+                      : `1 in ${Math.round(oneIn).toLocaleString()}`;
+  };
+
+  // ── Pack type ───────────────────────────────────────────────────────
+  // Only the fields the chosen type actually consults are shown. Nothing is
+  // cleared when they are hidden: switching type to look at the other options
+  // must not cost you the version list you already picked.
+  const versionBlock = document.getElementById('version-block');
+  const bandBlock = document.getElementById('band-block');
+  const countOnly = document.getElementById('count-only-block');
+  const spanReadout = document.getElementById('span-readout');
+  const spanLocked = document.getElementById('main_span_locked');
+  const versionsHint = document.getElementById('versions-hint');
+
+  function currentMode() {
+    const picked = form.querySelector('input[name="main_filter_mode"]:checked');
+    return picked ? picked.value : 'rating';
+  }
+
+  function syncMode() {
+    const mode = currentMode();
+    const usesVersion = (mode === 'version' || mode === 'both');
+    const showsBand = (mode !== 'version') || spanLocked.value === '1';
+
+    versionBlock.hidden = !usesVersion;
+    bandBlock.hidden = !showsBand;
+    countOnly.hidden = showsBand;
+    spanReadout.hidden = !(mode === 'version' && spanLocked.value !== '1');
+
+    versionsHint.textContent = usesVersion
+      ? 'Matching is case-insensitive.'
+      : '';
+
+    for (const label of document.querySelectorAll('#type-pick label')) {
+      label.classList.toggle('on', label.querySelector('input').checked);
+    }
+  }
+
+  for (const radio of form.querySelectorAll('input[name="main_filter_mode"]')) {
+    radio.addEventListener('change', () => { syncMode(); schedule(); });
+  }
+
+  document.getElementById('narrow-span').addEventListener('click', () => {
+    // The band stops following the version from here on, so whatever is in the
+    // two inputs is what gets saved — seed them from the span on screen rather
+    // than from whatever they held before the version was picked.
+    const main = document.getElementById('main-odds');
+    if (main) {
+      document.getElementById('main_min_rating').value = main.dataset.min;
+      document.getElementById('main_max_rating').value = main.dataset.max;
+    }
+    spanLocked.value = '1';
+    syncMode();
+    schedule();
+  });
+
+  // The count lives in the band block, which version mode hides. Mirror it so
+  // it stays visible and editable there.
+  const countReal = document.getElementById('main_count');
+  const countMirror = document.getElementById('main_count_mirror');
+  countMirror.disabled = false;
+  countMirror.addEventListener('input', () => { countReal.value = countMirror.value; schedule(); });
+  countReal.addEventListener('input', () => { countMirror.value = countReal.value; });
+
+  // ── The odds tables ─────────────────────────────────────────────────
+  const tables = Array.from(document.querySelectorAll('.odds'));
+
+  function rowHtml(slot, row, weight) {
+    const pool = row.pool
+      ? `<span class="mono">${row.pool}</span>`
+      : `<span class="pill pill-warn" title="No card sits at this rating, so it can't be pulled whatever weight it carries">0 cards</span>`;
+    return `<tr data-odds-row data-rating="${row.rating}" data-pool="${row.pool}"` +
+           ` data-value="${row.buy_value}"${row.pool ? '' : ' class="dead"'}>` +
+           `<td class="cell-num mono"><b>${row.rating}</b></td>` +
+           `<td class="cell-num mono">${fmt(row.buy_value)} \u{1FA99}</td>` +
+           `<td class="cell-num">${pool}</td>` +
+           `<td class="cell-num"><input type="number" class="cell-num mono" data-prob` +
+           ` name="${slot}_weight_${row.rating}" value="${fmtPct(weight)}"` +
+           ` min="0" max="100" step="{{ min_weight|pct }}"></td>` +
+           `<td class="cell-num mono" data-share>—</td>` +
+           `<td class="cell-num mono muted-sm" data-oddscell>—</td>` +
+           `<td class="cell-num mono" data-ev>—</td></tr>`;
+  }
+
+  function render(table, data) {
+    // Weights are carried across by RATING, never by position: a band that
+    // moved would otherwise slide every number onto the wrong row. A rating
+    // that has just come into the band starts at 0.
+    const kept = new Map();
+    for (const row of table.querySelectorAll('[data-odds-row]')) {
+      kept.set(Number(row.dataset.rating),
+               parseFloat(row.querySelector('[data-prob]').value) || 0);
+    }
+    const slot = table.dataset.slot;
+    table.dataset.min = data.min_rating;
+    table.dataset.max = data.max_rating;
+    table.querySelector('[data-rows]').innerHTML = data.rows
+      .map((row) => rowHtml(slot, row, kept.has(row.rating) ? kept.get(row.rating)
+                                                            : row.weight)).join('');
+    table.querySelector('[data-pool-total]').textContent = data.pool_total;
+    const note = table.querySelector('[data-span-note]');
+    if (note) note.textContent = data.span_note || '';
+    recalc(table);
+  }
+
+  function bandChanged(table, data) {
+    const shown = Array.from(table.querySelectorAll('[data-odds-row]'))
+      .map((r) => Number(r.dataset.rating));
+    const wanted = data.rows.map((r) => r.rating);
+    if (shown.length !== wanted.length) return true;
+    return shown.some((r, i) => r !== wanted[i]);
+  }
+
+  function poolChanged(table, data) {
+    const rows = table.querySelectorAll('[data-odds-row]');
+    return data.rows.some((row, i) =>
+      !rows[i] || Number(rows[i].dataset.pool) !== row.pool);
+  }
+
+  function recalc(table) {
+    const rows = Array.from(table.querySelectorAll('[data-odds-row]'));
+    // A rating with an empty pool cannot come up however it is weighted, so it
+    // is left out of the total — the same thing the pull and the price do with
+    // it. Showing it a share would be showing odds nobody can win.
+    let total = 0;
+    for (const row of rows) {
+      if (Number(row.dataset.pool) > 0) {
+        total += parseFloat(row.querySelector('[data-prob]').value) || 0;
+      }
+    }
+    const live = rows.filter((r) => Number(r.dataset.pool) > 0);
+    let ev = 0;
+
+    for (const row of rows) {
+      const shareCell = row.querySelector('[data-share]');
+      const oddsCell = row.querySelector('[data-oddscell]');
+      const evCell = row.querySelector('[data-ev]');
+      if (!(Number(row.dataset.pool) > 0)) {
+        shareCell.innerHTML = '<span class="pill pill-warn">can\'t be pulled</span>';
+        oddsCell.textContent = '—';
+        evCell.textContent = '—';
+        continue;
+      }
+      const value = parseFloat(row.querySelector('[data-prob]').value) || 0;
+      // An untouched column is even odds, which is what an empty weight list
+      // means to the pack itself — so show what that comes to rather than a
+      // column of dashes.
+      const share = total > 0 ? (value * 100) / total : (100 / (live.length || 1));
+      shareCell.textContent = fmtPct(share) + '%';
+      oddsCell.textContent = fmtOdds(share);
+      const contribution = (share / 100) * Number(row.dataset.value || 0);
+      evCell.textContent = fmt(Math.round(contribution)) + ' 🪙';
+      ev += contribution;
+    }
+
+    table.querySelector('[data-total]').textContent = fmtPct(total) + '%';
+    table.querySelector('[data-ev-total]').textContent =
+      fmt(Math.round(ev)) + ' 🪙 per card';
+    const hint = table.querySelector('[data-total-hint]');
+    if (total <= 0) {
+      hint.textContent = 'Even odds — nothing weighted yet.';
+    } else if (total >= 99 && total <= 101) {
+      hint.innerHTML = '<span class="pill pill-ok">sums to 100</span>';
+    } else {
+      hint.textContent = "Doesn't sum to 100 — every share is normalised, "
+                       + 'so the split works exactly as shown.';
+    }
+  }
+
+  function fill(table, how) {
+    const rows = Array.from(table.querySelectorAll('[data-odds-row]'));
+    const live = rows.filter((r) => Number(r.dataset.pool) > 0);
+    rows.forEach((row) => {
+      const input = row.querySelector('[data-prob]');
+      const pool = Number(row.dataset.pool) || 0;
+      if (how === 'clear') { input.value = 0; return; }
+      if (!pool) { input.value = 0; return; }
+      if (how === 'even') { input.value = fmtPct(100 / live.length); return; }
+      if (how === 'pool') {
+        const totalPool = live.reduce((n, r) => n + Number(r.dataset.pool), 0);
+        input.value = fmtPct((pool * 100) / totalPool);
+        return;
+      }
+      if (how === 'steep') {
+        // Rows run best-first, so each step down the table doubles.
+        const place = live.indexOf(row);
+        input.value = fmtPct(Math.pow(2, place));
+      }
+    });
+    recalc(table);
+    schedule();
+  }
+
+  for (const table of tables) {
+    for (const button of table.querySelectorAll('[data-fill]')) {
+      button.addEventListener('click', () => fill(table, button.dataset.fill));
+    }
+    table.querySelector('[data-simulate]')
+         .addEventListener('click', () => simulate(table));
+    recalc(table);
+  }
+
+  // ── Simulate ────────────────────────────────────────────────────────
+  // A column that reads like a sensible curve can still behave nothing like
+  // it. Opening the pack a thousand times on paper is the only thing that
+  // shows that before a player finds it.
+  async function simulate(table) {
+    const panel = table.querySelector('[data-sim]');
+    const slot = table.dataset.slot;
+    panel.hidden = false;
+    panel.textContent = 'Opening it 1,000 times…';
+    try {
+      const body = new FormData(form);
+      body.set('draws', '1000');
+      const res = await fetch('{{ url_for("admin_pack_simulate") }}', {
+        method: 'POST', body, credentials: 'same-origin',
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'failed');
+      const out = data.slots[slot];
+      if (!out || !out.draws) {
+        panel.textContent = 'Nothing to pull here yet — no card matches this slot.';
+        return;
+      }
+      const widest = Math.max(...out.rows.map((r) => r.actual), 1);
+      panel.innerHTML =
+        `<b>${fmt(out.draws)} opens</b> — what actually came out:` +
+        '<div class="table-wrap"><table><thead><tr>' +
+        '<th class="cell-num">Rating</th><th class="cell-num">You set</th>' +
+        '<th class="cell-num">Actually pulled</th><th></th></tr></thead><tbody>' +
+        out.rows.map((r) => {
+          if (!r.pool) return '';
+          const width = Math.round((r.actual / widest) * 140);
+          return `<tr><td class="cell-num mono"><b>${r.rating}</b></td>` +
+                 `<td class="cell-num mono muted-sm">${r.configured === null ? 'even' : fmtPct(r.configured) + '%'}</td>` +
+                 `<td class="cell-num mono">${fmtPct(r.actual)}%` +
+                 ` <span class="muted-sm">(${fmt(r.hits)})</span></td>` +
+                 `<td><span class="sim-bar" style="width:${width}px"></span></td></tr>`;
+        }).join('') +
+        '</tbody></table></div>';
+    } catch (err) {
+      panel.textContent = 'Could not simulate this right now.';
+    }
+  }
+
+  // ── The price ───────────────────────────────────────────────────────
   const statusEl = document.getElementById('ap-status');
   const bodyEl = document.getElementById('ap-body');
   const linesEl = document.getElementById('ap-lines');
   const valueEl = document.getElementById('ap-value');
   const ratesEl = document.getElementById('ap-rates');
   const warnEl = document.getElementById('ap-warnings');
+  const coinsField = document.getElementById('cost_coins');
+  const autoPill = document.getElementById('coins-auto');
+  const reseedLink = document.getElementById('coins-reseed');
   const buttons = {
     coins: document.getElementById('ap-use-coins'),
     quest_points: document.getElementById('ap-use-qp'),
     gems: document.getElementById('ap-use-gems'),
   };
 
-  const fmt = (n) => Number(n || 0).toLocaleString();
   let latest = null;
   let pending = null;
   let generation = 0;
+
+  // The coin price fills itself in from the contents, and keeps doing so while
+  // the filters move — which is exactly when you want it. It stops the moment
+  // the admin types a price of their own: a pack deliberately sold under what
+  // it holds is a design decision, not a stale number to overwrite. Setting
+  // .value from script fires no 'input' event, so the auto-writer can never
+  // mistake its own writing for a person's.
+  function coinsAreOwned() {
+    if (coinsField.dataset.owned === '1') return true;
+    for (const id of ['cost_quest_points', 'cost_gems']) {
+      if (Number(document.getElementById(id).value) > 0) return true;
+    }
+    return false;
+  }
+
+  for (const id of ['cost_coins', 'cost_quest_points', 'cost_gems']) {
+    document.getElementById(id).addEventListener('input', () => {
+      coinsField.dataset.owned = '1';
+      syncAutoPill();
+    });
+  }
+
+  reseedLink.addEventListener('click', (event) => {
+    event.preventDefault();
+    delete coinsField.dataset.owned;
+    for (const id of ['cost_quest_points', 'cost_gems']) {
+      document.getElementById(id).value = 0;
+    }
+    if (latest) coinsField.value = latest.coins || 0;
+    syncAutoPill();
+  });
+
+  function syncAutoPill() {
+    const owned = coinsAreOwned();
+    autoPill.hidden = owned;
+    reseedLink.hidden = !owned;
+  }
 
   function apply(currency) {
     if (!latest) return;
@@ -291,21 +788,23 @@
       const field = document.getElementById(btn.dataset.target);
       if (field) field.value = (key === currency) ? amount : 0;
     }
+    coinsField.dataset.owned = '1';
+    syncAutoPill();
   }
 
   for (const [currency, btn] of Object.entries(buttons)) {
     btn.addEventListener('click', () => apply(currency));
   }
 
-  function render(s) {
+  function renderPrice(s) {
     latest = s;
     const lines = [];
     if (s.main_count) {
-      lines.push(`<div>Main slot: <b>${s.main_count} x ${fmt(s.main.value)}</b> &#129689;` +
+      lines.push(`<div>Main: <b>${s.main_count} x ${fmt(s.main.value)}</b> &#129689;` +
                  ` <span class="autoprice-sub">- ${s.main.basis} (${fmt(s.main.pool)} in pool)</span></div>`);
     }
     if (s.bonus_count) {
-      lines.push(`<div>Bonus slots: <b>${s.bonus_count} x ${fmt(s.bonus.value)}</b> &#129689;` +
+      lines.push(`<div>Bonus: <b>${s.bonus_count} x ${fmt(s.bonus.value)}</b> &#129689;` +
                  ` <span class="autoprice-sub">- ${s.bonus.basis}</span></div>`);
     }
     linesEl.innerHTML = lines.join('') || '<div>Nothing configured to pull yet.</div>';
@@ -324,11 +823,14 @@
       .map((w) => `<div class="ap-warn">&#9888;&#65039; ${w}</div>`).join('');
     bodyEl.hidden = false;
     statusEl.textContent = '';
+
+    if (!coinsAreOwned()) coinsField.value = s.coins || 0;
+    syncAutoPill();
   }
 
   async function refresh() {
     const mine = ++generation;
-    statusEl.textContent = 'working it out\u2026';
+    statusEl.textContent = 'working it out…';
     try {
       const res = await fetch('{{ url_for("admin_pack_price_suggestion") }}', {
         method: 'POST',
@@ -338,7 +840,28 @@
       const data = await res.json();
       if (mine !== generation) return;   // a newer edit already overtook this one
       if (!data.ok) throw new Error(data.error || 'failed');
-      render(data.suggestion);
+
+      // The rows only get rebuilt when the band or the pools really moved —
+      // rebuilding on every keystroke would take the cursor out of the box
+      // being typed into.
+      if (data.odds) {
+        for (const table of tables) {
+          const fresh = data.odds[table.dataset.slot];
+          if (!fresh) continue;
+          if (bandChanged(table, fresh) || poolChanged(table, fresh)) {
+            render(table, fresh);
+          } else {
+            const note = table.querySelector('[data-span-note]');
+            if (note) note.textContent = fresh.span_note || '';
+            table.dataset.min = fresh.min_rating;
+            table.dataset.max = fresh.max_rating;
+          }
+        }
+        const main = data.odds.main;
+        document.getElementById('span-text').textContent =
+          main.min_rating ? `${main.min_rating} – ${main.max_rating}` : '—';
+      }
+      renderPrice(data.suggestion);
     } catch (err) {
       if (mine !== generation) return;
       statusEl.textContent = 'could not price this right now';
@@ -351,31 +874,18 @@
     pending = setTimeout(refresh, 250);
   }
 
-  // The picker is only consulted in version/both modes, so say which one is
-  // live rather than leaving a selection that does nothing looking like it does.
-  const versionsBox = document.getElementById('main_versions');
-  const versionsHint = document.getElementById('versions-hint');
-  function syncVersionHint() {
-    const mode = form.elements['main_filter_mode'].value;
-    const used = (mode === 'version' || mode === 'both');
-    versionsHint.innerHTML = used
-      ? 'Matching is case-insensitive. Selected versions are what this pack pulls from.'
-      : '<strong>Not used in rating mode</strong> \u2014 switch the filter mode above to '
-        + 'pull by version. The selection is kept either way.';
-    if (versionsBox) versionsBox.style.opacity = used ? '' : '.55';
-  }
-  form.elements['main_filter_mode'].addEventListener('change', syncVersionHint);
-  syncVersionHint();
+  // Delegated, so it keeps working on rows that were re-rendered after a band
+  // change — and so the odds tables don't need fifty named listeners each.
+  form.addEventListener('input', (event) => {
+    if (event.target.matches('[data-prob]')) {
+      recalc(event.target.closest('.odds'));
+    }
+    schedule();
+  });
+  form.addEventListener('change', schedule);
 
-  for (const name of ['main_filter_mode', 'main_versions', 'main_min_rating',
-                      'main_max_rating', 'main_count', 'main_weights',
-                      'bonus_min_rating', 'bonus_max_rating', 'bonus_count']) {
-    const field = form.elements[name];
-    if (!field) continue;
-    field.addEventListener('change', schedule);
-    field.addEventListener('input', schedule);
-  }
-
+  syncMode();
+  syncAutoPill();
   refresh();
 })();
 </script>

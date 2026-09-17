@@ -36,6 +36,17 @@ from sqlalchemy import func
 
 from config import COINS_PER_GEM, get_buy_value
 from models import Player
+# The pools, the version parsing and the weight parsing live in
+# ``services.pack_odds`` — the pull reads them too, and the pull must not have
+# to import the pricing to find out what a weight list means. Re-exported here
+# because callers (and tests) have always reached for them through this module.
+from services.pack_odds import (  # noqa: F401
+    base_counts_by_rating,
+    parse_versions,
+    parse_versions_field,
+    parse_weights,
+    version_counts_by_rating,
+)
 from services.player_service import not_career
 
 logger = logging.getLogger(__name__)
@@ -132,106 +143,6 @@ def version_catalogue(session):
 # What one pull is worth
 # ──────────────────────────────────────────────────────────────────────
 
-def parse_versions(raw):
-    """A version list from JSON, a list, or a comma-separated string."""
-    if not raw:
-        return []
-    values = raw
-    if isinstance(raw, str):
-        text = raw.strip()
-        if text.startswith("["):
-            try:
-                values = json.loads(text)
-            except (ValueError, TypeError):
-                values = text.split(",")
-        else:
-            values = text.split(",")
-    if not isinstance(values, (list, tuple)):
-        return []
-    out = []
-    for item in values:
-        name = str(item).strip()
-        if name and name.casefold() not in {v.casefold() for v in out}:
-            out.append(name)
-    return out
-
-
-def parse_versions_field(session, posted):
-    """The version list from a submitted form field.
-
-    The picker posts one value per choice, so the common case is already a
-    list. A single value is ambiguous: it is one option from the picker, or it
-    is the comma-joined string the field used to be a free-text box for. It is
-    only split when it does not name a real version — otherwise a version
-    actually called "World Cup, Final" would be torn in half by its own name.
-    """
-    values = list(posted or [])
-    if len(values) != 1:
-        return parse_versions(values)
-    only = str(values[0]).strip()
-    if "," not in only:
-        return parse_versions(only)
-    exists = (not_career(session.query(Player.id))
-              .filter(func.lower(Player.version) == only.lower())
-              .first() is not None)
-    return [only] if exists else parse_versions(only)
-
-
-def parse_weights(raw, expected):
-    """``expected``-long weight list, or ``None`` for uniform.
-
-    Mirrors ``pack_service._weighted_pick_rating``: a list of the wrong length,
-    unreadable JSON, or weights summing to zero all mean uniform, because that
-    is what the pack itself will do with them.
-    """
-    if not raw or expected <= 0:
-        return None
-    values = raw
-    if isinstance(raw, str):
-        text = raw.strip()
-        if not text:
-            return None
-        if text.startswith("["):
-            try:
-                values = json.loads(text)
-            except (ValueError, TypeError):
-                return None
-        else:
-            values = [part for part in text.split(",") if part.strip()]
-    if not isinstance(values, (list, tuple)) or len(values) != expected:
-        return None
-    try:
-        weights = [float(str(w).strip()) for w in values]
-    except (TypeError, ValueError):
-        return None
-    if any(w < 0 for w in weights) or sum(weights) <= 0:
-        return None
-    return weights
-
-
-def _base_counts_by_rating(session, min_rating, max_rating):
-    """``{rating: base cards available}`` over a band — rating-mode's real pool."""
-    rows = (not_career(session.query(Player.rating, func.count(Player.id)))
-            .filter(Player.is_active == True,
-                    Player.parent_player_id.is_(None),
-                    Player.rating.between(int(min_rating), int(max_rating)))
-            .group_by(Player.rating).all())
-    return {int(r): int(c or 0) for r, c in rows if r is not None}
-
-
-def _version_counts_by_rating(session, versions, min_rating, max_rating):
-    """``{rating: cards of these versions}`` over a band — 'both' mode's pool."""
-    lowered = [v.lower() for v in versions]
-    if not lowered:
-        return {}
-    rows = (not_career(session.query(Player.rating, func.count(Player.id)))
-            .filter(Player.is_active == True,
-                    Player.rating.between(int(min_rating), int(max_rating)),
-                    func.lower(Player.version).in_(lowered))
-            .group_by(Player.rating).all())
-    return {int(r): int(c or 0) for r, c in rows if r is not None}
-
-
 def _weighted_band_value(counts, min_rating, max_rating, weights):
     """``(value, pool, empty_ratings)`` for a weighted pull over a rating band.
 
@@ -266,8 +177,17 @@ def main_slot_value(session, *, mode, versions, min_rating, max_rating, weights)
     weights = parse_weights(weights, max_rating - min_rating + 1)
 
     if mode == "version":
-        # No rating selection happens at all — the pull is uniform over every
-        # card carrying one of the named versions, so the value is their mean.
+        # With per-rating odds configured, a version pack selects a rating
+        # first and only then a card carrying the version — the same two steps
+        # 'both' takes. Price it the same way, or the suggestion describes a
+        # pack that no longer exists. See ``pack_service._pick_main_player``.
+        if versions and weights is not None:
+            return main_slot_value(session, mode="both", versions=versions,
+                                   min_rating=min_rating, max_rating=max_rating,
+                                   weights=weights)
+        # Otherwise no rating selection happens at all — the pull is uniform
+        # over every card carrying one of the named versions, so the value is
+        # their mean.
         if not versions:
             return {"value": 0, "pool": 0, "empty_ratings": [],
                     "basis": "version — no version selected"}
@@ -292,15 +212,15 @@ def main_slot_value(session, *, mode, versions, min_rating, max_rating, weights)
             return main_slot_value(session, mode="rating", versions=None,
                                    min_rating=min_rating, max_rating=max_rating,
                                    weights=weights)
-        counts = _version_counts_by_rating(session, versions,
-                                           min_rating, max_rating)
+        counts = version_counts_by_rating(session, versions,
+                                          min_rating, max_rating)
         value, pool, empty = _weighted_band_value(counts, min_rating,
                                                   max_rating, weights)
         return {"value": value, "pool": pool, "empty_ratings": empty,
                 "basis": f"{', '.join(versions)} rated {min_rating}-{max_rating}, "
                          + ("weighted" if weights else "even odds")}
 
-    counts = _base_counts_by_rating(session, min_rating, max_rating)
+    counts = base_counts_by_rating(session, min_rating, max_rating)
     value, pool, empty = _weighted_band_value(counts, min_rating, max_rating,
                                               weights)
     return {"value": value, "pool": pool, "empty_ratings": empty,
@@ -308,28 +228,34 @@ def main_slot_value(session, *, mode, versions, min_rating, max_rating, weights)
                      + ("weighted" if weights else "even odds")}
 
 
-def bonus_slot_value(session, min_rating, max_rating):
+def bonus_slot_value(session, min_rating, max_rating, weights=None):
     """``{value, pool, empty_ratings, basis}`` for one bonus-slot pull.
 
-    Bonus slots are rating-only and always uniform — no version filter, no
-    weights — so this is the mean buy value of the base cards in the band,
-    weighted by how many there are at each rating.
+    Bonus slots are rating-only — no version filter — but they do carry odds:
+    ``_pick_bonus_player`` picks a RATING from ``bonus_weights_json`` and only
+    then a card at it. So the value is the weighted mean over the ratings, and
+    with no weights set the weighting is even, exactly as the pull is.
+
+    This used to average over the CARDS instead, which priced a band of forty
+    74s and one 80 like a 74 — while the pull, choosing the rating evenly, hands
+    out an 80 one time in seven. The pack paid far more than it was priced at.
+    Averaging over the ratings is what matches what actually comes out.
     """
     min_rating, max_rating = int(min_rating), int(max_rating)
     if max_rating < min_rating:
         min_rating, max_rating = max_rating, min_rating
-    counts = _base_counts_by_rating(session, min_rating, max_rating)
+    weights = parse_weights(weights, max_rating - min_rating + 1)
+    counts = base_counts_by_rating(session, min_rating, max_rating)
     pool = sum(counts.values())
     if not pool:
         return {"value": 0, "pool": 0,
                 "empty_ratings": list(range(min_rating, max_rating + 1)),
                 "basis": f"no base cards rated {min_rating}-{max_rating}"}
-    # Uniform over the CARDS, not over the ratings: a band with forty 74s and
-    # one 80 is worth about a 74.
-    value = sum(get_buy_value(r) * c for r, c in counts.items()) / pool
-    empty = [r for r in range(min_rating, max_rating + 1) if counts.get(r, 0) <= 0]
-    return {"value": int(round(value)), "pool": pool, "empty_ratings": empty,
-            "basis": f"{pool} base card(s) rated {min_rating}-{max_rating}"}
+    value, pool, empty = _weighted_band_value(counts, min_rating, max_rating,
+                                              weights)
+    return {"value": value, "pool": pool, "empty_ratings": empty,
+            "basis": f"{pool} base card(s) rated {min_rating}-{max_rating}, "
+                     + ("weighted" if weights else "even odds")}
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -339,7 +265,7 @@ def bonus_slot_value(session, min_rating, max_rating):
 def suggest(session, *, main_filter_mode="rating", main_versions=None,
             main_min_rating=70, main_max_rating=99, main_count=1,
             main_weights=None, bonus_min_rating=70, bonus_max_rating=80,
-            bonus_count=0):
+            bonus_count=0, bonus_weights=None):
     """Price one pack from what it can pull.
 
     Returns the two halves of the value (main slots and bonus slots), their
@@ -351,7 +277,8 @@ def suggest(session, *, main_filter_mode="rating", main_versions=None,
                            min_rating=main_min_rating,
                            max_rating=main_max_rating,
                            weights=main_weights)
-    bonus = bonus_slot_value(session, bonus_min_rating, bonus_max_rating)
+    bonus = bonus_slot_value(session, bonus_min_rating, bonus_max_rating,
+                             weights=bonus_weights)
 
     main_count = max(0, int(main_count or 0))
     bonus_count = max(0, int(bonus_count or 0))

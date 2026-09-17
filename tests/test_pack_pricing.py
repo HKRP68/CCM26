@@ -6,9 +6,12 @@ stock, so ``services/pack_pricing.py`` does the arithmetic from the same filters
 the pack draws from. These tests pin the parts that decide whether the number is
 worth trusting:
 
-  • **the value is over the cards, not over the ratings.** A band with forty 74s
-    and one 80 is worth about a 74; averaging the rating *tiers* instead would
-    price it like an 80 and hand out cards at a fraction of their worth.
+  • **the averaging follows the pull.** A slot that rolls a RATING and then a
+    card at it — rating mode, and the bonus slot — is worth the mean over its
+    ratings, so a band with forty 74s and one 80 is worth about halfway between
+    them. A version slot with no odds set draws uniformly over the CARDS, so
+    the same lopsided spread there is worth about a 74. Getting this backwards
+    prices a pack at a fraction of what it hands out.
   • **weights are the odds, so they are the weighting.** 60/30/10 over 85-87 is
     not the same pack as even odds over 85-87, and pricing it as though it were
     overcharges for the cheap end.
@@ -36,8 +39,36 @@ _ENGINE = None
 # file and that filter carries a *different* ``models.Player`` class than the
 # one this file just re-imported — SQLAlchemy then builds "FROM players,
 # players" and every query here comes back a cartesian product.
+# ``services.pack_odds`` is on it for the same reason ``pack_pricing`` is: it
+# holds the pools and the version parsing both of them query ``Player`` with.
 _MODULE_NAMES = ("database", "models", "config",
-                 "services.player_service", "services.pack_pricing")
+                 "services.player_service", "services.pack_odds",
+                 "services.pack_pricing")
+
+
+def _sync_package_attr(name, module):
+    """Keep the parent package's attribute in step with ``sys.modules``.
+
+    ``sys.modules.pop("services.pack_service")`` is not enough on its own: the
+    ``services`` package object still carries ``pack_service`` as an attribute,
+    and ``from services import pack_service`` reads that attribute in
+    preference to importing anything. Several test files in this suite stub
+    ``models`` and import service modules against the stub; without this, one
+    of those stubbed modules is handed straight to this file, bringing a
+    ``Player`` class that is not the one imported here — and every query comes
+    back "ambiguous column name: players.id", a very long way from the cause.
+    """
+    if "." not in name:
+        return
+    parent, _, child = name.rpartition(".")
+    package = sys.modules.get(parent)
+    if package is None:
+        return
+    if module is None:
+        if hasattr(package, child):
+            delattr(package, child)
+    else:
+        setattr(package, child, module)
 
 
 def setUpModule():
@@ -47,6 +78,7 @@ def setUpModule():
     _SAVED_MODULES = {name: sys.modules.get(name) for name in _MODULE_NAMES}
     for name in _MODULE_NAMES:
         sys.modules.pop(name, None)
+        _sync_package_attr(name, None)
 
     _TMP = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     _TMP.close()
@@ -73,6 +105,7 @@ def tearDownModule():
             sys.modules.pop(name, None)
         else:
             sys.modules[name] = module
+        _sync_package_attr(name, module)
     try:
         os.unlink(_TMP.name)
     except OSError:
@@ -289,15 +322,37 @@ class MainSlotTests(PricingCase):
 
 
 class BonusSlotTests(PricingCase):
-    def test_the_bonus_band_is_weighted_by_how_many_cards_sit_at_each_rating(self):
+    def test_the_bonus_band_is_priced_on_the_rating_it_rolls_not_the_card_count(self):
+        """``_pick_bonus_player`` rolls a RATING, so that is the weighting.
+
+        Forty 74s and one 80: the pull picks a rating evenly across the band and
+        only then a card at it, so the 80 comes up as often as the 74 — not one
+        time in forty-one. Averaging over the cards priced this band like a 74
+        and handed out 80s.
+        """
         for _ in range(40):
             self.card(74)
         self.card(80)
         self.session.commit()
         out = self.p.bonus_slot_value(self.session, 74, 80)
-        expected = (self.buy(74) * 40 + self.buy(80)) / 41
+        expected = (self.buy(74) + self.buy(80)) / 2
         self.assertEqual(out["value"], round(expected))
         self.assertEqual(out["pool"], 41)
+        # 75-79 hold nothing, so their share of the roll is dropped rather than
+        # priced — and reported, because an unfillable band is usually a typo.
+        self.assertEqual(out["empty_ratings"], [75, 76, 77, 78, 79])
+
+    def test_bonus_weights_are_the_bonus_odds(self):
+        """The bonus slot has carried weights all along; nothing used to set them."""
+        for rating in (74, 80):
+            self.card(rating)
+        self.session.commit()
+        even = self.p.bonus_slot_value(self.session, 74, 80)
+        # One weight per rating in 74-80, all of it on the 80.
+        top = self.p.bonus_slot_value(self.session, 74, 80,
+                                      weights="0, 0, 0, 0, 0, 0, 100")
+        self.assertEqual(top["value"], self.buy(80))
+        self.assertGreater(top["value"], even["value"])
 
     def test_variants_are_not_bonus_cards(self):
         """Bonus slots draw base cards only."""
@@ -491,6 +546,62 @@ class AdminWiringTests(unittest.TestCase):
         html = self._read("templates", "admin_pack_form.html")
         self.assertIn("(key === currency) ? amount : 0", html)
         self.assertIn("must hold", html)
+
+    def test_the_odds_are_a_table_of_ratings_not_a_comma_box(self):
+        html = self._read("templates", "admin_pack_form.html")
+        self.assertIn("_weight_", html)
+        self.assertIn("data-prob", html)
+        # Keyed by rating, so a band that moved can't slide every weight onto
+        # the wrong row.
+        self.assertIn('name="{{ slot }}_weight_{{ row.rating }}"', html)
+        # The old free-text box is gone.
+        self.assertNotIn('name="main_weights"', html)
+
+    def test_the_odds_tables_are_rendered_inside_the_form(self):
+        """Outside it they would post nothing, and the live price would be blind
+        to the very numbers it is pricing.
+
+        The macro is *defined* above the form, as Jinja requires; what has to
+        sit inside it is every call to the macro.
+        """
+        html = self._read("templates", "admin_pack_form.html")
+        opened, closed = html.index('<form method="POST"'), html.index("</form>")
+        calls = [i for i in range(len(html))
+                 if html.startswith("{{ odds_table(", i)]
+        self.assertEqual(len(calls), 2, "one table per slot")
+        for at in calls:
+            self.assertTrue(opened < at < closed,
+                            "an odds table was rendered outside the form")
+
+    def test_saving_writes_both_slots_odds(self):
+        admin = self._read("admin.py")
+        body = admin.split("def _save_pack_from_form(")[1]
+        self.assertIn("pack.main_weights_json = _odds_json_from_form(", body)
+        # bonus_weights_json has been on the model all along with nothing
+        # writing it — the bonus odds table is the first thing that does.
+        self.assertIn("pack.bonus_weights_json = _odds_json_from_form(", body)
+
+    def test_a_version_packs_band_comes_from_its_versions(self):
+        """The weight list is positional, so the band has to be the real one."""
+        admin = self._read("admin.py")
+        body = admin.split("def _save_pack_from_form(")[1]
+        self.assertIn("version_span(db, selected)", body)
+        self.assertIn("main_span_locked", body)
+
+    def test_the_suggestion_hands_back_the_rows_as_well_as_the_price(self):
+        """One round trip per edit — two could disagree with each other."""
+        admin = self._read("admin.py")
+        body = (admin.split("def admin_pack_price_suggestion():")[1]
+                .split("\n@app.route")[0])
+        self.assertIn("odds_rows(", body)
+        self.assertIn('"odds"', body)
+
+    def test_the_odds_are_not_published_to_players(self):
+        """They are an admin tuning tool. A pull nobody can audit is better
+        than a pull everybody argues about."""
+        packs = self._read("handlers", "packs.py")
+        self.assertNotIn("Main odds", packs)
+        self.assertNotIn("main_weights_json", packs)
 
 
 if __name__ == "__main__":
