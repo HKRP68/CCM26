@@ -2,6 +2,44 @@
 {% block title %}{{ 'Edit Pack' if pack else 'New Pack' }}{% endblock %}
 {% block content %}
 
+<style>
+  .cost-note {
+    margin: .2rem 0 .8rem; font-size: .8rem; color: var(--muted);
+    border-left: 3px solid var(--border); padding-left: .6rem;
+  }
+  .autoprice {
+    margin-top: 1rem; padding: .85rem 1rem;
+    background: var(--bg); border: 1px solid var(--border);
+    border-left: 3px solid #FBBF24; border-radius: 8px; font-size: .85rem;
+  }
+  .autoprice-head {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 1rem; flex-wrap: wrap;
+  }
+  .autoprice-status { color: var(--muted); font-size: .78rem; }
+  .autoprice-lines { margin: .6rem 0; color: var(--muted); }
+  .autoprice-lines div { padding: .12rem 0; }
+  .autoprice-lines b { color: var(--text); }
+  .autoprice-total { margin: .5rem 0; }
+  .autoprice-total strong { font-size: 1.1rem; color: var(--text); }
+  .autoprice-sub { color: var(--muted); font-size: .78rem; font-weight: normal; }
+  .autoprice-apply {
+    display: flex; align-items: center; gap: .5rem;
+    flex-wrap: wrap; margin-top: .6rem;
+  }
+  .ap-btn {
+    background: var(--card); color: var(--text);
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: .35rem .8rem; font-weight: 700; font-size: .82rem; cursor: pointer;
+  }
+  .ap-btn:hover:not(:disabled) { border-color: #FBBF24; color: #FBBF24; }
+  .ap-btn:disabled { opacity: .45; cursor: not-allowed; }
+  .ap-warn {
+    margin-top: .5rem; padding: .4rem .6rem; border-radius: 6px;
+    background: rgba(196,30,58,.12); color: #f7a1ae; font-size: .8rem;
+  }
+</style>
+
 <a href="{{ url_for('admin_packs_list') }}" style="color:var(--muted); text-decoration:none;">← Back to Packs</a>
 
 <h1>{{ '✏️ Edit Pack' if pack else '➕ New Pack' }}</h1>
@@ -46,25 +84,54 @@
               style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text); font-family:inherit;">{{ pack.description if pack else '' }}</textarea>
   </div>
 
-  <h3 style="margin-top:1.5rem;">Cost (set at least one)</h3>
+  <h3 style="margin-top:1.5rem;">Cost <span style="color:var(--muted); font-weight:normal; font-size:.85rem;">(set exactly one)</span></h3>
+  <p class="cost-note">
+    A buyer is charged the <strong>first</strong> non-zero of coins → quest points → gems,
+    but must hold <strong>all</strong> of them to buy at all. Two prices set means the
+    second is a requirement nobody ever pays — so price a pack in one currency.
+  </p>
   <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:.8rem;">
     <div>
       <label>Coins 🪙</label>
-      <input type="number" name="cost_coins" min="0"
+      <input type="number" name="cost_coins" id="cost_coins" min="0"
              value="{{ pack.cost_coins if pack else 0 }}"
              style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
     </div>
     <div>
       <label>Quest Points 🎯</label>
-      <input type="number" name="cost_quest_points" min="0"
+      <input type="number" name="cost_quest_points" id="cost_quest_points" min="0"
              value="{{ pack.cost_quest_points if pack else 0 }}"
              style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
     </div>
     <div>
       <label>Gems 💎</label>
-      <input type="number" name="cost_gems" min="0"
+      <input type="number" name="cost_gems" id="cost_gems" min="0"
              value="{{ pack.cost_gems if pack else 0 }}"
              style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+  </div>
+
+  <!-- Auto-price: what this pack's own filters are worth, priced live -->
+  <div class="autoprice" id="autoprice">
+    <div class="autoprice-head">
+      <strong>💡 Suggested price</strong>
+      <span class="autoprice-sub">— priced live from the slot settings below</span>
+      <span class="autoprice-status" id="ap-status">working it out…</span>
+    </div>
+    <div class="autoprice-body" id="ap-body" hidden>
+      <div class="autoprice-lines" id="ap-lines"></div>
+      <div class="autoprice-total">
+        Pack value: <strong id="ap-value">—</strong> 🪙
+        <span class="autoprice-sub">— what the cards inside are worth at list price</span>
+      </div>
+      <div class="autoprice-apply">
+        <span>Round up and use:</span>
+        <button type="button" class="ap-btn" id="ap-use-coins" data-target="cost_coins">— 🪙</button>
+        <button type="button" class="ap-btn" id="ap-use-qp" data-target="cost_quest_points">— 🎯</button>
+        <button type="button" class="ap-btn" id="ap-use-gems" data-target="cost_gems">— 💎</button>
+      </div>
+      <p class="autoprice-sub" id="ap-rates"></p>
+      <div id="ap-warnings"></div>
     </div>
   </div>
 
@@ -99,13 +166,30 @@
     </div>
   </div>
 
+  {% set chosen = (pack.main_versions_json|fromjson) if (pack and pack.main_versions_json) else [] %}
+  {% set chosen_lower = chosen|map('lower')|list %}
+  {% set known_lower = version_catalogue|map(attribute='name')|map('lower')|list %}
   <div style="margin-top:.8rem;">
-    <label>Versions <span style="color:var(--muted); font-weight:normal;">(comma-separated, used in version/both modes)</span></label>
-    <input type="text" name="main_versions"
-           placeholder="e.g. Star, Star Card, Star Player"
-           value="{% if pack and pack.main_versions_json %}{% set vs = pack.main_versions_json|fromjson %}{{ vs|join(', ') }}{% endif %}"
-           style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
-    <small style="color:var(--muted);">Match is case-insensitive. Leave empty for rating-only filtering.</small>
+    <label>Versions
+      <span style="color:var(--muted); font-weight:normal;">(pick one or more — hold Ctrl / ⌘ for several)</span>
+    </label>
+    <select name="main_versions" id="main_versions" multiple size="8"
+            style="width:100%; padding:.4rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text); font-family:inherit;">
+      {% for v in version_catalogue %}
+        <option value="{{ v.name }}" {% if v.name|lower in chosen_lower %}selected{% endif %}>
+          {{ v.name }}{% if v.cards %} — {{ v.cards }} card{{ '' if v.cards == 1 else 's' }} · {{ v.min_rating }}-{{ v.max_rating }} OVR · avg {{ '{:,}'.format(v.avg_value) }} 🪙{% else %} — no cards yet{% endif %}
+        </option>
+      {% endfor %}
+      {# A pack may point at a version whose cards were all deactivated or
+         renamed. It still has to show, and stay selected, or saving the form
+         for an unrelated reason would silently drop it. #}
+      {% for name in chosen %}
+        {% if name|lower not in known_lower %}
+          <option value="{{ name }}" selected>{{ name }} — ⚠️ no active cards</option>
+        {% endif %}
+      {% endfor %}
+    </select>
+    <small style="color:var(--muted);" id="versions-hint"></small>
   </div>
 
   <div style="margin-top:.8rem;">
@@ -167,5 +251,133 @@
     </a>
   </div>
 </form>
+
+<script>
+// ── Auto-price ─────────────────────────────────────────────────────────
+// The suggestion is what the cards this pack can pull are worth at list price,
+// computed server-side from the very same filters the pack draws from. It
+// re-runs as the filters change, because pricing a pack you have not saved yet
+// is exactly when you need the number.
+(function () {
+  const form = document.querySelector('form[method="POST"]');
+  const panel = document.getElementById('autoprice');
+  if (!form || !panel) return;
+
+  const statusEl = document.getElementById('ap-status');
+  const bodyEl = document.getElementById('ap-body');
+  const linesEl = document.getElementById('ap-lines');
+  const valueEl = document.getElementById('ap-value');
+  const ratesEl = document.getElementById('ap-rates');
+  const warnEl = document.getElementById('ap-warnings');
+  const buttons = {
+    coins: document.getElementById('ap-use-coins'),
+    quest_points: document.getElementById('ap-use-qp'),
+    gems: document.getElementById('ap-use-gems'),
+  };
+
+  const fmt = (n) => Number(n || 0).toLocaleString();
+  let latest = null;
+  let pending = null;
+  let generation = 0;
+
+  function apply(currency) {
+    if (!latest) return;
+    const amount = latest[currency] || 0;
+    if (!amount) return;
+    // A pack charges one currency and requires all of them, so applying a
+    // price clears the other two rather than stacking a second requirement
+    // the buyer is never actually charged.
+    for (const [key, btn] of Object.entries(buttons)) {
+      const field = document.getElementById(btn.dataset.target);
+      if (field) field.value = (key === currency) ? amount : 0;
+    }
+  }
+
+  for (const [currency, btn] of Object.entries(buttons)) {
+    btn.addEventListener('click', () => apply(currency));
+  }
+
+  function render(s) {
+    latest = s;
+    const lines = [];
+    if (s.main_count) {
+      lines.push(`<div>Main slot: <b>${s.main_count} x ${fmt(s.main.value)}</b> &#129689;` +
+                 ` <span class="autoprice-sub">- ${s.main.basis} (${fmt(s.main.pool)} in pool)</span></div>`);
+    }
+    if (s.bonus_count) {
+      lines.push(`<div>Bonus slots: <b>${s.bonus_count} x ${fmt(s.bonus.value)}</b> &#129689;` +
+                 ` <span class="autoprice-sub">- ${s.bonus.basis}</span></div>`);
+    }
+    linesEl.innerHTML = lines.join('') || '<div>Nothing configured to pull yet.</div>';
+    valueEl.textContent = fmt(s.raw_value);
+
+    buttons.coins.textContent = fmt(s.coins) + ' \u{1FA99}';
+    buttons.quest_points.textContent = fmt(s.quest_points) + ' \u{1F3AF}';
+    buttons.gems.textContent = fmt(s.gems) + ' \u{1F48E}';
+    for (const btn of Object.values(buttons)) btn.disabled = !s.raw_value;
+
+    ratesEl.textContent =
+      `Rounded up to the next round number. ${fmt(s.coins_per_quest_point)} coins ` +
+      `= 1 quest point, ${fmt(s.coins_per_gem)} coins = 1 gem.`;
+
+    warnEl.innerHTML = (s.warnings || [])
+      .map((w) => `<div class="ap-warn">&#9888;&#65039; ${w}</div>`).join('');
+    bodyEl.hidden = false;
+    statusEl.textContent = '';
+  }
+
+  async function refresh() {
+    const mine = ++generation;
+    statusEl.textContent = 'working it out\u2026';
+    try {
+      const res = await fetch('{{ url_for("admin_pack_price_suggestion") }}', {
+        method: 'POST',
+        body: new FormData(form),   // carries the CSRF token with everything else
+        credentials: 'same-origin',
+      });
+      const data = await res.json();
+      if (mine !== generation) return;   // a newer edit already overtook this one
+      if (!data.ok) throw new Error(data.error || 'failed');
+      render(data.suggestion);
+    } catch (err) {
+      if (mine !== generation) return;
+      statusEl.textContent = 'could not price this right now';
+      bodyEl.hidden = true;
+    }
+  }
+
+  function schedule() {
+    clearTimeout(pending);
+    pending = setTimeout(refresh, 250);
+  }
+
+  // The picker is only consulted in version/both modes, so say which one is
+  // live rather than leaving a selection that does nothing looking like it does.
+  const versionsBox = document.getElementById('main_versions');
+  const versionsHint = document.getElementById('versions-hint');
+  function syncVersionHint() {
+    const mode = form.elements['main_filter_mode'].value;
+    const used = (mode === 'version' || mode === 'both');
+    versionsHint.innerHTML = used
+      ? 'Matching is case-insensitive. Selected versions are what this pack pulls from.'
+      : '<strong>Not used in rating mode</strong> \u2014 switch the filter mode above to '
+        + 'pull by version. The selection is kept either way.';
+    if (versionsBox) versionsBox.style.opacity = used ? '' : '.55';
+  }
+  form.elements['main_filter_mode'].addEventListener('change', syncVersionHint);
+  syncVersionHint();
+
+  for (const name of ['main_filter_mode', 'main_versions', 'main_min_rating',
+                      'main_max_rating', 'main_count', 'main_weights',
+                      'bonus_min_rating', 'bonus_max_rating', 'bonus_count']) {
+    const field = form.elements[name];
+    if (!field) continue;
+    field.addEventListener('change', schedule);
+    field.addEventListener('input', schedule);
+  }
+
+  refresh();
+})();
+</script>
 
 {% endblock %}
