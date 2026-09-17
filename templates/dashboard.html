@@ -155,6 +155,32 @@
     display: inline-flex; align-items: center; justify-content: center;
     font-weight: 700; margin-right: .5rem;
   }
+  .matchday-list { font-size: .85rem; }
+  .matchday-list .row {
+    display: grid;
+    grid-template-columns: 1.6rem minmax(0, 1fr) minmax(70px, 120px) auto;
+    gap: .6rem; align-items: center;
+    padding: .4rem 0; border-bottom: 1px dashed var(--border, #2a3142);
+  }
+  .matchday-list .row:last-child { border: none; }
+  .matchday-list .rank {
+    background: var(--bg, #10141c);
+    border-radius: 50%; width: 1.5rem; height: 1.5rem;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: .75rem;
+  }
+  .matchday-list .who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .matchday-list .who a { color: inherit; text-decoration: none; }
+  .matchday-list .who small { color: var(--muted); font-size: .72rem; }
+  .matchday-list .meter { height: 8px; background: rgba(255,255,255,.08); border-radius: 999px; overflow: hidden; }
+  .matchday-list .meter i { display: block; height: 100%; background: linear-gradient(90deg, #C41E3A, #FBBF24); border-radius: inherit; }
+  .matchday-list .played { font-weight: 700; white-space: nowrap; }
+  .matchday-list .played small { color: var(--muted); font-weight: 400; font-size: .72rem; }
+  @media (max-width: 720px) {
+    .matchday-list .row { grid-template-columns: 1.6rem minmax(0, 1fr) auto; }
+    .matchday-list .meter { display: none; }
+  }
+
   .reward-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
   .reward-table th, .reward-table td {
     padding: .45rem .35rem;
@@ -405,6 +431,30 @@
       {% endfor %}
     </div>
   </div>
+</div>
+
+<!-- Who played the most matches today -->
+<div class="panel">
+  <h3>🏏 Most Matches Today
+    <span class="retention-sub">— {{ match_day.label }} (IST) · {{ match_day.total }} match{{ '' if match_day.total == 1 else 'es' }} played by {{ match_day.players }} player{{ '' if match_day.players == 1 else 's' }}</span>
+  </h3>
+  {% if match_day.leaders %}
+  <div class="matchday-list">
+    {% for row in match_day.leaders %}
+      <div class="row">
+        <span class="rank">{{ loop.index }}</span>
+        <span class="who">
+          <a href="{{ url_for('user_detail', user_id=row.user.id) }}">{{ row.user.first_name or row.user.team_name or '—' }}</a>
+          <small>@{{ row.user.username or row.user.telegram_id }}</small>
+        </span>
+        <span class="meter"><i style="width: {{ [row.pct, 4]|max }}%;"></i></span>
+        <span class="played">{{ row.count }} <small>played · {{ row.won }} won</small></span>
+      </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p style="color:var(--muted);">No matches have finished today yet.</p>
+  {% endif %}
 </div>
 
 <div class="twocol">

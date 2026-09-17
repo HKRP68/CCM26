@@ -15,7 +15,8 @@ can be run by several people, and all of them need to see what they have to play
 import logging
 from html import escape
 
-from models import Tournament, TournamentTeam, TournamentMatch
+from models import (Tournament, TournamentTeam, TournamentMatch,
+                    TournamentPlayerStats)
 from services import tournament_service
 
 logger = logging.getLogger(__name__)
@@ -356,6 +357,205 @@ def render_team_schedule(session, tour, team, viewer_tg_id=None, limit=40):
 
     out += ["", "<i>🏠 home · ✈️ away · 🌱 the pitch this match must be played "
                 "on.</i>"]
+    return "\n".join(out)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# /teamtourstats — one team's numbers, not its schedule
+# ══════════════════════════════════════════════════════════════════════
+#
+# ``render_team_schedule`` answers "what do we play next?". This answers the
+# other half of the same question: "how have we actually been doing?" — the
+# standing and form, what the team scores and concedes, its best and worst days
+# with the bat, and which of its own players are carrying it.
+#
+# Everything here is derived from the recorded matches and the tournament's
+# player-stat rows, so correcting or deleting a match moves this card exactly as
+# it moves the points table.
+
+
+def _overs_text(balls):
+    """Balls as cricket overs — ``27`` → ``4.3``."""
+    balls = int(balls or 0)
+    return f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6)
+
+
+def _run_rate(runs, balls):
+    """Runs per over, or ``None`` when nothing has been bowled."""
+    balls = int(balls or 0)
+    return (int(runs or 0) / (balls / 6.0)) if balls else None
+
+
+def team_innings(session, tournament_id, team_id):
+    """Every completed innings this team has batted, newest fixture last.
+
+    Returns ``[{runs, wickets, balls, opponent_id, won, match}, …]``. Which
+    innings belongs to which side is fixed by the schema: innings 1 is always
+    ``team1``'s and innings 2 always ``team2``'s — the same mapping
+    ``recompute_standings`` builds net run-rate from.
+    """
+    tid, team_id = int(tournament_id), int(team_id)
+    rows = (session.query(TournamentMatch)
+            .filter_by(tournament_id=tid, status="completed")
+            .filter((TournamentMatch.team1_id == team_id)
+                    | (TournamentMatch.team2_id == team_id))
+            .order_by(TournamentMatch.round_no, TournamentMatch.match_no,
+                      TournamentMatch.id).all())
+    out = []
+    for fx in rows:
+        first = fx.team1_id == team_id
+        runs = fx.inn1_runs if first else fx.inn2_runs
+        if runs is None:
+            continue    # a walkover or a manually recorded result with no score
+        out.append({
+            "runs": int(runs or 0),
+            "wickets": int((fx.inn1_wickets if first else fx.inn2_wickets) or 0),
+            "balls": int((fx.inn1_balls if first else fx.inn2_balls) or 0),
+            "conceded": int((fx.inn2_runs if first else fx.inn1_runs) or 0),
+            "conceded_wickets": int((fx.inn2_wickets if first else fx.inn1_wickets) or 0),
+            # The balls this team *bowled* — the other innings. Economy read off
+            # their own batting balls would be a different number entirely.
+            "conceded_balls": int((fx.inn2_balls if first else fx.inn1_balls) or 0),
+            "opponent_id": fx.team2_id if first else fx.team1_id,
+            "won": fx.winner_team_id == team_id,
+            "match": fx,
+        })
+    return out
+
+
+def team_player_stats(session, tour, team):
+    """The tournament's player-stat rows belonging to this team.
+
+    Rows carry the team name they were played under, which is what the stat
+    leaderboards show — so the name is the primary key here too. A Lets Play
+    team *is* a person, though, and a player who renames their team mid-run
+    would otherwise vanish from their own card; for those the owning user is
+    used as a fallback identity.
+    """
+    rows = (session.query(TournamentPlayerStats)
+            .filter_by(tournament_id=int(tour.id)).all())
+    wanted = _norm(team.name)
+    mine = [r for r in rows if _norm(r.team_name) == wanted]
+    if mine or not getattr(team, "user_tg_id", None):
+        return mine
+    from models import User
+    owner = (session.query(User)
+             .filter(User.telegram_id == int(team.user_tg_id)).first())
+    if owner is None:
+        return mine
+    return [r for r in rows if r.user_id == owner.id]
+
+
+def _best_batting(rows, limit=3):
+    """Top run-scorers — runs first, then the better strike rate."""
+    scored = [r for r in rows if (r.bat_runs or 0) > 0]
+    scored.sort(key=lambda r: ((r.bat_runs or 0),
+                               (r.bat_runs or 0) / (r.bat_balls or 1)),
+                reverse=True)
+    return scored[:limit]
+
+
+def _best_bowling(rows, limit=3):
+    """Top wicket-takers — wickets first, then the better economy."""
+    took = [r for r in rows if (r.bowl_wickets or 0) > 0]
+    took.sort(key=lambda r: ((r.bowl_wickets or 0),
+                             -((r.bowl_runs or 0) / ((r.bowl_balls or 1) / 6.0))))
+    took.reverse()
+    return took[:limit]
+
+
+def render_team_stats(session, tour, team, viewer_tg_id=None):
+    """One team's tournament, by the numbers — the ``/teamtourstats`` answer."""
+    name = escape(team.name or "—")
+    mine = (viewer_tg_id is not None
+            and tournament_service.is_team_member(team, viewer_tg_id))
+    out = [f"📊 <b>{name}</b>{' 👈 <b>your team</b>' if mine else ''}"
+           f" — {escape(tour.name)}", f"{status_label(tour)}"]
+
+    # ── Where they stand ──────────────────────────────────────────────
+    pos, standing = _standing_of(session, tour, team.id)
+    if standing is not None:
+        total = len(teams(session, tour.id))
+        out += ["", "<b>🏆 Standing</b>",
+                f"Position: <b>#{pos}</b> of {total} · "
+                f"<b>{standing.points or 0}</b> pts",
+                f"Played {standing.played or 0} · "
+                f"W {standing.won or 0} · L {standing.lost or 0} · "
+                f"T {standing.tied or 0}",
+                f"Net run rate: <b>{_nrr_text(standing._nrr)}</b>"]
+        adjust = int(standing.points_adjust or 0)
+        if adjust:
+            note = (standing.points_adjust_note or "").strip()
+            out.append(f"Points adjustment: <b>{adjust:+d}</b>"
+                       + (f" — <i>{escape(note)}</i>" if note else ""))
+    form = team_form(session, tour.id, team.id)
+    if form:
+        out.append("Form: "
+                   + " ".join(_FORM_EMOJI.get(f, "⚪") for f in reversed(form))
+                   + "  <i>(oldest → latest)</i>")
+
+    innings = team_innings(session, tour.id, team.id)
+    if not innings:
+        out += ["", "<i>No completed match with a recorded score yet — the "
+                    "batting and bowling numbers appear once this team has "
+                    "played one.</i>"]
+        return "\n".join(out)
+
+    names = {tt.id: (tt.name or "—") for tt in teams(session, tour.id)}
+
+    def _versus(entry):
+        return escape(names.get(entry["opponent_id"]) or "—")
+
+    # ── With the bat ──────────────────────────────────────────────────
+    runs_for = sum(e["runs"] for e in innings)
+    balls_for = sum(e["balls"] for e in innings)
+    wkts_lost = sum(e["wickets"] for e in innings)
+    rr_for = _run_rate(runs_for, balls_for)
+    best = max(innings, key=lambda e: e["runs"])
+    worst = min(innings, key=lambda e: e["runs"])
+    out += ["", "<b>🏏 With the bat</b>",
+            f"Runs: <b>{runs_for:,}</b> in {_overs_text(balls_for)} overs"
+            + (f" · RR <b>{rr_for:.2f}</b>" if rr_for is not None else ""),
+            f"Average total: <b>{runs_for // len(innings)}</b> "
+            f"({wkts_lost} wickets lost across {len(innings)} innings)",
+            f"Highest: <b>{best['runs']}/{best['wickets']}</b> vs {_versus(best)}"]
+    if worst is not best:
+        out.append(f"Lowest: <b>{worst['runs']}/{worst['wickets']}</b> "
+                   f"vs {_versus(worst)}")
+
+    # ── With the ball ─────────────────────────────────────────────────
+    runs_against = sum(e["conceded"] for e in innings)
+    balls_against = sum(e["conceded_balls"] for e in innings)
+    rr_against = _run_rate(runs_against, balls_against)
+    tightest = min(innings, key=lambda e: e["conceded"])
+    out += ["", "<b>🎯 With the ball</b>",
+            f"Conceded: <b>{runs_against:,}</b>"
+            + (f" · RR <b>{rr_against:.2f}</b>" if rr_against is not None else ""),
+            f"Best defence: <b>{tightest['conceded']}/"
+            f"{tightest['conceded_wickets']}</b> vs {_versus(tightest)}"]
+
+    # ── Who is doing it ───────────────────────────────────────────────
+    rows = team_player_stats(session, tour, team)
+    batters = _best_batting(rows)
+    bowlers = _best_bowling(rows)
+    if batters or bowlers:
+        out += ["", "<b>⭐ Leading the way</b>"]
+    for r in batters:
+        sr = ((r.bat_runs or 0) / r.bat_balls * 100.0) if r.bat_balls else None
+        out.append(f"🏏 {escape(r.name or 'Player')} — <b>{r.bat_runs}</b> runs"
+                   + (f" · SR {sr:.1f}" if sr is not None else "")
+                   + f" · HS {r.highest_score}")
+    for r in bowlers:
+        econ = _run_rate(r.bowl_runs, r.bowl_balls)
+        figure = (f" · Best {r.best_bowl_wickets}/{r.best_bowl_runs}"
+                  if (r.best_bowl_runs or -1) >= 0 else "")
+        out.append(f"🎯 {escape(r.name or 'Player')} — "
+                   f"<b>{r.bowl_wickets}</b> wkts"
+                   + (f" · Econ {econ:.2f}" if econ is not None else "")
+                   + figure)
+
+    out += ["", "<i>🗓️ /clsd for this team's fixtures and results · "
+                "🏆 /tournamentstats for the tournament-wide leaderboards.</i>"]
     return "\n".join(out)
 
 

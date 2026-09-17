@@ -15,7 +15,8 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger("admin")
 from functools import wraps
-from flask import Flask, render_template, request, redirect, url_for, flash, session, Response, send_file
+from flask import (Flask, render_template, request, redirect, url_for, flash,
+                   session, Response, send_file, jsonify)
 from sqlalchemy import func, or_, desc, asc, case, cast, String
 from dotenv import load_dotenv
 
@@ -770,6 +771,17 @@ def dashboard():
             "avg_active_7d": avg_active_7d,
         }
 
+        # ── Who played the most matches today ────────────────────────────
+        # The ops tiles answer "how many matches today", and Top Users ranks
+        # all-time wins — so the player who ground out twenty games this morning
+        # is invisible on both. This is that board, over the IST calendar day the
+        # rest of the site's timestamps are shown in.
+        from services.match_day_stats import most_matches
+        day_start_utc = ist_today_0 - _IST_OFFSET
+        match_day = most_matches(db, day_start_utc,
+                                 day_start_utc + timedelta(days=1))
+        match_day["label"] = ist_today_0.strftime("%d %b")
+
         # Player snapshot (kept compact)
         total_players = db.query(func.count(Player.id)).scalar() or 0
         active_players = db.query(func.count(Player.id)).filter(
@@ -830,6 +842,7 @@ def dashboard():
                                match_activity=match_activity,
                                recent_logs=recent_logs, top_users=top_users,
                                reward_stats=reward_stats, retention=retention,
+                               match_day=match_day,
                                maint_active=maint_active, maint_until=maint_until)
     finally:
         db.close()
@@ -12195,7 +12208,9 @@ def admin_pack_new():
             except Exception as e:
                 db.rollback()
                 flash(f"Error: {e}", "error")
-        return render_template("admin_pack_form.html", pack=None)
+        from services.pack_pricing import version_catalogue
+        return render_template("admin_pack_form.html", pack=None,
+                               version_catalogue=version_catalogue(db))
     finally:
         db.close()
 
@@ -12224,9 +12239,52 @@ def admin_pack_edit(pack_id):
                 db.rollback()
                 flash(f"Error: {e}", "error")
         # GET — show form with pool counts
+        from services.pack_pricing import version_catalogue
         return render_template("admin_pack_form.html", pack=p,
                                main_pool=count_main_pool(db, p),
-                               bonus_pool=count_bonus_pool(db, p))
+                               bonus_pool=count_bonus_pool(db, p),
+                               version_catalogue=version_catalogue(db))
+    finally:
+        db.close()
+
+
+@app.route("/packs/price-suggestion", methods=["POST"])
+@login_required
+def admin_pack_price_suggestion():
+    """What this pack's filters are worth, as JSON, for the form's auto-price.
+
+    Takes the form fields as they stand right now rather than a saved pack, so
+    the figures move with the version picker and the rating band while the admin
+    is still deciding — pricing a pack you have not saved yet is the whole point.
+    """
+    db = get_session()
+    try:
+        from services.pack_pricing import parse_versions_field, suggest
+        f = request.form
+
+        def _int(name, default=0):
+            try:
+                return int(str(f.get(name, "")).strip() or default)
+            except (TypeError, ValueError):
+                return default
+
+        data = suggest(
+            db,
+            main_filter_mode=(f.get("main_filter_mode") or "rating"),
+            main_versions=parse_versions_field(
+                db, request.form.getlist("main_versions")),
+            main_min_rating=_int("main_min_rating", 70),
+            main_max_rating=_int("main_max_rating", 99),
+            main_count=_int("main_count", 1),
+            main_weights=f.get("main_weights"),
+            bonus_min_rating=_int("bonus_min_rating", 70),
+            bonus_max_rating=_int("bonus_max_rating", 80),
+            bonus_count=_int("bonus_count", 0),
+        )
+        return jsonify({"ok": True, "suggestion": data})
+    except Exception as e:
+        logger.exception("pack price suggestion failed")
+        return jsonify({"ok": False, "error": str(e)}), 400
     finally:
         db.close()
 
@@ -12297,13 +12355,13 @@ def _save_pack_from_form(db, pack, *, is_new=False):
     else:
         pack.main_weights_json = None
 
-    # Versions — comma-separated names
-    versions_raw = (f.get("main_versions") or "").strip()
-    if versions_raw:
-        versions = [v.strip() for v in versions_raw.split(",") if v.strip()]
-        pack.main_versions_json = _j.dumps(versions) if versions else None
-    else:
-        pack.main_versions_json = None
+    # Versions — a multi-select, so the browser posts one field per choice.
+    # A single comma-joined value is still accepted: the field was a free-text
+    # box before the picker existed, and scripted posts (and anybody's saved
+    # bookmarklet) should keep working rather than silently clearing the list.
+    from services.pack_pricing import parse_versions_field
+    selected = parse_versions_field(db, f.getlist("main_versions"))
+    pack.main_versions_json = _j.dumps(selected) if selected else None
 
     pack.bonus_min_rating = max(50, min(100, int(f.get("bonus_min_rating") or 70)))
     pack.bonus_max_rating = max(pack.bonus_min_rating, min(100, int(f.get("bonus_max_rating") or 80)))
