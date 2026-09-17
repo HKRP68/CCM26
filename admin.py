@@ -770,6 +770,17 @@ def dashboard():
             "avg_active_7d": avg_active_7d,
         }
 
+        # ── Who played the most matches today ────────────────────────────
+        # The ops tiles answer "how many matches today", and Top Users ranks
+        # all-time wins — so the player who ground out twenty games this morning
+        # is invisible on both. This is that board, over the IST calendar day the
+        # rest of the site's timestamps are shown in.
+        from services.match_day_stats import most_matches
+        day_start_utc = ist_today_0 - _IST_OFFSET
+        match_day = most_matches(db, day_start_utc,
+                                 day_start_utc + timedelta(days=1))
+        match_day["label"] = ist_today_0.strftime("%d %b")
+
         # Player snapshot (kept compact)
         total_players = db.query(func.count(Player.id)).scalar() or 0
         active_players = db.query(func.count(Player.id)).filter(
@@ -830,6 +841,7 @@ def dashboard():
                                match_activity=match_activity,
                                recent_logs=recent_logs, top_users=top_users,
                                reward_stats=reward_stats, retention=retention,
+                               match_day=match_day,
                                maint_active=maint_active, maint_until=maint_until)
     finally:
         db.close()

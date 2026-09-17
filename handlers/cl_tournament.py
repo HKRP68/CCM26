@@ -11,6 +11,9 @@ for a player to see the schedule. These commands close that gap:
     /ctinjuries   the treatment room, when the tournament has injuries on
     /clsd <team>  one team's whole tournament: where they stand, their form,
                   what they play next and every result so far
+    /teamtourstats [team]  the same team by the numbers — standing, what it
+                  scores and concedes, its best and worst days, and which of
+                  its own players are carrying it
 
 Every one of them is read-only and open to anyone; starting a match is still the
 league's own (gated) tournament command. A league may also publish its own alias
@@ -187,16 +190,20 @@ def _pick_keyboard(candidates, limit=8):
     return InlineKeyboardMarkup(rows) if rows else None
 
 
-def _team_list_text(session, tours):
+def _team_list_text(session, tours, *, header=None, usage=None):
     """The 'which team?' prompt, listing what there is to ask about.
+
+    ``header`` and ``usage`` let the sibling commands that take a team name
+    reuse the list under their own heading — the field of teams is the same
+    either way, and only the line telling the user what to type differs.
 
     Team and tournament names are typed by admins, so they are escaped: one
     stray ``&`` in a franchise name makes Telegram reject the whole message, and
     the prompt that explains how to use the command is the worst place to lose.
     """
-    lines = ["🗓️ <b>Team schedule</b>",
-             "Usage: <code>/clsd &lt;team name&gt;</code> — e.g. "
-             "<code>/clsd Mumbai Indians</code>"]
+    lines = [header or "🗓️ <b>Team schedule</b>",
+             usage or ("Usage: <code>/clsd &lt;team name&gt;</code> — e.g. "
+                       "<code>/clsd Mumbai Indians</code>")]
     for tour in tours:
         rows = ctv.teams(session, tour.id)
         if not rows:
@@ -289,6 +296,144 @@ async def clsd_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             logger.debug("/clsd pick edit skipped", exc_info=True)
     except Exception:
         logger.exception("/clsd pick callback failed")
+    finally:
+        session.close()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# /teamtourstats [TEAM NAME] — one team's tournament by the numbers
+# ══════════════════════════════════════════════════════════════════════
+#
+# /tournamentstats ranks individual players across the whole competition, and
+# /clsd shows one team's fixtures. Neither answers the question a team owner
+# opens the bot to ask: "how is MY team doing?" — what we score, what we concede,
+# our best and worst days with the bat, and who in our own XI is actually
+# winning us matches.
+#
+# It defaults to the viewer's own team, which is the whole point of the command,
+# and still takes a name so a captain can scout the side they are about to face.
+# Like /clsd it reads whichever tournament is live — the Challenge League one,
+# and failing that the Lets Play one, where a team *is* a person playing their
+# own roster.
+
+# Its own callback namespace: ``ctsd_`` belongs to /clsd's picker.
+TS_PREFIX = "ctts_"
+
+_TS_HEADER = "📊 <b>Team stats</b>"
+_TS_USAGE = ("Usage: <code>/teamtourstats &lt;team name&gt;</code> — or run it "
+             "with no name and you get your own team.")
+
+
+def _my_teams(session, tours, viewer_tg_id):
+    """``[(tour, team), …]`` — every team this viewer runs in a live tournament.
+
+    A Lets Play team is the viewer themselves, so it is matched on
+    ``user_tg_id``; a Challenge League team is matched on ownership, which
+    covers co-owners too — a franchise run by three people is all three
+    people's team.
+    """
+    out = []
+    if viewer_tg_id is None:
+        return out
+    for tour in tours:
+        for tt in ctv.teams(session, tour.id):
+            if (tournament_service.is_team_member(tt, viewer_tg_id)
+                    or (tt.user_tg_id
+                        and int(tt.user_tg_id) == int(viewer_tg_id))):
+                out.append((tour, tt))
+    return out
+
+
+def _ts_pick_keyboard(pairs, limit=8):
+    """Buttons for the teams a /teamtourstats query could have meant."""
+    rows = [[InlineKeyboardButton((tt.name or "—")[:40],
+                                  callback_data=f"{TS_PREFIX}{tt.id}")]
+            for _tour, tt in pairs[:limit]]
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+async def teamtourstats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/teamtourstats [TEAM NAME] — a team's standing, scoring and top players."""
+    session = get_session()
+    try:
+        tours = _live_tournaments(session)
+        if not tours:
+            await _reply(update, NO_ACTIVE_ANY)
+            return
+        viewer = update.effective_user.id if update.effective_user else None
+        query = " ".join(context.args or []).strip()
+
+        if not query:
+            mine = _my_teams(session, tours, viewer)
+            if len(mine) == 1:
+                tour, team = mine[0]
+                await _reply(update, ctv.render_team_stats(
+                    session, tour, team, viewer_tg_id=viewer))
+                return
+            if len(mine) > 1:
+                # Somebody who runs several franchises has to say which.
+                await _reply(
+                    update,
+                    f"{_TS_HEADER}\nYou run {len(mine)} teams — which one?",
+                    reply_markup=_ts_pick_keyboard(mine))
+                return
+            # Not a team owner: they have to name the team they want.
+            await _reply(update, _team_list_text(
+                session, tours, header=_TS_HEADER, usage=_TS_USAGE))
+            return
+
+        tour, team, candidates = _resolve(session, query)
+        if team is not None:
+            await _reply(update, ctv.render_team_stats(
+                session, tour, team, viewer_tg_id=viewer))
+            return
+        if candidates:
+            await _reply(
+                update,
+                f"🤔 <b>{escape(query)}</b> could be "
+                f"{len(candidates)} teams. Which one?",
+                reply_markup=_ts_pick_keyboard([(tour, tt) for tt in candidates]))
+            return
+        await _reply(
+            update,
+            f"❌ No team called <b>{escape(query)}</b> is in the tournament.\n\n"
+            + _team_list_text(session, tours,
+                              header=_TS_HEADER, usage=_TS_USAGE))
+    except Exception:
+        logger.exception("/teamtourstats failed")
+        await _reply(update, "⚠️ Could not load that team's stats right now.")
+    finally:
+        session.close()
+
+
+async def teamtourstats_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """``ctts_<tournament_team_id>`` — show the team picked from the prompt."""
+    q = update.callback_query
+    raw = (q.data or "")[len(TS_PREFIX):]
+    session = get_session()
+    try:
+        try:
+            team_id = int(raw)
+        except ValueError:
+            await q.answer("Unknown team.", show_alert=True)
+            return
+        from models import Tournament, TournamentTeam
+        team = session.query(TournamentTeam).get(team_id)
+        tour = session.query(Tournament).get(team.tournament_id) if team else None
+        if not team or not tour:
+            await q.answer("That team is no longer in the tournament.",
+                           show_alert=True)
+            return
+        text = ctv.render_team_stats(session, tour, team,
+                                     viewer_tg_id=q.from_user.id)
+        await q.answer()
+        try:
+            await q.edit_message_text(text, parse_mode="HTML",
+                                      disable_web_page_preview=True)
+        except Exception:
+            logger.debug("/teamtourstats pick edit skipped", exc_info=True)
+    except Exception:
+        logger.exception("/teamtourstats pick callback failed")
     finally:
         session.close()
 

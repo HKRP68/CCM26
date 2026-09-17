@@ -74,7 +74,7 @@ from handlers.search import (
 )
 from handlers.buy import (
     buypl_handler, buypl_confirm_callback, buypl_cancel_callback,
-    player_page_callback, player_page_noop_callback,
+    buypl_close_callback, player_page_callback, player_page_noop_callback,
 )
 from handlers.team import teamname_handler, purse_handler, stats_handler, statscl_handler
 from handlers.tournament import (
@@ -987,6 +987,9 @@ async def start_handler(update, context):
         "/cttable /ctfixtures /ctteams - Tournament table, schedule (done matches struck through), field\n"
         "/ctinjuries - Who is ruled out injured, and for how many more matches 🚑\n"
         "/clsd <team> - One team's schedule: standing, form, next matches, results\n"
+        "/teamtourstats [team] - Your team's tournament by the numbers: standing, "
+        "what you score and concede, best and worst totals, and your top run-scorers "
+        "and wicket-takers\n"
         "/mvp - Tournament Most Valuable Player: batting + bowling + wins + POTM "
         "awards in one impact-point total\n"
         "/remindmatch [team] [vs team] - Admin: nudge two teams to play what "
@@ -1587,6 +1590,7 @@ def main():
             ctour_handler, cttable_handler, ctfixtures_handler,
             ctteams_handler, ctinjuries_handler, ct_view_callback,
             clsd_handler, clsd_pick_callback,
+            teamtourstats_handler, teamtourstats_pick_callback,
         )
         # Deliberately absent from BOT_MENU_COMMANDS: both slash menus are at
         # Telegram's 100-command-per-scope ceiling, and pushing one over silently
@@ -1610,6 +1614,18 @@ def main():
             ["clsd", "clschedule", "ctsd"], clsd_handler))
         app.add_handler(CallbackQueryHandler(clsd_pick_callback,
                                              pattern=r"^ctsd_"))
+
+        # ── /teamtourstats — one team's tournament by the numbers ──
+        # /tournamentstats ranks players across the whole competition and /clsd
+        # shows a team's fixtures; this is the card a team opens about itself:
+        # standing and form, what it scores and concedes, its best and worst
+        # days with the bat, and which of its own players are carrying it. No
+        # name needed — it defaults to the team the viewer runs.
+        app.add_handler(CommandHandler(
+            ["teamtourstats", "teamstour", "myteamstats", "tts"],
+            teamtourstats_handler))
+        app.add_handler(CallbackQueryHandler(teamtourstats_pick_callback,
+                                             pattern=r"^ctts_"))
 
         # ── /mvp — Most Valuable Player across the whole tournament ──
         # The one board that ranks a tournament rather than one column of it:
@@ -2257,6 +2273,8 @@ def main():
         # ── Buy callbacks ────────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(buypl_confirm_callback, pattern=r"^buypl_"))
         app.add_handler(CallbackQueryHandler(buypl_cancel_callback, pattern=r"^buycancel"))
+        # One buy at a time: this closes the card a refused /buypl pointed at.
+        app.add_handler(CallbackQueryHandler(buypl_close_callback, pattern=r"^buyclose_"))
         app.add_handler(CallbackQueryHandler(player_page_callback, pattern=r"^plpg_"))
         app.add_handler(CallbackQueryHandler(player_page_noop_callback, pattern=r"^plpgnoop_"))
 

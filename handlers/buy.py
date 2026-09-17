@@ -1,6 +1,7 @@
 """Handler for /buypl <player_name> — buy a player from the market."""
 
 import asyncio
+import html
 import io
 import logging
 from datetime import datetime
@@ -16,6 +17,7 @@ from config import get_buy_value, get_sell_value, MAX_ROSTER
 from services.activity_service import log_activity
 from services.card_text import format_player_card
 from services.roster_lock import MARKET_REASON, match_lock_message
+from services import buy_session
 from utils.idempotency import claim_once, release
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,45 @@ def _is_buy_restricted(session, update):
     return True, official_link
 
 
+def _open_card_keyboard(owner_tg):
+    """One button that closes the buy card already waiting on this user."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("\u274c Close the open card",
+                             callback_data=f"buyclose_{owner_tg}")
+    ]])
+
+
+async def _refuse_second_buy(update, pending, owner_tg):
+    """Tell a user with a card already open to finish that one first.
+
+    The refusal is a reply to the open card when it is in this chat, so the
+    thing they have to close is one tap away rather than somewhere up the
+    scroll; the button closes it for them either way.
+    """
+    who = pending.get("player_name")
+    what = f" for <b>{html.escape(who)}</b>" if who else ""
+    where = ""
+    if pending["chat_id"] != update.effective_chat.id:
+        title = pending.get("chat_title")
+        where = (f" in <b>{html.escape(title)}</b>" if title
+                 else " in another chat")
+    text = (f"\U0001f6d1 You already have a buy card open{what}{where}.\n\n"
+            "Buy it, or close it, before starting another \u2014 one buy at a "
+            "time keeps the price on the card the one you actually pay.")
+    kwargs = {"parse_mode": "HTML",
+              "reply_markup": _open_card_keyboard(owner_tg)}
+    if pending["chat_id"] == update.effective_chat.id:
+        try:
+            await update.message.reply_text(
+                text, reply_to_message_id=pending["message_id"], **kwargs)
+            return
+        except TelegramError:
+            # The card was deleted out from under the record — fall through and
+            # send the refusal on its own rather than losing it.
+            pass
+    await update.message.reply_text(text, **kwargs)
+
+
 def _join_gc_keyboard(official_link):
     """Single button that jumps to the official group."""
     if not official_link:
@@ -95,6 +136,13 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     reason=MARKET_REASON)
         if locked:
             await update.message.reply_text(locked, parse_mode="HTML")
+            return
+
+        # One buy at a time. A card already waiting on this user is a live
+        # offer against the same purse, so the next /buypl waits for it.
+        pending = buy_session.active_card(tg_user.id)
+        if pending:
+            await _refuse_second_buy(update, pending, tg_user.id)
             return
 
         if user.roster_count >= MAX_ROSTER:
@@ -139,6 +187,9 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             current_idx=current_idx, owner_tg=tg_user.id,
             send_to=update.message, context=context,
             restricted=restricted, official_link=official_link,
+            # A restricted card has no Buy button and nothing to close, so it
+            # never takes the slot.
+            track=not restricted,
         )
 
     except Exception:
@@ -148,12 +199,17 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.close()
 
 
-async def _replace_paged_message(context, edit_query, *, photo, caption, keyboard):
+async def _replace_paged_message(context, edit_query, *, photo, caption, keyboard,
+                                 owner_tg=None):
     """Delete the paged message and resend it, switching between text and photo.
 
     A Telegram message can't be edited from text to photo (or back), so when the
     target version's custom-card availability differs from the current message we
     replace it instead of editing in place.
+
+    The card keeps its identity across the swap: an open-buy record pointing at
+    the old message is moved onto the new one, so "close the card you have open"
+    keeps naming a message that still exists.
     """
     msg = edit_query.message
     chat_id = msg.chat_id
@@ -162,21 +218,31 @@ async def _replace_paged_message(context, edit_query, *, photo, caption, keyboar
     except Exception:
         pass
     if photo is not None:
-        await context.bot.send_photo(
+        sent = await context.bot.send_photo(
             chat_id, photo=photo, caption=caption, parse_mode="HTML", reply_markup=keyboard)
     else:
-        await context.bot.send_message(
+        sent = await context.bot.send_message(
             chat_id, text=caption, parse_mode="HTML", reply_markup=keyboard)
+    if owner_tg is not None and sent is not None:
+        buy_session.move_card(owner_tg,
+                              from_chat_id=chat_id, from_message_id=msg.message_id,
+                              to_chat_id=sent.chat_id, to_message_id=sent.message_id)
+    return sent
 
 
 async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
                              send_to, context, edit_query=None,
-                             restricted=False, official_link=None):
+                             restricted=False, official_link=None, track=False):
     """Render one version page. If edit_query is set, edit that message in
     place; otherwise send a new one via send_to.
 
     If restricted=True (used in a non-official group), the normal buy/nav
     buttons are replaced by a single "Join the GC to buy this player" button.
+
+    ``track=True`` marks the sent card as this user's one open buy — set by
+    /buypl, and deliberately not by /playerinfo, which renders the same
+    carousel for a multi-version player without the user having asked to buy
+    anything (see :mod:`services.buy_session`).
     """
     from services.version_paginator import build_pagination_keyboard, _format_version_label
     import io as _io
@@ -304,30 +370,30 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
                             except TelegramError:
                                 logger.warning("edit_version_page media retry failed; replacing message")
                                 await _replace_paged_message(
-                                    context, edit_query, photo=_io.BytesIO(retry_bytes),
+                                    context, edit_query, owner_tg=owner_tg, photo=_io.BytesIO(retry_bytes),
                                     caption=caption, keyboard=keyboard)
                         else:
                             logger.warning("edit_version_page media edit failed; replacing with text")
                             await _replace_paged_message(
-                                context, edit_query, photo=None,
+                                context, edit_query, owner_tg=owner_tg, photo=None,
                                 caption=caption, keyboard=keyboard)
                     else:
                         # media_src was rendered bytes — re-send fresh bytes.
                         logger.warning("edit_version_page media edit failed; replacing message")
                         await _replace_paged_message(
-                            context, edit_query, photo=_io.BytesIO(custom_bytes or gen_bytes),
+                            context, edit_query, owner_tg=owner_tg, photo=_io.BytesIO(custom_bytes or gen_bytes),
                             caption=caption, keyboard=keyboard)
             else:
                 # Text → photo isn't editable; replace the message.
                 await _replace_paged_message(
-                    context, edit_query, photo=media_src, caption=caption, keyboard=keyboard)
+                    context, edit_query, owner_tg=owner_tg, photo=media_src, caption=caption, keyboard=keyboard)
             return
 
         # No custom card → text.
         if is_photo_msg:
             # Photo → text isn't editable; replace the message.
             await _replace_paged_message(
-                context, edit_query, photo=None, caption=caption, keyboard=keyboard)
+                context, edit_query, owner_tg=owner_tg, photo=None, caption=caption, keyboard=keyboard)
         else:
             try:
                 await edit_query.edit_message_text(
@@ -347,6 +413,12 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
     )
     if sent is None:
         sent = await send_to.reply_text(caption, parse_mode="HTML", reply_markup=keyboard)
+
+    if track and sent is not None:
+        buy_session.open_card(
+            owner_tg, chat_id=sent.chat_id, message_id=sent.message_id,
+            player_name=player.name,
+            chat_title=getattr(sent.chat, "title", None))
 
     try:
         from services.button_timeout import schedule_button_timeout
@@ -437,6 +509,11 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             return
 
         # Owner confirmed — now remove the keyboard so the client can't re-fire it.
+        # Answering the card frees the one-buy-at-a-time slot, whichever way the
+        # rest of this callback goes: the buttons are gone either way.
+        buy_session.close_card(tg_user.id,
+                               chat_id=query.message.chat_id,
+                               message_id=query.message.message_id)
         try:
             await query.edit_message_reply_markup(reply_markup=None)
         except Exception:
@@ -580,8 +657,48 @@ async def buypl_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 return
         except ValueError:
             pass
+    buy_session.close_card(tg_user.id,
+                           chat_id=query.message.chat_id,
+                           message_id=query.message.message_id)
     await query.answer("Cancelled")
     try:
         await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+
+async def buypl_close_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """``buyclose_<owner_tg>`` — close the card a refused /buypl pointed at.
+
+    The refusal already tells the user where their open card is; this is the
+    shortcut for when it has scrolled away, or is in a chat they would rather
+    not go back to.
+    """
+    query = update.callback_query
+    tg_user = query.from_user
+    try:
+        owner_tg = int(query.data.split("_")[1])
+    except (IndexError, ValueError):
+        await query.answer("Invalid", show_alert=True)
+        return
+    if tg_user.id != owner_tg:
+        await query.answer("This isn't your buy!", show_alert=True)
+        return
+
+    pending = buy_session.close_card(owner_tg)
+    await query.answer("Closed" if pending else "Nothing open")
+    if pending:
+        # Strip the old card's buttons too, so the offer it still shows can't be
+        # taken after we have told the user it is closed.
+        try:
+            await context.bot.edit_message_reply_markup(
+                chat_id=pending["chat_id"], message_id=pending["message_id"],
+                reply_markup=None)
+        except Exception:
+            logger.debug("buyclose: old card already gone", exc_info=True)
+    try:
+        await query.edit_message_text(
+            "\u2705 Closed. You can run <code>/buypl &lt;player&gt;</code> again.",
+            parse_mode="HTML")
     except Exception:
         pass
