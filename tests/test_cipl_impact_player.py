@@ -359,6 +359,46 @@ class OneUseSurvivesEverythingTests(unittest.TestCase):
         impact_player.cipl_use(s, 2, 150, 105, A_PICK_CIPL_BOWLER)
         self.assertIsNone(cp._impact_button(s, 7))
 
+    def test_a_benchless_match_is_not_offered_the_button_at_all(self):
+        """A /cdraft squad is dealt exactly eleven, so neither side can ever
+        swap. Offering a button whose only possible answer is "no substitutes"
+        is worse than not offering one."""
+        import handlers.cipl_play as cp
+        s = _state(bat_bench=[], bowl_bench=[])
+        self.assertIsNone(cp._impact_button(s, 7))
+
+    def test_one_side_with_a_bench_still_gets_the_shared_button(self):
+        import handlers.cipl_play as cp
+        s = _state(bowl_bench=[])
+        self.assertIsNotNone(cp._impact_button(s, 7))
+        self.assertTrue(impact_player.cipl_available_to(s, 1))
+        self.assertFalse(impact_player.cipl_available_to(s, 2))
+
+    def test_availability_ignores_the_window_but_not_the_swap_itself(self):
+        # cipl_available_to answers "is this side's swap still on the table",
+        # which is what decides whether a button is worth showing — not whether
+        # this instant is a legal break.
+        s = _state()
+        self.assertTrue(impact_player.cipl_available_to(s, 1))
+        self.assertFalse(
+            impact_player.cipl_options(s, 1, A_COMPLETED)["can_use"],
+            "the window really is shut")
+        impact_player.cipl_use(s, 1, 50, 9, A_PICK_CIPL_BOWLER)
+        self.assertFalse(impact_player.cipl_available_to(s, 1))
+
+    def test_a_spectator_has_nothing_available(self):
+        self.assertFalse(impact_player.cipl_available_to(_state(), 999))
+
+    def test_the_remaining_bench_drops_anyone_a_swap_has_spent(self):
+        s = _state()
+        self.assertEqual(
+            [p["roster_id"] for p in impact_player.cipl_bench_for(s, "bat")],
+            [50, 51])
+        impact_player.cipl_use(s, 1, 50, 9, A_PICK_CIPL_BOWLER)
+        self.assertEqual(
+            [p["roster_id"] for p in impact_player.cipl_bench_for(s, "bat")],
+            [51], "the substitute who came on is no longer a substitute")
+
 
 class ImpactMarkingTests(unittest.TestCase):
     """A substitute is marked wherever their name appears."""

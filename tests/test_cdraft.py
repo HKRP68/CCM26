@@ -1156,6 +1156,118 @@ class CdraftFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(query.answers[-1][1])
         self.assertEqual(draft["target_tg_id"], self.STRANGER_TG)
 
+    # ── A live draft must never be torn down underneath its captains ──
+    #
+    # The regression: captains reported "This draft is no longer active." part
+    # way through picking. The abandoned-setup backstop (CHALLENGE_DRAFT_EXPIRE,
+    # 10 minutes) is armed with the lobby, and eleven slots at a minute each
+    # outlast it — so anything that leaves it running, or lets it fire on a
+    # draft that is mid-pick, kills a draft both captains are still playing and
+    # leaves every slot button reporting the draft as gone.
+
+    async def test_the_setup_backstop_is_dropped_once_picking_starts(self):
+        from handlers.cdraft import _lobby_job_name
+        await self._open_lobby()
+        draft_id = self._draft()["draft_id"]
+        self.assertTrue(self.context.job_queue.get_jobs_by_name(
+            _lobby_job_name(draft_id)), "the lobby arms the backstop")
+        await self._join()
+        self.assertFalse(self.context.job_queue.get_jobs_by_name(
+            _lobby_job_name(draft_id)),
+            "picking has its own clock — the backstop must go")
+
+    async def test_every_slot_re_drops_the_backstop(self):
+        """Belt and braces: a backstop that somehow survived the join must not
+        be left ticking over a draft that is being played out."""
+        from handlers.cdraft import _lobby_job_name
+        await self._open_lobby()
+        await self._join()
+        draft = self._draft()
+        # Re-arm it behind the handlers' back, as a missed cancel would.
+        self.context.job_queue.run_once(
+            lambda ctx: None, 600, name=_lobby_job_name(draft["draft_id"]),
+            data={})
+        await self._pick(self.HOST_TG)
+        self.assertFalse(self.context.job_queue.get_jobs_by_name(
+            _lobby_job_name(draft["draft_id"])))
+
+    async def test_the_backstop_refuses_to_kill_a_draft_that_is_still_picking(self):
+        from handlers.challenge import (
+            _challenge_team_draft_key, _expire_challenge_draft,
+        )
+        await self._open_lobby()
+        await self._join()
+        draft = self._draft()
+        job = SimpleNamespace(data={"draft_id": draft["draft_id"],
+                                    "chat_id": self.CHAT, "message_id": 1})
+        await _expire_challenge_draft(
+            SimpleNamespace(job=job, bot=self.context.bot,
+                            bot_data=self.context.bot_data,
+                            job_queue=self.context.job_queue))
+        self.assertIn(_challenge_team_draft_key(draft["draft_id"]),
+                      self.context.bot_data,
+                      "a draft mid-pick is not an abandoned setup")
+        # ...and the picking carries on as if nothing happened.
+        query = await self._pick(self.HOST_TG)
+        self.assertEqual(draft["cdraft"]["index"], 1)
+        self.assertNotIn(self.module.DRAFT_GONE_MESSAGE,
+                         [text for text, _alert in query.answers])
+
+    async def test_the_backstop_still_frees_an_abandoned_lobby(self):
+        """The guard is for picking only — an unjoined lobby must still expire."""
+        from handlers.challenge import (
+            _challenge_team_draft_key, _expire_challenge_draft,
+        )
+        await self._open_lobby()
+        draft = self._draft()
+        job = SimpleNamespace(data={"draft_id": draft["draft_id"],
+                                    "chat_id": self.CHAT, "message_id": 1})
+        await _expire_challenge_draft(
+            SimpleNamespace(job=job, bot=self.context.bot,
+                            bot_data=self.context.bot_data,
+                            job_queue=self.context.job_queue))
+        self.assertNotIn(_challenge_team_draft_key(draft["draft_id"]),
+                         self.context.bot_data)
+
+    # ── What a stale button says ──
+
+    async def test_a_pick_button_pressed_after_the_picking_says_so(self):
+        """The draft is alive and on the pitch step — not "no longer active"."""
+        await self._open_lobby()
+        await self._join()
+        draft = self._draft()
+        state = draft["cdraft"]
+        tg_for = {"host": self.HOST_TG, "target": self.GUEST_TG}
+        # Keep a button from the last slot before it is picked away.
+        while not cdraft_service.is_complete(state):
+            stale = (f"cdp_{draft['draft_id']}_{state['index']}"
+                     f"_{cdraft_service.current_slot(state)['cards'][0]['id']}")
+            await self._pick(tg_for[cdraft_service.current_side(state)])
+        self.assertEqual(draft["turn"], "complete")
+        query = FakeQuery(stale, self.HOST_TG, self.CHAT)
+        await self.module.cdraft_pick_callback(
+            SimpleNamespace(callback_query=query), self.context)
+        self.assertEqual(query.answers[-1][0],
+                         self.module.PICKING_OVER_MESSAGE)
+
+    async def test_a_button_on_a_draft_that_is_gone_says_what_to_do_next(self):
+        await self._open_lobby()
+        await self._join()
+        draft = self._draft()
+        stale = (f"cdp_{draft['draft_id']}_0"
+                 f"_{cdraft_service.current_slot(draft['cdraft'])['cards'][0]['id']}")
+        await self._cancel(self.HOST_TG)
+        for data in (stale, f"cdj_{draft['draft_id']}",
+                     f"cdc_{draft['draft_id']}"):
+            query = FakeQuery(data, self.HOST_TG, self.CHAT)
+            handler = {"cdp": self.module.cdraft_pick_callback,
+                       "cdj": self.module.cdraft_join_callback,
+                       "cdc": self.module.cdraft_cancel_callback}[data[:3]]
+            await handler(SimpleNamespace(callback_query=query), self.context)
+            self.assertEqual(query.answers[-1][0],
+                             self.module.DRAFT_GONE_MESSAGE, data)
+            self.assertIn("/cdraft", query.answers[-1][0])
+
     async def test_a_second_challenge_cannot_open_over_a_live_draft(self):
         await self._open_lobby()
         second = FakeMessage(self.CHAT)

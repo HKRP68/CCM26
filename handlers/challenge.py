@@ -2329,6 +2329,14 @@ async def _expire_challenge_draft(ctx):
     draft = ctx.bot_data.get(_challenge_team_draft_key(draft_id))
     if not draft or draft.get("match_launched"):
         return
+    # A /cdraft in its picking phase is the one pre-match step that is not
+    # "abandoned" just because it has run long: eleven slots at a minute each
+    # outlast this backstop, and picking has its own per-slot clock (which ends
+    # a draft whose captain has walked away). Tearing it down here would kill a
+    # draft both captains are still playing, and every pick button would then
+    # report the draft as gone.
+    if draft.get("mode") == "cdraft" and draft.get("turn") == "draft":
+        return
     _cancel_selection_jobs(ctx, draft_id)
     _release_draft_chat_lock(ctx.bot_data, draft)
     ctx.bot_data.pop(_challenge_team_draft_key(draft_id), None)

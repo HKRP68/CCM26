@@ -251,6 +251,36 @@ def cipl_batting_slots(state, out_roster_id=None):
     return slots
 
 
+def cipl_bench_for(state, side, usage=None):
+    """``side``'s remaining substitutes: the snapshotted bench, minus anyone
+    already spent by a swap and anyone who has since joined the XI."""
+    if usage is None:
+        usage = (state.get("impact_players") or {}).get("usage") or {}
+    xi = active_players(state.get(f"{side}_xi") or [])
+    spent = _spent_roster_ids(usage)
+    return [p for p in (state.get(f"{side}_bench") or [])
+            if p.get("roster_id") not in spent
+            and not any(x.get("roster_id") == p.get("roster_id") for x in xi)]
+
+
+def cipl_available_to(state, user_id):
+    """True while this captain still has an Impact Player swap left to make.
+
+    Deliberately ignores the current window: it answers "is this side's swap
+    still on the table at all?", which is what decides whether the shared 🔄
+    button is worth showing, not "may they swap this instant". A side with no
+    bench — a /cdraft squad is exactly eleven — never has one, so the button
+    should not offer them a refusal.
+    """
+    side = cipl_side(state, user_id)
+    if side is None:
+        return False
+    usage = (state.get("impact_players") or {}).get("usage") or {}
+    if (usage.get(str(user_id)) or {}).get("used"):
+        return False
+    return bool(cipl_bench_for(state, side, usage))
+
+
 def cipl_options(state, user_id, next_action):
     """What this captain may do with their Impact Player right now.
 
@@ -268,10 +298,7 @@ def cipl_options(state, user_id, next_action):
     legal_label = cipl_break_label(state, next_action)
 
     xi = active_players(state.get(f"{side}_xi") or [])
-    spent = _spent_roster_ids(usage)
-    bench = [p for p in (state.get(f"{side}_bench") or [])
-             if p.get("roster_id") not in spent
-             and not any(x.get("roster_id") == p.get("roster_id") for x in xi)]
+    bench = cipl_bench_for(state, side, usage)
 
     if side == "bat":
         # Real Impact Player rule, and it keeps striker_idx/non_striker_idx from
@@ -295,7 +322,8 @@ def cipl_options(state, user_id, next_action):
     elif not legal_label:
         message = NOT_A_BREAK_MESSAGE
     elif not bench:
-        message = "No substitutes available outside your Playing XI."
+        message = ("No substitutes available — every player in your squad is "
+                   "already in the Playing XI.")
     elif not replaceable:
         message = blocked_note
     else:

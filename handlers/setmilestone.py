@@ -13,6 +13,7 @@ file_id: the host filesystem is wiped on deploy.
 """
 
 import logging
+from html import escape as _esc
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -44,6 +45,10 @@ def _keys_keyboard():
             rows.append(row); row = []
     if row:
         rows.append(row)
+    # A way out of the command from every screen — the flow parks state in
+    # user_data, so an admin who opened it by accident needs something to press
+    # rather than having to remember /cancel.
+    rows.append([InlineKeyboardButton("✖️ Close", callback_data=f"{CB}_x_")])
     return rows
 
 
@@ -68,10 +73,18 @@ def _summarise(event_key):
         lines = [f"<b>{label}</b>", f"<i>{desc}</i>", ""]
         lines.append(f"🎬 Media: {len(enabled)} enabled / {len(rows)} total")
         if captions:
+            # Escaped, not rendered: a caption is admin-written HTML, and
+            # truncating it mid-tag would make this whole screen fail to send.
+            # Showing the source is also what an admin about to rewrite it wants.
             preview = captions[0]
             if len(preview) > 220:
                 preview = preview[:220] + "…"
-            lines.append(f"💬 Message: {preview}")
+            lines.append(f"💬 Message: <code>{_esc(preview)}</code>")
+            # Each clip carries its own caption, so say when they differ —
+            # otherwise the one preview above reads as "the" message.
+            if len(set(captions)) > 1:
+                lines.append(f"   <i>…and {len(set(captions)) - 1} other "
+                             f"message(s) across this milestone's clips.</i>")
         else:
             lines.append("💬 Message: <i>none set</i>")
         lines.append("")
@@ -83,9 +96,21 @@ def _summarise(event_key):
         [InlineKeyboardButton("💬 Set message", callback_data=f"{CB}_msg_{event_key}")],
         [InlineKeyboardButton("🎬 Upload media", callback_data=f"{CB}_up_{event_key}")],
         [InlineKeyboardButton("🗑 Clear message", callback_data=f"{CB}_clr_{event_key}")],
-        [InlineKeyboardButton("⬅️ All milestones", callback_data=f"{CB}_list")],
+        [InlineKeyboardButton("⬅️ All milestones", callback_data=f"{CB}_list"),
+         InlineKeyboardButton("✖️ Close", callback_data=f"{CB}_x_")],
     ]
     return "\n".join(lines), kb
+
+
+def _back_keyboard(event_key):
+    """Way out of a prompt that is waiting on the admin's next message.
+
+    Back drops the pending wait and returns to the milestone; Close leaves the
+    command entirely. Either way ``AWAIT_KEY`` is cleared, so the admin's next
+    message is not swallowed by a flow they thought they had left.
+    """
+    return [[InlineKeyboardButton("⬅️ Back", callback_data=f"{CB}_k_{event_key}"),
+             InlineKeyboardButton("✖️ Cancel", callback_data=f"{CB}_x_")]]
 
 
 async def setmilestone_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -125,6 +150,20 @@ async def milestone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             reply_markup=InlineKeyboardMarkup(_keys_keyboard()))
         return
 
+    # Close carries no event key, so it has to be answered before the lookup
+    # below — which would otherwise reject it as an unknown milestone.
+    if action == "x":
+        context.user_data.pop(AWAIT_KEY, None)
+        await q.answer("Closed.")
+        try:
+            await q.edit_message_text(
+                "✖️ <b>Milestone Messages closed.</b>\n\n"
+                "<i>Run /setmilestone again whenever you need it.</i>",
+                parse_mode="HTML")
+        except Exception:
+            logger.debug("closing the milestone menu failed", exc_info=True)
+        return
+
     event_key = data.split("_", 2)[2] if data.count("_") >= 2 else ""
     if not _key_meta(event_key):
         await q.answer("Unknown milestone.", show_alert=True)
@@ -143,9 +182,13 @@ async def milestone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await q.answer()
         await q.edit_message_text(
             f"💬 Send the message for <b>{_key_meta(event_key)[1]}</b>.\n\n"
+            "This sets the text on <b>every</b> clip for this milestone. To "
+            "give one clip its own line, send it as the caption when you "
+            "upload it.\n\n"
             f"HTML is allowed. Placeholders: "
             + ", ".join("{" + f + "}" for f in CAPTION_FIELDS)
-            + "\n\nSend /cancel to stop.", parse_mode="HTML")
+            + "\n\nSend /cancel to stop.", parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(_back_keyboard(event_key)))
         return
 
     if action == "up":
@@ -153,8 +196,15 @@ async def milestone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await q.answer()
         await q.edit_message_text(
             f"🎬 Send the GIF, photo or video for "
-            f"<b>{_key_meta(event_key)[1]}</b>.\n\nSend /cancel to stop.",
-            parse_mode="HTML")
+            f"<b>{_key_meta(event_key)[1]}</b>.\n\n"
+            "💬 <b>Add a caption to it</b> and that text becomes this "
+            "milestone's message, sent under the clip. HTML is allowed. "
+            "Placeholders: "
+            + ", ".join("{" + f + "}" for f in CAPTION_FIELDS)
+            + "\n\nSend the clip with no caption to keep the message you "
+            "already have.\n\nSend /cancel to stop.",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(_back_keyboard(event_key)))
         return
 
     if action == "clr":
@@ -215,13 +265,15 @@ async def milestone_reply_handler(update: Update, context: ContextTypes.DEFAULT_
         return True
 
     if pending.get("mode") == "media":
-        stored = _store_media_from_message(msg, event_key)
+        stored, caption_set = _store_media_from_message(msg, event_key)
         if not stored:
             await msg.reply_text("Send a GIF, photo or video — or /cancel.")
             return True
         context.user_data.pop(AWAIT_KEY, None)
         _invalidate()
-        await msg.reply_text("✅ Milestone media saved.")
+        await msg.reply_text(
+            "✅ Milestone media saved, with the caption you sent as its "
+            "message." if caption_set else "✅ Milestone media saved.")
         return True
     return False
 
@@ -252,7 +304,20 @@ def _set_caption(event_key, caption):
 
 
 def _store_media_from_message(msg, event_key):
-    """Persist an uploaded animation/photo/video as a durable Telegram file_id."""
+    """Persist an uploaded animation/photo/video as a durable Telegram file_id.
+
+    A caption sent **with** the clip becomes that clip's own message, shown
+    under it when the milestone fires — admins compose the two together in
+    Telegram, so a GIF with text on it should arrive in one message rather than
+    needing a second trip through "Set message". Captions are per row, so two
+    clips on one milestone can carry different lines; ``fire_event_media`` picks
+    a row and sends that row's caption.
+
+    An uncaptioned upload inherits the message already configured for the key,
+    so swapping a clip never silently drops the text.
+
+    Returns ``(stored, caption_set)``.
+    """
     file_id, media_type = None, "image"
     if msg.animation:
         file_id, media_type = msg.animation.file_id, "image"
@@ -263,7 +328,12 @@ def _store_media_from_message(msg, event_key):
     elif msg.document:
         file_id, media_type = msg.document.file_id, "image"
     if not file_id:
-        return False
+        return False, False
+
+    # caption_html keeps the bold/italic/links the admin typed in Telegram —
+    # fire_event_media sends captions with parse_mode="HTML", so the plain text
+    # would otherwise arrive stripped of every entity they applied.
+    caption = (getattr(msg, "caption_html", None) or msg.caption or "").strip()
 
     db = get_session()
     try:
@@ -274,14 +344,14 @@ def _store_media_from_message(msg, event_key):
                     .order_by(EventMedia.id.desc()).first())
         db.add(EventMedia(
             event_key=event_key, source_type="telegram", source=file_id,
-            caption=(existing.caption if existing else None),
+            caption=(caption or (existing.caption if existing else None)),
             media_type=media_type, weight=1, enabled=True,
             label="Uploaded from Telegram"))
         db.commit()
-        return True
+        return True, bool(caption)
     except Exception:
         db.rollback()
         logger.exception("saving milestone media failed")
-        return False
+        return False, False
     finally:
         db.close()
