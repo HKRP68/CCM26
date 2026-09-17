@@ -359,6 +359,12 @@ GROUP_ONLY_COMMANDS = frozenset({
     # Challenge Draft. It needs a second player to tap Join, so it refuses in a
     # private chat outright.
     "cdraft",
+    # Franchise Auction. An auction IS a group event — every one of these
+    # refuses outside the chat the auction is bound to. They are not in
+    # BOT_MENU_COMMANDS either (see the note there), so listing them here
+    # changes nothing today; it is the correct entry for the day a private
+    # slot frees up.
+    "bid", "aboard", "apurse",
 })
 
 # Commands that only make sense one-to-one with the bot: deep-link entry
@@ -434,6 +440,27 @@ ADMIN_MENU_COMMANDS = (
     ("ddrop", "Admin: send a drafted player back to the pool"),
     ("dpublish", "Admin: publish drafted squads as a Challenge League"),
     ("dcancel", "Admin: cancel the draft"),
+    # Franchise Auction. This bucket is exempt from the 100-command clamp and
+    # is published only into admin DMs, so eighteen names here cost nobody
+    # else a menu entry.
+    ("auction", "Admin: Franchise Auction reference card"),
+    ("anew", "Admin: create an auction and bind it to this group"),
+    ("abind", "Admin: bind an auction to this group"),
+    ("astart", "Admin: start (or resume) the auction"),
+    ("apause", "Admin: pause the auction clock"),
+    ("aresume", "Admin: resume a paused auction"),
+    ("anext", "Admin: put the next lot on the block"),
+    ("aextend", "Admin: add seconds to the lot on the block"),
+    ("asold", "Admin: sell the lot at the standing bid"),
+    ("aunsold", "Admin: pass the lot on the block"),
+    ("aundobid", "Admin: void the standing bid on the lot"),
+    ("awithdraw", "Admin: pull a player out of the auction"),
+    ("atimer", "Admin: seconds allowed per auction lot"),
+    ("asnipe", "Admin: anti-snipe window, extension and cap"),
+    ("agrant", "Admin: correct a franchise purse"),
+    ("aco", "Admin: add a co-owner who may bid for a franchise"),
+    ("apublish", "Admin: publish bought squads as a Challenge League"),
+    ("acancel", "Admin: cancel the auction"),
     # Running tournament: the points table, and matches played off the bot.
     ("tpoints", "Admin: dock or award points on the tournament table"),
     ("tpointsclear", "Admin: clear a team's points adjustment"),
@@ -523,6 +550,13 @@ BOT_MENU_COMMANDS = (
     # commands anyway, and the draft group is told about them where it matters:
     # the "draft complete" announcement, the footer of /dsquad, /dadmin, and
     # the completed-trade card's own pointer to /dtrades.
+    # /bid, /aboard and /apurse are NOT here, for exactly the reason /dtrade
+    # is not: both player scopes sit at Telegram's 100-command ceiling, and
+    # _clamped drops the tail rather than letting setMyCommands reject the
+    # whole call — so publishing three auction commands would cost three
+    # existing player commands their menu entry. They are group-only commands
+    # anyway, and the auction group is told about them where it matters: the
+    # /auction admin card, the pinned board's own footer, and /help.
     ("ciplbot", "Practice a league match against the bot (unranked)"),
     ("change", "Change your XI/batting order during match setup"),
     ("botstatus", "Bot ping, uptime & status"),
@@ -983,6 +1017,10 @@ async def start_handler(update, context):
         "/pick <player> - Tournament Draft: make your pick when you're on the clock\n"
         "/dboard /dsquad /dqueue - Draft board, your squad, your auto-pick wishlist\n"
         "/dtrade /dtrades - Trade players with another franchise once the draft is done\n"
+        "\n<b>Franchise Auction</b>\n"
+        "/bid [amount] - Bid for the player on the block (bare /bid = the next minimum)\n"
+        "/aboard - The live auction board\n"
+        "/apurse [franchise] - Every purse, or one franchise's squad\n"
         "/ctour - Challenge League Tournament hub: table, fixtures, teams\n"
         "/cttable /ctfixtures /ctteams - Tournament table, schedule (done matches struck through), field\n"
         "/ctinjuries - Who is ruled out injured, and for how many more matches 🚑\n"
@@ -2033,6 +2071,57 @@ def main():
         app.add_handler(CallbackQueryHandler(dtrade_button_callback,
                                              pattern=r"^dt_"))
 
+        # ── Franchise Auction ────────────────────────────────────────
+        # The draft's sibling: franchises with a purse buy their squads lot by
+        # lot instead of taking turns. None of the player-facing commands are
+        # published to a slash menu — both player scopes sit exactly at
+        # Telegram's 100-per-scope ceiling, so publishing them would cost two
+        # existing commands their entry. Same call, and the same answer, as
+        # /dtrade above: the room is told about them where it matters instead
+        # (the admin card, the board's own footer, and /help).
+        #
+        # The au_bid_ buttons are SHARED, not owner-locked. They ride on the
+        # pinned board every franchise is watching, and a board the second
+        # franchise cannot press is not an auction — handlers/auction.py
+        # authorises each press against the franchise the presser owns, and the
+        # exact price rides in the callback data so a stale button is refused
+        # rather than bidding a number nobody meant.
+        from handlers.auction import (
+            bid_handler, bid_callback, aboard_handler, apurse_handler,
+            aadmin_handler, anew_handler, abind_handler, astart_handler,
+            apause_handler, anext_handler, aextend_handler, asold_handler,
+            aunsold_handler, aundobid_handler, awithdraw_handler,
+            atimer_handler, asnipe_handler, agrant_handler, aco_handler,
+            apublish_handler, acancel_handler,
+        )
+        # Not "/b": that is already /buy, registered above, and PTB runs the
+        # first handler that matches — the alias would be dead.
+        app.add_handler(CommandHandler(["bid", "bd"], bid_handler))
+        app.add_handler(CallbackQueryHandler(bid_callback, pattern=r"^au_bid_"))
+        app.add_handler(CommandHandler(["aboard", "auctionboard"], aboard_handler))
+        app.add_handler(CommandHandler(["apurse", "apurses"], apurse_handler))
+        # Admin. Registered unconditionally, with the gate inside the handler,
+        # so it answers the person who typed it rather than looking like a
+        # command that does not exist.
+        app.add_handler(CommandHandler("auction", aadmin_handler))
+        app.add_handler(CommandHandler("anew", anew_handler))
+        app.add_handler(CommandHandler("abind", abind_handler))
+        app.add_handler(CommandHandler("astart", astart_handler))
+        app.add_handler(CommandHandler("apause", apause_handler))
+        app.add_handler(CommandHandler(["aresume", "aunpause"], astart_handler))
+        app.add_handler(CommandHandler("anext", anext_handler))
+        app.add_handler(CommandHandler("aextend", aextend_handler))
+        app.add_handler(CommandHandler("asold", asold_handler))
+        app.add_handler(CommandHandler("aunsold", aunsold_handler))
+        app.add_handler(CommandHandler("aundobid", aundobid_handler))
+        app.add_handler(CommandHandler("awithdraw", awithdraw_handler))
+        app.add_handler(CommandHandler("atimer", atimer_handler))
+        app.add_handler(CommandHandler("asnipe", asnipe_handler))
+        app.add_handler(CommandHandler("agrant", agrant_handler))
+        app.add_handler(CommandHandler("aco", aco_handler))
+        app.add_handler(CommandHandler("apublish", apublish_handler))
+        app.add_handler(CommandHandler("acancel", acancel_handler))
+
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))
         app.add_handler(CommandHandler("eu", unscramble_exit_handler))
@@ -2443,6 +2532,17 @@ def main():
             start_draft_scheduler(app)
         except Exception:
             logger.exception("Failed to start the draft clock")
+
+        # The auction lot clock. Same sweeper shape as the draft's, but every
+        # two seconds rather than fifteen: a lot runs for thirty seconds, so a
+        # fifteen-second sweep would sell up to half a lot-length late and
+        # refuse bids by a rule the room cannot see. It is one indexed query,
+        # and it returns nothing at all while no auction is live.
+        try:
+            from services.auction_scheduler import start_auction_scheduler
+            start_auction_scheduler(app)
+        except Exception:
+            logger.exception("Failed to start the auction clock")
 
         # Schedule periodic tour expiry (every hour)
         try:

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Franchise Auctions{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_auction.css') }}">{% endblock %}
+
+{% block content %}
+<div class="au-shell">
+  <h2 style="margin:0;">🔨 Franchise Auctions</h2>
+
+  <div class="au-card">
+    <h3 style="margin-top:0;">Create an auction</h3>
+    <p class="au-note" style="margin:.2rem 0 .8rem;">
+      Franchises start with a purse and buy their squads lot by lot in a bound
+      Telegram group. When every lot is resolved, publish the auction and the
+      squads become a playable Challenge League — exactly as a draft does.
+    </p>
+    <form method="POST" class="au-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="create">
+      <div style="grid-column:span 2;">
+        <label>Name</label>
+        <input type="text" name="name" placeholder="Season 2" required>
+      </div>
+      <div><button class="btn btn-primary" type="submit">Create</button></div>
+    </form>
+  </div>
+
+  {% if not rows %}
+    <div class="au-card"><p class="au-note" style="margin:0;">No auctions yet.</p></div>
+  {% endif %}
+
+  <div class="au-tiles">
+    {% for row in rows %}
+    <div class="au-tile">
+      <div style="display:flex;justify-content:space-between;gap:.6rem;align-items:center;">
+        <div style="font-weight:800;font-size:1.02rem;">{{ row.season.name }}</div>
+        <span class="status-pill {{ row.season.status }}">{{ row.season.status }}</span>
+      </div>
+      <div class="dim" style="font-size:.8rem;">
+        {{ row.franchises }} franchises · {{ row.lots }} lots · {{ row.sold }} sold
+        {% if row.season.chat_id %}· bound to {{ row.season.chat_id }}{% else %}· not bound to a group{% endif %}
+      </div>
+      <div class="au-actions">
+        <a class="btn btn-ghost" href="{{ url_for('admin_auction_detail', season_id=row.season.id) }}">⚙️ Set up</a>
+        <a class="btn btn-primary" href="{{ url_for('admin_auction_console', season_id=row.season.id) }}">🔨 Console</a>
+      </div>
+      <details>
+        <summary class="dim" style="cursor:pointer;font-size:.8rem;">Delete</summary>
+        <form method="POST" style="margin-top:.5rem;display:flex;gap:.4rem;flex-wrap:wrap;"
+              onsubmit="return confirm('Delete {{ row.season.name }}? Its pool, bids and purse ledger go with it. This cannot be undone.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="season_id" value="{{ row.season.id }}">
+          <input type="text" name="confirm_name" placeholder="Type “{{ row.season.name }}”" required style="flex:1;min-width:160px;">
+          <button class="btn btn-ghost danger" type="submit">Delete</button>
+        </form>
+        <p class="au-note" style="margin:.4rem 0 0;">
+          This removes the auction, its pool, every bid and the whole purse
+          ledger. A published Challenge League is left alone.
+        </p>
+      </details>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

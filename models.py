@@ -3513,3 +3513,433 @@ class PitchApproachStat(Base):
                          "bowl_approach", name="uq_pitch_approach_cell"),
         Index("ix_pitch_approach_lookup", "pitch_type", "mode"),
     )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# FRANCHISE AUCTION — a season's squads, bought rather than drafted
+#
+# An auction is the Tournament Draft's sibling: the same franchises, the same
+# bound group, the same restart-safe clock, the same one-way publish into a
+# ChallengeLeague. What is new is money — a purse, a base price, a bidding
+# loop — and money is why these are their own tables rather than a mode flag on
+# ``player_drafts``. A draft's slot is a *ceiling on tier*; an auction's lot is
+# a *price discovered by the room*, and half the draft's columns (tier ladder,
+# pick order, queue) mean nothing here while none of the ones below mean
+# anything there.
+#
+# Every amount is an INTEGER COUNT OF LAKH, and every such column is suffixed
+# ``_lakh`` so a float can never get in by accident. ₹1.5 Cr is 150; ₹100 Cr is
+# 10,000. It is a value unit of its own and has no relationship to the coin
+# economy in ``config.BUY_VALUES`` — a franchise purse is not spendable on
+# anything a player owns, and coins are not spendable at an auction.
+
+
+class AuctionSeason(Base):
+    """One auction: a player pool, a set of franchises, a purse each, a clock.
+
+    ``chat_id`` is the bound auction group. Every announcement goes there and
+    ``/bid`` is refused anywhere else — an auction is a public event, and a bid
+    made in a DM that nobody sees is how a price gets disputed. Unique, so two
+    auctions cannot both own one chat and leave ``/bid`` ambiguous (the same
+    call ``PlayerDraft.chat_id`` makes).
+
+    **The lot clock is not here.** ``AuctionLot`` carries ``deadline_at``,
+    ``going_stage`` and ``extensions_used``, because the anti-snipe extension
+    has to be applied in the *same statement* as the bid that earned it —
+    otherwise two bidders on the same tick both read the deadline, both decide
+    they are inside the snipe window, and both extend it. This row keeps only
+    ``current_lot_id`` as a pointer, and ``auction_service.current_lot`` heals
+    it from the lot table when it goes stale.
+    """
+    __tablename__ = "auction_seasons"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(120), nullable=False)
+    # setup | live | paused | completed | cancelled
+    status = Column(String(20), default="setup", nullable=False, index=True)
+    chat_id = Column(BigInteger, nullable=True)
+
+    # ── The clock ──────────────────────────────────────────────────────
+    # Seconds a lot stays on the block with no bid. A bid resets it; the
+    # anti-snipe rule below can extend it. The deadline itself is on the lot.
+    bid_seconds = Column(Integer, default=30, nullable=False)
+    current_lot_id = Column(Integer, nullable=True)
+
+    # ── Anti-snipe ─────────────────────────────────────────────────────
+    # A bid landing with ``snipe_window_seconds`` or less on the clock pushes
+    # the deadline out to ``snipe_extend_seconds``, at most ``max_extensions``
+    # times. Shipped at the proposal's numbers (2s / 10s / 5). Setting the
+    # window EQUAL to the extension gives the rule every real auction has —
+    # "any bid in the last 10 seconds gives everyone 10 more" — which is what
+    # most rooms actually want; at a 2-second window a bid at 3s left buys
+    # nobody a chance to answer.
+    snipe_window_seconds = Column(Integer, default=2, nullable=False)
+    snipe_extend_seconds = Column(Integer, default=10, nullable=False)
+    max_extensions = Column(Integer, default=5, nullable=False)
+
+    # ── Money ──────────────────────────────────────────────────────────
+    opening_purse_lakh = Column(Integer, default=10000, nullable=False)
+    currency_label = Column(String(10), default="₹", nullable=False)
+    # [{"min_rating": 90, "base_lakh": 200}, ...] highest band first. Read by
+    # auction_service.base_price_for() ONCE, at pool-build time, and stamped
+    # onto AuctionLot.base_price_lakh — so editing the ladder afterwards never
+    # moves the price a lot already went on the block at. A JSON column rather
+    # than a table for the same reason PlayerDraft.tier_order_json is one: a
+    # handful of bands, edited as a whole, never queried by.
+    base_price_rules_json = Column(Text, nullable=True)
+    # [{"upto_lakh": 200, "step_lakh": 10}, ...] — the bid increment ladder.
+    bid_increment_rules_json = Column(Text, nullable=True)
+
+    # ── Squad rules ────────────────────────────────────────────────────
+    min_squad_size = Column(Integer, default=15, nullable=False)
+    max_squad_size = Column(Integer, default=25, nullable=False)
+    # The cheapest base price in this pool, stamped at pool build. It is what
+    # the reachability rule holds back per unfilled slot — see
+    # auction_service.max_bid_now(). Deliberately static rather than "the
+    # cheapest lot still available": a ceiling that drifts every time some
+    # other franchise buys a cheap player is one nobody can steer by.
+    min_base_price_lakh = Column(Integer, default=20, nullable=False)
+    # {"Wicket Keeper": 1, "Bowler": 4} — same shape and same reachability
+    # semantics as PlayerDraft.role_minimums_json. Empty by default.
+    role_minimums_json = Column(Text, nullable=True)
+    home_country = Column(String(60), default="India", nullable=False)
+    max_overseas = Column(Integer, default=8, nullable=False)
+
+    # ── Retention / RTM ────────────────────────────────────────────────
+    # PHASE 2. These columns exist now and nothing reads them yet; they are
+    # here so the first schema change after deploy is not the one that has to
+    # add a non-nullable column to a populated table. ``rtm_enabled`` defaults
+    # False and no branch tests it.
+    rtm_enabled = Column(Boolean, default=False, nullable=False)
+    max_retentions = Column(Integer, default=0, nullable=False)
+    retention_locked_at = Column(DateTime, nullable=True)
+
+    # ── The board, and the announcement cursor ─────────────────────────
+    # ``board_message_id`` is the one pinned message the auction lives in; it
+    # is EDITED, never re-sent, so a 30-second lot does not cost the room 30
+    # messages. ``announced_event_id`` is how the website talks to the group
+    # without touching Telegram: an admin route writes rows and an AuctionEvent
+    # and commits, and the bot's sweeper announces everything past this cursor.
+    # ``board_rendered_bid_count`` debounces the edit — ten bids inside one
+    # two-second tick cost one edit, not ten.
+    board_message_id = Column(BigInteger, nullable=True)
+    announced_event_id = Column(Integer, default=0, nullable=False)
+    board_rendered_bid_count = Column(Integer, default=0, nullable=False)
+
+    # ── Publication ────────────────────────────────────────────────────
+    league_id = Column(Integer, ForeignKey("challenge_leagues.id", ondelete="SET NULL"),
+                       nullable=True, index=True)
+    published_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    franchises = relationship("AuctionFranchise", back_populates="season",
+                              cascade="all, delete-orphan")
+    # current_lot_id points into auction_lots, which points back here — name the
+    # join explicitly so SQLAlchemy does not have to guess between them.
+    lots = relationship("AuctionLot", back_populates="season",
+                        cascade="all, delete-orphan",
+                        foreign_keys="AuctionLot.season_id")
+    bids = relationship("AuctionBid", back_populates="season",
+                        cascade="all, delete-orphan")
+    ledger = relationship("AuctionLedgerEntry", back_populates="season",
+                          cascade="all, delete-orphan")
+    events = relationship("AuctionEvent", back_populates="season",
+                          cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_auction_season_chat_unique", "chat_id", unique=True),
+    )
+
+
+class AuctionFranchise(Base):
+    """A franchise in an auction: a name, the people who may bid, and a purse.
+
+    ``owner_tg_id`` is the identity (not ``users.id``) for the same reason
+    ``DraftTeam`` and ``TournamentTeam`` use it: an admin builds the field from
+    a list of Telegram ids, and some of those people have never messaged the
+    bot. Owner and co-owners are equals for every check ``/bid`` makes.
+
+    ``purse_remaining_lakh`` and ``squad_size`` are CACHES over
+    ``auction_ledger`` and ``auction_lots``, and they exist for atomicity
+    rather than for speed. The debit that must never overdraw is one statement
+    — ``UPDATE ... SET purse_remaining_lakh = purse_remaining_lakh - :price
+    WHERE id = :id AND purse_remaining_lakh >= :price`` — which either wins or
+    reports zero rows affected; the same device ``draft_service.make_pick``
+    uses to claim a player and a slot. The SUM-then-compare alternative is a
+    read followed by a write, and the gap between them is exactly where the
+    website's "Mark Sold" lives. ``auction_service.reconcile_purses`` re-sums
+    the ledger and reports any drift, and repairs it by writing a
+    ``correction`` row rather than by overwriting the column, which would
+    destroy the evidence.
+    """
+    __tablename__ = "auction_franchises"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_id = Column(Integer, ForeignKey("auction_seasons.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    name = Column(String(120), nullable=False)
+    short_name = Column(String(30), nullable=True)
+    city = Column(String(120), nullable=True)
+    logo_url = Column(String(500), nullable=True)
+    owner_tg_id = Column(BigInteger, nullable=True, index=True)
+    owner_name = Column(String(120), nullable=True)
+    # Extra Telegram ids allowed to bid for this franchise, as a JSON list.
+    co_owner_ids_json = Column(Text, nullable=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+
+    # ── Purse ──────────────────────────────────────────────────────────
+    purse_total_lakh = Column(Integer, default=10000, nullable=False)
+    purse_remaining_lakh = Column(Integer, default=10000, nullable=False)
+    squad_size = Column(Integer, default=0, nullable=False)
+
+    # ── Retention / RTM: PHASE 2, nothing reads these yet ───────────────
+    retained_count = Column(Integer, default=0, nullable=False)
+    rtm_cards_total = Column(Integer, default=0, nullable=False)
+    rtm_cards_used = Column(Integer, default=0, nullable=False)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    season = relationship("AuctionSeason", back_populates="franchises")
+
+    __table_args__ = (
+        Index("ix_auction_franchise_unique", "season_id", "name", unique=True),
+    )
+
+
+class AuctionLot(Base):
+    """One player in an auction — the lot that goes on the block AND its result.
+
+    The pool and the result log are the same rows on purpose, the same call
+    ``DraftPick`` makes: "Bumrah is lot 4 at a base of ₹2 Cr" and "lot 4 went to
+    Mumbai for ₹12.25 Cr" are the same fact at two points in time, and splitting
+    them would need an unenforceable "exactly one result per lot" invariant and
+    a LEFT JOIN on every dashboard query.
+
+    The player columns are a SNAPSHOT of the master ``players`` row taken at
+    pool-build time, not a view over it — the same reason ``DraftPlayer`` is its
+    own table. The catalogue moves (a card is re-rated, retired, deactivated)
+    and a finished season has to stay readable afterwards. ``player_id`` links
+    back so the bot can post the real card image when the lot opens.
+
+    **The clock lives here**, not on the season: the anti-snipe extension must
+    be applied in the same UPDATE as the bid that earned it.
+    """
+    __tablename__ = "auction_lots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_id = Column(Integer, ForeignKey("auction_seasons.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    player_id = Column(Integer, ForeignKey("players.id", ondelete="SET NULL"),
+                       nullable=True, index=True)
+
+    # ── The snapshot ───────────────────────────────────────────────────
+    name = Column(String(150), nullable=False, index=True)
+    rating = Column(Integer, default=70, nullable=False)
+    category = Column(String(30), default="Batsman", nullable=False)
+    country = Column(String(60), default="Unknown", nullable=False)
+    # Whether this player is overseas FOR THIS AUCTION: their country differed
+    # from AuctionSeason.home_country at pool-build time. A boolean because
+    # ChallengePlayer.is_overseas — which this feeds on publish — is one.
+    is_overseas = Column(Boolean, default=False, nullable=False)
+    version = Column(String(50), nullable=True)
+    bat_hand = Column(String(10), default="Right", nullable=False)
+    bowl_hand = Column(String(10), default="Right", nullable=False)
+    bowl_style = Column(String(30), default="Medium Pacer", nullable=False)
+    bat_rating = Column(Integer, default=0, nullable=False)
+    bowl_rating = Column(Integer, default=0, nullable=False)
+
+    # ── The order sheet ────────────────────────────────────────────────
+    set_name = Column(String(40), nullable=True)
+    lot_no = Column(Integer, default=1, nullable=False)
+    base_price_lakh = Column(Integer, default=20, nullable=False)
+    # queued | on_block | sold | unsold | withdrawn
+    status = Column(String(20), default="queued", nullable=False, index=True)
+
+    # ── The live half ──────────────────────────────────────────────────
+    deadline_at = Column(DateTime, nullable=True)
+    # 0 = running, 1 = going once (<=10s), 2 = going twice (<=5s). A counter
+    # rather than a boolean because the board says two different things, and a
+    # bid resets it to 0.
+    going_stage = Column(Integer, default=0, nullable=False)
+    extensions_used = Column(Integer, default=0, nullable=False)
+    current_bid_lakh = Column(Integer, nullable=True)
+    current_bidder_id = Column(Integer, ForeignKey("auction_franchises.id",
+                                                   ondelete="SET NULL"),
+                               nullable=True)
+    bid_count = Column(Integer, default=0, nullable=False)
+    opened_at = Column(DateTime, nullable=True)
+    # How many times this lot has gone unsold. An unsold player is RE-LISTED on
+    # this same row (a fresh lot_no at the tail), never copied to a second one —
+    # which is what keeps "one row per player per auction", and with it the
+    # unique index that makes /bid's name lookup unambiguous.
+    times_unsold = Column(Integer, default=0, nullable=False)
+
+    # ── The result ─────────────────────────────────────────────────────
+    sold_to_id = Column(Integer, ForeignKey("auction_franchises.id", ondelete="SET NULL"),
+                        nullable=True, index=True)
+    sold_price_lakh = Column(Integer, nullable=True)
+    sold_at = Column(DateTime, nullable=True)
+
+    # ── Retention / RTM ────────────────────────────────────────────────
+    # ``previous_franchise_id`` IS populated in phase 1, from the previous
+    # season's squads at pool-build time, even though only phase 2 reads it:
+    # who held this player last season gets harder to recover as time passes,
+    # not easier, and it is the entire input to Right To Match.
+    previous_franchise_id = Column(Integer, ForeignKey("auction_franchises.id",
+                                                       ondelete="SET NULL"),
+                                   nullable=True)
+    # auction | retained | rtm — PHASE 2 writes anything but "auction".
+    acquisition = Column(String(20), default="auction", nullable=False)
+    rtm_offered_at = Column(DateTime, nullable=True)
+    rtm_matched_by_id = Column(Integer, ForeignKey("auction_franchises.id",
+                                                   ondelete="SET NULL"),
+                               nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    season = relationship("AuctionSeason", back_populates="lots",
+                          foreign_keys=[season_id])
+    player = relationship("Player")
+    sold_to = relationship("AuctionFranchise", foreign_keys=[sold_to_id])
+    current_bidder = relationship("AuctionFranchise", foreign_keys=[current_bidder_id])
+
+    __table_args__ = (
+        Index("ix_auction_lot_player_unique", "season_id", "player_id", unique=True),
+        Index("ix_auction_lot_no_unique", "season_id", "lot_no", unique=True),
+        Index("ix_auction_lot_status", "season_id", "status"),
+    )
+
+
+class AuctionBid(Base):
+    """One bid. Append-only, losing bids included — this is the price's history.
+
+    A bid is deliberately NOT a purse-ledger row. Nothing moves when you bid:
+    you are outbid twenty seconds later and nothing happened. The purse is
+    debited exactly once, when a lot sells. A ledger that recorded bids would
+    need a matching reversal for almost every row, and it would make "undo the
+    last bid" a money operation instead of a price one.
+
+    ``is_void`` rather than DELETE, because an undone bid is part of why the
+    price moved and the room watched it happen — and because it makes undo
+    idempotent across a retry.
+    """
+    __tablename__ = "auction_bids"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_id = Column(Integer, ForeignKey("auction_seasons.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    lot_id = Column(Integer, ForeignKey("auction_lots.id", ondelete="CASCADE"),
+                    nullable=False, index=True)
+    franchise_id = Column(Integer, ForeignKey("auction_franchises.id", ondelete="CASCADE"),
+                          nullable=False, index=True)
+    amount_lakh = Column(Integer, nullable=False)
+    # The co-owner who actually typed it, so a bid is recorded as theirs rather
+    # than as the owner's.
+    by_tg_id = Column(BigInteger, nullable=True)
+    # tg | web | button
+    source = Column(String(10), default="tg", nullable=False)
+    is_void = Column(Boolean, default=False, nullable=False)
+    voided_by_tg_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    season = relationship("AuctionSeason", back_populates="bids")
+    lot = relationship("AuctionLot")
+    franchise = relationship("AuctionFranchise")
+
+    __table_args__ = (
+        Index("ix_auction_bid_lot", "lot_id", "id"),
+    )
+
+
+class AuctionLedgerEntry(Base):
+    """One movement of money in a franchise's purse.
+
+    ``amount_lakh`` is SIGNED: a purchase is negative, a refund positive. The
+    opening purse is itself a row (``kind='opening'``), so
+    ``SUM(amount_lakh)`` over a franchise equals its
+    ``purse_remaining_lakh`` — the invariant the test suite asserts after every
+    single mutation, not merely at the end.
+
+    ``balance_after`` is the cache's value at the moment the row was written,
+    which makes the ledger self-checking: any row whose ``balance_after`` is not
+    the previous one plus this ``amount_lakh`` is corruption you can find with
+    one query, and a statement renders without a window function.
+
+    ``player_name`` is kept alongside ``lot_id`` so the row still reads after a
+    lot is deleted — the same call ``DraftSquadEdit.player_name`` makes.
+    """
+    __tablename__ = "auction_ledger"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_id = Column(Integer, ForeignKey("auction_seasons.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    franchise_id = Column(Integer, ForeignKey("auction_franchises.id", ondelete="CASCADE"),
+                          nullable=False, index=True)
+    # opening | retention | purchase | refund | correction | rtm
+    kind = Column(String(20), nullable=False)
+    amount_lakh = Column(Integer, nullable=False)
+    balance_after = Column(Integer, nullable=False)
+    lot_id = Column(Integer, ForeignKey("auction_lots.id", ondelete="SET NULL"),
+                    nullable=True, index=True)
+    player_name = Column(String(150), nullable=True)
+    note = Column(String(200), nullable=True)
+    by_tg_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    season = relationship("AuctionSeason", back_populates="ledger")
+    franchise = relationship("AuctionFranchise")
+
+    __table_args__ = (
+        Index("ix_auction_ledger_franchise", "franchise_id", "id"),
+    )
+
+
+class AuctionEvent(Base):
+    """The permanent auction log — and the queue the group is announced from.
+
+    A separate table from ``AuctionBid`` for the reason ``DraftSquadEdit`` is
+    separate from ``DraftTrade``: a bid has a franchise, an amount and a lot,
+    always, and every one of them means something. An event has a kind and a
+    headline, and its other columns are meaningful only for some kinds. One
+    table would leave ``amount_lakh`` NULL on two thirds of the rows and turn
+    "the bid history for this lot" into a filtered scan over the room's whole
+    narrative.
+
+    Its second job is what makes a two-surface auction safe. The Flask admin
+    panel runs in a thread of the bot's process and must never touch Telegram —
+    so an admin action writes its rows and ONE row here, commits, and returns.
+    The bot's sweeper drains everything past
+    ``AuctionSeason.announced_event_id`` and announces it, in id order, whether
+    it came from the website or from a command. Nothing but the database
+    crosses the boundary.
+    """
+    __tablename__ = "auction_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_id = Column(Integer, ForeignKey("auction_seasons.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    lot_id = Column(Integer, ForeignKey("auction_lots.id", ondelete="SET NULL"),
+                    nullable=True)
+    franchise_id = Column(Integer, ForeignKey("auction_franchises.id", ondelete="SET NULL"),
+                          nullable=True)
+    # season_started | season_paused | season_resumed | season_cancelled
+    # | season_completed | lot_opened | lot_sold | lot_unsold | lot_withdrawn
+    # | lot_relisted | bid_undone | sale_undone | timer_extended
+    # | purse_corrected | franchise_added | published
+    kind = Column(String(24), nullable=False)
+    # Plain text, rendered once by whoever wrote the event, so the announcer
+    # and the website print the same sentence.
+    headline = Column(String(300), nullable=False)
+    detail_json = Column(Text, nullable=True)
+    by_tg_id = Column(BigInteger, nullable=True)
+    by_admin = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    season = relationship("AuctionSeason", back_populates="events")
+
+    __table_args__ = (
+        Index("ix_auction_event_season", "season_id", "id"),
+    )

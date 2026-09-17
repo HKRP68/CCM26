@@ -206,6 +206,8 @@ def init_db():
         Giveaway, GiveawayEntry,
         StoredAsset,
         PlayerDraft, DraftTeam, DraftPlayer, DraftPick,
+        AuctionSeason, AuctionFranchise, AuctionLot, AuctionBid,
+        AuctionLedgerEntry, AuctionEvent,
     )
     import logging
     import time as _time

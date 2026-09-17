@@ -30,6 +30,8 @@ from database import get_session, init_db
 from services.perf_log import perf_span as _perf_span, perf_timed as _perf_timed
 from services.telegram_user_service import user_lookup_filter
 from services.player_service import not_career
+from services import player_query
+from services import auction_service as auction_svc
 from services.match_outcome import (
     mark_end, derive_end_reason, end_reason_filter, match_type_label,
     match_type_family, END_REASONS, END_REASON_LABELS, END_REASON_HINTS,
@@ -50,7 +52,9 @@ from models import (Player, User, Trade, UserStats, UserRoster, ActivityLog,
                     ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer,
                     Tournament, TournamentTeam, TournamentMatch, TournamentPlayerStats,
                     TournamentGroup, TournamentInjury,
-                    PlayerDraft, DraftTeam, DraftPlayer, DraftPick)
+                    PlayerDraft, DraftTeam, DraftPlayer, DraftPick,
+                    AuctionSeason, AuctionFranchise, AuctionLot, AuctionBid,
+                    AuctionLedgerEntry, AuctionEvent)
 
 # A match that has actually started, versus one still forming (invite sent,
 # toss not called, openers not picked). Both are "not finished", but only the
@@ -15359,21 +15363,18 @@ def _apply_overseas_league_form(league):
 
 
 def _challenge_player_details_from_source(player, is_overseas=False):
-    return json.dumps({
-        "source_player_id": player.id,
-        "name": player.name,
-        "version": player.version,
-        "country": player.country,
-        "category": player.category,
-        "role": player.category,
-        "rating": player.rating,
-        "bat_rating": player.bat_rating or 0,
-        "bowl_rating": player.bowl_rating or 0,
-        "bat_hand": player.bat_hand,
-        "bowl_hand": player.bowl_hand,
-        "bowl_style": player.bowl_style,
-        "is_overseas": bool(is_overseas),
-    }, separators=(",", ":"))
+    """The ``details_json`` a ChallengePlayer carries, from a master card.
+
+    Delegated to ``services.player_query`` rather than written out here,
+    because three places now need this exact key set — a player added by hand,
+    a drafted one, and one bought at auction — and
+    ``services.cipl_match.cp_to_player_dict`` reads every rating and handedness
+    a match is played with out of this blob rather than out of ``players``. A
+    second copy that drifted would mean a squad plays with the wrong numbers
+    and nothing anywhere says so.
+    """
+    return player_query.challenge_details_json(player, is_overseas=is_overseas,
+                                               source_player_id=player.id)
 
 
 def _resync_challenge_players(db, player):
@@ -22051,6 +22052,486 @@ def api_fantasy_league():
         return {"ok": False, "error": "server_error"}, 500
     finally:
         db.close()
+
+
+
+
+# ══════════════════════════════════════════════════════════════════════
+# FRANCHISE AUCTION
+#
+# Four pages: the list, the setup page (settings, franchises, pool builder,
+# base prices), the live console, and the console's polled HTML fragment.
+#
+# **Nothing here touches Telegram.** This module runs in a thread of the bot's
+# process, and reaching across that boundary is the bug this design exists to
+# avoid. Every action writes its rows plus one ``AuctionEvent`` and commits;
+# ``services/auction_scheduler`` drains that log on its next two-second tick
+# and tells the group. So an admin pressing "Mark Sold" here and an admin
+# typing /asold in the room are the same call, announced the same way, in one
+# order.
+# ══════════════════════════════════════════════════════════════════════
+
+def _auction_or_404(db, season_id):
+    season = db.query(AuctionSeason).filter(AuctionSeason.id == season_id).first()
+    if season is None:
+        abort(404)
+    return season
+
+
+def _money_form(name, default=None):
+    """Read a crore-denominated form field as integer lakh.
+
+    The forms talk in crore because that is what the admin is thinking in; the
+    database is in lakh because that is what arithmetic on money needs. The one
+    conversion lives here so no route does it by hand.
+    """
+    raw = (request.form.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return auction_svc.parse_amount(raw)
+    except auction_svc.AuctionError:
+        return default
+
+
+def _auction_pool_filters():
+    """The pool builder's filter box, read from the query string."""
+    filters = player_query.empty_filters()
+    for key in ("q", "country", "role", "bat_hand", "bowl_style",
+                "rating_min", "rating_max", "version_mode"):
+        filters[key] = (request.args.get(key) or "").strip()
+    filters["versions"] = [v for v in request.args.getlist("versions") if v]
+    return filters
+
+
+@app.route("/auctions", methods=["GET", "POST"])
+@login_required
+def admin_auctions_list():
+    db = get_session()
+    try:
+        if request.method == "POST":
+            action = (request.form.get("action") or "").strip()
+            try:
+                if action == "create":
+                    season = auction_svc.create_season(
+                        db, request.form.get("name"))
+                    log_admin(db, "auction_create", "auction", season.id,
+                              season.name)
+                    db.commit()
+                    flash(f"🔨 “{season.name}” created.", "success")
+                    return redirect(url_for("admin_auction_detail",
+                                            season_id=season.id))
+                elif action == "delete":
+                    season = _auction_or_404(db, _parse_int(
+                        request.form.get("season_id")))
+                    # Destructive and unrecoverable: the whole auction, its
+                    # pool, its bids and its purse ledger. Typed confirmation,
+                    # checked here on the server and not only in the browser.
+                    typed = (request.form.get("confirm_name") or "").strip()
+                    if typed.lower() != (season.name or "").strip().lower():
+                        flash("⚠️ Type the auction's name exactly to delete it.",
+                              "error")
+                        return redirect(url_for("admin_auctions_list"))
+                    name = season.name
+                    db.delete(season)
+                    log_admin(db, "auction_delete", "auction", season.id, name)
+                    db.commit()
+                    flash(f"🗑 “{name}” deleted.", "success")
+                else:
+                    flash("Unknown action.", "error")
+            except auction_svc.AuctionError as ve:
+                db.rollback()
+                flash(f"⚠️ {ve}", "error")
+            except Exception as exc:
+                db.rollback()
+                logger.exception("admin_auctions_list failed")
+                flash(f"Error: {exc}", "error")
+            return redirect(url_for("admin_auctions_list"))
+
+        rows = []
+        for season in (db.query(AuctionSeason)
+                       .order_by(AuctionSeason.id.desc()).all()):
+            counts = auction_svc.pool_counts(db, season.id)
+            rows.append({
+                "season": season,
+                "label": auction_svc.status_label(season),
+                "franchises": len(auction_svc.franchises(db, season.id)),
+                "lots": counts.get("total", 0),
+                "sold": counts.get(auction_svc.LOT_SOLD, 0),
+            })
+        return render_template("admin_auctions.html", rows=rows)
+    finally:
+        db.close()
+
+
+@app.route("/auctions/<int:season_id>", methods=["GET", "POST"])
+@login_required
+def admin_auction_detail(season_id):
+    db = get_session()
+    try:
+        season = _auction_or_404(db, season_id)
+        if request.method == "POST":
+            action = (request.form.get("action") or "").strip()
+            try:
+                _auction_detail_action(db, season, action)
+                db.commit()
+            except auction_svc.AuctionError as ve:
+                db.rollback()
+                flash(f"⚠️ {ve}", "error")
+            except Exception as exc:
+                db.rollback()
+                logger.exception("admin_auction_detail failed")
+                flash(f"Error: {exc}", "error")
+            return redirect(url_for("admin_auction_detail", season_id=season.id)
+                            + (request.form.get("back_query") or ""))
+
+        filters = _auction_pool_filters()
+        preview, preview_count = [], 0
+        if request.args.get("preview"):
+            query = player_query.master_player_query(db, filters)
+            preview_count = query.count()
+            preview = player_query.ordered(query).limit(300).all()
+            pooled = {row[0] for row in db.query(AuctionLot.player_id)
+                      .filter(AuctionLot.season_id == season.id).all()}
+            preview = [(p, p.id in pooled) for p in preview]
+
+        return render_template(
+            "admin_auction_detail.html",
+            season=season,
+            label=auction_svc.status_label(season),
+            field=auction_svc.franchises(db, season.id),
+            lots=auction_svc.lots(db, season.id),
+            counts=auction_svc.pool_counts(db, season.id),
+            price_rules=auction_svc.base_price_rules(season),
+            filters=filters,
+            options=player_query.filter_options(db),
+            preview=preview,
+            preview_count=preview_count,
+            leagues=db.query(ChallengeLeague)
+                      .order_by(ChallengeLeague.name).all(),
+            ledger_drift=auction_svc.reconcile_purses(db, season),
+            events=auction_svc.recent_events(db, season.id, limit=40),
+            money=auction_svc.render_money,
+            max_bid=auction_svc.max_bid_now,
+            auction_base_price=auction_svc.base_price_for,
+        )
+    finally:
+        db.close()
+
+
+def _auction_detail_action(db, season, action):
+    """One if/elif chain, in the shape every other multi-action page uses."""
+    if action == "settings":
+        season.name = (request.form.get("name") or season.name).strip()[:120]
+        season.chat_id = _tg_chat_form("chat_id", season.chat_id)
+        season.bid_seconds = _int_form("bid_seconds", season.bid_seconds)
+        season.min_squad_size = _int_form("min_squad_size", season.min_squad_size)
+        season.max_squad_size = _int_form("max_squad_size", season.max_squad_size)
+        season.max_overseas = _int_form("max_overseas", season.max_overseas)
+        season.home_country = (request.form.get("home_country")
+                               or season.home_country or "India").strip()[:60]
+        season.opening_purse_lakh = _money_form("opening_purse",
+                                                season.opening_purse_lakh)
+        auction_svc.set_anti_snipe(db, season,
+                                   _int_form("snipe_window", season.snipe_window_seconds),
+                                   _int_form("snipe_extend", season.snipe_extend_seconds),
+                                   _int_form("max_extensions", season.max_extensions))
+        log_admin(db, "auction_settings", "auction", season.id, season.name)
+        flash("✅ Settings saved.", "success")
+
+    elif action == "price_rules":
+        rules = []
+        for rating, price in zip(request.form.getlist("rule_min_rating"),
+                                 request.form.getlist("rule_price")):
+            if not (rating or "").strip() and not (price or "").strip():
+                continue
+            try:
+                lakh = auction_svc.parse_amount(price)
+            except auction_svc.AuctionError:
+                continue
+            rules.append({"min_rating": _parse_int(rating) or 0,
+                          "base_lakh": lakh})
+        if not rules:
+            raise auction_svc.AuctionError("Give at least one base-price band.")
+        rules.sort(key=lambda r: r["min_rating"], reverse=True)
+        season.base_price_rules_json = json.dumps(rules, separators=(",", ":"))
+        log_admin(db, "auction_price_rules", "auction", season.id, season.name)
+        flash("✅ Base prices saved. They apply to lots added from now on — a "
+              "lot already in the pool keeps the price it was built with.",
+              "success")
+
+    elif action == "franchise":
+        fid = _parse_int(request.form.get("franchise_id"))
+        name = (request.form.get("name") or "").strip()
+        if fid:
+            franchise = (db.query(AuctionFranchise)
+                         .filter(AuctionFranchise.id == fid,
+                                 AuctionFranchise.season_id == season.id).first())
+            if franchise is None:
+                abort(404)
+            if name:
+                franchise.name = name[:120]
+        else:
+            franchise = auction_svc.create_franchise(
+                db, season, name,
+                purse_total_lakh=_money_form("purse_total",
+                                             season.opening_purse_lakh))
+        franchise.short_name = (request.form.get("short_name") or "").strip()[:30] or None
+        franchise.city = (request.form.get("city") or "").strip()[:120] or None
+        franchise.owner_name = (request.form.get("owner_name") or "").strip()[:120] or None
+        franchise.owner_tg_id = _tg_id_form("owner_tg_id")
+        auction_svc.set_co_owners(db, franchise,
+                                  (request.form.get("co_owners") or "").replace(";", ",").split(","))
+        logo = _save_challenge_team_logo(request.files.get("logo"))
+        if logo:
+            franchise.logo_url = logo
+        log_admin(db, "auction_franchise", "auction", season.id, franchise.name)
+        flash(f"✅ {franchise.name} saved.", "success")
+
+    elif action == "franchise_delete":
+        franchise = (db.query(AuctionFranchise)
+                     .filter(AuctionFranchise.id == _parse_int(request.form.get("franchise_id")),
+                             AuctionFranchise.season_id == season.id).first())
+        if franchise is None:
+            abort(404)
+        if int(franchise.squad_size or 0) > 0:
+            raise auction_svc.AuctionError(
+                f"{franchise.name} has already bought {franchise.squad_size} "
+                f"players. Undo those sales before removing the franchise.")
+        name = franchise.name
+        db.delete(franchise)
+        log_admin(db, "auction_franchise_delete", "auction", season.id, name)
+        flash(f"🗑 {name} removed.", "success")
+
+    elif action == "grant":
+        franchise = (db.query(AuctionFranchise)
+                     .filter(AuctionFranchise.id == _parse_int(request.form.get("franchise_id")),
+                             AuctionFranchise.season_id == season.id).first())
+        if franchise is None:
+            abort(404)
+        raw = (request.form.get("amount") or "").strip()
+        negative = raw.startswith("-")
+        amount = auction_svc.parse_amount(raw.lstrip("-"))
+        balance = auction_svc.correct_purse(
+            db, season, franchise, -amount if negative else amount,
+            note=(request.form.get("note") or "Admin correction")[:200])
+        log_admin(db, "auction_purse_correction", "auction", season.id,
+                  franchise.name, detail=raw)
+        flash(f"🧾 {franchise.name} now has "
+              f"{auction_svc.render_money(balance, season.currency_label)}.",
+              "success")
+
+    elif action == "add_pool":
+        ids = [int(v) for v in request.form.getlist("player_ids") if v.isdigit()]
+        if not ids:
+            raise auction_svc.AuctionError("Tick at least one player.")
+        players = db.query(Player).filter(Player.id.in_(ids)).all()
+        added, skipped = auction_svc.add_players_to_pool(
+            db, season, players,
+            set_name=(request.form.get("set_name") or "").strip() or None)
+        log_admin(db, "auction_pool_add", "auction", season.id, season.name,
+                  detail=f"{added} added")
+        flash(f"✅ {added} added to the pool"
+              + (f", {skipped} already there." if skipped else "."), "success")
+
+    elif action == "add_pool_all":
+        # Everything the current filter matches, not just the page on screen —
+        # the whole point of a filter is not having to tick 300 boxes.
+        query = player_query.master_player_query(db, _auction_pool_filters())
+        added, skipped = auction_svc.add_players_to_pool(
+            db, season, query.all(),
+            set_name=(request.form.get("set_name") or "").strip() or None)
+        log_admin(db, "auction_pool_add_all", "auction", season.id, season.name,
+                  detail=f"{added} added")
+        flash(f"✅ {added} added to the pool"
+              + (f", {skipped} already there." if skipped else "."), "success")
+
+    elif action == "lot_remove":
+        lot = _auction_lot(db, season, request.form.get("lot_id"))
+        name = lot.name
+        auction_svc.remove_lot(db, season, lot)
+        log_admin(db, "auction_lot_remove", "auction", season.id, name)
+        flash(f"🗑 {name} taken out of the pool.", "success")
+
+    elif action == "lot_price":
+        lot = _auction_lot(db, season, request.form.get("lot_id"))
+        auction_svc.set_base_price(db, season, lot,
+                                   auction_svc.parse_amount(request.form.get("price")))
+        log_admin(db, "auction_lot_price", "auction", season.id, lot.name)
+        flash(f"✅ {lot.name}'s base price is now "
+              f"{auction_svc.render_money(lot.base_price_lakh, season.currency_label)}.",
+              "success")
+
+    elif action == "link_previous":
+        stamped = auction_svc.link_previous_season(
+            db, season, _parse_int(request.form.get("league_id")))
+        flash(f"🔗 {stamped} players matched to the franchise that held them. "
+              f"(Recorded for Right To Match; nothing reads it yet.)", "success")
+
+    elif action == "reconcile":
+        drift = auction_svc.reconcile_purses(db, season, repair=True)
+        log_admin(db, "auction_reconcile", "auction", season.id, season.name,
+                  detail=f"{len(drift)} corrected")
+        flash("✅ Every purse matches its ledger." if not drift
+              else f"⚠️ {len(drift)} purse(s) disagreed with the ledger and "
+                   f"have been reconciled with a correction row.",
+              "success" if not drift else "error")
+
+    elif action == "publish":
+        league = auction_svc.publish_to_league(db, season)
+        log_admin(db, "auction_publish", "auction", season.id, season.name,
+                  detail=league.name)
+        flash(f"📤 Published to “{league.name}”.", "success")
+
+    else:
+        flash("Unknown action.", "error")
+
+
+def _auction_lot(db, season, lot_id):
+    lot = (db.query(AuctionLot)
+           .filter(AuctionLot.id == _parse_int(lot_id),
+                   AuctionLot.season_id == season.id).first())
+    if lot is None:
+        abort(404)
+    return lot
+
+
+def _tg_chat_form(name, default=None):
+    """A group chat id: negative, unlike a user id, so ``_tg_id_form`` won't do."""
+    raw = (request.form.get(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+
+
+# ── The live console ─────────────────────────────────────────────────
+#
+# The page and its polled fragment render the SAME partial, so there is one
+# copy of the console markup — the alternative (a JSON feed plus a client-side
+# renderer) means maintaining the layout twice. Same call ``admin_live_matches``
+# makes, and the JS keeps its ``res.redirected`` guard for the same reason: an
+# expired admin session answers with the login page, and painting that into the
+# console would look like the auction had vanished.
+
+def _console_context(db, season):
+    lot = auction_svc.current_lot(db, season)
+    return {
+        "season": season,
+        "label": auction_svc.status_label(season),
+        "lot": lot,
+        "left": auction_svc.seconds_left(lot),
+        "field": auction_svc.franchises(db, season.id),
+        "counts": auction_svc.pool_counts(db, season.id),
+        "upcoming": (db.query(AuctionLot)
+                     .filter(AuctionLot.season_id == season.id,
+                             AuctionLot.status == auction_svc.LOT_QUEUED)
+                     .order_by(AuctionLot.lot_no.asc()).limit(8).all()),
+        "bids": (db.query(AuctionBid)
+                 .filter(AuctionBid.lot_id == lot.id)
+                 .order_by(AuctionBid.id.desc()).limit(8).all()) if lot else [],
+        "events": auction_svc.recent_events(db, season.id, limit=12),
+        "next_min": auction_svc.next_min_bid(season, lot) if lot else None,
+        "money": auction_svc.render_money,
+        "max_bid": auction_svc.max_bid_now,
+        "STATUS_LIVE": auction_svc.STATUS_LIVE,
+        "STATUS_PAUSED": auction_svc.STATUS_PAUSED,
+    }
+
+
+@app.route("/auctions/<int:season_id>/console", methods=["GET", "POST"])
+@login_required
+def admin_auction_console(season_id):
+    db = get_session()
+    try:
+        season = _auction_or_404(db, season_id)
+        if request.method == "POST":
+            action = (request.form.get("action") or "").strip()
+            try:
+                _auction_console_action(db, season, action)
+                db.commit()
+            except auction_svc.AuctionError as ve:
+                db.rollback()
+                flash(f"⚠️ {ve}", "error")
+            except Exception as exc:
+                db.rollback()
+                logger.exception("admin_auction_console failed")
+                flash(f"Error: {exc}", "error")
+            return redirect(url_for("admin_auction_console", season_id=season.id))
+        return render_template("admin_auction_console.html",
+                               **_console_context(db, season))
+    finally:
+        db.close()
+
+
+@app.route("/auctions/<int:season_id>/console/panel")
+@login_required
+def admin_auction_console_panel(season_id):
+    """The polled fragment. Same partial the full page includes."""
+    db = get_session()
+    try:
+        season = _auction_or_404(db, season_id)
+        return render_template("_auction_console_panel.html",
+                               **_console_context(db, season))
+    finally:
+        db.close()
+
+
+def _auction_console_action(db, season, action):
+    lot = auction_svc.current_lot(db, season)
+
+    if action == "start":
+        auction_svc.start(db, season)
+    elif action == "pause":
+        auction_svc.pause(db, season)
+    elif action == "next":
+        auction_svc.open_next_lot(db, season)
+    elif action == "extend":
+        auction_svc.extend_timer(db, season, lot,
+                                 _int_form("seconds", season.bid_seconds))
+    elif action == "sold":
+        auction_svc.sell_lot(db, season, lot, by_admin=True)
+    elif action == "unsold":
+        auction_svc.pass_lot(db, season, lot, by_admin=True)
+    elif action == "undo_bid":
+        auction_svc.undo_last_bid(db, season, lot)
+    elif action == "undo_sale":
+        auction_svc.undo_sale(db, season, _auction_lot(db, season,
+                                                       request.form.get("lot_id")))
+    elif action == "withdraw":
+        auction_svc.withdraw_lot(db, season,
+                                 _auction_lot(db, season, request.form.get("lot_id")))
+    elif action == "relist":
+        auction_svc.relist(db, season,
+                           _auction_lot(db, season, request.form.get("lot_id")))
+    elif action == "bid":
+        # An owner whose phone has died, or who is simply not in the room. It
+        # is a real feature, not a test hatch — and it is stamped as an admin's
+        # bid and announced as one, because a bid that reads as the owner's own
+        # choice when it was not is how a result gets disputed.
+        franchise = (db.query(AuctionFranchise)
+                     .filter(AuctionFranchise.id == _parse_int(request.form.get("franchise_id")),
+                             AuctionFranchise.season_id == season.id).first())
+        if franchise is None:
+            abort(404)
+        amount = auction_svc.parse_amount(request.form.get("amount"))
+        auction_svc.place_bid(db, season, lot, franchise, amount, source="web",
+                              by_admin=True)
+    elif action == "cancel":
+        typed = (request.form.get("confirm_name") or "").strip()
+        if typed.lower() != (season.name or "").strip().lower():
+            raise auction_svc.AuctionError(
+                "Type the auction's name exactly to cancel it.")
+        auction_svc.cancel(db, season)
+    else:
+        flash("Unknown action.", "error")
+        return
+
+    log_admin(db, f"auction_{action}", "auction", season.id, season.name)
 
 
 # ── Run ──────────────────────────────────────────────────────────────

@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}{{ season.name }} — Auction console{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_auction.css') }}">{% endblock %}
+
+{% block content %}
+<div class="au-shell">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
+    <h2 style="margin:0;">🔨 {{ season.name }} <span class="status-pill {{ season.status }}">{{ season.status }}</span></h2>
+    <div class="au-actions">
+      <label class="dim" style="font-size:.82rem;display:flex;align-items:center;gap:.35rem;">
+        <input type="checkbox" id="au-auto" checked> auto-refresh
+      </label>
+      <a class="btn btn-ghost" href="{{ url_for('admin_auction_detail', season_id=season.id) }}">⚙️ Set up</a>
+    </div>
+  </div>
+
+  {% if not season.chat_id %}
+  <div class="au-card" style="border-color:rgba(253,230,138,.4);">
+    <b style="color:#fde68a;">⚠️ Not bound to a group.</b>
+    <p class="au-note" style="margin:.3rem 0 0;">
+      The auction runs here, but nothing is announced anywhere and
+      <code>/bid</code> has no room to work in. Set the chat id on the setup
+      page, or run <code>/anew</code> in the group.
+    </p>
+  </div>
+  {% endif %}
+
+  <!-- ── Controls ──────────────────────────────────────────────── -->
+  <div class="au-card">
+    <div class="au-actions">
+      {% if season.status != STATUS_LIVE %}
+        <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="start">
+          <button class="btn btn-primary" type="submit">▶️ {% if season.status == STATUS_PAUSED %}Resume{% else %}Start{% endif %}</button></form>
+      {% else %}
+        <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="pause">
+          <button class="btn btn-ghost" type="submit">⏸ Pause</button></form>
+      {% endif %}
+
+      <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="sold">
+        <button class="btn btn-primary" type="submit" {% if not lot or not lot.current_bidder_id %}disabled{% endif %}>🔨 Mark sold</button></form>
+
+      <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="unsold">
+        <button class="btn btn-ghost" type="submit" {% if not lot %}disabled{% endif %}>❌ Mark unsold</button></form>
+
+      <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="next">
+        <button class="btn btn-ghost" type="submit" {% if lot %}disabled{% endif %}>⏭ Next player</button></form>
+
+      <form method="POST" style="display:flex;gap:.3rem;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="extend">
+        <input type="number" name="seconds" value="{{ season.bid_seconds }}" min="1" max="600" style="width:5.5rem;">
+        <button class="btn btn-ghost" type="submit" {% if not lot %}disabled{% endif %}>⏱ Extend</button></form>
+
+      <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="undo_bid">
+        <button class="btn btn-ghost" type="submit" {% if not lot or not lot.current_bidder_id %}disabled{% endif %}>↩️ Undo last bid</button></form>
+
+      {% if lot %}
+      <form method="POST" onsubmit="return confirm('Withdraw {{ lot.name }} from the auction?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="withdraw">
+        <input type="hidden" name="lot_id" value="{{ lot.id }}">
+        <button class="btn btn-ghost danger" type="submit">🚫 Withdraw player</button></form>
+      {% endif %}
+    </div>
+
+    <p class="au-note" style="margin:.7rem 0 0;">
+      <b>Mark unsold is refused while a bid stands.</b> Passing a lot somebody
+      has bid for would void a franchise's winning bid with nothing on the
+      record — undo the bid first, which leaves a row with your name on it.
+      Every action here is announced in the group within a couple of seconds:
+      the website writes to the event log and the bot reads it, so a command
+      typed in the room and a button pressed here are the same call.
+    </p>
+  </div>
+
+  <!-- ── Bid for a franchise ───────────────────────────────────── -->
+  {% if lot %}
+  <div class="au-card">
+    <h3 style="margin-top:0;">Bid for a franchise</h3>
+    <form method="POST" class="au-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="bid">
+      <div><label>Franchise</label>
+        <select name="franchise_id">
+          {% for f in field %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
+        </select></div>
+      <div><label>Amount (Cr, or e.g. 75L)</label>
+        <input type="text" name="amount" value="{{ (next_min / 100)|round(2) }}"></div>
+      <div><button class="btn btn-primary" type="submit">Place bid</button></div>
+    </form>
+    <p class="au-note" style="margin-bottom:0;">
+      For an owner whose phone has died, or who is not in the room. It is
+      recorded and announced as an <b>admin's</b> bid — a bid that reads as the
+      owner's own choice when it was not is how a result gets disputed.
+    </p>
+  </div>
+  {% endif %}
+
+  <!-- ── The live panel ────────────────────────────────────────── -->
+  <div id="au-panel">
+    {% include "_auction_console_panel.html" %}
+  </div>
+
+  <!-- ── Cancel ────────────────────────────────────────────────── -->
+  <div class="au-card">
+    <details>
+      <summary class="dim" style="cursor:pointer;">Cancel this auction</summary>
+      <form method="POST" style="margin-top:.6rem;display:flex;gap:.4rem;flex-wrap:wrap;"
+            onsubmit="return confirm('Cancel {{ season.name }}? Bids stop and the lot on the block goes back to the queue.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="cancel">
+        <input type="text" name="confirm_name" placeholder="Type “{{ season.name }}”" required style="flex:1;min-width:180px;">
+        <button class="btn btn-ghost danger" type="submit">Cancel auction</button>
+      </form>
+      <p class="au-note" style="margin:.4rem 0 0;">
+        Sales already made are kept, with their ledger rows. This stops the
+        auction; it does not unwind it.
+      </p>
+    </details>
+  </div>
+</div>
+
+<script>
+(function () {
+  // Two independent loops, for two different reasons.
+  //
+  //   • The countdown ticks every second, client-side, off the deadline that
+  //     came down with the fragment — so the number moves smoothly without a
+  //     request per second.
+  //   • The panel itself is re-fetched every couple of seconds, because a bid
+  //     from the group has to show up here without anyone pressing anything.
+  //
+  // The redirect check is load-bearing: an expired admin session answers with
+  // the login page, and painting that into the panel would look exactly like
+  // the auction having vanished.
+  var PANEL_MS = 2000;
+  var panel = document.getElementById('au-panel');
+  var auto = document.getElementById('au-auto');
+  var url = "{{ url_for('admin_auction_console_panel', season_id=season.id) }}";
+  var inFlight = false;
+
+  function meta() { return document.getElementById('au-meta'); }
+
+  function tickClock() {
+    var m = meta(), el = document.getElementById('au-clock');
+    if (!m || !el) return;
+    if (m.dataset.status === 'paused') { el.textContent = 'paused'; el.className = 'au-clock'; return; }
+    var iso = m.dataset.deadline;
+    if (!iso) { el.textContent = '—'; el.className = 'au-clock'; return; }
+    var left = Math.max(0, Math.round((new Date(iso) - new Date()) / 1000));
+    el.textContent = left + 's';
+    el.className = 'au-clock' + (left <= 5 ? ' hot' : (left <= 10 ? ' warn' : ''));
+  }
+
+  function stop(msg) {
+    if (auto) auto.checked = false;
+    var m = document.createElement('div');
+    m.className = 'au-note';
+    m.style.color = '#fca5a5';
+    m.textContent = msg;
+    panel.prepend(m);
+  }
+
+  async function refresh() {
+    if (inFlight || (auto && !auto.checked) || document.hidden) return;
+    inFlight = true;
+    try {
+      var res = await fetch(url, { credentials: 'same-origin' });
+      if (res.redirected || !res.ok) throw new Error('signed out');
+      panel.innerHTML = await res.text();
+      tickClock();
+    } catch (e) {
+      stop('Auto-refresh stopped — reload the page.');
+    } finally {
+      inFlight = false;
+    }
+  }
+
+  setInterval(tickClock, 1000);
+  setInterval(refresh, PANEL_MS);
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) refresh(); });
+  tickClock();
+})();
+</script>
+{% endblock %}

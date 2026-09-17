@@ -1,0 +1,337 @@
+{% extends "base.html" %}
+{% block title %}{{ season.name }} — Auction{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_auction.css') }}">{% endblock %}
+
+{% block content %}
+<div class="au-shell">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
+    <h2 style="margin:0;">🔨 {{ season.name }} <span class="status-pill {{ season.status }}">{{ season.status }}</span></h2>
+    <div class="au-actions">
+      <a class="btn btn-primary" href="{{ url_for('admin_auction_console', season_id=season.id) }}">🔨 Live console</a>
+      <a class="btn btn-ghost" href="{{ url_for('admin_auctions_list') }}">← All auctions</a>
+    </div>
+  </div>
+
+  {% if ledger_drift %}
+  <div class="au-card" style="border-color:rgba(239,68,68,.4);">
+    <b style="color:#fca5a5;">⚠️ {{ ledger_drift|length }} purse(s) disagree with the ledger.</b>
+    <p class="au-note" style="margin:.3rem 0 .6rem;">
+      A franchise's purse and the sum of its ledger rows should always be the
+      same number. They are not, which means something wrote one without the
+      other. Reconciling writes a <code>correction</code> row rather than
+      overwriting either side, so the evidence survives.
+    </p>
+    <ul class="au-note">{% for f, cached, summed, delta in ledger_drift %}
+      <li>{{ f.name }} — purse {{ money(cached) }}, ledger {{ money(summed) }} ({{ money(delta) }} out)</li>
+    {% endfor %}</ul>
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="reconcile">
+      <button class="btn btn-ghost" type="submit">🔍 Reconcile purses</button></form>
+  </div>
+  {% endif %}
+
+  <!-- ── Settings ──────────────────────────────────────────────── -->
+  <div class="au-card">
+    <h3 style="margin-top:0;">Settings</h3>
+    <form method="POST" class="au-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="settings">
+      <div style="grid-column:span 2;"><label>Name</label><input type="text" name="name" value="{{ season.name }}"></div>
+      <div><label>Auction group chat id</label><input type="text" name="chat_id" value="{{ season.chat_id or '' }}" placeholder="-1001234567890"></div>
+      <div><label>Seconds per lot</label><input type="number" name="bid_seconds" min="5" max="600" value="{{ season.bid_seconds }}"></div>
+      <div><label>Opening purse (Cr)</label><input type="text" name="opening_purse" value="{{ (season.opening_purse_lakh / 100)|round(2) }}"></div>
+      <div><label>Min squad</label><input type="number" name="min_squad_size" min="0" max="50" value="{{ season.min_squad_size }}"></div>
+      <div><label>Max squad</label><input type="number" name="max_squad_size" min="1" max="50" value="{{ season.max_squad_size }}"></div>
+      <div><label>Home country</label><input type="text" name="home_country" value="{{ season.home_country }}"></div>
+      <div><label>Max overseas</label><input type="number" name="max_overseas" min="0" max="25" value="{{ season.max_overseas }}"></div>
+      <div><label>Anti-snipe window (s)</label><input type="number" name="snipe_window" min="0" max="120" value="{{ season.snipe_window_seconds }}"></div>
+      <div><label>Extend to (s)</label><input type="number" name="snipe_extend" min="1" max="300" value="{{ season.snipe_extend_seconds }}"></div>
+      <div><label>Max extensions</label><input type="number" name="max_extensions" min="0" max="100" value="{{ season.max_extensions }}"></div>
+      <div><button class="btn btn-primary" type="submit">Save settings</button></div>
+    </form>
+    <p class="au-note" style="margin-bottom:0;">
+      <b>Anti-snipe.</b> A bid arriving with the <em>window</em> or less on the
+      clock pushes the deadline out to the <em>extend</em> value, at most
+      <em>max</em> times per lot. Setting the window equal to the extension
+      (<code>10 / 10 / 5</code>) gives the rule most rooms actually want — <em>any
+      bid in the final ten seconds gives everybody ten more</em>. At a
+      two-second window, a bid with three seconds left buys nobody a chance to
+      answer.
+    </p>
+    <p class="au-note" style="margin-bottom:0;">
+      <b>Min squad</b> drives the reachability rule: a franchise may never bid
+      so much that it could not still fill its remaining slots at the pool's
+      cheapest base price ({{ money(season.min_base_price_lakh) }}). Every
+      franchise's ceiling is shown below and on the board, because a rule you
+      only meet once you have broken it is one you cannot plan around.
+    </p>
+  </div>
+
+  <!-- ── Base prices ───────────────────────────────────────────── -->
+  <div class="au-card">
+    <h3 style="margin-top:0;">Base prices by rating</h3>
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="price_rules">
+      <table class="au-table">
+        <tr><th>Rating at least</th><th>Base price (Cr)</th></tr>
+        {% for rule in price_rules %}
+        <tr>
+          <td><input type="number" name="rule_min_rating" value="{{ rule.min_rating }}" min="0" max="100" style="width:7rem;"></td>
+          <td><input type="text" name="rule_price" value="{{ (rule.base_lakh / 100)|round(2) }}" style="width:8rem;"></td>
+        </tr>
+        {% endfor %}
+        <tr>
+          <td><input type="number" name="rule_min_rating" placeholder="new" min="0" max="100" style="width:7rem;"></td>
+          <td><input type="text" name="rule_price" placeholder="e.g. 0.5" style="width:8rem;"></td>
+        </tr>
+      </table>
+      <button class="btn btn-primary" type="submit" style="margin-top:.6rem;">Save base prices</button>
+    </form>
+    <p class="au-note" style="margin-bottom:0;">
+      Highest band first; a card takes the first band its rating reaches. The
+      price is <b>stamped onto each lot when it is added to the pool</b>, so
+      editing this table never moves the price of a lot that is already there —
+      and never moves one mid-auction. Override a single player below.
+    </p>
+  </div>
+
+  <!-- ── Franchises ────────────────────────────────────────────── -->
+  <div class="au-card">
+    <h3 style="margin-top:0;">Franchises</h3>
+    <div class="au-tiles">
+      {% for f in field %}
+      <div class="au-tile">
+        <form method="POST" enctype="multipart/form-data" class="au-grid">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="franchise">
+          <input type="hidden" name="franchise_id" value="{{ f.id }}">
+          <div style="grid-column:span 2;"><label>Name</label><input type="text" name="name" value="{{ f.name }}"></div>
+          <div><label>Short name</label><input type="text" name="short_name" value="{{ f.short_name or '' }}"></div>
+          <div><label>City / State</label><input type="text" name="city" value="{{ f.city or '' }}"></div>
+          <div><label>Owner name</label><input type="text" name="owner_name" value="{{ f.owner_name or '' }}"></div>
+          <div><label>Owner Telegram id</label><input type="text" name="owner_tg_id" value="{{ f.owner_tg_id or '' }}"></div>
+          <div style="grid-column:span 2;"><label>Co-owners (Telegram ids)</label>
+            <input type="text" name="co_owners" value="{{ (f.co_owner_ids_json or '[]')|replace('[','')|replace(']','') }}" placeholder="111, 222"></div>
+          <div style="grid-column:span 2;"><label>Logo</label><input type="file" name="logo" accept="image/*"></div>
+          <div><button class="btn btn-primary" type="submit">Save</button></div>
+        </form>
+        <div class="au-note" style="margin-top:.5rem;">
+          💰 {{ money(f.purse_remaining_lakh) }} of {{ money(f.purse_total_lakh) }}
+          · 👥 {{ f.squad_size }}/{{ season.max_squad_size }}
+          · 🎯 max bid {{ money([0, max_bid(season, f)]|max) }}
+        </div>
+        <div class="au-actions" style="margin-top:.5rem;">
+          <form method="POST" style="display:flex;gap:.3rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="grant">
+            <input type="hidden" name="franchise_id" value="{{ f.id }}">
+            <input type="text" name="amount" placeholder="+2 or -2 (Cr)" style="width:9rem;">
+            <button class="btn btn-ghost" type="submit">🧾 Correct purse</button>
+          </form>
+          {% if not f.squad_size %}
+          <form method="POST" onsubmit="return confirm('Remove {{ f.name }}?');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="franchise_delete">
+            <input type="hidden" name="franchise_id" value="{{ f.id }}">
+            <button class="btn btn-ghost danger" type="submit">Remove</button>
+          </form>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
+
+      <div class="au-tile">
+        <b>Add a franchise</b>
+        <form method="POST" enctype="multipart/form-data" class="au-grid" style="margin-top:.5rem;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="franchise">
+          <div style="grid-column:span 2;"><label>Name</label><input type="text" name="name" required></div>
+          <div><label>Short name</label><input type="text" name="short_name"></div>
+          <div><label>City / State</label><input type="text" name="city"></div>
+          <div><label>Owner name</label><input type="text" name="owner_name"></div>
+          <div><label>Owner Telegram id</label><input type="text" name="owner_tg_id"></div>
+          <div><label>Purse (Cr)</label><input type="text" name="purse_total" value="{{ (season.opening_purse_lakh / 100)|round(2) }}"></div>
+          <div style="grid-column:span 2;"><label>Co-owners</label><input type="text" name="co_owners" placeholder="111, 222"></div>
+          <div><button class="btn btn-primary" type="submit">Add</button></div>
+        </form>
+        <p class="au-note" style="margin-bottom:0;">
+          The owner is a <b>Telegram id</b>, not an account here — an admin
+          builds the field from a list, and some of those people have never
+          messaged the bot. Owner and co-owners are equals for every check
+          <code>/bid</code> makes.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Retention & RTM (phase 2) ─────────────────────────────── -->
+  <div class="au-card" style="opacity:.75;">
+    <h3 style="margin-top:0;">Retention &amp; Right To Match <span class="pill">next phase</span></h3>
+    <p class="au-note" style="margin-bottom:.6rem;">
+      Not built yet, and deliberately shown as such rather than as a form that
+      silently does nothing. The columns exist and are not written by anything
+      in this release.
+    </p>
+    <form method="POST" class="au-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="link_previous">
+      <div style="grid-column:span 2;"><label>Record who held each player last season</label>
+        <select name="league_id">
+          <option value="">— pick the previous league —</option>
+          {% for lg in leagues %}<option value="{{ lg.id }}">{{ lg.name }}</option>{% endfor %}
+        </select></div>
+      <div><button class="btn btn-ghost" type="submit">🔗 Record</button></div>
+    </form>
+    <p class="au-note" style="margin-bottom:0;">
+      Worth doing <em>now</em> even though nothing reads it: who held a player
+      last season only gets harder to recover as time passes, and it is the
+      whole input to Right To Match.
+    </p>
+  </div>
+
+  <!-- ── Pool builder ──────────────────────────────────────────── -->
+  <div class="au-card">
+    <h3 style="margin-top:0;">Auction pool
+      <span class="pill">{{ counts.get('total', 0) }} lots</span>
+      <span class="pill">{{ counts.get('queued', 0) }} waiting</span>
+      <span class="pill">{{ counts.get('sold', 0) }} sold</span>
+      <span class="pill">{{ counts.get('unsold', 0) }} unsold</span>
+    </h3>
+    <p class="au-note" style="margin:.2rem 0 .8rem;">
+      Players come straight out of the global catalogue — filter, preview, then
+      add. Adding is <b>idempotent</b>: a player already in the pool is left
+      exactly as they are, including one already sold, so a corrected filter can
+      simply be re-applied.
+    </p>
+
+    <form method="GET" class="au-grid">
+      <input type="hidden" name="preview" value="1">
+      <div><label>Name</label><input type="text" name="q" value="{{ filters.q }}"></div>
+      <div><label>Min rating</label><input type="number" name="rating_min" min="0" max="100" value="{{ filters.rating_min }}"></div>
+      <div><label>Max rating</label><input type="number" name="rating_max" min="0" max="100" value="{{ filters.rating_max }}"></div>
+      <div><label>Country</label>
+        <select name="country"><option value="">Any</option>
+          {% for c in options.countries %}<option value="{{ c }}" {% if filters.country == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+        </select></div>
+      <div><label>Role</label>
+        <select name="role"><option value="">Any</option>
+          {% for r in options.roles %}<option value="{{ r }}" {% if filters.role == r %}selected{% endif %}>{{ r }}</option>{% endfor %}
+        </select></div>
+      <div><label>Bat hand</label>
+        <select name="bat_hand"><option value="">Any</option>
+          {% for h in options.bat_hands %}<option value="{{ h }}" {% if filters.bat_hand == h %}selected{% endif %}>{{ h }}</option>{% endfor %}
+        </select></div>
+      <div><label>Bowl style</label>
+        <select name="bowl_style"><option value="">Any</option>
+          {% for b in options.bowl_styles %}<option value="{{ b }}" {% if filters.bowl_style == b %}selected{% endif %}>{{ b }}</option>{% endfor %}
+        </select></div>
+      <div><label>Editions</label>
+        <select name="version_mode">
+          <option value="" {% if not filters.version_mode %}selected{% endif %}>Any edition</option>
+          <option value="base" {% if filters.version_mode == 'base' %}selected{% endif %}>Base cards only</option>
+        </select></div>
+      <div style="grid-column:span 2;"><label>Or pick editions</label>
+        <select name="versions" multiple size="4">
+          {% for v in options.versions %}<option value="{{ v }}" {% if v in filters.versions %}selected{% endif %}>{{ v }}</option>{% endfor %}
+        </select></div>
+      <div><button class="btn btn-primary" type="submit">Preview</button></div>
+    </form>
+
+    {% if preview %}
+    <form method="POST" style="margin-top:1rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="back_query" value="?{{ request.query_string.decode('utf-8') }}">
+      <div style="display:flex;gap:.5rem;align-items:end;flex-wrap:wrap;margin-bottom:.6rem;">
+        <div><label class="dim" style="font-size:.78rem;">Set name (optional)</label>
+          <input type="text" name="set_name" placeholder="Marquee"></div>
+        <button class="btn btn-primary" type="submit" name="action" value="add_pool">Add ticked</button>
+        <button class="btn btn-ghost" type="submit" name="action" value="add_pool_all">Add all {{ preview_count }} matching</button>
+        <span class="dim" style="font-size:.82rem;">{{ preview_count }} match; showing the first {{ preview|length }}.</span>
+      </div>
+      <div class="au-scroll">
+        <table class="au-table">
+          <tr><th></th><th>Player</th><th>OVR</th><th>Role</th><th>Country</th><th>Edition</th><th>Base</th></tr>
+          {% for p, pooled in preview %}
+          <tr {% if pooled %}class="dim"{% endif %}>
+            <td>{% if not pooled %}<input type="checkbox" name="player_ids" value="{{ p.id }}">{% else %}✓{% endif %}</td>
+            <td>{{ p.name }}</td><td>{{ p.rating }}</td><td>{{ p.category }}</td>
+            <td>{{ p.country }}</td><td>{{ p.version }}</td>
+            <td>{{ money(auction_base_price(season, p.rating)) }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+    </form>
+    {% endif %}
+
+    {% if lots %}
+    <h4 style="margin:1rem 0 .4rem;">In the pool</h4>
+    <div class="au-scroll">
+      <table class="au-table">
+        <tr><th>#</th><th>Player</th><th>OVR</th><th>Role</th><th>Base</th><th>Status</th><th>Sold to</th><th></th></tr>
+        {% for lot in lots %}
+        <tr>
+          <td>{{ lot.lot_no }}</td>
+          <td>{{ lot.name }}{% if lot.is_overseas %} ✈️{% endif %}</td>
+          <td>{{ lot.rating }}</td><td>{{ lot.category }}</td>
+          <td>{{ money(lot.base_price_lakh) }}</td>
+          <td><span class="status-pill">{{ lot.status }}</span></td>
+          <td>{% if lot.sold_to %}{{ lot.sold_to.name }} — {{ money(lot.sold_price_lakh) }}{% else %}—{% endif %}</td>
+          <td class="au-actions">
+            {% if lot.status == 'queued' %}
+            <form method="POST" style="display:flex;gap:.25rem;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="lot_price">
+              <input type="hidden" name="lot_id" value="{{ lot.id }}">
+              <input type="text" name="price" placeholder="Cr" style="width:5rem;">
+              <button class="btn btn-ghost" type="submit">Base</button>
+            </form>
+            <form method="POST" onsubmit="return confirm('Take {{ lot.name }} out of the pool?');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="lot_remove">
+              <input type="hidden" name="lot_id" value="{{ lot.id }}">
+              <button class="btn btn-ghost danger" type="submit">✕</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ── Publish ───────────────────────────────────────────────── -->
+  <div class="au-card">
+    <h3 style="margin-top:0;">Publish</h3>
+    <p class="au-note" style="margin:.2rem 0 .8rem;">
+      Writes every bought squad into a Challenge League so they can play.
+      Publishing again re-syncs the same league rather than creating a second
+      one, so a correction can simply be republished. Only a
+      <b>completed</b> auction can be published.
+      {% if season.published_at %}<br>Last published {{ season.published_at.strftime('%Y-%m-%d %H:%M') }} UTC.{% endif %}
+    </p>
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="publish">
+      <button class="btn btn-primary" type="submit">📤 Publish squads</button>
+    </form>
+  </div>
+
+  <!-- ── Event log ─────────────────────────────────────────────── -->
+  {% if events %}
+  <div class="au-card">
+    <h3 style="margin-top:0;">Event log</h3>
+    <div class="au-scroll au-log">
+      {% for e in events %}
+      <div style="padding:.3rem 0;border-bottom:1px solid var(--border);">
+        <span class="dim">{{ e.created_at.strftime('%H:%M:%S') }}</span>
+        {{ e.headline|safe }}{% if e.by_admin %} <span class="pill">admin</span>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
