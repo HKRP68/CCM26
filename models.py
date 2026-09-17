@@ -3605,14 +3605,59 @@ class AuctionSeason(Base):
     home_country = Column(String(60), default="India", nullable=False)
     max_overseas = Column(Integer, default=8, nullable=False)
 
-    # ── Retention / RTM ────────────────────────────────────────────────
-    # PHASE 2. These columns exist now and nothing reads them yet; they are
-    # here so the first schema change after deploy is not the one that has to
-    # add a non-nullable column to a populated table. ``rtm_enabled`` defaults
-    # False and no branch tests it.
-    rtm_enabled = Column(Boolean, default=False, nullable=False)
+    # ── Retention ──────────────────────────────────────────────────────
+    # Retention happens while the season is still in ``setup``: a franchise
+    # keeps some of its existing players at a price, and that spend comes off
+    # the top of its purse before a single lot opens. There is deliberately no
+    # ``retention`` season status — ``max_retentions > 0`` says retention is
+    # configured, and ``retention_locked_at`` says the window is shut. A status
+    # would have to be threaded through the pool guard, the sweeper's filter,
+    # every status pill and ``start()``'s resume path for nothing a timestamp
+    # does not already give.
+    #
+    # There is no ``retention_enabled`` boolean for the same kind of reason,
+    # plus a sharper one: a non-nullable Boolean added to a populated table
+    # reads back NULL-as-falsy on every existing row (see
+    # docs/player-draft.md on ``trades_open``), and ``max_retentions > 0``
+    # carries the same fact with an Integer that defaults cleanly.
     max_retentions = Column(Integer, default=0, nullable=False)
+    # Enforced at ``start()``, by name — nothing a retention *does* can fix a
+    # franchise being under the minimum, so refusing at retention time would be
+    # a complaint nobody can act on.
+    min_retentions = Column(Integer, default=0, nullable=False)
+    # NULL means uncapped. The cap is on the total, not per player, because
+    # that is the number an admin actually reasons about.
+    retention_max_spend_lakh = Column(Integer, nullable=True)
+    # Lazily enforced: ``retain()`` refuses once it has passed. Nothing sweeps
+    # during retention — the clock job only looks at live seasons — so there is
+    # nothing to actively close the window with, and an admin closing it by
+    # hand is ``retention_locked_at`` below.
+    retention_deadline_at = Column(DateTime, nullable=True)
+    # The proposal's optional rating / category restrictions. NULL and empty
+    # both mean "no restriction".
+    retention_min_rating = Column(Integer, nullable=True)
+    retention_max_rating = Column(Integer, nullable=True)
+    retention_categories_json = Column(Text, nullable=True)
+    # The slab ladder: [{"slab": 1, "price_lakh": 1800}, ...]. It only
+    # PRE-FILLS the price for a franchise's next retention; the caps are what
+    # actually refuse. Making the slab binding would invite juggling the order
+    # to dodge the expensive rungs, and an admin who can see the number before
+    # committing does not need protecting from it.
+    retention_price_rules_json = Column(Text, nullable=True)
+    # Shut the window. ``start()`` stamps this too, so opening the auction
+    # closes retention rather than leaving it ajar.
     retention_locked_at = Column(DateTime, nullable=True)
+
+    # ── Right To Match ─────────────────────────────────────────────────
+    # PHASE 2b. ``rtm_enabled`` defaults False and no branch tests it.
+    rtm_enabled = Column(Boolean, default=False, nullable=False)
+
+    # ── Last season ────────────────────────────────────────────────────
+    # The ChallengeLeague this season follows. Stored rather than passed in
+    # from a form each time, because the retention picker needs it BEFORE any
+    # lot exists — ``AuctionLot.previous_franchise_id`` can only be stamped
+    # once the pool is built, and retention runs before that.
+    previous_league_id = Column(Integer, nullable=True)
 
     # ── The board, and the announcement cursor ─────────────────────────
     # ``board_message_id`` is the one pinned message the auction lives in; it

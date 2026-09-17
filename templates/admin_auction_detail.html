@@ -165,28 +165,187 @@
     </div>
   </div>
 
-  <!-- ── Retention & RTM (phase 2) ─────────────────────────────── -->
+  <!-- ── Retention ─────────────────────────────────────────────── -->
+  <div class="au-card">
+    <h3 style="margin-top:0;">🔒 Retention
+      {% if retention_locked %}<span class="pill">closed</span>
+      {% elif not retention_open %}<span class="pill">unavailable</span>
+      {% elif retention_left is not none and retention_left > 0 %}<span class="pill">closes in {{ clock(retention_left) }}</span>
+      {% elif retention_left is not none %}<span class="pill">deadline passed</span>
+      {% else %}<span class="pill">open</span>{% endif %}
+    </h3>
+    <p class="au-note" style="margin:.2rem 0 .8rem;">
+      Franchises keep some of their existing players before the auction opens,
+      and that spend comes off the top of the purse. Retained players are
+      <b>left out of the pool automatically</b> — build the pool afterwards and
+      they are simply skipped.
+      {% if season.status != 'setup' %}
+        <br><b>The auction has already opened</b>, so retention is closed for good.
+      {% endif %}
+    </p>
+
+    <form method="POST" class="au-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="retention_rules">
+      <div><label>Max per franchise</label><input type="number" name="max_retentions" min="0" max="20" value="{{ season.max_retentions }}"></div>
+      <div><label>Min per franchise</label><input type="number" name="min_retentions" min="0" max="20" value="{{ season.min_retentions }}"></div>
+      <div><label>Retention budget (Cr)</label><input type="text" name="retention_max_spend" value="{{ (season.retention_max_spend_lakh / 100)|round(2) if season.retention_max_spend_lakh is not none else '' }}" placeholder="blank = uncapped"></div>
+      <div><label>Deadline (UTC)</label><input type="datetime-local" name="retention_deadline" value="{{ season.retention_deadline_at.strftime('%Y-%m-%dT%H:%M') if season.retention_deadline_at else '' }}"></div>
+      <div><label>Min rating</label><input type="number" name="retention_min_rating" min="0" max="100" value="{{ season.retention_min_rating if season.retention_min_rating is not none else '' }}" placeholder="any"></div>
+      <div><label>Max rating</label><input type="number" name="retention_max_rating" min="0" max="100" value="{{ season.retention_max_rating if season.retention_max_rating is not none else '' }}" placeholder="any"></div>
+      <div style="grid-column:span 2;"><label>Roles allowed (comma separated)</label>
+        <input type="text" name="retention_categories" value="{{ retention_cats|join(', ') }}" placeholder="any"></div>
+      <div style="grid-column:span 2;"><label>Price ladder — 1st, 2nd, 3rd… retention (Cr)</label>
+        <div style="display:flex;gap:.4rem;flex-wrap:wrap;">
+          {% for rule in ladder %}
+          <input type="text" name="slab_price" value="{{ (rule.price_lakh / 100)|round(2) }}" style="width:6rem;">
+          {% endfor %}
+          <input type="text" name="slab_price" placeholder="+" style="width:6rem;">
+        </div></div>
+      <div><button class="btn btn-primary" type="submit">Save retention rules</button></div>
+    </form>
+    <p class="au-note" style="margin-bottom:0;">
+      The ladder <b>pre-fills</b> the price for a franchise's next retention —
+      it is not binding, and any price can be typed over it. What actually
+      refuses is the count, the budget, the purse, and the same
+      <b>reachability</b> rule bidding uses: a franchise may never retain so
+      much that it could no longer fill its minimum squad at base price.
+      <br>The deadline is checked when somebody tries to retain — nothing
+      sweeps while an auction is in setup — so the countdown above is how you
+      see it coming.
+    </p>
+  </div>
+
+  {% if season.max_retentions %}
+  <div class="au-card">
+    <h3 style="margin-top:0;">Retained squads</h3>
+    <table class="au-table">
+      <tr><th>Franchise</th><th>Kept</th><th>Starting purse</th><th>Retention spent</th><th>Auction purse</th></tr>
+      {% for f in field %}
+      <tr>
+        <td>{{ f.name }}</td>
+        <td>{{ f.retained_count }}/{{ season.max_retentions }}</td>
+        <td>{{ money(f.purse_total_lakh) }}</td>
+        <td>{{ money(retention_spent(f.id)) }}</td>
+        <td><b>{{ money(f.purse_remaining_lakh) }}</b></td>
+      </tr>
+      {% endfor %}
+    </table>
+
+    <div class="au-tiles" style="margin-top:1rem;">
+      {% for f in field %}
+      <div class="au-tile">
+        <b>{{ f.name }}</b>
+        <div class="dim" style="font-size:.82rem;margin:.2rem 0 .5rem;">
+          next retention pre-fills at {{ money(next_slab(season, f.retained_count + 1)) }}
+          · ceiling {{ money([0, max_bid(season, f)]|max) }}
+        </div>
+        {% for lot in retained_of(f.id) %}
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;padding:.25rem 0;border-bottom:1px solid var(--border);">
+          <span>🔒 {{ lot.name }} <span class="dim">· {{ lot.rating }} · {{ lot.category }}</span></span>
+          <span style="display:flex;gap:.4rem;align-items:center;">
+            <b>{{ money(lot.sold_price_lakh) }}</b>
+            {% if retention_open %}
+            <form method="POST" onsubmit="return confirm('Release {{ lot.name }} into the auction pool?');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="unretain">
+              <input type="hidden" name="lot_id" value="{{ lot.id }}">
+              <button class="btn btn-ghost danger" type="submit">Release</button>
+            </form>
+            {% endif %}
+          </span>
+        </div>
+        {% else %}
+        <div class="dim" style="font-size:.85rem;">Nobody retained.</div>
+        {% endfor %}
+      </div>
+      {% endfor %}
+    </div>
+
+    {% if retention_open %}
+    <h4 style="margin:1rem 0 .4rem;">Retain a player</h4>
+    <form method="GET" style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:end;">
+      <div><label class="dim" style="font-size:.78rem;">Search the catalogue</label>
+        <input type="text" name="retain_q" value="{{ retain_q }}" placeholder="player name"></div>
+      <button class="btn btn-ghost" type="submit">Search</button>
+      {% if season.previous_league_id %}
+      <span class="dim" style="font-size:.82rem;">⭐ marks a franchise's own players from last season.</span>
+      {% else %}
+      <span class="dim" style="font-size:.82rem;">Record last season's league above to flag each franchise's own players.</span>
+      {% endif %}
+    </form>
+
+    {% if retain_hits %}
+    <div class="au-scroll" style="margin-top:.6rem;">
+      <table class="au-table">
+        <tr><th></th><th>Player</th><th>OVR</th><th>Role</th><th>Last season</th><th>Retain for</th><th></th></tr>
+        {% for player, held, pooled in retain_hits %}
+        <tr>
+          <td>{% if held %}⭐{% endif %}</td>
+          <td>{{ player.name }}</td>
+          <td>{{ player.rating }}</td>
+          <td>{{ player.category }}</td>
+          <td class="dim">{{ held.name if held else '—' }}</td>
+          <td colspan="2">
+            {% if pooled and pooled != 'queued' %}
+              <span class="dim">already {{ pooled }} in this auction</span>
+            {% else %}
+            <form method="POST" style="display:flex;gap:.3rem;align-items:center;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="retain">
+              <input type="hidden" name="player_id" value="{{ player.id }}">
+              <input type="hidden" name="back_query" value="?retain_q={{ retain_q }}">
+              <select name="franchise_id">
+                {% for f in field %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
+              </select>
+              <input type="text" name="price" placeholder="Cr — blank = ladder" style="width:9rem;">
+              <button class="btn btn-primary" type="submit">Retain</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+    {% elif retain_q %}
+      <p class="au-note">Nothing matches “{{ retain_q }}”.</p>
+    {% endif %}
+
+    <form method="POST" style="margin-top:1rem;"
+          onsubmit="return confirm('Close retention? Squads are then fixed until the auction.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="retention_lock">
+      <button class="btn btn-ghost" type="submit">🔒 Close retention</button>
+    </form>
+    <p class="au-note" style="margin-bottom:0;">
+      Starting the auction closes retention too — this is only for closing it
+      early. Once closed, nothing can be retained or released.
+    </p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- ── Right To Match (phase 2b) ──────────────────────────────── -->
   <div class="au-card" style="opacity:.75;">
-    <h3 style="margin-top:0;">Retention &amp; Right To Match <span class="pill">next phase</span></h3>
+    <h3 style="margin-top:0;">Right To Match <span class="pill">next phase</span></h3>
     <p class="au-note" style="margin-bottom:.6rem;">
       Not built yet, and deliberately shown as such rather than as a form that
-      silently does nothing. The columns exist and are not written by anything
-      in this release.
+      silently does nothing. Its columns exist and nothing writes them.
     </p>
     <form method="POST" class="au-grid">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="link_previous">
-      <div style="grid-column:span 2;"><label>Record who held each player last season</label>
+      <div style="grid-column:span 2;"><label>Last season's league</label>
         <select name="league_id">
           <option value="">— pick the previous league —</option>
-          {% for lg in leagues %}<option value="{{ lg.id }}">{{ lg.name }}</option>{% endfor %}
+          {% for lg in leagues %}<option value="{{ lg.id }}" {% if season.previous_league_id == lg.id %}selected{% endif %}>{{ lg.name }}</option>{% endfor %}
         </select></div>
       <div><button class="btn btn-ghost" type="submit">🔗 Record</button></div>
     </form>
     <p class="au-note" style="margin-bottom:0;">
-      Worth doing <em>now</em> even though nothing reads it: who held a player
-      last season only gets harder to recover as time passes, and it is the
-      whole input to Right To Match.
+      Worth doing <em>now</em>: it is what lets the retention picker flag each
+      franchise's own players, and who held whom only gets harder to recover as
+      time passes. It is also the entire input to Right To Match.
     </p>
   </div>
 

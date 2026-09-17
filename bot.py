@@ -461,6 +461,9 @@ ADMIN_MENU_COMMANDS = (
     ("aco", "Admin: add a co-owner who may bid for a franchise"),
     ("apublish", "Admin: publish bought squads as a Challenge League"),
     ("acancel", "Admin: cancel the auction"),
+    ("aretlock", "Admin: retention state, and close the window"),
+    ("aretain", "Admin: retain a player for a franchise"),
+    ("aunretain", "Admin: release a retained player into the pool"),
     # Running tournament: the points table, and matches played off the bot.
     ("tpoints", "Admin: dock or award points on the tournament table"),
     ("tpointsclear", "Admin: clear a team's points adjustment"),
@@ -2093,6 +2096,7 @@ def main():
             aunsold_handler, aundobid_handler, awithdraw_handler,
             atimer_handler, asnipe_handler, agrant_handler, aco_handler,
             apublish_handler, acancel_handler,
+            aretain_handler, aunretain_handler, aretlock_handler,
         )
         # Not "/b": that is already /buy, registered above, and PTB runs the
         # first handler that matches — the alias would be dead.
@@ -2121,6 +2125,10 @@ def main():
         app.add_handler(CommandHandler("aco", aco_handler))
         app.add_handler(CommandHandler("apublish", apublish_handler))
         app.add_handler(CommandHandler("acancel", acancel_handler))
+        # Retention: an auction's setup phase, before any lot opens.
+        app.add_handler(CommandHandler("aretain", aretain_handler))
+        app.add_handler(CommandHandler(["aunretain", "arelease"], aunretain_handler))
+        app.add_handler(CommandHandler(["aretlock", "aretention"], aretlock_handler))
 
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))

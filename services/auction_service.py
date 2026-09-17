@@ -46,7 +46,7 @@ from sqlalchemy import and_, case, func, or_
 from models import (
     AuctionBid, AuctionEvent, AuctionFranchise, AuctionLedgerEntry, AuctionLot,
     AuctionSeason, ChallengeLeague, ChallengeMode, ChallengePlayer,
-    ChallengeTeam, Player,
+    ChallengeTeam,
 )
 from services import player_query
 
@@ -110,6 +110,24 @@ DEFAULT_BASE_PRICE_RULES = [
     {"min_rating": 90, "base_lakh": 150},
     {"min_rating": 88, "base_lakh": 100},
     {"min_rating": 0, "base_lakh": 20},
+]
+
+# How a lot came to be on a squad. ``auction`` is the default and the only
+# value phase 1 ever wrote; ``retained`` is phase 2a. Kept as a column beside
+# ``status`` rather than as a status of its own, so every reader that asks
+# "is this player on a squad?" (squad, overseas_count, role_counts,
+# publish_to_league) keeps working untouched — see docs/franchise-auction.md.
+ACQ_AUCTION = "auction"
+ACQ_RETAINED = "retained"
+ACQ_RTM = "rtm"          # phase 2b
+
+# The retention slab ladder: what the Nth retention costs. Descending, the way
+# every real retention ladder is. This only PRE-FILLS the price; the caps are
+# what refuse. Real IPL's 2025 numbers, in lakh.
+DEFAULT_RETENTION_PRICE_RULES = [
+    {"slab": 1, "price_lakh": 1800},
+    {"slab": 2, "price_lakh": 1400},
+    {"slab": 3, "price_lakh": 1100},
 ]
 
 # The bid ladder: the smallest legal raise at a given standing price. Real
@@ -656,6 +674,406 @@ def max_bid_now(season, franchise, *, winning_this_lot=True):
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Retention
+#
+# Before a single lot opens, a franchise keeps some of the players it already
+# has, at a price, and that spend comes off the top of its purse. The whole of
+# it happens while the season is still in ``setup``.
+#
+# **A retained player is an ordinary sold lot** — ``status = LOT_SOLD`` with
+# ``acquisition = ACQ_RETAINED``. Not a status of its own, because ``squad``,
+# ``overseas_count``, ``role_counts`` and ``publish_to_league`` all key on
+# ``LOT_SOLD`` and then need no change at all: a retained player is in the
+# squad, counts against the overseas and squad caps, and reaches the published
+# league, for free.
+#
+# **Retention creates the lot from the catalogue**, rather than needing the
+# pool built first — which is the order the proposal asks for. Because
+# ``add_players_to_pool`` skips any player who already has a lot in the season,
+# building the pool afterwards excludes retained players automatically.
+# ──────────────────────────────────────────────────────────────────────
+
+def retention_price_rules(season):
+    """The slab ladder, cheapest slab number first."""
+    rules = _loads(getattr(season, "retention_price_rules_json", None), [])
+    cleaned = []
+    for row in rules if isinstance(rules, list) else []:
+        if not isinstance(row, dict):
+            continue
+        price = _as_int(row.get("price_lakh"), -1)
+        slab = _as_int(row.get("slab"), 0)
+        if price >= 0 and slab > 0:
+            cleaned.append({"slab": slab, "price_lakh": price})
+    if not cleaned:
+        return [dict(row) for row in DEFAULT_RETENTION_PRICE_RULES]
+    cleaned.sort(key=lambda r: r["slab"])
+    return cleaned
+
+
+def retention_price_for(season, nth):
+    """What the ``nth`` retention (1-based) costs, per the ladder.
+
+    A ladder shorter than ``max_retentions`` is not an error — past its end the
+    last slab repeats, which is the behaviour an admin who typed three rungs
+    and allowed four retentions obviously meant.
+
+    This only decides what the form and the command **default to**. Nothing
+    enforces it: ``retain`` takes the price it is given and refuses on the caps
+    instead. Making the slab binding would only invite juggling the retention
+    order to dodge the expensive rungs, and an admin who sees the number before
+    committing does not need protecting from it.
+    """
+    rules = retention_price_rules(season)
+    nth = max(1, _as_int(nth, 1))
+    for row in rules:
+        if row["slab"] == nth:
+            return row["price_lakh"]
+    return rules[-1]["price_lakh"]
+
+
+def retention_categories(season):
+    """Roles a retained player may have. Empty means no restriction."""
+    raw = _loads(getattr(season, "retention_categories_json", None), [])
+    return [str(v).strip() for v in (raw or []) if str(v).strip()]
+
+
+def retained(session, franchise_id):
+    """Every player this franchise has retained, best first."""
+    return (session.query(AuctionLot)
+            .filter(AuctionLot.sold_to_id == franchise_id,
+                    AuctionLot.status == LOT_SOLD,
+                    AuctionLot.acquisition == ACQ_RETAINED)
+            .order_by(AuctionLot.rating.desc(), AuctionLot.name.asc()).all())
+
+
+def retention_spent(session, franchise_id):
+    """What a franchise has spent retaining, in lakh.
+
+    Derived rather than cached. The purse column is a cache for a reason that
+    does not apply here — it has to be writable by a conditional UPDATE — and a
+    second cache is only a second thing to drift.
+    """
+    total = (session.query(func.coalesce(func.sum(AuctionLot.sold_price_lakh), 0))
+             .filter(AuctionLot.sold_to_id == franchise_id,
+                     AuctionLot.status == LOT_SOLD,
+                     AuctionLot.acquisition == ACQ_RETAINED).scalar())
+    return int(total or 0)
+
+
+def retention_configured(season):
+    return _as_int(getattr(season, "max_retentions", 0), 0) > 0
+
+
+def retention_locked(season):
+    return getattr(season, "retention_locked_at", None) is not None
+
+
+def retention_seconds_left(season, now=None):
+    """Seconds until the retention deadline, or None when there is not one.
+
+    Negative once it has passed, so a caller can tell "closes in 3h" from
+    "closed 2 days ago" without asking twice.
+    """
+    deadline = getattr(season, "retention_deadline_at", None)
+    if deadline is None:
+        return None
+    return (deadline - (now or datetime.utcnow())).total_seconds()
+
+
+def retention_open(season, now=None):
+    """Whether a retention would be accepted right now, ignoring the caps."""
+    if season.status != STATUS_SETUP or retention_locked(season):
+        return False
+    left = retention_seconds_left(season, now)
+    return left is None or left > 0
+
+
+def lock_retention(session, season, *, now=None, by_tg_id=None, quiet=False):
+    """Shut the retention window. Idempotent."""
+    if retention_locked(season):
+        return season
+    season.retention_locked_at = now or datetime.utcnow()
+    if not quiet:
+        log_event(session, season, "retention_locked",
+                  "🔒 Retention is closed. Every squad is now what it will "
+                  "take into the auction.",
+                  by_tg_id=by_tg_id, by_admin=True)
+    return season
+
+
+# ── Who held whom last season ────────────────────────────────────────
+
+def previous_squad_map(session, season, league_id=None):
+    """``{player_id: AuctionFranchise}`` for the league this season follows.
+
+    Matching is by ``source_player_id``, never by name: two cricketers sharing
+    a name would be quietly mis-assigned, and that is the one mistake a
+    retention picker — and later, Right To Match — must not make. The franchise
+    is matched to the old team by name, which is the only link there is.
+
+    Used by the retention picker (before any lot exists) and by
+    ``link_previous_season`` (after the pool is built), so the two can never
+    disagree about who held whom.
+    """
+    league_id = league_id or getattr(season, "previous_league_id", None)
+    if not league_id:
+        return {}
+    rows = (session.query(ChallengePlayer.source_player_id, ChallengeTeam.name)
+            .join(ChallengeTeam, ChallengePlayer.team_id == ChallengeTeam.id)
+            .filter(ChallengeTeam.league_id == int(league_id),
+                    ChallengePlayer.source_player_id.isnot(None)).all())
+    if not rows:
+        return {}
+    by_name = {(f.name or "").strip().lower(): f
+               for f in franchises(session, season.id)}
+    mapping = {}
+    for source_id, team_name in rows:
+        franchise = by_name.get((team_name or "").strip().lower())
+        if franchise is not None:
+            mapping[source_id] = franchise
+    return mapping
+
+
+# ── Retaining ────────────────────────────────────────────────────────
+
+def _retention_lot(session, season, player):
+    """The lot a retention will use — converting a queued one, or a new row.
+
+    An admin who built the pool first must not hit a wall, so a player already
+    sitting in the queue is converted in place rather than refused. Anything
+    further along than ``queued`` is somebody else's business and is refused by
+    name.
+    """
+    lot = (session.query(AuctionLot)
+           .filter(AuctionLot.season_id == season.id,
+                   AuctionLot.player_id == player.id).first())
+    if lot is None:
+        home = (season.home_country or "").strip().lower()
+        lot = AuctionLot(
+            season_id=season.id, player_id=player.id,
+            name=(player.name or "")[:150], rating=player.rating or 0,
+            category=player.category or "Batsman",
+            country=player.country or "Unknown",
+            is_overseas=bool(home and (player.country or "").strip().lower() != home),
+            version=player.version, bat_hand=player.bat_hand or "Right",
+            bowl_hand=player.bowl_hand or "Right",
+            bowl_style=player.bowl_style or "Medium Pacer",
+            bat_rating=player.bat_rating or 0,
+            bowl_rating=player.bowl_rating or 0,
+            lot_no=_next_lot_no(session, season.id),
+            base_price_lakh=base_price_for(season, player.rating),
+            status=LOT_QUEUED)
+        session.add(lot)
+        session.flush()
+        return lot
+    if lot.status == LOT_QUEUED:
+        return lot
+    if lot.acquisition == ACQ_RETAINED and lot.status == LOT_SOLD:
+        holder = (session.query(AuctionFranchise)
+                  .filter(AuctionFranchise.id == lot.sold_to_id).first())
+        raise AuctionError(f"{lot.name} has already been retained by "
+                           f"{holder.name if holder else 'another franchise'}.")
+    raise AuctionError(f"{lot.name} is already {lot.status} in this auction and "
+                       f"cannot be retained.")
+
+
+def retain(session, season, franchise, player, price_lakh=None, *,
+           now=None, by_tg_id=None):
+    """Keep a player for a franchise, at a price, out of its purse.
+
+    Every refusal names the number that would have worked. The order matters:
+    the window first (there is no point pricing a retention that cannot happen
+    at all), then the caps on how many and how much, then the squad rules, and
+    finally reachability — the same rule, and the same call, that refuses a
+    bid which would leave a franchise unable to fill its minimum squad.
+    """
+    now = now or datetime.utcnow()
+    symbol = season.currency_label or "₹"
+
+    if season.status != STATUS_SETUP:
+        raise AuctionError("Retention happens before the auction opens — this "
+                           "one is " + str(season.status) + ".")
+    if retention_locked(season):
+        raise AuctionError("Retention is closed for this auction.")
+    left = retention_seconds_left(season, now)
+    if left is not None and left <= 0:
+        raise AuctionError("The retention deadline has passed.")
+    if not retention_configured(season):
+        raise AuctionError("This auction allows no retentions — set a maximum "
+                           "first.")
+
+    count = int(franchise.retained_count or 0)
+    if count + 1 > _as_int(season.max_retentions, 0):
+        raise AuctionError(f"{franchise.name} has already retained {count}, "
+                           f"which is the maximum.")
+
+    price = (retention_price_for(season, count + 1) if price_lakh is None
+             else _as_int(price_lakh, -1))
+    if price < 0:
+        raise AuctionError("A retention price cannot be negative.")
+
+    cap = getattr(season, "retention_max_spend_lakh", None)
+    if cap is not None:
+        spent = retention_spent(session, franchise.id)
+        if spent + price > int(cap):
+            raise AuctionError(
+                f"{franchise.name} has spent "
+                f"{render_money(spent, symbol)} of a "
+                f"{render_money(int(cap), symbol)} retention budget — "
+                f"{render_money(price, symbol)} would go "
+                f"{render_money(spent + price - int(cap), symbol)} over.")
+
+    low = getattr(season, "retention_min_rating", None)
+    high = getattr(season, "retention_max_rating", None)
+    rating = _as_int(player.rating, 0)
+    if low is not None and rating < int(low):
+        raise AuctionError(f"{player.name} is rated {rating}; this auction "
+                           f"only allows retaining {int(low)} and above.")
+    if high is not None and rating > int(high):
+        raise AuctionError(f"{player.name} is rated {rating}; this auction "
+                           f"only allows retaining {int(high)} and below.")
+    allowed = retention_categories(season)
+    if allowed and (player.category or "") not in allowed:
+        raise AuctionError(f"{player.name} is a {player.category}; this "
+                           f"auction only allows retaining "
+                           f"{', '.join(allowed)}.")
+
+    size = int(franchise.squad_size or 0)
+    if size + 1 > _as_int(season.max_squad_size, 0):
+        raise AuctionError(f"{franchise.name} already has {size} players, "
+                           f"which is the squad limit.")
+
+    lot = _retention_lot(session, season, player)
+
+    if lot.is_overseas:
+        overseas_cap = max(0, _as_int(season.max_overseas, 0))
+        if overseas_count(session, franchise.id) + 1 > overseas_cap:
+            raise AuctionError(f"{franchise.name} is already at the overseas "
+                               f"limit of {overseas_cap}.")
+
+    remaining = int(franchise.purse_remaining_lakh or 0)
+    if price > remaining:
+        raise AuctionError(f"{franchise.name} has "
+                           f"{render_money(remaining, symbol)} left — "
+                           f"{render_money(price, symbol)} is more than the "
+                           f"purse.")
+    ceiling = max_bid_now(season, franchise)
+    if price > ceiling:
+        slots_after = max(0, _as_int(season.min_squad_size, 0) - (size + 1))
+        reserve = slots_after * max(0, _as_int(season.min_base_price_lakh, 0))
+        raise AuctionError(
+            f"{render_money(price, symbol)} would leave {franchise.name} "
+            f"unable to fill its squad: {slots_after} more players need "
+            f"{render_money(reserve, symbol)} held back. The most it can "
+            f"retain this player for is {render_money(max(0, ceiling), symbol)}.")
+
+    # Every write below is one transaction, and the debit is conditional for
+    # the same reason a sale's is: if the purse moved under the validation a
+    # few milliseconds ago, the whole retention rolls back rather than half
+    # happening.
+    debited = (session.query(AuctionFranchise)
+               .filter(AuctionFranchise.id == franchise.id,
+                       AuctionFranchise.purse_remaining_lakh >= price,
+                       AuctionFranchise.squad_size < _as_int(season.max_squad_size, 0))
+               .update({"purse_remaining_lakh":
+                        AuctionFranchise.purse_remaining_lakh - price,
+                        "squad_size": AuctionFranchise.squad_size + 1,
+                        "retained_count": AuctionFranchise.retained_count + 1},
+                       synchronize_session=False))
+    session.flush()
+    session.expire_all()
+    franchise = (session.query(AuctionFranchise)
+                 .filter(AuctionFranchise.id == franchise.id).first())
+    lot = session.query(AuctionLot).filter(AuctionLot.id == lot.id).first()
+    if not debited:
+        raise AuctionError(f"{franchise.name} can no longer pay "
+                           f"{render_money(price, symbol)} — nothing has been "
+                           f"retained.")
+
+    lot.status = LOT_SOLD
+    lot.acquisition = ACQ_RETAINED
+    lot.sold_to_id = franchise.id
+    lot.sold_price_lakh = price
+    lot.sold_at = now
+    lot.deadline_at = None
+    lot.going_stage = 0
+    # A retained player was, by definition, held by this franchise. Recording
+    # it keeps the Right To Match input complete even for players who will
+    # never be RTM'd, and costs nothing.
+    if lot.previous_franchise_id is None:
+        lot.previous_franchise_id = franchise.id
+
+    # Flushed before anything reads it back: this session is autoflush=False,
+    # and ``retention_spent`` / ``retained`` / ``squad`` all find a retention by
+    # QUERYING for ``status`` and ``acquisition``. Left pending, the next
+    # retention would price itself against a budget that had not noticed this
+    # one — the bug class that bit phase 1 three times.
+    session.flush()
+
+    _ledger(session, franchise, LEDGER_RETENTION, -price, lot=lot,
+            note=f"Retained: {lot.name}", by_tg_id=by_tg_id)
+    log_event(session, season, "retained",
+              f"🔒 <b>{_e(franchise.name)}</b> retain {_e(lot.name)} "
+              f"({lot.rating} OVR) for "
+              f"{render_money(price, symbol)}.",
+              lot=lot, franchise=franchise, by_tg_id=by_tg_id, by_admin=True,
+              detail={"price_lakh": price, "slab": count + 1})
+    return lot
+
+
+def unretain(session, season, franchise, lot, *, by_tg_id=None):
+    """Release a retained player back into the auction pool.
+
+    A money operation: the purse is credited back with a ``refund`` row so the
+    ledger still adds up, and both counters come down. The lot is returned to
+    the queue at its base price rather than deleted — the player is available
+    again, which is the point.
+    """
+    if lot is None or lot.acquisition != ACQ_RETAINED or lot.status != LOT_SOLD:
+        raise AuctionError(f"{lot.name if lot else 'That player'} is not "
+                           f"retained.")
+    if retention_locked(season):
+        raise AuctionError("Retention is closed — a retained player cannot be "
+                           "released now.")
+    if season.status != STATUS_SETUP:
+        raise AuctionError("The auction has already opened.")
+
+    price = int(lot.sold_price_lakh or 0)
+    (session.query(AuctionFranchise)
+     .filter(AuctionFranchise.id == franchise.id)
+     .update({"purse_remaining_lakh":
+              AuctionFranchise.purse_remaining_lakh + price,
+              "squad_size": case((AuctionFranchise.squad_size > 0,
+                                  AuctionFranchise.squad_size - 1), else_=0),
+              "retained_count": case((AuctionFranchise.retained_count > 0,
+                                      AuctionFranchise.retained_count - 1),
+                                     else_=0)},
+             synchronize_session=False))
+    session.flush()
+    session.expire_all()
+    franchise = (session.query(AuctionFranchise)
+                 .filter(AuctionFranchise.id == franchise.id).first())
+    lot = session.query(AuctionLot).filter(AuctionLot.id == lot.id).first()
+
+    lot.status = LOT_QUEUED
+    lot.acquisition = ACQ_AUCTION
+    lot.sold_to_id = None
+    lot.sold_price_lakh = None
+    lot.sold_at = None
+
+    session.flush()      # see retain() — autoflush is off
+
+    _ledger(session, franchise, LEDGER_REFUND, price, lot=lot,
+            note=f"Retention released: {lot.name}", by_tg_id=by_tg_id)
+    log_event(session, season, "retention_released",
+              f"🔓 <b>{_e(franchise.name)}</b> release {_e(lot.name)} — "
+              f"{render_money(price, season.currency_label)} back in the purse, "
+              f"and the player goes into the auction.",
+              lot=lot, franchise=franchise, by_tg_id=by_tg_id, by_admin=True)
+    return lot
+
+
+# ──────────────────────────────────────────────────────────────────────
 # The event log — and the queue the group is announced from
 # ──────────────────────────────────────────────────────────────────────
 
@@ -707,11 +1125,28 @@ def lots(session, season_id, status=None):
 
 
 def pool_counts(session, season_id):
-    rows = (session.query(AuctionLot.status, func.count(AuctionLot.id))
+    """How the pool stands, with **retentions counted separately**.
+
+    ``sold`` and ``total`` are auction figures — a retained player is a sold
+    lot (see the retention section) but is not something the auction did, and
+    folding them together would have the board announce "3/20 lots resolved"
+    before the first lot ever opened, and the admin list count retentions as
+    purchases. ``retained`` is its own key, and ``total`` counts only what the
+    auction actually has to get through.
+    """
+    rows = (session.query(AuctionLot.status, AuctionLot.acquisition,
+                          func.count(AuctionLot.id))
             .filter(AuctionLot.season_id == season_id)
-            .group_by(AuctionLot.status).all())
-    counts = {row[0]: int(row[1]) for row in rows}
-    counts["total"] = sum(counts.values())
+            .group_by(AuctionLot.status, AuctionLot.acquisition).all())
+    counts, retained_lots = {}, 0
+    for status, acquisition, n in rows:
+        n = int(n)
+        if status == LOT_SOLD and (acquisition or ACQ_AUCTION) != ACQ_AUCTION:
+            retained_lots += n
+            continue
+        counts[status] = counts.get(status, 0) + n
+    counts["retained"] = retained_lots
+    counts["total"] = sum(v for k, v in counts.items() if k != "retained")
     return counts
 
 
@@ -839,20 +1274,16 @@ def link_previous_season(session, season, league_id):
     """
     if not league_id:
         return 0
-    by_player = {}
-    rows = (session.query(ChallengePlayer.source_player_id, ChallengeTeam.name)
-            .join(ChallengeTeam, ChallengePlayer.team_id == ChallengeTeam.id)
-            .filter(ChallengeTeam.league_id == league_id,
-                    ChallengePlayer.source_player_id.isnot(None)).all())
-    for source_id, team_name in rows:
-        by_player[source_id] = (team_name or "").strip().lower()
-    if not by_player:
+    # Remembered, not just used: the retention picker needs to know whose
+    # players were whose BEFORE any lot exists, so it cannot re-derive this
+    # from the lots the way this function does.
+    season.previous_league_id = int(league_id)
+    mapping = previous_squad_map(session, season, league_id)
+    if not mapping:
         return 0
-    by_name = {(f.name or "").strip().lower(): f
-               for f in franchises(session, season.id)}
     stamped = 0
     for lot in lots(session, season.id):
-        franchise = by_name.get(by_player.get(lot.player_id) or "")
+        franchise = mapping.get(lot.player_id)
         if franchise is not None:
             lot.previous_franchise_id = franchise.id
             stamped += 1
@@ -977,6 +1408,27 @@ def start(session, season, *, now=None, by_tg_id=None):
                            "nobody could bid for them: " + ", ".join(ownerless))
     if next_queued(session, season.id) is None:
         raise AuctionError("The pool is empty — build it before starting.")
+
+    # A franchise under the retention minimum can only be fixed *before* the
+    # auction opens, so this is the last moment it can usefully be said — and
+    # it is said by name, because "someone is short" is not actionable.
+    # Flushed first: an admin who retains and starts in one request would
+    # otherwise be checked against what is still on disk.
+    if retention_configured(season) and _as_int(season.min_retentions, 0) > 0:
+        session.flush()
+        minimum = _as_int(season.min_retentions, 0)
+        short = [f"{f.name} ({int(f.retained_count or 0)})" for f in field
+                 if int(f.retained_count or 0) < minimum]
+        if short:
+            raise AuctionError(
+                f"These franchises have retained fewer than the minimum of "
+                f"{minimum}: " + ", ".join(short))
+
+    # Opening the auction closes retention rather than leaving the window
+    # ajar. Quietly — the "under way" announcement below already says the
+    # squads are what they are.
+    if season.status == STATUS_SETUP:
+        lock_retention(session, season, now=now, by_tg_id=by_tg_id, quiet=True)
 
     resuming = season.status == STATUS_PAUSED
     season.status = STATUS_LIVE
@@ -1171,8 +1623,11 @@ def validate_bid(session, season, lot, franchise, amount_lakh, *, now=None):
             f"lot is {render_money(ceiling, symbol)}.")
 
     if lot.is_overseas:
-        cap = int(season.max_overseas or 0)
-        if cap and overseas_count(session, franchise.id) + 1 > cap:
+        # A literal cap: a typed 0 is a real rule — *no* overseas players —
+        # not an absence of one, which is the convention every other overseas
+        # limit in this codebase already follows.
+        cap = max(0, _as_int(season.max_overseas, 0))
+        if overseas_count(session, franchise.id) + 1 > cap:
             raise AuctionError(f"{franchise.name} is already at the overseas "
                                f"limit of {cap}.")
 
@@ -1513,6 +1968,12 @@ def undo_sale(session, season, lot, *, now=None, by_tg_id=None):
     now = now or datetime.utcnow()
     if lot is None or lot.status != LOT_SOLD:
         raise AuctionError(f"{lot.name if lot else 'That lot'} is not sold.")
+    # A retained player is also a sold lot, and undoing one here would refund
+    # through the wrong ledger kind, leave ``retained_count`` standing, and put
+    # somebody nobody bid for on the block.
+    if (lot.acquisition or ACQ_AUCTION) != ACQ_AUCTION:
+        raise AuctionError(f"{lot.name} was retained, not bought. Release the "
+                           f"retention instead (/aunretain).")
     if season.published_at is not None:
         raise AuctionError("This auction has been published. Undo the sale "
                            "after re-publishing, or correct the squad in the "
@@ -1692,7 +2153,11 @@ def publish_to_league(session, season, *, league_name=None):
                 # Ignored by every existing reader, and it is what lets a
                 # published squad still say what each player cost.
                 extra={"auction_price_lakh": lot.sold_price_lakh,
-                       "auction_lot_no": lot.lot_no})
+                       "auction_lot_no": lot.lot_no,
+                       # How this player was got. Ignored by every existing
+                       # reader, and it is what lets a published squad still
+                       # say who was retained rather than bought.
+                       "acquisition": lot.acquisition or ACQ_AUCTION})
 
     season.league_id = league.id
     season.published_at = datetime.utcnow()
@@ -1760,15 +2225,19 @@ def render_board(session, season, lot=None, *, now=None):
                             + (" · <b>final extension</b>" if remaining <= 0
                                else f" · {remaining} left"))
 
-    head.append(f"\n📊 <b>{done}/{counts.get('total', 0)}</b> lots resolved")
+    head.append(f"\n📊 <b>{done}/{counts.get('total', 0)}</b> lots resolved"
+                + (f" · 🔒 {counts['retained']} retained"
+                   if counts.get("retained") else ""))
     head.append("\n<b>Purses</b>")
     for franchise in franchises(session, season.id):
         ceiling = max_bid_now(season, franchise)
+        kept = int(franchise.retained_count or 0)
         head.append(
             f"· {_e(franchise.name)} — "
             f"{render_money(franchise.purse_remaining_lakh, symbol)} · "
-            f"{franchise.squad_size}/{season.max_squad_size} · max bid "
-            f"{render_money(max(0, ceiling), symbol)}")
+            f"{franchise.squad_size}/{season.max_squad_size}"
+            + (f" (🔒{kept})" if kept else "")
+            + f" · max bid {render_money(max(0, ceiling), symbol)}")
     return "\n".join(head)
 
 
@@ -1782,16 +2251,30 @@ def _bid_hint(lakh):
 
 
 def render_purses(session, season):
+    """Every purse — and, where there are retentions, the proposal's own
+    Starting / Retention Spent / Auction Purse breakdown, which is just the
+    ledger read from one end to the other."""
     symbol = season.currency_label or "₹"
     lines = [f"💼 <b>{_e(season.name)}</b> — purses"]
     for franchise in franchises(session, season.id):
-        lines.append(
-            f"\n<b>{_e(franchise.name)}</b>\n"
-            f"  💰 {render_money(franchise.purse_remaining_lakh, symbol)} of "
-            f"{render_money(franchise.purse_total_lakh, symbol)}\n"
+        kept = retention_spent(session, franchise.id)
+        block = [f"\n<b>{_e(franchise.name)}</b>"]
+        if kept:
+            block.append(
+                f"  🏦 {render_money(franchise.purse_total_lakh, symbol)} "
+                f"start · 🔒 {render_money(kept, symbol)} retained "
+                f"({int(franchise.retained_count or 0)})")
+        block.append(
+            f"  💰 {render_money(franchise.purse_remaining_lakh, symbol)}"
+            + (" to spend" if kept else
+               f" of {render_money(franchise.purse_total_lakh, symbol)}"))
+        block.append(
             f"  👥 {franchise.squad_size}/{season.max_squad_size} · "
-            f"✈️ {overseas_count(session, franchise.id)}/{season.max_overseas}\n"
-            f"  🎯 Max bid {render_money(max(0, max_bid_now(season, franchise)), symbol)}")
+            f"✈️ {overseas_count(session, franchise.id)}/{season.max_overseas}")
+        block.append(
+            f"  🎯 Max bid "
+            f"{render_money(max(0, max_bid_now(season, franchise)), symbol)}")
+        lines.append("\n".join(block))
     return "\n".join(lines)
 
 
@@ -1799,15 +2282,19 @@ def render_squad(session, season, franchise):
     symbol = season.currency_label or "₹"
     rows = squad(session, franchise.id)
     spent = sum(int(lot.sold_price_lakh or 0) for lot in rows)
+    kept = retention_spent(session, franchise.id)
     lines = [f"👥 <b>{_e(franchise.name)}</b> — {len(rows)}"
-             f"/{season.max_squad_size} bought",
+             f"/{season.max_squad_size} players",
              f"💰 {render_money(franchise.purse_remaining_lakh, symbol)} left · "
-             f"spent {render_money(spent, symbol)}"]
+             f"spent {render_money(spent, symbol)}"
+             + (f" (🔒 {render_money(kept, symbol)} retained · 🔨 "
+                f"{render_money(spent - kept, symbol)} at auction)" if kept else "")]
     if not rows:
-        lines.append("\n<i>Nothing bought yet.</i>")
+        lines.append("\n<i>Nobody signed yet.</i>")
     for lot in rows:
         mark = "✈️" if lot.is_overseas else "🏠"
+        how = " 🔒" if (lot.acquisition or ACQ_AUCTION) != ACQ_AUCTION else ""
         lines.append(f"{mark} {_e(lot.name)} · {lot.rating} · "
                      f"{_e(lot.category)} — "
-                     f"{render_money(lot.sold_price_lakh, symbol)}")
+                     f"{render_money(lot.sold_price_lakh, symbol)}{how}")
     return "\n".join(lines)

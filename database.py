@@ -914,6 +914,27 @@ def _migrate_add_columns():
     # window.
     _try_add("player_drafts", "trades_open", "BOOLEAN DEFAULT TRUE")
 
+    # ── Franchise Auction: retention ──
+    # The six auction tables are new and ``create_all`` builds them; these
+    # columns arrived with phase 2a and land on an ``auction_seasons`` that may
+    # already have rows. Every one is nullable or defaulted on purpose, and
+    # every reader goes through ``_as_int(..., 0)`` / ``_loads(..., fallback)``,
+    # so a season written before retention existed reads as "retention not
+    # configured" rather than failing. Note the deliberate absence of a
+    # ``retention_enabled`` BOOLEAN: a non-nullable boolean added here reads
+    # back NULL-as-falsy on every existing row (the ``trades_open`` lesson
+    # above), and ``max_retentions > 0`` carries the same fact for free.
+    _try_add("auction_seasons", "min_retentions", "INTEGER DEFAULT 0")
+    _try_add("auction_seasons", "retention_max_spend_lakh", "INTEGER")
+    _try_add("auction_seasons", "retention_deadline_at", "TIMESTAMP")
+    _try_add("auction_seasons", "retention_min_rating", "INTEGER")
+    _try_add("auction_seasons", "retention_max_rating", "INTEGER")
+    _try_add("auction_seasons", "retention_categories_json", "TEXT")
+    _try_add("auction_seasons", "retention_price_rules_json", "TEXT")
+    # Which ChallengeLeague this season follows. The retention picker needs it
+    # before any lot exists, so it cannot be inferred from the lots themselves.
+    _try_add("auction_seasons", "previous_league_id", "INTEGER")
+
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so
     # they stay independently fault-tolerant without a round trip each.

@@ -22185,6 +22185,25 @@ def admin_auction_detail(season_id):
             return redirect(url_for("admin_auction_detail", season_id=season.id)
                             + (request.form.get("back_query") or ""))
 
+        # The retention picker: a plain name search over the catalogue. It is
+        # deliberately NOT restricted to last season's squad — an admin
+        # building a first season by hand has no last season, and the warning
+        # on save is the right weight for "that is not who held them".
+        retain_hits = []
+        retain_q = (request.args.get("retain_q") or "").strip()
+        if retain_q:
+            held = auction_svc.previous_squad_map(db, season)
+            rows = player_query.ordered(
+                player_query.master_player_query(db, {"q": retain_q})).limit(40).all()
+            pooled = {row[0]: row[1] for row in
+                      db.query(AuctionLot.player_id, AuctionLot.status)
+                      .filter(AuctionLot.season_id == season.id).all()}
+            retain_hits = [(p, held.get(p.id), pooled.get(p.id)) for p in rows]
+            # A franchise's own former players first — that is who retention is
+            # normally for, and scrolling past forty strangers to find them is
+            # the difference between a usable picker and a search box.
+            retain_hits.sort(key=lambda row: (row[1] is None, -(row[0].rating or 0)))
+
         filters = _auction_pool_filters()
         preview, preview_count = [], 0
         if request.args.get("preview"):
@@ -22214,6 +22233,21 @@ def admin_auction_detail(season_id):
             money=auction_svc.render_money,
             max_bid=auction_svc.max_bid_now,
             auction_base_price=auction_svc.base_price_for,
+            # ── Retention ──
+            ladder=auction_svc.retention_price_rules(season),
+            next_slab=auction_svc.retention_price_for,
+            # Bound to this request's session: the template calls them with a
+            # franchise id alone, which is the only argument it has.
+            retained_of=lambda fid: auction_svc.retained(db, fid),
+            retention_spent=lambda fid: auction_svc.retention_spent(db, fid),
+            retention_open=auction_svc.retention_open(season),
+            retention_locked=auction_svc.retention_locked(season),
+            retention_left=auction_svc.retention_seconds_left(season),
+            retention_cats=auction_svc.retention_categories(season),
+            clock=auction_svc.format_clock,
+            previous_squad=auction_svc.previous_squad_map(db, season),
+            retain_q=(request.args.get("retain_q") or "").strip(),
+            retain_hits=retain_hits,
         )
     finally:
         db.close()
@@ -22362,11 +22396,73 @@ def _auction_detail_action(db, season, action):
               f"{auction_svc.render_money(lot.base_price_lakh, season.currency_label)}.",
               "success")
 
+    elif action == "retention_rules":
+        season.max_retentions = _int_form("max_retentions", season.max_retentions)
+        season.min_retentions = _int_form("min_retentions", season.min_retentions)
+        season.retention_max_spend_lakh = _money_form("retention_max_spend", None)
+        season.retention_deadline_at = _dt_form("retention_deadline")
+        season.retention_min_rating = _nullable_int_form("retention_min_rating")
+        season.retention_max_rating = _nullable_int_form("retention_max_rating")
+        cats = [c.strip() for c in
+                (request.form.get("retention_categories") or "").split(",")
+                if c.strip()]
+        season.retention_categories_json = (json.dumps(cats, separators=(",", ":"))
+                                            if cats else None)
+        slabs = []
+        for price in request.form.getlist("slab_price"):
+            if not (price or "").strip():
+                continue
+            try:
+                slabs.append({"slab": len(slabs) + 1,
+                              "price_lakh": auction_svc.parse_amount(price)})
+            except auction_svc.AuctionError:
+                continue
+        season.retention_price_rules_json = (json.dumps(slabs, separators=(",", ":"))
+                                             if slabs else None)
+        log_admin(db, "auction_retention_rules", "auction", season.id, season.name)
+        flash("✅ Retention rules saved.", "success")
+
+    elif action == "retain":
+        franchise = _auction_franchise(db, season, request.form.get("franchise_id"))
+        player = db.query(Player).filter(
+            Player.id == _parse_int(request.form.get("player_id"))).first()
+        if player is None:
+            abort(404)
+        raw = (request.form.get("price") or "").strip()
+        lot = auction_svc.retain(db, season, franchise, player,
+                                 auction_svc.parse_amount(raw) if raw else None)
+        held = auction_svc.previous_squad_map(db, season).get(player.id)
+        if season.previous_league_id and (held is None or held.id != franchise.id):
+            # A warning, never a refusal: an admin correcting a mess has to be
+            # able to put a player somewhere the record does not expect.
+            flash(f"⚠️ {player.name} was "
+                  + (f"{held.name}'s" if held else "not in")
+                  + " last season — retained anyway.", "error")
+        log_admin(db, "auction_retain", "auction", season.id, franchise.name,
+                  detail=player.name)
+        flash(f"🔒 {franchise.name} retain {lot.name} for "
+              f"{auction_svc.render_money(lot.sold_price_lakh, season.currency_label)}.",
+              "success")
+
+    elif action == "unretain":
+        lot = _auction_lot(db, season, request.form.get("lot_id"))
+        franchise = _auction_franchise(db, season, lot.sold_to_id)
+        auction_svc.unretain(db, season, franchise, lot)
+        log_admin(db, "auction_unretain", "auction", season.id, franchise.name,
+                  detail=lot.name)
+        flash(f"🔓 {lot.name} released into the pool.", "success")
+
+    elif action == "retention_lock":
+        auction_svc.lock_retention(db, season)
+        log_admin(db, "auction_retention_lock", "auction", season.id, season.name)
+        flash("🔒 Retention is closed.", "success")
+
     elif action == "link_previous":
         stamped = auction_svc.link_previous_season(
             db, season, _parse_int(request.form.get("league_id")))
         flash(f"🔗 {stamped} players matched to the franchise that held them. "
-              f"(Recorded for Right To Match; nothing reads it yet.)", "success")
+              f"The league is remembered, so the retention picker can flag "
+              f"each franchise's own players.", "success")
 
     elif action == "reconcile":
         drift = auction_svc.reconcile_purses(db, season, repair=True)
@@ -22394,6 +22490,44 @@ def _auction_lot(db, season, lot_id):
     if lot is None:
         abort(404)
     return lot
+
+
+def _nullable_int_form(name):
+    """An integer form field where **blank means no rule at all**.
+
+    ``_int_form`` folds a blank to its default, which is the right call for a
+    setting that always has a value and the wrong one for an optional
+    restriction — a cleared box has to mean "no restriction", not "zero".
+    """
+    raw = (request.form.get(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _dt_form(name):
+    """A ``datetime-local`` field as a naive UTC datetime, or None."""
+    raw = (request.form.get(name) or "").strip()
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _auction_franchise(db, season, franchise_id):
+    franchise = (db.query(AuctionFranchise)
+                 .filter(AuctionFranchise.id == _parse_int(franchise_id),
+                         AuctionFranchise.season_id == season.id).first())
+    if franchise is None:
+        abort(404)
+    return franchise
 
 
 def _tg_chat_form(name, default=None):

@@ -127,6 +127,125 @@ rather than creating a second one, so a correction can simply be republished.
 
 ---
 
+## Retention
+
+Before the auction opens, a franchise keeps some of the players it already has,
+at a price, and that spend comes off the top of its purse. All of it happens
+while the season is still in **setup**.
+
+```text
+/aretlock                              the state of it, and every franchise's keeps
+/aretain Mumbai | Virat Kohli          at the ladder's next slab
+/aretain Mumbai | Virat Kohli | 12     at a price you choose
+/aunretain Virat Kohli                 back into the pool, purse refunded
+/aretlock on                           close the window early
+```
+
+…or the **🔒 Retention** card on the auction's setup page, which is where the
+player search and the purse table live.
+
+### A retained player is an ordinary sold lot
+
+`status = sold`, `acquisition = retained`. Not a status of its own — because
+`squad`, `overseas_count`, `role_counts` and `publish_to_league` all key on
+`sold` and then need *no change at all*. A retained player is in the squad,
+counts against the overseas and squad caps, and reaches the published league
+(carrying `acquisition` on its `details_json`), for free.
+
+**Retention creates the lot from the catalogue**, so it does not need the pool
+built first — which is the order the proposal asks for. Because the pool
+builder skips any player who already has a lot, building the pool afterwards
+leaves retained players out automatically. Build it the other way round and a
+player already sitting in the queue is converted in place rather than refused:
+an admin who did it backwards should not hit a wall.
+
+Two places had to be taught the difference, because "sold" alone is no longer
+the whole story:
+
+* **`pool_counts`** reports `retained` separately, and its `sold` and `total`
+  are *auction* figures. Otherwise the board would announce "3/20 lots
+  resolved" before the first lot ever opened.
+* **`undo_sale` refuses a retention** and names `/aunretain`. Undoing one there
+  would refund through the wrong ledger kind, leave `retained_count` standing,
+  and put somebody nobody bid for on the block.
+
+### The ladder pre-fills; the caps refuse
+
+The slab ladder — 1st retention ₹18 Cr, 2nd ₹14 Cr, 3rd ₹11 Cr — decides what
+the form and the command **default to** for a franchise's next keep, and past
+its end the last slab repeats. It is not binding: any price can be typed over
+it. Making the slab binding would only invite juggling the retention order to
+dodge the expensive rungs, and an admin who sees the number before committing
+does not need protecting from it.
+
+What actually refuses, each naming the number that would have worked: the
+window, the **count** (`max_retentions`), the **budget**
+(`retention_max_spend_lakh`), the purse, the squad and overseas caps, the
+optional **rating band and role restriction**, and **reachability**.
+
+That last one is the same rule bidding uses, and the same call —
+`max_bid_now`. A franchise cannot retain its way into being unable to fill its
+minimum squad at base price, and the rule stops applying the moment the minimum
+is met. Because retention moves the purse and the squad through the same path a
+purchase does, the bidding rule picks up exactly where retention left off.
+
+> One wrinkle worth knowing: `min_base_price_lakh` is stamped when the *pool*
+> is built, so a retention computes its reserve against the default floor and
+> the pool build re-stamps it afterwards. Not a correctness problem — the
+> bidding rule re-reads the column — but the ceiling shown during retention can
+> move once the pool lands.
+
+`min_retentions` is enforced **at `start()`**, by name, not at retention time:
+nothing a retention *does* can fix a franchise being under the minimum, so
+refusing earlier would be a complaint nobody could act on.
+
+### The window
+
+There is no `retention` season status. Retention happens while the season is in
+`setup`, and `retention_locked_at` says whether the window is shut — a status
+would have to be threaded through the pool guard, the sweeper's filter, every
+status pill and `start()`'s resume path for nothing a timestamp does not
+already give. There is no `retention_enabled` boolean either: `max_retentions >
+0` carries the same fact, and a non-nullable boolean added to a populated table
+reads back NULL-as-falsy on every existing row.
+
+The **deadline is enforced lazily** — `retain()` refuses once it has passed.
+Nothing sweeps during retention (the clock job only looks at live seasons), so
+there is nothing to close the window with and nothing that needs one. What that
+costs is visibility, so the setup page and `/aretlock` both carry a live
+"closes in 3h 20m" / "closed 2 days ago" line. A deadline nobody can see until
+it refuses them is the failure mode here.
+
+**Starting the auction closes retention**, quietly — the "under way"
+announcement already says the squads are what they are.
+
+### Who held whom last season
+
+`AuctionSeason.previous_league_id` remembers the league this season follows, and
+`previous_squad_map` turns it into `{player_id: franchise}` — matched by
+`source_player_id`, never by name, because two cricketers sharing a name would
+be quietly mis-assigned and that is the one mistake retention (and later RTM)
+must not make.
+
+The retention picker uses it to sort each franchise's own former players to the
+top and badge them ⭐, and **warns rather than refuses** when somebody retains a
+player they did not hold. An admin untangling a mess has to be able to put a
+player anywhere; the warning is the brake, not a gate. The same map is what
+`link_previous_season` stamps onto lots once the pool exists, so the picker and
+the stamper can never disagree.
+
+### The purse, read from both ends
+
+`purse_total_lakh` is where a franchise started, `retention_spent` is the sum of
+what it kept, and `purse_remaining_lakh` is what it takes into the auction. That
+is the proposal's Starting Purse / Retention Spent / Auction Purse table, and
+the tests assert the identity holds after every retention and every release.
+Retention spend is **derived, not cached** — the purse column is a cache for a
+reason that does not apply here, and a second cache is only a second thing to
+drift.
+
+---
+
 ## How the website talks to the group
 
 **The Flask admin panel never touches Telegram.** It runs in a thread of the
@@ -354,9 +473,11 @@ quietly bidding a number nobody meant.
 ```text
 AuctionSeason       the auction: status, bound chat, the lot timer, anti-snipe,
                     the purse default, squad rules, the base-price ladder, the
+                    retention rules and ladder, the league it follows, the
                     pinned board and the announcement cursor
 AuctionFranchise    a franchise: name, city, logo, owner + co-owners, purse
-AuctionLot          one player — the lot that goes on the block AND its result
+AuctionLot          one player — the lot that goes on the block AND its result,
+                    retained players included (``acquisition`` tells them apart)
 AuctionBid          every bid, losing and voided ones included
 AuctionLedgerEntry  every movement of a purse, signed, with the balance after
 AuctionEvent        the permanent log, and the queue the group is announced from
@@ -422,21 +543,22 @@ Two things were on their way to a third copy each, and both fail silently.
 | `migrate_auction_purse_reconcile.py` | Re-sums every ledger, `--dry-run` first; the work is the service's, shared with the admin button |
 | `tests/test_franchise_auction.py` | The pool, base prices, the ledger, reachability, the overseas cap, and publishing |
 | `tests/test_auction_bidding.py` | The lifecycle, bidding, two-session concurrency, the clock, anti-snipe, undo, permissions, the commands and the board |
+| `tests/test_auction_retention.py` | The ladder, the money, every cap, the window, what retention does to the pool and the board, publishing a retained player, and the commands |
 
 ---
 
 ## Not built (yet)
 
-* **Retention.** `AuctionSeason.max_retentions`, `retention_locked_at` and
-  `AuctionFranchise.retained_count` exist and nothing writes them.
 * **Right To Match.** `rtm_enabled`, `rtm_cards_total` / `rtm_cards_used`,
-  `AuctionLot.rtm_offered_at` / `rtm_matched_by_id` / `acquisition`, and the
-  `LEDGER_RTM` kind are all in place and unused. `rtm_enabled` defaults `False`
-  and no branch tests it.
-  **`AuctionLot.previous_franchise_id` is filled in phase 1 even so**, from the
-  previous league's squads (the *Record who held each player last season*
-  button): who held a player last season only gets harder to recover as time
-  passes, and it is the entire input to RTM.
+  `AuctionLot.rtm_offered_at` / `rtm_matched_by_id`, and the `LEDGER_RTM` kind
+  are all in place and unused. `rtm_enabled` defaults `False` and no branch
+  tests it. Its two inputs are already here and already working —
+  `previous_squad_map` and `AuctionLot.previous_franchise_id` — because who
+  held a player last season only gets harder to recover as time passes. What
+  RTM still needs is a price mode (`bid`, `bid + N`), a per-franchise card
+  count, and the hard part: a two-party confirmation under a clock, wedged
+  between the final bid and the sale committing. `DraftTrade` is the precedent
+  for keeping that offer in a row rather than in process memory.
 * **Season templates** — saving a finished configuration and starting the next
   season from it.
 * **A Mini App auction board.** The board is a Telegram message today; the

@@ -329,6 +329,12 @@ ADMIN_CARD = """🔨 <b>Franchise Auction — admin</b>
 <code>/asnipe &lt;window&gt; &lt;extend&gt; &lt;max&gt;</code> — anti-snipe, e.g. <code>/asnipe 10 10 5</code>
 <code>/aco &lt;franchise&gt; | &lt;telegram id&gt;</code> — let one more person bid for a franchise
 
+<b>Retention</b> — before the auction opens
+<code>/aretlock</code> — the state of retention, and every franchise's keeps
+<code>/aretain &lt;franchise&gt; | &lt;player&gt; | [price]</code> — leave the price off and the ladder decides
+<code>/aunretain &lt;player&gt;</code> — release one, back into the pool
+<code>/aretlock on</code> — close the window (<code>/astart</code> closes it too)
+
 <b>Running it</b>
 <code>/astart</code> · <code>/apause</code> · <code>/aresume</code>
 <code>/anext</code> — put the next lot on the block
@@ -601,6 +607,159 @@ async def aco_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ids = A.add_co_owner(session, franchise, tg_id)
         return (f"🤝 {html.escape(franchise.name)} now has "
                 f"<b>{len(ids)}</b> co-owner(s) who may bid.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def aretain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aretain Mumbai | Virat Kohli | 18</code> — the price is optional.
+
+    Left off, it takes the season's retention ladder for that franchise's next
+    slab, which is the number the admin almost always wants and the one the
+    reply prints back so they can see what they just spent.
+    """
+    user = update.effective_user
+    raw = _arg_text(context)
+
+    def work(session, season):
+        parts = [p.strip() for p in raw.split("|")]
+        if len(parts) < 2 or not parts[0] or not parts[1]:
+            raise AuctionError(
+                "Usage: /aretain <franchise> | <player> | [price]\n"
+                "The price is optional — leave it off and the retention "
+                "ladder decides.")
+        franchise = _find_franchise(session, season, parts[0])
+        player = _find_player(session, parts[1])
+        price = (A.parse_amount(parts[2])
+                 if len(parts) > 2 and parts[2] else None)
+        lot = A.retain(session, season, franchise, player, price,
+                       by_tg_id=user.id if user else None)
+        kept = int(franchise.retained_count or 0)
+        warning = ""
+        held = A.previous_squad_map(session, season).get(player.id)
+        if held is not None and held.id != franchise.id:
+            warning = (f"\n⚠️ {html.escape(player.name)} was "
+                       f"{html.escape(held.name)}'s last season — retained "
+                       f"anyway.")
+        elif held is None and season.previous_league_id:
+            warning = (f"\n⚠️ {html.escape(player.name)} was not in last "
+                       f"season's league — retained anyway.")
+        return (f"🔒 <b>{html.escape(franchise.name)}</b> retain "
+                f"{html.escape(lot.name)} for "
+                f"<b>{A.render_money(lot.sold_price_lakh, season.currency_label)}</b> "
+                f"({kept}/{season.max_retentions}).\n"
+                f"💰 {A.render_money(franchise.purse_remaining_lakh, season.currency_label)} "
+                f"left to bid with." + warning)
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+def _find_player(session, name):
+    """A master card by name. Never guesses between two.
+
+    Retaining the wrong card costs a franchise real money and an admin a
+    release to undo, so an ambiguous name asks for more of it rather than
+    picking the best match — the same call ``/pick`` makes in the draft.
+    """
+    from services import player_query
+    wanted = (name or "").strip().lower()
+    query = player_query.master_player_query(session, {"q": wanted})
+    rows = player_query.ordered(query).limit(30).all()
+    exact = [p for p in rows if (p.name or "").lower() == wanted]
+    if len(exact) == 1:
+        return exact[0]
+    if len(exact) > 1:
+        editions = sorted({p.version or "Base" for p in exact})
+        if len(editions) > 1:
+            raise AuctionError(f"There are {len(exact)} cards called “{name}” — "
+                               f"say which edition: " + ", ".join(editions))
+        raise AuctionError(
+            f"There are {len(exact)} cards called “{name}”, all {editions[0]}. "
+            f"Retain from the auction's setup page, where they can be told "
+            f"apart.")
+    if len(rows) == 1:
+        return rows[0]
+    if len(rows) > 1:
+        raise AuctionError("That could be " +
+                           ", ".join(p.name for p in rows[:5]) +
+                           " — type more of the name.")
+    raise AuctionError(f"No player called “{name}”.")
+
+
+async def aunretain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Release a retained player back into the auction pool."""
+    user = update.effective_user
+    name = _arg_text(context)
+
+    def work(session, season):
+        if not name:
+            raise AuctionError("Usage: /aunretain <player name>")
+        lot = _find_lot(session, season, name)
+        if (lot.acquisition or A.ACQ_AUCTION) != A.ACQ_RETAINED:
+            raise AuctionError(f"{lot.name} is not retained.")
+        from models import AuctionFranchise
+        franchise = (session.query(AuctionFranchise)
+                     .filter(AuctionFranchise.id == lot.sold_to_id).first())
+        A.unretain(session, season, franchise, lot,
+                   by_tg_id=user.id if user else None)
+        return (f"🔓 {html.escape(lot.name)} released — back in the pool, and "
+                f"{html.escape(franchise.name)} has "
+                f"<b>{A.render_money(franchise.purse_remaining_lakh, season.currency_label)}</b>.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def aretlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """With no arguments, the state of retention. With ``on``, close it.
+
+    The readout matters more than the switch: the deadline is enforced lazily
+    (nothing sweeps while an auction is in setup), so an admin who cannot see
+    how long is left only finds out when it refuses them.
+    """
+    user = update.effective_user
+    arg = _arg_text(context).strip().lower()
+
+    def work(session, season):
+        if arg in ("on", "close", "lock"):
+            A.lock_retention(session, season,
+                             by_tg_id=user.id if user else None)
+            return "🔒 Retention is closed."
+
+        symbol = season.currency_label
+        if not A.retention_configured(season):
+            return ("🔓 This auction allows no retentions. Set a maximum on "
+                    "the auction's setup page to turn retention on.")
+        left = A.retention_seconds_left(season)
+        if A.retention_locked(season):
+            window = "🔒 <b>Closed</b>"
+        elif left is None:
+            window = "🔓 <b>Open</b> — no deadline set"
+        elif left > 0:
+            window = f"🔓 <b>Open</b> — closes in {A.format_clock(left)}"
+        else:
+            window = f"🔒 <b>Closed</b> — the deadline passed {A.format_clock(-left)} ago"
+
+        lines = [f"🔒 <b>Retention</b> — {window}",
+                 f"Up to <b>{season.max_retentions}</b> per franchise"
+                 + (f", at least <b>{season.min_retentions}</b>"
+                    if season.min_retentions else "")]
+        if season.retention_max_spend_lakh is not None:
+            lines.append(f"Budget: "
+                         f"{A.render_money(season.retention_max_spend_lakh, symbol)}")
+        ladder = ", ".join(A.render_money(r["price_lakh"], symbol)
+                           for r in A.retention_price_rules(season))
+        lines.append(f"Ladder: {ladder}")
+        lines.append("")
+        for f in A.franchises(session, season.id):
+            kept = A.retained(session, f.id)
+            lines.append(
+                f"<b>{html.escape(f.name)}</b> — {len(kept)}"
+                f"/{season.max_retentions} · "
+                f"{A.render_money(A.retention_spent(session, f.id), symbol)}")
+            for lot in kept:
+                lines.append(f"   🔒 {html.escape(lot.name)} — "
+                             f"{A.render_money(lot.sold_price_lakh, symbol)}")
+        return "\n".join(lines)
 
     await _with_auction(update, work, admin=True, context=context)
 
