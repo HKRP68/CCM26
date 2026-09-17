@@ -923,7 +923,17 @@ def open_next_lot(session, season, *, now=None):
 
 
 def complete_if_done(session, season):
-    """Finish the auction once nothing is queued and nothing is on the block."""
+    """Finish the auction once nothing is queued and nothing is on the block.
+
+    Flushes first, and that is not a detail: this session is autoflush=False,
+    and every caller reaches here having *just* changed the status of the lot
+    it is asking about. Without the flush the query below reads the lot's old
+    ``on_block`` from the database, decides the auction is still running, and
+    the last lot of an auction leaves it live forever — which is exactly what
+    happens when an admin resolves the final lot from the website, where the
+    commit comes after this call rather than before it.
+    """
+    session.flush()
     if current_lot(session, season) is not None:
         return None
     if next_queued(session, season.id) is not None:

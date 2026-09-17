@@ -274,6 +274,29 @@ class LifecycleTests(AuctionCase):
         with self.assertRaises(self.A.AuctionError):
             self.A.open_lot(self.session, self.season, upcoming, now=NOW)
 
+    def test_the_last_lot_finishes_the_auction_without_an_intervening_commit(self):
+        """The website's shape: resolve every lot, then commit once at the end.
+
+        The admin routes call the service and commit afterwards, so anything
+        that decides "is this auction over?" has to see the change the caller
+        just made rather than what is still on disk.
+        """
+        self.build_pool()
+        self.start()
+        guard = 0
+        while self.season.status == self.A.STATUS_LIVE and guard < 50:
+            guard += 1
+            lot = self.A.current_lot(self.session, self.season)
+            if lot is None:
+                if self.A.next_queued(self.session, self.season.id) is None:
+                    self.A.complete_if_done(self.session, self.season)
+                    break
+                self.A.open_next_lot(self.session, self.season, now=NOW)
+                continue
+            self.A.pass_lot(self.session, self.season, lot)
+        self.session.commit()      # one commit, at the very end
+        self.assertEqual(self.A.STATUS_COMPLETED, self.season.status)
+
     def test_the_auction_finishes_when_nothing_is_left(self):
         self.build_pool()
         self.start()
