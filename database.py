@@ -820,6 +820,11 @@ def _migrate_add_columns():
     # Pack table additions (versions filtering)
     _try_add("packs", "main_filter_mode", "VARCHAR(10) DEFAULT 'rating'")
     _try_add("packs", "main_versions_json", "VARCHAR(500)")
+    # The per-rating odds tables on the pack form write both of these. The
+    # bonus column has existed on the model for a long time but nothing ever
+    # wrote it, so a database migrated by an early build may not have it.
+    _try_add("packs", "main_weights_json", "TEXT")
+    _try_add("packs", "bonus_weights_json", "TEXT")
     _try_add("user_quest_progress", "assigned", "BOOLEAN DEFAULT TRUE")
     _try_add("users", "pack_pity_counter", "INTEGER DEFAULT 0")
 
@@ -932,6 +937,12 @@ def _migrate_add_columns():
         # down to 0.00001, so an INTEGER column would round every fine-grained
         # probability to a whole number.
         "ALTER TABLE gspin_rewards ALTER COLUMN weight TYPE DOUBLE PRECISION",
+        # Pack odds are entered the same way, one weight per rating. A 50-100
+        # band at five decimals each runs past VARCHAR(500), and a truncated
+        # weight list parses as nothing — which reads back as "uniform", so a
+        # carefully tuned pack would pay flat odds with no error anywhere.
+        "ALTER TABLE packs ALTER COLUMN main_weights_json TYPE TEXT",
+        "ALTER TABLE packs ALTER COLUMN bonus_weights_json TYPE TEXT",
         # Career Player flags are non-nullable in the model. ADD COLUMN with a
         # DEFAULT already backfills existing rows, but a database migrated by an
         # earlier build may still hold NULLs — normalise them so the "is this a

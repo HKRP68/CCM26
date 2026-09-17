@@ -1433,7 +1433,11 @@ class Pack(Base):
     main_count = Column(Integer, default=1)
     # JSON list of weights, one per integer rating in [min, max]. If null,
     # we use uniform distribution. Example for 85-87: "[60, 30, 10]"
-    main_weights_json = Column(String(500), nullable=True)
+    # Text, not String(500): the admin odds table writes decimal weights, and
+    # a 50-100 band at five decimals each overflows 500 characters. Truncated
+    # JSON parses as nothing, which reads back as "uniform" — a tuned pack
+    # would silently pay flat odds. See services/pack_odds.py.
+    main_weights_json = Column(Text, nullable=True)
     # JSON list of acceptable version names (case-insensitive match).
     # e.g. ["Star", "Star Card", "Star Player"]. Used when filter_mode is
     # 'version' or 'both'.
@@ -1444,7 +1448,7 @@ class Pack(Base):
     bonus_min_rating = Column(Integer, default=74)
     bonus_max_rating = Column(Integer, default=80)
     bonus_count = Column(Integer, default=2)
-    bonus_weights_json = Column(String(500), nullable=True)
+    bonus_weights_json = Column(Text, nullable=True)
 
     # Limits
     daily_limit = Column(Integer, default=0)  # 0 = unlimited

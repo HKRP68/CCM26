@@ -12210,7 +12210,8 @@ def admin_pack_new():
                 flash(f"Error: {e}", "error")
         from services.pack_pricing import version_catalogue
         return render_template("admin_pack_form.html", pack=None,
-                               version_catalogue=version_catalogue(db))
+                               version_catalogue=version_catalogue(db),
+                               **_pack_form_context(db, None))
     finally:
         db.close()
 
@@ -12243,7 +12244,8 @@ def admin_pack_edit(pack_id):
         return render_template("admin_pack_form.html", pack=p,
                                main_pool=count_main_pool(db, p),
                                bonus_pool=count_bonus_pool(db, p),
-                               version_catalogue=version_catalogue(db))
+                               version_catalogue=version_catalogue(db),
+                               **_pack_form_context(db, p))
     finally:
         db.close()
 
@@ -12259,31 +12261,142 @@ def admin_pack_price_suggestion():
     """
     db = get_session()
     try:
-        from services.pack_pricing import parse_versions_field, suggest
-        f = request.form
-
-        def _int(name, default=0):
-            try:
-                return int(str(f.get(name, "")).strip() or default)
-            except (TypeError, ValueError):
-                return default
+        state = _pack_form_state(db)
+        from services.pack_odds import odds_rows
+        from services.pack_pricing import suggest
 
         data = suggest(
             db,
-            main_filter_mode=(f.get("main_filter_mode") or "rating"),
-            main_versions=parse_versions_field(
-                db, request.form.getlist("main_versions")),
-            main_min_rating=_int("main_min_rating", 70),
-            main_max_rating=_int("main_max_rating", 99),
-            main_count=_int("main_count", 1),
-            main_weights=f.get("main_weights"),
-            bonus_min_rating=_int("bonus_min_rating", 70),
-            bonus_max_rating=_int("bonus_max_rating", 80),
-            bonus_count=_int("bonus_count", 0),
+            main_filter_mode=state["mode"],
+            main_versions=state["versions"],
+            main_min_rating=state["main_min_rating"],
+            main_max_rating=state["main_max_rating"],
+            main_count=state["main_count"],
+            main_weights=state["main_weights"],
+            bonus_min_rating=state["bonus_min_rating"],
+            bonus_max_rating=state["bonus_max_rating"],
+            bonus_count=state["bonus_count"],
+            bonus_weights=state["bonus_weights"],
         )
-        return jsonify({"ok": True, "suggestion": data})
+        # The rows come back with the price so the page makes one round trip
+        # per edit rather than two that can disagree with each other.
+        odds = {
+            "main": odds_rows(db, mode=state["mode"], versions=state["versions"],
+                              min_rating=state["main_min_rating"],
+                              max_rating=state["main_max_rating"],
+                              weights_raw=state["main_weights"], slot="main"),
+            "bonus": odds_rows(db, mode="rating", versions=None,
+                               min_rating=state["bonus_min_rating"],
+                               max_rating=state["bonus_max_rating"],
+                               weights_raw=state["bonus_weights"], slot="bonus"),
+        }
+        return jsonify({"ok": True, "suggestion": data, "odds": odds})
     except Exception as e:
         logger.exception("pack price suggestion failed")
+        return jsonify({"ok": False, "error": str(e)}), 400
+    finally:
+        db.close()
+
+
+def _pack_form_state(db):
+    """The pack the admin is looking at right now, saved or not.
+
+    Both live endpoints — the price and the simulation — work off the form as it
+    currently stands rather than off a stored row, because the figures are most
+    wanted before the pack is saved. Reading the fields in one place is what
+    keeps the two answers about the same pack.
+    """
+    from services.pack_odds import parse_versions_field, version_span, weights_json
+    f = request.form
+
+    def _int(name, default=0):
+        try:
+            return int(str(f.get(name, "")).strip() or default)
+        except (TypeError, ValueError):
+            return default
+
+    mode = (f.get("main_filter_mode") or "rating").strip().lower()
+    if mode not in ("rating", "version", "both"):
+        mode = "rating"
+    versions = parse_versions_field(db, f.getlist("main_versions"))
+
+    main_min = _int("main_min_rating", 70)
+    main_max = _int("main_max_rating", 99)
+    if mode == "version" and versions and not f.get("main_span_locked"):
+        span = version_span(db, versions)
+        if span:
+            main_min, main_max = span
+    if main_max < main_min:
+        main_min, main_max = main_max, main_min
+
+    bonus_min = _int("bonus_min_rating", 70)
+    bonus_max = _int("bonus_max_rating", 80)
+    if bonus_max < bonus_min:
+        bonus_min, bonus_max = bonus_max, bonus_min
+
+    main_weights = _odds_json_from_form(f, "main", main_min, main_max, quiet=True)
+    bonus_weights = _odds_json_from_form(f, "bonus", bonus_min, bonus_max,
+                                         quiet=True)
+
+    return {
+        "mode": mode, "versions": versions,
+        "main_min_rating": main_min, "main_max_rating": main_max,
+        "main_count": _int("main_count", 1), "main_weights": main_weights,
+        "bonus_min_rating": bonus_min, "bonus_max_rating": bonus_max,
+        "bonus_count": _int("bonus_count", 0), "bonus_weights": bonus_weights,
+    }
+
+
+@app.route("/packs/simulate", methods=["POST"])
+@login_required
+def admin_pack_simulate():
+    """Open this pack N times on paper, and say what actually came out.
+
+    A weights column that reads like a sensible curve can still behave nothing
+    like it: a rating with no card behind it cannot be pulled whatever weight it
+    carries, and its share goes to everyone else. Configured-versus-actual, side
+    by side, is the only thing that shows that before players find it.
+
+    Works off the live form, so it answers for a pack that has not been saved.
+    """
+    db = get_session()
+    try:
+        from services.pack_odds import simulate, odds_rows
+
+        state = _pack_form_state(db)
+        try:
+            draws = max(100, min(100_000, int(request.form.get("draws") or 1000)))
+        except (TypeError, ValueError):
+            draws = 1000
+
+        out = {}
+        for slot, mode, low, high, weights in (
+            ("main", state["mode"], state["main_min_rating"],
+             state["main_max_rating"], state["main_weights"]),
+            ("bonus", "rating", state["bonus_min_rating"],
+             state["bonus_max_rating"], state["bonus_weights"]),
+        ):
+            rows = odds_rows(db, mode=mode, versions=state["versions"],
+                             min_rating=low, max_rating=high,
+                             weights_raw=weights, slot=slot)
+            counts = {r["rating"]: r["pool"] for r in rows["rows"]}
+            tally = simulate(counts, low, high, weights, draws)
+            total = sum(tally.values()) or 1
+            configured_total = sum(r["weight"] for r in rows["rows"]) or 0
+            out[slot] = {
+                "draws": sum(tally.values()),
+                "rows": [{
+                    "rating": r["rating"],
+                    "pool": r["pool"],
+                    "configured": (round(r["weight"] * 100 / configured_total, 3)
+                                   if configured_total else None),
+                    "actual": round(tally.get(r["rating"], 0) * 100 / total, 3),
+                    "hits": tally.get(r["rating"], 0),
+                } for r in rows["rows"]],
+            }
+        return jsonify({"ok": True, "draws": draws, "slots": out})
+    except Exception as e:
+        logger.exception("pack simulation failed")
         return jsonify({"ok": False, "error": str(e)}), 400
     finally:
         db.close()
@@ -12313,9 +12426,96 @@ def admin_pack_delete(pack_id):
     return redirect(url_for("admin_packs_list"))
 
 
+def _pack_form_context(db, pack):
+    """The odds tables for the form's first paint.
+
+    Rendered server-side rather than fetched, so the saved odds are correct with
+    no JavaScript and the page never flashes an empty table before filling it.
+    The page re-fetches the same structure from ``/packs/price-suggestion`` when
+    the filters change — one builder behind both, so they cannot disagree.
+    """
+    from services.pack_odds import MIN_WEIGHT, odds_rows
+
+    if pack is None:
+        main = odds_rows(db, mode="rating", versions=None, min_rating=85,
+                         max_rating=87, weights_raw=None, slot="main")
+        bonus = odds_rows(db, mode="rating", versions=None, min_rating=74,
+                          max_rating=80, weights_raw=None, slot="bonus")
+    else:
+        main = odds_rows(db, mode=pack.main_filter_mode,
+                         versions=pack.main_versions_json,
+                         min_rating=pack.main_min_rating,
+                         max_rating=pack.main_max_rating,
+                         weights_raw=pack.main_weights_json, slot="main")
+        bonus = odds_rows(db, mode="rating", versions=None,
+                          min_rating=pack.bonus_min_rating,
+                          max_rating=pack.bonus_max_rating,
+                          weights_raw=pack.bonus_weights_json, slot="bonus")
+    return {"odds": {"main": main, "bonus": bonus}, "min_weight": MIN_WEIGHT}
+
+
+def _posted_odds(f, slot):
+    """``{rating: weight}`` from one slot's odds table, or ``None``.
+
+    The table posts one ``<slot>_weight_<rating>`` field per row, keyed by the
+    rating itself rather than by position — so a band that moved while the page
+    was open cannot silently re-map somebody's odds onto the wrong ratings, and
+    a rating that left the band takes its weight with it.
+
+    ``None`` means the table was not on the page at all (a scripted post, or the
+    legacy comma box), which is different from a table the admin cleared.
+    """
+    prefix = f"{slot}_weight_"
+    posted = {}
+    for key in f.keys():
+        if not key.startswith(prefix):
+            continue
+        try:
+            rating = int(key[len(prefix):])
+            weight = float(f.get(key) or 0)
+        except (TypeError, ValueError):
+            continue
+        posted[rating] = max(0.0, min(100.0, weight))
+    return posted or None
+
+
+def _odds_json_from_form(f, slot, min_rating, max_rating, *, quiet=False):
+    """One slot's stored weight list, read from whichever input was used.
+
+    The odds table wins when it is present; otherwise the old comma-separated
+    box is still honoured, because it was the only input this form had until
+    now and scripted posts were written against it.
+
+    ``quiet`` for the JSON endpoints: they read the same fields on every
+    keystroke, and a flash queued there would surface on some later page load
+    with no idea what it was about.
+    """
+    from services.pack_odds import MIN_WEIGHT, weights_json, weights_map
+
+    posted = _posted_odds(f, slot)
+    if posted is None:
+        legacy = (f.get(f"{slot}_weights") or "").strip()
+        mapping = weights_map(min_rating, max_rating, legacy) if legacy else None
+        return weights_json(min_rating, max_rating, mapping) if mapping else None
+
+    # A weight too small to type is raised to the floor rather than rounded away
+    # — the same courtesy the /claim rarity table extends to a chase tier.
+    lifted = False
+    for rating, weight in posted.items():
+        if 0 < weight < MIN_WEIGHT:
+            posted[rating] = MIN_WEIGHT
+            lifted = True
+    if lifted and not quiet:
+        flash(f"Some {slot} odds were raised to the "
+              f"{_pct_filter(MIN_WEIGHT)}% minimum (anything smaller can't be "
+              f"entered).", "info")
+    return weights_json(min_rating, max_rating, posted)
+
+
 def _save_pack_from_form(db, pack, *, is_new=False):
     """Helper: populate pack fields from request.form. Returns the pack."""
     import json as _j
+    from services.pack_odds import parse_versions_field, version_span
     f = request.form
 
     pack.slot_number = int(f.get("slot_number") or 1)
@@ -12336,36 +12536,32 @@ def _save_pack_from_form(db, pack, *, is_new=False):
     pack.main_max_rating = max(pack.main_min_rating, min(100, int(f.get("main_max_rating") or 99)))
     pack.main_count = max(1, min(10, int(f.get("main_count") or 1)))
 
-    # Weights — comma-separated list of integers
-    weights_raw = (f.get("main_weights") or "").strip()
-    if weights_raw:
-        try:
-            weights = [int(x.strip()) for x in weights_raw.split(",") if x.strip()]
-            expected = pack.main_max_rating - pack.main_min_rating + 1
-            if len(weights) == expected and all(w >= 0 for w in weights):
-                pack.main_weights_json = _j.dumps(weights)
-            else:
-                # Mismatched length — store as null and warn
-                pack.main_weights_json = None
-                flash(f"⚠️ Weights count ({len(weights)}) doesn't match rating range "
-                      f"({expected}). Using uniform.", "error")
-        except ValueError:
-            pack.main_weights_json = None
-            flash("⚠️ Weights must be comma-separated integers. Using uniform.", "error")
-    else:
-        pack.main_weights_json = None
-
     # Versions — a multi-select, so the browser posts one field per choice.
     # A single comma-joined value is still accepted: the field was a free-text
     # box before the picker existed, and scripted posts (and anybody's saved
     # bookmarklet) should keep working rather than silently clearing the list.
-    from services.pack_pricing import parse_versions_field
     selected = parse_versions_field(db, f.getlist("main_versions"))
     pack.main_versions_json = _j.dumps(selected) if selected else None
+
+    # A version pack's rating band comes from the version's own cards, because
+    # the admin never types one — the odds table is built over that span, and
+    # the weight list is positional, so the two have to describe the same band
+    # or every weight lands on the wrong rating. "Narrow this" on the form
+    # posts ``main_span_locked`` to keep hand-typed limits instead.
+    if (mode == "version" and selected and not f.get("main_span_locked")
+            and _posted_odds(f, "main") is not None):
+        span = version_span(db, selected)
+        if span:
+            pack.main_min_rating, pack.main_max_rating = span
+
+    pack.main_weights_json = _odds_json_from_form(
+        f, "main", pack.main_min_rating, pack.main_max_rating)
 
     pack.bonus_min_rating = max(50, min(100, int(f.get("bonus_min_rating") or 70)))
     pack.bonus_max_rating = max(pack.bonus_min_rating, min(100, int(f.get("bonus_max_rating") or 80)))
     pack.bonus_count = max(0, min(10, int(f.get("bonus_count") or 0)))
+    pack.bonus_weights_json = _odds_json_from_form(
+        f, "bonus", pack.bonus_min_rating, pack.bonus_max_rating)
 
     pack.daily_limit = max(0, int(f.get("daily_limit") or 0))
     pack.is_active = (f.get("is_active") == "on")
@@ -12373,7 +12569,38 @@ def _save_pack_from_form(db, pack, *, is_new=False):
     if is_new:
         db.add(pack)
     db.flush()
+    _warn_about_empty_pools(db, pack)
     return pack
+
+
+def _warn_about_empty_pools(db, pack):
+    """Flash the same warnings the price panel shows, at the moment of saving.
+
+    The panel is a transient bit of the page; an admin who scrolls past it ships
+    a pack that opens empty and finds out from a player. These are the identical
+    checks ``pack_pricing.suggest`` already runs, so nothing new can be wrong
+    here that was not already on screen.
+    """
+    from services.pack_pricing import suggest
+    try:
+        data = suggest(
+            db,
+            main_filter_mode=pack.main_filter_mode,
+            main_versions=pack.main_versions_json,
+            main_min_rating=pack.main_min_rating,
+            main_max_rating=pack.main_max_rating,
+            main_count=pack.main_count,
+            main_weights=pack.main_weights_json,
+            bonus_min_rating=pack.bonus_min_rating,
+            bonus_max_rating=pack.bonus_max_rating,
+            bonus_count=pack.bonus_count,
+            bonus_weights=pack.bonus_weights_json,
+        )
+    except Exception:
+        logger.exception("pack save: could not re-check the pools")
+        return
+    for warning in data.get("warnings", []):
+        flash(f"⚠️ {warning}", "error")
 
 
 # ══════════════════════════════════════════════════════════════════════

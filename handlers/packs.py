@@ -160,21 +160,10 @@ def _detail_message(pack, user, bought_today):
         f"   • <b>{pack.bonus_count}× Bonus</b> player ({pack.bonus_min_rating}-{pack.bonus_max_rating} rated)"
     )
 
-    # Probability hint — only useful in rating/both mode
-    if pack.main_weights_json and mode in ("rating", "both"):
-        try:
-            import json as _j
-            weights = _j.loads(pack.main_weights_json)
-            ratings = list(range(pack.main_min_rating, pack.main_max_rating + 1))
-            if isinstance(weights, list) and len(weights) == len(ratings):
-                total = sum(weights) or 1
-                probs = "  ".join(
-                    f"{r}: <b>{int(w * 100 / total)}%</b>"
-                    for r, w in zip(ratings, weights)
-                )
-                lines.append(f"\n📊 <b>Main odds:</b> {probs}")
-        except Exception:
-            pass
+    # The per-rating odds are deliberately NOT shown. They are a tuning tool for
+    # the admin — see the odds tables on the pack form — and publishing them
+    # turns every pull into an argument about whether the roll was fair. The
+    # card, the rating band and the price are what a buyer decides on.
 
     if pack.daily_limit:
         remaining = max(0, pack.daily_limit - bought_today)

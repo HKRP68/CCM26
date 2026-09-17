@@ -136,8 +136,19 @@ def seed_default_packs(session):
 # could match, so there is nothing here to filter with.
 
 
-def _weighted_pick_rating(min_r, max_r, weights_json):
-    """Pick a rating in [min_r, max_r] using the JSON weights, or uniform."""
+def _weighted_pick_rating(min_r, max_r, weights_json, available=None):
+    """Pick a rating in [min_r, max_r] using the JSON weights, or uniform.
+
+    ``available`` narrows the roll to the ratings that actually have a card
+    behind them. A rating with an empty pool cannot be pulled whatever weight it
+    carries, so its share is dropped and the rest renormalised — which is
+    already what ``pack_pricing._weighted_band_value`` does when it prices the
+    same pack. Without it a weighted pack whose top rating is empty rolls that
+    rating, finds nothing, and falls through to a fallback that ignores the
+    weights entirely: the pack pays flat odds while the admin reads a curve.
+
+    Left at ``None`` (or empty) the behaviour is exactly what it always was.
+    """
     ratings = list(range(min_r, max_r + 1))
     if not ratings:
         return min_r
@@ -153,9 +164,31 @@ def _weighted_pick_rating(min_r, max_r, weights_json):
         except (ValueError, TypeError):
             logger.warning(f"Bad weights_json: {weights_json!r}, using uniform")
 
+    if available:
+        live = [(r, w) for r, w in zip(ratings, weights or [1.0] * len(ratings))
+                if r in available]
+        if live:
+            ratings = [r for r, _w in live]
+            weights = [w for _r, w in live]
+
     if weights is not None and sum(weights) > 0:
         return random.choices(ratings, weights=weights, k=1)[0]
     return random.choice(ratings)
+
+
+def _main_odds_active(pack):
+    """True when this pack carries usable per-rating odds for its main slot.
+
+    Everything that treats a version pack as rating-selecting hangs off this,
+    and nothing hangs off the mode alone. A version pack that predates the odds
+    table still holds whatever ``main_min_rating``/``main_max_rating`` happened
+    to be in the form when it was saved — dead metadata that was never consulted.
+    Start consulting it because the mode says "version" and a Star card rated
+    100 stops being pullable overnight.
+    """
+    from services.pack_odds import weights_map
+    return weights_map(pack.main_min_rating, pack.main_max_rating,
+                       pack.main_weights_json) is not None
 
 
 def _pick_main_player(session, pack, *, exclude_player_ids=None,
@@ -194,10 +227,31 @@ def _pick_main_player(session, pack, *, exclude_player_ids=None,
                                      user_owned_base_ids=owned)
 
     if mode == "version":
-        # Version-only packs ignore force_rating — there's no rating selection here.
         if not versions:
             logger.warning(f"Pack {pack.id} mode=version but no versions configured")
             return None
+        # With per-rating odds configured, a version pack DOES select a rating
+        # first — which is the same two steps 'both' takes, so take them there
+        # rather than growing a second copy. ``_ProxyPack`` already carries the
+        # band, the weights and the version list.
+        #
+        # Gated on the odds existing, never on the mode: a version pack saved
+        # before the odds table existed has no weights, falls straight through
+        # to the uniform pull below, and behaves exactly as it always has.
+        if _main_odds_active(pack) or force_rating is not None:
+            picked = _pick_main_player(session, _ProxyPack(pack, mode="both"),
+                                       exclude_player_ids=exclude,
+                                       user_owned_base_ids=owned,
+                                       force_rating=force_rating)
+            if picked:
+                return picked
+            # The saved band came from the version's own cards, but cards get
+            # added and retired afterwards. If the whole band has emptied out,
+            # a version pack still has a version to pull from — falling through
+            # to the uniform pick below beats opening empty.
+            logger.warning(f"Pack {pack.id}: rated {pack.main_min_rating}-"
+                           f"{pack.main_max_rating} came up empty for "
+                           f"{versions}; pulling from the version instead")
         # Case-insensitive match
         from sqlalchemy import func as _func
         lowered = [v.lower() for v in versions]
@@ -222,22 +276,32 @@ def _pick_main_player(session, pack, *, exclude_player_ids=None,
                                      user_owned_base_ids=owned)
         from sqlalchemy import func as _func
         lowered = [v.lower() for v in versions]
+        # One query for the whole band, then the rating is chosen against what
+        # came back. Rolling first and querying after meant a rating the version
+        # cannot fill fell through to a widen that ignores the weights entirely
+        # — the pack paid flat odds while the admin read a curve.
+        band_pool = (not_career(session.query(Player))
+                     .filter(Player.is_active == True,
+                             Player.rating.between(pack.main_min_rating,
+                                                   pack.main_max_rating),
+                             _func.lower(Player.version).in_(lowered))
+                     .all())
+        band_pool = [p for p in band_pool if p.id not in exclude]
+        live = {p.rating for p in band_pool}
         rating = force_rating if force_rating is not None else _weighted_pick_rating(
-            pack.main_min_rating, pack.main_max_rating, pack.main_weights_json)
-        # Try exact rating first
-        pool = (not_career(session.query(Player))
-                .filter(Player.is_active == True,
-                        Player.rating == rating,
-                        _func.lower(Player.version).in_(lowered))
-                .all())
+            pack.main_min_rating, pack.main_max_rating, pack.main_weights_json,
+            available=live)
+        pool = [p for p in band_pool if p.rating == rating]
         if not pool:
-            # Widen to full band
-            pool = (not_career(session.query(Player))
-                    .filter(Player.is_active == True,
-                            Player.rating.between(pack.main_min_rating, pack.main_max_rating),
-                            _func.lower(Player.version).in_(lowered))
-                    .all())
-        pool = [p for p in pool if p.id not in exclude]
+            # The whole band is empty, or a pity pull asked for a rating nobody
+            # holds. Widening keeps the pack from opening empty; it is the one
+            # path that cannot honour the odds, so say so.
+            if band_pool:
+                logger.warning(
+                    f"Pack {pack.id}: nothing at rating {rating} for "
+                    f"{versions}; widening across {pack.main_min_rating}-"
+                    f"{pack.main_max_rating} and dropping the configured odds")
+            pool = band_pool
         if not pool:
             return None
         fresh = [p for p in pool
@@ -307,8 +371,11 @@ MAX_INVENTORY = 50  # max unopened packs a user can hold
 
 # Pack pity timer — guarantees a max-rating pull after PITY_THRESHOLD
 # consecutive "non-max" pulls. Resets to 0 on every max-rating roll
-# (or when the guaranteed pull fires). Only applies to rating/both mode
-# packs with min < max — single-rating packs and version-only packs skip pity.
+# (or when the guaranteed pull fires). Needs a rating band with min < max to
+# mean anything, so single-rating packs skip it — and so do version packs that
+# carry no per-rating odds, because their band is metadata nothing consults.
+# A version pack WITH odds does select a rating, over a band written from the
+# version's own cards, so pity applies to it like any other.
 PITY_THRESHOLD = 10
 
 
@@ -454,7 +521,9 @@ def open_unopened_pack(session, user, inventory_id):
     pity_force_max = False
     mode = (pack.main_filter_mode or "rating").lower()
     rating_band = (pack.main_max_rating or 0) - (pack.main_min_rating or 0)
-    pity_eligible = (mode in ("rating", "both")) and rating_band > 0
+    selects_a_rating = (mode in ("rating", "both")
+                        or (mode == "version" and _main_odds_active(pack)))
+    pity_eligible = selects_a_rating and rating_band > 0
     if pity_eligible and (user.pack_pity_counter or 0) >= PITY_THRESHOLD:
         pity_force_max = True
 
@@ -599,10 +668,16 @@ def count_main_pool(session, pack):
     if mode == "version":
         if not versions: return 0
         from sqlalchemy import func as _func
-        return (not_career(session.query(Player))
-                .filter(Player.is_active == True,
-                        _func.lower(Player.version).in_(versions))
-                .count())
+        q = (not_career(session.query(Player))
+             .filter(Player.is_active == True,
+                     _func.lower(Player.version).in_(versions)))
+        if _main_odds_active(pack):
+            # Odds mean the pack rolls a rating inside its band first, so the
+            # band is part of the filter — counting the whole version here
+            # would promise cards the pack cannot reach.
+            q = q.filter(Player.rating.between(pack.main_min_rating,
+                                               pack.main_max_rating))
+        return q.count()
     if mode == "both":
         if not versions: return 0
         from sqlalchemy import func as _func
