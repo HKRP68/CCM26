@@ -486,7 +486,7 @@ def create_franchise(session, season, name, **fields):
     # rather than only after the first purchase.
     _ledger(session, franchise, LEDGER_OPENING, purse, note="Opening purse")
     log_event(session, season, "franchise_added",
-              f"🏛 {name} joined with {render_money(purse, season.currency_label)}.",
+              f"🏛 {_e(name)} joined with {render_money(purse, season.currency_label)}.",
               franchise=franchise)
     return franchise
 
@@ -575,7 +575,7 @@ def correct_purse(session, season, franchise, amount_lakh, *, note=None,
     _ledger(session, franchise, LEDGER_CORRECTION, amount, note=note,
             by_tg_id=by_tg_id)
     log_event(session, season, "purse_corrected",
-              f"🧾 {franchise.name}'s purse adjusted by "
+              f"🧾 {_e(franchise.name)}'s purse adjusted by "
               f"{render_money(amount, season.currency_label)} — now "
               f"{render_money(new_balance, season.currency_label)}.",
               franchise=franchise, by_tg_id=by_tg_id, by_admin=True)
@@ -819,7 +819,7 @@ def relist(session, season, lot):
     lot.going_stage = 0
     lot.extensions_used = 0
     log_event(session, season, "lot_relisted",
-              f"↩️ {lot.name} goes back into the pool for another round.",
+              f"↩️ {_e(lot.name)} goes back into the pool for another round.",
               lot=lot)
     return lot
 
@@ -907,8 +907,8 @@ def open_lot(session, season, lot, *, now=None):
     session.expire_all()
     lot = session.query(AuctionLot).filter(AuctionLot.id == lot.id).first()
     log_event(session, season, "lot_opened",
-              f"🔨 Lot {lot.lot_no}: {lot.name} ({lot.rating} OVR, "
-              f"{lot.category}) — base "
+              f"🔨 Lot {lot.lot_no}: {_e(lot.name)} ({lot.rating} OVR, "
+              f"{_e(lot.category)}) — base "
               f"{render_money(lot.base_price_lakh, season.currency_label)}.",
               lot=lot)
     return lot
@@ -969,7 +969,7 @@ def start(session, season, *, now=None, by_tg_id=None):
     log_event(session, season,
               "season_resumed" if resuming else "season_started",
               ("▶️ The auction is back on." if resuming
-               else f"🎬 <b>{season.name}</b> is under way — "
+               else f"🎬 <b>{_e(season.name)}</b> is under way — "
                     f"{len(field)} franchises, "
                     f"{pool_counts(session, season.id).get(LOT_QUEUED, 0)} lots."),
               by_tg_id=by_tg_id, by_admin=True)
@@ -1077,7 +1077,7 @@ def extend_timer(session, season, lot, seconds=None, *, now=None,
     lot.deadline_at = base + timedelta(seconds=seconds)
     lot.going_stage = 0
     log_event(session, season, "timer_extended",
-              f"⏱ {seconds}s added to {lot.name}.",
+              f"⏱ {seconds}s added to {_e(lot.name)}.",
               lot=lot, by_tg_id=by_tg_id, by_admin=True)
     return lot
 
@@ -1274,8 +1274,8 @@ def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
     # the record. A bid that reads as the owner's own choice when it was not is
     # how a result gets disputed afterwards.
     log_event(session, season, "bid",
-              f"💰 {franchise.name} bids "
-              f"{render_money(amount, season.currency_label)} for {lot.name}"
+              f"💰 {_e(franchise.name)} bids "
+              f"{render_money(amount, season.currency_label)} for {_e(lot.name)}"
               + (" <i>(entered by an admin)</i>." if by_admin else "."),
               lot=lot, franchise=franchise, by_tg_id=by_tg_id,
               by_admin=by_admin, detail={"amount_lakh": amount})
@@ -1372,7 +1372,7 @@ def sell_lot(session, season, lot, *, now=None, by_tg_id=None, by_admin=False):
     _ledger(session, buyer, LEDGER_PURCHASE, -price, lot=lot,
             note=f"Lot {lot.lot_no}: {lot.name}", by_tg_id=by_tg_id)
     log_event(session, season, "lot_sold",
-              f"🔨 <b>SOLD</b> — {lot.name} to <b>{buyer.name}</b> for "
+              f"🔨 <b>SOLD</b> — {_e(lot.name)} to <b>{_e(buyer.name)}</b> for "
               f"{render_money(price, season.currency_label)}.",
               lot=lot, franchise=buyer, by_tg_id=by_tg_id, by_admin=by_admin,
               detail={"price_lakh": price})
@@ -1403,7 +1403,7 @@ def pass_lot(session, season, lot, *, by_tg_id=None, by_admin=False):
     lot.times_unsold = int(lot.times_unsold or 0) + 1
     season.current_lot_id = None
     log_event(session, season, "lot_unsold",
-              f"❌ <b>UNSOLD</b> — nobody bid for {lot.name}.",
+              f"❌ <b>UNSOLD</b> — nobody bid for {_e(lot.name)}.",
               lot=lot, by_tg_id=by_tg_id, by_admin=by_admin)
     complete_if_done(session, season)
     return lot
@@ -1424,7 +1424,7 @@ def withdraw_lot(session, season, lot, *, by_tg_id=None):
     if was_on_block:
         season.current_lot_id = None
     log_event(session, season, "lot_withdrawn",
-              f"🚫 {lot.name} has been withdrawn from the auction.",
+              f"🚫 {_e(lot.name)} has been withdrawn from the auction.",
               lot=lot, by_tg_id=by_tg_id, by_admin=True)
     if was_on_block:
         complete_if_done(session, season)
@@ -1477,9 +1477,9 @@ def undo_last_bid(session, season, lot, *, now=None, by_tg_id=None):
     restored = (render_money(lot.current_bid_lakh, season.currency_label)
                 if lot.current_bid_lakh is not None else "no bid")
     log_event(session, season, "bid_undone",
-              f"↩️ {bidder.name if bidder else 'A'} bid of "
+              f"↩️ {_e(bidder.name) if bidder else 'A'} bid of "
               f"{render_money(top.amount_lakh, season.currency_label)} on "
-              f"{lot.name} was undone — back to {restored}.",
+              f"{_e(lot.name)} was undone — back to {restored}.",
               lot=lot, franchise=bidder, by_tg_id=by_tg_id, by_admin=True)
     return lot
 
@@ -1555,8 +1555,8 @@ def undo_sale(session, season, lot, *, now=None, by_tg_id=None):
     lot.deadline_at = now + timedelta(seconds=max(5, int(season.bid_seconds or 30)))
     season.current_lot_id = lot.id
     log_event(session, season, "sale_undone",
-              f"↩️ The sale of {lot.name} to "
-              f"{buyer.name if buyer else 'a franchise'} for "
+              f"↩️ The sale of {_e(lot.name)} to "
+              f"{_e(buyer.name) if buyer else 'a franchise'} for "
               f"{render_money(price, season.currency_label)} was undone — "
               f"the lot is back on the block.",
               lot=lot, franchise=buyer, by_tg_id=by_tg_id, by_admin=True)
@@ -1683,7 +1683,7 @@ def publish_to_league(session, season, *, league_name=None):
     season.league_id = league.id
     season.published_at = datetime.utcnow()
     log_event(session, season, "published",
-              f"📤 Squads published to the “{league.name}” Challenge League.",
+              f"📤 Squads published to the “{_e(league.name)}” Challenge League.",
               by_admin=True)
     return league
 

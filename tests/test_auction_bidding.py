@@ -825,6 +825,53 @@ class CommandTests(AuctionCase):
         self.assertEqual(minimum, self.A.parse_amount(hint))
 
 
+class HtmlSafetyTests(AuctionCase):
+    """Every headline is sent with parse_mode=HTML, and names are typed in.
+
+    A franchise called ``<b>Mumbai`` does not corrupt a message — Telegram
+    rejects the whole send as unparseable, so the announcement silently never
+    arrives and the room is told nothing at all. That is worse than a broken
+    name, which is why this escapes rather than strips.
+    """
+
+    def test_a_franchise_name_with_markup_is_escaped_in_its_event(self):
+        franchise = self.A.create_franchise(self.session, self.season,
+                                            "<b>Sneaky</b>", owner_tg_id=CAROL)
+        self.session.commit()
+        headline = self.A.recent_events(self.session, self.season.id,
+                                        limit=1)[0].headline
+        self.assertIn("&lt;b&gt;Sneaky", headline)
+        self.assertNotIn("<b>Sneaky", headline)
+
+    def test_a_player_name_with_markup_is_escaped_when_the_lot_opens(self):
+        from models import Player
+        self.session.add(Player(name="Bad <i>Name", rating=90,
+                                category="Batsman", country="India",
+                                bat_hand="Right", bowl_hand="Right",
+                                bowl_style="Medium Pacer", is_active=True,
+                                version="Base"))
+        self.session.flush()
+        self.build_pool(self.session.query(Player)
+                        .filter(Player.name == "Bad <i>Name").all())
+        self.start()
+        self.session.commit()
+        opened = [e for e in self.A.recent_events(self.session, self.season.id,
+                                                  limit=10)
+                  if e.kind == "lot_opened"][0]
+        self.assertIn("&lt;i&gt;", opened.headline)
+        self.assertNotIn("<i>", opened.headline)
+
+    def test_the_board_escapes_every_name_it_prints(self):
+        self.A.create_franchise(self.session, self.season, "<s>Zed",
+                                owner_tg_id=CAROL)
+        self.build_pool()
+        lot = self.start()
+        self.session.commit()
+        board = self.A.render_board(self.session, self.season, lot, now=NOW)
+        self.assertIn("&lt;s&gt;Zed", board)
+        self.assertNotIn("<s>Zed", board)
+
+
 class EventLogTests(AuctionCase):
     """The log is also the queue the group is announced from."""
 
