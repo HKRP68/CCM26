@@ -1110,3 +1110,326 @@ class SchedulerTests(AuctionCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The accelerated round
+# ══════════════════════════════════════════════════════════════════════
+
+class AcceleratedRoundTests(AuctionCase):
+    """Everything the room passed on, back in the queue at once."""
+
+    def setUp(self):
+        super().setUp()
+        self.build_pool()
+        self.lot = self.start()
+        self.session.commit()
+
+    def _pass_everything(self):
+        """Run the auction out with nobody bidding. Returns the names passed."""
+        names, lot, guard = [], self.lot, 0
+        while lot is not None and guard < 60:
+            names.append(lot.name)
+            self.A.pass_lot(self.session, self.season, lot)
+            self.session.commit()
+            lot = self.A.open_next_lot(self.session, self.season, now=NOW)
+            self.session.commit()
+            guard += 1
+        return names
+
+    def _buy(self, lot, franchise=None):
+        self.A.place_bid(self.session, self.season, lot,
+                         franchise or self.mumbai, lot.base_price_lakh,
+                         now=NOW, by_tg_id=ALICE)
+        sold = self.A.sell_lot(self.session, self.season, lot, now=NOW)
+        self.session.commit()
+        return sold
+
+    # ── what comes back ──
+
+    def test_every_unsold_player_comes_back_in_one_call(self):
+        passed = self._pass_everything()
+        self.assertEqual(self.A.STATUS_COMPLETED, self.season.status,
+                         "the last lot resolving is what finishes an auction")
+        back = self.A.relist_all(self.session, self.season)
+        self.session.commit()
+        self.assertEqual(sorted(passed), sorted(lot.name for lot in back))
+        self.assertTrue(all(lot.status == self.A.LOT_QUEUED for lot in back))
+
+    def test_they_keep_their_base_price(self):
+        """A second chance at the same player is not a discount."""
+        before = {lot.name: lot.base_price_lakh
+                  for lot in self.A.unsold(self.session, self.season.id)}
+        self._pass_everything()
+        back = self.A.relist_all(self.session, self.season)
+        self.session.commit()
+        before = before or {lot.name: lot.base_price_lakh for lot in back}
+        for lot in back:
+            self.assertEqual(before[lot.name], lot.base_price_lakh)
+
+    def test_they_come_back_in_the_order_they_were_offered(self):
+        self._pass_everything()
+        back = self.A.relist_all(self.session, self.season)
+        self.session.commit()
+        numbers = [lot.lot_no for lot in back]
+        self.assertEqual(sorted(numbers), numbers,
+                         "re-listing must not shuffle the running order")
+        self.assertEqual(len(set(numbers)), len(numbers),
+                         "two lots sharing a lot_no is an ambiguous queue")
+
+    def test_a_sold_player_is_never_dragged_back(self):
+        bought = self._buy(self.lot)
+        lot = self.A.open_next_lot(self.session, self.season, now=NOW)
+        self.session.commit()
+        self.lot = lot
+        self._pass_everything()
+        back = self.A.relist_all(self.session, self.season)
+        self.session.commit()
+        # By id, not by name: the catalogue deliberately holds two players
+        # called "Virat Kohli" (a Base card and an Icon), and a name match
+        # would pass here whichever of them came back.
+        self.assertNotIn(bought.id, [lot.id for lot in back])
+        self.session.refresh(bought)
+        self.assertEqual(self.A.LOT_SOLD, bought.status)
+
+    def test_a_withdrawn_player_stays_withdrawn(self):
+        """Withdrawing is a decision about the player, not about the bidding."""
+        upcoming = self.A.next_queued(self.session, self.season.id)
+        self.A.withdraw_lot(self.session, self.season, upcoming)
+        self.session.commit()
+        self._pass_everything()
+        back = self.A.relist_all(self.session, self.season)
+        self.session.commit()
+        self.assertNotIn(upcoming.name, [lot.name for lot in back])
+
+    # ── choosing a few ──
+
+    def test_a_chosen_few_can_come_back_alone(self):
+        self._pass_everything()
+        rows = self.A.unsold(self.session, self.season.id)
+        picked = [rows[0].id, rows[2].id]
+        back = self.A.relist_all(self.session, self.season, lot_ids=picked)
+        self.session.commit()
+        self.assertEqual(sorted(picked), sorted(lot.id for lot in back))
+        self.assertEqual(len(rows) - 2,
+                         len(self.A.unsold(self.session, self.season.id)))
+
+    def test_an_id_from_another_season_is_ignored_not_obeyed(self):
+        self._pass_everything()
+        rows = self.A.unsold(self.session, self.season.id)
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.A.relist_all(self.session, self.season, lot_ids=[999_999])
+        self.assertIn("None of those", str(caught.exception),
+                      "'nothing went unsold' when a dozen did sends an admin "
+                      "looking for a bug in the wrong place")
+        self.assertEqual(len(rows),
+                         len(self.A.unsold(self.session, self.season.id)))
+
+    # ── the season's status ──
+
+    def test_a_completed_auction_reopens_paused_not_live(self):
+        """Nobody is watching yet. A clock in an empty room sells a player to
+        whoever still has their phone out."""
+        self._pass_everything()
+        self.A.relist_all(self.session, self.season)
+        self.session.commit()
+        self.assertEqual(self.A.STATUS_PAUSED, self.season.status)
+        self.assertIsNone(self.season.current_lot_id)
+        self.assertIsNone(self.A.current_lot(self.session, self.season))
+
+    def test_and_starting_again_opens_the_first_of_them(self):
+        passed = self._pass_everything()
+        self.A.relist_all(self.session, self.season)
+        self.session.commit()
+        lot = self.A.start(self.session, self.season, now=NOW)
+        self.session.commit()
+        self.assertEqual(self.A.STATUS_LIVE, self.season.status)
+        self.assertEqual(passed[0], lot.name, "the queue kept its order")
+        self.assertEqual(self.A.LOT_ON_BLOCK, lot.status)
+
+    def test_a_live_auction_stays_live(self):
+        """Mid-auction, re-listing is just a queue edit."""
+        self.A.pass_lot(self.session, self.season, self.lot)
+        self.session.commit()
+        lot = self.A.open_next_lot(self.session, self.season, now=NOW)
+        self.session.commit()
+        self.A.relist_all(self.session, self.season)
+        self.session.commit()
+        self.assertEqual(self.A.STATUS_LIVE, self.season.status)
+        self.assertEqual(lot.id, self.A.current_lot(self.session, self.season).id,
+                         "the lot on the block is not disturbed")
+
+    def test_a_cancelled_auction_refuses(self):
+        self.A.cancel(self.session, self.season)
+        self.session.commit()
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.A.relist_all(self.session, self.season)
+        self.assertIn("cancelled", str(caught.exception))
+
+    def test_nothing_unsold_says_so_rather_than_succeeding_emptily(self):
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.A.relist_all(self.session, self.season)
+        self.assertIn("nothing to re-list", str(caught.exception))
+
+    # ── the room, and the money ──
+
+    def test_the_room_hears_one_announcement_not_forty(self):
+        """An event per player would be the sweeper's job to post, one at a
+        time, into a room that just wants to get on with it."""
+        self._pass_everything()
+        before = len(self.A.recent_events(self.session, self.season.id, limit=200))
+        back = self.A.relist_all(self.session, self.season)
+        self.session.commit()
+        after = self.A.recent_events(self.session, self.season.id, limit=200)
+        self.assertEqual(1, len(after) - before)
+        self.assertEqual("relist_all", after[0].kind)
+        self.assertIn(str(len(back)), after[0].headline)
+
+    def test_no_purse_moves(self):
+        self._buy(self.lot)
+        lot = self.A.open_next_lot(self.session, self.season, now=NOW)
+        self.session.commit()
+        self.lot = lot
+        self._pass_everything()
+        purses = {f.id: f.purse_remaining_lakh
+                  for f in self.A.franchises(self.session, self.season.id)}
+        self.A.relist_all(self.session, self.season)
+        self.session.commit()
+        for f in self.A.franchises(self.session, self.season.id):
+            self.assertEqual(purses[f.id], f.purse_remaining_lakh)
+        self.assertEqual([], self.A.reconcile_purses(self.session, self.season))
+
+    def test_a_relisted_lot_gets_its_anti_snipe_budget_back(self):
+        """The one piece of first-outing state that really does survive.
+
+        A standing bid cannot: ``pass_lot`` refuses while one stands, so an
+        unsold lot never holds a bidder. ``extensions_used`` is different — a
+        lot bid up into the snipe window spends extensions, and if the bid is
+        then undone and the lot passed, the spend outlives it. Coming back with
+        the budget already gone means the second outing is quietly played to a
+        shorter clock than the first.
+        """
+        # A bid inside the snipe window buys the lot an extension.
+        deadline = self.lot.deadline_at
+        inside = deadline - timedelta(
+            seconds=max(1, int(self.season.snipe_window_seconds) - 1))
+        self.A.place_bid(self.session, self.season, self.lot, self.mumbai,
+                         self.lot.base_price_lakh, now=inside, by_tg_id=ALICE)
+        self.session.commit()
+        self.session.refresh(self.lot)
+        self.assertEqual(1, self.lot.extensions_used,
+                         "the fixture has to actually spend one for this to "
+                         "be testing anything")
+
+        # Undone and passed: unsold, but carrying the spend.
+        self.A.undo_last_bid(self.session, self.season, self.lot)
+        self.session.commit()
+        self.A.pass_lot(self.session, self.season, self.lot)
+        self.session.commit()
+        self.session.refresh(self.lot)
+        self.assertEqual(self.A.LOT_UNSOLD, self.lot.status)
+        self.assertEqual(1, self.lot.extensions_used)
+
+        back = self.A.relist_all(self.session, self.season)
+        self.session.commit()
+        for lot in back:
+            self.assertEqual(0, lot.extensions_used,
+                             f"{lot.name} came back with its anti-snipe "
+                             f"budget already spent")
+            self.assertEqual(0, lot.going_stage)
+            self.assertIsNone(lot.current_bid_lakh)
+            self.assertIsNone(lot.current_bidder_id)
+            self.assertIsNone(lot.deadline_at)
+            self.assertIsNone(lot.rtm_stage)
+
+    def test_the_progress_line_counts_them_as_still_to_do(self):
+        self._pass_everything()
+        self.A.relist_all(self.session, self.season)
+        self.session.commit()
+        counts = self.A.pool_counts(self.session, self.season.id)
+        self.assertEqual(0, counts.get(self.A.LOT_UNSOLD, 0))
+        self.assertTrue(counts.get(self.A.LOT_QUEUED, 0) > 0)
+
+
+class AcceleratedRoundCommandTests(AcceleratedRoundTests):
+    """/aaccel, through the real handler."""
+
+    def setUp(self):
+        super().setUp()
+        self.replies = []
+        self._prev_admins = os.environ.get("BOT_ADMIN_IDS")
+        os.environ["BOT_ADMIN_IDS"] = str(CAROL)
+
+    def tearDown(self):
+        if self._prev_admins is None:
+            os.environ.pop("BOT_ADMIN_IDS", None)
+        else:
+            os.environ["BOT_ADMIN_IDS"] = self._prev_admins
+        super().tearDown()
+
+    def _run(self, handler, user_id, args=()):
+        import asyncio
+        from types import SimpleNamespace
+
+        async def reply_text(text, **kwargs):
+            self.replies.append(text)
+            return SimpleNamespace(message_id=1)
+
+        update = SimpleNamespace(
+            effective_chat=SimpleNamespace(id=self.season.chat_id,
+                                           type="supergroup"),
+            effective_user=SimpleNamespace(id=user_id, username="u",
+                                           first_name="U"),
+            effective_message=SimpleNamespace(reply_text=reply_text,
+                                              message_id=7))
+        context = SimpleNamespace(args=list(args), bot=SimpleNamespace())
+        self.session.commit()
+        self.session.close()
+        asyncio.run(handler(update, context))
+        from database import get_session
+        self.session = get_session()
+        self.season = self.session.merge(self.season)
+        return self.replies
+
+    def test_a_bare_aaccel_reads_out_who_would_come_back(self):
+        """Re-listing forty players is not a thing to do from muscle memory."""
+        from handlers import auction as H
+        passed = self._pass_everything()
+        self._run(H.aaccel_handler, CAROL)
+        self.assertIn(str(len(passed)), self.replies[-1])
+        self.assertIn(passed[0], self.replies[-1])
+        self.assertIn("/aaccel go", self.replies[-1])
+        self.assertEqual(self.A.STATUS_COMPLETED, self.season.status,
+                         "reading the list must not do the thing")
+        self.assertEqual(len(passed),
+                         len(self.A.unsold(self.session, self.season.id)))
+
+    def test_aaccel_go_does_it(self):
+        from handlers import auction as H
+        passed = self._pass_everything()
+        self._run(H.aaccel_handler, CAROL, ("go",))
+        self.assertIn(str(len(passed)), self.replies[-1])
+        self.assertEqual(self.A.STATUS_PAUSED, self.season.status)
+        self.assertEqual([], self.A.unsold(self.session, self.season.id))
+
+    def test_a_stranger_cannot_run_one(self):
+        from handlers import auction as H
+        passed = self._pass_everything()
+        self._run(H.aaccel_handler, ALICE, ("go",))
+        self.assertIn("admin", self.replies[-1].lower())
+        self.assertEqual(len(passed),
+                         len(self.A.unsold(self.session, self.season.id)))
+
+    def test_with_nothing_unsold_it_says_so(self):
+        from handlers import auction as H
+        self._run(H.aaccel_handler, CAROL, ("go",))
+        self.assertIn("Nothing went unsold", self.replies[-1])
+
+    def test_a_long_list_is_truncated_rather_than_flooding_the_chat(self):
+        from handlers import auction as H
+        passed = self._pass_everything()
+        self._run(H.aaccel_handler, CAROL)
+        shown = self.replies[-1].count("   • ")
+        self.assertLessEqual(shown, 15)
+        if len(passed) > 15:
+            self.assertIn("more", self.replies[-1])

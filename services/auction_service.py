@@ -1288,6 +1288,85 @@ def relist(session, season, lot):
     return lot
 
 
+def unsold(session, season_id):
+    """Every player the room passed on, in the order they were offered."""
+    return (session.query(AuctionLot)
+            .filter(AuctionLot.season_id == season_id,
+                    AuctionLot.status == LOT_UNSOLD)
+            .order_by(AuctionLot.lot_no.asc()).all())
+
+
+def relist_all(session, season, *, lot_ids=None, by_tg_id=None):
+    """The accelerated round: every unsold player back into the queue at once.
+
+    Re-listing one at a time is the same work done N times, and by the time it
+    matters — the end of a long auction, with a room waiting — N is usually
+    most of what went unsold in the first hour. Returns the lots re-listed.
+
+    They keep their original order and their base price. An accelerated round
+    is a second chance at the same player, not a discount: dropping the floor
+    would quietly re-price every lot the room had already judged, and an admin
+    who wants that has /alotprice.
+
+    ``lot_ids`` narrows it to a chosen few, which is what the console's
+    tick-boxes send — the same call either way, so the two surfaces cannot
+    drift.
+    """
+    if season.status == STATUS_CANCELLED:
+        raise AuctionError("This auction was cancelled.")
+
+    rows = unsold(session, season.id)
+    if not rows:
+        raise AuctionError("Nothing went unsold — there is nothing to re-list.")
+    if lot_ids is not None:
+        wanted = {int(i) for i in lot_ids}
+        rows = [lot for lot in rows if lot.id in wanted]
+        if not rows:
+            # Said apart from the case above on purpose: "nothing went unsold"
+            # when a dozen players did is the kind of wrong answer that sends
+            # an admin looking for a bug in the wrong place.
+            raise AuctionError("None of those are unsold in this auction.")
+
+    next_no = _next_lot_no(session, season.id)
+    for offset, lot in enumerate(rows):
+        lot.status = LOT_QUEUED
+        lot.lot_no = next_no + offset
+        lot.current_bid_lakh = None
+        lot.current_bidder_id = None
+        lot.deadline_at = None
+        lot.going_stage = 0
+        lot.extensions_used = 0
+        lot.rtm_stage = None
+        lot.rtm_base_bid_lakh = None
+
+    # A completed auction is the normal place to call this from — the last lot
+    # resolving is what finishes it, and "who is left" is only answerable once
+    # it has. It comes back PAUSED rather than live: nobody is watching yet,
+    # and starting a clock on a lot in an empty room is how a player goes for
+    # his base price to the one franchise still looking at their phone.
+    reopened = season.status == STATUS_COMPLETED
+    if reopened:
+        season.status = STATUS_PAUSED
+        season.current_lot_id = None
+
+    # Flushed before the announcement counts anything: this session is
+    # autoflush=False and pool_counts queries the very rows just changed.
+    session.flush()
+
+    note = (" The auction is open again, paused — /astart when the room is "
+            "ready." if reopened else "")
+    published = (" Squads were already published, so re-publish when this "
+                 "round is done." if season.published_at is not None else "")
+    log_event(session, season, "relist_all",
+              f"⚡ <b>Accelerated round</b> — {len(rows)} unsold "
+              f"{'player goes' if len(rows) == 1 else 'players go'} back into "
+              f"the pool.{note}{published}",
+              by_tg_id=by_tg_id, by_admin=True,
+              detail={"count": len(rows),
+                      "lot_ids": [lot.id for lot in rows]})
+    return rows
+
+
 def link_previous_season(session, season, league_id):
     """Stamp who held each pooled player in a league, for phase 2's RTM.
 

@@ -468,6 +468,7 @@ ADMIN_MENU_COMMANDS = (
     ("artmcards", "Admin: give one franchise its own Right To Match count"),
     ("artmforce", "Admin: answer an open Right To Match for a franchise"),
     ("artmundo", "Admin: undo a match — money and card both back"),
+    ("aaccel", "Admin: accelerated round — re-list everything unsold"),
     # Lets Play tournament. Every one of these is bot-admin-only, so they
     # belong in this bucket rather than nowhere: it is exempt from the
     # 100-command clamp and published only into admin DMs, so listing them
@@ -2126,7 +2127,7 @@ def main():
             aretain_handler, aunretain_handler, aretlock_handler,
             artm_handler, rtm_callback,
             artmset_handler, artmcards_handler, artmforce_handler,
-            artmundo_handler,
+            artmundo_handler, aaccel_handler,
         )
         # Not "/b": that is already /buy, registered above, and PTB runs the
         # first handler that matches — the alias would be dead.
@@ -2172,6 +2173,8 @@ def main():
         app.add_handler(CommandHandler("artmcards", artmcards_handler))
         app.add_handler(CommandHandler("artmforce", artmforce_handler))
         app.add_handler(CommandHandler("artmundo", artmundo_handler))
+        # The accelerated round: everything unsold, back in the queue at once.
+        app.add_handler(CommandHandler(["aaccel", "arelistall"], aaccel_handler))
 
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))

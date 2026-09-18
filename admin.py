@@ -22616,6 +22616,11 @@ def _console_context(db, season):
         "max_bid": auction_svc.max_bid_now,
         "STATUS_LIVE": auction_svc.STATUS_LIVE,
         "STATUS_PAUSED": auction_svc.STATUS_PAUSED,
+        "STATUS_COMPLETED": auction_svc.STATUS_COMPLETED,
+        # The accelerated round's working list. Capped for the page, but the
+        # count is the real one — an admin about to re-list 43 players should
+        # see 43, not "15".
+        "unsold": auction_svc.unsold(db, season.id),
     }
 
 
@@ -22684,6 +22689,15 @@ def _auction_console_action(db, season, action):
     elif action == "relist":
         auction_svc.relist(db, season,
                            _auction_lot(db, season, request.form.get("lot_id")))
+    elif action == "relist_all":
+        # The tick-boxes send lot_ids; an empty selection means "everything",
+        # which is the button most rooms actually press.
+        picked = [_parse_int(v) for v in request.form.getlist("lot_ids")]
+        picked = [v for v in picked if v]
+        back = auction_svc.relist_all(db, season, lot_ids=picked or None)
+        log_admin(db, "auction_relist_all", "auction", season.id,
+                  f"{len(back)} players")
+        flash(f"⚡ {len(back)} back in the pool.", "success")
     elif action == "bid":
         # An owner whose phone has died, or who is simply not in the room. It
         # is a real feature, not a test hatch — and it is stamped as an admin's

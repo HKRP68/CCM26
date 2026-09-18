@@ -93,7 +93,8 @@ Admin: `/auction` (the reference card), `/anew`, `/abind`, `/astart`,
 `/apause`, `/aresume`, `/anext`, `/aextend`, `/asold`, `/aunsold`,
 `/aundobid`, `/awithdraw`, `/atimer`, `/asnipe`, `/agrant`, `/aco`,
 `/apublish`, `/acancel`, plus retention's `/aretlock`, `/aretain`,
-`/aunretain` and RTM's `/artmset`, `/artmcards`, `/artmforce`, `/artmundo`.
+`/aunretain`, RTM's `/artmset`, `/artmcards`, `/artmforce`, `/artmundo`, and
+the accelerated round's `/aaccel`.
 
 `/bid`, `/artm`, `/aboard` and `/apurse` are **not** in the group slash menu. Both
 player scopes sit exactly at Telegram's 100-command ceiling and `_clamped`
@@ -362,6 +363,44 @@ previous franchise that is not already the top bidder, the purse, the same
 reachability rule bidding and retention use, and the squad and overseas caps.
 Fail any of it and the lot simply sells. The room hears *why* only when a card
 existed and something else blocked it; otherwise it is noise.
+
+---
+
+## The accelerated round
+
+At the end of a long auction a pile of players has gone unsold and the room
+wants another go at them. `/aaccel` puts **every** unsold player back into the
+queue at once, in the order they were first offered.
+
+```text
+/aaccel        who would come back, and what it would cost nobody
+/aaccel go     do it
+```
+
+…or the console's ⚡ card, whose tick-boxes bring back a chosen few. Same
+service call either way, so the two surfaces cannot drift.
+
+**They come back at the same base price.** A second chance at the same player
+is not a discount: dropping the floor would quietly re-price every lot the room
+had already judged, and an admin who actually wants that has the lot's own base
+price on the setup page.
+
+**A completed auction re-opens `paused`, never live.** The last lot resolving
+is what finishes an auction, so "who is left?" is only answerable once it has —
+which makes a completed season the normal place to call this from. Coming back
+paused means nothing goes on the block until an admin presses Start: a clock
+running in a room that has already drifted off sells a player to whoever still
+has their phone out.
+
+**One announcement, not forty.** The event log is the announcement queue, so a
+row per player would be forty messages for the sweeper to post one at a time
+into a room that just wants to get on with it.
+
+A re-listed lot comes back clean — and `extensions_used` is the one that
+matters. A standing bid cannot survive (`pass_lot` refuses while one stands),
+but a lot bid up into the snipe window *spends* extensions, and if that bid is
+then undone and the lot passed, the spend outlives it. Left alone, the second
+outing would quietly run to a shorter clock than the first.
 
 ---
 
@@ -666,7 +705,7 @@ Two things were on their way to a third copy each, and both fail silently.
 | `static/css/admin_auction.css` | Their stylesheet, via `{% block head_extra %}` |
 | `migrate_auction_purse_reconcile.py` | Re-sums every ledger, `--dry-run` first; the work is the service's, shared with the admin button |
 | `tests/test_franchise_auction.py` | The pool, base prices, the ledger, reachability, the overseas cap, and publishing |
-| `tests/test_auction_bidding.py` | The lifecycle, bidding, two-session concurrency, the clock, anti-snipe, undo, permissions, the commands and the board |
+| `tests/test_auction_bidding.py` | The lifecycle, bidding, two-session concurrency, the clock, anti-snipe, undo, permissions, the commands, the board, and the accelerated round |
 | `tests/test_auction_retention.py` | The ladder, the money, every cap, the window, what retention does to the pool and the board, publishing a retained player, and the commands |
 | `tests/test_auction_rtm.py` | The proposal's own Ashwin example end to end, every eligibility gate, all three timeouts, the self-raise suspension from both sides, the card, `undo_rtm`, the two-session races, and the autoflush shapes |
 
@@ -678,5 +717,4 @@ Two things were on their way to a third copy each, and both fail silently.
   season from it.
 * **A Mini App auction board.** The board is a Telegram message today; the
   `/webapp` plumbing would serve a live web view of the same data.
-* **Accelerated rounds** as a first-class thing. Re-listing an unsold player is
-  one button at a time; a "re-list everything unsold" sweep is a small addition.
+

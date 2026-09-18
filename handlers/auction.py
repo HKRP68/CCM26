@@ -917,6 +917,40 @@ async def aretlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _with_auction(update, work, admin=True, context=context)
 
 
+async def aaccel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aaccel</code> — every unsold player back into the queue at once.
+
+    With no arguments it reads out who would come back, because "re-list 43
+    players" is not a thing to do from muscle memory at the end of a long
+    auction. <code>/aaccel go</code> does it.
+    """
+    user = update.effective_user
+    arg = _arg_text(context).strip().lower()
+
+    def work(session, season):
+        rows = A.unsold(session, season.id)
+        if not rows:
+            return "⚡ Nothing went unsold — there is nothing to re-list."
+        if arg not in ("go", "yes", "confirm", "do"):
+            symbol = season.currency_label
+            names = "\n".join(
+                f"   • {html.escape(lot.name)} · {lot.rating} · "
+                f"{A.render_money(lot.base_price_lakh, symbol)}"
+                for lot in rows[:15])
+            more = (f"\n   …and {len(rows) - 15} more" if len(rows) > 15 else "")
+            return (f"⚡ <b>Accelerated round</b> — {len(rows)} unsold "
+                    f"{'player' if len(rows) == 1 else 'players'} would go back "
+                    f"into the pool at the same base price:\n{names}{more}\n\n"
+                    f"Confirm with <code>/aaccel go</code>.")
+        back = A.relist_all(session, season,
+                            by_tg_id=user.id if user else None)
+        return (f"⚡ {len(back)} "
+                f"{'player is' if len(back) == 1 else 'players are'} back in "
+                f"the pool.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
 async def artmset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """The Right To Match rules: read them, or set them in one line.
 

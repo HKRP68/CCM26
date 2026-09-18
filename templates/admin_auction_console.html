@@ -123,6 +123,46 @@
   </div>
   {% endif %}
 
+  <!-- ── Accelerated round ─────────────────────────────────────── -->
+  {% if unsold %}
+  <div class="au-card">
+    <h3 style="margin-top:0;">⚡ Accelerated round — {{ unsold|length }} unsold</h3>
+    <p class="au-note" style="margin-top:0;">
+      Everything the room passed on, back in the queue at the <b>same base
+      price</b>. A second chance at the same player is not a discount — to
+      re-price one, set its base on the auction's setup page first. Tick a few
+      to bring back only those; tick none to bring back all
+      {{ unsold|length }}.
+    </p>
+    <form method="POST" onsubmit="return confirm('Re-list the selected unsold players?');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="relist_all">
+      <table class="au-table">
+        <tr><th></th><th>Lot</th><th>Player</th><th>Rating</th><th>Base</th></tr>
+        {% for lot in unsold %}
+        <tr>
+          <td><input type="checkbox" name="lot_ids" value="{{ lot.id }}"></td>
+          <td class="dim">{{ lot.lot_no }}</td>
+          <td>{{ lot.name }}</td>
+          <td>{{ lot.rating }}</td>
+          <td>{{ money(lot.base_price_lakh, season.currency_label) }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      <p style="margin:.7rem 0 0;">
+        <button class="btn btn-primary" type="submit">⚡ Re-list</button>
+      </p>
+    </form>
+    {% if season.status == STATUS_COMPLETED %}
+    <p class="au-note" style="margin-bottom:0;">
+      This auction is <b>complete</b>. Re-listing re-opens it <b>paused</b>, so
+      nothing goes on the block until you press Start — a clock running in an
+      empty room sells a player to whoever is still looking at their phone.
+    </p>
+    {% endif %}
+  </div>
+  {% endif %}
+
   <!-- ── The live panel ────────────────────────────────────────── -->
   <div id="au-panel">
     {% include "_auction_console_panel.html" %}
