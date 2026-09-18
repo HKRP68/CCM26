@@ -169,6 +169,11 @@ def _hex_to_rgb(s, fallback):
 SCORECARD_FONT_OPTIONS = {
     "display": "Bebas Neue",
     "body": "Bricolage Grotesque",
+    # Summary-card faces. "headline" is the heavy grotesque the poster's title,
+    # scores and metric values are set in; "script" is the Game Changer! line.
+    "headline": "Anton",
+    "italic": "Lato Italic",
+    "script": "Caveat",
     "fallback": "DejaVu Sans",
 }
 
@@ -232,22 +237,48 @@ SCORECARD_TEXT_FIELDS = {
         ("opp_score_value", "Opp score value", ""),
         ("opp_score_label", "Opp score label", "OPP SCORE"),
     ],
+    # The summary card is the light "poster" design; a few of these are
+    # pipe-separated because the text object is stacked over several lines.
     "summary": [
-        ("header_title", "SUMMARY header", "SUMMARY"),
-        ("match_no", "MATCH # header", ""),
-        ("stadium", "Stadium bar", ""),
+        ("header_title", "Headline first word", "MATCH"),
+        ("header_summary", "Headline second word (gold)", "SUMMARY"),
+        ("brand_tagline", "Brand caps, | between lines", "PLAY|MANAGE|COMPETE|DOMINATE"),
+        ("tagline", "Right strapline, | between lines", "CRICKET|BEYOND|BOUNDARIES"),
+        ("match_no", "MATCH # in the venue pill", ""),
+        ("stadium", "Venue in the pill", ""),
         ("innings_team", "Innings team names", ""),
         ("innings_meta", "Overs text", ""),
         ("innings_score", "Score text", ""),
+        ("table_header", "All six column headers", ""),
+        ("header_batters", "BATTERS column head", "BATTERS"),
+        ("header_runs", "RUNS column head", "RUNS"),
+        ("header_balls", "BALLS column head", "BALLS"),
+        ("header_bowlers", "BOWLERS column head", "BOWLERS"),
+        ("header_figures", "FIGURES column head", "FIGURES"),
+        ("header_overs", "OVERS column head", "OVERS"),
         ("row_name", "Batter/Bowler names", ""),
         ("row_number", "Runs/Balls/Wickets/Overs values", ""),
         ("result", "Result bar", ""),
-        ("potm_badge", "POTM badge", "POTM"),
+        ("potm_badge", "POTM title, | between lines", "PLAYER|OF THE MATCH"),
         ("potm_name", "POTM name", ""),
-        ("potm_label", "Performance label", "PERFORMANCE:"),
-        ("potm_value", "Performance value", ""),
+        ("potm_label", "Performance showcase label", "PERFORMANCE SHOWCASE"),
+        ("potm_value", "Performance metric values", ""),
+        ("game_changer", "Script flourish (blank = automatic)", ""),
     ],
 }
+
+
+def _summary_font(card_type, key, headline, script, display, display_keys):
+    """Which face a text object defaults to in the website designer."""
+    if card_type == "summary":
+        if key in headline:
+            return "headline"
+        if key in script:
+            return "script"
+        if key in display:
+            return "display"
+        return "body"
+    return "display" if key in display_keys else "body"
 
 
 def default_scorecard_text_settings():
@@ -258,10 +289,21 @@ def default_scorecard_text_settings():
         for field in fields:
             key, _label = field[:2]
             default_text = field[2] if len(field) > 2 else ""
+            # The summary card mixes three faces. These take the wide black
+            # grotesque the poster sets its headline, team names, scores and
+            # metric values in; the rest of the display keys below take the
+            # condensed face used for small caps.
+            summary_headline = {
+                "header_title", "header_summary", "innings_team",
+                "innings_score", "row_number", "result", "potm_name",
+                "potm_value",
+            }
+            summary_script = {"game_changer"}
             summary_display = {
-                "header_title", "match_no", "stadium", "innings_team",
-                "innings_meta", "innings_score", "row_number", "result", "potm_badge",
-                "potm_name", "potm_label", "potm_value",
+                "brand_tagline", "tagline", "match_no", "stadium",
+                "innings_meta", "table_header", "header_batters", "header_runs",
+                "header_balls", "header_bowlers", "header_figures",
+                "header_overs", "potm_badge", "potm_label",
             }
             display_keys = {
                 "team", "stat_value", "run_rate_value", "extras_value",
@@ -270,7 +312,9 @@ def default_scorecard_text_settings():
             }
             settings[card_type][key] = {
                 "text": default_text,
-                "font": "display" if key in display_keys or (card_type == "summary" and key in summary_display) else "body",
+                "font": _summary_font(card_type, key, summary_headline,
+                                      summary_script, summary_display,
+                                      display_keys),
                 "size": 0,
                 "x": 0,
                 "y": 0,
