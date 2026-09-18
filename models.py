@@ -103,6 +103,11 @@ class User(Base):
     team_logo_asset_key = Column(String(300), nullable=True)
     team_logo_file_id = Column(String(200), nullable=True)
     team_logo_updated_at = Column(DateTime, nullable=True)
+    # The team's own colour on the scorecards — its header bar, crest panel and
+    # not-out scores. '#rrggbb'; NULL means the admin's per-innings default.
+    # Unlike the crest this needs no review: a hex code carries nothing to
+    # moderate, and the card picks readable text for whatever is chosen.
+    team_colour = Column(String(9), nullable=True)
     # Ban / disable — banned users are refused by the bot's middleware
     is_banned = Column(Boolean, default=False, nullable=False)
     ban_reason = Column(String(500), nullable=True)

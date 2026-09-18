@@ -219,6 +219,31 @@
 </details>
 
 <details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.5rem .85rem;margin-bottom:1rem;">
+  <summary style="cursor:pointer;color:var(--muted);font-size:.85rem;">🎨 Team colour</summary>
+  <form method="POST" action="{{ url_for('admin_team_colour', user_id=user.id) }}" style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div style="color:var(--muted);font-size:.85rem;">
+      Current:
+      {% if user.team_colour %}
+        <span style="display:inline-block;width:14px;height:14px;border-radius:3px;vertical-align:middle;border:1px solid var(--border);background:{{ user.team_colour }};"></span>
+        <strong style="color:var(--accent);">{{ user.team_colour }}</strong>
+      {% else %}
+        <strong style="color:var(--accent);">default</strong>
+      {% endif %}
+    </div>
+    <input type="color" name="team_colour" value="{{ user.team_colour or '#aa001b' }}"
+           style="width:52px;height:34px;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:2px;">
+    <button type="submit" class="btn btn-blue">💾 Apply</button>
+    <button type="submit" name="action" value="clear" class="btn">🗑 Clear</button>
+  </form>
+  <div style="color:var(--muted);font-size:.78rem;margin-top:.4rem;">
+    The team's header bar, crest panel and not-out scores on every scorecard.
+    Text contrast is picked automatically, and a colour too close to the
+    opponent's is nudged apart at render time.
+  </div>
+</details>
+
+<details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.5rem .85rem;margin-bottom:1rem;">
   <summary style="cursor:pointer;color:var(--muted);font-size:.85rem;">✉️ Send message to this user</summary>
   <form method="POST" action="{{ url_for('admin_message_user', user_id=user.id) }}" style="margin-top:.6rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

@@ -2932,6 +2932,55 @@ def admin_edit_qp(user_id):
     return redirect(url_for("user_detail", user_id=user_id))
 
 
+# ─── Edit a user's team colour ───────────────────────────────────────
+@app.route("/users/<int:user_id>/team_colour", methods=["POST"])
+@login_required
+def admin_team_colour(user_id):
+    """Set or clear the colour a user's team wears on the scorecards.
+
+    The same value ``/setteamcolour`` writes, so support can fix a colour
+    somebody has made unreadable without having to ask them to run a command.
+    """
+    db = get_session()
+    try:
+        user = db.get(User, user_id)
+        if not user:
+            flash(f"User {user_id} not found", "error")
+            return redirect(url_for("users_list"))
+        try:
+            from services import card_identity
+            raw = (request.form.get("team_colour") or "").strip()
+            was = user.team_colour or "default"
+            if not raw or (request.form.get("action") or "").strip() == "clear":
+                user.team_colour = None
+                msg = "Team colour cleared"
+            else:
+                colour = card_identity.normalise_hex(raw)
+                if not colour:
+                    flash(f"{raw[:30]} is not a hex colour", "error")
+                    return redirect(url_for("user_detail", user_id=user_id))
+                user.team_colour = colour
+                msg = f"Team colour set to {colour}"
+            db.commit()
+            try:
+                from services import team_logo_service
+                team_logo_service.invalidate_cache(user.id, user.team_name)
+            except Exception:
+                logger.warning("team colour cache invalidation failed", exc_info=True)
+            log_admin(db, "team_colour", target_type="user",
+                      target_id=user.id, target_name=user.first_name or "",
+                      detail=f"{was} → {user.team_colour or 'default'}")
+            db.commit()
+            flash(f"✅ {msg}", "success")
+        except Exception as e:
+            db.rollback()
+            logger.exception("Team colour edit failed")
+            flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("user_detail", user_id=user_id))
+
+
 # ─── Send a direct message to a user (via bot) ───────────────────────
 @app.route("/users/<int:user_id>/message", methods=["POST"])
 @login_required

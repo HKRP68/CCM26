@@ -3885,6 +3885,24 @@ def _summary_caption(state, result_line):
     return "\n".join(lines)
 
 
+def _cipl_team_user_id(state, team_name):
+    """The ``users.id`` behind a side in a /cipl match, or ``None``.
+
+    Matched on the clean team name rather than on which innings it batted in:
+    at the end of a chase ``bat_team_name`` is the second innings and
+    ``bowl_team_name`` the first, but a state read mid-innings is the other way
+    round, and guessing wrong would brand each side with the other's crest.
+    """
+    wanted = str(team_name or "").strip().lower()
+    if not wanted:
+        return None
+    for name_key, id_key in (("bat_team_name", "bat_team_id"),
+                             ("bowl_team_name", "bowl_team_id")):
+        if str(state.get(name_key) or "").strip().lower() == wanted:
+            return state.get(id_key)
+    return None
+
+
 def _build_cipl_summary_image(state, result):
     """Render the shared post-match summary card from the finished /cipl state."""
     try:
@@ -3951,7 +3969,31 @@ def _build_cipl_summary_image(state, result):
     inn1_label = with_bot_tag(state, inn1_team)
     inn2_label = with_bot_tag(state, inn2_team)
 
+    # Crests, team colours and the POTM portrait. Resolved from the *clean*
+    # team names and the owning user ids — never from the labels above, which
+    # carry a " (Bot)" suffix that matches nothing. /cipl calls the generator
+    # directly rather than through scorecard_delivery, so without this the
+    # whole league renders unbranded cards.
+    visuals = {}
+    try:
+        from services import card_identity
+        session = card_identity.open_session()
+        try:
+            visuals = card_identity.summary_visuals(
+                session,
+                inn1_team=inn1_team, inn2_team=inn2_team,
+                inn1_user_id=_cipl_team_user_id(state, inn1_team),
+                inn2_user_id=_cipl_team_user_id(state, inn2_team),
+                potm_player_id=state.get("potm_player_id"),
+                potm_name=potm_name,
+                include_style=False)
+        finally:
+            session.close()
+    except Exception:
+        logger.exception("cipl summary branding lookup failed — drawing plain")
+
     return generate_match_summary(
+        **visuals,
         inn1_team=inn1_label,
         inn1_runs=state.get("inn1_runs", 0),
         inn1_wickets=state.get("inn1_wickets", 0),

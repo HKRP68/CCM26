@@ -16,6 +16,7 @@ Team setup:
 The module is pure (no Telegram / asyncio). The handler layer drives it.
 """
 
+import logging
 import math
 import random
 from datetime import datetime
@@ -27,6 +28,8 @@ from engine.game_state_engine import (
     compute_game_state_vector,
     BALL_HISTORY_WINDOW,
 )
+
+logger = logging.getLogger(__name__)
 from engine.format_config import get_format, FORMAT_REGISTRY, FormatConfig, Phase
 from engine.bowler_manager import BowlerManager
 from services import batting_order_service as _bos
@@ -1030,8 +1033,15 @@ def _potm_stats(match):
     return ", ".join(bits) or "Impact performance"
 
 
-def render_match_summary_image(match, *, text_settings=None, stadium=None, match_no=None):
-    """Render the /sim match summary PNG bytes, or None if rendering fails."""
+def render_match_summary_image(match, *, text_settings=None, stadium=None,
+                               match_no=None, inn1_user_id=None,
+                               inn2_user_id=None, potm_player_id=None):
+    """Render the /sim match summary PNG bytes, or None if rendering fails.
+
+    The user ids are optional but strongly preferred over the team names for
+    branding: a ``/sim`` side can be called ``"🤖 Sim XI"``, ``"@someone"`` or
+    ``"Someone's XI"``, none of which match a stored team name.
+    """
     from services.match_summary_card import generate_match_summary
 
     i1, i2 = match["innings1"], match["innings2"]
@@ -1050,7 +1060,27 @@ def render_match_summary_image(match, *, text_settings=None, stadium=None, match
             "bowlers": _top_bowlers(i2),
         },
     }
+    # /sim calls the generator directly rather than through
+    # scorecard_delivery, so its crests, colours and POTM portrait are resolved
+    # here or not at all.
+    visuals = {}
+    try:
+        from services import card_identity
+        session = card_identity.open_session()
+        try:
+            visuals = card_identity.summary_visuals(
+                session,
+                inn1_team=i1["batting_team"], inn2_team=i2["batting_team"],
+                inn1_user_id=inn1_user_id, inn2_user_id=inn2_user_id,
+                potm_player_id=potm_player_id, potm_name=match.get("potm"),
+                include_style=False)
+        finally:
+            session.close()
+    except Exception:
+        logger.exception("sim summary branding lookup failed — drawing plain")
+
     return generate_match_summary(
+        **visuals,
         inn1_team=i1["batting_team"],
         inn1_runs=i1["runs"],
         inn1_wickets=i1["wickets"],

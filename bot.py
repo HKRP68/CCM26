@@ -76,7 +76,8 @@ from handlers.buy import (
     buypl_handler, buypl_confirm_callback, buypl_cancel_callback,
     buypl_close_callback, player_page_callback, player_page_noop_callback,
 )
-from handlers.team import teamname_handler, purse_handler, stats_handler, statscl_handler
+from handlers.team import (teamname_handler, teamcolour_handler, purse_handler,
+                           stats_handler, statscl_handler)
 from handlers.tournament import (
     statstour_handler, tournamentstats_handler, tournamentstats_callback,
 )
@@ -1040,6 +1041,7 @@ async def start_handler(update, context):
         "/setcaptain /cap [name] - Set captain\n"
         "/teamname /tn [name] - Set team name\n"
         "/setteamlogo - Set your team crest (DM, needs admin approval)\n"
+        "/setteamcolour [#hex] - Set your team's scorecard colour\n"
         "/purse /p - Check balance\n"
         "/catch [bet] [height] - Risk purse coins in the catching game\n"
         "/cm @user - Two-wicket challenge mode\n"
@@ -1629,6 +1631,10 @@ def main():
         app.add_handler(CallbackQueryHandler(giveaway_join_callback, pattern=r"^gwjoin_"))
         app.add_handler(CommandHandler(["buypl", "buy", "b"], buypl_handler))
         app.add_handler(CommandHandler(["teamname", "tn"], teamname_handler))
+        # Both spellings, because half the world types "color".
+        app.add_handler(CommandHandler(
+            ["setteamcolour", "setteamcolor", "teamcolour", "teamcolor"],
+            teamcolour_handler))
         app.add_handler(CommandHandler(["purse", "p"], purse_handler))
         # The stat readouts all answer in DM — a group full of managers pulling
         # career cards buried every match and lobby under them. In a group each

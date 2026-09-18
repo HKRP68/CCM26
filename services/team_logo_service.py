@@ -43,7 +43,25 @@ DONE_STATUSES = (STATUS_APPROVED, STATUS_REJECTED, STATUS_CANCELLED)
 # is the validator the website has used for custom card art for a long time.
 MAX_BYTES = 5 * 1024 * 1024
 MIN_DIM = 200
-ALLOWED_FORMATS = {"PNG", "JPEG", "WEBP", "GIF", "BMP"}
+# PNG only. Not arbitrary strictness: a PNG is the only common format that can
+# carry a transparent background, and a crest without one draws as a square tile
+# sitting on the team's colour instead of on it. services/player_portrait_service
+# takes the same line for the global portrait via its ``png_only=`` flag.
+ALLOWED_FORMATS = {"PNG"}
+
+# Refusing a JPG without saying how to fix it teaches nobody anything, so the
+# refusal carries the how-to. Shared with the "needs transparency" rejection
+# reason below, so the advice reads the same wherever it surfaces.
+TRANSPARENCY_HELP = (
+    "<b>How to get one:</b>\n"
+    "• Already have a logo? Run it through a free background remover — "
+    "remove.bg, photoroom.com, or Canva's BG Remover — then download it "
+    "as a PNG.\n"
+    "• On a phone, most gallery and editing apps can export PNG from "
+    "<i>Share → Save as</i>.\n"
+    "• Making one from scratch? Canva and Figma both export PNG with "
+    "<i>transparent background</i> ticked."
+)
 # A crest sits in a tall-ish panel on the card. Anything wilder than 2:1 either
 # renders as a sliver or forces the panel to letterbox it into uselessness.
 MAX_ASPECT = 2.0
@@ -86,6 +104,10 @@ REJECT_REASONS = (
     ("shape", "📐 Wrong shape",
      "The image is too wide or too tall for the crest panel. "
      "A square-ish image works best."),
+    ("alpha", "🪟 Needs a transparent background",
+     "The logo has a solid background, so it shows as a square tile on the "
+     "scorecard instead of sitting on your team's colour.\n\n"
+     + TRANSPARENCY_HELP),
 )
 REJECT_REASON_MAP = {key: (label, message) for key, label, message in REJECT_REASONS}
 CUSTOM_REASON_KEY = "custom"
@@ -165,8 +187,26 @@ def request_summary(request):
 # Validation and storage
 # ══════════════════════════════════════════════════════════════════════
 
+_FRIENDLY_FORMAT = {"JPEG": "a JPG", "WEBP": "a WEBP", "GIF": "a GIF",
+                    "BMP": "a BMP", "TIFF": "a TIFF"}
+
+
+def _not_png_message(fmt):
+    """Why a non-PNG is refused, and what to do about it."""
+    what = _FRIENDLY_FORMAT.get(fmt, f"a {fmt}" if fmt else "that")
+    return (f"That's {what} — team logos have to be <b>PNG</b>.\n\n"
+            "A PNG can carry a transparent background, which is what lets your "
+            "crest sit on your team's colour instead of in a white box.\n\n"
+            + TRANSPARENCY_HELP +
+            "\n\nThen send it here again.")
+
+
 def normalise_image(raw):
-    """Validate and re-encode an upload. Returns ``(png_bytes, w, h)``.
+    """Validate and re-encode an upload.
+
+    Returns ``(png_bytes, width, height, opaque)``, where ``opaque`` marks an
+    image with no transparency — accepted, but it will draw as a square tile,
+    so the uploader and the reviewing admin are both told.
 
     Raises :class:`ValueError` with a message meant for the uploader.
 
@@ -189,10 +229,9 @@ def normalise_image(raw):
         image.load()
     except Exception:
         raise ValueError("That does not look like an image I can read. "
-                         "PNG, JPG or WEBP, please.")
+                         "Send a PNG.")
     if fmt not in ALLOWED_FORMATS:
-        raise ValueError(f"{fmt or 'That format'} is not supported. "
-                         "Send a PNG, JPG or WEBP.")
+        raise ValueError(_not_png_message(fmt))
     width, height = image.size
     if width < MIN_DIM or height < MIN_DIM:
         raise ValueError(f"That image is {width}×{height}. "
@@ -203,6 +242,12 @@ def normalise_image(raw):
                          "works best.")
 
     image = image.convert("RGBA")
+    # A PNG can still be fully opaque, and then it is a square tile rather than
+    # a crest. Cheapest possible check: the alpha channel's darkest pixel.
+    try:
+        opaque = image.getchannel("A").getextrema()[0] == 255
+    except Exception:
+        opaque = False
     if max(image.size) > STORE_DIM:
         factor = STORE_DIM / max(image.size)
         image = image.resize(
@@ -210,7 +255,7 @@ def normalise_image(raw):
             Image.LANCZOS)
     buf = io.BytesIO()
     image.save(buf, format="PNG", optimize=True)
-    return buf.getvalue(), image.width, image.height
+    return buf.getvalue(), image.width, image.height, opaque
 
 
 def _asset_key(user_id):
@@ -395,7 +440,7 @@ def submit_logo(session, user, raw_bytes, *, file_id=None, ignore_limits=False):
         if blocked:
             return {"ok": False, "error": blocked[0], "message": blocked[1]}
     try:
-        png, width, height = normalise_image(raw_bytes)
+        png, width, height, opaque = normalise_image(raw_bytes)
     except ValueError as exc:
         return {"ok": False, "error": "invalid", "message": str(exc)}
 
@@ -411,7 +456,7 @@ def submit_logo(session, user, raw_bytes, *, file_id=None, ignore_limits=False):
     session.add(request)
     session.flush()             # the admin DM needs the id before the commit
     invalidate_cache(user.id)
-    return {"ok": True, "request": request, "png": png}
+    return {"ok": True, "request": request, "png": png, "opaque": opaque}
 
 
 def approve_request(session, request, *, reviewer=None):

@@ -340,6 +340,57 @@ class ThrottleTests(_Base):
         self.assertIsNone(self.tls.submission_block(self.session, second.id))
 
 
+class FormatTests(_Base):
+    """PNG only — because a PNG is the only common format that can carry a
+    transparent background, and a crest without one draws as a square tile."""
+
+    def _encode(self, fmt, mode="RGB", size=(320, 320)):
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new(mode, size, (200, 30, 40)).save(buf, format=fmt)
+        return buf.getvalue()
+
+    def test_a_png_is_accepted(self):
+        self.assertTrue(self._submit(self._user())["ok"])
+
+    def test_a_jpeg_is_refused_and_the_refusal_names_png(self):
+        result = self._submit(self._user(), raw=self._encode("JPEG"))
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "invalid")
+        self.assertIn("PNG", result["message"])
+        self.assertIn("JPG", result["message"])
+
+    def test_a_webp_is_refused(self):
+        result = self._submit(self._user(), raw=self._encode("WEBP"))
+        self.assertFalse(result["ok"])
+        self.assertIn("PNG", result["message"])
+
+    def test_a_gif_is_refused(self):
+        result = self._submit(self._user(), raw=self._encode("GIF", mode="P"))
+        self.assertFalse(result["ok"])
+        self.assertIn("PNG", result["message"])
+
+    def test_the_refusal_explains_how_to_get_a_png(self):
+        """A refusal that only states the rule teaches nobody anything."""
+        result = self._submit(self._user(), raw=self._encode("JPEG"))
+        self.assertIn(self.tls.TRANSPARENCY_HELP, result["message"])
+
+    def test_a_fully_opaque_png_is_accepted_but_flagged(self):
+        result = self._submit(self._user())
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["opaque"])
+
+    def test_a_transparent_png_is_not_flagged(self):
+        from PIL import Image, ImageDraw
+        image = Image.new("RGBA", (320, 320), (0, 0, 0, 0))
+        ImageDraw.Draw(image).ellipse([40, 40, 280, 280], fill=(200, 30, 40, 255))
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        result = self._submit(self._user(), raw=buf.getvalue())
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["opaque"])
+
+
 class ReasonTests(unittest.TestCase):
     def test_every_preset_reason_maps_to_a_message(self):
         from services import team_logo_service as tls

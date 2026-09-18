@@ -854,6 +854,9 @@ def _migrate_add_columns():
     _try_add("users", "team_logo_asset_key", "VARCHAR(300)")
     _try_add("users", "team_logo_file_id", "VARCHAR(200)")
     _try_add("users", "team_logo_updated_at", "TIMESTAMP")
+    # The team's own scorecard colour (/setteamcolour). VARCHAR(9) is the house
+    # width for a colour — it fits '#rrggbbaa' — matching challenge_teams above.
+    _try_add("users", "team_colour", "VARCHAR(9)")
 
     # ── Career Player (/cmucareer) ──
     # A career card is a normal players row owned by exactly one user. is_career
