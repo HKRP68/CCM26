@@ -50,11 +50,17 @@ them.
 
 ## What is deliberately *not* in a payload
 
-The admin accent colours, the Scorecard Designer's text settings, and the
-teams' logos. All three are re-read live in `render_card`, so a card redrawn
-next month follows the theme the admins have now and the crest the team has
-now, rather than the ones in force when the match was played. See
-`docs/team-logo-approval.md` for where a crest comes from.
+The admin accent colours, the Scorecard Designer's text settings, the teams'
+logos, and the Player of the Match's portrait. All of them are re-read live in
+`render_card`, so a card redrawn next month follows the theme the admins have
+now and the crest the team has now, rather than the ones in force when the
+match was played. See `docs/team-logo-approval.md` for where a crest comes
+from; the portrait is the admin-uploaded card art the bot already holds
+(`services/player_image_service`), found via the payload's `potm_player_id`.
+
+`/previewsummary` (bot admins) renders a card from canned data through this
+same path, which is the quick way to see the effect of a Scorecard Designer
+change without playing a match.
 
 ## `/lastscorecard`
 

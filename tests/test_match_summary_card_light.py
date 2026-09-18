@@ -170,6 +170,97 @@ class ShowcaseTests(unittest.TestCase):
         self.assertTrue(all(value == card.DASH for value, _label in metrics))
 
 
+class PotmRowTests(unittest.TestCase):
+    """The award is marked wherever the player appears — batters, bowlers, or
+    both. The marking is pixels, so ``_draw_rows`` returns the rows it marked
+    and that is what these assert on."""
+
+    def _rows(self, rows, potm_name, *, x_name=308, cx1=686, cx2=813,
+              max_name_w=282):
+        from PIL import Image, ImageDraw
+        img = Image.new("RGBA", (s := card.s(card.CANVAS_W), card.s(card.CANVAS_H)),
+                        (255, 255, 255, 255))
+        del s
+        draw = ImageDraw.Draw(img, "RGBA")
+        return card._draw_rows(draw, None, rows, x_name=x_name, cx1=cx1,
+                               cx2=cx2, top=300, color=card.TEAM_A,
+                               potm_name=potm_name, max_name_w=max_name_w)
+
+    def test_a_batting_award_marks_the_batters_table(self):
+        rows = card._normalise_batters([
+            {"name": "Ben Stokes", "runs": 52, "balls": 31, "out": False},
+            {"name": "Joe Root", "runs": 27, "balls": 17, "out": True},
+        ])
+        self.assertEqual(self._rows(rows, "Ben Stokes"), [0])
+
+    def test_a_bowling_award_marks_the_bowlers_table(self):
+        """The reason this matters: a bowler winning the award is common, and
+        the bowlers table goes through the same call with different columns."""
+        rows = card._normalise_bowlers([
+            {"name": "Jasprit Bumrah", "wickets": 4, "runs": 27, "overs": "4"},
+            {"name": "Sikandar Raza", "wickets": 1, "runs": 15, "overs": "2"},
+        ])
+        self.assertEqual(
+            self._rows(rows, "Jasprit Bumrah", x_name=959, cx1=1375, cx2=1520,
+                       max_name_w=320),
+            [0])
+
+    def test_an_all_rounder_is_marked_in_both_tables(self):
+        bat = card._normalise_batters([{"name": "Ben Stokes", "runs": 52,
+                                        "balls": 31, "out": False}])
+        bowl = card._normalise_bowlers([{"name": "Ben Stokes", "wickets": 4,
+                                         "runs": 27, "overs": "4"}])
+        self.assertEqual(self._rows(bat, "Ben Stokes"), [0])
+        self.assertEqual(
+            self._rows(bowl, "Ben Stokes", x_name=959, cx1=1375, cx2=1520,
+                       max_name_w=320),
+            [0])
+
+    def test_nobody_else_is_marked(self):
+        rows = card._normalise_batters([
+            {"name": "Joe Root", "runs": 27, "balls": 17, "out": True},
+            {"name": "Ben Stokes", "runs": 52, "balls": 31, "out": False},
+        ])
+        self.assertEqual(self._rows(rows, "Ben Stokes"), [1])
+        self.assertEqual(self._rows(rows, "Nobody At All"), [])
+        self.assertEqual(self._rows(rows, None), [])
+
+    def test_a_long_name_keeps_the_badge(self):
+        """The badge used to be dropped when the name ran long, which lost it on
+        exactly the row it exists to mark. The name is shortened instead."""
+        rows = card._normalise_bowlers([
+            {"name": "Ravichandran Ashwin Junior The Third", "wickets": 4,
+             "runs": 27, "overs": "4"}])
+        self.assertEqual(
+            self._rows(rows, "Ravichandran Ashwin Junior The Third",
+                       x_name=959, cx1=1375, cx2=1520, max_name_w=320),
+            [0])
+
+    def test_an_impact_substitute_can_win_it(self):
+        rows = card._normalise_batters([
+            {"name": "Super Sub", "runs": 70, "balls": 40, "out": False,
+             "impact": True}])
+        self.assertEqual(self._rows(rows, "Super Sub"), [0])
+
+    def test_the_impact_suffix_does_not_break_the_match(self):
+        """A caller that formats names for display appends ``-IP``; the award
+        carries the bare name."""
+        rows = card._normalise_batters([
+            {"name": "Super Sub -IP", "runs": 70, "balls": 40, "out": False,
+             "impact": True}])
+        self.assertEqual(self._rows(rows, "Super Sub"), [0])
+
+    def test_the_match_ignores_case_and_padding(self):
+        rows = card._normalise_batters([{"name": "  ben   STOKES ", "runs": 52,
+                                         "balls": 31, "out": False}])
+        self.assertEqual(self._rows(rows, "Ben Stokes"), [0])
+
+    def test_padding_rows_are_never_marked(self):
+        """Empty rows render as em-dashes; an em-dash award would mark them."""
+        rows = card._normalise_batters([])
+        self.assertEqual(self._rows(rows, "—"), [])
+
+
 class FlourishTests(unittest.TestCase):
     def test_the_default_matches_the_reference(self):
         """The poster says "Game Changer!", so an untouched install must too —

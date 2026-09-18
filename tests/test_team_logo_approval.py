@@ -89,7 +89,7 @@ class _Base(unittest.TestCase):
         # cannot make a later assertion pass for the wrong reason.
         for key in self._written:
             try:
-                self.tls._forget(key)
+                self.tls._forget(self.session, key)
             except Exception:
                 pass
         self.session.rollback()
@@ -104,9 +104,10 @@ class _Base(unittest.TestCase):
         self.session.commit()
         return user
 
-    def _submit(self, user, raw=None, file_id="FILEID"):
+    def _submit(self, user, raw=None, file_id="FILEID", ignore_limits=False):
         result = self.tls.submit_logo(self.session, user, raw or _png(),
-                                      file_id=file_id)
+                                      file_id=file_id,
+                                      ignore_limits=ignore_limits)
         if result.get("ok"):
             self.session.commit()
             self._written.append(result["request"].asset_key)
@@ -164,9 +165,13 @@ class PendingTests(_Base):
         self.assertEqual(again["error"], "pending")
 
     def test_a_new_upload_is_allowed_once_the_last_was_decided(self):
+        from datetime import datetime, timedelta
         user = self._user()
         first = self._submit(user)["request"]
         self.tls.reject_request(self.session, first, reviewer="a", note="no")
+        # Past the post-rejection cooldown, which ThrottleTests covers.
+        first.decided_at = (datetime.utcnow()
+                            - timedelta(seconds=self.tls.REJECT_COOLDOWN_SECONDS + 60))
         self.session.commit()
         self.assertTrue(self._submit(user)["ok"])
 
@@ -241,6 +246,98 @@ class DecisionTests(_Base):
         self.session.commit()
         self.assertIsNone(user.team_logo_asset_key)
         self.assertFalse(self.tls.remove_logo(self.session, user))
+
+
+class ThrottleTests(_Base):
+    """Every upload is a DM an admin has to action, so one user must not be
+    able to fill the queue on their own."""
+
+    def _reject(self, user, note="no"):
+        request = self._submit(user, ignore_limits=True)["request"]
+        self.tls.reject_request(self.session, request, reviewer="a", note=note)
+        self.session.commit()
+        return request
+
+    def test_a_fresh_user_is_not_blocked(self):
+        self.assertIsNone(self.tls.submission_block(self.session,
+                                                    self._user().id))
+
+    def test_a_rejection_starts_a_cooldown(self):
+        user = self._user()
+        self._reject(user)
+        blocked = self.tls.submission_block(self.session, user.id)
+        self.assertIsNotNone(blocked)
+        self.assertEqual(blocked[0], "cooldown")
+        self.assertIn("minute", blocked[1])
+
+    def test_the_cooldown_expires(self):
+        from datetime import datetime, timedelta
+        user = self._user()
+        request = self._reject(user)
+        request.decided_at = (datetime.utcnow()
+                              - timedelta(seconds=self.tls.REJECT_COOLDOWN_SECONDS + 60))
+        self.session.commit()
+        self.assertIsNone(self.tls.submission_block(self.session, user.id))
+
+    def test_three_rejections_in_a_row_hold_the_user(self):
+        from datetime import datetime, timedelta
+        user = self._user()
+        for _ in range(self.tls.CONSECUTIVE_REJECT_LIMIT):
+            request = self._reject(user)
+            # Past the cooldown, so the hold is what is being asserted.
+            request.decided_at = (datetime.utcnow()
+                                  - timedelta(seconds=self.tls.REJECT_COOLDOWN_SECONDS + 60))
+        self.session.commit()
+        blocked = self.tls.submission_block(self.session, user.id)
+        self.assertEqual(blocked[0], "held")
+
+    def test_an_approval_breaks_the_rejection_streak(self):
+        from datetime import datetime, timedelta
+        user = self._user()
+        for _ in range(self.tls.CONSECUTIVE_REJECT_LIMIT - 1):
+            request = self._reject(user)
+            request.decided_at = datetime.utcnow() - timedelta(days=1)
+        approved = self._submit(user, ignore_limits=True)["request"]
+        self.tls.approve_request(self.session, approved)
+        self.session.commit()
+        self.assertIsNone(self.tls.submission_block(self.session, user.id))
+
+    def test_an_admin_can_lift_a_hold(self):
+        from datetime import datetime, timedelta
+        user = self._user()
+        for _ in range(self.tls.CONSECUTIVE_REJECT_LIMIT):
+            request = self._reject(user)
+            request.decided_at = (datetime.utcnow()
+                                  - timedelta(seconds=self.tls.REJECT_COOLDOWN_SECONDS + 60))
+        self.session.commit()
+        self.assertEqual(self.tls.submission_block(self.session, user.id)[0], "held")
+        self.assertTrue(self.tls.clear_hold(self.session, user.id))
+        self.session.commit()
+        self.assertIsNone(self.tls.submission_block(self.session, user.id))
+
+    def test_the_daily_cap_is_enforced(self):
+        """Withdrawing does not buy another go — the cap counts submissions,
+        not decisions, which is what makes it a cap on admin workload."""
+        user = self._user()
+        for _ in range(self.tls.DAILY_SUBMISSION_CAP):
+            request = self._submit(user, ignore_limits=True)["request"]
+            self.tls.cancel_request(self.session, request)
+            self.session.commit()
+        blocked = self.tls.submission_block(self.session, user.id)
+        self.assertEqual(blocked[0], "daily_cap")
+
+    def test_submit_refuses_a_throttled_user(self):
+        user = self._user()
+        self._reject(user)
+        result = self.tls.submit_logo(self.session, user, _png())
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "cooldown")
+
+    def test_limits_only_count_that_user(self):
+        first, second = self._user(), self._user()
+        self._reject(first)
+        self.assertIsNotNone(self.tls.submission_block(self.session, first.id))
+        self.assertIsNone(self.tls.submission_block(self.session, second.id))
 
 
 class ReasonTests(unittest.TestCase):

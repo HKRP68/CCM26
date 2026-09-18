@@ -171,6 +171,11 @@ async def setteamlogo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                     "🚫 Withdraw it", callback_data=_cb("cancel", pending.id))]]))
             return
 
+        blocked = tls.submission_block(session, user.id)
+        if blocked:
+            await message.reply_text(f"🛑 {blocked[1]}")
+            return
+
         photo = _photo_from(message) or _photo_from(message.reply_to_message)
         if photo is None:
             context.user_data[AWAIT_IMAGE] = True
@@ -226,6 +231,8 @@ async def _accept_upload(update, context, session, user, photo):
         if result["error"] == "pending":
             await message.reply_text(
                 "⏳ You already have a logo waiting for approval.")
+        elif result["error"] in ("daily_cap", "cooldown", "held"):
+            await message.reply_text(f"🛑 {result['message']}")
         else:
             await message.reply_text(f"❌ {result.get('message', 'That did not work.')}")
         return
@@ -514,6 +521,59 @@ def _name_of(tg_user):
 # /logoqueue — the recovery path when a DM was missed
 # ══════════════════════════════════════════════════════════════════════
 
+async def logounhold_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """``/logounhold <telegram id>`` — let a held user try again.
+
+    Three rejections in a row pauses someone's uploads. This is the way back,
+    and it is deliberately a command rather than an automatic expiry: a hold
+    means an admin decided three times, so a human should decide to lift it.
+    """
+    message = update.effective_message
+    if message is None:
+        return
+    if not is_admin(update.effective_user.id):
+        await message.reply_text("That command is bot-admin only.")
+        return
+    if not context.args:
+        await message.reply_text(
+            "Usage: /logounhold &lt;telegram id&gt;\n"
+            "The id is on the review card, under the uploader's name.",
+            parse_mode="HTML")
+        return
+    try:
+        target = int(str(context.args[0]).lstrip("@"))
+    except (TypeError, ValueError):
+        await message.reply_text("That is not a Telegram id.")
+        return
+
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.telegram_id == target).first()
+        if user is None:
+            await message.reply_text("No account with that Telegram id.")
+            return
+        cleared = tls.clear_hold(session, user.id)
+        session.commit()
+        if not cleared:
+            await message.reply_text("That user is not on hold.")
+            return
+        delivered = await _dm(
+            context.bot, target,
+            "✅ <b>You can send a team logo again.</b>\n\n"
+            "Run /setteamlogo whenever you are ready — please read the earlier "
+            "reasons first.")
+        await message.reply_text(
+            f"✅ Hold lifted for <code>{target}</code>."
+            + (" User notified." if delivered else " ⚠️ Could not DM them."),
+            parse_mode="HTML")
+    except Exception:
+        session.rollback()
+        logger.exception("logounhold failed for %s", target)
+        await message.reply_text("⚠️ Something went wrong.")
+    finally:
+        session.close()
+
+
 async def logoqueue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
     if message is None or not is_admin(update.effective_user.id):
@@ -556,3 +616,88 @@ async def logoqueue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("⚠️ Something went wrong.")
     finally:
         session.close()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# /previewsummary — see the card without playing a match
+# ══════════════════════════════════════════════════════════════════════
+
+async def previewsummary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Render a summary card from canned data, with the caller's own crest.
+
+    Worth a command because the alternatives are both bad: play a whole match,
+    or change the Scorecard Designer and hope. It draws through the same
+    ``scorecard_delivery`` path a real match uses, so what comes back is what a
+    match would produce — current theme, current logos, current text settings.
+    """
+    message = update.effective_message
+    if message is None:
+        return
+    if not is_admin(update.effective_user.id):
+        await message.reply_text("That command is bot-admin only.")
+        return
+
+    session = get_session()
+    try:
+        viewer = (session.query(User)
+                  .filter(User.telegram_id == update.effective_user.id).first())
+        team = (viewer.team_name if viewer and viewer.team_name
+                else "Rome Gladiators")
+    finally:
+        session.close()
+
+    payload = {
+        "inn1_team": team, "inn1_runs": 156, "inn1_wickets": 7,
+        "inn1_overs": "20",
+        "inn2_team": "Mumbai Marathas", "inn2_runs": 158, "inn2_wickets": 4,
+        "inn2_overs": "16.5",
+        "winner_name": "Mumbai Marathas", "win_margin_text": "by 6 wickets",
+        "overs_total": 20, "match_no": 98,
+        "stadium": "Singapore National Stadium",
+        "potm_name": "Ben Stokes", "potm_team": "Mumbai Marathas",
+        "potm_stats": "52* (31)", "potm_runs": 52, "potm_balls": 31,
+        "potm_fours": 4, "potm_sixes": 2, "potm_sr": 167.7,
+        "top_per_team": {
+            "inn1": {"team": team,
+                     "batters": [
+                         {"name": "Shimron Hetmyer", "runs": 33, "balls": 22, "out": True},
+                         {"name": "Venkatesh Iyer", "runs": 29, "balls": 15, "out": False},
+                         {"name": "Glenn Maxwell", "runs": 27, "balls": 18, "out": True},
+                         {"name": "Nitish Rana", "runs": 22, "balls": 14, "out": True}],
+                     "bowlers": [
+                         {"name": "Ben Stokes", "wickets": 4, "runs": 27, "overs": "4"},
+                         {"name": "Sikandar Raza", "wickets": 1, "runs": 15, "overs": "2"},
+                         {"name": "Mitchell Starc", "wickets": 1, "runs": 18, "overs": "4"},
+                         {"name": "Jason Holder", "wickets": 1, "runs": 32, "overs": "4"}]},
+            "inn2": {"team": "Mumbai Marathas",
+                     "batters": [
+                         {"name": "Ben Stokes", "runs": 52, "balls": 31, "out": False},
+                         {"name": "Ravindra Jadeja", "runs": 29, "balls": 18, "out": True},
+                         {"name": "Joe Root", "runs": 27, "balls": 17, "out": True},
+                         {"name": "Suryakumar Yadav", "runs": 18, "balls": 9, "out": True}],
+                     "bowlers": [
+                         {"name": "James Anderson", "wickets": 1, "runs": 20, "overs": "4"},
+                         {"name": "Glenn Maxwell", "wickets": 1, "runs": 21, "overs": "4"},
+                         {"name": "Jason Holder", "wickets": 1, "runs": 43, "overs": "3"},
+                         {"name": "Sikandar Raza", "wickets": 1, "runs": 28, "overs": "3.5"}]},
+        },
+    }
+
+    try:
+        from services import scorecard_delivery
+        png = await scorecard_delivery.render_card_async(
+            scorecard_delivery.CARD_SUMMARY, payload)
+    except Exception:
+        logger.exception("previewsummary render failed")
+        png = None
+    if not png:
+        await message.reply_text(
+            "⚠️ The card did not render. Check the logs — a missing font or a "
+            "bad Scorecard Designer value would do it.")
+        return
+    await context.bot.send_photo(
+        chat_id=message.chat_id, photo=_fresh(png),
+        caption=(f"🖼 Preview — canned data, live theme.\n"
+                 f"Innings 1 is <b>{html.escape(team)}</b>, so its crest is "
+                 f"yours if you have one approved."),
+        parse_mode="HTML")

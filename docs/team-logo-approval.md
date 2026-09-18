@@ -30,6 +30,8 @@ so a queue backlog never leaks an unreviewed image onto a card.
 | `/setteamlogo` | anyone, DM only | Send an image with the command, reply to one, or send the command and then the image. |
 | `/setteamlogo remove` | anyone | Clear an approved crest. Needs no review — removing shows nobody anything. |
 | `/logoqueue` | bot admins | List what is waiting and re-send any review card. The recovery path when a DM was missed or the bot restarted. |
+| `/logounhold <telegram id>` | bot admins | Lift a consecutive-rejection hold. |
+| `/previewsummary` | bot admins | Render a summary card from canned data, through the real delivery path, with your own crest on innings 1. |
 
 `/setteamlogo` is deliberately **not** in the slash menu: both player scopes sit
 at Telegram's 100-command ceiling, so publishing it would cost an existing
@@ -115,9 +117,40 @@ pending, and the other copies are edited to say who decided. The message ids
 for that tidy-up live in `bot_data`, so a restart loses them — the buttons still
 work, they just stop being cleaned up.
 
-## What this does not do
+## Submission limits
 
-There is no rate limit. A rejected user can resubmit immediately, and every
-upload is a DM an admin has to action. If the queue becomes a burden, the
-obvious knobs are a cooldown after a rejection, a daily cap per user, and an
-auto-hold after repeated rejections.
+Every upload is a DM an admin has to action, so one user must not be able to
+fill the queue on their own. Three limits, all in `team_logo_service`:
+
+| Limit | Default | Why |
+| --- | --- | --- |
+| `DAILY_SUBMISSION_CAP` | 5 per 24h | Counts *submissions*, not decisions — withdrawing does not buy another go. |
+| `REJECT_COOLDOWN_SECONDS` | 1 hour | A resubmission straight after a rejection is usually the same image lightly edited. The wait is also when the reason gets read. |
+| `CONSECUTIVE_REJECT_LIMIT` | 3 | Three refusals in a row with nothing approved between pauses uploads until an admin lifts it. |
+
+They are checked before the image is decoded, so a throttled user does not pay
+for a validation pass they cannot use, and the message says which limit was hit
+and when it clears.
+
+A hold is lifted with `/logounhold <telegram id>` — deliberately a command
+rather than an automatic expiry, because a hold means an admin decided three
+times and a human should decide to undo that. The id is on the review card.
+`clear_hold` marks the streak `cancelled` rather than rewriting what was
+decided, so the audit trail survives.
+
+## Sessions: do not reach for a second one
+
+`_store` and `_forget` write `stored_assets` through the **caller's** session,
+not through `asset_store.put` / `asset_store.drop`. Those open their own, and
+everything here runs inside the caller's open transaction. A second pooled
+connection writing while the first is mid-transaction is the pool-exhaustion
+trap `services/player_image_service` documents at length; on SQLite it fails
+outright, and because the failure is swallowed the row survives as an orphan —
+the bytes of a rejected logo would outlive the rejection.
+
+Writing through the caller's session also means the bytes and the request row
+land together or not at all.
+
+For the same reason every read here calls `_flush(session)` first:
+`SessionLocal` is built with `autoflush=False`, so a status this service just
+set is *not* visible to a later filter on that status until something flushes.

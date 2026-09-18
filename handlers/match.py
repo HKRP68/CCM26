@@ -1201,7 +1201,7 @@ def _potm_showcase(s, potm_name):
     if not potm_name:
         return {}
     wanted = str(potm_name).strip().lower()
-    bat, bowl = {}, {}
+    bat, bowl, player_id = {}, {}, None
     pairs = [
         (s.get("inn1_bat_xi", []), s.get("inn1_bat_stats", {}), "bat"),
         (s.get("inn1_bowl_xi", []), s.get("inn1_bowl_stats", {}), "bowl"),
@@ -1215,6 +1215,7 @@ def _potm_showcase(s, potm_name):
         for player in xi or []:
             if str(player.get("name", "")).strip().lower() != wanted:
                 continue
+            player_id = player.get("player_id", player_id)
             row = _stats_get(stats, player.get("roster_id")) or {}
             target = bat if kind == "bat" else bowl
             for key, value in row.items():
@@ -1222,6 +1223,8 @@ def _potm_showcase(s, potm_name):
                     target[key] = target.get(key, 0) + value
 
     out = {}
+    if player_id is not None:
+        out["potm_player_id"] = player_id
     if bat.get("balls"):
         balls = bat["balls"]
         out.update(potm_runs=bat.get("runs", 0), potm_balls=balls,
@@ -1310,6 +1313,7 @@ def _gather_top_per_team(s, top_n=4):
       }
     Used by the new match summary card.
     """
+    from services import impact_player
     def _top_batters(xi, stats, top_n):
         rows = []
         for p in xi:
@@ -1326,6 +1330,9 @@ def _gather_top_per_team(s, top_n=4):
                 "fours": ps.get("fours", 0),
                 "sixes": ps.get("sixes", 0),
                 "out": ps.get("out", False),
+                # The summary card tints an Impact substitute's row green. The
+                # flag has to be set here — the card cannot see the XI dict.
+                "impact": impact_player.is_impact(p),
             })
         rows.sort(key=lambda r: (-r["runs"], r["balls"]))
         return rows[:top_n]
@@ -1350,6 +1357,7 @@ def _gather_top_per_team(s, top_n=4):
                 "runs": runs,
                 "wickets": ps.get("wickets", 0),
                 "econ": econ,
+                "impact": impact_player.is_impact(p),
             })
         rows.sort(key=lambda r: (-r["wickets"], r["econ"]))
         return rows[:top_n]

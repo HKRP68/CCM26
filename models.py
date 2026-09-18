@@ -1265,6 +1265,9 @@ class GameConfig(Base):
     # scorecard. Defaults match the original PRIMARY (red) / SECONDARY (teal).
     scorecard_color_inn1 = Column(String(9), default="#c41e3a")
     scorecard_color_inn2 = Column(String(9), default="#00c9a7")
+    # Off renders the reference poster's literal "Game Changer!"; on names what
+    # the Player of the Match actually did.
+    scorecard_dynamic_flourish = Column(Boolean, default=False)
     scorecard_text_settings = Column(Text, nullable=True)
     # ── /wpm and /cm completion cards ──
     # Comma-separated list of which cards to post to the lobby chat when a

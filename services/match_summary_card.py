@@ -64,6 +64,12 @@ WHITE = (255, 255, 255)
 # Impact substitutes get a green row instead of their side's colour, so a
 # changed XI is obvious on the card without reading the names.
 IMPACT_GREEN = (22, 140, 66)
+# Kept in step with services.impact_player.IMPACT_SUFFIX, imported lazily there
+# to keep this renderer free of bot imports.
+IMPACT_SUFFIX = "-ip"
+# What an empty table row is filled with, in every place that pads one.
+DASH = "—"
+_PLACEHOLDERS = {DASH, "-", "--", "?"}
 
 # ── Geometry, measured off the reference ─────────────────────────────
 PAD_L = 51
@@ -570,14 +576,45 @@ def _normalise_bowlers(rows):
     return out
 
 
+def _same_player(a, b):
+    """Whether two row names are the same player.
+
+    The award carries a bare name and the tables build theirs from the same XI
+    dicts, so this is usually an exact match — but a caller that formats names
+    for display appends the Impact substitute's ``-IP`` suffix, and a name that
+    only differs by that suffix is still the same person.
+    """
+    def key(value):
+        text = re.sub(r"\s+", " ", str(value or "")).strip().lower()
+        if text.endswith(IMPACT_SUFFIX):
+            text = text[:-len(IMPACT_SUFFIX)].strip()
+        # A table shorter than four rows is padded with placeholders, and a
+        # placeholder must never match anything — otherwise an award with no
+        # name would badge every empty row.
+        return "" if text in _PLACEHOLDERS else text
+    left, right = key(a), key(b)
+    return bool(left) and left == right
+
+
 def _draw_rows(draw, ts, rows, *, x_name, cx1, cx2, top, color, potm_name,
                max_name_w):
+    """Draw one four-row table. Returns the indexes marked Player of the Match.
+
+    The POTM is marked wherever they appear — the batters table, the bowlers
+    table, or both, when the award went to an all-rounder who did both. The
+    return value is what the tests assert on, because the marking itself is
+    pixels.
+    """
     name_f = _font_for(ts, "row_name", 23, family="body")
     # RUNS/FIGURES carry the weight in the reference; BALLS/OVERS are regular.
     num_f = _font_for(ts, "row_number", 21, family="headline")
     alt_f = _font(23 + int(_setting(ts, "row_number").get("size", 0) or 0),
                   family="body")
     badge_f = _font(12, family="display")
+    badge_w = _tw(draw, "POTM", badge_f) + 18
+    row_x0, row_x1 = x_name - 18, cx2 + 60
+    marked = []
+
     for i, row in enumerate(rows[:4]):
         # Tolerate a narrower tuple so a caller that has not been updated
         # degrades to "no green tint, no not-out colour" rather than an
@@ -585,32 +622,50 @@ def _draw_rows(draw, ts, rows, *, x_name, cx1, cx2, top, color, potm_name,
         name, v1, v2 = row[0], row[1], row[2]
         impact = bool(row[3]) if len(row) > 3 else False
         not_out = bool(row[4]) if len(row) > 4 else False
+        is_potm = _same_player(name, potm_name)
+        if is_potm:
+            marked.append(i)
+
         y0 = top + i * ROW_PITCH
         y1 = top + (i + 1) * ROW_PITCH
         cy = (y0 + y1) / 2
-        if impact:
-            draw.rectangle(sbox(x_name - 18, y0, cx2 + 60, y1),
-                           fill=(*IMPACT_GREEN, 30))
-        draw.line([(s(x_name - 18), s(y1)), (s(cx2 + 60), s(y1))],
+
+        # Row wash. The award outranks the Impact tint when a substitute won it
+        # — gold is the rarer thing to say — but the name stays green below, so
+        # neither signal is lost.
+        if is_potm:
+            draw.rectangle(sbox(row_x0, y0, row_x1, y1), fill=(*GOLD_BRIGHT, 34))
+            draw.rectangle(sbox(row_x0, y0 + 3, row_x0 + 5, y1 - 3),
+                           fill=(*GOLD, 255))
+        elif impact:
+            draw.rectangle(sbox(row_x0, y0, row_x1, y1), fill=(*IMPACT_GREEN, 30))
+            draw.rectangle(sbox(row_x0, y0 + 3, row_x0 + 5, y1 - 3),
+                           fill=(*IMPACT_GREEN, 210))
+        draw.line([(s(row_x0), s(y1)), (s(row_x1), s(y1))],
                   fill=(*ROW_LINE, 255), width=s(1))
 
-        label = _fit(draw, str(name).upper(), name_f, max_name_w)
+        # Reserve the badge's width before fitting the name. The badge used to
+        # be dropped whenever the name ran long, which meant the one row it
+        # exists to mark was the row most likely to lose it.
+        budget = max_name_w - (badge_w + 12 if is_potm else 0)
+        label = _fit(draw, str(name).upper(), name_f, max(60, budget))
         nx, ny = _xy(ts, "row_name", x_name, cy + 1)
         _draw_text(draw, (nx, ny), label, name_f,
                    IMPACT_GREEN if impact else NAME_INK, anchor="lm", weight=0.45)
-        if potm_name and str(name).strip().lower() == str(potm_name).strip().lower():
-            bx = nx + _tw(draw, label, name_f) + 12
-            if bx + 54 < cx1 - 34:
-                draw.rounded_rectangle(sbox(bx, cy - 11, bx + 54, cy + 11),
-                                       radius=s(5), fill=(*GOLD_BRIGHT, 255))
-                _draw_text(draw, (bx + 27, cy + 1), "POTM", badge_f, INK,
-                           tracking=0.8, anchor="mm")
+        if is_potm:
+            bx = min(nx + _tw(draw, label, name_f) + 12,
+                     cx1 - 34 - badge_w)
+            draw.rounded_rectangle(sbox(bx, cy - 11, bx + badge_w, cy + 11),
+                                   radius=s(5), fill=(*GOLD_BRIGHT, 255))
+            _draw_text(draw, (bx + badge_w / 2, cy + 1), "POTM", badge_f, INK,
+                       tracking=0.8, anchor="mm")
 
         v1x, v1y = _xy(ts, "row_number", cx1, cy + 1)
         _draw_text(draw, (v1x, v1y), str(v1).upper(), num_f,
                    color if not_out else VALUE_INK, anchor="mm")
         _draw_text(draw, (cx2, cy + 1), str(v2).upper(), alt_f, (64, 78, 98),
                    anchor="mm")
+    return marked
 
 
 def _draw_innings(img, draw, ts, y, *, team, runs, wickets, overs, overs_total,
@@ -882,7 +937,6 @@ def _draw_potm(img, draw, ts, *, name, team, photo_png, metrics, flourish):
 # is what keeps a bowling award out of the batting branch.
 _BAT_STAT_RE = re.compile(r"(?<![\d/\-])(\d+)\s*\*?\s*\((\d+)\)")
 _BOWL_STAT_RE = re.compile(r"(\d+)\s*[-/]\s*(\d+)")
-DASH = "—"
 
 
 def _num(value):

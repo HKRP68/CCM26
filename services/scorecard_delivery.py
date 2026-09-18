@@ -159,6 +159,24 @@ def _team_logo(team_name):
         session.close()
 
 
+def _potm_photo(player_id):
+    """The Player of the Match's portrait, for the summary card's POTM strip.
+
+    Reuses the admin-uploaded card art the bot already holds
+    (``services.player_image_service``), which restores itself from the
+    Telegram storage channel when an ephemeral deploy has wiped the local file.
+    No portrait is not a problem — the strip simply runs without one.
+    """
+    if not player_id:
+        return None
+    try:
+        from services import player_image_service
+        return player_image_service.get_custom_image_bytes(int(player_id))
+    except Exception:
+        logger.exception("POTM portrait lookup failed for player %s", player_id)
+        return None
+
+
 def _live_style(is_first_innings, team_name=None):
     """The admin-tunable accent + text settings, read at render time.
 
@@ -179,24 +197,27 @@ def _live_style(is_first_innings, team_name=None):
         return {"accent_hex": None, "text_settings": None, "team_logo_png": None}
 
 
-def _summary_style(inn1_team=None, inn2_team=None):
+def _summary_style(inn1_team=None, inn2_team=None, potm_player_id=None):
     """Text settings, the two innings colours, and both teams' crests.
 
     The summary card used to hardcode its red/blue by innings position while
     the batting and bowling cards read the admin colours — so the three cards
     of one match could disagree. They all read the same two settings now.
     """
-    style = {"text_settings": None, "inn1_color": None, "inn2_color": None}
+    style = {"text_settings": None, "inn1_color": None, "inn2_color": None,
+             "dynamic_flourish": False}
     try:
         from services.config_service import get_config
         cfg = get_config()
         style["text_settings"] = cfg.get("scorecard_text_settings")
         style["inn1_color"] = cfg.get("scorecard_color_inn1")
         style["inn2_color"] = cfg.get("scorecard_color_inn2")
+        style["dynamic_flourish"] = bool(cfg.get("scorecard_dynamic_flourish"))
     except Exception:
         logger.exception("summary style lookup failed — falling back to defaults")
     style["inn1_logo_png"] = _team_logo(inn1_team)
     style["inn2_logo_png"] = _team_logo(inn2_team)
+    style["potm_photo_png"] = _potm_photo(potm_player_id)
     return style
 
 
@@ -245,7 +266,8 @@ def render_card(card_type, payload):
         if card_type == CARD_SUMMARY:
             from services.match_summary_card import generate_match_summary
             payload.update(_summary_style(payload.get("inn1_team"),
-                                          payload.get("inn2_team")))
+                                          payload.get("inn2_team"),
+                                          payload.get("potm_player_id")))
             # ``match_date`` round-trips through JSON as an ISO string.
             raw_date = payload.get("match_date")
             if isinstance(raw_date, str):

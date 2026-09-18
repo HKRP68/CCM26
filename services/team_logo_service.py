@@ -28,7 +28,7 @@ import os
 import re
 import secrets
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,17 @@ _LOGO_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "data", "team_logos")
 _ASSET_PREFIX = "data/team_logos"
+
+# Submission limits. Every upload is a DM an admin has to action, and without
+# these one user can fill the queue on their own — resubmitting the instant a
+# rejection lands, forever.
+DAILY_SUBMISSION_CAP = 5
+# A rejection is a "no, not this". Coming straight back with another image is
+# usually the same image lightly edited, so there is a pause.
+REJECT_COOLDOWN_SECONDS = 60 * 60
+# After this many rejections in a row with nothing approved between them, the
+# next attempt is held until an admin lifts it with /logoqueue.
+CONSECUTIVE_REJECT_LIMIT = 3
 
 # The reasons an admin can reject with in one tap. ``key`` rides in the callback
 # data, so it stays short and stable — renaming one changes what an in-flight
@@ -84,9 +95,25 @@ CUSTOM_REASON_KEY = "custom"
 # Lookups
 # ══════════════════════════════════════════════════════════════════════
 
+def _flush(session):
+    """Make the caller's own uncommitted changes visible to the next query.
+
+    ``SessionLocal`` is built with ``autoflush=False`` (database.py), so a
+    status this service just set is *not* seen by a later filter on that
+    status until something flushes. Every read below is a decision about what
+    the caller has already done, so they all flush first. This stays inside the
+    caller's transaction — a rollback still discards it.
+    """
+    try:
+        session.flush()
+    except Exception:
+        logger.warning("team logo flush failed", exc_info=True)
+
+
 def pending_request(session, user_id):
     """The user's open request, or ``None``. There is at most one."""
     from models import TeamLogoRequest
+    _flush(session)
     return (session.query(TeamLogoRequest)
             .filter(TeamLogoRequest.user_id == user_id,
                     TeamLogoRequest.status == STATUS_PENDING)
@@ -200,31 +227,76 @@ def _asset_key(user_id):
             f"-{secrets.token_hex(4)}.png")
 
 
-def _store(key, png, uploaded_by=None):
-    """Write the bytes to the durable store and the on-disk cache."""
+def _store(session, key, png, uploaded_by=None):
+    """Write the bytes to the durable store and the on-disk cache.
+
+    Deliberately *not* ``asset_store.put``: like ``drop``, it opens its own
+    session, and this runs inside the caller's open transaction. A second
+    pooled connection writing while the first is mid-transaction is the
+    pool-exhaustion trap ``services/player_image_service`` documents, and on
+    SQLite it fails outright. Writing through the caller's session also means
+    the bytes and the request row land together or not at all.
+    """
+    import hashlib
+    from models import StoredAsset
     from services import asset_store
+
+    if len(png) > asset_store.MAX_ASSET_BYTES:
+        logger.warning("team logo %s is over the asset cap", key)
+        return False
+
     path = asset_store.absolute_path(key)
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as handle:
             handle.write(png)
     except OSError:
-        # The disk copy is only a cache; asset_store is the source of truth.
+        # The disk copy is only a cache; stored_assets is the source of truth.
         logger.warning("team logo cache write failed for %s", key, exc_info=True)
-    return asset_store.put(path, data=png, uploaded_by=uploaded_by,
-                           content_type="image/png")
+
+    try:
+        row = session.query(StoredAsset).filter(StoredAsset.key == key).first()
+        if row is None:
+            row = StoredAsset(key=key)
+            session.add(row)
+        row.filename = os.path.basename(key)
+        row.content_type = "image/png"
+        row.data = png
+        row.byte_size = len(png)
+        row.sha256 = hashlib.sha256(png).hexdigest()
+        if uploaded_by:
+            row.updated_by = str(uploaded_by)[:100]
+        return True
+    except Exception:
+        logger.exception("team logo could not be stored under %s", key)
+        return False
 
 
-def _forget(key):
+def _forget(session, key):
+    """Drop a crest's bytes, using the caller's session for the database row.
+
+    Deliberately *not* ``asset_store.drop``: that opens its own session, and
+    every caller here is mid-transaction with uncommitted changes of its own.
+    A second connection writing the same tables blocks on Postgres and fails
+    outright on SQLite, and because the failure is swallowed the row survives
+    as an orphan — the bytes of a rejected logo would outlive the rejection.
+
+    The row goes through the caller's transaction, so it is removed if and only
+    if the decision that removed it is committed. The disk copy is only a cache
+    and is unlinked immediately.
+    """
     if not key:
         return
+    from models import StoredAsset
     from services import asset_store
-    path = asset_store.absolute_path(key)
     try:
-        asset_store.drop(path)
+        (session.query(StoredAsset)
+         .filter(StoredAsset.key == key)
+         .delete(synchronize_session=False))
     except Exception:
-        logger.warning("team logo drop failed for %s", key, exc_info=True)
+        logger.warning("team logo row delete failed for %s", key, exc_info=True)
     try:
+        path = asset_store.absolute_path(key)
         if os.path.isfile(path):
             os.remove(path)
     except OSError:
@@ -252,19 +324,83 @@ def logo_bytes_for_key(key):
 # The request lifecycle
 # ══════════════════════════════════════════════════════════════════════
 
-def submit_logo(session, user, raw_bytes, *, file_id=None):
+def submission_block(session, user_id):
+    """Why this user may not submit right now, or ``None``.
+
+    Returns ``(reason, message)``. Checked before the image is decoded, so a
+    throttled user does not pay for a validation pass they cannot use.
+    """
+    from models import TeamLogoRequest
+    _flush(session)
+    since = datetime.utcnow() - timedelta(days=1)
+    today = (session.query(TeamLogoRequest)
+             .filter(TeamLogoRequest.user_id == user_id,
+                     TeamLogoRequest.created_at >= since).count())
+    if today >= DAILY_SUBMISSION_CAP:
+        return ("daily_cap",
+                f"You have sent {today} logos in the last 24 hours, which is "
+                f"the limit. Try again tomorrow.")
+
+    recent = (session.query(TeamLogoRequest)
+              .filter(TeamLogoRequest.user_id == user_id)
+              .order_by(TeamLogoRequest.created_at.desc())
+              .limit(CONSECUTIVE_REJECT_LIMIT).all())
+    streak = 0
+    for row in recent:
+        if row.status != STATUS_REJECTED:
+            break
+        streak += 1
+    if streak >= CONSECUTIVE_REJECT_LIMIT:
+        return ("held",
+                f"Your last {streak} logos were turned down, so new uploads "
+                "are paused. Message a bot admin and they can lift it.")
+
+    last_reject = next((r for r in recent if r.status == STATUS_REJECTED), None)
+    if last_reject is not None and last_reject.decided_at:
+        waited = (datetime.utcnow() - last_reject.decided_at).total_seconds()
+        if waited < REJECT_COOLDOWN_SECONDS:
+            minutes = int((REJECT_COOLDOWN_SECONDS - waited) // 60) + 1
+            return ("cooldown",
+                    f"Your last logo was turned down. You can send another in "
+                    f"{minutes} minute{'s' if minutes != 1 else ''} — please "
+                    "read the reason first.")
+    return None
+
+
+def clear_hold(session, user_id):
+    """Lift a consecutive-rejection hold, so the owner can try again.
+
+    The streak is counted off the most recent rows, so marking them
+    ``cancelled`` ends it without rewriting what was decided or why.
+    """
+    from models import TeamLogoRequest
+    rows = (session.query(TeamLogoRequest)
+            .filter(TeamLogoRequest.user_id == user_id,
+                    TeamLogoRequest.status == STATUS_REJECTED)
+            .order_by(TeamLogoRequest.created_at.desc())
+            .limit(CONSECUTIVE_REJECT_LIMIT).all())
+    for row in rows:
+        row.status = STATUS_CANCELLED
+    return len(rows)
+
+
+def submit_logo(session, user, raw_bytes, *, file_id=None, ignore_limits=False):
     """Queue a crest for review. Returns ``{"ok": ..., ...}``; caller commits."""
     from models import TeamLogoRequest
     existing = pending_request(session, user.id)
     if existing is not None:
         return {"ok": False, "error": "pending", "request": existing}
+    if not ignore_limits:
+        blocked = submission_block(session, user.id)
+        if blocked:
+            return {"ok": False, "error": blocked[0], "message": blocked[1]}
     try:
         png, width, height = normalise_image(raw_bytes)
     except ValueError as exc:
         return {"ok": False, "error": "invalid", "message": str(exc)}
 
     key = _asset_key(user.id)
-    if not _store(key, png, uploaded_by=user.telegram_id):
+    if not _store(session, key, png, uploaded_by=user.telegram_id):
         return {"ok": False, "error": "storage",
                 "message": "I could not save that image. Please try again."}
 
@@ -301,7 +437,7 @@ def approve_request(session, request, *, reviewer=None):
     # Only now is the old crest safe to forget: until this point it was still
     # the one being drawn.
     if previous and previous != request.asset_key:
-        _forget(previous)
+        _forget(session, previous)
     invalidate_cache(user.id, user.team_name)
     return {"ok": True, "request": request, "user": user}
 
@@ -314,7 +450,7 @@ def reject_request(session, request, *, reviewer=None, note=None):
     request.review_note = (str(note or "").strip()[:300] or None)
     request.reviewed_by = str(reviewer or "")[:80] or None
     request.decided_at = datetime.utcnow()
-    _forget(request.asset_key)
+    _forget(session, request.asset_key)
     request.asset_key = None
     invalidate_cache(request.user_id)
     return {"ok": True, "request": request}
@@ -327,7 +463,7 @@ def cancel_request(session, request, *, by_owner=True):
     request.status = STATUS_CANCELLED
     request.review_note = "Withdrawn by the owner." if by_owner else None
     request.decided_at = datetime.utcnow()
-    _forget(request.asset_key)
+    _forget(session, request.asset_key)
     request.asset_key = None
     invalidate_cache(request.user_id)
     return {"ok": True, "request": request}
@@ -336,7 +472,7 @@ def cancel_request(session, request, *, by_owner=True):
 def remove_logo(session, user):
     """Clear an approved crest. Needs no review — removing shows nobody anything."""
     had = bool(user.team_logo_asset_key)
-    _forget(user.team_logo_asset_key)
+    _forget(session, user.team_logo_asset_key)
     user.team_logo_asset_key = None
     user.team_logo_file_id = None
     user.team_logo_updated_at = datetime.utcnow()
