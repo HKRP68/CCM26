@@ -5,9 +5,13 @@ to 0.00001, so the picker must never floor or round them, and a reward parked
 at 0 must never land.
 """
 
+import os
 import sys
 import types
 import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
 
 
 def _install_stubs():
@@ -30,7 +34,7 @@ def _install_stubs():
     config.GSPIN_OUTCOMES = [(0.58, "red", "coins", (1500, 3000))]
     sys.modules["config"] = config
 
-    sys.modules.pop("services.gspin_reward_service", None)
+    _module_swap.unload(["services.gspin_reward_service"])
     from services import gspin_reward_service
     return gspin_reward_service
 

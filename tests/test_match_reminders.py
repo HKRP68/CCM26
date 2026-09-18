@@ -25,6 +25,9 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
+
 _TG = itertools.count(660_001)
 
 _PREV_DATABASE_URL = None
@@ -40,9 +43,8 @@ def setUpModule():
     global _PREV_DATABASE_URL, _SAVED_MODULES, _TMP, _ENGINE
 
     _PREV_DATABASE_URL = os.environ.get("DATABASE_URL")
-    _SAVED_MODULES = {name: sys.modules.get(name) for name in _MODULE_NAMES}
-    for name in _MODULE_NAMES:
-        sys.modules.pop(name, None)
+    _SAVED_MODULES = _module_swap.save(_MODULE_NAMES)
+    _module_swap.unload(_MODULE_NAMES)
 
     _TMP = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     _TMP.close()
@@ -64,11 +66,7 @@ def tearDownModule():
         os.environ.pop("DATABASE_URL", None)
     else:
         os.environ["DATABASE_URL"] = _PREV_DATABASE_URL
-    for name, module in _SAVED_MODULES.items():
-        if module is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = module
+    _module_swap.restore(_SAVED_MODULES)
     try:
         os.unlink(_TMP.name)
     except OSError:

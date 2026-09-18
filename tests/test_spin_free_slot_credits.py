@@ -22,6 +22,9 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
+
 _PREV_ENV = {}
 _SAVED_MODULES = {}
 _TMP = None
@@ -39,9 +42,8 @@ def setUpModule():
     _PREV_ENV = {k: os.environ.get(k)
                  for k in ("DATABASE_URL", "WEBAPP_DEV_MODE", "BOT_TOKEN",
                            "ADMIN_SECRET")}
-    _SAVED_MODULES = {name: sys.modules.get(name) for name in _MODULE_NAMES}
-    for name in _MODULE_NAMES:
-        sys.modules.pop(name, None)
+    _SAVED_MODULES = _module_swap.save(_MODULE_NAMES)
+    _module_swap.unload(_MODULE_NAMES)
 
     _TMP = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     _TMP.close()
@@ -68,11 +70,7 @@ def tearDownModule():
             os.environ.pop(key, None)
         else:
             os.environ[key] = value
-    for name, module in _SAVED_MODULES.items():
-        if module is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = module
+    _module_swap.restore(_SAVED_MODULES)
     try:
         os.unlink(_TMP.name)
     except Exception:

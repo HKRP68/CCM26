@@ -67,8 +67,17 @@ def _load_debut_with_stubs(monkeypatch):
     activity_service.log_activity = lambda *args, **kwargs: None
     monkeypatch.setitem(sys.modules, "services.activity_service", activity_service)
 
+    # delitem alone is half a cache miss: a popped submodule is still an
+    # attribute of its package, and ``from handlers import debut`` reads that
+    # attribute. delattr closes it, and monkeypatch restores both at teardown
+    # so the stub build does not outlive these tests.
+    import handlers
+    import services
+
     monkeypatch.delitem(sys.modules, "services.miniapp_buttons", raising=False)
+    monkeypatch.delattr(services, "miniapp_buttons", raising=False)
     monkeypatch.delitem(sys.modules, "handlers.debut", raising=False)
+    monkeypatch.delattr(handlers, "debut", raising=False)
 
     from handlers.debut import _build_post_debut_onboarding_markup
 

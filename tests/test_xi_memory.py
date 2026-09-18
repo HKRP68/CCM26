@@ -5,6 +5,9 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
+
 
 class XiMemoryServiceTest(unittest.TestCase):
     _MODULE_NAMES = ("database", "models", "config", "services.xi_memory_service")
@@ -17,9 +20,8 @@ class XiMemoryServiceTest(unittest.TestCase):
         # Save what we evict (and DATABASE_URL) so tearDownClass can restore the
         # process-wide state and not strand later tests on our temp-bound modules.
         cls._prev_database_url = os.environ.get("DATABASE_URL")
-        cls._saved_modules = {name: sys.modules.get(name) for name in cls._MODULE_NAMES}
-        for name in cls._MODULE_NAMES:
-            sys.modules.pop(name, None)
+        cls._saved_modules = _module_swap.save(cls._MODULE_NAMES)
+        _module_swap.unload(cls._MODULE_NAMES)
 
         # Point the whole stack at an isolated temp SQLite file before importing
         # any project module that reads DATABASE_URL at import time.
@@ -51,11 +53,7 @@ class XiMemoryServiceTest(unittest.TestCase):
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = cls._prev_database_url
-        for name, module in cls._saved_modules.items():
-            if module is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module
+        _module_swap.restore(cls._saved_modules)
         try:
             os.unlink(cls._tmp.name)
         except OSError:
