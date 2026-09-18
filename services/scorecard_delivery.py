@@ -31,9 +31,10 @@ What a payload holds
 ────────────────────
 Exactly the data arguments of the generator named by ``card_type`` — team
 names, rows, fall of wickets, extras. It deliberately does **not** store the
-admin-tunable accent colour or text settings: those are re-read live in
-:func:`render_card`, so a card redrawn next month follows the theme the admins
-have now rather than the one in force when the match was played.
+admin-tunable accent colours, the text settings, or the teams' logos: those are
+all re-read live in :func:`render_card`, so a card redrawn next month follows
+the theme the admins have now and the crest the team has now, rather than the
+ones in force when the match was played.
 """
 
 import asyncio
@@ -135,12 +136,35 @@ async def send_photo_with_retry(bot, chat_id, photo_factory, *, caption=None,
 # Rendering
 # ══════════════════════════════════════════════════════════════════════
 
-def _live_style(is_first_innings):
+def _team_logo(team_name):
+    """The approved crest bytes for a team name, or ``None``.
+
+    Resolved here rather than stored in the payload for the same reason the
+    accent colours are: a card redrawn next month should carry the crest the
+    team has now. Never raises — a card without a crest falls back to the
+    team's initials, which is a detail; a card that fails to render is the
+    card.
+    """
+    if not team_name:
+        return None
+    from database import get_session
+    session = get_session()
+    try:
+        from services import team_logo_service
+        return team_logo_service.logo_png_for_team_name(session, team_name)
+    except Exception:
+        logger.exception("team logo lookup failed for %r", team_name)
+        return None
+    finally:
+        session.close()
+
+
+def _live_style(is_first_innings, team_name=None):
     """The admin-tunable accent + text settings, read at render time.
 
     Kept out of the stored payload on purpose: a card redrawn later should
     follow the theme the admins have configured now, not the one in force when
-    the match was played.
+    the match was played. The team crest rides along for the same reason.
     """
     try:
         from services.config_service import get_config
@@ -148,19 +172,32 @@ def _live_style(is_first_innings):
         accent = (cfg.get("scorecard_color_inn1") if is_first_innings
                   else cfg.get("scorecard_color_inn2"))
         return {"accent_hex": accent,
-                "text_settings": cfg.get("scorecard_text_settings")}
+                "text_settings": cfg.get("scorecard_text_settings"),
+                "team_logo_png": _team_logo(team_name)}
     except Exception:
         logger.exception("scorecard style lookup failed — falling back to defaults")
-        return {"accent_hex": None, "text_settings": None}
+        return {"accent_hex": None, "text_settings": None, "team_logo_png": None}
 
 
-def _summary_style():
+def _summary_style(inn1_team=None, inn2_team=None):
+    """Text settings, the two innings colours, and both teams' crests.
+
+    The summary card used to hardcode its red/blue by innings position while
+    the batting and bowling cards read the admin colours — so the three cards
+    of one match could disagree. They all read the same two settings now.
+    """
+    style = {"text_settings": None, "inn1_color": None, "inn2_color": None}
     try:
         from services.config_service import get_config
-        return {"text_settings": get_config().get("scorecard_text_settings")}
+        cfg = get_config()
+        style["text_settings"] = cfg.get("scorecard_text_settings")
+        style["inn1_color"] = cfg.get("scorecard_color_inn1")
+        style["inn2_color"] = cfg.get("scorecard_color_inn2")
     except Exception:
         logger.exception("summary style lookup failed — falling back to defaults")
-        return {"text_settings": None}
+    style["inn1_logo_png"] = _team_logo(inn1_team)
+    style["inn2_logo_png"] = _team_logo(inn2_team)
+    return style
 
 
 def _accepted_kwargs(func, payload):
@@ -202,11 +239,13 @@ def render_card(card_type, payload):
                                                  generate_bowling_scorecard)
             generate = (generate_batting_scorecard if card_type == CARD_BATTING
                         else generate_bowling_scorecard)
-            payload.update(_live_style(payload.get("is_first_innings", True)))
+            payload.update(_live_style(payload.get("is_first_innings", True),
+                                       payload.get("team_name")))
             return generate(**_accepted_kwargs(generate, payload))
         if card_type == CARD_SUMMARY:
             from services.match_summary_card import generate_match_summary
-            payload.update(_summary_style())
+            payload.update(_summary_style(payload.get("inn1_team"),
+                                          payload.get("inn2_team")))
             # ``match_date`` round-trips through JSON as an ISO string.
             raw_date = payload.get("match_date")
             if isinstance(raw_date, str):

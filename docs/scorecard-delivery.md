@@ -48,6 +48,14 @@ The old fire-and-forget JSON snapshot to the Telegram storage channel is still
 taken, but it now runs *after* the chat has its cards rather than in front of
 them.
 
+## What is deliberately *not* in a payload
+
+The admin accent colours, the Scorecard Designer's text settings, and the
+teams' logos. All three are re-read live in `render_card`, so a card redrawn
+next month follows the theme the admins have now and the crest the team has
+now, rather than the ones in force when the match was played. See
+`docs/team-logo-approval.md` for where a crest comes from.
+
 ## `/lastscorecard`
 
 Aliases: `/lsc`, `/scorecard`.

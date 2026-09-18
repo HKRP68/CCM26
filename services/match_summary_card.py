@@ -578,7 +578,13 @@ def _draw_rows(draw, ts, rows, *, x_name, cx1, cx2, top, color, potm_name,
     alt_f = _font(23 + int(_setting(ts, "row_number").get("size", 0) or 0),
                   family="body")
     badge_f = _font(12, family="display")
-    for i, (name, v1, v2, impact, not_out) in enumerate(rows[:4]):
+    for i, row in enumerate(rows[:4]):
+        # Tolerate a narrower tuple so a caller that has not been updated
+        # degrades to "no green tint, no not-out colour" rather than an
+        # IndexError halfway through a render.
+        name, v1, v2 = row[0], row[1], row[2]
+        impact = bool(row[3]) if len(row) > 3 else False
+        not_out = bool(row[4]) if len(row) > 4 else False
         y0 = top + i * ROW_PITCH
         y1 = top + (i + 1) * ROW_PITCH
         cy = (y0 + y1) / 2
@@ -871,7 +877,10 @@ def _draw_potm(img, draw, ts, *, name, team, photo_png, metrics, flourish):
 # Entry point
 # ══════════════════════════════════════════════════════════════════════
 
-_BAT_STAT_RE = re.compile(r"(\d+)\s*\*?\s*\((\d+)\)")
+# "52(31)" or "52* (31)" — but NOT the trailing "(4)" of a bowling figure like
+# "4/27 (4)", which would otherwise read as 27 runs off 4 balls. The lookbehind
+# is what keeps a bowling award out of the batting branch.
+_BAT_STAT_RE = re.compile(r"(?<![\d/\-])(\d+)\s*\*?\s*\((\d+)\)")
 _BOWL_STAT_RE = re.compile(r"(\d+)\s*[-/]\s*(\d+)")
 DASH = "—"
 

@@ -237,6 +237,12 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # Official GC membership + one-entry itself), so it must never be owner-locked
     # to whoever the sender happened to be.
     "gwjoin_",
+    # The team-logo review keyboard is sent to the bot admins while handling the
+    # *uploader's* update, so the owner lock would pin it to the uploader and
+    # answer every admin with "this button is not for you". handlers/team_logo.py
+    # authorises each press with is_admin() instead, and the owner's own
+    # withdraw button checks the request's telegram_id.
+    "tlogo:",
 )
 
 # ════════════════════════════════════════════════════════════════════

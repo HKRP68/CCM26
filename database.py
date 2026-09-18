@@ -196,6 +196,7 @@ def init_db():
         RatingBlockRule, GameConfig,
         MessageTemplate, Bowlout, BowloutBall,
         UserReport, ShotProbability, BotChat, ChatMember, Broadcast, PendingUndo,
+        TeamLogoRequest,
         GlobalPlayerMarket, GlobalTraitMarket, MarketPurchase,
         ChallengeMode, ChallengeLeague, ChallengeTeam, ChallengePlayer, UserTeamLastXI,
         CLTour, CLTourMatch,
@@ -846,6 +847,13 @@ def _migrate_add_columns():
     # has never arranged one, so auto-built line-ups sort by batting rating.
     _try_add("users", "batting_order_set_at", "TIMESTAMP")
 
+    # The team crest an admin approved via /setteamlogo. Only an approved logo
+    # is here; a pending submission lives in team_logo_requests and changes
+    # nothing until it is decided.
+    _try_add("users", "team_logo_asset_key", "VARCHAR(300)")
+    _try_add("users", "team_logo_file_id", "VARCHAR(200)")
+    _try_add("users", "team_logo_updated_at", "TIMESTAMP")
+
     # ── Career Player (/cmucareer) ──
     # A career card is a normal players row owned by exactly one user. is_career
     # keeps it out of every shared pool; non_tradable is read dynamically by
@@ -1004,6 +1012,39 @@ def _migrate_add_columns():
         "UPDATE players SET career_free_changes = 0 "
         "WHERE career_free_changes IS NULL",
     ]
+    # ─────────────────────────────────────────────────────────────
+    # The summary card was redrawn as the light poster, and the saved
+    # Scorecard Designer nudges for it are pixel offsets tuned to the old dark
+    # layout. Replayed against the new geometry they shove text into the wrong
+    # places, which reads as a rendering bug rather than as a stale setting.
+    # Clear just the "summary" section once; batting and bowling are untouched.
+    _summary_reset_key = "scorecard_summary_text_reset_light_poster"
+    _done, _sig = _migration_signature_matches(_summary_reset_key, [_summary_reset_key])
+    if not _done:
+        try:
+            import json as _json
+            with engine.connect() as conn:
+                rows = conn.execute(text(
+                    "SELECT id, scorecard_text_settings FROM game_config "
+                    "WHERE scorecard_text_settings IS NOT NULL")).fetchall()
+                for row_id, raw in rows:
+                    try:
+                        data = _json.loads(raw) if isinstance(raw, str) else raw
+                    except Exception:
+                        continue
+                    if not isinstance(data, dict) or "summary" not in data:
+                        continue
+                    data.pop("summary", None)
+                    conn.execute(
+                        text("UPDATE game_config SET scorecard_text_settings = :v "
+                             "WHERE id = :i"),
+                        {"v": _json.dumps(data), "i": row_id})
+                conn.commit()
+            _record_migration_signature(_summary_reset_key, _sig)
+        except Exception:
+            # The card still renders on its own defaults; never fail the boot.
+            log.warning("summary text-settings reset skipped", exc_info=True)
+
     done, sig = _migration_signature_matches("backfill", backfill_sql)
     if not done:
         # SQLite and older schemas may not support ALTER COLUMN forms; safe to

@@ -149,6 +149,39 @@ def _load_logo(target=60):
         return None
 
 
+def _open_team_crest(png_bytes, target):
+    """A team crest from raw bytes, contain-fitted to ``target`` px square.
+
+    Returns ``None`` for anything PIL cannot decode: a user-supplied image must
+    never cost the card it appears on.
+    """
+    if not png_bytes:
+        return None
+    try:
+        crest = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+        if not crest.width or not crest.height:
+            return None
+        factor = min(target / crest.width, target / crest.height)
+        return crest.resize((max(1, int(crest.width * factor)),
+                            max(1, int(crest.height * factor))), Image.LANCZOS)
+    except Exception:
+        logger.warning("scorecard: team crest unreadable", exc_info=True)
+        return None
+
+
+def _draw_team_crest(img, x1, y1, x2, y2, png_bytes, size=66):
+    """Put the batting/bowling side's crest inside its team box.
+
+    The CMU logo keeps the centre of the header — that is the brand mark, not a
+    team's. The crest sits in the active side's own box instead.
+    """
+    crest = _open_team_crest(png_bytes, size)
+    if crest is None:
+        return 0
+    img.paste(crest, (x1 + 18, y1 + (y2 - y1 - crest.height) // 2), crest)
+    return crest.width + 24
+
+
 def _hex_to_rgb(s, fallback):
     """Parse '#rrggbb' or 'rrggbb'. Returns (r, g, b) tuple."""
     if not s:
@@ -723,7 +756,8 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
                                extras_dict, is_first_innings=True,
                                match_title="MATCH", target=None,
                                chase_outcome=None, stadium=None,
-                               *, match_no=None, accent_hex=None, text_settings=None) -> bytes | None:
+                               *, match_no=None, accent_hex=None, text_settings=None,
+                               team_logo_png=None) -> bytes | None:
     """Generate an HTML-mockup-style batting scorecard.
 
     The visual follows ``Batting Scorecard.html``: a wide glass card, top team
@@ -810,9 +844,12 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
                 draw.rounded_rectangle([x1, y1, x2, y2], radius=22,
                                        fill=(255, 255, 255, 8),
                                        outline=(255, 255, 255, 24), width=1)
-            txt = fit_text(name, f_team, x2 - x1 - 52)
+            crest_w = (_draw_team_crest(img, x1, y1, x2, y2, team_logo_png)
+                       if active else 0)
+            txt = fit_text(name, f_team, x2 - x1 - 52 - crest_w)
             tw = _tw(draw, txt, f_team)
-            tx, ty = _offset_xy(text_settings, "batting", "team", x1 + (x2 - x1 - tw) // 2, y1 + 18)
+            tx, ty = _offset_xy(text_settings, "batting", "team",
+                                x1 + crest_w + (x2 - x1 - crest_w - tw) // 2, y1 + 18)
             draw.text((tx, ty), txt, fill=(238, 243, 251), font=f_team)
 
         left_x1, left_x2 = card_x + 40, card_x + 40 + 520
@@ -1067,7 +1104,8 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
                                 opponent_name=None, opp_score=None,
                                 opp_wickets=None, opp_overs=None,
                                 stadium=None,
-                                *, match_no=None, accent_hex=None, text_settings=None) -> bytes | None:
+                                *, match_no=None, accent_hex=None, text_settings=None,
+                                team_logo_png=None) -> bytes | None:
     """Generate a bowling scorecard that follows ``Bowling Scorecard.html``.
 
     The bowling team is highlighted with the fixed green team box. ``accent_hex``
@@ -1141,9 +1179,12 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
             else:
                 draw.rounded_rectangle([x1, y1, x2, y2], radius=22,
                                        fill=(255, 255, 255, 8), outline=(255, 255, 255, 24), width=1)
-            txt = fit_text(name, f_team, x2 - x1 - 52)
+            crest_w = (_draw_team_crest(img, x1, y1, x2, y2, team_logo_png)
+                       if active else 0)
+            txt = fit_text(name, f_team, x2 - x1 - 52 - crest_w)
             tw = _tw(draw, txt, f_team)
-            tx, ty = _offset_xy(text_settings, "bowling", "team", x1 + (x2 - x1 - tw) // 2, y1 + 18)
+            tx, ty = _offset_xy(text_settings, "bowling", "team",
+                                x1 + crest_w + (x2 - x1 - crest_w - tw) // 2, y1 + 18)
             draw.text((tx, ty), txt, fill=(241, 242, 245), font=f_team)
 
         left_x1, left_x2 = card_x + 40, card_x + 40 + 520

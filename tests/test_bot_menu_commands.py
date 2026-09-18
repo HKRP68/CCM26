@@ -161,6 +161,11 @@ UNPUBLISHED_ON_PURPOSE = {
     # Scorecard replay — named under every match result, in /help and in
     # /matchhelp, which is where someone whose card went missing is looking.
     "lastscorecard",
+    # Team logo upload — a DM-only flow named in /help and in /howto beside
+    # /teamname, and offered again by the card that says a logo was rejected.
+    # Both player scopes are already at the ceiling, so publishing it would
+    # cost an existing command its entry.
+    "setteamlogo",
     # Forward-only mode: a separate run path where this is the ONLY command
     # registered at all, so there is no menu for it to be in.
     "frwd",
