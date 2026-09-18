@@ -65,8 +65,11 @@ async def teamname_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log_activity(session, user.id, "teamname", f"Team name: {old} → {name}")
         session.commit()
 
+        hint = ("" if user.team_logo_asset_key
+                else "\n\n🖼 Want a crest on your scorecards? "
+                     "Send /setteamlogo in a private chat.")
         await update.message.reply_text(
-            f"✅ Team name set to: <b>{name}</b>", parse_mode="HTML"
+            f"✅ Team name set to: <b>{name}</b>{hint}", parse_mode="HTML"
         )
     except Exception:
         session.rollback()
@@ -87,14 +90,25 @@ async def purse_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         team = user.team_name or "No team name set"
-        await update.message.reply_text(
+        body = (
             f"👤 <b>@{user.username or user.first_name}</b>\n"
             f"🏏 Team: {team}\n\n"
             f"💰 <b>Coins:</b> {user.total_coins:,}\n"
             f"💎 <b>Gems:</b> {user.total_gems}\n"
-            f"📊 Roster: {user.roster_count}/{MAX_ROSTER}",
-            parse_mode="HTML",
+            f"📊 Roster: {user.roster_count}/{MAX_ROSTER}"
         )
+        # Lead with the team's approved crest when it has one. Telegram's own
+        # file_id costs no upload; a team whose crest predates that id (or
+        # whose id Telegram has since rejected) simply gets the text.
+        if user.team_logo_file_id:
+            try:
+                await update.message.reply_photo(
+                    photo=user.team_logo_file_id, caption=body, parse_mode="HTML")
+                return
+            except Exception:
+                logger.info("purse could not send the team logo for %s",
+                            tg_user.id, exc_info=True)
+        await update.message.reply_text(body, parse_mode="HTML")
     except Exception:
         logger.exception(f"Purse error for {tg_user.id}")
         await update.message.reply_text("⚠️ Error. Try again.")

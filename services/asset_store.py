@@ -39,6 +39,7 @@ DURABLE_ROOTS = (
     "data/player_portraits",   # per-player cutouts + the global fallback
     "data/player_images",      # full custom card art
     "data/event_media",        # milestone media and sounds
+    "data/team_logos",         # user team crests, once an admin has approved one
 )
 
 # Anything larger is a mistake rather than an upload — the upload validators cap

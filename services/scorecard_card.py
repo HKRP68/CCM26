@@ -149,6 +149,39 @@ def _load_logo(target=60):
         return None
 
 
+def _open_team_crest(png_bytes, target):
+    """A team crest from raw bytes, contain-fitted to ``target`` px square.
+
+    Returns ``None`` for anything PIL cannot decode: a user-supplied image must
+    never cost the card it appears on.
+    """
+    if not png_bytes:
+        return None
+    try:
+        crest = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+        if not crest.width or not crest.height:
+            return None
+        factor = min(target / crest.width, target / crest.height)
+        return crest.resize((max(1, int(crest.width * factor)),
+                            max(1, int(crest.height * factor))), Image.LANCZOS)
+    except Exception:
+        logger.warning("scorecard: team crest unreadable", exc_info=True)
+        return None
+
+
+def _draw_team_crest(img, x1, y1, x2, y2, png_bytes, size=66):
+    """Put the batting/bowling side's crest inside its team box.
+
+    The CMU logo keeps the centre of the header — that is the brand mark, not a
+    team's. The crest sits in the active side's own box instead.
+    """
+    crest = _open_team_crest(png_bytes, size)
+    if crest is None:
+        return 0
+    img.paste(crest, (x1 + 18, y1 + (y2 - y1 - crest.height) // 2), crest)
+    return crest.width + 24
+
+
 def _hex_to_rgb(s, fallback):
     """Parse '#rrggbb' or 'rrggbb'. Returns (r, g, b) tuple."""
     if not s:
@@ -169,6 +202,11 @@ def _hex_to_rgb(s, fallback):
 SCORECARD_FONT_OPTIONS = {
     "display": "Bebas Neue",
     "body": "Bricolage Grotesque",
+    # Summary-card faces. "headline" is the heavy grotesque the poster's title,
+    # scores and metric values are set in; "script" is the Game Changer! line.
+    "headline": "Anton",
+    "italic": "Lato Italic",
+    "script": "Caveat",
     "fallback": "DejaVu Sans",
 }
 
@@ -232,22 +270,48 @@ SCORECARD_TEXT_FIELDS = {
         ("opp_score_value", "Opp score value", ""),
         ("opp_score_label", "Opp score label", "OPP SCORE"),
     ],
+    # The summary card is the light "poster" design; a few of these are
+    # pipe-separated because the text object is stacked over several lines.
     "summary": [
-        ("header_title", "SUMMARY header", "SUMMARY"),
-        ("match_no", "MATCH # header", ""),
-        ("stadium", "Stadium bar", ""),
+        ("header_title", "Headline first word", "MATCH"),
+        ("header_summary", "Headline second word (gold)", "SUMMARY"),
+        ("brand_tagline", "Brand caps, | between lines", "PLAY|MANAGE|COMPETE|DOMINATE"),
+        ("tagline", "Right strapline, | between lines", "CRICKET|BEYOND|BOUNDARIES"),
+        ("match_no", "MATCH # in the venue pill", ""),
+        ("stadium", "Venue in the pill", ""),
         ("innings_team", "Innings team names", ""),
         ("innings_meta", "Overs text", ""),
         ("innings_score", "Score text", ""),
+        ("table_header", "All six column headers", ""),
+        ("header_batters", "BATTERS column head", "BATTERS"),
+        ("header_runs", "RUNS column head", "RUNS"),
+        ("header_balls", "BALLS column head", "BALLS"),
+        ("header_bowlers", "BOWLERS column head", "BOWLERS"),
+        ("header_figures", "FIGURES column head", "FIGURES"),
+        ("header_overs", "OVERS column head", "OVERS"),
         ("row_name", "Batter/Bowler names", ""),
         ("row_number", "Runs/Balls/Wickets/Overs values", ""),
         ("result", "Result bar", ""),
-        ("potm_badge", "POTM badge", "POTM"),
+        ("potm_badge", "POTM title, | between lines", "PLAYER|OF THE MATCH"),
         ("potm_name", "POTM name", ""),
-        ("potm_label", "Performance label", "PERFORMANCE:"),
-        ("potm_value", "Performance value", ""),
+        ("potm_label", "Performance showcase label", "PERFORMANCE SHOWCASE"),
+        ("potm_value", "Performance metric values", ""),
+        ("game_changer", "Script flourish (blank = automatic)", ""),
     ],
 }
+
+
+def _summary_font(card_type, key, headline, script, display, display_keys):
+    """Which face a text object defaults to in the website designer."""
+    if card_type == "summary":
+        if key in headline:
+            return "headline"
+        if key in script:
+            return "script"
+        if key in display:
+            return "display"
+        return "body"
+    return "display" if key in display_keys else "body"
 
 
 def default_scorecard_text_settings():
@@ -258,10 +322,21 @@ def default_scorecard_text_settings():
         for field in fields:
             key, _label = field[:2]
             default_text = field[2] if len(field) > 2 else ""
+            # The summary card mixes three faces. These take the wide black
+            # grotesque the poster sets its headline, team names, scores and
+            # metric values in; the rest of the display keys below take the
+            # condensed face used for small caps.
+            summary_headline = {
+                "header_title", "header_summary", "innings_team",
+                "innings_score", "row_number", "result", "potm_name",
+                "potm_value",
+            }
+            summary_script = {"game_changer"}
             summary_display = {
-                "header_title", "match_no", "stadium", "innings_team",
-                "innings_meta", "innings_score", "row_number", "result", "potm_badge",
-                "potm_name", "potm_label", "potm_value",
+                "brand_tagline", "tagline", "match_no", "stadium",
+                "innings_meta", "table_header", "header_batters", "header_runs",
+                "header_balls", "header_bowlers", "header_figures",
+                "header_overs", "potm_badge", "potm_label",
             }
             display_keys = {
                 "team", "stat_value", "run_rate_value", "extras_value",
@@ -270,7 +345,9 @@ def default_scorecard_text_settings():
             }
             settings[card_type][key] = {
                 "text": default_text,
-                "font": "display" if key in display_keys or (card_type == "summary" and key in summary_display) else "body",
+                "font": _summary_font(card_type, key, summary_headline,
+                                      summary_script, summary_display,
+                                      display_keys),
                 "size": 0,
                 "x": 0,
                 "y": 0,
@@ -679,7 +756,8 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
                                extras_dict, is_first_innings=True,
                                match_title="MATCH", target=None,
                                chase_outcome=None, stadium=None,
-                               *, match_no=None, accent_hex=None, text_settings=None) -> bytes | None:
+                               *, match_no=None, accent_hex=None, text_settings=None,
+                               team_logo_png=None) -> bytes | None:
     """Generate an HTML-mockup-style batting scorecard.
 
     The visual follows ``Batting Scorecard.html``: a wide glass card, top team
@@ -766,9 +844,12 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
                 draw.rounded_rectangle([x1, y1, x2, y2], radius=22,
                                        fill=(255, 255, 255, 8),
                                        outline=(255, 255, 255, 24), width=1)
-            txt = fit_text(name, f_team, x2 - x1 - 52)
+            crest_w = (_draw_team_crest(img, x1, y1, x2, y2, team_logo_png)
+                       if active else 0)
+            txt = fit_text(name, f_team, x2 - x1 - 52 - crest_w)
             tw = _tw(draw, txt, f_team)
-            tx, ty = _offset_xy(text_settings, "batting", "team", x1 + (x2 - x1 - tw) // 2, y1 + 18)
+            tx, ty = _offset_xy(text_settings, "batting", "team",
+                                x1 + crest_w + (x2 - x1 - crest_w - tw) // 2, y1 + 18)
             draw.text((tx, ty), txt, fill=(238, 243, 251), font=f_team)
 
         left_x1, left_x2 = card_x + 40, card_x + 40 + 520
@@ -1023,7 +1104,8 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
                                 opponent_name=None, opp_score=None,
                                 opp_wickets=None, opp_overs=None,
                                 stadium=None,
-                                *, match_no=None, accent_hex=None, text_settings=None) -> bytes | None:
+                                *, match_no=None, accent_hex=None, text_settings=None,
+                                team_logo_png=None) -> bytes | None:
     """Generate a bowling scorecard that follows ``Bowling Scorecard.html``.
 
     The bowling team is highlighted with the fixed green team box. ``accent_hex``
@@ -1097,9 +1179,12 @@ def generate_bowling_scorecard(team_name, bowlers_rows, fall_of_wickets,
             else:
                 draw.rounded_rectangle([x1, y1, x2, y2], radius=22,
                                        fill=(255, 255, 255, 8), outline=(255, 255, 255, 24), width=1)
-            txt = fit_text(name, f_team, x2 - x1 - 52)
+            crest_w = (_draw_team_crest(img, x1, y1, x2, y2, team_logo_png)
+                       if active else 0)
+            txt = fit_text(name, f_team, x2 - x1 - 52 - crest_w)
             tw = _tw(draw, txt, f_team)
-            tx, ty = _offset_xy(text_settings, "bowling", "team", x1 + (x2 - x1 - tw) // 2, y1 + 18)
+            tx, ty = _offset_xy(text_settings, "bowling", "team",
+                                x1 + crest_w + (x2 - x1 - crest_w - tw) // 2, y1 + 18)
             draw.text((tx, ty), txt, fill=(241, 242, 245), font=f_team)
 
         left_x1, left_x2 = card_x + 40, card_x + 40 + 520

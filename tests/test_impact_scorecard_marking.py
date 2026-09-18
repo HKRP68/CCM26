@@ -22,8 +22,9 @@ class NormaliseCarriesTheFlagTests(unittest.TestCase):
              "impact": True},
             {"name": "Regular", "runs": 30, "balls": 25, "out": True},
         ])
-        self.assertEqual(rows[0], ("SuperSub", "44*", "21", True))
-        self.assertEqual(rows[1], ("Regular", "30", "25", False))
+        # (name, value, value, is_impact, is_not_out)
+        self.assertEqual(rows[0], ("SuperSub", "44*", "21", True, True))
+        self.assertEqual(rows[1], ("Regular", "30", "25", False, False))
 
     def test_bowlers_keep_the_impact_flag(self):
         rows = card._normalise_bowlers([
@@ -31,7 +32,7 @@ class NormaliseCarriesTheFlagTests(unittest.TestCase):
              "impact": True},
             {"name": "Regular", "wickets": 1, "runs": 40, "overs": "4.0"},
         ])
-        self.assertEqual(rows[0], ("BenchPace", "3-24", "4.0", True))
+        self.assertEqual(rows[0], ("BenchPace", "3-24", "4.0", True, False))
         self.assertEqual(rows[1][3], False)
 
     def test_padding_rows_are_not_marked(self):
@@ -69,13 +70,14 @@ class RendersTests(unittest.TestCase):
 
     def test_a_caller_still_passing_three_tuples_does_not_crash(self):
         # _draw_rows tolerates the old shape so an un-updated caller degrades to
-        # "no green tint" rather than an IndexError mid-render.
+        # "no green tint, no not-out colour" rather than an IndexError
+        # mid-render.
         from PIL import Image, ImageDraw
-        img = Image.new("RGBA", (600, 400), (0, 0, 0, 255))
+        img = Image.new("RGBA", (600, 400), (255, 255, 255, 255))
         draw = ImageDraw.Draw(img, "RGBA")
-        card._draw_rows(draw, 0, 0, 600,
-                        [("Old", "10", "8"), ("Shape", "20", "9")],
-                        color=card.BLUE, right_accent=False, text_settings=None)
+        card._draw_rows(draw, None, [("Old", "10", "8"), ("Shape", "20", "9")],
+                        x_name=40, cx1=300, cx2=420, top=20,
+                        color=card.TEAM_B, potm_name=None, max_name_w=200)
 
 
 class ScorecardRowMarkingTests(unittest.TestCase):

@@ -48,6 +48,50 @@ The old fire-and-forget JSON snapshot to the Telegram storage channel is still
 taken, but it now runs *after* the chat has its cards rather than in front of
 them.
 
+## What is deliberately *not* in a payload
+
+The admin accent colours, the Scorecard Designer's text settings, the teams'
+logos, and the Player of the Match's portrait. All of them are re-read live in
+`render_card`, so a card redrawn next month follows the theme the admins have
+now and the crest the team has now, rather than the ones in force when the
+match was played. See `docs/team-logo-approval.md` for where a crest comes
+from; the portrait is the admin-uploaded card art the bot already holds
+(`services/player_image_service`), found via the payload's `potm_player_id`.
+
+`/previewsummary` (bot admins) renders a card from canned data through this
+same path, which is the quick way to see the effect of a Scorecard Designer
+change without playing a match.
+
+## The Player of the Match showcase
+
+The strip's first two columns always carry the two numbers that describe a
+cricket performance — `runs(balls)` and `wickets/runs-conceded`. An all-rounder
+gets both; the showcase used to branch to one discipline and throw the other
+half away even when the payload held it. The last three columns adapt, so a
+bowler is never shown FOURS and SIXES and a batter is never shown ECONOMY:
+
+| The player | 1 | 2 | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- |
+| batted **and** bowled | BATTING | BOWLING | S/R | OVERS | ECON |
+| batted only | BATTING | BOWLING | FOURS | SIXES | S/R |
+| bowled only | BATTING | BOWLING | OVERS | ECON | DOTS |
+
+Payload numbers always win. What is missing is recovered from the `potm_stats`
+display string, which is all some callers send and all that archived rows have,
+so `_potm_metrics` parses every format in use:
+
+| Caller | String | |
+| --- | --- | --- |
+| `/playmatch` | `🏏 52(31) \| 🎳 4/27 (4)` | both halves, overs from the bare bracket |
+| `/cipl` | `52(31) \| 4/27 (4)` | both halves |
+| `/sim` | `52 runs, 3 wkts` | words |
+| Arena / `/wpm` / `/vsbot` | `12 runs • 2 wickets` | words — but this path now also digs the raw numbers out of the arena stat tables (`admin.py:_arena_potm_numbers`), so it fills properly |
+| Scorecard Designer preview | `4/25 (4 OVERS)` | figure plus an overs word |
+
+One parsing rule is load-bearing and has a test of its own: the batting pattern
+carries a lookbehind so the trailing `(4)` of `4/27 (4)` is not read as "27 runs
+off 4 balls".
+
 ## `/lastscorecard`
 
 Aliases: `/lsc`, `/scorecard`.

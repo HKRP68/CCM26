@@ -31,6 +31,8 @@ data/career_steps/
 data/player_images/
 data/player_portraits/
 data/event_media/
+# User-uploaded team crests; the bytes live in stored_assets.
+data/team_logos/
 data/card_templates/font*.ttf
 data/card_templates/font*.otf
 data/card_templates/template_career_*

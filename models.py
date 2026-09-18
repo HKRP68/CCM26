@@ -94,6 +94,15 @@ class User(Base):
     career_weekly_streak = Column(Integer, default=0, nullable=False)
     career_weekly_best_streak = Column(Integer, default=0, nullable=False)
     career_weekly_last_period = Column(String(10), nullable=True)  # 'YYYY-Wnn'
+    # The team's approved crest, drawn on the scorecards. Only an *approved*
+    # logo lands here: a submission waiting on review lives in
+    # team_logo_requests and changes nothing until an admin says yes.
+    # asset_key addresses the normalised PNG in stored_assets (the host
+    # filesystem is wiped on deploy); file_id is Telegram's own id for the same
+    # image, so a DM or /myteam can re-send it without a render.
+    team_logo_asset_key = Column(String(300), nullable=True)
+    team_logo_file_id = Column(String(200), nullable=True)
+    team_logo_updated_at = Column(DateTime, nullable=True)
     # Ban / disable — banned users are refused by the bot's middleware
     is_banned = Column(Boolean, default=False, nullable=False)
     ban_reason = Column(String(500), nullable=True)
@@ -1004,6 +1013,52 @@ class CareerChangeRequest(Base):
     )
 
 
+class TeamLogoRequest(Base):
+    """One user's team logo, waiting on a bot admin's yes or no.
+
+    Shaped after :class:`CareerChangeRequest`, for the same reason: a logo a
+    user uploads is shown to every other player on every scorecard of every
+    match their team appears in, so it is moderated before it goes anywhere,
+    and the row is the receipt for that decision.
+
+    Nothing about the team changes while a request is pending. The old crest
+    (or none) keeps rendering until an admin approves this one, at which point
+    ``asset_key``/``file_id`` are copied onto the ``users`` row. A rejection
+    writes the reason to ``review_note`` and the bytes are dropped.
+    """
+    __tablename__ = "team_logo_requests"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # Deliberately *not* a foreign key, for the reason given on
+    # CareerChangeRequest.player_id: this row is a moderation receipt and has
+    # to outlive the account it was about.
+    user_id = Column(Integer, nullable=False, index=True)
+    telegram_id = Column(BigInteger, nullable=False, index=True)
+    # The team name as it stood when the logo was submitted. An admin reviewing
+    # the queue needs to see the name the crest was meant for, not whatever the
+    # owner has renamed to since.
+    team_name = Column(String(50), nullable=True)
+
+    asset_key = Column(String(300), nullable=True)
+    file_id = Column(String(200), nullable=True)
+    byte_size = Column(Integer, nullable=True)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+
+    # 'pending' | 'approved' | 'rejected' | 'cancelled'
+    status = Column(String(12), default="pending", nullable=False, index=True)
+    # The rejection reason, shown to the owner verbatim.
+    review_note = Column(String(300), nullable=True)
+    reviewed_by = Column(String(80), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    decided_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_team_logo_status", "status", "created_at"),
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════
 # NOTIFICATIONS — scheduled FOMO-style push messages from the bot
 # ══════════════════════════════════════════════════════════════════════
@@ -1210,6 +1265,9 @@ class GameConfig(Base):
     # scorecard. Defaults match the original PRIMARY (red) / SECONDARY (teal).
     scorecard_color_inn1 = Column(String(9), default="#c41e3a")
     scorecard_color_inn2 = Column(String(9), default="#00c9a7")
+    # Off renders the reference poster's literal "Game Changer!"; on names what
+    # the Player of the Match actually did.
+    scorecard_dynamic_flourish = Column(Boolean, default=False)
     scorecard_text_settings = Column(Text, nullable=True)
     # ── /wpm and /cm completion cards ──
     # Comma-separated list of which cards to post to the lobby chat when a

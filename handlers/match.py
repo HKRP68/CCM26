@@ -1185,6 +1185,61 @@ def _calc_potm(s, winner_name=None):
     return best_name, int(best_impact), best_stats
 
 
+def _potm_showcase(s, potm_name):
+    """Raw batting/bowling numbers for the Player of the Match.
+
+    ``_calc_potm`` returns a display string; the summary card's performance
+    showcase needs the numbers behind it (fours, sixes, strike rate, or the
+    bowling figures for a bowling award). Rather than widen that function's
+    return — three tests and a caller unpack its 3-tuple — this walks the same
+    XI/stats pairs for the one named player.
+
+    Matching is by name because that is all the award carries. A duplicate name
+    in one match would merge two players' numbers, which is wrong but harmless:
+    the strip is a flourish, and the card's own tables still show the truth.
+    """
+    if not potm_name:
+        return {}
+    wanted = str(potm_name).strip().lower()
+    bat, bowl, player_id = {}, {}, None
+    pairs = [
+        (s.get("inn1_bat_xi", []), s.get("inn1_bat_stats", {}), "bat"),
+        (s.get("inn1_bowl_xi", []), s.get("inn1_bowl_stats", {}), "bowl"),
+    ]
+    if s.get("innings", 1) >= 2:
+        pairs += [
+            (s.get("bat_xi", []), s.get("bat_stats", {}), "bat"),
+            (s.get("bowl_xi", []), s.get("bowl_stats", {}), "bowl"),
+        ]
+    for xi, stats, kind in pairs:
+        for player in xi or []:
+            if str(player.get("name", "")).strip().lower() != wanted:
+                continue
+            player_id = player.get("player_id", player_id)
+            row = _stats_get(stats, player.get("roster_id")) or {}
+            target = bat if kind == "bat" else bowl
+            for key, value in row.items():
+                if isinstance(value, (int, float)):
+                    target[key] = target.get(key, 0) + value
+
+    out = {}
+    if player_id is not None:
+        out["potm_player_id"] = player_id
+    if bat.get("balls"):
+        balls = bat["balls"]
+        out.update(potm_runs=bat.get("runs", 0), potm_balls=balls,
+                   potm_fours=bat.get("fours", 0), potm_sixes=bat.get("sixes", 0),
+                   potm_sr=round(bat.get("runs", 0) * 100.0 / balls, 1))
+    if bowl.get("balls"):
+        balls = bowl["balls"]
+        overs = f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6)
+        out.update(potm_wickets=bowl.get("wickets", 0),
+                   potm_conceded=bowl.get("runs", 0), potm_overs=overs,
+                   potm_dots=bowl.get("dots") if "dots" in bowl else None,
+                   potm_economy=round(bowl.get("runs", 0) * 6.0 / balls, 2))
+    return out
+
+
 def _gather_top_performers(s):
     """Return (top_scorer_dict, top_wicket_dict) across both innings.
 
@@ -1258,6 +1313,7 @@ def _gather_top_per_team(s, top_n=4):
       }
     Used by the new match summary card.
     """
+    from services import impact_player
     def _top_batters(xi, stats, top_n):
         rows = []
         for p in xi:
@@ -1274,6 +1330,9 @@ def _gather_top_per_team(s, top_n=4):
                 "fours": ps.get("fours", 0),
                 "sixes": ps.get("sixes", 0),
                 "out": ps.get("out", False),
+                # The summary card tints an Impact substitute's row green. The
+                # flag has to be set here — the card cannot see the XI dict.
+                "impact": impact_player.is_impact(p),
             })
         rows.sort(key=lambda r: (-r["runs"], r["balls"]))
         return rows[:top_n]
@@ -1298,6 +1357,7 @@ def _gather_top_per_team(s, top_n=4):
                 "runs": runs,
                 "wickets": ps.get("wickets", 0),
                 "econ": econ,
+                "impact": impact_player.is_impact(p),
             })
         rows.sort(key=lambda r: (-r["wickets"], r["econ"]))
         return rows[:top_n]
@@ -6737,6 +6797,9 @@ async def _end_innings(ctx, mid):
                 "match_date": datetime.utcnow().isoformat(),
                 "is_spectator": bool(s.get("is_spectator")),
                 "match_no": mid,
+                # The performance showcase's five numbers. Archived rows from
+                # before these keys simply fall back to parsing potm_stats.
+                **_potm_showcase(s, potm_name),
             }
             summary_caption = (f"🏆 <b>Match Summary</b> — "
                                f"{html.escape(str(winner_name))} wins "

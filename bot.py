@@ -408,6 +408,9 @@ DM_ONLY_MENU_COMMANDS = frozenset(DM_ONLY_COMMANDS)
 # config.ADMIN_IDS, so they are usable from the slash menu by the people who
 # own them without ever appearing in a player's list.
 ADMIN_MENU_COMMANDS = (
+    ("logoqueue", "Admin: review team logos waiting for approval"),
+    ("logounhold", "Admin: let a held user send a team logo again"),
+    ("previewsummary", "Admin: render a sample match summary card"),
     ("grant", "Owner: grant a subscription tier to a user"),
     ("setcardid", "Admin: pin a Telegram photo as a player's card"),
     ("setmilestone", "Admin: set in-match milestone messages and media"),
@@ -1036,6 +1039,7 @@ async def start_handler(update, context):
         "/swapplayers /swap [n1] [n2] - Swap positions\n"
         "/setcaptain /cap [name] - Set captain\n"
         "/teamname /tn [name] - Set team name\n"
+        "/setteamlogo - Set your team crest (DM, needs admin approval)\n"
         "/purse /p - Check balance\n"
         "/catch [bet] [height] - Risk purse coins in the catching game\n"
         "/cm @user - Two-wicket challenge mode\n"
@@ -1783,6 +1787,30 @@ def main():
         from telegram.ext import filters as _chg_filters
         app.add_handler(_ChgMsgHandler(
             _chg_filters.TEXT & ~_chg_filters.COMMAND, career_name_text), group=8)
+
+        # ── Team logos (/setteamlogo) + the admin approval queue ─────
+        from handlers.team_logo import (setteamlogo_handler, logoqueue_handler,
+                                        logounhold_handler, previewsummary_handler,
+                                        team_logo_callback, team_logo_message)
+        app.add_handler(CommandHandler(["setteamlogo", "teamlogo"],
+                                       setteamlogo_handler))
+        app.add_handler(CommandHandler("logoqueue", logoqueue_handler))
+        app.add_handler(CommandHandler("logounhold", logounhold_handler))
+        app.add_handler(CommandHandler("previewsummary", previewsummary_handler))
+        app.add_handler(CallbackQueryHandler(team_logo_callback,
+                                             pattern=r"^tlogo:"))
+        # Serves two awaited inputs, both in a DM: the owner's image and an
+        # admin's typed rejection reason. Own group (9) so it stays purely
+        # additive, and it returns on a miss for everyone who asked for
+        # neither. Same local-alias reason as the block above.
+        from telegram.ext import MessageHandler as _TlMsgHandler
+        from telegram.ext import filters as _tl_filters
+        app.add_handler(_TlMsgHandler(
+            (_tl_filters.PHOTO | _tl_filters.Document.IMAGE | _tl_filters.TEXT)
+            & _tl_filters.ChatType.PRIVATE,
+            team_logo_message,
+        ), group=9)
+        logger.info("Registered /setteamlogo + /logoqueue handlers")
 
         # ── Admin reply-forward broadcasts ───────────────────────────
         app.add_handler(CommandHandler("frwd_grp", frwd_grp_handler))
