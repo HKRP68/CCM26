@@ -22248,6 +22248,15 @@ def admin_auction_detail(season_id):
             previous_squad=auction_svc.previous_squad_map(db, season),
             retain_q=(request.args.get("retain_q") or "").strip(),
             retain_hits=retain_hits,
+            cards_left=auction_svc.rtm_cards_left,
+            # Every match made so far, so the undo has somewhere to live. It
+            # is the only operation in the feature that hands a *card* back,
+            # and an admin who cannot reach it from a page has to go to
+            # Telegram for it.
+            matched=(db.query(AuctionLot)
+                     .filter(AuctionLot.season_id == season.id,
+                             AuctionLot.acquisition == auction_svc.ACQ_RTM)
+                     .order_by(AuctionLot.sold_at.desc()).all()),
         )
     finally:
         db.close()
@@ -22422,6 +22431,32 @@ def _auction_detail_action(db, season, action):
         log_admin(db, "auction_retention_rules", "auction", season.id, season.name)
         flash("✅ Retention rules saved.", "success")
 
+    elif action == "rtm_rules":
+        auction_svc.set_rtm_rules(
+            db, season,
+            enabled=_checked("rtm_enabled", False),
+            per_team=_int_form("rtm_per_team", season.rtm_per_team),
+            window_seconds=_int_form("rtm_window_seconds",
+                                     season.rtm_window_seconds),
+            extra_lakh=_money_form("rtm_extra", 0) or 0)
+        log_admin(db, "auction_rtm_rules", "auction", season.id, season.name)
+        flash("✅ Right To Match rules saved.", "success")
+
+    elif action == "rtm_cards":
+        franchise = _auction_franchise(db, season, request.form.get("franchise_id"))
+        auction_svc.set_rtm_cards(db, season, franchise,
+                                  _int_form("cards", franchise.rtm_cards_total))
+        log_admin(db, "auction_rtm_cards", "auction", season.id, franchise.name)
+        flash(f"✅ {franchise.name} now holds "
+              f"{auction_svc.rtm_cards_left(franchise)} RTM.", "success")
+
+    elif action == "rtm_undo":
+        lot = _auction_lot(db, season, request.form.get("lot_id"))
+        auction_svc.undo_rtm(db, season, lot)
+        log_admin(db, "auction_rtm_undo", "auction", season.id, lot.name)
+        flash(f"↩️ The Right To Match on {lot.name} was undone — the card is "
+              f"back too.", "success")
+
     elif action == "retain":
         franchise = _auction_franchise(db, season, request.form.get("franchise_id"))
         player = db.query(Player).filter(
@@ -22570,6 +22605,13 @@ def _console_context(db, season):
                  .order_by(AuctionBid.id.desc()).limit(8).all()) if lot else [],
         "events": auction_svc.recent_events(db, season.id, limit=12),
         "next_min": auction_svc.next_min_bid(season, lot) if lot else None,
+        "rtm_holder": auction_svc.rtm_holder(db, lot) if lot else None,
+        "rtm_price": auction_svc.rtm_price(season, lot) if lot else None,
+        "cards_left": auction_svc.rtm_cards_left,
+        "LOT_RTM_OFFERED": auction_svc.LOT_RTM_OFFERED,
+        "RTM_INTENT": auction_svc.RTM_INTENT,
+        "RTM_FINAL_OFFER": auction_svc.RTM_FINAL_OFFER,
+        "RTM_DECISION": auction_svc.RTM_DECISION,
         "money": auction_svc.render_money,
         "max_bid": auction_svc.max_bid_now,
         "STATUS_LIVE": auction_svc.STATUS_LIVE,
@@ -22655,6 +22697,25 @@ def _auction_console_action(db, season, action):
         amount = auction_svc.parse_amount(request.form.get("amount"))
         auction_svc.place_bid(db, season, lot, franchise, amount, source="web",
                               by_admin=True)
+    elif action in ("rtm_match", "rtm_decline"):
+        # The same service call the franchise's own command makes, stamped as
+        # an admin's — never a parallel path, or the two surfaces could decide
+        # a Right To Match differently.
+        wants = action == "rtm_match"
+        holder = auction_svc.rtm_holder(db, lot)
+        if holder is None:
+            raise auction_svc.AuctionError("No Right To Match is open.")
+        if lot.rtm_stage == auction_svc.RTM_INTENT:
+            auction_svc.rtm_intent(db, season, lot, holder, wants)
+        elif lot.rtm_stage == auction_svc.RTM_DECISION:
+            auction_svc.rtm_decide(db, season, lot, holder, wants)
+        else:
+            raise auction_svc.AuctionError(
+                "It is the top bidder's turn — they have one final raise.")
+
+    elif action == "rtm_stand":
+        auction_svc.rtm_to_decision(db, season, lot)
+
     elif action == "cancel":
         typed = (request.form.get("confirm_name") or "").strip()
         if typed.lower() != (season.name or "").strip().lower():

@@ -55,6 +55,7 @@ NOT_YOURS = ("⛔ Only a franchise's owner or a co-owner can bid for it.\n"
              "records the bid as an admin's.")
 
 BID_CB = "au_bid_"
+RTM_CB = "au_rtm_"
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -135,6 +136,23 @@ def bid_keyboard(season, lot):
     price has moved bids a number that is no longer legal and is refused with
     "the price has moved" rather than quietly bidding the wrong thing.
     """
+    if lot is not None and lot.status == A.LOT_RTM_OFFERED:
+        # The holder's two answers. The top bidder's final raise is an ordinary
+        # /bid, so it needs no button of its own.
+        if lot.rtm_stage in (A.RTM_INTENT, A.RTM_DECISION):
+            # The lot AND the stage ride in the callback data, for the same
+            # reason the quick-bid buttons carry the exact price: a "yes" from
+            # the *intent* prompt, pressed thirty seconds late, would otherwise
+            # land as a MATCH at the decision stage — signing a player for the
+            # raised number when the franchise only ever agreed to the old one.
+            tag = f"{RTM_CB}{lot.id}_{lot.rtm_stage}_"
+            label = ("🪪 Use RTM" if lot.rtm_stage == A.RTM_INTENT
+                     else f"🪪 Match {A.render_money(A.rtm_price(season, lot), season.currency_label)}")
+            return InlineKeyboardMarkup([[
+                InlineKeyboardButton(label, callback_data=f"{tag}yes"),
+                InlineKeyboardButton("Pass", callback_data=f"{tag}no"),
+            ]])
+        return None
     if lot is None or lot.status != A.LOT_ON_BLOCK:
         return None
     minimum = A.next_min_bid(season, lot)
@@ -205,6 +223,141 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # design exists to avoid. Entirely best-effort — the bid is committed.
     if landed is not None:
         await _react(context, update)
+
+
+async def artm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/artm yes</code> / <code>/artm no</code> — the RTM holder answers.
+
+    One command for both questions the rule asks a franchise, because from
+    where they are sitting it is the same question twice: *do you want him at
+    this price?* The bot has already said which stage it is on and what the
+    number is; making them remember two verbs under a thirty-second clock
+    would be a way to lose the lot to a typo.
+    """
+    chat = update.effective_chat
+    if chat is None or chat.type not in GROUP_CHAT_TYPES:
+        await _reply(update, GROUP_ONLY)
+        return
+    user = update.effective_user
+    raw = _arg_text(context).strip().lower()
+
+    session = get_session()
+    try:
+        season = A.season_for_chat(session, chat.id)
+        if season is None:
+            await _reply(update, NO_AUCTION)
+            return
+        lot = A.current_lot(session, season)
+        if lot is None or lot.status != A.LOT_RTM_OFFERED:
+            await _reply(update, "⚠️ There is no Right To Match to answer "
+                                 "right now.")
+            return
+        franchise = A.franchise_for_actor(session, season.id, user.id)
+        if franchise is None:
+            await _reply(update, NOT_YOURS)
+            return
+
+        if raw in ("yes", "y", "use", "match", "rtm"):
+            wants = True
+        elif raw in ("no", "n", "pass", "decline"):
+            wants = False
+        else:
+            holder = A.rtm_holder(session, lot)
+            price = A.render_money(A.rtm_price(season, lot),
+                                   season.currency_label)
+            question = ("use your Right To Match?"
+                        if lot.rtm_stage == A.RTM_INTENT
+                        else f"match at {price}?")
+            await _reply(update,
+                         f"🪪 {html.escape(holder.name) if holder else ''} — "
+                         f"{question}\nAnswer <code>/artm yes</code> or "
+                         f"<code>/artm no</code>.")
+            return
+
+        if lot.rtm_stage == A.RTM_INTENT:
+            A.rtm_intent(session, season, lot, franchise, wants,
+                         by_tg_id=user.id)
+        elif lot.rtm_stage == A.RTM_DECISION:
+            A.rtm_decide(session, season, lot, franchise, wants,
+                         by_tg_id=user.id)
+        else:
+            await _reply(update, "⚠️ It is the top bidder's turn — they have "
+                                 "one final raise.")
+            return
+        session.commit()
+    except AuctionError as exc:
+        session.rollback()
+        await _reply(update, f"⚠️ {html.escape(str(exc))}")
+        return
+    except Exception:
+        session.rollback()
+        logger.exception("/artm failed")
+        await _reply(update, "⚠️ Something went wrong. Try again.")
+        return
+    finally:
+        session.close()
+    # The sweeper announces the outcome within a tick, like every other
+    # auction action — nothing here talks to the room directly.
+    await _react(context, update)
+
+
+async def rtm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """The board's Use it / Pass buttons. Shared, authorised per press."""
+    query = update.callback_query
+    if query is None:
+        return
+    user = update.effective_user
+    try:
+        lot_id, stage, answer = (query.data or "")[len(RTM_CB):].split("_", 2)
+        lot_id = int(lot_id)
+    except (ValueError, AttributeError):
+        await query.answer("That button is from an older auction.",
+                           show_alert=True)
+        return
+
+    session = get_session()
+    try:
+        season = A.season_for_chat(session, update.effective_chat.id)
+        if season is None:
+            await query.answer("No auction is running here.", show_alert=True)
+            return
+        lot = A.current_lot(session, season)
+        if lot is None or lot.status != A.LOT_RTM_OFFERED or lot.id != lot_id:
+            await query.answer("That Right To Match has been answered.",
+                               show_alert=True)
+            return
+        if lot.rtm_stage != stage:
+            # The window moved on under them. Refusing beats guessing: the two
+            # stages ask different questions about different numbers.
+            await query.answer("That window has closed — check the board for "
+                               "what is being asked now.", show_alert=True)
+            return
+        franchise = A.franchise_for_actor(session, season.id, user.id)
+        if franchise is None:
+            await query.answer("Only the franchise that held this player can "
+                               "answer.", show_alert=True)
+            return
+        wants = answer == "yes"
+        if lot.rtm_stage == A.RTM_INTENT:
+            A.rtm_intent(session, season, lot, franchise, wants,
+                         by_tg_id=user.id)
+        elif lot.rtm_stage == A.RTM_DECISION:
+            A.rtm_decide(session, season, lot, franchise, wants,
+                         by_tg_id=user.id)
+        else:
+            await query.answer("It is the top bidder's turn.", show_alert=True)
+            return
+        session.commit()
+        await query.answer("Noted." if wants else "Passed.")
+    except AuctionError as exc:
+        session.rollback()
+        await query.answer(str(exc)[:190], show_alert=True)
+    except Exception:
+        session.rollback()
+        logger.exception("auction rtm button failed")
+        await query.answer("That did not land — try again.", show_alert=True)
+    finally:
+        session.close()
 
 
 async def _react(context, update):
@@ -760,6 +913,132 @@ async def aretlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lines.append(f"   🔒 {html.escape(lot.name)} — "
                              f"{A.render_money(lot.sold_price_lakh, symbol)}")
         return "\n".join(lines)
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def artmset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """The Right To Match rules: read them, or set them in one line.
+
+    <code>/artmset 2</code> — two cards each, the default 30s window, no
+    premium. <code>/artmset 2 45 200</code> — the same with a 45s window and
+    the proposal's optional premium on top of the final bid.
+    <code>/artmset off</code> turns it off without touching the numbers, so
+    turning it back on does not mean typing them again.
+    """
+    args = list(context.args or [])
+
+    def work(session, season):
+        symbol = season.currency_label
+        if args and args[0].lower() in ("off", "no", "none"):
+            A.set_rtm_rules(session, season, enabled=False)
+            return "🪪 Right To Match is off."
+        if args:
+            if len(args) > 3:
+                raise AuctionError("Usage: /artmset <cards> [seconds] "
+                                   "[premium], e.g. /artmset 2 30")
+            seconds = args[1] if len(args) > 1 else None
+            # The premium is money, so it is read the way every other amount
+            # in this feature is: "2" means two crore, not two lakh.
+            extra = A.parse_amount(args[2]) if len(args) > 2 else None
+            A.set_rtm_rules(session, season, enabled=True, per_team=args[0],
+                            window_seconds=seconds, extra_lakh=extra)
+
+        if not A.rtm_configured(season):
+            return ("🪪 Right To Match is <b>off</b>.\n"
+                    "Turn it on with <code>/artmset 2</code> — two cards each.")
+        lines = [f"🪪 <b>Right To Match</b> — on",
+                 f"{season.rtm_per_team} card(s) each · "
+                 f"{season.rtm_window_seconds}s to answer each question"
+                 + (f" · premium {A.render_money(season.rtm_extra_lakh, symbol)}"
+                    if season.rtm_extra_lakh else "")]
+        lines.append("")
+        for franchise in A.franchises(session, season.id):
+            lines.append(f"<b>{html.escape(franchise.name)}</b> — "
+                         f"{A.rtm_cards_left(franchise)} left of "
+                         f"{int(franchise.rtm_cards_total or 0)}")
+        lines.append("")
+        lines.append("<i>Give one franchise a different number with "
+                     "<code>/artmcards &lt;franchise&gt; &lt;n&gt;</code>.</i>")
+        return "\n".join(lines)
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def artmcards_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/artmcards Mumbai 3</code> — one franchise's own card count."""
+    args = list(context.args or [])
+
+    def work(session, season):
+        if len(args) < 2:
+            raise AuctionError("Usage: /artmcards <franchise> <cards>, "
+                               "e.g. /artmcards Mumbai 2")
+        franchise = _find_franchise(session, season, " ".join(args[:-1]))
+        A.set_rtm_cards(session, season, franchise, args[-1])
+        return (f"🪪 {html.escape(franchise.name)} now holds "
+                f"<b>{A.rtm_cards_left(franchise)}</b> Right To Match of "
+                f"{int(franchise.rtm_cards_total or 0)}.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def artmforce_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Answer the open RTM window on the franchise's behalf.
+
+    For the owner whose phone died mid-window. It is the same three
+    transitions the franchise itself would drive, so the announcement, the
+    card and the ledger all read exactly as they would have — the audit log
+    is where it shows that an admin did it.
+    """
+    user = update.effective_user
+    raw = _arg_text(context).strip().lower()
+
+    def work(session, season):
+        lot = A.current_lot(session, season)
+        if lot is None or lot.status != A.LOT_RTM_OFFERED:
+            raise AuctionError("There is no Right To Match open right now.")
+        by = user.id if user else None
+        if lot.rtm_stage == A.RTM_FINAL_OFFER:
+            if raw and raw not in ("stand", "no", "n"):
+                raise AuctionError("At the final offer the only thing to "
+                                   "force is standing pat: /artmforce stand. "
+                                   "A raise has to be a real bid.")
+            A.rtm_to_decision(session, season, lot)
+            return "🪪 The final-offer window is closed — over to the holder."
+        if raw in ("yes", "y", "use", "match"):
+            wants = True
+        elif raw in ("no", "n", "pass", "decline"):
+            wants = False
+        else:
+            raise AuctionError("Usage: /artmforce yes|no")
+        holder = A.rtm_holder(session, lot)
+        if lot.rtm_stage == A.RTM_INTENT:
+            A.rtm_intent(session, season, lot, holder, wants, by_tg_id=by)
+        else:
+            A.rtm_decide(session, season, lot, holder, wants, by_tg_id=by)
+        return ("🪪 Answered on their behalf." if wants
+                else "🪪 Declined on their behalf.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def artmundo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/artmundo Ashwin</code> — undo a match, card and money and all."""
+    raw = _arg_text(context).strip()
+
+    def work(session, season):
+        if not raw:
+            raise AuctionError("Usage: /artmundo <player>")
+        lot = _find_lot(session, season, raw)
+        if lot.acquisition != A.ACQ_RTM:
+            raise AuctionError(f"{lot.name} was not signed with a Right To "
+                               f"Match. Use /aundo for an auction sale.")
+        A.undo_rtm(session, season, lot,
+                   by_tg_id=update.effective_user.id if update.effective_user
+                   else None)
+        return (f"↩️ The Right To Match on {html.escape(lot.name)} is undone — "
+                f"the money and the card are both back, and he is on the "
+                f"block again.")
 
     await _with_auction(update, work, admin=True, context=context)
 

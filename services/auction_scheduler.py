@@ -262,7 +262,11 @@ async def _tick_one(context, session, season, now):
 
     if left is not None and left > 0:
         spoken = await drain_events(context.bot, session, season)
-        stage = A.going_stage_for(left)
+        # "Going once / going twice" is the language of a contest between
+        # bidders. An RTM window is one franchise answering one question, so it
+        # counts down without the auctioneer's patter.
+        stage = (0 if lot.status == A.LOT_RTM_OFFERED
+                 else A.going_stage_for(left))
         moved_on = stage > int(lot.going_stage or 0)
         new_bids = int(lot.bid_count or 0) != int(season.board_rendered_bid_count or 0)
         if moved_on:
@@ -279,11 +283,18 @@ async def _tick_one(context, session, season, now):
             session.commit()
         return
 
-    # Expired.
-    outcome, lot = A.resolve_expired(session, season, lot, now=now)
+    # Expired. A lot mid-Right-To-Match resolves the stage it is on rather
+    # than the lot — each stage taking the SAFE default, so a franchise nobody
+    # is running can never wedge an auction.
+    if lot.status == A.LOT_RTM_OFFERED:
+        A.resolve_rtm_stage(session, season, lot, now=now)
+    else:
+        A.resolve_expired(session, season, lot, now=now)
     session.commit()
     await drain_events(context.bot, session, season, limit=DRAIN_PER_TICK + 3)
-    if season.status == A.STATUS_LIVE:
+    # Only reach for the next lot once nothing is in front of the room. An RTM
+    # window that has just opened, or moved on a stage, still is.
+    if season.status == A.STATUS_LIVE and A.current_lot(session, season) is None:
         A.open_next_lot(session, season, now=now)
         session.commit()
         await drain_events(context.bot, session, season)

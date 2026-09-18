@@ -60,6 +60,18 @@
         <input type="hidden" name="action" value="undo_bid">
         <button class="btn btn-ghost" type="submit" {% if not lot or not lot.current_bidder_id %}disabled{% endif %}>↩️ Undo last bid</button></form>
 
+      {% if lot and lot.status == LOT_RTM_OFFERED %}
+      <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="rtm_match">
+        <button class="btn btn-primary" type="submit" {% if lot.rtm_stage == RTM_FINAL_OFFER %}disabled{% endif %}>🪪 Use RTM</button></form>
+      <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="rtm_decline">
+        <button class="btn btn-ghost" type="submit" {% if lot.rtm_stage == RTM_FINAL_OFFER %}disabled{% endif %}>Pass</button></form>
+      <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="rtm_stand">
+        <button class="btn btn-ghost" type="submit" {% if lot.rtm_stage != RTM_FINAL_OFFER %}disabled{% endif %}>Stand — put the price to them</button></form>
+      {% endif %}
+
       {% if lot %}
       <form method="POST" onsubmit="return confirm('Withdraw {{ lot.name }} from the auction?');">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -69,6 +81,15 @@
       {% endif %}
     </div>
 
+    {% if lot and lot.status == LOT_RTM_OFFERED %}
+    <p class="au-note" style="margin:.7rem 0 0;">
+      <b>A Right To Match is open</b>, so sell, pass and undo-bid are all
+      refused until it resolves — the answer belongs to
+      {{ rtm_holder.name if rtm_holder else 'the previous franchise' }}, not to
+      whoever reaches this page first. The buttons above answer <em>for</em>
+      them and are recorded as an admin's doing.
+    </p>
+    {% endif %}
     <p class="au-note" style="margin:.7rem 0 0;">
       <b>Mark unsold is refused while a bid stands.</b> Passing a lot somebody
       has bid for would void a franchise's winning bid with nothing on the

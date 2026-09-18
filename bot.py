@@ -364,7 +364,7 @@ GROUP_ONLY_COMMANDS = frozenset({
     # BOT_MENU_COMMANDS either (see the note there), so listing them here
     # changes nothing today; it is the correct entry for the day a private
     # slot frees up.
-    "bid", "aboard", "apurse",
+    "bid", "aboard", "apurse", "artm",
 })
 
 # Commands that only make sense one-to-one with the bot: deep-link entry
@@ -464,6 +464,10 @@ ADMIN_MENU_COMMANDS = (
     ("aretlock", "Admin: retention state, and close the window"),
     ("aretain", "Admin: retain a player for a franchise"),
     ("aunretain", "Admin: release a retained player into the pool"),
+    ("artmset", "Admin: Right To Match rules, and the card counts"),
+    ("artmcards", "Admin: give one franchise its own Right To Match count"),
+    ("artmforce", "Admin: answer an open Right To Match for a franchise"),
+    ("artmundo", "Admin: undo a match — money and card both back"),
     # Running tournament: the points table, and matches played off the bot.
     ("tpoints", "Admin: dock or award points on the tournament table"),
     ("tpointsclear", "Admin: clear a team's points adjustment"),
@@ -1024,6 +1028,7 @@ async def start_handler(update, context):
         "/bid [amount] - Bid for the player on the block (bare /bid = the next minimum)\n"
         "/aboard - The live auction board\n"
         "/apurse [franchise] - Every purse, or one franchise's squad\n"
+        "/artm yes|no - Answer a Right To Match on your former player\n"
         "/ctour - Challenge League Tournament hub: table, fixtures, teams\n"
         "/cttable /ctfixtures /ctteams - Tournament table, schedule (done matches struck through), field\n"
         "/ctinjuries - Who is ruled out injured, and for how many more matches 🚑\n"
@@ -2097,11 +2102,20 @@ def main():
             atimer_handler, asnipe_handler, agrant_handler, aco_handler,
             apublish_handler, acancel_handler,
             aretain_handler, aunretain_handler, aretlock_handler,
+            artm_handler, rtm_callback,
+            artmset_handler, artmcards_handler, artmforce_handler,
+            artmundo_handler,
         )
         # Not "/b": that is already /buy, registered above, and PTB runs the
         # first handler that matches — the alias would be dead.
         app.add_handler(CommandHandler(["bid", "bd"], bid_handler))
         app.add_handler(CallbackQueryHandler(bid_callback, pattern=r"^au_bid_"))
+        # Right To Match. Unpublished like /bid, and for the same reason: both
+        # player menu scopes are at Telegram's ceiling. The room hears about it
+        # when the bot asks them the question, which is the only moment it
+        # matters.
+        app.add_handler(CommandHandler(["artm", "rtm"], artm_handler))
+        app.add_handler(CallbackQueryHandler(rtm_callback, pattern=r"^au_rtm_"))
         app.add_handler(CommandHandler(["aboard", "auctionboard"], aboard_handler))
         app.add_handler(CommandHandler(["apurse", "apurses"], apurse_handler))
         # Admin. Registered unconditionally, with the gate inside the handler,
@@ -2129,6 +2143,13 @@ def main():
         app.add_handler(CommandHandler("aretain", aretain_handler))
         app.add_handler(CommandHandler(["aunretain", "arelease"], aunretain_handler))
         app.add_handler(CommandHandler(["aretlock", "aretention"], aretlock_handler))
+        # Right To Match, from the admin side: the rules, the card counts, and
+        # the two things an admin needs when a window is open and the owner is
+        # not — answer it for them, or put a match back.
+        app.add_handler(CommandHandler(["artmset", "artmrules"], artmset_handler))
+        app.add_handler(CommandHandler("artmcards", artmcards_handler))
+        app.add_handler(CommandHandler("artmforce", artmforce_handler))
+        app.add_handler(CommandHandler("artmundo", artmundo_handler))
 
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))

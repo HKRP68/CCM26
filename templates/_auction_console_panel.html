@@ -14,6 +14,20 @@
       <div class="dim" style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;">Lot {{ lot.lot_no }}{% if lot.set_name %} · {{ lot.set_name }}{% endif %}</div>
       <div class="au-lot-name">{{ lot.name }}{% if lot.is_overseas %} ✈️{% endif %}</div>
       <div class="dim">{{ lot.rating }} OVR · {{ lot.category }} · {{ lot.country }}{% if lot.version %} · {{ lot.version }}{% endif %}</div>
+      {% if lot.status == LOT_RTM_OFFERED %}
+      <div style="margin-top:.6rem;padding:.5rem;border:1px solid var(--border);border-radius:10px;">
+        <b>🪪 Right To Match</b> — {{ rtm_holder.name if rtm_holder else '?' }}
+        <span class="dim">({{ cards_left(rtm_holder) if rtm_holder else 0 }} left)</span>
+        <div class="dim" style="font-size:.85rem;margin-top:.2rem;">
+          {% if lot.rtm_stage == RTM_INTENT %}waiting on them: use it, or pass
+          {% elif lot.rtm_stage == RTM_FINAL_OFFER %}waiting on {{ lot.current_bidder.name if lot.current_bidder else 'the top bidder' }}: one final raise, or stand
+          {% else %}waiting on them: match {{ money(rtm_price) }}, or let him go{% endif %}
+          {% if lot.rtm_base_bid_lakh and lot.current_bid_lakh != lot.rtm_base_bid_lakh %}
+            · raised from {{ money(lot.rtm_base_bid_lakh) }}
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
       <div style="margin-top:.8rem;">
         <div class="dim" style="font-size:.78rem;">{% if lot.current_bid_lakh %}Current bid{% else %}Base price{% endif %}</div>
         <div class="au-price">{{ money(lot.current_bid_lakh if lot.current_bid_lakh else lot.base_price_lakh) }}</div>
@@ -45,6 +59,7 @@
     <span>{{ f.name }}{% if lot and lot.current_bidder_id == f.id %} <span class="pill">leading</span>{% endif %}</span>
     <span class="dim">
       {{ money(f.purse_remaining_lakh) }} · {{ f.squad_size }}/{{ season.max_squad_size }}
+      {% if season.rtm_enabled %}· 🪪 {{ cards_left(f) }}{% endif %}
       · max {{ money([0, max_bid(season, f)]|max) }}
     </span>
   </div>

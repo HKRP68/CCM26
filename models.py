@@ -3649,8 +3649,24 @@ class AuctionSeason(Base):
     retention_locked_at = Column(DateTime, nullable=True)
 
     # ── Right To Match ─────────────────────────────────────────────────
-    # PHASE 2b. ``rtm_enabled`` defaults False and no branch tests it.
+    # The IPL 2025 rule, in full: when a lot's clock expires, the franchise
+    # that held the player last season is asked whether it wants to exercise
+    # its RTM; if it says yes the standing top bidder gets ONE more raise; and
+    # only then does the RTM holder match that final number or let it go. The
+    # price is the final bid, not the one that triggered it.
     rtm_enabled = Column(Boolean, default=False, nullable=False)
+    # Cards each franchise starts the season with. Copied onto
+    # ``AuctionFranchise.rtm_cards_total`` when a franchise is created, so
+    # changing it later never silently re-arms a franchise mid-auction.
+    rtm_per_team = Column(Integer, default=0, nullable=False)
+    # How long each of the three windows runs. One number rather than three:
+    # the questions are equally urgent, and three knobs would only be three
+    # things to get wrong.
+    rtm_window_seconds = Column(Integer, default=30, nullable=False)
+    # The proposal's optional "bid + ₹2 Cr" premium on top of the final price.
+    # Zero by default, so what ships is the pure IPL rule and the premium is a
+    # deliberate choice rather than a surprise.
+    rtm_extra_lakh = Column(Integer, default=0, nullable=False)
 
     # ── Last season ────────────────────────────────────────────────────
     # The ChallengeLeague this season follows. Stored rather than passed in
@@ -3836,8 +3852,18 @@ class AuctionLot(Base):
     previous_franchise_id = Column(Integer, ForeignKey("auction_franchises.id",
                                                        ondelete="SET NULL"),
                                    nullable=True)
-    # auction | retained | rtm — PHASE 2 writes anything but "auction".
+    # auction | retained | rtm — how this player came to be on a squad.
     acquisition = Column(String(20), default="auction", nullable=False)
+    # Which of the three RTM windows is open: intent | final_offer | decision,
+    # NULL whenever the lot is not in one. ``deadline_at`` is reused for
+    # whichever window it is, so this is what says which question the clock is
+    # actually counting down on.
+    rtm_stage = Column(String(16), nullable=True)
+    # The bid that triggered the RTM. Kept so "did the top bidder actually
+    # raise?" is answerable afterwards — the difference between ₹6 Cr and
+    # ₹9 Cr is the whole story of the lot, and the bid log alone cannot say
+    # which of them was the final offer.
+    rtm_base_bid_lakh = Column(Integer, nullable=True)
     rtm_offered_at = Column(DateTime, nullable=True)
     rtm_matched_by_id = Column(Integer, ForeignKey("auction_franchises.id",
                                                    ondelete="SET NULL"),

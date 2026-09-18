@@ -267,6 +267,31 @@ class LifecycleTests(AuctionCase):
                          lot.deadline_at)
         self.assertEqual(0, lot.going_stage)
 
+    def test_the_last_lot_can_be_resumed_with_nothing_queued_behind_it(self):
+        """An auction paused on its final lot is not a dead end.
+
+        The empty-pool preflight asks whether there is anything to *open*.
+        A lot already standing is the answer, and refusing here would strand
+        it for good — no admin can queue their way back to a closed window.
+        """
+        self.build_pool(self.players[:1])
+        lot = self.start()
+        self.assertIsNone(self.A.next_queued(self.session, self.season.id))
+        self.A.pause(self.session, self.season)
+        self.session.commit()
+        later = NOW + timedelta(minutes=3)
+        resumed = self.A.start(self.session, self.season, now=later)
+        self.session.commit()
+        self.assertEqual(lot.id, resumed.id)
+        self.assertEqual(self.A.STATUS_LIVE, self.season.status)
+        self.assertEqual(later + timedelta(seconds=self.season.bid_seconds),
+                         resumed.deadline_at)
+
+    def test_an_auction_with_nothing_at_all_still_refuses_to_start(self):
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.start()
+        self.assertIn("pool is empty", str(caught.exception))
+
     def test_only_one_lot_is_ever_on_the_block(self):
         self.build_pool()
         self.start()

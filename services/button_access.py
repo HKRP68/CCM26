@@ -50,6 +50,11 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # than quietly bidding a number nobody meant. Same call as the dt_ trade
     # buttons below, for the same reason.
     "au_bid_",
+    # The Right To Match prompt rides on the same pinned board. Only the
+    # holding franchise can actually answer, and handlers/auction.py checks
+    # that on every press — but the button has to be reachable by them, and
+    # the board belongs to nobody.
+    "au_rtm_",
     "cric_join",
     "cric_join_",
     "cric_join:",

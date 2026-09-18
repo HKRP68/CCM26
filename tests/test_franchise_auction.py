@@ -824,12 +824,24 @@ class FlaskTelegramBoundaryTests(unittest.TestCase):
         """One implementation, so the two surfaces cannot diverge."""
         for call in ("auction_svc.sell_lot", "auction_svc.pass_lot",
                      "auction_svc.place_bid", "auction_svc.pause",
-                     "auction_svc.start", "auction_svc.undo_last_bid"):
+                     "auction_svc.start", "auction_svc.undo_last_bid",
+                     # Retention and Right To Match, added later and along
+                     # the same seam: the console forces a stage by calling
+                     # the transition the franchise itself would have.
+                     "auction_svc.retain", "auction_svc.unretain",
+                     "auction_svc.rtm_intent", "auction_svc.rtm_decide",
+                     "auction_svc.rtm_to_decision", "auction_svc.undo_rtm",
+                     "auction_svc.set_rtm_rules", "auction_svc.set_rtm_cards"):
             self.assertIn(call, self.routes)
 
 
-class PhaseTwoStaysOffTests(AuctionCase):
-    """Retention and RTM have columns and no behaviour. Keep it that way."""
+class DefaultsStayOffTests(AuctionCase):
+    """Retention and RTM both ship switched off, and stay that way.
+
+    They have behaviour now — this class is what stops either of them turning
+    itself on. An auction nobody configured is a plain auction: every player
+    goes to the block, and every squad is what the room paid for.
+    """
 
     def test_a_new_auction_has_rtm_turned_off(self):
         self.assertFalse(self.season.rtm_enabled)

@@ -86,20 +86,23 @@ are excluded before you see them.
 | --- | --- | --- |
 | `/bid [amount]` (`/bd`) | owner + co-owners | Bid on the lot on the block. **Bare `/bid` bids the next minimum** — the commonest action, and the one form that cannot be fat-fingered with ten seconds on the clock |
 | `/aboard` | anyone | A personal copy of the live board, with quick-bid buttons |
-| `/apurse [franchise]` | anyone | Every purse, max bid and squad count — or one franchise's squad |
+| `/apurse [franchise]` | anyone | Every purse, max bid and squad count (and RTM cards left) — or one franchise's squad |
+| `/artm yes\|no` | the holder's owner + co-owners | Answer an open Right To Match. One verb for both questions it asks |
 
 Admin: `/auction` (the reference card), `/anew`, `/abind`, `/astart`,
 `/apause`, `/aresume`, `/anext`, `/aextend`, `/asold`, `/aunsold`,
 `/aundobid`, `/awithdraw`, `/atimer`, `/asnipe`, `/agrant`, `/aco`,
-`/apublish`, `/acancel`.
+`/apublish`, `/acancel`, plus retention's `/aretlock`, `/aretain`,
+`/aunretain` and RTM's `/artmset`, `/artmcards`, `/artmforce`, `/artmundo`.
 
-`/bid`, `/aboard` and `/apurse` are **not** in the group slash menu. Both
+`/bid`, `/artm`, `/aboard` and `/apurse` are **not** in the group slash menu. Both
 player scopes sit exactly at Telegram's 100-command ceiling and `_clamped`
 drops the tail rather than letting `setMyCommands` reject the whole call, so
-publishing three auction commands would cost three existing player commands
-their entry. It is the same call `/dtrade` and `/dtrades` already made, and the
-room is told about them where it matters instead: the `/auction` card, the
-board's own footer, and `/help`. The eighteen admin commands are in
+publishing them would cost that many existing player commands their entry. It
+is the same call `/dtrade` and `/dtrades` already made, and the room is told
+about them where it matters instead: the `/auction` card, the board's own
+footer, `/help`, and — for `/artm` — the prompt that asks the question, which
+names the owner and carries buttons. The admin commands are in
 `ADMIN_MENU_COMMANDS`, which is exempt from the clamp and published only into
 admin DMs, so they cost nobody anything.
 
@@ -243,6 +246,122 @@ the tests assert the identity holds after every retention and every release.
 Retention spend is **derived, not cached** — the purse column is a cache for a
 reason that does not apply here, and a second cache is only a second thing to
 drift.
+
+---
+
+## Right To Match
+
+The franchise that held a player last season gets one chance to keep him at
+whatever the room decides he is worth. **The rule is IPL 2025's, in full** —
+not a straight match, but *intent → one final offer → decision*:
+
+> Ashwin is on the block and RCB have bid ₹6 Cr. Rajasthan Royals, who held him
+> last season, are asked first: do you want to use an RTM? If they say yes, RCB
+> get **one more bid**. If RCB raise to ₹9 Cr, RR may then match at ₹9 Cr — the
+> *final* number, not the one that triggered the window.
+
+```text
+/artmset 2                  two cards each, 30s a window, no premium
+/artmset 2 45 2             …a 45s window, and ₹2 Cr on top of the final bid
+/artmcards Mumbai 3         one franchise's own count
+/artm yes | /artm no        the holder answers — both questions, one verb
+/artmforce yes|no           an admin answers for them
+/artmundo Ashwin            money and card both back, lot on the block
+```
+
+…or the **🪪 Right To Match** card on the setup page and the console's stage
+buttons. Off by default: `rtm_enabled` is `False` and `rtm_per_team` is 0, so
+an auction nobody configured never offers one.
+
+### Three windows on one clock
+
+```text
+on_block ──(clock expires, a bid stands, RTM is available)──▶ rtm_offered
+    stage = intent      the holder: exercise it at all?
+        ├─ no / times out ──────────────────────────▶ sold to the bidder at ₹6 Cr
+        └─ yes ─▶ stage = final_offer
+                     the top bidder: one raise, or stand
+                        └────────────▶ stage = decision
+                     the holder: match the final number?
+                        ├─ yes ─────────────────────▶ sold to the holder (`rtm`, a card spent)
+                        └─ no / times out ──────────▶ sold to the bidder at the final number
+```
+
+**Every stage times out to the safe default** — decline, stand, decline — the
+one that changes nothing about who was winning. An owner whose phone is in
+their pocket cannot wedge an auction; that is the same call `pass_lot` makes
+for a lot nobody bid on. `rtm_stage` says which window is open and
+`deadline_at` carries whichever it is, so the sweeper reads the two together
+or not at all.
+
+**Anti-snipe does not apply.** Sniping is a contest between bidders; an RTM
+window is one franchise answering one question, and extending it only lets
+somebody stall. The lot's `extensions_used` budget is untouched.
+
+### `rtm_offered` is a status, where `retained` was not
+
+Retention rides on `sold` because every reader of `sold` wanted it. A lot under
+RTM is the opposite: it is neither on the block nor sold, and the difference
+matters to nearly every reader. So it gets a status — and then **one line does
+almost all of the work**:
+
+```python
+def current_lot(session, season):
+    ... AuctionLot.status.in_(LOT_LIVE)   # (on_block, rtm_offered)
+```
+
+Widening `current_lot` makes six functions that already guard on
+`status != LOT_ON_BLOCK` refuse during an RTM window *for free*, each with a
+message that was already right: `extend_timer`, `validate_bid`, `sell_lot`,
+`pass_lot`, `undo_last_bid`, `resolve_expired`. Two more follow without being
+told — `open_lot` will not open the next lot over an open window, and
+`complete_if_done` will not finish the auction mid-RTM. Of the 33 places that
+read `LOT_ON_BLOCK` or `current_lot()`, that left four needing code.
+
+### The one rule that is deliberately suspended
+
+`validate_bid` refuses the franchise that already holds the top bid — bidding
+against yourself is not a tactic. A final offer is exactly that, so the guard
+lifts, gated on **both** `rtm_stage == 'final_offer'` **and** the bidder being
+the standing top bidder. A third franchise is refused for the ordinary reason.
+The minimum increment still applies: a raise that is not a raise is not a
+final offer.
+
+This is also the one place the deadline stops being the whole story. Advancing
+to `decision` writes a *new, later* `deadline_at`, so a final offer arriving a
+moment late would still satisfy `deadline_at > now` and land as a raise against
+a question already being answered. The claim carries the stage as well:
+
+```python
+.filter(AuctionLot.id == lot.id,
+        AuctionLot.deadline_at > now,
+        *([AuctionLot.rtm_stage == RTM_FINAL_OFFER] if final_offer else []))
+```
+
+The buttons carry it too — `au_rtm_{lot_id}_{stage}_{yes|no}` — so a stale
+prompt still on somebody's screen cannot answer the *next* question.
+
+### The card, the money and the price
+
+The price is the **final** bid plus `rtm_extra_lakh`, which is 0 by default, so
+what ships is the pure IPL rule. A match spends a card, sells the lot with
+`acquisition = rtm`, sets `rtm_matched_by_id`, and writes a **`LEDGER_RTM`**
+row rather than `LEDGER_PURCHASE` — so the ledger still says how a squad was
+assembled, and `/apurse` shows cards left beside the purse.
+
+The card and the debit move in the same statement-pair as the sale: a debit
+that cannot go through takes the card back with it. **A holder who can afford
+the ₹6 Cr but not the raised ₹9 Cr is told so at the decision prompt**, before
+they can tap into a refusal, and the card is not spent — they never got to use
+it. `undo_rtm` returns the card as well as the money, which is the whole point
+of it being a separate operation: an undone match that quietly ate one leaves a
+franchise silently poorer for an admin's slip.
+
+Eligibility is checked once, at the moment the clock expires — a card in hand, a
+previous franchise that is not already the top bidder, the purse, the same
+reachability rule bidding and retention use, and the squad and overseas caps.
+Fail any of it and the lot simply sells. The room hears *why* only when a card
+existed and something else blocked it; otherwise it is noise.
 
 ---
 
@@ -473,18 +592,23 @@ quietly bidding a number nobody meant.
 ```text
 AuctionSeason       the auction: status, bound chat, the lot timer, anti-snipe,
                     the purse default, squad rules, the base-price ladder, the
-                    retention rules and ladder, the league it follows, the
-                    pinned board and the announcement cursor
-AuctionFranchise    a franchise: name, city, logo, owner + co-owners, purse
+                    retention rules and ladder, the RTM rules, the league it
+                    follows, the pinned board and the announcement cursor
+AuctionFranchise    a franchise: name, city, logo, owner + co-owners, purse,
+                    and its Right To Match cards (total and used)
 AuctionLot          one player — the lot that goes on the block AND its result,
-                    retained players included (``acquisition`` tells them apart)
+                    retained and matched players included (``acquisition``
+                    tells the three apart), plus the open RTM stage
 AuctionBid          every bid, losing and voided ones included
 AuctionLedgerEntry  every movement of a purse, signed, with the balance after
 AuctionEvent        the permanent log, and the queue the group is announced from
 ```
 
-Six new tables, so `create_all` builds them and there are **no `_try_add`
-lines** — but all six are in `database.init_db`'s explicit import list anyway.
+Six new tables, so `create_all` builds them. Everything the first release
+shipped needed **no `_try_add` lines**; retention and Right To Match were added
+afterwards and theirs sit beside each other in `_migrate_add_columns`, all
+nullable or defaulted. All six tables are in `database.init_db`'s explicit
+import list.
 
 **`AuctionLot` is one table, not two.** The pool and the result log are the same
 rows on purpose, the call `DraftPick` already makes: *"Bumrah is lot 4 at a base
@@ -535,7 +659,7 @@ Two things were on their way to a third copy each, and both fail silently.
 | `services/auction_service.py` | The rules: the pool, base prices, the ledger, validation, the bidding claim, the lot lifecycle, publishing, the renderers. Session-first, **commits nothing**, raises `AuctionError` in plain text; only `render_*` emits HTML. Every clock decision is a pure function taking an injected `now` |
 | `services/auction_scheduler.py` | The two-second sweeper, the pinned board, the hardened edit, and the event drain |
 | `services/player_query.py` | The one master-player filter, and the one `details_json` |
-| `handlers/auction.py` | `/bid` and every other command, plus the `au_bid_` buttons |
+| `handlers/auction.py` | `/bid`, `/artm` and every other command, plus the `au_bid_` and `au_rtm_` buttons |
 | `models.py` | The six tables |
 | `admin.py` | `/auctions`, `/auctions/<id>`, `/auctions/<id>/console` and its polled panel |
 | `templates/admin_auctions.html`, `admin_auction_detail.html`, `admin_auction_console.html`, `_auction_console_panel.html` | The pages |
@@ -544,21 +668,12 @@ Two things were on their way to a third copy each, and both fail silently.
 | `tests/test_franchise_auction.py` | The pool, base prices, the ledger, reachability, the overseas cap, and publishing |
 | `tests/test_auction_bidding.py` | The lifecycle, bidding, two-session concurrency, the clock, anti-snipe, undo, permissions, the commands and the board |
 | `tests/test_auction_retention.py` | The ladder, the money, every cap, the window, what retention does to the pool and the board, publishing a retained player, and the commands |
+| `tests/test_auction_rtm.py` | The proposal's own Ashwin example end to end, every eligibility gate, all three timeouts, the self-raise suspension from both sides, the card, `undo_rtm`, the two-session races, and the autoflush shapes |
 
 ---
 
 ## Not built (yet)
 
-* **Right To Match.** `rtm_enabled`, `rtm_cards_total` / `rtm_cards_used`,
-  `AuctionLot.rtm_offered_at` / `rtm_matched_by_id`, and the `LEDGER_RTM` kind
-  are all in place and unused. `rtm_enabled` defaults `False` and no branch
-  tests it. Its two inputs are already here and already working —
-  `previous_squad_map` and `AuctionLot.previous_franchise_id` — because who
-  held a player last season only gets harder to recover as time passes. What
-  RTM still needs is a price mode (`bid`, `bid + N`), a per-franchise card
-  count, and the hard part: a two-party confirmation under a clock, wedged
-  between the final bid and the sale committing. `DraftTrade` is the precedent
-  for keeping that offer in a row rather than in process memory.
 * **Season templates** — saving a finished configuration and starting the next
   season from it.
 * **A Mini App auction board.** The board is a Telegram message today; the

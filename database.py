@@ -935,6 +935,17 @@ def _migrate_add_columns():
     # before any lot exists, so it cannot be inferred from the lots themselves.
     _try_add("auction_seasons", "previous_league_id", "INTEGER")
 
+    # ── Franchise Auction: Right To Match ──
+    # Phase 2b. ``rtm_enabled`` shipped WITH auction_seasons, so every row
+    # already has a real value for it — the NULL-reads-falsy trap does not
+    # apply there. These are all defaulted integers for the same reason it
+    # would if they were booleans.
+    _try_add("auction_seasons", "rtm_per_team", "INTEGER DEFAULT 0")
+    _try_add("auction_seasons", "rtm_window_seconds", "INTEGER DEFAULT 30")
+    _try_add("auction_seasons", "rtm_extra_lakh", "INTEGER DEFAULT 0")
+    _try_add("auction_lots", "rtm_stage", "VARCHAR(16)")
+    _try_add("auction_lots", "rtm_base_bid_lakh", "INTEGER")
+
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so
     # they stay independently fault-tolerant without a round trip each.

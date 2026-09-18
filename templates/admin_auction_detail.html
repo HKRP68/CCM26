@@ -325,17 +325,101 @@
   </div>
   {% endif %}
 
-  <!-- ── Right To Match (phase 2b) ──────────────────────────────── -->
-  <div class="au-card" style="opacity:.75;">
-    <h3 style="margin-top:0;">Right To Match <span class="pill">next phase</span></h3>
-    <p class="au-note" style="margin-bottom:.6rem;">
-      Not built yet, and deliberately shown as such rather than as a form that
-      silently does nothing. Its columns exist and nothing writes them.
+  <!-- ── Right To Match ────────────────────────────────────────── -->
+  <div class="au-card">
+    <h3 style="margin-top:0;">🪪 Right To Match
+      {% if season.rtm_enabled %}<span class="pill">on</span>{% else %}<span class="pill">off</span>{% endif %}
+    </h3>
+    <p class="au-note" style="margin:.2rem 0 .8rem;">
+      The IPL 2025 rule, in full. When a lot's clock expires, the franchise
+      that held the player last season is asked whether it wants to use an
+      RTM. If it says yes, the <b>standing top bidder gets one more raise</b> —
+      and only then does the holder match that final number, or let him go.
+      The price is the final bid, not the one that triggered it.
+      <br>Each of the three windows times out to the safe answer, so a
+      franchise nobody is running can never wedge the auction.
     </p>
     <form method="POST" class="au-grid">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="rtm_rules">
+      <div><label>Enabled</label>
+        <input type="checkbox" name="rtm_enabled" {% if season.rtm_enabled %}checked{% endif %}></div>
+      <div><label>RTM per franchise</label>
+        <input type="number" name="rtm_per_team" min="0" max="10" value="{{ season.rtm_per_team }}"></div>
+      <div><label>Window (seconds)</label>
+        <input type="number" name="rtm_window_seconds" min="5" max="600" value="{{ season.rtm_window_seconds }}"></div>
+      <div><label>Premium on top (Cr)</label>
+        <input type="text" name="rtm_extra" value="{{ (season.rtm_extra_lakh / 100)|round(2) }}"></div>
+      <div><button class="btn btn-primary" type="submit">Save RTM rules</button></div>
+    </form>
+    <p class="au-note" style="margin-bottom:0;">
+      A <b>premium of 0</b> is the pure IPL rule — matching costs exactly the
+      final bid. Set it higher and holding a card costs something to use.
+      Saving deals the card count out to every franchise that has not spent one
+      yet; a franchise mid-auction keeps whatever it has left.
+    </p>
+
+    {% if season.rtm_enabled %}
+    <table class="au-table" style="margin-top:.8rem;">
+      <tr><th>Franchise</th><th>Held last season</th><th>RTM left</th><th></th></tr>
+      {% for f in field %}
+      <tr>
+        <td>{{ f.name }}</td>
+        <td class="dim">{{ previous_squad.values()|select('eq', f)|list|length }} players</td>
+        <td>{{ cards_left(f) }} of {{ f.rtm_cards_total }}</td>
+        <td>
+          <form method="POST" style="display:flex;gap:.3rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="rtm_cards">
+            <input type="hidden" name="franchise_id" value="{{ f.id }}">
+            <input type="number" name="cards" min="0" max="10" value="{{ f.rtm_cards_total }}" style="width:5rem;">
+            <button class="btn btn-ghost" type="submit">Set</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="au-note" style="margin-bottom:0;">
+      A franchise can only hold a Right To Match on a player the record says
+      was theirs, so recording last season's league below is what turns this
+      on in practice.
+    </p>
+    {% endif %}
+
+    {% if matched %}
+    <h4 style="margin:1rem 0 .4rem;">Matched so far</h4>
+    <table class="au-table">
+      <tr><th>Player</th><th>Kept by</th><th>Price</th><th></th></tr>
+      {% for lot in matched %}
+      <tr>
+        <td>{{ lot.name }}</td>
+        <td>{{ lot.sold_to.name if lot.sold_to else '—' }}</td>
+        <td>{{ money(lot.sold_price_lakh, season.currency_label) }}</td>
+        <td>
+          <form method="POST" onsubmit="return confirm('Undo the match on {{ lot.name }}? The money and the card both come back, and the lot goes on the block again.');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="rtm_undo">
+            <input type="hidden" name="lot_id" value="{{ lot.id }}">
+            <button class="btn btn-ghost" type="submit">Undo</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="au-note" style="margin-bottom:0;">
+      Undoing a match returns the card as well as the money — an undo that
+      quietly ate one would leave a franchise poorer for somebody else's slip.
+    </p>
+    {% endif %}
+  </div>
+
+  <!-- ── Last season ───────────────────────────────────────────── -->
+  <div class="au-card">
+    <h3 style="margin-top:0;">Last season's league</h3>
+    <form method="POST" class="au-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="link_previous">
-      <div style="grid-column:span 2;"><label>Last season's league</label>
+      <div style="grid-column:span 2;"><label>Which league this season follows</label>
         <select name="league_id">
           <option value="">— pick the previous league —</option>
           {% for lg in leagues %}<option value="{{ lg.id }}" {% if season.previous_league_id == lg.id %}selected{% endif %}>{{ lg.name }}</option>{% endfor %}
@@ -343,9 +427,11 @@
       <div><button class="btn btn-ghost" type="submit">🔗 Record</button></div>
     </form>
     <p class="au-note" style="margin-bottom:0;">
-      Worth doing <em>now</em>: it is what lets the retention picker flag each
-      franchise's own players, and who held whom only gets harder to recover as
-      time passes. It is also the entire input to Right To Match.
+      This is what decides <b>who holds a Right To Match on whom</b>, and it is
+      what lets the retention picker flag each franchise's own players. It can
+      only be changed while the auction is in setup or paused — an RTM may be
+      open right now, and moving the ground under it is how a player ends up
+      matched by the wrong franchise.
     </p>
   </div>
 

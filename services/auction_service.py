@@ -82,9 +82,28 @@ LOT_ON_BLOCK = "on_block"
 LOT_SOLD = "sold"
 LOT_UNSOLD = "unsold"
 LOT_WITHDRAWN = "withdrawn"
+# A lot mid-Right-To-Match: neither on the block nor sold. Unlike a retention —
+# which rides on ``sold`` precisely because every reader of ``sold`` wants it —
+# this one has to be its own status, because almost every reader wants the
+# opposite: no third-party bids, no sale on the clock, a different board.
+#
+# ``current_lot`` deliberately returns a lot in this state, which is what makes
+# the six existing ``status != LOT_ON_BLOCK`` guards (extend_timer, validate_bid,
+# sell_lot, pass_lot, undo_last_bid, resolve_expired) refuse during an RTM
+# window for free, with messages that are already right.
+LOT_RTM_OFFERED = "rtm_offered"
 
 # A lot in one of these has left the pool for good unless an admin re-lists it.
 LOT_RESOLVED = (LOT_SOLD, LOT_UNSOLD, LOT_WITHDRAWN)
+# The lot is in front of the room, one way or another.
+LOT_LIVE = (LOT_ON_BLOCK, LOT_RTM_OFFERED)
+
+# The three questions an RTM asks, in order. Each has its own window on
+# ``AuctionLot.deadline_at``, and each times out to the SAFE default —
+# decline, stand, decline — so a silent owner can never wedge an auction.
+RTM_INTENT = "intent"            # the holder: do you want to exercise it?
+RTM_FINAL_OFFER = "final_offer"  # the top bidder: one more raise, or stand?
+RTM_DECISION = "decision"        # the holder: match that number, or let it go?
 
 # ── Ledger kinds ──────────────────────────────────────────────────────
 LEDGER_OPENING = "opening"
@@ -1141,7 +1160,11 @@ def pool_counts(session, season_id):
     counts, retained_lots = {}, 0
     for status, acquisition, n in rows:
         n = int(n)
-        if status == LOT_SOLD and (acquisition or ACQ_AUCTION) != ACQ_AUCTION:
+        # Only a RETENTION is kept out of the auction figures. A Right To
+        # Match is auction progress — the room watched the clock run and money
+        # moved — so folding it in here would stall the board's "N/M resolved"
+        # line forever and credit a retention nobody made.
+        if status == LOT_SOLD and acquisition == ACQ_RETAINED:
             retained_lots += n
             continue
         counts[status] = counts.get(status, 0) + n
@@ -1257,6 +1280,8 @@ def relist(session, season, lot):
     lot.deadline_at = None
     lot.going_stage = 0
     lot.extensions_used = 0
+    lot.rtm_stage = None
+    lot.rtm_base_bid_lakh = None
     log_event(session, season, "lot_relisted",
               f"↩️ {_e(lot.name)} goes back into the pool for another round.",
               lot=lot)
@@ -1274,6 +1299,10 @@ def link_previous_season(session, season, league_id):
     """
     if not league_id:
         return 0
+    if season.status not in (STATUS_SETUP, STATUS_PAUSED):
+        raise AuctionError("Pause the auction before changing which league it "
+                           "follows — it decides who holds a Right To Match, "
+                           "and one may be open right now.")
     # Remembered, not just used: the retention picker needs to know whose
     # players were whose BEFORE any lot exists, so it cannot re-derive this
     # from the lots the way this function does.
@@ -1302,10 +1331,17 @@ def current_lot(session, season):
     crash between two commits heals itself on the next read instead of
     stranding the auction — the same call ``draft_service.current_pick`` makes,
     and for the same reason.
+
+    **A lot mid-RTM counts as the current lot.** It is still the one thing the
+    room is looking at, and saying so here is what makes the rest of the
+    service treat an RTM window correctly without being told: ``open_lot``
+    will not start the next lot over the top of one, ``complete_if_done`` will
+    not finish the auction in the middle of one, and every function that
+    already guards on ``status != LOT_ON_BLOCK`` refuses for the right reason.
     """
     return (session.query(AuctionLot)
             .filter(AuctionLot.season_id == season.id,
-                    AuctionLot.status == LOT_ON_BLOCK)
+                    AuctionLot.status.in_(LOT_LIVE))
             .order_by(AuctionLot.lot_no.asc()).first())
 
 
@@ -1406,7 +1442,15 @@ def start(session, season, *, now=None, by_tg_id=None):
     if ownerless:
         raise AuctionError("These franchises have no owner Telegram id, so "
                            "nobody could bid for them: " + ", ".join(ownerless))
-    if next_queued(session, season.id) is None:
+    # An auction paused on its last lot has nothing queued behind it. This
+    # preflight is about *opening* one with nothing to sell — applied to a
+    # resume it would strand the very lot the room is waiting on, and there
+    # would be no way back: building the pool cannot reopen a closed window.
+    # Flushed first, because an admin who withdraws a lot and resumes in one
+    # request would otherwise be answered from what is still on disk.
+    session.flush()
+    standing = current_lot(session, season)
+    if standing is None and next_queued(session, season.id) is None:
         raise AuctionError("The pool is empty — build it before starting.")
 
     # A franchise under the retention minimum can only be fixed *before* the
@@ -1440,7 +1484,6 @@ def start(session, season, *, now=None, by_tg_id=None):
                     f"{pool_counts(session, season.id).get(LOT_QUEUED, 0)} lots."),
               by_tg_id=by_tg_id, by_admin=True)
 
-    standing = current_lot(session, season)
     if standing is not None:
         # Resuming onto the lot that was on the block when we paused. A FULL
         # clock, not whatever fraction was left: the room has been arguing and
@@ -1451,8 +1494,16 @@ def start(session, season, *, now=None, by_tg_id=None):
 
 
 def restart_clock(session, season, lot, *, now=None):
+    """A fresh full clock on whatever question the lot is actually asking.
+
+    A lot paused mid-Right-To-Match comes back with an RTM window, not a
+    lot-length one: the room is answering a yes/no, not running an auction.
+    """
     now = now or datetime.utcnow()
-    lot.deadline_at = now + timedelta(seconds=max(5, int(season.bid_seconds or 30)))
+    seconds = (max(5, _as_int(getattr(season, "rtm_window_seconds", 30), 30))
+               if lot.status == LOT_RTM_OFFERED
+               else max(5, int(season.bid_seconds or 30)))
+    lot.deadline_at = now + timedelta(seconds=seconds)
     lot.going_stage = 0
     season.current_lot_id = lot.id
     return lot
@@ -1490,6 +1541,8 @@ def cancel(session, season, *, by_tg_id=None):
         lot.going_stage = 0
         lot.current_bid_lakh = None
         lot.current_bidder_id = None
+        lot.rtm_stage = None
+        lot.rtm_base_bid_lakh = None
     season.status = STATUS_CANCELLED
     season.current_lot_id = None
     log_event(session, season, "season_cancelled",
@@ -1568,13 +1621,25 @@ def validate_bid(session, season, lot, franchise, amount_lakh, *, now=None):
                            "admin resumes it.")
     if season.status != STATUS_LIVE:
         raise AuctionError("No auction is running here.")
-    if lot is None or lot.status != LOT_ON_BLOCK:
+    # The one case where a bid is legal on a lot that is NOT on the block: the
+    # standing top bidder making their one final offer inside an RTM window.
+    final_offer = (lot is not None
+                   and lot.status == LOT_RTM_OFFERED
+                   and lot.rtm_stage == RTM_FINAL_OFFER
+                   and lot.current_bidder_id == franchise.id)
+    if not final_offer and (lot is None or lot.status != LOT_ON_BLOCK):
+        if lot is not None and lot.status == LOT_RTM_OFFERED:
+            raise AuctionError(f"{lot.name} is under a Right To Match — only "
+                               f"the top bidder can raise, and only once.")
         raise AuctionError("Nothing is on the block right now.")
     left = seconds_left(lot, now)
     if left is None or left <= 0:
         raise AuctionError(f"The clock has run out on {lot.name}.")
 
-    if lot.current_bidder_id == franchise.id:
+    # Bidding against yourself is not a tactic — except when the rule asks you
+    # to. Gated on the stage AND the identity, so it opens for exactly one
+    # franchise at exactly one moment.
+    if lot.current_bidder_id == franchise.id and not final_offer:
         raise AuctionError(f"You already hold the top bid at "
                            f"{render_money(lot.current_bid_lakh, symbol)}. "
                            f"Bidding against yourself is not a tactic.")
@@ -1684,6 +1749,13 @@ def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
     now = now or datetime.utcnow()
     amount = validate_bid(session, season, lot, franchise, amount_lakh, now=now)
 
+    # Re-derived here rather than returned from validate_bid: the claim below
+    # has to know which status it is claiming against, and a validator that
+    # started handing back control flow would be a validator doing two jobs.
+    final_offer = (lot.status == LOT_RTM_OFFERED
+                   and lot.rtm_stage == RTM_FINAL_OFFER
+                   and lot.current_bidder_id == franchise.id)
+
     window = max(0, int(season.snipe_window_seconds or 0))
     extend = max(1, int(season.snipe_extend_seconds or 10))
     cap = max(0, int(season.max_extensions or 0))
@@ -1693,8 +1765,9 @@ def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
     # True exactly when this bid earns an extension: inside the window, and the
     # budget is not spent. Referenced twice below; SQL evaluates every SET
     # expression against the row's OLD values, so both see the same answer.
-    sniping = and_(AuctionLot.deadline_at <= snipe_cutoff,
-                   AuctionLot.extensions_used < cap) if window and cap else None
+    sniping = (and_(AuctionLot.deadline_at <= snipe_cutoff,
+                    AuctionLot.extensions_used < cap)
+               if window and cap and not final_offer else None)
 
     values = {
         "current_bid_lakh": amount,
@@ -1711,12 +1784,20 @@ def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
     claimed = (session.query(AuctionLot)
                .filter(AuctionLot.id == lot.id,
                        AuctionLot.season_id == season.id,
-                       AuctionLot.status == LOT_ON_BLOCK,
+                       AuctionLot.status == (LOT_RTM_OFFERED if final_offer
+                                             else LOT_ON_BLOCK),
                        AuctionLot.deadline_at > now,
+                       # During an RTM the deadline alone is NOT sufficient:
+                       # moving to the decision stage sets a new, later one, so
+                       # a late final offer would otherwise land against the
+                       # clock the holder is answering on.
+                       *([AuctionLot.rtm_stage == RTM_FINAL_OFFER]
+                         if final_offer else []),
                        or_(AuctionLot.current_bid_lakh.is_(None),
                            AuctionLot.current_bid_lakh < amount),
-                       or_(AuctionLot.current_bidder_id.is_(None),
-                           AuctionLot.current_bidder_id != franchise.id))
+                       *([] if final_offer else
+                         [or_(AuctionLot.current_bidder_id.is_(None),
+                              AuctionLot.current_bidder_id != franchise.id)]))
                .update(values, synchronize_session=False))
 
     # The UPDATE bypassed the identity map, so every loaded row may be stale.
@@ -1748,6 +1829,11 @@ def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
               + (" <i>(entered by an admin)</i>." if by_admin else "."),
               lot=lot, franchise=franchise, by_tg_id=by_tg_id,
               by_admin=by_admin, detail={"amount_lakh": amount})
+    # "One more chance to increase" means one. A landed final offer closes the
+    # raise window there and then and puts the number to the RTM holder,
+    # rather than leaving the clock running on a bidder who has had their go.
+    if final_offer:
+        lot = rtm_to_decision(session, season, lot, now=now)
     return lot
 
 
@@ -1884,12 +1970,16 @@ def withdraw_lot(session, season, lot, *, by_tg_id=None):
         raise AuctionError("No such lot.")
     if lot.status == LOT_SOLD:
         raise AuctionError(f"{lot.name} has been sold — undo the sale first.")
-    was_on_block = lot.status == LOT_ON_BLOCK
+    was_on_block = lot.status in LOT_LIVE
     lot.status = LOT_WITHDRAWN
     lot.deadline_at = None
     lot.going_stage = 0
     lot.current_bid_lakh = None
     lot.current_bidder_id = None
+    # A lot pulled mid-RTM takes no card with it — none was spent — but it must
+    # not keep a stage, or a re-listed lot would come back mid-question.
+    lot.rtm_stage = None
+    lot.rtm_base_bid_lakh = None
     if was_on_block:
         season.current_lot_id = None
     log_event(session, season, "lot_withdrawn",
@@ -1971,6 +2061,10 @@ def undo_sale(session, season, lot, *, now=None, by_tg_id=None):
     # A retained player is also a sold lot, and undoing one here would refund
     # through the wrong ledger kind, leave ``retained_count`` standing, and put
     # somebody nobody bid for on the block.
+    if lot.acquisition == ACQ_RTM:
+        raise AuctionError(f"{lot.name} was kept with a Right To Match, not "
+                           f"bought. Undo the match instead — it gives the "
+                           f"card back as well as the money.")
     if (lot.acquisition or ACQ_AUCTION) != ACQ_AUCTION:
         raise AuctionError(f"{lot.name} was retained, not bought. Release the "
                            f"retention instead (/aunretain).")
@@ -2049,8 +2143,481 @@ def resolve_expired(session, season, lot, *, now=None):
     if lot is None or lot.status != LOT_ON_BLOCK:
         return (None, lot)
     if lot.current_bidder_id is not None:
+        # Before the hammer: does anybody hold a Right To Match on him? If so
+        # the lot does not sell yet — it goes to the holder to answer.
+        holder, blocked = rtm_available(session, season, lot)
+        if holder is not None:
+            return ("rtm", offer_rtm(session, season, lot, now=now,
+                                     holder=holder))
+        if blocked:
+            # A card existed and something else stopped it. Worth saying;
+            # "no RTM was available" on every other lot would be noise.
+            log_event(session, season, "rtm_unavailable",
+                      f"🪪 No Right To Match on {_e(lot.name)} — {blocked}.",
+                      lot=lot)
         return ("sold", sell_lot(session, season, lot, now=now))
     return ("unsold", pass_lot(session, season, lot))
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Right To Match
+#
+# The IPL 2025 rule, in full, and it is the only three-party thing in this
+# feature:
+#
+#   The clock expires with RCB top at ₹6 Cr. Ashwin's old franchise, RR, is
+#   asked first whether it wants to exercise its RTM. If RR say yes, RCB get
+#   ONE more raise — say to ₹9 Cr. RR then match at ₹9 Cr, or let him go.
+#
+# Three questions, three parties, three windows on the same ``deadline_at``
+# with ``rtm_stage`` saying which one is open. **Every stage times out to the
+# safe default** — decline, stand, decline — so a franchise nobody is running
+# can never wedge an auction, the same call ``pass_lot`` makes for a lot
+# nobody bid on.
+#
+# The price is the FINAL bid, not the one that triggered the offer. That is the
+# whole point of the rule: exercising an RTM does not cap what the player
+# costs, it only decides who ends up with him.
+# ──────────────────────────────────────────────────────────────────────
+
+def rtm_configured(season):
+    return bool(getattr(season, "rtm_enabled", False))
+
+
+def rtm_cards_left(franchise):
+    if franchise is None:
+        return 0
+    return max(0, int(franchise.rtm_cards_total or 0)
+               - int(franchise.rtm_cards_used or 0))
+
+
+def set_rtm_rules(session, season, *, enabled=None, per_team=None,
+                  window_seconds=None, extra_lakh=None):
+    """Save the Right To Match rules and deal the cards out.
+
+    Card counts live on the franchise so an admin can hand one side an extra,
+    but the common case is "everybody gets N" — so saving the rules deals them
+    out to anyone who has not spent one yet. A franchise mid-auction that has
+    already used a card keeps whatever it has left, because taking a card back
+    from underneath a live auction is a way to lose one.
+    """
+    if enabled is not None:
+        season.rtm_enabled = bool(enabled)
+    if per_team is not None:
+        season.rtm_per_team = max(0, _as_int(per_team, 0))
+    if window_seconds is not None:
+        season.rtm_window_seconds = max(5, _as_int(window_seconds, 30))
+    if extra_lakh is not None:
+        season.rtm_extra_lakh = max(0, _as_int(extra_lakh, 0))
+    for franchise in franchises(session, season.id):
+        if int(franchise.rtm_cards_used or 0) == 0:
+            franchise.rtm_cards_total = _as_int(season.rtm_per_team, 0)
+    session.flush()
+    return season
+
+
+def set_rtm_cards(session, season, franchise, cards):
+    """Give one franchise its own number of cards, never below what it spent."""
+    franchise.rtm_cards_total = max(int(franchise.rtm_cards_used or 0),
+                                    _as_int(cards, 0))
+    session.flush()
+    return franchise
+
+
+def rtm_price(season, lot):
+    """What matching would cost: the standing bid, plus any configured premium.
+
+    The premium defaults to zero, so what ships is the pure IPL rule — an RTM
+    costs exactly what the room decided the player was worth.
+    """
+    return (int(lot.current_bid_lakh or 0)
+            + max(0, _as_int(getattr(season, "rtm_extra_lakh", 0), 0)))
+
+
+def owner_ping(franchise):
+    """The franchise's name, wired to a Telegram mention of its owner.
+
+    Used only where somebody has seconds to answer. A 30-second Right To
+    Match window that arrives as an unremarkable line of text in a busy
+    group is a window nobody opens — and every one of them times out into a
+    decision the owner never got to make.
+    """
+    if franchise is None:
+        return "?"
+    label = _e(franchise.name)
+    tg_id = int(franchise.owner_tg_id or 0)
+    if tg_id <= 0:
+        return label
+    return f'<a href="tg://user?id={tg_id}">{label}</a>'
+
+
+def rtm_holder(session, lot):
+    """The franchise that held this player last season, or None."""
+    if lot is None or not lot.previous_franchise_id:
+        return None
+    return (session.query(AuctionFranchise)
+            .filter(AuctionFranchise.id == lot.previous_franchise_id).first())
+
+
+def rtm_available(session, season, lot):
+    """``(holder, reason)`` — who may exercise an RTM on this lot, and if
+    nobody, why not.
+
+    The reason is returned rather than logged here because it is only worth
+    saying out loud in one case: a franchise *had* a card and still could not
+    use it. Announcing "no RTM was available" on every lot in a season where
+    RTM is off would be pure noise.
+    """
+    if not rtm_configured(season):
+        return (None, None)
+    if lot is None or lot.current_bidder_id is None:
+        return (None, None)
+    if (lot.acquisition or ACQ_AUCTION) != ACQ_AUCTION:
+        return (None, None)
+    holder = rtm_holder(session, lot)
+    if holder is None:
+        return (None, None)
+    if holder.id == lot.current_bidder_id:
+        # They are already winning him. There is nothing to match.
+        return (None, None)
+    if rtm_cards_left(holder) <= 0:
+        return (None, None)
+
+    # From here on a card genuinely exists, so a refusal is worth saying.
+    price = rtm_price(season, lot)
+    if int(holder.squad_size or 0) + 1 > _as_int(season.max_squad_size, 0):
+        return (None, f"{holder.name} has no squad room left")
+    if lot.is_overseas:
+        cap = max(0, _as_int(season.max_overseas, 0))
+        if overseas_count(session, holder.id) + 1 > cap:
+            return (None, f"{holder.name} is at the overseas limit")
+    if price > int(holder.purse_remaining_lakh or 0):
+        return (None, f"{holder.name} cannot afford "
+                      f"{render_money(price, season.currency_label)}")
+    if price > max_bid_now(season, holder):
+        return (None, f"{holder.name} could not fill its squad afterwards")
+    return (holder, None)
+
+
+def offer_rtm(session, season, lot, *, now=None, holder=None):
+    """Open the RTM window instead of selling the lot.
+
+    Conditional on the lot still being on the block, so an admin's Mark Sold
+    racing the sweeper cannot leave the lot both sold and offered.
+    """
+    now = now or datetime.utcnow()
+    holder = holder or rtm_available(session, season, lot)[0]
+    if holder is None:
+        raise AuctionError("No RTM is available on this lot.")
+
+    window = max(5, _as_int(getattr(season, "rtm_window_seconds", 30), 30))
+    claimed = (session.query(AuctionLot)
+               .filter(AuctionLot.id == lot.id,
+                       AuctionLot.status == LOT_ON_BLOCK)
+               .update({"status": LOT_RTM_OFFERED,
+                        "rtm_stage": RTM_INTENT,
+                        "rtm_base_bid_lakh": lot.current_bid_lakh,
+                        "rtm_offered_at": now,
+                        "deadline_at": now + timedelta(seconds=window),
+                        "going_stage": 0}, synchronize_session=False))
+    session.flush()
+    session.expire_all()
+    lot = session.query(AuctionLot).filter(AuctionLot.id == lot.id).first()
+    if not claimed:
+        raise AuctionError(f"{lot.name} has just been resolved by someone else.")
+
+    bidder = (session.query(AuctionFranchise)
+              .filter(AuctionFranchise.id == lot.current_bidder_id).first())
+    log_event(session, season, "rtm_offered",
+              f"🪪 <b>Right To Match</b> — {_e(lot.name)} is going to "
+              f"{_e(bidder.name) if bidder else '?'} for "
+              f"{render_money(lot.current_bid_lakh, season.currency_label)}.\n"
+              f"<b>{owner_ping(holder)}</b>, do you want to use an RTM? "
+              f"({rtm_cards_left(holder)} left) — "
+              f"<code>/artm yes</code> or <code>/artm no</code>",
+              lot=lot, franchise=holder,
+              detail={"stage": RTM_INTENT, "bid_lakh": lot.current_bid_lakh})
+    return lot
+
+
+def _rtm_to_bidder(session, season, lot, *, now=None, reason="", by_tg_id=None):
+    """End the RTM and let the standing top bidder have the player.
+
+    Puts the lot back on the block for exactly as long as it takes ``sell_lot``
+    to close it, rather than growing a second copy of the money path. One
+    implementation of the debit, the ledger row and the event is the whole
+    reason the purse and its ledger have never disagreed.
+    """
+    now = now or datetime.utcnow()
+    lot.status = LOT_ON_BLOCK
+    lot.rtm_stage = None
+    session.flush()
+    sold = sell_lot(session, season, lot, now=now, by_tg_id=by_tg_id)
+    if reason:
+        log_event(session, season, "rtm_declined", reason, lot=sold,
+                  by_tg_id=by_tg_id)
+    return sold
+
+
+def rtm_intent(session, season, lot, franchise, wants, *, now=None,
+               by_tg_id=None):
+    """The holder's first answer: do you want to exercise it at all?
+
+    Yes opens the top bidder's one raise. No sells the lot where it stood —
+    and spends no card, because nothing was used.
+    """
+    now = now or datetime.utcnow()
+    if lot is None or lot.status != LOT_RTM_OFFERED or lot.rtm_stage != RTM_INTENT:
+        raise AuctionError("There is no Right To Match to answer right now.")
+    holder = rtm_holder(session, lot)
+    if holder is None or franchise is None or holder.id != franchise.id:
+        whose = holder.name if holder else "the previous franchise"
+        raise AuctionError(f"Only {whose} can answer this Right To Match.")
+
+    if not wants:
+        return _rtm_to_bidder(
+            session, season, lot, now=now, by_tg_id=by_tg_id,
+            reason=f"🪪 {_e(holder.name)} pass on their Right To Match.")
+
+    window = max(5, _as_int(getattr(season, "rtm_window_seconds", 30), 30))
+    advanced = (session.query(AuctionLot)
+                .filter(AuctionLot.id == lot.id,
+                        AuctionLot.status == LOT_RTM_OFFERED,
+                        AuctionLot.rtm_stage == RTM_INTENT)
+                .update({"rtm_stage": RTM_FINAL_OFFER,
+                         "deadline_at": now + timedelta(seconds=window)},
+                        synchronize_session=False))
+    session.flush()
+    session.expire_all()
+    lot = session.query(AuctionLot).filter(AuctionLot.id == lot.id).first()
+    if not advanced:
+        raise AuctionError("That Right To Match has already been answered.")
+
+    bidder = (session.query(AuctionFranchise)
+              .filter(AuctionFranchise.id == lot.current_bidder_id).first())
+    log_event(session, season, "rtm_intent",
+              f"🪪 <b>{_e(holder.name)}</b> will use their Right To Match on "
+              f"{_e(lot.name)}.\n"
+              f"<b>{owner_ping(bidder)}</b> — one final bid, or "
+              f"stand at {render_money(lot.current_bid_lakh, season.currency_label)}. "
+              f"<code>/bid &lt;amount&gt;</code> to raise.",
+              lot=lot, franchise=holder, by_tg_id=by_tg_id,
+              detail={"stage": RTM_FINAL_OFFER})
+    return lot
+
+
+def rtm_to_decision(session, season, lot, *, now=None):
+    """Close the top bidder's window and put the number to the holder."""
+    now = now or datetime.utcnow()
+    if lot is None or lot.rtm_stage != RTM_FINAL_OFFER:
+        return lot
+    window = max(5, _as_int(getattr(season, "rtm_window_seconds", 30), 30))
+    (session.query(AuctionLot)
+     .filter(AuctionLot.id == lot.id,
+             AuctionLot.status == LOT_RTM_OFFERED,
+             AuctionLot.rtm_stage == RTM_FINAL_OFFER)
+     .update({"rtm_stage": RTM_DECISION,
+              "deadline_at": now + timedelta(seconds=window)},
+             synchronize_session=False))
+    session.flush()
+    session.expire_all()
+    lot = session.query(AuctionLot).filter(AuctionLot.id == lot.id).first()
+
+    holder = rtm_holder(session, lot)
+    price = rtm_price(season, lot)
+    raised = int(lot.current_bid_lakh or 0) > int(lot.rtm_base_bid_lakh or 0)
+    afford = holder is not None and price <= max_bid_now(season, holder) \
+        and price <= int(holder.purse_remaining_lakh or 0)
+    body = (f"🪪 Final price on {_e(lot.name)}: "
+            f"<b>{render_money(price, season.currency_label)}</b>"
+            + (" — raised from "
+               f"{render_money(lot.rtm_base_bid_lakh, season.currency_label)}."
+               if raised else ", unchanged."))
+    if afford:
+        body += (f"\n<b>{owner_ping(holder)}</b> — match it? "
+                 f"<code>/artm yes</code> or <code>/artm no</code>")
+    else:
+        # Say it before they tap into a refusal. The card is not spent either
+        # way: they never got to use it.
+        body += (f"\n<b>{_e(holder.name) if holder else '?'}</b> cannot afford "
+                 f"that and still fill a squad — the Right To Match lapses.")
+    log_event(session, season, "rtm_final_offer", body, lot=lot,
+              franchise=holder, detail={"stage": RTM_DECISION,
+                                        "price_lakh": price})
+    return lot
+
+
+def rtm_decide(session, season, lot, franchise, matching, *, now=None,
+               by_tg_id=None):
+    """The holder's second answer: match the final number, or let him go."""
+    now = now or datetime.utcnow()
+    if lot is None or lot.status != LOT_RTM_OFFERED or lot.rtm_stage != RTM_DECISION:
+        raise AuctionError("There is no Right To Match to answer right now.")
+    holder = rtm_holder(session, lot)
+    if holder is None or franchise is None or holder.id != franchise.id:
+        whose = holder.name if holder else "the previous franchise"
+        raise AuctionError(f"Only {whose} can answer this Right To Match.")
+
+    if not matching:
+        return _rtm_to_bidder(
+            session, season, lot, now=now, by_tg_id=by_tg_id,
+            reason=f"🪪 {_e(holder.name)} let {_e(lot.name)} go.")
+
+    symbol = season.currency_label or "₹"
+    price = rtm_price(season, lot)
+    if price > int(holder.purse_remaining_lakh or 0):
+        raise AuctionError(f"{holder.name} has "
+                           f"{render_money(holder.purse_remaining_lakh, symbol)} "
+                           f"— {render_money(price, symbol)} is more than the "
+                           f"purse.")
+    if price > max_bid_now(season, holder):
+        raise AuctionError(f"{render_money(price, symbol)} would leave "
+                           f"{holder.name} unable to fill its squad.")
+    if rtm_cards_left(holder) <= 0:
+        raise AuctionError(f"{holder.name} has no Right To Match left.")
+
+    claimed = (session.query(AuctionLot)
+               .filter(AuctionLot.id == lot.id,
+                       AuctionLot.status == LOT_RTM_OFFERED,
+                       AuctionLot.rtm_stage == RTM_DECISION)
+               .update({"status": LOT_SOLD, "rtm_stage": None,
+                        "acquisition": ACQ_RTM,
+                        "sold_to_id": holder.id, "sold_price_lakh": price,
+                        "rtm_matched_by_id": holder.id,
+                        "sold_at": now, "deadline_at": None},
+                       synchronize_session=False))
+    session.flush()
+    session.expire_all()
+    lot = session.query(AuctionLot).filter(AuctionLot.id == lot.id).first()
+    if not claimed:
+        raise AuctionError("That Right To Match has already been answered.")
+
+    # The card and the money move in the SAME statement-pair as the sale, so a
+    # debit that cannot go through takes the card back with it rather than
+    # leaving a franchise quietly one poorer.
+    debited = (session.query(AuctionFranchise)
+               .filter(AuctionFranchise.id == holder.id,
+                       AuctionFranchise.purse_remaining_lakh >= price,
+                       AuctionFranchise.squad_size < _as_int(season.max_squad_size, 0),
+                       AuctionFranchise.rtm_cards_used < AuctionFranchise.rtm_cards_total)
+               .update({"purse_remaining_lakh":
+                        AuctionFranchise.purse_remaining_lakh - price,
+                        "squad_size": AuctionFranchise.squad_size + 1,
+                        "rtm_cards_used": AuctionFranchise.rtm_cards_used + 1},
+                       synchronize_session=False))
+    session.flush()
+    session.expire_all()
+    holder = (session.query(AuctionFranchise)
+              .filter(AuctionFranchise.id == holder.id).first())
+    lot = session.query(AuctionLot).filter(AuctionLot.id == lot.id).first()
+    if not debited:
+        raise AuctionError(f"{holder.name} can no longer pay "
+                           f"{render_money(price, symbol)} — the match has been "
+                           f"rolled back.")
+
+    _ledger(session, holder, LEDGER_RTM, -price, lot=lot,
+            note=f"Right To Match: {lot.name}", by_tg_id=by_tg_id)
+    log_event(session, season, "rtm_matched",
+              f"🪪 <b>MATCHED</b> — {_e(holder.name)} keep {_e(lot.name)} for "
+              f"{render_money(price, symbol)}. "
+              f"({rtm_cards_left(holder)} RTM left)",
+              lot=lot, franchise=holder, by_tg_id=by_tg_id,
+              detail={"price_lakh": price})
+    season.current_lot_id = None
+    complete_if_done(session, season)
+    return lot
+
+
+def resolve_rtm_stage(session, season, lot, *, now=None):
+    """What the clock does when an RTM window runs out. Returns the outcome.
+
+    Every default here is the *safe* one — the one that changes nothing about
+    who was winning — because the alternative is an auction that stops dead
+    when somebody's phone is in their pocket.
+    """
+    now = now or datetime.utcnow()
+    if lot is None or lot.status != LOT_RTM_OFFERED:
+        return (None, lot)
+    holder = rtm_holder(session, lot)
+    name = _e(holder.name) if holder else "The previous franchise"
+
+    if lot.rtm_stage == RTM_INTENT:
+        return ("declined", _rtm_to_bidder(
+            session, season, lot, now=now,
+            reason=f"🪪 {name} did not answer in time — no Right To Match."))
+    if lot.rtm_stage == RTM_FINAL_OFFER:
+        # Standing pat is a real answer, and the commonest one.
+        return ("stood", rtm_to_decision(session, season, lot, now=now))
+    if lot.rtm_stage == RTM_DECISION:
+        return ("declined", _rtm_to_bidder(
+            session, season, lot, now=now,
+            reason=f"🪪 {name} did not match in time."))
+    return (None, lot)
+
+
+def undo_rtm(session, season, lot, *, now=None, by_tg_id=None):
+    """Undo a matched RTM: refund the purse, **give the card back**, re-open.
+
+    Returning the card is the whole point. An undone match that quietly ate one
+    leaves a franchise permanently poorer for an admin's slip, and nothing on
+    the record to say why.
+    """
+    now = now or datetime.utcnow()
+    if lot is None or lot.status != LOT_SOLD or lot.acquisition != ACQ_RTM:
+        raise AuctionError(f"{lot.name if lot else 'That lot'} was not a "
+                           f"Right To Match.")
+    if season.published_at is not None:
+        raise AuctionError("This auction has been published. Undo the match "
+                           "after re-publishing, or correct the squad in the "
+                           "league itself.")
+    standing = current_lot(session, season)
+    if standing is not None and standing.id != lot.id:
+        raise AuctionError(f"{standing.name} is in front of the room — finish "
+                           f"that lot first.")
+
+    price = int(lot.sold_price_lakh or 0)
+    holder = (session.query(AuctionFranchise)
+              .filter(AuctionFranchise.id == lot.sold_to_id).first())
+    if holder is not None:
+        (session.query(AuctionFranchise)
+         .filter(AuctionFranchise.id == holder.id)
+         .update({"purse_remaining_lakh":
+                  AuctionFranchise.purse_remaining_lakh + price,
+                  "squad_size": case((AuctionFranchise.squad_size > 0,
+                                      AuctionFranchise.squad_size - 1), else_=0),
+                  "rtm_cards_used": case((AuctionFranchise.rtm_cards_used > 0,
+                                          AuctionFranchise.rtm_cards_used - 1),
+                                         else_=0)},
+                 synchronize_session=False))
+        session.flush()
+        session.expire_all()
+        holder = (session.query(AuctionFranchise)
+                  .filter(AuctionFranchise.id == holder.id).first())
+        lot = session.query(AuctionLot).filter(AuctionLot.id == lot.id).first()
+        _ledger(session, holder, LEDGER_REFUND, price, lot=lot,
+                note=f"Right To Match undone: {lot.name}", by_tg_id=by_tg_id)
+
+    lot.status = LOT_ON_BLOCK
+    lot.acquisition = ACQ_AUCTION
+    lot.rtm_matched_by_id = None
+    lot.rtm_offered_at = None
+    lot.rtm_base_bid_lakh = None
+    lot.rtm_stage = None
+    lot.sold_to_id = None
+    lot.sold_price_lakh = None
+    lot.sold_at = None
+    if season.status == STATUS_COMPLETED:
+        season.status = STATUS_LIVE
+    lot.deadline_at = now + timedelta(seconds=max(5, _as_int(season.bid_seconds, 30)))
+    season.current_lot_id = lot.id
+    session.flush()
+    log_event(session, season, "rtm_undone",
+              f"↩️ The Right To Match on {_e(lot.name)} was undone — "
+              f"{render_money(price, season.currency_label)} back in "
+              f"{_e(holder.name) if holder else 'the'} purse, and the card "
+              f"returned. The lot is back on the block.",
+              lot=lot, franchise=holder, by_tg_id=by_tg_id, by_admin=True)
+    return lot
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -2210,14 +2777,40 @@ def render_board(session, season, lot=None, *, now=None):
                       .filter(AuctionFranchise.id == lot.current_bidder_id).first())
             head.append(f"💰 <b>{render_money(lot.current_bid_lakh, symbol)}</b> — "
                         f"{_e(bidder.name if bidder else '?')}")
-        head.append(f"➡️ Next bid: <code>/bid "
-                    f"{_bid_hint(next_min_bid(season, lot))}</code> "
-                    f"({render_money(next_min_bid(season, lot), symbol)})")
+        # Only invite a bid when one would actually be accepted. During the
+        # intent and decision windows nobody may bid at all, and during the
+        # final offer only one franchise may.
+        if lot.status != LOT_RTM_OFFERED or lot.rtm_stage == RTM_FINAL_OFFER:
+            head.append(f"➡️ Next bid: <code>/bid "
+                        f"{_bid_hint(next_min_bid(season, lot))}</code> "
+                        f"({render_money(next_min_bid(season, lot), symbol)})")
+        if lot.status == LOT_RTM_OFFERED:
+            holder = rtm_holder(session, lot)
+            who = _e(holder.name) if holder else "the previous franchise"
+            price = render_money(rtm_price(season, lot), symbol)
+            if lot.rtm_stage == RTM_INTENT:
+                head.append(f"🪪 <b>Right To Match</b> — {who}, use it? "
+                            f"<code>/artm yes</code> / <code>/artm no</code>")
+            elif lot.rtm_stage == RTM_FINAL_OFFER:
+                bidder = (session.query(AuctionFranchise)
+                          .filter(AuctionFranchise.id == lot.current_bidder_id)
+                          .first())
+                head.append(f"🪪 <b>Right To Match</b> — {who} will use it. "
+                            f"{_e(bidder.name) if bidder else '?'}: one final "
+                            f"raise, or stand.")
+            elif lot.rtm_stage == RTM_DECISION:
+                head.append(f"🪪 <b>Right To Match</b> — {who}, match at "
+                            f"{price}? <code>/artm yes</code> / "
+                            f"<code>/artm no</code>")
         if season.status == STATUS_PAUSED:
             head.append("⏸ <b>Paused</b> — bidding is closed.")
         elif left is not None:
-            stage = {1: " · <b>going once</b>", 2: " · <b>GOING TWICE</b>"}.get(
-                going_stage_for(left), "")
+            # "Going once / twice" is the auctioneer calling a contest. An RTM
+            # window is one franchise answering one question, so it counts
+            # down without the patter.
+            stage = "" if lot.status == LOT_RTM_OFFERED else {
+                1: " · <b>going once</b>",
+                2: " · <b>GOING TWICE</b>"}.get(going_stage_for(left), "")
             head.append(f"⏳ {format_clock(left)} left{stage}")
             if lot.extensions_used and season.max_extensions:
                 remaining = int(season.max_extensions) - int(lot.extensions_used)
@@ -2274,6 +2867,9 @@ def render_purses(session, season):
         block.append(
             f"  🎯 Max bid "
             f"{render_money(max(0, max_bid_now(season, franchise)), symbol)}")
+        if rtm_configured(season):
+            block.append(f"  🪪 {rtm_cards_left(franchise)} Right To Match "
+                         f"of {int(franchise.rtm_cards_total or 0)}")
         lines.append("\n".join(block))
     return "\n".join(lines)
 
@@ -2283,17 +2879,26 @@ def render_squad(session, season, franchise):
     rows = squad(session, franchise.id)
     spent = sum(int(lot.sold_price_lakh or 0) for lot in rows)
     kept = retention_spent(session, franchise.id)
+    matched = sum(int(lot.sold_price_lakh or 0) for lot in rows
+                  if lot.acquisition == ACQ_RTM)
     lines = [f"👥 <b>{_e(franchise.name)}</b> — {len(rows)}"
              f"/{season.max_squad_size} players",
              f"💰 {render_money(franchise.purse_remaining_lakh, symbol)} left · "
              f"spent {render_money(spent, symbol)}"
              + (f" (🔒 {render_money(kept, symbol)} retained · 🔨 "
                 f"{render_money(spent - kept, symbol)} at auction)" if kept else "")]
+    if matched:
+        lines.append(f"🪪 {render_money(matched, symbol)} of that was matched "
+                     f"back at auction prices.")
     if not rows:
         lines.append("\n<i>Nobody signed yet.</i>")
     for lot in rows:
         mark = "✈️" if lot.is_overseas else "🏠"
-        how = " 🔒" if (lot.acquisition or ACQ_AUCTION) != ACQ_AUCTION else ""
+        # A matched player is not a retained one: he went to the block, the
+        # room set his price, and a card was spent to keep him. Squashing the
+        # two into one padlock loses the whole story.
+        how = {ACQ_RETAINED: " 🔒", ACQ_RTM: " 🪪"}.get(
+            lot.acquisition or ACQ_AUCTION, "")
         lines.append(f"{mark} {_e(lot.name)} · {lot.rating} · "
                      f"{_e(lot.category)} — "
                      f"{render_money(lot.sold_price_lakh, symbol)}{how}")
