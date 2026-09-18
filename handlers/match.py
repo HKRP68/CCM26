@@ -25,7 +25,7 @@ from services.activity_service import log_activity
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from services.batsman_card import generate_batsman_card
 from services.bowler_card import generate_bowler_card
-from services.scorecard_card import generate_batting_scorecard, generate_bowling_scorecard
+from services import scorecard_delivery
 from handlers.lineup import format_xi_text
 
 logger = logging.getLogger(__name__)
@@ -1665,6 +1665,200 @@ async def lastmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.close()
 
 
+
+
+# ═══════════════════════ /lastscorecard ══════════════════════════════
+
+# Chats with a replay in flight. A group re-sending five images is a lot of
+# upload; letting a second tap run alongside it doubles the flood-control
+# pressure that made the cards go missing in the first place.
+_SCORECARD_REPLAYS_IN_FLIGHT = set()
+
+
+def _describe_scorecard_match(session, match_id):
+    """One-line header for a replayed scorecard: who played, and the result."""
+    m = session.get(Match, match_id) if match_id else None
+    if not m:
+        return f"Match {match_id}"
+
+    def _label(uid):
+        usr = session.get(User, uid) if uid else None
+        if not usr:
+            return "—"
+        if usr.telegram_id == BOT_TG_ID_:
+            return "🤖 Bot"
+        return f"@{usr.username}" if usr.username else (usr.first_name or "Player")
+
+    parts = [f"{_label(m.user1_id)} vs {_label(m.user2_id)}"]
+    if m.inn1_runs is not None and m.inn2_runs is not None:
+        parts.append(f"{m.inn1_runs}/{m.inn1_wickets or 0} vs "
+                     f"{m.inn2_runs}/{m.inn2_wickets or 0}")
+    if m.winner_id:
+        margin = ""
+        if m.margin_type == "tie":
+            margin = "tied"
+        elif m.margin_type == "forfeit":
+            margin = "won by forfeit"
+        elif m.margin_type == "super_over":
+            margin = "won in the Super Over"
+        elif m.margin_type and m.margin_value is not None:
+            margin = f"won by {m.margin_value} {m.margin_type}"
+        parts.append(f"{_label(m.winner_id)} {margin}".strip())
+    return " · ".join(html.escape(p) for p in parts)
+
+
+async def lastscorecard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Re-send the scorecard images of the last match played in this chat.
+
+    Usage:
+      /lastscorecard              → the group's most recent match
+      /lastscorecard <match_id>   → a specific match played in this group
+
+    Cards are replayed from their cached Telegram file_id where one exists and
+    redrawn from the stored values where one does not — which is what makes
+    this the repair for a card that never arrived live. In a private chat there
+    is no group history to read, so it answers with the caller's own last match.
+    """
+    chat = update.effective_chat
+    tg = update.effective_user
+    cid = chat.id
+    is_group = chat.type in ("group", "supergroup")
+
+    requested_id = None
+    if context.args:
+        raw = str(context.args[0]).strip().lstrip("#")
+        if not raw.isdigit():
+            await update.message.reply_text(
+                "❌ Usage: <code>/lastscorecard</code> or "
+                "<code>/lastscorecard &lt;match id&gt;</code>", parse_mode="HTML")
+            return
+        requested_id = int(raw)
+
+    session = get_session()
+    try:
+        if requested_id is not None:
+            match_id = requested_id
+            cards = scorecard_delivery.load_cards(match_id, session=session)
+            if not cards:
+                await update.message.reply_text(
+                    f"🏏 No stored scorecard for match <b>{match_id}</b>.\n\n"
+                    f"<i>Only matches played after scorecard archiving was "
+                    f"added can be replayed.</i>", parse_mode="HTML")
+                return
+            # A match belongs to the chat it was played in. Anyone who played it
+            # may pull it up anywhere; nobody else can read another group's
+            # match out of their own chat.
+            owner_chat = cards[0].get("chat_id")
+            if owner_chat != cid:
+                from services.admin_ids import is_admin as _is_bot_admin
+                u = session.query(User).filter(User.telegram_id == tg.id).first()
+                m = session.get(Match, match_id)
+                played_in_it = bool(
+                    u and m and u.id in (m.user1_id, m.user2_id))
+                if not played_in_it and not _is_bot_admin(tg.id):
+                    await update.message.reply_text(
+                        f"❌ Match <b>{match_id}</b> wasn't played here.",
+                        parse_mode="HTML")
+                    return
+        elif is_group:
+            match_id = scorecard_delivery.latest_match_id_for_chat(
+                cid, session=session)
+            if match_id is None:
+                await update.message.reply_text(
+                    "🏏 <b>No scorecard yet for this group.</b>\n\n"
+                    "Play a match here with <code>/playmatch @user</code> — "
+                    "its scorecards are archived automatically and "
+                    "<code>/lastscorecard</code> will bring them back.",
+                    parse_mode="HTML")
+                return
+            cards = scorecard_delivery.load_cards(match_id, session=session)
+        else:
+            u = session.query(User).filter(User.telegram_id == tg.id).first()
+            match_id = (scorecard_delivery.latest_match_id_for_user(
+                u.id, session=session) if u else None)
+            if match_id is None:
+                await update.message.reply_text(
+                    "🏏 <b>No scorecard yet.</b>\n\n"
+                    "Play a match with <code>/playmatch @user</code> or "
+                    "<code>/vsbot</code> first. In a group, "
+                    "<code>/lastscorecard</code> shows that group's last match.",
+                    parse_mode="HTML")
+                return
+            cards = scorecard_delivery.load_cards(match_id, session=session)
+
+        header = _describe_scorecard_match(session, match_id)
+    except Exception:
+        logger.exception("lastscorecard lookup failed")
+        await update.message.reply_text(
+            "⚠️ Couldn't look up the last scorecard. Try again in a moment.")
+        return
+    finally:
+        session.close()
+
+    if not cards:
+        await update.message.reply_text(
+            f"🏏 No stored scorecard images for match <b>{match_id}</b>.",
+            parse_mode="HTML")
+        return
+
+    if cid in _SCORECARD_REPLAYS_IN_FLIGHT:
+        await update.message.reply_text(
+            "⏳ Already sending a scorecard here — hold on.")
+        return
+
+    _SCORECARD_REPLAYS_IN_FLIGHT.add(cid)
+    try:
+        await context.bot.send_message(
+            chat_id=cid,
+            text=(f"🏏 <b>SCORECARD · MATCH {match_id}</b>\n"
+                  f"━━━━━━━━━━━━━━━━━━━\n{header}"),
+            parse_mode="HTML")
+
+        # A card with no cached file_id needs a fresh PIL render, which is
+        # seconds rather than milliseconds. Say so instead of leaving the chat
+        # wondering whether the command worked — and when some of those cards
+        # never reached the chat in the first place, say that too, since that
+        # is the case this command exists for.
+        notice = None
+        if any(not c.get("file_id") for c in cards):
+            missed = sum(1 for c in cards if not c.get("delivered"))
+            text = "🎨 Rebuilding the scorecard…"
+            if missed:
+                text = (f"🎨 Rebuilding {missed} card"
+                        f"{'s' if missed != 1 else ''} this chat never "
+                        f"received…")
+            try:
+                notice = await context.bot.send_message(chat_id=cid, text=text)
+            except Exception:
+                logger.debug("scorecard notice failed (non-fatal)", exc_info=True)
+
+        sent = await scorecard_delivery.deliver_cards(context.bot, cid, cards)
+
+        if notice is not None:
+            try:
+                await notice.delete()
+            except Exception:
+                logger.debug("scorecard notice delete failed (non-fatal)",
+                             exc_info=True)
+
+        if sent == 0:
+            # Every image failed. The values are still here, so show them.
+            if not await scorecard_delivery.send_text_fallback(
+                    context.bot, cid, cards):
+                await update.message.reply_text(
+                    "⚠️ Couldn't rebuild the scorecard images. Try again in a "
+                    "moment.")
+        elif sent < len(cards):
+            await context.bot.send_message(
+                chat_id=cid,
+                text=(f"⚠️ <i>{len(cards) - sent} of {len(cards)} cards "
+                      f"couldn't be rebuilt.</i>"), parse_mode="HTML")
+    except Exception:
+        logger.exception("lastscorecard replay failed for match %s", match_id)
+        await update.message.reply_text(
+            "⚠️ Couldn't re-send the scorecard. Try again in a moment.")
+    finally:
+        _SCORECARD_REPLAYS_IN_FLIGHT.discard(cid)
 
 
 async def testwpm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5882,7 +6076,12 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
     """
     s = _gs(ctx, mid)
     if not s:
-        return
+        # The live state is already gone, so nothing can be built from it. Any
+        # card recorded for this innings earlier is still replayable through
+        # /lastscorecard, so re-send rather than leaving the chat empty.
+        logger.warning("innings %s scorecards: no live state for match %s — "
+                       "replaying any stored cards", innings_num, mid)
+        return await _replay_stored_scorecards(ctx, mid, innings_num)
 
     cid = s["chat_id"]
 
@@ -6031,44 +6230,56 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
             else:
                 chase_outcome = "lost"
 
-        # Load admin-tunable accent color
-        from services.config_service import get_config as _get_cfg
-        _cfg = _get_cfg()
-        accent_hex = (_cfg.get("scorecard_color_inn1") if is_first
-                      else _cfg.get("scorecard_color_inn2"))
-        text_settings = _cfg.get("scorecard_text_settings")
+        stadium = s.get("stadium")
 
-        # Generate both scorecards off the event loop and in parallel — they
-        # are CPU-bound PIL renders and would otherwise block every other live
-        # match while drawing one after the other.
-        # Bowling scorecard: team name is the bowling team. Pass the opponent's
-        # (batting) score so the "RUN SCORED BY OPPONENTS" panel can render.
-        bat_card_bytes, bowl_card_bytes = await asyncio.gather(
-            asyncio.to_thread(
-                generate_batting_scorecard,
-                bat_team, bowl_team,
-                total_runs, total_wickets, overs_str,
-                batsmen_rows, fow, extras,
-                is_first_innings=is_first, match_title=match_title,
-                target=target, chase_outcome=chase_outcome,
-                stadium=s.get("stadium"), match_no=mid, accent_hex=accent_hex,
-                text_settings=text_settings,
-            ),
-            asyncio.to_thread(
-                generate_bowling_scorecard,
-                bowl_team, bowlers_rows, fow,
-                is_first_innings=is_first, match_title=match_title,
-                opponent_name=bat_team,
-                opp_score=total_runs, opp_wickets=total_wickets, opp_overs=overs_str,
-                stadium=s.get("stadium"),
-                match_no=mid, accent_hex=accent_hex,
-                text_settings=text_settings,
-            ),
-        )
+        # The render-ready values for both cards. Accent colour and text
+        # settings are deliberately absent: scorecard_delivery re-reads those
+        # live at render time, so a card redrawn weeks later follows whatever
+        # theme the admins have configured then.
+        #
+        # Bowling card: the team name is the bowling side, and the batting
+        # side's score rides along so the "RUN SCORED BY OPPONENTS" panel can
+        # render.
+        cards = [
+            {
+                "card_type": scorecard_delivery.CARD_BATTING,
+                "innings": innings_num,
+                "caption": f"🏏 <b>{html.escape(str(bat_team))}</b> — Batting Scorecard",
+                "payload": {
+                    "team_name": bat_team, "opponent_name": bowl_team,
+                    "total_runs": total_runs, "total_wickets": total_wickets,
+                    "overs_str": overs_str, "batsmen_rows": batsmen_rows,
+                    "fall_of_wickets": fow, "extras_dict": extras,
+                    "is_first_innings": is_first, "match_title": match_title,
+                    "target": target, "chase_outcome": chase_outcome,
+                    "stadium": stadium, "match_no": mid,
+                },
+            },
+            {
+                "card_type": scorecard_delivery.CARD_BOWLING,
+                "innings": innings_num,
+                "caption": f"🎳 <b>{html.escape(str(bowl_team))}</b> — Bowling Scorecard",
+                "payload": {
+                    "team_name": bowl_team, "bowlers_rows": bowlers_rows,
+                    "fall_of_wickets": fow, "is_first_innings": is_first,
+                    "match_title": match_title, "opponent_name": bat_team,
+                    "opp_score": total_runs, "opp_wickets": total_wickets,
+                    "opp_overs": overs_str, "stadium": stadium,
+                    "match_no": mid,
+                },
+            },
+        ]
 
-        # Best-effort durable value snapshot in the Telegram storage channel.
-        # Images are still sent to the match chat; the JSON file keeps all values
-        # needed to regenerate batting/bowling cards after ephemeral storage resets.
+        # Persist first, then render and send each card independently, each
+        # send retried. Batting goes out before bowling (sort order lives in
+        # scorecard_delivery). If every image fails the group still gets the
+        # numbers as text rather than silence.
+        sent = await scorecard_delivery.record_and_send(ctx.bot, cid, mid, cards)
+
+        # Best-effort off-site copy in the Telegram storage channel. It runs
+        # after the chat has its cards, not before: the DB rows above are what
+        # /lastscorecard reads, and a slow storage upload must never hold the
+        # group's scorecards behind it.
         try:
             from services import tg_storage_service
             await tg_storage_service.upload_json_async({
@@ -6089,38 +6300,41 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
                     "opponent_overs": overs_str,
                     "rows": bowlers_rows, "fall_of_wickets": fow,
                 },
-                "style": {
-                    "accent_hex": accent_hex,
-                    "text_settings": text_settings,
-                    "match_title": match_title,
-                    "stadium": s.get("stadium"),
-                },
+                "style": {"match_title": match_title, "stadium": stadium},
             }, f"match-{mid}-innings-{innings_num}-scorecards.json",
                caption=f"Scorecard values · Match {mid} · Innings {innings_num}")
         except Exception:
             logger.exception("scorecard storage snapshot failed (non-fatal)")
 
-        # Send in the order specified by the user: Batting first, then Bowling
-        if bat_card_bytes:
-            bat_io = io.BytesIO(bat_card_bytes)
-            try:
-                await ctx.bot.send_photo(
-                    chat_id=cid, photo=bat_io,
-                    caption=f"🏏 <b>{bat_team}</b> — Batting Scorecard",
-                    parse_mode="HTML")
-            finally:
-                bat_io.close()
-        if bowl_card_bytes:
-            bowl_io = io.BytesIO(bowl_card_bytes)
-            try:
-                await ctx.bot.send_photo(
-                    chat_id=cid, photo=bowl_io,
-                    caption=f"🎳 <b>{bowl_team}</b> — Bowling Scorecard",
-                    parse_mode="HTML")
-            finally:
-                bowl_io.close()
+        return sent
     except Exception:
         logger.exception(f"Failed to send innings {innings_num} scorecards")
+        # Whatever failed above, anything already recorded for this innings is
+        # still deliverable — a build error must not cost the chat a card that
+        # a previous attempt had persisted.
+        return await _replay_stored_scorecards(ctx, mid, innings_num)
+
+
+async def _replay_stored_scorecards(ctx, mid, innings_num=None):
+    """Re-send the scorecards persisted for a match, optionally one innings.
+
+    The recovery path for every way the live build can fail: cleaned-up state,
+    a render that raised, a send Telegram refused. Returns how many images
+    landed.
+    """
+    try:
+        cards = scorecard_delivery.load_cards(mid)
+        if innings_num is not None:
+            cards = [c for c in cards if c.get("innings") == innings_num]
+        if not cards:
+            return 0
+        cid = cards[0].get("chat_id")
+        if cid is None:
+            return 0
+        return await scorecard_delivery.deliver_cards(ctx.bot, cid, cards)
+    except Exception:
+        logger.exception("replaying stored scorecards for match %s failed", mid)
+        return 0
 
 
 async def _end_innings(ctx, mid):
@@ -6451,6 +6665,9 @@ async def _end_innings(ctx, mid):
                     f"🏆 {winner_name}: +{wc:,} Coins 💰 +{wg} Gems 💎\n"
                     f"📉 {loser_name}: +{lc:,} Coins 💰 +{lg} Gems 💎\n"
                     f"━━━━━━━━━━━━━━━━━━━")
+        # The cards are archived, so a missing one is recoverable. Say where.
+        msg += ("\n\n📋 <i>Scorecards missing or scrolled away? "
+                "<code>/lastscorecard</code></i>")
 
         # ── Send innings-2 scorecards (new graphics request: every innings
         # ends with bat + bowl cards). The match summary card below adds
@@ -6459,7 +6676,6 @@ async def _end_innings(ctx, mid):
 
         # ── Match summary card (NEW design: team-sections + result bar)
         try:
-            from services.match_summary_card import generate_match_summary
             from services.config_service import get_config as _get_summary_cfg
             _summary_cfg = _get_summary_cfg()
             top_scorer, top_wicket = _gather_top_performers(s)
@@ -6493,35 +6709,49 @@ async def _end_innings(ctx, mid):
             if not _state_has_play(s):
                 logger.info("match %s ended with no play — skipping summary card", mid)
                 raise _SkipSummary()
+            # The summary card's own values, stored like the innings cards so
+            # /lastscorecard can redraw it after the live state is gone. Text
+            # settings stay out of the payload — scorecard_delivery re-reads
+            # them at render time.
+            summary_payload = {
+                "inn1_team": s.get("inn1_team", "Team 1"),
+                "inn1_runs": s.get("inn1_runs", 0),
+                "inn1_wickets": s.get("inn1_wickets", 0),
+                "inn1_overs": s.get("inn1_overs", "0"),
+                "inn2_team": s.get("bat_team_name", "Team 2"),
+                "inn2_runs": s.get("total_runs", 0),
+                "inn2_wickets": s.get("total_wickets", 0),
+                "inn2_overs": format_overs(s),
+                "winner_name": winner_name,
+                "win_margin_text": margin,
+                "overs_total": overs,
+                "potm_name": potm_name,
+                "potm_rating": potm_rating,
+                "potm_team": potm_team,
+                "potm_stats": potm_stats,
+                "potm_impact": potm_impact,
+                "top_scorer": top_scorer,
+                "top_wicket": top_wicket,
+                "top_per_team": top_per_team,
+                "stadium": s.get("stadium"),
+                "match_date": datetime.utcnow().isoformat(),
+                "is_spectator": bool(s.get("is_spectator")),
+                "match_no": mid,
+            }
+            summary_caption = (f"🏆 <b>Match Summary</b> — "
+                               f"{html.escape(str(winner_name))} wins "
+                               f"{html.escape(str(margin))}!")
+            scorecard_delivery.record_cards(mid, cid, [{
+                "card_type": scorecard_delivery.CARD_SUMMARY,
+                "innings": scorecard_delivery.WHOLE_MATCH,
+                "caption": summary_caption,
+                "payload": summary_payload,
+            }])
+
             # Rendering the 2048×1280 PNG is CPU-heavy; run it off the event loop
             # so concurrent live matches don't stall (mirrors the scorecard cards).
-            summary_bytes = await asyncio.to_thread(
-                generate_match_summary,
-                inn1_team=s.get("inn1_team", "Team 1"),
-                inn1_runs=s.get("inn1_runs", 0),
-                inn1_wickets=s.get("inn1_wickets", 0),
-                inn1_overs=s.get("inn1_overs", "0"),
-                inn2_team=s.get("bat_team_name", "Team 2"),
-                inn2_runs=s.get("total_runs", 0),
-                inn2_wickets=s.get("total_wickets", 0),
-                inn2_overs=format_overs(s),
-                winner_name=winner_name,
-                win_margin_text=margin,
-                overs_total=overs,
-                potm_name=potm_name,
-                potm_rating=potm_rating,
-                potm_team=potm_team,
-                potm_stats=potm_stats,
-                potm_impact=potm_impact,
-                top_scorer=top_scorer,
-                top_wicket=top_wicket,
-                top_per_team=top_per_team,
-                stadium=s.get("stadium"),
-                match_date=datetime.utcnow(),
-                is_spectator=bool(s.get("is_spectator")),
-                match_no=mid,
-                text_settings=_summary_cfg.get("scorecard_text_settings"),
-            )
+            summary_bytes = await scorecard_delivery.render_card_async(
+                scorecard_delivery.CARD_SUMMARY, summary_payload)
             if summary_bytes:
                 try:
                     from services import tg_storage_service
@@ -6548,15 +6778,20 @@ async def _end_innings(ctx, mid):
                        caption=f"Match summary values · Match {mid}")
                 except Exception:
                     logger.exception("match summary storage snapshot failed (non-fatal)")
-                photo_io = io.BytesIO(summary_bytes)
-                try:
-                    await ctx.bot.send_photo(
-                        chat_id=cid, photo=photo_io,
-                        caption=f"🏆 <b>Match Summary</b> — {winner_name} wins {margin}!",
-                        parse_mode="HTML",
-                    )
-                finally:
-                    photo_io.close()
+                # Retried, and the returned file_id is cached so a later
+                # /lastscorecard re-sends this card without re-rendering it.
+                summary_msg_sent = await scorecard_delivery.send_photo_with_retry(
+                    ctx.bot, cid, lambda: io.BytesIO(summary_bytes),
+                    caption=summary_caption)
+                if summary_msg_sent is None:
+                    logger.error("match %s summary card never reached chat %s "
+                                 "— recoverable via /lastscorecard", mid, cid)
+                else:
+                    scorecard_delivery.mark_delivered(
+                        mid, scorecard_delivery.WHOLE_MATCH,
+                        scorecard_delivery.CARD_SUMMARY,
+                        file_id=(summary_msg_sent.photo[-1].file_id
+                                 if summary_msg_sent.photo else None))
         except _SkipSummary:
             pass
         except Exception:

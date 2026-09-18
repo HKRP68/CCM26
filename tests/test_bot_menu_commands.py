@@ -158,6 +158,9 @@ UNPUBLISHED_ON_PURPOSE = {
     "clsd", "teamtourstats", "mvp",
     # In-match, offered by the match's own keyboard at the moment it applies.
     "impact", "pitchstats",
+    # Scorecard replay — named under every match result, in /help and in
+    # /matchhelp, which is where someone whose card went missing is looking.
+    "lastscorecard",
     # Forward-only mode: a separate run path where this is the ONLY command
     # registered at all, so there is no menu for it to be in.
     "frwd",

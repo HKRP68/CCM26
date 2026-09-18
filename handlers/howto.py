@@ -236,6 +236,8 @@ SECTIONS = {
             "<b>🆘 Stuck?</b>\n"
             "<b>/resume</b> or <b>/r</b> — recover any stuck match instantly\n"
             "<b>/lastmatch</b> or <b>/lm</b> — see your last completed match\n"
+            "<b>/lastscorecard</b> or <b>/lsc</b> — re-send this chat's last "
+            "scorecard images (use it whenever a card doesn't arrive)\n"
             "<b>/howto</b> — show this help (you're here!)"
         ),
     },
