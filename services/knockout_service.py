@@ -346,7 +346,7 @@ def generate_knockout(session, tournament_id):
     """
     from models import Tournament
     tid = int(tournament_id)
-    tour = session.query(Tournament).get(tid)
+    tour = session.get(Tournament, tid)
     if not tour:
         return 0
     ktype = (tour.knockout_type or "").strip()
@@ -425,7 +425,7 @@ def advance_bracket(session, completed_match):
         """Drop ``team_id`` into the first empty slot of a non-completed downstream match."""
         if not target_match_id or not team_id:
             return
-        nxt = session.query(TournamentMatch).get(target_match_id)
+        nxt = session.get(TournamentMatch, target_match_id)
         if not nxt or nxt.status == "completed":
             return
         if nxt.team1_id is None:
@@ -461,7 +461,7 @@ def retract_bracket(session, match):
         """Remove ``team_id`` from a non-completed downstream slot it was advanced into."""
         if not target_match_id or not team_id:
             return
-        nxt = session.query(TournamentMatch).get(target_match_id)
+        nxt = session.get(TournamentMatch, target_match_id)
         if not nxt or nxt.status == "completed":
             return  # already played downstream — don't rewrite history
         if nxt.team1_id == team_id:

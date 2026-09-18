@@ -500,7 +500,7 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
         if tour_ctx and tour_ctx.get("guest_user_id"):
             # /lptour already resolved (and validated) the opponent.
-            guest_user = session.query(User).get(int(tour_ctx["guest_user_id"]))
+            guest_user = session.get(User, int(tour_ctx["guest_user_id"]))
             if not guest_user:
                 # Their account went away between /lptour and here. Falling
                 # through would print the generic "challenge another player"
@@ -1876,8 +1876,8 @@ async def _launch_match(context, draft, decision, winner_side):
 
     session = get_session()
     try:
-        host = session.query(User).get(host_info["user_id"])
-        guest = session.query(User).get(guest_info["user_id"])
+        host = session.get(User, host_info["user_id"])
+        guest = session.get(User, guest_info["user_id"])
         if not host or not guest:
             await _abandon_launch(context, draft,
                                   "⚠️ A player no longer exists — match cancelled.")

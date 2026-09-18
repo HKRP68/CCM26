@@ -861,7 +861,7 @@ class SeederTests(unittest.TestCase):
         result = seed(self.session)
         self.session.commit()
         self.assertEqual(result["retired"], 1)
-        refreshed = self.session.query(Quest).get(legacy.id)
+        refreshed = self.session.get(Quest, legacy.id)
         self.assertIsNotNone(refreshed)
         self.assertFalse(refreshed.is_active)
 
@@ -883,8 +883,8 @@ class SeederTests(unittest.TestCase):
 
         seed(self.session)
         self.session.commit()
-        self.assertTrue(self.session.query(Quest).get(pinned.id).is_active)
-        self.assertTrue(self.session.query(Quest).get(career.id).is_active)
+        self.assertTrue(self.session.get(Quest, pinned.id).is_active)
+        self.assertTrue(self.session.get(Quest, career.id).is_active)
 
     def test_dry_run_writes_nothing(self):
         from models import Quest
@@ -908,7 +908,7 @@ class SeederTests(unittest.TestCase):
         result = seed(self.session, retire_legacy=False)
         self.session.commit()
         self.assertEqual(result["retired"], 0)
-        self.assertTrue(self.session.query(Quest).get(legacy.id).is_active)
+        self.assertTrue(self.session.get(Quest, legacy.id).is_active)
 
 
 # ════════════════════════════════════════════════════════════════════

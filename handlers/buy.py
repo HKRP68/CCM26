@@ -451,7 +451,7 @@ async def player_page_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await q.answer("Do /debut first")
             return
 
-        target = session.query(Player).get(target_player_id)
+        target = session.get(Player, target_player_id)
         if not target:
             await q.answer("Player not found")
             return
@@ -502,7 +502,7 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     session = get_session()
     try:
-        user = session.query(User).get(owner_user_id)
+        user = session.get(User, owner_user_id)
         if not user or user.telegram_id != tg_user.id:
             # Not the owner — don't strip their button; just drop the claim.
             release(key)
@@ -541,7 +541,7 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             await query.message.reply_text("🔴 Buying is restricted to the Official Group.")
             return
 
-        player = session.query(Player).get(player_id)
+        player = session.get(Player, player_id)
         if not player:
             release(key)
             await query.message.reply_text("❌ Player no longer available")

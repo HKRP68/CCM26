@@ -125,7 +125,7 @@ def release_player(session: Session, user: User, roster_entry_id: int) -> dict:
     if not entry:
         return {"success": False, "error": "You don't own this player"}
 
-    player = session.query(Player).get(entry.player_id)
+    player = session.get(Player, entry.player_id)
     sell_val = get_sell_value(player.rating)
 
     session.delete(entry)
@@ -169,7 +169,7 @@ def release_duplicates(session: Session, user: User, player_id: int, count: int)
     if not entries:
         return {"success": False, "error": "Player not found in roster"}
 
-    player = session.query(Player).get(player_id)
+    player = session.get(Player, player_id)
     sell_each = get_sell_value(player.rating)
     total_sell = sell_each * len(entries)
 

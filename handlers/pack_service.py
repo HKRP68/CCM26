@@ -380,7 +380,7 @@ def open_unopened_pack(session, user, inventory_id):
                    UnopenedPack.user_id == user.id).first())
     if not inv:
         return {"success": False, "message": "❌ Pack not found in your inventory."}
-    pack = session.query(Pack).get(inv.pack_id)
+    pack = session.get(Pack, inv.pack_id)
     if not pack:
         session.delete(inv); session.flush()
         return {"success": False, "message": "❌ Pack definition no longer exists."}

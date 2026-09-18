@@ -541,7 +541,7 @@ def delete_career_player(session, player, *, refund_gems=True):
     owner_id = player.career_owner_user_id
     invested = total_invested(player)
 
-    owner = session.query(User).get(owner_id) if owner_id else None
+    owner = session.get(User, owner_id) if owner_id else None
 
     # A name change still waiting for approval belongs to a card that is about
     # to stop existing. Close and refund it here rather than leaving it in the

@@ -850,7 +850,7 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
     now = datetime.utcnow()
     current_period = period_key_for(quest_type, now)
 
-    user = session.query(User).get(user_id)
+    user = session.get(User, user_id)
     if not user:
         return {"assigned": [], "auto_claimed": []}
 
@@ -1273,11 +1273,11 @@ def claim_quest_reward(session, user_id, quest_id):
     row that is still unclaimed: exactly one caller gets rowcount 1 and pays
     out, and the other is told it's already claimed.
     """
-    user = session.query(User).get(user_id)
+    user = session.get(User, user_id)
     if not user:
         return False, "User not found.", None
 
-    quest = session.query(Quest).get(quest_id)
+    quest = session.get(Quest, quest_id)
     if not quest:
         return False, "Quest not found.", None
 
@@ -1491,7 +1491,7 @@ def track_user_match_quests(session, state, user, is_winner, is_vsbot, winner_ui
                 pst = stats.get(str(rid))
             if not pst:
                 continue
-            ur = session.query(UserRoster).get(rid)
+            ur = session.get(UserRoster, rid)
             if not ur or ur.user_id != uid:
                 continue
             is_career_slot = (career_player_id is not None

@@ -875,7 +875,7 @@ async def _close_idle_bot_match(context, mid, state):
 
     session = get_session()
     try:
-        match = session.query(Match).get(mid)
+        match = session.get(Match, mid)
         if match and match.status not in ("completed", "abandoned"):
             match.status = "abandoned"
             match.completed_at = datetime.utcnow()
@@ -938,7 +938,7 @@ async def _forfeit_live_match(context, mid, state, expected):
     from services.activity_service import log_activity
     session = get_session()
     try:
-        match = session.query(Match).get(mid)
+        match = session.get(Match, mid)
         if match and match.status not in ("completed", "abandoned"):
             match.status = "completed"
             match.completed_at = datetime.utcnow()
@@ -960,8 +960,8 @@ async def _forfeit_live_match(context, mid, state, expected):
                     record_cl_match_result(session, state["cl_tour_match_id"], win_uid)
             except Exception:
                 logger.exception("CL tour forfeit recording failed for %s", mid)
-        idle_user = session.query(User).get(idle_uid) if idle_uid else None
-        win_user = session.query(User).get(win_uid) if win_uid else None
+        idle_user = session.get(User, idle_uid) if idle_uid else None
+        win_user = session.get(User, win_uid) if win_uid else None
         if idle_user:
             charged_coins = min(idle_user.total_coins or 0, CIPL_FORFEIT_COINS)
             charged_gems = min(idle_user.total_gems or 0, CIPL_FORFEIT_GEMS)
@@ -1215,7 +1215,7 @@ def _cancel_orphan_match_row(mid):
     """
     session = get_session()
     try:
-        match = session.query(Match).get(mid)
+        match = session.get(Match, mid)
         if not match or match.status not in ("active", "playing", "in_progress"):
             return
         match.status = "cancelled"
@@ -1327,8 +1327,8 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
     session = None
     try:
         session = get_session()
-        host = session.query(User).get(draft["host_user_id"])
-        target = session.query(User).get(draft["target_user_id"])
+        host = session.get(User, draft["host_user_id"])
+        target = session.get(User, draft["target_user_id"])
         if not host or not target:
             await _fail("Players no longer exist.")
             return
@@ -1396,7 +1396,7 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
             # play the same fixture. find_open_fixture later fills the 'live' row.
             from models import Tournament as _Tourn
             from services import league_schedule_service as _lss
-            _tour = session.query(_Tourn).get(int(tid))
+            _tour = session.get(_Tourn, int(tid))
             if _tour and (_tour.schedule_generated or _tour.knockout_generated):
                 _fx = _lss.reserve_fixture_by_names(session, tid, host_team, target_team)
                 if not _fx:
@@ -2013,7 +2013,7 @@ def _match_row_status(mid):
     """Read Match.status from the DB (blocking — call via asyncio.to_thread)."""
     session = get_session()
     try:
-        m = session.query(Match).get(mid)
+        m = session.get(Match, mid)
         return (m.status or "") if m else None
     except Exception:
         logger.exception("match status lookup failed for %s", mid)
@@ -3313,7 +3313,7 @@ async def _complete_match(context, mid, state):
             except Exception:
                 logger.exception("cipl POTM career credit failed for match %s", mid)
 
-            match = session.query(Match).get(mid)
+            match = session.get(Match, mid)
             if match:
                 match.status = "completed"
                 match.completed_at = datetime.utcnow()
@@ -3411,7 +3411,7 @@ async def _complete_match(context, mid, state):
                             state.get("inn1_bowl_team_id")):
                     if not uid:
                         continue
-                    qu = session.query(User).get(uid)
+                    qu = session.get(User, uid)
                     track_user_match_quests(
                         session, state, qu,
                         bool(quest_winner) and uid == quest_winner,

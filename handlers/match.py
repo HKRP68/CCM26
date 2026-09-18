@@ -378,8 +378,8 @@ def _chat_busy_message(match):
     try:
         ses = get_session()
         try:
-            u1 = ses.query(User).get(match.user1_id) if match.user1_id else None
-            u2 = ses.query(User).get(match.user2_id) if match.user2_id else None
+            u1 = ses.get(User, match.user1_id) if match.user1_id else None
+            u2 = ses.get(User, match.user2_id) if match.user2_id else None
             p1 = (("@" + u1.username) if (u1 and u1.username)
                   else (u1.first_name if u1 else "Player 1"))
             p2 = (("@" + u2.username) if (u2 and u2.username)
@@ -826,7 +826,7 @@ async def _action_timeout(context):
                          coins_change=-FINE_COINS, gems_change=-FINE_GEMS)
 
         # Finalize Match record
-        m = session.query(Match).get(mid)
+        m = session.get(Match, mid)
         tour_announce = None
         if m and m.status != "completed":
             m.status = "completed"
@@ -871,8 +871,8 @@ async def _action_timeout(context):
                     from services.tour_service import record_match_result
                     tour_obj = record_match_result(session, mid, winner_user.id, forfeit=True)
                     if tour_obj:
-                        u1 = session.query(User).get(tour_obj.user1_id)
-                        u2 = session.query(User).get(tour_obj.user2_id)
+                        u1 = session.get(User, tour_obj.user1_id)
+                        u2 = session.get(User, tour_obj.user2_id)
                         tour_announce = {
                             "completed": tour_obj.status == "completed",
                             "winner_id": tour_obj.winner_id,
@@ -1512,7 +1512,7 @@ async def recentmatches_handler(update: Update, context: ContextTypes.DEFAULT_TY
         miniapp_name = (_os.getenv("MINIAPP_NAME", "") or "").strip()
 
         def _label(uid):
-            usr = session.query(User).get(uid) if uid else None
+            usr = session.get(User, uid) if uid else None
             if not usr:
                 return "—"
             return f"@{usr.username}" if usr.username else (usr.first_name or "Player")
@@ -1587,8 +1587,8 @@ async def lastmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Build a compact recap. Re-fetch user labels.
-        u1 = session.query(User).get(m.user1_id)
-        u2 = session.query(User).get(m.user2_id)
+        u1 = session.get(User, m.user1_id)
+        u2 = session.get(User, m.user2_id)
         u1_label = f"@{u1.username}" if u1 and u1.username else (
             u1.first_name if u1 else "User1")
         u2_label = f"@{u2.username}" if u2 and u2.username else (
@@ -1599,7 +1599,7 @@ async def lastmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if u2 and u2.telegram_id == BOT_TG_ID_:
             u2_label = "🤖 Bot"
 
-        winner = session.query(User).get(m.winner_id) if m.winner_id else None
+        winner = session.get(User, m.winner_id) if m.winner_id else None
         winner_label = "—"
         if winner:
             winner_label = (f"@{winner.username}" if winner.username
@@ -1638,7 +1638,7 @@ async def lastmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # POTM
         if m.potm_player_id:
             from models import Player as _P
-            pl = session.query(_P).get(m.potm_player_id)
+            pl = session.get(_P, m.potm_player_id)
             if pl:
                 lines.append(f"⭐ POTM: <b>{pl.name}</b>")
 
@@ -1700,7 +1700,7 @@ async def testwpm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(
                     "Usage: <code>/testwpm [match_id]</code>", parse_mode="HTML")
                 return
-            match = session.query(Match).get(match_id)
+            match = session.get(Match, match_id)
             if match and user.id not in (match.user1_id, match.user2_id):
                 await update.message.reply_text("❌ You are not a participant in that match.")
                 return
@@ -1947,7 +1947,7 @@ async def endmatch_yes_callback(update: Update, context: ContextTypes.DEFAULT_TY
     session = get_session()
     try:
         u = session.query(User).filter(User.telegram_id == uid_tg).first()
-        m = session.query(Match).get(mid)
+        m = session.get(Match, mid)
         # The fine leaves the economy. Nothing is credited to the opponent —
         # see ENDMATCH_FINE_PER_BALL for why that channel was closed.
         charged_coins = 0
@@ -2839,7 +2839,7 @@ async def cric_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     session = get_session()
     try:
-        host = session.query(User).get(lobby["host_user_id"])
+        host = session.get(User, lobby["host_user_id"])
         guest = session.query(User).filter(User.telegram_id == q.from_user.id).first()
         if not guest:
             await q.answer("Use /debut first!", show_alert=True)
@@ -2930,8 +2930,8 @@ async def cric_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     session = get_session()
     try:
-        host = session.query(User).get(lobby["host_user_id"])
-        guest = session.query(User).get(lobby["guest_user_id"])
+        host = session.get(User, lobby["host_user_id"])
+        guest = session.get(User, lobby["guest_user_id"])
         if not host or not guest:
             context.bot_data.pop(key, None)
             await q.edit_message_text("Lobby players no longer exist.")
@@ -2982,8 +2982,8 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
     session = get_session()
     match = None
     try:
-        host = session.query(User).get(lobby["host_user_id"])
-        guest = session.query(User).get(lobby["guest_user_id"])
+        host = session.get(User, lobby["host_user_id"])
+        guest = session.get(User, lobby["guest_user_id"])
         if not host or not guest:
             context.bot_data.pop(key, None)
             await q.answer("Lobby players no longer exist.", show_alert=True)
@@ -3028,7 +3028,7 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
             try:
                 if tmid:
                     from models import TourMatch
-                    tmrow = session.query(TourMatch).get(tmid)
+                    tmrow = session.get(TourMatch, tmid)
                     if tmrow:
                         tmrow.match_id = None
                         tmrow.status = "pending"
@@ -3085,8 +3085,8 @@ async def cric_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         await q.answer()
         await q.edit_message_text(
             f"✅ {_user_label(winner)} elected to {'BAT' if decision == 'bat' else 'BOWL'} FIRST")
-        bat_user = session.query(User).get(match.batting_first_id)
-        bowl_user = session.query(User).get(match.bowling_first_id)
+        bat_user = session.get(User, match.batting_first_id)
+        bowl_user = session.get(User, match.bowling_first_id)
         bat_team = _team_label(bat_user)
         bowl_team = _team_label(bowl_user)
         toss_note = (f"{_user_label(winner)} won & chose to "
@@ -3241,12 +3241,12 @@ async def _legacy_playmatch_handler(update: Update, context: ContextTypes.DEFAUL
 async def _auto_expire(ctx):
     d = ctx.job.data; session = get_session()
     try:
-        m = session.query(Match).get(d["match_id"])
+        m = session.get(Match, d["match_id"])
         # Expire invites that were never accepted, and (defensively) any match
         # left "accepted" without overs being chosen — both block the chat.
         if m and m.status in ("pending", "accepted"):
             if m.status == "accepted" and m.user2_id:
-                u2 = session.query(User).get(m.user2_id)
+                u2 = session.get(User, m.user2_id)
                 if u2:
                     ctx.bot_data.pop(f"awaiting_overs_{u2.telegram_id}", None)
             m.status = "expired"; session.commit()
@@ -3261,7 +3261,7 @@ async def _expire_overs(ctx):
     d = ctx.job.data; session = get_session()
     try:
         ctx.bot_data.pop(f"awaiting_overs_{d.get('guest_tg')}", None)
-        m = session.query(Match).get(d["match_id"])
+        m = session.get(Match, d["match_id"])
         if m and m.status == "accepted":
             m.status = "expired"; session.commit()
             await ctx.bot.send_message(
@@ -3287,13 +3287,13 @@ async def match_accept_callback(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         u = session.query(User).filter(User.telegram_id == tg.id).first()
         if not u or u.id != auid: await q.answer("Only invited!"); return
-        await q.answer(); m = session.query(Match).get(mid)
+        await q.answer(); m = session.get(Match, mid)
         if not m or m.status != "pending": await q.edit_message_text("❌ Not available."); return
         m.status = "accepted"; session.commit()
         try:
             for j in context.job_queue.get_jobs_by_name(f"match_{mid}"): j.schedule_removal()
         except Exception: pass
-        u1 = session.query(User).get(m.user1_id); u2 = session.query(User).get(m.user2_id)
+        u1 = session.get(User, m.user1_id); u2 = session.get(User, m.user2_id)
         t1 = u1.team_name or f"{('@' + u1.username) if u1.username else (u1.first_name or 'Player')}'s XI"
         t2 = u2.team_name or f"{('@' + u2.username) if u2.username else (u2.first_name or 'Player')}'s XI"
         # Inline overs picker — far more reliable than a free-text reply in busy
@@ -3330,7 +3330,7 @@ async def match_deny_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         u = session.query(User).filter(User.telegram_id == q.from_user.id).first()
         if not u or u.id != auid: await q.answer("Only invited!"); return
-        await q.answer(); m = session.query(Match).get(mid)
+        await q.answer(); m = session.get(Match, mid)
         if m and m.status == "pending": m.status = "expired"; session.commit()
         await q.edit_message_text("❌ Match denied.")
     except Exception:
@@ -3396,10 +3396,10 @@ async def _confirm_overs(context, cid, mid, overs):
     _cancel_overs_timer(context, mid)
     session = get_session()
     try:
-        m = session.query(Match).get(mid)
+        m = session.get(Match, mid)
         if not m or m.status != "accepted": return
         m.overs = overs; m.status = "toss"; session.commit()
-        u1 = session.query(User).get(m.user1_id); u2 = session.query(User).get(m.user2_id)
+        u1 = session.get(User, m.user1_id); u2 = session.get(User, m.user2_id)
         t1 = u1.team_name or f"{('@' + u1.username) if u1.username else (u1.first_name or 'Player')}'s XI"
         t2 = u2.team_name or f"{('@' + u2.username) if u2.username else (u2.first_name or 'Player')}'s XI"
 
@@ -3411,7 +3411,7 @@ async def _confirm_overs(context, cid, mid, overs):
             f"📉 Loser: {l_coins:,} Coins + {max(1,int(overs*0.5))} Gems\n\n🔄 Toss...", parse_mode="HTML")
 
         wid = random.choice([m.user1_id, m.user2_id]); m.toss_winner_id = wid; session.commit()
-        w = session.query(User).get(wid)
+        w = session.get(User, wid)
 
         # ── Animated coin toss ──
         import asyncio as _asyncio
@@ -3479,7 +3479,7 @@ async def toss_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
     try:
         u = session.query(User).filter(User.telegram_id == tg.id).first()
         if not u or u.id != wid: await q.answer("Toss winner only!"); return
-        await q.answer(); m = session.query(Match).get(mid)
+        await q.answer(); m = session.get(Match, mid)
         if not m or m.status != "toss": await q.edit_message_text("❌ Error."); return
         m.toss_decision = dec
         if dec == "bat": m.batting_first_id = wid; m.bowling_first_id = m.user2_id if wid == m.user1_id else m.user1_id
@@ -3487,7 +3487,7 @@ async def toss_decision_callback(update: Update, context: ContextTypes.DEFAULT_T
         m.status = "selecting"; session.commit()
         await q.edit_message_text(f"✅ @{u.username} elected to {'BAT' if dec=='bat' else 'BOWL'} FIRST")
         cid = q.message.chat_id
-        bu = session.query(User).get(m.batting_first_id); bwu = session.query(User).get(m.bowling_first_id)
+        bu = session.get(User, m.batting_first_id); bwu = session.get(User, m.bowling_first_id)
         bxi = _gxi(session, bu.id); bwxi = _gxi(session, bwu.id)
         bt = bu.team_name or f"@{bu.username}'s XI"; bwt = bwu.team_name or f"@{bwu.username}'s XI"
         bat_r = (session.query(UserRoster, Player).join(Player).filter(UserRoster.user_id == bu.id).order_by(UserRoster.order_position).limit(11).all())
@@ -3669,11 +3669,11 @@ async def _openers_locked(context, session, cid, mid, op1, op2):
     # Get bowling user from bot_data (works for both innings)
     bowl_uid = context.bot_data.get(f"bowl_uid_{mid}")
     if bowl_uid:
-        bwu = session.query(User).get(bowl_uid)
+        bwu = session.get(User, bowl_uid)
     else:
         # Fallback: 1st innings — read from Match record
-        m = session.query(Match).get(mid)
-        bwu = session.query(User).get(m.bowling_first_id)
+        m = session.get(Match, mid)
+        bwu = session.get(User, m.bowling_first_id)
 
     bwxi = _setup_xi(context, mid, "bowl_xi")
 
@@ -3790,12 +3790,12 @@ async def select_bowler_callback(update: Update, context: ContextTypes.DEFAULT_T
                                       s["bat_team_id"], s["bowl_team_id"])
         else:
             # 1st innings — create fresh state
-            m = session.query(Match).get(mid); m.status = "playing"; session.commit()
+            m = session.get(Match, mid); m.status = "playing"; session.commit()
             bxi = context.bot_data.get(f"bat_xi_{mid}", [])
             op1 = context.bot_data.get(f"opener1_{mid}", {}); op2 = context.bot_data.get(f"opener2_{mid}", {})
             bat_uid = context.bot_data.get(f"bat_uid_{mid}", m.batting_first_id)
             bowl_uid_db = context.bot_data.get(f"bowl_uid_{mid}", m.bowling_first_id)
-            bu = session.query(User).get(bat_uid); bwu = session.query(User).get(bowl_uid_db)
+            bu = session.get(User, bat_uid); bwu = session.get(User, bowl_uid_db)
             bt = bu.team_name or f"@{bu.username}'s XI"; bwt = bwu.team_name or f"@{bwu.username}'s XI"
 
             s = create_match_state(mid, m.overs, bat_uid, bowl_uid_db, bxi, bwxi, op1, op2, bowler)
@@ -4985,7 +4985,7 @@ def _form_mod_for(s, roster_id):
         from models import UserRoster as _UR
         ses = _gs_db()
         try:
-            ur = ses.query(_UR).get(roster_id)
+            ur = ses.get(_UR, roster_id)
             if ur:
                 mod = form_to_rating_mod(
                     compute_form_score(ses, ur.user_id, ur.player_id))
@@ -6357,7 +6357,7 @@ async def _end_innings(ctx, mid):
         # Update Match record + User stats
         session = get_session()
         try:
-            m = session.query(Match).get(mid)
+            m = session.get(Match, mid)
             if m:
                 m.status = "completed"
                 m.completed_at = datetime.utcnow()
@@ -6394,7 +6394,7 @@ async def _end_innings(ctx, mid):
                 from services.match_rewards import (
                     apply_win_streak, record_active_day, is_ai_user)
                 for uid, is_winner in [(winner_uid, True), (loser_uid, False)]:
-                    u = session.query(User).get(uid)
+                    u = session.get(User, uid)
                     if u and not is_ai_user(u):
                         u.matches_played = (u.matches_played or 0) + 1
                         if is_winner:
@@ -6583,10 +6583,10 @@ async def _end_innings(ctx, mid):
                 tu_session = get_session()
                 try:
                     from models import Tour as _Tour
-                    tour_obj = tu_session.query(_Tour).get(tour_update["tour_id"])
+                    tour_obj = tu_session.get(_Tour, tour_update["tour_id"])
                     if tour_obj:
-                        u1 = tu_session.query(User).get(tour_obj.user1_id)
-                        u2 = tu_session.query(User).get(tour_obj.user2_id)
+                        u1 = tu_session.get(User, tour_obj.user1_id)
+                        u2 = tu_session.get(User, tour_obj.user2_id)
                         u1_label = f"@{u1.username}" if u1 and u1.username else (
                             u1.first_name if u1 else "User1")
                         u2_label = f"@{u2.username}" if u2 and u2.username else (
@@ -6627,7 +6627,7 @@ async def _end_innings(ctx, mid):
         # Save message id for /jump
         session = get_session()
         try:
-            m = session.query(Match).get(mid)
+            m = session.get(Match, mid)
             if m and sent:
                 m.result_message_id = sent.message_id
                 session.commit()
@@ -6642,10 +6642,10 @@ async def _end_innings(ctx, mid):
                 ach_session = get_session()
                 try:
                     # Re-fetch user IDs from match record
-                    m = ach_session.query(Match).get(mid)
+                    m = ach_session.get(Match, mid)
                     if m:
                         for uid in [m.user1_id, m.user2_id]:
-                            u = ach_session.query(User).get(uid)
+                            u = ach_session.get(User, uid)
                             if u and u.telegram_id != -1:
                                 await check_and_notify(ctx, cid, ach_session, u.id)
                 finally:

@@ -202,7 +202,7 @@ def serve_match(session, tournament_id, team_ids):
 def heal(session, injury_id):
     """Declare a player fit immediately. Caller commits."""
     from datetime import datetime
-    row = session.query(TournamentInjury).get(int(injury_id))
+    row = session.get(TournamentInjury, int(injury_id))
     if row is None:
         return None
     row.matches_remaining = 0
@@ -229,7 +229,7 @@ def clear_for_tournament(session, tournament_id, *, only_active=False):
 def _squad_size(session, tournament_team_id):
     """How many ``ChallengePlayer`` rows this participating team can pick from."""
     from models import ChallengePlayer
-    tt = session.query(TournamentTeam).get(int(tournament_team_id))
+    tt = session.get(TournamentTeam, int(tournament_team_id))
     if tt is None or not tt.challenge_team_id:
         return 0
     return (session.query(ChallengePlayer)
@@ -362,7 +362,7 @@ def add_manual(session, tournament_id, tournament_team_id, roster_id, *,
     second one on top, so an admin correcting a layoff gets the layoff they
     typed instead of two overlapping ones.
     """
-    tour = session.query(Tournament).get(int(tournament_id))
+    tour = session.get(Tournament, int(tournament_id))
     _e, _c, cap = settings(tour)
     matches = max(1, min(cap, int(matches or 1)))
     (session.query(TournamentInjury)
@@ -426,7 +426,7 @@ def process_match(session, tour, tm, lines, *, user_by_team=None, rng=None):
             uid = (user_by_team or {}).get(int(tid))
             if uid is None:
                 continue
-            tt = session.query(TournamentTeam).get(int(tid))
+            tt = session.get(TournamentTeam, int(tid))
             injury = roll_for_team(
                 session, tour, tt, lines, uid,
                 match_id=getattr(tm, "match_id", None),

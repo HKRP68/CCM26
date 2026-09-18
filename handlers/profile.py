@@ -177,7 +177,7 @@ def _format_results(session, user):
 
     for m in matches:
         opp_id = m.user2_id if m.user1_id == user.id else m.user1_id
-        opp = session.query(User).get(opp_id)
+        opp = session.get(User, opp_id)
         opp_name = opp.username or opp.first_name if opp else "Unknown"
 
         won = (m.winner_id == user.id)

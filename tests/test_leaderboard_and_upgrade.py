@@ -76,8 +76,10 @@ class AiUserIsNotAPlayerTest(unittest.TestCase):
             def query(self, _model):
                 return self
 
-            def get(self, uid):
-                return self.rows.get(uid)
+            # Takes both spellings: session.get(User, id) and the legacy
+            # query(User).get(id), which lands here with the id alone.
+            def get(self, model_or_id, uid=None):
+                return self.rows.get(model_or_id if uid is None else uid)
 
         human = SimpleNamespace(telegram_id=555, win_streak=2, best_streak=2,
                                 active_days=4, last_match_date=None)

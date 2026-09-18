@@ -124,8 +124,8 @@ class LoginRewardSingleClaimTests(_DBCase):
         from services.login_streak_service import claim_login_reward
         other = self.Session()
         try:
-            other_user = other.query(self.User).get(self.user.id)
-            other_stats = other.query(self.UserStats).get(self.user.id)
+            other_user = other.get(self.User, self.user.id)
+            other_stats = other.get(self.UserStats, self.user.id)
             self.assertIsNone(other_stats.login_reward_claimed_date)
 
             self.assertTrue(self._claim()["ok"])
@@ -141,7 +141,7 @@ class LoginRewardSingleClaimTests(_DBCase):
 
         self.db.expire_all()
         self.assertEqual(
-            self.db.query(self.User).get(self.user.id).total_coins,
+            self.db.get(self.User, self.user.id).total_coins,
             coins_after_one)
 
     def test_the_row_is_stamped_before_the_payout(self):
@@ -247,7 +247,7 @@ class QuestClaimSingleClaimTests(_DBCase):
 
         self.db.expire_all()
         self.assertEqual(
-            self.db.query(self.User).get(self.user.id).total_coins, 2500)
+            self.db.get(self.User, self.user.id).total_coins, 2500)
 
     def test_an_incomplete_quest_is_still_refused(self):
         self.progress.completed = False

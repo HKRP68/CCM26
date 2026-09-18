@@ -289,7 +289,7 @@ async def owners_page_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     session = get_session()
     try:
-        player = session.query(Player).get(base_id)
+        player = session.get(Player, base_id)
         if not player:
             await q.answer("Player not found", show_alert=True)
             return

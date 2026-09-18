@@ -286,7 +286,7 @@ async def fantasy_lb_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         from models import FantasyLeague
         from services import fantasy_service
-        league = session.query(FantasyLeague).get(league_id)
+        league = session.get(FantasyLeague, league_id)
         if not league:
             await query.edit_message_text("League not found.")
             return

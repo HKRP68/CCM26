@@ -195,7 +195,7 @@ class TraitMarketFlowTests(unittest.TestCase):
         from models import User
         session = self.get_session()
         try:
-            return session.query(User).get(user_id).total_gems
+            return session.get(User, user_id).total_gems
         finally:
             session.close()
 
@@ -203,7 +203,7 @@ class TraitMarketFlowTests(unittest.TestCase):
         from models import TraitInventory
         session = self.get_session()
         try:
-            row = session.query(TraitInventory).get(inv_id)
+            row = session.get(TraitInventory, inv_id)
             return row.user_id if row else None
         finally:
             session.close()
@@ -322,7 +322,7 @@ class TraitMarketFlowTests(unittest.TestCase):
 
         session = get_session()
         try:
-            session.query(TraitInventory).get(self.inv2_id).level = 5
+            session.get(TraitInventory, self.inv2_id).level = 5
             session.commit()
         finally:
             session.close()

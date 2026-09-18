@@ -213,7 +213,7 @@ async def wsp_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     session = get_session()
     try:
-        host = session.query(User).get(lobby["host_user_id"])
+        host = session.get(User, lobby["host_user_id"])
         guest = session.query(User).filter(User.telegram_id == q.from_user.id).first()
         if not guest:
             await q.answer("Use /debut first!", show_alert=True)
@@ -296,8 +296,8 @@ async def wsp_decision_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     session = get_session()
     try:
-        host = session.query(User).get(lobby["host_user_id"])
-        guest = session.query(User).get(lobby["guest_user_id"])
+        host = session.get(User, lobby["host_user_id"])
+        guest = session.get(User, lobby["guest_user_id"])
         if not host or not guest:
             context.bot_data.pop(key, None)
             await q.answer("Players no longer exist.", show_alert=True)
@@ -344,8 +344,8 @@ async def wsp_decision_callback(update: Update, context: ContextTypes.DEFAULT_TY
             parse_mode="HTML",
         )
 
-        bat_user = session.query(User).get(match.batting_first_id)
-        bowl_user = session.query(User).get(match.bowling_first_id)
+        bat_user = session.get(User, match.batting_first_id)
+        bowl_user = session.get(User, match.bowling_first_id)
         bat_team = bat_user.team_name or f"@{bat_user.username}'s XI"
         bowl_team = bowl_user.team_name or f"@{bowl_user.username}'s XI"
 

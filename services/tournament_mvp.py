@@ -154,7 +154,7 @@ def _side_resolver(session, match, name_cache):
         if team_id is None:
             return None
         if team_id not in name_cache:
-            tt = session.query(TournamentTeam).get(int(team_id))
+            tt = session.get(TournamentTeam, int(team_id))
             name_cache[team_id] = (tt.name or "") if tt else ""
         return name_cache[team_id]
 

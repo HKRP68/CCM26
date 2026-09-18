@@ -102,7 +102,7 @@ def join_club(session, user, code=None, club_id=None):
     if code:
         club = session.query(Club).filter(Club.code == code.strip().upper()).first()
     elif club_id:
-        club = session.query(Club).get(club_id)
+        club = session.get(Club, club_id)
     if not club:
         return {"ok": False, "error": "not_found", "message": "Club not found."}
 
@@ -130,7 +130,7 @@ def leave_club(session, user):
     if not user.club_id:
         return {"ok": False, "error": "not_in_club", "message": "You're not in a club."}
 
-    club = session.query(Club).get(user.club_id)
+    club = session.get(Club, user.club_id)
     if not club:
         user.club_id = None
         return {"ok": True, "disbanded": True}
@@ -171,14 +171,14 @@ def kick_member(session, founder, target_user_id):
     """Founder kicks a member. Caller commits."""
     if not founder.club_id:
         return {"ok": False, "error": "not_in_club"}
-    club = session.query(Club).get(founder.club_id)
+    club = session.get(Club, founder.club_id)
     if not club or club.founder_user_id != founder.id:
         return {"ok": False, "error": "not_founder",
                 "message": "Only the founder can remove members."}
     if target_user_id == founder.id:
         return {"ok": False, "error": "cant_kick_self",
                 "message": "Use Leave to exit your own club."}
-    target = session.query(User).get(target_user_id)
+    target = session.get(User, target_user_id)
     if not target or target.club_id != club.id:
         return {"ok": False, "error": "not_member", "message": "That player isn't in your club."}
 
@@ -225,7 +225,7 @@ def _club_public(session, club, viewer=None):
 def get_my_club(session, user):
     if not user.club_id:
         return None
-    club = session.query(Club).get(user.club_id)
+    club = session.get(Club, user.club_id)
     if not club:
         user.club_id = None
         return None
@@ -280,7 +280,7 @@ def finalize_clubs_for_season(session, season_key, top_n=3, pool_per_rank=None):
         rank = entry["rank"]
         if rank not in pool_per_rank:
             continue
-        club = session.query(Club).get(entry["club_id"])
+        club = session.get(Club, entry["club_id"])
         if not club:
             continue
         members = session.query(User).filter(User.club_id == club.id).all()
@@ -307,7 +307,7 @@ def admin_list_clubs(session):
     clubs = session.query(Club).all()
     out = []
     for c in clubs:
-        founder = session.query(User).get(c.founder_user_id) if c.founder_user_id else None
+        founder = session.get(User, c.founder_user_id) if c.founder_user_id else None
         out.append({
             "club": c,
             "points": _club_points(session, c.id),
@@ -319,7 +319,7 @@ def admin_list_clubs(session):
 
 def admin_get_club(session, club_id):
     """Full club detail incl. members for the admin view."""
-    club = session.query(Club).get(club_id)
+    club = session.get(Club, club_id)
     if not club:
         return None
     members = (session.query(User)
@@ -343,7 +343,7 @@ def admin_get_club(session, club_id):
 
 
 def admin_rename_club(session, club_id, name=None, description=None, emoji=None, max_members=None):
-    club = session.query(Club).get(club_id)
+    club = session.get(Club, club_id)
     if not club:
         return {"ok": False, "error": "not_found"}
     if name is not None:
@@ -365,10 +365,10 @@ def admin_rename_club(session, club_id, name=None, description=None, emoji=None,
 
 
 def admin_transfer_founder(session, club_id, new_founder_user_id):
-    club = session.query(Club).get(club_id)
+    club = session.get(Club, club_id)
     if not club:
         return {"ok": False, "error": "not_found"}
-    target = session.query(User).get(new_founder_user_id)
+    target = session.get(User, new_founder_user_id)
     if not target or target.club_id != club.id:
         return {"ok": False, "error": "not_member",
                 "message": "That user isn't a member of this club."}
@@ -377,7 +377,7 @@ def admin_transfer_founder(session, club_id, new_founder_user_id):
 
 
 def admin_disband_club(session, club_id):
-    club = session.query(Club).get(club_id)
+    club = session.get(Club, club_id)
     if not club:
         return {"ok": False, "error": "not_found"}
     # Clear all members
@@ -390,8 +390,8 @@ def admin_disband_club(session, club_id):
 
 
 def admin_kick(session, club_id, user_id):
-    club = session.query(Club).get(club_id)
-    target = session.query(User).get(user_id)
+    club = session.get(Club, club_id)
+    target = session.get(User, user_id)
     if not club or not target or target.club_id != club.id:
         return {"ok": False, "error": "not_member"}
     target.club_id = None

@@ -68,7 +68,7 @@ class RosterCountConsistencyTest(unittest.TestCase):
         for i in range(n):
             pid = start_pid + i
             # Reuse an existing player row if one is already seeded for this id.
-            player = session.query(Player).get(pid)
+            player = session.get(Player, pid)
             if player is None:
                 player = Player(id=pid, name=f"P{pid}", rating=75,
                                 category="Batsman", country="India",

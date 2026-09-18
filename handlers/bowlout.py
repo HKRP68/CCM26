@@ -79,7 +79,7 @@ async def start_bowlout(context, *, chat_id, user1_id, user2_id,
             first_picker_user_id=first_picker_user_id or user1_id,
         )
         session.commit()
-        picker = session.query(User).get(bo.current_picker)
+        picker = session.get(User, bo.current_picker)
         intro_text = get_msg(
             "bowlout_tied_intro",
             first_picker_mention=_mention_user(picker),
@@ -126,7 +126,7 @@ async def bowlout_pick_callback(update: Update, context: ContextTypes.DEFAULT_TY
         )
         from services.message_service import get_msg
 
-        bo = session.query(Bowlout).get(bowlout_id)
+        bo = session.get(Bowlout, bowlout_id)
         if not bo:
             await q.answer("Bowl-out not found", show_alert=True)
             return
@@ -157,7 +157,7 @@ async def bowlout_pick_callback(update: Update, context: ContextTypes.DEFAULT_TY
             await q.answer("Already picked this bowler.", show_alert=True)
             return
 
-        player = session.query(Player).get(roster_row.player_id)
+        player = session.get(Player, roster_row.player_id)
         record_pick(session, bowlout_id, bo.current_picker,
                      player.id, player.name, player.bowl_rating or 50)
         session.commit()
@@ -180,7 +180,7 @@ async def bowlout_pick_callback(update: Update, context: ContextTypes.DEFAULT_TY
             return
 
         # Otherwise, show next pick prompt
-        picker_user = session.query(User).get(bo_after.current_picker)
+        picker_user = session.get(User, bo_after.current_picker)
         n_picks = count_picks(session, bowlout_id, bo_after.current_picker) + 1
 
         # Build next pick keyboard — exclude already-picked roster_ids
@@ -242,7 +242,7 @@ async def _run_bowlout_deliveries(context, bowlout_id):
 
     session = get_session()
     try:
-        bo = session.query(Bowlout).get(bowlout_id)
+        bo = session.get(Bowlout, bowlout_id)
         if not bo:
             return
         chat_id = bo.chat_id
@@ -259,7 +259,7 @@ async def _run_bowlout_deliveries(context, bowlout_id):
             if ball is None:
                 break
             session.commit()
-            bo = session.query(Bowlout).get(bowlout_id)
+            bo = session.get(Bowlout, bowlout_id)
             text = render_scoreboard(session, bowlout_id)
         finally:
             session.close()
@@ -278,7 +278,7 @@ async def _run_bowlout_deliveries(context, bowlout_id):
     # After 10 balls: decided or sudden death?
     session = get_session()
     try:
-        bo = session.query(Bowlout).get(bowlout_id)
+        bo = session.get(Bowlout, bowlout_id)
         winner_id = is_match_decided_after(session, bowlout_id)
     finally:
         session.close()
@@ -308,7 +308,7 @@ async def _run_bowlout_deliveries(context, bowlout_id):
         await asyncio.sleep(DELAY)
         session = get_session()
         try:
-            bo = session.query(Bowlout).get(bowlout_id)
+            bo = session.get(Bowlout, bowlout_id)
             u1_all = _xi_bowlers(session, bo.user1_id)
             u2_all = _xi_bowlers(session, bo.user2_id)
             u1_all.sort(key=lambda x: -(x["bowl_rating"] or 0))
@@ -373,7 +373,7 @@ async def _run_bowlout_deliveries(context, bowlout_id):
     # 1000+ rounds; this just keeps the function total).
     session = get_session()
     try:
-        bo = session.query(Bowlout).get(bowlout_id)
+        bo = session.get(Bowlout, bowlout_id)
         winner_id = bo.user1_id if bo.user1_hits >= bo.user2_hits else bo.user2_id
     finally:
         session.close()
@@ -388,7 +388,7 @@ async def _finalize_bowlout(context, bowlout_id, winner_user_id, flavor=None):
     from services.message_service import get_msg
     session = get_session()
     try:
-        bo = session.query(Bowlout).get(bowlout_id)
+        bo = session.get(Bowlout, bowlout_id)
         bo.status = "completed"
         bo.winner_user_id = winner_user_id
         bo.completed_at = datetime.utcnow()
@@ -415,7 +415,7 @@ async def _finalize_bowlout(context, bowlout_id, winner_user_id, flavor=None):
         if parent_match_id:
             try:
                 from models import Match
-                m = session.query(Match).get(parent_match_id)
+                m = session.get(Match, parent_match_id)
                 if m:
                     m.winner_id = winner_user_id
                     m.loser_id = (bo_user2_id if winner_user_id == bo_user1_id
@@ -553,11 +553,11 @@ async def pbo_accept_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     session = get_session()
     try:
-        u2 = session.query(User).get(u2_id)
+        u2 = session.get(User, u2_id)
         if not u2 or q.from_user.id != u2.telegram_id:
             await q.answer("Not your invite to accept.", show_alert=True)
             return
-        u1 = session.query(User).get(u1_id)
+        u1 = session.get(User, u1_id)
         if not u1:
             await q.answer("Inviter not found.", show_alert=True)
             return
@@ -597,7 +597,7 @@ async def pbo_decline_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     session = get_session()
     try:
-        u2 = session.query(User).get(u2_id)
+        u2 = session.get(User, u2_id)
         if not u2 or q.from_user.id != u2.telegram_id:
             await q.answer("Not your invite to decline.", show_alert=True)
             return
@@ -612,13 +612,13 @@ async def pbo_decline_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 # ── Internal helpers ────────────────────────────────────────────────
 
 def _tg_id(session, user_id):
-    u = session.query(User).get(user_id)
+    u = session.get(User, user_id)
     return u.telegram_id if u else None
 
 
 def _picks_summary(session, bowlout_id):
     """A short running-summary for the pick phase."""
-    bo = session.query(Bowlout).get(bowlout_id)
+    bo = session.get(Bowlout, bowlout_id)
     if not bo: return ""
     u1_picks = (session.query(BowloutBall)
                        .filter(BowloutBall.bowlout_id == bowlout_id,

@@ -353,7 +353,7 @@ def _trait_slot_lines(session, rows, btns, owner_tg):
 
     slot_lines = []
     for row in rows:
-        trait = session.query(Trait).get(row.trait_id)
+        trait = session.get(Trait, row.trait_id)
         if not trait:
             continue
         sold_out = is_sold_out(row)
@@ -647,7 +647,7 @@ async def trapply_inv_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception: pass
             return
 
-        trait = session.query(Trait).get(inv.trait_id)
+        trait = session.get(Trait, inv.trait_id)
         await q.answer()
 
         # Show the most likely targets, numbered the way every other surface
@@ -977,7 +977,7 @@ async def trrep_pt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.answer("Trait not found")
             return
         await q.answer()
-        old_trait = session.query(Trait).get(pt.trait_id)
+        old_trait = session.get(Trait, pt.trait_id)
         inv_rows = (session.query(TraitInventory, Trait)
                     .join(Trait, TraitInventory.trait_id == Trait.id)
                     .filter(TraitInventory.user_id == user.id).all())
@@ -1239,7 +1239,7 @@ async def trsell_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await q.edit_message_text("❌ That trait is no longer in your inventory.")
             except Exception: pass
             return
-        trait = session.query(Trait).get(inv.trait_id)
+        trait = session.get(Trait, inv.trait_id)
         level = int(inv.level or 1)
         await q.answer()
 

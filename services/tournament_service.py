@@ -175,7 +175,7 @@ def activate_tournament(session, tournament_id):
     is per competition family, so activating a Lets Play tournament never takes
     a running Challenge League tournament off the air (or vice versa).
     """
-    tour = session.query(Tournament).get(int(tournament_id))
+    tour = session.get(Tournament, int(tournament_id))
     if not tour:
         return None
     # Deactivate the other tournaments of this kind — the single-active rule.
@@ -191,7 +191,7 @@ def activate_tournament(session, tournament_id):
 
 
 def deactivate_tournament(session, tournament_id):
-    tour = session.query(Tournament).get(int(tournament_id))
+    tour = session.get(Tournament, int(tournament_id))
     if tour:
         tour.is_active = False
     return tour
@@ -199,7 +199,7 @@ def deactivate_tournament(session, tournament_id):
 
 def set_status(session, tournament_id, status):
     """Update lifecycle status (start/pause/resume/complete/cancel)."""
-    tour = session.query(Tournament).get(int(tournament_id))
+    tour = session.get(Tournament, int(tournament_id))
     if not tour:
         return None
     tour.status = status
@@ -258,7 +258,7 @@ def reset_tournament(session, tournament_id):
     for tt in session.query(TournamentTeam).filter_by(tournament_id=tid).all():
         tt.played = tt.won = tt.lost = tt.tied = tt.no_result = tt.points = 0
         tt.runs_for = tt.balls_for = tt.runs_against = tt.balls_against = 0
-    tour = session.query(Tournament).get(tid)
+    tour = session.get(Tournament, tid)
     if tour:
         tour.knockout_generated = False
         tour.completed_at = None
@@ -428,7 +428,7 @@ def set_team_owner(session, tournament_team_id, owner_tg_id, owner_name=None):
     still run the team, and dropping them silently would hand a claimed team
     back to the whole chat.
     """
-    row = session.query(TournamentTeam).get(int(tournament_team_id))
+    row = session.get(TournamentTeam, int(tournament_team_id))
     if row is None:
         return None
     if owner_tg_id in (None, "", 0):
@@ -457,7 +457,7 @@ def set_co_owners(session, tournament_team_id, tg_ids):
     website can post a raw comma-separated box straight through. Returns the
     cleaned list.
     """
-    row = session.query(TournamentTeam).get(int(tournament_team_id))
+    row = session.get(TournamentTeam, int(tournament_team_id))
     if row is None:
         return None
     owner = int(row.owner_tg_id or 0)
@@ -480,7 +480,7 @@ def add_co_owner(session, tournament_team_id, tg_id):
     Returns the new co-owner list, or None when the team is missing. Raises
     ``ValueError`` for an id that is already the owner or already a co-owner.
     """
-    row = session.query(TournamentTeam).get(int(tournament_team_id))
+    row = session.get(TournamentTeam, int(tournament_team_id))
     if row is None:
         return None
     try:
@@ -502,7 +502,7 @@ def add_co_owner(session, tournament_team_id, tg_id):
 
 def remove_co_owner(session, tournament_team_id, tg_id):
     """Drop one co-owner. Caller commits. Returns the remaining list."""
-    row = session.query(TournamentTeam).get(int(tournament_team_id))
+    row = session.get(TournamentTeam, int(tournament_team_id))
     if row is None:
         return None
     try:
@@ -558,7 +558,7 @@ def sync_owners_from_draft(session, tournament_id):
     that already has an owner or a co-owner is left alone entirely — an admin's
     manual assignment outranks the draft.
     """
-    tour = session.query(Tournament).get(int(tournament_id))
+    tour = session.get(Tournament, int(tournament_id))
     if not tour or not tour.league_id:
         return 0
     changed = 0
@@ -595,7 +595,7 @@ def overseas_limits(session, tour, league=None):
         lo = getattr(tour, "min_overseas", None)
         hi = getattr(tour, "max_overseas", None)
     if (lo is None or hi is None) and tour is not None and league is None and tour.league_id:
-        league = session.query(ChallengeLeague).get(int(tour.league_id))
+        league = session.get(ChallengeLeague, int(tour.league_id))
     if lo is None:
         lo = getattr(league, "min_overseas", None)
     if hi is None:
@@ -638,7 +638,7 @@ def _reserved_fixture(session, tournament_id, fixture_id, team1_id, team2_id):
     """
     if not fixture_id:
         return None
-    tm = session.query(TournamentMatch).get(int(fixture_id))
+    tm = session.get(TournamentMatch, int(fixture_id))
     if tm is None or tm.tournament_id != int(tournament_id):
         return None
     if tm.status == "completed":
@@ -881,7 +881,7 @@ def recompute_standings(session, tournament_id):
     """
     tid = int(tournament_id)
     session.query(Tournament).filter_by(id=tid).with_for_update().first()
-    tour = session.query(Tournament).get(tid)
+    tour = session.get(Tournament, tid)
     teams = {tt.id: tt for tt in
              session.query(TournamentTeam).filter_by(tournament_id=tid).all()}
     for tt in teams.values():
@@ -967,7 +967,7 @@ def adjust_points(session, tournament_team_id, delta=None, *, set_to=None,
     Returns the ``TournamentTeam``. Raises ``ValueError`` with a message written
     for whoever asked when the team is unknown or the total is out of range.
     """
-    tt = session.query(TournamentTeam).get(int(tournament_team_id))
+    tt = session.get(TournamentTeam, int(tournament_team_id))
     if tt is None:
         raise ValueError("That team is not in this tournament.")
     if (delta is None) == (set_to is None):
@@ -1045,7 +1045,7 @@ def delete_tournament_match(session, tournament_match_id):
 
     Returns the tournament id (so the caller can log/redirect) or None. Caller commits.
     """
-    tm = session.query(TournamentMatch).get(int(tournament_match_id))
+    tm = session.get(TournamentMatch, int(tournament_match_id))
     if not tm:
         return None
     tid = tm.tournament_id
@@ -1091,7 +1091,7 @@ def record_manual_result(session, fixture_id, *,
     with level scores). No per-player scorecard is captured, so batting/bowling
     leaderboards are unaffected. Caller commits.
     """
-    tm = session.query(TournamentMatch).get(int(fixture_id))
+    tm = session.get(TournamentMatch, int(fixture_id))
     if not tm:
         raise ValueError("Fixture not found.")
     if tm.status == "completed":
@@ -1116,7 +1116,7 @@ def record_manual_result(session, fixture_id, *,
     # Reject an innings longer than the tournament's configured over limit — that
     # would silently corrupt the net run-rate that recompute_standings derives
     # from these ball counts (e.g. "50" typed into a 20-over tournament).
-    tour = session.query(Tournament).get(tm.tournament_id)
+    tour = session.get(Tournament, tm.tournament_id)
     max_overs = tour.overs if tour else None
     if max_overs:
         max_balls = int(max_overs) * 6
@@ -1194,7 +1194,7 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
                      .filter_by(match_id=match_id, status="completed").first()):
         return None  # already recorded
 
-    tour = session.query(Tournament).get(tid)
+    tour = session.get(Tournament, tid)
     if not tour:
         return None
 
@@ -1230,7 +1230,7 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
             row_id = tteam_by_user.get(int(uid))
             if not row_id:
                 return None
-            tt = session.query(TournamentTeam).get(row_id)
+            tt = session.get(TournamentTeam, row_id)
             # Guard against a state that outlived its tournament (or points at
             # another one): a foreign row must never be credited here.
             return tt if tt and tt.tournament_id == tid else None
@@ -1401,7 +1401,7 @@ def tournament_champion(session, tournament_id):
            .first())
     if not fin:
         return None
-    return session.query(TournamentTeam).get(fin.winner_team_id)
+    return session.get(TournamentTeam, fin.winner_team_id)
 
 
 def _stat_rows(session, tournament_id):
@@ -1535,7 +1535,7 @@ def stat_leaders(session, tournament_id, limit=10):
     """Return a dict of leaderboard lists for the dashboard."""
     from services import tournament_mvp  # imported here: it imports this module
     rows = _stat_rows(session, tournament_id)
-    tour = session.query(Tournament).get(int(tournament_id))
+    tour = session.get(Tournament, int(tournament_id))
     min_sr = (tour.min_balls_for_sr if tour else 20) or 0
     min_econ = (tour.min_balls_for_econ if tour else 12) or 0
 

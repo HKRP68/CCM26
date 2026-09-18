@@ -54,8 +54,8 @@ def record_referral(session, inviter_user_id, invitee_user_id):
         return None
 
     # Confirm both users exist
-    inviter = session.query(User).get(inviter_user_id)
-    invitee = session.query(User).get(invitee_user_id)
+    inviter = session.get(User, inviter_user_id)
+    invitee = session.get(User, invitee_user_id)
     if not inviter or not invitee:
         return None
 
@@ -106,12 +106,12 @@ def complete_referral(session, invitee_user_id):
 
     # Pay per-invite reward if competition has it configured
     if ref.competition_id:
-        comp = session.query(ReferralCompetition).get(ref.competition_id)
+        comp = session.get(ReferralCompetition, ref.competition_id)
         if comp:
             paid_coins = int(comp.prize_per_invite or 0)
             paid_gems = int(comp.prize_per_invite_gems or 0)
     if paid_coins > 0 or paid_gems > 0:
-        inviter = session.query(User).get(ref.inviter_user_id)
+        inviter = session.get(User, ref.inviter_user_id)
         if inviter:
             inviter.total_coins = (inviter.total_coins or 0) + paid_coins
             inviter.total_gems = (inviter.total_gems or 0) + paid_gems
@@ -286,7 +286,7 @@ def declare_winners(session, competition_id, declared_by="admin"):
     Returns dict {ok, winners: [{rank, user_id, telegram_id, prize}], message}
     """
     from models import ReferralCompetition, User
-    comp = session.query(ReferralCompetition).get(competition_id)
+    comp = session.get(ReferralCompetition, competition_id)
     if not comp:
         return {"ok": False, "message": "Competition not found."}
     if comp.winners_announced_at is not None:
@@ -304,7 +304,7 @@ def declare_winners(session, competition_id, declared_by="admin"):
         prize = prizes[rank - 1] or 0
         if prize <= 0:
             continue
-        u = session.query(User).get(entry["user_id"])
+        u = session.get(User, entry["user_id"])
         if not u: continue
         u.total_coins = (u.total_coins or 0) + prize
         winners.append({
@@ -426,7 +426,7 @@ def redeem_code(session, code, invitee_user_id):
         return {"ok": False, "error": "self_referral",
                 "message": "You can't use your own code."}
 
-    invitee = session.query(User).get(invitee_user_id)
+    invitee = session.get(User, invitee_user_id)
     if not invitee:
         return {"ok": False, "error": "invitee_missing",
                 "message": "User not found."}

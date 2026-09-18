@@ -24,7 +24,14 @@ def _user(**kw):
 
 
 class _FakeSession:
-    """Minimal session: query(User).get(id) resolves from a dict."""
+    """Minimal session: ``session.get(User, id)`` resolves from a dict.
+
+    ``query(User).get(id)`` still works, because ``query`` hands back this same
+    object and ``get`` takes either shape — the legacy call passes the id
+    alone. Modelling both is deliberate: a double that only understands the
+    spelling the code happens to use today turns a routine migration into a
+    wall of red that says nothing about the code under test.
+    """
 
     def __init__(self, users):
         self._users = users
@@ -32,8 +39,8 @@ class _FakeSession:
     def query(self, _model):
         return self
 
-    def get(self, uid):
-        return self._users.get(uid)
+    def get(self, model_or_id, uid=None):
+        return self._users.get(model_or_id if uid is None else uid)
 
 
 # ── streak ───────────────────────────────────────────────────────────

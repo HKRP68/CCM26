@@ -106,7 +106,7 @@ def apply_auto_locks(session):
 
 def get_league(session, league_id):
     from models import FantasyLeague
-    return session.query(FantasyLeague).get(league_id)
+    return session.get(FantasyLeague, league_id)
 
 
 def get_or_create_entry(session, user_id, league_id):
@@ -129,14 +129,14 @@ def set_picks(session, entry_id, picks, bypass_lock=False):
     Returns (ok: bool, message: str).
     """
     from models import FantasyEntry, FantasyPick, Player, FantasyLeague
-    entry = session.query(FantasyEntry).get(entry_id)
+    entry = session.get(FantasyEntry, entry_id)
     if not entry:
         return False, "Entry not found."
 
     if not bypass_lock and entry.locked:
         return False, "Squads are locked. Ask admin to make changes."
 
-    league = session.query(FantasyLeague).get(entry.league_id)
+    league = session.get(FantasyLeague, entry.league_id)
     if not league:
         return False, "League not found."
     if not bypass_lock and is_locked(league):
@@ -356,7 +356,7 @@ def save_player_scores(session, fantasy_match_id, scores):
     """
     from models import FantasyPlayerScore, FantasyMatch, FantasyPick, FantasyEntry
 
-    fmatch = session.query(FantasyMatch).get(fantasy_match_id)
+    fmatch = session.get(FantasyMatch, fantasy_match_id)
     if not fmatch:
         return False, "Fantasy match not found."
 
@@ -394,7 +394,7 @@ def save_player_scores(session, fantasy_match_id, scores):
             mult = (CAPTAIN_MULTIPLIER if pick.role == "captain"
                     else VC_MULTIPLIER if pick.role == "vc" else 1.0)
             pick.total_points = round(pick.total_points + delta * mult, 2)
-            entry = session.query(FantasyEntry).get(pick.entry_id)
+            entry = session.get(FantasyEntry, pick.entry_id)
             if entry:
                 entry.total_points = round(entry.total_points + delta * mult, 2)
 
@@ -405,7 +405,7 @@ def save_player_scores(session, fantasy_match_id, scores):
 def lock_league(session, league_id):
     """Lock the league: freeze all entries, return group chat IDs for broadcast."""
     from models import FantasyLeague, FantasyEntry, BotChat
-    league = session.query(FantasyLeague).get(league_id)
+    league = session.get(FantasyLeague, league_id)
     if not league:
         return [], "League not found."
     league.status = "locked"

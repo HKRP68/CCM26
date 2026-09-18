@@ -174,7 +174,7 @@ def buy_trait_from_shop(session, user, slot_index):
     session.add(inv)
     session.flush()
 
-    trait = session.query(Trait).get(row.trait_id)
+    trait = session.get(Trait, row.trait_id)
     return True, f"Bought {trait.emoji} {trait.name} Lv.1 for {row.final_price} 💎!", inv
 
 
@@ -213,7 +213,7 @@ def apply_trait_to_player(session, user, inventory_id, roster_id):
         return False, (f"Player already has {TRAIT_MAX_PER_PLAYER} traits. "
                        f"Use /traitreplace to swap one.")
 
-    trait = session.query(Trait).get(inv.trait_id)
+    trait = session.get(Trait, inv.trait_id)
     if not trait:
         return False, "Trait definition missing."
 
@@ -234,7 +234,7 @@ def apply_trait_to_player(session, user, inventory_id, roster_id):
     session.delete(inv)
     session.flush()
 
-    player = session.query(Player).get(roster.player_id)
+    player = session.get(Player, roster.player_id)
     return True, f"✨ Applied {trait.emoji} {trait.name} Lv.{pt.level} to {player.name}!"
 
 
@@ -254,7 +254,7 @@ def replace_trait_on_player(session, user, player_trait_id, inventory_id):
     if not inv:
         return False, "Replacement trait not in inventory."
 
-    new_trait = session.query(Trait).get(inv.trait_id)
+    new_trait = session.get(Trait, inv.trait_id)
     other_traits = (session.query(PlayerTrait)
                     .filter(PlayerTrait.roster_id == pt.roster_id,
                             PlayerTrait.id != pt.id).all())
@@ -264,7 +264,7 @@ def replace_trait_on_player(session, user, player_trait_id, inventory_id):
 
     current_cat_count = 0
     for o in other_traits:
-        ot = session.query(Trait).get(o.trait_id)
+        ot = session.get(Trait, o.trait_id)
         if ot.category == new_trait.category:
             current_cat_count += 1
     if current_cat_count >= TRAIT_MAX_SAME_CATEGORY:
@@ -272,7 +272,7 @@ def replace_trait_on_player(session, user, player_trait_id, inventory_id):
                        f"traits on this player.")
 
     user.total_gems -= TRAIT_REPLACE_COST
-    old_trait = session.query(Trait).get(pt.trait_id)
+    old_trait = session.get(Trait, pt.trait_id)
     pt.trait_id = new_trait.id
     pt.level = inv.level
     pt.acquired_at = datetime.utcnow()
@@ -300,7 +300,7 @@ def upgrade_player_trait(session, user, player_trait_id):
     user.total_gems -= cost
     pt.level += 1
     session.flush()
-    trait = session.query(Trait).get(pt.trait_id)
+    trait = session.get(Trait, pt.trait_id)
     extra = ""
     if pt.level == 5:
         extra = "\n🌟 <b>MAX LEVEL REACHED!</b> Badge + hidden bonus unlocked."
@@ -323,5 +323,5 @@ def upgrade_inventory_trait(session, user, inventory_id):
     user.total_gems -= cost
     inv.level += 1
     session.flush()
-    trait = session.query(Trait).get(inv.trait_id)
+    trait = session.get(Trait, inv.trait_id)
     return True, f"⬆️ {trait.emoji} {trait.name} → Lv.{inv.level} (in inventory). -{cost} 💎"

@@ -151,7 +151,7 @@ async def wspbot_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await q.edit_message_text("❌ Use /debut first!")
             return
 
-        bot_team = session.query(BotTeam).get(team_id)
+        bot_team = session.get(BotTeam, team_id)
         if not bot_team or not bot_team.is_active:
             await q.edit_message_text("❌ Bot team unavailable.")
             return
@@ -321,11 +321,11 @@ async def _wspbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=Non
     """Apply toss decision, initialize the WSP match, launch auto-simulation."""
     session = get_session()
     try:
-        m = session.query(Match).get(mid)
+        m = session.get(Match, mid)
         if not m:
             return
         bot_user = session.query(User).filter(User.telegram_id == BOT_TG_ID).first()
-        user = session.query(User).get(m.user1_id)
+        user = session.get(User, m.user1_id)
 
         m.toss_decision = decision
         if decision == "bat":
@@ -348,7 +348,7 @@ async def _wspbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=Non
                 await context.bot.send_message(chat_id, err_msg)
             return
 
-        bot_team = session.query(BotTeam).get(bot_team_id) if bot_team_id else None
+        bot_team = session.get(BotTeam, bot_team_id) if bot_team_id else None
         user_team_name = user.team_name or f"@{user.username}'s XI"
         bot_team_name = bot_user.team_name or "Bot XI"
         bat_uid = m.batting_first_id
@@ -360,7 +360,7 @@ async def _wspbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=Non
         m.status = "playing"
         session.commit()
 
-        winner = session.query(User).get(decider_uid)
+        winner = session.get(User, decider_uid)
         winner_name = (winner.first_name or winner.username or "Bot") if winner else "Bot"
         result_text = (
             f"🪙 <b>TOSS RESULT</b>\n\n"

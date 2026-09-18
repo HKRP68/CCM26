@@ -445,9 +445,9 @@ class KindIsolationTests(LPTCase):
         self.lpt.activate(self.session, second.id)
         self.session.commit()
         self.session.expire_all()
-        self.assertTrue(self.session.query(Tournament).get(cipl.id).is_active)
+        self.assertTrue(self.session.get(Tournament, cipl.id).is_active)
         # …but it does take the previous Lets Play tournament off the air.
-        self.assertFalse(self.session.query(Tournament).get(self.tour.id).is_active)
+        self.assertFalse(self.session.get(Tournament, self.tour.id).is_active)
 
     def test_kind_reads_as_challenge_when_the_column_is_null(self):
         # Databases migrated before the column existed can hold NULL, and every
@@ -685,7 +685,7 @@ class FixtureReservationTests(LPTCase):
                                                    self.a.id, self.b.id)
         self.session.commit()
         self.assertEqual(
-            self.session.query(TournamentMatch).get(fixture_id).status, "live")
+            self.session.get(TournamentMatch, fixture_id).status, "live")
 
     def test_a_second_reservation_of_the_same_pairing_is_refused(self):
         self.lpt.reserve_pair_fixture(self.session, self.tour, self.a.id, self.b.id)

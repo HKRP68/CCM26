@@ -108,7 +108,7 @@ def team_badge(session, team):
     rgb = None
     if getattr(team, "challenge_team_id", None):
         try:
-            ct = session.query(ChallengeTeam).get(int(team.challenge_team_id))
+            ct = session.get(ChallengeTeam, int(team.challenge_team_id))
             rgb = _parse_hex(getattr(ct, "primary_color", None)) if ct else None
         except Exception:
             logger.debug("Team badge colour lookup failed", exc_info=True)

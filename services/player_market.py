@@ -78,7 +78,7 @@ def get_or_refresh_market(session, user_id, force=False):
     # Return (row, player) pairs
     pairs = []
     for r in rows:
-        p = session.query(Player).get(r.player_id)
+        p = session.get(Player, r.player_id)
         if p:
             pairs.append((r, p))
     return pairs
@@ -95,7 +95,7 @@ def buy_from_player_market(session, user, slot_index):
     if row.purchased:
         return False, "Already purchased this slot."
 
-    player = session.query(Player).get(row.player_id)
+    player = session.get(Player, row.player_id)
     if not player:
         return False, "Player no longer available."
 

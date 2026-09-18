@@ -591,12 +591,12 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
     if mwa.get_state(match_id):
         return True, "Already initialized."
 
-    m = session.query(Match).get(match_id)
+    m = session.get(Match, match_id)
     if not m or not m.batting_first_id or not m.bowling_first_id:
         return False, "Match toss not completed."
 
-    bu = session.query(User).get(m.batting_first_id)
-    bwu = session.query(User).get(m.bowling_first_id)
+    bu = session.get(User, m.batting_first_id)
+    bwu = session.get(User, m.bowling_first_id)
     if not bu or not bwu:
         return False, "Players missing."
 
@@ -648,7 +648,7 @@ def init_match_for_webapp(session, match_id, xi_overrides=None, challenge_rules=
             return bt
         if uid == bwu.id:
             return bwt
-        uu = session.query(User).get(uid)
+        uu = session.get(User, uid)
         return (uu.team_name or (f"@{uu.username}" if uu and uu.username else "Player")) if uu else "Player"
     s["host_name"] = _disp(m.user1_id)
     s["guest_name"] = _disp(m.user2_id)
@@ -740,12 +740,12 @@ def init_match_for_wsp(session, match_id, xi_overrides=None):
     if mwa.get_state(match_id):
         return True, "Already initialized."
 
-    m = session.query(Match).get(match_id)
+    m = session.get(Match, match_id)
     if not m or not m.batting_first_id or not m.bowling_first_id:
         return False, "Match toss not completed."
 
-    bu = session.query(User).get(m.batting_first_id)
-    bwu = session.query(User).get(m.bowling_first_id)
+    bu = session.get(User, m.batting_first_id)
+    bwu = session.get(User, m.bowling_first_id)
     if not bu or not bwu:
         return False, "Players missing."
 
@@ -797,7 +797,7 @@ def init_match_for_wsp(session, match_id, xi_overrides=None):
             return bt
         if uid == bwu.id:
             return bwt
-        uu = session.query(User).get(uid)
+        uu = session.get(User, uid)
         return (uu.team_name or (f"@{uu.username}" if uu and uu.username else "Player")) if uu else "Player"
 
     s["host_name"] = _disp(m.user1_id)
@@ -938,7 +938,7 @@ def build_snapshot(session, match_id, user_id, state_override=None):
     role = role_for(state, user_id)
     setup = state.get("setup")
 
-    m = session.query(Match).get(match_id)
+    m = session.get(Match, match_id)
     status = m.status if m else "unknown"
     if next_action == A_COMPLETED:
         # The Mini App polls very aggressively and can observe the state-machine
@@ -1058,7 +1058,7 @@ def build_match_state_api(session, match_id, user_id):
     if not base:
         return None
     state = mwa.get_state(match_id)
-    m = session.query(Match).get(match_id)
+    m = session.get(Match, match_id)
 
     role = base.get("role")  # batsman / bowler / spectator
     turn = base.get("turn")  # batsman / bowler / None
@@ -1067,7 +1067,7 @@ def build_match_state_api(session, match_id, user_id):
     def _user_block(uid):
         if not uid:
             return None
-        u = session.query(User).get(uid)
+        u = session.get(User, uid)
         if not u:
             return None
         is_bat = (uid == state.get("bat_team_id"))
@@ -1087,7 +1087,7 @@ def build_match_state_api(session, match_id, user_id):
     # Toss winner as a friendly label
     toss_winner = None
     if m and m.toss_winner_id:
-        tw = session.query(User).get(m.toss_winner_id)
+        tw = session.get(User, m.toss_winner_id)
         toss_winner = {
             "user_id": m.toss_winner_id,
             "name": (tw.first_name or tw.username) if tw else None,
@@ -2781,7 +2781,7 @@ def _pick_player_of_match(state, result):
 
 def _tour_user_label(session, user_id):
     from models import User
-    u = session.query(User).get(user_id) if user_id else None
+    u = session.get(User, user_id) if user_id else None
     if not u:
         return "Player"
     if u.username:
@@ -2934,7 +2934,7 @@ def finalize_webapp_match(session, match_id):
             if count_result:
                 from services.match_rewards import is_ai_user as _is_ai
                 for uid in (u1, u2):
-                    usr = session.query(_U).get(uid)
+                    usr = session.get(_U, uid)
                     if usr and not _is_ai(usr):
                         usr.matches_played = (usr.matches_played or 0) + 1
             # A tie breaks nobody's streak, but it was still a day spent playing.
@@ -3041,7 +3041,7 @@ def finalize_webapp_match(session, match_id):
         for uid in (m.user1_id, m.user2_id):
             if not uid:
                 continue
-            qu = session.query(_QUser).get(uid)
+            qu = session.get(_QUser, uid)
             track_user_match_quests(
                 session, state or {}, qu,
                 bool(winner_uid and uid == winner_uid and not is_tie),
@@ -3108,7 +3108,7 @@ def ensure_webapp_match_completed(session, match_id):
     from services.match_engine import compute_match_result, is_innings_over
     from services.match_state_store import A_COMPLETED
 
-    m = session.query(Match).get(match_id)
+    m = session.get(Match, match_id)
     if not m or m.status == "completed":
         return None
 
@@ -3211,7 +3211,7 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit",
     """
     from models import Match, User
     from services.activity_service import log_activity
-    m = session.query(Match).get(match_id)
+    m = session.get(Match, match_id)
     if not m:
         return False, "Match not found."
     if m.status == "completed":
@@ -3226,8 +3226,8 @@ def handle_match_termination(session, match_id, quitter_id, reason="quit",
     penalty = q["penalty"]
     balls = q["balls_bowled"]
 
-    quitter = session.query(User).get(quitter_id)
-    opponent = session.query(User).get(opponent_id)
+    quitter = session.get(User, quitter_id)
+    opponent = session.get(User, opponent_id)
 
     applied_penalty = 0
     compensation = 0
@@ -3332,7 +3332,7 @@ def abandon_match(session, match_id, by_user_id, reason="abandoned",
     """
     from models import Match
     state = mwa.get_state(match_id)
-    m = session.query(Match).get(match_id)
+    m = session.get(Match, match_id)
     if not m:
         return False, "Match not found."
     if m.status == "completed":
@@ -3441,7 +3441,7 @@ def restore_active_matches(session):
 
     for ms in rows:
         mid = ms.match_id
-        m = session.query(Match).get(mid)
+        m = session.get(Match, mid)
         # Orphan: state with no parent match → clean up.
         if not m:
             try:
@@ -3504,7 +3504,7 @@ def sweep_stale_webapp_matches(session):
         state = mwa.get_state(ms.match_id)
         if not state or state.get("played_via") != "webapp":
             continue
-        m = session.query(Match).get(ms.match_id)
+        m = session.get(Match, ms.match_id)
         if not m or m.status == "completed":
             continue
         # Whoever's turn it is forfeits (they're the idle one)

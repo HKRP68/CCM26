@@ -183,7 +183,7 @@ class TraitReturnTest(_TraitFixtures, unittest.TestCase):
             inv = self._inventory(session, user)
             self.assertEqual(len(inv), 1)
             self.assertEqual(inv[0].level, 3)  # removing never costs progress
-            self.assertIsNone(session.query(PlayerTrait).get(pt.id))
+            self.assertIsNone(session.get(PlayerTrait, pt.id))
         finally:
             session.rollback()
             session.close()
@@ -287,14 +287,14 @@ class TraitReturnTest(_TraitFixtures, unittest.TestCase):
             self._equip(session, user, roster, self._trait(session), level=2)
             self._equip(session, user, roster, self._trait(session), level=1)
 
-            entry = session.query(UserRoster).get(roster.id)
-            pl = session.query(Player).get(player.id)
+            entry = session.get(UserRoster, roster.id)
+            pl = session.get(Player, player.id)
             result = _do_release(session, user, [(entry, pl)])
 
             self.assertTrue(result["success"])
             self.assertEqual(result["traits_returned"], 2)
             self.assertEqual(len(self._inventory(session, user)), 2)
-            self.assertIsNone(session.query(UserRoster).get(roster.id))
+            self.assertIsNone(session.get(UserRoster, roster.id))
         finally:
             session.rollback()
             session.close()
@@ -362,7 +362,7 @@ class RemoveTraitCommandTest(_TraitFixtures, unittest.TestCase):
 
         check = get_session()
         try:
-            self.assertIsNone(check.query(PlayerTrait).get(pt_id))
+            self.assertIsNone(check.get(PlayerTrait, pt_id))
             inv = (check.query(TraitInventory)
                    .filter(TraitInventory.user_id == user_id).all())
             self.assertEqual([i.level for i in inv], [3])

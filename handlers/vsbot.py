@@ -420,7 +420,7 @@ async def vsbot_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             await q.edit_message_text("❌ Do /debut first!")
             return
 
-        bot_team = session.query(BotTeam).get(team_id)
+        bot_team = session.get(BotTeam, team_id)
         if not bot_team or not bot_team.is_active:
             await q.edit_message_text("❌ Bot team unavailable.")
             return
@@ -617,12 +617,12 @@ async def _vsbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=None
     """
     session = get_session()
     try:
-        m = session.query(Match).get(mid)
+        m = session.get(Match, mid)
         if not m:
             return
 
         bot_user = session.query(User).filter(User.telegram_id == BOT_TG_ID).first()
-        user = session.query(User).get(m.user1_id)
+        user = session.get(User, m.user1_id)
 
         m.toss_decision = decision
         if decision == "bat":
@@ -634,7 +634,7 @@ async def _vsbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=None
         m.status = "selecting"
         session.commit()
 
-        winner = session.query(User).get(decider_uid)
+        winner = session.get(User, decider_uid)
         winner_name = winner.first_name or winner.username or "Bot"
 
         result_text = (
@@ -716,7 +716,7 @@ async def _vsbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=None
                 from services.match_webapp_service import init_match_for_webapp
                 # The bot's XI isn't in UserRoster — pass it explicitly.
                 overrides = {bot_user.id: bot_xi}
-                bt = session.query(BotTeam).get(bot_team_id) if bot_team_id else None
+                bt = session.get(BotTeam, bot_team_id) if bot_team_id else None
                 init_match_for_webapp(
                     session, mid, xi_overrides=overrides,
                     difficulty=(bt.difficulty if bt else None))
@@ -1044,7 +1044,7 @@ async def _vsbot_openers_locked(context, session, chat_id, mid, op1, op2):
         await _bot_pick_and_start(context, chat_id, mid)
     else:
         # Show user bowler picker
-        bwu = session.query(User).get(bowl_uid)
+        bwu = session.get(User, bowl_uid)
         await _show_user_opening_bowler(context, chat_id, mid, bwu, bowl_xi)
 
 
@@ -1208,7 +1208,7 @@ async def _vsbot_start_match(context, chat_id, mid, opening_bowler):
 
     session = get_session()
     try:
-        m = session.query(Match).get(mid)
+        m = session.get(Match, mid)
         if not m:
             return
         m.status = "in_progress"
@@ -1231,8 +1231,8 @@ async def _vsbot_start_match(context, chat_id, mid, opening_bowler):
         # Map to actual telegram IDs
         bat_uid_real = context.bot_data.get(f"bat_uid_{mid}")
         bowl_uid_real = context.bot_data.get(f"bowl_uid_{mid}")
-        bat_user = session.query(User).get(bat_uid_real)
-        bowl_user = session.query(User).get(bowl_uid_real)
+        bat_user = session.get(User, bat_uid_real)
+        bowl_user = session.get(User, bowl_uid_real)
 
         state = {
             "match_id": mid,
@@ -1310,7 +1310,7 @@ def _get_vsbot_difficulty(session, context, mid):
     """Look up bot team difficulty for AI decision-making."""
     bot_team_id = context.bot_data.get(f"vsbot_team_{mid}")
     if bot_team_id:
-        bt = session.query(BotTeam).get(bot_team_id)
+        bt = session.get(BotTeam, bot_team_id)
         if bt:
             return bt.difficulty
     return "Medium"

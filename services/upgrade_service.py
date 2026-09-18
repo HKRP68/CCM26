@@ -55,11 +55,11 @@ def get_upgrade_options(session, user_id, roster_id):
         return {"ok": False, "error": "not_found",
                 "message": "That player isn't in your roster."}
 
-    current = session.query(Player).get(entry.player_id)
+    current = session.get(Player, entry.player_id)
     if not current:
         return {"ok": False, "error": "player_missing"}
 
-    user = session.query(User).get(user_id)
+    user = session.get(User, user_id)
     coins = user.total_coins or 0
 
     base_id = get_base_id(current.id, session)
@@ -110,8 +110,8 @@ def upgrade_player(session, user, roster_id, target_player_id):
         return {"ok": False, "error": "not_found",
                 "message": "That player isn't in your roster."}
 
-    current = session.query(Player).get(entry.player_id)
-    target = session.query(Player).get(target_player_id)
+    current = session.get(Player, entry.player_id)
+    target = session.get(Player, target_player_id)
     if not current or not target:
         return {"ok": False, "error": "player_missing",
                 "message": "Player version not found."}

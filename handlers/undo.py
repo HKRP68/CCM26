@@ -238,7 +238,7 @@ async def _undo_release(update, session, user, payload):
     # Verify all players still exist (haven't been deleted)
     missing = []
     for it in items:
-        pl = session.query(Player).get(it["player_id"])
+        pl = session.get(Player, it["player_id"])
         if not pl:
             missing.append(it["player_name"])
     if missing:

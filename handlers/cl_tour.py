@@ -179,7 +179,7 @@ async def cltset_league_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     session = get_session()
     try:
-        league = session.query(ChallengeLeague).get(league_id)
+        league = session.get(ChallengeLeague, league_id)
         if not league:
             await q.answer("League not found", show_alert=True)
             return
@@ -219,11 +219,11 @@ async def cltset_hostteam_callback(update: Update, context: ContextTypes.DEFAULT
 
     session = get_session()
     try:
-        team = session.query(ChallengeTeam).get(team_id)
+        team = session.get(ChallengeTeam, team_id)
         if not team or team.league_id != draft["league_id"]:
             await q.answer("Team not in this league", show_alert=True)
             return
-        league = session.query(ChallengeLeague).get(draft["league_id"])
+        league = session.get(ChallengeLeague, draft["league_id"])
         draft["host_team_id"] = team_id
         draft["host_team_name"] = _esc(team.name)
         await q.answer(f"You picked {team.name}")
@@ -262,11 +262,11 @@ async def cltset_guestteam_callback(update: Update, context: ContextTypes.DEFAUL
 
     session = get_session()
     try:
-        team = session.query(ChallengeTeam).get(team_id)
+        team = session.get(ChallengeTeam, team_id)
         if not team or team.league_id != draft["league_id"]:
             await q.answer("Team not in this league", show_alert=True)
             return
-        league = session.query(ChallengeLeague).get(draft["league_id"])
+        league = session.get(ChallengeLeague, draft["league_id"])
         if team_id == draft["host_team_id"] and not league.same_team_allowed:
             await q.answer("That team is taken — pick another.", show_alert=True)
             return
@@ -369,7 +369,7 @@ async def cltset_count_callback(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         # Refuse to create a tour with a team that can never field a legal XI —
         # otherwise both players would be locked in an unplayable active tour.
-        league = session.query(ChallengeLeague).get(draft["league_id"])
+        league = session.get(ChallengeLeague, draft["league_id"])
         min_raw = getattr(league, "min_overseas", None) if league else None
         max_raw = getattr(league, "max_overseas", None) if league else None
         min_ov = int(min_raw) if min_raw is not None else 0
@@ -493,7 +493,7 @@ async def cltour_accept_callback(update: Update, context: ContextTypes.DEFAULT_T
     session = get_session()
     try:
         u = session.query(User).filter(User.telegram_id == q.from_user.id).first()
-        tour = session.query(CLTour).get(tour_id)
+        tour = session.get(CLTour, tour_id)
         if not tour:
             await q.answer("Tour not found", show_alert=True)
             return
@@ -536,7 +536,7 @@ async def cltour_decline_callback(update: Update, context: ContextTypes.DEFAULT_
     session = get_session()
     try:
         u = session.query(User).filter(User.telegram_id == q.from_user.id).first()
-        tour = session.query(CLTour).get(tour_id)
+        tour = session.get(CLTour, tour_id)
         if not tour:
             await q.answer("Tour not found", show_alert=True)
             return
@@ -589,11 +589,11 @@ async def _show_my_tour(update, session, user):
 
 def _render_cl_tour_view(session, tour, viewer_tg):
     """Return (text, InlineKeyboardMarkup|None) for a CL tour."""
-    u1 = session.query(User).get(tour.user1_id)
-    u2 = session.query(User).get(tour.user2_id)
-    league = session.query(ChallengeLeague).get(tour.league_id)
-    host_team = session.query(ChallengeTeam).get(tour.host_team_id)
-    guest_team = session.query(ChallengeTeam).get(tour.guest_team_id)
+    u1 = session.get(User, tour.user1_id)
+    u2 = session.get(User, tour.user2_id)
+    league = session.get(ChallengeLeague, tour.league_id)
+    host_team = session.get(ChallengeTeam, tour.host_team_id)
+    guest_team = session.get(ChallengeTeam, tour.guest_team_id)
     matches = get_cl_tour_matches(session, tour.id)
 
     lines = [
@@ -606,7 +606,7 @@ def _render_cl_tour_view(session, tour, viewer_tg):
     ]
     for tm in matches:
         if tm.status == "done":
-            w = session.query(User).get(tm.winner_id) if tm.winner_id else None
+            w = session.get(User, tm.winner_id) if tm.winner_id else None
             lines.append(f"✅ Match {tm.match_number}: "
                          + (f"<b>{_u_label(w)}</b> won" if w else "no result"))
         elif tm.status == "playing":
@@ -619,7 +619,7 @@ def _render_cl_tour_view(session, tour, viewer_tg):
         if tie:
             lines.append("\n🤝 <b>Series drawn!</b>")
         else:
-            w = session.query(User).get(leader)
+            w = session.get(User, leader)
             lines.append(f"\n🏆 <b>{_u_label(w)} won the tour!</b>")
 
     kb = None
@@ -651,7 +651,7 @@ async def cltour_play_callback(update: Update, context: ContextTypes.DEFAULT_TYP
     session = get_session()
     try:
         tapper = session.query(User).filter(User.telegram_id == q.from_user.id).first()
-        tour = session.query(CLTour).get(tour_id)
+        tour = session.get(CLTour, tour_id)
         if not tour or not tapper:
             await q.answer("Tour not found", show_alert=True)
             return
@@ -669,13 +669,13 @@ async def cltour_play_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
         from handlers.challenge import (
             launch_cl_tour_match, normalize_challenge_league)
-        host = session.query(User).get(tour.user1_id)
-        guest = session.query(User).get(tour.user2_id)
+        host = session.get(User, tour.user1_id)
+        guest = session.get(User, tour.user2_id)
         # FKs may be NULL after an admin deleted the league/team (ondelete SET
         # NULL) — guard the lookups so we don't query on a NULL primary key.
-        host_team = session.query(ChallengeTeam).get(tour.host_team_id) if tour.host_team_id else None
-        guest_team = session.query(ChallengeTeam).get(tour.guest_team_id) if tour.guest_team_id else None
-        league = session.query(ChallengeLeague).get(tour.league_id) if tour.league_id else None
+        host_team = session.get(ChallengeTeam, tour.host_team_id) if tour.host_team_id else None
+        guest_team = session.get(ChallengeTeam, tour.guest_team_id) if tour.guest_team_id else None
+        league = session.get(ChallengeLeague, tour.league_id) if tour.league_id else None
         # If an admin deleted the league/team mid-tour, the SET NULL FKs leave the
         # series unplayable. Retire the tour so both players are unblocked rather
         # than leaving them stuck in a permanently-active tour they can't play.

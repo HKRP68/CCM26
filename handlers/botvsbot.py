@@ -138,7 +138,7 @@ async def bvb_pickA_callback(update, context):
 
     session = get_session()
     try:
-        team_a = session.query(BotTeam).get(team_a_id)
+        team_a = session.get(BotTeam, team_a_id)
         if not team_a:
             await q.edit_message_text("⚠️ Team not found.")
             return
@@ -199,8 +199,8 @@ async def bvb_pickB_callback(update, context):
 
     session = get_session()
     try:
-        team_a = session.query(BotTeam).get(team_a_id)
-        team_b = session.query(BotTeam).get(team_b_id)
+        team_a = session.get(BotTeam, team_a_id)
+        team_b = session.get(BotTeam, team_b_id)
         if not team_a or not team_b:
             await q.edit_message_text("⚠️ Team(s) not found.")
             return

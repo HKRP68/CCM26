@@ -83,6 +83,19 @@ class _FakeSession:
         self.statements = []
         self.limited_race_loss = limited_race_loss
 
+    def get(self, model, _id):
+        """``Session.get(Model, pk)`` — what the code actually calls now.
+
+        The legacy ``query(Model).get(pk)`` below routes through here too, so
+        both spellings resolve the same rows.
+        """
+        name = model.__name__
+        if name == "Trait":
+            return self.trait
+        if name == "Player":
+            return self.player
+        return None
+
     def query(self, model):
         session = self
 
@@ -97,12 +110,7 @@ class _FakeSession:
                 return session.slot
 
             def get(self, _id):
-                name = model.__name__
-                if name == "Trait":
-                    return session.trait
-                if name == "Player":
-                    return session.player
-                return None
+                return session.get(model, _id)
 
         return _Q()
 
@@ -251,6 +259,10 @@ class AdminSlotEditTests(unittest.TestCase):
     class _Session:
         def __init__(self, slot):
             self.slot = slot
+
+        # Both spellings, for the reason the fake above gives.
+        def get(self, _model, _id):
+            return self.slot
 
         def query(self, model):
             session = self

@@ -442,7 +442,7 @@ async def quest_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         # Re-render the current tab — figure out which one we're on
         # by checking which quest type was just claimed
         from models import Quest as Q
-        cq = session.query(Q).get(quest_id)
+        cq = session.get(Q, quest_id)
         quest_type = cq.quest_type if cq else "daily"
         quests_data = get_user_quests(session, user.id, quest_type)
         text, kb = _render_quest_list(quests_data, quest_type, user, tg.id)

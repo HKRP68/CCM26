@@ -629,7 +629,7 @@ class WeeklyDealTests(unittest.TestCase):
         quests[-1].is_active = False
         self.session.commit()
 
-        user = self.session.query(User).get(self.user.id)
+        user = self.session.get(User, self.user.id)
         judged = _judge_career_week(self.session, user, period, 4, 100)
         self.assertIsNotNone(judged)
         self.assertTrue(judged["cleared"],

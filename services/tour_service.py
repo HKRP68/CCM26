@@ -79,7 +79,7 @@ def accept_tour(session, tour_id, accepter_user_id):
 
     Returns (tour, error_message).
     """
-    tour = session.query(Tour).get(tour_id)
+    tour = session.get(Tour, tour_id)
     if not tour:
         return None, "Tour not found."
     if tour.status != "pending":
@@ -112,7 +112,7 @@ def accept_tour(session, tour_id, accepter_user_id):
 
 
 def decline_tour(session, tour_id, decliner_user_id):
-    tour = session.query(Tour).get(tour_id)
+    tour = session.get(Tour, tour_id)
     if not tour:
         return None, "Tour not found."
     if tour.user2_id != decliner_user_id:
@@ -126,7 +126,7 @@ def decline_tour(session, tour_id, decliner_user_id):
 
 def expire_pending_invite(session, tour_id):
     """Called by the 30s timer. Marks pending tour as expired (no-op if not pending)."""
-    tour = session.query(Tour).get(tour_id)
+    tour = session.get(Tour, tour_id)
     if tour and tour.status == "pending":
         tour.status = "expired"
         session.flush()
@@ -157,7 +157,7 @@ def get_tour_matches(session, tour_id):
 
 def link_match_to_tour(session, tour_match_id, match_id):
     """Called when the user starts Match N: attach the actual Match record."""
-    tm = session.query(TourMatch).get(tour_match_id)
+    tm = session.get(TourMatch, tour_match_id)
     if not tm:
         return None
     tm.match_id = match_id
@@ -179,7 +179,7 @@ def record_match_result(session, match_id, winner_user_id, *, forfeit=False):
     if not tm:
         return None  # standalone match, not in a tour
 
-    tour = session.query(Tour).get(tm.tour_id)
+    tour = session.get(Tour, tm.tour_id)
     if not tour:
         return None
     if tour.status != "active":
@@ -321,8 +321,8 @@ def get_tour_stats(session, tour_id, top_n=3):
     def _resolve(rows, value_key):
         out = []
         for r in rows:
-            player = session.query(Player).get(r[0])
-            user = session.query(User).get(r[1])
+            player = session.get(Player, r[0])
+            user = session.get(User, r[1])
             if not player or not user:
                 continue
             value = int(r[2] or 0)

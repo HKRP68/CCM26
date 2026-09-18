@@ -260,7 +260,7 @@ class DeleteTests(CareerAdminActionTestCase):
         self.session.commit()
 
         self.assertTrue(result["ok"])
-        self.assertIsNone(self.session.query(Player).get(player_id))
+        self.assertIsNone(self.session.get(Player, player_id))
         self.assertIsNone(cs.get_career_player(self.session, self.user.id))
         self.assertEqual(
             self.session.query(UserRoster)
@@ -398,7 +398,7 @@ class DeleteTests(CareerAdminActionTestCase):
         result = cs.delete_career_player(self.session, ordinary)
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "not_career")
-        self.assertIsNotNone(self.session.query(Player).get(ordinary.id))
+        self.assertIsNotNone(self.session.get(Player, ordinary.id))
 
 
 if __name__ == "__main__":

@@ -1612,7 +1612,7 @@ def player_add():
 def player_edit(player_id):
     db = get_session()
     try:
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if not player:
             flash("Player not found", "error")
             return redirect(url_for("players_list"))
@@ -1711,7 +1711,7 @@ def admin_player_card_preview(player_id):
     """Serve the generated card preview, including portrait-or-shadow artwork."""
     db = get_session()
     try:
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if not player:
             return "Player not found", 404
         from services.card_generator import generate_card
@@ -1729,7 +1729,7 @@ def admin_player_card_preview(player_id):
 def admin_player_image_upload(player_id):
     db = get_session()
     try:
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if not player:
             flash("Player not found.", "error")
             return redirect(url_for("players_list"))
@@ -1771,7 +1771,7 @@ def admin_player_image_upload(player_id):
 def admin_player_image_remove(player_id):
     db = get_session()
     try:
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if not player:
             return redirect(url_for("players_list"))
         from services.player_image_service import remove_custom_image
@@ -1928,7 +1928,7 @@ def admin_cmushop():
 
                 elif action == "delete":
                     rid = int(request.form.get("image_id"))
-                    row = db.query(CMUShopImage).get(rid)
+                    row = db.get(CMUShopImage, rid)
                     if row:
                         try:
                             if row.image_path and os.path.exists(row.image_path):
@@ -1945,7 +1945,7 @@ def admin_cmushop():
 
                 elif action == "toggle":
                     rid = int(request.form.get("image_id"))
-                    row = db.query(CMUShopImage).get(rid)
+                    row = db.get(CMUShopImage, rid)
                     if row:
                         row.is_active = not row.is_active
                         db.commit()
@@ -1994,7 +1994,7 @@ def admin_cmushop_image(image_id):
     from models import CMUShopImage
     db = get_session()
     try:
-        row = db.query(CMUShopImage).get(image_id)
+        row = db.get(CMUShopImage, image_id)
         if not row:
             from flask import abort
             abort(404)
@@ -2020,7 +2020,7 @@ def admin_player_version_new(base_id):
     """Create a new version of a base player. Requires a custom image upload."""
     db = get_session()
     try:
-        base = db.query(Player).get(base_id)
+        base = db.get(Player, base_id)
         if not base:
             flash("Base player not found.", "error")
             return redirect(url_for("players_list"))
@@ -2182,7 +2182,7 @@ def admin_player_version_delete(version_id):
     """Delete a variant Player. Refuses if the version is owned by anyone."""
     db = get_session()
     try:
-        v = db.query(Player).get(version_id)
+        v = db.get(Player, version_id)
         if not v or not v.parent_player_id:
             flash("Not a valid variant.", "error")
             return redirect(url_for("players_list"))
@@ -2246,7 +2246,7 @@ def _purge_player_references(db, player):
 def player_delete(player_id):
     db = get_session()
     try:
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if not player:
             flash("Player not found", "error")
             return redirect(url_for("players_list"))
@@ -2297,7 +2297,7 @@ def player_delete(player_id):
 def player_toggle(player_id):
     db = get_session()
     try:
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if player:
             player.is_active = not player.is_active
             status = "activated" if player.is_active else "deactivated"
@@ -2325,7 +2325,7 @@ def player_toggle_buypl(player_id):
     this player. Player remains available via market, packs, trades, etc."""
     db = get_session()
     try:
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if player:
             player.restricted_from_buypl = not (player.restricted_from_buypl or False)
             status = ("🚫 BLOCKED from /buypl" if player.restricted_from_buypl
@@ -2720,7 +2720,7 @@ def _users_csv_export(db, base_query):
 def user_detail(user_id):
     db = get_session()
     try:
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         if not user:
             flash("User not found", "error")
             return redirect(url_for("users_list"))
@@ -2817,7 +2817,7 @@ def user_detail(user_id):
         match_meta = []
         for m in active_matches:
             opp_id = m.user2_id if m.user1_id == user.id else m.user1_id
-            opp = db.query(User).get(opp_id) if opp_id else None
+            opp = db.get(User, opp_id) if opp_id else None
             match_meta.append({
                 "match": m,
                 "opp_name": (opp.first_name or opp.username) if opp else "Bot/Unknown",
@@ -2895,7 +2895,7 @@ def user_detail(user_id):
 def admin_edit_qp(user_id):
     db = get_session()
     try:
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         if not user:
             flash(f"User {user_id} not found", "error")
             return redirect(url_for("users_list"))
@@ -2938,7 +2938,7 @@ def admin_edit_qp(user_id):
 def admin_message_user(user_id):
     db = get_session()
     try:
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         if not user:
             flash(f"User {user_id} not found", "error")
             return redirect(url_for("users_list"))
@@ -2991,7 +2991,7 @@ def admin_message_user(user_id):
 def admin_reset_user(user_id):
     db = get_session()
     try:
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         if not user:
             flash(f"User {user_id} not found", "error")
             return redirect(url_for("users_list"))
@@ -3101,12 +3101,12 @@ def admin_user_quest_progress_edit(user_id, progress_id):
     db = get_session()
     try:
         from models import UserQuestProgress, Quest
-        uqp = db.query(UserQuestProgress).get(progress_id)
+        uqp = db.get(UserQuestProgress, progress_id)
         if not uqp or uqp.user_id != user_id:
             flash("Progress entry not found.", "error")
             return redirect(url_for("user_detail", user_id=user_id))
         new_progress = max(0, int(request.form.get("progress", 0) or 0))
-        q = db.query(Quest).get(uqp.quest_id)
+        q = db.get(Quest, uqp.quest_id)
         if not q:
             flash("Quest not found.", "error")
             return redirect(url_for("user_detail", user_id=user_id))
@@ -3145,7 +3145,7 @@ def admin_force_end_match(user_id, match_id):
     db = get_session()
     try:
         from models import Match, MatchState
-        match = db.query(Match).get(match_id)
+        match = db.get(Match, match_id)
         if not match:
             flash("Match not found.", "error")
             return redirect(url_for("user_detail", user_id=user_id))
@@ -3215,7 +3215,7 @@ def admin_cancel_pending_trades(user_id):
 def user_edit_purse(user_id):
     db = get_session()
     try:
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         if user:
             old_coins = user.total_coins
             old_gems = user.total_gems
@@ -3246,7 +3246,7 @@ def user_ban(user_id):
     """Ban or unban a user. The bot's middleware refuses banned users."""
     db = get_session()
     try:
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         if not user:
             flash("User not found", "error")
             return redirect(url_for("users_list"))
@@ -3313,7 +3313,7 @@ def user_subscription(user_id):
     from services import subscription_service
     db = get_session()
     try:
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         if not user:
             flash("User not found", "error")
             return redirect(url_for("users_list"))
@@ -3514,7 +3514,7 @@ def user_reset_cooldowns(user_id):
             stats.last_sim = None
             from services.activity_service import log_activity
             log_activity(db, user_id, "admin_reset", "Admin reset all cooldowns")
-            u = db.query(User).get(user_id)
+            u = db.get(User, user_id)
             log_admin(db, "cooldown_reset", target_type="user", target_id=user_id,
                       target_name=(u.username or u.first_name) if u else str(user_id),
                       detail="Reset claim/daily/gspin/sim cooldowns")
@@ -3537,7 +3537,7 @@ def user_add_player(user_id):
         rating_raw = request.form.get("overall_rating", "").strip()
         category = request.form.get("category", "").strip()
 
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         if not user:
             flash("User not found", "error")
             return redirect(url_for("users_list"))
@@ -3594,14 +3594,14 @@ def user_remove_player(user_id, roster_id):
     try:
         entry = db.query(UserRoster).filter(UserRoster.id == roster_id, UserRoster.user_id == user_id).first()
         if entry:
-            player = db.query(Player).get(entry.player_id)
+            player = db.get(Player, entry.player_id)
             name = player.name if player else "Unknown"
             # Traits the owner equipped on this player go back to their
             # inventory — an admin removal must not burn them (and PlayerTrait
             # rows would otherwise block the delete on the FK).
             from services.trait_service import return_traits_to_inventory
             return_traits_to_inventory(db, entry.id)
-            user = db.query(User).get(user_id)
+            user = db.get(User, user_id)
             if user and user.captain_roster_id == entry.id:
                 user.captain_roster_id = None
                 db.flush()
@@ -3744,7 +3744,7 @@ def admin_traits_list():
 def admin_trait_edit(trait_id):
     db = get_session()
     try:
-        t = db.query(Trait).get(trait_id)
+        t = db.get(Trait, trait_id)
         if not t:
             flash("Trait not found.", "error")
             return redirect(url_for("admin_traits_list"))
@@ -3792,7 +3792,7 @@ def admin_trait_edit(trait_id):
 def admin_trait_toggle(trait_id):
     db = get_session()
     try:
-        t = db.query(Trait).get(trait_id)
+        t = db.get(Trait, trait_id)
         if t:
             t.is_active = not t.is_active
             db.commit()
@@ -3811,7 +3811,7 @@ def admin_user_traits(user_id):
     """View a single user's equipped + inventory traits."""
     db = get_session()
     try:
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         if not user:
             flash("User not found.", "error")
             return redirect(url_for("users_list"))
@@ -3842,10 +3842,10 @@ def admin_grant_trait(user_id):
     """Admin override: grant a trait directly to user inventory at chosen level."""
     db = get_session()
     try:
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         trait_id = int(request.form.get("trait_id", 0))
         level = max(1, min(5, int(request.form.get("level", 1))))
-        trait = db.query(Trait).get(trait_id)
+        trait = db.get(Trait, trait_id)
         if not (user and trait):
             flash("Invalid user or trait.", "error")
             return redirect(url_for("admin_user_traits", user_id=user_id))
@@ -3869,9 +3869,9 @@ def admin_grant_trait(user_id):
 def admin_revoke_player_trait(user_id, player_trait_id):
     db = get_session()
     try:
-        pt = db.query(PlayerTrait).get(player_trait_id)
+        pt = db.get(PlayerTrait, player_trait_id)
         if pt and pt.user_id == user_id:
-            trait = db.query(Trait).get(pt.trait_id)
+            trait = db.get(Trait, pt.trait_id)
             db.delete(pt)
             db.commit()
             log_admin(db, "trait_revoke", "user", user_id, "",
@@ -3888,7 +3888,7 @@ def admin_revoke_player_trait(user_id, player_trait_id):
 def admin_delete_inventory(user_id, inv_id):
     db = get_session()
     try:
-        inv = db.query(TraitInventory).get(inv_id)
+        inv = db.get(TraitInventory, inv_id)
         if inv and inv.user_id == user_id:
             db.delete(inv)
             db.commit()
@@ -4496,7 +4496,7 @@ def _render_player_card(player_id):
     """Load + render one player card. Caller holds a render slot."""
     db = get_session()
     try:
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if not player or not player.is_active:
             return "Player not found", 404
         from services.card_generator import generate_card
@@ -4817,7 +4817,7 @@ def webapp_player_detail(player_id):
         return err
     db, user, tg_id = auth
     try:
-        p = db.query(Player).get(player_id)
+        p = db.get(Player, player_id)
         if not p or not p.is_active:
             return {"ok": False, "error": "not_found"}, 404
         from services.version_service import user_owns_any_version
@@ -4891,7 +4891,7 @@ def webapp_buy(player_id):
         from services.version_service import user_owns_any_version
         from config import get_buy_value
 
-        p = db.query(Player).get(player_id)
+        p = db.get(Player, player_id)
         if not p or not p.is_active:
             return {"ok": False, "error": "not_found"}, 404
         if getattr(p, "restricted_from_buypl", False):
@@ -5007,7 +5007,7 @@ def webapp_release(roster_id):
             return {"ok": False, "error": "not_found",
                     "message": "That player isn't in your roster."}, 404
 
-        player = db.query(Player).get(row.player_id)
+        player = db.get(Player, row.player_id)
         if not player:
             return {"ok": False, "error": "player_missing"}, 404
 
@@ -6991,7 +6991,7 @@ def webapp_market_buy(slot_id):
             return {"ok": False, "error": "sold_out",
                     "message": "This item is sold out."}, 400
 
-        player = db.query(Player).get(slot.player_id)
+        player = db.get(Player, slot.player_id)
         if not player:
             return {"ok": False, "error": "player_missing"}, 404
 
@@ -7509,7 +7509,7 @@ def webapp_quest_claim():
         quest_title = None
         try:
             from models import Quest as _Quest
-            quest = db.query(_Quest).get(qid)
+            quest = db.get(_Quest, qid)
             quest_title = getattr(quest, "name", None) if quest else None
         except Exception:
             logger.exception("quest lookup for activity failed")
@@ -8104,7 +8104,7 @@ def webapp_roster_player_detail():
         if not entry:
             return {"ok": False, "error": "not_found",
                     "message": "Player not in your roster."}, 404
-        player = db.query(Player).get(entry.player_id)
+        player = db.get(Player, entry.player_id)
         if not player:
             return {"ok": False, "error": "player_missing"}, 404
 
@@ -8280,13 +8280,13 @@ def webapp_trait_apply():
                        .filter(UserRoster.id == roster_id,
                                UserRoster.user_id == user.id).first())
             if _roster:
-                _pl = db.query(Player).get(_roster.player_id)
+                _pl = db.get(Player, _roster.player_id)
                 _pname = _pl.name if _pl else None
             _inv = (db.query(TraitInventory)
                     .filter(TraitInventory.id == inventory_id,
                             TraitInventory.user_id == user.id).first())
             if _inv:
-                _tr = db.query(Trait).get(_inv.trait_id)
+                _tr = db.get(Trait, _inv.trait_id)
                 if _tr:
                     _tname, _temoji = _tr.name, (_tr.emoji or "")
         except Exception:
@@ -8555,7 +8555,7 @@ def _match_rest_user_and_match(db, user_id, match_id=None):
         uid = int(user_id or 0)
     except (TypeError, ValueError):
         return None, None, ({"ok": False, "error": "bad_user_id"}, 400)
-    user = db.query(User).get(uid)
+    user = db.get(User, uid)
     if not user:
         # The Crickidex Arena frontend sends the raw Telegram id as userId;
         # fall back to a telegram_id lookup so those links resolve too.
@@ -8567,7 +8567,7 @@ def _match_rest_user_and_match(db, user_id, match_id=None):
             mid = int(match_id)
         except (TypeError, ValueError):
             return user, None, ({"ok": False, "error": "bad_match_id"}, 400)
-        match = db.query(Match).get(mid)
+        match = db.get(Match, mid)
     else:
         match = (db.query(Match)
                  .filter(((Match.user1_id == user.id) | (Match.user2_id == user.id)),
@@ -8679,7 +8679,7 @@ def _user_has_autoplay(db, user_id) -> bool:
     the Mini App Autoplay toggle."""
     try:
         from services import subscription_service
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         return subscription_service.has_autoplay(user)
     except Exception:
         logger.exception("_user_has_autoplay failed")
@@ -9278,7 +9278,7 @@ def event_media_asset(media_id):
     try:
         from models import EventMedia
         from services.event_media_service import MEDIA_DIR
-        media = db.query(EventMedia).get(media_id)
+        media = db.get(EventMedia, media_id)
         if not media or (not media.enabled and not session.get("admin_user")):
             return {"error": "not_found"}, 404
         if media.source_type == "url":
@@ -9486,7 +9486,7 @@ def webapp_match_init():
         match_id = int(data.get("match_id") or 0)
         # Only participants can initialize
         from models import Match
-        m = db.query(Match).get(match_id)
+        m = db.get(Match, match_id)
         if not m:
             return {"ok": False, "error": "no_match"}, 404
         if user.id not in (m.user1_id, m.user2_id):
@@ -10195,7 +10195,7 @@ def _match_origin_chat_id(match_id, state=None):
     db = get_session()
     try:
         from models import Match
-        match = db.query(Match).get(match_id)
+        match = db.get(Match, match_id)
         return match.chat_id if match else None
     except Exception:
         logger.exception("failed to resolve match origin chat")
@@ -10663,7 +10663,7 @@ def _completed_user_mention(db, user_id):
     try:
         from models import User
         from handlers.match import BOT_TG_ID_
-        u = db.query(User).get(user_id)
+        u = db.get(User, user_id)
         if not u:
             return None
         if u.telegram_id == BOT_TG_ID_:
@@ -11013,7 +11013,7 @@ def _announce_tour_after_result(match_id, fin):
             from models import Match as _M
             db = _gs()
             try:
-                m = db.query(_M).get(match_id)
+                m = db.get(_M, match_id)
                 chat_id = _resolve_lobby_chat_id(db, match_id, m)
             finally:
                 db.close()
@@ -11098,7 +11098,7 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
 
     db = get_session()
     try:
-        match = db.query(Match).get(match_id)
+        match = db.get(Match, match_id)
         if not match:
             return False
         from types import SimpleNamespace
@@ -11777,7 +11777,7 @@ def admin_bot_team_delete(team_id):
     db = get_session()
     try:
         from services.bot_team_service import delete_team
-        team = db.query(BotTeam).get(team_id)
+        team = db.get(BotTeam, team_id)
         if team:
             name = team.name
             ok, err = delete_team(db, team_id)
@@ -12155,7 +12155,7 @@ def admin_packs_list():
         known_packs = {p.id: p for p in packs}
         recent_purchases = []
         for a in audit:
-            pack = known_packs.get(a.pack_id) or db.query(Pack).get(a.pack_id)
+            pack = known_packs.get(a.pack_id) or db.get(Pack, a.pack_id)
             recent_purchases.append({
                 "row": a,
                 "user": users.get(a.user_id),
@@ -12227,7 +12227,7 @@ def admin_pack_edit(pack_id):
     try:
         from models import Pack
         from services.pack_service import count_main_pool, count_bonus_pool
-        p = db.query(Pack).get(pack_id)
+        p = db.get(Pack, pack_id)
         if not p:
             flash("Pack not found.", "error")
             return redirect(url_for("admin_packs_list"))
@@ -12412,7 +12412,7 @@ def admin_pack_delete(pack_id):
     db = get_session()
     try:
         from models import Pack
-        p = db.query(Pack).get(pack_id)
+        p = db.get(Pack, pack_id)
         if not p:
             flash("Pack not found.", "error")
             return redirect(url_for("admin_packs_list"))
@@ -12633,8 +12633,8 @@ def admin_tours_list():
         rows = []
         from models import User
         for t in tours:
-            u1 = db.query(User).get(t.user1_id)
-            u2 = db.query(User).get(t.user2_id)
+            u1 = db.get(User, t.user1_id)
+            u2 = db.get(User, t.user2_id)
             done_count = (db.query(func.count(TourMatch.id))
                           .filter(TourMatch.tour_id == t.id,
                                   TourMatch.status == "done").scalar()) or 0
@@ -12673,13 +12673,13 @@ def admin_tour_detail(tour_id):
         from models import Tour, TourMatch, User, Match
         from services.tour_service import get_tour_stats, get_tour_matches
 
-        tour = db.query(Tour).get(tour_id)
+        tour = db.get(Tour, tour_id)
         if not tour:
             flash("Tour not found.", "error")
             return redirect(url_for("admin_tours_list"))
 
-        u1 = db.query(User).get(tour.user1_id)
-        u2 = db.query(User).get(tour.user2_id)
+        u1 = db.get(User, tour.user1_id)
+        u2 = db.get(User, tour.user2_id)
 
         # Match list with linked Match info (winner, scores)
         tour_matches = get_tour_matches(db, tour_id)
@@ -12691,10 +12691,10 @@ def admin_tour_detail(tour_id):
                 "match": None,
             }
             if tm.match_id:
-                m = db.query(Match).get(tm.match_id)
+                m = db.get(Match, tm.match_id)
                 entry["match"] = m
                 if m and m.winner_id:
-                    w = db.query(User).get(m.winner_id)
+                    w = db.get(User, m.winner_id)
                     entry["winner_label"] = (f"@{w.username}" if w and w.username
                                               else (w.first_name if w else "?"))
             match_rows.append(entry)
@@ -12725,7 +12725,7 @@ def admin_tour_force_expire(tour_id):
     try:
         from models import Tour, TourMatch
         from services.tour_service import _decide_winner
-        tour = db.query(Tour).get(tour_id)
+        tour = db.get(Tour, tour_id)
         if not tour:
             flash("Tour not found.", "error")
             return redirect(url_for("admin_tours_list"))
@@ -12770,7 +12770,7 @@ def admin_tour_delete(tour_id):
     db = get_session()
     try:
         from models import Tour, TourMatch
-        tour = db.query(Tour).get(tour_id)
+        tour = db.get(Tour, tour_id)
         if not tour:
             flash("Tour not found.", "error")
             return redirect(url_for("admin_tours_list"))
@@ -12852,7 +12852,7 @@ def admin_quest_new():
 def admin_quest_edit(quest_id):
     db = get_session()
     try:
-        q = db.query(Quest).get(quest_id)
+        q = db.get(Quest, quest_id)
         if not q:
             flash("Quest not found.", "error")
             return redirect(url_for("admin_quests_list"))
@@ -12890,7 +12890,7 @@ def admin_quest_edit(quest_id):
 def admin_quest_delete(quest_id):
     db = get_session()
     try:
-        q = db.query(Quest).get(quest_id)
+        q = db.get(Quest, quest_id)
         if q:
             name = q.name
             # Also delete any user progress on this quest
@@ -12913,7 +12913,7 @@ def admin_quest_delete(quest_id):
 def admin_quest_toggle(quest_id):
     db = get_session()
     try:
-        q = db.query(Quest).get(quest_id)
+        q = db.get(Quest, quest_id)
         if q:
             q.is_active = not q.is_active
             db.commit()
@@ -12984,7 +12984,7 @@ def admin_commentary_new():
 def admin_commentary_edit(entry_id):
     db = get_session()
     try:
-        entry = db.query(CommentaryEntry).get(entry_id)
+        entry = db.get(CommentaryEntry, entry_id)
         if not entry:
             flash("Entry not found.", "error")
             return redirect(url_for("admin_commentary_list"))
@@ -13011,7 +13011,7 @@ def admin_commentary_edit(entry_id):
 def admin_commentary_delete(entry_id):
     db = get_session()
     try:
-        entry = db.query(CommentaryEntry).get(entry_id)
+        entry = db.get(CommentaryEntry, entry_id)
         if entry:
             event_key = entry.event_key
             db.delete(entry); db.commit()
@@ -13152,7 +13152,7 @@ def admin_notification_new():
 def admin_notification_edit(sid):
     db = get_session()
     try:
-        ns = db.query(NotificationSchedule).get(sid)
+        ns = db.get(NotificationSchedule, sid)
         if not ns:
             flash("Not found.", "error")
             return redirect(url_for("admin_notifications_list"))
@@ -13187,7 +13187,7 @@ def admin_notification_edit(sid):
 def admin_notification_delete(sid):
     db = get_session()
     try:
-        ns = db.query(NotificationSchedule).get(sid)
+        ns = db.get(NotificationSchedule, sid)
         if ns:
             name = ns.name
             db.delete(ns); db.commit()
@@ -13207,7 +13207,7 @@ def admin_notification_delete(sid):
 def admin_notification_toggle(sid):
     db = get_session()
     try:
-        ns = db.query(NotificationSchedule).get(sid)
+        ns = db.get(NotificationSchedule, sid)
         if ns:
             ns.is_active = not ns.is_active
             db.commit()
@@ -13232,7 +13232,7 @@ def admin_notification_send_now(sid):
     import concurrent.futures as _cf
     db = get_session()
     try:
-        ns = db.query(NotificationSchedule).get(sid)
+        ns = db.get(NotificationSchedule, sid)
         if not ns:
             flash("Not found.", "error")
             return redirect(url_for("admin_notifications_list"))
@@ -13387,7 +13387,7 @@ def admin_rarity_save():
         tier_ids = request.form.getlist("tier_id")
         for tid_str in tier_ids:
             tid = int(tid_str)
-            t = db.query(ClaimRarityTier).get(tid)
+            t = db.get(ClaimRarityTier, tid)
             if not t:
                 continue
             try:
@@ -13457,7 +13457,7 @@ def admin_rarity_new():
 def admin_rarity_delete(tid):
     db = get_session()
     try:
-        t = db.query(ClaimRarityTier).get(tid)
+        t = db.get(ClaimRarityTier, tid)
         if t:
             label = t.label
             db.delete(t); db.commit()
@@ -13563,7 +13563,7 @@ def admin_rating_block_save():
 
         for bid_str in request.form.getlist("block_id"):
             bid = int(bid_str)
-            rule = db.query(RatingBlockRule).get(bid)
+            rule = db.get(RatingBlockRule, bid)
             if not rule:
                 continue
             try:
@@ -13602,7 +13602,7 @@ def admin_rating_block_delete(bid):
     try:
         from services import rating_block_service
 
-        rule = db.query(RatingBlockRule).get(bid)
+        rule = db.get(RatingBlockRule, bid)
         if rule:
             band = f"{rule.rating_min}-{rule.rating_max}"
             db.delete(rule); db.commit()
@@ -14441,7 +14441,7 @@ def admin_media_detail(event_key):
 
                     replace_id = request.form.get("replace_media_id")
                     if em is not None and replace_id:
-                        old_media = db.query(EventMedia).get(int(replace_id))
+                        old_media = db.get(EventMedia, int(replace_id))
                         if old_media and old_media.event_key == event_key and old_media.id != em.id:
                             if old_media.source_type == "file":
                                 old_path = _os.path.join(MEDIA_DIR, old_media.source)
@@ -14454,7 +14454,7 @@ def admin_media_detail(event_key):
 
                 elif action == "delete":
                     mid = int(request.form.get("media_id", 0))
-                    em = db.query(EventMedia).get(mid)
+                    em = db.get(EventMedia, mid)
                     if em and em.event_key == event_key:
                         # If file-backed, try to remove from disk too
                         if em.source_type == "file":
@@ -14470,7 +14470,7 @@ def admin_media_detail(event_key):
 
                 elif action == "toggle":
                     mid = int(request.form.get("media_id", 0))
-                    em = db.query(EventMedia).get(mid)
+                    em = db.get(EventMedia, mid)
                     if em and em.event_key == event_key:
                         em.enabled = not em.enabled
                         db.commit()
@@ -14478,7 +14478,7 @@ def admin_media_detail(event_key):
 
                 elif action == "update":
                     mid = int(request.form.get("media_id", 0))
-                    em = db.query(EventMedia).get(mid)
+                    em = db.get(EventMedia, mid)
                     if em and em.event_key == event_key:
                         em.label = (request.form.get("label") or "").strip()[:120] or None
                         try:
@@ -15053,7 +15053,7 @@ def admin_lucky_card_rewards():
 
                 elif action == "edit":
                     rid = int(request.form.get("id", 0))
-                    r = db.query(GSpinReward).get(rid)
+                    r = db.get(GSpinReward, rid)
                     if r:
                         r.label = (request.form.get("label", "") or r.label).strip()[:60]
                         r.emoji = (request.form.get("emoji", "") or r.emoji or "🎁").strip()[:10]
@@ -15077,7 +15077,7 @@ def admin_lucky_card_rewards():
 
                 elif action == "toggle":
                     rid = int(request.form.get("id", 0))
-                    r = db.query(GSpinReward).get(rid)
+                    r = db.get(GSpinReward, rid)
                     if r:
                         r.enabled = not r.enabled
                         db.commit()
@@ -15089,7 +15089,7 @@ def admin_lucky_card_rewards():
 
                 elif action == "delete":
                     rid = int(request.form.get("id", 0))
-                    r = db.query(GSpinReward).get(rid)
+                    r = db.get(GSpinReward, rid)
                     if r:
                         name = r.label
                         db.delete(r); db.commit()
@@ -15408,7 +15408,7 @@ def _bulk_add_challenge_players(db, team_id, player_names_or_ids):
     exact case-insensitive name match, then a partial case-insensitive match.
     Returns (added_count, skipped_list).
     """
-    team = db.query(ChallengeTeam).get(team_id)
+    team = db.get(ChallengeTeam, team_id)
     if not team:
         return 0, ["Team not found"]
     league = team.league
@@ -15438,7 +15438,7 @@ def _bulk_add_challenge_players(db, team_id, player_names_or_ids):
 
         source = None
         if name.isdigit():
-            source = db.query(Player).get(int(name))
+            source = db.get(Player, int(name))
         if not source:
             source = db.query(Player).filter(Player.name.ilike(name)).first()
         if not source:
@@ -15533,7 +15533,7 @@ def _hydrate_team_counts(teams):
 
 
 def _get_league_or_404(db, league_id):
-    league = db.query(ChallengeLeague).get(int(league_id))
+    league = db.get(ChallengeLeague, int(league_id))
     if not league:
         flash("League not found.", "error")
         return None
@@ -15584,7 +15584,7 @@ def admin_challenge_data():
                         log_admin(db, "challenge_league_add", "challenge_league", league.id, league.name)
                         flash(f"✅ Added league {league.name}.", "success")
                 elif action in {"toggle_league", "delete_league", "remove_league_image"}:
-                    league = db.query(ChallengeLeague).get(_int_form("league_id"))
+                    league = db.get(ChallengeLeague, _int_form("league_id"))
                     if not league:
                         flash("League not found.", "error")
                     elif action == "toggle_league":
@@ -15860,7 +15860,7 @@ def admin_challenge_team_detail(league_id, team_id):
                     source = None
                     pid = request.form.get("source_player_id")
                     if pid and str(pid).isdigit():
-                        source = db.query(Player).get(int(pid))
+                        source = db.get(Player, int(pid))
                     if not source:
                         flash("Choose a player to add.", "error")
                     else:
@@ -15987,7 +15987,7 @@ _tournament_recompute_at = {}
 
 def _get_tournament_or_404(db, tournament_id):
     """Return the Tournament for ``tournament_id`` or flash + return None."""
-    t = db.query(Tournament).get(int(tournament_id))
+    t = db.get(Tournament, int(tournament_id))
     if not t:
         flash("Tournament not found.", "error")
     return t
@@ -16005,7 +16005,7 @@ def admin_tournaments_list():
             try:
                 if action == "create_tournament":
                     name = (request.form.get("name") or "").strip()
-                    league = db.query(ChallengeLeague).get(_int_form("league_id")) \
+                    league = db.get(ChallengeLeague, _int_form("league_id")) \
                         if _int_form("league_id") else None
                     # Tournament Format → (league_format, knockout_type, display label).
                     # Each preset maps a SimCricketX-style structure onto the engine.
@@ -16054,7 +16054,7 @@ def admin_tournaments_list():
                         db.add(t)
                         db.flush()
                         for cid in request.form.getlist("team_ids"):
-                            ct = db.query(ChallengeTeam).get(int(cid)) if cid else None
+                            ct = db.get(ChallengeTeam, int(cid)) if cid else None
                             if ct and ct.league_id == league.id:
                                 # Owners (and their co-owners) come free when the
                                 # league was published from a Tournament Draft.
@@ -16097,7 +16097,7 @@ def admin_tournaments_list():
                                 else "admin_tournament_dashboard")
                         return redirect(url_for(dest, tournament_id=t.id))
                 elif action in {"activate", "deactivate", "delete"}:
-                    t = db.query(Tournament).get(_int_form("tournament_id"))
+                    t = db.get(Tournament, _int_form("tournament_id"))
                     if not t:
                         flash("Tournament not found.", "error")
                     elif action == "activate":
@@ -16274,13 +16274,13 @@ def admin_tournament_detail(tournament_id):
                         log_admin(db, "tournament_group_add", "tournament", t.id, gname)
                         flash(f"✅ Added {gname}.", "success")
                 elif action == "set_group_rr":
-                    g = db.query(TournamentGroup).get(_int_form("group_id"))
+                    g = db.get(TournamentGroup, _int_form("group_id"))
                     if g and g.tournament_id == t.id and _allow_structural_edit():
                         rr = (request.form.get("group_rr_mode") or "single").strip()
                         g.rr_mode = "double" if rr == "double" else "single"
                         flash(f"✅ {g.name}: {g.rr_mode} round-robin.", "success")
                 elif action == "delete_group":
-                    g = db.query(TournamentGroup).get(_int_form("group_id"))
+                    g = db.get(TournamentGroup, _int_form("group_id"))
                     if g and g.tournament_id == t.id and _allow_structural_edit():
                         # Unassign its teams first so they remain in the tournament.
                         for tt in db.query(TournamentTeam).filter_by(
@@ -16291,11 +16291,11 @@ def admin_tournament_detail(tournament_id):
                         log_admin(db, "tournament_group_delete", "tournament", t.id, nm)
                         flash(f"Removed {nm}.", "info")
                 elif action == "assign_team_group":
-                    tt = db.query(TournamentTeam).get(_int_form("team_id"))
+                    tt = db.get(TournamentTeam, _int_form("team_id"))
                     gid = _int_form("group_id")
                     if tt and tt.tournament_id == t.id and _allow_structural_edit():
                         if gid:
-                            g = db.query(TournamentGroup).get(gid)
+                            g = db.get(TournamentGroup, gid)
                             tt.group_id = g.id if (g and g.tournament_id == t.id) else None
                         else:
                             tt.group_id = None
@@ -16334,7 +16334,7 @@ def admin_tournament_detail(tournament_id):
                 elif action == "delete_fixture":
                     from services import league_schedule_service
                     try:
-                        fx = db.query(TournamentMatch).get(_int_form("fixture_id"))
+                        fx = db.get(TournamentMatch, _int_form("fixture_id"))
                         if not fx or fx.tournament_id != t.id:
                             raise ValueError("Fixture not found in this tournament.")
                         league_schedule_service.delete_fixture(db, fx.id)
@@ -16345,7 +16345,7 @@ def admin_tournament_detail(tournament_id):
                 elif action == "swap_team":
                     from services import league_schedule_service
                     try:
-                        fx = db.query(TournamentMatch).get(_int_form("fixture_id"))
+                        fx = db.get(TournamentMatch, _int_form("fixture_id"))
                         if not fx or fx.tournament_id != t.id:
                             raise ValueError("Fixture not found in this tournament.")
                         league_schedule_service.swap_fixture_team(
@@ -16355,7 +16355,7 @@ def admin_tournament_detail(tournament_id):
                         db.rollback()
                         flash(f"⚠️ {ve}", "error")
                 elif action == "set_team_owner":
-                    tt = db.query(TournamentTeam).get(_int_form("team_id"))
+                    tt = db.get(TournamentTeam, _int_form("team_id"))
                     if not tt or tt.tournament_id != t.id:
                         flash("Team not found in this tournament.", "error")
                     else:
@@ -16368,7 +16368,7 @@ def admin_tournament_detail(tournament_id):
                               + (f"owner set to {tt.owner_tg_id}."
                                  if tt.owner_tg_id else "owner cleared."), "success")
                 elif action == "set_co_owners":
-                    tt = db.query(TournamentTeam).get(_int_form("team_id"))
+                    tt = db.get(TournamentTeam, _int_form("team_id"))
                     if not tt or tt.tournament_id != t.id:
                         flash("Team not found in this tournament.", "error")
                     else:
@@ -16383,7 +16383,7 @@ def admin_tournament_detail(tournament_id):
                                  else "co-owners cleared."), "success")
                 elif action == "heal_injury":
                     from services import injury_service
-                    row = db.query(TournamentInjury).get(_int_form("injury_id"))
+                    row = db.get(TournamentInjury, _int_form("injury_id"))
                     if not row or row.tournament_id != t.id:
                         flash("Injury not found in this tournament.", "error")
                     else:
@@ -16393,8 +16393,8 @@ def admin_tournament_detail(tournament_id):
                         flash(f"✅ {row.player_name} is declared fit.", "success")
                 elif action == "add_injury":
                     from services import injury_service
-                    tt = db.query(TournamentTeam).get(_int_form("team_id"))
-                    cp = (db.query(ChallengePlayer).get(_int_form("roster_id"))
+                    tt = db.get(TournamentTeam, _int_form("team_id"))
+                    cp = (db.get(ChallengePlayer, _int_form("roster_id"))
                           if _int_form("roster_id") else None)
                     if not tt or tt.tournament_id != t.id:
                         flash("Team not found in this tournament.", "error")
@@ -16420,7 +16420,7 @@ def admin_tournament_detail(tournament_id):
                           "success" if n else "info")
                 elif action == "set_team_home_pitch":
                     from services.league_schedule_service import FIXTURE_PITCHES
-                    tt = db.query(TournamentTeam).get(_int_form("team_id"))
+                    tt = db.get(TournamentTeam, _int_form("team_id"))
                     if not tt or tt.tournament_id != t.id:
                         flash("Team not found in this tournament.", "error")
                     else:
@@ -16445,7 +16445,7 @@ def admin_tournament_detail(tournament_id):
                 elif action == "set_fixture_pitch":
                     from services import league_schedule_service
                     try:
-                        fx = db.query(TournamentMatch).get(_int_form("fixture_id"))
+                        fx = db.get(TournamentMatch, _int_form("fixture_id"))
                         if not fx or fx.tournament_id != t.id:
                             raise ValueError("Fixture not found in this tournament.")
                         league_schedule_service.set_fixture_pitch(
@@ -16457,7 +16457,7 @@ def admin_tournament_detail(tournament_id):
                 elif action == "set_fixture_home":
                     from services import league_schedule_service
                     try:
-                        fx = db.query(TournamentMatch).get(_int_form("fixture_id"))
+                        fx = db.get(TournamentMatch, _int_form("fixture_id"))
                         if not fx or fx.tournament_id != t.id:
                             raise ValueError("Fixture not found in this tournament.")
                         league_schedule_service.set_fixture_home(
@@ -16468,7 +16468,7 @@ def admin_tournament_detail(tournament_id):
                         flash(f"⚠️ {ve}", "error")
                 elif action == "record_result":
                     try:
-                        fx = db.query(TournamentMatch).get(_int_form("fixture_id"))
+                        fx = db.get(TournamentMatch, _int_form("fixture_id"))
                         if not fx or fx.tournament_id != t.id:
                             raise ValueError("Fixture not found in this tournament.")
                         tournament_service.record_manual_result(
@@ -16488,7 +16488,7 @@ def admin_tournament_detail(tournament_id):
                         db.rollback()
                         flash(f"⚠️ {ve}", "error")
                 elif action == "add_team":
-                    ct = db.query(ChallengeTeam).get(_int_form("challenge_team_id")) \
+                    ct = db.get(ChallengeTeam, _int_form("challenge_team_id")) \
                         if _int_form("challenge_team_id") else None
                     if not ct or ct.league_id != t.league_id:
                         flash("Invalid team.", "error")
@@ -16535,7 +16535,7 @@ def admin_tournament_detail(tournament_id):
                         flash(f"⚠️ {ve}", "error")
                 elif action == "rename_lp_team":
                     from services import lp_tournament_service as lp_svc
-                    tt = db.query(TournamentTeam).get(_int_form("team_id"))
+                    tt = db.get(TournamentTeam, _int_form("team_id"))
                     if not tt or tt.tournament_id != t.id or not tt.user_tg_id:
                         flash("Participant not found.", "error")
                     else:
@@ -16556,7 +16556,7 @@ def admin_tournament_detail(tournament_id):
                            "accounts.") if changed
                           else "Every team already has a real name.", "info")
                 elif action == "remove_team":
-                    tt = db.query(TournamentTeam).get(_int_form("team_id"))
+                    tt = db.get(TournamentTeam, _int_form("team_id"))
                     if not tt or tt.tournament_id != t.id:
                         flash("Team not found.", "error")
                     elif tt.user_tg_id:
@@ -16809,7 +16809,7 @@ def admin_tournament_points(tournament_id):
     from services import tournament_service
     db = get_session()
     try:
-        tt = db.query(TournamentTeam).get(_int_form("team_id"))
+        tt = db.get(TournamentTeam, _int_form("team_id"))
         if not tt or tt.tournament_id != tournament_id:
             flash("Team not found in this tournament.", "error")
         else:
@@ -16848,7 +16848,7 @@ def admin_tournament_match_delete(tournament_id, match_row_id):
     from services import tournament_service
     db = get_session()
     try:
-        tm = db.query(TournamentMatch).get(match_row_id)
+        tm = db.get(TournamentMatch, match_row_id)
         if not tm or tm.tournament_id != tournament_id:
             flash("Match not found.", "error")
         else:
@@ -17647,13 +17647,13 @@ def admin_reports():
             try:
                 if action == "mark_read":
                     rid = int(request.form.get("report_id"))
-                    r = db.query(UserReport).get(rid)
+                    r = db.get(UserReport, rid)
                     if r:
                         r.is_read = True; db.commit()
                         flash("Marked as read", "info")
                 elif action == "resolve":
                     rid = int(request.form.get("report_id"))
-                    r = db.query(UserReport).get(rid)
+                    r = db.get(UserReport, rid)
                     if r:
                         r.is_resolved = True; r.is_read = True
                         db.commit()
@@ -17668,9 +17668,9 @@ def admin_reports():
                     if not reply:
                         flash("Reply cannot be empty", "error")
                     else:
-                        r = db.query(UserReport).get(rid)
+                        r = db.get(UserReport, rid)
                         if r:
-                            user = db.query(User).get(r.user_id)
+                            user = db.get(User, r.user_id)
                             if user:
                                 try:
                                     from bot import _send_admin_reply_blocking
@@ -18056,7 +18056,7 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None
             from database import get_session as _gs
             from models import Broadcast as _BC
             s = _gs()
-            bc = s.query(_BC).get(bc_id)
+            bc = s.get(_BC, bc_id)
             if bc:
                 bc.status = "running"
                 s.commit()
@@ -18190,7 +18190,7 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None
         if bc_id is not None and (sent + failed) % 50 == 0:
             try:
                 s = _gs()
-                bc = s.query(_BC).get(bc_id)
+                bc = s.get(_BC, bc_id)
                 if bc:
                     bc.sent_count = sent
                     bc.failed_count = failed
@@ -18202,7 +18202,7 @@ def _run_broadcast_worker(bc_id, chat_ids, message, attachment=None, button=None
     if bc_id is not None:
         try:
             s = _gs()
-            bc = s.query(_BC).get(bc_id)
+            bc = s.get(_BC, bc_id)
             if bc:
                 bc.sent_count = sent
                 bc.failed_count = failed
@@ -18524,11 +18524,11 @@ def admin_markets_overview():
         t_slots = list_trait_market(db)
         p_data = []
         for s in p_slots:
-            player = db.query(Player).get(s.player_id)
+            player = db.get(Player, s.player_id)
             p_data.append({"row": s, "player": player})
         t_data = []
         for s in t_slots:
-            trait = db.query(Trait).get(s.trait_id)
+            trait = db.get(Trait, s.trait_id)
             t_data.append({"row": s, "trait": trait})
         # Who bought which player (or trait), same as the pack feed: the audit
         # rows store ids, so the manager and the card are resolved to names here.
@@ -18695,7 +18695,7 @@ def admin_market_player_add():
         ok, result = add_player_to_market(db, player_id, custom_price=custom_price_int)
         if ok:
             db.commit()
-            player = db.query(Player).get(player_id)
+            player = db.get(Player, player_id)
             label = player.name + (f" [{player.version}]" if player.version else "")
             log_admin(db, "market_add_player", "market", result, label,
                       f"Added to slot {result}")
@@ -18776,7 +18776,7 @@ def admin_market_trait_add():
                                          quantity=quantity_int)
         if ok:
             db.commit()
-            trait = db.query(Trait).get(trait_id)
+            trait = db.get(Trait, trait_id)
             qty_label = "unlimited" if quantity_int <= 0 else f"qty {quantity_int}"
             log_admin(db, "market_add_trait", "market", result, trait.name,
                       f"Added trait to slot {result}, {qty_label}")
@@ -18856,7 +18856,7 @@ def admin_market_trait_edit(slot_id):
 def admin_market_player_delete(slot_id):
     db = get_session()
     try:
-        s = db.query(GlobalPlayerMarket).get(slot_id)
+        s = db.get(GlobalPlayerMarket, slot_id)
         if s:
             db.delete(s); db.commit()
             flash("✅ Slot removed.", "info")
@@ -18873,7 +18873,7 @@ def admin_market_player_delete(slot_id):
 def admin_market_trait_delete(slot_id):
     db = get_session()
     try:
-        s = db.query(GlobalTraitMarket).get(slot_id)
+        s = db.get(GlobalTraitMarket, slot_id)
         if s:
             db.delete(s); db.commit()
             flash("✅ Slot removed.", "info")
@@ -19103,7 +19103,7 @@ def admin_competition_detail(comp_id):
     try:
         from models import ReferralCompetition, Referral
         from services.referral_service import get_leaderboard
-        comp = db.query(ReferralCompetition).get(comp_id)
+        comp = db.get(ReferralCompetition, comp_id)
         if not comp:
             flash("Competition not found.", "error")
             return redirect(url_for("admin_competitions"))
@@ -19130,7 +19130,7 @@ def admin_competition_update(comp_id):
     try:
         from models import ReferralCompetition
         from datetime import datetime as _dt
-        comp = db.query(ReferralCompetition).get(comp_id)
+        comp = db.get(ReferralCompetition, comp_id)
         if not comp:
             flash("Not found.", "error")
             return redirect(url_for("admin_competitions"))
@@ -19204,8 +19204,8 @@ def admin_competition_user(comp_id, user_id):
         from services.referral_service import (
             get_user_invitee_list, get_user_stats,
         )
-        comp = db.query(ReferralCompetition).get(comp_id)
-        target_user = db.query(User).get(user_id)
+        comp = db.get(ReferralCompetition, comp_id)
+        target_user = db.get(User, user_id)
         if not comp or not target_user:
             flash("Not found.", "error")
             return redirect(url_for("admin_competitions"))
@@ -19225,7 +19225,7 @@ def admin_referral_toggle(ref_id):
     db = get_session()
     try:
         from models import Referral
-        ref = db.query(Referral).get(ref_id)
+        ref = db.get(Referral, ref_id)
         if not ref:
             flash("Referral not found.", "error")
             return redirect(request.referrer or url_for("admin_competitions"))
@@ -19324,7 +19324,7 @@ def admin_competition_template_update(tpl_id):
     db = get_session()
     try:
         from models import CompetitionTemplate
-        tpl = db.query(CompetitionTemplate).get(tpl_id)
+        tpl = db.get(CompetitionTemplate, tpl_id)
         if not tpl:
             flash("Template not found.", "error")
             return redirect(url_for("admin_competition_templates"))
@@ -19368,7 +19368,7 @@ def admin_competition_template_delete(tpl_id):
     db = get_session()
     try:
         from models import CompetitionTemplate
-        tpl = db.query(CompetitionTemplate).get(tpl_id)
+        tpl = db.get(CompetitionTemplate, tpl_id)
         if not tpl:
             flash("Template not found.", "error")
             return redirect(url_for("admin_competition_templates"))
@@ -19570,7 +19570,7 @@ def admin_giveaway_detail(gid):
     db = get_session()
     try:
         from models import Giveaway, GiveawayEntry, User
-        g = db.query(Giveaway).get(gid)
+        g = db.get(Giveaway, gid)
         if not g:
             flash("Giveaway not found.", "error")
             return redirect(url_for("admin_giveaways"))
@@ -19604,8 +19604,8 @@ def admin_giveaway_toggle_priority(gid, entry_id):
     try:
         from datetime import datetime as _dt
         from models import Giveaway, GiveawayEntry
-        g = db.query(Giveaway).get(gid)
-        entry = db.query(GiveawayEntry).get(entry_id)
+        g = db.get(Giveaway, gid)
+        entry = db.get(GiveawayEntry, entry_id)
         if not g or not entry or entry.giveaway_id != gid:
             flash("Not found.", "error")
             return redirect(url_for("admin_giveaways"))
@@ -19650,7 +19650,7 @@ def admin_giveaway_cancel(gid):
     db = get_session()
     try:
         from models import Giveaway
-        g = db.query(Giveaway).get(gid)
+        g = db.get(Giveaway, gid)
         if not g:
             flash("Not found.", "error")
             return redirect(url_for("admin_giveaways"))
@@ -19683,7 +19683,7 @@ def admin_giveaway_announce_now(gid):
     try:
         from datetime import datetime as _dt
         from models import Giveaway
-        g = db.query(Giveaway).get(gid)
+        g = db.get(Giveaway, gid)
         if not g:
             flash("Not found.", "error")
             return redirect(url_for("admin_giveaways"))
@@ -19707,7 +19707,7 @@ def admin_giveaway_draw_now(gid):
     try:
         from datetime import datetime as _dt
         from models import Giveaway
-        g = db.query(Giveaway).get(gid)
+        g = db.get(Giveaway, gid)
         if not g:
             flash("Not found.", "error")
             return redirect(url_for("admin_giveaways"))
@@ -20594,7 +20594,7 @@ def admin_career_reset(player_id):
         from services.career_service import (ALL_ATTRS, CAREER_START,
                                              attr_column, recompute_ratings,
                                              total_invested)
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if not player or not player.is_career:
             flash("❌ That isn't a Career Player.", "error")
             return redirect(url_for("admin_career"))
@@ -20635,12 +20635,12 @@ def admin_career_rename(player_id):
         from models import User
         from services.career_service import rename_career_player
 
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if not player or not player.is_career:
             flash("❌ That isn't a Career Player.", "error")
             return redirect(url_for("admin_career"))
 
-        owner = (db.query(User).get(player.career_owner_user_id)
+        owner = (db.get(User, player.career_owner_user_id)
                  if player.career_owner_user_id else None)
         result = rename_career_player(db, player, request.form.get("name"))
         if not result["ok"]:
@@ -20694,7 +20694,7 @@ def admin_career_delete(player_id):
         from models import User
         from services.career_service import delete_career_player, clean_career_name
 
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if not player or not player.is_career:
             flash("❌ That isn't a Career Player.", "error")
             return redirect(url_for("admin_career"))
@@ -20705,7 +20705,7 @@ def admin_career_delete(player_id):
                   f"deletion.", "error")
             return redirect(url_for("admin_career"))
 
-        owner = (db.query(User).get(player.career_owner_user_id)
+        owner = (db.get(User, player.career_owner_user_id)
                  if player.career_owner_user_id else None)
         refund = bool(request.form.get("refund"))
         notify = bool(request.form.get("notify"))
@@ -20867,12 +20867,12 @@ def _career_change_decide(request_id, approve):
         from models import CareerChangeRequest, User
         from services import career_change_service as ccs
 
-        req = db.query(CareerChangeRequest).get(request_id)
+        req = db.get(CareerChangeRequest, request_id)
         if req is None:
             flash("❌ No such request.", "error")
             return redirect(url_for("admin_career_changes"))
 
-        owner = db.query(User).get(req.user_id) if req.user_id else None
+        owner = db.get(User, req.user_id) if req.user_id else None
         note = (request.form.get("note") or "").strip()
         reviewer = session.get("admin_user") or "admin"
         old_name = req.old_name
@@ -20964,7 +20964,7 @@ def admin_career_grant_change(player_id):
         from models import User
         from services import career_change_service as ccs
 
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if not player or not player.is_career:
             flash("❌ That isn't a Career Player.", "error")
             return redirect(url_for("admin_career"))
@@ -20974,7 +20974,7 @@ def admin_career_grant_change(player_id):
             count = 1
 
         total = ccs.grant_free_change(db, player, count)
-        owner = (db.query(User).get(player.career_owner_user_id)
+        owner = (db.get(User, player.career_owner_user_id)
                  if player.career_owner_user_id else None)
         log_admin(db, "career_change_grant", target_type="player",
                   target_id=player.id, target_name=player.name,
@@ -21202,7 +21202,7 @@ def admin_card_template_preview(player_id):
     so the admin can preview before activating it."""
     db = get_session()
     try:
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if not player:
             return "Player not found", 404
         from services.card_generator import (generate_template_card,
@@ -21287,7 +21287,7 @@ def admin_events_toggle(event_id):
     db = get_session()
     try:
         from models import Event
-        ev = db.query(Event).get(event_id)
+        ev = db.get(Event, event_id)
         if ev:
             ev.is_active = not ev.is_active
             db.commit()
@@ -21306,7 +21306,7 @@ def admin_events_delete(event_id):
     db = get_session()
     try:
         from models import Event
-        ev = db.query(Event).get(event_id)
+        ev = db.get(Event, event_id)
         if ev:
             db.delete(ev)
             db.commit()
@@ -21509,7 +21509,7 @@ def admin_fantasy_detail(league_id):
     try:
         from models import FantasyLeague, FantasyEntry, FantasyMatch, User, Player
         from services import fantasy_service
-        league = db.query(FantasyLeague).get(league_id)
+        league = db.get(FantasyLeague, league_id)
         if not league:
             flash("League not found.", "error")
             return redirect(url_for("admin_fantasy_list"))
@@ -21549,7 +21549,7 @@ def admin_fantasy_broadcast(league_id):
     try:
         from models import FantasyLeague
         from services import fantasy_service
-        league = db.query(FantasyLeague).get(league_id)
+        league = db.get(FantasyLeague, league_id)
         if not league:
             flash("League not found.", "error")
             return redirect(url_for("admin_fantasy_list"))
@@ -21624,7 +21624,7 @@ def admin_fantasy_settings(league_id):
     try:
         from models import FantasyLeague
         from datetime import datetime as _dt
-        league = db.query(FantasyLeague).get(league_id)
+        league = db.get(FantasyLeague, league_id)
         if not league:
             flash("League not found.", "error")
             return redirect(url_for("admin_fantasy_list"))
@@ -21655,7 +21655,7 @@ def admin_fantasy_players(league_id):
     try:
         from models import FantasyLeague, Player
         from services import fantasy_service
-        league = db.query(FantasyLeague).get(league_id)
+        league = db.get(FantasyLeague, league_id)
         if not league:
             flash("League not found.", "error")
             return redirect(url_for("admin_fantasy_list"))
@@ -21723,7 +21723,7 @@ def admin_fantasy_delete(league_id):
         from models import FantasyLeague, FantasyMatch, FantasyEntry
         db.query(FantasyMatch).filter_by(league_id=league_id).delete()
         db.query(FantasyEntry).filter_by(league_id=league_id).delete()
-        lg = db.query(FantasyLeague).get(league_id)
+        lg = db.get(FantasyLeague, league_id)
         if lg:
             db.delete(lg)
         db.commit()
@@ -21742,7 +21742,7 @@ def admin_fantasy_match_new(league_id):
     db = get_session()
     try:
         from models import FantasyLeague, FantasyMatch
-        league = db.query(FantasyLeague).get(league_id)
+        league = db.get(FantasyLeague, league_id)
         if not league:
             flash("League not found.", "error")
             return redirect(url_for("admin_fantasy_list"))
@@ -21774,8 +21774,8 @@ def admin_fantasy_match_scores(league_id, match_id):
     db = get_session()
     try:
         from models import FantasyLeague, FantasyMatch, FantasyPlayerScore, Player
-        league = db.query(FantasyLeague).get(league_id)
-        fmatch = db.query(FantasyMatch).get(match_id)
+        league = db.get(FantasyLeague, league_id)
+        fmatch = db.get(FantasyMatch, match_id)
         if not league or not fmatch or fmatch.league_id != league_id:
             flash("Not found.", "error")
             return redirect(url_for("admin_fantasy_list"))
@@ -21827,7 +21827,7 @@ def admin_fantasy_match_delete(league_id, match_id):
     try:
         from models import FantasyMatch, FantasyPlayerScore
         db.query(FantasyPlayerScore).filter_by(fantasy_match_id=match_id).delete()
-        fm = db.query(FantasyMatch).get(match_id)
+        fm = db.get(FantasyMatch, match_id)
         if fm and fm.league_id == league_id:
             db.delete(fm)
         db.commit()
@@ -21847,12 +21847,12 @@ def admin_fantasy_entry_edit(league_id, entry_id):
     try:
         from models import FantasyLeague, FantasyEntry, FantasyPick, Player, User
         from services import fantasy_service
-        league = db.query(FantasyLeague).get(league_id)
-        entry = db.query(FantasyEntry).get(entry_id)
+        league = db.get(FantasyLeague, league_id)
+        entry = db.get(FantasyEntry, entry_id)
         if not league or not entry or entry.league_id != league_id:
             flash("Not found.", "error")
             return redirect(url_for("admin_fantasy_list"))
-        user = db.query(User).get(entry.user_id)
+        user = db.get(User, entry.user_id)
 
         if request.method == "POST":
             try:

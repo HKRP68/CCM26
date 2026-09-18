@@ -59,7 +59,7 @@ def record_pick(session, bowlout_id, user_id, player_id, player_name, bowl_ratin
     has 5 picks.
     """
     from models import Bowlout, BowloutBall
-    bo = session.query(Bowlout).get(bowlout_id)
+    bo = session.get(Bowlout, bowlout_id)
     if not bo:
         return -1
 
@@ -87,7 +87,7 @@ def record_pick(session, bowlout_id, user_id, player_id, player_name, bowl_ratin
 def advance_picker(session, bowlout_id):
     """Switch to the other user as picker, or mark ready to bowl if all done."""
     from models import Bowlout
-    bo = session.query(Bowlout).get(bowlout_id)
+    bo = session.get(Bowlout, bowlout_id)
     if not bo:
         return None
     u1 = count_picks(session, bowlout_id, bo.user1_id)
@@ -115,7 +115,7 @@ def bowl_next(session, bowlout_id):
     Updates the parent Bowlout's hit counters and ball pointer.
     """
     from models import Bowlout, BowloutBall
-    bo = session.query(Bowlout).get(bowlout_id)
+    bo = session.get(Bowlout, bowlout_id)
     if not bo or bo.status != "bowling":
         return None
 
@@ -162,7 +162,7 @@ def is_match_decided_after(session, bowlout_id):
     Returns winner user_id, or None if undecided / needs more balls.
     """
     from models import Bowlout, BowloutBall
-    bo = session.query(Bowlout).get(bowlout_id)
+    bo = session.get(Bowlout, bowlout_id)
     if not bo:
         return None
 
@@ -190,7 +190,7 @@ def queue_sudden_death(session, bowlout_id, user1_pick, user2_pick):
     Returns the two new ball_index values.
     """
     from models import Bowlout, BowloutBall
-    bo = session.query(Bowlout).get(bowlout_id)
+    bo = session.get(Bowlout, bowlout_id)
     if not bo:
         return None
 
@@ -228,7 +228,7 @@ def render_scoreboard(session, bowlout_id, max_pairs=5):
     show the bowler names with ⚪ for "not yet bowled".
     """
     from models import Bowlout, BowloutBall
-    bo = session.query(Bowlout).get(bowlout_id)
+    bo = session.get(Bowlout, bowlout_id)
     if not bo:
         return ""
 

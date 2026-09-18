@@ -31,7 +31,7 @@ def get_base_id(player_id, session=None):
         session = get_session()
         own = True
     try:
-        p = session.query(Player).get(player_id)
+        p = session.get(Player, player_id)
         if not p:
             return player_id
         return p.parent_player_id or p.id
@@ -53,12 +53,12 @@ def get_all_versions(session: Session, base_id):
 
     Ordered: base first, then variants by id. Deduped by row id.
     """
-    base = session.query(Player).get(base_id)
+    base = session.get(Player, base_id)
     if not base:
         return []
     # If the supplied id is actually a variant, walk up to its base
     if base.parent_player_id:
-        parent = session.query(Player).get(base.parent_player_id)
+        parent = session.get(Player, base.parent_player_id)
         if parent:
             base = parent
 
@@ -90,7 +90,7 @@ def user_owns_any_version(session: Session, user_id, player_id):
     Uses the same edition grouping as get_all_versions so the "can't own two
     editions" rule stays consistent across linked variants AND same-named rows.
     """
-    base = session.query(Player).get(player_id)
+    base = session.get(Player, player_id)
     if not base:
         return False
     base_id = base.parent_player_id or base.id

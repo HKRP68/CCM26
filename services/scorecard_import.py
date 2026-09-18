@@ -777,7 +777,7 @@ def plan_import(session, fixture, parsed):
             f"Both innings resolved to {resolved[0].name!r} — check the team "
             "names on the innings headers.")
 
-    tour = session.query(Tournament).get(fixture.tournament_id)
+    tour = session.get(Tournament, fixture.tournament_id)
     max_overs = int(tour.overs) if tour and tour.overs else None
     warnings = []
     innings_out = []

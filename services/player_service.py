@@ -370,7 +370,7 @@ def purge_player_references(session, player, *, refund=True):
                 t.receiver_roster_id = None
         session.flush()
         for row in roster_rows:
-            user = session.query(User).get(row.user_id)
+            user = session.get(User, row.user_id)
             if user:
                 touched_users.add(user.id)
                 user.roster_count = max(0, (user.roster_count or 0) - 1)

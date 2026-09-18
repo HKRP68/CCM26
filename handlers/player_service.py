@@ -23,7 +23,7 @@ def get_random_player_by_rating_range(session: Session, low: int, high: int) -> 
     if not pick:
         return None
     # Fetch single ORM row (cheap — single row, indexed lookup)
-    return session.query(Player).get(pick["id"])
+    return session.get(Player, pick["id"])
 
 
 def _get_rarity_distribution(session: Session):
@@ -69,7 +69,7 @@ def _pick_in_range_strict(session: Session, low: int, high: int) -> Player | Non
     if not pool:
         return None
     pick = random.choice(pool)
-    return session.query(Player).get(pick["id"])
+    return session.get(Player, pick["id"])
 
 
 def get_random_player_by_rarity(session: Session) -> Player | None:

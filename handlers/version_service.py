@@ -29,7 +29,7 @@ def get_base_id(player_id, session=None):
         session = get_session()
         own = True
     try:
-        p = session.query(Player).get(player_id)
+        p = session.get(Player, player_id)
         if not p:
             return player_id
         return p.parent_player_id or p.id
@@ -42,12 +42,12 @@ def get_all_versions(session: Session, base_id):
     """Return all rows that are versions of this base (including the base itself).
     Ordered: base first, then variants by id.
     """
-    base = session.query(Player).get(base_id)
+    base = session.get(Player, base_id)
     if not base:
         return []
     # If the supplied id is actually a variant, walk up to its base
     if base.parent_player_id:
-        base = session.query(Player).get(base.parent_player_id)
+        base = session.get(Player, base.parent_player_id)
         if not base:
             return []
 
@@ -60,7 +60,7 @@ def get_all_versions(session: Session, base_id):
 
 def user_owns_any_version(session: Session, user_id, player_id):
     """True if the user has a roster entry for the base or any variant."""
-    base = session.query(Player).get(player_id)
+    base = session.get(Player, player_id)
     if not base:
         return False
     base_id = base.parent_player_id or base.id

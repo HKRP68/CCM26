@@ -199,7 +199,7 @@ def find_players_for_search(session, search_term: str,
              .first())
     if exact:
         base_id = exact.parent_player_id or exact.id
-        base = session.query(Player).get(base_id)
+        base = session.get(Player, base_id)
         return [base or exact]
 
     rows = (not_career(session.query(Player))
@@ -214,7 +214,7 @@ def find_players_for_search(session, search_term: str,
         if base_id in seen:
             continue
         base = (p if p.parent_player_id is None
-                else (session.query(Player).get(base_id) or p))
+                else (session.get(Player, base_id) or p))
         seen[base_id] = base
         if len(seen) >= limit:
             break
