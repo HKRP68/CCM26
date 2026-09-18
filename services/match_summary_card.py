@@ -123,10 +123,14 @@ POTM_Y = 794
 POTM_H = 125
 POTM_TROPHY_CX = 102
 POTM_TITLE_X = 153
-POTM_PHOTO = (318, 480)                 # photo band, x
-POTM_NAME_X = 508
+POTM_PHOTO = (318, 480)                 # photo band, x — only when one exists
+POTM_NAME_X = 508                       # name's left edge WITH a portrait…
+POTM_NAME_X_BARE = 330                  # …and without one, where the band was
+POTM_DIVIDER_X = 772                    # gold rule before the showcase
 POTM_SHOWCASE_CX = 1105
-POTM_METRIC_EDGES = (790, 912, 1042, 1160, 1278, 1420)
+# BATTING and BOWLING carry a combined figure like "52*(31)", so the first two
+# columns are wider than the three single numbers that follow.
+POTM_METRIC_EDGES = (790, 935, 1075, 1190, 1305, 1420)
 POTM_SCRIPT_CX = 1548
 
 _ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -888,28 +892,43 @@ def _draw_potm(img, draw, ts, *, name, team, photo_png, metrics, flourish):
         img.alpha_composite(photo, (s((POTM_PHOTO[0] + POTM_PHOTO[1]) / 2) - photo.width // 2,
                                     s(y1) - photo.height))
 
+    # The photo band is only reserved when there is actually a portrait. Most
+    # players have none, and holding 162px open for a picture that is not
+    # coming left a dead gap between the title and the name.
+    name_x = POTM_NAME_X if photo else POTM_NAME_X_BARE
+    name_w = POTM_DIVIDER_X - name_x - 24
+
     parts = str(name or "—").strip().split()
     first, last = (" ".join(parts[:-1]), parts[-1]) if len(parts) > 1 else ("", parts[0] if parts else "—")
-    nx, ny = _xy(ts, "potm_name", POTM_NAME_X, (y0 + y1) / 2)
-    name_w = POTM_METRIC_EDGES[0] - POTM_NAME_X - 116
+    nx, ny = _xy(ts, "potm_name", name_x, (y0 + y1) / 2)
+
+    # Three lines in a 125px strip, so the leading is set deliberately rather
+    # than by eye: first name and team sit clear of the surname's cap height.
     if first:
-        _draw_text(draw, (nx, ny - 32), first.upper(), _font(19, family="display"),
-                   GOLD_PALE, tracking=2.2, anchor="lm")
-    f_last = _fitted_font(draw, last.upper(), "headline", 44, name_w, min_size=22)
+        first_txt = _fit(draw, first.upper(), _font(19, family="display"),
+                         name_w, 3)
+        _draw_text(draw, (nx, ny - 34), first_txt, _font(19, family="display"),
+                   GOLD_PALE, tracking=2.4, anchor="lm", weight=0.25)
+    f_last = _fitted_font(draw, last.upper(), "headline", 48, name_w, min_size=22)
     _draw_italic_text(img, (nx, ny + 6), last.upper(), f_last, (*WHITE, 255),
                       anchor="lm")
     if team:
-        team_txt = _fit(draw, str(team).upper(), _font(13, family="display"),
-                        name_w, 4)
-        _draw_text(draw, (nx, ny + 36), team_txt, _font(13, family="display"),
-                   METRIC_LABEL, tracking=2.0, anchor="lm")
+        team_f = _font(14, family="display")
+        team_txt = _fit(draw, str(team).upper(), team_f, name_w, 4)
+        _draw_text(draw, (nx, ny + 38), team_txt, team_f, (168, 190, 216),
+                   tracking=2.2, anchor="lm", weight=0.2)
+
+    # A gold rule closing the identity block. Without it the name simply drifts
+    # left into the space the photo used to hold.
+    draw.rectangle(sbox(POTM_DIVIDER_X, y0 + 26, POTM_DIVIDER_X + 2, y1 - 26),
+                   fill=(*GOLD, 170))
 
     _draw_text(draw, (POTM_SHOWCASE_CX, y0 + 20),
                _txt(ts, "potm_label", "PERFORMANCE SHOWCASE").upper(),
                _font_for(ts, "potm_label", 15, family="display"), GOLD_PALE,
                tracking=3.0, anchor="mm")
 
-    f_value = _font_for(ts, "potm_value", 31, family="headline")
+    base_value = 31 + int(_setting(ts, "potm_value").get("size", 0) or 0)
     f_label = _font(12, family="display")
     for i, (value, label) in enumerate(metrics[:5]):
         x0, x1 = POTM_METRIC_EDGES[i], POTM_METRIC_EDGES[i + 1]
@@ -917,8 +936,13 @@ def _draw_potm(img, draw, ts, *, name, team, photo_png, metrics, flourish):
             draw.line([(s(x0), s(y0 + 42)), (s(x0), s(y1 - 22))],
                       fill=(255, 255, 255, 62), width=s(1))
         cx = (x0 + x1) / 2
-        _draw_italic_text(img, (cx, y0 + 66), str(value).upper(), f_value,
-                          (*WHITE, 255), anchor="mm")
+        # "52*(31)" is far wider than "52", and a long one would otherwise run
+        # into its column's divider — so each value is fitted to its own column.
+        text = str(value).upper()
+        f_value = _fitted_font(draw, text, "headline", base_value,
+                               (x1 - x0) - 28, min_size=15)
+        _draw_italic_text(img, (cx, y0 + 66), text, f_value, (*WHITE, 255),
+                          anchor="mm")
         _draw_text(draw, (cx, y0 + 92), str(label).upper(), f_label,
                    METRIC_LABEL, tracking=1.6, anchor="mm")
 
@@ -932,11 +956,25 @@ def _draw_potm(img, draw, ts, *, name, team, photo_png, metrics, flourish):
 # Entry point
 # ══════════════════════════════════════════════════════════════════════
 
-# "52(31)" or "52* (31)" — but NOT the trailing "(4)" of a bowling figure like
-# "4/27 (4)", which would otherwise read as 27 runs off 4 balls. The lookbehind
-# is what keeps a bowling award out of the batting branch.
+# Every stats-string format the callers actually send, because the showcase has
+# to fill from whichever one arrives:
+#
+#   /playmatch   "🏏 52(31) | 🎳 4/27 (4)"     both halves
+#   /cipl        "52(31) | 4/27 (4)"           both halves, no emoji
+#   /sim         "52 runs, 3 wkts"             words, no balls or overs
+#   Arena        "12 runs • 2 wickets"         words
+#   designer     "4/25 (4 OVERS)"              bowling plus an overs word
+#
+# The lookbehind on the batting pattern is load-bearing: without it the trailing
+# "(4)" of "4/27 (4)" reads as 27 runs off 4 balls.
 _BAT_STAT_RE = re.compile(r"(?<![\d/\-])(\d+)\s*\*?\s*\((\d+)\)")
 _BOWL_STAT_RE = re.compile(r"(\d+)\s*[-/]\s*(\d+)")
+_RUNS_WORD_RE = re.compile(r"(\d+)\s*runs?\b", re.I)
+_WKTS_WORD_RE = re.compile(r"(\d+)\s*(?:wkts?|wickets?)\b", re.I)
+_OVERS_WORD_RE = re.compile(r"(\d+(?:\.\d+)?)\s*overs?\b", re.I)
+# The overs a bowling figure trails in bare parentheses — "4/27 (4)". Anchored
+# to the figure so it cannot pick up a batter's balls-faced bracket.
+_BOWL_OVERS_RE = re.compile(r"\d+\s*[-/]\s*\d+\s*\((\d+(?:\.\d+)?)\)")
 
 
 def _num(value):
@@ -953,46 +991,73 @@ def _potm_metrics(potm_stats, runs, balls, fours, sixes, sr, *,
                   dots=None):
     """Five (value, label) pairs for the performance showcase.
 
-    Values the payload carries win; anything missing is recovered from the
-    ``potm_stats`` display string, so cards archived before those keys existed
-    still fill the strip. A bowling Player of the Match gets a bowling
-    showcase — five dashes under RUNS/BALLS/FOURS/SIXES is not a performance.
+    The first two columns always carry the two things that describe a cricket
+    performance: what they scored, ``runs(balls)``, and what they took,
+    ``wickets/runs-conceded``. An all-rounder gets both — the old version
+    branched to one discipline and threw the other half away, even when the
+    payload carried it.
+
+    The last three adapt to what the player actually did, so a bowler is never
+    shown FOURS and SIXES and a batter is never shown ECONOMY.
+
+    Payload values always win. Anything missing is recovered from the
+    ``potm_stats`` display string, which is the only thing some callers send and
+    is all that archived rows have.
     """
     stats = str(potm_stats or "")
+
+    # ── batting ──
     if runs is None or balls is None:
         m = _BAT_STAT_RE.search(stats)
         if m:
             runs = runs if runs is not None else m.group(1)
             balls = balls if balls is not None else m.group(2)
+    if runs is None:
+        m = _RUNS_WORD_RE.search(stats)
+        if m:
+            runs = m.group(1)
+
+    # ── bowling ──
     if wickets is None or conceded is None:
         m = _BOWL_STAT_RE.search(stats)
-        if m and not _BAT_STAT_RE.search(stats):
+        if m:
             wickets = wickets if wickets is not None else m.group(1)
             conceded = conceded if conceded is not None else m.group(2)
+    if wickets is None:
+        m = _WKTS_WORD_RE.search(stats)
+        if m:
+            wickets = m.group(1)
+    if overs is None:
+        m = _OVERS_WORD_RE.search(stats) or _BOWL_OVERS_RE.search(stats)
+        if m:
+            overs = m.group(1)
 
-    batted = _num(runs) is not None and _num(balls) is not None
+    batted = _num(runs) is not None
     bowled = _num(wickets) is not None
-    if bowled and not batted:
-        if economy is None and _num(conceded) is not None and _num(overs):
-            economy = round(_num(conceded) / _num(overs), 2)
-        return [
-            (wickets if wickets not in (None, "") else DASH, "WICKETS"),
-            (conceded if conceded not in (None, "") else DASH, "RUNS"),
-            (overs if overs not in (None, "") else DASH, "OVERS"),
-            (economy if economy not in (None, "") else DASH, "ECONOMY"),
-            (dots if dots not in (None, "") else DASH, "DOTS"),
-        ]
+    if sr is None and _num(runs) is not None and _num(balls):
+        sr = round(_num(runs) * 100.0 / _num(balls), 1)
+    if economy is None and _num(conceded) is not None and _num(overs):
+        economy = round(_num(conceded) / _num(overs), 2)
 
-    if sr is None and batted:
-        sr = round(_num(runs) * 100.0 / _num(balls), 1) if _num(balls) else None
+    def cell(value):
+        return value if value not in (None, "") else DASH
+
     star = "*" if "*" in stats else ""
-    return [
-        (f"{runs}{star}" if runs not in (None, "") else DASH, "RUNS"),
-        (balls if balls not in (None, "") else DASH, "BALLS"),
-        (fours if fours not in (None, "") else DASH, "FOURS"),
-        (sixes if sixes not in (None, "") else DASH, "SIXES"),
-        (sr if sr not in (None, "") else DASH, "STRIKE RATE"),
-    ]
+    batting = (f"{runs}{star}({balls})" if _num(balls) is not None
+               else f"{runs}{star}") if batted else DASH
+    bowling = (f"{wickets}/{conceded}" if _num(conceded) is not None
+               else f"{wickets}") if bowled else DASH
+
+    if batted and bowled:
+        tail = [(cell(sr), "S/R"), (cell(overs), "OVERS"), (cell(economy), "ECON")]
+    elif bowled:
+        tail = [(cell(overs), "OVERS"), (cell(economy), "ECON"), (cell(dots), "DOTS")]
+    else:
+        # Also the "neither" case: a card with no numbers at all still reads as
+        # a batting showcase full of dashes rather than something stranger.
+        tail = [(cell(fours), "FOURS"), (cell(sixes), "SIXES"), (cell(sr), "S/R")]
+
+    return [(batting, "BATTING"), (bowling, "BOWLING")] + tail
 
 
 def _flourish(potm_stats, runs, wickets):

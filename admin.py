@@ -10483,6 +10483,10 @@ def _build_match_summary_image(match, sc, result_text, arena, pom,
             potm_team=pom_team,
             potm_stats=pom_stats,
             potm_impact=pom.get("impact_points") if isinstance(pom, dict) else None,
+            # The showcase's own numbers, dug out of the arena stat tables.
+            **_arena_potm_numbers(
+                arena, pom.get("roster_id") if isinstance(pom, dict) else None,
+                pom_name),
             top_scorer=top_scorer,
             top_wicket=top_wicket,
             top_per_team=top_per_team,
@@ -10513,6 +10517,60 @@ def _arena_stat(stats, roster_id):
     """Read an Arena stat row regardless of JSON/stringified roster keys."""
     stats = stats or {}
     return stats.get(roster_id) or stats.get(str(roster_id)) or {}
+
+
+def _arena_potm_numbers(arena, roster_id, name=None):
+    """The Player of the Match's raw batting and bowling numbers.
+
+    ``_pick_player_of_match`` hands back aggregate runs and wickets but no
+    balls, runs conceded, overs or boundaries, so the summary card's
+    performance showcase had nothing to fill itself with and rendered dashes.
+    Those numbers are right here in the arena's own stat tables — this pulls
+    them out by roster id, falling back to the player's name when the award
+    came from a payload that carried no id.
+
+    Key names match ``handlers.match._potm_showcase`` so the renderer needs no
+    special case for where a card came from.
+    """
+    pairs = (
+        (arena.get("inn1_bat_xi"), arena.get("inn1_bat_stats"), "bat"),
+        (arena.get("inn1_bowl_xi"), arena.get("inn1_bowl_stats"), "bowl"),
+        (arena.get("bat_xi"), arena.get("bat_stats"), "bat"),
+        (arena.get("bowl_xi"), arena.get("bowl_stats"), "bowl"),
+    )
+    wanted = str(name or "").strip().lower()
+    bat, bowl, player_id = {}, {}, None
+    for xi, stats, kind in pairs:
+        for player in xi or []:
+            rid = player.get("roster_id")
+            same = (roster_id is not None and rid == roster_id) or (
+                wanted and str(player.get("name", "")).strip().lower() == wanted)
+            if not same:
+                continue
+            player_id = player.get("player_id", player_id)
+            row = _arena_stat(stats, rid)
+            target = bat if kind == "bat" else bowl
+            for key, value in (row or {}).items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    target[key] = target.get(key, 0) + value
+
+    out = {}
+    if player_id is not None:
+        out["potm_player_id"] = player_id
+    if bat.get("balls"):
+        balls = int(bat["balls"])
+        out.update(potm_runs=int(bat.get("runs", 0)), potm_balls=balls,
+                   potm_fours=int(bat.get("fours", 0)),
+                   potm_sixes=int(bat.get("sixes", 0)),
+                   potm_sr=round(int(bat.get("runs", 0)) * 100.0 / balls, 1))
+    if bowl.get("balls"):
+        balls = int(bowl["balls"])
+        overs = f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6)
+        out.update(potm_wickets=int(bowl.get("wickets", 0)),
+                   potm_conceded=int(bowl.get("runs", 0)), potm_overs=overs,
+                   potm_dots=(int(bowl["dots"]) if "dots" in bowl else None),
+                   potm_economy=round(int(bowl.get("runs", 0)) * 6.0 / balls, 2))
+    return out
 
 
 def _arena_overs(state):

@@ -106,6 +106,26 @@ class RenderTests(unittest.TestCase):
     def test_a_very_long_team_name_still_renders(self):
         self._render(inn1_team="Himanshu's Absolutely Enormous Super Kings XI")
 
+    def test_it_renders_for_a_bowling_award(self):
+        self._render(potm_stats="5-21", potm_runs=None, potm_balls=None,
+                     potm_fours=None, potm_sixes=None, potm_sr=None,
+                     potm_wickets=5, potm_conceded=21, potm_overs=4)
+
+    def test_it_renders_for_an_all_rounder(self):
+        self._render(potm_stats="🏏 52(31) | 🎳 4/27 (4)",
+                     potm_wickets=4, potm_conceded=27, potm_overs="4")
+
+    def test_it_renders_with_a_portrait(self):
+        """The name block has two layouts: with a portrait the name keeps its
+        place, without one it slides left into the empty photo band."""
+        self._render(potm_photo_png=_png((300, 380)))
+
+    def test_it_renders_with_figures_wide_enough_to_crowd_a_column(self):
+        """Each showcase value is fitted to its own column, so a double-century
+        or a ten-for shrinks rather than running into its divider."""
+        self._render(potm_stats="148* (52)", potm_runs=148, potm_balls=52,
+                     potm_wickets=10, potm_conceded=137, potm_overs="12.3")
+
     def test_it_renders_with_nothing_but_the_required_arguments(self):
         png = card.generate_match_summary(
             inn1_team="A", inn1_runs=1, inn1_wickets=0, inn1_overs="1",
@@ -134,40 +154,93 @@ class ArchivedPayloadTests(unittest.TestCase):
 
 
 class ShowcaseTests(unittest.TestCase):
-    def test_a_batting_award_shows_batting_numbers(self):
-        metrics = card._potm_metrics("52* (31)", 52, 31, 4, 2, None)
-        self.assertEqual([label for _value, label in metrics],
-                         ["RUNS", "BALLS", "FOURS", "SIXES", "STRIKE RATE"])
-        self.assertEqual(metrics[0][0], "52*")
-        self.assertEqual(metrics[4][0], 167.7)
+    """The performance showcase.
 
-    def test_a_bowling_award_shows_bowling_numbers(self):
-        """Five dashes under RUNS/BALLS/FOURS/SIXES is not a performance."""
+    Columns 1 and 2 always carry the two numbers that describe a cricket
+    performance — runs(balls) and wickets/conceded — because an all-rounder used
+    to have one of them silently thrown away. The last three adapt, so a bowler
+    is never shown FOURS and a batter is never shown ECONOMY.
+    """
+
+    def labels(self, metrics):
+        return [label for _value, label in metrics]
+
+    def values(self, metrics):
+        return [value for value, _label in metrics]
+
+    def test_an_all_rounder_shows_both_disciplines(self):
+        metrics = card._potm_metrics("🏏 52(31) | 🎳 4/27 (4)", 52, 31, 4, 2, None,
+                                     wickets=4, conceded=27, overs="4")
+        self.assertEqual(self.labels(metrics),
+                         ["BATTING", "BOWLING", "S/R", "OVERS", "ECON"])
+        self.assertEqual(self.values(metrics)[:2], ["52(31)", "4/27"])
+
+    def test_a_batter_gets_boundaries_after_the_two(self):
+        metrics = card._potm_metrics("52* (31)", 52, 31, 4, 2, 167.7)
+        self.assertEqual(self.labels(metrics),
+                         ["BATTING", "BOWLING", "FOURS", "SIXES", "S/R"])
+        self.assertEqual(self.values(metrics)[0], "52*(31)")
+        self.assertEqual(self.values(metrics)[1], card.DASH)
+
+    def test_a_bowler_gets_bowling_stats_after_the_two(self):
         metrics = card._potm_metrics("5-21", None, None, None, None, None,
-                                     wickets=5, conceded=21, overs=4)
-        self.assertEqual([label for _value, label in metrics],
-                         ["WICKETS", "RUNS", "OVERS", "ECONOMY", "DOTS"])
-        self.assertEqual(metrics[3][0], 5.25)
+                                     wickets=5, conceded=21, overs=4, dots=11)
+        self.assertEqual(self.labels(metrics),
+                         ["BATTING", "BOWLING", "OVERS", "ECON", "DOTS"])
+        self.assertEqual(self.values(metrics)[0], card.DASH)
+        self.assertEqual(self.values(metrics)[1], "5/21")
+        self.assertEqual(self.values(metrics)[3], 5.25)
 
-    def test_the_numbers_are_recovered_from_an_archived_stats_string(self):
-        metrics = card._potm_metrics("🏏 52(31)", None, None, None, None, None)
-        self.assertEqual(metrics[0][0], "52")
-        self.assertEqual(metrics[1][0], "31")
-
-    def test_bowling_figures_are_recovered_from_an_archived_stats_string(self):
-        metrics = card._potm_metrics("🎳 4/27 (4)", None, None, None, None, None)
-        self.assertEqual(metrics[0][1], "WICKETS")
-        self.assertEqual(metrics[0][0], "4")
-
-    def test_an_all_rounder_who_batted_keeps_the_batting_showcase(self):
-        metrics = card._potm_metrics("🏏 52(31) | 🎳 4/27 (4)",
-                                     None, None, None, None, None)
-        self.assertEqual(metrics[0][1], "RUNS")
-        self.assertEqual(metrics[0][0], "52")
+    def test_the_not_out_star_rides_on_the_batting_figure(self):
+        metrics = card._potm_metrics("52* (31)", 52, 31, None, None, None)
+        self.assertEqual(self.values(metrics)[0], "52*(31)")
 
     def test_nothing_at_all_degrades_to_dashes(self):
         metrics = card._potm_metrics(None, None, None, None, None, None)
-        self.assertTrue(all(value == card.DASH for value, _label in metrics))
+        self.assertTrue(all(value == card.DASH for value in self.values(metrics)))
+        self.assertEqual(self.labels(metrics)[:2], ["BATTING", "BOWLING"])
+
+    # ── the stats strings the live callers actually send ──
+
+    def test_the_playmatch_string_fills_both(self):
+        metrics = card._potm_metrics("🏏 52(31) | 🎳 4/27 (4)",
+                                     None, None, None, None, None)
+        self.assertEqual(self.values(metrics)[:2], ["52(31)", "4/27"])
+        self.assertEqual(self.values(metrics)[3], "4")   # overs, from "(4)"
+
+    def test_the_cipl_string_fills_both(self):
+        """This is the one the old guard threw away: it refused to read a
+        bowling figure out of any string that also held a batting one."""
+        metrics = card._potm_metrics("52(31) | 4/27 (4)",
+                                     None, None, None, None, None)
+        self.assertEqual(self.values(metrics)[:2], ["52(31)", "4/27"])
+
+    def test_the_sim_string_parses(self):
+        metrics = card._potm_metrics("52 runs, 3 wkts",
+                                     None, None, None, None, None)
+        self.assertEqual(self.values(metrics)[:2], ["52", "3"])
+
+    def test_the_arena_string_parses(self):
+        metrics = card._potm_metrics("12 runs • 2 wickets",
+                                     None, None, None, None, None)
+        self.assertEqual(self.values(metrics)[:2], ["12", "2"])
+
+    def test_the_designer_preview_string_parses(self):
+        metrics = card._potm_metrics("4/25 (4 OVERS)",
+                                     None, None, None, None, None)
+        self.assertEqual(self.values(metrics)[1], "4/25")
+        self.assertEqual(self.labels(metrics)[2], "OVERS")
+
+    def test_a_bowling_figure_is_not_read_as_runs_off_balls(self):
+        """The lookbehind that stops "4/27 (4)" becoming 27 runs off 4 balls."""
+        metrics = card._potm_metrics("🎳 4/27 (4)", None, None, None, None, None)
+        self.assertEqual(self.values(metrics)[0], card.DASH)
+        self.assertEqual(self.values(metrics)[1], "4/27")
+
+    def test_payload_values_beat_the_string(self):
+        metrics = card._potm_metrics("99 runs, 9 wkts", 52, 31, None, None, None,
+                                     wickets=4, conceded=27)
+        self.assertEqual(self.values(metrics)[:2], ["52(31)", "4/27"])
 
 
 class PotmRowTests(unittest.TestCase):
