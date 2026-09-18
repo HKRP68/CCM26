@@ -123,6 +123,7 @@ from handlers.match import (
     endmatch_handler, endmatch_yes_callback, endmatch_no_callback,
     clearmatches_handler, removematch_handler,
     resume_handler, lastmatch_handler, recentmatches_handler, info_handler,
+    lastscorecard_handler,
     testwpm_handler,
 )
 from handlers.h2h import h2h_handler
@@ -1732,6 +1733,12 @@ def main():
         app.add_handler(CommandHandler(["removematch", "rmatch", "kickmatch"], removematch_handler))
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
         app.add_handler(CommandHandler(["lastmatch", "lm"], lastmatch_handler))
+        # Re-sends the archived scorecard images of the chat's last match. Not
+        # in BOT_MENU_COMMANDS: both player scopes sit AT Telegram's 100-command
+        # ceiling, so an entry here would cost an existing command its slot. It
+        # is advertised in /help, /matchhelp and under every match result.
+        app.add_handler(CommandHandler(
+            ["lastscorecard", "lsc", "scorecard"], lastscorecard_handler))
         app.add_handler(CommandHandler(
             ["recentmatches", "recent", "matches"],
             dm_only("recentmatches", recentmatches_handler)))

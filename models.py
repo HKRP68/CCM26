@@ -2320,6 +2320,54 @@ class MatchScorecard(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class MatchScorecardImage(Base):
+    """One scorecard image of a match: the values it was drawn from, plus the
+    Telegram ``file_id`` once the photo landed in the chat.
+
+    The cards used to be a fire-and-forget render off live match state. If the
+    render raised, the send timed out, or Telegram rate-limited the chat, the
+    image was simply gone — the state it was built from is cleaned up minutes
+    later, so there was nothing left to retry from and no way for the group to
+    ask for it again. A row is written *before* the render for exactly that
+    reason: the values outlive every failure downstream, so
+    ``services.scorecard_delivery`` can redraw the card on demand.
+
+    ``file_id`` is filled in once Telegram accepts the photo, which makes every
+    later re-send free (no PIL render, no upload). ``chat_id`` is the chat the
+    match was played in, so "the last scorecard of this group" is one indexed
+    lookup rather than a walk back through the matches table.
+    """
+    __tablename__ = "match_scorecard_images"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(Integer, ForeignKey("matches.id"), nullable=False, index=True)
+    chat_id = Column(BigInteger, nullable=True, index=True)
+    # 1 or 2 for an innings card; 0 for a whole-match card (the summary).
+    innings = Column(Integer, nullable=False, default=0)
+    # "batting" | "bowling" | "summary" — see scorecard_delivery.CARD_TYPES.
+    card_type = Column(String(20), nullable=False)
+    # Delivery order within a match, so a re-send reproduces the original
+    # sequence (bat 1, bowl 1, bat 2, bowl 2, summary).
+    sort_order = Column(Integer, nullable=False, default=0)
+    caption = Column(String(300), nullable=True)
+    # Render-ready keyword arguments for the generator named by ``card_type``.
+    # Deliberately excludes the admin-tunable accent/text settings: those are
+    # re-read live at render time so a redraw follows the current theme.
+    payload_json = Column(Text, nullable=False)
+    file_id = Column(String(200), nullable=True)
+    # True once the image actually reached the match chat. A row that stays
+    # False is the durable record of a card the group never saw — the thing
+    # "the scorecard didn't come" reports used to leave no trace of.
+    # /lastscorecard reads it to say how many cards it is repairing.
+    delivered = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_scorecard_images_card", "match_id", "innings", "card_type",
+              unique=True),
+        Index("ix_scorecard_images_chat", "chat_id", "match_id"),
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════

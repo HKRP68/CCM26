@@ -10415,12 +10415,12 @@ def _top_performers_for_summary(arena_state):
     return top_scorer, top_wicket, top_per_team
 
 
-def _build_match_summary_image(match, sc, result_text, arena, pom):
+def _build_match_summary_image(match, sc, result_text, arena, pom,
+                               chat_id=None):
     """Render the same post-match summary card used by /playmatch when possible."""
     try:
         from datetime import datetime as _dt
-        from services.match_summary_card import generate_match_summary
-        from services.config_service import get_config
+        from html import escape
         innings = sc.get("innings") or []
         if len(innings) < 2:
             # Some completions previously persisted an incomplete scorecard (or
@@ -10464,7 +10464,7 @@ def _build_match_summary_image(match, sc, result_text, arena, pom):
         pom_stats = pom.get("stats") if isinstance(pom, dict) else None
         if not pom_stats and isinstance(pom, dict):
             pom_stats = f"{pom.get('runs', 0)} runs • {pom.get('wickets', 0)} wickets"
-        return generate_match_summary(
+        payload = dict(
             inn1_team=inn1.get("bat_team", "Team 1"),
             inn1_runs=inn1.get("runs", 0),
             inn1_wickets=inn1.get("wickets", 0),
@@ -10487,11 +10487,23 @@ def _build_match_summary_image(match, sc, result_text, arena, pom):
             top_wicket=top_wicket,
             top_per_team=top_per_team,
             stadium=match.stadium or arena.get("stadium"),
-            match_date=getattr(match, "completed_at", None) or _dt.utcnow(),
+            match_date=(getattr(match, "completed_at", None)
+                        or _dt.utcnow()).isoformat(),
             is_spectator=bool(arena.get("is_spectator")),
             match_no=match.id,
-            text_settings=get_config().get("scorecard_text_settings"),
         )
+        # Archived before the render for the same reason the innings cards are:
+        # a summary that fails here is still replayable with /lastscorecard.
+        from services import scorecard_delivery
+        archive_chat = chat_id if chat_id is not None else match.chat_id
+        scorecard_delivery.record_cards(match.id, archive_chat, [{
+            "card_type": scorecard_delivery.CARD_SUMMARY,
+            "innings": scorecard_delivery.WHOLE_MATCH,
+            "caption": f"🏆 <b>Match Summary</b> — {escape(str(result_text))}",
+            "payload": payload,
+        }])
+        return scorecard_delivery.render_card(
+            scorecard_delivery.CARD_SUMMARY, payload)
     except Exception:
         logger.exception("wpm match summary image render failed")
         return None
@@ -10508,7 +10520,7 @@ def _arena_overs(state):
     return f"{max(0, int(state.get('current_over', 1) or 1) - 1)}.{int(state.get('current_ball', 0) or 0)}"
 
 
-def _build_innings_cards(match, arena, innings_num):
+def _build_innings_cards(match, arena, innings_num, chat_id=None):
     """Render the batting + bowling scorecard images for one innings of a
     completed Mini App match.
 
@@ -10524,10 +10536,8 @@ def _build_innings_cards(match, arena, innings_num):
     if int(arena.get("innings", 0) or 0) != 2:
         return {}
     try:
-        from services.config_service import get_config
-        from services.scorecard_card import generate_batting_scorecard, generate_bowling_scorecard
+        from html import escape
 
-        config = get_config()
         if innings_num == 1:
             bat_team = arena.get("inn1_team") or arena.get("bowl_team_name", "Team")
             bowl_team = arena.get("bowl_team_name", "Opponent")
@@ -10544,7 +10554,6 @@ def _build_innings_cards(match, arena, innings_num):
                       "nb": int(arena.get("inn1_noballs", 0) or 0), "b": 0,
                       "lb": int(arena.get("inn1_legbyes", 0) or 0)}
             target = None
-            accent = config.get("scorecard_color_inn1")
         else:
             bat_team = arena.get("bat_team_name", "Team")
             bowl_team = arena.get("bowl_team_name", "Opponent")
@@ -10561,7 +10570,6 @@ def _build_innings_cards(match, arena, innings_num):
                       "nb": int(arena.get("noballs", 0) or 0), "b": 0,
                       "lb": int(arena.get("legbyes", 0) or 0)}
             target = int(arena.get("target", 0) or 0) or None
-            accent = config.get("scorecard_color_inn2")
 
         ordered_batters, seen = [], set()
         for player in list(batting_order) + list(bat_xi):
@@ -10615,27 +10623,50 @@ def _build_innings_cards(match, arena, innings_num):
 
         common = {
             "is_first_innings": innings_num == 1, "match_title": "MATCH",
-            "stadium": match.stadium or arena.get("stadium"), "match_no": match.id,
-            "accent_hex": accent,
-            "text_settings": config.get("scorecard_text_settings"),
+            "stadium": match.stadium or arena.get("stadium"),
+            "match_no": match.id,
         }
-        batting = generate_batting_scorecard(
-            bat_team, bowl_team, total_runs, total_wickets, overs_str,
-            batsmen_rows, fow, extras, target=target,
+        bat_caption = (f"🏏 <b>{escape(str(bat_team))}</b> — Batting "
+                       f"(Innings {innings_num})")
+        bowl_caption = (f"🎳 <b>{escape(str(bowl_team))}</b> — Bowling "
+                        f"(Innings {innings_num})")
+        bat_payload = dict(
+            team_name=bat_team, opponent_name=bowl_team,
+            total_runs=total_runs, total_wickets=total_wickets,
+            overs_str=overs_str, batsmen_rows=batsmen_rows,
+            fall_of_wickets=fow, extras_dict=extras, target=target,
             chase_outcome=chase_outcome, **common)
-        bowling = generate_bowling_scorecard(
-            bowl_team, bowlers_rows, fow, opponent_name=bat_team,
+        bowl_payload = dict(
+            team_name=bowl_team, bowlers_rows=bowlers_rows,
+            fall_of_wickets=fow, opponent_name=bat_team,
             opp_score=total_runs, opp_wickets=total_wickets,
             opp_overs=overs_str, **common)
 
+        # Archive the values before rendering, so a Mini-App match's cards are
+        # replayable through /lastscorecard exactly like a /playmatch one —
+        # including when the render below fails outright.
+        from services import scorecard_delivery
+        archive_chat = chat_id if chat_id is not None else match.chat_id
+        scorecard_delivery.record_cards(match.id, archive_chat, [
+            {"card_type": scorecard_delivery.CARD_BATTING,
+             "innings": innings_num, "caption": bat_caption,
+             "payload": bat_payload},
+            {"card_type": scorecard_delivery.CARD_BOWLING,
+             "innings": innings_num, "caption": bowl_caption,
+             "payload": bowl_payload},
+        ])
+
+        batting = scorecard_delivery.render_card(
+            scorecard_delivery.CARD_BATTING, bat_payload)
+        bowling = scorecard_delivery.render_card(
+            scorecard_delivery.CARD_BOWLING, bowl_payload)
+
         cards = {}
         if batting:
-            cards["bat"] = (batting,
-                            f"🏏 <b>{bat_team}</b> — Batting (Innings {innings_num})",
+            cards["bat"] = (batting, bat_caption,
                             f"innings{innings_num}_batting.png")
         if bowling:
-            cards["bowl"] = (bowling,
-                             f"🎳 <b>{bowl_team}</b> — Bowling (Innings {innings_num})",
+            cards["bowl"] = (bowling, bowl_caption,
                              f"innings{innings_num}_bowling.png")
         return cards
     except Exception:
@@ -11294,12 +11325,13 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         inn_cards = {}
 
         def _render_innings(num):
-            cards = _build_innings_cards(render_match, arena, num)
+            cards = _build_innings_cards(render_match, arena, num, chat_id)
             return num, cards
 
         def _render_summary():
             summary_caption = f"🏆 <b>Match Summary</b> — {escape(str(result_text))}"
-            summary = _build_match_summary_image(render_match, scorecard, result_text, arena, pom)
+            summary = _build_match_summary_image(
+                render_match, scorecard, result_text, arena, pom, chat_id)
             return ((summary, summary_caption, "match_summary.png")
                     if summary else None)
 
@@ -11324,11 +11356,11 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         except Exception:
             logger.exception("parallel completed-card render failed; retrying serially")
             if any(t in selection for t in ("bat1", "bowl1")):
-                c1 = _build_innings_cards(render_match, arena, 1)
+                c1 = _build_innings_cards(render_match, arena, 1, chat_id)
                 inn_cards["bat1"] = c1.get("bat")
                 inn_cards["bowl1"] = c1.get("bowl")
             if any(t in selection for t in ("bat2", "bowl2")):
-                c2 = _build_innings_cards(render_match, arena, 2)
+                c2 = _build_innings_cards(render_match, arena, 2, chat_id)
                 inn_cards["bat2"] = c2.get("bat")
                 inn_cards["bowl2"] = c2.get("bowl")
             if "summary" in selection:

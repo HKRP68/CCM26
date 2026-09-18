@@ -255,6 +255,13 @@ PAGES = [
         "<b>Form</b> — a player's last five matches move their effective rating."
     )),
     ("after", "🏆", "After the match", lambda: (
+        "<b>📋 The scorecards</b>\n"
+        "Batting and bowling cards go out at the end of every innings, and a "
+        "summary card at the result. They are archived as they are sent, so a "
+        "card that never arrived — or one buried a hundred messages up — comes "
+        "back with <b>/lastscorecard</b> (or <b>/lsc</b>), which replays the "
+        "last match played in this chat. <b>/lastscorecard 1234</b> pulls up a "
+        "specific match by number.\n\n"
         "<b>📊 The match analysis file</b>\n"
         "Every finished match sends a full HTML report into the chat. Open it in "
         "your browser for:\n"
