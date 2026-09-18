@@ -49,6 +49,9 @@ MAX_OVERS = 20
 
 def _player_to_dict(p):
     return {
+        # Carried so the summary card can find the Player of the Match's
+        # portrait; the engine itself never looks at it.
+        "id": p.id,
         "name": p.name,
         "rating": p.rating,
         "bat_rating": p.bat_rating or p.rating,
@@ -424,10 +427,23 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         card2 = render_innings_card(match["innings2"])
         result_text = render_result(match)
         cfg = get_config()
+        # Who batted first depends on the toss, so map the innings back to the
+        # owning user by name rather than assuming an order — branding the two
+        # sides the wrong way round is worse than not branding them.
+        bats_first_is_user = (match["innings1"]["batting_team"] == team_name)
+        opponent_id = getattr(opponent, "id", None)
+        # A portrait is a flourish; the match is not. Anything unexpected in an
+        # XI entry costs the photo, never the card.
+        potm_id = next(
+            (p.get("id") for p in list(user_xi) + list(opponent_xi)
+             if isinstance(p, dict) and p.get("name") == match.get("potm")), None)
         summary_bytes = render_match_summary_image(
             match,
             text_settings=cfg.get("scorecard_text_settings"),
             stadium=f"SIM • {pitch} pitch",
+            inn1_user_id=user.id if bats_first_is_user else opponent_id,
+            inn2_user_id=opponent_id if bats_first_is_user else user.id,
+            potm_player_id=potm_id,
         )
         match_intro = [match["toss"]["text"]] + match["innings1"].get("innings_intro", [])
         feed_payload = {

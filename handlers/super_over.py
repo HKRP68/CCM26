@@ -388,7 +388,28 @@ def _build_super_over_card(so):
         win_uid = so.get("_winner_uid")
         win_name = so["teams"][win_uid]["name"] if win_uid in so["teams"] else ""
         margin = so.get("_margin_text", "won the Super Over")
+
+        # Each innings carries the owning user's id, so both crests and both
+        # team colours resolve directly. This card calls the generator itself
+        # rather than going through scorecard_delivery, so without this a Super
+        # Over is the one card in a match that shows up unbranded.
+        visuals = {}
+        try:
+            from services import card_identity
+            session = card_identity.open_session()
+            try:
+                visuals = card_identity.summary_visuals(
+                    session,
+                    inn1_team=a.get("team"), inn2_team=b.get("team"),
+                    inn1_user_id=a.get("team_uid"), inn2_user_id=b.get("team_uid"),
+                    include_style=False)
+            finally:
+                session.close()
+        except Exception:
+            logger.exception("Super Over branding lookup failed — drawing plain")
+
         return generate_match_summary(
+            **visuals,
             inn1_team=a["team"], inn1_runs=a["runs"], inn1_wickets=a["wickets"],
             inn1_overs=a["overs"],
             inn2_team=b["team"], inn2_runs=b["runs"], inn2_wickets=b["wickets"],

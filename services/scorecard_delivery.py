@@ -136,88 +136,64 @@ async def send_photo_with_retry(bot, chat_id, photo_factory, *, caption=None,
 # Rendering
 # ══════════════════════════════════════════════════════════════════════
 
-def _team_logo(team_name):
-    """The approved crest bytes for a team name, or ``None``.
+def _visuals(resolve):
+    """Run one :mod:`services.card_identity` lookup on a session of our own.
 
-    Resolved here rather than stored in the payload for the same reason the
-    accent colours are: a card redrawn next month should carry the crest the
-    team has now. Never raises — a card without a crest falls back to the
-    team's initials, which is a detail; a card that fails to render is the
-    card.
+    The identity functions take a session rather than opening one, because the
+    handlers that call them directly already hold one and a second pooled
+    connection mid-transaction is the exhaustion trap
+    ``services/player_image_service`` documents. Rendering, though, runs on a
+    worker thread with no session in hand, so this is where one is opened.
+
+    Never raises: a card without a crest is a detail, a card that fails to
+    render is the card.
     """
-    if not team_name:
-        return None
-    from database import get_session
-    session = get_session()
+    from services import card_identity
+    session = card_identity.open_session()
     try:
-        from services import team_logo_service
-        return team_logo_service.logo_png_for_team_name(session, team_name)
+        return resolve(session)
     except Exception:
-        logger.exception("team logo lookup failed for %r", team_name)
-        return None
+        logger.exception("card identity lookup failed — drawing without it")
+        return {}
     finally:
         session.close()
 
 
-def _potm_photo(player_id):
-    """The Player of the Match's portrait, for the summary card's POTM strip.
-
-    Reuses the admin-uploaded card art the bot already holds
-    (``services.player_image_service``), which restores itself from the
-    Telegram storage channel when an ephemeral deploy has wiped the local file.
-    No portrait is not a problem — the strip simply runs without one.
-    """
-    if not player_id:
-        return None
-    try:
-        from services import player_image_service
-        return player_image_service.get_custom_image_bytes(int(player_id))
-    except Exception:
-        logger.exception("POTM portrait lookup failed for player %s", player_id)
-        return None
-
-
-def _live_style(is_first_innings, team_name=None):
-    """The admin-tunable accent + text settings, read at render time.
+def _live_style(is_first_innings, team_name=None, user_id=None):
+    """The team's accent, crest and the admin text settings, at render time.
 
     Kept out of the stored payload on purpose: a card redrawn later should
-    follow the theme the admins have configured now, not the one in force when
-    the match was played. The team crest rides along for the same reason.
+    follow the theme the admins have configured now and the crest the team has
+    now, not the ones in force when the match was played.
     """
-    try:
-        from services.config_service import get_config
-        cfg = get_config()
-        accent = (cfg.get("scorecard_color_inn1") if is_first_innings
-                  else cfg.get("scorecard_color_inn2"))
-        return {"accent_hex": accent,
-                "text_settings": cfg.get("scorecard_text_settings"),
-                "team_logo_png": _team_logo(team_name)}
-    except Exception:
-        logger.exception("scorecard style lookup failed — falling back to defaults")
-        return {"accent_hex": None, "text_settings": None, "team_logo_png": None}
+    from services import card_identity
+    style = _visuals(lambda s: card_identity.innings_visuals(
+        s, team_name=team_name, user_id=user_id,
+        is_first_innings=is_first_innings))
+    style.setdefault("accent_hex", None)
+    style.setdefault("text_settings", None)
+    style.setdefault("team_logo_png", None)
+    return style
 
 
-def _summary_style(inn1_team=None, inn2_team=None, potm_player_id=None):
-    """Text settings, the two innings colours, and both teams' crests.
+def _summary_style(inn1_team=None, inn2_team=None, potm_player_id=None,
+                   inn1_user_id=None, inn2_user_id=None, potm_name=None):
+    """Both teams' colours and crests, the POTM portrait, and the text settings.
 
     The summary card used to hardcode its red/blue by innings position while
     the batting and bowling cards read the admin colours — so the three cards
-    of one match could disagree. They all read the same two settings now.
+    of one match could disagree. They all resolve through the same place now,
+    and a team that has set its own colour gets it.
     """
-    style = {"text_settings": None, "inn1_color": None, "inn2_color": None,
-             "dynamic_flourish": False}
-    try:
-        from services.config_service import get_config
-        cfg = get_config()
-        style["text_settings"] = cfg.get("scorecard_text_settings")
-        style["inn1_color"] = cfg.get("scorecard_color_inn1")
-        style["inn2_color"] = cfg.get("scorecard_color_inn2")
-        style["dynamic_flourish"] = bool(cfg.get("scorecard_dynamic_flourish"))
-    except Exception:
-        logger.exception("summary style lookup failed — falling back to defaults")
-    style["inn1_logo_png"] = _team_logo(inn1_team)
-    style["inn2_logo_png"] = _team_logo(inn2_team)
-    style["potm_photo_png"] = _potm_photo(potm_player_id)
+    from services import card_identity
+    style = _visuals(lambda s: card_identity.summary_visuals(
+        s, inn1_team=inn1_team, inn2_team=inn2_team,
+        inn1_user_id=inn1_user_id, inn2_user_id=inn2_user_id,
+        potm_player_id=potm_player_id, potm_name=potm_name))
+    for key in ("text_settings", "inn1_color", "inn2_color",
+                "inn1_logo_png", "inn2_logo_png", "potm_photo_png"):
+        style.setdefault(key, None)
+    style.setdefault("dynamic_flourish", False)
     return style
 
 
@@ -261,13 +237,17 @@ def render_card(card_type, payload):
             generate = (generate_batting_scorecard if card_type == CARD_BATTING
                         else generate_bowling_scorecard)
             payload.update(_live_style(payload.get("is_first_innings", True),
-                                       payload.get("team_name")))
+                                       payload.get("team_name"),
+                                       payload.get("team_user_id")))
             return generate(**_accepted_kwargs(generate, payload))
         if card_type == CARD_SUMMARY:
             from services.match_summary_card import generate_match_summary
-            payload.update(_summary_style(payload.get("inn1_team"),
-                                          payload.get("inn2_team"),
-                                          payload.get("potm_player_id")))
+            payload.update(_summary_style(
+                payload.get("inn1_team"), payload.get("inn2_team"),
+                payload.get("potm_player_id"),
+                inn1_user_id=payload.get("inn1_user_id"),
+                inn2_user_id=payload.get("inn2_user_id"),
+                potm_name=payload.get("potm_name")))
             # ``match_date`` round-trips through JSON as an ISO string.
             raw_date = payload.get("match_date")
             if isinstance(raw_date, str):

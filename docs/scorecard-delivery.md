@@ -50,8 +50,8 @@ them.
 
 ## What is deliberately *not* in a payload
 
-The admin accent colours, the Scorecard Designer's text settings, the teams'
-logos, and the Player of the Match's portrait. All of them are re-read live in
+The teams' colours and logos, the Player of the Match's portrait, and the
+Scorecard Designer's text settings. All of them are re-read live in
 `render_card`, so a card redrawn next month follows the theme the admins have
 now and the crest the team has now, rather than the ones in force when the
 match was played. See `docs/team-logo-approval.md` for where a crest comes
@@ -61,6 +61,34 @@ from; the portrait is the admin-uploaded card art the bot already holds
 `/previewsummary` (bot admins) renders a card from canned data through this
 same path, which is the quick way to see the effect of a Scorecard Designer
 change without playing a match.
+
+## Branding reaches every mode, not just this one
+
+All of the above is resolved by **`services/card_identity.py`**, not by this
+module. That matters because not every mode goes through `render_card`: `/cipl`
+and the Challenge League, the Super Over and `/sim` all import a generator and
+call it directly, and while the resolution lived here those modes silently drew
+cards with no crest, no colour and no photo.
+
+They now each call `card_identity.summary_visuals(...)` and spread the result
+into their generator call. Identity resolves in this order, first hit wins:
+
+1. **user id** — `users.team_logo_asset_key` / `users.team_colour`
+2. **`ChallengeTeam`** — its `logo_url` / `primary_color`, since CIPL sides are
+   franchises rather than user teams
+3. **team name** — the `users` lookup keyed on the name
+
+A user id is preferred wherever one is in scope, because names are not reliable
+keys: `/sim` can pass `"🤖 Sim XI"`, `"@someone"` or `"Someone's XI"`, and
+`/cipl` labels carry a `" (Bot)"` suffix. Each mode resolves from the clean
+name and the owning id, never from the display label.
+
+The POTM portrait comes from `services/player_portrait_service` — cut-outs with
+a transparent background, and a **global fallback PNG**, which is what makes a
+photo appear in every mode rather than only for players with art of their own.
+It is deliberately *not* `player_image_service.get_custom_image_bytes`: that
+returns the full collectible card, borders and all, which is what the strip used
+to paste in.
 
 ## The Player of the Match showcase
 

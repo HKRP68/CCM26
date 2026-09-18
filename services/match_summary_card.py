@@ -703,8 +703,11 @@ def _draw_innings(img, draw, ts, y, *, team, runs, wickets, overs, overs_total,
     else:
         mono = _fitted_font(draw, _initials(team), "headline", 56,
                             CREST_X1_BOT - PAD_L - 34)
+        # Not hardcoded white: teams choose their own colour now, and white
+        # initials on a light crest panel are invisible.
         _draw_text(draw, ((PAD_L + CREST_X1_BOT) / 2, y + INN_H / 2 + 4),
-                   _initials(team), mono, (*WHITE, 232), tracking=2, anchor="mm")
+                   _initials(team), mono, (*_readable_on(_mix(color, dark, 0.5)), 232),
+                   tracking=2, anchor="mm")
 
     # Colour bar across the top, with a darker score panel on the right.
     bar = Image.new("RGBA", (s(CANVAS_W), s(CANVAS_H)), (0, 0, 0, 0))

@@ -166,6 +166,9 @@ UNPUBLISHED_ON_PURPOSE = {
     # Both player scopes are already at the ceiling, so publishing it would
     # cost an existing command its entry.
     "setteamlogo",
+    # Team colour — same ceiling, same reason. Named in /help and /howto next
+    # to /setteamlogo, and offered by /teamname to anyone without one.
+    "setteamcolour",
     # Forward-only mode: a separate run path where this is the ONLY command
     # registered at all, so there is no menu for it to be in.
     "frwd",

@@ -68,6 +68,9 @@ async def teamname_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         hint = ("" if user.team_logo_asset_key
                 else "\n\n🖼 Want a crest on your scorecards? "
                      "Send /setteamlogo in a private chat.")
+        if not hint and not user.team_colour:
+            hint = ("\n\n🎨 Want your own colour on the scorecards? "
+                    "Try /setteamcolour #aa001b")
         await update.message.reply_text(
             f"✅ Team name set to: <b>{name}</b>{hint}", parse_mode="HTML"
         )
@@ -77,6 +80,195 @@ async def teamname_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Error. Try again.")
     finally:
         session.close()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# /setteamcolour — the team's own colour on the scorecards
+# ══════════════════════════════════════════════════════════════════════
+
+# People type colour names far more readily than hex. This is not a full CSS
+# list on purpose: a short set of strong, card-legible colours beats 140 names
+# of which half are unreadable pastels.
+COLOUR_NAMES = {
+    "red": "#c41e3a", "crimson": "#aa001b", "maroon": "#6d0f1a",
+    "orange": "#e8590c", "amber": "#d97706", "gold": "#c7922c",
+    "yellow": "#eab308", "lime": "#65a30d", "green": "#15803d",
+    "emerald": "#047857", "teal": "#0f766e", "cyan": "#0891b2",
+    "sky": "#0284c7", "blue": "#0065b3", "navy": "#123a6d",
+    "indigo": "#4338ca", "purple": "#7e22ce", "violet": "#6d28d9",
+    "magenta": "#be185d", "pink": "#db2777", "brown": "#78350f",
+    "slate": "#475569", "black": "#1a1a1a", "white": "#e8e8e8",
+}
+
+
+def _swatch_png(colour_hex, team_name):
+    """A small preview of the team's own bar, so the reply shows the colour.
+
+    A hex code tells nobody what their scorecard will look like. This draws the
+    real thing — the crest panel gradient, the colour bar, the score chip — with
+    the same helpers the card itself uses, so what they see is what they get.
+    """
+    try:
+        from PIL import Image, ImageDraw
+        from services import match_summary_card as card
+
+        colour = card._hex_to_rgb(colour_hex, card.TEAM_A)
+        dark = card._shade(colour, 0.62)
+        on_bar = card._readable_on(colour)
+        w, h, pad = 900, 200, 12
+        img = Image.new("RGB", (w, h), (252, 252, 254))
+        draw = ImageDraw.Draw(img, "RGBA")
+
+        crest_w = 150
+        panel = card._diagonal_gradient((crest_w, h - pad * 2), colour, dark)
+        mask = Image.new("L", (crest_w, h - pad * 2), 0)
+        ImageDraw.Draw(mask).rounded_rectangle(
+            [0, 0, crest_w - 1, h - pad * 2 - 1], radius=14, fill=255)
+        img.paste(panel, (pad, pad), mask)
+
+        draw.rounded_rectangle([pad + crest_w - 14, pad, w - pad, pad + 72],
+                               radius=12, fill=(*colour, 255))
+        draw.rectangle([pad + crest_w - 14, pad + 58, w - pad, pad + 72],
+                       fill=(*colour, 255))
+        draw.polygon([(w - 250, pad), (w - pad, pad), (w - pad, pad + 72),
+                      (w - 264, pad + 72)], fill=(*dark, 255))
+
+        small = card._font(15, family="display")
+        name_x = pad + crest_w + 16
+        # Fit the name into the gap before the score chip, the way the card
+        # itself does — a long team name must not run under the score.
+        name_room = (w - 280) - name_x
+        label = str(team_name or "YOUR TEAM").upper()
+        big = card._font(30, family="headline")
+        while big.size > card.s(14) and draw.textlength(label, font=big) > name_room:
+            big = card._font((big.size / card.SCALE) - 1, family="headline")
+        while draw.textlength(label, font=big) > name_room and len(label) > 4:
+            label = label[:-2] + "…"
+        draw.text((name_x, pad + 36), label, font=big, fill=on_bar, anchor="lm")
+        draw.text((w - pad - 24, pad + 36), "156-7",
+                  font=card._font(30, family="headline"),
+                  fill=card._readable_on(dark), anchor="rm")
+        # The crest panel shows initials, which is what a team without an
+        # uploaded logo actually gets.
+        initials = card._initials(team_name or "Your Team")
+        mono = card._font(34, family="headline")
+        while mono.size > card.s(12) and draw.textlength(initials, font=mono) > crest_w - 26:
+            mono = card._font((mono.size / card.SCALE) - 1, family="headline")
+        draw.text((pad + crest_w / 2, pad + (h - pad * 2) / 2), initials,
+                  font=mono,
+                  fill=card._readable_on(card._mix(colour, dark, 0.5)), anchor="mm")
+        draw.text((pad + crest_w + 16, pad + 108), "VENKATESH IYER",
+                  font=small, fill=card.NAME_INK, anchor="lm")
+        draw.text((w - pad - 120, pad + 108), "29*", font=small, fill=colour,
+                  anchor="rm")
+        draw.text((w - pad - 24, pad + 108), colour_hex.upper(), font=small,
+                  fill=card.COL_HEAD, anchor="rm")
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        # The colour is still set; only the picture is missing.
+        logger.warning("team colour swatch failed", exc_info=True)
+        return None
+
+
+async def teamcolour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """``/setteamcolour #aa001b`` — the team's colour on every scorecard.
+
+    Applies immediately, unlike the crest: a hex code carries nothing to
+    moderate, and the card picks readable text for whatever is chosen.
+    """
+    from services import card_identity
+
+    tg_user = update.effective_user
+    message = update.effective_message
+    arg = " ".join(context.args or []).strip()
+
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.telegram_id == tg_user.id).first()
+        if not user:
+            await message.reply_text("❌ Do /debut first!")
+            return
+
+        if not arg:
+            current = card_identity.normalise_hex(user.team_colour)
+            if not current:
+                await message.reply_text(
+                    "🎨 <b>Team colour</b>\n\n"
+                    "Your scorecards use the default colours right now.\n\n"
+                    "Set your own with a hex code — <code>/setteamcolour "
+                    "#aa001b</code> — or a name like <code>/setteamcolour "
+                    "crimson</code>.\n\n"
+                    f"<b>Names:</b> {', '.join(sorted(COLOUR_NAMES))}",
+                    parse_mode="HTML")
+                return
+            png = _swatch_png(current, user.team_name)
+            caption = (f"🎨 Your team colour is <code>{current}</code>.\n\n"
+                       "Change it with /setteamcolour, or clear it with "
+                       "/setteamcolour remove.")
+            if png:
+                await message.reply_photo(photo=io.BytesIO(png), caption=caption,
+                                          parse_mode="HTML")
+            else:
+                await message.reply_text(caption, parse_mode="HTML")
+            return
+
+        if arg.lower() in ("remove", "clear", "delete", "off", "reset"):
+            had = bool(user.team_colour)
+            user.team_colour = None
+            log_activity(session, user.id, "teamcolour", "Team colour cleared")
+            session.commit()
+            card_identity_invalidate(user)
+            await message.reply_text(
+                "🗑 Team colour cleared — your scorecards go back to the "
+                "default colours." if had
+                else "You do not have a team colour set.")
+            return
+
+        colour = COLOUR_NAMES.get(arg.lower()) or card_identity.normalise_hex(arg)
+        if not colour:
+            await message.reply_text(
+                f"❌ <code>{arg[:30]}</code> is not a colour I understand.\n\n"
+                "Send a hex code like <code>#aa001b</code> (the <code>#</code> "
+                "is optional), or a name like <code>crimson</code>.\n\n"
+                f"<b>Names:</b> {', '.join(sorted(COLOUR_NAMES))}",
+                parse_mode="HTML")
+            return
+
+        old = user.team_colour or "default"
+        user.team_colour = colour
+        log_activity(session, user.id, "teamcolour", f"Team colour: {old} → {colour}")
+        session.commit()
+        card_identity_invalidate(user)
+
+        hint = ("" if user.team_logo_asset_key
+                else "\n\n🖼 A crest goes beside it — /setteamlogo in a "
+                     "private chat.")
+        png = _swatch_png(colour, user.team_name)
+        caption = (f"✅ Team colour set to <code>{colour}</code>. "
+                   "It is on your scorecards from your next match." + hint)
+        if png:
+            await message.reply_photo(photo=io.BytesIO(png), caption=caption,
+                                      parse_mode="HTML")
+        else:
+            await message.reply_text(caption, parse_mode="HTML")
+    except Exception:
+        session.rollback()
+        logger.exception("Teamcolour error for %s", tg_user.id)
+        await message.reply_text("⚠️ Error. Try again.")
+    finally:
+        session.close()
+
+
+def card_identity_invalidate(user):
+    """Drop the cached crest/colour for a team so the change shows at once."""
+    try:
+        from services import team_logo_service
+        team_logo_service.invalidate_cache(user.id, user.team_name)
+    except Exception:
+        logger.warning("team colour cache invalidation failed", exc_info=True)
 
 
 async def purse_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

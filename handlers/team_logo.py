@@ -68,14 +68,18 @@ def _reason_keyboard(request_id):
     return InlineKeyboardMarkup(rows)
 
 
-def _review_caption(request, uploader):
+def _review_caption(request, uploader, opaque=False):
     who = uploader.username and f"@{uploader.username}" or (uploader.first_name or "—")
+    # The reviewer cannot see transparency in a Telegram preview — it renders
+    # on white either way — so the caption has to tell them.
+    alpha = ("\n⚠️ No transparent background — will draw as a square tile."
+             if opaque else "")
     return (
         "🛡 <b>Team logo awaiting review</b>\n\n"
         f"👤 {html.escape(str(who))} (<code>{uploader.telegram_id}</code>)\n"
         f"🏏 Team: <b>{html.escape(str(request.team_name or 'no team name'))}</b>\n"
         f"🖼 {request.width}×{request.height}, "
-        f"{(request.byte_size or 0) / 1024:.0f} KB\n"
+        f"{(request.byte_size or 0) / 1024:.0f} KB{alpha}\n"
         f"🆔 Request #{request.id}"
     )
 
@@ -96,14 +100,14 @@ async def _dm(bot, chat_id, text, **kwargs):
         return False
 
 
-async def _fan_out_review(context, request, uploader, png):
+async def _fan_out_review(context, request, uploader, png, opaque=False):
     """Send the review card to every admin. Returns how many got it.
 
     Each admin gets their own copy, and whoever presses first wins — the
     service refuses a second decision because the row is no longer pending, and
     the other copies are edited to say who decided.
     """
-    caption = _review_caption(request, uploader)
+    caption = _review_caption(request, uploader, opaque=opaque)
     keyboard = _review_keyboard(request.id)
     sent = []
     for admin_id in _admin_ids():
@@ -176,15 +180,20 @@ async def setteamlogo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             await message.reply_text(f"🛑 {blocked[1]}")
             return
 
-        photo = _photo_from(message) or _photo_from(message.reply_to_message)
+        photo, kind = _photo_from(message)
+        if photo is None:
+            photo, kind = _photo_from(message.reply_to_message)
         if photo is None:
             context.user_data[AWAIT_IMAGE] = True
             current = ("\n\n🖼 You have a logo set already — a new one replaces "
                        "it once approved." if user.team_logo_asset_key else "")
             await message.reply_text(
                 "🏏 <b>Set your team logo</b>\n\n"
-                "Send me the image now, as a photo or a file.\n\n"
-                "• PNG, JPG or WEBP\n"
+                "Send me the image now — attach it as a <b>file</b>, not a "
+                "photo. Telegram compresses photos into JPG and throws the "
+                "transparent background away.\n\n"
+                "• <b>PNG only</b> — ideally with a transparent background, so "
+                "your crest sits on your team's colour rather than in a box\n"
                 f"• at least {tls.MIN_DIM}×{tls.MIN_DIM}, square-ish works best\n"
                 f"• up to {tls.MAX_BYTES // 1024 // 1024} MB\n"
                 "• your own artwork only\n\n"
@@ -193,7 +202,7 @@ async def setteamlogo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 parse_mode="HTML")
             return
 
-        await _accept_upload(update, context, session, user, photo)
+        await _accept_upload(update, context, session, user, photo, kind)
     except Exception:
         session.rollback()
         logger.exception("setteamlogo failed for %s", tg_user.id)
@@ -202,21 +211,46 @@ async def setteamlogo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         session.close()
 
 
+# Telegram re-encodes anything sent as a *photo* into JPEG, which strips the
+# alpha channel. So a compressed send can never be a usable crest, however the
+# file started life, and the only fix is for the sender to attach it as a file.
+COMPRESSED_PHOTO_HELP = (
+    "📎 <b>Send it as a file, not a photo.</b>\n\n"
+    "Telegram compresses photos into JPG, which throws away the transparent "
+    "background — so a crest sent that way always arrives as a solid square.\n\n"
+    "In the attachment menu choose <b>File</b> (on iPhone, <i>Document</i>) and "
+    "pick your PNG from there. On desktop, untick "
+    "<i>Compress images</i> before sending."
+)
+
+
 def _photo_from(message):
-    """The best image on a message: the largest photo size, or an image file."""
+    """The image on a message, as ``(file, kind)`` — or ``(None, None)``.
+
+    ``kind`` distinguishes a document from a compressed photo, because the two
+    are not interchangeable here: Telegram converts photos to JPEG, so a
+    compressed send is refused with instructions rather than downloaded and
+    then refused for its format.
+    """
     if message is None:
-        return None
-    if message.photo:
-        return message.photo[-1]
+        return None, None
     doc = message.document
     if doc and (doc.mime_type or "").startswith("image/"):
-        return doc
-    return None
+        return doc, "document"
+    if message.photo:
+        return message.photo[-1], "photo"
+    return None, None
 
 
-async def _accept_upload(update, context, session, user, photo):
+async def _accept_upload(update, context, session, user, photo, kind="document"):
     """Download, validate, queue, and fan out to the admins."""
     message = update.effective_message
+    if kind == "photo":
+        # Keep the await slot armed: they are about to try again, and being
+        # asked to re-run the command after a near miss is needless friction.
+        context.user_data[AWAIT_IMAGE] = True
+        await message.reply_text(COMPRESSED_PHOTO_HELP, parse_mode="HTML")
+        return
     context.user_data.pop(AWAIT_IMAGE, None)
     try:
         handle = await context.bot.get_file(photo.file_id)
@@ -234,19 +268,31 @@ async def _accept_upload(update, context, session, user, photo):
         elif result["error"] in ("daily_cap", "cooldown", "held"):
             await message.reply_text(f"🛑 {result['message']}")
         else:
-            await message.reply_text(f"❌ {result.get('message', 'That did not work.')}")
+            # The format refusal is a multi-line how-to, so it is sent as HTML
+            # rather than squeezed onto one line behind a cross.
+            await message.reply_text(f"❌ {result.get('message', 'That did not work.')}",
+                                     parse_mode="HTML")
         return
 
     request = result["request"]
     log_activity(session, user.id, "teamlogo", f"Logo submitted (#{request.id})")
     session.commit()
 
-    reached = await _fan_out_review(context, request, user, result["png"])
+    # A PNG with no transparency is still reviewable — it just will not look
+    # like a crest. Say so now, while they can still send a better one.
+    opaque_note = ("\n\n⚠️ <b>Heads up:</b> this PNG has no transparent "
+                   "background, so it will show as a square tile rather than a "
+                   "cut-out crest. It will still be reviewed.\n\n"
+                   + tls.TRANSPARENCY_HELP) if result.get("opaque") else ""
+
+    reached = await _fan_out_review(context, request, user, result["png"],
+                                    opaque=result.get("opaque"))
     if reached:
         await message.reply_text(
             "✅ <b>Sent for approval.</b>\n\n"
             "A bot admin will check it shortly. You will get a message here "
-            "either way — and if it is turned down, I will tell you why.",
+            "either way — and if it is turned down, I will tell you why."
+            + opaque_note,
             parse_mode="HTML")
     else:
         # The row is queued and /logoqueue will find it, so this is a delay
@@ -254,7 +300,8 @@ async def _accept_upload(update, context, session, user, photo):
         await message.reply_text(
             "✅ <b>Sent for approval.</b>\n\n"
             "I could not reach an admin right now, so this may take a little "
-            "longer. It is safely in the queue.", parse_mode="HTML")
+            "longer. It is safely in the queue." + opaque_note,
+            parse_mode="HTML")
 
 
 async def team_logo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -281,12 +328,11 @@ async def team_logo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop(AWAIT_IMAGE, None)
         await message.reply_text("Cancelled. Nothing was sent for approval.")
         return
-    photo = _photo_from(message)
+    photo, kind = _photo_from(message)
     if photo is None:
         if message.text:
             await message.reply_text(
-                "Send the image itself, as a photo or a file. "
-                "Or /cancel to stop.")
+                "Send the PNG itself, attached as a file. Or /cancel to stop.")
         return
 
     session = get_session()
@@ -296,7 +342,7 @@ async def team_logo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop(AWAIT_IMAGE, None)
             await message.reply_text("❌ Do /debut first!")
             return
-        await _accept_upload(update, context, session, user, photo)
+        await _accept_upload(update, context, session, user, photo, kind)
     except Exception:
         session.rollback()
         logger.exception("team logo upload failed for %s", tg_user.id)
@@ -643,10 +689,21 @@ async def previewsummary_handler(update: Update, context: ContextTypes.DEFAULT_T
                   .filter(User.telegram_id == update.effective_user.id).first())
         team = (viewer.team_name if viewer and viewer.team_name
                 else "Rome Gladiators")
+        viewer_id = viewer.id if viewer else None
+        # Any real player, so the POTM strip shows an actual portrait rather
+        # than a gap — a preview that omits the photo cannot preview the photo.
+        potm_player_id = None
+        try:
+            from models import Player
+            row = session.query(Player.id).order_by(Player.id).first()
+            potm_player_id = row[0] if row else None
+        except Exception:
+            logger.warning("preview could not pick a player", exc_info=True)
     finally:
         session.close()
 
     payload = {
+        "inn1_user_id": viewer_id, "potm_player_id": potm_player_id,
         "inn1_team": team, "inn1_runs": 156, "inn1_wickets": 7,
         "inn1_overs": "20",
         "inn2_team": "Mumbai Marathas", "inn2_runs": 158, "inn2_wickets": 4,

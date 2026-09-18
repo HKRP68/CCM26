@@ -38,13 +38,38 @@ at Telegram's 100-command ceiling, so publishing it would cost an existing
 command its entry. It is named in `/help` and in `/howto` beside `/teamname`,
 and `/teamname` offers it to anyone who has not set one.
 
+## Team colour
+
+`/setteamcolour #aa001b` (also `/teamcolour`, and the `color` spelling) sets the
+colour a team wears on every scorecard — its header bar, crest panel, table
+divider and not-out scores. Unlike the crest it applies **immediately**: a hex
+code carries nothing to moderate, and the card picks readable text for whatever
+is chosen (`match_summary_card._readable_on`).
+
+It takes `#aa001b`, a bare `aa001b`, three-digit `#abc`, or one of the names in
+`handlers/team.COLOUR_NAMES` (`crimson`, `navy`, `gold`, …). `/setteamcolour`
+alone shows the current colour; `remove` clears it. The confirmation renders a
+**live swatch** — the real bar, crest panel and a sample row — because a hex
+code tells nobody what their scorecard will look like.
+
+Two teams can choose the same colour, and two identical innings blocks read as a
+rendering fault. `card_identity.separate_colours` keeps innings 1 exactly as
+chosen and pushes innings 2 away from it — lightening a dark clash, darkening a
+light one — falling back to the admin default only when it cannot separate them
+at all. Distinct colours are never touched.
+
+Admins can set or clear it from a user's page on the website
+(`/users/<id>/team_colour`).
+
 ## What an upload has to be
 
 Checked in `services/team_logo_service.normalise_image`, reusing the limits the
 website's custom card art has used for a long time
 (`services/player_image_service.py`):
 
-* PNG, JPG, WEBP, GIF or BMP, at most **5 MB**
+* **PNG only**, at most **5 MB** — a PNG is the only common format that can
+  carry a transparent background, and a crest without one draws as a square
+  tile sitting on the team's colour instead of on it
 * at least **200×200**
 * no wilder than **2:1** — the crest panel is tall-ish, and anything longer
   renders as a sliver
@@ -53,6 +78,27 @@ website's custom card art has used for a long time
 The re-encode is the point, not a side effect: it drops EXIF, animation frames
 and anything else the decoder found interesting, so what reaches the card
 renderer is a plain PNG.
+
+### Teaching, not just refusing
+
+A refusal that only states the rule teaches nobody anything, so the guidance
+lives in `TRANSPARENCY_HELP` and surfaces in four places:
+
+1. **A non-PNG** is refused with why, plus how to get one — a background
+   remover, a phone's *Share → Save as*, or Canva/Figma's transparent export.
+2. **A photo rather than a file.** Telegram re-encodes anything sent as a
+   *photo* into JPEG, which strips the alpha channel — so a compressed send can
+   never be a usable crest however the file started. `_photo_from` returns the
+   *kind* alongside the file so this is caught before the download, and the
+   reply explains the attachment menu. The await slot stays armed so they can
+   just try again.
+3. **A fully opaque PNG** is accepted and queued, but the uploader is warned it
+   will tile, and the admin's review caption carries the same note — a Telegram
+   preview renders transparency on white either way, so the reviewer cannot see
+   it for themselves.
+4. **A preset rejection reason**, "🪟 Needs a transparent background", whose
+   message is the same how-to. One tap, and the owner gets an answer rather
+   than a dead end.
 
 ## Rejection reasons
 
