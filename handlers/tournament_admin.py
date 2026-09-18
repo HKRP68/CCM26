@@ -108,7 +108,7 @@ def _resolve_tournament(session, args):
     """
     tournament_id = _pop_tournament_id(args)
     if tournament_id:
-        tour = session.query(Tournament).get(tournament_id)
+        tour = session.get(Tournament, tournament_id)
         if not tour:
             raise ValueError(f"No tournament with id {tournament_id}.")
         return tour
@@ -411,7 +411,7 @@ def _find_fixture(session, tour, number):
         # number of its own. Without that guard "/taddmatch 45" would land on
         # whatever row happens to have id 45 — which is some other match number
         # entirely, and an admin reading "45" has no way to see the difference.
-        row = session.query(TournamentMatch).get(int(number))
+        row = session.get(TournamentMatch, int(number))
         if row is not None and row.tournament_id == tour.id and not row.match_no:
             fixture = row
     if fixture is None:
@@ -551,8 +551,8 @@ async def taddmatch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     session = get_session()
     try:
-        tour = session.query(Tournament).get(pending["tournament_id"])
-        fixture = session.query(TournamentMatch).get(pending["fixture_id"])
+        tour = session.get(Tournament, pending["tournament_id"])
+        fixture = session.get(TournamentMatch, pending["fixture_id"])
         if tour is None or fixture is None:
             raise ScorecardError("That fixture is gone — nothing was recorded.")
         # Re-parse and re-plan: the fixture may have been played, edited or

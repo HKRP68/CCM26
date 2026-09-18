@@ -227,6 +227,10 @@ def _patch_finalize(monkeypatch_target):
             return SimpleNamespace()
 
     class _S:
+        # Session.get(Model, pk), which is what the code calls now.
+        def get(self, *a, **k):
+            return SimpleNamespace()
+
         def query(self, *a, **k):
             return _Q()
 

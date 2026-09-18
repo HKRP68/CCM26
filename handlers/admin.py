@@ -501,7 +501,7 @@ def player_add():
 def player_edit(player_id):
     db = get_session()
     try:
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if not player:
             flash("Player not found", "error")
             return redirect(url_for("players_list"))
@@ -556,7 +556,7 @@ def player_edit(player_id):
 def admin_player_image_upload(player_id):
     db = get_session()
     try:
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if not player:
             flash("Player not found.", "error")
             return redirect(url_for("players_list"))
@@ -598,7 +598,7 @@ def admin_player_image_upload(player_id):
 def admin_player_image_remove(player_id):
     db = get_session()
     try:
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if not player:
             return redirect(url_for("players_list"))
         from services.player_image_service import remove_custom_image
@@ -656,7 +656,7 @@ def admin_player_image_preview(player_id):
 def player_delete(player_id):
     db = get_session()
     try:
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if not player:
             flash("Player not found", "error")
             return redirect(url_for("players_list"))
@@ -683,7 +683,7 @@ def player_delete(player_id):
 def player_toggle(player_id):
     db = get_session()
     try:
-        player = db.query(Player).get(player_id)
+        player = db.get(Player, player_id)
         if player:
             player.is_active = not player.is_active
             status = "activated" if player.is_active else "deactivated"
@@ -736,7 +736,7 @@ def users_list():
 def user_detail(user_id):
     db = get_session()
     try:
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         if not user:
             flash("User not found", "error")
             return redirect(url_for("users_list"))
@@ -772,7 +772,7 @@ def user_detail(user_id):
 def user_edit_purse(user_id):
     db = get_session()
     try:
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         if user:
             old_coins = user.total_coins
             old_gems = user.total_gems
@@ -809,7 +809,7 @@ def user_reset_cooldowns(user_id):
             stats.last_gspin = None
             from services.activity_service import log_activity
             log_activity(db, user_id, "admin_reset", "Admin reset all cooldowns")
-            u = db.query(User).get(user_id)
+            u = db.get(User, user_id)
             log_admin(db, "cooldown_reset", target_type="user", target_id=user_id,
                       target_name=(u.username or u.first_name) if u else str(user_id),
                       detail="Reset claim/daily/gspin cooldowns")
@@ -834,7 +834,7 @@ def user_add_player(user_id):
             flash(f"Player '{player_name}' not found", "error")
             return redirect(url_for("user_detail", user_id=user_id))
 
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         if not user:
             flash("User not found", "error")
             return redirect(url_for("users_list"))
@@ -863,10 +863,10 @@ def user_remove_player(user_id, roster_id):
     try:
         entry = db.query(UserRoster).filter(UserRoster.id == roster_id, UserRoster.user_id == user_id).first()
         if entry:
-            player = db.query(Player).get(entry.player_id)
+            player = db.get(Player, entry.player_id)
             name = player.name if player else "Unknown"
             db.delete(entry)
-            user = db.query(User).get(user_id)
+            user = db.get(User, user_id)
             if user:
                 user.roster_count = max(0, user.roster_count - 1)
             from services.activity_service import log_activity
@@ -983,7 +983,7 @@ def admin_traits_list():
 def admin_trait_edit(trait_id):
     db = get_session()
     try:
-        t = db.query(Trait).get(trait_id)
+        t = db.get(Trait, trait_id)
         if not t:
             flash("Trait not found.", "error")
             return redirect(url_for("admin_traits_list"))
@@ -1012,7 +1012,7 @@ def admin_trait_edit(trait_id):
 def admin_trait_toggle(trait_id):
     db = get_session()
     try:
-        t = db.query(Trait).get(trait_id)
+        t = db.get(Trait, trait_id)
         if t:
             t.is_active = not t.is_active
             db.commit()
@@ -1031,7 +1031,7 @@ def admin_user_traits(user_id):
     """View a single user's equipped + inventory traits."""
     db = get_session()
     try:
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         if not user:
             flash("User not found.", "error")
             return redirect(url_for("users_list"))
@@ -1062,10 +1062,10 @@ def admin_grant_trait(user_id):
     """Admin override: grant a trait directly to user inventory at chosen level."""
     db = get_session()
     try:
-        user = db.query(User).get(user_id)
+        user = db.get(User, user_id)
         trait_id = int(request.form.get("trait_id", 0))
         level = max(1, min(5, int(request.form.get("level", 1))))
-        trait = db.query(Trait).get(trait_id)
+        trait = db.get(Trait, trait_id)
         if not (user and trait):
             flash("Invalid user or trait.", "error")
             return redirect(url_for("admin_user_traits", user_id=user_id))
@@ -1089,9 +1089,9 @@ def admin_grant_trait(user_id):
 def admin_revoke_player_trait(user_id, player_trait_id):
     db = get_session()
     try:
-        pt = db.query(PlayerTrait).get(player_trait_id)
+        pt = db.get(PlayerTrait, player_trait_id)
         if pt and pt.user_id == user_id:
-            trait = db.query(Trait).get(pt.trait_id)
+            trait = db.get(Trait, pt.trait_id)
             db.delete(pt)
             db.commit()
             log_admin(db, "trait_revoke", "user", user_id, "",
@@ -1108,7 +1108,7 @@ def admin_revoke_player_trait(user_id, player_trait_id):
 def admin_delete_inventory(user_id, inv_id):
     db = get_session()
     try:
-        inv = db.query(TraitInventory).get(inv_id)
+        inv = db.get(TraitInventory, inv_id)
         if inv and inv.user_id == user_id:
             db.delete(inv)
             db.commit()
@@ -1327,7 +1327,7 @@ def admin_bot_team_delete(team_id):
     db = get_session()
     try:
         from services.bot_team_service import delete_team
-        team = db.query(BotTeam).get(team_id)
+        team = db.get(BotTeam, team_id)
         if team:
             name = team.name
             ok, err = delete_team(db, team_id)
@@ -1515,7 +1515,7 @@ def admin_quest_new():
 def admin_quest_edit(quest_id):
     db = get_session()
     try:
-        q = db.query(Quest).get(quest_id)
+        q = db.get(Quest, quest_id)
         if not q:
             flash("Quest not found.", "error")
             return redirect(url_for("admin_quests_list"))
@@ -1552,7 +1552,7 @@ def admin_quest_edit(quest_id):
 def admin_quest_delete(quest_id):
     db = get_session()
     try:
-        q = db.query(Quest).get(quest_id)
+        q = db.get(Quest, quest_id)
         if q:
             name = q.name
             # Also delete any user progress on this quest
@@ -1575,7 +1575,7 @@ def admin_quest_delete(quest_id):
 def admin_quest_toggle(quest_id):
     db = get_session()
     try:
-        q = db.query(Quest).get(quest_id)
+        q = db.get(Quest, quest_id)
         if q:
             q.is_active = not q.is_active
             db.commit()
@@ -1646,7 +1646,7 @@ def admin_commentary_new():
 def admin_commentary_edit(entry_id):
     db = get_session()
     try:
-        entry = db.query(CommentaryEntry).get(entry_id)
+        entry = db.get(CommentaryEntry, entry_id)
         if not entry:
             flash("Entry not found.", "error")
             return redirect(url_for("admin_commentary_list"))
@@ -1673,7 +1673,7 @@ def admin_commentary_edit(entry_id):
 def admin_commentary_delete(entry_id):
     db = get_session()
     try:
-        entry = db.query(CommentaryEntry).get(entry_id)
+        entry = db.get(CommentaryEntry, entry_id)
         if entry:
             event_key = entry.event_key
             db.delete(entry); db.commit()
@@ -1814,7 +1814,7 @@ def admin_notification_new():
 def admin_notification_edit(sid):
     db = get_session()
     try:
-        ns = db.query(NotificationSchedule).get(sid)
+        ns = db.get(NotificationSchedule, sid)
         if not ns:
             flash("Not found.", "error")
             return redirect(url_for("admin_notifications_list"))
@@ -1849,7 +1849,7 @@ def admin_notification_edit(sid):
 def admin_notification_delete(sid):
     db = get_session()
     try:
-        ns = db.query(NotificationSchedule).get(sid)
+        ns = db.get(NotificationSchedule, sid)
         if ns:
             name = ns.name
             db.delete(ns); db.commit()
@@ -1869,7 +1869,7 @@ def admin_notification_delete(sid):
 def admin_notification_toggle(sid):
     db = get_session()
     try:
-        ns = db.query(NotificationSchedule).get(sid)
+        ns = db.get(NotificationSchedule, sid)
         if ns:
             ns.is_active = not ns.is_active
             db.commit()
@@ -1894,7 +1894,7 @@ def admin_notification_send_now(sid):
     import concurrent.futures as _cf
     db = get_session()
     try:
-        ns = db.query(NotificationSchedule).get(sid)
+        ns = db.get(NotificationSchedule, sid)
         if not ns:
             flash("Not found.", "error")
             return redirect(url_for("admin_notifications_list"))

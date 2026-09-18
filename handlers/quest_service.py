@@ -97,7 +97,7 @@ def ensure_quests_assigned(session, user_id, quest_type, *, max_count=None):
     now = datetime.utcnow()
     current_period = period_key_for(quest_type, now)
 
-    user = session.query(User).get(user_id)
+    user = session.get(User, user_id)
     if not user:
         return {"assigned": [], "auto_claimed": []}
 
@@ -301,11 +301,11 @@ def claim_quest_reward(session, user_id, quest_id):
     """User claims the reward for a completed quest.
     Returns (success, message, reward_dict).
     """
-    user = session.query(User).get(user_id)
+    user = session.get(User, user_id)
     if not user:
         return False, "User not found.", None
 
-    quest = session.query(Quest).get(quest_id)
+    quest = session.get(Quest, quest_id)
     if not quest:
         return False, "Quest not found.", None
 

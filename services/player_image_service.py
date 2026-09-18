@@ -237,7 +237,7 @@ def save_custom_image(session, player_id, file_bytes, original_filename,
             from models import Player as _P
             player_name = ""
             try:
-                p = session.query(_P).get(player_id)
+                p = session.get(_P, player_id)
                 if p: player_name = f"{p.name} ({p.rating})"
             except Exception:
                 pass

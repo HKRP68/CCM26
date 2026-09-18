@@ -257,7 +257,10 @@ def test_quick_match_renumbers_positions_to_the_batting_order(monkeypatch):
         def all(self):
             return self._rows
 
-    session = SimpleNamespace(query=lambda *_a, **_kw: _Q(roster))
+    # ``get`` is Session.get(Model, pk); ``query`` serves the roster join.
+    session = SimpleNamespace(
+        query=lambda *_a, **_kw: _Q(roster),
+        get=lambda *_a, **_kw: SimpleNamespace(captain_roster_id=None))
     monkeypatch.setattr(bos, "user_has_custom_order", lambda *_a, **_kw: False)
 
     xi = qms.get_user_xi(session, 1)

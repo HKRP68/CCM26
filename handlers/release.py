@@ -491,7 +491,7 @@ async def release_one_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             return
 
         await query.answer()
-        player = session.query(Player).get(entry.player_id)
+        player = session.get(Player, entry.player_id)
         if not player:
             # Roster entry orphaned — just delete it
             session.delete(entry)

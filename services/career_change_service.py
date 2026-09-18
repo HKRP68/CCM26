@@ -514,7 +514,7 @@ def _log(session, user_id, request, player, extra=None, gems_change=None):
 
 def _refund(session, request, player):
     """Give back the gems and the ladder rung a refused request consumed."""
-    owner = session.query(User).get(request.user_id) if request.user_id else None
+    owner = session.get(User, request.user_id) if request.user_id else None
     refunded = max(0, _int(request.gems_charged, 0))
     if owner is not None and refunded:
         owner.total_gems = _int(owner.total_gems, 0) + refunded
@@ -535,7 +535,7 @@ def approve_request(session, request, *, reviewer=None):
         return {"ok": False, "error": "not_pending",
                 "message": "That request has already been decided."}
 
-    player = session.query(Player).get(request.player_id)
+    player = session.get(Player, request.player_id)
     if player is None or not player.is_career:
         # The card went away while the name sat in the queue (an admin delete,
         # say). There is nothing to rename, so refund rather than strand them.
@@ -586,7 +586,7 @@ def reject_request(session, request, *, reviewer=None, note=None):
         return {"ok": False, "error": "not_pending",
                 "message": "That request has already been decided."}
 
-    player = session.query(Player).get(request.player_id)
+    player = session.get(Player, request.player_id)
     owner, refunded = _refund(session, request, player)
     request.status = STATUS_REJECTED
     request.review_note = (note or "").strip()[:300] or None
@@ -607,7 +607,7 @@ def cancel_request(session, request, *, by_owner=True):
         return {"ok": False, "error": "not_pending",
                 "message": "There is nothing waiting to be reviewed."}
 
-    player = session.query(Player).get(request.player_id)
+    player = session.get(Player, request.player_id)
     owner, refunded = _refund(session, request, player)
     request.status = STATUS_CANCELLED
     request.review_note = "Withdrawn by the owner" if by_owner else "Cancelled by an admin"

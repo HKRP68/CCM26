@@ -1,0 +1,107 @@
+{# The live console's body. Rendered inline by admin_auction_console.html AND
+   on its own by admin_auction_console_panel, which the page polls — one copy
+   of this markup, the same call admin_live_matches makes. Anything the JS
+   needs to know rides on data- attributes rather than in a parallel JSON
+   feed. #}
+<div id="au-meta"
+     data-status="{{ season.status }}"
+     data-deadline="{{ lot.deadline_at.isoformat() ~ 'Z' if lot and lot.deadline_at else '' }}"
+     data-lot="{{ lot.id if lot else '' }}"></div>
+
+<div class="au-block">
+  <div class="au-card">
+    {% if lot %}
+      <div class="dim" style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;">Lot {{ lot.lot_no }}{% if lot.set_name %} · {{ lot.set_name }}{% endif %}</div>
+      <div class="au-lot-name">{{ lot.name }}{% if lot.is_overseas %} ✈️{% endif %}</div>
+      <div class="dim">{{ lot.rating }} OVR · {{ lot.category }} · {{ lot.country }}{% if lot.version %} · {{ lot.version }}{% endif %}</div>
+      {% if lot.status == LOT_RTM_OFFERED %}
+      <div style="margin-top:.6rem;padding:.5rem;border:1px solid var(--border);border-radius:10px;">
+        <b>🪪 Right To Match</b> — {{ rtm_holder.name if rtm_holder else '?' }}
+        <span class="dim">({{ cards_left(rtm_holder) if rtm_holder else 0 }} left)</span>
+        <div class="dim" style="font-size:.85rem;margin-top:.2rem;">
+          {% if lot.rtm_stage == RTM_INTENT %}waiting on them: use it, or pass
+          {% elif lot.rtm_stage == RTM_FINAL_OFFER %}waiting on {{ lot.current_bidder.name if lot.current_bidder else 'the top bidder' }}: one final raise, or stand
+          {% else %}waiting on them: match {{ money(rtm_price) }}, or let him go{% endif %}
+          {% if lot.rtm_base_bid_lakh and lot.current_bid_lakh != lot.rtm_base_bid_lakh %}
+            · raised from {{ money(lot.rtm_base_bid_lakh) }}
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+      <div style="margin-top:.8rem;">
+        <div class="dim" style="font-size:.78rem;">{% if lot.current_bid_lakh %}Current bid{% else %}Base price{% endif %}</div>
+        <div class="au-price">{{ money(lot.current_bid_lakh if lot.current_bid_lakh else lot.base_price_lakh) }}</div>
+        <div class="dim">
+          {% if lot.current_bidder %}{{ lot.current_bidder.name }}{% else %}no bids yet{% endif %}
+          · next {{ money(next_min) }}
+          {% if lot.extensions_used %}· 🛡 {{ lot.extensions_used }}/{{ season.max_extensions }} extensions{% endif %}
+        </div>
+      </div>
+    {% else %}
+      <div class="au-lot-name">Nothing on the block</div>
+      <div class="dim">{{ counts.get('queued', 0) }} lots still waiting.</div>
+    {% endif %}
+  </div>
+
+  <div class="au-card" style="text-align:center;">
+    <div class="dim" style="font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;">Clock</div>
+    <div class="au-clock" id="au-clock">{% if season.status == STATUS_PAUSED %}paused{% elif left is not none %}{{ left|int }}s{% else %}—{% endif %}</div>
+    <div class="dim" style="margin-top:.4rem;">
+      {{ counts.get('sold', 0) + counts.get('unsold', 0) }} / {{ counts.get('total', 0) }} lots resolved
+    </div>
+  </div>
+</div>
+
+<div class="au-card" style="margin-top:1rem;">
+  <h3 style="margin-top:0;">Purses</h3>
+  {% for f in field %}
+  <div class="au-purse-row">
+    <span>{{ f.name }}{% if lot and lot.current_bidder_id == f.id %} <span class="pill">leading</span>{% endif %}</span>
+    <span class="dim">
+      {{ money(f.purse_remaining_lakh) }} · {{ f.squad_size }}/{{ season.max_squad_size }}
+      {% if season.rtm_enabled %}· 🪪 {{ cards_left(f) }}{% endif %}
+      · max {{ money([0, max_bid(season, f)]|max) }}
+    </span>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="au-block" style="margin-top:1rem;">
+  <div class="au-card">
+    <h3 style="margin-top:0;">Bids on this lot</h3>
+    {% if bids %}
+      <table class="au-table">
+        {% for b in bids %}
+        <tr{% if b.is_void %} class="dim"{% endif %}>
+          <td>{{ b.created_at.strftime('%H:%M:%S') }}</td>
+          <td>{{ b.franchise.name if b.franchise else '?' }}</td>
+          <td>{{ money(b.amount_lakh) }}</td>
+          <td>{% if b.is_void %}voided{% else %}{{ b.source }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </table>
+    {% else %}<p class="au-note" style="margin:0;">No bids yet.</p>{% endif %}
+  </div>
+
+  <div class="au-card">
+    <h3 style="margin-top:0;">Coming up</h3>
+    {% if upcoming %}
+    <table class="au-table">
+      {% for l in upcoming %}
+      <tr><td>{{ l.lot_no }}</td><td>{{ l.name }}</td><td>{{ l.rating }}</td><td>{{ money(l.base_price_lakh) }}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}<p class="au-note" style="margin:0;">Nothing left in the queue.</p>{% endif %}
+  </div>
+</div>
+
+<div class="au-card" style="margin-top:1rem;">
+  <h3 style="margin-top:0;">Recent events</h3>
+  <div class="au-log">
+    {% for e in events %}
+    <div style="padding:.25rem 0;border-bottom:1px solid var(--border);">
+      <span class="dim">{{ e.created_at.strftime('%H:%M:%S') }}</span> {{ e.headline|safe }}
+    </div>
+    {% endfor %}
+  </div>
+</div>

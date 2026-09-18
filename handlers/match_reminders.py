@@ -188,7 +188,7 @@ def build_plan(session, tg_id, team_id=None, opponent_id=None, force=False,
         # that row is the authority: a tournament deactivated between the two
         # taps must say so rather than quietly redirect the reminders at
         # whichever one is live now.
-        tour = session.query(Tournament).get(int(tour_id))
+        tour = session.get(Tournament, int(tour_id))
     else:
         tours = _live_tournaments(session)
         tour = tours[0] if tours else None
@@ -202,11 +202,11 @@ def build_plan(session, tg_id, team_id=None, opponent_id=None, force=False,
         return _Plan(tour, [], "", error=NOT_ALLOWED)
 
     if team_id is not None:
-        team = session.query(TournamentTeam).get(int(team_id))
+        team = session.get(TournamentTeam, int(team_id))
         if not team or team.tournament_id != tour.id:
             return _Plan(tour, [], "",
                          error="❌ That team is no longer in the tournament.")
-        opponent = (session.query(TournamentTeam).get(int(opponent_id))
+        opponent = (session.get(TournamentTeam, int(opponent_id))
                     if opponent_id is not None else None)
         fixtures = mrs.pending_fixtures(
             session, tour.id, team_id=team.id,

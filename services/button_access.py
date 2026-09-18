@@ -41,6 +41,20 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # posted them — see OWNER_RULES below — because a draft group is a busy
     # room and a board somebody else re-filters under you is worse than
     # typing /dboard again.)
+    # The Franchise Auction's quick-bid buttons ride on the ONE pinned board
+    # every franchise in the room is watching — a board only the person who
+    # started the auction may press is not an auction. handlers/auction.py
+    # authorises each press against the franchise the presser actually owns,
+    # and the exact price is baked into the callback data, so a button pressed
+    # after the price has moved is refused with "the price has moved" rather
+    # than quietly bidding a number nobody meant. Same call as the dt_ trade
+    # buttons below, for the same reason.
+    "au_bid_",
+    # The Right To Match prompt rides on the same pinned board. Only the
+    # holding franchise can actually answer, and handlers/auction.py checks
+    # that on every press — but the button has to be reachable by them, and
+    # the board belongs to nobody.
+    "au_rtm_",
     "cric_join",
     "cric_join_",
     "cric_join:",

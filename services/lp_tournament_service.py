@@ -85,7 +85,7 @@ def list_tournaments(session, include_finished=True):
 
 def get_tournament(session, tournament_id):
     """A Lets Play tournament by id, or None if it is missing or another kind."""
-    tour = session.query(Tournament).get(int(tournament_id))
+    tour = session.get(Tournament, int(tournament_id))
     if not tour or tournament_service.tournament_kind(tour) != KIND_LETSPLAY:
         return None
     return tour

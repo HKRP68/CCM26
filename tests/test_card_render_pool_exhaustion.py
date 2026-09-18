@@ -126,7 +126,7 @@ class OneConnectionPerRenderTests(unittest.TestCase):
             # freshly deployed container, for one). Measuring the *steady*
             # state is what matters: that is the render a card burst repeats
             # twenty times over.
-            generate_card(session.query(Player).get(cls.player_id))
+            generate_card(session.get(Player, cls.player_id))
         finally:
             session.close()
 
@@ -144,7 +144,7 @@ class OneConnectionPerRenderTests(unittest.TestCase):
 
         session = database.get_session()
         try:
-            player = session.query(Player).get(self.player_id)
+            player = session.get(Player, self.player_id)
             self.assertIsNotNone(player)
             with _PoolWatch(database.engine) as watch:
                 # The session is already holding its connection; count from 1.
@@ -188,7 +188,7 @@ class OneConnectionPerRenderTests(unittest.TestCase):
 
         session = database.get_session()
         try:
-            player = session.query(Player).get(self.player_id)
+            player = session.get(Player, self.player_id)
             self.assertIs(_session_for(player), session)
             session.expunge(player)
             self.assertIsNone(_session_for(player))

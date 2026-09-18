@@ -228,7 +228,7 @@ async def player_version_callback(update: Update, context: ContextTypes.DEFAULT_
         if not user:
             await q.answer("User not found", show_alert=True)
             return
-        version = session.query(Player).get(ver_id)
+        version = session.get(Player, ver_id)
         if not version:
             await q.answer("Version not found", show_alert=True)
             return

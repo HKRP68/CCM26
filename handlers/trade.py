@@ -64,8 +64,8 @@ def _is_expired(state: dict) -> bool:
 
 
 def _load_users(session, state):
-    user1 = session.query(User).get(state["user1_id"])
-    user2 = session.query(User).get(state["user2_id"])
+    user1 = session.get(User, state["user1_id"])
+    user2 = session.get(User, state["user2_id"])
     return user1, user2
 
 
@@ -103,7 +103,7 @@ async def _expire_trade_job(context: ContextTypes.DEFAULT_TYPE):
         trade_db_id = state.get("db_trade_id")
         if trade_db_id:
             from models import Trade
-            trade = session.query(Trade).get(trade_db_id)
+            trade = session.get(Trade, trade_db_id)
             if trade and trade.status == "pending":
                 trade.status = "expired"
                 trade.updated_at = datetime.utcnow()
@@ -238,7 +238,7 @@ async def trade_user1_player_callback(update: Update, context: ContextTypes.DEFA
     try:
         user1, user2 = _load_users(session, state)
         entry = session.query(UserRoster).filter(UserRoster.id == roster_id, UserRoster.user_id == user1.id).first()
-        player = session.query(Player).get(entry.player_id) if entry else None
+        player = session.get(Player, entry.player_id) if entry else None
         valid = any(e.id == roster_id for e, _ in get_tradable_players(session, user1.id))
         if not entry or not player or not valid:
             await query.edit_message_text("Trade cancelled because one player is no longer available.")
@@ -299,7 +299,7 @@ async def trade_user2_player_callback(update: Update, context: ContextTypes.DEFA
     try:
         user1, user2 = _load_users(session, state)
         entry = session.query(UserRoster).filter(UserRoster.id == roster_id, UserRoster.user_id == user2.id).first()
-        player = session.query(Player).get(entry.player_id) if entry else None
+        player = session.get(Player, entry.player_id) if entry else None
         required_ovr = state["selected_player_ovr"]
         valid = any(e.id == roster_id for e, _ in get_players_at_rating(session, user2.id, required_ovr))
         if not entry or not player or player.rating != required_ovr or not valid:

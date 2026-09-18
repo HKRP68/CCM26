@@ -443,7 +443,7 @@ def _persist_main_stats(mid, state):
             persist_player_game_stats(session, state)
         except Exception:
             logger.exception("Super Over: main-match stat persistence failed (%s)", mid)
-        m = session.query(Match).get(mid)
+        m = session.get(Match, mid)
         if m:
             m.inn1_runs = state.get("inn1_runs")
             m.inn1_wickets = state.get("inn1_wickets")
@@ -1732,7 +1732,7 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
     prize = None
     session = get_session()
     try:
-        m = session.query(Match).get(mid)
+        m = session.get(Match, mid)
         if m:
             m.status = "completed"
             m.completed_at = datetime.utcnow()
@@ -1837,7 +1837,7 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
                         main_state.get("inn1_bowl_team_id")):
                 if not uid:
                     continue
-                qu = session.query(_QUser).get(uid)
+                qu = session.get(_QUser, uid)
                 track_user_match_quests(session, main_state, qu,
                                         uid == winner_uid, False, winner_uid)
             if match_counts_for_quests(main_state):

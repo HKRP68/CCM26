@@ -162,9 +162,11 @@ def test_run_coin_toss_win_logic(monkeypatch):
 
     # Coin forced to heads → calling heads wins, tails loses.
     monkeypatch.setattr(mb.random, "choice", lambda seq: "heads")
-    coin, won = asyncio.get_event_loop().run_until_complete(
-        mb.run_coin_toss(_edit, "heads"))
+    # asyncio.run(), not get_event_loop(): a run() anywhere earlier in the
+    # suite closes the process-wide loop and leaves none current, so
+    # get_event_loop() raises here and this test passes or fails on what ran
+    # before it. Same call tests/test_cipl_duplicate_picker.py makes.
+    coin, won = asyncio.run(mb.run_coin_toss(_edit, "heads"))
     assert coin == "heads" and won is True
-    coin, won = asyncio.get_event_loop().run_until_complete(
-        mb.run_coin_toss(_edit, "tails"))
+    coin, won = asyncio.run(mb.run_coin_toss(_edit, "tails"))
     assert coin == "heads" and won is False

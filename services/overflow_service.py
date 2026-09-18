@@ -138,7 +138,7 @@ def resolve_replace(session, user, claim_id, old_roster_id):
         return {"ok": False, "error": "expired",
                 "message": "This reward expired. Try the reward again."}
 
-    new_player = session.query(Player).get(claim.player_id)
+    new_player = session.get(Player, claim.player_id)
     if not new_player:
         session.delete(claim)
         return {"ok": False, "error": "player_missing",
@@ -158,7 +158,7 @@ def resolve_replace(session, user, claim_id, old_roster_id):
 
     # A Career Player is permanent — it can never be the card dropped to make
     # room for an incoming reward.
-    dropped = session.query(Player).get(old_entry.player_id)
+    dropped = session.get(Player, old_entry.player_id)
     if dropped is not None and getattr(dropped, "is_career", False):
         from services.career_service import CAREER_LOCKED_MESSAGE
         return {"ok": False, "error": "career_player",
@@ -172,7 +172,7 @@ def resolve_replace(session, user, claim_id, old_roster_id):
         return {"ok": False, "error": "already_owned",
                 "message": f"You already own a version of {new_player.name}."}
 
-    old_player = session.query(Player).get(old_entry.player_id)
+    old_player = session.get(Player, old_entry.player_id)
     old_name = old_player.name if old_player else "Unknown"
     old_rating = old_player.rating if old_player else 0
     source = claim.source
@@ -222,7 +222,7 @@ def resolve_release(session, user, claim_id):
         return {"ok": False, "error": "expired",
                 "message": "This reward expired. Try the reward again."}
 
-    player = session.query(Player).get(claim.player_id)
+    player = session.get(Player, claim.player_id)
     name = player.name if player else "Player"
     rating = player.rating if player else 0
     sell_value = claim.sell_value or _sell_value(rating)

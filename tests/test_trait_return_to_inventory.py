@@ -11,6 +11,9 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
+
 
 _PREV_DATABASE_URL = None
 _SAVED_MODULES = {}
@@ -25,9 +28,8 @@ def setUpModule():
     global _PREV_DATABASE_URL, _SAVED_MODULES, _TMP, _ENGINE
 
     _PREV_DATABASE_URL = os.environ.get("DATABASE_URL")
-    _SAVED_MODULES = {name: sys.modules.get(name) for name in _MODULE_NAMES}
-    for name in _MODULE_NAMES:
-        sys.modules.pop(name, None)
+    _SAVED_MODULES = _module_swap.save(_MODULE_NAMES)
+    _module_swap.unload(_MODULE_NAMES)
 
     _TMP = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     _TMP.close()
@@ -49,11 +51,7 @@ def tearDownModule():
         os.environ.pop("DATABASE_URL", None)
     else:
         os.environ["DATABASE_URL"] = _PREV_DATABASE_URL
-    for name, module in _SAVED_MODULES.items():
-        if module is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = module
+    _module_swap.restore(_SAVED_MODULES)
     try:
         os.unlink(_TMP.name)
     except OSError:
@@ -185,7 +183,7 @@ class TraitReturnTest(_TraitFixtures, unittest.TestCase):
             inv = self._inventory(session, user)
             self.assertEqual(len(inv), 1)
             self.assertEqual(inv[0].level, 3)  # removing never costs progress
-            self.assertIsNone(session.query(PlayerTrait).get(pt.id))
+            self.assertIsNone(session.get(PlayerTrait, pt.id))
         finally:
             session.rollback()
             session.close()
@@ -289,14 +287,14 @@ class TraitReturnTest(_TraitFixtures, unittest.TestCase):
             self._equip(session, user, roster, self._trait(session), level=2)
             self._equip(session, user, roster, self._trait(session), level=1)
 
-            entry = session.query(UserRoster).get(roster.id)
-            pl = session.query(Player).get(player.id)
+            entry = session.get(UserRoster, roster.id)
+            pl = session.get(Player, player.id)
             result = _do_release(session, user, [(entry, pl)])
 
             self.assertTrue(result["success"])
             self.assertEqual(result["traits_returned"], 2)
             self.assertEqual(len(self._inventory(session, user)), 2)
-            self.assertIsNone(session.query(UserRoster).get(roster.id))
+            self.assertIsNone(session.get(UserRoster, roster.id))
         finally:
             session.rollback()
             session.close()
@@ -364,7 +362,7 @@ class RemoveTraitCommandTest(_TraitFixtures, unittest.TestCase):
 
         check = get_session()
         try:
-            self.assertIsNone(check.query(PlayerTrait).get(pt_id))
+            self.assertIsNone(check.get(PlayerTrait, pt_id))
             inv = (check.query(TraitInventory)
                    .filter(TraitInventory.user_id == user_id).all())
             self.assertEqual([i.level for i in inv], [3])

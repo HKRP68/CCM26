@@ -55,11 +55,11 @@ def create_cl_tour(session, host_id, guest_id, league_id, host_team_id,
     if host_id == guest_id:
         return None, "You can't start a tour with yourself."
 
-    league = session.query(ChallengeLeague).get(league_id)
+    league = session.get(ChallengeLeague, league_id)
     if not league:
         return None, "League not found."
-    host_team = session.query(ChallengeTeam).get(host_team_id)
-    guest_team = session.query(ChallengeTeam).get(guest_team_id)
+    host_team = session.get(ChallengeTeam, host_team_id)
+    guest_team = session.get(ChallengeTeam, guest_team_id)
     if not host_team or host_team.league_id != league_id:
         return None, "Host team is not in this league."
     if not guest_team or guest_team.league_id != league_id:
@@ -92,7 +92,7 @@ def create_cl_tour(session, host_id, guest_id, league_id, host_team_id,
 
 def accept_cl_tour(session, tour_id, accepter_user_id):
     """Guest accepts; create the CLTourMatch slots. Returns (tour, error)."""
-    tour = session.query(CLTour).get(tour_id)
+    tour = session.get(CLTour, tour_id)
     if not tour:
         return None, "Tour not found."
     if tour.status != "pending":
@@ -118,7 +118,7 @@ def accept_cl_tour(session, tour_id, accepter_user_id):
 
 
 def decline_cl_tour(session, tour_id, decliner_user_id):
-    tour = session.query(CLTour).get(tour_id)
+    tour = session.get(CLTour, tour_id)
     if not tour:
         return None, "Tour not found."
     if tour.user2_id != decliner_user_id:
@@ -132,7 +132,7 @@ def decline_cl_tour(session, tour_id, decliner_user_id):
 
 def expire_pending_invite(session, tour_id):
     """Called by the invite timer. Marks pending tour expired (no-op otherwise)."""
-    tour = session.query(CLTour).get(tour_id)
+    tour = session.get(CLTour, tour_id)
     if tour and tour.status == "pending":
         tour.status = "expired"
         session.flush()
@@ -186,7 +186,7 @@ def next_pending_match(session, tour_id):
 
 def link_match_to_cl_tour(session, cl_tour_match_id, match_id):
     """When a tour match's /cipl match launches: attach the Match + mark playing."""
-    tm = session.query(CLTourMatch).get(cl_tour_match_id)
+    tm = session.get(CLTourMatch, cl_tour_match_id)
     if not tm:
         return None
     tm.match_id = match_id
@@ -205,7 +205,7 @@ def unlink_match_from_cl_tour(session, cl_tour_match_id):
     that was never bowled. Only reverts a slot that is still ``playing``, so a
     finished result is never rewound. Caller commits.
     """
-    tm = session.query(CLTourMatch).get(cl_tour_match_id)
+    tm = session.get(CLTourMatch, cl_tour_match_id)
     if not tm or tm.status != "playing":
         return None
     tm.match_id = None
@@ -223,13 +223,13 @@ def record_cl_match_result(session, cl_tour_match_id, winner_user_id):
 
     Returns the CLTour, or None.
     """
-    tm = session.query(CLTourMatch).get(cl_tour_match_id)
+    tm = session.get(CLTourMatch, cl_tour_match_id)
     if not tm:
         return None
     if tm.status == "done":
-        return session.query(CLTour).get(tm.cl_tour_id)  # don't double-count
+        return session.get(CLTour, tm.cl_tour_id)  # don't double-count
 
-    tour = session.query(CLTour).get(tm.cl_tour_id)
+    tour = session.get(CLTour, tm.cl_tour_id)
     if not tour or tour.status != "active":
         return tour
 

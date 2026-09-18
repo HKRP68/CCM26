@@ -75,12 +75,17 @@ class FakeSession:
         self._objects = objects
         self.flushed = 0
 
+    def get(self, model, key):
+        """``Session.get(Model, pk)`` — the spelling the service uses now.
+        ``query(Model).get(pk)`` below routes through here."""
+        return self._objects.get((model.__name__, key))
+
     def query(self, model):
         session = self
 
         class _Q:
             def get(self, key):
-                return session._objects.get((model.__name__, key))
+                return session.get(model, key)
 
             def filter(self, *a, **k):
                 return self

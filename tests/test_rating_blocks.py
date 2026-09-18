@@ -8,10 +8,14 @@ in); and the rules must reach nothing beyond /claim, /daily and /gspin —
 other earned rewards.
 """
 
+import os
 import sys
 import types
 import unittest
 from types import SimpleNamespace
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
 
 
 def _install_stubs():
@@ -37,7 +41,7 @@ def _install_stubs():
     config.get_sell_value = lambda r: r * 50
     sys.modules["config"] = config
 
-    sys.modules.pop("services.player_service", None)
+    _module_swap.unload(["services.player_service"])
     from services import player_service, rating_block_service
     return player_service, rating_block_service
 

@@ -67,7 +67,7 @@ def _user_lite(session, user_id):
         if hit and (now - hit[0]) <= _USER_CACHE_TTL:
             return hit[1]
     from models import User
-    u = session.query(User).get(user_id)
+    u = session.get(User, user_id)
     if not u:
         return None
     lite = _UserLite(u)
@@ -338,7 +338,7 @@ def resolve_viewer(session, user_id_param):
     u = session.query(User).filter(User.telegram_id == tg).first()
     if u:
         return u
-    return session.query(User).get(tg)
+    return session.get(User, tg)
 
 
 def find_active_match(session, user, match_id=None):
@@ -347,7 +347,7 @@ def find_active_match(session, user, match_id=None):
     from models import Match
     if match_id:
         try:
-            return session.query(Match).get(int(match_id))
+            return session.get(Match, int(match_id))
         except (TypeError, ValueError):
             return None
     if not user:

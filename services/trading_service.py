@@ -57,7 +57,7 @@ def _get_owned_available_entry(session: Session, user_id: int, roster_id: int):
     )
     if not entry:
         return None, None
-    player = session.query(Player).get(entry.player_id)
+    player = session.get(Player, entry.player_id)
     if not player or is_player_locked(entry, player) or is_player_non_tradable(player):
         return None, None
     if not any(e.id == entry.id for e, _ in get_players_at_rating(session, user_id, player.rating)):
@@ -170,7 +170,7 @@ def _cannot_afford(initiator: User, receiver: User, fee: int):
 def complete_trade(session: Session, trade_id: int) -> dict:
     """Final safety check and same-OVR player swap."""
     expire_stale_trades(session)
-    trade = session.query(Trade).get(trade_id)
+    trade = session.get(Trade, trade_id)
     if not trade:
         return {"success": False, "message": "Trade not found"}
     if trade.status != "pending":
@@ -182,8 +182,8 @@ def complete_trade(session: Session, trade_id: int) -> dict:
         session.flush()
         return {"success": False, "message": "Trade expired."}
 
-    initiator = session.query(User).get(trade.initiator_id)
-    receiver = session.query(User).get(trade.receiver_id)
+    initiator = session.get(User, trade.initiator_id)
+    receiver = session.get(User, trade.receiver_id)
     init_entry, init_player, recv_entry, recv_player, error = _validate_same_ovr_swap(
         session, initiator, receiver, trade.initiator_roster_id, trade.receiver_roster_id
     )
@@ -273,7 +273,7 @@ def initiate_trade(session: Session, initiator: User, receiver: User, initiator_
 
 
 def accept_trade(session: Session, trade_id: int, user: User) -> dict:
-    trade = session.query(Trade).get(trade_id)
+    trade = session.get(Trade, trade_id)
     if not trade:
         return {"success": False, "message": "Trade not found"}
     if trade.receiver_id != user.id:
@@ -282,7 +282,7 @@ def accept_trade(session: Session, trade_id: int, user: User) -> dict:
 
 
 def reject_trade(session: Session, trade_id: int, user: User) -> dict:
-    trade = session.query(Trade).get(trade_id)
+    trade = session.get(Trade, trade_id)
     if not trade:
         return {"success": False, "message": "Trade not found"}
     if trade.status != "pending":

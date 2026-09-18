@@ -259,7 +259,7 @@ async def fire_one_off(bot, session, schedule_id, message_override=None,
     """Send a one-time blast — used by the admin "Send Now" button.
     Doesn't update schedule.last_fired_at unless the schedule type is one_off.
     """
-    schedule = session.query(NotificationSchedule).get(schedule_id)
+    schedule = session.get(NotificationSchedule, schedule_id)
     if not schedule:
         return 0, 0
     msg = message_override or schedule.message

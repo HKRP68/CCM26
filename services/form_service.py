@@ -76,7 +76,7 @@ def compute_form_score(session, user_id, player_id, player_category=None):
         return 0  # no history → neutral form
 
     # Get player to know category
-    player = session.query(Player).get(player_id)
+    player = session.get(Player, player_id)
     if not player:
         return 0
     cat = player_category or player.category

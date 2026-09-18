@@ -39,9 +39,26 @@ def _install_telegram_stub(monkeypatch):
 
 
 def _load_modules(monkeypatch):
+    """Import both modules fresh against the telegram stub, and leave nothing.
+
+    Clearing ``sys.modules`` is only half of it. Importing a submodule also
+    rebinds it as an attribute of its package, and ``monkeypatch.delitem``
+    knows nothing about that — so without the two ``delattr`` calls below these
+    tests leave ``services.match_broadcast`` pointing at a copy built against a
+    fake ``telegram``. Anything that later reaches it through the package
+    attribute rather than through ``sys.modules`` gets the stub build, and
+    patching one of the two has no effect on the other. That is how a test in
+    another file came to be patching a module nobody was calling.
+
+    ``monkeypatch.delattr`` restores the attribute at teardown, which is the
+    whole reason to route this through monkeypatch rather than doing it by hand.
+    """
+    import services
+
     _install_telegram_stub(monkeypatch)
-    monkeypatch.delitem(sys.modules, "services.miniapp_buttons", raising=False)
-    monkeypatch.delitem(sys.modules, "services.match_broadcast", raising=False)
+    for name in ("miniapp_buttons", "match_broadcast"):
+        monkeypatch.delitem(sys.modules, f"services.{name}", raising=False)
+        monkeypatch.delattr(services, name, raising=False)
     buttons = importlib.import_module("services.miniapp_buttons")
     broadcast = importlib.import_module("services.match_broadcast")
     return buttons, broadcast

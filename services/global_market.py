@@ -458,7 +458,7 @@ def add_player_to_market(session, player_id, custom_price=None,
     ``quantity`` defaults to unlimited; pass a positive number for a limited run.
     Returns (success, message_or_slot_index).
     """
-    player = session.query(Player).get(player_id)
+    player = session.get(Player, player_id)
     if not player:
         return False, "Player not found."
     if not player.is_active:
@@ -542,7 +542,7 @@ def buy_player(session, user, slot_index):
     if is_sold_out(slot):
         return False, "Sold out — try another slot.", 0
 
-    player = session.query(Player).get(slot.player_id)
+    player = session.get(Player, slot.player_id)
     if not player:
         return False, "Player no longer available.", 0
 
@@ -742,7 +742,7 @@ def add_trait_to_market(session, trait_id, custom_price=None,
     ``quantity`` defaults to unlimited; pass a positive number for a limited run.
     Returns (success, message_or_slot_index).
     """
-    trait = session.query(Trait).get(trait_id)
+    trait = session.get(Trait, trait_id)
     if not trait:
         return False, "Trait not found."
     if not trait.is_active:
@@ -785,7 +785,7 @@ def buy_trait(session, user, slot_index):
         return False, "Slot not found or inactive."
     if is_sold_out(slot):
         return False, "Sold out."
-    trait = session.query(Trait).get(slot.trait_id)
+    trait = session.get(Trait, slot.trait_id)
     if not trait:
         return False, "Trait unavailable."
     if (user.total_gems or 0) < slot.final_price:
@@ -826,7 +826,7 @@ def update_player_slot(session, slot_id, **fields):
     ``quantity`` 0 (or below) is stored as UNLIMITED rather than rejected — that
     is how the admin page puts a slot back into unlimited stock.
     """
-    slot = session.query(GlobalPlayerMarket).get(slot_id)
+    slot = session.get(GlobalPlayerMarket, slot_id)
     if not slot:
         return False, "Not found."
     for k, v in fields.items():
@@ -846,7 +846,7 @@ def update_player_slot(session, slot_id, **fields):
 
 
 def update_trait_slot(session, slot_id, **fields):
-    slot = session.query(GlobalTraitMarket).get(slot_id)
+    slot = session.get(GlobalTraitMarket, slot_id)
     if not slot:
         return False, "Not found."
     for k, v in fields.items():

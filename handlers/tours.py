@@ -209,8 +209,8 @@ async def cmt_overs_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
         session.commit()
 
-        u1 = session.query(User).get(draft["u1_id"])
-        u2 = session.query(User).get(draft["u2_id"])
+        u1 = session.get(User, draft["u1_id"])
+        u2 = session.get(User, draft["u2_id"])
         u1_label = f"@{u1.username}" if u1.username else (u1.first_name or "User1")
         u2_label = f"@{u2.username}" if u2.username else (u2.first_name or "User2")
 
@@ -342,7 +342,7 @@ async def tour_accept_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             return
         session.commit()
 
-        u1 = session.query(User).get(tour.user1_id)
+        u1 = session.get(User, tour.user1_id)
         u1_label = f"@{u1.username}" if u1.username else (u1.first_name or "User1")
         u2_label = f"@{u.username}" if u.username else (u.first_name or "User2")
 
@@ -441,7 +441,7 @@ async def mytours_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # No active — show summary list of past tours
         lines = ["📋 <b>YOUR TOURS</b>", "━━━━━━━━━━━━━━━━━━━"]
         for t in tours[:5]:
-            opp = session.query(User).get(t.user2_id if t.user1_id == u.id else t.user1_id)
+            opp = session.get(User, t.user2_id if t.user1_id == u.id else t.user1_id)
             opp_label = f"@{opp.username}" if opp and opp.username else (opp.first_name if opp else "?")
             status_emoji = {
                 "pending": "⏳", "active": "▶️", "completed": "🏁",
@@ -465,8 +465,8 @@ async def mytours_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def _render_tour_view(session, tour, viewer_user, viewer_tg):
     """Return (text, kb) for the active tour view."""
-    u1 = session.query(User).get(tour.user1_id)
-    u2 = session.query(User).get(tour.user2_id)
+    u1 = session.get(User, tour.user1_id)
+    u2 = session.get(User, tour.user2_id)
     u1_label = f"@{u1.username}" if u1.username else (u1.first_name or "User1")
     u2_label = f"@{u2.username}" if u2.username else (u2.first_name or "User2")
 
@@ -483,7 +483,7 @@ def _render_tour_view(session, tour, viewer_user, viewer_tg):
     # Match list with status icons
     for tm in matches:
         if tm.status == "done":
-            winner = session.query(User).get(tm.winner_id) if tm.winner_id else None
+            winner = session.get(User, tm.winner_id) if tm.winner_id else None
             wlabel = f"@{winner.username}" if (winner and winner.username) else (
                 winner.first_name if winner else "?")
             lines.append(f"✅ Match {tm.match_number}: <b>{wlabel}</b> won "
@@ -560,7 +560,7 @@ async def mytours_play_callback(update: Update, context: ContextTypes.DEFAULT_TY
         if not u_tapper:
             await q.answer("Do /debut first", show_alert=True)
             return
-        tour = session.query(Tour).get(tour_id)
+        tour = session.get(Tour, tour_id)
         if not tour:
             await q.answer("Tour not found", show_alert=True)
             return
@@ -590,7 +590,7 @@ async def mytours_play_callback(update: Update, context: ContextTypes.DEFAULT_TY
         # The tapper becomes user1 (the initiator); other user is user2
         u1 = u_tapper
         u2_id = tour.user2_id if u_tapper.id == tour.user1_id else tour.user1_id
-        u2 = session.query(User).get(u2_id)
+        u2 = session.get(User, u2_id)
 
         r1_count = session.query(UserRoster).filter(UserRoster.user_id == u1.id).count()
         r2_count = session.query(UserRoster).filter(UserRoster.user_id == u2.id).count()
@@ -734,12 +734,12 @@ async def mytours_info_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     session = get_session()
     try:
-        tour = session.query(Tour).get(tour_id)
+        tour = session.get(Tour, tour_id)
         if not tour:
             await q.answer("Not found", show_alert=True)
             return
-        u1 = session.query(User).get(tour.user1_id)
-        u2 = session.query(User).get(tour.user2_id)
+        u1 = session.get(User, tour.user1_id)
+        u2 = session.get(User, tour.user2_id)
         u1_label = f"@{u1.username}" if u1.username else (u1.first_name or "U1")
         u2_label = f"@{u2.username}" if u2.username else (u2.first_name or "U2")
 
@@ -799,7 +799,7 @@ async def mytours_stats_callback(update: Update, context: ContextTypes.DEFAULT_T
 
     session = get_session()
     try:
-        tour = session.query(Tour).get(tour_id)
+        tour = session.get(Tour, tour_id)
         if not tour:
             return
         stats = get_tour_stats(session, tour_id, top_n=3)
@@ -864,7 +864,7 @@ async def mytours_back_callback(update: Update, context: ContextTypes.DEFAULT_TY
     session = get_session()
     try:
         u = session.query(User).filter(User.telegram_id == tg.id).first()
-        tour = session.query(Tour).get(tour_id)
+        tour = session.get(Tour, tour_id)
         if not (u and tour):
             return
         text, kb = _render_tour_view(session, tour, u, tg.id)

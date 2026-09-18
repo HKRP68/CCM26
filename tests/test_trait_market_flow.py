@@ -14,6 +14,9 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
+
 _PREV_DATABASE_URL = None
 _SAVED_MODULES = {}
 _TMP = None
@@ -27,9 +30,8 @@ def setUpModule():
     global _PREV_DATABASE_URL, _SAVED_MODULES, _TMP, _ENGINE
 
     _PREV_DATABASE_URL = os.environ.get("DATABASE_URL")
-    _SAVED_MODULES = {name: sys.modules.get(name) for name in _MODULE_NAMES}
-    for name in _MODULE_NAMES:
-        sys.modules.pop(name, None)
+    _SAVED_MODULES = _module_swap.save(_MODULE_NAMES)
+    _module_swap.unload(_MODULE_NAMES)
 
     _TMP = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     _TMP.close()
@@ -51,11 +53,7 @@ def tearDownModule():
         os.environ.pop("DATABASE_URL", None)
     else:
         os.environ["DATABASE_URL"] = _PREV_DATABASE_URL
-    for name, module in _SAVED_MODULES.items():
-        if module is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = module
+    _module_swap.restore(_SAVED_MODULES)
     try:
         os.unlink(_TMP.name)
     except OSError:
@@ -197,7 +195,7 @@ class TraitMarketFlowTests(unittest.TestCase):
         from models import User
         session = self.get_session()
         try:
-            return session.query(User).get(user_id).total_gems
+            return session.get(User, user_id).total_gems
         finally:
             session.close()
 
@@ -205,7 +203,7 @@ class TraitMarketFlowTests(unittest.TestCase):
         from models import TraitInventory
         session = self.get_session()
         try:
-            row = session.query(TraitInventory).get(inv_id)
+            row = session.get(TraitInventory, inv_id)
             return row.user_id if row else None
         finally:
             session.close()
@@ -324,7 +322,7 @@ class TraitMarketFlowTests(unittest.TestCase):
 
         session = get_session()
         try:
-            session.query(TraitInventory).get(self.inv2_id).level = 5
+            session.get(TraitInventory, self.inv2_id).level = 5
             session.commit()
         finally:
             session.close()

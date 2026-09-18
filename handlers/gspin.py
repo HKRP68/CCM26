@@ -159,7 +159,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     session = get_session()
     try:
-        user = session.query(User).get(user_id)
+        user = session.get(User, user_id)
         if not user or user.telegram_id != tg_user.id:
             release(key)
             return
@@ -260,7 +260,7 @@ async def gspin_spin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             elif rt == "pack":
                 from models import Pack, UserPack
                 pid = reward_row.pack_id
-                pack = session.query(Pack).get(pid) if pid else None
+                pack = session.get(Pack, pid) if pid else None
                 if pack:
                     up = UserPack(user_id=user.id, pack_id=pack.id,
                                    acquired_at=datetime.utcnow())

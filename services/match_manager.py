@@ -429,7 +429,7 @@ class MatchManager:
                 is_vsbot=(self.match_type == "vsbot"),
             )
             # Update Match row with result details
-            match_row = session.query(MatchModel).get(self.match_id)
+            match_row = session.get(MatchModel, self.match_id)
             if match_row:
                 match_row.status = "completed"
                 mark_end(match_row, END_COMPLETED)

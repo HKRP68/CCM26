@@ -266,7 +266,7 @@ def get_user_xi(session, user_id):
     """
     from models import UserRoster, User
     from services import batting_order_service as bos
-    user = session.query(User).get(user_id)
+    user = session.get(User, user_id)
     captain_rid = user.captain_roster_id if user else None
     from models import Player as _P
     rows = (session.query(UserRoster, _P)

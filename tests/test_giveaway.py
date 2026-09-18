@@ -7,6 +7,7 @@ the heavy imports and exercise the pure logic of ``services.giveaway_service``
 against lightweight fakes.
 """
 
+import os
 import sys
 import types
 import random
@@ -29,6 +30,9 @@ _STUBBED_MODULES = (
 # pinning a literal that a rebalance would silently leave behind. config.py
 # pulls in nothing heavier than python-dotenv, so this is safe here.
 import config as _real_config  # noqa: E402
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
 _REAL_MAX_ROSTER = _real_config.MAX_ROSTER
 
 
@@ -102,7 +106,7 @@ def _load_service(test):
     cfg.MAX_ROSTER = _REAL_MAX_ROSTER
     sys.modules["config"] = cfg
 
-    sys.modules.pop("services.giveaway_service", None)
+    _module_swap.unload(["services.giveaway_service"])
     from services import giveaway_service
     return giveaway_service, models, IntegrityError
 

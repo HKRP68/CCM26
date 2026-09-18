@@ -268,7 +268,7 @@ def add_player_to_market(session, player_id, custom_price=None):
     """Add a single player (base or variant) to the market in the next free slot.
     Returns (success, message_or_slot_index).
     """
-    player = session.query(Player).get(player_id)
+    player = session.get(Player, player_id)
     if not player:
         return False, "Player not found."
     if not player.is_active:
@@ -322,7 +322,7 @@ def buy_player(session, user, slot_index):
     if slot.purchased_count >= slot.quantity:
         return False, "Sold out — try another slot."
 
-    player = session.query(Player).get(slot.player_id)
+    player = session.get(Player, slot.player_id)
     if not player:
         return False, "Player no longer available."
 
@@ -447,7 +447,7 @@ def add_trait_to_market(session, trait_id, custom_price=None, quantity=10):
     """Add a single trait to the trait market in the next free slot.
     Returns (success, message_or_slot_index).
     """
-    trait = session.query(Trait).get(trait_id)
+    trait = session.get(Trait, trait_id)
     if not trait:
         return False, "Trait not found."
     if not trait.is_active:
@@ -490,7 +490,7 @@ def buy_trait(session, user, slot_index):
         return False, "Slot not found or inactive."
     if slot.purchased_count >= slot.quantity:
         return False, "Sold out."
-    trait = session.query(Trait).get(slot.trait_id)
+    trait = session.get(Trait, slot.trait_id)
     if not trait:
         return False, "Trait unavailable."
     if (user.total_gems or 0) < slot.final_price:
@@ -526,7 +526,7 @@ def buy_trait(session, user, slot_index):
 
 def update_player_slot(session, slot_id, **fields):
     """Update one slot's editable fields (final_price, quantity, is_active, etc)."""
-    slot = session.query(GlobalPlayerMarket).get(slot_id)
+    slot = session.get(GlobalPlayerMarket, slot_id)
     if not slot:
         return False, "Not found."
     for k, v in fields.items():
@@ -543,7 +543,7 @@ def update_player_slot(session, slot_id, **fields):
 
 
 def update_trait_slot(session, slot_id, **fields):
-    slot = session.query(GlobalTraitMarket).get(slot_id)
+    slot = session.get(GlobalTraitMarket, slot_id)
     if not slot:
         return False, "Not found."
     for k, v in fields.items():

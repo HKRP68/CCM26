@@ -217,7 +217,11 @@ class BotTurnFlowTests(unittest.TestCase):
         the coin flip, so `q.answer(...)` is rejected. Launch failures must fall
         back to a chat message instead of leaving a dead toss on screen."""
         session = MagicMock()
-        session.query.return_value.get.return_value = None   # "Players no longer exist"
+        # "Players no longer exist" — stubbed on both spellings, because a
+        # MagicMock answers an unstubbed call with a truthy mock and the
+        # not-found branch would simply never be taken.
+        session.get.return_value = None
+        session.query.return_value.get.return_value = None
         q = MagicMock()
         # Telegram rejects a second answer on an already-answered query.
         q.answer = AsyncMock(side_effect=RuntimeError("query already answered"))

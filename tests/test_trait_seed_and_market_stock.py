@@ -181,7 +181,7 @@ class SeedTests(unittest.TestCase):
         db._seed_traits()
         session = _session()
         try:
-            row = session.query(mdl.Trait).get(trait_id)
+            row = session.get(mdl.Trait, trait_id)
             self.assertFalse(row.is_active)
             self.assertEqual(row.base_price, 4242)
         finally:
@@ -206,7 +206,7 @@ class SeedTests(unittest.TestCase):
         session = _session()
         try:
             self.assertEqual(session.query(mdl.Trait).count(), total)
-            self.assertEqual(session.query(mdl.Trait).get(trait_id).name,
+            self.assertEqual(session.get(mdl.Trait, trait_id).name,
                              "Yorker Specialist")
         finally:
             session.close()
@@ -253,7 +253,7 @@ class MarketStockTests(unittest.TestCase):
         try:
             self._list_market(session)
             slot = market.list_trait_market(session)[0]
-            user = session.query(mdl.User).get(self.user_id)
+            user = session.get(mdl.User, self.user_id)
             spend = 0
             for i in range(25):
                 ok, name = market.buy_trait(session, user, slot.slot_index)
@@ -277,7 +277,7 @@ class MarketStockTests(unittest.TestCase):
             market.update_trait_slot(session, slot.id, quantity=2)
             session.commit()
 
-            user = session.query(mdl.User).get(self.user_id)
+            user = session.get(mdl.User, self.user_id)
             self.assertTrue(market.buy_trait(session, user, slot.slot_index)[0])
             self.assertTrue(market.buy_trait(session, user, slot.slot_index)[0])
             ok, msg = market.buy_trait(session, user, slot.slot_index)
@@ -294,7 +294,7 @@ class MarketStockTests(unittest.TestCase):
             self._list_market(session)
             slot = market.list_trait_market(session)[0]
             market.update_trait_slot(session, slot.id, quantity=1)
-            user = session.query(mdl.User).get(self.user_id)
+            user = session.get(mdl.User, self.user_id)
             self.assertTrue(market.buy_trait(session, user, slot.slot_index)[0])
             self.assertFalse(market.buy_trait(session, user, slot.slot_index)[0])
 
@@ -310,7 +310,7 @@ class MarketStockTests(unittest.TestCase):
         try:
             self._list_market(session)
             for row in market.list_trait_market(session):
-                trait = session.query(mdl.Trait).get(row.trait_id)
+                trait = session.get(mdl.Trait, row.trait_id)
                 self.assertEqual(row.base_price, trait_price_of(trait))
                 self.assertLessEqual(row.final_price, row.base_price)
         finally:

@@ -27,9 +27,16 @@ import sys
 import tempfile
 import unittest
 
-from services.scorecard_import import (
-    ScorecardError, parse_batting_line, parse_bowling_line, parse_scorecard,
-)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
+
+# ScorecardError, parse_batting_line, parse_bowling_line and parse_scorecard are
+# bound in setUpModule, NOT here. setUpModule swaps services.scorecard_import
+# for a copy built against this file's own database, and names imported before
+# that swap point at the module it replaced — so ``assertRaises(ScorecardError)``
+# would be watching for a class the code under test no longer raises.
+ScorecardError = None
+parse_batting_line = parse_bowling_line = parse_scorecard = None
 
 _TG = itertools.count(880_001)
 
@@ -206,11 +213,11 @@ _MODULE_NAMES = ("database", "models", "config",
 
 def setUpModule():
     global _PREV_DATABASE_URL, _SAVED_MODULES, _TMP, _ENGINE
+    global ScorecardError, parse_batting_line, parse_bowling_line, parse_scorecard
 
     _PREV_DATABASE_URL = os.environ.get("DATABASE_URL")
-    _SAVED_MODULES = {name: sys.modules.get(name) for name in _MODULE_NAMES}
-    for name in _MODULE_NAMES:
-        sys.modules.pop(name, None)
+    _SAVED_MODULES = _module_swap.save(_MODULE_NAMES)
+    _module_swap.unload(_MODULE_NAMES)
 
     _TMP = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     _TMP.close()
@@ -222,6 +229,10 @@ def setUpModule():
     _ENGINE = engine
     Base.metadata.create_all(bind=engine)
 
+    # Now, and only now, are these the ones the tests will actually exercise.
+    from services.scorecard_import import (
+        ScorecardError, parse_batting_line, parse_bowling_line, parse_scorecard)
+
 
 def tearDownModule():
     try:
@@ -232,11 +243,7 @@ def tearDownModule():
         os.environ.pop("DATABASE_URL", None)
     else:
         os.environ["DATABASE_URL"] = _PREV_DATABASE_URL
-    for name, module in _SAVED_MODULES.items():
-        if module is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = module
+    _module_swap.restore(_SAVED_MODULES)
     try:
         os.unlink(_TMP.name)
     except OSError:

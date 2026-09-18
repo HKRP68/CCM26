@@ -222,7 +222,7 @@ async def wpmbot_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         if not user or user.id != uid:
             await q.answer("Only the calling captain can toss!", show_alert=True)
             return
-        m = session.query(Match).get(mid)
+        m = session.get(Match, mid)
         if not m or m.status != "toss":
             await q.answer("This toss is no longer active.", show_alert=True)
             return
@@ -333,11 +333,11 @@ async def _wpmbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=Non
     """
     session = get_session()
     try:
-        m = session.query(Match).get(mid)
+        m = session.get(Match, mid)
         if not m:
             return
         bot_user = session.query(User).filter(User.telegram_id == BOT_TG_ID).first()
-        user = session.query(User).get(m.user1_id)
+        user = session.get(User, m.user1_id)
 
         m.toss_decision = decision
         if decision == "bat":
@@ -374,7 +374,7 @@ async def _wpmbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=Non
         session.commit()
 
         # Toss result message.
-        winner = session.query(User).get(decider_uid)
+        winner = session.get(User, decider_uid)
         winner_name = winner.first_name or winner.username or "Bot"
         result_text = (
             f"🪙 <b>TOSS RESULT</b>\n\n"
@@ -410,7 +410,7 @@ async def _wpmbot_apply_toss(context, chat_id, mid, decision, decider_uid, q=Non
             from handlers.match import _mention as _mm
             bat_mention = "🤖 AI" if bat_uid == bot_user.id else _mm(user)
             bowl_mention = "🤖 AI" if bowl_uid == bot_user.id else _mm(user)
-            winner = session.query(User).get(decider_uid)
+            winner = session.get(User, decider_uid)
             winner_label = ("🤖 " + ADAPTIVE_BOT_TEAM_NAME
                             if decider_uid == bot_user.id
                             else f"@{winner.username or winner.first_name}")

@@ -125,7 +125,7 @@ def assign_fixture_venues(session, tournament_id, *, overwrite=False):
     """
     from models import Tournament, TournamentMatch
     tid = int(tournament_id)
-    tour = session.query(Tournament).get(tid)
+    tour = session.get(Tournament, tid)
     if not tour:
         return 0
     mode = (tour.pitch_mode or PITCH_MODE_HOST)
@@ -165,7 +165,7 @@ def assign_fixture_venues(session, tournament_id, *, overwrite=False):
 def set_fixture_pitch(session, fixture_id, pitch):
     """Pin (or clear, with a falsy ``pitch``) one fixture's surface. Caller commits."""
     from models import TournamentMatch
-    fx = session.query(TournamentMatch).get(int(fixture_id))
+    fx = session.get(TournamentMatch, int(fixture_id))
     if not fx:
         return None
     if fx.status == "completed":
@@ -182,7 +182,7 @@ def set_fixture_pitch(session, fixture_id, pitch):
 def set_fixture_home(session, fixture_id, team_id):
     """Set which side is at home. Must be one of the fixture's two teams. Caller commits."""
     from models import TournamentMatch
-    fx = session.query(TournamentMatch).get(int(fixture_id))
+    fx = session.get(TournamentMatch, int(fixture_id))
     if not fx:
         return None
     if fx.status == "completed":
@@ -232,7 +232,7 @@ def locked_pitch_for_pair(session, tour, name1, name2):
     home = None
     if fx.home_team_id:
         from models import TournamentTeam
-        row = session.query(TournamentTeam).get(int(fx.home_team_id))
+        row = session.get(TournamentTeam, int(fx.home_team_id))
         home = (row.name or "").strip() if row else None
     return pitch, home
 
@@ -251,7 +251,7 @@ def generate_schedule(session, tournament_id):
     """
     from models import Tournament, TournamentTeam, TournamentGroup, TournamentMatch
     tid = int(tournament_id)
-    tour = session.query(Tournament).get(tid)
+    tour = session.get(Tournament, tid)
     if not tour:
         return 0
 
@@ -360,7 +360,7 @@ def generate_series(session, tournament_id, matches):
         a, b = (t1, t2) if i % 2 == 0 else (t2, t1)
         add_fixture(session, tid, a, b, round_no=i + 1)
 
-    tour = session.query(Tournament).get(tid)
+    tour = session.get(Tournament, tid)
     if tour:
         tour.schedule_generated = True
     session.flush()
@@ -394,7 +394,7 @@ def add_fixture(session, tournament_id, team1_id, team2_id, group_id=None, round
     from sqlalchemy import func
     from models import Tournament, TournamentMatch, TournamentGroup
     tid = int(tournament_id)
-    tour = session.query(Tournament).get(tid)
+    tour = session.get(Tournament, tid)
     t1 = _require_team(session, tid, team1_id)
     t2 = _require_team(session, tid, team2_id)
     if not t1 or not t2:
@@ -425,7 +425,7 @@ def add_fixture(session, tournament_id, team1_id, team2_id, group_id=None, round
 def delete_fixture(session, fixture_id):
     """Delete a *scheduled* fixture only. Caller commits."""
     from models import TournamentMatch
-    tm = session.query(TournamentMatch).get(int(fixture_id))
+    tm = session.get(TournamentMatch, int(fixture_id))
     if not tm:
         return None
     if tm.status != "scheduled":
@@ -440,7 +440,7 @@ def delete_fixture(session, fixture_id):
 def swap_fixture_team(session, fixture_id, slot, new_team_id):
     """Replace one side of a *scheduled* fixture. ``slot`` is 1 or 2. Caller commits."""
     from models import TournamentMatch
-    tm = session.query(TournamentMatch).get(int(fixture_id))
+    tm = session.get(TournamentMatch, int(fixture_id))
     if not tm:
         return None
     if tm.status != "scheduled":
@@ -556,7 +556,7 @@ def bind_fixture_match(session, fixture_id, match_id):
     from models import TournamentMatch
     if not fixture_id or not match_id:
         return None
-    fx = session.query(TournamentMatch).get(int(fixture_id))
+    fx = session.get(TournamentMatch, int(fixture_id))
     if fx is None or fx.status != "live" or fx.match_id:
         return None
     fx.match_id = int(match_id)

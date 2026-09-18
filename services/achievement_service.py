@@ -375,7 +375,7 @@ def check_and_award(session, user_id):
     Returns: list of newly-unlocked entries (full catalog dicts).
     Calling code should commit the session.
     """
-    user = session.query(User).get(user_id)
+    user = session.get(User, user_id)
     if not user:
         return []
     if user.telegram_id == -1:  # bot user — skip

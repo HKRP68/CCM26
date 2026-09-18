@@ -14,6 +14,9 @@ import sys
 import tempfile
 import unittest
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
+
 
 class SquadDownsizeMigrationTest(unittest.TestCase):
     # squad_downsize_service is listed because the sibling
@@ -27,9 +30,8 @@ class SquadDownsizeMigrationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._prev_database_url = os.environ.get("DATABASE_URL")
-        cls._saved_modules = {name: sys.modules.get(name) for name in cls._MODULE_NAMES}
-        for name in cls._MODULE_NAMES:
-            sys.modules.pop(name, None)
+        cls._saved_modules = _module_swap.save(cls._MODULE_NAMES)
+        _module_swap.unload(cls._MODULE_NAMES)
 
         cls._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         cls._tmp.close()
@@ -51,11 +53,7 @@ class SquadDownsizeMigrationTest(unittest.TestCase):
             os.environ.pop("DATABASE_URL", None)
         else:
             os.environ["DATABASE_URL"] = cls._prev_database_url
-        for name, module in cls._saved_modules.items():
-            if module is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = module
+        _module_swap.restore(cls._saved_modules)
         try:
             os.unlink(cls._tmp.name)
         except OSError:

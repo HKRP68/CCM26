@@ -224,7 +224,7 @@ def add_names(session, country, kind, values):
 
 def remove_name(session, row_id):
     """Delete one pool entry. Caller commits. Returns whether a row went."""
-    row = session.query(CareerNamePool).get(row_id)
+    row = session.get(CareerNamePool, row_id)
     if not row:
         return False
     session.delete(row)

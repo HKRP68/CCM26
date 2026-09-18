@@ -22,6 +22,9 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
+
 _TG_IDS = itertools.count(98_401)
 
 _PREV_DATABASE_URL = None
@@ -41,9 +44,8 @@ def setUpModule():
     global _PREV_DATABASE_URL, _SAVED_MODULES, _TMP, _ENGINE
 
     _PREV_DATABASE_URL = os.environ.get("DATABASE_URL")
-    _SAVED_MODULES = {name: sys.modules.get(name) for name in _MODULE_NAMES}
-    for name in _MODULE_NAMES:
-        sys.modules.pop(name, None)
+    _SAVED_MODULES = _module_swap.save(_MODULE_NAMES)
+    _module_swap.unload(_MODULE_NAMES)
 
     _TMP = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     _TMP.close()
@@ -75,11 +77,7 @@ def tearDownModule():
         os.environ.pop("DATABASE_URL", None)
     else:
         os.environ["DATABASE_URL"] = _PREV_DATABASE_URL
-    for name, module in _SAVED_MODULES.items():
-        if module is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = module
+    _module_swap.restore(_SAVED_MODULES)
     try:
         os.unlink(_TMP.name)
     except OSError:
@@ -631,7 +629,7 @@ class WeeklyDealTests(unittest.TestCase):
         quests[-1].is_active = False
         self.session.commit()
 
-        user = self.session.query(User).get(self.user.id)
+        user = self.session.get(User, self.user.id)
         judged = _judge_career_week(self.session, user, period, 4, 100)
         self.assertIsNotNone(judged)
         self.assertTrue(judged["cleared"],

@@ -89,7 +89,7 @@ def record_match_result_stats(session, winner_user_id, loser_user_id,
         for uid in tie_user_ids:
             if not uid:
                 continue
-            u = session.query(User).get(uid)
+            u = session.get(User, uid)
             if is_ai_user(u):
                 continue
             record_active_day(u, now)
@@ -98,7 +98,7 @@ def record_match_result_stats(session, winner_user_id, loser_user_id,
     for uid, won in ((winner_user_id, True), (loser_user_id, False)):
         if not uid:
             continue
-        u = session.query(User).get(uid)
+        u = session.get(User, uid)
         if not u or is_ai_user(u):
             continue
         apply_win_streak(u, won)
@@ -132,8 +132,8 @@ def award_match_rewards_core(session, winner_user_id, loser_user_id, overs,
         return 0, 0, 0, 0
 
     cfg = get_config(session)
-    w = session.query(User).get(winner_user_id) if winner_user_id else None
-    l = session.query(User).get(loser_user_id) if loser_user_id else None
+    w = session.get(User, winner_user_id) if winner_user_id else None
+    l = session.get(User, loser_user_id) if loser_user_id else None
 
     # The AI never banks anything — see is_ai_user().
     if is_ai_user(w):

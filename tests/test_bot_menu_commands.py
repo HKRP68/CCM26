@@ -104,6 +104,25 @@ def test_every_scope_fits_telegrams_limit():
             f"Telegram allows per scope — setMyCommands would reject it whole")
 
 
+def test_the_admin_bucket_alone_still_fits():
+    """The admin bucket is exempt from the clamp only because it has never
+    filled it on its own.
+
+    Admin commands lead the menu, so the clamp eats player entries first and an
+    admin loses nothing they cannot reach in another scope. Once the admin
+    commands themselves pass the ceiling that stops being true: the tail of the
+    admin list starts dropping, and nothing says so — the menu simply comes
+    back short. This is the line where that begins.
+    """
+    admin_only = _admin_commands()
+    limit = _limit()
+    assert len(admin_only) <= limit, (
+        f"{len(admin_only)} admin-only commands, over the {limit} Telegram "
+        f"allows per scope — the tail of ADMIN_MENU_COMMANDS is now being "
+        f"dropped silently. Retire some, or fold a family behind one "
+        f"reference card the way /auction and /lptadmin do.")
+
+
 def test_the_admin_commands_always_survive_the_clamp():
     admin = _scopes()["admin"]
     assert admin[:len(_admin_commands())] == _admin_commands(), (
@@ -116,14 +135,64 @@ def test_no_scope_has_duplicates():
         assert not dupes, f"duplicate entries in the {scope} menu: {sorted(dupes)}"
 
 
+# Commands that deliberately reach no slash menu, and why.
+#
+# Both player scopes sit AT Telegram's 100-command ceiling, so publishing one
+# more costs an existing command its entry — ``_clamped`` drops the tail rather
+# than letting setMyCommands reject the whole call, which would silently freeze
+# the menu on whatever was published last. Every command here is advertised
+# in-product instead: in /help, on a reference card, from a hub's own buttons,
+# or by the prompt that asks for it.
+#
+# This is an allowlist, not an amnesty: a command added without a menu entry
+# and without a line here still fails the test below.
+UNPUBLISHED_ON_PURPOSE = {
+    # Franchise Auction — /auction card, the board's footer, and the RTM
+    # prompt itself, which names the owner and carries buttons.
+    "bid", "artm", "aboard", "apurse",
+    # Player Draft trades — the precedent the auction followed.
+    "dtrade", "dtrades", "dtradecancel",
+    # Challenge League tournament views — /help, the hub's buttons, and
+    # whatever alias a league sets as its fixtures_command.
+    "ctour", "cttable", "ctfixtures", "ctteams", "ctinjuries",
+    "clsd", "teamtourstats", "mvp",
+    # In-match, offered by the match's own keyboard at the moment it applies.
+    "impact", "pitchstats",
+    # Forward-only mode: a separate run path where this is the ONLY command
+    # registered at all, so there is no menu for it to be in.
+    "frwd",
+}
+
+
 def test_every_registered_command_is_published_somewhere():
     published = set().union(*(set(v) for v in _scopes().values()))
     primary, _every = _registered_commands()
-    missing = sorted({c for c in primary if c not in published})
+    missing = sorted({c for c in primary
+                      if c not in published and c not in UNPUBLISHED_ON_PURPOSE})
     assert not missing, (
         f"these commands have handlers but reach no slash menu: {missing}. "
         f"Add them to BOT_MENU_COMMANDS, or to ADMIN_MENU_COMMANDS if they are "
-        f"admin-only.")
+        f"admin-only (that bucket is exempt from the clamp and costs players "
+        f"nothing). If leaving one unpublished is deliberate, add it to "
+        f"UNPUBLISHED_ON_PURPOSE with its reason.")
+
+
+def test_the_unpublished_list_does_not_outlive_its_commands():
+    """A stale allowlist entry hides the next real omission behind a name that
+    no longer exists, so the list has to shrink when a command does."""
+    _primary, every = _registered_commands()
+    stale = sorted(UNPUBLISHED_ON_PURPOSE - set(every))
+    assert not stale, (
+        f"UNPUBLISHED_ON_PURPOSE names commands with no handler: {stale}")
+
+
+def test_nothing_is_both_published_and_excused():
+    """An entry that is also in a menu means the list is being read as
+    decoration rather than as the record of a decision."""
+    published = set().union(*(set(v) for v in _scopes().values()))
+    both = sorted(UNPUBLISHED_ON_PURPOSE & published)
+    assert not both, (
+        f"these are in a slash menu AND in UNPUBLISHED_ON_PURPOSE: {both}")
 
 
 def test_menu_entries_all_have_a_handler():

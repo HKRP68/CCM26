@@ -1,8 +1,12 @@
+import os
 import sys
 import types
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
 
 
 # Modules this file swaps for stubs so ``handlers.challenge`` can be imported
@@ -85,7 +89,7 @@ def _load_challenge_with_stubs():
     handlers_match._user_label = lambda user: "User"
     sys.modules["handlers.match"] = handlers_match
 
-    sys.modules.pop("handlers.challenge", None)
+    _module_swap.unload(["handlers.challenge"])
     try:
         from handlers import challenge
     finally:

@@ -93,8 +93,8 @@ def _label(trait, level):
 
 
 def _load_users(session, state):
-    return (session.query(User).get(state["user1_id"]),
-            session.query(User).get(state["user2_id"]))
+    return (session.get(User, state["user1_id"]),
+            session.get(User, state["user2_id"]))
 
 
 async def _answer_not_part(query, message="You are not part of this trade."):

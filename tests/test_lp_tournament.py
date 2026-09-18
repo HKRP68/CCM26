@@ -27,6 +27,9 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper, see its docstring)
+
 _TG = itertools.count(880_001)
 
 _PREV_DATABASE_URL = None
@@ -42,9 +45,11 @@ def setUpModule():
     global _PREV_DATABASE_URL, _SAVED_MODULES, _TMP, _ENGINE
 
     _PREV_DATABASE_URL = os.environ.get("DATABASE_URL")
-    _SAVED_MODULES = {name: sys.modules.get(name) for name in _MODULE_NAMES}
-    for name in _MODULE_NAMES:
-        sys.modules.pop(name, None)
+    # Popping sys.modules alone is not enough — a popped submodule is still an
+    # attribute of its package, and ``from services import tournament_service``
+    # reads that attribute. See tests/_module_swap.py.
+    _SAVED_MODULES = _module_swap.save(_MODULE_NAMES)
+    _module_swap.unload(_MODULE_NAMES)
 
     _TMP = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     _TMP.close()
@@ -66,11 +71,7 @@ def tearDownModule():
         os.environ.pop("DATABASE_URL", None)
     else:
         os.environ["DATABASE_URL"] = _PREV_DATABASE_URL
-    for name, module in _SAVED_MODULES.items():
-        if module is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = module
+    _module_swap.restore(_SAVED_MODULES)
     try:
         os.unlink(_TMP.name)
     except OSError:
@@ -444,9 +445,9 @@ class KindIsolationTests(LPTCase):
         self.lpt.activate(self.session, second.id)
         self.session.commit()
         self.session.expire_all()
-        self.assertTrue(self.session.query(Tournament).get(cipl.id).is_active)
+        self.assertTrue(self.session.get(Tournament, cipl.id).is_active)
         # …but it does take the previous Lets Play tournament off the air.
-        self.assertFalse(self.session.query(Tournament).get(self.tour.id).is_active)
+        self.assertFalse(self.session.get(Tournament, self.tour.id).is_active)
 
     def test_kind_reads_as_challenge_when_the_column_is_null(self):
         # Databases migrated before the column existed can hold NULL, and every
@@ -684,7 +685,7 @@ class FixtureReservationTests(LPTCase):
                                                    self.a.id, self.b.id)
         self.session.commit()
         self.assertEqual(
-            self.session.query(TournamentMatch).get(fixture_id).status, "live")
+            self.session.get(TournamentMatch, fixture_id).status, "live")
 
     def test_a_second_reservation_of_the_same_pairing_is_refused(self):
         self.lpt.reserve_pair_fixture(self.session, self.tour, self.a.id, self.b.id)

@@ -206,6 +206,8 @@ def init_db():
         Giveaway, GiveawayEntry,
         StoredAsset,
         PlayerDraft, DraftTeam, DraftPlayer, DraftPick,
+        AuctionSeason, AuctionFranchise, AuctionLot, AuctionBid,
+        AuctionLedgerEntry, AuctionEvent,
     )
     import logging
     import time as _time
@@ -911,6 +913,47 @@ def _migrate_add_columns():
     # shipped should be tradable, and /dtradelock is how an admin closes the
     # window.
     _try_add("player_drafts", "trades_open", "BOOLEAN DEFAULT TRUE")
+
+    # ── Franchise Auction: retention ──
+    # The six auction tables are new and ``create_all`` builds them; these
+    # columns arrived with phase 2a and land on an ``auction_seasons`` that may
+    # already have rows. Every one is nullable or defaulted on purpose, and
+    # every reader goes through ``_as_int(..., 0)`` / ``_loads(..., fallback)``,
+    # so a season written before retention existed reads as "retention not
+    # configured" rather than failing. Note the deliberate absence of a
+    # ``retention_enabled`` BOOLEAN: a non-nullable boolean added here reads
+    # back NULL-as-falsy on every existing row (the ``trades_open`` lesson
+    # above), and ``max_retentions > 0`` carries the same fact for free.
+    _try_add("auction_seasons", "min_retentions", "INTEGER DEFAULT 0")
+    _try_add("auction_seasons", "retention_max_spend_lakh", "INTEGER")
+    _try_add("auction_seasons", "retention_deadline_at", "TIMESTAMP")
+    _try_add("auction_seasons", "retention_min_rating", "INTEGER")
+    _try_add("auction_seasons", "retention_max_rating", "INTEGER")
+    _try_add("auction_seasons", "retention_categories_json", "TEXT")
+    _try_add("auction_seasons", "retention_price_rules_json", "TEXT")
+    # Which ChallengeLeague this season follows. The retention picker needs it
+    # before any lot exists, so it cannot be inferred from the lots themselves.
+    _try_add("auction_seasons", "previous_league_id", "INTEGER")
+
+    # ── Franchise Auction: Right To Match ──
+    # Phase 2b. ``rtm_enabled`` shipped WITH auction_seasons, so every row
+    # already has a real value for it — the NULL-reads-falsy trap does not
+    # apply there. These are all defaulted integers for the same reason it
+    # would if they were booleans.
+    _try_add("auction_seasons", "rtm_per_team", "INTEGER DEFAULT 0")
+    _try_add("auction_seasons", "rtm_window_seconds", "INTEGER DEFAULT 30")
+    _try_add("auction_seasons", "rtm_extra_lakh", "INTEGER DEFAULT 0")
+    _try_add("auction_lots", "rtm_stage", "VARCHAR(16)")
+    _try_add("auction_lots", "rtm_base_bid_lakh", "INTEGER")
+
+    # ── Franchise Auction: one season following another ──
+    # ``previous_season_id`` is where the RULES came from; ``previous_league_id``
+    # above is where last season's SQUADS live. A season cloned from another has
+    # both; one linked to a league by hand has only the second.
+    # ``carried_from_id`` is the link that survives a franchise being renamed
+    # between seasons, which the team-name match it replaces does not.
+    _try_add("auction_seasons", "previous_season_id", "INTEGER")
+    _try_add("auction_franchises", "carried_from_id", "INTEGER")
 
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so

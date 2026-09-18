@@ -6,10 +6,14 @@ those (mirroring tests/test_challenge_league_commands.py) before importing it.
 """
 
 import importlib.util
+import os
 import sys
 import types
 import unittest
 from types import SimpleNamespace
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
 
 
 # Modules we inject only when the real one is missing (bare test env). They are
@@ -81,7 +85,7 @@ def _load_h2h_with_stubs():
     _stub("models", _models)
     _stub("services.telegram_user_service", _tus)
 
-    sys.modules.pop("handlers.h2h", None)
+    _module_swap.unload(["handlers.h2h"])
     from handlers.h2h import tally_h2h, _plain_name
     return tally_h2h, _plain_name
 
@@ -89,7 +93,7 @@ def _load_h2h_with_stubs():
 def tearDownModule():
     for name in _INJECTED:
         sys.modules.pop(name, None)
-    sys.modules.pop("handlers.h2h", None)
+    _module_swap.unload(["handlers.h2h"])
 
 
 tally_h2h, _plain_name = _load_h2h_with_stubs()

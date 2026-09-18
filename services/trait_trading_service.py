@@ -72,7 +72,7 @@ def _owned_inventory_trait(session, user_id, inventory_id):
                    TraitInventory.user_id == user_id).first())
     if not inv:
         return None, None
-    return inv, session.query(Trait).get(inv.trait_id)
+    return inv, session.get(Trait, inv.trait_id)
 
 
 def list_inventory(session, user_id, level=None):

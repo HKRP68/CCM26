@@ -92,8 +92,8 @@ async def _auto_decide(context: ContextTypes.DEFAULT_TYPE):
 
     session = get_session()
     try:
-        user = session.query(User).get(d["user_id"])
-        player = session.query(Player).get(d["player_id"])
+        user = session.get(User, d["user_id"])
+        player = session.get(Player, d["player_id"])
         if not user or not player:
             return
 
@@ -122,7 +122,7 @@ async def _auto_decide(context: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 session.rollback()
                 logger.exception("Auto-retain failed, falling back to auto-release")
-                user = session.query(User).get(d["user_id"])
+                user = session.get(User, d["user_id"])
                 user.total_coins += sell_val
                 log_activity(session, user.id, "auto_release",
                              f"Auto-released {player.name} (retain failed)",
@@ -289,13 +289,13 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     session = get_session()
     try:
-        user = session.query(User).get(user_id)
+        user = session.get(User, user_id)
         if not user or user.telegram_id != tg_user.id:
             # Not the owner — don't mutate the card UI or cancel their timer.
             release(key)
             return
 
-        player = session.query(Player).get(player_id)
+        player = session.get(Player, player_id)
         if not player:
             release(key)
             return
@@ -391,7 +391,7 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     session = get_session()
     try:
-        user = session.query(User).get(user_id)
+        user = session.get(User, user_id)
         if not user or user.telegram_id != tg_user.id:
             # Not the owner — don't mutate the card UI or cancel their timer.
             release(key)
@@ -404,7 +404,7 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         _cancel_timer(context, user_id)
 
-        player = session.query(Player).get(player_id)
+        player = session.get(Player, player_id)
         name = player.name if player else "Unknown"
         rating = player.rating if player else 0
         username = tg_user.username or tg_user.first_name
@@ -439,7 +439,7 @@ async def replace_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     session = get_session()
     try:
-        user = session.query(User).get(user_id)
+        user = session.get(User, user_id)
         if not user or user.telegram_id != tg_user.id:
             return
 
@@ -500,7 +500,7 @@ async def replace_confirm_callback(update: Update, context: ContextTypes.DEFAULT
 
     session = get_session()
     try:
-        user = session.query(User).get(user_id)
+        user = session.get(User, user_id)
         if not user or user.telegram_id != tg_user.id:
             return
 
@@ -510,8 +510,8 @@ async def replace_confirm_callback(update: Update, context: ContextTypes.DEFAULT
             await context.bot.send_message(chat_id=chat_id, text="❌ Player no longer in roster")
             return
 
-        old_player = session.query(Player).get(old_entry.player_id)
-        new_player = session.query(Player).get(new_player_id)
+        old_player = session.get(Player, old_entry.player_id)
+        new_player = session.get(Player, new_player_id)
         old_name = old_player.name if old_player else "Unknown"
         new_name = new_player.name if new_player else "Unknown"
         count = user.roster_count

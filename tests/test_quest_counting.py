@@ -18,6 +18,9 @@ import tempfile
 import unittest
 from datetime import datetime
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
+
 _TG_IDS = itertools.count(98_401)
 
 _PREV_DATABASE_URL = None
@@ -32,9 +35,8 @@ def setUpModule():
     global _PREV_DATABASE_URL, _SAVED_MODULES, _TMP, _ENGINE
 
     _PREV_DATABASE_URL = os.environ.get("DATABASE_URL")
-    _SAVED_MODULES = {name: sys.modules.get(name) for name in _MODULE_NAMES}
-    for name in _MODULE_NAMES:
-        sys.modules.pop(name, None)
+    _SAVED_MODULES = _module_swap.save(_MODULE_NAMES)
+    _module_swap.unload(_MODULE_NAMES)
 
     _TMP = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
     _TMP.close()
@@ -56,11 +58,7 @@ def tearDownModule():
         os.environ.pop("DATABASE_URL", None)
     else:
         os.environ["DATABASE_URL"] = _PREV_DATABASE_URL
-    for name, module in _SAVED_MODULES.items():
-        if module is None:
-            sys.modules.pop(name, None)
-        else:
-            sys.modules[name] = module
+    _module_swap.restore(_SAVED_MODULES)
     try:
         os.unlink(_TMP.name)
     except OSError:
@@ -863,7 +861,7 @@ class SeederTests(unittest.TestCase):
         result = seed(self.session)
         self.session.commit()
         self.assertEqual(result["retired"], 1)
-        refreshed = self.session.query(Quest).get(legacy.id)
+        refreshed = self.session.get(Quest, legacy.id)
         self.assertIsNotNone(refreshed)
         self.assertFalse(refreshed.is_active)
 
@@ -885,8 +883,8 @@ class SeederTests(unittest.TestCase):
 
         seed(self.session)
         self.session.commit()
-        self.assertTrue(self.session.query(Quest).get(pinned.id).is_active)
-        self.assertTrue(self.session.query(Quest).get(career.id).is_active)
+        self.assertTrue(self.session.get(Quest, pinned.id).is_active)
+        self.assertTrue(self.session.get(Quest, career.id).is_active)
 
     def test_dry_run_writes_nothing(self):
         from models import Quest
@@ -910,7 +908,7 @@ class SeederTests(unittest.TestCase):
         result = seed(self.session, retire_legacy=False)
         self.session.commit()
         self.assertEqual(result["retired"], 0)
-        self.assertTrue(self.session.query(Quest).get(legacy.id).is_active)
+        self.assertTrue(self.session.get(Quest, legacy.id).is_active)
 
 
 # ════════════════════════════════════════════════════════════════════

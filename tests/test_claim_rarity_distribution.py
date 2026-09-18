@@ -5,10 +5,14 @@ rarity bands strictly: an empty band must never leak picks into arbitrary
 ratings — it re-rolls among the other configured bands instead.
 """
 
+import os
 import sys
 import types
 import unittest
 from types import SimpleNamespace
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
 
 
 def _load_player_service():
@@ -38,7 +42,7 @@ def _load_player_service():
     config.get_sell_value = lambda r: r * 50
     sys.modules["config"] = config
 
-    sys.modules.pop("services.player_service", None)
+    _module_swap.unload(["services.player_service"])
     from services import player_service
     return player_service
 

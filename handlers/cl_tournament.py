@@ -280,8 +280,8 @@ async def clsd_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await q.answer("Unknown team.", show_alert=True)
             return
         from models import Tournament, TournamentTeam
-        team = session.query(TournamentTeam).get(team_id)
-        tour = session.query(Tournament).get(team.tournament_id) if team else None
+        team = session.get(TournamentTeam, team_id)
+        tour = session.get(Tournament, team.tournament_id) if team else None
         if not team or not tour:
             await q.answer("That team is no longer in the tournament.",
                            show_alert=True)
@@ -418,8 +418,8 @@ async def teamtourstats_pick_callback(update: Update, context: ContextTypes.DEFA
             await q.answer("Unknown team.", show_alert=True)
             return
         from models import Tournament, TournamentTeam
-        team = session.query(TournamentTeam).get(team_id)
-        tour = session.query(Tournament).get(team.tournament_id) if team else None
+        team = session.get(TournamentTeam, team_id)
+        tour = session.get(Tournament, team.tournament_id) if team else None
         if not team or not tour:
             await q.answer("That team is no longer in the tournament.",
                            show_alert=True)

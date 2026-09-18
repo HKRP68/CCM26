@@ -197,6 +197,11 @@ class FakeSession:
         self.deleted = []
         self.flushed = 0
 
+    def get(self, model, key):
+        """``Session.get(Model, pk)`` — the spelling the service uses now.
+        ``query(Model).get(pk)`` below routes through here."""
+        return self.traits.get(key) if model.__name__ == "Trait" else None
+
     def query(self, model):
         session = self
         name = model.__name__
@@ -206,7 +211,7 @@ class FakeSession:
                 self._filters = []
 
             def get(self, key):
-                return session.traits.get(key) if name == "Trait" else None
+                return session.get(model, key)
 
             def filter(self, *conditions):
                 self._filters.extend(conditions)

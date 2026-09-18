@@ -28,7 +28,7 @@ def list_active_teams(session):
 
 def get_team_with_players(session, team_id):
     """Returns (team, [(BotTeamPlayer, Player), ...]) sorted by batting_order."""
-    team = session.query(BotTeam).get(team_id)
+    team = session.get(BotTeam, team_id)
     if not team:
         return None, []
     rows = (session.query(BotTeamPlayer, Player)
@@ -82,7 +82,7 @@ def create_team(session, name, description="", difficulty="Medium"):
 
 def update_team(session, team_id, name=None, description=None,
                 difficulty=None, is_active=None):
-    t = session.query(BotTeam).get(team_id)
+    t = session.get(BotTeam, team_id)
     if not t:
         return None, "Team not found"
     if name is not None:
@@ -105,7 +105,7 @@ def update_team(session, team_id, name=None, description=None,
 
 
 def delete_team(session, team_id):
-    t = session.query(BotTeam).get(team_id)
+    t = session.get(BotTeam, team_id)
     if not t:
         return False, "Team not found"
     session.query(BotTeamPlayer).filter(BotTeamPlayer.bot_team_id == team_id).delete()
@@ -115,10 +115,10 @@ def delete_team(session, team_id):
 
 def add_player_to_team(session, team_id, player_id):
     """Append a player at the next batting position."""
-    team = session.query(BotTeam).get(team_id)
+    team = session.get(BotTeam, team_id)
     if not team:
         return None, "Team not found"
-    player = session.query(Player).get(player_id)
+    player = session.get(Player, player_id)
     if not player:
         return None, "Player not found"
     if getattr(player, "is_career", False):
@@ -205,7 +205,7 @@ def set_captain(session, team_id, player_id):
 def bulk_add_players(session, team_id, player_names_or_ids):
     """Bulk-add players by name or id, one per line.
     Returns (added_count, skipped_list)."""
-    team = session.query(BotTeam).get(team_id)
+    team = session.get(BotTeam, team_id)
     if not team:
         return 0, ["Team not found"]
     added = 0
@@ -222,7 +222,7 @@ def bulk_add_players(session, team_id, player_names_or_ids):
         # Try ID first, then name
         player = None
         if name.isdigit():
-            player = session.query(Player).get(int(name))
+            player = session.get(Player, int(name))
         if not player:
             player = (not_career(session.query(Player))
                       .filter(Player.name.ilike(name)).first())

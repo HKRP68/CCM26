@@ -143,7 +143,7 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         # Build buttons: one per player (their name) + Cancel
         btns = []
         for slot in slots:
-            player = session.query(Player).get(slot.player_id)
+            player = session.get(Player, slot.player_id)
             if not player:
                 continue
             sold = is_sold_out(slot)
@@ -189,7 +189,7 @@ async def playermarket_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 "━━━━━━━━━━━━━━━━━━",
             ]
             for slot in slots:
-                p = session.query(Player).get(slot.player_id)
+                p = session.get(Player, slot.player_id)
                 if p:
                     text_lines.append(
                         f"#{slot.slot_index+1}. <b>{p.name}</b> "
@@ -246,7 +246,7 @@ async def playermarket_select_callback(update: Update, context: ContextTypes.DEF
         if not slot:
             await q.answer("Slot no longer available.", show_alert=True)
             return
-        player = session.query(Player).get(slot.player_id)
+        player = session.get(Player, slot.player_id)
         if not player:
             await q.answer("Player gone.", show_alert=True)
             return

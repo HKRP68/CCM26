@@ -126,7 +126,7 @@ async def daily_claim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     session = get_session()
     try:
-        user = session.query(User).get(user_id)
+        user = session.get(User, user_id)
         if not user or user.telegram_id != tg_user.id:
             release(key)
             return

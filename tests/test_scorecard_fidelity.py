@@ -5,9 +5,13 @@ module imports without the Pillow dependency installed.
 """
 
 import importlib.util
+import os
 import sys
 import types
 import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
 
 
 # Only stub PIL when it's genuinely absent (bare test env); removed in
@@ -24,7 +28,7 @@ def _load_scorecard_with_pil_stub():
                                               load_default=lambda *a, **k: None)
         sys.modules["PIL"] = pil
         _INJECTED.append("PIL")
-    sys.modules.pop("services.scorecard_card", None)
+    _module_swap.unload(["services.scorecard_card"])
     from services.scorecard_card import _extras_breakdown
     return _extras_breakdown
 
@@ -35,7 +39,7 @@ _extras_breakdown = _load_scorecard_with_pil_stub()
 def tearDownModule():
     for name in _INJECTED:
         sys.modules.pop(name, None)
-    sys.modules.pop("services.scorecard_card", None)
+    _module_swap.unload(["services.scorecard_card"])
 
 
 class ExtrasBreakdownTests(unittest.TestCase):

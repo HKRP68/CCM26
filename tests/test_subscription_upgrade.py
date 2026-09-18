@@ -6,11 +6,15 @@ remaining paid time rather than resetting the clock or re-granting the full
 bundle.
 """
 
+import os
 import sys
 import types
 import unittest
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import _module_swap  # noqa: E402  (sibling helper; see its docstring)
 
 
 def _load_service():
@@ -19,7 +23,7 @@ def _load_service():
     dotenv = types.ModuleType("dotenv")
     dotenv.load_dotenv = lambda *a, **k: None
     sys.modules.setdefault("dotenv", dotenv)
-    sys.modules.pop("services.subscription_service", None)
+    _module_swap.unload(["services.subscription_service"])
     # Stub the lazily-imported side effects so no DB/pack catalogue is needed.
     activity = types.ModuleType("services.activity_service")
     activity.log_activity = lambda *a, **k: None

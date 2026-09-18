@@ -14,14 +14,24 @@ from services.match_rewards import (
 
 
 def _user(**kw):
-    base = dict(id=1, win_streak=0, best_streak=0, active_days=0,
-                last_match_date=None)
+    # A positive telegram_id matters: ``is_ai_user`` treats a missing or
+    # non-positive one as the bot's own row and writes no career counters for
+    # it, so a fixture without one silently exercises nothing.
+    base = dict(id=1, telegram_id=100, win_streak=0, best_streak=0,
+                active_days=0, last_match_date=None)
     base.update(kw)
     return SimpleNamespace(**base)
 
 
 class _FakeSession:
-    """Minimal session: query(User).get(id) resolves from a dict."""
+    """Minimal session: ``session.get(User, id)`` resolves from a dict.
+
+    ``query(User).get(id)`` still works, because ``query`` hands back this same
+    object and ``get`` takes either shape — the legacy call passes the id
+    alone. Modelling both is deliberate: a double that only understands the
+    spelling the code happens to use today turns a routine migration into a
+    wall of red that says nothing about the code under test.
+    """
 
     def __init__(self, users):
         self._users = users
@@ -29,8 +39,8 @@ class _FakeSession:
     def query(self, _model):
         return self
 
-    def get(self, uid):
-        return self._users.get(uid)
+    def get(self, model_or_id, uid=None):
+        return self._users.get(model_or_id if uid is None else uid)
 
 
 # ── streak ───────────────────────────────────────────────────────────
@@ -81,6 +91,26 @@ def test_match_on_a_new_day_counts_again():
 
 
 # ── combined result recording ────────────────────────────────────────
+
+def test_the_bot_collects_no_career_counters():
+    """The other side of the fixture above, pinned so it cannot go quiet again.
+
+    The AI opponent plays constantly and wins constantly, so crediting it would
+    put it permanently on top of every leaderboard. It is recognised by a
+    non-positive ``telegram_id`` — and a fixture that simply forgot the column
+    looked exactly like the bot, which is how three tests in this file came to
+    assert nothing at all.
+    """
+    human = _user(id=1, telegram_id=100, win_streak=2, best_streak=2)
+    bot = _user(id=2, telegram_id=-1, win_streak=0, best_streak=0)
+    session = _FakeSession({1: human, 2: bot})
+
+    record_match_result_stats(session, 1, 2)
+
+    assert human.win_streak == 3, "the human's streak still moves"
+    assert bot.win_streak == 0 and bot.active_days == 0
+    assert bot.last_match_date is None
+
 
 def test_record_match_result_updates_both_sides():
     winner = _user(id=1, win_streak=2, best_streak=2)

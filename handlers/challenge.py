@@ -259,7 +259,7 @@ def is_fixtures_command(command_name, session):
 def _active_tournament_command(session, tour):
     """Best-effort tournament command string for an active tournament."""
     if tour.league_id:
-        lg = session.query(ChallengeLeague).get(tour.league_id)
+        lg = session.get(ChallengeLeague, tour.league_id)
         if lg and lg.tournament_command:
             return lg.tournament_command
     return tour.command_snapshot or ""
@@ -720,7 +720,7 @@ def _resolve_fixture_venue(draft):
     try:
         from models import Tournament
         from services import league_schedule_service
-        tour = session.query(Tournament).get(int(draft["tournament_id"]))
+        tour = session.get(Tournament, int(draft["tournament_id"]))
         return league_schedule_service.locked_pitch_for_pair(
             session, tour, draft.get("host_team"), draft.get("target_team"))
     except Exception:
@@ -1076,7 +1076,7 @@ def _load_team_players_with_retry(draft, side, attempts=2):
                 if draft.get("is_tournament") and draft.get("tournament_id"):
                     from models import Tournament
                     from services import tournament_service
-                    tour = session.query(Tournament).get(int(draft["tournament_id"]))
+                    tour = session.get(Tournament, int(draft["tournament_id"]))
                     if tour is not None:
                         lo, hi = tournament_service.overseas_limits(
                             session, tour, league)
@@ -1091,7 +1091,7 @@ def _load_team_players_with_retry(draft, side, attempts=2):
             if draft.get("is_tournament") and draft.get("tournament_id") and team_id:
                 from models import Tournament
                 from services import injury_service
-                tour = session.query(Tournament).get(int(draft["tournament_id"]))
+                tour = session.get(Tournament, int(draft["tournament_id"]))
                 hurt_ids, hurt_rows = injury_service.unavailable_for_team(
                     session, tour, team_id)
                 if hurt_ids:
@@ -1817,7 +1817,7 @@ def _fixture_open_for_pair(tournament_id, name1, name2):
     from models import Tournament
     session = get_session()
     try:
-        tour = session.query(Tournament).get(int(tournament_id))
+        tour = session.get(Tournament, int(tournament_id))
         if not tour or not tour.schedule_generated:
             return True
         opts = league_schedule_service.remaining_opponent_names(session, tournament_id, name1)
@@ -2526,7 +2526,7 @@ async def challenge_accept_callback(update: Update, context: ContextTypes.DEFAUL
         if not valid:
             await query.answer(_xi_error(errors if errors else count), show_alert=True)
             return
-        challenger = session.query(User).get(lobby["challenger_user_id"])
+        challenger = session.get(User, lobby["challenger_user_id"])
         if not challenger:
             _pop_lobby(context, lobby_id)
             await query.answer("The challenger no longer exists.", show_alert=True)
@@ -2634,8 +2634,8 @@ async def challenge_coin_callback(update: Update, context: ContextTypes.DEFAULT_
         coin, won = await run_coin_toss(
             lambda t: query.edit_message_text(t, parse_mode="HTML"), call)
 
-        challenger = session.query(User).get(lobby["challenger_user_id"])
-        target = session.query(User).get(lobby["target_user_id"])
+        challenger = session.get(User, lobby["challenger_user_id"])
+        target = session.get(User, lobby["target_user_id"])
         if not challenger or not target:
             _pop_lobby(context, lobby_id)
             await query.edit_message_text("Challenge players no longer exist.")
@@ -2684,8 +2684,8 @@ async def challenge_toss_callback(update: Update, context: ContextTypes.DEFAULT_
             await query.answer("A match is already active in this chat.", show_alert=True)
             return
 
-        challenger = session.query(User).get(lobby["challenger_user_id"])
-        target = session.query(User).get(lobby["target_user_id"])
+        challenger = session.get(User, lobby["challenger_user_id"])
+        target = session.get(User, lobby["target_user_id"])
         if not challenger or not target:
             _pop_lobby(context, lobby_id)
             await query.answer("Challenge players no longer exist.", show_alert=True)
@@ -2726,8 +2726,8 @@ async def challenge_toss_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.edit_message_text(
             f"✅ {_user_label(user)} elected to {'BAT' if decision == 'bat' else 'BOWL'} FIRST.\n"
             "Opening the Challenge Mode Mini App…")
-        bat_user = session.query(User).get(match.batting_first_id)
-        bowl_user = session.query(User).get(match.bowling_first_id)
+        bat_user = session.get(User, match.batting_first_id)
+        bowl_user = session.get(User, match.bowling_first_id)
         bat_team = bat_user.team_name or f"{('@' + bat_user.username) if bat_user.username else (bat_user.first_name or 'Player')}'s XI"
         bowl_team = bowl_user.team_name or f"{('@' + bowl_user.username) if bowl_user.username else (bowl_user.first_name or 'Player')}'s XI"
         toss_note = (f"{_user_label(user)} won & chose to "

@@ -180,13 +180,19 @@ def test_persist_stats_lookup_includes_inactive_impact_player(monkeypatch):
     import services.player_stats_service as stats_svc
 
     calls = []
-    monkeypatch.setattr(
-        stats_svc,
-        "_update_bowling",
-        lambda session, user_id, player_id, bowling: (
-            calls.append((user_id, player_id, bowling)) or True
-        ),
-    )
+
+    def _record(session, user_id, player_id, bowling):
+        """Stand in for ``_update_bowling`` — including what it returns.
+
+        The caller counts truthy returns, and the real thing returns False for
+        an all-zero line: deciding "is there anything to record" in one place
+        is the point of that split. A stub that always said True made this test
+        assert the caller filtered, which it has never done.
+        """
+        calls.append((user_id, player_id, bowling))
+        return any(bowling.get(k) for k in ("balls", "runs", "wickets"))
+
+    monkeypatch.setattr(stats_svc, "_update_bowling", _record)
 
     state = {
         "innings": 2,
@@ -207,8 +213,12 @@ def test_persist_stats_lookup_includes_inactive_impact_player(monkeypatch):
 
     counts = stats_svc.persist_player_game_stats(object(), state)
 
+    # The whole point of the test: the replaced player is still *found*, even
+    # though the XI marks them inactive, so their spell reaches their career.
+    assert (2, 1202, {"balls": 6, "runs": 5, "wickets": 1}) in calls
+    # The impact sub who never bowled is looked up too, and records nothing.
+    assert (2, 1300, {"balls": 0, "runs": 0, "wickets": 0}) in calls
     assert counts["bowling"] == 1
-    assert calls == [(2, 1202, {"balls": 6, "runs": 5, "wickets": 1})]
 
 
 def _patch_next_action(monkeypatch, state, next_action):
