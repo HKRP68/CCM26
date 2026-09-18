@@ -468,6 +468,28 @@ ADMIN_MENU_COMMANDS = (
     ("artmcards", "Admin: give one franchise its own Right To Match count"),
     ("artmforce", "Admin: answer an open Right To Match for a franchise"),
     ("artmundo", "Admin: undo a match — money and card both back"),
+    # Lets Play tournament. Every one of these is bot-admin-only, so they
+    # belong in this bucket rather than nowhere: it is exempt from the
+    # 100-command clamp and published only into admin DMs, so listing them
+    # costs no player a menu entry and the people who actually run a
+    # tournament can find them.
+    ("lptadmin", "Admin: Lets Play tournament reference card"),
+    ("lptnew", "Admin: create and activate a Lets Play tournament"),
+    ("lptadd", "Admin: add a team to the tournament"),
+    ("lptremove", "Admin: remove a team from the tournament"),
+    ("lptrename", "Admin: rename the tournament"),
+    ("lptsync", "Admin: resolve placeholder names from Telegram accounts"),
+    ("lptschedule", "Admin: generate the fixture list"),
+    ("lptknockout", "Admin: seed the playoff bracket from the table"),
+    ("lptstart", "Admin: start the tournament"),
+    ("lptpause", "Admin: pause the tournament"),
+    ("lptresume", "Admin: resume a paused tournament"),
+    ("lptcomplete", "Admin: mark the tournament completed"),
+    ("lptcancel", "Admin: cancel the tournament"),
+    ("lptreset", "Admin: clear every result, keeping teams and fixtures"),
+    ("lptlist", "Admin: list every Lets Play tournament"),
+    ("lptuse", "Admin: make another tournament the active one"),
+    ("lptdelete", "Admin: delete a Lets Play tournament"),
     # Running tournament: the points table, and matches played off the bot.
     ("tpoints", "Admin: dock or award points on the tournament table"),
     ("tpointsclear", "Admin: clear a team's points adjustment"),
