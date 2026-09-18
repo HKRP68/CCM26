@@ -22148,9 +22148,11 @@ def admin_auctions_list():
                 flash(f"Error: {exc}", "error")
             return redirect(url_for("admin_auctions_list"))
 
+        all_seasons = (db.query(AuctionSeason)
+                       .order_by(AuctionSeason.id.desc()).all())
+        by_id = {s.id: s for s in all_seasons}
         rows = []
-        for season in (db.query(AuctionSeason)
-                       .order_by(AuctionSeason.id.desc()).all()):
+        for season in all_seasons:
             counts = auction_svc.pool_counts(db, season.id)
             rows.append({
                 "season": season,
@@ -22158,6 +22160,9 @@ def admin_auctions_list():
                 "franchises": len(auction_svc.franchises(db, season.id)),
                 "lots": counts.get("total", 0),
                 "sold": counts.get(auction_svc.LOT_SOLD, 0),
+                # Resolved from the list we already have rather than a query
+                # each, so a page of twenty seasons stays one round trip.
+                "follows": by_id.get(season.previous_season_id or 0),
             })
         return render_template("admin_auctions.html", rows=rows)
     finally:
@@ -22172,8 +22177,13 @@ def admin_auction_detail(season_id):
         season = _auction_or_404(db, season_id)
         if request.method == "POST":
             action = (request.form.get("action") or "").strip()
+            landing = None
             try:
-                _auction_detail_action(db, season, action)
+                # Actions normally return nothing and we come back to this
+                # page. One — cloning — creates a *different* auction, and
+                # leaving the admin on the old one is how the next twenty
+                # minutes get spent setting up the season they just left.
+                landing = _auction_detail_action(db, season, action)
                 db.commit()
             except auction_svc.AuctionError as ve:
                 db.rollback()
@@ -22182,6 +22192,8 @@ def admin_auction_detail(season_id):
                 db.rollback()
                 logger.exception("admin_auction_detail failed")
                 flash(f"Error: {exc}", "error")
+            if landing:
+                return redirect(landing)
             return redirect(url_for("admin_auction_detail", season_id=season.id)
                             + (request.form.get("back_query") or ""))
 
@@ -22257,6 +22269,9 @@ def admin_auction_detail(season_id):
                      .filter(AuctionLot.season_id == season.id,
                              AuctionLot.acquisition == auction_svc.ACQ_RTM)
                      .order_by(AuctionLot.sold_at.desc()).all()),
+            # Which seasons this one follows, nearest first.
+            chain=auction_svc.season_chain(db, season),
+            STATUS_COMPLETED=auction_svc.STATUS_COMPLETED,
         )
     finally:
         db.close()
@@ -22491,6 +22506,21 @@ def _auction_detail_action(db, season, action):
         auction_svc.lock_retention(db, season)
         log_admin(db, "auction_retention_lock", "auction", season.id, season.name)
         flash("🔒 Retention is closed.", "success")
+
+    elif action == "clone":
+        fresh = auction_svc.clone_season(
+            db, season, request.form.get("name"))
+        log_admin(db, "auction_clone", "auction", fresh.id,
+                  f"{fresh.name} from {season.name}")
+        note = ("" if fresh.previous_league_id else
+                f" {season.name} was never published, so there is no record of "
+                f"last season's squads yet — publish it, then link the league "
+                f"below.")
+        flash(f"🌱 “{fresh.name}” starts from “{season.name}”. Build the pool, "
+              f"and bind it to a group when “{season.name}” is done.{note}",
+              "success")
+        # The whole point is landing on the new auction, not the old one.
+        return url_for("admin_auction_detail", season_id=fresh.id)
 
     elif action == "link_previous":
         stamped = auction_svc.link_previous_season(

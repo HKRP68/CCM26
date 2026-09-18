@@ -3674,6 +3674,10 @@ class AuctionSeason(Base):
     # lot exists — ``AuctionLot.previous_franchise_id`` can only be stamped
     # once the pool is built, and retention runs before that.
     previous_league_id = Column(Integer, nullable=True)
+    # The auction this one was cloned from, which is a different fact: the
+    # league above is where last season's SQUADS live, this is where its RULES
+    # came from. A season linked to a league by hand has one and not the other.
+    previous_season_id = Column(Integer, nullable=True)
 
     # ── The board, and the announcement cursor ─────────────────────────
     # ``board_message_id`` is the one pinned message the auction lives in; it
@@ -3755,10 +3759,18 @@ class AuctionFranchise(Base):
     purse_remaining_lakh = Column(Integer, default=10000, nullable=False)
     squad_size = Column(Integer, default=0, nullable=False)
 
-    # ── Retention / RTM: PHASE 2, nothing reads these yet ───────────────
+    # ── Retention / RTM ─────────────────────────────────────────────────
     retained_count = Column(Integer, default=0, nullable=False)
     rtm_cards_total = Column(Integer, default=0, nullable=False)
     rtm_cards_used = Column(Integer, default=0, nullable=False)
+
+    # ── Last season ─────────────────────────────────────────────────────
+    # The franchise in the previous season that this one continues. Worth a
+    # column of its own because the alternative — matching last season's team
+    # NAME to this season's franchise name — breaks the moment somebody
+    # renames a franchise between seasons, and breaks silently: every Right To
+    # Match and every retention candidate simply vanishes.
+    carried_from_id = Column(Integer, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

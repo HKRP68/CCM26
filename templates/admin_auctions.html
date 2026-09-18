@@ -38,6 +38,7 @@
       <div class="dim" style="font-size:.8rem;">
         {{ row.franchises }} franchises · {{ row.lots }} lots · {{ row.sold }} sold
         {% if row.season.chat_id %}· bound to {{ row.season.chat_id }}{% else %}· not bound to a group{% endif %}
+        {% if row.follows %}<br>follows <a href="{{ url_for('admin_auction_detail', season_id=row.follows.id) }}">{{ row.follows.name }}</a>{% endif %}
       </div>
       <div class="au-actions">
         <a class="btn btn-ghost" href="{{ url_for('admin_auction_detail', season_id=row.season.id) }}">⚙️ Set up</a>

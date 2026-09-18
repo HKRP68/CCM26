@@ -917,6 +917,44 @@ async def aretlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _with_auction(update, work, admin=True, context=context)
 
 
+async def aclone_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aclone Season 3</code> — start the next season from this one.
+
+    Every rule and every franchise, owners included, carried over. Deliberately
+    does <b>not</b> bind the new auction to this group: the old season's pinned
+    board is still here, and stealing the group out from under it would leave
+    that board answering for an auction nobody is running. /abind when the
+    current one is finished.
+    """
+    user = update.effective_user
+    raw = _arg_text(context).strip()
+
+    def work(session, season):
+        if not raw:
+            raise AuctionError("Usage: /aclone <name>, e.g. /aclone Season 3")
+        fresh = A.clone_season(session, season, raw,
+                               by_tg_id=user.id if user else None)
+        field = A.franchises(session, fresh.id)
+        lines = [f"🌱 <b>{html.escape(fresh.name)}</b> starts from "
+                 f"<b>{html.escape(season.name)}</b> — {len(field)} franchises "
+                 f"and every rule carried over."]
+        if fresh.previous_league_id:
+            lines.append("It follows last season's published league, so "
+                         "retention and Right To Match already know who held "
+                         "whom.")
+        else:
+            lines.append(f"⚠️ {html.escape(season.name)} was never published, "
+                         f"so there is no record of last season's squads yet. "
+                         f"Publish it, then link the league on the new "
+                         f"auction's setup page.")
+        lines.append("")
+        lines.append("Next: build the pool, then <code>/abind</code> in this "
+                     "group once this auction is done.")
+        return "\n".join(lines)
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
 async def aaccel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """<code>/aaccel</code> — every unsold player back into the queue at once.
 

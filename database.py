@@ -946,6 +946,15 @@ def _migrate_add_columns():
     _try_add("auction_lots", "rtm_stage", "VARCHAR(16)")
     _try_add("auction_lots", "rtm_base_bid_lakh", "INTEGER")
 
+    # ── Franchise Auction: one season following another ──
+    # ``previous_season_id`` is where the RULES came from; ``previous_league_id``
+    # above is where last season's SQUADS live. A season cloned from another has
+    # both; one linked to a league by hand has only the second.
+    # ``carried_from_id`` is the link that survives a franchise being renamed
+    # between seasons, which the team-name match it replaces does not.
+    _try_add("auction_seasons", "previous_season_id", "INTEGER")
+    _try_add("auction_franchises", "carried_from_id", "INTEGER")
+
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so
     # they stay independently fault-tolerant without a round trip each.

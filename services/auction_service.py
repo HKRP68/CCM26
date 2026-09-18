@@ -413,6 +413,127 @@ def create_season(session, name, **settings):
     return season
 
 
+# Every rule a season carries — the whole of "how this competition is played",
+# and exactly what a next season should inherit. Named explicitly rather than
+# derived by copying every column, because the interesting question is which
+# columns are NOT here: status, the bound chat, the published league and the
+# board cursors are all state from a *run*, and a clone is not a run.
+#
+# ``tests/test_auction_season.py`` checks this list against the model, so a new
+# rule column added later fails a test instead of being silently left behind.
+SEASON_RULE_FIELDS = (
+    # The clock
+    "bid_seconds", "snipe_window_seconds", "snipe_extend_seconds",
+    "max_extensions",
+    # Money
+    "opening_purse_lakh", "currency_label", "min_base_price_lakh",
+    "base_price_rules_json", "bid_increment_rules_json",
+    # The squad
+    "min_squad_size", "max_squad_size", "role_minimums_json",
+    "home_country", "max_overseas",
+    # Retention
+    "max_retentions", "min_retentions", "retention_max_spend_lakh",
+    "retention_min_rating", "retention_max_rating",
+    "retention_categories_json", "retention_price_rules_json",
+    # Right To Match
+    "rtm_enabled", "rtm_per_team", "rtm_window_seconds", "rtm_extra_lakh",
+)
+
+# What a franchise takes with it into the next season: who it is and who runs
+# it. Everything else — the purse, the squad, the cards — is this season's
+# result, and starts again.
+FRANCHISE_CARRY_FIELDS = ("short_name", "city", "logo_url", "owner_tg_id",
+                          "owner_name", "co_owner_ids_json", "sort_order")
+
+
+def clone_season(session, source, name, *, chat_id=None, by_tg_id=None):
+    """Start the next season from this one. Returns the new season.
+
+    Every rule is copied and every franchise carried over with its owners, so
+    "the same competition, next year" is one action rather than an evening of
+    re-typing. What it does *not* copy is as deliberate:
+
+    * **The pool.** The proposal's own flow is RETAIN, then BUILD POOL — by the
+      time a season ends, last season's players are sitting on squads and the
+      catalogue has moved on. The pool builder already skips retained players.
+    * **The bound group.** ``bind_chat`` refuses to steal another auction's
+      chat, and it is right to: the old season's pinned board is still in that
+      group answering to an auction that would no longer exist. An admin runs
+      /abind when the old season is finished. ``chat_id`` is here for the case
+      where the group is already free and the caller knows it.
+    * **Anything from the run** — status, the published league, the board
+      cursors, the retention lock.
+
+    The one thing it wires up by itself is ``previous_league_id``, pointed at
+    the league the source published. That is the single most forgettable step
+    in setting up a season, and forgetting it does not fail loudly: retention
+    and Right To Match simply find nobody.
+    """
+    if source is None:
+        raise AuctionError("There is no auction to clone.")
+
+    season = create_season(session, name,
+                           **{f: getattr(source, f) for f in SEASON_RULE_FIELDS})
+    season.previous_season_id = source.id
+    session.flush()
+
+    if chat_id is not None:
+        bind_chat(session, season, chat_id)
+
+    for old in franchises(session, source.id):
+        create_franchise(
+            session, season, old.name, quiet=True,
+            purse_total_lakh=season.opening_purse_lakh,
+            carried_from_id=old.id,
+            rtm_cards_total=_as_int(season.rtm_per_team, 0),
+            **{f: getattr(old, f) for f in FRANCHISE_CARRY_FIELDS})
+
+    # Flushed before anything counts the rows just written: this session is
+    # autoflush=False, and ``link_previous_season`` reads the franchises back
+    # through a query to match them to last season's teams.
+    session.flush()
+
+    followed = 0
+    if source.league_id:
+        followed = link_previous_season(session, season, source.league_id)
+
+    field = franchises(session, season.id)
+    if source.league_id:
+        tail = (f" Following {_e(source.name)}'s published league, so "
+                f"retention and Right To Match already know who held whom.")
+    else:
+        tail = (f" {_e(source.name)} was never published, so there is no "
+                f"record of last season's squads to follow — publish it, then "
+                f"link the league on this season's setup page.")
+    log_event(session, season, "season_cloned",
+              f"🌱 <b>{_e(season.name)}</b> starts from {_e(source.name)} — "
+              f"{len(field)} franchises and every rule carried over.{tail}",
+              by_tg_id=by_tg_id, by_admin=True,
+              detail={"from_season_id": source.id,
+                      "franchises": len(field),
+                      "lots_followed": followed})
+    return season
+
+
+def season_chain(session, season):
+    """The seasons behind this one, nearest first. Empty for a first season."""
+    chain, seen = [], set()
+    current = season
+    while current is not None and getattr(current, "previous_season_id", None):
+        previous_id = int(current.previous_season_id)
+        # A cycle cannot happen through clone_season, but a hand-edited row is
+        # not worth hanging the page over.
+        if previous_id in seen:
+            break
+        seen.add(previous_id)
+        current = (session.query(AuctionSeason)
+                   .filter(AuctionSeason.id == previous_id).first())
+        if current is None:
+            break
+        chain.append(current)
+    return chain
+
+
 def season_for_chat(session, chat_id):
     """The auction bound to this group, or None. ``chat_id`` is unique."""
     if chat_id is None:
@@ -422,12 +543,32 @@ def season_for_chat(session, chat_id):
 
 
 def bind_chat(session, season, chat_id):
-    """Bind an auction to one group. Refuses to steal another auction's chat."""
+    """Bind an auction to one group, taking it from a finished one if need be.
+
+    A *running* auction keeps its group: its pinned board is in there and the
+    room is bidding into it, so binding over the top would leave that board
+    answering for an auction nobody can reach. That much was always true.
+
+    A **finished** one does not. The obvious next thing a group does after an
+    auction is run the next season in the same group, and the old binding is
+    then pure history — ``season_for_chat`` resolves one chat to one auction,
+    so leaving it in place blocks the group forever. It used to, and the
+    refusal even said "cancel or finish it first" when finishing it was exactly
+    what had already happened.
+    """
     chat_id = int(chat_id)
     other = season_for_chat(session, chat_id)
     if other is not None and other.id != season.id:
-        raise AuctionError(f"This group is already running “{other.name}”. "
-                           f"Cancel or finish it first.")
+        if other.status not in (STATUS_COMPLETED, STATUS_CANCELLED):
+            raise AuctionError(f"This group is already running “{other.name}”. "
+                               f"Finish or cancel it first.")
+        # Released, not shared: two auctions on one chat_id would make every
+        # command in the group ambiguous.
+        other.chat_id = None
+        session.flush()
+        log_event(session, season, "chat_rebound",
+                  f"📌 This group has moved on from {_e(other.name)} to "
+                  f"<b>{_e(season.name)}</b>.", by_admin=True)
     season.chat_id = chat_id
     return season
 
@@ -497,8 +638,14 @@ def add_co_owner(session, franchise, tg_id):
     return ids
 
 
-def create_franchise(session, season, name, **fields):
-    """Add a franchise, and open its purse with the ledger's first row."""
+def create_franchise(session, season, name, *, quiet=False, **fields):
+    """Add a franchise, and open its purse with the ledger's first row.
+
+    ``quiet`` suppresses the per-franchise announcement, for a caller adding a
+    whole field at once — ten "X joined" lines are ten messages for the sweeper
+    to post where one summary would do. The ledger row is written either way:
+    that one is the record, not the announcement.
+    """
     name = (name or "").strip()
     if not name:
         raise AuctionError("A franchise needs a name.")
@@ -526,9 +673,11 @@ def create_franchise(session, season, name, **fields):
     # SUM(ledger) == purse_remaining_lakh true from the very first moment
     # rather than only after the first purchase.
     _ledger(session, franchise, LEDGER_OPENING, purse, note="Opening purse")
-    log_event(session, season, "franchise_added",
-              f"🏛 {_e(name)} joined with {render_money(purse, season.currency_label)}.",
-              franchise=franchise)
+    if not quiet:
+        log_event(session, season, "franchise_added",
+                  f"🏛 {_e(name)} joined with "
+                  f"{render_money(purse, season.currency_label)}.",
+                  franchise=franchise)
     return franchise
 
 
@@ -827,8 +976,14 @@ def previous_squad_map(session, season, league_id=None):
 
     Matching is by ``source_player_id``, never by name: two cricketers sharing
     a name would be quietly mis-assigned, and that is the one mistake a
-    retention picker — and later, Right To Match — must not make. The franchise
-    is matched to the old team by name, which is the only link there is.
+    retention picker — and later, Right To Match — must not make.
+
+    The *franchise* side has two routes. A season cloned from another carries
+    ``carried_from_id`` on every franchise, which is an exact link and survives
+    a franchise being renamed between seasons. Failing that we fall back to
+    matching last season's team name to this season's franchise name, which is
+    all a hand-linked season has — and which loses every holder, in silence,
+    the moment somebody renames a side.
 
     Used by the retention picker (before any lot exists) and by
     ``link_previous_season`` (after the pool is built), so the two can never
@@ -843,11 +998,29 @@ def previous_squad_map(session, season, league_id=None):
                     ChallengePlayer.source_player_id.isnot(None)).all())
     if not rows:
         return {}
-    by_name = {(f.name or "").strip().lower(): f
-               for f in franchises(session, season.id)}
+    here = franchises(session, season.id)
+    by_name = {(f.name or "").strip().lower(): f for f in here}
+
+    # The exact route, for a season cloned from another. Last season's teams
+    # were named after last season's franchises by ``publish_to_league``, so
+    # team name -> old franchise is safe *within that season*; the hop from
+    # there to this season's franchise is the stored link, not a name.
+    carried = {f.carried_from_id: f for f in here if f.carried_from_id}
+    previous_by_name = {}
+    if carried and getattr(season, "previous_season_id", None):
+        previous_by_name = {
+            (f.name or "").strip().lower(): f
+            for f in franchises(session, int(season.previous_season_id))}
+
     mapping = {}
     for source_id, team_name in rows:
-        franchise = by_name.get((team_name or "").strip().lower())
+        key = (team_name or "").strip().lower()
+        franchise = None
+        was = previous_by_name.get(key)
+        if was is not None:
+            franchise = carried.get(was.id)
+        if franchise is None:
+            franchise = by_name.get(key)
         if franchise is not None:
             mapping[source_id] = franchise
     return mapping

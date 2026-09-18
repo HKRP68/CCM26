@@ -433,6 +433,47 @@
       open right now, and moving the ground under it is how a player ends up
       matched by the wrong franchise.
     </p>
+    {% if chain %}
+    <p class="au-note" style="margin-bottom:0;">
+      This auction follows
+      {% for s in chain %}<a href="{{ url_for('admin_auction_detail', season_id=s.id) }}">{{ s.name }}</a>{% if not loop.last %} → {% endif %}{% endfor %},
+      and its franchises are linked to theirs by more than a name — so renaming
+      one here does not lose who held whom.
+    </p>
+    {% endif %}
+  </div>
+
+  <!-- ── Next season ───────────────────────────────────────────── -->
+  <div class="au-card">
+    <h3 style="margin-top:0;">🌱 Next season</h3>
+    <p class="au-note" style="margin-top:0;">
+      A new auction with <b>every rule and every franchise of this one</b>,
+      owners and co-owners included. Purses go back to the opening purse,
+      squads and RTM cards start again, and the new auction follows this one's
+      published league — so retention and Right To Match already know who held
+      whom, which is the step it is easiest to forget.
+    </p>
+    <form method="POST" class="au-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="clone">
+      <div style="grid-column:span 2;">
+        <label>Name</label>
+        <input type="text" name="name" placeholder="Season 3" required>
+      </div>
+      <div><button class="btn btn-primary" type="submit">Start next season</button></div>
+    </form>
+    <p class="au-note" style="margin-bottom:0;">
+      The <b>player pool is not copied</b> — by now this season's players are on
+      squads and the catalogue has moved on, so the next one retains first and
+      builds its pool after. The <b>group is not taken over</b> either: this
+      season's pinned board still lives there. Bind the new auction with
+      <code>/abind</code> once this one is finished.
+      {% if not season.league_id %}
+      <br><b>Publish this auction first</b> if you can — an unpublished season
+      leaves no record of its squads, and the new one would start with nobody
+      holding a Right To Match.
+      {% endif %}
+    </p>
   </div>
 
   <!-- ── Pool builder ──────────────────────────────────────────── -->

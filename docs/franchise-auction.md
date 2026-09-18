@@ -93,8 +93,8 @@ Admin: `/auction` (the reference card), `/anew`, `/abind`, `/astart`,
 `/apause`, `/aresume`, `/anext`, `/aextend`, `/asold`, `/aunsold`,
 `/aundobid`, `/awithdraw`, `/atimer`, `/asnipe`, `/agrant`, `/aco`,
 `/apublish`, `/acancel`, plus retention's `/aretlock`, `/aretain`,
-`/aunretain`, RTM's `/artmset`, `/artmcards`, `/artmforce`, `/artmundo`, and
-the accelerated round's `/aaccel`.
+`/aunretain`, RTM's `/artmset`, `/artmcards`, `/artmforce`, `/artmundo`, the
+accelerated round's `/aaccel`, and `/aclone` for the next season.
 
 `/bid`, `/artm`, `/aboard` and `/apurse` are **not** in the group slash menu. Both
 player scopes sit exactly at Telegram's 100-command ceiling and `_clamped`
@@ -404,6 +404,65 @@ outing would quietly run to a shorter clock than the first.
 
 ---
 
+## The next season
+
+A finished season **is** the saved configuration — so there is no template
+table, just `/aclone`:
+
+```text
+/aclone Season 3     every rule, every franchise, every owner
+```
+
+…or **🌱 Next season** on the setup page, which lands you on the new auction
+rather than the one you just left.
+
+What carries: the whole clock, the purse, both price ladders, the squad and
+overseas caps, every retention rule, every RTM rule — and the field, with its
+owners and co-owners, which is the tedious part. Purses go back to the opening
+purse (with their opening ledger row, so `ledger_total == purse_remaining_lakh`
+from the first moment), squads and cards start again.
+
+**The one thing it wires up by itself** is `previous_league_id`, pointed at the
+league the source published. That is the most forgettable step in setting a
+season up and it does not fail loudly when missed — retention and Right To
+Match simply find nobody. An unpublished source has nothing to point at, and
+both surfaces say so rather than leaving it quiet.
+
+`SEASON_RULE_FIELDS` names the rules explicitly rather than copying every
+column, because the interesting question is which columns are *not* there —
+status, the bound chat, the published league and the board cursors are state
+from a **run**, and a clone is not a run. A test checks that list against the
+model, so a rule column added later fails rather than being silently left on
+its default.
+
+**What is not carried**, and why:
+
+* **The pool.** §14's flow is RETAIN, then BUILD POOL. By the end of a season
+  its players are on squads and the catalogue has moved on, so the next season
+  builds fresh — and the pool builder already skips retained players.
+* **The group.** A *running* auction keeps its chat: its pinned board is in
+  there and the room is bidding into it. A **finished** one hands it over on
+  the next `/abind`, releasing its own binding as it goes, because
+  `season_for_chat` resolves one chat to one auction and two would make every
+  command in the group ambiguous. (That used to be refused outright, with a
+  message reading "cancel or finish it first" when finishing it was exactly
+  what had happened — so the group was blocked forever.)
+
+### Renaming a franchise between seasons
+
+`previous_squad_map` matched last season's **team name** to this season's
+**franchise name**, and its own docstring called that "the only link there is".
+It was: rebrand a side between seasons and every Right To Match and every
+retention candidate vanished, with no error — just an empty map.
+
+A cloned franchise carries `carried_from_id`, which is a real link. The lookup
+now resolves last season's team name to last season's *franchise* (safe, because
+`publish_to_league` names teams after franchises in that same season) and then
+hops to this season's through the stored id. The name match stays as the
+fallback, because a season linked to a league by hand has nothing else.
+
+---
+
 ## How the website talks to the group
 
 **The Flask admin panel never touches Telegram.** It runs in a thread of the
@@ -631,10 +690,12 @@ quietly bidding a number nobody meant.
 ```text
 AuctionSeason       the auction: status, bound chat, the lot timer, anti-snipe,
                     the purse default, squad rules, the base-price ladder, the
-                    retention rules and ladder, the RTM rules, the league it
-                    follows, the pinned board and the announcement cursor
+                    retention rules and ladder, the RTM rules, the league and
+                    the season it follows, the pinned board and the
+                    announcement cursor
 AuctionFranchise    a franchise: name, city, logo, owner + co-owners, purse,
-                    and its Right To Match cards (total and used)
+                    its Right To Match cards (total and used), and the
+                    franchise it continues from last season
 AuctionLot          one player — the lot that goes on the block AND its result,
                     retained and matched players included (``acquisition``
                     tells the three apart), plus the open RTM stage
@@ -708,13 +769,12 @@ Two things were on their way to a third copy each, and both fail silently.
 | `tests/test_auction_bidding.py` | The lifecycle, bidding, two-session concurrency, the clock, anti-snipe, undo, permissions, the commands, the board, and the accelerated round |
 | `tests/test_auction_retention.py` | The ladder, the money, every cap, the window, what retention does to the pool and the board, publishing a retained player, and the commands |
 | `tests/test_auction_rtm.py` | The proposal's own Ashwin example end to end, every eligibility gate, all three timeouts, the self-raise suspension from both sides, the card, `undo_rtm`, the two-session races, and the autoflush shapes |
+| `tests/test_auction_season.py` | Cloning: every rule carried (and a guard against the rule list falling behind the model), the field and its owners, the purses and their ledger, what is deliberately left behind, the group handover, and the rename that used to lose every holder |
 
 ---
 
 ## Not built (yet)
 
-* **Season templates** — saving a finished configuration and starting the next
-  season from it.
 * **A Mini App auction board.** The board is a Telegram message today; the
   `/webapp` plumbing would serve a live web view of the same data.
 
