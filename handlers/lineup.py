@@ -5,7 +5,7 @@ see ``services.roster_lock``.
 """
 
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Chat, Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from database import get_session
@@ -20,6 +20,7 @@ from services.roster_view import build_display_order, XI_SIZE
 from services.fancy_text import small_caps, bold_digits, bold_serif, circled
 from services.miniapp_buttons import miniapp_deep_link
 from services import chemistry
+from services import rich_message
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,34 @@ def _xi_chemistry(top_11):
     return chemistry.xi_summary([player for _entry, player in top_11])
 
 
+def _xi_sections(top_11):
+    """Split an XI into its display sections as ``(emoji, title, pairs)``.
+
+    Bowlers (pacers + spinners) share one section, but pacers stay ahead of
+    spinners to match /swap display ordering. An unrecognised category reads as
+    a batsman. Shared by the HTML renderer and the rich-text one so the two can
+    never drift on which section a card lands in.
+    """
+    batsmen, keepers, allrounders, pacers, spinners = [], [], [], [], []
+    for entry, player in top_11:
+        pair = (entry, player)
+        cat = player.category
+        if cat == "Wicket Keeper":
+            keepers.append(pair)
+        elif cat == "All-rounder":
+            allrounders.append(pair)
+        elif cat == "Bowler":
+            (spinners if _is_spin(player.bowl_style) else pacers).append(pair)
+        else:
+            batsmen.append(pair)
+    return [
+        ("🏏", "BATSMEN", batsmen),
+        ("🧤", "WICKET-KEEPER", keepers),
+        ("⚡", "ALL-ROUNDERS", allrounders),
+        ("🎯", "BOWLERS", pacers + spinners),
+    ]
+
+
 def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False,
                    origin_chat_id=None):
     """Build the stylised Playing XI text.
@@ -71,29 +100,8 @@ def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False,
     bench = roster_list[11:]
     count = len(top_11)
 
-    # First pass: categorize. Bowlers (pacers + spinners) share one section,
-    # but pacers stay ahead of spinners to match /swap display ordering.
-    batsmen_raw, keepers_raw, allrounders_raw, pacers_raw, spinners_raw = [], [], [], [], []
-    total_ovr = 0
-    for entry, player in top_11:
-        total_ovr += player.rating
-        cat = player.category
-        pair = (entry, player)
-        if cat == "Batsman":
-            batsmen_raw.append(pair)
-        elif cat == "Wicket Keeper":
-            keepers_raw.append(pair)
-        elif cat == "All-rounder":
-            allrounders_raw.append(pair)
-        elif cat == "Bowler":
-            if _is_spin(player.bowl_style):
-                spinners_raw.append(pair)
-            else:
-                pacers_raw.append(pair)
-        else:
-            batsmen_raw.append(pair)
-
-    bowlers_raw = pacers_raw + spinners_raw
+    sections = _xi_sections(top_11)
+    total_ovr = sum(player.rating for _entry, player in top_11)
     avg_ovr = round(total_ovr / count, 1) if count else 0
 
     chem = _xi_chemistry(top_11)
@@ -120,10 +128,8 @@ def format_xi_text(roster_list, team_name, captain_rid=None, show_bench=False,
         lines.append(f"{emoji} <b>{bold_serif(title)}</b>")
         lines.append("<blockquote>" + "\n".join(body) + "</blockquote>")
 
-    _section("🏏", "BATSMEN", batsmen_raw)
-    _section("🧤", "WICKET-KEEPER", keepers_raw)
-    _section("⚡", "ALL-ROUNDERS", allrounders_raw)
-    _section("🎯", "BOWLERS", bowlers_raw)
+    for emoji, title, pairs in sections:
+        _section(emoji, title, pairs)
 
     lines.append(f"\n▫️⚡ <b>{bold_serif('TOTAL OVR')}: {bold_digits(total_ovr)}</b> ▫️")
 
@@ -165,6 +171,122 @@ def format_bench_text(roster_list):
         body.append(f"{circled(position)} {small_caps(player.name)}  {flag}  {stats}")
     return (f"📋 <b>{bold_serif('BENCH')}</b> ({len(bench)})\n"
             "<blockquote expandable>" + "\n".join(body) + "</blockquote>")
+
+
+# ── Rich text (Bot API 10.1) ─────────────────────────────────────────
+# The same XI and bench, rendered as rich blocks instead of an HTML string: the
+# stats become a real table with its own column alignment, so a long name no
+# longer pushes the numbers out of line the way padded text inside a blockquote
+# does, and the bench is a native collapsible block. services.rich_message
+# falls back to the HTML above whenever Telegram refuses the rich send, so both
+# renderers stay in use and must stay in sync — they share _xi_sections and the
+# display numbering.
+
+# #, PLAYER, OVR, BAT, BOWL — section names span the whole row.
+_XI_TABLE_COLUMNS = 5
+
+
+def _rich_stat_header():
+    """The table's header row."""
+    return [
+        rich_message.cell(rich_message.bold("#"), header=True, align="center"),
+        rich_message.cell(rich_message.bold("PLAYER"), header=True),
+        rich_message.cell(rich_message.bold("OVR"), header=True, align="right"),
+        rich_message.cell(rich_message.bold("BAT"), header=True, align="right"),
+        rich_message.cell(rich_message.bold("BOWL"), header=True, align="right"),
+    ]
+
+
+def _rich_player_row(serial, entry, player, captain_rid=None):
+    """One player as a table row, numbered by the display position."""
+    cap = " 👑" if captain_rid is not None and entry.id == captain_rid else ""
+    name = f"{small_caps(player.name)}  {get_flag(player.country)}{cap}"
+    return [
+        rich_message.cell(str(serial), align="center"),
+        rich_message.cell(name),
+        rich_message.cell(rich_message.bold(str(player.rating)), align="right"),
+        rich_message.cell(str(player.bat_rating), align="right"),
+        rich_message.cell(str(player.bowl_rating), align="right"),
+    ]
+
+
+def _rich_section_row(emoji, title):
+    """A full-width heading row inside the XI table."""
+    return [rich_message.cell(rich_message.bold(f"{emoji} {title}"),
+                              header=True, colspan=_XI_TABLE_COLUMNS)]
+
+
+def build_xi_blocks(roster_list, team_name, captain_rid=None, show_bench=False,
+                    origin_chat_id=None):
+    """The Playing XI as rich blocks — the block twin of :func:`format_xi_text`.
+
+    Carries the same content in the same order (header, four sections, total,
+    chemistry, Mini App link, optional bench) and the same 1-N display
+    numbering, so a user reading either rendering types the same position at
+    /swap and /release.
+    """
+    top_11 = roster_list[:XI_SIZE]
+    bench = roster_list[XI_SIZE:]
+    count = len(top_11)
+    total_ovr = sum(player.rating for _entry, player in top_11)
+    avg_ovr = round(total_ovr / count, 1) if count else 0
+    chem = _xi_chemistry(top_11)
+
+    summary = [f"⭐ AVG: {avg_ovr}"]
+    if chem:
+        summary.append("   🧪 CHEM: ")
+        summary.append(rich_message.bold(
+            f"{chem[0]}/{chemistry.CMUCHEM_TOTAL_MAX}"))
+
+    blocks = [
+        rich_message.heading(f"👑 {team_name}'s PLAYING XI", size=3),
+        rich_message.paragraph(summary),
+    ]
+
+    rows = [_rich_stat_header()]
+    serial = 0
+    for emoji, title, pairs in _xi_sections(top_11):
+        if not pairs:
+            continue
+        rows.append(_rich_section_row(emoji, title))
+        for entry, player in pairs:
+            serial += 1
+            rows.append(_rich_player_row(serial, entry, player, captain_rid))
+    blocks.append(rich_message.table(rows, bordered=True, compact=True))
+
+    blocks.append(rich_message.divider())
+    blocks.append(rich_message.paragraph(
+        ["⚡ ", rich_message.bold(f"TOTAL OVR: {total_ovr}")]))
+    if chem:
+        blocks.append(rich_message.paragraph(
+            [rich_message.bold("🧪 CHEMISTRY"),
+             f": {chem[0]}/{chemistry.CMUCHEM_TOTAL_MAX}  •  shape {chem[1]}"]))
+
+    if show_bench and bench:
+        blocks.append(build_bench_details(roster_list))
+
+    link = miniapp_deep_link("xi", origin_chat_id=origin_chat_id)
+    if link:
+        blocks.append(rich_message.footer(
+            rich_message.link("~ VIEW PLAYING XI IN MINIAPP ~", link)))
+
+    return blocks
+
+
+def build_bench_details(roster_list):
+    """The bench as one collapsed ``details`` block, or None when empty.
+
+    Bench numbering continues the XI's serial, same as :func:`format_bench_text`.
+    """
+    bench = roster_list[XI_SIZE:]
+    if not bench:
+        return None
+    rows = [_rich_stat_header()]
+    for position, (entry, player) in enumerate(bench, len(roster_list[:XI_SIZE]) + 1):
+        rows.append(_rich_player_row(position, entry, player))
+    return rich_message.details(
+        rich_message.bold(f"📋 BENCH ({len(bench)})"),
+        [rich_message.table(rows, bordered=True, compact=True)])
 
 
 # ── XI Validation ────────────────────────────────────────────────────
@@ -214,16 +336,22 @@ async def playingxi_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                               show_bench=False, origin_chat_id=update.effective_chat.id)
 
         # Add bench button only for own XI
-        bench = roster[11:]
+        bench = roster[XI_SIZE:]
+        kb = None
         if is_own and bench:
             kb = InlineKeyboardMarkup([[
                 InlineKeyboardButton(f"📋 View Bench ({len(bench)})", callback_data=f"viewbench_{view_user.id}")
             ]])
-            await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb,
-                                            disable_web_page_preview=True)
-        else:
-            await update.message.reply_text(text, parse_mode="HTML",
-                                            disable_web_page_preview=True)
+        blocks = build_xi_blocks(roster, handle, view_user.captain_roster_id,
+                                 show_bench=False,
+                                 origin_chat_id=update.effective_chat.id)
+        # reply_text quotes the command in group chats but not in DMs; both
+        # send paths here go through the bot directly, so carry that over.
+        quote_id = (update.message.message_id
+                    if update.effective_chat.type != Chat.PRIVATE else None)
+        await rich_message.send_rich_message(
+            context.bot, update.effective_chat.id, blocks, text,
+            reply_markup=kb, reply_to_message_id=quote_id)
 
     except Exception:
         logger.exception("PlayingXI error")
@@ -250,10 +378,28 @@ async def bench_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         roster = _get_ordered_roster(session, owner_uid)
         session.commit()
 
-        text = format_bench_text(roster)
-        await q.edit_message_text(
-            q.message.text_html + "\n\n" + text if q.message.text_html else text,
-            parse_mode="HTML", disable_web_page_preview=True)
+        # The rich path rebuilds the whole message with the bench expanded,
+        # since rich blocks cannot be appended to the text already on screen.
+        handle = (f"@{viewer.username}" if viewer.username
+                  else (viewer.team_name or viewer.first_name))
+        if await rich_message.edit_rich_message(
+                context.bot, q.message.chat_id, q.message.message_id,
+                build_xi_blocks(roster, handle, viewer.captain_roster_id,
+                                show_bench=True,
+                                origin_chat_id=q.message.chat_id)):
+            return
+
+        # A message sent as rich blocks has no HTML to append to, so rebuild the
+        # whole XI in that case rather than replacing it with a bare bench.
+        on_screen = q.message.text_html
+        if on_screen:
+            text = on_screen + "\n\n" + format_bench_text(roster)
+        else:
+            text = format_xi_text(roster, handle, viewer.captain_roster_id,
+                                  show_bench=True,
+                                  origin_chat_id=q.message.chat_id)
+        await q.edit_message_text(text, parse_mode="HTML",
+                                  disable_web_page_preview=True)
     except Exception:
         logger.exception("Bench err")
     finally:

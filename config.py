@@ -10,6 +10,14 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///cricket_bot.db")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 
+# Bot API 10.1 rich messages (native tables, headings, collapsible blocks) for
+# the surfaces that render them — see services/rich_message.py. Every rich send
+# falls back to the surface's HTML, so turning this off is always safe; set it
+# to 0 when running against a self-hosted Bot API server below 10.1 to skip the
+# refused call entirely.
+RICH_TEXT_ENABLED = os.getenv("RICH_TEXT", "1").strip().lower() not in (
+    "0", "false", "no", "off", "")
+
 # ── Media storage channel ───────────────────────────────────────────
 # Optional: a private Telegram channel where the bot is admin, used as
 # a persistent file_id store for uploaded GIFs. If set, file uploads via
