@@ -614,6 +614,99 @@ async def deliver_cards(bot, chat_id, cards, *, reply_to_message_id=None):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# The Player of the Match's collectible card
+# ══════════════════════════════════════════════════════════════════════
+
+def _potm_card_enabled():
+    """Whether the extra photo is switched on.
+
+    Assumes on for anything that is not an explicit "off": a config that cannot
+    be read, and a column that is there but was never written — a row that
+    predates the migration reads ``None``, and ``bool(None)`` would quietly ship
+    the feature off to exactly the installs that already existed.
+    """
+    try:
+        from services.config_service import get_config
+        value = get_config().get("scorecard_potm_card")
+    except Exception:
+        logger.exception("POTM card toggle lookup failed — assuming on")
+        return True
+    return True if value is None else bool(value)
+
+
+def potm_card_bytes(player_id=None, name=None):
+    """Draw the award winner's card. Image bytes or ``None``, never raises.
+
+    Synchronous and CPU-bound, like :func:`render_card` — call it through
+    ``asyncio.to_thread`` from the event loop. Owns a session for the same
+    reason :func:`_visuals` does: this runs well away from whatever handler
+    started the match, with no session in hand.
+
+    Honours the ``scorecard_potm_card`` switch, so every mode gets the toggle
+    by using this rather than reaching for ``card_identity`` directly.
+    """
+    if not player_id and not name:
+        return None
+    if not _potm_card_enabled():
+        return None
+    from services import card_identity
+    session = card_identity.open_session()
+    try:
+        return card_identity.potm_card_png(session, player_id=player_id,
+                                           name=name)
+    except Exception:
+        logger.exception("POTM card render failed (player=%s name=%r)",
+                         player_id, name)
+        return None
+    finally:
+        session.close()
+
+
+def potm_card_caption(name=None, team=None):
+    """The caption that goes under the player card, in one place so the modes
+    that send it themselves (the Mini App album) read the same as the rest."""
+    import html
+    label = html.escape(str(name).strip()) if name else "Player of the Match"
+    caption = f"🏅 <b>{label}</b>"
+    if team:
+        caption += f" — {html.escape(str(team).strip())}"
+    return caption
+
+
+async def send_potm_card(bot, chat_id, *, player_id=None, name=None, team=None,
+                         reply_to_message_id=None):
+    """Post the Player of the Match's collectible card after the summary card.
+
+    The summary's POTM strip is 125px tall and the card is 1536×1024, so it
+    cannot be composited in and still be readable — it goes out as its own
+    photo, which also means every mode gets it rather than only the ones whose
+    strip has room.
+
+    Best-effort from end to end. The summary card has already landed by the time
+    this runs, and a player without art, a stale id or a render failure must all
+    read as "no second photo" rather than as an error on a finished match.
+    Returns True when a photo was sent.
+    """
+    if not player_id and not name:
+        return False
+    try:
+        png = await asyncio.to_thread(potm_card_bytes, player_id, name)
+    except Exception:
+        logger.exception("POTM card render thread failed (player=%s name=%r)",
+                         player_id, name)
+        return False
+    if not png:
+        return False
+
+    caption = potm_card_caption(name, team)
+    extra = ({"reply_to_message_id": reply_to_message_id}
+             if reply_to_message_id is not None else {})
+    msg = await send_photo_with_retry(
+        bot, chat_id, lambda: io.BytesIO(png), caption=caption, **extra)
+    return msg is not None
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Text fallback
 # ══════════════════════════════════════════════════════════════════════
 

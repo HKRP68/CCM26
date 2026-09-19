@@ -3,8 +3,8 @@
 The card flattens each row dict to a tuple before drawing, which is exactly
 where a flag gets silently dropped — the batter/bowler dicts carry `impact`,
 but `_normalise_*` used to keep only (name, value, value). If the flag stops
-surviving that hop the row quietly renders in the team colour again, and
-nothing else in the suite would notice.
+surviving that hop the row quietly renders as an ordinary one, and nothing else
+in the suite would notice.
 
 The drawing itself is pixels, so these assert on the tuple contract and then
 render one card end-to-end to prove the wider tuple did not break the renderer.
@@ -70,14 +70,13 @@ class RendersTests(unittest.TestCase):
 
     def test_a_caller_still_passing_three_tuples_does_not_crash(self):
         # _draw_rows tolerates the old shape so an un-updated caller degrades to
-        # "no green tint, no not-out colour" rather than an IndexError
-        # mid-render.
+        # "no green tint" rather than an IndexError mid-render.
         from PIL import Image, ImageDraw
         img = Image.new("RGBA", (600, 400), (255, 255, 255, 255))
         draw = ImageDraw.Draw(img, "RGBA")
         card._draw_rows(draw, None, [("Old", "10", "8"), ("Shape", "20", "9")],
                         x_name=40, cx1=300, cx2=420, top=20,
-                        color=card.TEAM_B, potm_name=None, max_name_w=200)
+                        potm_name=None, max_name_w=200)
 
 
 class ScorecardRowMarkingTests(unittest.TestCase):

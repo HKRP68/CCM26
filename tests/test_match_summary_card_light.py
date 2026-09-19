@@ -243,6 +243,73 @@ class ShowcaseTests(unittest.TestCase):
         self.assertEqual(self.values(metrics)[:2], ["52(31)", "4/27"])
 
 
+class RowTextIsInkTests(unittest.TestCase):
+    """Player names and the run / ball / wicket numbers are plain ink.
+
+    Teams pick their own colour now, and a not-out score used to be drawn in it
+    — which reads as the number saying something about the team rather than
+    about the innings. The trailing "*" already marks a not-out, so the colour
+    was only repeating it.
+
+    This is the only test in the suite that asserts on rendered pixels, because
+    it is the only way to state the requirement: the same match drawn for two
+    wildly different teams must produce byte-identical table text.
+    """
+
+    def _card(self, colour):
+        return card.generate_match_summary(**_payload(
+            inn1_color=colour, inn2_color=colour,
+            top_per_team={
+                "inn1": {"team": "Rome Gladiators",
+                         "batters": [
+                             {"name": "Not Out Batter", "runs": 52, "balls": 31,
+                              "out": False},
+                             {"name": "Out Batter", "runs": 33, "balls": 22,
+                              "out": True}],
+                         "bowlers": [{"name": "Some Bowler", "wickets": 4,
+                                      "runs": 27, "overs": "4"}]},
+                "inn2": {"team": "Mumbai Marathas", "batters": [], "bowlers": []},
+            }))
+
+    def _table_strip(self, png):
+        """The batters table's rows — clear of the crest panel on the left and
+        of the team-coloured divider at the midpoint, both of which are
+        *supposed* to follow the team colour."""
+        from PIL import Image
+        image = Image.open(io.BytesIO(png)).convert("RGB")
+        return image.crop((card.CREST_X1_TOP + 20, card.INN1_Y + card.BAR_H + 4,
+                           card.TABLE_DIV - 10, card.INN1_Y + card.INN_H - 4))
+
+    def test_row_text_does_not_change_with_the_team_colour(self):
+        """The same match drawn for a red team and a green one has to produce
+        byte-identical table text."""
+        red = self._table_strip(self._card("#aa001b"))
+        green = self._table_strip(self._card("#15803d"))
+        self.assertEqual(red.tobytes(), green.tobytes(),
+                         "the table's text changed with the team colour")
+
+    def test_a_not_out_score_carries_no_trace_of_the_team_colour(self):
+        """Asserted as "nothing red survives" rather than as an exact pixel:
+        two different numbers antialias differently, so only the *hue* is
+        meaningful."""
+        from PIL import Image
+        image = Image.open(io.BytesIO(self._card("#aa001b"))).convert("RGB")
+        top = card.INN1_Y + card.BAR_H + card.HEAD_ROW_H
+        y0 = int(top) + 6
+        y1 = int(top + card.ROW_PITCH) - 6
+        box = image.crop((card.COL_L1_CX - 40, y0, card.COL_L1_CX + 40, y1))
+        colours = [c for _count, c in box.getcolors(maxcolors=box.width * box.height)]
+        reddest = max(colours, key=lambda p: p[0] - p[2])
+        self.assertLess(reddest[0] - reddest[2], 40,
+                        f"the not-out score still carries the team's red: {reddest}")
+
+    def test_the_rows_take_no_team_colour_at_all(self):
+        """The parameter is gone, so it cannot be reintroduced by accident."""
+        import inspect
+        self.assertNotIn("color",
+                         inspect.signature(card._draw_rows).parameters)
+
+
 class PotmRowTests(unittest.TestCase):
     """The award is marked wherever the player appears — batters, bowlers, or
     both. The marking is pixels, so ``_draw_rows`` returns the rows it marked
@@ -256,7 +323,7 @@ class PotmRowTests(unittest.TestCase):
         del s
         draw = ImageDraw.Draw(img, "RGBA")
         return card._draw_rows(draw, None, rows, x_name=x_name, cx1=cx1,
-                               cx2=cx2, top=300, color=card.TEAM_A,
+                               cx2=cx2, top=300,
                                potm_name=potm_name, max_name_w=max_name_w)
 
     def test_a_batting_award_marks_the_batters_table(self):

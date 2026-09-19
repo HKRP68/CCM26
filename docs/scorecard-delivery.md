@@ -120,6 +120,40 @@ One parsing rule is load-bearing and has a test of its own: the batting pattern
 carries a lookbehind so the trailing `(4)` of `4/27 (4)` is not read as "27 runs
 off 4 balls".
 
+## The player card that follows the summary
+
+Right after the summary card, the winner's own **collectible card** goes out as
+a second photo — the card people actually collect, from
+`card_generator.generate_card` (admin custom art → website template →
+procedural tier card, cached per player).
+
+It is a separate photo rather than part of the summary because it cannot be
+both. The card is 1536×1024 and the summary's POTM strip is 125px tall: fitted
+in there it would land at about a tenth of linear scale, with its own name text
+a few pixels high. Sending it on its own also means every mode gets it, rather
+than only the ones whose strip happens to have room.
+
+| Mode | How it goes out |
+|---|---|
+| `/playmatch`, `/vsbot`, tours | `scorecard_delivery.send_potm_card` after the summary photo |
+| `/cipl`, Challenge League | same, from `_complete_match` |
+| `/sim` | same, under the summary reply |
+| Mini App `/wpm`, `/cm`, `/wpmbot` | appended to the recap **album** (`admin._build_potm_card_image`) — that path sends one media group rather than a sequence |
+
+Everything about it is best-effort: the summary card has already landed by the
+time it runs, so a player who cannot be resolved, one with no card art, or a
+render that raises all read as "no second photo" and never as an error on a
+finished match. It is sent only when the summary card itself was delivered — on
+its own it would read as an orphan photo.
+
+Resolution is `card_identity.potm_card_png`, which takes the award's
+`player_id` first and falls back to the name, the same order as the portrait
+lookup beside it. The in-chat modes reach it through
+`scorecard_delivery.potm_card_bytes`, which also owns the session and honours
+the switch below; no call site reads the config itself, so no mode can miss it.
+
+**Off switch:** `GameConfig.scorecard_potm_card`, **on by default**.
+
 ## `/lastscorecard`
 
 Aliases: `/lsc`, `/scorecard`.

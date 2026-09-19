@@ -58,6 +58,9 @@ DEFAULTS = {
     # "Game Changer!"; on names what the player actually did (Five For!,
     # Century!, Match Winner!).
     "scorecard_dynamic_flourish": False,
+    # Post the Player of the Match's collectible card as a second photo after
+    # the summary card. On by default.
+    "scorecard_potm_card": True,
     # Which cards /wpm and /cm post to the lobby chat on completion.
     "wpm_result_cards": "summary",
     # Maintenance mode

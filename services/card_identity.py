@@ -298,6 +298,52 @@ def potm_portrait_png(session, *, player_id=None, name=None):
         return None
 
 
+def _potm_player(session, player_id=None, name=None):
+    """The ``Player`` row behind an award, by id then by name, or ``None``."""
+    if session is None or (not player_id and not name):
+        return None
+    from models import Player
+    if player_id:
+        player = session.query(Player).filter(Player.id == player_id).first()
+        if player is not None:
+            return player
+    if name:
+        from sqlalchemy import func
+        return (session.query(Player)
+                .filter(func.lower(func.trim(Player.name))
+                        == str(name).strip().lower())
+                .first())
+    return None
+
+
+def potm_card_png(session, *, player_id=None, name=None):
+    """The Player of the Match's collectible card, as image bytes.
+
+    This is the card people actually collect — ``card_generator.generate_card``
+    dispatches admin custom art, then the website template, then the procedural
+    tier card, and caches the result by player, so only the first card of a
+    given player pays the render.
+
+    It is sent as its own photo rather than composited into the summary card:
+    the card is 1536×1024, and the summary's POTM strip is 125px tall, so
+    fitting it in there would shrink it to about a tenth of linear scale with
+    its own text a few pixels high. Unreadable is worse than absent.
+
+    Returns ``None`` for anything that does not resolve — a missing card must
+    never affect the summary card that has already gone out.
+    """
+    try:
+        player = _potm_player(session, player_id, name)
+        if player is None:
+            return None
+        from services.card_generator import generate_card
+        return generate_card(player)
+    except Exception:
+        logger.exception("POTM card render failed (player=%s name=%r)",
+                         player_id, name)
+        return None
+
+
 # ══════════════════════════════════════════════════════════════════════
 # What the callers use
 # ══════════════════════════════════════════════════════════════════════

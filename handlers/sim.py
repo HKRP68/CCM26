@@ -437,6 +437,11 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         potm_id = next(
             (p.get("id") for p in list(user_xi) + list(opponent_xi)
              if isinstance(p, dict) and p.get("name") == match.get("potm")), None)
+        potm_team = next(
+            (side for xi, side in ((user_xi, team_name),
+                                   (opponent_xi, opponent_name))
+             if any(isinstance(p, dict) and p.get("name") == match.get("potm")
+                    for p in xi or [])), None)
         summary_bytes = render_match_summary_image(
             match,
             text_settings=cfg.get("scorecard_text_settings"),
@@ -533,6 +538,12 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_photo(
                 photo=InputFile(photo, filename=photo.name),
                 caption="🖼️ Match Summary")
+            # The winner's own collectible card, right under the summary whose
+            # POTM strip names them.
+            from services import scorecard_delivery as _sd
+            await _sd.send_potm_card(
+                context.bot, update.effective_chat.id,
+                player_id=potm_id, name=match.get("potm"), team=potm_team)
 
         buf = io.BytesIO(json.dumps(feed_payload, indent=2, ensure_ascii=False).encode("utf-8"))
         buf.seek(0)

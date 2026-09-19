@@ -1273,6 +1273,10 @@ class GameConfig(Base):
     # Off renders the reference poster's literal "Game Changer!"; on names what
     # the Player of the Match actually did.
     scorecard_dynamic_flourish = Column(Boolean, default=False)
+    # After the match summary card, post the Player of the Match's collectible
+    # card as a second photo. On by default: it is the card people collect, and
+    # the summary's POTM strip is far too short to show it inline.
+    scorecard_potm_card = Column(Boolean, default=True)
     scorecard_text_settings = Column(Text, nullable=True)
     # ── /wpm and /cm completion cards ──
     # Comma-separated list of which cards to post to the lobby chat when a

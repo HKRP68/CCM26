@@ -10562,6 +10562,39 @@ def _build_match_summary_image(match, sc, result_text, arena, pom,
         return None
 
 
+def _build_potm_card_image(arena, pom):
+    """The Player of the Match's collectible card, as a card tuple or ``None``.
+
+    The Mini App modes post their recap as one album rather than a sequence of
+    sends, so the player card rides along as an extra image here instead of
+    going out through ``scorecard_delivery.send_potm_card`` the way the in-chat
+    modes send it — same bytes, same off switch. The caption comes along for
+    the case where it can be shown; an album carries only its first caption
+    today, and the winner's name is on the summary card above it either way.
+
+    Runs on the broadcast worker thread, so the render is called directly.
+    """
+    try:
+        if not isinstance(pom, dict):
+            return None
+        name = pom.get("name")
+        player_id = pom.get("player_id")
+        if player_id is None:
+            player_id = _arena_potm_numbers(
+                arena, pom.get("roster_id"), name).get("potm_player_id")
+        if not player_id and not name:
+            return None
+        from services import scorecard_delivery
+        png = scorecard_delivery.potm_card_bytes(player_id=player_id, name=name)
+        if not png:
+            return None
+        caption = scorecard_delivery.potm_card_caption(name, pom.get("team"))
+        return (png, caption, "potm_card.png")
+    except Exception:
+        logger.exception("POTM player card render failed (non-fatal)")
+        return None
+
+
 def _arena_stat(stats, roster_id):
     """Read an Arena stat row regardless of JSON/stringified roster keys."""
     stats = stats or {}
@@ -11482,6 +11515,19 @@ def _build_and_send_match_result(match_id, result, override_chat_id=None):
         summary_card = inn_cards.get("summary")
         images = [inn_cards.get(token) for token in selection]
         images = [c for c in images if c]
+
+        # The winner's own collectible card, last in the album. Only when the
+        # summary card is actually there — it is that card's POTM strip this
+        # belongs to, and on its own it would read as an orphan photo.
+        #
+        # Note this turns the default summary-only recap into a two-card album,
+        # so the Spectate button rides on the recap text rather than on the
+        # scorecard image (see _send_completed_match_cards_via_bot: Telegram
+        # albums cannot carry an inline keyboard). The button is still there.
+        if summary_card:
+            potm_card = _build_potm_card_image(arena, pom)
+            if potm_card:
+                images.append(potm_card)
 
         # If the mandatory summary PNG could not be produced, still send a clear
         # text fallback for all Mini-App modes instead of treating a plain result
