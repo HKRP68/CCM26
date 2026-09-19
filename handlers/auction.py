@@ -917,6 +917,168 @@ async def aretlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _with_auction(update, work, admin=True, context=context)
 
 
+async def apick_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/apick Gujarat | Hardik Pandya | 15</code> — the price is optional.
+
+    An expansion side taking a player before the auction opens. Left off, the
+    price is the retention ladder's rung for that side's next pick, which is
+    the number an admin almost always wants and the one the reply prints back.
+    """
+    user = update.effective_user
+    raw = _arg_text(context)
+
+    def work(session, season):
+        parts = [p.strip() for p in raw.split("|")]
+        if len(parts) < 2 or not parts[0] or not parts[1]:
+            turn = A.pick_turn(session, season)
+            whose = (f"\nIt is <b>{html.escape(turn.name)}</b>'s pick."
+                     if turn is not None else "")
+            raise AuctionError(
+                "Usage: /apick <franchise> | <player> | [price]\n"
+                "The price is optional — leave it off and the retention "
+                "ladder decides." + whose)
+        franchise = _find_franchise(session, season, parts[0])
+        player = _find_player(session, parts[1])
+        price = (A.parse_amount(parts[2])
+                 if len(parts) > 2 and parts[2] else None)
+        lot = A.draft_pick(session, season, franchise, player, price,
+                           by_tg_id=user.id if user else None)
+        used = int(franchise.draft_picks_used or 0)
+        following = A.pick_turn(session, season)
+        nxt = (f"\n➡️ Next: <b>{html.escape(following.name)}</b>."
+               if following is not None
+               else "\n✅ That is every pick used — the auction can open.")
+        return (f"🆕 <b>{html.escape(franchise.name)}</b> draft "
+                f"{html.escape(lot.name)} for "
+                f"<b>{A.render_money(lot.sold_price_lakh, season.currency_label)}</b> "
+                f"({used}/{int(franchise.draft_picks_total or 0)}).\n"
+                f"💰 {A.render_money(franchise.purse_remaining_lakh, season.currency_label)} "
+                f"left to bid with." + nxt)
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def apicks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/apicks</code> — the running order, whose turn, and what is taken."""
+    def work(session, season):
+        symbol = season.currency_label
+        order = A.pick_order(session, season)
+        if not order:
+            new_sides = A.expansion_franchises(session, season)
+            if not new_sides:
+                return ("🆕 <b>Expansion picks</b> — nobody is new this "
+                        "season, so there are no picks to make.\n"
+                        "<i>A side is 'new' when last season's league records "
+                        "nobody as theirs.</i>")
+            return ("🆕 <b>Expansion picks</b> — none dealt yet.\n"
+                    "New this season: "
+                    + ", ".join(html.escape(f.name) for f in new_sides)
+                    + "\nGive them picks with <code>/apickset 3</code>.")
+
+        turn = A.pick_turn(session, season)
+        lines = ["🆕 <b>Expansion picks</b>"]
+        if turn is not None:
+            lines.append(f"▶️ It is <b>{html.escape(turn.name)}</b>'s pick.")
+        else:
+            lines.append("✅ Every pick is used.")
+        if A.retention_configured(season) and not A.retention_locked(season):
+            lines.append("⚠️ Retention is still open — close it with "
+                         "<code>/aretlock on</code> before picking.")
+        lines.append("")
+        lines.append("<b>Order</b> (it snakes: last in a round picks first in "
+                     "the next)")
+        schedule = A.pick_schedule(session, season)
+        made = sum(int(f.draft_picks_used or 0) for f in order)
+        for i, franchise in enumerate(schedule, start=1):
+            mark = "✅" if i <= made else ("▶️" if i == made + 1 else "  ")
+            lines.append(f"{mark} {i}. {html.escape(franchise.name)}")
+        lines.append("")
+        for franchise in order:
+            taken = A.drafted(session, franchise.id)
+            lines.append(
+                f"<b>{html.escape(franchise.name)}</b> — "
+                f"{A.picks_left(franchise)} left of "
+                f"{int(franchise.draft_picks_total or 0)} · "
+                f"{A.render_money(franchise.purse_remaining_lakh, symbol)}")
+            for lot in taken:
+                lines.append(f"   🆕 {html.escape(lot.name)} — "
+                             f"{A.render_money(lot.sold_price_lakh, symbol)}")
+        return "\n".join(lines)
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def apickset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/apickset 3</code> — picks for every new side.
+
+    <code>/apickset Gujarat | 2</code> gives one side its own number, never
+    below what it has already used.
+    """
+    raw = _arg_text(context).strip()
+
+    def work(session, season):
+        if not raw:
+            raise AuctionError(
+                "Usage: /apickset <n>, or /apickset <franchise> | <n>")
+        if "|" in raw:
+            name, _, count = raw.partition("|")
+            franchise = _find_franchise(session, season, name.strip())
+            A.set_franchise_picks(session, season, franchise, count.strip())
+            return (f"🆕 {html.escape(franchise.name)} now holds "
+                    f"<b>{A.picks_left(franchise)}</b> picks of "
+                    f"{int(franchise.draft_picks_total or 0)}.")
+        dealt = A.set_expansion_picks(session, season, raw)
+        if not dealt:
+            return ("🆕 Saved, but nobody is new this season so nobody got "
+                    "picks.\n<i>A side is 'new' when last season's league "
+                    "records nobody as theirs — check the auction follows "
+                    "the right league.</i>")
+        return (f"🆕 <b>{season.expansion_picks}</b> picks each to: "
+                + ", ".join(html.escape(f.name) for f in dealt)
+                + ".\nSee the order with <code>/apicks</code>.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def apickskip_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/apickskip</code> — burn the current turn without signing anyone."""
+    user = update.effective_user
+    raw = _arg_text(context).strip()
+
+    def work(session, season):
+        franchise = (_find_franchise(session, season, raw) if raw
+                     else A.pick_turn(session, season))
+        if franchise is None:
+            raise AuctionError("There is no pick waiting to be made.")
+        A.skip_pick(session, season, franchise,
+                    by_tg_id=user.id if user else None)
+        following = A.pick_turn(session, season)
+        return (f"⏭ {html.escape(franchise.name)} pass."
+                + (f"\n➡️ Next: <b>{html.escape(following.name)}</b>."
+                   if following is not None
+                   else "\n✅ That is every pick used."))
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def apickundo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/apickundo Hardik Pandya</code> — money and the pick both back."""
+    user = update.effective_user
+    raw = _arg_text(context).strip()
+
+    def work(session, season):
+        if not raw:
+            raise AuctionError("Usage: /apickundo <player>")
+        lot = _find_lot(session, season, raw)
+        A.undo_pick(session, season, lot,
+                    by_tg_id=user.id if user else None)
+        return (f"↩️ The expansion pick on {html.escape(lot.name)} is undone — "
+                f"the money and the pick are both back, and he is in the pool "
+                f"again.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
 async def aclone_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """<code>/aclone Season 3</code> — start the next season from this one.
 

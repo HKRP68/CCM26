@@ -515,6 +515,41 @@
     {% if t.knockout_generated %}<p style="color:#86efac; font-size:.82rem; margin:.6rem 0 0;">✅ A knockout bracket has been generated.</p>{% endif %}
   </section>
 
+  <!-- Next season -->
+  {% if follows %}
+  <section class="tour-card">
+    <h3 style="margin-top:0;">🏆 Next season</h3>
+    <p style="margin:.2rem 0 .8rem; opacity:.85;">
+      <a href="{{ url_for('admin_auction_detail', season_id=follows.id) }}">{{ follows.name }}</a>
+      already follows this league.
+    </p>
+  </section>
+  {% elif can_roll_over %}
+  <section class="tour-card">
+    <h3 style="margin-top:0;">🏆 Next season</h3>
+    <p style="margin:.2rem 0 .8rem; opacity:.85;">
+      Roll this league into an auction for the season after it. The teams that
+      played become the franchises, and the league becomes the record of
+      <b>who held whom</b> — which is what retention and Right To Match read,
+      and the step easiest to forget when it is wired by hand.
+    </p>
+    <form method="POST" class="lifecycle">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="next_season">
+      <input type="text" name="name" placeholder="{{ t.name }} — next season"
+             style="min-width:16rem;">
+      <button class="btn primary" type="submit">Start next season's auction</button>
+    </form>
+    <p style="margin:.7rem 0 0; opacity:.75; font-size:.82rem;">
+      The new franchises arrive <b>without owners</b> — a league team has none
+      to carry — so set those before starting. This is also where you
+      <b>add new teams</b>: a side with no squad last season can be given
+      picks to sign players before the auction opens, the way Gujarat and
+      Lucknow were in 2022.
+    </p>
+  </section>
+  {% endif %}
+
   <!-- Data management -->
   <section class="tour-card">
     <h3 style="margin-top:0;">Data management</h3>

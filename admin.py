@@ -16742,6 +16742,37 @@ def admin_tournament_detail(tournament_id):
                     tournament_service.reset_tournament(db, t.id)
                     log_admin(db, "tournament_reset", "tournament", t.id, t.name)
                     flash("♻️ Tournament data reset.", "info")
+                elif action == "next_season":
+                    # A finished league rolls into next season's auction. The
+                    # teams that played it become the franchises, and the
+                    # league itself becomes the record of who held whom —
+                    # which is what retention and Right To Match read, and the
+                    # step easiest to forget when it is done by hand.
+                    from services import auction_service as _auc
+                    if not t.league_id:
+                        raise ValueError("This tournament has no Challenge "
+                                         "League behind it, so there are no "
+                                         "squads to carry into an auction.")
+                    existing = _auc.season_following_league(db, t.league_id)
+                    if existing is not None:
+                        flash(f"“{existing.name}” already follows this league.",
+                              "info")
+                        db.commit()
+                        return redirect(url_for("admin_auction_detail",
+                                                season_id=existing.id))
+                    league = (db.query(ChallengeLeague)
+                              .filter(ChallengeLeague.id == t.league_id).first())
+                    fresh = _auc.season_from_league(
+                        db, league,
+                        request.form.get("name") or f"{t.name} — next season")
+                    log_admin(db, "auction_from_league", "auction", fresh.id,
+                              f"{fresh.name} from {t.name}")
+                    db.commit()
+                    flash(f"🏆 “{fresh.name}” starts from this league. Set the "
+                          f"owners, add any new teams, then build the pool.",
+                          "success")
+                    return redirect(url_for("admin_auction_detail",
+                                            season_id=fresh.id))
                 elif action == "delete":
                     nm = t.name
                     db.delete(t)
@@ -16810,7 +16841,16 @@ def admin_tournament_detail(tournament_id):
                                co_owners=co_owners, injuries=injuries,
                                squads_json=json.dumps(squads),
                                team_challenge_json=json.dumps(team_challenge),
-                               is_lp=is_lp_kind)
+                               is_lp=is_lp_kind,
+                               # Next season's auction: only a Challenge
+                               # League tournament has a league of squads to
+                               # carry, and only a finished one is a season
+                               # anybody wants to follow.
+                               can_roll_over=(not is_lp_kind
+                                              and bool(t.league_id)
+                                              and t.status == "completed"),
+                               follows=auction_svc.season_following_league(
+                                   db, t.league_id))
     finally:
         db.close()
 
@@ -22410,6 +22450,21 @@ def admin_auction_detail(season_id):
                      .order_by(AuctionLot.sold_at.desc()).all()),
             # Which seasons this one follows, nearest first.
             chain=auction_svc.season_chain(db, season),
+            # Expansion picks. ``new_sides`` is derived from who held whom
+            # last season, so it answers "who is new" without anyone ticking
+            # a box — and it is empty for a first season, where every side is
+            # new and picks make no sense.
+            new_sides=auction_svc.expansion_franchises(db, season),
+            picks_left=auction_svc.picks_left,
+            pick_spent=lambda fid: auction_svc.pick_spent(db, fid),
+            pick_turn=auction_svc.pick_turn(db, season),
+            picks_schedule=auction_svc.pick_schedule(db, season),
+            picks_made=sum(int(f.draft_picks_used or 0)
+                           for f in auction_svc.pick_order(db, season)),
+            picked=(db.query(AuctionLot)
+                    .filter(AuctionLot.season_id == season.id,
+                            AuctionLot.acquisition == auction_svc.ACQ_DRAFTED)
+                    .order_by(AuctionLot.sold_at.asc()).all()),
             STATUS_COMPLETED=auction_svc.STATUS_COMPLETED,
         )
     finally:
@@ -22645,6 +22700,59 @@ def _auction_detail_action(db, season, action):
         auction_svc.lock_retention(db, season)
         log_admin(db, "auction_retention_lock", "auction", season.id, season.name)
         flash("🔒 Retention is closed.", "success")
+
+    elif action == "expansion_rules":
+        dealt = auction_svc.set_expansion_picks(
+            db, season, _int_form("expansion_picks", season.expansion_picks))
+        log_admin(db, "auction_expansion_rules", "auction", season.id,
+                  season.name)
+        if dealt:
+            flash(f"🆕 {season.expansion_picks} picks each to: "
+                  + ", ".join(f.name for f in dealt) + ".", "success")
+        else:
+            flash("🆕 Saved, but nobody is new this season so nobody got "
+                  "picks. A side is 'new' when last season's league records "
+                  "nobody as theirs — check the auction follows the right "
+                  "league.", "info")
+
+    elif action == "expansion_cards":
+        franchise = _auction_franchise(db, season, request.form.get("franchise_id"))
+        auction_svc.set_franchise_picks(db, season, franchise,
+                                        _int_form("picks",
+                                                  franchise.draft_picks_total))
+        log_admin(db, "auction_expansion_cards", "auction", season.id,
+                  franchise.name)
+        flash(f"🆕 {franchise.name} now holds "
+              f"{auction_svc.picks_left(franchise)} picks.", "success")
+
+    elif action == "expansion_pick":
+        franchise = _auction_franchise(db, season, request.form.get("franchise_id"))
+        player = db.query(Player).filter(
+            Player.id == _parse_int(request.form.get("player_id"))).first()
+        if player is None:
+            abort(404)
+        raw_price = (request.form.get("price") or "").strip()
+        price = auction_svc.parse_amount(raw_price) if raw_price else None
+        lot = auction_svc.draft_pick(db, season, franchise, player, price)
+        log_admin(db, "auction_expansion_pick", "auction", season.id,
+                  f"{franchise.name}: {lot.name}")
+        flash(f"🆕 {franchise.name} draft {lot.name} for "
+              f"{auction_svc.render_money(lot.sold_price_lakh, season.currency_label)}.",
+              "success")
+
+    elif action == "expansion_skip":
+        franchise = _auction_franchise(db, season, request.form.get("franchise_id"))
+        auction_svc.skip_pick(db, season, franchise)
+        log_admin(db, "auction_expansion_skip", "auction", season.id,
+                  franchise.name)
+        flash(f"⏭ {franchise.name} pass.", "success")
+
+    elif action == "expansion_undo":
+        lot = _auction_lot(db, season, request.form.get("lot_id"))
+        auction_svc.undo_pick(db, season, lot)
+        log_admin(db, "auction_expansion_undo", "auction", season.id, lot.name)
+        flash(f"↩️ The pick on {lot.name} is undone — the money and the pick "
+              f"are both back.", "success")
 
     elif action == "clone":
         fresh = auction_svc.clone_season(

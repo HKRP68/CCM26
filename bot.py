@@ -475,6 +475,11 @@ ADMIN_MENU_COMMANDS = (
     ("artmundo", "Admin: undo a match — money and card both back"),
     ("aaccel", "Admin: accelerated round — re-list everything unsold"),
     ("aclone", "Admin: start the next season from this one"),
+    ("apick", "Admin: an expansion side signs a player before the auction"),
+    ("apicks", "Admin: the expansion picking order and whose turn it is"),
+    ("apickset", "Admin: how many picks each new side gets"),
+    ("apickskip", "Admin: pass on the current expansion pick"),
+    ("apickundo", "Admin: undo an expansion pick — money and pick both back"),
     # Lets Play tournament. Every one of these is bot-admin-only, so they
     # belong in this bucket rather than nowhere: it is exempt from the
     # 100-command clamp and published only into admin DMs, so listing them
@@ -2170,6 +2175,8 @@ def main():
             artm_handler, rtm_callback,
             artmset_handler, artmcards_handler, artmforce_handler,
             artmundo_handler, aaccel_handler, aclone_handler,
+            apick_handler, apicks_handler, apickset_handler,
+            apickskip_handler, apickundo_handler,
         )
         # Not "/b": that is already /buy, registered above, and PTB runs the
         # first handler that matches — the alias would be dead.
@@ -2219,6 +2226,16 @@ def main():
         app.add_handler(CommandHandler(["aaccel", "arelistall"], aaccel_handler))
         # Next season, from this one: every rule and every franchise carried.
         app.add_handler(CommandHandler(["aclone", "anextseason"], aclone_handler))
+        # Expansion picks: a new side signing players before the auction opens.
+        # In the a* namespace on purpose — the whole d* namespace belongs to
+        # the PlayerDraft, which is a different feature entirely.
+        app.add_handler(CommandHandler("apick", apick_handler))
+        app.add_handler(CommandHandler(["apicks", "apickboard"], apicks_handler))
+        app.add_handler(CommandHandler(["apickset", "apickrules"],
+                                       apickset_handler))
+        app.add_handler(CommandHandler(["apickskip", "apickpass"],
+                                       apickskip_handler))
+        app.add_handler(CommandHandler("apickundo", apickundo_handler))
 
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))
