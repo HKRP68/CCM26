@@ -600,7 +600,7 @@ def _same_player(a, b):
     return bool(left) and left == right
 
 
-def _draw_rows(draw, ts, rows, *, x_name, cx1, cx2, top, color, potm_name,
+def _draw_rows(draw, ts, rows, *, x_name, cx1, cx2, top, potm_name,
                max_name_w):
     """Draw one four-row table. Returns the indexes marked Player of the Match.
 
@@ -608,6 +608,10 @@ def _draw_rows(draw, ts, rows, *, x_name, cx1, cx2, top, color, potm_name,
     table, or both, when the award went to an all-rounder who did both. The
     return value is what the tests assert on, because the marking itself is
     pixels.
+
+    Takes no team colour: every name and number here is ink, and the only
+    colours in a row are the fixed gold of an award and the fixed green of an
+    Impact substitute.
     """
     name_f = _font_for(ts, "row_name", 23, family="body")
     # RUNS/FIGURES carry the weight in the reference; BALLS/OVERS are regular.
@@ -664,10 +668,15 @@ def _draw_rows(draw, ts, rows, *, x_name, cx1, cx2, top, color, potm_name,
             _draw_text(draw, (bx + badge_w / 2, cy + 1), "POTM", badge_f, INK,
                        tracking=0.8, anchor="mm")
 
+        # Both value columns are plain ink. A not-out score used to be drawn in
+        # the team's colour, but once teams pick their own that reads as the
+        # number meaning something about the team rather than about the innings
+        # — and the trailing "*" is what marks a not-out anyway, so the colour
+        # was only ever repeating it.
         v1x, v1y = _xy(ts, "row_number", cx1, cy + 1)
-        _draw_text(draw, (v1x, v1y), str(v1).upper(), num_f,
-                   color if not_out else VALUE_INK, anchor="mm")
-        _draw_text(draw, (cx2, cy + 1), str(v2).upper(), alt_f, (64, 78, 98),
+        _draw_text(draw, (v1x, v1y), str(v1).upper(), num_f, VALUE_INK,
+                   anchor="mm")
+        _draw_text(draw, (cx2, cy + 1), str(v2).upper(), alt_f, VALUE_INK,
                    anchor="mm")
     return marked
 
@@ -771,10 +780,10 @@ def _draw_innings(img, draw, ts, y, *, team, runs, wickets, overs, overs_total,
                    fill=(*color, 255))
 
     _draw_rows(draw, ts, _normalise_batters(batters), x_name=NAME_L_X,
-               cx1=COL_L1_CX, cx2=COL_L2_CX, top=head_y1, color=color,
+               cx1=COL_L1_CX, cx2=COL_L2_CX, top=head_y1,
                potm_name=potm_name, max_name_w=COL_L1_CX - NAME_L_X - 96)
     _draw_rows(draw, ts, _normalise_bowlers(bowlers), x_name=NAME_R_X,
-               cx1=COL_R1_CX, cx2=COL_R2_CX, top=head_y1, color=color,
+               cx1=COL_R1_CX, cx2=COL_R2_CX, top=head_y1,
                potm_name=potm_name, max_name_w=COL_R1_CX - NAME_R_X - 96)
 
 

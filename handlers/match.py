@@ -6786,6 +6786,7 @@ async def _end_innings(ctx, mid):
                 "win_margin_text": margin,
                 "overs_total": overs,
                 "potm_name": potm_name,
+                "potm_player_id": s.get("potm_player_id"),
                 "potm_rating": potm_rating,
                 "potm_team": potm_team,
                 "potm_stats": potm_stats,
@@ -6855,6 +6856,12 @@ async def _end_innings(ctx, mid):
                         scorecard_delivery.CARD_SUMMARY,
                         file_id=(summary_msg_sent.photo[-1].file_id
                                  if summary_msg_sent.photo else None))
+                    # The winner's own collectible card, straight after the
+                    # summary. Only once the summary actually landed — a second
+                    # photo on its own would read as an orphan.
+                    await scorecard_delivery.send_potm_card(
+                        ctx.bot, cid, player_id=s.get("potm_player_id"),
+                        name=potm_name, team=potm_team)
         except _SkipSummary:
             pass
         except Exception:

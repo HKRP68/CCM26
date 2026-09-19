@@ -41,10 +41,30 @@ and `/teamname` offers it to anyone who has not set one.
 ## Team colour
 
 `/setteamcolour #aa001b` (also `/teamcolour`, and the `color` spelling) sets the
-colour a team wears on every scorecard — its header bar, crest panel, table
-divider and not-out scores. Unlike the crest it applies **immediately**: a hex
-code carries nothing to moderate, and the card picks readable text for whatever
-is chosen (`match_summary_card._readable_on`).
+colour a team wears on every scorecard — its header bar, crest panel and table
+divider. Unlike the crest it applies **immediately**: a hex code carries nothing
+to moderate, and the card picks readable text for whatever is chosen
+(`match_summary_card._readable_on`).
+
+### What the colour does *not* touch
+
+The batters' and bowlers' names, and every number beside them, are drawn in
+plain ink (`match_summary_card.VALUE_INK`) whatever the team picked. The
+reference poster tints a not-out score in the team's colour, and this is a
+deliberate departure from it: once teams choose their own colours, a tinted
+number reads as saying something about the *team* rather than about the
+innings — and the trailing `*` is what marks a not-out anyway, so the colour
+was only repeating it. `_draw_rows` takes no colour argument at all, which is
+what keeps this from drifting back.
+
+Two colours on the card are fixed rather than ink: the gold of an award and the
+green of an Impact substitute. Both mark something no other element shows.
+
+Text drawn *on* a team-coloured bar — the crest initials, the team name, the
+overs meta and the score — is the one exception, and it is not "team-coloured
+text": `_readable_on` picks black or white per bar so the text stays legible
+whatever the team chose. Forcing those to black would make them vanish on any
+dark colour.
 
 It takes `#aa001b`, a bare `aa001b`, three-digit `#abc`, or one of the names in
 `handlers/team.COLOUR_NAMES` (`crimson`, `navy`, `gold`, …). `/setteamcolour`

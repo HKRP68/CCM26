@@ -514,6 +514,126 @@ class DeliverCardTests(unittest.TestCase):
         self.assertEqual(bot.send_photo.await_count, 1)
 
 
+class PotmCardTests(unittest.TestCase):
+    """The Player of the Match's collectible card, sent as a second photo.
+
+    It goes out *after* the summary card has already landed, so every failure
+    mode here — no identity, a player with no card, a render that raises — has
+    to read as "no second photo" and never as an error on a finished match.
+    """
+
+    def _bot(self, send=None):
+        bot = MagicMock()
+        bot.send_photo = AsyncMock(return_value=send or MagicMock())
+        return bot
+
+    def test_it_sends_the_rendered_card(self):
+        bot = self._bot()
+        with unittest.mock.patch.object(sd, "potm_card_bytes",
+                                        return_value=b"card-bytes") as render:
+            ok = _run(sd.send_potm_card(bot, -100, player_id=7, name="Ace",
+                                        team="Alpha"))
+        self.assertTrue(ok)
+        render.assert_called_once_with(7, "Ace")
+        self.assertEqual(bot.send_photo.await_count, 1)
+        caption = bot.send_photo.await_args.kwargs["caption"]
+        self.assertIn("Ace", caption)
+        self.assertIn("Alpha", caption)
+
+    def test_no_identity_sends_nothing_and_does_not_render(self):
+        bot = self._bot()
+        with unittest.mock.patch.object(sd, "potm_card_bytes") as render:
+            ok = _run(sd.send_potm_card(bot, -100))
+        self.assertFalse(ok)
+        render.assert_not_called()
+        bot.send_photo.assert_not_awaited()
+
+    def test_a_player_with_no_card_sends_nothing(self):
+        bot = self._bot()
+        with unittest.mock.patch.object(sd, "potm_card_bytes",
+                                        return_value=None):
+            ok = _run(sd.send_potm_card(bot, -100, name="Ghost"))
+        self.assertFalse(ok)
+        bot.send_photo.assert_not_awaited()
+
+    def test_a_render_that_raises_does_not_propagate(self):
+        bot = self._bot()
+        with unittest.mock.patch.object(sd, "potm_card_bytes",
+                                        side_effect=RuntimeError("boom")):
+            ok = _run(sd.send_potm_card(bot, -100, player_id=7, name="Ace"))
+        self.assertFalse(ok)
+        bot.send_photo.assert_not_awaited()
+
+    def test_a_send_that_never_lands_is_reported_not_raised(self):
+        bot = MagicMock()
+        bot.send_photo = AsyncMock(side_effect=Forbidden("kicked"))
+        with unittest.mock.patch.object(sd, "potm_card_bytes",
+                                        return_value=b"card-bytes"):
+            ok = _run(sd.send_potm_card(bot, -100, player_id=7, name="Ace"))
+        self.assertFalse(ok)
+
+    def test_the_caption_escapes_a_name_that_looks_like_markup(self):
+        caption = sd.potm_card_caption("<b>Ace</b>", "Alpha & Co")
+        self.assertIn("&lt;b&gt;Ace&lt;/b&gt;", caption)
+        self.assertIn("Alpha &amp; Co", caption)
+
+    def test_the_caption_survives_a_nameless_award(self):
+        self.assertIn("Player of the Match", sd.potm_card_caption(None, None))
+
+    def test_the_switch_turns_the_render_off(self):
+        """One config key, so an admin can stop the extra photo without a
+        deploy — and it is read here rather than at each of the four call
+        sites, so no mode can miss it."""
+        with unittest.mock.patch.object(sd, "_potm_card_enabled",
+                                        return_value=False):
+            self.assertIsNone(sd.potm_card_bytes(player_id=7, name="Ace"))
+
+    def test_it_defaults_to_on_when_the_config_cannot_be_read(self):
+        import services.config_service as config_service
+        with unittest.mock.patch.object(config_service, "get_config",
+                                        side_effect=RuntimeError("db down")):
+            self.assertTrue(sd._potm_card_enabled())
+
+    def test_a_row_that_predates_the_migration_still_gets_the_card(self):
+        """The column is added with a default, but a NULL would read as False
+        and ship the feature off to precisely the installs that already had
+        matches to show it on."""
+        import services.config_service as config_service
+        with unittest.mock.patch.object(
+                config_service, "get_config",
+                return_value={"scorecard_potm_card": None}):
+            self.assertTrue(sd._potm_card_enabled())
+
+    def test_an_explicit_off_is_honoured(self):
+        import services.config_service as config_service
+        with unittest.mock.patch.object(
+                config_service, "get_config",
+                return_value={"scorecard_potm_card": False}):
+            self.assertFalse(sd._potm_card_enabled())
+
+    def test_the_switch_ships_on(self):
+        from services.config_service import DEFAULTS
+        self.assertIs(DEFAULTS["scorecard_potm_card"], True)
+
+    def test_nothing_to_resolve_skips_the_session_entirely(self):
+        """No id and no name cannot resolve to anybody, so it must not open a
+        connection to find that out."""
+        import services.card_identity as card_identity
+        with unittest.mock.patch.object(card_identity, "open_session") as opened:
+            self.assertIsNone(sd.potm_card_bytes())
+        opened.assert_not_called()
+
+    def test_the_session_is_closed_even_when_the_lookup_raises(self):
+        import services.card_identity as card_identity
+        session = MagicMock()
+        with unittest.mock.patch.object(card_identity, "open_session",
+                                        return_value=session), \
+             unittest.mock.patch.object(card_identity, "potm_card_png",
+                                        side_effect=RuntimeError("boom")):
+            self.assertIsNone(sd.potm_card_bytes(player_id=7))
+        session.close.assert_called_once()
+
+
 class TextFallbackTests(unittest.TestCase):
     """When every image fails the group still gets the numbers."""
 

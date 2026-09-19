@@ -3555,6 +3555,14 @@ async def _complete_match(context, mid, state):
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(miniapp_row)
                 if miniapp_row else None)
+            # The winner's own collectible card, straight after the summary
+            # whose POTM strip names them.
+            from services import scorecard_delivery as _sd
+            award = state.get("_summary_potm") or {}
+            await _sd.send_potm_card(
+                context.bot, state["chat_id"],
+                player_id=state.get("potm_player_id"),
+                name=award.get("name"), team=award.get("team"))
         else:
             logger.warning("cipl match summary image came back empty for match %s", mid)
     except Exception:
@@ -3950,6 +3958,10 @@ def _build_cipl_summary_image(state, result):
     except Exception:
         logger.exception("cipl POTM calculation failed for match %s", state.get("match_id"))
         potm_name, potm_stats, potm_team = None, None, None
+
+    # This is the only place the award is worked out, and the send path needs
+    # the same name and side for the player card that follows the summary.
+    state["_summary_potm"] = {"name": potm_name, "team": potm_team}
 
     is_hundred = cipl_match.is_hundred(state)
     if is_hundred:

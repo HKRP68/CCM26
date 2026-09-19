@@ -112,6 +112,16 @@ class _Base(unittest.TestCase):
             self._keys.append(user.team_logo_asset_key)
         return user
 
+    def _player(self, name, rating=85):
+        from models import Player
+        player = Player(name=name, rating=rating, category="Batsman",
+                        country="India", bat_hand="RHB", bowl_hand="R",
+                        bowl_style="Medium", bat_rating=rating,
+                        bowl_rating=40)
+        self.session.add(player)
+        self.session.commit()
+        return player
+
 
 class ColourResolutionTests(_Base):
     def test_a_users_own_colour_wins(self):
@@ -196,6 +206,64 @@ class PortraitTests(_Base):
 
     def test_a_missing_session_is_not_an_error(self):
         self.assertIsNone(self.ci.potm_portrait_png(None, player_id=1))
+
+
+class PlayerCardTests(_Base):
+    """The award winner's collectible card, which goes out as a second photo.
+
+    The summary card has already landed by the time this is asked for, so every
+    way of not finding a player has to read as "no second photo" rather than as
+    an exception on a finished match.
+    """
+
+    def test_an_unknown_player_is_not_an_error(self):
+        self.assertIsNone(self.ci.potm_card_png(self.session, player_id=999_999))
+
+    def test_an_unknown_name_is_not_an_error(self):
+        self.assertIsNone(
+            self.ci.potm_card_png(self.session, name="Nobody At All"))
+
+    def test_no_identity_at_all_returns_none(self):
+        self.assertIsNone(self.ci.potm_card_png(self.session))
+
+    def test_a_missing_session_is_not_an_error(self):
+        self.assertIsNone(self.ci.potm_card_png(None, player_id=1))
+
+    def test_a_render_that_blows_up_returns_none(self):
+        """``generate_card`` reaches template config, asset storage and PIL. If
+        any of that fails the match must not notice."""
+        import services.card_generator as cg
+        player = self._player("Exploding Batter")
+        original = cg.generate_card
+        cg.generate_card = lambda _p: (_ for _ in ()).throw(RuntimeError("boom"))
+        try:
+            self.assertIsNone(
+                self.ci.potm_card_png(self.session, player_id=player.id))
+        finally:
+            cg.generate_card = original
+
+    def test_a_known_player_is_rendered(self):
+        player = self._player("Card Holder")
+        png = self.ci.potm_card_png(self.session, player_id=player.id)
+        self.assertTrue(png, "no card came back for a real player")
+        self._assert_image(png)
+
+    def test_the_name_resolves_when_no_id_is_given(self):
+        self._player("Named Only")
+        png = self.ci.potm_card_png(self.session, name="  named only  ")
+        self.assertTrue(png, "a POTM known only by name got no card")
+        self._assert_image(png)
+
+    def _assert_image(self, blob):
+        from PIL import Image
+        image = Image.open(io.BytesIO(blob))
+        # The card at the size people collect it, not the thumbnail that
+        # compositing it into the 125px POTM strip would have produced. The
+        # exact dimensions depend on which of generate_card's three paths ran
+        # (custom art, website template, or — here, with no template
+        # configured — the procedural tier card), so this only pins the floor.
+        self.assertGreaterEqual(image.width, 320)
+        self.assertGreaterEqual(image.height, 320)
 
 
 class SummaryVisualsTests(_Base):

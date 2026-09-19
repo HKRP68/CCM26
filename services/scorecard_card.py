@@ -868,8 +868,10 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
             draw.rounded_rectangle([logo_x, logo_y, logo_x + logo_size, logo_y + logo_size],
                                    radius=18, fill=(18, 28, 44), outline=(255, 255, 255, 42), width=1)
             bot = "BOT"
+            # Plain card text, not the accent: the accent is the team's own
+            # colour now, and this placeholder says nothing about the team.
             draw.text((logo_x + (logo_size - _tw(draw, bot, f_logo)) // 2, logo_y + 44),
-                      bot, fill=accent, font=f_logo)
+                      bot, fill=TEXT, font=f_logo)
         if match_no:
             mt = f"MATCH #{match_no}"
             draw.text((logo_x + (logo_size - _tw(draw, mt, f_meta)) // 2, logo_y + logo_size + 2),
@@ -1085,7 +1087,10 @@ def generate_batting_scorecard(team_name, opponent_name, total_runs, total_wicke
                 outcome_txt = " · TARGET MISSED"
             full = f"TARGET: {target}{outcome_txt}"
             f_tgt = _font_from_setting(text_settings, "batting", "target", 16, bold=True)
-            draw.text(_offset_xy(text_settings, "batting", "target", (W - _tw(draw, full, f_tgt)) // 2, H - 42), full, fill=accent, font=f_tgt)
+            # Gold, matching this card's table headers. It used to take the
+            # accent, which is the team's own colour now — a chase target is
+            # about the match, not about either side.
+            draw.text(_offset_xy(text_settings, "batting", "target", (W - _tw(draw, full, f_tgt)) // 2, H - 42), full, fill=GOLD, font=f_tgt)
 
         buf = io.BytesIO()
         img.save(buf, format="PNG", optimize=True)
