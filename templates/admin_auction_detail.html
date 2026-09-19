@@ -413,6 +413,124 @@
     {% endif %}
   </div>
 
+
+  <!-- ── Expansion picks ───────────────────────────────────────── -->
+  <div class="au-card">
+    <h3 style="margin-top:0;">🆕 Expansion picks</h3>
+    <p class="au-note" style="margin-top:0;">
+      A side joining a league that already exists has nobody to retain, so it
+      would walk into the auction empty-handed against everyone else's kept
+      players. Picks let it sign a few first, out of the pool <b>nobody
+      retained</b> — the rule the IPL used for Gujarat and Lucknow in 2022.
+    </p>
+    <form method="POST" class="au-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="expansion_rules">
+      <div><label>Picks per new side</label>
+        <input type="number" name="expansion_picks" min="0" max="15" value="{{ season.expansion_picks }}"></div>
+      <div><button class="btn btn-primary" type="submit">Save and deal</button></div>
+    </form>
+    <p class="au-note" style="margin-bottom:0;">
+      Who counts as "new" is <b>worked out, not ticked</b>: a side is new when
+      last season's league records nobody as theirs. So this depends on the
+      auction following the right league — set that below. Saving deals the
+      picks out; a side that has already used one keeps what it has left.
+      A pick costs the <b>retention ladder's</b> rung for that side's next
+      pick, and can be overridden per pick.
+    </p>
+
+    {% if new_sides %}
+    <h4 style="margin:1rem 0 .4rem;">New this season</h4>
+    <table class="au-table">
+      <tr><th>Franchise</th><th>Picks</th><th>Spent</th><th></th></tr>
+      {% for f in new_sides %}
+      <tr>
+        <td>{{ f.name }}{% if pick_turn and pick_turn.id == f.id %} <b>← their pick</b>{% endif %}</td>
+        <td>{{ picks_left(f) }} of {{ f.draft_picks_total }}</td>
+        <td>{{ money(pick_spent(f.id), season.currency_label) }}</td>
+        <td>
+          <form method="POST" style="display:flex;gap:.3rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="expansion_cards">
+            <input type="hidden" name="franchise_id" value="{{ f.id }}">
+            <input type="number" name="picks" min="0" max="15" value="{{ f.draft_picks_total }}" style="width:5rem;">
+            <button class="btn btn-ghost" type="submit">Set</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="au-note" style="margin:.8rem 0 0;">
+      <b>Nobody is new this season.</b> Every franchise is recorded as holding
+      players in the league below — or no league is recorded yet, in which
+      case every side is new and picks do not apply. Add a franchise above and
+      it will appear here.
+    </p>
+    {% endif %}
+
+    {% if picks_schedule %}
+    <h4 style="margin:1rem 0 .4rem;">Order</h4>
+    <p class="au-note" style="margin-top:0;">
+      It <b>snakes</b> — the side picking last in a round picks first in the
+      next — so no one seat takes the best player available every round. The
+      order follows each franchise's sort order; changing that mid-draft moves
+      the turn.
+    </p>
+    <ol class="au-note" style="margin:0;">
+      {% for f in picks_schedule %}
+      <li{% if loop.index == picks_made + 1 %} style="font-weight:700;"{% elif loop.index <= picks_made %} style="opacity:.5;"{% endif %}>
+        {{ f.name }}{% if loop.index <= picks_made %} ✅{% elif loop.index == picks_made + 1 %} ← now{% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+
+    {% if retention_open and season.max_retentions %}
+    <p class="au-note" style="margin:.8rem 0 0; color:#fca5a5;">
+      ⚠️ <b>Retention is still open.</b> A pick comes out of the players nobody
+      kept, so close retention first — picks are refused until you do.
+    </p>
+    {% elif pick_turn %}
+    <p class="au-note" style="margin:.8rem 0 0;">
+      It is <b>{{ pick_turn.name }}</b>'s pick, at
+      {{ money(next_slab(season, (pick_turn.draft_picks_used or 0) + 1), season.currency_label) }}
+      by default. Find the player in the <b>Retention</b> search below and use
+      <b>🆕 Pick for {{ pick_turn.name }}</b> — one search box, so a pick and a
+      retention can never disagree about which card they mean.
+    </p>
+    <form method="POST" style="margin-top:.4rem;"
+          onsubmit="return confirm('Pass on {{ pick_turn.name }}’s pick? The turn is spent either way.');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="expansion_skip">
+      <input type="hidden" name="franchise_id" value="{{ pick_turn.id }}">
+      <button class="btn btn-ghost" type="submit">⏭ Pass this pick</button>
+    </form>
+    {% endif %}
+    {% endif %}
+
+    {% if picked %}
+    <h4 style="margin:1rem 0 .4rem;">Taken so far</h4>
+    <table class="au-table">
+      <tr><th>Player</th><th>By</th><th>Price</th><th></th></tr>
+      {% for lot in picked %}
+      <tr>
+        <td>{{ lot.name }}</td>
+        <td>{{ lot.sold_to.name if lot.sold_to else '—' }}</td>
+        <td>{{ money(lot.sold_price_lakh, season.currency_label) }}</td>
+        <td>
+          <form method="POST" onsubmit="return confirm('Undo the pick on {{ lot.name }}? The money and the pick both come back.');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="expansion_undo">
+            <input type="hidden" name="lot_id" value="{{ lot.id }}">
+            <button class="btn btn-ghost" type="submit">Undo</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+  </div>
+
   <!-- ── Last season ───────────────────────────────────────────── -->
   <div class="au-card">
     <h3 style="margin-top:0;">Last season's league</h3>
@@ -483,6 +601,8 @@
       <span class="pill">{{ counts.get('queued', 0) }} waiting</span>
       <span class="pill">{{ counts.get('sold', 0) }} sold</span>
       <span class="pill">{{ counts.get('unsold', 0) }} unsold</span>
+      {% if counts.get('retained', 0) %}<span class="pill">🔒 {{ counts.get('retained', 0) }} retained</span>{% endif %}
+      {% if counts.get('drafted', 0) %}<span class="pill">🆕 {{ counts.get('drafted', 0) }} drafted</span>{% endif %}
     </h3>
     <p class="au-note" style="margin:.2rem 0 .8rem;">
       Players come straight out of the global catalogue — filter, preview, then

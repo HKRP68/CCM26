@@ -94,7 +94,9 @@ Admin: `/auction` (the reference card), `/anew`, `/abind`, `/astart`,
 `/aundobid`, `/awithdraw`, `/atimer`, `/asnipe`, `/agrant`, `/aco`,
 `/apublish`, `/acancel`, plus retention's `/aretlock`, `/aretain`,
 `/aunretain`, RTM's `/artmset`, `/artmcards`, `/artmforce`, `/artmundo`, the
-accelerated round's `/aaccel`, and `/aclone` for the next season.
+accelerated round's `/aaccel`, `/aclone` for the next season, and the
+expansion picks' `/apick`, `/apicks`, `/apickset`, `/apickskip` and
+`/apickundo`.
 
 `/bid`, `/artm`, `/aboard` and `/apurse` are **not** in the group slash menu. Both
 player scopes sit exactly at Telegram's 100-command ceiling and `_clamped`
@@ -463,6 +465,98 @@ fallback, because a season linked to a league by hand has nothing else.
 
 ---
 
+## Expansion teams
+
+A side joining a league that already exists has no previous squad, so it
+retains nobody — and would walk into the auction with an empty list while
+everyone else arrives holding three players. The IPL solved this in 2022:
+Gujarat and Lucknow each took three players out of the pool **nobody had
+retained**, before the mega auction opened.
+
+### Getting there from a finished tournament
+
+`clone_season` needs a previous *auction*. What actually finishes is a
+**tournament**, and the league it played on may never have come from an
+auction at all. So a completed Challenge League tournament's admin page offers
+**🏆 Next season**, which calls `season_from_league`: a franchise per team, and
+`previous_league_id` wired to that league — the step that decides who holds a
+Right To Match on whom, and the one easiest to forget by hand.
+
+Only a **Challenge League** tournament, and only a **completed** one. A Lets
+Play tournament's teams are Telegram users playing their own rosters, so there
+is no league of squads to auction. A second press links to the season that
+already follows that league rather than quietly building a rival field.
+
+The new franchises arrive **ownerless** — a `ChallengeTeam` has no owner to
+carry. That is not a hole: `start()` already refuses an ownerless franchise by
+name, so it cannot be missed quietly.
+
+### The picks
+
+```text
+/apickset 3                       three picks to every new side
+/apickset Lucknow | 2             one side's own number
+/apick Gujarat | Hardik Pandya    at the ladder price
+/apick Gujarat | Hardik | 15      at yours
+/apicks                           the order, whose turn, what is taken
+/apickskip                        pass — the turn is spent either way
+/apickundo Hardik Pandya          money and pick both back
+```
+
+…or the **🆕 Expansion picks** card on the setup page, which shares the
+retention search box — one resolver, so a pick and a retention can never
+disagree about which card they mean.
+
+**Who is new is derived, not ticked.** A side is an expansion side exactly
+when the league this season follows records nobody as theirs — the same
+question `previous_squad_map` already answers for retention and RTM. One source
+of truth beats a checkbox somebody has to remember, and a first season (where
+every side is new) correctly gets none.
+
+**The order snakes** — 1, 2, 2, 1, 1, 2 — so no seat takes the best player
+available every round. It is derived from `draft_picks_used` and `sort_order`,
+not stored in a cursor: a cursor is one more thing to fall out of step with the
+picks it describes. A skip spends the turn, which is the point — a side that
+does not want its pick must not be able to stall the order by never taking it.
+
+**Retention closes first.** A pick comes out of the players nobody kept, so a
+season that allows retentions refuses picks until retention is locked, naming
+`/aretlock on`. One switch, not a second window with its own deadline.
+
+### A pick is a retention with a different eligibility rule
+
+That is the whole design. Both acquire a player before the auction, at a price,
+out of the purse. They differ in three places:
+
+| | retention | expansion pick |
+|---|---|---|
+| who is eligible | anyone (yours is *warned*, not required) | anyone **not already signed** this season |
+| counts against | `retained_count` / `max_retentions` | `draft_picks_used` / `draft_picks_total` |
+| called | `ACQ_RETAINED`, `LEDGER_RETENTION` | `ACQ_DRAFTED`, `LEDGER_DRAFT` |
+
+Everything else — the squad cap, the lot claim, the overseas cap, the purse,
+the reachability rule, the conditional debit, the ledger row and the
+announcement — is identical, and lives once in `_sign_before_auction`. `retain`
+is a thin caller over it with its signature unchanged.
+
+One reader had to be told about the new kind, and it is the one that bit this
+feature before: **`pool_counts`** keeps picks out of the auction figures and
+counts them apart from retentions. Nobody bid and no clock ran, so folding them
+in would have the board announce lots resolved before the first one opened —
+exactly the bug retention shipped in phase 2a. A pick also does **not** rewrite
+`previous_franchise_id`: a retention records the holder because it *is* one,
+but a pick takes somebody nobody kept, so the real record survives.
+
+### The pool builder stamps who held whom
+
+`link_previous_season` can only stamp lots that already exist, and the natural
+order — the one `/aclone` and both pages tell an admin to work in — is to
+follow a league first and build the pool after. Every lot came out unstamped
+and Right To Match found nobody, in silence. `add_players_to_pool` now stamps
+as it creates, so the order cannot matter.
+
+---
+
 ## How the website talks to the group
 
 **The Flask admin panel never touches Telegram.** It runs in a thread of the
@@ -769,6 +863,7 @@ Two things were on their way to a third copy each, and both fail silently.
 | `tests/test_auction_bidding.py` | The lifecycle, bidding, two-session concurrency, the clock, anti-snipe, undo, permissions, the commands, the board, and the accelerated round |
 | `tests/test_auction_retention.py` | The ladder, the money, every cap, the window, what retention does to the pool and the board, publishing a retained player, and the commands |
 | `tests/test_auction_rtm.py` | The proposal's own Ashwin example end to end, every eligibility gate, all three timeouts, the self-raise suspension from both sides, the card, `undo_rtm`, the two-session races, and the autoflush shapes |
+| `tests/test_auction_expansion.py` | Starting a season from a league, who counts as an expansion side, the snake order as a sequence, every cap a pick obeys, and the rule that a player somebody kept cannot be picked |
 | `tests/test_auction_season.py` | Cloning: every rule carried (and a guard against the rule list falling behind the model), the field and its owners, the purses and their ledger, what is deliberately left behind, the group handover, and the rename that used to lose every holder |
 
 ---
