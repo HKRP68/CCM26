@@ -112,6 +112,7 @@ LEDGER_REFUND = "refund"
 LEDGER_CORRECTION = "correction"
 LEDGER_RETENTION = "retention"   # phase 2
 LEDGER_RTM = "rtm"               # phase 2
+LEDGER_DRAFT = "draft"           # an expansion side's pre-auction pick
 
 # ── Money ─────────────────────────────────────────────────────────────
 LAKH_PER_CRORE = 100
@@ -139,6 +140,17 @@ DEFAULT_BASE_PRICE_RULES = [
 ACQ_AUCTION = "auction"
 ACQ_RETAINED = "retained"
 ACQ_RTM = "rtm"          # phase 2b
+# A pre-auction pick by a side with no previous squad. Its own kind and not a
+# retention, because a retention is a franchise KEEPING somebody — an
+# expansion pick is a franchise taking somebody nobody kept, and the two
+# answer different questions about how a squad was assembled.
+ACQ_DRAFTED = "drafted"
+
+# Signed before the auction opened: no bid, no clock, no room watching. What
+# these have in common is what ``pool_counts`` needs — they are not auction
+# progress, and folding them into the board's "N/M resolved" line would have
+# it announce a figure before the first lot ever opened.
+ACQ_PRE_AUCTION = (ACQ_RETAINED, ACQ_DRAFTED)
 
 # The retention slab ladder: what the Nth retention costs. Descending, the way
 # every real retention ladder is. This only PRE-FILLS the price; the caps are
@@ -437,6 +449,8 @@ SEASON_RULE_FIELDS = (
     "retention_categories_json", "retention_price_rules_json",
     # Right To Match
     "rtm_enabled", "rtm_per_team", "rtm_window_seconds", "rtm_extra_lakh",
+    # Expansion teams
+    "expansion_picks",
 )
 
 # What a franchise takes with it into the next season: who it is and who runs
@@ -513,6 +527,76 @@ def clone_season(session, source, name, *, chat_id=None, by_tg_id=None):
                       "franchises": len(field),
                       "lots_followed": followed})
     return season
+
+
+def season_from_league(session, league, name, *, template=None, chat_id=None,
+                       by_tg_id=None):
+    """Start an auction for the season after the one this league just played.
+
+    ``clone_season`` needs a previous *auction*. This one needs only a league,
+    which is what a finished tournament actually leaves behind — and that
+    league may never have come from an auction at all: it can be hand-built,
+    or come out of a draft. Without this there is no way in from there, and
+    the one thing that matters most, ``previous_league_id``, has to be wired
+    by hand or the new season's retention and Right To Match find nobody.
+
+    ``template`` is an earlier season to take the rules from. With none, the
+    season takes the ordinary defaults and the admin sets them up.
+
+    The franchises come out **ownerless**, because a ``ChallengeTeam`` has no
+    owner to carry — the league only knows a team's name and its badge. That
+    is not a hole: ``start`` refuses an auction with an ownerless franchise,
+    by name, so it cannot be forgotten quietly.
+    """
+    if league is None:
+        raise AuctionError("That league no longer exists.")
+
+    settings = ({f: getattr(template, f) for f in SEASON_RULE_FIELDS}
+                if template is not None else {})
+    season = create_season(session, name, **settings)
+    if template is not None:
+        season.previous_season_id = template.id
+    session.flush()
+
+    if chat_id is not None:
+        bind_chat(session, season, chat_id)
+
+    teams = (session.query(ChallengeTeam)
+             .filter(ChallengeTeam.league_id == league.id)
+             .order_by(ChallengeTeam.sort_order.asc(),
+                       ChallengeTeam.name.asc()).all())
+    for team in teams:
+        create_franchise(session, season, team.name, quiet=True,
+                         short_name=team.short_name, logo_url=team.logo_url,
+                         sort_order=team.sort_order,
+                         rtm_cards_total=_as_int(season.rtm_per_team, 0))
+
+    # Flushed before ``link_previous_season`` reads the franchises back
+    # through a query: this session is autoflush=False.
+    session.flush()
+    link_previous_season(session, season, league.id)
+
+    field = franchises(session, season.id)
+    log_event(session, season, "season_from_league",
+              f"🌱 <b>{_e(season.name)}</b> follows {_e(league.name)} — "
+              f"{len(field)} franchises carried over from its teams. "
+              f"They have no owners yet; set those before starting.",
+              by_tg_id=by_tg_id, by_admin=True,
+              detail={"league_id": league.id, "franchises": len(field)})
+    return season
+
+
+def season_following_league(session, league_id):
+    """The auction already following this league, or None.
+
+    So a second "next season" press links to the one that exists rather than
+    quietly building a duplicate field of franchises beside it.
+    """
+    if not league_id:
+        return None
+    return (session.query(AuctionSeason)
+            .filter(AuctionSeason.previous_league_id == int(league_id))
+            .order_by(AuctionSeason.id.asc()).first())
 
 
 def season_chain(session, season):
@@ -1028,13 +1112,16 @@ def previous_squad_map(session, season, league_id=None):
 
 # ── Retaining ────────────────────────────────────────────────────────
 
-def _retention_lot(session, season, player):
-    """The lot a retention will use — converting a queued one, or a new row.
+def _signing_lot(session, season, player, *, verb="retained"):
+    """The lot a pre-auction signing will use — a queued one, or a new row.
 
-    An admin who built the pool first must not hit a wall, so a player already
-    sitting in the queue is converted in place rather than refused. Anything
-    further along than ``queued`` is somebody else's business and is refused by
-    name.
+    Shared by retention and by an expansion pick, which are the same operation
+    with different eligibility (see ``_sign_before_auction``). An admin who
+    built the pool first must not hit a wall, so a player already sitting in
+    the queue is converted in place rather than refused. Anything further
+    along than ``queued`` is somebody else's business and is refused **by
+    name** — which is what stops a new side picking a player another franchise
+    has already kept, the whole point of drafting from the un-retained pool.
     """
     lot = (session.query(AuctionLot)
            .filter(AuctionLot.season_id == season.id,
@@ -1060,13 +1147,122 @@ def _retention_lot(session, season, player):
         return lot
     if lot.status == LOT_QUEUED:
         return lot
-    if lot.acquisition == ACQ_RETAINED and lot.status == LOT_SOLD:
+    if lot.status == LOT_SOLD and lot.acquisition in (ACQ_RETAINED, ACQ_DRAFTED):
         holder = (session.query(AuctionFranchise)
                   .filter(AuctionFranchise.id == lot.sold_to_id).first())
-        raise AuctionError(f"{lot.name} has already been retained by "
+        how = "retained" if lot.acquisition == ACQ_RETAINED else "drafted"
+        raise AuctionError(f"{lot.name} has already been {how} by "
                            f"{holder.name if holder else 'another franchise'}.")
     raise AuctionError(f"{lot.name} is already {lot.status} in this auction and "
-                       f"cannot be retained.")
+                       f"cannot be {verb}.")
+
+
+def _sign_before_auction(session, season, franchise, player, price, *,
+                         kind, counter, ledger_kind, verb, note,
+                         event_kind, mark, word, detail=None,
+                         now=None, by_tg_id=None):
+    """Put a player on a squad before the auction opens, for a price.
+
+    The shared body of **retention** and an **expansion pick**, which are the
+    same operation with different eligibility (see the table in
+    ``docs/franchise-auction.md``). Each caller does its own window and quota
+    checks first, then hands the price here; everything from the squad cap
+    down — the lot claim, the overseas cap, the purse, the reachability rule,
+    the conditional debit, the ledger row and the announcement — is identical
+    and lives once.
+
+    ``counter`` is the column on the franchise that the signing spends:
+    ``retained_count`` for a retention, ``draft_picks_used`` for a pick. It is
+    incremented inside the same conditional UPDATE as the debit, so a purse
+    that moved underneath the validation rolls the whole signing back rather
+    than leaving a counter that moved and a player who did not.
+    """
+    now = now or datetime.utcnow()
+    symbol = season.currency_label or "₹"
+
+    size = int(franchise.squad_size or 0)
+    if size + 1 > _as_int(season.max_squad_size, 0):
+        raise AuctionError(f"{franchise.name} already has {size} players, "
+                           f"which is the squad limit.")
+
+    lot = _signing_lot(session, season, player, verb=f"{verb}ed")
+
+    if lot.is_overseas:
+        overseas_cap = max(0, _as_int(season.max_overseas, 0))
+        if overseas_count(session, franchise.id) + 1 > overseas_cap:
+            raise AuctionError(f"{franchise.name} is already at the overseas "
+                               f"limit of {overseas_cap}.")
+
+    remaining = int(franchise.purse_remaining_lakh or 0)
+    if price > remaining:
+        raise AuctionError(f"{franchise.name} has "
+                           f"{render_money(remaining, symbol)} left — "
+                           f"{render_money(price, symbol)} is more than the "
+                           f"purse.")
+    ceiling = max_bid_now(season, franchise)
+    if price > ceiling:
+        slots_after = max(0, _as_int(season.min_squad_size, 0) - (size + 1))
+        reserve = slots_after * max(0, _as_int(season.min_base_price_lakh, 0))
+        raise AuctionError(
+            f"{render_money(price, symbol)} would leave {franchise.name} "
+            f"unable to fill its squad: {slots_after} more players need "
+            f"{render_money(reserve, symbol)} held back. The most it can "
+            f"{verb} this player for is {render_money(max(0, ceiling), symbol)}.")
+
+    # Every write below is one transaction, and the debit is conditional for
+    # the same reason a sale's is: if the purse moved under the validation a
+    # few milliseconds ago, the whole signing rolls back rather than half
+    # happening.
+    column = getattr(AuctionFranchise, counter)
+    debited = (session.query(AuctionFranchise)
+               .filter(AuctionFranchise.id == franchise.id,
+                       AuctionFranchise.purse_remaining_lakh >= price,
+                       AuctionFranchise.squad_size < _as_int(season.max_squad_size, 0))
+               .update({"purse_remaining_lakh":
+                        AuctionFranchise.purse_remaining_lakh - price,
+                        "squad_size": AuctionFranchise.squad_size + 1,
+                        counter: column + 1},
+                       synchronize_session=False))
+    session.flush()
+    session.expire_all()
+    franchise = (session.query(AuctionFranchise)
+                 .filter(AuctionFranchise.id == franchise.id).first())
+    lot = session.query(AuctionLot).filter(AuctionLot.id == lot.id).first()
+    if not debited:
+        raise AuctionError(f"{franchise.name} can no longer pay "
+                           f"{render_money(price, symbol)} — nothing has been "
+                           f"signed.")
+
+    lot.status = LOT_SOLD
+    lot.acquisition = kind
+    lot.sold_to_id = franchise.id
+    lot.sold_price_lakh = price
+    lot.sold_at = now
+    lot.deadline_at = None
+    lot.going_stage = 0
+    # A RETAINED player was, by definition, held by this franchise; recording
+    # it keeps the Right To Match input complete even for players who will
+    # never be RTM'd, and costs nothing. A DRAFTED one was not — an expansion
+    # side is taking somebody nobody kept — so the field is left alone and
+    # whoever really held him last season stays on the record.
+    if kind == ACQ_RETAINED and lot.previous_franchise_id is None:
+        lot.previous_franchise_id = franchise.id
+
+    # Flushed before anything reads it back: this session is autoflush=False,
+    # and ``retention_spent`` / ``retained`` / ``drafted`` / ``squad`` all find
+    # a signing by QUERYING for ``status`` and ``acquisition``. Left pending,
+    # the next one would price itself against a budget that had not noticed
+    # this one — the bug class that bit phase 1 three times.
+    session.flush()
+
+    _ledger(session, franchise, ledger_kind, -price, lot=lot, note=note,
+            by_tg_id=by_tg_id)
+    log_event(session, season, event_kind,
+              f"{mark} <b>{_e(franchise.name)}</b> {word} {_e(lot.name)} "
+              f"({lot.rating} OVR) for {render_money(price, symbol)}.",
+              lot=lot, franchise=franchise, by_tg_id=by_tg_id, by_admin=True,
+              detail={"price_lakh": price, **(detail or {})})
+    return lot
 
 
 def retain(session, season, franchise, player, price_lakh=None, *,
@@ -1130,87 +1326,287 @@ def retain(session, season, franchise, player, price_lakh=None, *,
                            f"auction only allows retaining "
                            f"{', '.join(allowed)}.")
 
-    size = int(franchise.squad_size or 0)
-    if size + 1 > _as_int(season.max_squad_size, 0):
-        raise AuctionError(f"{franchise.name} already has {size} players, "
-                           f"which is the squad limit.")
+    return _sign_before_auction(
+        session, season, franchise, player, price,
+        kind=ACQ_RETAINED, counter="retained_count",
+        ledger_kind=LEDGER_RETENTION, verb="retain",
+        note=f"Retained: {player.name}",
+        event_kind="retained", mark="🔒", word="retain",
+        detail={"slab": count + 1}, now=now, by_tg_id=by_tg_id)
 
-    lot = _retention_lot(session, season, player)
 
-    if lot.is_overseas:
-        overseas_cap = max(0, _as_int(season.max_overseas, 0))
-        if overseas_count(session, franchise.id) + 1 > overseas_cap:
-            raise AuctionError(f"{franchise.name} is already at the overseas "
-                               f"limit of {overseas_cap}.")
+# ── Expansion picks ──────────────────────────────────────────────────
+#
+# A side joining a league that already exists has no previous squad, so it
+# retains nobody and would walk into the auction with an empty list while
+# everyone else arrives with three players kept. The IPL solved this in 2022
+# by letting Gujarat and Lucknow each take three players out of the pool
+# nobody had retained, before the mega auction opened. This is that.
+#
+# Deliberately NOT built on the ``PlayerDraft`` feature, which owns the whole
+# ``d*`` command namespace: that is a season object in its own right, and
+# using it would mean standing a second season up beside the auction and
+# reconciling two purses, two pools and two publish paths for the sake of a
+# handful of picks. The money, the caps and the ledger a pick needs are all
+# already here, on the franchise doing the picking.
 
-    remaining = int(franchise.purse_remaining_lakh or 0)
-    if price > remaining:
-        raise AuctionError(f"{franchise.name} has "
-                           f"{render_money(remaining, symbol)} left — "
-                           f"{render_money(price, symbol)} is more than the "
-                           f"purse.")
-    ceiling = max_bid_now(season, franchise)
-    if price > ceiling:
-        slots_after = max(0, _as_int(season.min_squad_size, 0) - (size + 1))
-        reserve = slots_after * max(0, _as_int(season.min_base_price_lakh, 0))
-        raise AuctionError(
-            f"{render_money(price, symbol)} would leave {franchise.name} "
-            f"unable to fill its squad: {slots_after} more players need "
-            f"{render_money(reserve, symbol)} held back. The most it can "
-            f"retain this player for is {render_money(max(0, ceiling), symbol)}.")
 
-    # Every write below is one transaction, and the debit is conditional for
-    # the same reason a sale's is: if the purse moved under the validation a
-    # few milliseconds ago, the whole retention rolls back rather than half
-    # happening.
-    debited = (session.query(AuctionFranchise)
-               .filter(AuctionFranchise.id == franchise.id,
-                       AuctionFranchise.purse_remaining_lakh >= price,
-                       AuctionFranchise.squad_size < _as_int(season.max_squad_size, 0))
-               .update({"purse_remaining_lakh":
-                        AuctionFranchise.purse_remaining_lakh - price,
-                        "squad_size": AuctionFranchise.squad_size + 1,
-                        "retained_count": AuctionFranchise.retained_count + 1},
-                       synchronize_session=False))
+def expansion_configured(season):
+    return _as_int(getattr(season, "expansion_picks", 0), 0) > 0
+
+
+def picks_left(franchise):
+    if franchise is None:
+        return 0
+    return max(0, int(franchise.draft_picks_total or 0)
+               - int(franchise.draft_picks_used or 0))
+
+
+def drafted(session, franchise_id):
+    """Every player this franchise took as an expansion pick, best first."""
+    return (session.query(AuctionLot)
+            .filter(AuctionLot.sold_to_id == franchise_id,
+                    AuctionLot.status == LOT_SOLD,
+                    AuctionLot.acquisition == ACQ_DRAFTED)
+            .order_by(AuctionLot.rating.desc(), AuctionLot.name.asc()).all())
+
+
+def pick_spent(session, franchise_id):
+    """What a franchise has spent on picks, in lakh. Derived, not cached."""
+    total = (session.query(func.coalesce(func.sum(AuctionLot.sold_price_lakh), 0))
+             .filter(AuctionLot.sold_to_id == franchise_id,
+                     AuctionLot.status == LOT_SOLD,
+                     AuctionLot.acquisition == ACQ_DRAFTED).scalar())
+    return int(total or 0)
+
+
+def expansion_franchises(session, season):
+    """The sides with no previous squad — the ones a pick is for.
+
+    Derived, not flagged. A franchise is an expansion side exactly when the
+    league this season follows records nobody as theirs, which is the same
+    question ``previous_squad_map`` already answers for retention and Right To
+    Match. One source of truth beats a checkbox an admin has to remember.
+
+    With no previous league at all every side is new — a first season — and
+    picks make no sense, so this comes back empty rather than handing the
+    whole field free players.
+    """
+    if not getattr(season, "previous_league_id", None):
+        return []
+    held = previous_squad_map(session, season)
+    have_squads = {f.id for f in held.values()}
+    return [f for f in franchises(session, season.id)
+            if f.id not in have_squads]
+
+
+def deal_expansion_picks(session, season):
+    """Give every expansion side the season's allowance. Returns them.
+
+    Run when the allowance is set rather than at pick time, so an admin sees
+    who is getting what before anybody picks — and a side that has already
+    used one keeps what it has left, the same call ``set_rtm_rules`` makes
+    about Right To Match cards.
+    """
+    allowance = _as_int(getattr(season, "expansion_picks", 0), 0)
+    new_sides = expansion_franchises(session, season)
+    for franchise in new_sides:
+        if int(franchise.draft_picks_used or 0) == 0:
+            franchise.draft_picks_total = allowance
     session.flush()
-    session.expire_all()
+    return new_sides
+
+
+def pick_order(session, season):
+    """The sides holding picks, in seat order."""
+    return [f for f in franchises(session, season.id)
+            if int(f.draft_picks_total or 0) > 0]
+
+
+def pick_schedule(session, season):
+    """The whole running order, one entry per pick.
+
+    **A snake**: round one runs down the seats, round two back up them, and so
+    on, so the side picking last in one round picks first in the next. Straight
+    repetition would hand the first seat the best player available in every
+    round, which is the entire reason a draft snakes.
+
+    Built whole rather than stepped through, because "whose turn is it" and
+    "what is the running order" are then the same fact read two ways, and a
+    schedule you can print is a schedule an owner can plan against.
+    """
+    order = pick_order(session, season)
+    if not order:
+        return []
+    rounds = max(int(f.draft_picks_total or 0) for f in order)
+    schedule = []
+    for rnd in range(rounds):
+        seats = order if rnd % 2 == 0 else list(reversed(order))
+        for franchise in seats:
+            if int(franchise.draft_picks_total or 0) > rnd:
+                schedule.append(franchise)
+    return schedule
+
+
+def pick_turn(session, season):
+    """Whose pick it is, or ``None`` once every allowance is spent.
+
+    Derived from what has been used, not from a stored cursor: a cursor is one
+    more thing to fall out of step with the picks it describes, and there is
+    nothing here it would buy. Because a turn can only be spent in order — by
+    picking or by being skipped, both of which bump ``draft_picks_used`` — the
+    number already spent *is* the index into the schedule.
+    """
+    schedule = pick_schedule(session, season)
+    made = sum(int(f.draft_picks_used or 0) for f in pick_order(session, season))
+    return schedule[made] if made < len(schedule) else None
+
+
+def _pick_window(session, season):
+    """Refuse a pick that cannot happen at all, and say which reason."""
+    if season.status != STATUS_SETUP:
+        raise AuctionError("Expansion picks happen before the auction opens — "
+                           "this one is " + str(season.status) + ".")
+    # Picks come out of the pool nobody retained, so retention has to be over
+    # first. Reusing retention's own lock rather than inventing a second
+    # window with its own deadline: one switch, one thing to explain.
+    if retention_configured(season) and not retention_locked(season):
+        raise AuctionError("Retention is still open. A pick comes out of the "
+                           "players nobody kept, so close retention first "
+                           "with /aretlock on.")
+
+
+def draft_pick(session, season, franchise, player, price_lakh=None, *,
+               now=None, by_tg_id=None):
+    """An expansion side signs a player before the auction, at a price.
+
+    The same operation as a retention with a different eligibility rule, so it
+    runs through the same body — see ``_sign_before_auction``. What is its own
+    here is the turn, the allowance, and that the player must not already have
+    been signed by anybody, which ``_signing_lot`` enforces and names.
+    """
+    now = now or datetime.utcnow()
+    _pick_window(session, season)
+
+    used = int(franchise.draft_picks_used or 0)
+    if picks_left(franchise) <= 0:
+        raise AuctionError(f"{franchise.name} has used all "
+                           f"{int(franchise.draft_picks_total or 0)} of its "
+                           f"picks.")
+
+    turn = pick_turn(session, season)
+    if turn is not None and turn.id != franchise.id:
+        raise AuctionError(f"It is {turn.name}'s pick, not {franchise.name}'s.")
+
+    price = (retention_price_for(season, used + 1) if price_lakh is None
+             else _as_int(price_lakh, -1))
+    if price < 0:
+        raise AuctionError("A pick price cannot be negative.")
+
+    return _sign_before_auction(
+        session, season, franchise, player, price,
+        kind=ACQ_DRAFTED, counter="draft_picks_used",
+        ledger_kind=LEDGER_DRAFT, verb="draft",
+        note=f"Expansion pick: {player.name}",
+        event_kind="drafted", mark="🆕", word="draft",
+        detail={"pick": used + 1}, now=now, by_tg_id=by_tg_id)
+
+
+def skip_pick(session, season, franchise, *, by_tg_id=None):
+    """Burn a turn without signing anybody.
+
+    The allowance is spent either way, which is the point: a side that does
+    not want its pick must not be able to stall the order by never taking it.
+    """
+    _pick_window(session, season)
+    if picks_left(franchise) <= 0:
+        raise AuctionError(f"{franchise.name} has no picks left to skip.")
+    turn = pick_turn(session, season)
+    if turn is not None and turn.id != franchise.id:
+        raise AuctionError(f"It is {turn.name}'s pick, not {franchise.name}'s.")
+
+    franchise.draft_picks_used = int(franchise.draft_picks_used or 0) + 1
+    # Flushed before the announcement reads the turn back: this session is
+    # autoflush=False and ``pick_turn`` QUERIES the franchises.
+    session.flush()
+    following = pick_turn(session, season)
+    log_event(session, season, "pick_skipped",
+              f"⏭ <b>{_e(franchise.name)}</b> pass on an expansion pick."
+              + (f" Over to {_e(following.name)}." if following is not None
+                 else " That is every pick used."),
+              franchise=franchise, by_tg_id=by_tg_id, by_admin=True)
+    return franchise
+
+
+def undo_pick(session, season, lot, *, by_tg_id=None):
+    """Put a picked player back in the pool, money and turn both returned.
+
+    Returning the pick is the whole reason this is not ``undo_sale``: an undone
+    pick that quietly ate one leaves a side a player short for somebody else's
+    slip.
+    """
+    if lot is None or lot.acquisition != ACQ_DRAFTED or lot.status != LOT_SOLD:
+        raise AuctionError(f"{lot.name if lot else 'That player'} was not an "
+                           f"expansion pick.")
+    if season.status not in (STATUS_SETUP, STATUS_PAUSED):
+        raise AuctionError("Undo a pick before the auction opens — this one "
+                           "is " + str(season.status) + ".")
+
     franchise = (session.query(AuctionFranchise)
-                 .filter(AuctionFranchise.id == franchise.id).first())
-    lot = session.query(AuctionLot).filter(AuctionLot.id == lot.id).first()
-    if not debited:
-        raise AuctionError(f"{franchise.name} can no longer pay "
-                           f"{render_money(price, symbol)} — nothing has been "
-                           f"retained.")
+                 .filter(AuctionFranchise.id == lot.sold_to_id).first())
+    price = int(lot.sold_price_lakh or 0)
 
-    lot.status = LOT_SOLD
-    lot.acquisition = ACQ_RETAINED
-    lot.sold_to_id = franchise.id
-    lot.sold_price_lakh = price
-    lot.sold_at = now
-    lot.deadline_at = None
-    lot.going_stage = 0
-    # A retained player was, by definition, held by this franchise. Recording
-    # it keeps the Right To Match input complete even for players who will
-    # never be RTM'd, and costs nothing.
-    if lot.previous_franchise_id is None:
-        lot.previous_franchise_id = franchise.id
+    if franchise is not None:
+        (session.query(AuctionFranchise)
+         .filter(AuctionFranchise.id == franchise.id)
+         # ``case`` rather than a two-argument ``max``: that spelling is
+         # SQLite's, and Postgres calls it ``greatest``. The same call
+         # ``unretain`` makes, for the same reason.
+         .update({"purse_remaining_lakh":
+                  AuctionFranchise.purse_remaining_lakh + price,
+                  "squad_size": case((AuctionFranchise.squad_size > 0,
+                                      AuctionFranchise.squad_size - 1), else_=0),
+                  "draft_picks_used":
+                      case((AuctionFranchise.draft_picks_used > 0,
+                            AuctionFranchise.draft_picks_used - 1), else_=0)},
+                 synchronize_session=False))
+        session.flush()
+        session.expire_all()
+        franchise = (session.query(AuctionFranchise)
+                     .filter(AuctionFranchise.id == franchise.id).first())
+        lot = session.query(AuctionLot).filter(AuctionLot.id == lot.id).first()
+        _ledger(session, franchise, LEDGER_REFUND, price, lot=lot,
+                note=f"Pick undone: {lot.name}", by_tg_id=by_tg_id)
 
-    # Flushed before anything reads it back: this session is autoflush=False,
-    # and ``retention_spent`` / ``retained`` / ``squad`` all find a retention by
-    # QUERYING for ``status`` and ``acquisition``. Left pending, the next
-    # retention would price itself against a budget that had not noticed this
-    # one — the bug class that bit phase 1 three times.
+    lot.status = LOT_QUEUED
+    lot.acquisition = ACQ_AUCTION
+    lot.sold_to_id = None
+    lot.sold_price_lakh = None
+    lot.sold_at = None
     session.flush()
 
-    _ledger(session, franchise, LEDGER_RETENTION, -price, lot=lot,
-            note=f"Retained: {lot.name}", by_tg_id=by_tg_id)
-    log_event(session, season, "retained",
-              f"🔒 <b>{_e(franchise.name)}</b> retain {_e(lot.name)} "
-              f"({lot.rating} OVR) for "
-              f"{render_money(price, symbol)}.",
-              lot=lot, franchise=franchise, by_tg_id=by_tg_id, by_admin=True,
-              detail={"price_lakh": price, "slab": count + 1})
+    log_event(session, season, "pick_undone",
+              f"↩️ The expansion pick on {_e(lot.name)} is undone — "
+              f"{render_money(price, season.currency_label)} back in "
+              f"{_e(franchise.name) if franchise else 'the'} purse, and the "
+              f"pick returned. He is in the pool again.",
+              lot=lot, franchise=franchise, by_tg_id=by_tg_id, by_admin=True)
     return lot
+
+
+def set_expansion_picks(session, season, count):
+    """Set the season's allowance and deal it out."""
+    season.expansion_picks = max(0, _as_int(count, 0))
+    session.flush()
+    return deal_expansion_picks(session, season)
+
+
+def set_franchise_picks(session, season, franchise, count):
+    """One side's own allowance, never below what it has already used."""
+    franchise.draft_picks_total = max(int(franchise.draft_picks_used or 0),
+                                      _as_int(count, 0))
+    session.flush()
+    return franchise
 
 
 def unretain(session, season, franchise, lot, *, by_tg_id=None):
@@ -1317,32 +1713,36 @@ def lots(session, season_id, status=None):
 
 
 def pool_counts(session, season_id):
-    """How the pool stands, with **retentions counted separately**.
+    """How the pool stands, with **pre-auction signings counted separately**.
 
-    ``sold`` and ``total`` are auction figures — a retained player is a sold
-    lot (see the retention section) but is not something the auction did, and
-    folding them together would have the board announce "3/20 lots resolved"
-    before the first lot ever opened, and the admin list count retentions as
-    purchases. ``retained`` is its own key, and ``total`` counts only what the
-    auction actually has to get through.
+    ``sold`` and ``total`` are auction figures. A retained player — and an
+    expansion side's pick — is a sold lot (see the retention section) but is
+    not something the auction did, and folding them in would have the board
+    announce "3/20 lots resolved" before the first lot ever opened, and the
+    admin list count them as purchases. They get their own keys, and ``total``
+    counts only what the auction actually has to get through.
+
+    ``retained`` and ``drafted`` are kept apart from each other too: they are
+    different facts about how a squad was assembled, and a league that adds a
+    team wants to see which is which.
     """
     rows = (session.query(AuctionLot.status, AuctionLot.acquisition,
                           func.count(AuctionLot.id))
             .filter(AuctionLot.season_id == season_id)
             .group_by(AuctionLot.status, AuctionLot.acquisition).all())
-    counts, retained_lots = {}, 0
+    counts, before = {}, {ACQ_RETAINED: 0, ACQ_DRAFTED: 0}
     for status, acquisition, n in rows:
         n = int(n)
-        # Only a RETENTION is kept out of the auction figures. A Right To
-        # Match is auction progress — the room watched the clock run and money
-        # moved — so folding it in here would stall the board's "N/M resolved"
-        # line forever and credit a retention nobody made.
-        if status == LOT_SOLD and acquisition == ACQ_RETAINED:
-            retained_lots += n
+        # A Right To Match is deliberately NOT here: the room watched a clock
+        # run and money moved, so it is auction progress.
+        if status == LOT_SOLD and acquisition in ACQ_PRE_AUCTION:
+            before[acquisition] += n
             continue
         counts[status] = counts.get(status, 0) + n
-    counts["retained"] = retained_lots
-    counts["total"] = sum(v for k, v in counts.items() if k != "retained")
+    aside = ("retained", "drafted")
+    counts["total"] = sum(v for k, v in counts.items() if k not in aside)
+    counts["retained"] = before[ACQ_RETAINED]
+    counts["drafted"] = before[ACQ_DRAFTED]
     return counts
 
 
@@ -1376,13 +1776,26 @@ def add_players_to_pool(session, season, players, *, set_name=None):
     lot_no = _next_lot_no(session, season.id)
     added = skipped = 0
 
+    # Who held each of these last season, stamped as the lot is created.
+    #
+    # ``link_previous_season`` can only stamp lots that already exist, and the
+    # natural order is the other way round: follow a league first, build the
+    # pool after — which is exactly what /aclone and the setup page tell an
+    # admin to do. Left to that, every lot came out unstamped and Right To
+    # Match found nobody, in silence. Done here it cannot depend on the order
+    # at all.
+    held = (previous_squad_map(session, season)
+            if getattr(season, "previous_league_id", None) else {})
+
     for player in players:
         if player is None or player.id in existing:
             skipped += 1
             continue
         existing.add(player.id)
+        was = held.get(player.id)
         session.add(AuctionLot(
             season_id=season.id, player_id=player.id,
+            previous_franchise_id=was.id if was is not None else None,
             name=(player.name or "")[:150], rating=player.rating or 0,
             category=player.category or "Batsman",
             country=player.country or "Unknown",
@@ -2317,6 +2730,10 @@ def undo_sale(session, season, lot, *, now=None, by_tg_id=None):
         raise AuctionError(f"{lot.name} was kept with a Right To Match, not "
                            f"bought. Undo the match instead — it gives the "
                            f"card back as well as the money.")
+    if lot.acquisition == ACQ_DRAFTED:
+        raise AuctionError(f"{lot.name} was an expansion pick, not bought. "
+                           f"Undo the pick instead — it gives the pick back "
+                           f"as well as the money.")
     if (lot.acquisition or ACQ_AUCTION) != ACQ_AUCTION:
         raise AuctionError(f"{lot.name} was retained, not bought. Release the "
                            f"retention instead (/aunretain).")
@@ -3146,10 +3563,12 @@ def render_squad(session, season, franchise):
         lines.append("\n<i>Nobody signed yet.</i>")
     for lot in rows:
         mark = "✈️" if lot.is_overseas else "🏠"
-        # A matched player is not a retained one: he went to the block, the
-        # room set his price, and a card was spent to keep him. Squashing the
-        # two into one padlock loses the whole story.
-        how = {ACQ_RETAINED: " 🔒", ACQ_RTM: " 🪪"}.get(
+        # Four different ways onto a squad, four marks. A matched player is
+        # not a retained one — he went to the block, the room set his price,
+        # and a card was spent to keep him — and an expansion pick is neither:
+        # nobody kept him and nobody bid. Squashing any of them together loses
+        # the story of how the squad was built.
+        how = {ACQ_RETAINED: " 🔒", ACQ_RTM: " 🪪", ACQ_DRAFTED: " 🆕"}.get(
             lot.acquisition or ACQ_AUCTION, "")
         lines.append(f"{mark} {_e(lot.name)} · {lot.rating} · "
                      f"{_e(lot.category)} — "

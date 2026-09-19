@@ -955,6 +955,15 @@ def _migrate_add_columns():
     _try_add("auction_seasons", "previous_season_id", "INTEGER")
     _try_add("auction_franchises", "carried_from_id", "INTEGER")
 
+    # ── Franchise Auction: expansion teams ──
+    # A side joining a league that already exists has no previous squad, so it
+    # retains nobody. These let it sign a few players before the auction opens
+    # instead — the IPL 2022 rule for Gujarat and Lucknow. Defaulted integers,
+    # 0 meaning "no expansion draft", which is what most seasons want.
+    _try_add("auction_seasons", "expansion_picks", "INTEGER DEFAULT 0")
+    _try_add("auction_franchises", "draft_picks_total", "INTEGER DEFAULT 0")
+    _try_add("auction_franchises", "draft_picks_used", "INTEGER DEFAULT 0")
+
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so
     # they stay independently fault-tolerant without a round trip each.

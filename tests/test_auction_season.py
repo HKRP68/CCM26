@@ -529,6 +529,35 @@ class RenameTests(SeasonCase):
         self.assertIn(carried["Mumbai"].id, owners)
         self.assertIn(carried["Chennai"].id, owners)
 
+    def test_building_the_pool_after_linking_still_stamps_the_holder(self):
+        """The order every surface actually tells an admin to work in.
+
+        ``link_previous_season`` can only stamp lots that exist, and /aclone
+        and the setup page both say "follow the league, then build the pool".
+        Left to that the lots came out unstamped and Right To Match found
+        nobody — with no error, which is the whole failure mode this feature
+        was meant to remove. The pool builder stamps as it creates.
+        """
+        self.run_and_publish()
+        fresh = self.clone()
+        self.assertTrue(fresh.previous_league_id)
+        self.assertEqual([], self.A.lots(self.session, fresh.id),
+                         "the pool must not exist yet for this to be testing "
+                         "anything")
+
+        # Build the pool and do NOT re-link afterwards.
+        self.A.add_players_to_pool(self.session, fresh, self.players)
+        self.session.commit()
+
+        stamped = [lot for lot in self.A.lots(self.session, fresh.id)
+                   if lot.previous_franchise_id]
+        self.assertTrue(stamped,
+                        "no lot knows who held it last season, so nobody "
+                        "holds a Right To Match on anybody")
+        here = {f.id: f.name for f in self.A.franchises(self.session, fresh.id)}
+        self.assertEqual({"Mumbai", "Chennai"},
+                         {here[lot.previous_franchise_id] for lot in stamped})
+
     def test_a_hand_linked_season_still_matches_by_name(self):
         """The fallback has to keep working: a season linked to a league by
         hand has no carry links at all."""

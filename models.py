@@ -3679,6 +3679,13 @@ class AuctionSeason(Base):
     # came from. A season linked to a league by hand has one and not the other.
     previous_season_id = Column(Integer, nullable=True)
 
+    # ── Expansion teams ────────────────────────────────────────────────
+    # How many players a brand-new franchise may sign before the auction
+    # opens — the IPL 2022 rule that let Gujarat and Lucknow take three each
+    # out of the un-retained pool. 0 turns the whole thing off, which is what
+    # a season with no new sides wants.
+    expansion_picks = Column(Integer, default=0, nullable=False)
+
     # ── The board, and the announcement cursor ─────────────────────────
     # ``board_message_id`` is the one pinned message the auction lives in; it
     # is EDITED, never re-sent, so a 30-second lot does not cost the room 30
@@ -3771,6 +3778,15 @@ class AuctionFranchise(Base):
     # renames a franchise between seasons, and breaks silently: every Right To
     # Match and every retention candidate simply vanishes.
     carried_from_id = Column(Integer, nullable=True)
+
+    # ── Expansion picks ─────────────────────────────────────────────────
+    # Per franchise rather than per season, because "how many picks does this
+    # side get" is a decision an admin may want to make differently for each
+    # one — a league adding one team and compensating it is as real a case as
+    # adding two equal ones. ``draft_picks_used`` counts skips too: a turn
+    # burned is a turn spent, or the order never moves on.
+    draft_picks_total = Column(Integer, default=0, nullable=False)
+    draft_picks_used = Column(Integer, default=0, nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
