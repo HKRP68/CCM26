@@ -60,7 +60,7 @@
         {% endif %}
       </td>
       <td style="font-size:.85rem;">{{ l.detail or '' }}</td>
-      <td style="font-size:.75rem;color:var(--muted);">{{ l.ip_address or '-' }}</td>
+      <td style="font-size:.75rem;color:var(--muted);">{{ mask_audit_ip(l.ip_address) }}</td>
     </tr>
     {% endfor %}
     {% if not logs %}
