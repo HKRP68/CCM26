@@ -52,15 +52,15 @@ class EvolutionTests(unittest.TestCase):
         self.assertIsNone(ps.evolution_note("Sandpaper"))
 
     def test_the_doc_windows_land_on_the_doc_overs(self):
-        graveyard = [o for o in range(1, 21)
-                     if "graveyard" in " ".join(ps.innings2_trace("Dusty", o, 20))]
-        self.assertEqual(graveyard, [7, 8, 9, 10, 11, 12])
+        tighter = [o for o in range(1, 21)
+                   if "tighter" in " ".join(ps.innings2_trace("Dusty", o, 20))]
+        self.assertEqual(tighter, [7, 8, 9, 10, 11, 12])
         lottery = [o for o in range(1, 21)
                    if "cracks open" in " ".join(ps.innings2_trace("Dry", o, 20))]
         self.assertEqual(lottery, [16, 17, 18, 19, 20])
-        flattened = [o for o in range(1, 21)
-                     if "flattened" in " ".join(ps.innings2_trace("Green", o, 20))]
-        self.assertEqual(flattened, list(range(9, 21)))
+        fading = [o for o in range(1, 21)
+                  if "fading" in " ".join(ps.innings2_trace("Green", o, 20))]
+        self.assertEqual(fading, list(range(9, 21)))
 
     def test_windows_still_exist_in_a_short_format(self):
         """A 5-over game must not silently lose every pitch rule."""
@@ -74,11 +74,25 @@ class EvolutionTests(unittest.TestCase):
         self.assertLess(death["Six"], early["Six"])
         self.assertGreater(death.get("Wicket", 1.0), 1.0)
 
-    def test_green_flattens_out_rather_than_staying_lethal(self):
+    def test_green_eases_but_only_a_touch(self):
         early = ps.innings2_effects("Green", 4, 20)
         late = ps.innings2_effects("Green", 15, 20)
-        self.assertLess(late["Wicket"], early["Wicket"])
-        self.assertGreater(late["Four"], 1.0)
+        self.assertLess(late["Wicket"], early.get("Wicket", 1.0))
+        # A big easing handed the chase two Green matches in three.
+        self.assertGreater(late["Wicket"], 0.95)
+
+    def test_bowling_surfaces_change_little_between_innings(self):
+        """The chase has to get the same match the first innings got, give or
+        take the surface's own flavour, or the toss decides it: the old +15%
+        Dusty spin grip and -15% Green wickets split real matches 58/42 and
+        37/63. Even and Hard are left as they were."""
+        for pitch in ("Dusty", "Green", "Dry", "Bouncy", "Flat"):
+            for over in range(1, 21):
+                for is_spin in (False, True):
+                    for value in ps.innings2_effects(pitch, over, 20,
+                                                     is_spin=is_spin).values():
+                        self.assertLess(abs(value - 1.0), 0.11,
+                                        (pitch, over, is_spin))
 
     def test_spin_gated_rules_need_a_spinner(self):
         self.assertNotIn("Wicket", ps.innings2_effects("Dusty", 3, 20, is_spin=False))

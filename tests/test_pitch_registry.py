@@ -213,12 +213,24 @@ def test_chase_grids_are_centred_on_each_pitch_s_own_par():
                 > ground_config.get_chase_win_pct(p, int(par + 40)))
 
 
-def test_the_turner_is_the_hardest_chase_and_the_road_the_easiest():
-    for total in (150, 190, 230, 300):
+def test_a_par_total_is_a_coin_flip_on_the_rebalanced_surfaces():
+    """Dusty, Green, Dry, Bouncy and Flat were rebuilt so batting first and
+    chasing are an even bet at par: real matches had split 58/42 on the turner
+    and 37/63 on the green top, so the toss was deciding games. A small
+    per-surface offset is allowed (it is what evens up the engine's own
+    residual), a surface character baked into the grid is not. The bands are
+    20 runs wide, so par can sit near either edge of the one it lands in."""
+    for p in ("Dusty", "Green", "Dry", "Bouncy", "Flat"):
+        pct = ground_config.get_chase_win_pct(p, int(pitch_registry.par(p)))
+        assert 35 <= pct <= 65, f"{p}: a par chase reads {pct}%"
+
+
+def test_a_bigger_total_is_harder_to_chase_on_a_bowling_surface():
+    for total in (150, 190, 230):
         pcts = {p: ground_config.get_chase_win_pct(p, total)
                 for p in pitch_registry.PITCHES}
-        assert pcts["Dusty"] == min(pcts.values()), pcts
         assert pcts["Dead"] == max(pcts.values()), pcts
+        assert pcts["Flat"] > pcts["Dusty"], pcts
 
 
 def test_chase_pitch_modifier_agrees_with_the_par_table():

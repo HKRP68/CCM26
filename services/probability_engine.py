@@ -154,16 +154,16 @@ LENGTH_MODS = {
 # everything. WHO takes the wickets is PITCH_BOWLER_SYNERGY's job, below.
 PITCH_MODS = {
     # Raging turner: a single is always on, a boundary never is.
-    "Dusty":  {"dot": +2.0, "W": +1.3, "1": +1.0, "4": -2.5, "6": -2.0,
+    "Dusty":  {"dot": +2.0, "W": +0.9, "1": +1.0, "4": -2.5, "6": -2.0,
                "wide": +0.2},
     # Green top: you cannot rotate against the moving ball, so the runs that do
     # come are boundaries — off the edge as often as the middle.
-    "Green":  {"dot": +2.5, "W": +1.2, "1": -2.0, "4": +0.5, "6": -1.8,
+    "Green":  {"dot": +2.5, "W": +0.85, "1": -2.0, "4": +0.5, "6": -1.8,
                "wide": +0.6, "noball": +0.3, "legbye": +0.4},
     # Slow, low turner: nudge and work; the big shot is a mug's game.
-    "Dry":    {"dot": +1.2, "W": +0.8, "1": +1.2, "4": -1.2, "6": -1.5},
+    "Dry":    {"dot": +1.2, "W": +0.55, "1": +1.2, "4": -1.2, "6": -1.5},
     # Steep bounce: awkward to get off strike, but a mistimed pull still carries.
-    "Bouncy": {"dot": +1.0, "W": +0.9, "1": -1.0, "4": +0.3, "6": +0.5,
+    "Bouncy": {"dot": +1.0, "W": +0.6, "1": -1.0, "4": +0.3, "6": +0.5,
                "noball": +0.3},
     # Neutral surface — the baseline everything else is measured against.
     "Even":   {},
@@ -210,14 +210,17 @@ def _pitch_wear_mods(pitch_type, wear):
     }
     # Pitch-specific multipliers — one per surface in engine.pitch_registry.
     multiplier = {
-        "Dusty":  1.5,   # footmarks deepen; the middle overs become a graveyard
-        "Dry":    1.3,   # cracks open and the death overs turn into a lottery
-        "Bouncy": 0.7,   # the vicious bounce settles out of it
+        # The four bowling surfaces are kept close to 1.0 either way: a big
+        # multiplier here decides the match for whoever bats first (turners)
+        # or second (green top, bouncy deck) before a ball is bowled.
+        "Dusty":  1.0,   # footmarks deepen; the spinners get a little more
+        "Dry":    0.9,   # cracks open and the death overs get harder
+        "Bouncy": 0.4,   # the vicious bounce settles out of it
         "Even":   0.9,   # moderate, honest wear
         "Hard":   0.5,   # pace carry drops a little, nothing more
         "Flat":   0.3,   # a road stays a road
         "Dead":   0.2,   # nothing to wear out
-        "Green": -0.8,   # grass burns off: the surface FLATTENS as it wears
+        "Green": -0.4,   # grass burns off: the surface eases as it wears
     }.get(pitch_type, 0.9)
     return {k: v * multiplier for k, v in base.items()}
 
@@ -250,8 +253,8 @@ PITCH_BOWLER_SYNERGY = {
     ("Green",  "Off Spinner"):   {"W": -0.8, "4": +0.5},
     ("Green",  "Leg Spinner"):   {"W": -0.7, "4": +0.5},
     # Raging turner — every spinner is a threat, the quicks bowl cutters.
-    ("Dusty",  "Off Spinner"):   {"W": +1.4, "dot": +1.2},
-    ("Dusty",  "Leg Spinner"):   {"W": +1.6, "dot": +1.0},
+    ("Dusty",  "Off Spinner"):   {"W": +1.0, "dot": +1.2},
+    ("Dusty",  "Leg Spinner"):   {"W": +1.2, "dot": +1.0},
     ("Dusty",  "Fast Pacer"):    {"W": -0.8, "1": +0.5},
     ("Dusty",  "Medium Pacer"):  {"W": -0.4, "dot": +0.3},   # cutters do a job
     # Slow turner — the same shape with the volume down.

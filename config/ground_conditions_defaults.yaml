@@ -46,68 +46,68 @@ active_game_mode: "natural_game"
 # ─── PITCH PROFILES ───
 pitch_profiles:
   Green:
-    description: "Green seaming top — the seam and swing bowler's pitch; nick off or cash in (par ~171)"
+    description: "Green seaming top — the seam and swing bowler's pitch; nick off or cash in (par ~181)"
     scoring_matrix:
-      Dot: 0.3823
+      Dot: 0.3919
       Single: 0.2966
       Double: 0.0551
       Three: 0.0051
-      Four: 0.1271
-      Six: 0.0466
-      Wicket: 0.0279
+      Four: 0.1215
+      Six: 0.0445
+      Wicket: 0.026
       Extras: 0.0593
     run_factor: 0.900
     wicket_factors:
-      Fast: 1.42
-      Fast-medium: 1.55
-      Medium-fast: 1.25
-      Off spin: 0.62
-      Finger spin: 0.60
-      Leg spin: 0.66
-      Wrist spin: 0.64
-      default: 0.62
-    scoring_dynamics: {floor: 135, par_low: 165, par_high: 178, ceiling: 210, anomaly: 250}
+      Fast: 1.30
+      Fast-medium: 1.30
+      Medium-fast: 1.10
+      Off spin: 0.59
+      Finger spin: 0.57
+      Leg spin: 0.63
+      Wrist spin: 0.61
+      default: 0.59
+    scoring_dynamics: {floor: 142, par_low: 174, par_high: 188, ceiling: 222, anomaly: 280}
     chase_win_pct:
-      - {max: 150, pct: 83}
-      - {max: 170, pct: 68}
-      - {max: 190, pct: 48}
-      - {max: 210, pct: 29}
-      - {max: 230, pct: 15}
-      - {max: 250, pct: 7}
-      - {max: 270, pct: 3}
-      - {max: 99999, pct: 2}
+      - {max: 150, pct: 66}
+      - {max: 170, pct: 54}
+      - {max: 190, pct: 42}
+      - {max: 210, pct: 30}
+      - {max: 230, pct: 21}
+      - {max: 250, pct: 14}
+      - {max: 270, pct: 9}
+      - {max: 99999, pct: 6}
 
   Dry:
-    description: "Slow, low turner — spin grips through the middle and the cracks open late (par ~176)"
+    description: "Slow, low turner — spin grips through the middle and the cracks open late (par ~187)"
     scoring_matrix:
-      Dot: 0.3189
+      Dot: 0.3234
       Single: 0.3731
       Double: 0.07
       Three: 0.0062
       Four: 0.1127
       Six: 0.0428
-      Wicket: 0.0297
+      Wicket: 0.0252
       Extras: 0.0466
     run_factor: 0.940
     wicket_factors:
       Fast: 0.80
       Fast-medium: 0.84
       Medium-fast: 0.90
-      Off spin: 1.28
-      Finger spin: 1.24
-      Leg spin: 1.34
-      Wrist spin: 1.30
+      Off spin: 1.24
+      Finger spin: 1.20
+      Leg spin: 1.29
+      Wrist spin: 1.25
       default: 0.88
-    scoring_dynamics: {floor: 145, par_low: 170, par_high: 182, ceiling: 215, anomaly: 278}
+    scoring_dynamics: {floor: 150, par_low: 180, par_high: 194, ceiling: 226, anomaly: 280}
     chase_win_pct:
-      - {max: 150, pct: 82}
-      - {max: 170, pct: 66}
-      - {max: 190, pct: 45}
-      - {max: 210, pct: 26}
-      - {max: 230, pct: 13}
-      - {max: 250, pct: 6}
-      - {max: 270, pct: 3}
-      - {max: 99999, pct: 2}
+      - {max: 150, pct: 79}
+      - {max: 170, pct: 69}
+      - {max: 190, pct: 57}
+      - {max: 210, pct: 45}
+      - {max: 230, pct: 33}
+      - {max: 250, pct: 23}
+      - {max: 270, pct: 15}
+      - {max: 99999, pct: 10}
 
   Hard:
     description: "Hard, true surface with good carry — pace is rewarded, 220 is a contest (par ~219)"
@@ -142,15 +142,15 @@ pitch_profiles:
       - {max: 99999, pct: 10}
 
   Flat:
-    description: "Road with even bounce and no lateral movement — batting paradise (par ~232)"
+    description: "Road with even bounce and no lateral movement — batting paradise (par ~238)"
     scoring_matrix:
-      Dot: 0.311
-      Single: 0.3409
+      Dot: 0.3128
+      Single: 0.344
       Double: 0.0813
       Three: 0.0058
-      Four: 0.1394
-      Six: 0.0697
-      Wicket: 0.0248
+      Four: 0.138
+      Six: 0.067
+      Wicket: 0.024
       Extras: 0.0271
     run_factor: 1.130
     wicket_factors:
@@ -162,16 +162,16 @@ pitch_profiles:
       Leg spin: 0.92
       Wrist spin: 0.94
       default: 0.88
-    scoring_dynamics: {floor: 190, par_low: 225, par_high: 240, ceiling: 280, anomaly: 315}
+    scoring_dynamics: {floor: 195, par_low: 230, par_high: 246, ceiling: 285, anomaly: 320}
     chase_win_pct:
-      - {max: 150, pct: 94}
-      - {max: 170, pct: 91}
-      - {max: 190, pct: 85}
-      - {max: 210, pct: 76}
-      - {max: 230, pct: 64}
-      - {max: 250, pct: 51}
-      - {max: 270, pct: 37}
-      - {max: 99999, pct: 20}
+      - {max: 150, pct: 91}
+      - {max: 170, pct: 86}
+      - {max: 190, pct: 79}
+      - {max: 210, pct: 70}
+      - {max: 230, pct: 58}
+      - {max: 250, pct: 46}
+      - {max: 270, pct: 34}
+      - {max: 99999, pct: 24}
 
   Dead:
     description: "Lifeless shirtfront — nothing off the pitch for anyone, a batting festival (par ~250)"
@@ -206,68 +206,68 @@ pitch_profiles:
       - {max: 99999, pct: 33}
 
   Dusty:
-    description: "Raging turner — every spinner is a threat and the middle overs strangle (par ~158)"
+    description: "Raging turner — every spinner is a threat and the middle overs strangle (par ~167)"
     scoring_matrix:
-      Dot: 0.3691
+      Dot: 0.3742
       Single: 0.3776
       Double: 0.0566
       Three: 0.006
       Four: 0.0831
       Six: 0.034
-      Wicket: 0.0283
+      Wicket: 0.0232
       Extras: 0.0453
     run_factor: 0.860
     wicket_factors:
       Fast: 0.68
       Fast-medium: 0.74
       Medium-fast: 0.82
-      Off spin: 1.52
-      Finger spin: 1.46
-      Leg spin: 1.62
-      Wrist spin: 1.56
+      Off spin: 1.44
+      Finger spin: 1.39
+      Leg spin: 1.53
+      Wrist spin: 1.48
       default: 0.78
-    scoring_dynamics: {floor: 120, par_low: 152, par_high: 165, ceiling: 200, anomaly: 278}
+    scoring_dynamics: {floor: 128, par_low: 160, par_high: 173, ceiling: 208, anomaly: 278}
     chase_win_pct:
       - {max: 150, pct: 68}
-      - {max: 170, pct: 45}
-      - {max: 190, pct: 24}
-      - {max: 210, pct: 11}
-      - {max: 230, pct: 5}
-      - {max: 250, pct: 2}
-      - {max: 270, pct: 2}
-      - {max: 99999, pct: 2}
+      - {max: 170, pct: 56}
+      - {max: 190, pct: 43}
+      - {max: 210, pct: 32}
+      - {max: 230, pct: 22}
+      - {max: 250, pct: 15}
+      - {max: 270, pct: 9}
+      - {max: 99999, pct: 6}
 
   Bouncy:
-    description: "Steep, extra bounce — express pace bites, but timing carries the rope (par ~186)"
+    description: "Steep, extra bounce — express pace bites, but timing carries the rope (par ~192)"
     scoring_matrix:
-      Dot: 0.3625
+      Dot: 0.3714
       Single: 0.3261
       Double: 0.0683
       Three: 0.0068
-      Four: 0.1175
-      Six: 0.0531
-      Wicket: 0.024
+      Four: 0.114
+      Six: 0.0515
+      Wicket: 0.0202
       Extras: 0.0417
     run_factor: 0.980
     wicket_factors:
-      Fast: 1.58
-      Fast-medium: 1.30
-      Medium-fast: 1.05
+      Fast: 1.49
+      Fast-medium: 1.25
+      Medium-fast: 1.04
       Off spin: 0.74
       Finger spin: 0.72
       Leg spin: 0.88
       Wrist spin: 0.90
       default: 0.80
-    scoring_dynamics: {floor: 155, par_low: 180, par_high: 192, ceiling: 220, anomaly: 268}
+    scoring_dynamics: {floor: 160, par_low: 186, par_high: 198, ceiling: 228, anomaly: 275}
     chase_win_pct:
-      - {max: 150, pct: 87}
-      - {max: 170, pct: 76}
-      - {max: 190, pct: 60}
-      - {max: 210, pct: 41}
-      - {max: 230, pct: 25}
-      - {max: 250, pct: 13}
-      - {max: 270, pct: 7}
-      - {max: 99999, pct: 2}
+      - {max: 150, pct: 74}
+      - {max: 170, pct: 63}
+      - {max: 190, pct: 51}
+      - {max: 210, pct: 39}
+      - {max: 230, pct: 28}
+      - {max: 250, pct: 19}
+      - {max: 270, pct: 12}
+      - {max: 99999, pct: 8}
 
   Even:
     description: "Neutral international track — bat and ball share the honours (par ~196)"
@@ -313,6 +313,10 @@ phase_boosts:
     boundary_boost_batting_pitch: 2.2
     boundary_boost_bowling_pitch: 1.8
     wicket_boost: 1.35
+    # Softer on the five surfaces where real matches lost 0.43-0.46 wickets an
+    # over at the death, and a collapse there settled the game before the chase
+    # could get going. Even, Hard and Dead keep the shared boost above.
+    wicket_boost_by_pitch: {Dusty: 1.22, Green: 1.10, Dry: 1.22, Bouncy: 1.22, Flat: 1.22}
   second_innings_death:
     scoring_boost: 1.15
     wicket_boost: 1.1

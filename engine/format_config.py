@@ -171,13 +171,13 @@ _T20_PAR_SCORES: Dict[int, float] = {
 # against 123, i.e. read every Green innings as 40 runs ahead of par from the
 # first over.
 _T20_PITCH_PAR_FACTORS: Dict[str, float] = {
-    "Dusty":  0.81,
-    "Green":  0.88,
-    "Dry":    0.90,
-    "Bouncy": 0.95,
+    "Dusty":  0.85,
+    "Green":  0.92,
+    "Dry":    0.95,
+    "Bouncy": 0.98,
     "Even":   1.00,
     "Hard":   1.12,
-    "Flat":   1.19,
+    "Flat":   1.21,
     "Dead":   1.28,
 }
 
@@ -208,13 +208,13 @@ _T20 = FormatConfig(
     target_scores={
         # The par-band midpoints from config/ground_conditions.yaml, measured
         # with `python -m tools.pitch_calibration`.
-        "Dusty":  159,
-        "Green":  172,
-        "Dry":    176,
-        "Bouncy": 186,
+        "Dusty":  167,
+        "Green":  181,
+        "Dry":    187,
+        "Bouncy": 192,
         "Even":   196,
         "Hard":   219,
-        "Flat":   233,
+        "Flat":   238,
         "Dead":   250,
     },
     # Toss calls come from engine.pitch_registry so the Pitch Report card, the
@@ -230,13 +230,13 @@ _T20 = FormatConfig(
         # 20 overs. GSME divides the actual RRR by this to get a normalised
         # aggression index, so it has to track the par table or a chase on a
         # turner reads as relaxed and a chase on a road as desperate.
-        "Dusty":  8.0,
-        "Green":  8.6,
-        "Dry":    8.8,
-        "Bouncy": 9.3,
+        "Dusty":  8.3,
+        "Green":  9.1,
+        "Dry":    9.4,
+        "Bouncy": 9.6,
         "Even":   9.8,
         "Hard":  11.0,
-        "Flat":  11.7,
+        "Flat":  11.9,
         "Dead":  12.5,
     },
 )
