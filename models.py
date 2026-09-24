@@ -4202,6 +4202,17 @@ class AuctionRetentionOffer(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     answered_at = Column(DateTime, nullable=True)
 
+    __table_args__ = (
+        # At most ONE pending offer per player per season, held by the
+        # database rather than a read-then-insert: two admins offering the
+        # same player on the same tick would otherwise both pass the check,
+        # and two franchises could then both accept him.
+        Index("ix_auction_ret_offer_pending", "season_id", "player_id",
+              unique=True,
+              sqlite_where=text("status = 'pending'"),
+              postgresql_where=text("status = 'pending'")),
+    )
+
 
 class AuctionAdmin(Base):
     """Somebody trusted to run auctions without being a bot admin.

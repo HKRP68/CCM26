@@ -2116,8 +2116,12 @@ def complete_if_done(session, season):
         session.flush()
         return None
     # Squads still under the minimum are topped up for free from whatever is
-    # left unsold, inside the squad and overseas caps.
-    autofill_short_squads(session, season)
+    # left unsold, inside the squad and overseas caps — but only once the
+    # unsold players have had their second round. With the automatic round
+    # switched off and no /aaccel run, the admin has chosen to leave them
+    # unsold, and handing them out anyway would overrule that.
+    if _as_int(getattr(season, "accelerated_done", 0), 0):
+        autofill_short_squads(session, season)
     season.status = STATUS_COMPLETED
     season.current_lot_id = None
     log_event(session, season, "season_completed",
@@ -3608,6 +3612,13 @@ def _match_set(session, season, text):
     queued = queued_lots(session, season)
     if not queued:
         raise AuctionError("Nothing is waiting in the queue.")
+    # An exact set name wins over reading the text as a range: "85-90 OVR" is
+    # the name /apool gives a set, and it must move THAT set, not every queued
+    # player rated 85-90 wherever they sit.
+    typed = (text or "").strip().lower()
+    for name in dict.fromkeys(set_label(lot) for lot in queued):
+        if name.lower() == typed:
+            return name, [lot for lot in queued if set_label(lot) == name]
     band = parse_rating_range(text)
     if band is not None:
         low, high = band
@@ -3747,6 +3758,9 @@ def remove_franchise(session, season, franchise, *, by_tg_id=None):
       deleted, explicitly rather than by relying on ``ON DELETE CASCADE``,
       which SQLite only honours with a pragma this project does not set.
 
+    If the auction had already finished, releasing players re-opens it
+    **paused**, the way ``relist_all`` does, so they can still be sold.
+
     Refused while it holds the standing bid on the block (undo the bid first,
     so the room sees who drops out), while a Right To Match is being asked of
     it, once squads are published, and for the last franchise standing.
@@ -3793,6 +3807,24 @@ def remove_franchise(session, season, franchise, *, by_tg_id=None):
         lot.rtm_stage = None
         lot.rtm_base_bid_lakh = None
         lot.rtm_matched_by_id = None
+        lot.bid_count = 0
+    # A released player starts his new round clean. The bids from the round
+    # that sold him are voided — never deleted, they are why his old price
+    # was what it was — or an undo in the new round would fall back to one of
+    # them and hand him to a side that has not bid for him this time.
+    if held:
+        (session.query(AuctionBid)
+         .filter(AuctionBid.lot_id.in_([lot.id for lot in held]),
+                 AuctionBid.is_void.is_(False))
+         .update({"is_void": True, "voided_by_tg_id": by_tg_id},
+                 synchronize_session=False))
+        # A finished auction with players back in the queue is not finished:
+        # it re-opens PAUSED, as ``relist_all`` does, so /astart can sell them
+        # — left completed, the sweeper ignores it, start() refuses it, and a
+        # publish would silently leave them out of the league.
+        if season.status == STATUS_COMPLETED:
+            season.status = STATUS_PAUSED
+            season.current_lot_id = None
     # Nobody may exercise a Right To Match on behalf of a side that is gone.
     (session.query(AuctionLot)
      .filter(AuctionLot.season_id == season.id,
@@ -3871,8 +3903,9 @@ def remove_franchise(session, season, franchise, *, by_tg_id=None):
 def autofill_short_squads(session, season, *, now=None):
     """Hand unsold players, free, to franchises still under the minimum squad.
 
-    Runs once the queue is empty for good — after the accelerated round — so
-    it only ever deals in players the whole room has already passed on twice.
+    Runs once the queue is empty for good, and only after an accelerated
+    round has run (automatic or ``/aaccel go``) — so it only ever deals in
+    players the whole room has already passed on twice.
     Round-robin, the smallest squad choosing first, each taking the
     best-rated player left that fits: the squad cap, the overseas cap, never
     a second card of a cricketer the squad already has (a published league
@@ -4019,8 +4052,17 @@ def offer_retention(session, season, franchise, player, price_lakh=None, *,
         season_id=season.id, franchise_id=franchise.id, player_id=player.id,
         player_name=(player.name or "")[:150], price_lakh=price,
         status=OFFER_PENDING, offered_by_tg_id=by_tg_id, chat_id=chat_id)
-    session.add(offer)
-    session.flush()
+    # The check above reads; the partial unique index on pending offers is
+    # what actually holds when two admins offer the same player on one tick.
+    # A savepoint keeps the loser's session usable for the refusal.
+    from sqlalchemy.exc import IntegrityError
+    try:
+        with session.begin_nested():
+            session.add(offer)
+            session.flush()
+    except IntegrityError:
+        raise AuctionError(f"{player.name} already has a retention offer "
+                           f"waiting. Withdraw it with /aretcancel first.")
     return offer
 
 
@@ -4071,6 +4113,9 @@ def answer_retention_offer(session, season, offer, tg_id, accept, *, now=None):
                                f"catalogue.")
         lot = retain(session, season, franchise, player, offer.price_lakh,
                      now=now, by_tg_id=tg_id)
+        # What was actually paid, so the card never re-prices an accepted
+        # offer off the NEXT slab of the ladder.
+        offer.price_lakh = int(lot.sold_price_lakh or 0)
     offer.status = OFFER_ACCEPTED if accept else OFFER_DECLINED
     offer.answered_by_tg_id = int(tg_id) if tg_id else None
     offer.answered_at = now or datetime.utcnow()

@@ -168,7 +168,9 @@ the franchise's money, and the button exists so that they chose to.
 Accepting runs the ordinary `retain()` at the offered price, so every cap
 below still refuses — and says why in the button's alert — at the moment of
 acceptance, against the purse as it is then. An offer with no price takes the
-ladder's slab **when it is accepted**. One offer waits per player; `/aoffers`
+ladder's slab **when it is accepted**. One offer waits per player — held by a partial unique index on pending
+offers, not just a check, so two admins on the same tick cannot both create
+one — and an offer whose card fails to post is withdrawn at once; `/aoffers`
 lists them and `/aretcancel` withdraws one. They live in
 `auction_retention_offers`, and nothing is announced until one is accepted —
 the `retained` event is the announcement.
@@ -497,14 +499,22 @@ page's Remove button, whatever the squad) does it:
   **explicitly**, because SQLite only honours `ON DELETE CASCADE` with a pragma
   this project does not set.
 
+The bids from the round that sold those players are **voided** and their bid
+counts reset, so an undo in the new round cannot fall back to an old-round bid.
+If the auction had already finished, releasing players re-opens it **paused**,
+as `relist_all` does — left completed, they could never be sold, and a publish
+would quietly leave them out of the league.
+
 Refused while it holds the standing bid (undo it first, so the room sees who
 dropped out), while a Right To Match is being asked of it, once published, and
 for the last franchise standing.
 
 ## Short squads at the end
 
-When the queue is done for good, `autofill_short_squads` runs just before the
-auction is marked complete: round-robin, the smallest squad first, each
+When the queue is done for good — and only once an accelerated round has run,
+automatic or `/aaccel go`, so with `/aaccelmode off` and no manual round the
+admin's choice to leave players unsold stands — `autofill_short_squads` runs
+just before the auction is marked complete: round-robin, the smallest squad first, each
 franchise under `min_squad_size` takes the best-rated unsold player that fits —
 the squad cap, the overseas cap, owed roles first when role minimums are set,
 and never a second card of a cricketer it already has (a published league keys

@@ -149,20 +149,24 @@ async def edit_board(bot, chat_id, message_id, text, *, attempts=3,
     return False
 
 
-async def pin_board(bot, session, season, message):
-    """Pin the board once, best-effort.
+async def pin_board(bot, session, season, message, previous_id=None):
+    """Pin the board once, best-effort, unpinning only the board it replaces.
 
     An auction group scrolls fast and the board is the one message that answers
     "where are we" — but pinning needs a right the bot may not have been given,
-    and an auction must never stop over a pin.
+    and an auction must never stop over a pin. The unpin names the previous
+    board: without a ``message_id`` Telegram unpins the most recent pin in the
+    chat, which may be somebody's unrelated announcement.
     """
     message_id = getattr(message, "message_id", None)
     if message_id is None or not season.chat_id:
         return None
-    try:
-        await bot.unpin_chat_message(chat_id=season.chat_id)
-    except Exception:
-        logger.debug("auction: nothing to unpin", exc_info=True)
+    if previous_id and previous_id != message_id:
+        try:
+            await bot.unpin_chat_message(chat_id=season.chat_id,
+                                         message_id=previous_id)
+        except Exception:
+            logger.debug("auction: nothing to unpin", exc_info=True)
     try:
         await bot.pin_chat_message(chat_id=season.chat_id,
                                    message_id=message_id,
@@ -199,6 +203,7 @@ async def refresh_board(bot, session, season, *, force=False, now=None):
     markup = AR.bid_keyboard(season, lot)
     new_lot = (lot is not None
                and int(getattr(season, "board_lot_id", 0) or 0) != lot.id)
+    previous_board = season.board_message_id
 
     if season.board_message_id and not new_lot:
         rich = await AR.edit(bot, season.chat_id, season.board_message_id,
@@ -222,7 +227,7 @@ async def refresh_board(bot, session, season, *, force=False, now=None):
     season.board_message_id = sent.message_id
     season.board_lot_id = lot.id if lot is not None else None
     season.board_rendered_bid_count = int(lot.bid_count or 0) if lot else 0
-    await pin_board(bot, session, season, sent)
+    await pin_board(bot, session, season, sent, previous_id=previous_board)
     return season.board_message_id
 
 
@@ -238,6 +243,33 @@ async def _send_rich(bot, chat_id, blocks, html_text, **kwargs):
     except TelegramError:
         logger.exception("auction send failed")
     return None
+
+
+async def _send_bid_line(bot, chat_id, text):
+    """Send a bid line. True when it landed or never can; None to retry.
+
+    A transient failure — flood control, a timeout, a network error — must not
+    advance the drain cursor, or the burst is never announced. A permanent
+    refusal (kicked, read-only, a bad request) is reported as done, so one
+    unreachable chat cannot stall the drain forever.
+    """
+    try:
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML",
+                               disable_web_page_preview=True)
+        return True
+    except RetryAfter as exc:
+        logger.warning("auction bid line rate-limited: %s", exc)
+        return None
+    except (Forbidden, BadRequest) as exc:
+        # Before NetworkError: PTB's BadRequest subclasses it.
+        logger.warning("auction bid line refused by chat %s: %s", chat_id, exc)
+        return True
+    except (TimedOut, NetworkError) as exc:
+        logger.warning("auction bid line failed, will retry: %s", exc)
+        return None
+    except TelegramError:
+        logger.exception("auction bid line failed")
+        return True
 
 
 async def send_lot_card(bot, session, season, lot):
@@ -301,8 +333,12 @@ async def drain_events(bot, session, season, *, limit=DRAIN_PER_TICK):
                 # Hold the burst for a later tick; the board already shows
                 # the price, so nothing the room needs is late.
                 break
-            await _send(bot, season.chat_id,
-                        AR.bid_burst_html(session, season, run))
+            delivered = await _send_bid_line(
+                bot, season.chat_id, AR.bid_burst_html(session, season, run))
+            if delivered is None:
+                # Rate-limited or a network blip: keep the cursor where it
+                # is and send the whole burst again on a later tick.
+                break
             _last_bid_message[season.id] = time.monotonic()
             spoken += 1
             last = run[-1]

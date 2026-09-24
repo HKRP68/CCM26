@@ -749,6 +749,8 @@ def retention_offer_card(session, season, offer):
     franchise = _franchise(session, offer.franchise_id)
     price = A.offer_price(season, franchise, offer) if franchise else offer.price_lakh
     kept = int(franchise.retained_count or 0) if franchise else 0
+    # Once accepted, this retention is already counted in ``kept``.
+    slab = kept if offer.status == A.OFFER_ACCEPTED else kept + 1
     who = A.owner_ping(franchise) if franchise else "?"
     status = {A.OFFER_ACCEPTED: "✅ <b>Accepted</b>",
               A.OFFER_DECLINED: "❌ <b>Declined</b>",
@@ -757,7 +759,7 @@ def retention_offer_card(session, season, offer):
              f"<blockquote><b>{_e(offer.player_name)}</b> → "
              f"<b>{_e(franchise.name if franchise else '?')}</b>\n"
              f"💰 {_money(season, price)} · retention "
-             f"{kept + 1}/{season.max_retentions}</blockquote>"]
+             f"{slab}/{season.max_retentions}</blockquote>"]
     if status:
         lines.append(status)
     else:

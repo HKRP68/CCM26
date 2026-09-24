@@ -193,11 +193,18 @@ def pullquote(text, caption=None):
 
 
 def list_block(items, *, ordered: bool = False):
-    """A bulleted (or, with ``ordered``, numbered) list of RichText items."""
-    block = {"type": "list", "items": list(items)}
-    if ordered:
-        block["is_ordered"] = True
-    return block
+    """A bulleted (or, with ``ordered``, numbered) list of RichText items.
+
+    Each item is its own list of blocks, so a plain RichText item is wrapped
+    in a paragraph; a numbered list carries its number as each item's label.
+    """
+    wrapped = []
+    for number, item in enumerate(items, start=1):
+        entry = {"blocks": [paragraph(item)]}
+        if ordered:
+            entry["label"] = f"{number}."
+        wrapped.append(entry)
+    return {"type": "list", "items": wrapped}
 
 
 # ── Senders ──────────────────────────────────────────────────────────

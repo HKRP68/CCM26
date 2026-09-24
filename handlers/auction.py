@@ -822,8 +822,17 @@ async def aretain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.commit()
         text = (AR.retention_offer_card(session, season, offer)
                 + _holder_warning(session, season, franchise, player))
-        sent = await _reply(update, text,
-                            reply_markup=AR.retention_offer_keyboard(offer))
+        try:
+            sent = await _reply(update, text,
+                                reply_markup=AR.retention_offer_keyboard(offer))
+        except Exception:
+            # The offer is committed but nobody can see its buttons. Withdraw
+            # it rather than leave a pending offer that blocks the next one
+            # for this player until somebody notices.
+            session.rollback()
+            A.cancel_retention_offer(session, season, offer)
+            session.commit()
+            raise
         message_id = getattr(sent, "message_id", None)
         if message_id:
             offer.message_id = message_id
@@ -834,7 +843,12 @@ async def aretain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         session.rollback()
         logger.exception("/aretain failed")
-        await _reply(update, "⚠️ Something went wrong. Try again.")
+        try:
+            await _reply(update, "⚠️ Something went wrong. Try again.")
+        except Exception:
+            # The failure may well have been the chat refusing messages.
+            logger.debug("/aretain: could not report the failure",
+                         exc_info=True)
     finally:
         session.close()
 
@@ -1676,7 +1690,9 @@ async def aaccelmode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 + (" — already run this auction." if on and done else
                    " — unsold players come back once, as the ⚡ Accelerated "
                    "set, when the main pool is done." if on else
-                   " — unsold players stay unsold unless you run /aaccel go."))
+                   " — unsold players stay unsold unless you run /aaccel go, "
+                   "and short squads are only auto-filled after a round of "
+                   "it."))
 
     await _with_auction(update, work, admin=True, context=context)
 

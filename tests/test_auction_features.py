@@ -348,6 +348,21 @@ class SetTests(FeatureCase):
         self.assertEqual([p.name for p in others + bats],
                          [lot.name for lot in queue])
 
+    def test_a_range_named_set_moves_only_itself(self):
+        """"85-90 OVR" is the name /apool gives a set, not a request for
+        every queued player rated 85-90 wherever they sit."""
+        self.build_sets()
+        others = self.A.queued_lots(self.session, self.season,
+                                    set_name="Others")
+        for lot in others:
+            lot.set_name = "70-99 OVR"
+        self.session.commit()
+        label, moved = self.A.bring_forward(self.session, self.season,
+                                           "70-99 OVR")
+        self.assertEqual("70-99 OVR", label)
+        self.assertEqual(sorted(l.id for l in others),
+                         sorted(l.id for l in moved))
+
     def test_an_unknown_set_names_the_ones_that_are_queued(self):
         self.build_sets()
         with self.assertRaises(self.A.AuctionError) as caught:
@@ -439,6 +454,51 @@ class RemoveFranchiseTests(FeatureCase):
         with self.assertRaises(self.A.AuctionError):
             self.A.remove_franchise(self.session, self.season, self.delhi)
 
+    def test_a_released_player_starts_his_new_round_with_no_old_bids(self):
+        lot = self.A.current_lot(self.session, self.season)
+        self.A.place_bid(self.session, self.season, lot, self.chennai,
+                         lot.base_price_lakh, now=NOW)
+        top = self.A.next_min_bid(self.season, lot)
+        self.A.place_bid(self.session, self.season, lot, self.mumbai, top,
+                         now=NOW)
+        self.A.sell_lot(self.session, self.season, lot, now=NOW)
+        self.session.commit()
+        released, _shares = self.A.remove_franchise(self.session, self.season,
+                                                    self.mumbai)
+        self.session.commit()
+        from models import AuctionBid
+        live = (self.session.query(AuctionBid)
+                .filter(AuctionBid.lot_id == released[0].id,
+                        AuctionBid.is_void.is_(False)).count())
+        self.assertEqual(0, live, "Chennai's old bid must not survive")
+        self.assertEqual(0, released[0].bid_count)
+
+        # In the new round, undoing the first bid falls back to nothing.
+        self.A.bring_forward(self.session, self.season, released[0].set_name)
+        self.A.open_next_lot(self.session, self.season, now=NOW)
+        relot = self.A.current_lot(self.session, self.season)
+        self.assertEqual(released[0].id, relot.id)
+        self.A.place_bid(self.session, self.season, relot, self.delhi,
+                         relot.base_price_lakh, now=NOW)
+        relot = self.A.undo_last_bid(self.session, self.season, relot, now=NOW)
+        self.assertIsNone(relot.current_bidder_id)
+        self.assertIsNone(relot.current_bid_lakh)
+
+    def test_removing_a_team_after_the_end_re_opens_the_auction(self):
+        self.buy(self.mumbai)
+        self.season.auto_accelerated = 0
+        self.session.commit()
+        self.pass_until(lambda: self.season.status == self.A.STATUS_COMPLETED)
+        self.assertEqual(self.A.STATUS_COMPLETED, self.season.status)
+        self.A.remove_franchise(self.session, self.season, self.mumbai)
+        self.session.commit()
+        self.assertEqual(self.A.STATUS_PAUSED, self.season.status,
+                         "released players have to be sellable")
+        self.A.start(self.session, self.season, now=NOW)
+        self.session.commit()
+        self.assertTrue(self.A.set_label(self.A.current_lot(
+            self.session, self.season)).startswith(self.A.RELEASED_SET_PREFIX))
+
     def test_the_command_previews_before_it_acts(self):
         from handlers import auction as H
         self.buy(self.mumbai)
@@ -510,6 +570,23 @@ class AcceleratedAndAutofillTests(FeatureCase):
         self.assertEqual(self.purse_lakh, chennai.purse_remaining_lakh)
         self.assert_ledger_agrees("after the auto-fill")
 
+    def test_with_the_automatic_round_off_nobody_is_auto_filled(self):
+        """The admin chose to leave them unsold; handing them out overrules it."""
+        self.season.auto_accelerated = 0
+        self.session.commit()
+        self._run_out()
+        self.assertEqual(self.A.STATUS_COMPLETED, self.season.status)
+        for franchise in self.A.franchises(self.session, self.season.id):
+            self.assertEqual([], self.A.squad(self.session, franchise.id))
+        # A manual round counts: run it out and the short squads are filled.
+        self.A.relist_all(self.session, self.season)
+        self.A.start(self.session, self.season, now=NOW)
+        self.session.commit()
+        self._run_out()
+        for franchise in self.A.franchises(self.session, self.season.id):
+            self.assertEqual(self.min_squad,
+                             len(self.A.squad(self.session, franchise.id)))
+
     def test_the_auto_fill_respects_the_overseas_cap(self):
         self.season.max_overseas = 0
         self.session.commit()
@@ -569,6 +646,17 @@ class RetentionOfferTests(FeatureCase):
         self.assertEqual(1, len(self.A.retained(self.session, self.mumbai.id)))
         self.assert_ledger_agrees("after an accepted retention")
 
+    def test_the_accepted_card_shows_the_slab_and_price_paid(self):
+        from services import auction_rich as AR
+        offer = self.offer()                       # the ladder decides
+        self.A.answer_retention_offer(self.session, self.season, offer,
+                                      ALICE, True, now=NOW)
+        self.session.commit()
+        card = AR.retention_offer_card(self.session, self.season, offer)
+        self.assertIn("retention 1/2", card)
+        self.assertIn("₹18 Cr", card, "not re-priced off the next slab")
+        self.assertIn("Accepted", card)
+
     def test_a_co_owner_may_accept(self):
         offer = self.offer()
         lot = self.A.answer_retention_offer(self.session, self.season, offer,
@@ -607,6 +695,57 @@ class RetentionOfferTests(FeatureCase):
         with self.assertRaises(self.A.AuctionError) as caught:
             self.offer()
         self.assertIn("/aretcancel", str(caught.exception))
+
+    def test_the_database_holds_one_pending_offer_per_player(self):
+        """The read-then-insert check can race; the partial index cannot."""
+        from sqlalchemy.exc import IntegrityError
+        from models import AuctionRetentionOffer
+        first = self.offer()
+
+        def row(status="pending"):
+            return AuctionRetentionOffer(
+                season_id=self.season.id, franchise_id=self.chennai.id,
+                player_id=self.player.id, player_name=self.player.name,
+                status=status)
+
+        self.session.add(row())
+        with self.assertRaises(IntegrityError):
+            self.session.flush()
+        self.session.rollback()
+        # Answered offers do not count against it.
+        self.A.answer_retention_offer(self.session, self.season,
+                                      self.A.retention_offer(self.session,
+                                                             first.id),
+                                      ALICE, False)
+        self.session.add(row())
+        self.session.flush()
+        self.session.commit()
+
+    def test_an_offer_that_cannot_be_posted_is_withdrawn(self):
+        from handlers import auction as H
+        from models import Player
+        name = f"Unposted Player {self.tag}"
+        self.session.add(Player(name=name, rating=90, **PLAYER_DEFAULTS))
+        self.session.commit()
+
+        async def refuse(text, **kwargs):
+            raise RuntimeError("telegram said no")
+
+        update = SimpleNamespace(
+            effective_chat=SimpleNamespace(id=self.season.chat_id,
+                                           type="supergroup"),
+            effective_user=SimpleNamespace(id=CAROL, username="c",
+                                           first_name="C"),
+            effective_message=SimpleNamespace(reply_text=refuse, message_id=7,
+                                              reply_to_message=None))
+        context = SimpleNamespace(args=["Mumbai", "|", name],
+                                  bot=SimpleNamespace())
+        with AdminEnv(CAROL):
+            asyncio.run(H.aretain_handler(update, context))
+        self.session.expire_all()
+        self.assertEqual([], [o for o in self.A.pending_retention_offers(
+            self.session, self.season.id) if o.player_name == name],
+            "a pending offer nobody can see would block the next one")
 
     def test_aretain_posts_an_offer_with_the_franchises_buttons(self):
         from handlers import auction as H
@@ -894,8 +1033,15 @@ class RichTests(FeatureCase):
         from services import rich_message as R
         self.assertEqual({"type": "pre", "text": "x", "language": "text"},
                          R.pre("x", "text"))
-        self.assertEqual({"type": "list", "items": ["a"], "is_ordered": True},
-                         R.list_block(["a"], ordered=True))
+        self.assertEqual(
+            {"type": "list", "items": [
+                {"blocks": [{"type": "paragraph", "text": "a"}], "label": "1."},
+                {"blocks": [{"type": "paragraph", "text": "b"}], "label": "2."}]},
+            R.list_block(["a", "b"], ordered=True))
+        self.assertEqual(
+            {"type": "list",
+             "items": [{"blocks": [{"type": "paragraph", "text": "a"}]}]},
+            R.list_block(["a"]))
         self.assertEqual({"type": "pullquote", "text": "q"}, R.pullquote("q"))
         self.assertEqual({"type": "url", "text": "Al",
                           "url": "tg://user?id=5"}, R.mention("Al", 5))
@@ -911,6 +1057,7 @@ class FakeBot:
         self.sent = []
         self.edits = []
         self.pinned = []
+        self.unpinned = []
         self.next_id = 500
 
     async def send_message(self, chat_id=None, text="", **kwargs):
@@ -927,7 +1074,8 @@ class FakeBot:
         self.pinned.append(message_id)
         return True
 
-    async def unpin_chat_message(self, chat_id=None, **kwargs):
+    async def unpin_chat_message(self, chat_id=None, message_id=None, **kwargs):
+        self.unpinned.append(message_id)
         return True
 
 
@@ -966,6 +1114,8 @@ class AnnouncementTests(FeatureCase):
         self.assertNotEqual(first_board, self.season.board_message_id)
         self.assertEqual(2, len(self.bot.pinned))
         self.assertEqual(self.season.board_message_id, self.bot.pinned[-1])
+        # Only the old board is unpinned — never "whatever was pinned last".
+        self.assertEqual([first_board], self.bot.unpinned)
 
     def test_a_burst_of_bids_is_one_small_message(self):
         self.tick(NOW + timedelta(seconds=1))
@@ -1007,6 +1157,28 @@ class AnnouncementTests(FeatureCase):
         self.tick(NOW + timedelta(seconds=6))
         self.assertEqual(before + 1, len(self.bot.sent))
         self.assertIn("Chennai", self.bot.sent[-1])
+
+    def test_a_rate_limited_bid_line_is_sent_again_not_lost(self):
+        from telegram.error import RetryAfter
+        self.tick(NOW + timedelta(seconds=1))
+        self.A.place_bid(self.session, self.season, self.lot, self.mumbai,
+                         self.lot.base_price_lakh,
+                         now=NOW + timedelta(seconds=2))
+        self.session.commit()
+        real = self.bot.send_message
+
+        async def flooded(chat_id=None, text="", **kwargs):
+            if "💸" in text:
+                raise RetryAfter(3)
+            return await real(chat_id=chat_id, text=text, **kwargs)
+
+        self.bot.send_message = flooded
+        self.tick(NOW + timedelta(seconds=3))
+        self.assertFalse([t for t in self.bot.sent if "💸" in t])
+        self.bot.send_message = real
+        self.tick(NOW + timedelta(seconds=4))
+        self.assertEqual(1, len([t for t in self.bot.sent if "💸" in t]),
+                         "the held burst goes out once the flood clears")
 
     def test_a_sale_is_announced_in_rich_html(self):
         self.A.place_bid(self.session, self.season, self.lot, self.mumbai,
