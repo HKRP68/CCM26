@@ -752,6 +752,44 @@ async def atimer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _with_auction(update, work, admin=True, context=context)
 
 
+async def afocus_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/afocus on|off</code> — lock this group to auction commands, or don't.
+
+    Bare <code>/afocus</code> is the readout, the way bare <code>/atimer</code>
+    is: an admin checking whether the lock is the reason somebody's
+    <code>/claim</code> was refused should not have to change it to find out.
+    """
+    raw = _arg_text(context).strip().lower()
+
+    def work(session, season):
+        on = A.focus_mode_on(season)
+        if not raw:
+            state = "🔒 <b>on</b>" if on else "🔓 <b>off</b>"
+            says = ("While this auction is live or paused, only auction "
+                    "commands work in this group — everything else works in a "
+                    "DM with me." if on else
+                    "Every other command works in this group, auction or no "
+                    "auction.")
+            return (f"🎯 Auction focus is {state}.\n{says}\n"
+                    f"Change it with <code>/afocus on</code> or "
+                    f"<code>/afocus off</code>.")
+        if raw in ("on", "yes", "1", "lock"):
+            want = True
+        elif raw in ("off", "no", "0", "unlock"):
+            want = False
+        else:
+            raise AuctionError("Usage: /afocus on  |  /afocus off")
+        if want == on:
+            return (f"🎯 Auction focus is already "
+                    f"<b>{'on' if on else 'off'}</b>.")
+        A.set_focus_mode(session, season, want,
+                         by_tg_id=(update.effective_user.id
+                                   if update.effective_user else None))
+        return None      # the sweeper announces it, within a tick
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
 async def asnipe_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = list(context.args or [])
 

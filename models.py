@@ -3853,6 +3853,16 @@ class AuctionSeason(Base):
     auto_accelerated = Column(Integer, default=1, nullable=False)
     accelerated_done = Column(Integer, default=0, nullable=False)
 
+    # ── Focus mode ─────────────────────────────────────────────────────
+    # While the auction is live or paused, the bound group answers auction
+    # commands and nothing else — see ``services/auction_focus.py`` for why a
+    # thirty-second clock and a pinned board cannot share a room with /claim.
+    # ON by default, because a room that wanted the other way round says so
+    # once with ``/afocus off``. An integer, not a boolean, for the
+    # NULL-reads-falsy reason above; 1/0 are on/off, and a season written
+    # before the column existed reads as ON.
+    focus_mode = Column(Integer, default=1, nullable=False)
+
     # ── Publication ────────────────────────────────────────────────────
     league_id = Column(Integer, ForeignKey("challenge_leagues.id", ondelete="SET NULL"),
                        nullable=True, index=True)

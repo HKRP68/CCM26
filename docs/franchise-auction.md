@@ -91,6 +91,12 @@ names the uncovered ratings.
 
 `/arules` prints the same ladder to the room, band by band.
 
+> Two PDFs sit beside this file and are meant to be handed out rather than
+> read here: **`docs/Franchise-Auction-Guide-Users.pdf`** for owners and
+> co-owners, **`docs/Franchise-Auction-Guide-Admins.pdf`** for whoever runs
+> one. `tools/make_auction_guides.py` rebuilds both; re-run it when a command
+> or a rule moves.
+
 **Franchises** — name, city, logo, owner and co-owners, and a purse that
 defaults to the season's. The owner is a **Telegram id, not an account here**,
 for the reason `DraftTeam` and `TournamentTeam` both use one: an admin builds
@@ -154,7 +160,7 @@ of them answers **in a DM** — see [Before it starts](#before-it-starts).
 
 Admin: `/adminhelp` (the reference card, also `/auction`), `/anew`, `/abind`, `/astart`,
 `/apause`, `/aresume`, `/anext`, `/aextend`, `/asold`, `/aunsold`,
-`/aundobid`, `/awithdraw`, `/atimer`, `/asnipe`, `/agrant`, `/aco`,
+`/aundobid`, `/awithdraw`, `/atimer`, `/asnipe`, `/afocus`, `/agrant`, `/aco`,
 `/apublish`, `/acancel`, plus retention's `/aretlock on`, `/aretain`,
 `/aunretain`, RTM's `/artmset`, `/artmcards`, `/artmforce`, `/artmundo`, the
 accelerated round's `/aaccel`, `/aclone` for the next season, and the
@@ -732,6 +738,85 @@ at all, which is a button that does nothing.
 * SOLD, UNSOLD and RETAINED are announced in richer HTML (a quoted result, the
   buyer's purse and squad after it); everything else still reads its stored
   `headline`.
+
+## Focus mode: one room, one feature
+
+While an auction bound to a group is **live or paused**, that group answers
+**auction commands and nothing else**. A `/claim`, a `/vsbot`, somebody's
+`/pxi` — each is refused with one line naming where it still works, which is a
+DM with the bot:
+
+> 🔨 **Season 2** is on the block.
+> Only auction commands work in this group while it runs — `/bid`, `/ainfo`,
+> `/aboard`, `/apurse` and the rest of the a-commands.
+> *Everything else still works in a DM with me.*
+
+The reason is the board. An auction group is the loudest chat the bot has — a
+thirty-second clock, a pinned message edited every tick, forty bids inside one
+lot — and anything else typed into it lands on top of that at exactly the
+moment the room needs to read it. A bid that scrolls past unseen is how a price
+gets disputed, which is the same reason `AuctionSeason.chat_id` exists at all.
+
+Four limits, because a gate that swallows more than it was asked to is worse
+than no gate:
+
+* **Per group, never per person.** The lock is bound to the auction's own chat.
+  A franchise owner's DMs, and every other group the bot is in, carry on exactly
+  as before — nobody loses the bot because an auction is running somewhere they
+  are not.
+* **Commands and buttons only.** Plain chatter is never touched. A room that
+  cannot talk during its own auction is not a room, and the shouting is half of
+  what an auction is.
+* **Only while it runs.** `setup` is exempt, the same call `STATUS_ACTIVE`
+  makes elsewhere: retention, the expansion picks and the pool all happen before
+  a lot ever opens, and an auction can sit in setup for weeks.
+* **Admins are never locked out.** Bot admins and auction admins run the room,
+  and the thing they need in the middle of a disputed lot is as likely to be
+  `/grant` as `/aundobid`.
+
+A non-auction **button** tapped in a locked group is refused the same way, with
+an alert rather than a message. Every auction callback shares the `au_` prefix,
+so one entry in `AUCTION_CALLBACK_PREFIXES` covers the board, `/ainfo`, the sets
+pages, the RTM answers and the retention offers — and covers a prefix added
+later for free.
+
+`AuctionSeason.focus_mode` is the switch, **on** by default, flipped with
+`/afocus on|off` in the group or the checkbox in ⚙️ Settings on the setup page.
+Bare `/afocus` reads it back, the way bare `/atimer` does: an admin working out
+whether the lock is why somebody's `/claim` was refused should not have to
+change it to find out. It is an integer, not a boolean, for the reason
+`database._migrate_add_columns` gives — a non-nullable boolean added to a table
+with rows reads back NULL-as-falsy — and NULL is read as ON, so an auction
+already running when this shipped picks the lock up rather than losing it.
+`/arules` prints the rule to the room while it is on, and only while it is on.
+It is in `SEASON_RULE_FIELDS`, so a room that turned it off keeps it off next
+season: that was a decision about the room, not about the season.
+
+### Where it sits, and what it costs
+
+`services/auction_focus.py` holds the rules and `bot.py` registers one more
+middleware, `_auction_focus_check`, at **group=-5** — after maintenance, the ban
+guard and the Rookie gate, so "the bot is down", "you are banned" and "you need
+a membership" all still win over it. It is the narrowest of the five and the
+only one that answers for one chat rather than for the whole bot.
+
+Two answers are given before the gate looks anything up, and they are what keep
+it free: a **private chat** is never locked, and a **non-command message** is
+never blocked. So the database is consulted only for a command or a button
+press, in a group — and that lookup ("is this chat locked, and what is the
+auction called?") is cached per chat for ten seconds. `auction_service` drops
+the entry the moment an auction is started, paused, cancelled, completed,
+rebound or unlocked, so `/astart` and `/afocus off` land in the room at once
+instead of at the end of a window. The auction-admin bypass is a query too, and
+it is asked **only about an update the gate is otherwise about to refuse** —
+never on a `/bid`.
+
+Both the lookup and the bypass run in one worker thread, the way `_ban_check`
+does its own, so a slow round trip can't stall the update queue. And the whole
+gate is wrapped: anything but `ApplicationHandlerStop` is logged and swallowed,
+because a broken gate must never cost a group its commands. `locked_season_for_chat`
+**fails open** for the same reason — the state the group was in before this
+existed.
 
 ## Removing a franchise
 
@@ -1388,12 +1473,16 @@ Two things were on their way to a third copy each, and both fail silently.
 | `services/auction_scheduler.py` | The two-second sweeper, the pinned board (fresh per lot), the lot card, the bid-line coalescing, the hardened edit, and the event drain |
 | `services/auction_rich.py` | Every auction surface as a Bot API 10.1 rich message beside its HTML twin — board, squad, purses, sets, sold/unsold, `/ainfo`, `/adminhelp` — plus the richer announcements and the shared keyboards |
 | `services/player_query.py` | The one master-player filter, and the one `details_json` |
+| `services/auction_focus.py` | Focus mode: which commands and buttons a locked group still answers, the cached "is this chat locked?" lookup, and the two refusals. Pure apart from that one lookup |
 | `handlers/auction.py` | `/bid`, `/artm` and every other command, plus the `au_bid_` and `au_rtm_` buttons |
 | `models.py` | The six tables |
 | `admin.py` | `/auctions`, `/auctions/<id>`, `/auctions/<id>/console` and its polled panel |
 | `templates/admin_auctions.html`, `admin_auction_detail.html`, `admin_auction_console.html`, `_auction_console_panel.html` | The pages. The setup page is folded — every rule-set a closed `<details>` with its numbers in the summary |
 | `templates/_auction_sets_card.html` | The 🗂 Sets card, rendered bare inside the setup page's one 📋 Auction pool card and as a card of its own on the console |
 | `static/css/admin_auction.css` | Their stylesheet, via `{% block head_extra %}` |
+| `docs/Franchise-Auction-Guide-Users.pdf` | The owner's guide: money, bidding, the max-bid rule, every refusal, retention and RTM, focus mode, and the command list |
+| `docs/Franchise-Auction-Guide-Admins.pdf` | The admin's guide: the running order, the setup page fold by fold, running the room, focus mode, retention/RTM/picks, publishing, and troubleshooting |
+| `tools/make_auction_guides.py` | Builds both PDFs. Re-run it when the commands or the rules move — it is the only thing that keeps the files honest |
 | `migrate_auction_purse_reconcile.py` | Re-sums every ledger, `--dry-run` first; the work is the service's, shared with the admin button |
 | `tests/test_franchise_auction.py` | The pool, base prices, the ledger, reachability, the overseas cap, both ends of the role rule, deleting a set and emptying the pool, the franchise file, and publishing |
 | `tests/test_auction_bidding.py` | The lifecycle, bidding, two-session concurrency, the clock, anti-snipe, undo, permissions, the commands, the board, and the accelerated round |
@@ -1402,6 +1491,7 @@ Two things were on their way to a third copy each, and both fail silently.
 | `tests/test_auction_expansion.py` | Starting a season from a league, who counts as an expansion side, the snake order as a sequence, every cap a pick obeys, and the rule that a player somebody kept cannot be picked |
 | `tests/test_auction_features.py` | Sets and the queue order, removing a franchise and its purse split, the automatic accelerated round, the free auto-fill and its caps, retention offers and who may answer them, auction admins, `/acall`, every team view, the rich builders, and what the sweeper sends per lot and per burst of bids |
 | `tests/test_auction_pool_page.py` | The setup page over HTTP: the pool builder's preview, the Sets card's numbering and its deletes, the squad-rules form, the franchise file both ways, and the typed confirmations |
+| `tests/test_auction_focus.py` | Focus mode: what a locked group refuses and what it never touches, that every auction command survives its own lock (pinned against `bot.py` both ways), the admin bypass and when it is asked, the cache and its invalidation, and where the middleware sits |
 | `tests/test_auction_season.py` | Cloning: every rule carried (and a guard against the rule list falling behind the model), the field and its owners, the purses and their ledger, what is deliberately left behind, the group handover, and the rename that used to lose every holder |
 
 ---

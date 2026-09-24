@@ -500,6 +500,21 @@ def rules_view(session, season):
                  f"{season.max_extensions} times a lot.")
     lines.append("")
 
+    # ── The room ──
+    # Only when it is on. The rule is "this group is the auction's group while
+    # it runs"; saying so where it is NOT true would just be a paragraph of
+    # rules card describing a lock nobody has.
+    if A.focus_mode_on(season):
+        focus = ("🎯 While this auction is live or paused, this group answers "
+                 "auction commands and nothing else — the board is what the "
+                 "room needs to be able to read. Every other command still "
+                 "works in a DM with me, and talking is never blocked.")
+        blocks.append(R.details(R.bold("🎯 In the group"),
+                                [R.paragraph(focus)]))
+        lines.append("<b>🎯 In the group</b>")
+        lines.append(focus)
+        lines.append("")
+
     # ── The two ladders ──
     header = [R.cell(R.bold("Rating"), header=True),
               R.cell(R.bold("Base price"), header=True, align="right")]
@@ -1289,6 +1304,8 @@ ADMIN_SECTIONS = (
         ("/abind <name>", "Bind an existing auction to this group"),
         ("/atimer <seconds>", "Seconds per lot (default 30)"),
         ("/asnipe <window> <extend> <max>", "Anti-snipe rule, e.g. /asnipe 10 10 5"),
+        ("/afocus on|off", "While the auction runs, lock this group to auction "
+                           "commands (on by default) — bare /afocus reads it back"),
         ("/aco <team> | <id>", "Add a co-owner who may bid"),
         ("/aaccelmode on|off", "The automatic ⚡ Accelerated round"),
     )),

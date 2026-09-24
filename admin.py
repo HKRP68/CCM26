@@ -22606,6 +22606,9 @@ def admin_auction_detail(season_id):
             STATUS_CANCELLED=auction_svc.STATUS_CANCELLED,
             STATUS_SETUP=auction_svc.STATUS_SETUP,
             STATUS_PAUSED=auction_svc.STATUS_PAUSED,
+            # Read through the service rather than off the column: it is an
+            # integer, and NULL on a season older than the column means ON.
+            focus_mode_on=auction_svc.focus_mode_on(season),
         )
     finally:
         db.close()
@@ -22633,6 +22636,14 @@ def _auction_detail_action(db, season, action):
                                    _int_form("snipe_window", season.snipe_window_seconds),
                                    _int_form("snipe_extend", season.snipe_extend_seconds),
                                    _int_form("max_extensions", season.max_extensions))
+        # A checkbox posts nothing at all when it is off, so "absent" and "off"
+        # are the same request — and an older bookmarked POST that predates the
+        # field would read as "unlock the group". The hidden marker beside it is
+        # what tells those two apart. Quiet: the page says which way it went,
+        # and the group hears it from /afocus.
+        if request.form.get("focus_mode_sent"):
+            auction_svc.set_focus_mode(db, season, _checked("focus_mode", False),
+                                       quiet=True)
         log_admin(db, "auction_settings", "auction", season.id, season.name)
         flash("✅ Settings saved.", "success")
 

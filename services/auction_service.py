@@ -557,6 +557,10 @@ SEASON_RULE_FIELDS = (
     "expansion_picks",
     # Whether unsold players get their accelerated round on their own
     "auto_accelerated",
+    # Whether the group runs auction commands only while the auction is live.
+    # A room that turned the lock off for one season meant it about the room,
+    # not about that season.
+    "focus_mode",
 )
 
 # What a franchise takes with it into the next season: who it is and who runs
@@ -755,11 +759,13 @@ def bind_chat(session, season, chat_id):
         # Released, not shared: two auctions on one chat_id would make every
         # command in the group ambiguous.
         other.chat_id = None
+        _focus_changed(other, session)
         session.flush()
         log_event(session, season, "chat_rebound",
                   f"📌 This group has moved on from {_e(other.name)} to "
                   f"<b>{_e(season.name)}</b>.", by_admin=True)
     season.chat_id = chat_id
+    _focus_changed(season, session)
     return season
 
 
@@ -2595,6 +2601,7 @@ def complete_if_done(session, season):
         autofill_short_squads(session, season)
     season.status = STATUS_COMPLETED
     season.current_lot_id = None
+    _focus_changed(season, session)
     log_event(session, season, "season_completed",
               "🏁 Every lot is resolved — the auction is complete. "
               "An admin can publish the squads now.")
@@ -2658,6 +2665,7 @@ def start(session, season, *, now=None, by_tg_id=None):
 
     resuming = season.status == STATUS_PAUSED
     season.status = STATUS_LIVE
+    _focus_changed(season, session)
     log_event(session, season,
               "season_resumed" if resuming else "season_started",
               ("▶️ The auction is back on." if resuming
@@ -2703,6 +2711,7 @@ def pause(session, season, *, by_tg_id=None):
     if season.status != STATUS_LIVE:
         raise AuctionError("The auction is not running.")
     season.status = STATUS_PAUSED
+    _focus_changed(season, session)
     lot = current_lot(session, season)
     if lot is not None:
         lot.deadline_at = None
@@ -2727,10 +2736,78 @@ def cancel(session, season, *, by_tg_id=None):
         lot.rtm_base_bid_lakh = None
     season.status = STATUS_CANCELLED
     season.current_lot_id = None
+    _focus_changed(season, session)
     log_event(session, season, "season_cancelled",
               "🚫 The auction has been cancelled.",
               by_tg_id=by_tg_id, by_admin=True)
     return season
+
+
+def _focus_changed(season, session=None):
+    """Drop the focus-mode gate's cached answer for this auction's group.
+
+    The gate caches "is this chat locked?" for a few seconds so it can be asked
+    on every command in every group without a query each time. Every call that
+    moves an auction's status or its focus switch calls this, so /astart,
+    /apause and /afocus land in the room at once rather than at the end of a
+    TTL.
+
+    Dropped **twice** when a session is given: now, and again when that session
+    commits. The second is what closes the window between the two — a command
+    arriving in those milliseconds would otherwise read the state this call is
+    in the middle of changing and cache it for a full TTL. A rolled-back
+    transaction simply never fires the second one, and has already invalidated
+    the entry it might have dirtied.
+
+    Missing a call site only delays a change by one window, so this is allowed
+    to fail quietly rather than take a sale down with it.
+    """
+    chat_id = getattr(season, "chat_id", None)
+    try:
+        from services.auction_focus import invalidate
+        invalidate(chat_id)
+        if session is not None:
+            from sqlalchemy import event
+
+            @event.listens_for(session, "after_commit", once=True)
+            def _drop_it_again(_session):      # pragma: no cover - trivial
+                invalidate(chat_id)
+    except Exception:
+        logger.debug("auction focus invalidation failed", exc_info=True)
+
+
+def focus_mode_on(season):
+    """True when this auction locks its group to auction commands while it runs.
+
+    The rule itself lives in ``services/auction_focus.py``; this is the reader
+    every card and every template goes through, so nobody has to remember that
+    the column is an integer or that NULL means ON.
+    """
+    from services.auction_focus import focus_mode_on as _on
+    return _on(season)
+
+
+def set_focus_mode(session, season, on, *, by_tg_id=None, quiet=False):
+    """Turn focus mode on or off, and tell the room which way it went.
+
+    Announced rather than silent: it changes what every command in the group
+    does, and a room that finds out by being refused has been told the hard
+    way. ``quiet`` is for the website, which says so on the page instead.
+    """
+    on = bool(on)
+    was = focus_mode_on(season)
+    season.focus_mode = 1 if on else 0
+    _focus_changed(season, session)
+    if not quiet and was != on:
+        log_event(session, season, "focus_mode",
+                  ("🔒 Auction focus is <b>on</b>: while this auction is "
+                   "running, only auction commands work in this group. "
+                   "Everything else still works in a DM with me."
+                   if on else
+                   "🔓 Auction focus is <b>off</b>: every other command works "
+                   "in this group again, auction or no auction."),
+                  by_tg_id=by_tg_id, by_admin=True)
+    return on
 
 
 def set_timer(session, season, seconds):

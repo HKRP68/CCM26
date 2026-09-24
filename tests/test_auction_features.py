@@ -1807,5 +1807,104 @@ class AnnouncementTests(FeatureCase):
         self.assertIn("Mumbai", said)
 
 
+# ══════════════════════════════════════════════════════════════════════
+# Focus mode
+# ══════════════════════════════════════════════════════════════════════
+
+class FocusModeTests(FeatureCase):
+    """The switch, end to end: the column, /afocus, and what locks the room.
+
+    The gate's own rules are pinned in tests/test_auction_focus.py against
+    plain objects; what is pinned here is the half that needs a database — a
+    new season is created locked, the command flips it and says so, and what
+    the middleware asks about (``locks_the_room``) follows the status.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from services import auction_focus
+        self.F = auction_focus
+        self.F.invalidate()
+        self.addCleanup(self.F.invalidate)
+
+    def test_a_new_auction_is_locked_by_default(self):
+        self.assertTrue(self.A.focus_mode_on(self.season))
+
+    def test_the_lock_follows_the_status(self):
+        # Setup locks nothing: retention and the pool happen here, and an
+        # auction can sit in setup for weeks.
+        self.assertFalse(self.F.locks_the_room(self.season))
+        self.build_sets()
+        self.start()
+        self.assertTrue(self.F.locks_the_room(self.season))
+        self.A.pause(self.session, self.season)
+        self.session.commit()
+        self.assertTrue(self.F.locks_the_room(self.season),
+                        "a paused auction is still mid-flight")
+        self.A.cancel(self.session, self.season)
+        self.session.commit()
+        self.assertFalse(self.F.locks_the_room(self.season))
+
+    def test_afocus_reads_it_back_without_changing_it(self):
+        from handlers import auction as H
+        with AdminEnv(ALICE):
+            out = self.run_handler(H.afocus_handler, ALICE)
+        self.assertIn("on", out.replies[0])
+        self.assertIn("/afocus off", out.replies[0])
+        self.assertTrue(self.A.focus_mode_on(self.season))
+
+    def test_afocus_off_unlocks_the_room_and_announces_it(self):
+        from handlers import auction as H
+        self.build_sets()
+        self.start()
+        with AdminEnv(ALICE):
+            self.run_handler(H.afocus_handler, ALICE, ["off"])
+        self.session.expire_all()
+        self.assertFalse(self.A.focus_mode_on(self.season))
+        self.assertFalse(self.F.locks_the_room(self.season))
+        said = [e.headline for e in
+                self.A.recent_events(self.session, self.season.id, limit=5)]
+        self.assertTrue(any("focus" in line.lower() for line in said), said)
+
+        with AdminEnv(ALICE):
+            self.run_handler(H.afocus_handler, ALICE, ["on"])
+        self.session.expire_all()
+        self.assertTrue(self.A.focus_mode_on(self.season))
+
+    def test_it_is_an_admin_switch(self):
+        from handlers import auction as H
+        with AdminEnv(CAROL):                    # ALICE owns a team, runs nothing
+            out = self.run_handler(H.afocus_handler, ALICE, ["off"])
+        self.assertIn("auction admins", out.replies[0].lower())
+        self.assertTrue(self.A.focus_mode_on(self.season))
+
+    def test_a_typo_is_refused_rather_than_guessed(self):
+        from handlers import auction as H
+        with AdminEnv(ALICE):
+            out = self.run_handler(H.afocus_handler, ALICE, ["maybe"])
+        self.assertIn("/afocus on", out.replies[0])
+        self.assertTrue(self.A.focus_mode_on(self.season))
+
+    def test_the_cached_lock_state_is_dropped_when_the_auction_starts(self):
+        """/astart must land in the room now, not at the end of a TTL."""
+        chat_id = self.season.chat_id
+        self.assertIsNone(self.F.locked_season_for_chat(chat_id))
+        self.build_sets()
+        self.start()
+        self.assertEqual(self.season.name,
+                         self.F.locked_season_for_chat(chat_id))
+
+    def test_the_next_season_inherits_the_switch(self):
+        from handlers import auction as H
+        with AdminEnv(ALICE):
+            self.run_handler(H.afocus_handler, ALICE, ["off"])
+        self.session.expire_all()
+        clone = self.A.clone_season(self.session, self.season,
+                                    f"Features {self.tag} II")
+        self.session.commit()
+        self.assertFalse(self.A.focus_mode_on(clone),
+                         "a room that turned the lock off meant the room")
+
+
 if __name__ == "__main__":
     unittest.main()

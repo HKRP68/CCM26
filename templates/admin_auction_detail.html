@@ -64,7 +64,8 @@
 
   <!-- ── Settings ──────────────────────────────────────────────── -->
   {{ fold("settings", "⚙️ Settings",
-          season.bid_seconds ~ "s per lot · " ~ money(season.opening_purse_lakh) ~ " purse") }}
+          season.bid_seconds ~ "s per lot · " ~ money(season.opening_purse_lakh) ~ " purse"
+          ~ (" · 🎯 group locked while live" if focus_mode_on else " · 🔓 group open")) }}
     <form method="POST" class="au-grid">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="settings">
@@ -76,8 +77,19 @@
       <div><label>Anti-snipe window (s)</label><input type="number" name="snipe_window" min="0" max="120" value="{{ season.snipe_window_seconds }}"></div>
       <div><label>Extend to (s)</label><input type="number" name="snipe_extend" min="1" max="300" value="{{ season.snipe_extend_seconds }}"></div>
       <div><label>Max extensions</label><input type="number" name="max_extensions" min="0" max="100" value="{{ season.max_extensions }}"></div>
+      <div><label>Auction focus (lock the group)</label>
+        <input type="hidden" name="focus_mode_sent" value="1">
+        <input type="checkbox" name="focus_mode" {% if focus_mode_on %}checked{% endif %}></div>
       <div><button class="btn btn-primary" type="submit">Save settings</button></div>
     </form>
+    <p class="au-note" style="margin-bottom:0;">
+      <b>Auction focus.</b> While this auction is <em>live</em> or <em>paused</em>,
+      the bound group answers auction commands and nothing else — a
+      thirty-second clock and a pinned board cannot share a room with
+      <code>/claim</code>. Talking is never blocked, admins are never locked
+      out, every other command still works in a DM, and setup is exempt. The
+      group can flip it with <code>/afocus on|off</code>.
+    </p>
     <p class="au-note" style="margin-bottom:0;">
       <b>Anti-snipe.</b> A bid arriving with the <em>window</em> or less on the
       clock pushes the deadline out to the <em>extend</em> value, at most

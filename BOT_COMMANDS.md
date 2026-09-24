@@ -570,6 +570,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/awithdraw <player name>` | Pull a player out of the auction |
 | `/atimer <seconds>` | Seconds allowed per lot — `/atimer 45` |
 | `/asnipe <window> <extend> <max>` | Anti-snipe window, extension and cap — `/asnipe 10 10 5` |
+| `/afocus on\|off` | Focus mode: while the auction is live or paused, this group answers auction commands and nothing else (default **on**). Bare `/afocus` reads it back |
 | `/agrant <franchise> \| <amount>` | Correct a franchise purse |
 | `/aco <franchise> \| <telegram id>` | Add a co-owner who may bid |
 | `/aretain <franchise> \| <player> \| [price]` | Retain a player — `/aretain Mumbai \| Virat Kohli \| 18` |
@@ -598,6 +599,14 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 presses ✅ Accept (nobody else can), and only then is the player kept.
 **Auction admins** may use every command in this table and no other admin
 command in the bot.
+
+**Focus mode.** While an auction bound to a group is live or paused, that group
+answers **only** auction commands — `/bid`, `/aboard`, `/apurse`, `/ainfo`,
+`/asquad` and the rest — and refuses everything else with one line pointing at
+a DM, where the whole rest of the bot still works. Talking is never blocked,
+non-auction buttons are refused the same way, admins are never locked out, and
+an auction still in setup locks nothing. `/afocus off` turns it off for that
+auction; the ⚙️ Settings fold on the auction's page has the same switch.
 
 ## B5 · Lets Play Tournament
 
