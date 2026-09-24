@@ -33,7 +33,8 @@ from database import get_session
 from models import (
     User, CLTour, ChallengeLeague, ChallengeTeam, ChallengePlayer)
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
-from handlers.match import _mention
+from handlers.match import _mention, _mention_parts
+from services import rich_message as R
 from services.cl_tour_service import (
     create_cl_tour, accept_cl_tour, decline_cl_tour, expire_pending_invite,
     get_active_cl_tour, get_user_cl_tours, get_cl_tour_matches,
@@ -139,13 +140,17 @@ async def cltour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rows = [[InlineKeyboardButton(lg.name, callback_data=f"cltset_lg_{tg.id}_{lg.id}")]
                 for lg in leagues]
         rows.append([InlineKeyboardButton("❌ Cancel", callback_data=f"cltset_x_{tg.id}")])
-        await update.message.reply_text(
+        await R.reply_rich(
+            update.message,
+            _setup_blocks(rows=[("👑 Host", _u_node(u1)),
+                                ("⚔️ Guest", _u_node(target))],
+                          ask=[_u_node(u1), ", choose the ", R.bold("league"),
+                               " for this tour:"]),
             f"🏆 <b>NEW CL TOUR</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"👑 Host: {_u_label(u1)}\n"
             f"⚔️ Guest: {_u_label(target)}\n\n"
             f"{_u_label(u1)}, choose the <b>league</b> for this tour:",
-            parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(rows))
     finally:
         session.close()
@@ -192,11 +197,15 @@ async def cltset_league_callback(update: Update, context: ContextTypes.DEFAULT_T
         await q.answer()
         rows = _team_rows(teams, f"cltset_ht_{host_tg}")
         rows.append([InlineKeyboardButton("❌ Cancel", callback_data=f"cltset_x_{host_tg}")])
-        await q.edit_message_text(
+        await R.edit_rich(
+            q,
+            _setup_blocks(league=league.name,
+                          ask=[f"👑 {draft['host_name']}, pick ",
+                               R.bold("your team"), ":"]),
             f"🏆 <b>NEW CL TOUR — {_esc(league.name)}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"👑 {draft['host_name']}, pick <b>your team</b>:",
-            parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
+            reply_markup=InlineKeyboardMarkup(rows))
     finally:
         session.close()
 
@@ -234,12 +243,17 @@ async def cltset_hostteam_callback(update: Update, context: ContextTypes.DEFAULT
             teams = [t for t in teams if t.id != team_id]
         rows = _team_rows(teams, f"cltset_gt_{host_tg}")
         rows.append([InlineKeyboardButton("❌ Cancel", callback_data=f"cltset_x_{host_tg}")])
-        await q.edit_message_text(
+        await R.edit_rich(
+            q,
+            _setup_blocks(league=draft["league_name"],
+                          rows=[(f"👑 {draft['host_name']}", team.name)],
+                          ask=[f"⚔️ {draft['guest_name']}, pick ",
+                               R.bold("your team"), ":"]),
             f"🏆 <b>NEW CL TOUR — {draft['league_name']}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"👑 Host: {draft['host_name']} — <b>{_esc(team.name)}</b>\n\n"
             f"⚔️ {draft['guest_name']}, pick <b>your team</b>:",
-            parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
+            reply_markup=InlineKeyboardMarkup(rows))
     finally:
         session.close()
 
@@ -277,13 +291,19 @@ async def cltset_guestteam_callback(update: Update, context: ContextTypes.DEFAUL
         rows = [[InlineKeyboardButton(str(n), callback_data=f"cltset_n_{host_tg}_{n}")
                  for n in ALLOWED_MATCH_COUNTS]]
         rows.append([InlineKeyboardButton("❌ Cancel", callback_data=f"cltset_x_{host_tg}")])
-        await q.edit_message_text(
+        await R.edit_rich(
+            q,
+            _setup_blocks(
+                league=draft["league_name"],
+                rows=[(f"👑 {draft['host_name']}", draft["host_team_name"]),
+                      (f"⚔️ {draft['guest_name']}", team.name)],
+                ask=f"👑 {draft['host_name']}, how many matches in the tour?"),
             f"🏆 <b>NEW CL TOUR — {draft['league_name']}</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"👑 {draft['host_name']} — <b>{draft['host_team_name']}</b>\n"
             f"⚔️ {draft['guest_name']} — <b>{_esc(team.name)}</b>\n\n"
             f"👑 {draft['host_name']}, how many matches in the tour?",
-            parse_mode="HTML", reply_markup=InlineKeyboardMarkup(rows))
+            reply_markup=InlineKeyboardMarkup(rows))
     finally:
         session.close()
 
@@ -400,7 +420,8 @@ async def cltset_count_callback(update: Update, context: ContextTypes.DEFAULT_TY
             InlineKeyboardButton("✅ Accept", callback_data=f"clt_acc_{tour.id}"),
             InlineKeyboardButton("❌ Decline", callback_data=f"clt_dec_{tour.id}"),
         ]])
-        await q.edit_message_text(
+        await R.edit_rich(
+            q, _invite_blocks(draft, count),
             f"🏆 <b>CL TOUR INVITATION</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🏟️ League: <b>{draft['league_name']}</b>\n"
@@ -409,7 +430,7 @@ async def cltset_count_callback(update: Update, context: ContextTypes.DEFAULT_TY
             f"📋 Best of <b>{count}</b> matches\n\n"
             f"{_mention(draft['guest_tg'], draft['guest_name'])}, do you accept?\n"
             f"⏳ <i>Expires in {INVITE_EXPIRE_SECONDS}s.</i>",
-            parse_mode="HTML", reply_markup=invite_kb)
+            reply_markup=invite_kb)
 
         try:
             if context.job_queue:
@@ -512,10 +533,10 @@ async def cltour_accept_callback(update: Update, context: ContextTypes.DEFAULT_T
         session.commit()
         text, _ = _render_cl_tour_view(session, tour, viewer_tg=None)
         try:
-            await q.edit_message_text(
+            await R.edit_rich(
+                q, _cl_tour_blocks(session, tour, accepted=True),
                 "✅ <b>CL TOUR ACCEPTED!</b>\n\n" + text + "\n\n"
-                "<i>Either player can run /cltour to play the next match.</i>",
-                parse_mode="HTML")
+                "<i>Either player can run /cltour to play the next match.</i>")
         except TelegramError:
             logger.debug("Failed to edit CL tour accepted message", exc_info=True)
     except Exception:
@@ -573,7 +594,8 @@ async def _show_my_tour(update, session, user):
         recent = get_user_cl_tours(session, user.id)
         if recent:
             text, kb = _render_cl_tour_view(session, recent[0], update.effective_user.id)
-            await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+            await R.reply_rich(update.message, _cl_tour_blocks(session, recent[0]),
+                               text, reply_markup=kb)
             return
         await update.message.reply_text(
             "🏆 <b>NO CL TOUR YET</b>\n"
@@ -584,7 +606,147 @@ async def _show_my_tour(update, session, user):
             parse_mode="HTML")
         return
     text, kb = _render_cl_tour_view(session, tour, update.effective_user.id)
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=kb)
+    await R.reply_rich(update.message, _cl_tour_blocks(session, tour), text,
+                       reply_markup=kb)
+
+
+def _setup_blocks(*, league=None, rows=(), ask=None):
+    """A card for one step of the /cltour setup wizard.
+
+    All four steps are the same shape — what has been settled so far, then one
+    question — so they share a builder rather than each drawing its own ``━━━``
+    rule and hoping the labels line up. ``rows`` are ``(label, value)`` pairs of
+    what is already decided; ``ask`` is the question under them.
+
+    ``None`` on any failure: a step of a wizard is a card somebody has to tap,
+    so a renderer bug costs the rendering and never the card.
+    """
+    try:
+        title = f"🏆 New CL Tour — {league}" if league else "🏆 New CL Tour"
+        blocks = [R.heading(title, size=3)]
+        cells = [[R.cell(R.bold(label)), R.cell(R.bold(value))]
+                 for label, value in rows if value]
+        if cells:
+            blocks.append(R.table(cells, bordered=True, compact=True))
+        if ask is not None:
+            blocks.append(R.paragraph(ask))
+        return blocks
+    except Exception:
+        logger.exception("CL tour setup blocks failed to build")
+        return None
+
+
+def _invite_blocks(draft, count):
+    """The invitation the guest accepts or declines."""
+    try:
+        return [
+            R.heading("🏆 CL Tour Invitation", size=2),
+            R.table([
+                [R.cell(R.bold("🏟️ League")), R.cell(R.bold(draft["league_name"])),
+                 R.cell("")],
+                [R.cell(R.bold("👑 Host")), R.cell(draft["host_name"]),
+                 R.cell(R.bold(draft["host_team_name"]), align="right")],
+                [R.cell(R.bold("⚔️ Guest")), R.cell(draft["guest_name"]),
+                 R.cell(R.bold(draft["guest_team_name"]), align="right")],
+                [R.cell(R.bold("📋 Format")), R.cell(f"Best of {count}"),
+                 R.cell("")],
+            ], bordered=True, striped=True, compact=True),
+            R.paragraph([R.mention(R.bold(draft["guest_name"]),
+                                   draft["guest_tg"]),
+                         ", do you accept?"]),
+            R.footer(R.italic(f"⏳ Expires in {INVITE_EXPIRE_SECONDS}s.")),
+        ]
+    except Exception:
+        logger.exception("CL tour invite blocks failed to build")
+        return None
+
+
+def _u_node(user):
+    """A user as a rich mention node — the block twin of :func:`_u_label`.
+
+    ``_u_label`` HTML-escapes for a ``parse_mode="HTML"`` send; a block tree
+    carries its own escaping, so the raw name goes in and the tg link rides on
+    a ``mention`` node rather than being baked into a string.
+    """
+    if not user:
+        return "User"
+    name = f"@{user.username}" if user.username else (user.first_name or "User")
+    label, tg_id = _mention_parts(getattr(user, "telegram_id", None), name)
+    return R.mention(R.bold(label), tg_id) if tg_id else R.bold(label)
+
+
+def _cl_tour_blocks(session, tour, *, accepted=False):
+    """The tour card as blocks — the twin of :func:`_render_cl_tour_view`.
+
+    A best-of series is a scoreline and a list of matches, and both were padded
+    HTML: the scoreline a single line carrying four names, the match list a
+    column of ``Match 3: pending``. As a ``pullquote`` and a table the client
+    lines them up, so which side is winning is readable at a glance instead of
+    reconstructed from the middle of a sentence.
+
+    Returns ``None`` on any failure — a card is what a player taps Play Match
+    on, so a renderer bug must cost the rendering and not the card.
+    """
+    try:
+        u1 = session.get(User, tour.user1_id)
+        u2 = session.get(User, tour.user2_id)
+        league = session.get(ChallengeLeague, tour.league_id)
+        host_team = session.get(ChallengeTeam, tour.host_team_id)
+        guest_team = session.get(ChallengeTeam, tour.guest_team_id)
+        matches = get_cl_tour_matches(session, tour.id)
+
+        blocks = []
+        if accepted:
+            blocks.append(R.heading("✅ CL Tour accepted!", size=2))
+        blocks.append(R.heading(
+            f"🏆 CL Tour — {league.name if league else ''}", size=3))
+        blocks.append(R.table([
+            [R.cell(R.bold("👑 Host")),
+             R.cell(_u_node(u1)),
+             R.cell(R.bold(host_team.name if host_team else "—"),
+                    align="right")],
+            [R.cell(R.bold("⚔️ Guest")),
+             R.cell(_u_node(u2)),
+             R.cell(R.bold(guest_team.name if guest_team else "—"),
+                    align="right")],
+        ], bordered=True, compact=True))
+        blocks.append(R.pullquote(
+            R.bold(f"{tour.user1_wins} — {tour.user2_wins}"),
+            caption=f"Best of {tour.match_count}"))
+
+        if matches:
+            cells = [[R.cell(R.bold("#"), header=True, align="center"),
+                      R.cell(R.bold("MATCH"), header=True)]]
+            for tm in matches:
+                if tm.status == "done":
+                    w = session.get(User, tm.winner_id) if tm.winner_id else None
+                    state = (["✅ ", _u_node(w), " won"] if w
+                             else ["✅ ", R.italic("no result")])
+                elif tm.status == "playing":
+                    state = ["▶️ ", R.bold("in progress")]
+                else:
+                    state = ["⏳ ", R.italic("pending")]
+                cells.append([R.cell(str(tm.match_number), align="center"),
+                              R.cell(state)])
+            blocks.append(R.table(cells, bordered=True, striped=True,
+                                  compact=True))
+
+        if tour.status == "completed":
+            leader, tie = series_leader(tour)
+            if tie:
+                blocks.append(R.pullquote(R.bold("🤝 Series drawn!")))
+            else:
+                winner = session.get(User, leader)
+                blocks.append(R.pullquote(
+                    ["🏆 ", _u_node(winner)], caption="won the tour"))
+        if accepted:
+            blocks.append(R.footer(
+                ["Either player can run ", R.code("/cltour"),
+                 " to play the next match."]))
+        return blocks
+    except Exception:
+        logger.exception("CL tour blocks failed to build")
+        return None
 
 
 def _render_cl_tour_view(session, tour, viewer_tg):

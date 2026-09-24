@@ -13,6 +13,7 @@ from telegram.ext import ContextTypes
 from database import get_session
 from models import ChallengeLeague, ChallengePlayer, ChallengeTeam, FantasyLeague, Match, User
 from services import match_rich
+from services import challenge_rich as chr_
 from services import rich_message as R
 from services import xi_rules
 from services.match_constants import MATCH_EXPIRE, PITCH_TYPES, random_match_settings
@@ -631,6 +632,16 @@ def _deny_only_keyboard(draft_id):
         "❌ Deny Match", callback_data=f"cl_denymatch_{draft_id}")]])
 
 
+def _pitch_prompt_blocks(draft):
+    """The pitch menu as blocks — the twin of :func:`_pitch_prompt`."""
+    return chr_.pitch_prompt_blocks(
+        title=_league_battle_title(draft.get("league_name"), draft.get("mode")),
+        host=draft.get("host") or {},
+        host_team=draft.get("host_team") or "Host XI",
+        target_team=draft.get("target_team") or "Guest XI",
+        pitches=[(p, _PITCH_DESC.get(p)) for p in PITCH_TYPES])
+
+
 def _pitch_prompt(draft):
     host = draft.get("host") or {}
     mention = _mention(host.get("tg_id"), host.get("name") or "Host")
@@ -649,12 +660,44 @@ def _pitch_prompt(draft):
     return "\n".join(lines)
 
 
+def _challenge_created_blocks(draft, session=None):
+    """The recap as blocks — the twin of :func:`_challenge_created_text`.
+
+    The bot's XI goes behind a ``details`` here. In the HTML it has to be
+    eleven more lines under the card, which pushes the thing the captains came
+    for — their own Select XI buttons — off the bottom of a phone screen.
+    """
+    host_team = draft.get("host_team") or "Host XI"
+    target_team = draft.get("target_team") or "Guest XI"
+    title = (draft.get("league_name") or "IPL").upper()
+    if draft.get("mode") != "cdraft":
+        title = f"{title} — CHALLENGE"
+    series = None
+    if draft.get("cl_tour_id"):
+        series = (f"CL Tour · Match {draft.get('cl_tour_match_no')}"
+                  f"/{draft.get('cl_tour_match_count')}")
+    bot_xi = None
+    if draft.get("vs_bot"):
+        names = draft.get("bot_xi_names") or []
+        bot_xi = [f"{i}. {n}" for i, n in enumerate(names, 1)]
+    return chr_.created_blocks(
+        title=title, host=draft.get("host") or {},
+        target=draft.get("target") or {},
+        host_team=host_team, target_team=target_team,
+        host_code=_team_short_code(host_team, draft.get("league_key"), session),
+        target_code=_team_short_code(target_team, draft.get("league_key"),
+                                     session),
+        host_emoji=_team_emoji(host_team), target_emoji=_team_emoji(target_team),
+        series=series, bot_xi=bot_xi)
+
+
 async def _send_challenge_xi_prompt(context, draft, message_obj):
     """Send the 'challenge created' recap + Playing XI selection keyboard."""
     draft_id = draft.get("draft_id")
     session = get_session()
     try:
         created_message = _challenge_created_text(draft, session)
+        blocks = _challenge_created_blocks(draft, session)
     finally:
         session.close()
     if draft.get("vs_bot"):
@@ -665,11 +708,9 @@ async def _send_challenge_xi_prompt(context, draft, message_obj):
     if message_obj is None:
         return
     try:
-        sent = await message_obj.reply_text(
-            created_message,
-            parse_mode="HTML",
-            reply_markup=_challenge_xi_keyboard(draft_id, draft),
-        )
+        sent = await R.reply_rich(
+            message_obj, blocks, created_message,
+            reply_markup=_challenge_xi_keyboard(draft_id, draft))
         _track_setup_msg(draft, sent)
     except Exception:
         logger.exception("Failed to send challenge created Playing XI message")
@@ -702,6 +743,16 @@ def _apply_pitch(draft, pitch):
         locked_note = ("\n🔒 <i>Fixed by the tournament fixture"
                        + (f" — {_esc(home)} are at home" if home else "")
                        + ". Nobody picks the surface for this match.</i>")
+    # Stashed on the draft rather than returned alongside: this is called from
+    # half a dozen places that all want the HTML, and threading a second return
+    # value through every one of them to reach the two that also draw blocks is
+    # a worse trade than one key on a dict the flow already carries.
+    draft["_pitch_card_blocks"] = chr_.pitch_locked_blocks(
+        title=_league_battle_title(draft.get("league_name"), draft.get("mode")),
+        host_team=draft.get("host_team") or "Host XI",
+        target_team=draft.get("target_team") or "Guest XI",
+        pitch=pitch, description=_PITCH_DESC.get(pitch),
+        report=report_text, locked_note=locked_note)
     if report_text:
         return header + "\n" + report_text + locked_note
     desc = _PITCH_DESC.get(pitch)
@@ -791,8 +842,10 @@ async def challenge_pitch_callback(update: Update, context: ContextTypes.DEFAULT
     pitch = PITCH_TYPES[pitch_idx]
     await query.answer(f"Pitch: {pitch}")
     confirm = _apply_pitch(draft, pitch)
+    blocks = draft.pop("_pitch_card_blocks", None)
     try:
-        await query.edit_message_text(confirm, parse_mode="HTML")
+        if not await R.edit_rich(query, blocks, confirm):
+            raise RuntimeError("the pitch confirmation edit was refused")
     except Exception:
         try:
             await query.edit_message_caption(caption=confirm, parse_mode="HTML")
@@ -1557,6 +1610,21 @@ def _same_team_allowed_for_draft(draft):
         session.close()
 
 
+def _team_picker_blocks(draft, player_key):
+    """The team picker as blocks — the twin of :func:`_team_picker_prompt`.
+
+    Only used on the text path. Most leagues carry a banner image, and the
+    picker then lives in that photo's caption — ``sendRichMessage`` does not
+    replace a caption, so a league with a banner keeps the HTML and the two
+    cards stay the same shape as each other.
+    """
+    return chr_.team_picker_blocks(
+        title=_league_battle_title(draft.get("league_name")),
+        player=draft.get(player_key) or {},
+        league_name=draft.get("league_name"),
+        status_lines=_team_selection_status(draft))
+
+
 def _team_picker_prompt(draft, player_key):
     league_name = draft.get("league_name")
     player = draft.get(player_key) or {}
@@ -1696,7 +1764,8 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
                 logger.exception("Failed to send league image for %s; falling back to text", league_key)
                 sent = None
         if sent is None:
-            sent = await reply.reply_text(caption, parse_mode="HTML", reply_markup=markup)
+            sent = await R.reply_rich(reply, _team_picker_blocks(draft, "host"),
+                                      caption, reply_markup=markup)
     except Exception:
         # The draft + chat lock were installed before this send; if we couldn't
         # post the picker at all, release them so the chat isn't locked with no
@@ -1828,8 +1897,9 @@ async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
     # setup + match runs in the group the tour belongs to.
     sent = None
     try:
-        sent = await context.bot.send_message(
-            chat_id=chat_id, text=_pitch_prompt(draft), parse_mode="HTML",
+        sent = await R.send_rich_message(
+            context.bot, chat_id, _pitch_prompt_blocks(draft),
+            _pitch_prompt(draft),
             reply_markup=_pitch_keyboard(draft_id, allow_deny=False))
     except Exception:
         logger.exception("Failed to send CL tour pitch prompt; releasing draft lock")
@@ -2393,8 +2463,9 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
                 draft["home_team"] = home_team
                 confirm = _apply_pitch(draft, locked_pitch)
                 try:
-                    sent = await message_obj.reply_text(
-                        confirm, parse_mode="HTML",
+                    sent = await R.reply_rich(
+                        message_obj, draft.pop("_pitch_card_blocks", None),
+                        confirm,
                         # The guest's only say is still to refuse the match; the
                         # Deny button therefore moves onto this card.
                         reply_markup=(None if draft.get("vs_bot") else
@@ -2407,12 +2478,11 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
             # Otherwise the host picks the pitch before Playing XI selection.
             # Vs the bot there is no guest who could deny the match.
             try:
-                sent = await message_obj.reply_text(
+                sent = await R.reply_rich(
+                    message_obj, _pitch_prompt_blocks(draft),
                     _pitch_prompt(draft),
-                    parse_mode="HTML",
                     reply_markup=_pitch_keyboard(
-                        draft_id, allow_deny=not draft.get("vs_bot")),
-                )
+                        draft_id, allow_deny=not draft.get("vs_bot")))
                 _track_setup_msg(draft, sent)
             except Exception:
                 logger.exception("Failed to send pitch selection message")

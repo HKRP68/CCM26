@@ -31,9 +31,11 @@ result being recorded against the tournament when it ends.
 import asyncio
 import html
 import logging
+import re
 from datetime import datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from database import get_session
@@ -44,6 +46,8 @@ from services.telegram_user_service import sync_telegram_user, resolve_command_t
 from services.match_state_store import save_state, cleanup_state, A_PICK_CIPL_BOWLER
 from services import cipl_match
 from services import batting_order_service as _bos
+from services import letsplay_rich as lpr
+from services import rich_message as R
 from handlers.match import (
     _mention, _active_match_in_chat, _active_match_for_user,
     _cric_lobby_for_user, _chat_busy_message, _user_busy_message,
@@ -57,10 +61,9 @@ SETUP_TIMEOUT = 180    # seconds a setup stage (pitch/xi/toss) may stall before
                        # the accepted draft is abandoned and the chat freed
 LETSPLAY_OVERS = 20    # /letsplay is always a 20-over contest
 
-_PITCH_EMOJI = {
-    "Dry": "🟫", "Dusty": "🟤", "Hard": "🟩",
-    "Flat": "⬜", "Green": "🌿", "Bouncy": "🔵", "Even": "🟨",
-}
+# Shared with the block renderer so the two live cards can't disagree about
+# what a pitch looks like.
+_PITCH_EMOJI = lpr.PITCH_EMOJI
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -639,7 +642,8 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         InlineKeyboardButton("✅ Accept", callback_data=f"lp_accept_{invite_id}"),
         InlineKeyboardButton("❌ Deny", callback_data=f"lp_deny_{invite_id}"),
     ]])
-    sent = await msg.reply_text(text, parse_mode="HTML", reply_markup=kb)
+    sent = await R.reply_rich(msg, lpr.invite_blocks(draft, host_preview),
+                              text, reply_markup=kb)
     if sent and getattr(sent, "message_id", None):
         draft["invite_msg_id"] = sent.message_id
     _arm_invite_timeout(context, invite_id)
@@ -863,11 +867,12 @@ async def _prompt_trait_vote(context, draft):
     }
     vote = draft["trait_vote"]
     try:
-        sent = await context.bot.send_message(
-            draft["chat_id"],
+        sent = await R.send_rich_message(
+            context.bot, draft["chat_id"],
+            tvs.prompt_blocks(draft["host"]["name"], draft["guest"]["name"],
+                              vote["host_strength"], vote["guest_strength"]),
             tvs.prompt_text(_m(draft["host"]), _m(draft["guest"]),
                             vote["host_strength"], vote["guest_strength"]),
-            parse_mode="HTML",
             reply_markup=_trait_vote_keyboard(draft["invite_id"]))
     except Exception:
         # The question never reached the chat, so there is nothing to answer.
@@ -926,14 +931,20 @@ async def _settle_trait_vote(context, draft):
     _cancel_trait_vote_timeout(context, invite_id)
     text = tvs.result_text(result, _m(draft["host"]), _m(draft["guest"]),
                            vote.get("host"), vote.get("guest"))
+    blocks = tvs.result_blocks(result, draft["host"]["name"],
+                               draft["guest"]["name"],
+                               vote.get("host"), vote.get("guest"))
     msg_id = draft.pop("trait_vote_msg_id", None)
     try:
         if msg_id:
-            await context.bot.edit_message_text(
-                text, chat_id=draft["chat_id"], message_id=msg_id,
-                parse_mode="HTML", reply_markup=None)
+            if not await R.edit_rich_message(context.bot, draft["chat_id"],
+                                             msg_id, blocks):
+                await context.bot.edit_message_text(
+                    text, chat_id=draft["chat_id"], message_id=msg_id,
+                    parse_mode="HTML", reply_markup=None)
         else:
-            await context.bot.send_message(draft["chat_id"], text, parse_mode="HTML")
+            await R.send_rich_message(context.bot, draft["chat_id"], blocks,
+                                      text)
     except Exception:
         logger.exception("letsplay trait vote result render failed (non-fatal)")
     draft["status"] = "pitch"
@@ -980,12 +991,18 @@ async def letsplay_traits_callback(update: Update, context: ContextTypes.DEFAULT
         await _settle_trait_vote(context, draft)
         return
     try:
-        await q.edit_message_text(
+        await R.edit_rich(
+            q,
+            tvs.prompt_blocks(draft["host"]["name"], draft["guest"]["name"],
+                              vote.get("host_strength"),
+                              vote.get("guest_strength"),
+                              host_voted=bool(vote.get("host")),
+                              guest_voted=bool(vote.get("guest"))),
             tvs.prompt_text(_m(draft["host"]), _m(draft["guest"]),
                             vote.get("host_strength"), vote.get("guest_strength"),
                             host_voted=bool(vote.get("host")),
                             guest_voted=bool(vote.get("guest"))),
-            parse_mode="HTML", reply_markup=_trait_vote_keyboard(invite_id))
+            reply_markup=_trait_vote_keyboard(invite_id))
     except Exception:
         logger.exception("letsplay trait vote refresh failed (non-fatal)")
 
@@ -1007,8 +1024,8 @@ async def _prompt_pitch(context, draft):
         rows.append(row)
     text = (f"🌱 <b>Pitch Selection</b>\n\n"
             f"{_m(draft['host'])}, choose the pitch for this match:")
-    sent = await context.bot.send_message(
-        draft["chat_id"], text, parse_mode="HTML",
+    sent = await R.send_rich_message(
+        context.bot, draft["chat_id"], lpr.pitch_prompt_blocks(draft), text,
         reply_markup=InlineKeyboardMarkup(rows))
     if sent and getattr(sent, "message_id", None):
         draft["pitch_msg_id"] = sent.message_id
@@ -1037,9 +1054,9 @@ async def letsplay_pitch_callback(update: Update, context: ContextTypes.DEFAULT_
     draft["pitch_type"] = pitch
     draft["status"] = "showxi"
     _rearm_setup_timeout(context, invite_id)
-    await q.edit_message_text(
-        f"🌱 Pitch locked: <b>{_PITCH_EMOJI.get(pitch, '🏏')} {pitch}</b>",
-        parse_mode="HTML")
+    await R.edit_rich(
+        q, lpr.pitch_locked_blocks(pitch),
+        f"🌱 Pitch locked: <b>{_PITCH_EMOJI.get(pitch, '🏏')} {pitch}</b>")
     await _prompt_show_xi(context, draft)
 
 
@@ -1199,18 +1216,112 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
     return "\n".join(p for p in parts if p)
 
 
-def _stats_fairness_note(host_pairs, guest_pairs, vs_bot=False,
-                         host_traits=None, guest_traits=None):
-    """A Team Overall line for the Playing-XI card, warning when the gap is wide
-    enough that career stats won't be recorded (anti stat-farming), plus the
-    Trait Boost each side's equipped traits are worth.
+def _xi_rows(pairs, trait_map=None, limit=11):
+    """One side's XI as ``(name, rating, role, badge)`` rows for the table.
 
-    The two numbers answer different questions and are printed as two lines on
-    purpose. The gap decides whether career stats count, and it is measured on
-    the printed card ratings (see ``player_stats_service.is_stat_farming_mismatch``
-    — traits are bought with gems, so they must never cost a captain their
-    stats). The boost is what those traits add to the team the captain is about
-    to field, which is the thing they came to this card to weigh up.
+    Flattened here, while the caller's session is still open: a builder that
+    reached back into the ORM would be reading rows the handler has already
+    committed and detached, and a renderer is not a place to discover that.
+    """
+    from services.trait_rating_service import format_player_rating, player_bonus
+    rows = []
+    for row in (pairs or [])[:limit] if limit else (pairs or []):
+        name, rating, category, traits = _row_fields(row, trait_map)
+        rows.append((name,
+                     format_player_rating(rating, player_bonus(traits)),
+                     _ROLE_LABEL.get(category, category or ""),
+                     _trait_tag(traits).strip()))
+    return rows
+
+
+# Roles as the table's own column, rather than the emoji the HTML line tacks
+# onto a name. A column can be read down; a suffix cannot.
+_ROLE_LABEL = {"Wicket Keeper": "🧤 WK", "All-rounder": "⚡ AR",
+               "Bowler": "🎯 BOWL", "Batsman": "🏏 BAT"}
+
+
+def _show_xi_blocks(draft, host_pairs, guest_pairs,
+                    host_bench=None, guest_bench=None, session=None):
+    """The 'both XIs locked' card as blocks — the twin of :func:`_show_xi_text`.
+
+    Same two line-ups in the same order, the same Team Overall verdict and the
+    same /change instructions. The differences are the ones a table buys: each
+    rating in its own right-aligned column instead of trailing a name of
+    unpredictable width, the role as a column of its own, and the bench as a
+    real ``details`` rather than a quoted list standing in for one.
+    """
+    try:
+        vs_bot = bool(draft.get("vs_bot"))
+        traits_on = draft.get("traits_enabled", True)
+        host_traits = _side_trait_map(session, host_pairs) if traits_on else {}
+        guest_traits = _side_trait_map(session, guest_pairs) if traits_on else {}
+
+        trait_status = None
+        if "traits_enabled" in draft:
+            from services.trait_vote_service import status_line
+            trait_status = _strip_html(status_line(traits_on))
+
+        facts = _fairness_facts(host_pairs, guest_pairs, vs_bot=vs_bot,
+                                host_traits=host_traits,
+                                guest_traits=guest_traits)
+        fairness = lpr.fairness_blocks(
+            host_label=facts["host_label"], guest_label=facts["guest_label"],
+            host_ovr=facts["host_ovr"], guest_ovr=facts["guest_ovr"],
+            gap_limit=facts["gap_limit"], vs_bot=vs_bot,
+            boost=_strip_html(facts["boost"]), boost_note=facts["boost_note"])
+
+        guest_label = (f"{draft['guest']['name']} (Bot — auto-picked)" if vs_bot
+                       else f"{draft['guest']['name']} (Guest)")
+        starter = draft["host"] if vs_bot else draft["guest"]
+        start_prompt = ["🔒 When ready, ", lpr.mention(starter),
+                        " taps ", R.bold("Start Toss"), " to flip the coin!"]
+
+        return lpr.playing_xi_blocks(
+            vs_bot=vs_bot, pitch=draft.get("pitch_type", "Hard"),
+            host_label=draft["host"]["name"], guest_label=guest_label,
+            host_xi=_xi_rows(host_pairs, host_traits),
+            guest_xi=_xi_rows(guest_pairs, guest_traits),
+            host_bench=(None if host_bench is None
+                        else _xi_rows(host_bench, limit=None)),
+            guest_bench=(None if guest_bench is None
+                         else _xi_rows(guest_bench, limit=None)),
+            trait_status=trait_status, fairness=fairness,
+            start_prompt=start_prompt)
+    except Exception:
+        # A renderer bug costs the rendering, never the card: None sends the
+        # HTML, and a captain is waiting on this to tap Start Toss.
+        logger.exception("letsplay: Playing XI blocks failed to build")
+        return None
+
+
+def _strip_html(text):
+    """Plain text from a snippet another service formatted as HTML.
+
+    The trait services hand back ready-made HTML lines (``<b>Trait Boost:</b>
+    …``). A rich block carries its own formatting, so the tags come off rather
+    than being printed as literal angle brackets; the emphasis they marked is
+    not worth re-deriving for one line.
+    """
+    if not text:
+        return None
+    return html.unescape(re.sub(r"<[^>]+>", "", str(text))).strip() or None
+
+
+def _fairness_facts(host_pairs, guest_pairs, vs_bot=False,
+                    host_traits=None, guest_traits=None):
+    """The Team Overall numbers behind the fairness verdict, computed once.
+
+    Both renderings of the Playing-XI card print this verdict, and it is the one
+    thing on the card a captain acts on — a gap too wide costs both sides their
+    career stats, and the fix is /change before the toss. Two renderers deriving
+    it separately is two cards that can disagree about whether the match counts,
+    so they share these numbers and differ only in how they draw them.
+
+    The gap is measured on the printed card ratings (see
+    ``player_stats_service.is_stat_farming_mismatch`` — traits are bought with
+    gems, so they must never cost a captain their stats). The boost is what
+    those traits add to the team about to take the field, which is the other
+    question the captain came to this card with.
     """
     from services.player_stats_service import (
         STATS_FAIRNESS_OVR_GAP, team_overall)
@@ -1219,40 +1330,53 @@ def _stats_fairness_note(host_pairs, guest_pairs, vs_bot=False,
     guest_card = _side_rating_card(guest_pairs, guest_traits)
     host_ovr = team_overall([{"rating": _row_fields(r)[1]} for r in host_pairs[:11]])
     guest_ovr = team_overall([{"rating": _row_fields(r)[1]} for r in guest_pairs[:11]])
+    labels = ("You", "Bot") if vs_bot else ("Host", "Guest")
+    boost = format_team_line(labels[0], host_card, labels[1], guest_card)
+    # The footnote only earns its line when there is a boost to explain AND the
+    # boost is outside the gap — otherwise it is answering a question nobody
+    # reading this card has asked.
+    boost_note = ("⚡ Trait Boost is what your equipped traits add to the team "
+                  "card. It does not change the gap above — traits never cost "
+                  "you career stats."
+                  if boost and not counts_for_fairness() else None)
+    return {"host_ovr": host_ovr, "guest_ovr": guest_ovr,
+            "gap": abs(host_ovr - guest_ovr),
+            "gap_limit": STATS_FAIRNESS_OVR_GAP,
+            "host_label": labels[0], "guest_label": labels[1],
+            "vs_bot": bool(vs_bot), "boost": boost, "boost_note": boost_note}
+
+
+def _stats_fairness_note(host_pairs, guest_pairs, vs_bot=False,
+                         host_traits=None, guest_traits=None):
+    """The fairness verdict as HTML — see :func:`_fairness_facts`."""
+    f = _fairness_facts(host_pairs, guest_pairs, vs_bot=vs_bot,
+                        host_traits=host_traits, guest_traits=guest_traits)
+    boost = f["boost"]
+    note = f"<i>{f['boost_note']}</i>" if f["boost_note"] else None
     if vs_bot:
         # Nothing is at stake in a practice match, so the anti stat-farming gap
         # warning is irrelevant — say plainly that this one doesn't count.
-        boost = format_team_line("You", host_card, "Bot", guest_card)
         return "\n".join(p for p in (
-            f"📊 <b>Team Overall:</b> You <b>{host_ovr}</b> vs Bot "
-            f"<b>{guest_ovr}</b>",
+            f"📊 <b>Team Overall:</b> You <b>{f['host_ovr']}</b> vs Bot "
+            f"<b>{f['guest_ovr']}</b>",
             boost,
             "🎯 <b>Practice match — unranked.</b> No career stats, no coins or "
             "gems, no Win/Loss and no streak. Just cricket.",
             "━━━━━━━━━━━━━━━━━━━") if p)
-    boost = format_team_line("Host", host_card, "Guest", guest_card)
-    # The footnote only earns its line when there is a boost to explain AND the
-    # boost is outside the gap — otherwise it is answering a question nobody
-    # reading this card has asked.
-    boost_note = ("<i>⚡ Trait Boost is what your equipped traits add to the "
-                  "team card. It does not change the gap above — traits never "
-                  "cost you career stats.</i>"
-                  if boost and not counts_for_fairness() else None)
-    gap = abs(host_ovr - guest_ovr)
-    if gap >= STATS_FAIRNESS_OVR_GAP:
+    if f["gap"] >= f["gap_limit"]:
         return "\n".join(p for p in (
             "⚠️ <b>This match WON'T count.</b>",
-            f"Team Overall gap is too wide — Host <b>{host_ovr}</b> vs "
-            f"Guest <b>{guest_ovr}</b> (<b>{gap}</b> apart, limit "
-            f"{STATS_FAIRNESS_OVR_GAP}). No career stats, no Win/Loss or streak, "
+            f"Team Overall gap is too wide — Host <b>{f['host_ovr']}</b> vs "
+            f"Guest <b>{f['guest_ovr']}</b> (<b>{f['gap']}</b> apart, limit "
+            f"{f['gap_limit']}). No career stats, no Win/Loss or streak, "
             "and no coins or gems — it keeps things fair. Play on for fun, or "
             "even up the XIs with <code>/change</code>.",
-            boost, boost_note,
+            boost, note,
             "━━━━━━━━━━━━━━━━━━━") if p)
     return "\n".join(p for p in (
-        f"📊 <b>Team Overall:</b> Host <b>{host_ovr}</b> vs Guest "
-        f"<b>{guest_ovr}</b> — stats will count. ✅",
-        boost, boost_note,
+        f"📊 <b>Team Overall:</b> Host <b>{f['host_ovr']}</b> vs Guest "
+        f"<b>{f['guest_ovr']}</b> — stats will count. ✅",
+        boost, note,
         "━━━━━━━━━━━━━━━━━━━") if p)
 
 
@@ -1265,7 +1389,7 @@ async def _prompt_show_xi(context, draft):
     """
     invite_id = draft["invite_id"]
     session = get_session()
-    text = host_ids = guest_ids = bad = errs = None
+    text = blocks = host_ids = guest_ids = bad = errs = None
     try:
         host_pairs, host_bench, host_errs = _xi_bench_for_side(
             session, draft["host"]["user_id"])
@@ -1285,6 +1409,9 @@ async def _prompt_show_xi(context, draft):
             text = _show_xi_text(draft, host_pairs, guest_pairs,
                                  host_bench=host_bench, guest_bench=guest_bench,
                                  session=session)
+            blocks = _show_xi_blocks(draft, host_pairs, guest_pairs,
+                                     host_bench=host_bench,
+                                     guest_bench=guest_bench, session=session)
         session.commit()
     except Exception:
         logger.exception("letsplay: failed to build auto XIs")
@@ -1316,9 +1443,8 @@ async def _prompt_show_xi(context, draft):
 
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(
         "🪙 Start Toss", callback_data=f"lp_starttoss_{invite_id}")]])
-    sent = await context.bot.send_message(
-        draft["chat_id"], text,
-        parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
+    sent = await R.send_rich_message(context.bot, draft["chat_id"], blocks,
+                                     text, reply_markup=kb)
     if sent and getattr(sent, "message_id", None):
         draft["showxi_msg_id"] = sent.message_id
 
@@ -1373,7 +1499,7 @@ async def _rerender_show_xi(context, draft):
     On any failure (rebuild raised, produced no text, or the message could not be
     sent) a lightweight notice is posted so the players know the XI did change."""
     session = get_session()
-    text = None
+    text = blocks = None
     try:
         host_xi, host_bench, _h = _xi_bench_for_side(
             session, draft["host"]["user_id"], draft.get("host_xi_roster_ids"))
@@ -1382,6 +1508,9 @@ async def _rerender_show_xi(context, draft):
             text = _show_xi_text(draft, host_xi, guest_xi,
                                  host_bench=host_bench, guest_bench=guest_bench,
                                  session=session)
+            blocks = _show_xi_blocks(draft, host_xi, guest_xi,
+                                     host_bench=host_bench,
+                                     guest_bench=guest_bench, session=session)
         session.commit()
     except Exception:
         logger.exception("letsplay: re-render show XI failed")
@@ -1397,6 +1526,9 @@ async def _rerender_show_xi(context, draft):
     mid = draft.get("showxi_msg_id")
     if mid:
         try:
+            if await R.edit_rich_message(context.bot, draft["chat_id"], mid,
+                                         blocks, reply_markup=kb):
+                return
             await context.bot.edit_message_text(
                 text, chat_id=draft["chat_id"], message_id=mid,
                 parse_mode="HTML", reply_markup=kb,
@@ -1405,15 +1537,20 @@ async def _rerender_show_xi(context, draft):
         except Exception:
             logger.debug("letsplay /change in-place edit failed", exc_info=True)
     try:
-        sent = await context.bot.send_message(
-            draft["chat_id"], text, parse_mode="HTML", reply_markup=kb,
-            disable_web_page_preview=True)
+        sent = await R.send_rich_message(context.bot, draft["chat_id"], blocks,
+                                         text, reply_markup=kb)
     except Exception:
         logger.exception("letsplay: re-render show XI send failed")
         await _notify_change_applied(context, draft)
         return
     if sent and getattr(sent, "message_id", None):
         draft["showxi_msg_id"] = sent.message_id
+
+
+async def _reply_usage(msg, problem, usage_html):
+    """Say what was wrong with a ``/change``, then how to write it."""
+    return await R.reply_rich(msg, lpr.change_usage_blocks(problem),
+                              f"❌ {problem}\n{usage_html}")
 
 
 async def letsplay_change_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
@@ -1475,23 +1612,24 @@ async def letsplay_change_handler(update: Update, context: ContextTypes.DEFAULT_
         bench_number = {12 + i: int(e.id) for i, (e, _p) in enumerate(bench)}
 
         if len(nums) != 2:
-            await msg.reply_text("❌ Give two numbers.\n" + usage, parse_mode="HTML")
+            await _reply_usage(msg, "Give two numbers.", usage)
             return True
         out_no, in_no = int(nums[0]), int(nums[1])
         if not (1 <= out_no <= 11):
-            await msg.reply_text(
-                f"❌ The first number must be an XI slot (1–11), not {out_no}.\n"
-                + usage, parse_mode="HTML")
+            await _reply_usage(
+                msg,
+                f"The first number must be an XI slot (1–11), not {out_no}.",
+                usage)
             return True
 
         new_ids = list(xi_ids_order)
         if 1 <= in_no <= 11:
             # Reorder the batting line-up: swap the two XI slots.
             if in_no == out_no:
-                await msg.reply_text(
-                    "❌ Those are the same slot — pick two different XI slots to "
-                    "reorder, or a bench player (12+) to swap in.\n" + usage,
-                    parse_mode="HTML")
+                await _reply_usage(
+                    msg,
+                    "Those are the same slot — pick two different XI slots to "
+                    "reorder, or a bench player (12+) to swap in.", usage)
                 return True
             new_ids[out_no - 1], new_ids[in_no - 1] = (
                 new_ids[in_no - 1], new_ids[out_no - 1])
@@ -1500,15 +1638,17 @@ async def letsplay_change_handler(update: Update, context: ContextTypes.DEFAULT_
             new_ids[out_no - 1] = bench_number[in_no]
         else:
             if not bench:
-                await msg.reply_text(
-                    "❌ The second number must be another XI slot (1–11) to "
-                    "reorder your batting. You have no bench players to swap in "
-                    "— your roster is exactly 11.\n" + usage, parse_mode="HTML")
+                await _reply_usage(
+                    msg,
+                    "The second number must be another XI slot (1–11) to "
+                    "reorder your batting. You have no bench players to swap "
+                    "in — your roster is exactly 11.", usage)
             else:
-                await msg.reply_text(
-                    f"❌ The second number must be an XI slot (1–11) to reorder, "
-                    f"or a bench player (12–{11 + len(bench)}) to swap in — not "
-                    f"{in_no}.\n" + usage, parse_mode="HTML")
+                await _reply_usage(
+                    msg,
+                    f"The second number must be an XI slot (1–11) to reorder, "
+                    f"or a bench player (12–{11 + len(bench)}) to swap in — "
+                    f"not {in_no}.", usage)
             return True
 
         new_pairs = [by_id[i] for i in new_ids if i in by_id]
@@ -1588,6 +1728,19 @@ async def letsplay_starttoss_callback(update: Update, context: ContextTypes.DEFA
 # Toss (guest calls, winner elects bat/bowl) — same coin animation as /cipl
 # ════════════════════════════════════════════════════════════════════
 
+async def _reveal_rich(q, blocks, text, reply_markup=None):
+    """A rich edit ``reveal_toss_result`` can actually retry.
+
+    That retry loop reads *exceptions* — an edit that raises is tried again, and
+    one that returns is done. ``edit_rich`` reports a refusal with False and
+    swallows the exception, so handing it over directly would count the very
+    first attempt a success and leave the toss frozen on a mid-flip frame with
+    no Bat/Bowl buttons. Raising here keeps the retry meaning what it says.
+    """
+    if not await R.edit_rich(q, blocks, text, reply_markup=reply_markup):
+        raise TelegramError("the toss reveal was refused")
+
+
 async def _start_toss(context, draft):
     caller = draft["host"] if draft.get("vs_bot") else draft["guest"]
     text = (f"🪙 <b>Toss Time!</b>\n\n"
@@ -1596,8 +1749,10 @@ async def _start_toss(context, draft):
         InlineKeyboardButton("⬆️ Heads", callback_data=f"lp_coin_heads_{draft['invite_id']}"),
         InlineKeyboardButton("⬇️ Tails", callback_data=f"lp_coin_tails_{draft['invite_id']}"),
     ]])
-    sent = await context.bot.send_message(
-        draft["chat_id"], text, parse_mode="HTML", reply_markup=kb)
+    sent = await R.send_rich_message(
+        context.bot, draft["chat_id"],
+        lpr.toss_call_blocks(caller, vs_bot=bool(draft.get("vs_bot"))),
+        text, reply_markup=kb)
     if sent and getattr(sent, "message_id", None):
         draft["toss_msg_id"] = sent.message_id
 
@@ -1663,13 +1818,16 @@ async def letsplay_coin_callback(update: Update, context: ContextTypes.DEFAULT_T
     if vs_bot and winner_side == "guest":
         from services.bot_captain import elect_toss_decision
         decision = elect_toss_decision()
-        revealed = await reveal_toss_result(lambda: q.edit_message_text(
+        bot_won_html = (
             f"🪙 The coin lands on <b>{coin.upper()}</b> — you called "
             f"<b>{call.upper()}</b>.\n\n"
             f"🤖 <b>Bot</b> won the toss and elected to "
             f"<b>{'BAT' if decision == 'bat' else 'BOWL'}</b> first.\n\n"
-            f"The match begins below — play over by over!",
-            parse_mode="HTML"))
+            f"The match begins below — play over by over!")
+        revealed = await reveal_toss_result(lambda: _reveal_rich(
+            q, (lpr.toss_result_blocks(coin, call, "you", winner) or [])
+               + (lpr.toss_elected_blocks(winner, decision, bot_won=True) or []),
+            bot_won_html))
         if revealed:
             draft["toss_winner_side"] = winner_side
             draft["match_launched"] = True
@@ -1696,16 +1854,19 @@ async def letsplay_coin_callback(update: Update, context: ContextTypes.DEFAULT_T
         # The reveal is the critical edit: if it fails the toss is left frozen on
         # a mid-flip frame. Retry it, and only mark the winner once it actually
         # lands — otherwise release the lock so the caller can try again.
-        revealed = await reveal_toss_result(lambda: q.edit_message_text(
+        elect_kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏏 Bat First",
+                                 callback_data=f"lp_toss_bat_{invite_id}_{winner_side}"),
+            InlineKeyboardButton("🎳 Bowl First",
+                                 callback_data=f"lp_toss_bowl_{invite_id}_{winner_side}"),
+        ]])
+        elect_html = (
             f"🪙 The coin lands on <b>{coin.upper()}</b> — {caller_label} called "
             f"<b>{call.upper()}</b>.\n\n"
-            f"🏆 {_m(winner)} won the toss. Choose:",
-            parse_mode="HTML", reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🏏 Bat First",
-                                     callback_data=f"lp_toss_bat_{invite_id}_{winner_side}"),
-                InlineKeyboardButton("🎳 Bowl First",
-                                     callback_data=f"lp_toss_bowl_{invite_id}_{winner_side}"),
-            ]])))
+            f"🏆 {_m(winner)} won the toss. Choose:")
+        revealed = await reveal_toss_result(lambda: _reveal_rich(
+            q, lpr.toss_result_blocks(coin, call, caller_label, winner),
+            elect_html, reply_markup=elect_kb))
     if not revealed:
         # The animation edits already stripped the Heads/Tails keyboard, so a
         # bare alert would leave the guest with no button to retry. Clear the
@@ -1759,11 +1920,11 @@ async def letsplay_toss_callback(update: Update, context: ContextTypes.DEFAULT_T
     # starting. An unguarded edit here left `match_launched` set on a match that
     # was never created, so every retry answered "Match already started".
     try:
-        await q.edit_message_text(
+        await _reveal_rich(
+            q, lpr.toss_elected_blocks(winner, decision),
             f"✅ {_m(winner)} elected to "
             f"<b>{'BAT' if decision == 'bat' else 'BOWL'}</b> first.\n\n"
-            f"The match begins below — play over by over!",
-            parse_mode="HTML")
+            f"The match begins below — play over by over!")
     except Exception:
         logger.warning("letsplay toss result edit failed for invite %s — "
                        "starting the match anyway", invite_id, exc_info=True)
