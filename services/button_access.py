@@ -55,15 +55,13 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # that on every press — but the button has to be reachable by them, and
     # the board belongs to nobody.
     "au_rtm_",
-    # The /ainfo view buttons (Sets, Next Set, My Squad, …) are read-only and
-    # answer whoever presses them — "My Squad" resolves the presser's own
-    # franchise — so the card belongs to the whole room.
-    "au_info_",
-    # The 🗂 Sets card's pages and its per-set buttons. Read-only like the
-    # /ainfo views, and posted into a room where every franchise wants to look
-    # at the sets — a card only the admin who typed /asets could page is a card
-    # nobody else can read.
-    "au_sets_",
+    # (The /ainfo menu and the 🗂 Sets card used to be listed here. They are
+    # owner-locked now — see OWNER_RULES below — because both are a COMMAND's
+    # reply rather than the room's board: /ainfo opens views under the person
+    # who pressed, and the Sets card re-renders in place, so a second pair of
+    # hands on either genuinely fights the first in the one chat that has to
+    # stay readable. Both commands are free and everything behind them is
+    # public, so a copy of your own costs one command.)
     # A retention offer is posted by the ADMIN who ran /aretain, but it is the
     # franchise that has to answer it. handlers/auction.py lets only that
     # franchise's owner and co-owners accept or decline, on every press.
@@ -312,6 +310,19 @@ OWNER_RULES: dict[str, str] = {
                    "Tap 🔄 Impact Player, or send /impact, for your own."),
     "cipl_impx_": ("⛔ That Impact Player picker belongs to the other captain. "
                    "Tap 🔄 Impact Player, or send /impact, for your own."),
+    # The Franchise Auction's command cards. Owner-tagged rather than left to
+    # the registry because an auction group is the busiest chat the bot has and
+    # the registry forgets on restart — mid-auction is exactly when a restart
+    # happens. The pinned board is NOT here: its quick-bid and RTM buttons stay
+    # shared above, because a board only one person may press is not an auction.
+    "au_info_": ("🔨 That menu belongs to whoever sent /ainfo. "
+                 "Send /ainfo for your own copy."),
+    "au_sets_": ("🗂 That sets card belongs to whoever sent /asets. "
+                 "Send /asets for your own — its pages are per-person."),
+    # ❌ Close. Deleting somebody else's card is the one press that cannot be
+    # undone by pressing again, so it is the tightest of the three.
+    "au_x_": ("❌ That card belongs to whoever asked for it — they can close "
+              "it. Send the command yourself for a copy you control."),
 }
 
 

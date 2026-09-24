@@ -118,10 +118,15 @@ SUBSTITUTES = {
 DROP = {0xFE0F, 0x200D}
 
 
-def T(text):
+def T(text, collapse=True):
     """Text with every character this document cannot draw resolved.
 
     Markup passes through untouched — everything inside a tag is ASCII.
+
+    ``collapse`` tidies the gap a dropped emoji leaves behind, which is what
+    prose wants and what a command block must not have: the columns in those
+    are the layout, and a line silently narrowed by one space is a line that
+    no longer lines up with the one above it.
     """
     out = []
     for ch in str(text):
@@ -132,8 +137,10 @@ def T(text):
             out.append(ch)
         else:
             out.append(SUBSTITUTES.get(ch, ""))
-    # A dropped emoji leaves the space that followed it behind.
-    return "".join(out).replace("  ", " ").strip() or " "
+    done = "".join(out)
+    if not collapse:
+        return done or " "
+    return done.replace("  ", " ").strip() or " "
 
 
 # ── Styles ──────────────────────────────────────────────────────────
@@ -232,8 +239,9 @@ def code(lines):
     # the width of is held by non-breaking spaces.
     # KeepTogether: half a command block at the foot of a page is a command
     # somebody will type half of.
-    return KeepTogether(Paragraph("<br/>".join(T(line).replace(" ", "&nbsp;")
-                                               for line in lines), S["code"]))
+    return KeepTogether(Paragraph(
+        "<br/>".join(T(line, collapse=False).replace(" ", "&nbsp;")
+                     for line in lines), S["code"]))
 
 
 def table(rows, widths, header=True, mono_first=True):
@@ -410,6 +418,29 @@ def user_guide():
           "exception is a Right To Match window, where the top bidder is "
           "invited to raise their own bid once — see section 8.)"),
 
+        h2("One pair of hands per franchise, per lot"),
+        p("Owner and co-owners are equals — but not at the same moment. "
+          + B("Whoever bids first for a franchise holds that lot") + ", and the "
+          "other one is refused by name until the next lot:"),
+        p("“Alice is bidding for Mumbai on this lot — only one of you at a "
+          "time, or you end up raising each other. The next lot is open to "
+          "either of you.”", "callout"),
+        p("Two co-owners bidding the same player is not two tactics; it is one "
+          "franchise racing itself up its own price, and the loser of that race "
+          "is always the franchise. The claim clears the moment the lot does, "
+          "so the next player is open to either of you again — and if an admin "
+          "undoes the bid that claimed it, so does the claim."),
+
+        h2("Direct bids, if your auction allows them"),
+        p("Some rooms run a strict ladder. If your admin has turned "
+          + B("direct bids off") + ", a typed amount is refused, and the "
+          "message names the number it would have been:"),
+        code(["/bid 12   →  Direct bids are off in this auction",
+              "          →  Send /bid on its own to bid ₹2.4 Cr"]),
+        p("Bare " + C("/bid") + " and the board's buttons still work, so you "
+          "can always bid — one step at a time. " + C("/arules") + " says which "
+          "way your auction is set."),
+
         h1("4. The clock"),
         bullets([
             "A lot stays on the block for " + B("30 seconds") + " by default, "
@@ -484,6 +515,15 @@ def user_guide():
         p("None of these are in the slash menu (both menus are full at "
           "Telegram's 100-command ceiling), so they are listed here and behind "
           + C("/ainfo") + "'s buttons."),
+        p(B("Every card is yours, and closes.") + " A card you asked for carries "
+          "a ❌ Close button that takes it out of the chat — useful in a group "
+          "where the board is the message everyone is trying to read — and only "
+          "you can press it. The " + C("/ainfo") + " menu and the Sets card work "
+          "the same way: they answer the person who sent the command, so if "
+          "somebody else's card ignores your taps, send the command yourself "
+          "for a copy of your own. The " + B("pinned board") + " is the "
+          "exception on both counts — its quick-bid buttons belong to the whole "
+          "room, and it cannot be closed."),
         table([
             ["Command", "What you get"],
             ["/aboard", "A personal copy of the live board, with quick-bid "
@@ -625,7 +665,14 @@ def user_guide():
             ["“My /claim did not work in the group.”",
              "Focus mode: the auction is live. Use a DM. Section 9."],
             ["“Can my co-owner bid for us?”",
-             "Yes. Owner and co-owners are equals for every check /bid makes."],
+             "Yes — but one of you at a time on a lot. Whoever bids first holds "
+             "it; the next lot is open to either of you. Section 3."],
+            ["“/bid 12 was refused, but /bid worked.”",
+             "Direct bids are off in that auction: every raise is one step. "
+             "Section 3."],
+            ["“Somebody else's card ignores my taps.”",
+             "Cards belong to whoever asked for them. Send the command "
+             "yourself. Section 7."],
             ["“Can an admin bid for me if my phone dies?”",
              "Yes, from the website console — and it is announced as an "
              "admin's bid, not as yours."],
@@ -666,6 +713,7 @@ def admin_guide():
          "Building the pool, and ordering the sets",
          "Running the room: the commands and the web console",
          "Focus mode: the group locked to auction commands",
+         "The opening purse, direct bids, and one bidder per franchise",
          "Retention, Right To Match and expansion picks",
          "Money: correcting a purse, and the ledger behind it",
          "Finishing: publishing, cloning, cancelling",
@@ -698,6 +746,7 @@ def admin_guide():
               "Then:",
               "   /atimer 30                seconds per lot",
               "   /asnipe 10 10 5           window / extend / max per lot",
+              "   /adirect off              (optional) ladder only, no typed bids",
               "   /acall Auction starts in 10 minutes",
               "   /astart",
               "",
@@ -735,8 +784,9 @@ def admin_guide():
         table([
             ["Fold", "What it holds"],
             ["⚙️ Settings", "Name, the group chat id, seconds per lot, the "
-                            "opening purse, the three anti-snipe numbers, and "
-                            "the focus-mode switch (section 7)."],
+                            "opening purse (which moves every franchise — see "
+                            "below), the three anti-snipe numbers, and the "
+                            "focus-mode and direct-bid switches."],
             ["🧩 Squad rules", "Squad minimum and maximum, the home country and "
                                "the overseas cap, and a minimum and maximum for "
                                "each of the four roles."],
@@ -869,7 +919,56 @@ def admin_guide():
     ]
 
     flow += [
-        h1("9. Running the room"),
+        h1("9. Four rules worth knowing before you start"),
+        h2("Changing the opening purse changes every franchise"),
+        p("It is not just the default for the next side you add. Save a new "
+          "opening purse in ⚙️ Settings and " + B("every franchise moves to "
+          "it") + ": its total is set, its remaining moves by the same amount, "
+          "and the move is written into the ledger as a correction, so the "
+          "purse and its ledger still agree afterwards."),
+        bullets([
+            B("Spending stays spent.") + " A side that has bought ₹30 Cr of "
+            "players out of ₹100 Cr lands on ₹90 Cr of a ₹120 Cr purse.",
+            B("A cut that would overdraw somebody is refused by name") + ", "
+            "before anything is written — sell somebody first, or set that "
+            "one franchise's own purse on its row.",
+            "The flash message says how many franchises moved.",
+            B("Saving the same number does nothing") + ", so a franchise you "
+            "deliberately gave a purse of its own on its row keeps it until "
+            "the season's purse actually changes.",
+        ]),
+        h2("Direct bids: the room's choice, not the rule's"),
+        code(["/adirect            is it on, and what that means",
+              "/adirect off        ladder only: bare /bid and the buttons",
+              "/adirect on         a bidder may type their own number"]),
+        p("A jump bid (" + C("/bid 12") + " when the minimum is ₹2.4 Cr) is half "
+          "of what an auction is, and a strict ladder is the other half — "
+          "neither is wrong, so it is a switch rather than a rule. Off, a typed "
+          "amount is refused with the number it " + B("would") + " have been, "
+          "and bare " + C("/bid") + ", the board's buttons and your own console "
+          "bid all keep working. It is on by default, carried into a cloned "
+          "season, and printed in " + C("/arules") + " when it is off."),
+        h2("One pair of hands per franchise, per lot"),
+        p("Whoever bids first for a franchise holds that lot; another owner or "
+          "co-owner of the same side is refused, by the holder's name, until "
+          "the next lot. Two of them bidding one player is one franchise "
+          "raising its own price. The claim resets with the lot, and an undone "
+          "bid releases it — and " + B("your console bid is exempt") + ", "
+          "because that is you acting for the franchise, announced as such."),
+
+        h2("Every card belongs to whoever asked for it"),
+        p("Each card a command posts — yours included — carries a "
+          + B("❌ Close") + " button, and only the person who asked for it can press "
+          "it. The " + C("/ainfo") + " menu and the 🗂 Sets card go further: "
+          "they answer that person alone, because both re-render under whoever "
+          "presses and a second pair of hands on one genuinely fights the "
+          "first. The " + B("pinned board is the exception on both counts") + ": "
+          "its quick-bid and RTM buttons belong to the room, and it has no "
+          "Close, because a board any passer-by could delete is a board the "
+          "auction loses mid-lot. Delete it yourself if you must, from "
+          "Telegram."),
+
+        h1("10. Running the room"),
         table([
             ["Command", "What it does"],
             ["/astart", "Open the auction, or resume a paused one. Refuses "
@@ -913,7 +1012,7 @@ def admin_guide():
           "choice when it was not is how a result gets disputed. The countdown "
           "ticks client-side and the panel refreshes itself every two seconds."),
 
-        h1("10. Retention, RTM and expansion picks"),
+        h1("11. Retention, RTM and expansion picks"),
         h2("Retention — before the first lot"),
         code(["/aretain Mumbai | Virat Kohli | 18   offer it (they must accept)",
               "/aretainforce Mumbai | Virat Kohli   retain at once, no Accept",
@@ -956,7 +1055,7 @@ def admin_guide():
     ]
 
     flow += [
-        h1("11. Money, and the ledger behind it"),
+        h1("12. Money, and the ledger behind it"),
         code(["/apurse                     every purse, max bid, squad count",
               "/agrant Mumbai | 5          add ₒ5 Cr",
               "/agrant Mumbai | -2         take ₒ2 Cr back"]),
@@ -973,7 +1072,7 @@ def admin_guide():
             "as an admin correction, with your id on it.",
         ]),
 
-        h1("12. Finishing"),
+        h1("13. Finishing"),
         code(["/apublish            squads → one Challenge League",
               "/aclone Season 3     next season: every rule, every franchise",
               "/acancel             cancel the auction"]),
@@ -994,7 +1093,7 @@ def admin_guide():
             "but only after the unsold players have had their accelerated round.",
         ]),
 
-        h1("13. Troubleshooting"),
+        h1("14. Troubleshooting"),
         table([
             ["“/astart says the pool is empty.”",
              "Nothing is queued. Build the pool on the setup page, or /apool a "
@@ -1018,6 +1117,16 @@ def admin_guide():
             ["“An owner's phone has died mid-lot.”",
              "Bid for them from the console's bid-for-a-franchise form. It is "
              "announced as an admin's bid, deliberately."],
+            ["“I changed the opening purse and nothing happened.”",
+             "It moves every franchise now, and the flash says how many. If "
+             "one refused, the message names the side that has already spent "
+             "more than the new purse."],
+            ["“Two co-owners keep outbidding each other.”",
+             "They cannot any more: the first to bid for a side holds that "
+             "lot. Section 9."],
+            ["“The room is jump-bidding wildly.”",
+             "/adirect off — every raise becomes one step. Bare /bid and the "
+             "board's buttons still work."],
             ["“A purse looks wrong.”",
              "🔍 Reconcile purses on the setup page re-sums the ledger and "
              "reports the drift; /agrant is the recorded way to correct one."],
@@ -1027,7 +1136,7 @@ def admin_guide():
              "already carries."],
         ], widths=[52 * mm, None], header=False, mono_first=False),
 
-        h1("14. Auction admins"),
+        h1("15. Auction admins"),
         p("A bot admin can appoint somebody who may run " + B("every auction "
           "command and no other admin command in the bot") + " — the person "
           "who runs your league's auction does not need the keys to everything "
@@ -1038,11 +1147,11 @@ def admin_guide():
         p("Those three are bot-admin only. Auction admins are also exempt from "
           "focus mode, like you."),
 
-        h1("15. The admin command list"),
+        h1("16. The admin command list"),
         table([
             ["Group", "Commands"],
-            ["Setting up", "/anew · /abind · /atimer · /asnipe · /afocus · /aco "
-                           "· /aaccelmode"],
+            ["Setting up", "/anew · /abind · /atimer · /asnipe · /afocus · "
+                           "/adirect · /aco · /aaccelmode"],
             ["Pool & sets", "/apool · /anextset · /asetorder · /asets · "
                             "/awithdraw"],
             ["Running it", "/astart · /apause · /aresume · /anext · /aextend · "

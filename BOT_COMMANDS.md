@@ -571,6 +571,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/atimer <seconds>` | Seconds allowed per lot — `/atimer 45` |
 | `/asnipe <window> <extend> <max>` | Anti-snipe window, extension and cap — `/asnipe 10 10 5` |
 | `/afocus on\|off` | Focus mode: while the auction is live or paused, this group answers auction commands and nothing else (default **on**). Bare `/afocus` reads it back |
+| `/adirect on\|off` | Direct bids: may a bidder type their own amount (`/bid 12`), or only take the next step? Default **on**. Off still allows bare `/bid` and the board's buttons |
 | `/agrant <franchise> \| <amount>` | Correct a franchise purse |
 | `/aco <franchise> \| <telegram id>` | Add a co-owner who may bid |
 | `/aretain <franchise> \| <player> \| [price]` | Retain a player — `/aretain Mumbai \| Virat Kohli \| 18` |
@@ -607,6 +608,20 @@ a DM, where the whole rest of the bot still works. Talking is never blocked,
 non-auction buttons are refused the same way, admins are never locked out, and
 an auction still in setup locks nothing. `/afocus off` turns it off for that
 auction; the ⚙️ Settings fold on the auction's page has the same switch.
+
+**One pair of hands per franchise.** Whoever bids first for a franchise on a lot
+holds that lot: a second owner or co-owner of the same side is refused by name
+until the next lot, because two of them bidding one player is one franchise
+raising its own price. An admin bidding from the console is exempt.
+
+**Every auction card has a ❌ Close**, and belongs to whoever asked for it — the
+`/ainfo` menu and the 🗂 Sets card can only be driven by the person who sent the
+command. The pinned board is the exception on both counts: its quick-bid and RTM
+buttons are the room's, and it cannot be closed.
+
+**Changing the opening purse on the setup page now moves every franchise** to
+the new purse — what has already been spent stays spent, and a cut that would
+overdraw somebody is refused by name.
 
 ## B5 · Lets Play Tournament
 

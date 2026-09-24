@@ -73,13 +73,17 @@
       <div style="grid-column:span 2;"><label>Name</label><input type="text" name="name" value="{{ season.name }}"></div>
       <div><label>Auction group chat id</label><input type="text" name="chat_id" value="{{ season.chat_id or '' }}" placeholder="-1001234567890"></div>
       <div><label>Seconds per lot</label><input type="number" name="bid_seconds" min="5" max="600" value="{{ season.bid_seconds }}"></div>
-      <div><label>Opening purse (Cr)</label><input type="text" name="opening_purse" value="{{ (season.opening_purse_lakh / 100)|round(2) }}"></div>
+      <div><label>Opening purse (Cr)</label><input type="text" name="opening_purse" value="{{ (season.opening_purse_lakh / 100)|round(2) }}">
+        <small class="au-note" style="display:block;margin-top:.25rem;">Applies to every franchise — spending stays spent.</small></div>
       <div><label>Anti-snipe window (s)</label><input type="number" name="snipe_window" min="0" max="120" value="{{ season.snipe_window_seconds }}"></div>
       <div><label>Extend to (s)</label><input type="number" name="snipe_extend" min="1" max="300" value="{{ season.snipe_extend_seconds }}"></div>
       <div><label>Max extensions</label><input type="number" name="max_extensions" min="0" max="100" value="{{ season.max_extensions }}"></div>
       <div><label>Auction focus (lock the group)</label>
         <input type="hidden" name="focus_mode_sent" value="1">
         <input type="checkbox" name="focus_mode" {% if focus_mode_on %}checked{% endif %}></div>
+      <div><label>Direct bids (typed amounts)</label>
+        <input type="hidden" name="direct_bids_sent" value="1">
+        <input type="checkbox" name="direct_bids" {% if direct_bids_on %}checked{% endif %}></div>
       <div><button class="btn btn-primary" type="submit">Save settings</button></div>
     </form>
     <p class="au-note" style="margin-bottom:0;">
@@ -89,6 +93,13 @@
       <code>/claim</code>. Talking is never blocked, admins are never locked
       out, every other command still works in a DM, and setup is exempt. The
       group can flip it with <code>/afocus on|off</code>.
+    </p>
+    <p class="au-note" style="margin-bottom:0;">
+      <b>Direct bids.</b> On, a bidder may name their own number
+      (<code>/bid 12</code>). Off, every raise is one step: bare
+      <code>/bid</code> and the board's quick-bid buttons still work, and a
+      typed amount is refused with the number it would have been. The group
+      flips it with <code>/adirect on|off</code>.
     </p>
     <p class="au-note" style="margin-bottom:0;">
       <b>Anti-snipe.</b> A bid arriving with the <em>window</em> or less on the

@@ -3863,6 +3863,14 @@ class AuctionSeason(Base):
     # before the column existed reads as ON.
     focus_mode = Column(Integer, default=1, nullable=False)
 
+    # ── Direct bids ────────────────────────────────────────────────────
+    # ``/bid 12`` — naming your own number rather than taking the next
+    # minimum. ON by default, because that is what an auction is; a room that
+    # wants a strict ladder (every raise exactly one step, no jump bids) turns
+    # it off with ``/adirect off`` and bare ``/bid`` and the board's buttons
+    # still work. An integer for the NULL-reads-falsy reason above.
+    direct_bids = Column(Integer, default=1, nullable=False)
+
     # ── Publication ────────────────────────────────────────────────────
     league_id = Column(Integer, ForeignKey("challenge_leagues.id", ondelete="SET NULL"),
                        nullable=True, index=True)

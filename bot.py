@@ -465,6 +465,7 @@ ADMIN_MENU_COMMANDS = (
     ("atimer", "Admin: seconds allowed per auction lot"),
     ("asnipe", "Admin: anti-snipe window, extension and cap"),
     ("afocus", "Admin: lock this group to auction commands while it runs"),
+    ("adirect", "Admin: allow typed bid amounts, or the next step only"),
     ("agrant", "Admin: correct a franchise purse"),
     ("aco", "Admin: add a co-owner who may bid for a franchise"),
     ("apublish", "Admin: publish bought squads as a Challenge League"),
@@ -2247,7 +2248,7 @@ def main():
             aadmin_handler, anew_handler, abind_handler, astart_handler,
             apause_handler, anext_handler, aextend_handler, asold_handler,
             aunsold_handler, aundobid_handler, awithdraw_handler,
-            atimer_handler, asnipe_handler, afocus_handler,
+            atimer_handler, asnipe_handler, afocus_handler, adirect_handler,
             agrant_handler, aco_handler,
             apublish_handler, acancel_handler,
             aretain_handler, aunretain_handler, aretlock_handler,
@@ -2257,6 +2258,7 @@ def main():
             apick_handler, apicks_handler, apickset_handler,
             apickskip_handler, apickundo_handler,
             aretainforce_handler, retention_offer_callback, aoffers_handler,
+            close_callback,
             aretcancel_handler, ainfo_handler, info_callback, asets_handler,
             arules_handler, sets_callback,
             anextset_handler, anextplayer_handler, asquad_handler,
@@ -2285,6 +2287,9 @@ def main():
         app.add_handler(CommandHandler("asets", asets_handler))
         # The Sets card's own buttons: its pages, and one per set to open it.
         app.add_handler(CallbackQueryHandler(sets_callback, pattern=r"^au_sets_"))
+        # ❌ Close, on every card a command posts. Owner-tagged, so only the
+        # person who asked for the card can take it away.
+        app.add_handler(CallbackQueryHandler(close_callback, pattern=r"^au_x_"))
         app.add_handler(CommandHandler("anextset", anextset_handler))
         app.add_handler(CommandHandler(["anextplayer", "anextplayers"],
                                        anextplayer_handler))
@@ -2314,6 +2319,10 @@ def main():
         # services/auction_focus.py and _auction_focus_check above enforces
         # them; this command is only the switch.
         app.add_handler(CommandHandler(["afocus", "afocusmode"], afocus_handler))
+        # Direct bids: may a bidder name their own number, or only take the
+        # next step? On by default; off leaves bare /bid and the buttons.
+        app.add_handler(CommandHandler(["adirect", "adirectbids"],
+                                       adirect_handler))
         app.add_handler(CommandHandler("agrant", agrant_handler))
         app.add_handler(CommandHandler("aco", aco_handler))
         app.add_handler(CommandHandler("apublish", apublish_handler))

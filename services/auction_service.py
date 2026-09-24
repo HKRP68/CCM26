@@ -561,6 +561,8 @@ SEASON_RULE_FIELDS = (
     # A room that turned the lock off for one season meant it about the room,
     # not about that season.
     "focus_mode",
+    # Whether a bidder may name their own number, or only take the next step.
+    "direct_bids",
 )
 
 # What a franchise takes with it into the next season: who it is and who runs
@@ -1185,6 +1187,91 @@ def reconcile_purses(session, season, *, repair=False, by_tg_id=None):
                     note="Reconciliation: ledger brought up to the live purse",
                     by_tg_id=by_tg_id)
     return drift
+
+
+def set_opening_purse(session, season, purse_lakh, *, by_tg_id=None,
+                     apply_to_field=True, quiet=False):
+    """Change the season's opening purse — and every franchise's with it.
+
+    The opening purse used to be read once, by ``create_franchise``, and never
+    again: editing it on the setup page moved a number that only the *next*
+    franchise would ever see, so an admin who set the field up at ₹100 Cr and
+    then decided on ₹120 Cr had twelve purses to re-type by hand — and no sign
+    that anything had been missed until somebody was refused mid-lot.
+
+    So the field moves with it. Each franchise is brought to exactly the new
+    purse: its total is set, its remaining is moved by the same delta, and the
+    move is written as a ``correction`` ledger row, which is what keeps
+    ``SUM(ledger) == purse_remaining_lakh`` true and leaves the reason on the
+    record. Spending is untouched — a franchise that has bought ₹30 Cr of
+    players out of ₹100 Cr keeps its squad and lands on ₹90 Cr of a ₹120 Cr
+    purse, not on ₹120 Cr.
+
+    A cut that would overdraw somebody is refused **by name** rather than
+    clamped at zero: "₹40 Cr, but Mumbai has already spent ₹55 Cr" is a
+    decision for the admin (sell somebody, or pick another number), and a
+    silent clamp would leave one franchise on a different purse from the rest
+    with nothing saying so.
+
+    Saving the same number again does nothing at all, which is what protects a
+    franchise deliberately given a purse of its own: the field follows this
+    number when this number moves, not on every save of the page it lives on.
+
+    ``apply_to_field=False`` keeps the old behaviour — the default for new
+    franchises only — for a caller that wants it.
+    """
+    new_purse = _as_int(purse_lakh, None)
+    if new_purse is None or new_purse < 0:
+        raise AuctionError("A purse cannot be negative.")
+    old_purse = _as_int(season.opening_purse_lakh, 0)
+    season.opening_purse_lakh = new_purse
+    if not apply_to_field or new_purse == old_purse:
+        # Unchanged is not "apply it again": a franchise deliberately set to a
+        # different purse on its own row would otherwise be dragged back to the
+        # season's every time somebody saved the anti-snipe numbers. The field
+        # moves when the number moves, and only then.
+        return []
+
+    field = franchises(session, season.id)
+    symbol = season.currency_label or "₹"
+    # Everything is checked before anything is written: a half-applied purse
+    # change is the one outcome worse than a refused one.
+    for franchise in field:
+        delta = new_purse - _as_int(franchise.purse_total_lakh, 0)
+        if delta >= 0:
+            continue
+        after = _as_int(franchise.purse_remaining_lakh, 0) + delta
+        if after < 0:
+            spent = (_as_int(franchise.purse_total_lakh, 0)
+                     - _as_int(franchise.purse_remaining_lakh, 0))
+            raise AuctionError(
+                f"{franchise.name} has already spent "
+                f"{render_money(spent, symbol)}, so a "
+                f"{render_money(new_purse, symbol)} purse would put it "
+                f"{render_money(-after, symbol)} in the red. Sell somebody "
+                f"first, or set that franchise's own purse.")
+
+    changed = []
+    for franchise in field:
+        delta = new_purse - _as_int(franchise.purse_total_lakh, 0)
+        if delta == 0:
+            continue
+        franchise.purse_total_lakh = new_purse
+        franchise.purse_remaining_lakh = (
+            _as_int(franchise.purse_remaining_lakh, 0) + delta)
+        _ledger(session, franchise, LEDGER_CORRECTION, delta,
+                note=(f"Opening purse {render_money(old_purse, symbol)} → "
+                      f"{render_money(new_purse, symbol)}"),
+                by_tg_id=by_tg_id)
+        changed.append(franchise)
+
+    if changed and not quiet:
+        log_event(session, season, "opening_purse",
+                  f"💰 Every franchise now has a purse of "
+                  f"<b>{render_money(new_purse, symbol)}</b> — what has been "
+                  f"spent already stays spent.",
+                  by_tg_id=by_tg_id, by_admin=True)
+    return changed
 
 
 def correct_purse(session, season, franchise, amount_lakh, *, note=None,
@@ -2810,6 +2897,49 @@ def set_focus_mode(session, season, on, *, by_tg_id=None, quiet=False):
     return on
 
 
+def direct_bids_on(season):
+    """True when a bidder may name their own number (``/bid 12``).
+
+    OFF means the ladder and nothing else: bare ``/bid`` takes the next
+    minimum, the board's quick-bid buttons offer the same steps, and a typed
+    amount is refused. An integer column read the way ``focus_mode`` is, NULL
+    included, so an auction written before the switch existed keeps the
+    behaviour it has always had.
+    """
+    if season is None:
+        return True
+    raw = getattr(season, "direct_bids", 1)
+    if raw is None:
+        return True
+    try:
+        return bool(int(raw))
+    except (TypeError, ValueError):
+        return bool(raw)
+
+
+def set_direct_bids(session, season, on, *, by_tg_id=None, quiet=False):
+    """Turn typed bid amounts on or off, and tell the room which way it went.
+
+    Announced rather than silent, for focus mode's reason: it changes what
+    ``/bid 12`` does for everybody in the room, and a franchise that finds out
+    by being refused on a thirty-second clock has been told the hard way.
+    """
+    on = bool(on)
+    was = direct_bids_on(season)
+    season.direct_bids = 1 if on else 0
+    if not quiet and was != on:
+        log_event(session, season, "direct_bids",
+                  ("🔢 Direct bids are <b>on</b>: name your own number with "
+                   "<code>/bid 12</code>, or send bare <code>/bid</code> for "
+                   "the next minimum."
+                   if on else
+                   "🪜 Direct bids are <b>off</b>: every raise is one step. "
+                   "Send bare <code>/bid</code> — or tap the board — to bid "
+                   "the next minimum. A typed amount will be refused."),
+                  by_tg_id=by_tg_id, by_admin=True)
+    return on
+
+
 def set_timer(session, season, seconds):
     seconds = _as_int(seconds, 0)
     if seconds < 5 or seconds > 600:
@@ -2864,7 +2994,49 @@ def extend_timer(session, season, lot, seconds=None, *, now=None,
 # Bidding
 # ──────────────────────────────────────────────────────────────────────
 
-def validate_bid(session, season, lot, franchise, amount_lakh, *, now=None):
+def lot_bidder(session, lot_id, franchise_id):
+    """The Telegram id that claimed this franchise's bidding on this lot.
+
+    The first person from the franchise to bid on a lot holds it for that lot;
+    ``None`` while nobody has bid yet. Read off ``auction_bids`` rather than
+    stored on a column, which gives two properties for free: it resets by
+    itself when the next lot opens, and ``/aundobid`` — which voids a bid
+    rather than deleting it — releases the claim when the last of that
+    franchise's bids on the lot goes.
+    """
+    row = (session.query(AuctionBid.by_tg_id)
+           .filter(AuctionBid.lot_id == lot_id,
+                   AuctionBid.franchise_id == franchise_id,
+                   AuctionBid.is_void.is_(False),
+                   AuctionBid.by_tg_id.isnot(None))
+           .order_by(AuctionBid.id.asc()).first())
+    return int(row[0]) if row and row[0] is not None else None
+
+
+def person_name(session, tg_id):
+    """A name for a Telegram id, for a refusal that has to name somebody.
+
+    Falls back to the id itself: "222 is bidding for Mumbai" is still an
+    answer the other co-owner can act on, where "somebody" is not.
+    """
+    if tg_id is None:
+        return "somebody"
+    try:
+        from models import User
+        user = (session.query(User)
+                .filter(User.telegram_id == int(tg_id)).first())
+    except Exception:
+        logger.debug("bidder name lookup failed", exc_info=True)
+        user = None
+    if user is not None:
+        name = (user.first_name or "").strip() or (user.username or "").strip()
+        if name:
+            return name
+    return str(tg_id)
+
+
+def validate_bid(session, season, lot, franchise, amount_lakh, *, now=None,
+                 by_tg_id=None, by_admin=False):
     """Everything that can refuse a bid, checked in the order that reads best.
 
     Refusals name the number. An auction runs on a thirty-second clock and
@@ -2902,6 +3074,21 @@ def validate_bid(session, season, lot, franchise, amount_lakh, *, now=None):
         raise AuctionError(f"You already hold the top bid at "
                            f"{render_money(lot.current_bid_lakh, symbol)}. "
                            f"Bidding against yourself is not a tactic.")
+
+    # One pair of hands per franchise per lot. Two co-owners bidding the same
+    # player is not two tactics, it is one franchise racing itself up its own
+    # price — and the loser of that race is always the franchise. Whoever bids
+    # first holds this lot; the next lot is open to either of them again.
+    # ``by_admin`` is exempt: an admin bidding from the console is acting FOR
+    # the franchise, and the announcement says so.
+    if by_tg_id is not None and not by_admin:
+        holder = lot_bidder(session, lot.id, franchise.id)
+        if holder is not None and holder != int(by_tg_id):
+            raise AuctionError(
+                f"{person_name(session, holder)} is bidding for "
+                f"{franchise.name} on this lot — only one of you at a time, "
+                f"or you end up raising each other. The next lot is open to "
+                f"either of you.")
 
     minimum = next_min_bid(season, lot)
     if amount < minimum:
@@ -3055,7 +3242,8 @@ def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
     twice for one bid.
     """
     now = now or datetime.utcnow()
-    amount = validate_bid(session, season, lot, franchise, amount_lakh, now=now)
+    amount = validate_bid(session, season, lot, franchise, amount_lakh, now=now,
+                          by_tg_id=by_tg_id, by_admin=by_admin)
 
     # Re-derived here rather than returned from validate_bid: the claim below
     # has to know which status it is claiming against, and a validator that

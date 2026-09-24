@@ -1143,33 +1143,73 @@ class RoomViewTests(FeatureCase):
             self.assertTrue(out.replies, f"{handler.__name__} said nothing")
             self.assertIn(expected, out.replies[-1], handler.__name__)
 
-    def test_ainfo_carries_a_button_per_view(self):
+    def _info_buttons(self, user_id=ALICE):
+        """(the view keys on the /ainfo card, every callback datum on it)."""
         from handlers import auction as H
-        out = self.run_handler(H.ainfo_handler, ALICE)
+        from services.button_access import split_owner
+        out = self.run_handler(H.ainfo_handler, user_id)
         data = [b.callback_data for row in out.markups[-1].inline_keyboard
                 for b in row]
-        self.assertEqual({"au_info_rules", "au_info_sets", "au_info_nextset",
-                          "au_info_next", "au_info_squad", "au_info_sold",
-                          "au_info_unsold", "au_info_purse"}, set(data))
+        views = {split_owner("au_info_", d, separator="_")[1]
+                 for d in data if d.startswith("au_info_")}
+        return views, data
+
+    def test_ainfo_carries_a_button_per_view(self):
+        views, _data = self._info_buttons()
+        self.assertEqual({"rules", "sets", "nextset", "next", "squad", "sold",
+                          "unsold", "purse"}, views)
+
+    def test_the_card_belongs_to_whoever_asked_for_it(self):
+        """Every button names its owner, and the card can be closed."""
+        from services.button_access import (check_callback_owner, split_owner)
+        _views, data = self._info_buttons()
+        for datum in data:
+            if not datum.startswith("au_info_"):
+                continue
+            self.assertEqual(ALICE, split_owner("au_info_", datum,
+                                                separator="_")[0], datum)
+        self.assertIn(f"au_x_u{ALICE}", data, "no ❌ Close on the card")
+
+        # …and the guard agrees: Bob may not drive Alice's card.
+        def press(datum, by):
+            return check_callback_owner(SimpleNamespace(
+                callback_query=SimpleNamespace(
+                    data=datum, from_user=SimpleNamespace(id=by),
+                    message=SimpleNamespace(chat_id=-1, message_id=1))))
+        self.assertTrue(press(f"au_info_u{ALICE}_sets", ALICE))
+        self.assertFalse(press(f"au_info_u{ALICE}_sets", BOB))
+        self.assertFalse(press(f"au_x_u{ALICE}", BOB))
+        # The pinned board stays the room's.
+        self.assertTrue(press("au_bid_4_200", BOB))
+
+    def test_every_view_card_carries_a_close_button(self):
+        from handlers import auction as H
+        for handler, args in ((H.arules_handler, ()), (H.asets_handler, ()),
+                              (H.anextplayer_handler, ()),
+                              (H.asquad_handler, ()), (H.apurse_handler, ()),
+                              (H.asoldlist_handler, ()),
+                              (H.aunsoldlist_handler, ()),
+                              (H.aboard_handler, ())):
+            out = self.run_handler(handler, ALICE, args)
+            markup = out.markups[-1]
+            self.assertIsNotNone(markup, f"{handler.__name__} sent no keyboard")
+            data = [b.callback_data for row in markup.inline_keyboard
+                    for b in row]
+            self.assertIn(f"au_x_u{ALICE}", data, handler.__name__)
 
     def test_ainfo_only_offers_the_views_this_auction_has(self):
         """🔒 Retention and 🆕 Picks are buttons whose only answer would be
         "not a thing here" when the auction is configured for neither."""
-        from handlers import auction as H
-        out = self.run_handler(H.ainfo_handler, ALICE)
-        data = {b.callback_data for row in out.markups[-1].inline_keyboard
-                for b in row}
-        self.assertNotIn("au_info_retention", data)
-        self.assertNotIn("au_info_picks", data)
+        views, _data = self._info_buttons()
+        self.assertNotIn("retention", views)
+        self.assertNotIn("picks", views)
 
         self.season.max_retentions = 2
         self.season.expansion_picks = 3
         self.session.commit()
-        out = self.run_handler(H.ainfo_handler, ALICE)
-        data = {b.callback_data for row in out.markups[-1].inline_keyboard
-                for b in row}
-        self.assertIn("au_info_retention", data)
-        self.assertIn("au_info_picks", data)
+        views, _data = self._info_buttons()
+        self.assertIn("retention", views)
+        self.assertIn("picks", views)
 
     def test_my_squad_needs_a_franchise_or_a_name(self):
         from handlers import auction as H
@@ -1904,6 +1944,210 @@ class FocusModeTests(FeatureCase):
         self.session.commit()
         self.assertFalse(self.A.focus_mode_on(clone),
                          "a room that turned the lock off meant the room")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The purse, the bid ladder, and one pair of hands per franchise
+# ══════════════════════════════════════════════════════════════════════
+
+class OpeningPurseTests(FeatureCase):
+    """Changing the season's purse moves the whole field with it."""
+
+    def test_it_carries_every_franchise(self):
+        self.A.set_opening_purse(self.session, self.season, 12_000)
+        self.session.commit()
+        for franchise in self.A.franchises(self.session, self.season.id):
+            self.assertEqual(12_000, franchise.purse_total_lakh)
+            self.assertEqual(12_000, franchise.purse_remaining_lakh)
+        self.assert_ledger_agrees("after an opening-purse change")
+
+    def test_what_was_spent_stays_spent(self):
+        self.build_sets()
+        self.start()
+        lot = self.A.current_lot(self.session, self.season)
+        self.buy(self.mumbai, lot, price=2_000)
+        self.A.set_opening_purse(self.session, self.season, 12_000)
+        self.session.commit()
+        self.session.refresh(self.mumbai)
+        self.assertEqual(12_000, self.mumbai.purse_total_lakh)
+        self.assertEqual(10_000, self.mumbai.purse_remaining_lakh,
+                         "the ₹20 Cr already spent came out of the new purse")
+        self.assert_ledger_agrees("after a purse change mid-auction")
+
+    def test_a_cut_that_would_overdraw_is_refused_by_name(self):
+        self.build_sets()
+        self.start()
+        self.buy(self.mumbai, price=2_000)
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.A.set_opening_purse(self.session, self.season, 1_000)
+        self.assertIn("Mumbai", str(caught.exception))
+        self.session.rollback()
+        self.session.refresh(self.chennai)
+        self.assertEqual(self.purse_lakh, self.chennai.purse_total_lakh,
+                         "a refused change must leave the field untouched")
+
+    def test_the_move_is_on_the_record(self):
+        self.A.set_opening_purse(self.session, self.season, 12_000)
+        self.session.commit()
+        kinds = [row.kind for row in
+                 self.A.ledger(self.session, self.mumbai.id)]
+        self.assertIn(self.A.LEDGER_CORRECTION, kinds)
+
+    def test_saving_the_same_number_leaves_a_custom_purse_alone(self):
+        """Otherwise every save of the anti-snipe numbers resets the field."""
+        kochi = self.A.create_franchise(self.session, self.season, "Kochi",
+                                        owner_tg_id=ERIN, quiet=True,
+                                        purse_total_lakh=8_000)
+        self.session.commit()
+        self.assertEqual([], self.A.set_opening_purse(
+            self.session, self.season, self.purse_lakh))
+        self.session.refresh(kochi)
+        self.assertEqual(8_000, kochi.purse_total_lakh)
+        self.assert_ledger_agrees("after a no-op purse save")
+
+        # …but when the number really moves, it moves with everybody else.
+        self.A.set_opening_purse(self.session, self.season, 12_000)
+        self.session.commit()
+        self.session.refresh(kochi)
+        self.assertEqual(12_000, kochi.purse_total_lakh)
+        self.assert_ledger_agrees("after the purse moved")
+
+    def test_a_new_franchise_still_opens_at_the_season_purse(self):
+        self.A.set_opening_purse(self.session, self.season, 12_000)
+        late = self.A.create_franchise(self.session, self.season, "Kolkata",
+                                       owner_tg_id=ERIN, quiet=True)
+        self.session.commit()
+        self.assertEqual(12_000, late.purse_total_lakh)
+
+
+class DirectBidTests(FeatureCase):
+    """/adirect off leaves the ladder: bare /bid and the buttons."""
+
+    def setUp(self):
+        super().setUp()
+        self.build_sets()
+        # Real time, not the suite's frozen NOW: these drive the /bid HANDLER,
+        # which reads the clock itself.
+        self.start(now=datetime.utcnow())
+        self.lot = self.A.current_lot(self.session, self.season)
+
+    def test_it_is_on_by_default(self):
+        self.assertTrue(self.A.direct_bids_on(self.season))
+
+    def test_a_typed_amount_is_refused_when_it_is_off(self):
+        from handlers import auction as H
+        with AdminEnv(CAROL):
+            self.A.set_direct_bids(self.session, self.season, False)
+            self.session.commit()
+        out = self.run_handler(H.bid_handler, ALICE, ("5",))
+        self.assertIn("Direct bids are off", out.replies[-1])
+        self.session.expire_all()
+        self.assertIsNone(self.A.current_lot(self.session, self.season)
+                          .current_bid_lakh, "the bid must not have landed")
+
+    def test_bare_bid_still_works_when_it_is_off(self):
+        from handlers import auction as H
+        self.A.set_direct_bids(self.session, self.season, False)
+        self.session.commit()
+        out = self.run_handler(H.bid_handler, ALICE)
+        self.session.expire_all()
+        lot = self.A.current_lot(self.session, self.season)
+        self.assertEqual(lot.base_price_lakh, lot.current_bid_lakh,
+                         f"bare /bid was refused: {out.replies}")
+
+    def test_adirect_reads_back_and_flips(self):
+        from handlers import auction as H
+        with AdminEnv(ALICE):
+            out = self.run_handler(H.adirect_handler, ALICE)
+            self.assertIn("on", out.replies[-1])
+            self.run_handler(H.adirect_handler, ALICE, ("off",))
+        self.session.expire_all()
+        self.assertFalse(self.A.direct_bids_on(self.season))
+        said = [e.headline for e in
+                self.A.recent_events(self.session, self.season.id, limit=5)]
+        self.assertTrue(any("Direct bids" in line for line in said), said)
+
+    def test_it_is_an_admin_switch(self):
+        from handlers import auction as H
+        with AdminEnv(CAROL):
+            out = self.run_handler(H.adirect_handler, ALICE, ("off",))
+        self.assertIn("auction admins", out.replies[-1].lower())
+        self.assertTrue(self.A.direct_bids_on(self.season))
+
+    def test_the_next_season_inherits_it(self):
+        self.A.set_direct_bids(self.session, self.season, False)
+        clone = self.A.clone_season(self.session, self.season,
+                                    f"Ladder {self.tag}")
+        self.session.commit()
+        self.assertFalse(self.A.direct_bids_on(clone))
+
+
+class OneBidderPerFranchiseTests(FeatureCase):
+    """Two co-owners bidding one lot is a franchise racing itself."""
+
+    def setUp(self):
+        super().setUp()
+        self.A.add_co_owner(self.session, self.mumbai, CAROL)
+        self.build_sets()
+        self.start()
+        self.lot = self.A.current_lot(self.session, self.season)
+        self.session.commit()
+
+    def _bid(self, tg_id, amount=None):
+        lot = self.A.current_lot(self.session, self.season)
+        return self.A.place_bid(
+            self.session, self.season, lot, self.mumbai,
+            amount or self.A.next_min_bid(self.season, lot), now=NOW,
+            by_tg_id=tg_id)
+
+    def test_the_first_bidder_holds_the_lot(self):
+        self._bid(ALICE)
+        # Chennai raises, so Mumbai may legally bid again — but only Alice.
+        self.A.place_bid(self.session, self.season, self.lot, self.chennai,
+                         self.A.next_min_bid(self.season, self.lot), now=NOW,
+                         by_tg_id=BOB)
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self._bid(CAROL)
+        self.assertIn("only one of you", str(caught.exception))
+        self._bid(ALICE)          # the holder carries on untouched
+
+    def test_the_claim_is_per_lot(self):
+        self._bid(ALICE)
+        self.A.sell_lot(self.session, self.season,
+                        self.A.current_lot(self.session, self.season), now=NOW)
+        self.A.open_next_lot(self.session, self.season, now=NOW)
+        self.session.commit()
+        self._bid(CAROL)          # a new lot is open to either of them
+
+    def test_an_undone_bid_releases_the_claim(self):
+        self._bid(ALICE)
+        self.A.undo_last_bid(self.session, self.season,
+                             self.A.current_lot(self.session, self.season),
+                             now=NOW)
+        self.session.commit()
+        self._bid(CAROL)
+
+    def test_an_admin_may_still_bid_for_the_franchise(self):
+        self._bid(ALICE)
+        self.A.place_bid(self.session, self.season, self.lot, self.chennai,
+                         self.A.next_min_bid(self.season, self.lot), now=NOW,
+                         by_tg_id=BOB)
+        lot = self.A.current_lot(self.session, self.season)
+        self.A.place_bid(self.session, self.season, lot, self.mumbai,
+                         self.A.next_min_bid(self.season, lot), now=NOW,
+                         by_tg_id=DAVE, by_admin=True)
+
+    def test_the_refusal_names_the_holder(self):
+        from models import User
+        self.session.add(User(telegram_id=ALICE, first_name="Alice"))
+        self.session.flush()
+        self._bid(ALICE)
+        self.A.place_bid(self.session, self.season, self.lot, self.chennai,
+                         self.A.next_min_bid(self.season, self.lot), now=NOW,
+                         by_tg_id=BOB)
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self._bid(CAROL)
+        self.assertIn("Alice", str(caught.exception))
 
 
 if __name__ == "__main__":

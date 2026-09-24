@@ -160,7 +160,8 @@ of them answers **in a DM** — see [Before it starts](#before-it-starts).
 
 Admin: `/adminhelp` (the reference card, also `/auction`), `/anew`, `/abind`, `/astart`,
 `/apause`, `/aresume`, `/anext`, `/aextend`, `/asold`, `/aunsold`,
-`/aundobid`, `/awithdraw`, `/atimer`, `/asnipe`, `/afocus`, `/agrant`, `/aco`,
+`/aundobid`, `/awithdraw`, `/atimer`, `/asnipe`, `/afocus`, `/adirect`,
+`/agrant`, `/aco`,
 `/apublish`, `/acancel`, plus retention's `/aretlock on`, `/aretain`,
 `/aunretain`, RTM's `/artmset`, `/artmcards`, `/artmforce`, `/artmundo`, the
 accelerated round's `/aaccel`, `/aclone` for the next season, and the
@@ -818,6 +819,93 @@ because a broken gate must never cost a group its commands. `locked_season_for_c
 **fails open** for the same reason — the state the group was in before this
 existed.
 
+## Four rules the room meets at the bid
+
+### The opening purse is the field's, not the next franchise's
+
+`opening_purse_lakh` used to be read once, by `create_franchise`, and never
+again: editing it on the setup page moved a number only the *next* franchise
+would ever see. An admin who built a twelve-side field at ₹100 Cr and then
+decided on ₹120 Cr had twelve purses to re-type by hand — and nothing said so
+until somebody was refused mid-lot.
+
+`set_opening_purse` carries the field with it. Each franchise is brought to
+**exactly** the new purse: its total is set, its remaining moves by the same
+delta, and the move is written as a `correction` ledger row — which is what
+keeps `SUM(ledger) == purse_remaining_lakh` true and leaves the reason on the
+record. **Spending is untouched**: a side that has bought ₹30 Cr of players out
+of ₹100 Cr lands on ₹90 Cr of a ₹120 Cr purse, not on ₹120 Cr.
+
+Saving the **same** number again does nothing at all, and that is what protects
+a franchise deliberately given a purse of its own on its row: the field follows
+this number when this number *moves*, not every time somebody saves the
+anti-snipe values on the same page.
+
+A cut that would overdraw somebody is refused **by name**, before anything is
+written — "₹40 Cr, but Mumbai has already spent ₹55 Cr" is a decision for the
+admin (sell somebody, or pick another number), and a silent clamp to zero would
+leave one franchise on a different purse from the rest with nothing saying so.
+A half-applied purse change is the one outcome worse than a refused one, so
+every franchise is checked before any is moved.
+
+### Direct bids, or the ladder only
+
+`/adirect off` (or the ⚙️ Settings checkbox) refuses a **typed** amount:
+
+```text
+/bid 12   → 🪜 Direct bids are off in this auction — every raise is one step.
+             Send /bid on its own (or tap the board) to bid ₹2.4 Cr.
+```
+
+Bare `/bid`, the board's quick-bid buttons and an admin's console bid all keep
+working, so the room can still bid — one step at a time. The refusal names the
+number the bid *would* have been, because on a thirty-second clock a refusal
+that only says no costs somebody the lot. `direct_bids` is ON by default and is
+carried into a cloned season; `/arules` says so in the increments section, and
+only when it is off.
+
+Why a switch rather than a rule: a jump bid is half of what an auction is, and
+a ladder-only room is the other half. Neither is wrong, and the room that has
+to live with it is the one that should choose.
+
+### One pair of hands per franchise per lot
+
+Two co-owners bidding the same player is not two tactics — it is one franchise
+racing itself up its own price, and the loser of that race is always the
+franchise. So **the first person from a franchise to bid on a lot holds it**:
+another owner or co-owner of the same side is refused, by the holder's name,
+until the next lot.
+
+The claim is read off `auction_bids` rather than stored on a column, which
+gives two properties for free: it **resets by itself** when the next lot opens,
+and `/aundobid` — which voids a bid rather than deleting it — releases the claim
+when the last of that franchise's bids on the lot goes. An admin's console bid
+is exempt: it is the admin acting *for* the franchise, and the room is told it
+was an admin's.
+
+### Every card belongs to whoever asked for it
+
+Two kinds of message carry buttons in an auction group, and they are not the
+same kind of thing:
+
+* **The pinned board** is the room's. Its quick-bid and RTM buttons stay
+  shared — a board only one person may press is not an auction — and each press
+  is authorised against the franchise the presser actually owns, with the exact
+  price baked into the callback data. It has **no** ❌ Close: a board any passer
+  by could delete is a board the auction loses mid-lot.
+* **A command's reply** is one person's. `/ainfo`'s menu and the 🗂 Sets card
+  are now owner-locked (`OWNER_RULES` in `services/button_access.py`, so the id
+  rides in the callback data and survives a restart — mid-auction is exactly
+  when a restart happens), and **every** card a command posts carries a
+  ❌ Close button that only its owner can press.
+
+Close is attached in one place — `handlers.auction._view`, the funnel every
+read-only view already goes through — so a view added later cannot quietly ship
+with no way out. It deletes the message, and falls back to editing the card down
+to one line where Telegram refuses a delete (older than 48 hours, or a group
+whose permissions forbid it), because a button that looks dead is worse than a
+card that stays.
+
 ## Removing a franchise
 
 `/aremoveteam Delhi` previews; `/aremoveteam Delhi | confirm` (or the setup
@@ -1473,6 +1561,7 @@ Two things were on their way to a third copy each, and both fail silently.
 | `services/auction_scheduler.py` | The two-second sweeper, the pinned board (fresh per lot), the lot card, the bid-line coalescing, the hardened edit, and the event drain |
 | `services/auction_rich.py` | Every auction surface as a Bot API 10.1 rich message beside its HTML twin — board, squad, purses, sets, sold/unsold, `/ainfo`, `/adminhelp` — plus the richer announcements and the shared keyboards |
 | `services/player_query.py` | The one master-player filter, and the one `details_json` |
+| `services/button_access.py` | Which auction buttons belong to one person and which to the room: the `au_info_`/`au_sets_`/`au_x_` owner rules, and the `au_bid_`/`au_rtm_`/`au_ret_` prefixes the pinned board keeps shared |
 | `services/auction_focus.py` | Focus mode: which commands and buttons a locked group still answers, the cached "is this chat locked?" lookup, and the two refusals. Pure apart from that one lookup |
 | `handlers/auction.py` | `/bid`, `/artm` and every other command, plus the `au_bid_` and `au_rtm_` buttons |
 | `models.py` | The six tables |

@@ -266,6 +266,18 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         raw = _arg_text(context)
+        if raw and not A.direct_bids_on(season):
+            # The ladder-only mode an admin turns on with /adirect off. Bare
+            # /bid and the board's buttons still work, so the refusal names
+            # the number this bid would have been rather than just saying no.
+            minimum = A.render_money(A.next_min_bid(season, lot),
+                                     season.currency_label or "₹")
+            await _reply(update,
+                         f"🪜 <b>Direct bids are off</b> in this auction — "
+                         f"every raise is one step.\nSend <code>/bid</code> "
+                         f"on its own (or tap the board) to bid "
+                         f"<b>{html.escape(minimum)}</b>.")
+            return
         # A bare /bid means "the next minimum" — the commonest action in the
         # room, and the one form that cannot be fat-fingered into a number
         # nobody meant with ten seconds on the clock.
@@ -500,10 +512,12 @@ async def aboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # else is one that can only ever answer "not here".
         chat = update.effective_chat
         in_room = chat is not None and season.chat_id == chat.id
+        user = update.effective_user
         await _reply_rich(update, context, AR.board_blocks(session, season, lot),
                           AR.board_html(session, season, lot),
-                          reply_markup=bid_keyboard(season, lot)
-                          if in_room else None)
+                          reply_markup=AR.with_close(
+                              bid_keyboard(season, lot) if in_room else None,
+                              user.id if user else None))
     except AuctionError as exc:
         await _reply(update, f"⚠️ {html.escape(str(exc))}")
     finally:
@@ -511,23 +525,16 @@ async def aboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def apurse_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    session = get_session()
-    try:
-        season = _read_season(session, update)
-        if season is None:
-            await _reply(update, _no_auction(update))
-            return
-        name = _arg_text(context)
+    """<code>/apurse [franchise]</code> — every purse, or one franchise's squad."""
+    name = _arg_text(context)
+
+    def build(session, season):
         if name:
-            franchise = _find_franchise(session, season, name)
-            await _reply_rich(update, context,
-                              *AR.squad_view(session, season, franchise))
-            return
-        await _reply_rich(update, context, *AR.purses_view(session, season))
-    except AuctionError as exc:
-        await _reply(update, f"⚠️ {html.escape(str(exc))}")
-    finally:
-        session.close()
+            return AR.squad_view(session, season,
+                                 _find_franchise(session, season, name))
+        return AR.purses_view(session, season)
+
+    await _view(update, context, build)
 
 
 def _find_franchise(session, season, name):
@@ -562,7 +569,9 @@ async def aadmin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     user = update.effective_user
     blocks, html_text = AR.admin_help(bot_admin=bool(user and is_admin(user.id)))
-    await _reply_rich(update, context, blocks, html_text)
+    await _reply_rich(update, context, blocks, html_text,
+                      reply_markup=AR.with_close(
+                          None, user.id if user else None))
 
 
 async def anew_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -785,6 +794,44 @@ async def afocus_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         A.set_focus_mode(session, season, want,
                          by_tg_id=(update.effective_user.id
                                    if update.effective_user else None))
+        return None      # the sweeper announces it, within a tick
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def adirect_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/adirect on|off</code> — may a bidder name their own number?
+
+    Bare <code>/adirect</code> reads it back, the way bare <code>/atimer</code>
+    does. Off leaves bare <code>/bid</code> and the board's quick-bid buttons
+    working: the room can still bid, one step at a time.
+    """
+    raw = _arg_text(context).strip().lower()
+
+    def work(session, season):
+        on = A.direct_bids_on(season)
+        if not raw:
+            state = "🔢 <b>on</b>" if on else "🪜 <b>off</b>"
+            says = ("A bidder may name their own number — <code>/bid 12</code> "
+                    "— or send bare <code>/bid</code> for the next minimum."
+                    if on else
+                    "Every raise is one step: bare <code>/bid</code> and the "
+                    "board's buttons only. A typed amount is refused.")
+            return (f"🎚 Direct bids are {state}.\n{says}\n"
+                    f"Change it with <code>/adirect on</code> or "
+                    f"<code>/adirect off</code>.")
+        if raw in ("on", "yes", "1", "free"):
+            want = True
+        elif raw in ("off", "no", "0", "ladder", "step"):
+            want = False
+        else:
+            raise AuctionError("Usage: /adirect on  |  /adirect off")
+        if want == on:
+            return (f"🎚 Direct bids are already "
+                    f"<b>{'on' if on else 'off'}</b>.")
+        A.set_direct_bids(session, season, want,
+                          by_tg_id=(update.effective_user.id
+                                    if update.effective_user else None))
         return None      # the sweeper announces it, within a tick
 
     await _with_auction(update, work, admin=True, context=context)
@@ -1486,8 +1533,17 @@ async def acancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ════════════════════════════════════════════════════════════════════
 
 async def _view(update, context, build):
-    """Run a read-only view against this chat's auction and send it."""
+    """Run a read-only view against this chat's auction and send it.
+
+    Every card this posts carries a ❌ Close button belonging to whoever asked
+    for it. A read in a live auction group is a message on top of the board the
+    room is trying to read, so the person who put it there is the one who
+    should be able to take it away — and one funnel means no view can be added
+    later that quietly has no way out.
+    """
     session = get_session()
+    user = update.effective_user
+    owner_id = getattr(user, "id", None)
     try:
         season = _read_season(session, update)
         if season is None:
@@ -1499,7 +1555,8 @@ async def _view(update, context, build):
             return
         blocks, html_text, *markup = result
         await _reply_rich(update, context, blocks, html_text,
-                          reply_markup=markup[0] if markup else None)
+                          reply_markup=AR.with_close(
+                              markup[0] if markup else None, owner_id))
     except AuctionError as exc:
         await _reply(update, f"⚠️ {html.escape(str(exc))}")
     except Exception:
@@ -1529,7 +1586,8 @@ async def ainfo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         franchise = (A.franchise_for_actor(session, season.id, user.id)
                      if user else None)
         blocks, html_text = AR.info_menu(session, season, franchise)
-        return blocks, html_text, AR.info_keyboard(season)
+        return blocks, html_text, AR.info_keyboard(
+            season, owner_id=user.id if user else None)
 
     await _view(update, context, build)
 
@@ -1553,8 +1611,11 @@ async def asets_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     shows the whole thing. <code>/asets 2</code> starts on the second page.
     """
     page = A._as_int(_arg_text(context), 1) or 1
+    user = update.effective_user
     await _view(update, context,
-                lambda s, season: AR.sets_view(s, season, page=page))
+                lambda s, season: AR.sets_view(
+                    s, season, page=page,
+                    owner_id=user.id if user else None))
 
 
 async def anextset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1612,9 +1673,14 @@ async def info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query is None:
         return
-    key = (query.data or "")[len(INFO_CB):]
+    from services.button_access import split_owner
+    owner_id, key = split_owner(INFO_CB, query.data or "", separator="_")
+    if owner_id is None:
+        # A card posted before the buttons carried their owner. The registry
+        # still guards it for as long as this process remembers the message.
+        key = (query.data or "")[len(INFO_CB):]
     views = {
-        "sets": lambda s, season: AR.sets_view(s, season),
+        "sets": lambda s, season: AR.sets_view(s, season, owner_id=owner_id),
         "nextset": lambda s, season: AR.next_set_view(s, season),
         "next": lambda s, season: AR.next_players_view(s, season),
         "squad": lambda s, season: AR.squad_view(
@@ -1642,7 +1708,8 @@ async def info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         blocks, html_text, *markup = build(session, season)
         await query.answer()
         await AR.send(context.bot, update.effective_chat.id, blocks, html_text,
-                      reply_markup=markup[0] if markup else None)
+                      reply_markup=AR.with_close(
+                          markup[0] if markup else None, owner_id))
     except AuctionError as exc:
         await query.answer(str(exc)[:190], show_alert=True)
     except Exception:
@@ -1651,6 +1718,34 @@ async def info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                            show_alert=True)
     finally:
         session.close()
+
+
+async def close_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """❌ Close — take this card out of the room again.
+
+    Deletes the message. A card an admin has deleted for everybody is the same
+    outcome as one nobody posted, and in a group mid-lot that is worth more
+    than the card was. Telegram refuses a delete after 48 hours and in some
+    group setups, so the fallback edits the card down to one line rather than
+    leaving a button that looks broken.
+    """
+    query = update.callback_query
+    if query is None:
+        return
+    await query.answer()
+    message = query.message
+    if message is None:
+        return
+    try:
+        await message.delete()
+        return
+    except Exception:
+        logger.debug("auction card delete refused; editing instead",
+                     exc_info=True)
+    try:
+        await message.edit_text("❌ <i>Closed.</i>", parse_mode="HTML")
+    except Exception:
+        logger.debug("auction card close edit failed", exc_info=True)
 
 
 async def sets_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1664,7 +1759,10 @@ async def sets_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query is None:
         return
-    raw = (query.data or "")[len(AR.SETS_CB):]
+    from services.button_access import split_owner
+    owner_id, raw = split_owner(AR.SETS_CB, query.data or "", separator="_")
+    if owner_id is None:
+        raw = (query.data or "")[len(AR.SETS_CB):]
     if raw == "noop":
         await query.answer()
         return
@@ -1689,7 +1787,7 @@ async def sets_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("No auction is running here.", show_alert=True)
             return
         result = AR.sets_view(session, season, page=page, expand=expand,
-                              lot_page=lot_page)
+                              lot_page=lot_page, owner_id=owner_id)
         if result is None:
             # The set finished and the numbers moved under the open card. Saying
             # so beats opening whichever set now holds that number.

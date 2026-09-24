@@ -1003,6 +1003,12 @@ def _migrate_add_columns():
     # has run one asked for. ``/afocus off`` is how a room opts out.
     _try_add("auction_seasons", "focus_mode", "INTEGER DEFAULT 1")
 
+    # ── Franchise Auction: direct bids ──
+    # Whether ``/bid 12`` (naming your own number) is allowed, or only the next
+    # minimum and the board's buttons. Defaulted to 1 for the reason above: an
+    # auction that has always allowed jump bids must keep allowing them.
+    _try_add("auction_seasons", "direct_bids", "INTEGER DEFAULT 1")
+
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so
     # they stay independently fault-tolerant without a round trip each.
@@ -1062,6 +1068,7 @@ def _migrate_add_columns():
         # the column did. ``auction_focus.focus_mode_on`` tolerates NULL as ON
         # for the same reason; this makes the data say it too.
         "UPDATE auction_seasons SET focus_mode = 1 WHERE focus_mode IS NULL",
+        "UPDATE auction_seasons SET direct_bids = 1 WHERE direct_bids IS NULL",
     ]
     # ─────────────────────────────────────────────────────────────
     # The summary card was redrawn as the light poster, and the saved

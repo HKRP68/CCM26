@@ -22609,6 +22609,7 @@ def admin_auction_detail(season_id):
             # Read through the service rather than off the column: it is an
             # integer, and NULL on a season older than the column means ON.
             focus_mode_on=auction_svc.focus_mode_on(season),
+            direct_bids_on=auction_svc.direct_bids_on(season),
         )
     finally:
         db.close()
@@ -22620,8 +22621,12 @@ def _auction_detail_action(db, season, action):
         season.name = (request.form.get("name") or season.name).strip()[:120]
         season.chat_id = _tg_chat_form("chat_id", season.chat_id)
         season.bid_seconds = _int_form("bid_seconds", season.bid_seconds)
-        season.opening_purse_lakh = _money_form("opening_purse",
-                                                season.opening_purse_lakh)
+        # The opening purse is not just the default for the NEXT franchise: it
+        # is what this field runs on, so changing it carries every franchise
+        # with it (spending untouched, each move written as a ledger
+        # correction). See auction_service.set_opening_purse.
+        purse_changed = auction_svc.set_opening_purse(
+            db, season, _money_form("opening_purse", season.opening_purse_lakh))
         # The squad caps and the home country live in Squad rules now, where
         # the role min/max they interact with are. They are still read here
         # when a form sends them, because ``_int_form`` falls back to the
@@ -22644,8 +22649,17 @@ def _auction_detail_action(db, season, action):
         if request.form.get("focus_mode_sent"):
             auction_svc.set_focus_mode(db, season, _checked("focus_mode", False),
                                        quiet=True)
+        # Same marker trick, same reason.
+        if request.form.get("direct_bids_sent"):
+            auction_svc.set_direct_bids(db, season,
+                                        _checked("direct_bids", False))
         log_admin(db, "auction_settings", "auction", season.id, season.name)
-        flash("✅ Settings saved.", "success")
+        if purse_changed:
+            flash(f"✅ Settings saved. {len(purse_changed)} franchise"
+                  f"{'' if len(purse_changed) == 1 else 's'} moved to the new "
+                  f"purse — what was already spent stays spent.", "success")
+        else:
+            flash("✅ Settings saved.", "success")
 
     elif action == "squad_rules":
         # Both ends of the role rule in one save, because they constrain each

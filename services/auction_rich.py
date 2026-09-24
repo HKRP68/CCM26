@@ -67,6 +67,47 @@ def _lot(session, lot_id):
 BID_CB = "au_bid_"
 RTM_CB = "au_rtm_"
 INFO_CB = "au_info_"
+# ❌ Close. Every card a command posts carries one, because a read in a live
+# auction group is a message on top of the board the room is trying to read —
+# and the person who asked for it is the one who should be able to take it
+# away again. Owner-tagged like the card's own buttons, so a stranger cannot
+# close somebody else's card, and so the tag survives a restart.
+CLOSE_CB = "au_x_"
+
+
+def _tagged(prefix, owner_id):
+    """``prefix`` with the owner written into it, and the separator to follow.
+
+    Returns ``(data prefix, separator)``. Untagged when there is no owner, so
+    a card posted before this shipped — or one where the user is unknown —
+    still parses through exactly the same ``split_owner`` call.
+    """
+    from services.button_access import tag_owner
+    tagged = tag_owner(prefix, owner_id)
+    return tagged, ("_" if tagged != prefix else "")
+
+
+def close_button(owner_id=None):
+    """The ❌ Close button, owned by whoever asked for the card."""
+    from telegram import InlineKeyboardButton
+    from services.button_access import tag_owner
+    return InlineKeyboardButton("❌ Close",
+                                callback_data=tag_owner(CLOSE_CB, owner_id))
+
+
+def with_close(markup, owner_id=None):
+    """``markup`` plus a ❌ Close row — or a keyboard that is only that.
+
+    Takes and returns a keyboard rather than being baked into each builder, so
+    the views keep handing back what they are about and one caller decides
+    whether this copy is somebody's to close. The pinned board is the
+    deliberate exception: it belongs to the room, and a board any passer-by
+    could delete is a board the auction loses mid-lot.
+    """
+    from telegram import InlineKeyboardMarkup
+    rows = [list(row) for row in getattr(markup, "inline_keyboard", []) or []]
+    rows.append([close_button(owner_id)])
+    return InlineKeyboardMarkup(rows)
 
 # The /ainfo menu. ``when`` decides whether a button is worth a slot: None is
 # always, and the rest are asked of the season, because a menu offering
@@ -126,17 +167,25 @@ def bid_keyboard(season, lot):
     return InlineKeyboardMarkup([row])
 
 
-def info_keyboard(season=None):
+def info_keyboard(season=None, owner_id=None):
     """The /ainfo menu: every read-only view this auction has, one press each.
 
     ``season`` is optional so an older caller still gets the whole menu; passed,
     it drops the views this auction does not use.
+
+    ``owner_id`` writes the asker into the callback data, which makes the card
+    theirs: /ainfo is free and everything behind it is public, so a second pair
+    of hands driving somebody's menu is pure noise in the one chat that has to
+    stay readable — the same call the Tournament Draft's board already made.
     """
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    buttons = [InlineKeyboardButton(label, callback_data=f"{INFO_CB}{key}")
+    prefix, sep = _tagged(INFO_CB, owner_id)
+    buttons = [InlineKeyboardButton(label,
+                                    callback_data=f"{prefix}{sep}{key}")
                for key, label, when in INFO_VIEWS
                if when is None or season is None or when(season)]
     rows = [buttons[i:i + 3] for i in range(0, len(buttons), 3)]
+    rows.append([close_button(owner_id)])
     return InlineKeyboardMarkup(rows)
 
 
@@ -545,15 +594,25 @@ def rules_view(session, season):
         step = "+" + A.render_money(row["step_lakh"], symbol)
         rows.append([R.cell(where), R.cell(step, align="right")])
         step_lines.append(f"{where} → <b>{step}</b>")
+    ladder_note = ("A bare /bid bids the next minimum — the number the bot "
+                   "just printed.")
+    if not A.direct_bids_on(season):
+        ladder_note += (" Direct bids are OFF in this auction: every raise is "
+                        "one step, so a typed amount is refused. Send /bid on "
+                        "its own, or tap the board.")
+    # One rule the room meets only by being refused by it, so it is printed
+    # with the ladder it belongs to rather than left to the refusal.
+    hands = ("🙋 One pair of hands per franchise per lot: whoever bids first "
+             "for a side holds that lot, and the next lot is open to either "
+             "an owner or a co-owner again.")
     blocks.append(R.details(R.bold("📈 Bid increments"),
                             [R.table(rows, bordered=True, compact=True),
-                             R.paragraph(R.italic(
-                                 "A bare /bid bids the next minimum — the "
-                                 "number the bot just printed."))]))
+                             R.paragraph(R.italic(ladder_note)),
+                             R.paragraph(hands)]))
     lines.append("<b>📈 Bid increments</b>")
     lines += step_lines
-    lines.append("<i>A bare /bid bids the next minimum — the number the bot "
-                 "just printed.</i>")
+    lines.append(f"<i>{_e(ladder_note)}</i>")
+    lines.append(_e(hands))
     lines.append("")
 
     # ── Retention, RTM, the expansion picks ──
@@ -856,7 +915,8 @@ def _lot_result(session, season, lot):
             A.LOT_WITHDRAWN: "🚫 withdrawn"}.get(lot.status, lot.status)
 
 
-def sets_view(session, season, *, page=1, expand=None, lot_page=1):
+def sets_view(session, season, *, page=1, expand=None, lot_page=1,
+              owner_id=None):
     """The sets card: one page of sets, or one set opened in full.
 
     ``expand`` is a ``set_no``. Returns ``(blocks, html, keyboard)`` — the third
@@ -874,7 +934,8 @@ def sets_view(session, season, *, page=1, expand=None, lot_page=1):
         if chosen is None:
             return None
         return _set_detail_view(session, season, chosen, groups,
-                                lot_page=lot_page, total_pages=total_pages)
+                                lot_page=lot_page, total_pages=total_pages,
+                                owner_id=owner_id)
 
     page = _clamp_page(page, total_pages)
     start = (page - 1) * SETS_PAGE_SIZE
@@ -932,10 +993,12 @@ def sets_view(session, season, *, page=1, expand=None, lot_page=1):
     blocks.append(R.footer(footer))
     lines.append(f"\n<i>{footer}</i>")
     return blocks, "\n".join(lines), sets_keyboard(shown, page=page,
-                                                  total_pages=total_pages)
+                                                  total_pages=total_pages,
+                                                  owner_id=owner_id)
 
 
-def _set_detail_view(session, season, entry, groups, *, lot_page, total_pages):
+def _set_detail_view(session, season, entry, groups, *, lot_page, total_pages,
+                     owner_id=None):
     """One set, in full, a page of players at a time."""
     rows = groups.get(entry["name"], [])
     lot_pages = _pages(len(rows), LOT_PAGE_SIZE)
@@ -971,13 +1034,22 @@ def _set_detail_view(session, season, entry, groups, *, lot_page, total_pages):
     return (blocks, "\n".join(lines),
             sets_keyboard([], page=back_page, total_pages=total_pages,
                           expand=entry["set_no"], lot_page=lot_page,
-                          lot_pages=lot_pages))
+                          lot_pages=lot_pages, owner_id=owner_id))
 
 
 def sets_keyboard(entries, *, page, total_pages, expand=None, lot_page=1,
-                  lot_pages=1):
-    """Page buttons for the sets card, and one button per set to open it."""
+                  lot_pages=1, owner_id=None):
+    """Page buttons for the sets card, and one button per set to open it.
+
+    ``owner_id`` makes the card personal, for ``info_keyboard``'s reason: this
+    one re-renders *in place*, so a second pair of hands on it genuinely fights
+    the first — one reader three pages in, another flipping back to the top.
+    /asets is free; a copy of your own costs a command.
+    """
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    tag, sep = _tagged(SETS_CB, owner_id)
+    head = f"{tag}{sep}"
 
     def nav(label, data):
         return InlineKeyboardButton(label, callback_data=data)
@@ -986,30 +1058,32 @@ def sets_keyboard(entries, *, page, total_pages, expand=None, lot_page=1,
     if expand is None:
         # Three per row keeps the labels readable on a phone.
         opens = [nav(f"#{e['set_no']} {_short(e['name'])}",
-                     f"{SETS_CB}x_{e['set_no']}_1")
+                     f"{head}x_{e['set_no']}_1")
                  for e in entries]
         rows += [opens[i:i + 3] for i in range(0, len(opens), 3)]
         if total_pages > 1:
             bar = []
             if page > 1:
-                bar.append(nav("⬅️ Prev", f"{SETS_CB}p_{page - 1}"))
-            bar.append(nav(f"Page {page}/{total_pages}", f"{SETS_CB}noop"))
+                bar.append(nav("⬅️ Prev", f"{head}p_{page - 1}"))
+            bar.append(nav(f"Page {page}/{total_pages}", f"{head}noop"))
             if page < total_pages:
-                bar.append(nav("Next ➡️", f"{SETS_CB}p_{page + 1}"))
+                bar.append(nav("Next ➡️", f"{head}p_{page + 1}"))
             rows.append(bar)
-        rows.append([nav("🔄 Refresh", f"{SETS_CB}p_{page}")])
+        rows.append([nav("🔄 Refresh", f"{head}p_{page}"),
+                     close_button(owner_id)])
         return InlineKeyboardMarkup(rows)
 
     if lot_pages > 1:
         bar = []
         if lot_page > 1:
-            bar.append(nav("⬅️", f"{SETS_CB}x_{expand}_{lot_page - 1}"))
-        bar.append(nav(f"Page {lot_page}/{lot_pages}", f"{SETS_CB}noop"))
+            bar.append(nav("⬅️", f"{head}x_{expand}_{lot_page - 1}"))
+        bar.append(nav(f"Page {lot_page}/{lot_pages}", f"{head}noop"))
         if lot_page < lot_pages:
-            bar.append(nav("➡️", f"{SETS_CB}x_{expand}_{lot_page + 1}"))
+            bar.append(nav("➡️", f"{head}x_{expand}_{lot_page + 1}"))
         rows.append(bar)
-    rows.append([nav("⬅️ All sets", f"{SETS_CB}p_{page}"),
-                 nav("🔄 Refresh", f"{SETS_CB}x_{expand}_{lot_page}")])
+    rows.append([nav("⬅️ All sets", f"{head}p_{page}"),
+                 nav("🔄 Refresh", f"{head}x_{expand}_{lot_page}"),
+                 close_button(owner_id)])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1306,6 +1380,8 @@ ADMIN_SECTIONS = (
         ("/asnipe <window> <extend> <max>", "Anti-snipe rule, e.g. /asnipe 10 10 5"),
         ("/afocus on|off", "While the auction runs, lock this group to auction "
                            "commands (on by default) — bare /afocus reads it back"),
+        ("/adirect on|off", "Allow typed bid amounts (/bid 12), or the next "
+                            "step only — bare /adirect reads it back"),
         ("/aco <team> | <id>", "Add a co-owner who may bid"),
         ("/aaccelmode on|off", "The automatic ⚡ Accelerated round"),
     )),
