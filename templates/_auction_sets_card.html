@@ -7,13 +7,25 @@
    index into the parallel set_name inputs, so no set name is ever parsed back
    out of a string.
 
+   ``row_index`` is counted over the rows that RENDER a set_name, not over
+   ``sets``. Those are not the same list: a finished or live set renders its
+   number as plain text with no hidden input, and ``list_sets`` sorts finished
+   sets FIRST — so ``loop.index0`` pointed one row further down the queue for
+   every set that had already run, and a button meant for the row it sat in
+   moved (and now, deletes) a different one.
+
    It must stay OUTSIDE the console's #au-panel: that fragment is re-fetched
    every couple of seconds and would wipe a half-typed Set No.
+
+   ``sets_bare`` renders the contents alone, for a caller that supplies its own
+   card — the setup page folds this into its one Auction pool card. Without it
+   the partial is its own card, which is how the console still uses it.
 #}
-<div class="au-card" id="sets">
+{% if not sets_bare %}<div class="au-card" id="sets">
   <h3 style="margin-top:0;">🗂 Sets
     {% if sets %}<span class="pill">{{ sets|length }}</span>{% endif %}
   </h3>
+{% endif %}
   <p class="au-note" style="margin:.2rem 0 .8rem;">
     <b>Set No is the order sets run in</b> — 1 goes to the block first, then 2,
     and so on. Two sets can never hold the same number, so retype the numbers and
@@ -30,8 +42,13 @@
       <table class="au-table">
         <tr><th>Set No</th><th></th><th>Set</th><th class="cell-num">Left</th>
             <th class="cell-num">Sold</th><th class="cell-num">Unsold</th><th></th></tr>
+        {# The index a row button carries. Counted here, incremented only on a
+           row that actually submits a set_name — see the note above. #}
+        {% set rows = namespace(index=0) %}
         {% for s in sets %}
         {% set movable = s.queued and season.status not in (STATUS_COMPLETED, STATUS_CANCELLED) %}
+        {% set row_index = rows.index %}
+        {% if movable %}{% set rows.index = rows.index + 1 %}{% endif %}
         <tr>
           <td>
             {% if movable %}
@@ -55,18 +72,49 @@
             {% if movable %}
             {% if not loop.first %}
             <button class="btn btn-ghost btn-sm" type="submit" name="move_up"
-                    value="{{ loop.index0 }}" title="One place earlier"
+                    value="{{ row_index }}" title="One place earlier"
                     formnovalidate>↑</button>
             {% endif %}
             {% if not loop.last %}
             <button class="btn btn-ghost btn-sm" type="submit" name="move_down"
-                    value="{{ loop.index0 }}" title="One place later"
+                    value="{{ row_index }}" title="One place later"
                     formnovalidate>↓</button>
             {% endif %}
             {% if s.state != 'next' %}
             <button class="btn btn-ghost btn-sm" type="submit" name="bring_next"
-                    value="{{ loop.index0 }}" formnovalidate>⏭ Bring next</button>
+                    value="{{ row_index }}" formnovalidate>⏭ Bring next</button>
             {% endif %}
+            {# Deleting a set is the one row button that cannot be undone, so it
+               is not a bare click: the panel names what goes, asks for the set's
+               name back, and the server checks that name again — a confirmation
+               that only lives in the browser is one a stale page or a resent
+               POST walks straight past. The confirm inputs are a parallel list
+               too, read at the same row index as the name. #}
+            <details class="au-confirm">
+              <summary class="btn btn-ghost btn-sm danger">🗑 Delete</summary>
+              <div class="au-confirm-body">
+                <p class="au-note" style="margin:0 0 .4rem;">
+                  This removes <b>{{ s.queued }}</b> player{{ '' if s.queued == 1 else 's' }}
+                  still waiting in <b>{{ s.name }}</b>.
+                  {% if s.sold or s.unsold %}The {{ s.sold + s.unsold }} already
+                  sold or passed on stay on the record.{% endif %}
+                  It cannot be undone — the players go back to the catalogue and
+                  the set has to be rebuilt.
+                </p>
+                <div style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;">
+                  <input type="text" name="confirm_set" placeholder="{{ s.name }}"
+                         style="width:11rem;" autocomplete="off">
+                  <button class="btn btn-ghost danger btn-sm" type="submit"
+                          name="drop_set" value="{{ row_index }}"
+                          formnovalidate>Delete this set</button>
+                </div>
+              </div>
+            </details>
+            {% elif not s.queued %}
+            {# A row with nothing waiting carries no set_name, so it can submit
+               no row button at all — including this one. Saying so beats a
+               button that silently points at somebody else's row. #}
+            <span class="dim" style="font-size:.78rem;">finished</span>
             {% endif %}
           </td>
         </tr>
@@ -133,5 +181,34 @@
     same man twice. Leave <b>Set No</b> blank to put the set at the back of the
     queue.
   </p>
+
+  {% if sets %}
+  {# Emptying the whole pool at once, for the case a set-by-set delete is the
+     wrong shape of tool: a filter that pulled in the wrong four hundred cards.
+     Same rule as a set delete — only what is still waiting goes. #}
+  <details class="au-confirm" style="margin-top:.9rem;">
+    <summary class="btn btn-ghost danger btn-sm">🗑 Empty the whole pool</summary>
+    <div class="au-confirm-body">
+      <p class="au-note" style="margin:0 0 .4rem;">
+        Every player still waiting goes, whatever set they are in — for a pool
+        built from the wrong filter, where deleting set by set is the long way
+        round. Anyone already sold, passed on or withdrawn stays on the record,
+        because this is a pool edit and not an undo.
+      </p>
+      <form method="POST" style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="pool_clear">
+        <input type="hidden" name="back_query" value="#sets">
+        <input type="hidden" name="sets_card" value="1">
+        <label class="dim" style="font-size:.8rem;text-transform:none;letter-spacing:0;">
+          Type <code>EMPTY</code> to confirm
+        </label>
+        <input type="text" name="confirm_clear" placeholder="EMPTY"
+               style="width:8rem;" autocomplete="off">
+        <button class="btn btn-ghost danger" type="submit">Empty the pool</button>
+      </form>
+    </div>
+  </details>
   {% endif %}
-</div>
+  {% endif %}
+{% if not sets_bare %}</div>{% endif %}

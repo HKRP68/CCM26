@@ -463,6 +463,13 @@ def rules_view(session, season):
         need = ", ".join(f"{role} ×{n}" for role, n in sorted(minimums.items()))
         money.append(R.paragraph(["🧩 Every squad needs: ", R.bold(need)]))
         body.append(f"🧩 Every squad needs: <b>{_e(need)}</b>")
+    # The other end of the same rule, and the one a bid actually meets: a
+    # franchise at a role's ceiling is refused outright rather than steered.
+    ceilings = A.role_maximums(season)
+    if ceilings:
+        caps = ", ".join(f"{role} ≤{n}" for role, n in sorted(ceilings.items()))
+        money.append(R.paragraph(["🚧 No squad may exceed: ", R.bold(caps)]))
+        body.append(f"🚧 No squad may exceed: <b>{_e(caps)}</b>")
     reserve = (f"🎯 A franchise may never bid its way out of filling that "
                f"minimum: {floor} is held back for every slot it still has to "
                f"fill. That is the max bid the board prints — it is not a "

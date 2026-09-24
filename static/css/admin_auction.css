@@ -50,3 +50,43 @@
   .au-grid { grid-template-columns:1fr; }
   .au-block { grid-template-columns:1fr; }
 }
+
+/* ── Disclosure ───────────────────────────────────────────────────────
+   The setup page is a dozen rule-sets deep and almost every visit touches
+   one of them, so each is a <details> that opens on demand. Native, which
+   is what makes it survive a form POST landing back on an anchor, work with
+   the browser's own find-in-page, and need no JavaScript to be usable at
+   all. The one thing native <details> does not give is a marker that reads
+   as a control, so the summary is styled into a header row. */
+.au-fold { background:var(--card); border:1px solid var(--border); border-radius:16px;
+           box-shadow:0 10px 24px rgba(0,0,0,.18); overflow:hidden; }
+.au-fold > summary { list-style:none; cursor:pointer; padding:.85rem 1rem;
+                     display:flex; align-items:center; gap:.6rem; flex-wrap:wrap;
+                     font-weight:800; font-size:1.02rem; }
+.au-fold > summary::-webkit-details-marker { display:none; }
+.au-fold > summary::before { content:"▸"; color:var(--muted); font-size:.85rem;
+                             transition:transform .15s ease; }
+.au-fold[open] > summary::before { transform:rotate(90deg); }
+.au-fold > summary:hover { background:var(--bg-soft); }
+.au-fold > summary .au-sum { color:var(--muted); font-weight:500; font-size:.82rem;
+                             margin-left:auto; text-align:right; }
+.au-fold-body { padding:0 1rem 1rem; border-top:1px solid var(--border); }
+.au-fold-body > *:first-child { margin-top:.8rem; }
+
+/* A franchise, closed. The summary is the whole row an admin scans. */
+.au-fold.au-team { border-radius:14px; box-shadow:none; background:var(--bg-soft); }
+.au-fold.au-team > summary { padding:.6rem .8rem; font-size:.95rem; }
+.au-fold.au-team .au-fold-body { padding:0 .8rem .8rem; }
+.au-teams { display:flex; flex-direction:column; gap:.5rem; }
+
+/* An inline "are you sure" that a stale page cannot click through, because
+   the server asks for the same typed word the panel does. */
+.au-confirm { display:inline-block; }
+.au-confirm > summary { list-style:none; cursor:pointer; }
+.au-confirm > summary::-webkit-details-marker { display:none; }
+.au-confirm-body { margin-top:.5rem; padding:.6rem; border-radius:10px;
+                   border:1px solid rgba(239,68,68,.4); background:rgba(239,68,68,.07);
+                   white-space:normal; max-width:30rem; }
+
+.cell-num { text-align:right; }
+.mono { font-variant-numeric:tabular-nums; }

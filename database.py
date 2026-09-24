@@ -989,6 +989,12 @@ def _migrate_add_columns():
     _try_add("auction_seasons", "auto_accelerated", "INTEGER DEFAULT 1")
     _try_add("auction_seasons", "accelerated_done", "INTEGER DEFAULT 0")
 
+    # ── Franchise Auction: the other end of the role rule ──
+    # ``role_minimums_json`` shipped with auction_seasons; the ceiling did not.
+    # NULL reads back as "no ceiling on any role", which is exactly how every
+    # season written before this behaved, so there is nothing to backfill.
+    _try_add("auction_seasons", "role_maximums_json", "TEXT")
+
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so
     # they stay independently fault-tolerant without a round trip each.

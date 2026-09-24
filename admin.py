@@ -22426,6 +22426,33 @@ def admin_auctions_list():
         db.close()
 
 
+@app.route("/auctions/<int:season_id>/franchises.json")
+@login_required
+def admin_auction_franchises_json(season_id):
+    """The field as a file. A GET, so it is a link rather than a form.
+
+    ``ensure_ascii=False`` because half a real field is names and cities that
+    are not ASCII, and a file of escaped code points is one nobody can
+    hand-edit —
+    which is most of what an export is for. The charset is stated in the
+    content type for the same reason.
+    """
+    db = get_session()
+    try:
+        season = _auction_or_404(db, season_id)
+        payload = auction_svc.export_franchises(db, season)
+        stamp = datetime.utcnow().strftime("%Y%m%d")
+        slug = re.sub(r"[^A-Za-z0-9]+", "-",
+                      (season.name or "auction")).strip("-").lower() or "auction"
+        return Response(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            mimetype="application/json; charset=utf-8",
+            headers={"Content-Disposition":
+                     f'attachment; filename="{slug}-franchises-{stamp}.json"'})
+    finally:
+        db.close()
+
+
 @app.route("/auctions/<int:season_id>", methods=["GET", "POST"])
 @login_required
 def admin_auction_detail(season_id):
@@ -22498,6 +22525,13 @@ def admin_auction_detail(season_id):
             lots=auction_svc.lots(db, season.id),
             counts=auction_svc.pool_counts(db, season.id),
             price_rules=auction_svc.base_price_rules(season),
+            # Both ends of the role rule, and the four roles the page lists.
+            squad_roles=auction_svc.SQUAD_ROLES,
+            role_minimums=auction_svc.role_minimums(season),
+            role_maximums=auction_svc.role_maximums(season),
+            role_rule_line=auction_svc.role_rule_line(season),
+            role_shortfall=lambda f: auction_svc.role_shortfall(db, season, f),
+            squad_roles_of=lambda fid: auction_svc.role_counts(db, fid),
             price_gaps=auction_svc.base_price_gaps(season),
             rating_band=auction_svc.render_rating_band,
             base_floor=auction_svc.DEFAULT_MIN_BASE_PRICE_LAKH,
@@ -22507,6 +22541,12 @@ def admin_auction_detail(season_id):
             preview_count=preview_count,
             previewed=previewed,
             sets=sets,
+            # The shared Sets partial renders its own card on the live console
+            # and bare here, folded into this page's one Auction pool card.
+            # Passed from the route rather than set in the template: whether a
+            # ``{% set %}`` reaches an ``{% include %}`` has changed between
+            # Jinja versions, and this cannot be allowed to depend on that.
+            sets_bare=True,
             # The "In the pool" table shows each lot's Set No, which only
             # ``list_sets`` knows — a lot row carries the set's name, not its
             # place in the running order.
@@ -22577,19 +22617,46 @@ def _auction_detail_action(db, season, action):
         season.name = (request.form.get("name") or season.name).strip()[:120]
         season.chat_id = _tg_chat_form("chat_id", season.chat_id)
         season.bid_seconds = _int_form("bid_seconds", season.bid_seconds)
+        season.opening_purse_lakh = _money_form("opening_purse",
+                                                season.opening_purse_lakh)
+        # The squad caps and the home country live in Squad rules now, where
+        # the role min/max they interact with are. They are still read here
+        # when a form sends them, because ``_int_form`` falls back to the
+        # current value and a caller that posts neither changes neither —
+        # which is what keeps an older bookmarked POST working.
         season.min_squad_size = _int_form("min_squad_size", season.min_squad_size)
         season.max_squad_size = _int_form("max_squad_size", season.max_squad_size)
         season.max_overseas = _int_form("max_overseas", season.max_overseas)
         season.home_country = (request.form.get("home_country")
                                or season.home_country or "India").strip()[:60]
-        season.opening_purse_lakh = _money_form("opening_purse",
-                                                season.opening_purse_lakh)
         auction_svc.set_anti_snipe(db, season,
                                    _int_form("snipe_window", season.snipe_window_seconds),
                                    _int_form("snipe_extend", season.snipe_extend_seconds),
                                    _int_form("max_extensions", season.max_extensions))
         log_admin(db, "auction_settings", "auction", season.id, season.name)
         flash("✅ Settings saved.", "success")
+
+    elif action == "squad_rules":
+        # Both ends of the role rule in one save, because they constrain each
+        # other — see ``auction_service.set_role_rules``. Blank is "no rule",
+        # which is NOT the same as 0: a typed 0 maximum is a real rule ("no
+        # specialist keepers here") and has to survive the round trip.
+        lows, highs = {}, {}
+        for index, role in enumerate(auction_svc.SQUAD_ROLES):
+            lows[role] = _int_form(f"role_min_{index}", 0)
+            raw = (request.form.get(f"role_max_{index}") or "").strip()
+            highs[role] = _parse_int(raw) if raw else None
+        season.min_squad_size = _int_form("min_squad_size", season.min_squad_size)
+        season.max_squad_size = _int_form("max_squad_size", season.max_squad_size)
+        season.max_overseas = _int_form("max_overseas", season.max_overseas)
+        season.home_country = (request.form.get("home_country")
+                               or season.home_country or "India").strip()[:60]
+        auction_svc.set_role_rules(db, season, lows, highs)
+        log_admin(db, "auction_squad_rules", "auction", season.id, season.name)
+        line = auction_svc.role_rule_line(season)
+        flash("✅ Squad rules saved." + (f" Roles: {line}." if line else
+                                        " No role has a rule, so any mix of "
+                                        "roles is legal."), "success")
 
     elif action == "price_rules":
         # One row is a rating RANGE and a price: "96 to 92 → ₹2 Cr". The top
@@ -22666,6 +22733,15 @@ def _auction_detail_action(db, season, action):
         if franchise is None:
             abort(404)
         name = franchise.name
+        # Typed, and checked here rather than only in the browser: removing a
+        # franchise mid-auction hands its players back to the pool and shares
+        # its purse out, which is not an operation a stray double-click or a
+        # resent POST should be able to perform. Same shape as deleting a whole
+        # auction from the list page.
+        typed = (request.form.get("confirm_name") or "").strip()
+        if typed.lower() != (name or "").strip().lower():
+            raise auction_svc.AuctionError(
+                f"Type “{name}” exactly to remove it. Nothing was changed.")
         if int(franchise.squad_size or 0) > 0 or season.status != auction_svc.STATUS_SETUP:
             # A franchise with players, or one in an auction under way, goes
             # the way /aremoveteam takes it: its players back into the pool,
@@ -22678,6 +22754,42 @@ def _auction_detail_action(db, season, action):
             db.delete(franchise)
             flash(f"🗑 {name} removed.", "success")
         log_admin(db, "auction_franchise_delete", "auction", season.id, name)
+
+    elif action == "franchise_import":
+        # A file, or the box below it — an admin fixing one id is far more
+        # likely to paste than to save-edit-upload, and the two are the same
+        # JSON either way.
+        upload = request.files.get("franchise_file")
+        raw = (request.form.get("franchise_json") or "").strip()
+        if upload is not None and (upload.filename or "").strip():
+            blob = upload.read()
+            if len(blob) > 2_000_000:
+                raise auction_svc.AuctionError(
+                    "That file is over 2 MB — a franchise file is a few "
+                    "kilobytes, so this is almost certainly the wrong one.")
+            try:
+                raw = blob.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                raise auction_svc.AuctionError(
+                    "That file is not UTF-8 text. Export one from this page to "
+                    "see the shape an import expects.")
+        if not raw:
+            raise auction_svc.AuctionError(
+                "Choose a file or paste the JSON.")
+        try:
+            payload = json.loads(raw)
+        except ValueError as bad:
+            raise auction_svc.AuctionError(f"That is not valid JSON — {bad}.")
+        replace = bool(request.form.get("replace_missing"))
+        added, updated, removed = auction_svc.import_franchises(
+            db, season, payload, replace=replace)
+        log_admin(db, "auction_franchise_import", "auction", season.id,
+                  season.name,
+                  detail=f"{added} added, {updated} updated, "
+                         f"{len(removed)} removed")
+        flash(f"📥 {added} franchise(s) added, {updated} updated"
+              + (f", {len(removed)} removed ({', '.join(removed)})."
+                 if removed else "."), "success")
 
     elif action == "grant":
         franchise = (db.query(AuctionFranchise)
@@ -22962,6 +23074,34 @@ def _auction_sets_action(db, season, action, *, quiet):
         flash(f"⏭ {label} comes next — {len(moved)} players.", "success")
         done = "set_next"
 
+    elif "drop_set" in request.form:
+        # Destructive, so it is not a bare click: the row's own confirm panel
+        # asks for the set's name back and the server checks it here too. A
+        # confirmation that only lives in the browser is one a stale page, a
+        # double submit or a resent POST walks straight past.
+        name = _auction_set_row(request.form["drop_set"])
+        typed = _auction_row_field("confirm_set", request.form["drop_set"])
+        if typed.lower() != name.strip().lower():
+            raise auction_svc.AuctionError(
+                f"Type “{name}” exactly to delete the set. Nothing was "
+                f"removed.")
+        label, removed = auction_svc.delete_set(db, season, name, quiet=quiet)
+        flash(f"🗑 {label} deleted — {removed} player"
+              f"{'' if removed == 1 else 's'} taken out of the pool. Anyone "
+              f"already sold or passed on stays on the record.", "success")
+        done = "set_delete"
+
+    elif action == "pool_clear":
+        typed = (request.form.get("confirm_clear") or "").strip()
+        if typed.upper() != "EMPTY":
+            raise auction_svc.AuctionError(
+                "Type EMPTY to clear the pool. Nothing was removed.")
+        removed = auction_svc.clear_pool(db, season, quiet=quiet)
+        flash(f"🗑 The pool is empty — {removed} player"
+              f"{'' if removed == 1 else 's'} removed. Everything already sold "
+              f"or passed on stays on the record.", "success")
+        done = "pool_clear"
+
     elif action == "set_next":
         # The console's own hidden-field shape, kept so a bookmarked POST and
         # anything else already pointing at it keeps working.
@@ -23013,6 +23153,21 @@ def _auction_set_row(raw):
         raise auction_svc.AuctionError(
             "That row is from an older version of the page — reload it.")
     return names[index]
+
+
+def _auction_row_field(field, raw):
+    """One row's value from a parallel list, at the index a row button carries.
+
+    Every movable row in the Sets card renders one of these, so the list lines
+    up with ``set_name`` exactly — the same index resolves both. Missing reads
+    as blank rather than as an error, because the caller is comparing it to a
+    name and a blank can only ever fail that comparison.
+    """
+    values = request.form.getlist(field)
+    index = _parse_int(raw)
+    if index is None or not 0 <= index < len(values):
+        return ""
+    return (values[index] or "").strip()
 
 
 def _auction_order_line(order, limit=6):

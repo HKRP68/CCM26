@@ -213,9 +213,16 @@ class PreviewTests(PoolPageCase):
         self.assertNotIn("Add ticked", body)
 
     def test_the_filter_form_comes_back_to_the_pool_card(self):
+        # The builder now sits inside the one Auction pool card rather than in
+        # a card of its own, so the filter form comes back to the builder's own
+        # anchor — which is a finer landing than the card's top, and still
+        # inside it. Both ids have to be on the page or the fragment lands on
+        # nothing and Preview reads as a dead button.
         body = self.get()
         self.assertIn('id="pool"', body)
-        self.assertIn(f'/auctions/{self.season_id}#pool', body)
+        self.assertIn('id="builder"', body)
+        self.assertIn(f'/auctions/{self.season_id}#builder', body)
+        self.assertLess(body.index('id="pool"'), body.index('id="builder"'))
 
     def test_a_card_with_a_null_is_active_is_still_offered(self):
         from sqlalchemy import text
@@ -454,6 +461,320 @@ class BasePriceRangeTests(PoolPageCase):
                    "rule_min_rating": [""], "rule_price": [""]})
         self.session.expire_all()
         self.assertEqual(before, self.season.base_price_rules_json)
+
+
+class SetDeleteTests(PoolPageCase):
+    """Deleting a set, and emptying the pool — over HTTP.
+
+    The destructive half of the Sets card. Two things are pinned: what a delete
+    actually removes (only what is still waiting, never the record of what
+    already happened), and that a click alone cannot do it.
+    """
+
+    def add_set(self, players, name):
+        return self.post({"action": "add_pool", "set_name": name,
+                          "player_ids": [str(p.id) for p in players]})
+
+    def names(self):
+        self.session.expire_all()
+        return sorted(lot.name for lot in
+                      self.A.lots(self.session, self.season.id))
+
+    def test_a_set_deletes_with_its_name_typed_back(self):
+        self.add_set(self.players[:2], "Marquee")
+        self.add_set(self.players[2:], "Uncapped")
+        response = self.post({"sets_card": "1", "drop_set": "0",
+                              "set_name": ["Marquee", "Uncapped"],
+                              "set_no": ["1", "2"],
+                              "confirm_set": ["Marquee", ""]})
+        self.assertIn("Marquee deleted", response.get_data(as_text=True))
+        self.assertEqual([(1, "Uncapped")], self.sets())
+        self.assertEqual(3, len(self.names()))
+
+    def test_the_typed_name_has_to_match_and_nothing_goes_without_it(self):
+        self.add_set(self.players[:2], "Marquee")
+        before = self.names()
+        response = self.post({"sets_card": "1", "drop_set": "0",
+                              "set_name": ["Marquee"], "set_no": ["1"],
+                              "confirm_set": [""]})
+        self.assertIn("Type", response.get_data(as_text=True))
+        self.assertEqual(before, self.names())
+        self.assertEqual([(1, "Marquee")], self.sets())
+
+    def test_the_confirm_box_is_read_at_the_row_the_button_names(self):
+        # Three rows, three confirm boxes, and the second one typed. A server
+        # reading ``confirm_set`` as a single value would read the FIRST box —
+        # which is blank — and refuse a delete the admin correctly confirmed.
+        self.add_set(self.players[:2], "Marquee")
+        self.add_set(self.players[2:4], "Uncapped")
+        self.add_set(self.players[4:], "Spares")
+        self.post({"sets_card": "1", "drop_set": "1",
+                   "set_name": ["Marquee", "Uncapped", "Spares"],
+                   "set_no": ["1", "2", "3"],
+                   "confirm_set": ["", "Uncapped", ""]})
+        self.assertEqual([(1, "Marquee"), (2, "Spares")], self.sets())
+
+    def test_a_deleted_set_leaves_what_already_happened_alone(self):
+        self.add_set(self.players[:3], "Marquee")
+        self.session.expire_all()
+        # One of them has already been sold: the set is half run.
+        lots = self.A.queued_lots(self.session, self.season, set_name="Marquee")
+        sold = lots[0]
+        sold.status = self.A.LOT_SOLD
+        sold.sold_price_lakh = 100
+        self.session.commit()
+
+        self.post({"sets_card": "1", "drop_set": "0",
+                   "set_name": ["Marquee"], "set_no": ["1"],
+                   "confirm_set": ["Marquee"]})
+        self.session.expire_all()
+        remaining = self.A.lots(self.session, self.season.id)
+        self.assertEqual([sold.name], [lot.name for lot in remaining])
+        # The set is still there, finished, rather than gone with its record.
+        self.assertEqual([(1, "Marquee")], self.sets())
+
+    def test_emptying_the_pool_needs_the_word_and_then_takes_everything(self):
+        self.add_set(self.players[:2], "Marquee")
+        self.add_set(self.players[2:], "Uncapped")
+        refused = self.post({"action": "pool_clear", "confirm_clear": "yes"})
+        self.assertIn("Type EMPTY", refused.get_data(as_text=True))
+        self.assertEqual(5, len(self.names()))
+
+        self.post({"action": "pool_clear", "confirm_clear": "EMPTY"})
+        self.assertEqual([], self.names())
+        self.assertEqual([], self.sets())
+
+    def test_the_card_offers_a_delete_per_set(self):
+        self.add_set(self.players[:2], "Marquee")
+        body = self.get()
+        self.assertIn('name="drop_set"', body)
+        self.assertIn('name="confirm_set"', body)
+        self.assertIn("Empty the whole pool", body)
+
+
+class SquadRulesPageTests(PoolPageCase):
+    """The role minimum/maximum form, and what it refuses."""
+
+    def save(self, mins, maxes, **extra):
+        data = {"action": "squad_rules",
+                "min_squad_size": str(extra.pop("min_squad", 3)),
+                "max_squad_size": str(extra.pop("max_squad", 11)),
+                "home_country": "India", "max_overseas": "8"}
+        for index, role in enumerate(self.A.SQUAD_ROLES):
+            data[f"role_min_{index}"] = str(mins.get(role, "") or "")
+            high = maxes.get(role, "")
+            data[f"role_max_{index}"] = "" if high is None else str(high)
+        data.update(extra)
+        return self.post(data)
+
+    def test_both_ends_save_and_a_typed_zero_survives(self):
+        self.save({"Bowler": 3}, {"Bowler": 5, "Wicket Keeper": 0})
+        self.session.expire_all()
+        self.assertEqual({"Bowler": 3},
+                         self.A.role_minimums(self.season))
+        # A blank max is "no ceiling"; a typed 0 is a real rule and must not be
+        # mistaken for one. That distinction is the whole reason the map is
+        # sparse rather than one entry per role.
+        self.assertEqual({"Bowler": 5, "Wicket Keeper": 0},
+                         self.A.role_maximums(self.season))
+        self.assertNotIn("Batsman", self.A.role_maximums(self.season))
+
+    def test_a_minimum_above_its_own_maximum_is_refused(self):
+        response = self.save({"Bowler": 6}, {"Bowler": 4})
+        self.assertIn("above the maximum", response.get_data(as_text=True))
+        self.session.expire_all()
+        self.assertEqual({}, self.A.role_minimums(self.season))
+        self.assertEqual({}, self.A.role_maximums(self.season))
+
+    def test_minimums_that_cannot_fit_the_squad_are_refused(self):
+        response = self.save({"Batsman": 5, "Bowler": 5, "All-rounder": 5},
+                             {}, max_squad=11)
+        self.assertIn("more than the squad limit",
+                      response.get_data(as_text=True))
+        self.session.expire_all()
+        self.assertEqual({}, self.A.role_minimums(self.season))
+
+    def test_maximums_that_cannot_fill_the_squad_are_refused(self):
+        response = self.save({}, {"Batsman": 2, "Bowler": 2,
+                                  "All-rounder": 1, "Wicket Keeper": 1},
+                             min_squad=11, max_squad=11)
+        self.assertIn("fewer than the minimum squad size",
+                      response.get_data(as_text=True))
+        self.session.expire_all()
+        self.assertEqual({}, self.A.role_maximums(self.season))
+
+    def test_the_card_renders_a_row_per_role(self):
+        body = self.get()
+        for index, role in enumerate(self.A.SQUAD_ROLES):
+            self.assertIn(f'name="role_min_{index}"', body)
+            self.assertIn(f'name="role_max_{index}"', body)
+            self.assertIn(role, body)
+
+
+class FranchiseFileTests(PoolPageCase):
+    """The field, downloaded and uploaded."""
+
+    def field(self):
+        self.session.expire_all()
+        return self.A.franchises(self.session, self.season.id)
+
+    def add(self, name, **fields):
+        franchise = self.A.create_franchise(self.session, self.season, name,
+                                            quiet=True, **fields)
+        self.session.commit()
+        return franchise
+
+    def download(self):
+        import json as _json
+        response = self.client.get(
+            f"/auctions/{self.season_id}/franchises.json")
+        self.assertEqual(200, response.status_code)
+        self.assertIn("attachment",
+                      response.headers.get("Content-Disposition", ""))
+        return _json.loads(response.get_data(as_text=True))
+
+    def upload(self, payload, **extra):
+        import json as _json
+        data = {"action": "franchise_import",
+                "franchise_json": _json.dumps(payload)}
+        data.update(extra)
+        return self.post(data)
+
+    def test_the_download_carries_the_rules_and_not_the_score(self):
+        self.add("Mumbai", short_name="MI", city="Mumbai", owner_tg_id=111,
+                 owner_name="Aarav")
+        payload = self.download()
+        self.assertEqual("franchise-auction/franchises", payload["format"])
+        row = payload["franchises"][0]
+        self.assertEqual("Mumbai", row["name"])
+        self.assertEqual(111, row["owner_tg_id"])
+        self.assertIn("purse_total_lakh", row)
+        # The caches and the results are what an import must never write, so
+        # they are not in the file to be written from.
+        self.assertNotIn("purse_remaining_lakh", row)
+        self.assertNotIn("squad_size", row)
+        self.assertEqual([], row["squad"])
+
+    def test_a_download_reimports_into_the_same_field(self):
+        self.add("Mumbai", short_name="MI", owner_tg_id=111)
+        self.add("Chennai", short_name="CSK", owner_tg_id=222)
+        payload = self.download()
+        # Into a second auction, which is the case the file exists for.
+        other = self.A.create_season(self.session, f"Next {self.tag}")
+        self.session.commit()
+        added, updated, removed = self.A.import_franchises(
+            self.session, other, payload)
+        self.session.commit()
+        self.assertEqual((2, 0, []), (added, updated, removed))
+        # The file's own order is what the new field comes out in — a franchise
+        # with no sort order of its own takes the row it was listed in, so the
+        # expansion pick order does not become alphabetical by accident.
+        exported = [row["name"] for row in payload["franchises"]]
+        names = [f.name for f in self.A.franchises(self.session, other.id)]
+        self.assertEqual(exported, names)
+        self.assertEqual({"Mumbai", "Chennai"}, set(names))
+        rebuilt = {f.name: f for f in self.A.franchises(self.session, other.id)}
+        self.assertEqual("MI", rebuilt["Mumbai"].short_name)
+        self.assertEqual(222, rebuilt["Chennai"].owner_tg_id)
+
+    def test_uploading_the_same_file_twice_edits_rather_than_doubles(self):
+        self.upload({"franchises": [{"name": "Mumbai", "owner_tg_id": 111}]})
+        self.assertEqual(["Mumbai"], [f.name for f in self.field()])
+        response = self.upload({"franchises": [
+            {"name": "mumbai", "owner_tg_id": 999, "city": "Wankhede"}]})
+        self.assertIn("1 updated", response.get_data(as_text=True))
+        field = self.field()
+        self.assertEqual(1, len(field))
+        self.assertEqual(999, field[0].owner_tg_id)
+        self.assertEqual("Wankhede", field[0].city)
+        # Matched by name, so the name it already had is what it keeps.
+        self.assertEqual("Mumbai", field[0].name)
+
+    def test_a_changed_purse_goes_through_the_ledger(self):
+        self.upload({"franchises": [{"name": "Mumbai",
+                                     "purse_total_lakh": 10000}]})
+        self.upload({"franchises": [{"name": "Mumbai",
+                                     "purse_total_lakh": 12000}]})
+        franchise = self.field()[0]
+        self.assertEqual(12000, franchise.purse_total_lakh)
+        self.assertEqual(12000, franchise.purse_remaining_lakh)
+        # The purse and the sum of its ledger rows must agree, which is exactly
+        # what a column written over without a row would break.
+        self.assertEqual(12000,
+                         self.A.ledger_total(self.session, franchise.id))
+        self.assertEqual([], self.A.reconcile_purses(self.session, self.season))
+
+    def test_keys_the_file_leaves_out_are_left_alone(self):
+        self.upload({"franchises": [{"name": "Mumbai", "city": "Wankhede",
+                                     "owner_name": "Aarav"}]})
+        self.upload({"franchises": [{"name": "Mumbai", "owner_tg_id": 111}]})
+        franchise = self.field()[0]
+        self.assertEqual("Wankhede", franchise.city)
+        self.assertEqual("Aarav", franchise.owner_name)
+        self.assertEqual(111, franchise.owner_tg_id)
+
+    def test_nothing_is_removed_unless_the_box_is_ticked(self):
+        self.add("Mumbai")
+        self.add("Chennai")
+        self.upload({"franchises": [{"name": "Mumbai"}]})
+        self.assertEqual({"Mumbai", "Chennai"},
+                         {f.name for f in self.field()})
+        self.upload({"franchises": [{"name": "Mumbai"}]},
+                    replace_missing="1")
+        self.assertEqual(["Mumbai"], [f.name for f in self.field()])
+
+    def test_a_broken_file_is_refused_by_name(self):
+        for payload, expected in (
+                ("not json at all", "not valid JSON"),
+                ('{"franchises": []}', "lists no franchises"),
+                ('{"teams": []}', "no “franchises” list"),
+                ('{"franchises": [{"city": "Mumbai"}]}', "has no name"),
+                ('{"franchises": [{"name": "A"}, {"name": "a"}]}',
+                 "listed twice")):
+            with self.subTest(payload=payload):
+                response = self.post({"action": "franchise_import",
+                                      "franchise_json": payload})
+                self.assertIn(expected, response.get_data(as_text=True))
+                self.assertEqual([], self.field())
+
+    def test_the_card_offers_both_halves(self):
+        body = self.get()
+        self.assertIn(f"/auctions/{self.season_id}/franchises.json", body)
+        self.assertIn('name="franchise_file"', body)
+        self.assertIn('name="replace_missing"', body)
+
+
+class FranchiseDeleteTests(PoolPageCase):
+    """A franchise is removed only when its name is typed back."""
+
+    def field(self):
+        self.session.expire_all()
+        return self.A.franchises(self.session, self.season.id)
+
+    def setUp(self):
+        super().setUp()
+        self.A.create_franchise(self.session, self.season, "Mumbai", quiet=True)
+        self.session.commit()
+
+    def test_the_wrong_name_changes_nothing(self):
+        franchise = self.field()[0]
+        response = self.post({"action": "franchise_delete",
+                              "franchise_id": str(franchise.id),
+                              "confirm_name": "Chennai"})
+        self.assertIn("exactly to remove it", response.get_data(as_text=True))
+        self.assertEqual(["Mumbai"], [f.name for f in self.field()])
+
+    def test_the_right_name_removes_it(self):
+        franchise = self.field()[0]
+        self.post({"action": "franchise_delete",
+                   "franchise_id": str(franchise.id),
+                   "confirm_name": "mumbai"})
+        self.assertEqual([], self.field())
+
+    def test_the_page_asks_for_the_name(self):
+        body = self.get()
+        self.assertIn('name="confirm_name"', body)
+        self.assertIn("Remove this franchise", body)
 
 
 if __name__ == "__main__":       # pragma: no cover

@@ -583,6 +583,316 @@ class OverseasTests(AuctionCase):
         self.assertIn("overseas limit", str(caught.exception))
 
 
+class RoleRuleTests(AuctionCase):
+    """Both ends of the role rule, and why they are enforced differently.
+
+    A **maximum** is a fact about the squad in front of you, so the bid that
+    would break it is refused outright. A **minimum** is a promise about a squad
+    that does not exist yet, so it is enforced as reachability — refused while
+    there is still a slot to fix the problem with, never afterwards.
+    """
+
+    min_squad = 2
+    max_squad = 4
+
+    def open_lot(self, role, now=NOW):
+        """Put a queued lot of ``role`` on the block."""
+        from models import AuctionLot
+        lot = (self.session.query(AuctionLot)
+               .filter(AuctionLot.season_id == self.season.id,
+                       AuctionLot.status == self.A.LOT_QUEUED,
+                       AuctionLot.category == role).first())
+        self.assertIsNotNone(lot, f"no queued {role} in the pool")
+        lot.status = self.A.LOT_ON_BLOCK
+        lot.deadline_at = now + timedelta(seconds=30)
+        self.season.current_lot_id = lot.id
+        # Around ``start()``: these tests are about what refuses a bid, not
+        # about the opening sequence, and starting for real would open whatever
+        # lot happens to be first rather than the role under test.
+        self.season.status = self.A.STATUS_LIVE
+        self.session.commit()
+        return lot
+
+    def hand(self, franchise, role, count):
+        """Sign ``count`` players of ``role`` to ``franchise``, around bidding."""
+        from models import AuctionLot
+        rows = (self.session.query(AuctionLot)
+                .filter(AuctionLot.season_id == self.season.id,
+                        AuctionLot.status == self.A.LOT_QUEUED,
+                        AuctionLot.category == role).limit(count).all())
+        self.assertEqual(count, len(rows), f"not enough queued {role}s")
+        for lot in rows:
+            lot.status = self.A.LOT_SOLD
+            lot.sold_to_id = franchise.id
+            lot.sold_price_lakh = 100
+            franchise.squad_size = int(franchise.squad_size or 0) + 1
+        self.session.commit()
+
+    # ── saving the rules ──
+
+    def test_a_blank_ceiling_and_a_typed_zero_are_different_answers(self):
+        self.A.set_role_rules(self.session, self.season, {},
+                              {"Bowler": None, "Wicket Keeper": 0})
+        self.session.commit()
+        caps = self.A.role_maximums(self.season)
+        self.assertNotIn("Bowler", caps, "a blank is no rule at all")
+        self.assertEqual(0, caps["Wicket Keeper"], "a typed 0 is a real rule")
+
+    def test_an_unsatisfiable_pair_is_refused_before_anybody_bids(self):
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.A.set_role_rules(self.session, self.season,
+                                  {"Bowler": 3}, {"Bowler": 2})
+        self.assertIn("above the maximum", str(caught.exception))
+
+    def test_minimums_adding_up_past_the_squad_cap_are_refused(self):
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.A.set_role_rules(self.session, self.season,
+                                  {"Batsman": 3, "Bowler": 3}, {})
+        self.assertIn("squad limit", str(caught.exception))
+
+    def test_the_rule_reads_back_as_one_line(self):
+        self.A.set_role_rules(self.session, self.season,
+                              {"Bowler": 1}, {"Bowler": 2, "Batsman": 3})
+        self.session.commit()
+        self.assertEqual("Batsman up to 3, Bowler 1-2",
+                         self.A.role_rule_line(self.season))
+        # No rules at all reads as empty, so every caller can print it behind a
+        # plain truth test.
+        self.A.set_role_rules(self.session, self.season, {}, {})
+        self.session.commit()
+        self.assertEqual("", self.A.role_rule_line(self.season))
+
+    # ── what a bid meets ──
+
+    def test_a_bid_past_a_role_ceiling_is_refused(self):
+        self.build_pool()
+        self.A.set_role_rules(self.session, self.season, {}, {"Batsman": 1})
+        self.session.commit()
+        self.hand(self.mumbai, "Batsman", 1)
+        lot = self.open_lot("Batsman")
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.A.validate_bid(self.session, self.season, lot, self.mumbai,
+                                lot.base_price_lakh, now=NOW)
+        self.assertIn("limit of 1", str(caught.exception))
+        # The cap is per role, so another role is untouched by it.
+        bowler = self.open_lot("Bowler")
+        self.assertEqual(bowler.base_price_lakh,
+                         self.A.validate_bid(self.session, self.season, bowler,
+                                             self.mumbai,
+                                             bowler.base_price_lakh, now=NOW))
+
+    def test_a_ceiling_of_zero_refuses_the_first_one_and_says_why(self):
+        self.build_pool()
+        self.A.set_role_rules(self.session, self.season, {},
+                              {"Wicket Keeper": 0})
+        self.session.commit()
+        lot = self.open_lot("Wicket Keeper")
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.A.validate_bid(self.session, self.season, lot, self.mumbai,
+                                lot.base_price_lakh, now=NOW)
+        # "already has 0, which is the limit of 0" would read as a bug.
+        self.assertIn("at all", str(caught.exception))
+
+    def test_a_ceiling_the_squad_is_under_lets_the_bid_through(self):
+        self.build_pool()
+        self.A.set_role_rules(self.session, self.season, {}, {"Batsman": 2})
+        self.session.commit()
+        self.hand(self.mumbai, "Batsman", 1)
+        lot = self.open_lot("Batsman")
+        self.assertEqual(lot.base_price_lakh,
+                         self.A.validate_bid(self.session, self.season, lot,
+                                             self.mumbai,
+                                             lot.base_price_lakh, now=NOW))
+
+    def test_a_retention_cannot_walk_past_a_ceiling_either(self):
+        # The gap a ceiling enforced only at bid time would leave: a franchise
+        # retains its way to an illegal squad before a single lot opens, and
+        # nothing it does afterwards can fix it.
+        self.season.max_retentions = 3
+        self.A.set_role_rules(self.session, self.season, {},
+                              {"Wicket Keeper": 1})
+        self.session.commit()
+        keepers = [p for p in self.players if p.category == "Wicket Keeper"]
+        self.assertGreaterEqual(len(keepers), 2)
+        self.A.retain(self.session, self.season, self.mumbai, keepers[0], 100)
+        self.session.commit()
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.A.retain(self.session, self.season, self.mumbai, keepers[1],
+                          100)
+        self.assertIn("limit of 1", str(caught.exception))
+        self.session.rollback()
+
+    def test_a_squad_over_a_ceiling_is_reported_rather_than_hidden(self):
+        # A rule tightened after the squad was built. Nothing the franchise
+        # does next can fix it, so the number has to be visible to an admin.
+        self.build_pool()
+        self.hand(self.mumbai, "Batsman", 2)
+        self.A.set_role_rules(self.session, self.season, {}, {"Batsman": 1})
+        self.session.commit()
+        owed, over = self.A.role_shortfall(self.session, self.season,
+                                           self.mumbai)
+        self.assertEqual({}, owed)
+        self.assertEqual({"Batsman": 1}, over)
+
+    def test_what_a_squad_still_owes_is_readable(self):
+        self.build_pool()
+        self.A.set_role_rules(self.session, self.season,
+                              {"Bowler": 1, "Wicket Keeper": 1}, {})
+        self.session.commit()
+        self.hand(self.mumbai, "Bowler", 1)
+        owed, over = self.A.role_shortfall(self.session, self.season,
+                                           self.mumbai)
+        self.assertEqual({"Wicket Keeper": 1}, owed)
+        self.assertEqual({}, over)
+
+    def test_the_rules_carry_into_next_season(self):
+        self.A.set_role_rules(self.session, self.season, {"Bowler": 1},
+                              {"Batsman": 4})
+        self.session.commit()
+        fresh = self.A.clone_season(self.session, self.season, "Next season")
+        self.session.commit()
+        self.assertEqual({"Bowler": 1}, self.A.role_minimums(fresh))
+        self.assertEqual({"Batsman": 4}, self.A.role_maximums(fresh))
+
+
+class SetDeleteServiceTests(AuctionCase):
+    """``delete_set`` and ``clear_pool`` — what goes, and what must not."""
+
+    def test_a_set_takes_only_what_is_still_waiting(self):
+        from models import AuctionLot
+        self.build_pool()
+        # Everything is in the default set; give three of them their own.
+        rows = (self.session.query(AuctionLot)
+                .filter(AuctionLot.season_id == self.season.id)
+                .order_by(AuctionLot.lot_no).limit(3).all())
+        for lot in rows:
+            lot.set_name = "Marquee"
+        # One of the three has already been sold.
+        rows[0].status = self.A.LOT_SOLD
+        rows[0].sold_to_id = self.mumbai.id
+        rows[0].sold_price_lakh = 500
+        self.session.commit()
+
+        label, removed = self.A.delete_set(self.session, self.season,
+                                           "Marquee")
+        self.session.commit()
+        self.assertEqual(("Marquee", 2), (label, removed))
+        left = {lot.name for lot in self.A.lots(self.session, self.season.id)}
+        self.assertIn(rows[0].name, left, "a sold lot is the record, not stock")
+        self.assertNotIn(rows[1].name, left)
+
+    def test_a_set_that_is_not_there_is_refused_rather_than_guessed_at(self):
+        self.build_pool()
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.A.delete_set(self.session, self.season, "Marq")
+        self.assertIn("Reload", str(caught.exception))
+
+    def test_a_live_auction_refuses_a_pool_edit(self):
+        self.build_pool()
+        self.start()
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.A.clear_pool(self.session, self.season)
+        self.assertIn("Pause the auction", str(caught.exception))
+
+    def test_clearing_the_pool_leaves_the_result_and_takes_the_queue(self):
+        from models import AuctionLot
+        self.build_pool()
+        sold = (self.session.query(AuctionLot)
+                .filter(AuctionLot.season_id == self.season.id).first())
+        sold.status = self.A.LOT_SOLD
+        sold.sold_to_id = self.mumbai.id
+        sold.sold_price_lakh = 500
+        self.session.commit()
+        total = len(self.A.lots(self.session, self.season.id))
+
+        removed = self.A.clear_pool(self.session, self.season)
+        self.session.commit()
+        self.assertEqual(total - 1, removed)
+        self.assertEqual([sold.name],
+                         [lot.name for lot in
+                          self.A.lots(self.session, self.season.id)])
+
+    def test_clearing_an_already_empty_queue_says_so(self):
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.A.clear_pool(self.session, self.season)
+        self.assertIn("Nothing is waiting", str(caught.exception))
+
+
+class FranchiseFileServiceTests(AuctionCase):
+    """Export and import of the field, at the service level."""
+
+    def test_the_export_carries_the_rules_and_the_squad_separately(self):
+        self.build_pool()
+        payload = self.A.export_franchises(self.session, self.season)
+        self.assertEqual(self.A.FRANCHISE_FILE_VERSION, payload["version"])
+        rows = {row["name"]: row for row in payload["franchises"]}
+        self.assertEqual({"Mumbai", "Chennai"}, set(rows))
+        self.assertEqual(ALICE, rows["Mumbai"]["owner_tg_id"])
+        self.assertEqual(self.purse_lakh, rows["Mumbai"]["purse_total_lakh"])
+        for key in ("purse_remaining_lakh", "squad_size", "retained_count",
+                    "rtm_cards_used", "draft_picks_used"):
+            self.assertNotIn(key, rows["Mumbai"],
+                             f"{key} is a result, not a rule — it must not be "
+                             f"in a file an import reads")
+
+    def test_an_import_never_writes_the_squad_it_carries(self):
+        other = self.A.create_season(self.session, "Elsewhere")
+        self.session.commit()
+        self.A.import_franchises(self.session, other, {"franchises": [
+            {"name": "Mumbai", "purse_total_lakh": 5000,
+             "squad": [{"name": "Somebody", "rating": 99}],
+             "squad_size": 11, "purse_remaining_lakh": 1}]})
+        self.session.commit()
+        franchise = self.A.franchises(self.session, other.id)[0]
+        self.assertEqual(0, franchise.squad_size)
+        self.assertEqual(5000, franchise.purse_remaining_lakh)
+        self.assertEqual([], self.A.squad(self.session, franchise.id))
+
+    def test_co_owners_survive_the_round_trip(self):
+        self.A.set_co_owners(self.session, self.mumbai, [CAROL, 444])
+        self.session.commit()
+        payload = self.A.export_franchises(self.session, self.season)
+        other = self.A.create_season(self.session, "Elsewhere")
+        self.session.commit()
+        self.A.import_franchises(self.session, other, payload)
+        self.session.commit()
+        rebuilt = {f.name: f for f in self.A.franchises(self.session, other.id)}
+        self.assertEqual([CAROL, 444],
+                         self.A.co_owner_ids(rebuilt["Mumbai"]))
+
+    def test_a_bare_list_is_accepted_as_readily_as_the_whole_file(self):
+        other = self.A.create_season(self.session, "Elsewhere")
+        self.session.commit()
+        added, updated, removed = self.A.import_franchises(
+            self.session, other, [{"name": "Kolkata"}])
+        self.session.commit()
+        self.assertEqual((1, 0, []), (added, updated, removed))
+
+    def test_replacing_hands_a_removed_sides_players_back(self):
+        from models import AuctionLot
+        self.build_pool()
+        lot = (self.session.query(AuctionLot)
+               .filter(AuctionLot.season_id == self.season.id).first())
+        lot.status = self.A.LOT_SOLD
+        lot.sold_to_id = self.chennai.id
+        lot.sold_price_lakh = 500
+        self.chennai.squad_size = 1
+        self.chennai.purse_remaining_lakh -= 500
+        self.session.commit()
+
+        self.A.import_franchises(self.session, self.season,
+                                 [{"name": "Mumbai"}], replace=True)
+        self.session.commit()
+        self.assertEqual(["Mumbai"],
+                         [f.name for f in
+                          self.A.franchises(self.session, self.season.id)])
+        self.session.expire_all()
+        refreshed = (self.session.query(AuctionLot)
+                     .filter(AuctionLot.id == lot.id).first())
+        self.assertEqual(self.A.LOT_QUEUED, refreshed.status,
+                         "a removed side's players go back into the pool")
+
+
 # ══════════════════════════════════════════════════════════════════════
 # Publishing
 # ══════════════════════════════════════════════════════════════════════
