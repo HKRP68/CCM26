@@ -1,4 +1,15 @@
-"""Handler for /claim — keeps session open through entire flow."""
+"""Handler for /claim — keeps session open through entire flow.
+
+The claim card itself is a photo with a caption, which is not something
+``sendRichMessage`` replaces. Everything the card *leads to* is an ordinary
+message, though, and those are what a manager reads afterwards: what joined the
+squad and what it is, what was released and for how much, what was swapped for
+what. Each of those now has a Bot API 10.1 block rendering beside its HTML one —
+the player's attributes as a real table behind a collapsible ``details``, rather
+than a ``<blockquote expandable>`` of ``key: value`` lines — and
+``services/rich_message.py`` sends the HTML whenever the rich send is refused.
+See ``docs/rich-text-messages.md``.
+"""
 
 import io
 import logging
@@ -16,6 +27,7 @@ from services.card_generator import generate_card
 from services.activity_service import log_activity
 from services.flags import get_flag
 from services.fancy_text import compact_value
+from services import rich_message as R
 from config import CLAIM_COOLDOWN, CLAIM_COINS, MAX_ROSTER, get_sell_value, get_buy_value
 
 logger = logging.getLogger(__name__)
@@ -64,6 +76,109 @@ def _build_card_text(p, coin_reward=0, mention=None):
     return "\n".join(lines)
 
 
+# ── Block renderings ─────────────────────────────────────────────────
+# Each one is the twin of the HTML message built at its call site: same facts,
+# same order, the parts that are really a table rendered as one. A builder that
+# raises hands back None, which rich_message reads as "send the HTML".
+
+
+def _card_details(rows, summary="📇 Card details"):
+    """A player's attributes as a collapsed table.
+
+    Replaces the ``<blockquote expandable>`` the HTML uses: the same tap to
+    open, but the values line up in their own column instead of drifting with
+    the length of each label.
+    """
+    return R.details(R.bold(summary),
+                     [R.table([[R.cell(R.bold(label)), R.cell(str(value))]
+                               for label, value in rows],
+                              bordered=True, compact=True)])
+
+
+def _retained_blocks(name, category, rating, bat_rating, bowl_rating,
+                     bat_hand, bowl_style, squad_size, mention_text,
+                     mention_tg_id):
+    """"X joined your squad" — the ✅ Retain outcome."""
+    try:
+        who = (R.mention(mention_text, mention_tg_id) if mention_text
+               else "your squad")
+        return [
+            R.heading(f"🏏 {name} joins the squad", size=3),
+            R.paragraph(["Signed by ", who, "."]),
+            _card_details([
+                ("👤 Category", category or "—"),
+                ("⭐ Rating", rating),
+                ("📊 Bat rating", bat_rating),
+                ("📊 Bowl rating", bowl_rating),
+                ("🏏 Bats", bat_hand or "—"),
+                ("🎯 Bowls", bowl_style or "—"),
+            ]),
+            R.footer(["✅ Squad size: ",
+                      R.bold(f"{squad_size}/{MAX_ROSTER}")]),
+        ]
+    except Exception:
+        logger.exception("claim retained blocks failed to build")
+        return None
+
+
+def _released_blocks(name, rating, mention_text, mention_tg_id, coins=None):
+    """"X has been released" — the 🔴 Release outcome."""
+    try:
+        who = (R.mention(mention_text, mention_tg_id) if mention_text
+               else "their manager")
+        blocks = [R.heading(f"🏏 {name} released", size=3),
+                  R.paragraph(["Released by ", who, "."]),
+                  R.table([[R.cell(R.bold("⭐ Rating")),
+                            R.cell(str(rating), align="right")]],
+                          bordered=True, compact=True)]
+        if coins:
+            blocks.append(R.footer(["💰 ", R.bold(f"+{coins:,}"),
+                                    " coins added"]))
+        return blocks
+    except Exception:
+        logger.exception("claim released blocks failed to build")
+        return None
+
+
+def _replaced_blocks(old_name, new_name, squad_size, traits_returned):
+    """"Out, in" — the ⚪ Replace outcome, as the two-row swap it is."""
+    try:
+        blocks = [R.heading("🔁 Player replaced", size=3),
+                  R.table([
+                      [R.cell("⬅"), R.cell(R.bold("Removed")),
+                       R.cell(old_name, align="right")],
+                      [R.cell("➡"), R.cell(R.bold("Added")),
+                       R.cell(new_name, align="right")],
+                  ], bordered=True, striped=True, compact=True),
+                  R.paragraph(["✅ Squad updated: ",
+                               R.bold(f"{squad_size}/{MAX_ROSTER}")])]
+        if traits_returned:
+            blocks.append(R.footer(
+                f"💎 {traits_returned} trait(s) returned to inventory."))
+        return blocks
+    except Exception:
+        logger.exception("claim replaced blocks failed to build")
+        return None
+
+
+def _auto_decide_blocks(title, name, rating, *, coins=None, note=None):
+    """The timeout outcome — auto-retained, or auto-released for coins."""
+    try:
+        rows = [[R.cell(R.bold("🏏 Player")), R.cell(name)],
+                [R.cell(R.bold("⭐ Rating")), R.cell(f"{rating} OVR")]]
+        if coins:
+            rows.append([R.cell(R.bold("💰 Coins")),
+                         R.cell(R.bold(f"+{coins:,}"))])
+        blocks = [R.heading(f"⏱ {title}", size=3),
+                  R.table(rows, bordered=True, compact=True)]
+        if note:
+            blocks.append(R.footer(R.italic(note)))
+        return blocks
+    except Exception:
+        logger.exception("claim auto-decide blocks failed to build")
+        return None
+
+
 def _player_to_dict(player):
     """Convert ORM player to plain dict while session is open."""
     return {
@@ -90,6 +205,7 @@ async def _auto_decide(context: ContextTypes.DEFAULT_TYPE):
     if _claim_done(key):
         return
 
+    action_blocks = None
     session = get_session()
     try:
         user = session.get(User, d["user_id"])
@@ -119,6 +235,9 @@ async def _auto_decide(context: ContextTypes.DEFAULT_TYPE):
                 session.commit()
                 action_msg = (f"⏱ <b>Time Expired — Auto-Retained</b>\n\n"
                               f"🏏 {player.name} ({player.rating} OVR) added to your roster.")
+                action_blocks = _auto_decide_blocks(
+                    "Time expired — auto-retained", player.name, player.rating,
+                    note="Nobody answered in time, so the card was kept.")
             except Exception:
                 session.rollback()
                 logger.exception("Auto-retain failed, falling back to auto-release")
@@ -132,6 +251,9 @@ async def _auto_decide(context: ContextTypes.DEFAULT_TYPE):
                 action_msg = (f"⏱ <b>Time Expired — Auto-Released</b>\n\n"
                               f"🏏 {player.name} ({player.rating} OVR)\n"
                               f"💰 +{sell_val:,} coins added")
+                action_blocks = _auto_decide_blocks(
+                    "Time expired — auto-released", player.name, player.rating,
+                    coins=sell_val)
         else:
             # AUTO-RELEASE (roster full, can't retain without picking who to drop)
             user.total_coins += sell_val
@@ -143,6 +265,11 @@ async def _auto_decide(context: ContextTypes.DEFAULT_TYPE):
             action_msg = (f"⏱ <b>Time Expired — Roster Full</b>\n\n"
                           f"🏏 {player.name} ({player.rating} OVR) auto-released.\n"
                           f"💰 +{sell_val:,} coins added")
+            action_blocks = _auto_decide_blocks(
+                "Time expired — roster full", player.name, player.rating,
+                coins=sell_val,
+                note=f"Your squad was already at {MAX_ROSTER}, so the card "
+                     "was sold back.")
 
         # Strip buttons + post outcome
         try:
@@ -150,8 +277,8 @@ async def _auto_decide(context: ContextTypes.DEFAULT_TYPE):
                 chat_id=d["chat_id"], message_id=d["message_id"], reply_markup=None)
         except Exception:
             pass
-        await context.bot.send_message(
-            chat_id=d["chat_id"], text=action_msg, parse_mode="HTML")
+        await R.send_rich_message(context.bot, d["chat_id"], action_blocks,
+                                  action_msg)
     except Exception:
         session.rollback()
         logger.exception("_auto_decide error")
@@ -343,20 +470,23 @@ async def retain_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.commit()
 
         mention = f"@{tg_user.username}" if tg_user.username else (tg_user.first_name or "")
-        await context.bot.send_message(chat_id=chat_id,
-            text=(f"🏏 {name} has been added to your squad. {mention}\n"
-                  f"━━━━━━━━━━━━━━\n"
-                  f"<blockquote expandable>"
-                  f"👤 Category: {category}\n"
-                  f"⭐ Rating: {rating}\n"
-                  f"📊 Bat Rating: {bat_rating}\n"
-                  f"📊 Bowl Rating: {bowl_rating}\n"
-                  f"🏏 Bat: {bat_hand}\n"
-                  f"🎯 Bowl: {bowl_style}"
-                  f"</blockquote>\n"
-                  f"━━━━━━━━━━━━━━\n"
-                  f"✅ Your Squad Size: {new_count}/{MAX_ROSTER}"),
-            parse_mode="HTML")
+        await R.send_rich_message(
+            context.bot, chat_id,
+            _retained_blocks(name, category, rating, bat_rating, bowl_rating,
+                             bat_hand, bowl_style, new_count,
+                             mention or "you", tg_user.id),
+            (f"🏏 {name} has been added to your squad. {mention}\n"
+             f"━━━━━━━━━━━━━━\n"
+             f"<blockquote expandable>"
+             f"👤 Category: {category}\n"
+             f"⭐ Rating: {rating}\n"
+             f"📊 Bat Rating: {bat_rating}\n"
+             f"📊 Bowl Rating: {bowl_rating}\n"
+             f"🏏 Bat: {bat_hand}\n"
+             f"🎯 Bowl: {bowl_style}"
+             f"</blockquote>\n"
+             f"━━━━━━━━━━━━━━\n"
+             f"✅ Your Squad Size: {new_count}/{MAX_ROSTER}"))
 
         # Achievement check (post-commit so it sees fresh roster_count)
         try:
@@ -414,10 +544,12 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      coins_change=sell_val, player_name=name)
         session.commit()
 
-        await context.bot.send_message(chat_id=chat_id,
-            text=(f"🏏 {name} has been released by @{username}\n\n"
-                  f"{name}, {rating} OVR"),
-            parse_mode="HTML")
+        await R.send_rich_message(
+            context.bot, chat_id,
+            _released_blocks(name, rating, f"@{username}", tg_user.id,
+                             coins=sell_val),
+            (f"🏏 {name} has been released by @{username}\n\n"
+             f"{name}, {rating} OVR"))
 
     except Exception:
         # Keep the claim (may be post-commit) so a stale tap can't re-credit.
@@ -536,12 +668,13 @@ async def replace_confirm_callback(update: Update, context: ContextTypes.DEFAULT
 
         traits_line = (f"\n💎 {traits_returned} trait(s) returned to inventory."
                        if traits_returned else "")
-        await context.bot.send_message(chat_id=chat_id,
-            text=(f"🔁 <b>Player SUCCESSFULLY REPLACED!</b>\n\n"
-                  f"⬅ Removed: {old_name}\n"
-                  f"➡ Added: {new_name}\n\n"
-                  f"✅ Squad Updated: {count}/{MAX_ROSTER}{traits_line}"),
-            parse_mode="HTML")
+        await R.send_rich_message(
+            context.bot, chat_id,
+            _replaced_blocks(old_name, new_name, count, traits_returned),
+            (f"🔁 <b>Player SUCCESSFULLY REPLACED!</b>\n\n"
+             f"⬅ Removed: {old_name}\n"
+             f"➡ Added: {new_name}\n\n"
+             f"✅ Squad Updated: {count}/{MAX_ROSTER}{traits_line}"))
 
     except Exception:
         session.rollback()

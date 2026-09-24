@@ -22,6 +22,12 @@ _MISSING = object()      # tells "absent from sys.modules" from "present as None
 
 
 def _load_challenge_with_stubs():
+    # ``handlers.challenge`` pulls in the rich-message renderers, which import
+    # the real ``telegram`` at module level. Import them here, before the stub
+    # goes in, so they are already cached and never loaded against it.
+    import services.match_rich  # noqa: F401
+    import services.rich_message  # noqa: F401
+
     saved = {name: sys.modules.get(name, _MISSING) for name in _STUBBED}
     # ``from handlers import challenge`` also caches the module as an attribute on
     # the already-imported ``handlers`` package, so restoring sys.modules alone
@@ -85,6 +91,8 @@ def _load_challenge_with_stubs():
     handlers_match._chat_busy_message = lambda *args, **kwargs: "busy"
     handlers_match._cric_lobby_for_user = lambda *args, **kwargs: None
     handlers_match._mention = lambda user, fallback_name=None: "@user"
+    handlers_match._mention_parts = (
+        lambda tg_id, fallback_name="Player": (fallback_name, tg_id))
     handlers_match._user_busy_message = lambda *args, **kwargs: "busy"
     handlers_match._user_label = lambda user: "User"
     sys.modules["handlers.match"] = handlers_match
@@ -1016,6 +1024,67 @@ class CiplXiHybridTests(unittest.IsolatedAsyncioTestCase):
         # Bench continues from 12 over the non-selected squad players.
         self.assertIn("12. Player 12", text)
         self.assertIn("15. Player 15", text)
+
+    def test_confirmed_blocks_number_the_xi_exactly_as_the_text_does(self):
+        """The block twin and the HTML must agree on the /change numbering.
+
+        A captain reading either rendering types the same slot number, so a
+        drift here swaps the wrong player.
+        """
+        players = _squad_15()
+        draft = {"host": {"tg_id": 1, "name": "User 1"}}
+        order = [3, 1, 2] + list(range(4, 12))
+        blocks = challenge._challenge_xi_confirmed_blocks(
+            draft, "host", "Mumbai Indians", players, order)
+        self.assertIsNotNone(blocks)
+
+        def cell_text(cell):
+            node = cell.get("text", "")
+            while isinstance(node, dict):
+                node = node.get("text", "")
+            return node if isinstance(node, str) else "".join(
+                n if isinstance(n, str) else "" for n in node)
+
+        def rows(table):
+            return [(cell_text(r[0]), cell_text(r[1])) for r in table["cells"][1:]]
+
+        found = []
+
+        def walk(nodes):
+            for node in nodes or ():
+                if node.get("type") == "table":
+                    found.append(node)
+                walk(node.get("blocks"))
+
+        walk(blocks)
+        xi_rows, bench_rows = rows(found[0]), rows(found[1])
+        self.assertEqual([n for n, _name in xi_rows],
+                         [str(i) for i in range(1, 12)])
+        self.assertEqual([name for _n, name in xi_rows[:3]],
+                         ["Player 3", "Player 1", "Player 2"])
+        self.assertEqual([n for n, _name in bench_rows], ["12", "13", "14", "15"])
+
+        text = challenge._challenge_xi_confirmed_text(
+            draft, "host", "Mumbai Indians", players, order)
+        for number, name in xi_rows + bench_rows:
+            self.assertIn(f"{number}. {name}", text)
+
+    def test_picker_blocks_tick_the_rules_the_text_ticks(self):
+        players = _squad_15()
+        draft = {"host": {"tg_id": 1, "name": "User 1"}}
+        blocks = challenge._challenge_xi_picker_blocks(
+            draft, "host", "Mumbai Indians", players, [1, 2, 3])
+        checklists = [b for b in blocks if b.get("is_checkbox")]
+        self.assertEqual(len(checklists), 1)
+        # Player 1 is the keeper, so that rule is met; three picks is nowhere
+        # near five bowling options, so that one is not. The HTML renderer draws
+        # the same one-ticked, one-empty pair for the same selection.
+        self.assertEqual([item["is_checked"] for item in checklists[0]["items"]],
+                         [True, False])
+        text = challenge._challenge_xi_text(
+            draft, "host", "Mumbai Indians", players, [1, 2, 3])
+        self.assertEqual(text.count("☑️"), 1)
+        self.assertEqual(text.count("☐"), 1)
 
     def test_confirmed_text_capped_for_huge_roster(self):
         # A pathological admin team with a very large roster must not blow past

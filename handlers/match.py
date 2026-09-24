@@ -1,6 +1,6 @@
 """Handler for /playmatch — full match with endmatch, timeouts, rewards."""
 
-import asyncio, html, io, os, random, logging
+import asyncio, html, io, os, random, re, logging
 from datetime import datetime, timedelta
 from sqlalchemy import or_
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -26,6 +26,8 @@ from services.telegram_user_service import resolve_command_target, sync_telegram
 from services.batsman_card import generate_batsman_card
 from services.bowler_card import generate_bowler_card
 from services import scorecard_delivery
+from services import match_rich
+from services import rich_message
 from handlers.lineup import format_xi_text
 
 logger = logging.getLogger(__name__)
@@ -63,6 +65,10 @@ WPM_MAX_OVERS = 20
 
 # Sentinel telegram ID for the AI bot opponent in /vsbot
 BOT_TG_ID_ = -1
+
+# The ball headline is written as HTML ("🟥 <b>WICKET!</b> …"); the block
+# rendering wants the words on their own, so the tags come off before it.
+_HTML_TAGS_RE = re.compile(r"<[^>]+>")
 
 # State store (persistent — backed by match_state DB table)
 from services.match_state_store import (
@@ -462,6 +468,19 @@ def _mention(user_or_tg_id, fallback_name=None):
     name = u.username or u.first_name or fallback_name or "Player"
     label = f"@{u.username}" if u.username else name
     return f'<a href="tg://user?id={u.telegram_id}">{label}</a>'
+
+
+def _mention_parts(tg_id, fallback_name="Player"):
+    """``(label, tg_id_or_None)`` for a rich-message mention.
+
+    The HTML ``_mention`` above bakes the link into a string, which a block
+    tree cannot use. This returns the two halves instead, and keeps the same
+    rule for the bot opponent: it is named, never linked, because there is no
+    account behind it to open.
+    """
+    if tg_id is None or tg_id == BOT_TG_ID_:
+        return ("🤖 Bot" if tg_id == BOT_TG_ID_ else fallback_name), None
+    return fallback_name, tg_id
 
 
 def _mention_by_tg_id(session, tg_id, fallback="Player"):
@@ -4445,8 +4464,10 @@ async def _show_delivery(ctx, cid, mid):
         bw = get_bowler(s); st = get_striker(s); ph = get_phase(s)
         ov = s["current_over"]; bl = s["current_ball"] + 1
         opts = get_delivery_options(bw["bowl_style"], bw["bowl_hand"])
+        # _take_ai_note pops, so it is read once and shared by both renderings.
+        ai_note = _take_ai_note(s)
         bowl_mention = _mention(s.get("bowl_user_tg"), fallback_name=s.get("bowl_username") or "Bowler")
-        hdr = (f"{_take_ai_note(s)}🎳 <b>OVER {ov} • BALL {bl}</b>\n\n📊 {format_score(s)} | {format_overs(s)} ov | CRR {crr(s)}\n\n"
+        hdr = (f"{ai_note}🎳 <b>OVER {ov} • BALL {bl}</b>\n\n📊 {format_score(s)} | {format_overs(s)} ov | CRR {crr(s)}\n\n"
                f"🎳 {bw['name']} ({bw['bowl_rating']} BWL)\n🏏 vs {st['name']} ({st['bat_rating']} BAT)\n📍 {ph}\n\n"
                f"━━━━━━━━━━━━━━━━━━━\n\n{bowl_mention}, choose your delivery:\n\n")
         if opts["is_spinner"]:
@@ -4455,25 +4476,33 @@ async def _show_delivery(ctx, cid, mid):
                 row.append(InlineKeyboardButton(d, callback_data=f"bspin_{mid}_{i}"))
                 if len(row) == 3: btns.append(row); row = []
             if row: btns.append(row)
-            text_to_send = hdr + "🎯 <b>SELECT DELIVERY</b>"
+            choose = "SELECT DELIVERY"
         else:
             vs = opts["variations"]; btns = []; row = []
             for i, v in enumerate(vs):
                 row.append(InlineKeyboardButton(v, callback_data=f"bvar_{mid}_{i}"))
                 if len(row) == 3: btns.append(row); row = []
             if row: btns.append(row)
-            text_to_send = hdr + "🎯 <b>SELECT VARIATION</b>"
+            choose = "SELECT VARIATION"
+        text_to_send = hdr + f"🎯 <b>{choose}</b>"
+        label, mention_id = _mention_parts(
+            s.get("bowl_user_tg"), s.get("bowl_username") or "Bowler")
+        blocks = match_rich.delivery_prompt_blocks(
+            s, bowler=bw, striker=st, phase=ph, mention_text=label,
+            mention_tg_id=mention_id, choose_label=f"🎯 {choose}",
+            ai_note=ai_note.strip() or None)
+        keyboard = InlineKeyboardMarkup(btns)
 
         # Send with retry-once
         try:
-            await ctx.bot.send_message(cid, text_to_send, parse_mode="HTML",
-                                        reply_markup=InlineKeyboardMarkup(btns))
+            await rich_message.send_rich_message(
+                ctx.bot, cid, blocks, text_to_send, reply_markup=keyboard)
         except Exception as e1:
             logger.warning(f"_show_delivery first attempt failed: {e1}")
             import asyncio
             await asyncio.sleep(0.5)
             await ctx.bot.send_message(cid, text_to_send, parse_mode="HTML",
-                                        reply_markup=InlineKeyboardMarkup(btns))
+                                        reply_markup=keyboard)
 
         _start_action_timer(ctx, mid, s["bowl_user_tg"], "select delivery")
     except Exception:
@@ -4627,8 +4656,10 @@ async def _show_shot(ctx, cid, mid):
     try:
         st = get_striker(s); bw = get_bowler(s); dl = s.get("current_delivery", "?")
         bs = _stats_get(s["bat_stats"], st["roster_id"])
+        # _take_ai_note pops, so it is read once and shared by both renderings.
+        ai_note = _take_ai_note(s)
         bat_mention = _mention(s.get("bat_user_tg"), fallback_name=s.get("bat_username") or "Batsman")
-        txt = (f"{_take_ai_note(s)}"
+        txt = (f"{ai_note}"
                f"🏏 <b>OVER {s['current_over']} • BALL {s['current_ball'] + 1}</b>\n\n"
                f"📊 {format_score(s)} | {format_overs(s)} ov | CRR {crr(s)}\n\n"
                f"🎳 {bw['name']}: {dl}\n🏏 {st['name']} ({st['bat_rating']} BAT) — "
@@ -4639,17 +4670,23 @@ async def _show_shot(ctx, cid, mid):
             row.append(InlineKeyboardButton(sh, callback_data=f"bshot_{mid}_{i}"))
             if len(row) == 3: btns.append(row); row = []
         if row: btns.append(row)
+        label, mention_id = _mention_parts(
+            s.get("bat_user_tg"), s.get("bat_username") or "Batsman")
+        blocks = match_rich.shot_prompt_blocks(
+            s, bowler=bw, striker=st, delivery=dl, mention_text=label,
+            mention_tg_id=mention_id, ai_note=ai_note.strip() or None)
+        keyboard = InlineKeyboardMarkup(btns)
 
         # Try once; if it fails, retry once with a small delay
         try:
-            await ctx.bot.send_message(cid, txt, parse_mode="HTML",
-                                        reply_markup=InlineKeyboardMarkup(btns))
+            await rich_message.send_rich_message(
+                ctx.bot, cid, blocks, txt, reply_markup=keyboard)
         except Exception as e1:
             logger.warning(f"_show_shot first attempt failed: {e1}")
             import asyncio
             await asyncio.sleep(0.5)
             await ctx.bot.send_message(cid, txt, parse_mode="HTML",
-                                        reply_markup=InlineKeyboardMarkup(btns))
+                                        reply_markup=keyboard)
 
         _start_action_timer(ctx, mid, s["bat_user_tg"], "choose shot")
     except Exception:
@@ -4927,16 +4964,23 @@ async def _process_shot_core(context, mid, si, *, q=None):
             # Build the result message
             sc = build_live_scorecard(s)
             traits_line = ""
+            # The block rendering keeps each announcement as its own paragraph
+            # rather than one run-on line, so collect them as they are decided.
+            trait_notes = []
             activated = oc.get("traits_activated") or []
             if activated:
                 unique_act = list(dict.fromkeys(activated))[:3]
                 traits_line = "\n💎 " + " · ".join(unique_act)
+                trait_notes.append("💎 " + " · ".join(unique_act))
             # Chemistry gets the same treatment as a trait: it is announced on
             # the ball where it does something the player can feel. The static
             # team numbers live on the scorecard below (build_chemistry_line);
             # this is the death-overs/clutch doubling firing right now.
             if s.pop("_chem_clutch_live", False):
                 traits_line += "\n🧪 <i>Clutch chemistry — the drilled side holds its nerve</i>"
+                trait_notes.append(
+                    ["🧪 ", rich_message.italic(
+                        "Clutch chemistry — the drilled side holds its nerve")])
             # Prefer the rich SimCricketX engine (situation + sequence aware);
             # fall back to the configured per-event line when it yields nothing.
             commentary_line = _engine_commentary(
@@ -4954,6 +4998,13 @@ async def _process_shot_core(context, mid, si, *, q=None):
                 f"{rtxt}{commentary_block}{traits_line}\n\n"
                 f"{sc}"
             )
+            # The block twin of the same ball. ``rtxt`` is HTML, so the headline
+            # is handed over tag-free — the pullquote does its own emphasis.
+            head_blocks = match_rich.ball_result_blocks(
+                s, bowler_name=bowler["name"], delivery=dl,
+                striker_name=striker["name"], shot=shot,
+                headline=html.unescape(_HTML_TAGS_RE.sub("", rtxt)).strip(),
+                commentary=commentary_line, trait_lines=trait_notes)
 
             # Reset transient state
             s["current_delivery"] = None
@@ -4975,13 +5026,13 @@ async def _process_shot_core(context, mid, si, *, q=None):
 
             # Send result message (lock still held, but send is fast — no artificial delay)
             try:
-                if q is not None:
-                    try:
-                        await q.edit_message_text(head, parse_mode="HTML")
-                    except Exception:
-                        await context.bot.send_message(s["chat_id"], head, parse_mode="HTML")
-                else:
-                    await context.bot.send_message(s["chat_id"], head, parse_mode="HTML")
+                # Redraw the prompt the batsman just answered, as before; a
+                # refused edit still leaves the ball posted as a new message.
+                drawn = (await rich_message.edit_rich(q, head_blocks, head)
+                         if q is not None else False)
+                if not drawn:
+                    await rich_message.send_rich_message(
+                        context.bot, s["chat_id"], head_blocks, head)
             except Exception:
                 logger.exception("Failed to send scorecard update")
 

@@ -712,7 +712,12 @@ class RecordAndSendTests(unittest.TestCase):
                 sd, "render_card_async", new=AsyncMock(return_value=None)):
             _run(sd.record_and_send(bot, -5005, 96, [_bat_card(1, 96)]))
         bot.send_message.assert_awaited_once()
-        self.assertIn("156/4", bot.send_message.await_args.kwargs["text"])
+        # The text fallback now goes out through ``rich_message``, which tries a
+        # rich message first and passes the body positionally when it falls back
+        # to HTML. What matters is that the numbers reach the chat either way.
+        call = bot.send_message.await_args
+        body = call.kwargs.get("text") or call.args[1]
+        self.assertIn("156/4", body)
 
     def test_a_successful_send_does_not_also_post_the_text_fallback(self):
         bot = MagicMock()
