@@ -377,44 +377,246 @@ def purses_view(session, season):
     return blocks, A.render_purses(session, season)
 
 
-def sets_view(session, season):
-    """Every set in running order, and the unsold pile as one of its own."""
-    entries = A.list_sets(session, season)
-    unsold = A.unsold(session, season.id)
-    header = [R.cell(R.bold(""), header=True, align="center"),
-              R.cell(R.bold("Set"), header=True),
-              R.cell(R.bold("Left"), header=True, align="right"),
-              R.cell(R.bold("Sold"), header=True, align="right"),
-              R.cell(R.bold("Unsold"), header=True, align="right")]
+# ── Sets: paged, with a set openable in place ────────────────────────
+#
+# A pool is routinely dozens of sets of dozens of players, which is several
+# messages' worth of text — so the card is paged, and a set is opened rather
+# than always printed. Three things carry that, in order of how little they
+# cost the reader:
+#
+#   • every set on the page is a ``details`` collapsible (an expandable
+#     blockquote in the HTML twin), so its first few players are one tap away
+#     with no round trip at all;
+#   • a button per set opens that set in full, itself paged, by editing the
+#     message rather than posting another one;
+#   • the page buttons walk the sets.
+#
+# Sets are addressed in callback data by ``set_no``, never by name: names carry
+# emoji, spaces and commas, Telegram caps callback data at 64 bytes, and
+# ``list_sets`` maps the number back. A number that no longer exists is refused
+# rather than silently opening whatever now sits in that place.
+
+SETS_CB = "au_sets_"
+# Sets per page of the list.
+SETS_PAGE_SIZE = 6
+# Players per page of one opened set.
+LOT_PAGE_SIZE = 20
+# Players shown inside a set's collapsible on the list page. Deliberately small:
+# this is the "is this the set I meant?" glance, and the button beside it is the
+# whole thing.
+INLINE_LOTS = 8
+
+
+def _pages(total, per_page):
+    return max(1, (total + per_page - 1) // per_page)
+
+
+def _clamp_page(page, total_pages):
+    return min(max(A._as_int(page, 1) or 1, 1), total_pages)
+
+
+def _set_lot_table(session, season, rows):
+    """One opened set's players, and where each of them ended up.
+
+    Its own table rather than ``_lot_table``: a set holds queued, sold and
+    unsold players at once, and the two shapes ``_lot_table`` offers each drop
+    the half the other shows.
+    """
+    header = [R.cell(R.bold("#"), header=True, align="center"),
+              R.cell(R.bold("Player"), header=True),
+              R.cell(R.bold("OVR"), header=True, align="right"),
+              R.cell(R.bold("Role"), header=True),
+              R.cell(R.bold("Base"), header=True, align="right"),
+              R.cell(R.bold("Result"), header=True)]
     table = [header]
-    lines = [f"🗂 <b>{_e(season.name)} — sets</b>", ""]
-    for entry in entries:
-        mark = STATE_MARK[entry["state"]]
-        table.append([R.cell(mark, align="center"),
-                      R.cell(R.bold(entry["name"]) if entry["state"] in ("live", "next")
-                             else entry["name"]),
-                      R.cell(str(entry["queued"]), align="right"),
-                      R.cell(str(entry["sold"]), align="right"),
-                      R.cell(str(entry["unsold"]), align="right")])
-        lines.append(f"{mark} <b>{_e(entry['name'])}</b> — "
-                     f"{STATE_WORD[entry['state']]} · {entry['queued']} left · "
-                     f"{entry['sold']} sold · {entry['unsold']} unsold")
+    for lot in rows:
+        table.append([R.cell(str(lot.lot_no), align="center"),
+                      R.cell(f"{_flag(lot)} {lot.name}"),
+                      R.cell(str(lot.rating), align="right"),
+                      R.cell(lot.category),
+                      R.cell(_money(season, lot.base_price_lakh), align="right"),
+                      R.cell(_lot_result(session, season, lot))])
+    return R.table(table, bordered=True, striped=True, compact=True)
+
+
+def _lot_result(session, season, lot):
+    """Where a lot stands, in the few words a table cell has room for."""
+    if lot.status == A.LOT_SOLD:
+        buyer = _franchise(session, lot.sold_to_id)
+        return (f"{buyer.name if buyer else '?'}"
+                f"{A.acquisition_mark(lot)} "
+                f"{_money(season, lot.sold_price_lakh)}")
+    return {A.LOT_QUEUED: "⏳ waiting", A.LOT_ON_BLOCK: "🔨 on the block",
+            A.LOT_UNSOLD: "❌ unsold",
+            A.LOT_WITHDRAWN: "🚫 withdrawn"}.get(lot.status, lot.status)
+
+
+def sets_view(session, season, *, page=1, expand=None, lot_page=1):
+    """The sets card: one page of sets, or one set opened in full.
+
+    ``expand`` is a ``set_no``. Returns ``(blocks, html, keyboard)`` — the third
+    element is what makes it pageable, and ``_view`` already forwards it.
+    Returns None for ``expand`` naming a set that is no longer there, so the
+    caller can say the sets have moved instead of showing the wrong one.
+    """
+    entries = A.list_sets(session, season)
+    groups = _grouped(A.lots(session, season.id))
+    total_pages = _pages(len(entries), SETS_PAGE_SIZE)
+
+    if expand is not None:
+        chosen = next((e for e in entries
+                       if e["set_no"] == A._as_int(expand, 0)), None)
+        if chosen is None:
+            return None
+        return _set_detail_view(session, season, chosen, groups,
+                                lot_page=lot_page, total_pages=total_pages)
+
+    page = _clamp_page(page, total_pages)
+    start = (page - 1) * SETS_PAGE_SIZE
+    shown = entries[start:start + SETS_PAGE_SIZE]
+
     blocks = [R.heading(f"🗂 {season.name} — sets", size=2)]
-    if len(table) > 1:
-        blocks.append(R.table(table, bordered=True, striped=True, compact=True))
-    else:
+    lines = [f"🗂 <b>{_e(season.name)} — sets</b>"]
+    if not entries:
         blocks.append(R.paragraph(R.italic("The pool is empty.")))
         lines.append("<i>The pool is empty.</i>")
-    blocks.append(R.paragraph([
-        "⚡ ", R.bold(A.UNSOLD_SET), f": {len(unsold)} waiting"
-        + (" — they return once, automatically, when the main pool is done."
-           if unsold and A._as_int(getattr(season, 'auto_accelerated', 1), 1)
-           and not A._as_int(getattr(season, 'accelerated_done', 0), 0) else ".")]))
-    lines.append("")
-    lines.append(f"⚡ <b>{_e(A.UNSOLD_SET)}</b>: {len(unsold)} waiting")
-    blocks.append(R.footer("✅ done · 🔨 live · ⏭ next · ⏳ queued — "
-                           "/anextset shows the next set's players"))
-    return blocks, "\n".join(lines)
+    else:
+        count = f"{len(entries)} set{'s' if len(entries) != 1 else ''}"
+        blocks.append(R.paragraph(
+            f"{count}, in the order they run · page {page}/{total_pages}"))
+        lines.append(f"<i>{count}, in the order they run — page "
+                     f"{page}/{total_pages}</i>")
+
+    for entry in shown:
+        mark = STATE_MARK[entry["state"]]
+        rows = groups.get(entry["name"], [])
+        summary = (f"#{entry['set_no']} {mark} {entry['name']} — "
+                   f"{entry['queued']} left · {entry['sold']} sold · "
+                   f"{entry['unsold']} unsold")
+        body = [_set_lot_table(session, season, rows[:INLINE_LOTS])] if rows else []
+        if len(rows) > INLINE_LOTS:
+            body.append(R.paragraph(R.italic(
+                f"…and {len(rows) - INLINE_LOTS} more — press "
+                f"#{entry['set_no']} below for the whole set.")))
+        blocks.append(R.details(
+            R.bold(summary), body,
+            # The set being auctioned right now is the one the room is actually
+            # asking about, so it starts open.
+            is_open=entry["state"] in ("live", "next")))
+
+        lines.append(f"\n#{entry['set_no']} {mark} <b>{_e(entry['name'])}</b> — "
+                     f"{STATE_WORD[entry['state']]} · {entry['queued']} left · "
+                     f"{entry['sold']} sold · {entry['unsold']} unsold")
+        if rows:
+            preview = [_lot_line(season, lot) for lot in rows[:INLINE_LOTS]]
+            if len(rows) > INLINE_LOTS:
+                preview.append(f"<i>…and {len(rows) - INLINE_LOTS} more</i>")
+            lines.append("<blockquote expandable>" + "\n".join(preview)
+                         + "</blockquote>")
+
+    unsold = A.unsold(session, season.id)
+    tail = ("⚡ " + A.UNSOLD_SET + f": {len(unsold)} waiting")
+    if (unsold and A._as_int(getattr(season, "auto_accelerated", 1), 1)
+            and not A._as_int(getattr(season, "accelerated_done", 0), 0)):
+        tail += " — they return once, automatically, when the main pool is done."
+    blocks.append(R.paragraph(tail))
+    lines.append(f"\n⚡ <b>{_e(A.UNSOLD_SET)}</b>: {len(unsold)} waiting")
+
+    footer = ("✅ done · 🔨 live · ⏭ next · ⏳ queued — tap a set to see its "
+              "first few, or press its number for the whole set")
+    blocks.append(R.footer(footer))
+    lines.append(f"\n<i>{footer}</i>")
+    return blocks, "\n".join(lines), sets_keyboard(shown, page=page,
+                                                  total_pages=total_pages)
+
+
+def _set_detail_view(session, season, entry, groups, *, lot_page, total_pages):
+    """One set, in full, a page of players at a time."""
+    rows = groups.get(entry["name"], [])
+    lot_pages = _pages(len(rows), LOT_PAGE_SIZE)
+    lot_page = _clamp_page(lot_page, lot_pages)
+    start = (lot_page - 1) * LOT_PAGE_SIZE
+    shown = rows[start:start + LOT_PAGE_SIZE]
+    mark = STATE_MARK[entry["state"]]
+    # Which page of the list this set sits on, so "All sets" goes back to it
+    # rather than to the first page.
+    back_page = ((entry["set_no"] - 1) // SETS_PAGE_SIZE) + 1
+
+    title = f"🗂 #{entry['set_no']} {entry['name']}"
+    stand = (f"{mark} {STATE_WORD[entry['state']]} · {entry['queued']} waiting · "
+             f"{entry['sold']} sold · {entry['unsold']} unsold")
+    blocks = [R.heading(title, size=2), R.paragraph(stand)]
+    lines = [f"{mark} <b>{_e(title)}</b>", f"<i>{_e(stand)}</i>"]
+
+    if not rows:
+        blocks.append(R.paragraph(R.italic("This set has no players.")))
+        lines.append("<i>This set has no players.</i>")
+    else:
+        span = (f"Players {start + 1}–{start + len(shown)} of {len(rows)}"
+                + (f" · page {lot_page}/{lot_pages}" if lot_pages > 1 else ""))
+        blocks.append(R.paragraph(span))
+        blocks.append(_set_lot_table(session, season, shown))
+        lines.append(f"<i>{span}</i>")
+        for chunk in range(0, len(shown), QUOTE_ROWS):
+            lines.append("<blockquote expandable>"
+                         + "\n".join(_lot_line(season, lot)
+                                     for lot in shown[chunk:chunk + QUOTE_ROWS])
+                         + "</blockquote>")
+
+    return (blocks, "\n".join(lines),
+            sets_keyboard([], page=back_page, total_pages=total_pages,
+                          expand=entry["set_no"], lot_page=lot_page,
+                          lot_pages=lot_pages))
+
+
+def sets_keyboard(entries, *, page, total_pages, expand=None, lot_page=1,
+                  lot_pages=1):
+    """Page buttons for the sets card, and one button per set to open it."""
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+    def nav(label, data):
+        return InlineKeyboardButton(label, callback_data=data)
+
+    rows = []
+    if expand is None:
+        # Three per row keeps the labels readable on a phone.
+        opens = [nav(f"#{e['set_no']} {_short(e['name'])}",
+                     f"{SETS_CB}x_{e['set_no']}_1")
+                 for e in entries]
+        rows += [opens[i:i + 3] for i in range(0, len(opens), 3)]
+        if total_pages > 1:
+            bar = []
+            if page > 1:
+                bar.append(nav("⬅️ Prev", f"{SETS_CB}p_{page - 1}"))
+            bar.append(nav(f"Page {page}/{total_pages}", f"{SETS_CB}noop"))
+            if page < total_pages:
+                bar.append(nav("Next ➡️", f"{SETS_CB}p_{page + 1}"))
+            rows.append(bar)
+        rows.append([nav("🔄 Refresh", f"{SETS_CB}p_{page}")])
+        return InlineKeyboardMarkup(rows)
+
+    if lot_pages > 1:
+        bar = []
+        if lot_page > 1:
+            bar.append(nav("⬅️", f"{SETS_CB}x_{expand}_{lot_page - 1}"))
+        bar.append(nav(f"Page {lot_page}/{lot_pages}", f"{SETS_CB}noop"))
+        if lot_page < lot_pages:
+            bar.append(nav("➡️", f"{SETS_CB}x_{expand}_{lot_page + 1}"))
+        rows.append(bar)
+    rows.append([nav("⬅️ All sets", f"{SETS_CB}p_{page}"),
+                 nav("🔄 Refresh", f"{SETS_CB}x_{expand}_{lot_page}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _short(name, limit=14):
+    """A set name cut to fit a button beside its number.
+
+    Cuts by code point, so an emoji built from several of them can lose its tail.
+    That is a cosmetic risk on a label only — the button carries the set's number,
+    never its name, so nothing is resolved from what this returns.
+    """
+    name = str(name or "").strip()
+    return name if len(name) <= limit else name[:limit - 1].rstrip() + "…"
 
 
 def _lot_table(season, rows, *, sold=False, session=None):
@@ -455,11 +657,12 @@ def next_set_view(session, season):
         text = "⏭ No other set is waiting — this is the last one."
         return [R.paragraph(text)], text
     rows = A.queued_lots(session, season, set_name=entry["name"])
-    blocks = [R.heading(f"⏭ Next set: {entry['name']}", size=2),
+    blocks = [R.heading(f"⏭ Next set #{entry['set_no']}: {entry['name']}", size=2),
               R.paragraph(f"{len(rows)} player{'s' if len(rows) != 1 else ''}, "
                           f"in the order they come up."),
               _lot_table(season, rows[:40])]
-    lines = [f"⏭ <b>Next set: {_e(entry['name'])}</b> — {len(rows)} players", ""]
+    lines = [f"⏭ <b>Next set #{entry['set_no']}: {_e(entry['name'])}</b> — "
+             f"{len(rows)} players", ""]
     lines += [_lot_line(season, lot) for lot in rows[:40]]
     if len(rows) > 40:
         more = f"…and {len(rows) - 40} more"
@@ -846,28 +1049,52 @@ async def send(bot, chat_id, blocks, html_text, *, reply_markup=None,
     return sent
 
 
-async def edit(bot, chat_id, message_id, blocks, *, reply_markup=None):
+async def edit(bot, chat_id, message_id, blocks, *, reply_markup=None,
+               html_text=None):
     """Edit a message into ``blocks``. True, False, or None (not attempted).
 
     "Not modified" is a success here, as it is for the HTML board: two ticks
     can render the same thing.
+
+    Pass ``html_text`` for a message somebody is *driving* — a paged card whose
+    buttons edit it in place. Without it a chat where rich text is off, refused
+    or unavailable gets no edit at all, which is a button that does nothing; with
+    it the edit falls back to HTML the same way :func:`send` does. The board
+    leaves it out on purpose: it has its own HTML edit path and re-renders on the
+    next tick anyway.
     """
     post = getattr(bot, "_post", None)
-    if not (R.rich_text_enabled() and blocks and post):
+    if R.rich_text_enabled() and blocks and post:
+        payload = {"chat_id": chat_id, "message_id": message_id,
+                   "rich_message": {"blocks": blocks}}
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        try:
+            await post("editMessageText", payload)
+            return True
+        except Exception as exc:
+            if "not modified" in str(exc).lower():
+                return True
+            from telegram.error import TelegramError
+            if isinstance(exc, TelegramError):
+                R._note_failure("editMessageText", exc)
+            else:
+                logger.warning("auction rich edit failed: %s", exc)
+            if html_text is None:
+                return False
+    if html_text is None:
         return None
-    payload = {"chat_id": chat_id, "message_id": message_id,
-               "rich_message": {"blocks": blocks}}
-    if reply_markup is not None:
-        payload["reply_markup"] = reply_markup
     try:
-        await post("editMessageText", payload)
+        # Only the first part: an edit replaces one message, so a card driven by
+        # buttons has to fit one. html_parts caps it rather than losing the tail
+        # to Telegram's length limit.
+        await bot.edit_message_text(
+            chat_id=chat_id, message_id=message_id,
+            text=html_parts(html_text)[0], parse_mode="HTML",
+            disable_web_page_preview=True, reply_markup=reply_markup)
         return True
     except Exception as exc:
         if "not modified" in str(exc).lower():
             return True
-        from telegram.error import TelegramError
-        if isinstance(exc, TelegramError):
-            R._note_failure("editMessageText", exc)
-        else:
-            logger.warning("auction rich edit failed: %s", exc)
+        logger.warning("auction HTML edit failed: %s", exc)
         return False

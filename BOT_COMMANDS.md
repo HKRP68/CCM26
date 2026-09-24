@@ -275,7 +275,7 @@ An auction is a group event; these run in the chat the auction is bound to.
 | `/apurse` 👥 | `/apurses` | Every purse, or one franchise's squad |
 | `/artm` 👥 | `/rtm` | Answer a Right To Match on your former player |
 | `/ainfo` 👥 | `/amenu` | Where the auction stands, with a button for every view below |
-| `/asets` 👥 | — | Every set in running order: done, live, next, queued |
+| `/asets [page]` 👥 | — | Every set in running order, numbered — tap one for its first few players, or press its number for the whole set |
 | `/anextset` 👥 | — | The next set's players |
 | `/anextplayer` 👥 | `/anextplayers` | Who comes to the block next |
 | `/asquad` 👥 | `/amysquad` | Your squad (or name a franchise), with purse and max bid |
@@ -585,7 +585,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/acancel` | Cancel the auction |
 | `/apool <min>-<max> [\| set] [\| all]` | Add every card in a rating range to the pool as one set — `/apool 85-90 \| Marquee` |
 | `/anextset <set \| 80-85>` | Make a set, or every queued player in a rating range, come next |
-| `/asetorder A, B, C` | Order the whole queue by set |
+| `/asetorder A, B, C` | Order the whole queue by set — the numbers `/asets` shows are the order it runs in, and the website's Sets card does the same with ↑ / ↓ |
 | `/aaccelmode on\|off` | The automatic ⚡ Accelerated round for unsold players (default on) |
 | `/aretainforce <franchise> \| <player> \| [price]` | Retain at once, without the franchise's Accept |
 | `/aoffers` · `/aretcancel <player>` | Retention offers waiting, and withdraw one |

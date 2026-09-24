@@ -123,35 +123,11 @@
   </div>
   {% endif %}
 
-  <!-- ── Sets ──────────────────────────────────────────────────── -->
-  {% if sets %}
-  <div class="au-card">
-    <h3 style="margin-top:0;">🗂 Sets</h3>
-    <table class="au-table">
-      {% for s in sets %}
-      <tr>
-        <td>{{ {'done': '✅', 'live': '🔨', 'next': '⏭', 'queued': '⏳'}[s.state] }}</td>
-        <td>{{ s.name }}</td>
-        <td class="dim">{{ s.queued }} left · {{ s.sold }} sold · {{ s.unsold }} unsold</td>
-        <td>
-          {% if s.queued and s.state != 'next' %}
-          <form method="POST" style="margin:0;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="set_next">
-            <input type="hidden" name="set_name" value="{{ s.name }}">
-            <button class="btn btn-ghost" type="submit">⏭ Bring next</button></form>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </table>
-    <p class="au-note" style="margin-bottom:0;">
-      The queue runs set by set. <b>Bring next</b> moves that set's waiting
-      players to the front — the lot on the block finishes first. The same as
-      <code>/anextset</code> in the group.
-    </p>
-  </div>
-  {% endif %}
+  <!-- ── Sets ──────────────────────────────────────────────────────
+       The same card the setup page renders. It deliberately sits OUTSIDE
+       #au-panel below: that fragment is re-fetched every couple of seconds and
+       would wipe a Set No half typed into it. -->
+  {% include "_auction_sets_card.html" %}
 
   <!-- ── Accelerated round ─────────────────────────────────────── -->
   {% if unsold %}

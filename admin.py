@@ -22442,8 +22442,14 @@ def admin_auction_detail(season_id):
             retain_hits.sort(key=lambda row: (row[1] is None, -(row[0].rating or 0)))
 
         filters = _auction_pool_filters()
+        # ``previewed`` is NOT ``bool(preview)``: a filter that matches nobody
+        # has to say so. Before this flag existed the whole results block hung
+        # off the row list, so pressing Preview on a filter with no matches —
+        # which is what filling in every box at once usually is — rendered
+        # nothing at all, and read as a dead button.
+        previewed = bool(request.args.get("preview"))
         preview, preview_count = [], 0
-        if request.args.get("preview"):
+        if previewed:
             query = player_query.master_player_query(db, filters)
             preview_count = query.count()
             preview = player_query.ordered(query).limit(300).all()
@@ -22451,6 +22457,7 @@ def admin_auction_detail(season_id):
                       .filter(AuctionLot.season_id == season.id).all()}
             preview = [(p, p.id in pooled) for p in preview]
 
+        sets = auction_svc.list_sets(db, season)
         return render_template(
             "admin_auction_detail.html",
             season=season,
@@ -22463,6 +22470,12 @@ def admin_auction_detail(season_id):
             options=player_query.filter_options(db),
             preview=preview,
             preview_count=preview_count,
+            previewed=previewed,
+            sets=sets,
+            # The "In the pool" table shows each lot's Set No, which only
+            # ``list_sets`` knows — a lot row carries the set's name, not its
+            # place in the running order.
+            set_numbers={entry["name"]: entry["set_no"] for entry in sets},
             leagues=db.query(ChallengeLeague)
                       .order_by(ChallengeLeague.name).all(),
             ledger_drift=auction_svc.reconcile_purses(db, season),
@@ -22512,6 +22525,12 @@ def admin_auction_detail(season_id):
                             AuctionLot.acquisition == auction_svc.ACQ_DRAFTED)
                     .order_by(AuctionLot.sold_at.asc()).all()),
             STATUS_COMPLETED=auction_svc.STATUS_COMPLETED,
+            # Read by the shared Sets card, which this page and the live console
+            # both render.
+            STATUS_LIVE=auction_svc.STATUS_LIVE,
+            STATUS_CANCELLED=auction_svc.STATUS_CANCELLED,
+            STATUS_SETUP=auction_svc.STATUS_SETUP,
+            STATUS_PAUSED=auction_svc.STATUS_PAUSED,
         )
     finally:
         db.close()
@@ -22629,9 +22648,11 @@ def _auction_detail_action(db, season, action):
         if not ids:
             raise auction_svc.AuctionError("Tick at least one player.")
         players = db.query(Player).filter(Player.id.in_(ids)).all()
+        label = (request.form.get("set_name") or "").strip() or None
         added, skipped = auction_svc.add_players_to_pool(
-            db, season, players,
-            set_name=(request.form.get("set_name") or "").strip() or None)
+            db, season, players, set_name=label)
+        if added and label:
+            _auction_place_new_set(db, season, label[:40], quiet=True)
         log_admin(db, "auction_pool_add", "auction", season.id, season.name,
                   detail=f"{added} added")
         flash(f"✅ {added} added to the pool"
@@ -22641,9 +22662,11 @@ def _auction_detail_action(db, season, action):
         # Everything the current filter matches, not just the page on screen —
         # the whole point of a filter is not having to tick 300 boxes.
         query = player_query.master_player_query(db, _auction_pool_filters())
+        label = (request.form.get("set_name") or "").strip() or None
         added, skipped = auction_svc.add_players_to_pool(
-            db, season, query.all(),
-            set_name=(request.form.get("set_name") or "").strip() or None)
+            db, season, query.all(), set_name=label)
+        if added and label:
+            _auction_place_new_set(db, season, label[:40], quiet=True)
         log_admin(db, "auction_pool_add_all", "auction", season.id, season.name,
                   detail=f"{added} added")
         flash(f"✅ {added} added to the pool"
@@ -22842,8 +22865,132 @@ def _auction_detail_action(db, season, action):
                   detail=league.name)
         flash(f"📤 Published to “{league.name}”.", "success")
 
+    elif (handled := _auction_sets_action(db, season, action, quiet=True)):
+        # The Sets card, shared with the live console. Quiet here: the setup page
+        # is where an admin nudges the order repeatedly, and the room does not
+        # want a message per nudge (see ``auction_service.set_order``).
+        log_admin(db, f"auction_{handled}", "auction", season.id, season.name)
+
     else:
         flash("Unknown action.", "error")
+
+
+def _auction_sets_action(db, season, action, *, quiet):
+    """The 🗂 Sets card's actions. Returns what it did, or None.
+
+    One copy for both surfaces — the setup page and the live console render the
+    same partial, so a fix to either has to be a fix to both. It flashes but
+    never calls ``log_admin``: the console logs every action of its own with one
+    blanket call after its chain, and a second one here would double-log it. The
+    name it returns is what those callers log, because the card's row buttons
+    submit no ``action`` of their own.
+    """
+    done = action
+    # The card's row buttons name themselves and carry their row's index as the
+    # value — one click cannot submit a second field, so this is how it says both
+    # "what" and "which set". They send no ``action``, hence the keys first.
+    if "move_up" in request.form or "move_down" in request.form:
+        up = "move_up" in request.form
+        name = _auction_set_row(request.form["move_up" if up else "move_down"])
+        order = auction_svc.move_set(db, season, name, -1 if up else 1,
+                                     quiet=quiet)
+        if order is None:
+            flash(f"{name} is already {'first' if up else 'last'} in the queue.",
+                  "success")
+        else:
+            flash("🗂 " + _auction_order_line(order), "success")
+        done = "set_move"
+
+    elif "bring_next" in request.form:
+        label, moved = auction_svc.bring_forward(
+            db, season, _auction_set_row(request.form["bring_next"]),
+            quiet=quiet)
+        flash(f"⏭ {label} comes next — {len(moved)} players.", "success")
+        done = "set_next"
+
+    elif action == "set_next":
+        # The console's own hidden-field shape, kept so a bookmarked POST and
+        # anything else already pointing at it keeps working.
+        label, moved = auction_svc.bring_forward(
+            db, season, (request.form.get("set_name") or "").strip(),
+            quiet=quiet)
+        flash(f"⏭ {label} comes next — {len(moved)} players.", "success")
+
+    elif action == "set_positions":
+        order = auction_svc.set_positions(
+            db, season,
+            list(zip(request.form.getlist("set_name"),
+                     request.form.getlist("set_no"))),
+            quiet=quiet)
+        flash("🗂 The queue now runs " + _auction_order_line(order) + ".",
+              "success")
+
+    elif action == "add_set_range":
+        raw = (request.form.get("range") or "").strip()
+        band = auction_svc.parse_rating_range(raw)
+        if band is None:
+            raise auction_svc.AuctionError(
+                "Give the rating band as 85-90, 85+ or 85.")
+        added, skipped, label = auction_svc.add_rating_range_to_pool(
+            db, season, *band,
+            set_name=(request.form.get("set_name") or "").strip() or None,
+            editions=bool(request.form.get("editions")))
+        _auction_place_new_set(db, season, label, quiet=quiet)
+        flash(f"🗂 {label} — {added} added"
+              + (f", {skipped} already in the auction." if skipped else "."),
+              "success")
+
+    else:
+        return None
+    return done
+
+
+def _auction_set_row(raw):
+    """The set name a row button's index points at, in the submitted rows.
+
+    The index is into this page's own parallel ``set_name`` inputs, so a stale
+    page — a set finished while it sat open — resolves to a name the service then
+    refuses by exact match, rather than to whatever now happens to sit in that
+    row.
+    """
+    names = request.form.getlist("set_name")
+    index = _parse_int(raw)
+    if index is None or not 0 <= index < len(names):
+        raise auction_svc.AuctionError(
+            "That row is from an older version of the page — reload it.")
+    return names[index]
+
+
+def _auction_order_line(order, limit=6):
+    return " → ".join(order[:limit]) + ("…" if len(order) > limit else "")
+
+
+def _auction_place_new_set(db, season, label, *, quiet):
+    """Put a set just added to the pool at the Set No the form asked for.
+
+    Blank means "leave it at the back", which is where adding lands it anyway.
+    A number is a rank, so it is passed straight to ``set_positions`` alongside
+    every other queued set's current number — that way the new set slots in and
+    the rest keep their relative order instead of being shuffled.
+    """
+    wanted = _parse_int(request.form.get("set_no"))
+    if wanted is None or wanted < 1:
+        return
+    queued = auction_svc.queued_sets(db, season)
+    # Adding is idempotent, so a filter re-run over players already in the pool
+    # adds nobody and the set never appears in the queue. There is nothing to
+    # place then, and asking for it would refuse a request that did no harm.
+    if not any(entry["name"] == label for entry in queued):
+        return
+    pairs = []
+    for entry in queued:
+        if entry["name"] == label:
+            continue
+        # Bumped past the newcomer's slot so the number it was given is free.
+        pairs.append((entry["name"], entry["set_no"]
+                      + (1 if entry["set_no"] >= wanted else 0)))
+    pairs.append((label, wanted))
+    auction_svc.set_positions(db, season, pairs, quiet=quiet)
 
 
 def _auction_lot(db, season, lot_id):
@@ -22945,6 +23092,8 @@ def _console_context(db, season):
         "STATUS_LIVE": auction_svc.STATUS_LIVE,
         "STATUS_PAUSED": auction_svc.STATUS_PAUSED,
         "STATUS_COMPLETED": auction_svc.STATUS_COMPLETED,
+        "STATUS_CANCELLED": auction_svc.STATUS_CANCELLED,
+        "STATUS_SETUP": auction_svc.STATUS_SETUP,
         # The accelerated round's working list. Capped for the page, but the
         # count is the real one — an admin about to re-list 43 players should
         # see 43, not "15".
@@ -22971,7 +23120,12 @@ def admin_auction_console(season_id):
                 db.rollback()
                 logger.exception("admin_auction_console failed")
                 flash(f"Error: {exc}", "error")
-            return redirect(url_for("admin_auction_console", season_id=season.id))
+            # The Sets card sits well down a long console, so a reorder comes
+            # back to it rather than to the top of the page. Keyed off the card's
+            # own marker because its row buttons submit no ``action`` at all.
+            anchor = "#sets" if request.form.get("sets_card") else ""
+            return redirect(url_for("admin_auction_console",
+                                    season_id=season.id) + anchor)
         return render_template("admin_auction_console.html",
                                **_console_context(db, season))
     finally:
@@ -23059,10 +23213,12 @@ def _auction_console_action(db, season, action):
     elif action == "rtm_stand":
         auction_svc.rtm_to_decision(db, season, lot)
 
-    elif action == "set_next":
-        label, moved = auction_svc.bring_forward(
-            db, season, (request.form.get("set_name") or "").strip())
-        flash(f"⏭ {label} comes next — {len(moved)} players.", "success")
+    elif (handled := _auction_sets_action(db, season, action, quiet=False)):
+        # Not quiet here: the room is watching a live auction, and the order the
+        # remaining sets run in is news to every franchise in it. ``handled`` is
+        # the name of what it did — the card's row buttons submit no ``action``,
+        # so the blanket log below would otherwise record "auction_".
+        action = handled
 
     elif action == "cancel":
         typed = (request.form.get("confirm_name") or "").strip()

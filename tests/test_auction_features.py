@@ -391,6 +391,241 @@ class SetTests(FeatureCase):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Set No — the running order, read back as a number
+# ══════════════════════════════════════════════════════════════════════
+
+class SetNumberTests(FeatureCase):
+    """Set No is a *position*, not a column, and that is what makes it unique.
+
+    What is pinned here: the numbers run 1…N with no repeats however the pool was
+    built; typing them reorders the queue; a number already given to another set
+    is refused and nothing moves; and reordering a pool nobody has bid in yet
+    leaves the lot numbers compact instead of climbing every time.
+    """
+
+    def names(self):
+        return [e["name"] for e in self.A.list_sets(self.session, self.season)]
+
+    def numbers(self):
+        return [e["set_no"] for e in self.A.list_sets(self.session, self.season)]
+
+    def lot_nos(self):
+        return sorted(lot.lot_no for lot in
+                      self.A.lots(self.session, self.season.id))
+
+    def three_sets(self):
+        """Bats / Others, plus a third so an order has a middle to it."""
+        bats, others = self.build_sets()
+        from models import Player
+        extra = Player(name=f"Spare {self.tag}", rating=61, **PLAYER_DEFAULTS)
+        self.session.add(extra)
+        self.session.flush()
+        self.A.add_players_to_pool(self.session, self.season, [extra],
+                                   set_name="Spares")
+        self.session.commit()
+        return bats, others, extra
+
+    def test_numbers_are_one_to_n_with_no_repeats(self):
+        self.three_sets()
+        self.assertEqual([1, 2, 3], self.numbers())
+        self.assertEqual(["Bats", "Others", "Spares"], self.names())
+
+    def test_numbers_stay_unique_through_a_relist(self):
+        # The ⚡ Accelerated set is created by the service, never by a page, so
+        # nothing stamps a number on it — it has to be numbered on the way out.
+        self.build_sets()
+        self.start()
+        self.pass_until(lambda: self.A.next_queued(self.session,
+                                                   self.season.id) is None)
+        self.A.relist_all(self.session, self.season,
+                          set_name=self.A.ACCELERATED_SET)
+        self.session.commit()
+        numbers = self.numbers()
+        self.assertEqual(sorted(numbers), list(range(1, len(numbers) + 1)))
+        self.assertIn(self.A.ACCELERATED_SET, self.names())
+        # It came back into the queue, so it runs after everything already done.
+        entry = next(e for e in self.A.list_sets(self.session, self.season)
+                     if e["name"] == self.A.ACCELERATED_SET)
+        self.assertEqual(max(numbers), entry["set_no"])
+
+    def test_typing_the_numbers_reorders_the_queue(self):
+        self.three_sets()
+        order = self.A.set_positions(
+            self.session, self.season,
+            [("Bats", 3), ("Others", 1), ("Spares", 2)])
+        self.session.commit()
+        self.assertEqual(["Others", "Spares", "Bats"], order)
+        self.assertEqual(["Others", "Spares", "Bats"], self.names())
+        self.assertEqual([1, 2, 3], self.numbers())
+        # And the queue really runs that way, which is the only thing Set No
+        # means.
+        self.assertEqual(
+            "Others",
+            self.A.set_label(self.A.next_queued(self.session, self.season.id)))
+
+    def test_the_numbers_are_a_rank_not_a_value(self):
+        self.three_sets()
+        order = self.A.set_positions(
+            self.session, self.season,
+            [("Bats", 40), ("Others", 2), ("Spares", 9)])
+        self.session.commit()
+        self.assertEqual(["Others", "Spares", "Bats"], order)
+        self.assertEqual([1, 2, 3], self.numbers())
+
+    def test_a_number_already_given_is_refused_and_nothing_moves(self):
+        self.three_sets()
+        before, before_lots = self.names(), self.lot_nos()
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.A.set_positions(self.session, self.season,
+                                 [("Bats", 1), ("Others", 1), ("Spares", 3)])
+        message = str(caught.exception)
+        # It has to name both, or an admin cannot tell which one to change.
+        self.assertIn("Bats", message)
+        self.assertIn("Others", message)
+        self.assertEqual(before, self.names())
+        self.assertEqual(before_lots, self.lot_nos())
+
+    def test_a_number_belonging_to_a_finished_set_is_refused(self):
+        self.build_sets()
+        self.start()
+        self.pass_until(lambda: self.A.set_label(
+            self.A.current_lot(self.session, self.season)
+            or SimpleNamespace(set_name="x")) == "Others")
+        done = next(e for e in self.A.list_sets(self.session, self.season)
+                    if e["state"] == "done")
+        queued = [e for e in self.A.list_sets(self.session, self.season)
+                  if e["queued"]]
+        if not queued:                      # nothing left to reorder
+            return
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.A.set_positions(self.session, self.season,
+                                 [(queued[0]["name"], done["set_no"])])
+        self.assertIn(done["name"], str(caught.exception))
+
+    def test_a_set_that_has_finished_cannot_be_reordered(self):
+        self.build_sets()
+        self.start()
+        self.pass_until(lambda: self.A.set_label(
+            self.A.current_lot(self.session, self.season)
+            or SimpleNamespace(set_name="x")) == "Others")
+        with self.assertRaises(self.A.AuctionError):
+            self.A.set_positions(self.session, self.season, [("Bats", 1)])
+
+    def test_move_set_swaps_neighbours_and_stops_at_the_ends(self):
+        self.three_sets()
+        self.assertEqual(["Bats", "Others", "Spares"], self.names())
+        self.A.move_set(self.session, self.season, "Spares", -1)
+        self.session.commit()
+        self.assertEqual(["Bats", "Spares", "Others"], self.names())
+        self.A.move_set(self.session, self.season, "Spares", -1)
+        self.session.commit()
+        self.assertEqual(["Spares", "Bats", "Others"], self.names())
+        # Already first: a no-op, not an error — ↑ on the top row is a misclick.
+        self.assertIsNone(self.A.move_set(self.session, self.season,
+                                          "Spares", -1))
+        self.assertEqual(["Spares", "Bats", "Others"], self.names())
+
+    def test_move_set_matches_the_name_exactly(self):
+        self.three_sets()
+        # "Spare" is a prefix of "Spares" and a substring of nothing else, so
+        # ``_match_set`` would happily take it. The buttons must not: they submit
+        # names they rendered, and a near-miss means the page is stale.
+        with self.assertRaises(self.A.AuctionError):
+            self.A.move_set(self.session, self.season, "Spare", -1)
+        self.assertEqual(["Bats", "Others", "Spares"], self.names())
+
+    def test_reordering_an_untouched_pool_keeps_lot_numbers_compact(self):
+        bats, others, _ = self.three_sets()
+        total = len(bats) + len(others) + 1
+        self.assertEqual(list(range(1, total + 1)), self.lot_nos())
+        for _ in range(3):
+            self.A.move_set(self.session, self.season, "Spares", -1)
+            self.A.move_set(self.session, self.season, "Spares", 1)
+            self.session.commit()
+        # Without the compaction pass these would now be in the sixties: every
+        # reorder numbers above the season's high-water mark, and the number is
+        # on screen as the lot's "#".
+        self.assertEqual(list(range(1, total + 1)), self.lot_nos())
+
+    def test_a_reorder_after_a_sale_never_reuses_a_number(self):
+        self.build_sets()
+        self.start()
+        self.buy(self.mumbai)
+        before = {lot.id: lot.lot_no for lot in
+                  self.A.lots(self.session, self.season.id)
+                  if lot.status != self.A.LOT_QUEUED}
+        self.A.set_positions(self.session, self.season, [("Others", 1)])
+        self.session.commit()
+        after = self.A.lots(self.session, self.season.id)
+        self.assertEqual(len(after), len({lot.lot_no for lot in after}))
+        # A lot that has left the queue keeps the number it ran under.
+        for lot in after:
+            if lot.id in before:
+                self.assertEqual(before[lot.id], lot.lot_no)
+
+    def test_quiet_reorders_say_nothing_to_the_room(self):
+        from models import AuctionEvent
+
+        def events():
+            return (self.session.query(AuctionEvent)
+                    .filter(AuctionEvent.season_id == self.season.id,
+                            AuctionEvent.kind == "set_order").count())
+
+        self.three_sets()
+        self.assertEqual(0, events())
+        # The setup page nudges the order repeatedly; every event is announced to
+        # the room, so those nudges must not queue up messages.
+        self.A.move_set(self.session, self.season, "Spares", -1, quiet=True)
+        self.session.commit()
+        self.assertEqual(0, events())
+        # The live console is the opposite: the room is watching, so it is told.
+        self.A.move_set(self.session, self.season, "Spares", 1, quiet=False)
+        self.session.commit()
+        self.assertEqual(1, events())
+
+    def test_a_long_set_name_is_stored_clipped_to_the_column(self):
+        from models import Player
+        extra = Player(name=f"Longname {self.tag}", rating=62,
+                       **PLAYER_DEFAULTS)
+        self.session.add(extra)
+        self.session.flush()
+        long_name = "M" * 60
+        self.A.add_players_to_pool(self.session, self.season, [extra],
+                                   set_name=long_name)
+        self.session.commit()
+        stored = [lot.set_name for lot in
+                  self.A.lots(self.session, self.season.id)
+                  if lot.player_id == extra.id]
+        self.assertEqual(["M" * 40], stored)
+        # And the clipped name is what the reorder path has to match, so the
+        # round trip has to work on it.
+        self.assertIn("M" * 40, self.names())
+        self.A.move_set(self.session, self.season, "M" * 40, -1)
+        self.session.commit()
+
+    def test_a_rating_band_added_from_a_page_is_numbered_like_any_other(self):
+        from models import Player
+        base = 320 + 5 * self.tag
+        for offset in range(3):
+            self.session.add(Player(name=f"Paged {self.tag} {offset}",
+                                    rating=base + offset, **PLAYER_DEFAULTS))
+        self.session.flush()
+        self.build_sets()
+        added, _, label = self.A.add_rating_range_to_pool(
+            self.session, self.season, base, base + 2, set_name="From the site")
+        self.session.commit()
+        self.assertEqual(3, added)
+        entry = next(e for e in self.A.list_sets(self.session, self.season)
+                     if e["name"] == label)
+        # Added last, so it runs last until somebody says otherwise.
+        self.assertEqual(max(self.numbers()), entry["set_no"])
+        self.A.set_positions(self.session, self.season,
+                            [(label, 1), ("Bats", 2), ("Others", 3)])
+        self.session.commit()
+        self.assertEqual([label, "Bats", "Others"], self.names())
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Removing a franchise
 # ══════════════════════════════════════════════════════════════════════
 
@@ -948,6 +1183,197 @@ def _cells(blocks):
                 yield from row
         if block.get("type") == "details":
             yield from _cells(block["blocks"])
+
+
+class SetsCardTests(FeatureCase):
+    """The 🗂 Sets card: pages, a button per set, and a set opened in full.
+
+    A pool is routinely dozens of sets of dozens of players — several messages'
+    worth — so what is pinned here is that the card never tries to print all of
+    it: it pages, every set on the page collapses, and opening one pages too.
+    """
+
+    def many_sets(self, count=8, per_set=3, big=None):
+        """``count`` sets of ``per_set`` players, one of them ``big``."""
+        from models import Player
+        base = 200 + 40 * self.tag
+        made = []
+        for index in range(count):
+            size = big if (big and index == count - 1) else per_set
+            batch = []
+            for offset in range(size):
+                player = Player(name=f"S{self.tag}-{index}-{offset}",
+                                rating=base + index, **PLAYER_DEFAULTS)
+                self.session.add(player)
+                batch.append(player)
+            self.session.flush()
+            name = f"Band {index + 1}" if not (big and index == count - 1) \
+                else "Big one"
+            self.A.add_players_to_pool(self.session, self.season, batch,
+                                       set_name=name)
+            made.append(name)
+        self.session.commit()
+        return made
+
+    def labels(self, keyboard):
+        return [b.text for row in keyboard.inline_keyboard for b in row]
+
+    def datas(self, keyboard):
+        return [b.callback_data for row in keyboard.inline_keyboard for b in row]
+
+    def test_the_card_pages_and_offers_a_button_per_set(self):
+        from services import auction_rich as AR
+        self.many_sets(count=8)
+        blocks, html_text, keyboard = AR.sets_view(self.session, self.season)
+        labels = self.labels(keyboard)
+        self.assertEqual(AR.SETS_PAGE_SIZE,
+                         sum(1 for b in blocks if b.get("type") == "details"))
+        self.assertEqual(AR.SETS_PAGE_SIZE,
+                         sum(1 for label in labels if label.startswith("#")))
+        self.assertIn("Next ➡️", labels)
+        self.assertNotIn("⬅️ Prev", labels)
+        self.assertIn("page 1/2", html_text)
+
+        _, _, second = AR.sets_view(self.session, self.season, page=2)
+        self.assertIn("⬅️ Prev", self.labels(second))
+        self.assertNotIn("Next ➡️", self.labels(second))
+
+    def test_a_page_beyond_the_end_clamps_instead_of_emptying(self):
+        from services import auction_rich as AR
+        self.many_sets(count=8)
+        blocks, html_text, _ = AR.sets_view(self.session, self.season, page=99)
+        self.assertIn("page 2/2", html_text)
+        self.assertTrue(any(b.get("type") == "details" for b in blocks))
+
+    def test_a_set_opens_in_full_and_pages_its_players(self):
+        from services import auction_rich as AR
+        self.many_sets(count=3, big=25)
+        big = next(e for e in self.A.list_sets(self.session, self.season)
+                   if e["name"] == "Big one")
+        blocks, html_text, keyboard = AR.sets_view(
+            self.session, self.season, expand=big["set_no"])
+        self.assertIn(f"Players 1–{AR.LOT_PAGE_SIZE} of 25", html_text)
+        self.assertIn("⬅️ All sets", self.labels(keyboard))
+        rows = sum(len(b["cells"]) for b in blocks if b.get("type") == "table")
+        self.assertEqual(AR.LOT_PAGE_SIZE + 1, rows)   # + the header row
+
+        _, tail, _ = AR.sets_view(self.session, self.season,
+                                  expand=big["set_no"], lot_page=2)
+        self.assertIn(f"Players {AR.LOT_PAGE_SIZE + 1}–25 of 25", tail)
+
+    def test_all_sets_goes_back_to_the_page_the_set_was_on(self):
+        from services import auction_rich as AR
+        self.many_sets(count=8)
+        last = max(self.A.list_sets(self.session, self.season),
+                   key=lambda e: e["set_no"])
+        _, _, keyboard = AR.sets_view(self.session, self.season,
+                                      expand=last["set_no"])
+        # Not page 1: a set on the second page has to come back to the second
+        # page, or paging to it again is the price of every look.
+        self.assertIn(f"{AR.SETS_CB}p_2", self.datas(keyboard))
+
+    def test_sets_are_addressed_by_number_not_by_name(self):
+        from services import auction_rich as AR
+        # Telegram caps callback data at 64 bytes and set names carry emoji,
+        # spaces and commas — the number is what survives the round trip.
+        self.A.add_players_to_pool(self.session, self.season, self.players,
+                                   set_name="⚡ Accelerated, take two")
+        self.session.commit()
+        _, _, keyboard = AR.sets_view(self.session, self.season)
+        for data in self.datas(keyboard):
+            self.assertLessEqual(len(data.encode("utf-8")), 64)
+            self.assertNotIn("Accelerated", data)
+
+    def test_a_number_that_no_longer_exists_is_refused(self):
+        from services import auction_rich as AR
+        self.build_sets()
+        # The set finished and the numbers moved while the card sat open. Saying
+        # so beats opening whichever set now holds that number.
+        self.assertIsNone(AR.sets_view(self.session, self.season, expand=999))
+
+    def test_an_empty_pool_still_renders(self):
+        from services import auction_rich as AR
+        blocks, html_text, keyboard = AR.sets_view(self.session, self.season)
+        self.assertIn("The pool is empty", html_text)
+        self.assertEqual([], [b for b in blocks if b.get("type") == "details"])
+        self.assertIn("🔄 Refresh", self.labels(keyboard))
+
+    def test_a_page_press_edits_in_html_when_rich_text_is_off(self):
+        from services import auction_rich as AR
+        from services import rich_message
+        import config
+
+        edits = []
+
+        class Bot:
+            # No ``_post`` at all: rich sending is unavailable, which is the
+            # state every chat is in when the feature flag is off.
+            async def edit_message_text(self, chat_id=None, message_id=None,
+                                        text="", **kwargs):
+                edits.append((text, kwargs.get("reply_markup")))
+                return SimpleNamespace(message_id=message_id)
+
+        self.many_sets(count=8)
+        blocks, html_text, keyboard = AR.sets_view(self.session, self.season)
+        previous = getattr(config, "RICH_TEXT_ENABLED", False)
+        config.RICH_TEXT_ENABLED = False
+        try:
+            result = asyncio.run(AR.edit(Bot(), 1, 2, blocks,
+                                         reply_markup=keyboard,
+                                         html_text=html_text))
+        finally:
+            config.RICH_TEXT_ENABLED = previous
+        # Without the HTML fallback this returned None and edited nothing, which
+        # is a page button that does nothing at all.
+        self.assertTrue(result)
+        self.assertEqual(1, len(edits))
+        self.assertIn("page 1/2", edits[0][0])
+        self.assertIs(keyboard, edits[0][1])
+        # The board must NOT get this: it has its own HTML edit path, so it
+        # passes no html_text and still opts out.
+        self.assertIsNone(asyncio.run(
+            AR.edit(Bot(), 1, 2, [rich_message.paragraph("x")])))
+
+    def test_a_refused_rich_edit_still_reaches_the_reader(self):
+        from telegram.error import BadRequest
+        from services import auction_rich as AR
+        from services import rich_message
+        import config
+
+        edits = []
+
+        class Bot:
+            async def _post(self, endpoint, payload):
+                raise BadRequest("can't parse rich message")
+
+            async def edit_message_text(self, chat_id=None, message_id=None,
+                                        text="", **kwargs):
+                edits.append(text)
+                return SimpleNamespace(message_id=message_id)
+
+        rich_message.reset_support_latch()
+        previous = getattr(config, "RICH_TEXT_ENABLED", False)
+        config.RICH_TEXT_ENABLED = True
+        try:
+            result = asyncio.run(AR.edit(Bot(), 1, 2,
+                                         [rich_message.paragraph("x")],
+                                         html_text="<b>fallback</b>"))
+        finally:
+            config.RICH_TEXT_ENABLED = previous
+        self.assertTrue(result)
+        self.assertEqual(["<b>fallback</b>"], edits)
+
+    def test_the_live_set_starts_open_and_the_html_twin_fits_one_message(self):
+        from services import auction_rich as AR
+        self.many_sets(count=8, big=25)
+        self.start()
+        blocks, html_text, _ = AR.sets_view(self.session, self.season)
+        opened = [b for b in blocks
+                  if b.get("type") == "details" and b.get("is_open")]
+        self.assertTrue(opened, "the set being auctioned should not need a tap")
+        # One page has to be one message, or the buttons end up on a part of it.
+        self.assertLessEqual(len(html_text), AR.TEXT_LIMIT)
+        json.dumps(blocks)
 
 
 class RichTests(FeatureCase):
