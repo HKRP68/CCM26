@@ -49,13 +49,36 @@ open it.
 minimum and maximum, home country and the overseas cap, and the three
 anti-snipe numbers.
 
-**Base prices by rating** — a ladder, highest band first; a card takes the first
-band its rating reaches.
+**Base prices by rating** — a list of rating **ranges**, one price each, with
+**➕ Add range** to put another rung in. A row is read top first, the way the
+room says it: *96 down to 92 → ₹2 Cr*. The highest band's top is left blank,
+which means "and up".
+
+> Leaving a top blank on any other row is not a mistake either: the band then
+> runs up to just under the band above it, which is exactly what the ladder
+> meant before ranges existed. `base_price_rules()` fills those tops in when it
+> reads the column, so **a season saved the old way prices every rating exactly
+> as it did**, `DEFAULT_BASE_PRICE_RULES` needed no rewriting, and neither
+> caller has to know which shape a row came from. Re-saving the page turns the
+> derived tops into typed ones, at the same cuts.
+
+Why explicit tops at all: under the old shape a band's ceiling was whatever the
+row above started at, so **adding a rung in the middle silently re-cut its
+neighbours**. Now 96-92 stays 96-92 whatever is inserted under it.
+
+The first band a rating fits wins, so two bands that overlap are settled by the
+dearer one rather than refused — an overlap is somebody narrowing a rung, not a
+mistake worth blocking a pool build over. A gap is the opposite, because it is
+**silent**: those cards are simply built at the floor and nobody finds out until
+the pool is priced. So `base_price_gaps()` is asked on every save and the page
+names the uncovered ratings.
 
 > The price is **stamped onto each lot when the lot is built**, not looked up
 > when it opens. Editing the ladder afterwards cannot move a price that a lot
 > already went on the block at, and cannot move one mid-auction. A single
 > player is overridden from the pool table, while the lot is still queued.
+
+`/arules` prints the same ladder to the room, band by band.
 
 **Franchises** — name, city, logo, owner and co-owners, and a purse that
 defaults to the season's. The owner is a **Telegram id, not an account here**,

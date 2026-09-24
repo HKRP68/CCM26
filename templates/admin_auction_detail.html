@@ -73,28 +73,97 @@
     <form method="POST">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="price_rules">
-      <table class="au-table">
-        <tr><th>Rating at least</th><th>Base price (Cr)</th></tr>
+      <table class="au-table" id="au-price-rules">
+        <thead>
+          <tr>
+            <th style="width:7rem;">Rating from</th>
+            <th style="width:7rem;">down to</th>
+            <th style="width:8rem;">Base price (Cr)</th>
+            <th>Reads as</th>
+            <th style="width:3rem;"></th>
+          </tr>
+        </thead>
+        <tbody>
         {% for rule in price_rules %}
-        <tr>
-          <td><input type="number" name="rule_min_rating" value="{{ rule.min_rating }}" min="0" max="100" style="width:7rem;"></td>
-          <td><input type="text" name="rule_price" value="{{ (rule.base_lakh / 100)|round(2) }}" style="width:8rem;"></td>
-        </tr>
+          <tr>
+            <td><input type="number" name="rule_max_rating" value="{{ rule.max_rating if rule.max_rating is not none else '' }}" min="0" max="100" placeholder="and up" style="width:6rem;"></td>
+            <td><input type="number" name="rule_min_rating" value="{{ rule.min_rating }}" min="0" max="100" style="width:6rem;"></td>
+            <td><input type="text" name="rule_price" value="{{ (rule.base_lakh / 100)|round(2) }}" style="width:7rem;"></td>
+            <td class="dim">{{ rating_band(rule) }} OVR → {{ money(rule.base_lakh) }}</td>
+            <td><button type="button" class="btn btn-sm au-drop-range" title="Remove this range">✕</button></td>
+          </tr>
         {% endfor %}
-        <tr>
-          <td><input type="number" name="rule_min_rating" placeholder="new" min="0" max="100" style="width:7rem;"></td>
-          <td><input type="text" name="rule_price" placeholder="e.g. 0.5" style="width:8rem;"></td>
-        </tr>
+        </tbody>
       </table>
-      <button class="btn btn-primary" type="submit" style="margin-top:.6rem;">Save base prices</button>
+      <div style="margin-top:.6rem;display:flex;gap:.5rem;flex-wrap:wrap;">
+        <button type="button" class="btn" id="au-add-range">➕ Add range</button>
+        <button class="btn btn-primary" type="submit">Save base prices</button>
+      </div>
     </form>
+    {% if price_gaps %}
+    <p class="au-note" style="margin-bottom:0;color:var(--amber-dark);">
+      ⚠️ No band covers
+      {% for lo, hi in price_gaps %}{{ lo if lo == hi else hi ~ '-' ~ lo }} OVR{{ ", " if not loop.last }}{% endfor %}.
+      Cards in that range are built at {{ money(base_floor) }}. Add a range for
+      them, or widen one.
+    </p>
+    {% endif %}
     <p class="au-note" style="margin-bottom:0;">
-      Highest band first; a card takes the first band its rating reaches. The
-      price is <b>stamped onto each lot when it is added to the pool</b>, so
+      A range is read <b>top first</b>, the way the room says it:
+      <code>96</code> down to <code>92</code> → <code>2</code> is
+      "96-92 OVR start at ₹2 Cr". Leave <b>Rating from</b> blank and the band
+      runs up to just under the band above it, so the highest row means
+      "and up". Ranges may overlap — the dearer band wins — but a rating no
+      band covers falls to the floor, and saving says which ratings those are.
+    </p>
+    <p class="au-note" style="margin-bottom:0;">
+      The price is <b>stamped onto each lot when it is added to the pool</b>, so
       editing this table never moves the price of a lot that is already there —
       and never moves one mid-auction. Override a single player below.
     </p>
   </div>
+
+  <script>
+  // Add / drop a range. The rows are a plain repeated-name form — the POST
+  // handler zips rule_max_rating, rule_min_rating and rule_price by position —
+  // so a new row is a clone of the markup above and needs no ids of its own.
+  (function () {
+    var table = document.getElementById("au-price-rules");
+    if (!table) { return; }
+    var body = table.tBodies[0];
+
+    function blankRow() {
+      var row = document.createElement("tr");
+      row.innerHTML =
+        '<td><input type="number" name="rule_max_rating" min="0" max="100" placeholder="and up" style="width:6rem;"></td>' +
+        '<td><input type="number" name="rule_min_rating" min="0" max="100" placeholder="e.g. 92" style="width:6rem;"></td>' +
+        '<td><input type="text" name="rule_price" placeholder="e.g. 2" style="width:7rem;"></td>' +
+        '<td class="dim">new range</td>' +
+        '<td><button type="button" class="btn btn-sm au-drop-range" title="Remove this range">\u2715</button></td>';
+      return row;
+    }
+
+    document.getElementById("au-add-range").addEventListener("click", function () {
+      var row = blankRow();
+      body.appendChild(row);
+      row.querySelector("input").focus();
+    });
+
+    body.addEventListener("click", function (event) {
+      var button = event.target.closest(".au-drop-range");
+      if (!button) { return; }
+      // Never leave the form with nothing to save: the last row is emptied
+      // rather than removed, because a POST with no bands at all is refused.
+      if (body.rows.length > 1) {
+        button.closest("tr").remove();
+      } else {
+        Array.prototype.forEach.call(
+          button.closest("tr").querySelectorAll("input"),
+          function (input) { input.value = ""; });
+      }
+    });
+  })();
+  </script>
 
   <!-- ── Franchises ────────────────────────────────────────────── -->
   <div class="au-card">

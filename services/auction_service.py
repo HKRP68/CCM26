@@ -335,6 +335,23 @@ def going_stage_for(left):
 # ──────────────────────────────────────────────────────────────────────
 
 def base_price_rules(season):
+    """The base-price ladder as explicit rating **ranges**, highest band first.
+
+    Each row is ``{"min_rating": lo, "max_rating": hi, "base_lakh": n}``, and
+    ``max_rating`` of ``None`` is an open top — "97 and up".
+
+    A ladder saved before ranges existed carries only ``min_rating``, and its
+    upper bound was implicit: each band ran up to just below the band above
+    it. Those rows are given exactly that bound here, so a season saved the
+    old way keeps precisely the prices it had, ``DEFAULT_BASE_PRICE_RULES``
+    needs no rewriting, and nothing downstream has to know which shape a row
+    came from. That is the whole reason the normalising lives here rather than
+    in the two callers.
+
+    A range typed backwards (``92-96``) is read as the slip it is rather than
+    as a band that matches nothing — the same call
+    ``parse_rating_range`` already makes for ``/apool 90 - 85``.
+    """
     rules = _loads(getattr(season, "base_price_rules_json", None), [])
     cleaned = []
     for row in rules if isinstance(rules, list) else []:
@@ -343,11 +360,31 @@ def base_price_rules(season):
         base = _as_int(row.get("base_lakh"), -1)
         if base < 0:
             continue
-        cleaned.append({"min_rating": _as_int(row.get("min_rating"), 0),
+        low = max(0, _as_int(row.get("min_rating"), 0))
+        raw_high = row.get("max_rating")
+        high = (_as_int(raw_high, 0) if raw_high not in (None, "")
+                else None)
+        if high is not None and high < low:
+            low, high = high, low
+        cleaned.append({"min_rating": low, "max_rating": high,
                         "base_lakh": base})
     if not cleaned:
-        return [dict(row) for row in DEFAULT_BASE_PRICE_RULES]
-    cleaned.sort(key=lambda r: r["min_rating"], reverse=True)
+        cleaned = [{"min_rating": row["min_rating"], "max_rating": None,
+                    "base_lakh": row["base_lakh"]}
+                   for row in DEFAULT_BASE_PRICE_RULES]
+    # Highest band first, because the first band a rating fits is the one that
+    # wins; an open top sorts above a closed band that starts in the same
+    # place, since it is the wider of the two.
+    cleaned.sort(key=lambda r: (r["min_rating"],
+                                10 ** 6 if r["max_rating"] is None
+                                else r["max_rating"]),
+                 reverse=True)
+    above = None
+    for row in cleaned:
+        if row["max_rating"] is None and above is not None:
+            # The old shape's implicit ceiling: up to just under the band above.
+            row["max_rating"] = above - 1
+        above = row["min_rating"]
     return cleaned
 
 
@@ -358,12 +395,59 @@ def base_price_for(season, rating):
     ``AuctionLot.base_price_lakh``. Editing the ladder afterwards is therefore
     safe by construction: it cannot move the price of a lot that has already
     gone on the block, and it cannot move a price mid-auction.
+
+    First band the rating fits wins, so two bands that overlap are decided by
+    the more expensive one rather than refused — an overlap is somebody
+    narrowing a rung, not a mistake worth blocking a pool build over. A rating
+    **no** band covers falls back to the floor, and
+    ``base_price_gaps`` is what the setup page uses to say so before it costs
+    anybody a lot priced at ₹20 L by accident.
     """
     rating = _as_int(rating, 0)
     for row in base_price_rules(season):
-        if rating >= row["min_rating"]:
+        high = row["max_rating"]
+        if rating >= row["min_rating"] and (high is None or rating <= high):
             return max(1, row["base_lakh"])
     return max(1, DEFAULT_MIN_BASE_PRICE_LAKH)
+
+
+def base_price_gaps(season, low=1, high=100):
+    """Runs of rating in ``low..high`` that no band covers, as ``(lo, hi)``.
+
+    The ladder used to be gapless by construction — every row was "this rating
+    and up", so the bottom row caught everything below it. Ranges can leave a
+    hole, and a hole is silent: those cards are simply built at
+    ``DEFAULT_MIN_BASE_PRICE_LAKH`` and nobody finds out until the pool is
+    already priced. So the setup page asks this and says which ratings are
+    uncovered, before the build rather than after.
+    """
+    covered = set()
+    for row in base_price_rules(season):
+        top = row["max_rating"]
+        top = high if top is None else min(high, top)
+        for rating in range(max(low, row["min_rating"]), top + 1):
+            covered.add(rating)
+    gaps, run = [], None
+    for rating in range(low, high + 1):
+        if rating in covered:
+            if run is not None:
+                gaps.append((run, rating - 1))
+                run = None
+        elif run is None:
+            run = rating
+    if run is not None:
+        gaps.append((run, high))
+    return gaps
+
+
+def render_rating_band(row):
+    """One ladder rung the way it is typed and read: ``96-92``, or ``97+``."""
+    low, high = row["min_rating"], row["max_rating"]
+    if high is None:
+        return f"{low}+"
+    if high == low:
+        return str(low)
+    return f"{high}-{low}"
 
 
 def increment_rules(season):

@@ -422,16 +422,6 @@ def retention_window_text(season, now=None):
     return f"🔒 Closed — the deadline passed {A.format_clock(-left)} ago"
 
 
-def _rating_band(row, previous):
-    """One base-price rung, read the way the ladder is: highest band first."""
-    low = row["min_rating"]
-    if low <= 0:
-        return "everyone else"
-    if previous is None:
-        return f"{low}+ OVR"
-    return f"{low}–{previous - 1} OVR"
-
-
 def rules_view(session, season):
     """📜 Every number that decides what a franchise may do.
 
@@ -506,13 +496,17 @@ def rules_view(session, season):
     # ── The two ladders ──
     header = [R.cell(R.bold("Rating"), header=True),
               R.cell(R.bold("Base price"), header=True, align="right")]
-    rows, previous, ladder_lines = [header], None, []
+    rows, ladder_lines = [header], []
     for row in A.base_price_rules(season):
-        band = _rating_band(row, previous)
+        # The band is the one the admin typed — ``base_price_rules`` has
+        # already filled in the top of a rung left open, so this never has to
+        # work it out from the neighbours and can never disagree with the
+        # price the pool builder stamps.
+        band = (A.render_rating_band(row) + " OVR" if row["min_rating"]
+                else "everyone else")
         price = A.render_money(row["base_lakh"], symbol)
         rows.append([R.cell(band), R.cell(price, align="right")])
         ladder_lines.append(f"{band} → <b>{price}</b>")
-        previous = row["min_rating"]
     blocks.append(R.details(R.bold("🏷 Base prices"),
                             [R.table(rows, bordered=True, compact=True)]))
     lines.append("<b>🏷 Base prices</b>")
