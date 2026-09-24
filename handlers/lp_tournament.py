@@ -26,6 +26,12 @@ Running it (bot admins only — see /lptadmin)
 Every admin command works on the *active* Lets Play tournament unless it takes
 an explicit id, so the normal run of a season is: /lptnew → /lptadd ×N →
 /lptschedule → /lptstart, and then the players use /lptour.
+
+The four public views go out as Bot API 10.1 rich messages where the server
+takes them — ``services/lp_tournament_rich.py`` renders the table and the
+fixture list as native tables — and as the HTML in
+``services/lp_tournament_service.py`` whenever the rich send is refused. Both
+renderings are live; see ``docs/rich-text-messages.md``.
 """
 
 import html
@@ -35,7 +41,9 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from database import get_session
+from services import lp_tournament_rich as lptr
 from services import lp_tournament_service as lpt
+from services import rich_message as R
 from services import tournament_service
 from services.admin_ids import is_admin
 from services.lp_tournament_service import LPTError
@@ -52,14 +60,17 @@ NO_ACTIVE = ("❌ No Lets Play Tournament is running right now.\n"
 # Shared plumbing
 # ════════════════════════════════════════════════════════════════════
 
-async def _reply(update, text, **kwargs):
-    """Reply with this module's defaults: HTML, and no link previews."""
+async def _reply(update, text, *, blocks=None, reply_markup=None):
+    """Reply with ``blocks`` where the server takes them, else HTML.
+
+    Most replies here are one-line admin acknowledgements with nothing a table
+    would improve, so ``blocks`` defaults to None and they go out as the HTML
+    they always were — now split rather than refused when one runs long.
+    """
     msg = update.effective_message
     if msg is None:
         return None
-    kwargs.setdefault("parse_mode", "HTML")
-    kwargs.setdefault("disable_web_page_preview", True)
-    return await msg.reply_text(text, **kwargs)
+    return await R.reply_rich(msg, blocks, text, reply_markup=reply_markup)
 
 
 def _arg_text(context):
@@ -136,6 +147,7 @@ async def _with_active(update, work, *, admin=False):
     """
     if admin and not await _require_admin(update):
         return
+    blocks = None
     session = get_session()
     try:
         tour = _load_active(session)
@@ -143,6 +155,10 @@ async def _with_active(update, work, *, admin=False):
             await _reply(update, NO_ACTIVE)
             return
         text = work(session, tour)
+        # A view hands back ``(html, blocks)``; an admin command just the text
+        # it wants echoed.
+        if isinstance(text, tuple):
+            text, blocks = text
         session.commit()
     except LPTError as exc:
         session.rollback()
@@ -156,7 +172,7 @@ async def _with_active(update, work, *, admin=False):
     finally:
         session.close()
     if text:
-        await _reply(update, text)
+        await _reply(update, text, blocks=blocks)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -239,6 +255,7 @@ async def lpt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _reply(update, NO_ACTIVE)
             return
         text = lpt.render_overview(session, tour)
+        blocks = lptr.render_blocks(session, tour, "overview")
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("📊 Table", callback_data="lptv_table"),
             InlineKeyboardButton("🗓️ Fixtures", callback_data="lptv_fixtures"),
@@ -246,7 +263,7 @@ async def lpt_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("👥 Teams", callback_data="lptv_teams"),
             InlineKeyboardButton("🏠 Overview", callback_data="lptv_overview"),
         ]])
-        await _reply(update, text, reply_markup=kb)
+        await _reply(update, text, blocks=blocks, reply_markup=kb)
     except Exception:
         logger.exception("/lpt failed")
         await _reply(update, "⚠️ Could not load the tournament.")
@@ -275,7 +292,10 @@ async def lpt_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif view == "teams":
             text = lpt.render_teams(session, tour)
         else:
+            view = "overview"
             text = lpt.render_overview(session, tour)
+        blocks = lptr.render_blocks(session, tour, view,
+                                    viewer_tg_id=q.from_user.id)
         await q.answer()
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton(("● " if view == "table" else "") + "📊 Table",
@@ -288,14 +308,9 @@ async def lpt_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton(("● " if view == "overview" else "") + "🏠 Overview",
                                  callback_data="lptv_overview"),
         ]])
-        try:
-            await q.edit_message_text(text, parse_mode="HTML",
-                                     disable_web_page_preview=True,
-                                     reply_markup=kb)
-        except Exception:
-            # Tapping the view you are already on is a no-op edit, which Telegram
-            # rejects — that is not an error worth showing anybody.
-            logger.debug("/lpt view edit skipped", exc_info=True)
+        # Tapping the view you are already on is a no-op edit, which Telegram
+        # rejects — ``edit_rich`` reads that as "already drawn", not an error.
+        await R.edit_rich(q, blocks, text, reply_markup=kb)
     except Exception:
         logger.exception("/lpt view callback failed")
     finally:
@@ -304,19 +319,22 @@ async def lpt_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def lptable_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/lptable — the Lets Play Tournament points table."""
-    await _with_active(update, lambda s, t: lpt.render_table(s, t))
+    await _with_active(update, lambda s, t: (lpt.render_table(s, t),
+                                            lptr.render_blocks(s, t, "table")))
 
 
 async def lptfixtures_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/lptfixtures — the fixture list, with your own next matches highlighted."""
     viewer = update.effective_user.id if update.effective_user else None
-    await _with_active(
-        update, lambda s, t: lpt.render_fixtures(s, t, viewer_tg_id=viewer))
+    await _with_active(update, lambda s, t: (
+        lpt.render_fixtures(s, t, viewer_tg_id=viewer),
+        lptr.render_blocks(s, t, "fixtures", viewer_tg_id=viewer)))
 
 
 async def lptteams_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/lptteams — the participating squad list."""
-    await _with_active(update, lambda s, t: lpt.render_teams(s, t))
+    await _with_active(update, lambda s, t: (lpt.render_teams(s, t),
+                                            lptr.render_blocks(s, t, "teams")))
 
 
 # ── /lptstats: the same Top-10 leaderboards /tournamentstats renders, but for
@@ -325,7 +343,7 @@ async def lptteams_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def lptstats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/lptstats — Top-10 Lets Play Tournament leaderboards with category buttons."""
-    from handlers.tournament import _leaders_for, _render
+    from handlers.tournament import _leaderboard_blocks, _leaders_for, _render
     session = get_session()
     try:
         tour = _load_active(session)
@@ -335,6 +353,7 @@ async def lptstats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         opener = update.effective_user.id if update.effective_user else 0
         rows = _leaders_for(session, tour, "runs")
         await _reply(update, _render(tour, "runs", rows),
+                     blocks=_leaderboard_blocks(tour, "runs", rows),
                      reply_markup=_stats_keyboard("runs", opener))
     except Exception:
         logger.exception("/lptstats failed")
@@ -361,7 +380,8 @@ def _stats_keyboard(active, opener_tg):
 
 async def lptstats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """``lptstat_<cat>_<opener>`` — switch the /lptstats category."""
-    from handlers.tournament import _leaders_for, _render, _CAT_LABELS
+    from handlers.tournament import (_CAT_LABELS, _leaderboard_blocks,
+                                     _leaders_for, _render)
     q = update.callback_query
     try:
         _, cat, opener = q.data.split("_", 2)
@@ -384,8 +404,9 @@ async def lptstats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(NO_ACTIVE, parse_mode="HTML")
             return
         rows = _leaders_for(session, tour, cat)
-        await q.edit_message_text(_render(tour, cat, rows), parse_mode="HTML",
-                                  reply_markup=_stats_keyboard(cat, opener))
+        await R.edit_rich(q, _leaderboard_blocks(tour, cat, rows),
+                          _render(tour, cat, rows),
+                          reply_markup=_stats_keyboard(cat, opener))
     except Exception:
         logger.exception("/lptstats callback failed")
     finally:

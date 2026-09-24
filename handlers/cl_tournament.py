@@ -15,6 +15,13 @@ for a player to see the schedule. These commands close that gap:
                   scores and concedes, its best and worst days, and which of
                   its own players are carrying it
 
+Every view is sent twice over: as a Bot API 10.1 rich message when the server
+takes one (``services/cl_tournament_rich.py`` — the points table, the fixture
+list and a team's card are native tables there, not ``<code>`` padded to a
+guessed width), and as the HTML in ``services/cl_tournament_view.py`` whenever
+the rich send is refused. Both renderings are live; see
+``docs/rich-text-messages.md``.
+
 Every one of them is read-only and open to anyone; starting a match is still the
 league's own (gated) tournament command. A league may also publish its own alias
 for the hub — ``ChallengeLeague.fixtures_command`` — which routes here from
@@ -28,7 +35,9 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from database import get_session
+from services import cl_tournament_rich as ctr
 from services import cl_tournament_view as ctv
+from services import rich_message as R
 from services import tournament_service
 
 logger = logging.getLogger(__name__)
@@ -69,13 +78,17 @@ def _keyboard(tour, active="overview"):
                                  for i in range(0, len(buttons), 2)])
 
 
-async def _reply(update, text, reply_markup=None):
+async def _reply(update, text, reply_markup=None, blocks=None):
+    """Answer with ``blocks`` when the server takes them, else the HTML.
+
+    ``blocks=None`` is the ordinary case for the short prompts here (a "which
+    team?" question, an error) — those have nothing a table would improve, and
+    ``rich_message`` sends the HTML straight through for them.
+    """
     msg = update.effective_message
     if msg is None:
         return
-    await msg.reply_text(text, parse_mode="HTML",
-                         disable_web_page_preview=True,
-                         reply_markup=reply_markup)
+    await R.reply_rich(msg, blocks, text, reply_markup=reply_markup)
 
 
 async def _show(update, view):
@@ -88,7 +101,9 @@ async def _show(update, view):
             return
         viewer = update.effective_user.id if update.effective_user else None
         text = ctv.render(session, tour, view, viewer_tg_id=viewer)
-        await _reply(update, text, reply_markup=_keyboard(tour, view))
+        blocks = ctr.render_blocks(session, tour, view, viewer_tg_id=viewer)
+        await _reply(update, text, reply_markup=_keyboard(tour, view),
+                     blocks=blocks)
     except Exception:
         logger.exception("Challenge League Tournament view %r failed", view)
         await _reply(update, "⚠️ Could not load the tournament right now.")
@@ -231,8 +246,12 @@ async def clsd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for tt in ctv.teams(session, tour.id):
                     if viewer is not None and tournament_service.is_team_member(
                             tt, viewer):
-                        await _reply(update, ctv.render_team_schedule(
-                            session, tour, tt, viewer_tg_id=viewer))
+                        await _reply(
+                            update,
+                            ctv.render_team_schedule(session, tour, tt,
+                                                     viewer_tg_id=viewer),
+                            blocks=ctr.team_schedule_blocks(
+                                session, tour, tt, viewer_tg_id=viewer))
                         return
             await _reply(update, _team_list_text(session, tours),
                          reply_markup=_pick_keyboard(
@@ -242,8 +261,12 @@ async def clsd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         tour, team, candidates = _resolve(session, query)
         if team is not None:
-            await _reply(update, ctv.render_team_schedule(
-                session, tour, team, viewer_tg_id=viewer))
+            await _reply(
+                update,
+                ctv.render_team_schedule(session, tour, team,
+                                         viewer_tg_id=viewer),
+                blocks=ctr.team_schedule_blocks(session, tour, team,
+                                                viewer_tg_id=viewer))
             return
         if candidates:
             await _reply(
@@ -288,12 +311,10 @@ async def clsd_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return
         text = ctv.render_team_schedule(session, tour, team,
                                         viewer_tg_id=q.from_user.id)
+        blocks = ctr.team_schedule_blocks(session, tour, team,
+                                          viewer_tg_id=q.from_user.id)
         await q.answer()
-        try:
-            await q.edit_message_text(text, parse_mode="HTML",
-                                      disable_web_page_preview=True)
-        except Exception:
-            logger.debug("/clsd pick edit skipped", exc_info=True)
+        await R.edit_rich(q, blocks, text)
     except Exception:
         logger.exception("/clsd pick callback failed")
     finally:
@@ -367,8 +388,12 @@ async def teamtourstats_handler(update: Update, context: ContextTypes.DEFAULT_TY
             mine = _my_teams(session, tours, viewer)
             if len(mine) == 1:
                 tour, team = mine[0]
-                await _reply(update, ctv.render_team_stats(
-                    session, tour, team, viewer_tg_id=viewer))
+                await _reply(
+                    update,
+                    ctv.render_team_stats(session, tour, team,
+                                          viewer_tg_id=viewer),
+                    blocks=ctr.team_stats_blocks(session, tour, team,
+                                                 viewer_tg_id=viewer))
                 return
             if len(mine) > 1:
                 # Somebody who runs several franchises has to say which.
@@ -384,8 +409,11 @@ async def teamtourstats_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
         tour, team, candidates = _resolve(session, query)
         if team is not None:
-            await _reply(update, ctv.render_team_stats(
-                session, tour, team, viewer_tg_id=viewer))
+            await _reply(
+                update,
+                ctv.render_team_stats(session, tour, team, viewer_tg_id=viewer),
+                blocks=ctr.team_stats_blocks(session, tour, team,
+                                             viewer_tg_id=viewer))
             return
         if candidates:
             await _reply(
@@ -426,12 +454,10 @@ async def teamtourstats_pick_callback(update: Update, context: ContextTypes.DEFA
             return
         text = ctv.render_team_stats(session, tour, team,
                                      viewer_tg_id=q.from_user.id)
+        blocks = ctr.team_stats_blocks(session, tour, team,
+                                       viewer_tg_id=q.from_user.id)
         await q.answer()
-        try:
-            await q.edit_message_text(text, parse_mode="HTML",
-                                      disable_web_page_preview=True)
-        except Exception:
-            logger.debug("/teamtourstats pick edit skipped", exc_info=True)
+        await R.edit_rich(q, blocks, text)
     except Exception:
         logger.exception("/teamtourstats pick callback failed")
     finally:
@@ -455,15 +481,12 @@ async def ct_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.answer("No tournament is running.", show_alert=True)
             return
         text = ctv.render(session, tour, view, viewer_tg_id=q.from_user.id)
+        blocks = ctr.render_blocks(session, tour, view,
+                                   viewer_tg_id=q.from_user.id)
         await q.answer()
-        try:
-            await q.edit_message_text(text, parse_mode="HTML",
-                                      disable_web_page_preview=True,
-                                      reply_markup=_keyboard(tour, view))
-        except Exception:
-            # Tapping the view you are already on is a no-op edit, which Telegram
-            # rejects — that is not an error worth showing anybody.
-            logger.debug("/ctour view edit skipped", exc_info=True)
+        # Tapping the view you are already on is a no-op edit, which Telegram
+        # rejects — ``edit_rich`` reads that as "already drawn", not an error.
+        await R.edit_rich(q, blocks, text, reply_markup=_keyboard(tour, view))
     except Exception:
         logger.exception("/ctour view callback failed")
     finally:

@@ -9,17 +9,56 @@ Launch scheme:
     is used; the Mini App reads start_param and routes to the match.)
 
 Backward-compatible: the Mini App still understands the older lm_/sc_ forms.
+
+The two cards this module posts into the chat — "Match Ready" and the live
+scorecard — each have a Bot API 10.1 block rendering beside the HTML one. A
+scorecard is columns (batsman, runs, balls; bowler, wickets, runs), which a
+proportional font cannot align, so the blocks version makes them a native
+table; ``services/rich_message.py`` falls back to the HTML whenever the rich
+send is refused. See ``docs/rich-text-messages.md``.
 """
 
 import asyncio
 import logging
 import os
 import random
+import re
 
 from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo)
 from telegram.error import BadRequest, NetworkError, RetryAfter, TimedOut
 
+from services import rich_message as R
+
 logger = logging.getLogger(__name__)
+
+# The mentions handed to the Match Ready card are already HTML anchors. A block
+# tree cannot carry a tag, so they are stripped back to the visible name.
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+# The anchor those mentions use, so the block rendering can rebuild it as a
+# real mention node instead of flattening a ping into plain text.
+_TG_MENTION_RE = re.compile(
+    r'<a\s+href="tg://user\?id=(\d+)"\s*>(.*?)</a>', re.I | re.S)
+
+
+def _plain(value):
+    """An HTML fragment as the text a reader sees, or ``—`` when it is empty."""
+    return _HTML_TAG_RE.sub("", str(value or "")).strip() or "—"
+
+
+def _mention_node(value):
+    """An HTML mention as a rich-message node, keeping the link where there is one.
+
+    Callers build these mentions as ``<a href="tg://user?id=…">`` strings, which
+    a block tree cannot carry. Reading the id back out means the card still
+    pings the captain it names, rather than degrading to a plain name.
+    """
+    match = _TG_MENTION_RE.search(str(value or ""))
+    if match:
+        return R.mention(_HTML_TAG_RE.sub("", match.group(2)).strip() or "—",
+                         match.group(1))
+    return _plain(value)
 
 
 def _retry_after_seconds(exc):
@@ -240,12 +279,66 @@ async def send_match_ready_message(context, chat_id, match, bat_team, bowl_team,
     if kb is None:
         text += ("\n\n⚠️ <i>Mini App link unavailable — set BOT_USERNAME"
                  " (and MINIAPP_NAME) to enable.</i>")
+    blocks = _match_ready_blocks(match, bat_team, bowl_team, bat_mention,
+                                 bowl_mention, rules_note, toss_note,
+                                 traits_note, has_button=kb is not None)
     try:
-        await context.bot.send_message(chat_id, text, parse_mode="HTML",
-                                       reply_markup=kb,
-                                       disable_web_page_preview=True)
+        await R.send_rich_message(context.bot, chat_id, blocks, text,
+                                  reply_markup=kb)
     except Exception:
         logger.exception("send_match_ready_message failed")
+
+
+def _match_ready_blocks(match, bat_team, bowl_team, bat_mention, bowl_mention,
+                        rules_note, toss_note, traits_note, *, has_button):
+    """The Match Ready card as blocks — the twin of the HTML above.
+
+    The mentions arrive already rendered as HTML anchors (every caller builds
+    them that way), so they are stripped back to their visible text here: a
+    block tree cannot carry a tag, and a name that reads ``<a href=…>`` on the
+    card is worse than one that does not ping.
+    """
+    try:
+        facts = [
+            [R.cell(R.bold("🏟️ Venue")), R.cell(match.stadium or "Neutral")],
+            [R.cell(R.bold("🌤️ Pitch")), R.cell(match.pitch_type or "Balanced")],
+            [R.cell(R.bold("⏱️ Overs")), R.cell(str(match.overs))],
+        ]
+        if toss_note:
+            facts.append([R.cell(R.bold("🪙 Toss")), R.cell(_plain(toss_note))])
+        if rules_note:
+            facts.append([R.cell(R.bold("🎯 Rules")), R.cell(_plain(rules_note))])
+        if traits_note:
+            facts.append([R.cell(R.bold("💎 Traits")),
+                          R.cell(_plain(traits_note))])
+
+        blocks = [
+            R.heading("🏏 MATCH READY!", size=2),
+            R.table(facts, bordered=True, compact=True),
+            R.table([
+                [R.cell("🏏"), R.cell(R.bold(bat_team)),
+                 R.cell(_mention_node(bat_mention), align="right"),
+                 R.cell(R.italic("bats first"), align="right")],
+                [R.cell("🎳"), R.cell(R.bold(bowl_team)),
+                 R.cell(_mention_node(bowl_mention), align="right"),
+                 R.cell(R.italic("bowls first"), align="right")],
+            ], bordered=True, striped=True, compact=True),
+            R.paragraph(["Tap ", R.bold("Play Match"),
+                         " to open the game board."]),
+            R.list_block([
+                "Batting side → pick openers & play shots",
+                "Bowling side → pick bowler & deliver",
+                "Everyone else → spectate live 👁",
+            ]),
+        ]
+        if not has_button:
+            blocks.append(R.footer(R.italic(
+                "⚠️ Mini App link unavailable — set BOT_USERNAME (and "
+                "MINIAPP_NAME) to enable.")))
+        return blocks
+    except Exception:
+        logger.exception("match ready blocks failed to build")
+        return None
 
 
 def build_live_scorecard_text(state, waiting_for_mention=None):
@@ -312,16 +405,93 @@ def build_live_scorecard_text(state, waiting_for_mention=None):
     return "\n".join(lines)
 
 
+def build_live_scorecard_blocks(state, waiting_for_mention=None):
+    """The broadcast scorecard as blocks — the twin of the text above.
+
+    Same four sections in the same order (who is batting and on what score, the
+    pair at the crease, the bowler, and the chase when there is one), with the
+    two player sections as native tables: their numbers are columns, and the
+    text version can only pad them and hope.
+    """
+    try:
+        bat_team = state.get("bat_team_name", "Batting")
+        runs = state.get("total_runs", 0)
+        wkts = state.get("total_wickets", 0)
+        over = max(0, state.get("current_over", 1) - 1)
+        ball = state.get("current_ball", 0)
+        overs_limit = state.get("overs", 0)
+
+        blocks = [R.heading("🏏 LIVE SCORECARD", size=3),
+                  R.table([
+                      [R.cell(R.bold("Batting")), R.cell(bat_team)],
+                      [R.cell(R.bold("Score")),
+                       R.cell(R.bold(f"{runs}/{wkts}"))],
+                      [R.cell(R.bold("Overs")),
+                       R.cell(f"{over}.{ball}/{overs_limit}")],
+                  ], bordered=True, compact=True)]
+
+        order = state.get("batting_order", [])
+        bat_stats = state.get("bat_stats", {})
+        rows = [[R.cell(R.bold("BATSMAN"), header=True),
+                 R.cell(R.bold("R"), header=True, align="right"),
+                 R.cell(R.bold("B"), header=True, align="right")]]
+        for idx, on_strike in ((state.get("striker_idx", 0), True),
+                               (state.get("non_striker_idx", 1), False)):
+            if idx is None or idx < 0 or idx >= len(order):
+                continue
+            player = order[idx]
+            st = bat_stats.get(player["roster_id"], {})
+            name = f"{'👉 ' if on_strike else ''}{player['name']}"
+            rows.append([R.cell(R.bold(name) if on_strike else name),
+                         R.cell(R.bold(str(st.get("runs", 0))), align="right"),
+                         R.cell(str(st.get("balls", 0)), align="right")])
+        if len(rows) > 1:
+            blocks.append(R.table(rows, bordered=True, compact=True,
+                                  caption=R.bold("🪓 Batsmen")))
+
+        bowler = state.get("current_bowler") or {}
+        if bowler:
+            bws = state.get("bowl_stats", {}).get(bowler.get("roster_id"), {})
+            done = bws.get("overs_done", 0)
+            this_over = bws.get("this_over_balls", 0)
+            blocks.append(R.table([
+                [R.cell(R.bold("BOWLER"), header=True),
+                 R.cell(R.bold("W-R"), header=True, align="right"),
+                 R.cell(R.bold("OV"), header=True, align="right")],
+                [R.cell(bowler.get("name", "?")),
+                 R.cell(R.bold(f"{bws.get('wickets', 0)}-{bws.get('runs', 0)}"),
+                        align="right"),
+                 R.cell(f"{done}.{this_over}" if this_over else str(done),
+                        align="right")],
+            ], bordered=True, compact=True, caption=R.bold("🎳 Bowler")))
+
+        if state.get("innings") == 2 and state.get("target"):
+            from services.match_engine import chase_requirements
+            chase = chase_requirements(state)
+            if chase:
+                blocks.append(R.pullquote(
+                    ["🎯 Need ", R.bold(str(chase["runs_required"])), " from ",
+                     R.bold(str(chase["balls_remaining"])), " balls"],
+                    caption="To win"))
+        if waiting_for_mention:
+            blocks.append(R.footer(
+                ["🎳 ", R.bold(f"Waiting for {waiting_for_mention} to deliver…")]))
+        return blocks
+    except Exception:
+        logger.exception("live scorecard blocks failed to build")
+        return None
+
+
 async def broadcast_scorecard(context, match_id, state, waiting_for_mention=None):
     """Send the live scorecard + Play Match button to the match chat."""
     chat_id = state.get("chat_id")
     if not chat_id:
         return
     text = build_live_scorecard_text(state, waiting_for_mention)
+    blocks = build_live_scorecard_blocks(state, waiting_for_mention)
     kb = play_match_keyboard(match_id)
     try:
-        await context.bot.send_message(chat_id, text, parse_mode="HTML",
-                                       reply_markup=kb,
-                                       disable_web_page_preview=True)
+        await R.send_rich_message(context.bot, chat_id, blocks, text,
+                                  reply_markup=kb)
     except Exception:
         logger.exception("broadcast_scorecard failed")

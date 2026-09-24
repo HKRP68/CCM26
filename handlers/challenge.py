@@ -12,12 +12,15 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import ChallengeLeague, ChallengePlayer, ChallengeTeam, FantasyLeague, Match, User
+from services import match_rich
+from services import rich_message as R
 from services import xi_rules
 from services.match_constants import MATCH_EXPIRE, PITCH_TYPES, random_match_settings
 from services.match_outcome import TYPE_CHALLENGE
 from services.telegram_user_service import resolve_command_target, sync_telegram_user
 from services.xi_memory_service import load_last_xi, save_last_xi
 from handlers.match import (
+    _mention_parts,
     _active_cric_match_for_user,
     _active_cric_match_in_chat,
     _active_match_in_chat,
@@ -1320,6 +1323,163 @@ def _challenge_xi_confirmed_text(draft, side, team_name, players, selected_ids):
         "✏️ Swap a player with <code>/change &lt;out&gt; &lt;in&gt;</code> — e.g. <code>/change 2 13</code>",
     ])
     return _join_within_limit(lines)
+
+
+# ── The XI, announced ────────────────────────────────────────────────
+# A confirmed Playing XI is the one message in a Challenge League match that
+# everybody reads twice: once to check the order, and again during the match to
+# find out who is in next. The HTML version is a numbered list, which puts the
+# role in brackets after a name of unpredictable length; the block version is
+# ``services.match_rich.playing_xi_blocks`` — a native table with the number,
+# the name and the role in their own columns, and the bench behind a collapsed
+# ``details`` rather than a second list nobody scrolls to.
+
+
+def _challenge_xi_confirmed_blocks(draft, side, team_name, players,
+                                   selected_ids):
+    """The confirmed XI as blocks — the twin of the text renderer above.
+
+    Same 1-11 batting order and same 12.. bench numbering, because those are
+    the numbers a captain types at ``/change``.
+    """
+    try:
+        return _challenge_xi_confirmed_tree(draft, side, team_name, players,
+                                            selected_ids)
+    except Exception:
+        # None sends the HTML twin; an XI announcement is never worth losing.
+        logger.exception("challenge confirmed-XI blocks failed to build")
+        return None
+
+
+def _challenge_xi_confirmed_tree(draft, side, team_name, players, selected_ids):
+    selected_ids = [int(pid) for pid in selected_ids]
+    pid_map = {int(getattr(player, "id")): player for player in players}
+    xi = [pid_map[pid] for pid in selected_ids if pid in pid_map]
+    bench = [player for player in players
+             if int(getattr(player, "id")) not in set(selected_ids)]
+    owner = draft.get(side) or {}
+    label, tg_id = _mention_parts(owner.get("tg_id"),
+                                  owner.get("name") or "Captain")
+    return match_rich.playing_xi_blocks(
+        team_name, xi, bench=bench,
+        subtitle=["👤 ", R.mention(R.bold(label), tg_id)],
+        footer=["✏️ Swap a player with ", R.code("/change <out> <in>"),
+                " — e.g. ", R.code("/change 2 13")],
+        name_of=lambda player: player.name,
+        detail_of=lambda player: (
+            _challenge_player_category(player)
+            + (_challenge_player_rating_suffix(player) or "")))
+
+
+def _challenge_xi_picker_blocks(draft, side, team_name, players, selected_ids):
+    """The live picker: the rule sheet as a real checklist, order underneath.
+
+    The HTML renders each rule with a ☑️/☐ character it has to draw itself.
+    A checkbox list is the block the API has for exactly this, so the ticks are
+    the client's and the rules read as the conditions they are.
+    """
+    try:
+        return _challenge_xi_picker_tree(draft, side, team_name, players,
+                                         selected_ids)
+    except Exception:
+        logger.exception("challenge XI picker blocks failed to build")
+        return None
+
+
+def _challenge_xi_picker_tree(draft, side, team_name, players, selected_ids):
+    owner = draft.get(side) or {}
+    selected_ids = [int(pid) for pid in selected_ids]
+    selected_set = set(selected_ids)
+    picked = [p for p in players if int(getattr(p, "id")) in selected_set]
+    picked.sort(key=lambda p: selected_ids.index(int(getattr(p, "id"))))
+    keepers = sum(1 for p in picked if _challenge_is_wicket_keeper(p))
+    bowling = sum(1 for p in picked if _challenge_is_bowling_option(p))
+    lo, hi = _challenge_overseas_limits(draft)
+    overseas = sum(1 for p in picked if _challenge_is_overseas(p))
+
+    label, tg_id = _mention_parts(owner.get("tg_id"),
+                                  owner.get("name") or "Player")
+    rules = [(keepers >= 1, f"1 Wicket Keeper ({keepers}/1)"),
+             (bowling >= 5, f"At least 5 Bowling Options ({bowling}/5)")]
+    if lo > 0 or hi < 11:
+        rules.append((lo <= overseas <= hi,
+                      f"Overseas ✈️ {overseas} (min {lo} / max {hi})"))
+
+    blocks = [
+        R.heading(f"🏏 {team_name} — Playing XI Selection", size=3),
+        R.paragraph([R.mention(R.bold(label), tg_id),
+                     ", select exactly 11 players."]),
+        R.paragraph(["Tap a player to add/remove, or reply with their numbers "
+                     "— e.g. ", R.code("1 2 3 4 5 6 7 8 9 10 11"), "."]),
+        R.paragraph([R.bold("Selected: "),
+                     R.bold(f"{len(selected_ids)}/11")]),
+        R.checklist(rules),
+        R.paragraph(R.italic("Selection order becomes batting order.")),
+    ]
+    injured = (draft.get("injured_out") or {}).get(side) or []
+    if injured:
+        blocks.append(R.details(
+            R.bold(f"🚑 Unavailable — injured ({len(injured)})"),
+            [R.list_block([
+                [R.bold(row.get("name") or "Player"), " — ",
+                 row.get("injury") or "injured", ", out ",
+                 ("1 more match" if int(row.get("matches") or 0) == 1
+                  else f"{int(row.get('matches') or 0)} more matches")]
+                for row in injured])]))
+    if picked:
+        blocks.append(R.table(
+            [[R.cell(R.bold("#"), header=True, align="center"),
+              R.cell(R.bold("PLAYER"), header=True),
+              R.cell(R.bold("ROLE"), header=True, align="right")]]
+            + [[R.cell(str(i), align="center"), R.cell(p.name),
+                R.cell(_challenge_player_category(p), align="right")]
+               for i, p in enumerate(picked, 1)],
+            bordered=True, compact=True, caption=R.bold("Batting order")))
+    return blocks
+
+
+def _challenge_match_ready_blocks(draft):
+    """The Match Ready card as blocks — the twin of the text renderer above."""
+    try:
+        host = draft.get("host") or {}
+        target = draft.get("target") or {}
+        host_team = draft.get("host_team") or "Host XI"
+        target_team = draft.get("target_team") or "Guest XI"
+        host_code = _team_short_code(host_team, draft.get("league_key")) or host_team
+        target_code = _team_short_code(target_team, draft.get("league_key")) or target_team
+        pitch_profile = (draft.get("pitch_profile") or draft.get("pitch_type")
+                         or "Balanced Pitch")
+        if pitch_profile and not str(pitch_profile).lower().endswith("pitch"):
+            pitch_profile = f"{pitch_profile} Pitch"
+        host_label, host_tg = _mention_parts(host.get("tg_id"),
+                                             host.get("name") or "Host")
+        guest_label, guest_tg = _mention_parts(target.get("tg_id"),
+                                               target.get("name") or "Guest")
+        return [
+            R.heading("🏏 MATCH READY!", size=2),
+            R.table([
+                [R.cell(f"{_team_emoji(host_team)} Host"),
+                 R.cell(R.bold(host_team)),
+                 R.cell(R.mention(host_label, host_tg), align="right")],
+                [R.cell(f"{_team_emoji(target_team)} Guest"),
+                 R.cell(R.bold(target_team)),
+                 R.cell(R.mention(guest_label, guest_tg), align="right")],
+            ], bordered=True, striped=True, compact=True),
+            R.table([
+                [R.cell(R.bold("⚔️ Challenge Mode")),
+                 R.cell(draft.get("league_name") or "IPL")],
+                [R.cell(R.bold("🎮 Game Mode")),
+                 R.cell(draft.get("game_mode") or "Classic Challenge")],
+                [R.cell(R.bold("🌱 Pitch Profile")), R.cell(pitch_profile)],
+            ], bordered=True, compact=True),
+            R.pullquote(R.bold(f"🔥 {host_code} vs {target_code}"),
+                        caption="Ready to begin"),
+            R.footer(["🟢 ", R.mention(R.bold(host_label), host_tg),
+                      ", tap ", R.bold("Start Match"), "."]),
+        ]
+    except Exception:
+        logger.exception("challenge match-ready blocks failed to build")
+        return None
 
 
 def _challenge_xi_player_keyboard(draft_id, side, players, selected_ids,
@@ -2826,9 +2986,11 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await _touch_selection_timer(context, draft)
     await query.answer(f"Select your {team_name} Playing XI.")
     try:
-        sent = await query.message.reply_text(
+        sent = await R.reply_rich(
+            query.message,
+            _challenge_xi_picker_blocks(draft, side, team_name, players,
+                                        selected_ids),
             _challenge_xi_text(draft, side, team_name, players, selected_ids),
-            parse_mode="HTML",
             reply_markup=_challenge_xi_player_keyboard(
                 draft_id, side, players, selected_ids,
                 saved_available=bool(saved_subset), team_code=team_code,
@@ -2916,9 +3078,10 @@ async def challenge_xi_useprev_callback(update: Update, context: ContextTypes.DE
         await query.answer(f"Loaded {len(saved_subset)}/11 from your last XI — fill the rest.")
     _store_xi_message_ref(selection, getattr(query, "message", None))
     try:
-        await query.edit_message_text(
+        await R.edit_rich(
+            query,
+            _challenge_xi_picker_blocks(draft, side, team_name, players, saved_subset),
             _challenge_xi_text(draft, side, team_name, players, saved_subset),
-            parse_mode="HTML",
             reply_markup=_challenge_xi_player_keyboard(draft_id, side, players, saved_subset),
         )
     except Exception:
@@ -2987,9 +3150,10 @@ async def challenge_xi_pick_callback(update: Update, context: ContextTypes.DEFAU
     await _touch_selection_timer(context, draft)
     _store_xi_message_ref(selection, getattr(query, "message", None))
     try:
-        await query.edit_message_text(
+        await R.edit_rich(
+            query,
+            _challenge_xi_picker_blocks(draft, side, team_name, players, selected_ids),
             _challenge_xi_text(draft, side, team_name, players, selected_ids),
-            parse_mode="HTML",
             reply_markup=_challenge_xi_player_keyboard(draft_id, side, players, selected_ids),
         )
     except Exception:
@@ -3069,9 +3233,12 @@ async def _finalize_xi_confirm(context, query, draft, draft_id, side, team_name,
     edit_allowed = not _challenge_xi_ready(draft) and not draft.get("match_ready_sent")
     _store_xi_message_ref(selection, getattr(query, "message", None))
     try:
-        await query.edit_message_text(
-            _challenge_xi_confirmed_text(draft, side, team_name, players, selected_ids),
-            parse_mode="HTML",
+        await R.edit_rich(
+            query,
+            _challenge_xi_confirmed_blocks(draft, side, team_name, players,
+                                           selected_ids),
+            _challenge_xi_confirmed_text(draft, side, team_name, players,
+                                         selected_ids),
             reply_markup=(_challenge_xi_postselect_keyboard(draft_id, side, confirmed=True)
                           if edit_allowed else None),
         )
@@ -3083,9 +3250,9 @@ async def _finalize_xi_confirm(context, query, draft, draft_id, side, team_name,
         message_obj = getattr(query, "message", None)
         if message_obj is not None:
             try:
-                await message_obj.reply_text(
+                await R.reply_rich(
+                    message_obj, _challenge_match_ready_blocks(draft),
                     _challenge_match_ready_text(draft),
-                    parse_mode="HTML",
                     reply_markup=_challenge_start_match_keyboard(draft_id),
                 )
             except Exception:
@@ -3129,9 +3296,10 @@ async def challenge_xi_clear_callback(update: Update, context: ContextTypes.DEFA
     _store_xi_message_ref(selection, getattr(query, "message", None))
     await query.answer("Selection cleared.")
     try:
-        await query.edit_message_text(
+        await R.edit_rich(
+            query,
+            _challenge_xi_picker_blocks(draft, side, team_name, players, []),
             _challenge_xi_text(draft, side, team_name, players, []),
-            parse_mode="HTML",
             reply_markup=_challenge_xi_player_keyboard(draft_id, side, players, []),
         )
     except Exception:
@@ -3177,9 +3345,10 @@ async def challenge_xi_edit_callback(update: Update, context: ContextTypes.DEFAU
     _store_xi_message_ref(selection, getattr(query, "message", None))
     await query.answer("Edit your XI." if was_confirmed else "Keep editing.")
     try:
-        await query.edit_message_text(
+        await R.edit_rich(
+            query,
+            _challenge_xi_picker_blocks(draft, side, team_name, players, selected_ids),
             _challenge_xi_text(draft, side, team_name, players, selected_ids),
-            parse_mode="HTML",
             reply_markup=_challenge_xi_player_keyboard(draft_id, side, players, selected_ids),
         )
     except Exception:
@@ -3258,9 +3427,11 @@ async def challenge_xi_quickselect(update: Update, context: ContextTypes.DEFAULT
     await _touch_selection_timer(context, draft)
     draft_id = draft.get("draft_id")
     try:
-        sent = await message.reply_text(
+        sent = await R.reply_rich(
+            message,
+            _challenge_xi_picker_blocks(draft, side, team_name, players,
+                                        selected_ids),
             _challenge_xi_text(draft, side, team_name, players, selected_ids),
-            parse_mode="HTML",
             reply_markup=_challenge_xi_player_keyboard(draft_id, side, players, selected_ids),
         )
         _store_xi_message_ref(selection, sent)
@@ -3362,20 +3533,27 @@ async def challenge_change_handler(update: Update, context: ContextTypes.DEFAULT
     msg_chat_id = selection.get("msg_chat_id")
     msg_id = selection.get("msg_id")
     rendered = _challenge_xi_confirmed_text(draft, side, team_name, players, new_ids)
+    rendered_blocks = _challenge_xi_confirmed_blocks(draft, side, team_name,
+                                                     players, new_ids)
     markup = (_challenge_xi_postselect_keyboard(draft_id, side, confirmed=confirmed)
               if not (draft.get("match_ready_sent") or draft.get("match_started")) else None)
     if msg_chat_id is not None and msg_id is not None:
-        try:
-            await context.bot.edit_message_text(
-                rendered, chat_id=msg_chat_id, message_id=msg_id,
-                parse_mode="HTML", reply_markup=markup,
-            )
-            edited = True
-        except Exception:
-            logger.debug("change: in-place XI edit failed", exc_info=True)
+        edited = await R.edit_rich_message(
+            context.bot, msg_chat_id, msg_id, rendered_blocks,
+            reply_markup=markup)
+        if not edited:
+            try:
+                await context.bot.edit_message_text(
+                    rendered, chat_id=msg_chat_id, message_id=msg_id,
+                    parse_mode="HTML", reply_markup=markup,
+                )
+                edited = True
+            except Exception:
+                logger.debug("change: in-place XI edit failed", exc_info=True)
     if not edited:
         try:
-            sent = await message.reply_text(rendered, parse_mode="HTML", reply_markup=markup)
+            sent = await R.reply_rich(message, rendered_blocks, rendered,
+                                      reply_markup=markup)
             _store_xi_message_ref(selection, sent)
         except Exception:
             logger.exception("Failed to render /change XI message")

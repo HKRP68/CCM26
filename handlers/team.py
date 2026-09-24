@@ -1,4 +1,13 @@
-"""Handlers for /teamname, /purse, /stats."""
+"""Handlers for /teamname, /purse, /stats.
+
+``/stats`` is a card image plus a career record. The record has always been a
+``<code>`` block padded with ``str.ljust`` into two fake columns — which only
+lines up while every number has the width the padding assumed. Where the server
+takes Bot API 10.1 rich messages the same record goes out as two native tables
+instead (``services/rich_message.py``, ``docs/rich-text-messages.md``), the card
+leading with a short caption; where it does not, nothing changes and the record
+rides in the caption exactly as before.
+"""
 
 import re
 import io
@@ -16,6 +25,7 @@ from models import (
 from config import get_buy_value, get_sell_value, MAX_ROSTER
 from services.activity_service import log_activity
 from services.flags import get_flag
+from services import rich_message as R
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +318,65 @@ async def purse_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.close()
 
 
+def _career_blocks(player, flag, owner_name, buy_val, gs):
+    """A player's career record as two tables — the twin of the ``<code>`` block.
+
+    Batting and bowling are read separately, so they are separate tables rather
+    than one block of two columns glued together by padding.
+    """
+    try:
+        return [
+            R.heading(f"📛 {player.name} {flag}", size=3),
+            R.paragraph([R.bold(f"⭐ {player.rating} OVR"),
+                         f"  ·  {player.category or '—'}"]),
+            R.table([
+                [R.cell(R.bold("👤 Owner")), R.cell(owner_name)],
+                [R.cell(R.bold("💰 Value")),
+                 R.cell(f"{buy_val:,} 🪙", align="right")],
+                [R.cell(R.bold("🏆 POTM")),
+                 R.cell(str(gs.potm), align="right")],
+            ], bordered=True, compact=True),
+            R.table([
+                [R.cell(R.bold("Inns")), R.cell(str(gs.bat_inns), align="right"),
+                 R.cell(R.bold("Runs")), R.cell(R.bold(str(gs.runs)),
+                                                align="right")],
+                [R.cell(R.bold("50s")), R.cell(str(gs.fifties), align="right"),
+                 R.cell(R.bold("100s")), R.cell(str(gs.hundreds),
+                                                align="right")],
+                [R.cell(R.bold("4s / 6s")),
+                 R.cell(f"{gs.fours}/{gs.sixes}", align="right"),
+                 R.cell(R.bold("Ducks")), R.cell(str(gs.ducks), align="right")],
+                [R.cell(R.bold("Avg")), R.cell(str(gs.bat_avg), align="right"),
+                 R.cell(R.bold("SR")), R.cell(str(gs.bat_sr), align="right")],
+                [R.cell(R.bold("HS")), R.cell(R.bold(gs.hs_str), align="right"),
+                 R.cell(""), R.cell("")],
+            ], bordered=True, compact=True, caption=R.bold("🏏 Batting")),
+            R.table([
+                [R.cell(R.bold("Inns")), R.cell(str(gs.bowl_inns), align="right"),
+                 R.cell(R.bold("Wickets")),
+                 R.cell(R.bold(str(gs.wickets_taken)), align="right")],
+                [R.cell(R.bold("3-Fers")), R.cell(str(gs.three_fers),
+                                                  align="right"),
+                 R.cell(R.bold("5-Fers")), R.cell(str(gs.five_fers),
+                                                  align="right")],
+                [R.cell(R.bold("Avg")), R.cell(str(gs.bowl_avg), align="right"),
+                 R.cell(R.bold("Econ")), R.cell(str(gs.bowl_economy),
+                                                align="right")],
+                [R.cell(R.bold("SR")), R.cell(str(gs.bowl_sr), align="right"),
+                 R.cell(R.bold("Hattricks")), R.cell(str(gs.hattricks),
+                                                     align="right")],
+                [R.cell(R.bold("BBF")), R.cell(R.bold(gs.bbf_str),
+                                               align="right"),
+                 R.cell(""), R.cell("")],
+            ], bordered=True, compact=True, caption=R.bold("🎯 Bowling")),
+            R.footer(["Everyone's numbers with this cricketer: ",
+                      R.code(f"/gstats {player.name}")]),
+        ]
+    except Exception:
+        logger.exception("career blocks failed to build for %s", player.name)
+        return None
+
+
 async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/stats <player_name> — show per-owner game stats."""
     tg_user = update.effective_user
@@ -384,7 +453,15 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # message by using the full stats block as the photo caption whenever it
         # fits Telegram's 1024-char cap; only fall back to a short caption + a
         # separate stats message when the block is too long.
-        full_in_caption = _caption_fits(text)
+        # With rich messages available the record goes out as its own message
+        # of native tables, so the card leads with the short caption. The
+        # decision is made *before* the photo is sent, which is why it reads the
+        # flag rather than the outcome of a send: at worst this costs the same
+        # two messages an over-long record has always cost, and once the latch
+        # trips (an older Bot API server) it is back to one.
+        career_blocks = (_career_blocks(player, flag, owner_name, buy_val, gs)
+                         if R.rich_text_enabled() else None)
+        full_in_caption = _caption_fits(text) and not career_blocks
         short_caption = (
             f"📛 <b>{player.name}</b> {flag}\n"
             f"⭐ {player.rating} OVR | {player.category}\n"
@@ -419,7 +496,7 @@ async def stats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Send the stats as a follow-up only when they weren't already carried in
         # the photo caption (or when no card image could be sent at all).
         if not (photo_sent and full_in_caption):
-            await update.message.reply_text(text, parse_mode="HTML")
+            await R.reply_rich(update.message, career_blocks, text)
 
     except Exception:
         logger.exception(f"Stats error for {tg_user.id}")

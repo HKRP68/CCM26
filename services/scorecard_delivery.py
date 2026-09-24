@@ -776,17 +776,119 @@ def text_scorecard(cards):
     return "\n\n".join(blocks)
 
 
+def scorecard_blocks(cards):
+    """The same innings cards as Bot API 10.1 blocks, or ``None``.
+
+    This is the fallback's fallback, and it is exactly where alignment matters
+    most: the images are gone, so these numbers are the whole scorecard. The
+    text version writes one bullet per player, which puts a score of ``104(58)``
+    and one of ``4(9)`` in different places on every line; a native table gives
+    each of runs, balls, fours and sixes its own column, which is how a
+    scorecard is read.
+    """
+    try:
+        from services import rich_message as R
+    except Exception:
+        return None
+    try:
+        blocks = [R.heading("📋 Scorecard", size=2),
+                  R.paragraph(R.italic(
+                      "Scorecard images couldn't be generated — here are the "
+                      "numbers."))]
+        for card in sorted(cards or [], key=_sort_key):
+            payload = card.get("payload") or {}
+            card_type = card.get("card_type")
+            if card_type == CARD_BATTING:
+                rows = [[R.cell(R.bold("BATSMAN"), header=True),
+                         R.cell(R.bold("R"), header=True, align="right"),
+                         R.cell(R.bold("B"), header=True, align="right"),
+                         R.cell(R.bold("4s"), header=True, align="right"),
+                         R.cell(R.bold("6s"), header=True, align="right"),
+                         R.cell(R.bold("HOW OUT"), header=True)]]
+                for row in (payload.get("batsmen_rows") or []):
+                    if row.get("status") == "dnb":
+                        continue
+                    rows.append([
+                        R.cell(_fmt_row_name(row)),
+                        R.cell(R.bold(str(row.get("runs", 0))), align="right"),
+                        R.cell(str(row.get("balls", 0)), align="right"),
+                        R.cell(str(row.get("fours", 0)), align="right"),
+                        R.cell(str(row.get("sixes", 0)), align="right"),
+                        R.cell(R.italic(row.get("dismissal") or "not out")),
+                    ])
+                extras = payload.get("extras_dict") or {}
+                if extras.get("total"):
+                    rows.append([R.cell(R.italic("Extras")),
+                                 R.cell(str(extras["total"]), align="right"),
+                                 R.cell(""), R.cell(""), R.cell(""),
+                                 R.cell("")])
+                blocks.append(R.table(rows, bordered=True, striped=True,
+                                      compact=True, caption=[
+                                          R.bold(f"🏏 {payload.get('team_name', 'Team')}"),
+                                          f"  {payload.get('total_runs', 0)}/"
+                                          f"{payload.get('total_wickets', 0)} "
+                                          f"({payload.get('overs_str', '0.0')})"]))
+            elif card_type == CARD_BOWLING:
+                rows = [[R.cell(R.bold("BOWLER"), header=True),
+                         R.cell(R.bold("O"), header=True, align="right"),
+                         R.cell(R.bold("M"), header=True, align="right"),
+                         R.cell(R.bold("R"), header=True, align="right"),
+                         R.cell(R.bold("W"), header=True, align="right")]]
+                for row in (payload.get("bowlers_rows") or []):
+                    rows.append([
+                        R.cell(_fmt_row_name(row)),
+                        R.cell(str(row.get("overs", "0")), align="right"),
+                        R.cell(str(row.get("maidens", 0)), align="right"),
+                        R.cell(str(row.get("runs_conceded", 0)), align="right"),
+                        R.cell(R.bold(str(row.get("wickets", 0))),
+                               align="right"),
+                    ])
+                blocks.append(R.table(
+                    rows, bordered=True, striped=True, compact=True,
+                    caption=R.bold(f"🎳 {payload.get('team_name', 'Team')} — "
+                                   "Bowling")))
+            elif card_type == CARD_SUMMARY and payload.get("winner_name"):
+                blocks.append(R.table([
+                    [R.cell(payload.get("inn1_team", "Team 1")),
+                     R.cell(R.bold(f"{payload.get('inn1_runs', 0)}/"
+                                   f"{payload.get('inn1_wickets', 0)}"),
+                            align="right"),
+                     R.cell(f"({payload.get('inn1_overs', '0')})",
+                            align="right")],
+                    [R.cell(payload.get("inn2_team", "Team 2")),
+                     R.cell(R.bold(f"{payload.get('inn2_runs', 0)}/"
+                                   f"{payload.get('inn2_wickets', 0)}"),
+                            align="right"),
+                     R.cell(f"({payload.get('inn2_overs', '0')})",
+                            align="right")],
+                ], bordered=True, compact=True, caption=R.bold("🏆 Result")))
+                blocks.append(R.pullquote(
+                    R.bold(f"{payload['winner_name']} won "
+                           f"{payload.get('win_margin_text', '')}".rstrip()),
+                    caption="Result"))
+                if payload.get("potm_name"):
+                    blocks.append(R.footer(
+                        ["🏅 ", R.bold(payload["potm_name"]),
+                         (f" — {payload['potm_stats']}"
+                          if payload.get("potm_stats") else "")]))
+        # Two blocks means the head with nothing under it.
+        return blocks if len(blocks) > 2 else None
+    except Exception:
+        logger.exception("scorecard blocks failed to build")
+        return None
+
+
 async def send_text_fallback(bot, chat_id, cards):
     """Post :func:`text_scorecard` when no image could be delivered."""
     text = text_scorecard(cards)
     if not text:
         return False
     try:
-        await bot.send_message(
-            chat_id=chat_id,
-            text="⚠️ <i>Scorecard images couldn't be generated — here are the "
-                 "numbers.</i>\n\n" + text,
-            parse_mode="HTML")
+        from services import rich_message as R
+        await R.send_rich_message(
+            bot, chat_id, scorecard_blocks(cards),
+            "⚠️ <i>Scorecard images couldn't be generated — here are the "
+            "numbers.</i>\n\n" + text)
         return True
     except Exception:
         logger.exception("scorecard text fallback failed for chat %s", chat_id)

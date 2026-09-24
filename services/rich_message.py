@@ -15,6 +15,12 @@ in this module is allowed to lose the message.
 The block and text shapes below follow the Bot API 10.1 schema: exactly one of
 ``html``/``markdown``/``blocks`` per message, ``align`` and ``valign`` required
 on every table cell, heading ``size`` 1-6 with 1 the largest.
+
+Two conveniences sit on top of the raw senders, because most surfaces in this
+bot already hold a ``Message`` or a ``CallbackQuery`` rather than a bot and a
+chat id: :func:`reply_rich` answers a command, :func:`edit_rich` redraws a card
+behind a button. Both take the surface's existing HTML as the fallback, and
+both split an over-long fallback rather than letting Telegram refuse it.
 """
 
 import logging
@@ -35,6 +41,10 @@ _unsupported = False
 # a payload it did not like.
 _MISSING_METHOD_HINTS = ("method not found", "method is not available",
                          "unknown method", "not supported")
+
+# Telegram refuses a text message over 4,096 characters outright. The HTML
+# fallbacks are cut under that rather than lost.
+CHUNK_LIMIT = 3800
 
 
 def rich_text_enabled() -> bool:
@@ -207,7 +217,74 @@ def list_block(items, *, ordered: bool = False):
     return {"type": "list", "items": wrapped}
 
 
+def checklist(items):
+    """A checkbox list from ``(checked, RichText)`` pairs.
+
+    The Bot API's list items carry their own tick state, so a rule sheet — the
+    Challenge League's XI conditions, say — is a real checklist rather than a
+    line of ✅/⬜ characters that the HTML rendering has to fake.
+    """
+    wrapped = []
+    for checked, item in items:
+        wrapped.append({"blocks": [paragraph(item)],
+                        "is_checked": bool(checked)})
+    return {"type": "list", "items": wrapped, "is_checkbox": True}
+
+
+def blockquote(blocks, *, expandable: bool = False):
+    """A quoted passage. ``expandable`` collapses a long one behind a tap.
+
+    The block twin of ``<blockquote>`` / ``<blockquote expandable>``, which is
+    how every HTML renderer in the bot sets a passage apart.
+    """
+    block = {"type": "blockquote", "blocks": blocks}
+    if expandable:
+        block["is_expandable"] = True
+    return block
+
+
+def footnote(text, reference):
+    """Body ``text`` carrying a ``reference`` note readers can open.
+
+    Used for the asterisks a scoreboard grows — an adjusted points total, a
+    not-out score — so the explanation rides on the number it belongs to
+    instead of a line at the bottom nobody connects back.
+    """
+    return {"type": "footnote", "text": text, "reference": reference}
+
+
 # ── Senders ──────────────────────────────────────────────────────────
+
+async def _post_rich(bot, chat_id, blocks, reply_markup, reply_to_message_id):
+    """One ``sendRichMessage`` attempt: the Message, or None when refused.
+
+    Shared by every sender here so the decision of *whether* to try rich, and
+    the accounting when Telegram says no, live in exactly one place.
+    """
+    post = getattr(bot, "_post", None)
+    if not (rich_text_enabled() and blocks and post):
+        return None
+    payload = {"chat_id": chat_id, "rich_message": {"blocks": blocks}}
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    if reply_to_message_id is not None:
+        payload["reply_parameters"] = {"message_id": reply_to_message_id}
+    try:
+        result = await post("sendRichMessage", payload)
+        return Message.de_json(result, bot)
+    except TelegramError as exc:
+        _note_failure("sendRichMessage", exc)
+        return None
+    except Exception:
+        # Not a refusal — a bug on this side of the wire (a block builder that
+        # produced something unserialisable, say). It must still fall through to
+        # the HTML, because nothing in this module is allowed to lose the
+        # message; it is logged with its traceback rather than counted as a
+        # server refusal, so it keeps showing up until somebody fixes it.
+        logger.warning("sendRichMessage failed locally — falling back to HTML",
+                       exc_info=True)
+        return None
+
 
 async def send_rich_message(bot, chat_id, blocks, fallback_text, *,
                             reply_markup=None, reply_to_message_id=None,
@@ -217,17 +294,10 @@ async def send_rich_message(bot, chat_id, blocks, fallback_text, *,
     Returns the sent :class:`telegram.Message`. ``kwargs`` are passed to the
     HTML fallback only, since the two endpoints do not take the same options.
     """
-    if rich_text_enabled() and blocks:
-        payload = {"chat_id": chat_id, "rich_message": {"blocks": blocks}}
-        if reply_markup is not None:
-            payload["reply_markup"] = reply_markup
-        if reply_to_message_id is not None:
-            payload["reply_parameters"] = {"message_id": reply_to_message_id}
-        try:
-            result = await bot._post("sendRichMessage", payload)
-            return Message.de_json(result, bot)
-        except TelegramError as exc:
-            _note_failure("sendRichMessage", exc)
+    sent = await _post_rich(bot, chat_id, blocks, reply_markup,
+                            reply_to_message_id)
+    if sent is not None:
+        return sent
 
     return await bot.send_message(
         chat_id, fallback_text, parse_mode="HTML", reply_markup=reply_markup,
@@ -242,15 +312,115 @@ async def edit_rich_message(bot, chat_id, message_id, blocks, *,
     Returns True on success. On refusal the caller still holds its HTML path,
     so this reports failure instead of raising.
     """
-    if not (rich_text_enabled() and blocks):
+    post = getattr(bot, "_post", None)
+    if not (rich_text_enabled() and blocks and post):
         return False
     payload = {"chat_id": chat_id, "message_id": message_id,
                "rich_message": {"blocks": blocks}}
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
     try:
-        await bot._post("editMessageText", payload)
+        await post("editMessageText", payload)
         return True
-    except TelegramError as exc:
-        _note_failure("editMessageText", exc)
+    except Exception as exc:
+        if "not modified" in str(exc).lower():
+            # Two ticks can render the same card. Nothing changed, so nothing
+            # failed — reporting this as a refusal would send the HTML twin
+            # over a message that already shows the right thing.
+            return True
+        if isinstance(exc, TelegramError):
+            _note_failure("editMessageText", exc)
+        else:
+            logger.warning("editMessageText failed locally — falling back to "
+                           "HTML", exc_info=True)
+        return False
+
+
+# ── Conveniences for handlers ────────────────────────────────────────
+# A command handler holds a ``Message``; a button handler holds a
+# ``CallbackQuery``. Neither holds the (bot, chat_id) pair the senders above
+# take, and both already know how to render their own HTML — so these two wrap
+# the plumbing that would otherwise be copied into every surface.
+
+
+def html_parts(html_text, limit=CHUNK_LIMIT):
+    """``html_text`` cut into sends Telegram will accept.
+
+    Cuts at blank lines first — where every renderer in this bot puts its
+    section breaks, and never inside a ``<blockquote>`` — and only falls back to
+    single line breaks for one section longer than a whole message.
+    """
+    from utils.message_chunks import chunk_blocks
+    if len(html_text) <= limit:
+        return [html_text]
+    parts = []
+    for chunk in chunk_blocks(html_text.split("\n\n"), limit=limit):
+        chunk = chunk.strip("\n")
+        if len(chunk) <= limit:
+            parts.append(chunk)
+        else:
+            parts.extend(p.strip("\n")
+                         for p in chunk_blocks(chunk.split("\n"), limit=limit))
+    return [p for p in parts if p]
+
+
+async def reply_rich(message, blocks, fallback_text, *, reply_markup=None):
+    """Answer ``message`` with ``blocks``, or with its HTML twin.
+
+    Returns the last message sent, or None when there was nothing to answer.
+    The fallback goes out through ``message.reply_text`` — the same call the
+    surfaces here made before they grew a block rendering, so the threading and
+    quoting behaviour is unchanged — and an HTML body too long for one send goes
+    out in parts, with the buttons on the last.
+    """
+    if message is None:
+        return None
+    get_bot = getattr(message, "get_bot", None)
+    if get_bot is not None:
+        sent = await _post_rich(get_bot(), message.chat_id, blocks,
+                                reply_markup, None)
+        if sent is not None:
+            return sent
+    parts = html_parts(fallback_text)
+    sent = None
+    for index, part in enumerate(parts):
+        last = index == len(parts) - 1
+        sent = await message.reply_text(
+            part, parse_mode="HTML", disable_web_page_preview=True,
+            reply_markup=reply_markup if last else None)
+    return sent
+
+
+async def edit_rich(query, blocks, fallback_text, *, reply_markup=None):
+    """Redraw a callback card as ``blocks``, falling back to its HTML twin.
+
+    Returns True when something was drawn. An edit that Telegram refuses as
+    "not modified" counts as drawn — the card already shows what was asked for.
+    """
+    if query is None:
+        return False
+    message = getattr(query, "message", None)
+    get_bot = getattr(query, "get_bot", None)
+    if message is not None and get_bot is not None:
+        if await edit_rich_message(get_bot(), message.chat_id,
+                                   message.message_id, blocks,
+                                   reply_markup=reply_markup):
+            return True
+    # An edit is one message by definition, so an over-long fallback cannot go
+    # out in parts the way a reply can. Showing the first part and saying it was
+    # cut beats a refused edit that leaves the old card on screen.
+    parts = html_parts(fallback_text)
+    text = parts[0]
+    if len(parts) > 1:
+        text += "\n\n<i>… trimmed to fit — run the command again for the "\
+                "full card.</i>"
+    try:
+        await query.edit_message_text(
+            text, parse_mode="HTML",
+            disable_web_page_preview=True, reply_markup=reply_markup)
+        return True
+    except Exception as exc:
+        if "not modified" in str(exc).lower():
+            return True
+        logger.debug("rich edit fallback failed: %s", exc)
         return False
