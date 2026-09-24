@@ -40,6 +40,12 @@ DURABLE_ROOTS = (
     "data/player_images",      # full custom card art
     "data/event_media",        # milestone media and sounds
     "data/team_logos",         # user team crests, once an admin has approved one
+    # Tournament, Challenge League, draft and auction crests. These live under
+    # static/ rather than data/ because Flask serves them straight to the admin
+    # pages, and until they were listed here a deploy wiped every one of them:
+    # the league kept playing, the cards just stopped carrying its crest and
+    # nothing said so. See services/card_identity._event_logo_bytes.
+    "static/challenge_leagues",
 )
 
 # Anything larger is a mistake rather than an upload — the upload validators cap
@@ -131,11 +137,134 @@ def put(path, data=None, uploaded_by=None, content_type=None):
             row.updated_by = str(uploaded_by)[:100]
         session.commit()
         logger.info("asset_store saved %s (%.1f KB)", key, len(data) / 1024)
-        return True
     except Exception:
         session.rollback()
         logger.exception("asset_store could not save %s", key)
         return False
+    finally:
+        session.close()
+
+    # After the session is closed, not inside it: the mirror is a network call
+    # that opens a session of its own to record the file_id, and holding two
+    # while one of them waits on Telegram is the pool-exhaustion trap
+    # services/player_image_service documents at length.
+    _mirror_to_telegram(key, data)
+    return True
+
+
+# ── The Telegram storage channel ────────────────────────────────────────────
+#
+# A third copy, behind disk and the database. It is not redundancy for its own
+# sake: the database copy is what a redeploy restores from, and an admin who
+# prunes or migrates that database would otherwise take every uploaded crest
+# with it. Telegram keeps a file by id forever and costs nothing, so an asset
+# that reached the channel once is not losable by anything done here.
+#
+# Best-effort at every step. Storage is opt-in (``STORAGE_CHAT_ID``), the
+# upload is a network call on an admin's save, and a crest is never worth
+# failing an upload the admin has already had confirmed.
+
+def _mirror_to_telegram(key, data=None):
+    """Send one stored asset to the storage channel, recording its ``file_id``.
+
+    Sent as a *document* rather than a photo: Telegram re-encodes a photo to
+    JPEG, and a crest that loses its alpha channel comes back as a white tile
+    sitting on the team's colour instead of on it.
+    """
+    try:
+        from services import tg_storage_service
+        if not tg_storage_service.is_configured():
+            return None
+    except Exception:
+        logger.debug("telegram storage unavailable for %s", key, exc_info=True)
+        return None
+
+    try:
+        file_id = tg_storage_service.upload_bytes_sync(
+            data if data is not None else b"", os.path.basename(key),
+            caption=f"Asset · {key}")
+    except Exception:
+        logger.warning("asset_store could not mirror %s to Telegram", key,
+                       exc_info=True)
+        return None
+    if not file_id:
+        return None
+
+    from models import StoredAsset
+    session = _session()
+    try:
+        row = session.query(StoredAsset).filter(StoredAsset.key == key).first()
+        if row is not None:
+            row.telegram_file_id = file_id
+            session.commit()
+    except Exception:
+        session.rollback()
+        logger.warning("asset_store could not record the Telegram id for %s", key,
+                       exc_info=True)
+    finally:
+        session.close()
+    return file_id
+
+
+def _from_telegram(row):
+    """Bytes for a stored asset whose database copy is gone, or ``None``."""
+    file_id = getattr(row, "telegram_file_id", None)
+    if not file_id:
+        return None
+    try:
+        from services import tg_storage_service
+        return tg_storage_service.download_file_bytes_sync(file_id)
+    except Exception:
+        logger.warning("asset_store could not restore %s from Telegram", row.key,
+                       exc_info=True)
+        return None
+
+
+def mirror_missing_to_telegram(limit=None):
+    """Push every stored asset that has no ``file_id`` yet to the channel.
+
+    Retroactive, so turning storage on later still covers what is already
+    stored — every asset saved before ``STORAGE_CHAT_ID`` was configured has no
+    ``file_id``, and nothing else would ever give it one. Returns how many went.
+
+    Deliberately not called from :func:`sync_on_boot`: it is one network upload
+    per asset, and boot is the one moment nothing should be waiting on
+    Telegram. Run it from a console or an admin action.
+    """
+    from models import StoredAsset
+    session = _session()
+    try:
+        query = (session.query(StoredAsset.key)
+                 .filter(StoredAsset.telegram_file_id.is_(None))
+                 .order_by(StoredAsset.key))
+        if limit:
+            query = query.limit(int(limit))
+        keys = [row[0] for row in query.all()]
+    except Exception:
+        logger.exception("asset_store could not list unmirrored assets")
+        return 0
+    finally:
+        session.close()
+
+    sent = 0
+    for key in keys:
+        data = _stored_bytes(key)
+        if data and _mirror_to_telegram(key, data):
+            sent += 1
+    if sent:
+        logger.info("asset_store mirrored %s asset(s) to the storage channel", sent)
+    return sent
+
+
+def _stored_bytes(key):
+    from models import StoredAsset
+    session = _session()
+    try:
+        row = session.query(StoredAsset).filter(StoredAsset.key == key).first()
+        return row.data if row is not None else None
+    except Exception:
+        logger.exception("asset_store could not read %s", key)
+        return None
     finally:
         session.close()
 
@@ -208,9 +337,12 @@ def ensure(path):
     session = _session()
     try:
         row = session.query(StoredAsset).filter(StoredAsset.key == key).first()
-        if not row or not row.data:
+        if not row:
             return False
-        return _write_out(key, row.data) is not None
+        data = row.data or _from_telegram(row)
+        if not data:
+            return False
+        return _write_out(key, data) is not None
     except Exception:
         logger.exception("asset_store could not restore %s", key)
         return False

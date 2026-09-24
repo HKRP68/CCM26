@@ -37,7 +37,12 @@ logger = logging.getLogger(__name__)
 
 # ── Canvas ───────────────────────────────────────────────────────────
 CANVAS_W = 1675
-CANVAS_H = 939
+# The POTM strip carries the award winner's collectible card now, and a card is
+# 3:2 landscape — so the strip is deep enough to show one at a readable size and
+# the canvas is that much taller. Everything above the strip is untouched: the
+# header, both innings blocks and the result bar keep the coordinates they were
+# measured at, and only the bottom of the poster grew.
+CANVAS_H = 986
 SCALE = 2
 
 # ── Palette (from the reference's own :root tokens) ──────────────────
@@ -120,18 +125,37 @@ RESULT_H = 52
 RESULT_BEVELS = ((290, 320), (1365, 1395))
 
 POTM_Y = 794
-POTM_H = 125
+POTM_H = 172
 POTM_TROPHY_CX = 102
 POTM_TITLE_X = 153
 POTM_PHOTO = (318, 480)                 # photo band, x — only when one exists
-POTM_NAME_X = 508                       # name's left edge WITH a portrait…
-POTM_NAME_X_BARE = 330                  # …and without one, where the band was
-POTM_DIVIDER_X = 772                    # gold rule before the showcase
-POTM_SHOWCASE_CX = 1105
+# How tall a cut-out portrait is drawn. Fixed rather than derived from POTM_H:
+# it is bottom-aligned and deliberately overshoots the strip by a little so it
+# reads as standing on the bar, and tying it to a strip that got deeper for the
+# collectible card would have it standing halfway up the result bar instead.
+POTM_PHOTO_H = 141
+# The collectible card's band. Wider than the portrait's, because a card is
+# landscape: at the strip's usable height a 3:2 card comes out about 220px
+# across, and the name block is shifted right by the difference rather than
+# drawn over it.
+POTM_CARD_BAND = (292, 524)
+POTM_CARD_PAD = 13                      # breathing room above and below it
+POTM_NAME_X_CARD = 546                  # name's left edge WITH the card…
+POTM_NAME_X = 508                       # …with a portrait only…
+POTM_NAME_X_BARE = 330                  # …and with neither, where the band was
+POTM_DIVIDER_X = 792                    # gold rule before the showcase
+POTM_SHOWCASE_CX = 1112
 # BATTING and BOWLING carry a combined figure like "52*(31)", so the first two
 # columns are wider than the three single numbers that follow.
-POTM_METRIC_EDGES = (790, 935, 1075, 1190, 1305, 1420)
-POTM_SCRIPT_CX = 1548
+POTM_METRIC_EDGES = (810, 952, 1090, 1202, 1314, 1426)
+POTM_SCRIPT_CX = 1556
+# The showcase's three rows, as offsets from the strip's vertical centre. They
+# were written as offsets from its top while the strip was only as tall as they
+# needed; a deeper strip would have left them pinned under the gold rule.
+POTM_SHOWCASE_DY = -42                  # PERFORMANCE SHOWCASE
+POTM_VALUE_DY = 4                       # the five numbers
+POTM_METRIC_LABEL_DY = 30               # their labels
+POTM_METRIC_RULE_DY = (-20, 40)         # the hairlines between the columns
 
 _ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LOGO_PATH = os.path.join(_ROOT_DIR, "assets", "logo.png")
@@ -465,6 +489,73 @@ def _open_crest(png_bytes, target):
     except Exception:
         # A user-supplied image that PIL cannot decode must never cost the card.
         logger.warning("summary card: team crest unreadable", exc_info=True)
+        return None
+
+
+def _open_card(png_bytes, target):
+    """The award winner's collectible card, contain-fitted into ``target``.
+
+    Separate from :func:`_open_crest` because a card is artwork with edges: it
+    is opaque, rectangular and wants its corners rounded and its border drawn,
+    where a crest is a cut-out that wants neither.
+    """
+    if not png_bytes:
+        return None
+    try:
+        card = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+        tw, th = s(target[0]), s(target[1])
+        if not card.width or not card.height:
+            return None
+        factor = min(tw / card.width, th / card.height)
+        size = (max(1, int(card.width * factor)), max(1, int(card.height * factor)))
+        return card.resize(size, Image.LANCZOS)
+    except Exception:
+        logger.warning("summary card: POTM card artwork unreadable", exc_info=True)
+        return None
+
+
+def _rounded_mask(size, radius):
+    mask = Image.new("L", size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, size[0] - 1, size[1] - 1],
+                                           radius=radius, fill=255)
+    return mask
+
+
+def _paste_potm_card(img, card, centre):
+    """Drop the card into the strip: rounded, gold-edged, with a soft shadow.
+
+    The frame is what stops it reading as a screenshot pasted onto the poster —
+    the strip is navy, the card is full-bleed artwork, and without an edge the
+    two just collide. Returns the box it occupied, or ``None``.
+    """
+    if card is None:
+        return None
+    try:
+        radius = max(2, s(7))
+        card.putalpha(_rounded_mask(card.size, radius))
+
+        cx, cy = s(centre[0]), s(centre[1])
+        x0, y0 = cx - card.width // 2, cy - card.height // 2
+
+        # A shadow under it, so the card sits on the bar rather than in it.
+        pad = max(2, s(3))
+        shadow = Image.new("RGBA", (card.width + pad * 2, card.height + pad * 2),
+                           (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).rounded_rectangle(
+            [0, 0, shadow.width - 1, shadow.height - 1],
+            radius=radius + pad, fill=(0, 0, 0, 110))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(max(1, s(2))))
+        img.alpha_composite(shadow, (x0 - pad, y0 - pad + max(1, s(2))))
+
+        img.alpha_composite(card, (x0, y0))
+        ImageDraw.Draw(img, "RGBA").rounded_rectangle(
+            [x0, y0, x0 + card.width - 1, y0 + card.height - 1],
+            radius=radius, outline=(*GOLD_BRIGHT, 235), width=max(1, s(1.6)))
+        return (x0, y0, x0 + card.width, y0 + card.height)
+    except Exception:
+        # The card is a bonus on a card that is already drawn. Never the card.
+        logger.warning("summary card: POTM card could not be composited",
+                       exc_info=True)
         return None
 
 
@@ -876,7 +967,8 @@ def _draw_trophy(draw, cx, cy, h=52):
                            radius=s(3), fill=(*GOLD_BRIGHT, 255))
 
 
-def _draw_potm(img, draw, ts, *, name, team, photo_png, metrics, flourish):
+def _draw_potm(img, draw, ts, *, name, team, photo_png, metrics, flourish,
+               card_png=None):
     y0, y1 = POTM_Y, POTM_Y + POTM_H
     band = Image.new("RGBA", (s(CANVAS_W), s(y1 - y0)), (0, 0, 0, 0))
     bd = ImageDraw.Draw(band, "RGBA")
@@ -898,16 +990,38 @@ def _draw_potm(img, draw, ts, *, name, team, photo_png, metrics, flourish):
                    _font(17, family="display"), GOLD_PALE, tracking=1.4,
                    anchor="lm")
 
-    photo = _open_crest(photo_png, (POTM_PHOTO[1] - POTM_PHOTO[0], POTM_H + 16))
-    if photo:
-        # Bottom-aligned, so a cut-out reads as standing on the bar.
-        img.alpha_composite(photo, (s((POTM_PHOTO[0] + POTM_PHOTO[1]) / 2) - photo.width // 2,
-                                    s(y1) - photo.height))
+    # The award winner's own collectible card, beside their name — the card
+    # people collect, on the card that says they won it. It takes the band
+    # because it *is* the portrait and more: the artwork already carries the
+    # player, so drawing a cut-out next to it would show them twice.
+    card_box = None
+    if card_png:
+        band_w = POTM_CARD_BAND[1] - POTM_CARD_BAND[0]
+        art = _open_card(card_png, (band_w, POTM_H - POTM_CARD_PAD * 2))
+        if art is not None:
+            card_box = _paste_potm_card(
+                img, art,
+                ((POTM_CARD_BAND[0] + POTM_CARD_BAND[1]) / 2, (y0 + y1) / 2))
 
-    # The photo band is only reserved when there is actually a portrait. Most
-    # players have none, and holding 162px open for a picture that is not
-    # coming left a dead gap between the title and the name.
-    name_x = POTM_NAME_X if photo else POTM_NAME_X_BARE
+    photo = None
+    if card_box is None:
+        photo = _open_crest(photo_png,
+                            (POTM_PHOTO[1] - POTM_PHOTO[0], POTM_PHOTO_H))
+        if photo:
+            # Bottom-aligned, so a cut-out reads as standing on the bar.
+            img.alpha_composite(
+                photo, (s((POTM_PHOTO[0] + POTM_PHOTO[1]) / 2) - photo.width // 2,
+                        s(y1) - photo.height))
+
+    # The band is only reserved when something is actually in it. Most players
+    # have no portrait, and holding 162px open for a picture that is not coming
+    # left a dead gap between the title and the name.
+    if card_box is not None:
+        name_x = POTM_NAME_X_CARD
+    elif photo:
+        name_x = POTM_NAME_X
+    else:
+        name_x = POTM_NAME_X_BARE
     name_w = POTM_DIVIDER_X - name_x - 24
 
     parts = str(name or "—").strip().split()
@@ -935,7 +1049,8 @@ def _draw_potm(img, draw, ts, *, name, team, photo_png, metrics, flourish):
     draw.rectangle(sbox(POTM_DIVIDER_X, y0 + 26, POTM_DIVIDER_X + 2, y1 - 26),
                    fill=(*GOLD, 170))
 
-    _draw_text(draw, (POTM_SHOWCASE_CX, y0 + 20),
+    cy = (y0 + y1) / 2
+    _draw_text(draw, (POTM_SHOWCASE_CX, cy + POTM_SHOWCASE_DY),
                _txt(ts, "potm_label", "PERFORMANCE SHOWCASE").upper(),
                _font_for(ts, "potm_label", 15, family="display"), GOLD_PALE,
                tracking=3.0, anchor="mm")
@@ -945,18 +1060,19 @@ def _draw_potm(img, draw, ts, *, name, team, photo_png, metrics, flourish):
     for i, (value, label) in enumerate(metrics[:5]):
         x0, x1 = POTM_METRIC_EDGES[i], POTM_METRIC_EDGES[i + 1]
         if i:
-            draw.line([(s(x0), s(y0 + 42)), (s(x0), s(y1 - 22))],
+            draw.line([(s(x0), s(cy + POTM_METRIC_RULE_DY[0])),
+                       (s(x0), s(cy + POTM_METRIC_RULE_DY[1]))],
                       fill=(255, 255, 255, 62), width=s(1))
-        cx = (x0 + x1) / 2
+        mcx = (x0 + x1) / 2
         # "52*(31)" is far wider than "52", and a long one would otherwise run
         # into its column's divider — so each value is fitted to its own column.
         text = str(value).upper()
         f_value = _fitted_font(draw, text, "headline", base_value,
                                (x1 - x0) - 28, min_size=15)
-        _draw_italic_text(img, (cx, y0 + 66), text, f_value, (*WHITE, 255),
-                          anchor="mm")
-        _draw_text(draw, (cx, y0 + 92), str(label).upper(), f_label,
-                   METRIC_LABEL, tracking=1.6, anchor="mm")
+        _draw_italic_text(img, (mcx, cy + POTM_VALUE_DY), text, f_value,
+                          (*WHITE, 255), anchor="mm")
+        _draw_text(draw, (mcx, cy + POTM_METRIC_LABEL_DY), str(label).upper(),
+                   f_label, METRIC_LABEL, tracking=1.6, anchor="mm")
 
     script = _txt(ts, "game_changer", flourish or "Game Changer!")
     f_script = _font_for(ts, "game_changer", 34, family="script")
@@ -1113,6 +1229,11 @@ def generate_match_summary(*,
     inn1_logo_png=None,
     inn2_logo_png=None,
     potm_photo_png=None,
+    # The award winner's collectible card, drawn into the strip beside their
+    # name. Resolved by services.card_identity.potm_card_png and switched by
+    # GameConfig.scorecard_potm_card_inline; absent simply falls back to the
+    # cut-out portrait, the way the strip always worked.
+    potm_card_png=None,
     potm_runs=None,
     potm_balls=None,
     potm_fours=None,
@@ -1171,7 +1292,8 @@ def generate_match_summary(*,
                                 conceded=potm_conceded, overs=potm_overs,
                                 economy=potm_economy, dots=potm_dots)
         _draw_potm(img, draw, ts, name=potm_name, team=potm_team,
-                   photo_png=potm_photo_png, metrics=metrics,
+                   photo_png=potm_photo_png, card_png=potm_card_png,
+                   metrics=metrics,
                    flourish=(_flourish(potm_stats, potm_runs, potm_wickets)
                              if dynamic_flourish else "Game Changer!"))
 

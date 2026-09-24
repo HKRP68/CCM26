@@ -878,6 +878,11 @@ class StoredAsset(Base):
     byte_size = Column(Integer, default=0, nullable=False)
     # Lets a restore skip rewriting a file that is already correct on disk.
     sha256 = Column(String(64), nullable=True, index=True)
+    # The copy in the Telegram storage channel, when STORAGE_CHAT_ID is set.
+    # A third tier behind disk and ``data``: Telegram keeps a file by id
+    # forever, so an asset that reached the channel survives even a rebuilt
+    # database. ``asset_store.ensure`` falls back to it.
+    telegram_file_id = Column(String(200), nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by = Column(String(100), nullable=True)
 
@@ -1273,10 +1278,17 @@ class GameConfig(Base):
     # Off renders the reference poster's literal "Game Changer!"; on names what
     # the Player of the Match actually did.
     scorecard_dynamic_flourish = Column(Boolean, default=False)
-    # After the match summary card, post the Player of the Match's collectible
-    # card as a second photo. On by default: it is the card people collect, and
-    # the summary's POTM strip is far too short to show it inline.
+    # Post the Player of the Match's collectible card as a second photo after
+    # the summary card — the card at full size, with its own caption. On by
+    # default, but suppressed while the card is drawn into the summary card
+    # itself: the two below are the same artwork in two places, and exactly one
+    # of them runs. See services/scorecard_delivery.send_potm_card.
     scorecard_potm_card = Column(Boolean, default=True)
+    # Draw that same card *into* the summary card, beside the Player of the
+    # Match's name — which is where someone reading the result looks for it,
+    # and where the chat cannot lose it. On by default, and it is what
+    # suppresses the second photo above.
+    scorecard_potm_card_inline = Column(Boolean, default=True)
     scorecard_text_settings = Column(Text, nullable=True)
     # ── /wpm and /cm completion cards ──
     # Comma-separated list of which cards to post to the lobby chat when a

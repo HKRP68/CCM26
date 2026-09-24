@@ -271,11 +271,16 @@ def get_tour_stats(session, tour_id, top_n=3):
     """Aggregate player stats across all completed matches of a tour.
 
     Returns dict:
-      most_runs: [(player_name, runs, team_user_id, team_name), ...]
-      most_wickets: [(player_name, wickets, team_user_id, team_name), ...]
+      most_runs: [{player_name, value, team_user_id, team_name, …}, ...]
+      most_wickets: [{player_name, value, team_user_id, team_name, …}, ...]
       total_matches_played: int
       total_runs: int (across both teams)
       total_wickets: int
+
+    Each leader row also carries the numbers *behind* its number — the balls,
+    strike rate, overs, economy and how many matches it took. They are summed
+    in the same pass and cost nothing extra, and a board that says only "383"
+    cannot tell anyone whether that was a season or an afternoon.
     """
     from models import PlayerMatchStats, Player
 
@@ -294,28 +299,28 @@ def get_tour_stats(session, tour_id, top_n=3):
             "total_matches_played": 0, "total_runs": 0, "total_wickets": 0,
         }
 
-    # Aggregate runs per player
-    runs_rows = (session.query(
-        PlayerMatchStats.player_id,
-        PlayerMatchStats.user_id,
-        func.sum(PlayerMatchStats.bat_runs).label("total_runs"),
+    # Aggregate runs per player. The supporting columns ride along in the same
+    # GROUP BY: they are what turns "383" into "383 off 144 in 13 matches".
+    _support = (
+        func.sum(PlayerMatchStats.bat_runs).label("bat_runs"),
+        func.sum(PlayerMatchStats.bat_balls).label("bat_balls"),
+        func.sum(PlayerMatchStats.bowl_wickets).label("bowl_wickets"),
+        func.sum(PlayerMatchStats.bowl_runs).label("bowl_runs"),
+        func.sum(PlayerMatchStats.bowl_balls).label("bowl_balls"),
+        func.count(PlayerMatchStats.id).label("matches"),
     )
-        .filter(PlayerMatchStats.match_id.in_(match_ids))
-        .group_by(PlayerMatchStats.player_id, PlayerMatchStats.user_id)
-        .order_by(func.sum(PlayerMatchStats.bat_runs).desc())
-        .limit(top_n)
-        .all())
 
-    wickets_rows = (session.query(
-        PlayerMatchStats.player_id,
-        PlayerMatchStats.user_id,
-        func.sum(PlayerMatchStats.bowl_wickets).label("total_wkts"),
-    )
-        .filter(PlayerMatchStats.match_id.in_(match_ids))
-        .group_by(PlayerMatchStats.player_id, PlayerMatchStats.user_id)
-        .order_by(func.sum(PlayerMatchStats.bowl_wickets).desc())
-        .limit(top_n)
-        .all())
+    def _board(order_by):
+        return (session.query(PlayerMatchStats.player_id,
+                              PlayerMatchStats.user_id, *_support)
+                .filter(PlayerMatchStats.match_id.in_(match_ids))
+                .group_by(PlayerMatchStats.player_id, PlayerMatchStats.user_id)
+                .order_by(order_by)
+                .limit(top_n)
+                .all())
+
+    runs_rows = _board(func.sum(PlayerMatchStats.bat_runs).desc())
+    wickets_rows = _board(func.sum(PlayerMatchStats.bowl_wickets).desc())
 
     # Resolve player+team names
     def _resolve(rows, value_key):
@@ -325,16 +330,29 @@ def get_tour_stats(session, tour_id, top_n=3):
             user = session.get(User, r[1])
             if not player or not user:
                 continue
-            value = int(r[2] or 0)
+            value = int(getattr(r, value_key, 0) or 0)
             if value == 0:
                 continue  # Skip players who didn't contribute
             team_name = user.team_name or f"@{user.username}'s XI"
+            bat_balls = int(r.bat_balls or 0)
+            bowl_balls = int(r.bowl_balls or 0)
             out.append({
                 "player_name": player.name,
                 "value": value,
                 "team_user_id": user.id,
                 "team_name": team_name,
                 "username": user.username,
+                "matches": int(r.matches or 0),
+                "bat_runs": int(r.bat_runs or 0),
+                "bat_balls": bat_balls,
+                "strike_rate": (round(int(r.bat_runs or 0) * 100.0 / bat_balls, 2)
+                                if bat_balls else None),
+                "bowl_wickets": int(r.bowl_wickets or 0),
+                "bowl_runs": int(r.bowl_runs or 0),
+                "bowl_balls": bowl_balls,
+                "overs": f"{bowl_balls // 6}.{bowl_balls % 6}",
+                "economy": (round(int(r.bowl_runs or 0) * 6.0 / bowl_balls, 2)
+                            if bowl_balls else None),
             })
         return out
 
@@ -349,8 +367,8 @@ def get_tour_stats(session, tour_id, top_n=3):
     total_wickets = int(totals[1] or 0)
 
     return {
-        "most_runs": _resolve(runs_rows, "total_runs"),
-        "most_wickets": _resolve(wickets_rows, "total_wkts"),
+        "most_runs": _resolve(runs_rows, "bat_runs"),
+        "most_wickets": _resolve(wickets_rows, "bowl_wickets"),
         "total_matches_played": len(match_ids),
         "total_runs": total_runs,
         "total_wickets": total_wickets,

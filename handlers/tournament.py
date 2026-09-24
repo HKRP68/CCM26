@@ -72,6 +72,25 @@ _CAT_COLUMN = {
     "sr": "SR", "econ": "ECON",
 }
 
+# The symbol each board's number wears, and the word for it. "412" alone says a
+# player is top of *something*; a board read on a phone should not need its own
+# header held in mind to be read.
+_CAT_ICON = {
+    "mvp": "🏅", "runs": "🏃", "wkts": "🎯", "sixes": "6️⃣", "fours": "4️⃣",
+    # ⚖️ rather than the 📊 the button wears, so the average does not collide
+    # with the match count that closes the same line.
+    "hs": "⭐", "avg": "⚖️", "fig": "💥", "sr": "⚡", "econ": "🛡️",
+}
+_CAT_UNIT = {
+    "mvp": "pts", "runs": "runs", "wkts": "wkts", "sixes": "sixes",
+    "fours": "fours", "hs": "", "avg": "avg", "fig": "", "sr": "SR",
+    "econ": "econ",
+}
+# What closes a line: how many matches it took. Carried only by the boards that
+# rank a season — Highest Score ranks one knock and Best Figure one spell, and
+# "in how many matches" has one answer there, so those leave it off.
+_MATCHES_ICON = "📊"
+
 
 def _sr(r):
     """Batting strike rate (runs per 100 balls) for a stats row, 0 if no balls."""
@@ -84,39 +103,154 @@ def _econ(r):
     return ((r.bowl_runs or 0) / overs) if overs else 0.0
 
 
+def _overs(balls):
+    """Balls as cricket overs — 110 balls is 18.2, never 18.33."""
+    balls = int(balls or 0)
+    return f"{balls // 6}.{balls % 6}"
+
+
+def _figure(r):
+    """A best bowling figure, or ``None`` when nobody has taken one yet.
+
+    ``best_bowl_runs`` is seeded at -1 rather than 0 precisely because 0 runs is
+    a real (excellent) figure, so the sentinel is what this checks.
+    """
+    wkts = getattr(r, "best_bowl_wickets", None)
+    runs = getattr(r, "best_bowl_runs", None)
+    if wkts is None or runs is None or runs < 0:
+        return None
+    return f"{wkts}/{runs}"
+
+
+def _leader(name, team, value, *, extras=(), matches=None, cells=()):
+    """One ranked row, with the numbers behind its number.
+
+    ``extras`` is what the HTML board prints in the bracket and ``cells`` the
+    columns the table gives them; they carry the same figures in the two shapes
+    the two renderers want. Everything is optional — a board with nothing to add
+    still renders as the single-number line it always was.
+    """
+    return {"name": name, "team": team, "value": str(value),
+            "extras": [e for e in extras if e], "matches": matches,
+            "cells": [c for c in cells if c]}
+
+
+def _unpack(row):
+    """A board row as a dict, whatever shape the caller built it in.
+
+    Rows used to be ``(name, team, value)`` tuples and a caller outside this
+    module may still build one; those simply have nothing extra to show.
+    """
+    if isinstance(row, dict):
+        return row
+    name, team, value = (list(row) + [None, None, None])[:3]
+    return _leader(name, team, value)
+
+
 def _leaders_for(session, tour, category, limit=BOARD_LIMIT):
-    """``[(name, team, value_str), …]`` for one category, best first.
+    """The ranked rows for one category, best first.
 
     Ranked ``limit`` deep rather than ten, and the renderers below decide how
     much of that is open and how much is behind a tap.
+
+    Each row carries the numbers *behind* its number. "383" says who is top and
+    nothing else — 383 off 144 balls in 13 matches is a season, and it is the
+    difference between a board that settles an argument and one that starts
+    one. The figures are already loaded (``stat_leaders`` reads whole rows), so
+    this costs nothing but the formatting.
     """
     leaders = tournament_service.stat_leaders(session, tour.id, limit=limit)
     out = []
     if category == "runs":
-        out = [(r.name, r.team_name, str(r.bat_runs)) for r in leaders["most_runs"]]
+        out = [_leader(r.name, r.team_name, r.bat_runs,
+                       extras=[f"{r.bat_balls}b", f"SR {_sr(r):.2f}"],
+                       matches=r.matches,
+                       cells=[("BALLS", str(r.bat_balls or 0)),
+                              ("SR", f"{_sr(r):.2f}"),
+                              ("M", str(r.matches or 0))])
+               for r in leaders["most_runs"]]
     elif category == "wkts":
-        out = [(r.name, r.team_name, str(r.bowl_wickets)) for r in leaders["most_wickets"]]
+        out = [_leader(r.name, r.team_name, r.bowl_wickets,
+                       extras=[f"{_overs(r.bowl_balls)} ov",
+                               f"Econ {_econ(r):.2f}",
+                               (f"Best {_figure(r)}" if _figure(r) else None)],
+                       matches=r.matches,
+                       cells=[("OVERS", _overs(r.bowl_balls)),
+                              ("ECON", f"{_econ(r):.2f}"),
+                              ("BEST", _figure(r) or "—"),
+                              ("M", str(r.matches or 0))])
+               for r in leaders["most_wickets"]]
     elif category == "sixes":
-        out = [(r.name, r.team_name, str(r.bat_sixes)) for r in leaders["most_sixes"]]
+        out = [_leader(r.name, r.team_name, r.bat_sixes,
+                       extras=[f"{r.bat_runs} runs", f"SR {_sr(r):.2f}"],
+                       matches=r.matches,
+                       cells=[("RUNS", str(r.bat_runs or 0)),
+                              ("SR", f"{_sr(r):.2f}"),
+                              ("M", str(r.matches or 0))])
+               for r in leaders["most_sixes"]]
     elif category == "fours":
-        out = [(r.name, r.team_name, str(r.bat_fours)) for r in leaders["most_fours"]]
+        out = [_leader(r.name, r.team_name, r.bat_fours,
+                       extras=[f"{r.bat_runs} runs", f"SR {_sr(r):.2f}"],
+                       matches=r.matches,
+                       cells=[("RUNS", str(r.bat_runs or 0)),
+                              ("SR", f"{_sr(r):.2f}"),
+                              ("M", str(r.matches or 0))])
+               for r in leaders["most_fours"]]
     elif category == "hs":
-        out = [(r.name, r.team_name, f"{r.highest_score}{'*' if r.not_out else ''}")
+        # A single knock, not a season: the strike rate is this innings' own,
+        # and there is no match count to give because the answer is one.
+        out = [_leader(r.name, r.team_name,
+                       f"{r.highest_score}{'*' if r.not_out else ''}",
+                       extras=[f"{r.bat_balls}b",
+                               (f"SR {r.highest_score * 100.0 / r.bat_balls:.2f}"
+                                if r.bat_balls else None)],
+                       cells=[("BALLS", str(r.bat_balls or 0)),
+                              ("SR", (f"{r.highest_score * 100.0 / r.bat_balls:.2f}"
+                                      if r.bat_balls else "—"))])
                for r in leaders["highest_score"]]
     elif category == "avg":
-        out = [(r.name, r.team_name, f"{v:.2f}") for r, v in leaders["top_average"]]
+        out = [_leader(r.name, r.team_name, f"{v:.2f}",
+                       extras=[f"{r.bat_runs} runs", f"{r.bat_outs} outs"],
+                       matches=r.matches,
+                       cells=[("RUNS", str(r.bat_runs or 0)),
+                              ("OUTS", str(r.bat_outs or 0)),
+                              ("M", str(r.matches or 0))])
+               for r, v in leaders["top_average"]]
     elif category == "fig":
-        out = [(r.name, r.team_name, f"{r.best_bowl_wickets}/{r.best_bowl_runs}")
+        # One spell, so there is nothing behind the figure but the figure.
+        out = [_leader(r.name, r.team_name,
+                       f"{r.best_bowl_wickets}/{r.best_bowl_runs}")
                for r in leaders["best_figure"]]
     elif category == "sr":
-        out = [(r.name, r.team_name, f"{v:.1f}") for r, v in leaders["best_strike_rate"]]
+        out = [_leader(r.name, r.team_name, f"{v:.2f}",
+                       extras=[f"{r.bat_runs} runs", f"{r.bat_balls}b"],
+                       matches=r.matches,
+                       cells=[("RUNS", str(r.bat_runs or 0)),
+                              ("BALLS", str(r.bat_balls or 0)),
+                              ("M", str(r.matches or 0))])
+               for r, v in leaders["best_strike_rate"]]
     elif category == "econ":
-        out = [(r.name, r.team_name, f"{v:.2f}") for r, v in leaders["best_economy"]]
+        out = [_leader(r.name, r.team_name, f"{v:.2f}",
+                       extras=[f"{r.bowl_wickets} wkts",
+                               f"{_overs(r.bowl_balls)} ov"],
+                       matches=r.matches,
+                       cells=[("WKTS", str(r.bowl_wickets or 0)),
+                              ("OVERS", _overs(r.bowl_balls)),
+                              ("M", str(r.matches or 0))])
+               for r, v in leaders["best_economy"]]
     elif category == "mvp":
         # MVP is the one board whose number means nothing on its own, so each
         # row carries the season behind it — the total is what ranks them, the
         # line under it is why.
-        out = [(r.name, r.team_name, f"{r.points:g} pts") for r in leaders["mvp"]]
+        out = [_leader(r.name, r.team_name, f"{r.points:g} pts",
+                       extras=[f"{r.bat_runs} runs", f"{r.bowl_wickets} wkts",
+                               f"{r.wins}W",
+                               (f"{r.awards}⭐" if r.awards else None)],
+                       matches=r.matches,
+                       cells=[("RUNS", str(r.bat_runs or 0)),
+                              ("WKTS", str(r.bowl_wickets or 0)),
+                              ("M", str(r.matches or 0))])
+               for r in leaders["mvp"]]
     return out
 
 
@@ -143,14 +277,15 @@ def _render(tour, category, rows):
     if not rows:
         lines.append("<i>No qualifying players yet.</i>")
     else:
-        lines += [_rank_line(i, row) for i, row in enumerate(rows[:BOARD_OPEN], 1)]
+        lines += [_rank_line(i, row, category)
+                  for i, row in enumerate(rows[:BOARD_OPEN], 1)]
         rest = rows[BOARD_OPEN:]
         if rest:
             lines += ["",
                       f"<b>👇 Ranks {BOARD_OPEN + 1}–{len(rows)}</b> "
                       f"<i>(tap to expand)</i>"]
             lines += expandable_quotes(
-                _rank_line(i, row)
+                _rank_line(i, row, category)
                 for i, row in enumerate(rest, BOARD_OPEN + 1))
     if category == "mvp":
         lines += ["", "<i>Impact points across the whole tournament — "
@@ -158,13 +293,40 @@ def _render(tour, category, rows):
     return "\n".join(lines)
 
 
-def _rank_line(position, row):
-    """One ranked line of the HTML board: medal or number, player, team, value."""
-    name, team, value = row
+def _rank_line(position, row, category="runs"):
+    """One ranked entry of the HTML board.
+
+    Two lines, not one. The first names the player and their side; the second
+    is what they actually did — the ranked number with its unit, the figures
+    behind it in a bracket, and how many matches it took:
+
+        🥇 Sai Sudharsan (PBKS)
+             — 🏃 383 runs (144b · SR 265.97) · 📊 13 M
+
+    A row with nothing to add falls back to the single line this used to be, so
+    a board of bare figures (a best spell, say) does not grow a blank second
+    line under every entry.
+    """
+    row = _unpack(row)
     rank = _MEDALS.get(position, f"{position}.")
-    team_s = f" · {html.escape(team)}" if team else ""
-    return (f"{rank} {html.escape(name or 'Player')}{team_s} — "
-            f"<b>{html.escape(str(value))}</b>")
+    team_s = f" <i>({html.escape(str(row['team']))})</i>" if row.get("team") else ""
+    head = f"{rank} <b>{html.escape(str(row.get('name') or 'Player'))}</b>{team_s}"
+
+    icon = _CAT_ICON.get(category, "")
+    unit = _CAT_UNIT.get(category, "")
+    value = f"<b>{html.escape(str(row.get('value')))}</b>"
+    detail = f"{icon} {value}".strip()
+    if unit:
+        detail += f" {unit}"
+    if row.get("extras"):
+        detail += " (" + " · ".join(html.escape(str(e)) for e in row["extras"]) + ")"
+    if row.get("matches"):
+        detail += f" · {_MATCHES_ICON} {row['matches']} M"
+    if not row.get("extras") and not row.get("matches"):
+        # Nothing behind the number — keep it on one line rather than wrapping
+        # a bare figure onto its own.
+        return f"{head} — {detail}"
+    return f"{head}\n     — {detail}"
 
 
 def _leaderboard_blocks(tour, category, rows):
@@ -185,19 +347,33 @@ def _leaderboard_blocks(tour, category, rows):
 
 
 def _rank_cells(category, rows, start=1):
-    """``rows`` as table rows, headed and numbered from ``start``."""
+    """``rows`` as table rows, headed and numbered from ``start``.
+
+    The supporting figures get columns of their own rather than the HTML
+    board's bracket — a table has headers, which is the one place the numbers
+    can be labelled without repeating the label on every row. The headers come
+    from the first row that has any, so every row is laid out the same way even
+    when one of them is missing a figure.
+    """
+    unpacked = [_unpack(row) for row in rows]
+    extra_heads = next(([head for head, _ in row["cells"]]
+                        for row in unpacked if row.get("cells")), [])
     cells = [[R.cell(R.bold("#"), header=True, align="center"),
               R.cell(R.bold("PLAYER"), header=True),
               R.cell(R.bold("TEAM"), header=True),
               R.cell(R.bold(_CAT_COLUMN.get(category, "VALUE")), header=True,
-                     align="right")]]
-    for position, (name, team, value) in enumerate(rows, start):
+                     align="right")]
+             + [R.cell(R.bold(head), header=True, align="right")
+                for head in extra_heads]]
+    for position, row in enumerate(unpacked, start):
+        values = dict(row.get("cells") or ())
         cells.append([
             R.cell(_MEDALS.get(position, f"{position}."), align="center"),
-            R.cell(name or "Player"),
-            R.cell(team or "—"),
-            R.cell(R.bold(str(value)), align="right"),
-        ])
+            R.cell(row.get("name") or "Player"),
+            R.cell(row.get("team") or "—"),
+            R.cell(R.bold(str(row.get("value"))), align="right"),
+        ] + [R.cell(values.get(head, "—"), align="right")
+             for head in extra_heads])
     return cells
 
 

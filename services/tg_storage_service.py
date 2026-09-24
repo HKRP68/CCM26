@@ -54,6 +54,10 @@ DOWNLOAD_TIMEOUT = _seconds_setting("TG_DOWNLOAD_TIMEOUT_SECONDS", 20.0)
 # always be the one that fires; this only covers a worker wedged somewhere
 # asyncio cannot interrupt, so it sits just past the inner one.
 DOWNLOAD_TIMEOUT_GRACE = _seconds_setting("TG_DOWNLOAD_GRACE_SECONDS", 5.0)
+# Ceiling on one mirror upload. An upload is always a side effect of something
+# that has already succeeded (an admin's save, a stored asset), so it gives up
+# rather than holding the caller.
+UPLOAD_TIMEOUT = _seconds_setting("TG_UPLOAD_TIMEOUT_SECONDS", 25.0)
 
 
 def is_configured() -> bool:
@@ -225,6 +229,66 @@ async def upload_document_async(file_path: str, caption: str = None) -> str | No
     except Exception:
         logger.exception("upload_document failed")
         return None
+
+async def upload_bytes_async(data: bytes, filename: str,
+                             caption: str = None) -> str | None:
+    """Upload in-memory bytes as a document; return the Telegram ``file_id``.
+
+    A *document* rather than a photo on purpose: Telegram re-encodes photos to
+    JPEG, which drops the alpha channel a crest needs and re-compresses
+    everything else. A document comes back byte-identical.
+    """
+    if not is_configured() or not data:
+        return None
+    try:
+        import io
+        token = os.getenv("BOT_TOKEN", "").strip()
+        bot = Bot(token=token)
+        chat_id = _chat_id()
+        bio = io.BytesIO(data)
+        bio.name = filename
+        msg = await bot.send_document(
+            chat_id=chat_id,
+            document=InputFile(bio, filename=filename),
+            caption=caption[:1024] if caption else None,
+        )
+        if msg.document:
+            return msg.document.file_id
+        return None
+    except Exception:
+        logger.exception("upload_bytes_async failed")
+        return None
+
+
+def upload_bytes_sync(data: bytes, filename: str, caption: str = None) -> str | None:
+    """:func:`upload_bytes_async` from anywhere, loop or no loop.
+
+    Always on a worker thread with its own loop, for the reason
+    :func:`download_file_bytes_sync` spells out: the callers are a Flask route,
+    a bot handler and a card render, and ``asyncio.run`` on the last two would
+    raise on the loop that is already running.
+    """
+    if not is_configured() or not data:
+        return None
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _Timeout
+
+    def _upload():
+        return asyncio.run(upload_bytes_async(data, filename, caption=caption))
+
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="tg-upload")
+    try:
+        return executor.submit(_upload).result(timeout=UPLOAD_TIMEOUT)
+    except _Timeout:
+        logger.warning("upload_bytes_sync gave up on %s after %ss",
+                       filename, UPLOAD_TIMEOUT)
+        return None
+    except Exception:
+        logger.exception("upload_bytes_sync failed")
+        return None
+    finally:
+        executor.shutdown(wait=False)
+
 
 async def upload_text_async(text: str, filename: str, caption: str = None) -> str | None:
     """Upload an in-memory text blob to the Telegram storage channel as a file.

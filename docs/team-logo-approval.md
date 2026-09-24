@@ -145,6 +145,88 @@ previously approved one is still being drawn on cards, and a shared key would
 let unreviewed bytes overwrite it. A timestamp alone is not enough — two
 uploads in the same second collide.
 
+## A tournament's crest overrides the manager's
+
+In a tournament or a Challenge League nobody is playing *their* team. They are
+playing a franchise the admins entered, with the franchise's name in the points
+table and the franchise's crest on the fixture card — and until this landed the
+scorecard drew the *manager's* crest on it, because `card_identity` tried
+`user_id` first and a league side always has one. The badge named the wrong
+team, on the one card everyone in the chat sees.
+
+So whenever a card is drawn for a competition, the competition's own crest wins:
+
+| Order | Source | Where it comes from |
+| --- | --- | --- |
+| 1 | `TournamentTeam.logo_url` | the tournament's own entry for that side |
+| 2 | `ChallengeTeam.logo_url` | the franchise behind it — a tournament row that has no crest of its own falls through to the league's |
+| 3 | `users.team_logo_asset_key` | the manager's own `/setteamlogo` crest |
+| 4 | the team name | the `users` lookup keyed on the name |
+
+Colours follow the same order, and for the same reason: a card wearing the
+franchise's badge and the manager's colour names two different sides.
+`TournamentTeam` carries a crest but not a colour, so the colour comes off the
+franchise behind it.
+
+**The override only applies when the caller says it is in a competition.** With
+no event context — no `tournament_id`, `tournament_team_id`,
+`challenge_team_id`, `challenge_team` or `league_key` — the order is exactly
+what it always was, so a plain `/playmatch` still draws the manager's crest.
+That guard is what keeps a user whose team name happens to match a franchise
+from silently losing their own badge.
+
+### How a card knows which competition it is
+
+By id, never by name: two tournaments can both have a "Super Kings", and a Lets
+Play side is a *user* playing under a team label rather than a franchise at all.
+The match state already carries the mapping, so nothing has to be looked up:
+
+| State key | Maps | Set by |
+| --- | --- | --- |
+| `tournament_tteam_by_user` | `users.id` → `TournamentTeam.id` | Lets Play (`handlers/letsplay.py`) |
+| `tournament_team_by_user` | `users.id` → `ChallengeTeam.id` | Challenge League (`handlers/cipl_play.py`) |
+| `tournament_id`, `league_key` | the competition itself | both |
+
+`handlers/match._event_identity` reads those into the stored card payload, which
+is why it is *data* rather than styling: the tournament a match was played in is
+fixed forever, while the crest behind it is still re-read live — a franchise
+renamed next season redraws under its new badge, not its old one. A payload
+archived before any of this existed simply has none of the keys and resolves
+exactly as it always did.
+
+## Event crests are kept, not just saved
+
+League, tournament, draft and auction crests upload to
+`static/challenge_leagues/` because Flask serves them straight to the admin
+pages. The host filesystem is rebuilt on every deploy, and that directory was
+not in `asset_store.DURABLE_ROOTS` — so every release silently stripped every
+league's crest off every scorecard. The rows still pointed at the files; the
+files were gone. Nothing said so, because a missing crest falls back to
+initials rather than failing.
+
+It is a durable root now, and an uploaded crest is written three times:
+
+1. **disk** — `static/challenge_leagues/`, the fast path every renderer reads
+2. **`stored_assets`** — the database copy a redeploy refills the disk from,
+   healed on a read miss by `asset_store.ensure` and on boot by `sync_on_boot`
+3. **the Telegram storage channel** — `StoredAsset.telegram_file_id`, when
+   `STORAGE_CHAT_ID` is configured
+
+The third tier is not redundancy for its own sake. The database copy is what a
+redeploy restores from, so an admin who prunes or migrates that database would
+otherwise take every uploaded crest with it; Telegram keeps a file by id
+forever, and `asset_store.ensure` falls back to it when the stored bytes are
+gone. It is sent as a **document**, not a photo — Telegram re-encodes photos to
+JPEG, and a crest that loses its alpha channel comes back as a white tile
+sitting on the team's colour instead of on it.
+
+Every step is best-effort and runs *after* the file is already saved: a crest
+is never worth failing an upload the admin has had confirmed.
+`asset_store.adopt_existing` picks up whatever is already on disk at the next
+boot, so nothing has to be re-uploaded even once, and
+`asset_store.mirror_missing_to_telegram` backfills the channel for installs
+that turn storage on later.
+
 ## How a crest reaches a card
 
 Resolved at **render time**, not stored in the scorecard payload:
@@ -161,10 +243,11 @@ carry the crest the team has *now*, not the one it had when the match was
 played. A team with no approved crest falls back to its initials on the summary
 card, and to the CMU mark on the batting and bowling cards.
 
-The lookup goes through the **team name**, because that is what the stored
-payloads have held since long before crests existed. Two users with the same
-team name is possible and rare; the most recently approved crest wins, which at
-least stays stable rather than alternating. Results are cached for five minutes
+For a user's own crest the lookup goes through the **team name**, because that
+is what the stored payloads have held since long before crests existed. Two
+users with the same team name is possible and rare; the most recently approved
+crest wins, which at least stays stable rather than alternating. A tournament or
+league card resolves by id instead — see above. Results are cached for five minutes
 and invalidated on every approve, reject and removal, so a decision shows up
 immediately rather than within the minute.
 

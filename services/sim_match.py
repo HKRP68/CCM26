@@ -1065,7 +1065,7 @@ def render_match_summary_image(match, *, text_settings=None, stadium=None,
     # here or not at all.
     visuals = {}
     try:
-        from services import card_identity
+        from services import card_identity, scorecard_delivery
         session = card_identity.open_session()
         try:
             visuals = card_identity.summary_visuals(
@@ -1073,6 +1073,11 @@ def render_match_summary_image(match, *, text_settings=None, stadium=None,
                 inn1_team=i1["batting_team"], inn2_team=i2["batting_team"],
                 inn1_user_id=inn1_user_id, inn2_user_id=inn2_user_id,
                 potm_player_id=potm_player_id, potm_name=match.get("potm"),
+                # The award winner's collectible card goes *on* the summary
+                # card now; the second photo /sim used to send is suppressed
+                # while that is on, so asking for it here is what keeps the
+                # card in the reply at all.
+                potm_card=scorecard_delivery.potm_card_inline(),
                 include_style=False)
         finally:
             session.close()

@@ -120,6 +120,34 @@ class RenderTests(unittest.TestCase):
         place, without one it slides left into the empty photo band."""
         self._render(potm_photo_png=_png((300, 380)))
 
+    def test_it_renders_with_the_award_winners_card(self):
+        """The collectible card sits beside the winner's name, which is where
+        someone reading the result looks for it."""
+        self._render(potm_card_png=_png((1536, 1024)))
+
+    def test_the_card_displaces_the_portrait_rather_than_crowding_it(self):
+        """Both in the band would show the same player twice — the artwork
+        already carries them."""
+        self._render(potm_card_png=_png((1536, 1024)),
+                     potm_photo_png=_png((300, 380)))
+
+    def test_undecodable_card_bytes_do_not_cost_the_card(self):
+        """The award's card is a bonus on a card that is already drawn."""
+        self._render(potm_card_png=b"not an image at all")
+
+    def test_the_name_moves_over_for_the_card(self):
+        """The three name layouts are the point of the band being conditional:
+        holding it open for artwork that is not coming leaves a dead gap."""
+        self.assertGreater(card.POTM_NAME_X_CARD, card.POTM_NAME_X)
+        self.assertGreater(card.POTM_NAME_X, card.POTM_NAME_X_BARE)
+
+    def test_the_strip_is_deep_enough_for_a_landscape_card(self):
+        """A collectible card is 3:2. The band has to fit one at a size that
+        still reads as a card rather than as a smear."""
+        band = card.POTM_CARD_BAND[1] - card.POTM_CARD_BAND[0]
+        self.assertGreaterEqual(card.POTM_H - card.POTM_CARD_PAD * 2,
+                                band / 1.5 * 0.9)
+
     def test_it_renders_with_figures_wide_enough_to_crowd_a_column(self):
         """Each showcase value is fitted to its own column, so a double-century
         or a ten-for shrinks rather than running into its divider."""
