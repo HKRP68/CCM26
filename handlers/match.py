@@ -4145,8 +4145,11 @@ async def render_screen(ctx, mid):
     # to their own resume path instead.
     if s.get("mode") == "cipl_approach":
         try:
-            from handlers.cipl_play import cipl_resume
-            return await cipl_resume(ctx, mid, s)
+            from handlers.cipl_play import cipl_resume, RCL_LOCK_TIMEOUT
+            # Bounded like /rcl: a match busy finishing a step reports failure
+            # (the caller says recovery is still active) instead of hanging.
+            return bool(await cipl_resume(ctx, mid, s,
+                                          lock_timeout=RCL_LOCK_TIMEOUT))
         except Exception:
             logger.exception(f"cipl render_screen route failed for match {mid}")
             return False

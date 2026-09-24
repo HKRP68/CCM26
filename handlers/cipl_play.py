@@ -18,6 +18,7 @@ import html
 import logging
 import os
 import re
+import sys
 from datetime import datetime, timedelta
 from io import BytesIO
 
@@ -31,12 +32,23 @@ from services.match_outcome import (
     mark_end, TYPE_CIPL, END_AUTO, END_COMPLETED,
 )
 from services.match_state_store import (
-    get_state as _gs_store,
-    save_state as _ss_store,
     get_next_action,
     cleanup_state,
     get_match_lock,
     release_match_lock,
+    serialize_state,
+    write_state_guarded,
+    read_row_snapshot,
+    adopt_row,
+    sync_from_row,
+    _mem_key,
+    REV_KEY,
+    VER_KEY,
+    NA_KEY,
+    SAVE_OK,
+    SAVE_STALE,
+    SAVE_FAILED,
+    SAVE_GONE,
     A_PICK_CIPL_BOWLER,
     A_PICK_BOWL_APPROACH,
     A_PICK_BAT_APPROACH,
@@ -253,27 +265,266 @@ def _resolve_team_identity(team_name, league_key, session):
 # Small helpers
 # ════════════════════════════════════════════════════════════════════
 
-# get_state / save_state keep the per-match snapshot in ctx.bot_data, which is
-# owned by the event-loop thread and read/iterated by other handlers there
-# (e.g. _find_cipl_match_in_chat, cleanup_state). They must therefore run ON the
-# loop — offloading them to a worker thread would mutate bot_data off-thread and
-# can race those iterations (RuntimeError: dictionary changed size during
-# iteration). They stay async so call sites await them uniformly; the heavy,
-# bot_data-free work (the over simulation, the match-finalisation DB batch, the
-# cold-path DB reads in the middleware) is what actually moves off-loop.
+# The per-match snapshot lives in ctx.bot_data, which is owned by the event-loop
+# thread and read/iterated by other handlers there (e.g. _find_cipl_match_in_chat,
+# cleanup_state). Every bot_data read/write below therefore stays ON the loop —
+# mutating it off-thread can race those iterations (RuntimeError: dictionary
+# changed size during iteration). Only the DB half (read_row_snapshot,
+# write_state_guarded), which never touches bot_data, runs in a worker thread.
+#
+# The in-memory copy is never trusted on its own. /rcl used to re-show whatever
+# it held, and write it back — so a copy from before an over (its save had
+# failed, or a second bot process loaded it during a deploy) put that over back
+# in play and it was simulated again with a different result. _gs re-checks the
+# copy against the saved row, and _ss refuses to save over a newer row.
+
+class StaleMatchState(Exception):
+    """A newer snapshot of this match is already saved.
+
+    Raised by _ss instead of writing an older copy back. The flow holding the
+    old copy must stop; a resume from the newer snapshot is already scheduled.
+    """
+
+    def __init__(self, mid):
+        super().__init__(f"match {mid} has a newer saved snapshot")
+        self.mid = mid
+
+
+class MatchCleared(StaleMatchState):
+    """The match's saved row is gone — it was finished or cleared by an admin.
+
+    Raised by _ss instead of re-creating the row. A StaleMatchState, so every
+    flow that stops quietly on a newer snapshot stops on this too; unlike a
+    newer snapshot there is nothing to resume, so no recovery is scheduled.
+    """
+
+    def __init__(self, mid):
+        Exception.__init__(self, f"match {mid} was cleared")
+        self.mid = mid
+
+
+# A save that fails is retried once or twice in place (a dropped pooled
+# connection usually succeeds on the next one), then handed to a background
+# flush that keeps trying — see _schedule_cipl_flush.
+CIPL_SAVE_RETRY_DELAYS = (0.5, 1.5)
+CIPL_FLUSH_FIRST_DELAY = 2.0
+CIPL_FLUSH_MAX_DELAY = 60.0
+
+
+def _dirty_key(mid):
+    """bot_data flag: the in-memory copy is newer than the DB (a save failed).
+
+    Ends in ``_{mid}`` so cleanup_state clears it with the match.
+    """
+    return f"cipl_dirty_{mid}"
+
+
+def _is_dirty(ctx, mid):
+    return bool(ctx.bot_data.get(_dirty_key(mid)))
+
+
 async def _gs(ctx, mid):
-    return _gs_store(ctx, mid)
+    """The current snapshot of match ``mid``, reconciled with the saved row.
+
+    An unsaved (dirty) in-memory copy is the newest there is, so it is used as
+    is. Otherwise the row decides: same version → the memory copy; newer → the
+    row replaces it; gone → the match is over and None comes back. If the DB
+    can't be read at all, the memory copy is still better than nothing.
+    """
+    mem = ctx.bot_data.get(_mem_key(mid))
+    if mem is not None and _is_dirty(ctx, mid):
+        return mem
+    try:
+        row = await asyncio.to_thread(read_row_snapshot, mid)
+    except Exception:
+        logger.exception("cipl: state read failed for match %s — using the "
+                         "in-memory copy", mid)
+        return mem
+    return sync_from_row(ctx, mid, row)
 
 
-async def _ss(ctx, mid, s, next_action=None, last_prompt_msg_id=None):
-    _ss_store(ctx, mid, s, next_action=next_action,
-              last_prompt_msg_id=last_prompt_msg_id)
+async def _persist(ctx, mid, s, next_action=None, last_prompt_msg_id=None,
+                   force=False, retry_delays=None):
+    """Save ``s`` as the newest snapshot of match ``mid``.
+
+    Returns SAVE_OK, SAVE_STALE (a newer snapshot was already saved; memory now
+    holds it) or SAVE_FAILED (the DB is unreachable; memory keeps ``s`` and is
+    flagged dirty so nothing reads the older row in its place).
+    """
+    if retry_delays is None:
+        retry_delays = CIPL_SAVE_RETRY_DELAYS
+    s[REV_KEY] = int(s.get(REV_KEY) or 0) + 1
+    if next_action is not None:
+        s[NA_KEY] = next_action
+    ctx.bot_data[_mem_key(mid)] = s
+    snapshot = serialize_state(s)
+    rev, na = s[REV_KEY], s.get(NA_KEY)
+
+    result = {"status": SAVE_FAILED}
+    for delay in (0.0,) + tuple(retry_delays):
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            result = await asyncio.to_thread(
+                write_state_guarded, mid, snapshot, rev, na,
+                last_prompt_msg_id, force)
+        except Exception:
+            logger.exception("cipl: save failed for match %s", mid)
+            result = {"status": SAVE_FAILED}
+        if (result["status"] == SAVE_STALE
+                and result.get("state_json") == snapshot):
+            # A commit that raised had in fact landed: the "newer" row is this
+            # very snapshot. That is a successful save, not a conflict.
+            result = {"status": SAVE_OK, "version": result.get("version") or 0}
+        if result["status"] != SAVE_FAILED:
+            break
+
+    status = result["status"]
+    if status == SAVE_OK:
+        s[VER_KEY] = result["version"]
+        ctx.bot_data.pop(_dirty_key(mid), None)
+        if result.get("inserted"):
+            try:
+                from services.match_heartbeat_flags import increment_active_matches
+                increment_active_matches(ctx)
+            except Exception:
+                pass
+    elif status == SAVE_STALE:
+        logger.warning("cipl: refused to save an older copy of match %s over "
+                       "a newer one — continuing from the saved snapshot", mid)
+        ctx.bot_data.pop(_dirty_key(mid), None)
+        adopt_row(ctx, mid, result)
+    elif status == SAVE_GONE:
+        logger.info("cipl: match %s was cleared — not saving it back", mid)
+        ctx.bot_data.pop(_mem_key(mid), None)
+        ctx.bot_data.pop(_dirty_key(mid), None)
+    else:
+        logger.error("cipl: match %s could not be saved — keeping it in memory "
+                     "and retrying in the background", mid)
+        ctx.bot_data[_dirty_key(mid)] = True
+    return status
+
+
+async def _ss(ctx, mid, s, next_action=None, last_prompt_msg_id=None,
+              force=False):
+    """Save the match. Raises StaleMatchState rather than overwrite a newer one.
+
+    ``force`` is for terminal writes (the match is finished): there is nothing
+    newer left for them to protect.
+    """
+    status = await _persist(ctx, mid, s, next_action=next_action,
+                            last_prompt_msg_id=last_prompt_msg_id, force=force)
+    if status == SAVE_GONE:
+        raise MatchCleared(mid)
+    if status == SAVE_STALE:
+        _schedule_cipl_recovery(ctx, mid, force=True)
+        raise StaleMatchState(mid)
+    if status == SAVE_FAILED:
+        _schedule_cipl_flush(ctx, mid)
+
+
+async def _flush_dirty_locked(ctx, mid):
+    """Write an unsaved in-memory copy back to the DB. Caller holds the lock.
+
+    Returns True once memory and DB agree (nothing to flush, saved, a newer
+    snapshot turned out to be saved already — memory now holds that one — or
+    the match was cleared meanwhile and both copies are gone).
+    """
+    if not _is_dirty(ctx, mid):
+        return True
+    state = ctx.bot_data.get(_mem_key(mid))
+    if state is None:
+        ctx.bot_data.pop(_dirty_key(mid), None)
+        return True
+    status = await _persist(ctx, mid, state, retry_delays=())
+    if status == SAVE_OK:
+        logger.info("cipl: unsaved progress for match %s is now saved", mid)
+    elif status == SAVE_STALE:
+        _schedule_cipl_recovery(ctx, mid, force=True)
+    return status != SAVE_FAILED
+
+
+def _schedule_cipl_flush(context, mid):
+    """Keep retrying an unsaved snapshot until the DB takes it. Idempotent.
+
+    The over that was just played exists only in memory until this lands; if the
+    process restarted first, the DB would still hold the state from before it
+    and that over would be played again.
+    """
+    key = f"cipl_flush_{mid}"
+    existing = context.bot_data.get(key)
+    if existing is not None and not existing.done():
+        return existing
+
+    async def _runner():
+        delay = CIPL_FLUSH_FIRST_DELAY
+        while _is_dirty(context, mid):
+            await asyncio.sleep(delay)
+            try:
+                async with get_match_lock(mid):
+                    if await _flush_dirty_locked(context, mid):
+                        return
+            except Exception:
+                logger.exception("cipl: flush attempt failed for match %s", mid)
+            delay = min(delay * 2, CIPL_FLUSH_MAX_DELAY)
+
+    try:
+        task = asyncio.create_task(_runner(), name=key)
+    except RuntimeError:
+        logger.exception("cipl flush could not be scheduled for match %s", mid)
+        return None
+    context.bot_data[key] = task
+
+    def _clear(done_task):
+        if context.bot_data.get(key) is done_task:
+            context.bot_data.pop(key, None)
+
+    task.add_done_callback(_clear)
+    return task
+
+
+async def flush_unsaved_matches(context, lock_timeout=5.0):
+    """Save every match whose latest snapshot exists only in memory.
+
+    Run at shutdown (a deploy's SIGTERM), so an over played while the DB was
+    unreachable is not lost with the process.
+    """
+    prefix = "cipl_dirty_"
+    mids = []
+    for k in list(context.bot_data.keys()):
+        if isinstance(k, str) and k.startswith(prefix):
+            try:
+                mids.append(int(k[len(prefix):]))
+            except ValueError:
+                continue
+    for mid in mids:
+        lock = get_match_lock(mid)
+        try:
+            await asyncio.wait_for(lock.acquire(), lock_timeout)
+            locked = True
+        except asyncio.TimeoutError:
+            locked = False  # a flow is stuck mid-step — save what we have anyway
+        try:
+            await _flush_dirty_locked(context, mid)
+        except Exception:
+            logger.exception("cipl: shutdown flush failed for match %s", mid)
+        finally:
+            if locked:
+                lock.release()
 
 
 async def _get_next_action(ctx, mid):
-    """Off-loop wrapper for the blocking next_action read. Safe to offload:
-    get_next_action only touches the lock-guarded shared cache and the DB — it
-    never writes ctx.bot_data."""
+    """The outstanding pick. Off-loop wrapper for the blocking pointer read.
+
+    While the in-memory copy is unsaved, the DB pointer is as old as the DB
+    state, so the pointer saved with the memory copy is used instead — otherwise
+    a resume would re-show a pick that was already made (e.g. the batting
+    approach for an over that has been played).
+    """
+    if _is_dirty(ctx, mid):
+        mem = ctx.bot_data.get(_mem_key(mid))
+        if mem and mem.get(NA_KEY):
+            return mem[NA_KEY]
     return await asyncio.to_thread(get_next_action, ctx, mid)
 
 
@@ -691,11 +942,21 @@ def timer_armed(context, mid):
 # outstanding prompt on the match's behalf.
 
 CIPL_RECOVERY_DELAYS = (2.0, 5.0, 15.0, 45.0)
+# After a save was refused as stale: the chat is showing (or just acted on) an
+# older copy, so re-show the current pick straight away, delivered or not.
+CIPL_STALE_RECOVERY_DELAYS = (0.5, 5.0, 15.0)
 
 
-def _schedule_cipl_recovery(context, mid, delays=CIPL_RECOVERY_DELAYS):
-    """Retry the outstanding prompt in the background. Idempotent per match."""
-    key = f"cipl_recovery_{mid}"
+def _schedule_cipl_recovery(context, mid, delays=None, force=False):
+    """Retry the outstanding prompt in the background. Idempotent per match.
+
+    ``force`` re-sends it even when the saved state says a prompt was
+    delivered — used when a newer snapshot has replaced the one the chat was
+    working from.
+    """
+    if delays is None:
+        delays = CIPL_STALE_RECOVERY_DELAYS if force else CIPL_RECOVERY_DELAYS
+    key = f"cipl_recovery_{'force_' if force else ''}{mid}"
     existing = context.bot_data.get(key)
     if existing is not None and not existing.done():
         return existing
@@ -706,7 +967,7 @@ def _schedule_cipl_recovery(context, mid, delays=CIPL_RECOVERY_DELAYS):
             state = await _gs(context, mid)
             if not is_cipl_state(state):
                 return                      # match ended or was cleared
-            if state.get("prompt_delivered"):
+            if state.get("prompt_delivered") and not force:
                 return                      # a prompt landed on its own
             try:
                 if await cipl_resume(context, mid):
@@ -753,6 +1014,13 @@ async def _recover_from_error(context, mid, where):
     saved, so the resume re-reads the pointer and re-sends whatever is actually
     outstanding.
     """
+    exc = sys.exc_info()[1]
+    if isinstance(exc, StaleMatchState):
+        # Not a failure: a newer snapshot was already saved (this step's copy
+        # was dropped and _ss scheduled a resume from the newer one), or the
+        # match was cleared (MatchCleared — nothing left to resume).
+        logger.info("cipl: %s stopped for match %s — %s", where, mid, exc)
+        return
     logger.exception("cipl: %s failed for match %s", where, mid)
     try:
         state = await _gs(context, mid)
@@ -906,7 +1174,7 @@ async def _close_idle_bot_match(context, mid, state):
         except Exception:
             logger.exception("bot practice-match close notice failed for %s", mid)
 
-    await _ss(context, mid, state, next_action=A_COMPLETED)
+    await _ss(context, mid, state, next_action=A_COMPLETED, force=True)
     cleanup_state(context, mid)
     release_match_lock(mid)
 
@@ -1005,7 +1273,7 @@ async def _forfeit_live_match(context, mid, state, expected):
         except Exception:
             logger.exception("cipl forfeit announce failed for match %s", mid)
 
-    await _ss(context, mid, state, next_action=A_COMPLETED)
+    await _ss(context, mid, state, next_action=A_COMPLETED, force=True)
     cleanup_state(context, mid)
     release_match_lock(mid)
 
@@ -1669,7 +1937,8 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         state["user_names"][str(BOT_TG_ID_)] = "🤖 Bot"
         # (league_key, which the Rematch button reads to reopen the same
         # league, is carried for every match above.)
-    await _ss(context, match.id, state, next_action=A_PICK_CIPL_BOWLER)
+    await _ss(context, match.id, state, next_action=A_PICK_CIPL_BOWLER,
+              force=True)
     # Clear the pre-match setup chatter (keep the toss result) and pin a polished
     # announcement carrying the Watch Match button.
     await _cleanup_setup_and_announce(context, state, draft)
@@ -2040,7 +2309,8 @@ def _super_over_active(context, mid):
     return bool(context.bot_data.get(f"so_{mid}"))
 
 
-async def cipl_resume(context, mid, state=None):
+async def cipl_resume(context, mid, state=None, *, only_if_stalled=False,
+                      lock_timeout=None):
     """Re-render the current Challenge League prompt from saved state.
 
     A Challenge League match drives itself through three picks per over
@@ -2050,22 +2320,51 @@ async def cipl_resume(context, mid, state=None):
     left off. It NEVER falls through to the regular-match delivery renderer
     (which would spam "Couldn't show delivery buttons. Retrying automatically…").
 
-    Returns True if a prompt was re-sent, False otherwise.
+    ``only_if_stalled`` (heartbeat, startup sweep) leaves a match alone if its
+    inactivity clock turns out to be running once the lock is held — the turn
+    that held the lock has just prompted, so re-sending would only duplicate it.
+    ``lock_timeout`` bounds the wait for the match lock; a caller that sets it
+    gets None back when the lock stayed busy.
+
+    Returns True if a prompt was re-sent, False if there was nothing to resume,
+    None if the lock could not be taken in time.
     """
     # Hold the per-match lock so a resume can't interleave with a captain
     # callback or the inactivity timer (both of which lock) and rewind the flow
     # to an older action. Re-read state under the lock for the same reason.
-    async with get_match_lock(mid):
-        return await _resume_locked(context, mid)
+    lock = get_match_lock(mid)
+    if lock_timeout is None:
+        async with lock:
+            return await _resume_locked(context, mid,
+                                        only_if_stalled=only_if_stalled)
+    try:
+        await asyncio.wait_for(lock.acquire(), lock_timeout)
+    except asyncio.TimeoutError:
+        logger.warning("cipl resume: match %s still busy after %ss", mid,
+                       lock_timeout)
+        return None
+    try:
+        return await _resume_locked(context, mid, only_if_stalled=only_if_stalled)
+    finally:
+        lock.release()
 
 
-async def _resume_locked(context, mid):
+async def _resume_locked(context, mid, only_if_stalled=False):
     """``cipl_resume`` with the match lock already held by the caller.
 
     Split out so the inactivity timeout — which runs inside the lock — can
     re-send a prompt that never reached the chat instead of deadlocking on a
     second acquire of a non-reentrant lock.
     """
+    # Unsaved progress goes to the DB before anything is re-shown, so the
+    # prompt below and the saved row describe the same point in the match.
+    # If the DB is still unreachable the in-memory copy (the newest) is used.
+    try:
+        await _flush_dirty_locked(context, mid)
+    except Exception:
+        logger.exception("cipl resume: flush failed for match %s", mid)
+    if only_if_stalled and timer_armed(context, mid):
+        return False
     state = await _gs(context, mid)
     if not is_cipl_state(state):
         return False
@@ -2087,7 +2386,10 @@ async def _resume_locked(context, mid):
     # part-way (a dropped Telegram send left next_action on the consumed
     # approach pick). Drive the terminal step instead.
     if _innings_quota_used(state):
-        return await _resume_finished_innings(context, mid, state)
+        try:
+            return await _resume_finished_innings(context, mid, state)
+        except StaleMatchState:
+            return False  # a newer snapshot is saved; its resume is scheduled
     try:
         # Re-render the outstanding pick. Keep action_msg_id so an approach
         # resume edits the existing prompt IN PLACE (no duplicate), and a
@@ -2146,6 +2448,9 @@ async def _resume_finished_innings(context, mid, state):
     return True
 
 
+RCL_LOCK_TIMEOUT = 15  # seconds /rcl waits for a busy match before saying so
+
+
 async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/rcl — resume a stuck Challenge League (/cipl) match in this chat."""
     chat = update.effective_chat
@@ -2186,9 +2491,29 @@ async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ Only the two captains in this match can use /rcl to resume it.")
         return
 
+    # Name the point the match resumes from, read from the saved snapshot (not
+    # whatever this process last held), so the chat can see nothing was
+    # rewound.
+    where = ""
+    current = await _gs(context, found_mid)
+    if is_cipl_state(current):
+        try:
+            where = (f"\n🏏 <b>{html.escape(str(current['bat_team_name']))}</b> "
+                     f"{cipl_match.format_score(current)} ({_progress(current)})")
+        except Exception:
+            logger.exception("cipl resume score line failed for match %s",
+                             found_mid)
     await update.message.reply_text(
-        f"🔄 <b>Resuming {_label} match…</b>", parse_mode="HTML")
-    ok = await cipl_resume(context, found_mid, found_state)
+        f"🔄 <b>Resuming {_label} match…</b>{where}", parse_mode="HTML")
+    ok = await cipl_resume(context, found_mid, found_state,
+                           lock_timeout=RCL_LOCK_TIMEOUT)
+    if ok is None:
+        # A step of the match (usually the over being simulated) still holds
+        # the lock. Waiting on it forever made /rcl look dead.
+        await update.message.reply_text(
+            "⏳ The match is still finishing its last step — try /rcl again "
+            "in a few seconds.")
+        return
     if not ok:
         await update.message.reply_text(
             "🏁 Nothing to resume — this match has already finished.\n"
@@ -2288,8 +2613,8 @@ async def cipl_bowler_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await q.answer()
         _cancel_timer(context, mid)
         state["current_bowler"] = bowler
-        await _ss(context, mid, state)
         try:
+            await _ss(context, mid, state)
             await _prompt_bowl_approach(context, mid, state)
         except Exception:
             await _recover_from_error(context, mid, "bowling-approach prompt")
@@ -2328,8 +2653,8 @@ async def cipl_bowlapp_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await q.answer()
         _cancel_timer(context, mid)
         state["bowling_approach"] = BOWLING_APPROACHES[idx][0]
-        await _ss(context, mid, state)
         try:
+            await _ss(context, mid, state)
             await _prompt_bat_approach(context, mid, state)
         except Exception:
             await _recover_from_error(context, mid, "batting-approach prompt")
@@ -2368,8 +2693,8 @@ async def cipl_batapp_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await q.answer()
         _cancel_timer(context, mid)
         state["batting_approach"] = BATTING_APPROACHES[idx][0]
-        await _ss(context, mid, state)
         try:
+            await _ss(context, mid, state)
             await _run_over(context, mid, state)
         except Exception:
             await _recover_from_error(context, mid, "over simulation")
@@ -2516,7 +2841,10 @@ async def _send_impact_step1(context, state, mid, owner_tg, opts):
         context, state,
         f"🔄 <b>Impact Player</b> — {html.escape(str(opts['legal_break']))}\n\n"
         f"Step 1 of 3: who comes <b>off</b>?", keyboard=rows)
-    await _ss(context, mid, state)
+    try:
+        await _ss(context, mid, state)
+    except StaleMatchState:
+        pass  # only the picker's message id went unrecorded; the match resumes
 
 
 async def cipl_impact_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2658,8 +2986,13 @@ async def cipl_impact_pos_callback(update: Update, context: ContextTypes.DEFAULT
         if not ok:
             await q.answer(msg, show_alert=True)
             return
+        try:
+            await _ss(context, mid, state)
+        except StaleMatchState:
+            await q.answer("The match moved on while you picked — open Impact "
+                           "Player again.", show_alert=True)
+            return
         await q.answer("Impact Player confirmed.")
-        await _ss(context, mid, state)
         try:
             _fire_milestones_async(context, state["chat_id"], [("impact_player", {
                 "team": rec.get("team_name") or "",
@@ -2828,6 +3161,13 @@ async def _run_over(context, mid, state):
     # later /rcl would re-show the approach picker on the now-advanced scorecard
     # and re-simulate this over. For an innings-ending over the dedicated
     # handlers below set the pointer themselves, so only persist the state here.
+    #
+    # This save is what stops a played over from ever being played again. If
+    # the copy this over was simulated from turns out to be older than the
+    # saved one, _ss raises StaleMatchState and nothing below runs — no summary
+    # of an over simulated from old state, and the resume shows the real one.
+    # If the DB is unreachable the over is kept in memory, flagged unsaved, and
+    # flushed in the background, so a restart can't take it back.
     if innings_over:
         await _ss(context, mid, state)
     else:
@@ -3589,7 +3929,7 @@ async def _complete_match(context, mid, state):
         except Exception:
             pass
 
-    await _ss(context, mid, state, next_action=A_COMPLETED)
+    await _ss(context, mid, state, next_action=A_COMPLETED, force=True)
     cleanup_state(context, mid)
     release_match_lock(mid)
 

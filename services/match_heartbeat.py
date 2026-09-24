@@ -33,7 +33,19 @@ HEARTBEAT_JOB_NAME = "match_heartbeat_global"
 # bites.
 CIPL_RESUME_COOLDOWN = 300
 CIPL_RESUME_TIMEOUT = 20       # seconds to wait on one match's lock
+CIPL_RESUME_HARD_TIMEOUT = 60  # backstop on one whole resume (lock wait + sends)
 _CIPL_RESUME_KEY = "_hb_cipl_resumed_{mid}"
+# A Challenge League / Lets Play match with no inactivity clock running is not
+# waiting on anyone — its flow was dropped. It doesn't need the ball-by-ball
+# 90s grace before being picked back up; players were typing /rcl well before
+# that. (A running clock still means "leave it alone" — see _recover_cipl.)
+CIPL_STALL_THRESHOLD = 45
+# One sweep shortly after boot: a restart drops every in-memory clock and
+# drop_pending_updates discards the taps made while the bot was down, so every
+# live over-by-over match is picked straight back up instead of sitting idle
+# until the heartbeat's stall gate.
+STARTUP_SWEEP_DELAY = 10
+STARTUP_SWEEP_JOB_NAME = "cipl_startup_sweep"
 
 
 async def _heartbeat_tick(context: ContextTypes.DEFAULT_TYPE):
@@ -96,8 +108,9 @@ async def _heartbeat_tick(context: ContextTypes.DEFAULT_TYPE):
             if ms.next_action == A_COMPLETED:
                 continue
 
-            # Only act on truly idle matches
-            if idle_seconds < RERENDER_THRESHOLD:
+            # Only act on truly idle matches. The shorter over-by-over gate is
+            # checked first; the ball-by-ball one once the mode is known.
+            if idle_seconds < min(CIPL_STALL_THRESHOLD, RERENDER_THRESHOLD):
                 continue
 
             # Check the match state is in memory; if not, hydrate it
@@ -123,6 +136,9 @@ async def _heartbeat_tick(context: ContextTypes.DEFAULT_TYPE):
             # /rcl does, instead of leaving that to a captain.
             if mem.get("mode") == "cipl_approach":
                 await _recover_cipl(context, mid)
+                continue
+
+            if idle_seconds < RERENDER_THRESHOLD:
                 continue
 
             if idle_seconds >= AUTODECIDE_THRESHOLD:
@@ -169,18 +185,71 @@ async def _recover_cipl(context, mid):
 
     # The resume waits on the match's own lock. Bound that wait: one match whose
     # lock is held by a hung task must not stop the sweep from reaching every
-    # other match.
+    # other match. only_if_stalled re-checks the clock once the lock is held:
+    # the step that was holding it has usually just prompted and armed one.
     try:
-        resumed = await asyncio.wait_for(cipl_resume(context, mid),
-                                         timeout=CIPL_RESUME_TIMEOUT)
+        resumed = await asyncio.wait_for(
+            cipl_resume(context, mid, only_if_stalled=True,
+                        lock_timeout=CIPL_RESUME_TIMEOUT),
+            timeout=CIPL_RESUME_HARD_TIMEOUT)
     except asyncio.TimeoutError:
         logger.warning("cipl heartbeat resume timed out for match %s", mid)
         return
     except Exception:
         logger.exception("cipl heartbeat resume failed for match %s", mid)
         return
-    if resumed:
+    if resumed is None:
+        logger.warning("cipl heartbeat resume: match %s lock stayed busy", mid)
+    elif resumed:
         logger.info("heartbeat resumed stalled Challenge League match %s", mid)
+
+
+def _live_cipl_match_ids():
+    """Match ids of every saved, unfinished over-by-over match (blocking)."""
+    import json
+    from database import get_session
+    from models import MatchState
+    from services.match_state_store import A_COMPLETED
+
+    session = get_session()
+    try:
+        rows = (session.query(MatchState.match_id, MatchState.next_action,
+                              MatchState.state_json)
+                .order_by(MatchState.match_id).all())
+    finally:
+        session.close()
+    mids = []
+    for mid, next_action, state_json in rows:
+        if next_action == A_COMPLETED:
+            continue
+        try:
+            state = json.loads(state_json) if state_json else {}
+        except (TypeError, ValueError):
+            continue
+        if (isinstance(state, dict) and state.get("mode") == "cipl_approach"
+                and state.get("played_via") != "webapp"):
+            mids.append(mid)
+    return mids
+
+
+async def _startup_cipl_sweep(context):
+    """Pick every live Challenge League / Lets Play match back up after boot.
+
+    A restart (a deploy, a crash) loses every inactivity clock with the old
+    process, and the taps players made while it was down are dropped. Without
+    this the match sat silent until the heartbeat's stall gate noticed it, and
+    players typed /rcl first. Each match is resumed exactly as /rcl would: the
+    outstanding pick is re-shown from the saved snapshot and its clock restarted.
+    """
+    try:
+        mids = await asyncio.to_thread(_live_cipl_match_ids)
+    except Exception:
+        logger.exception("cipl startup sweep: could not list live matches")
+        return
+    if mids:
+        logger.info("cipl startup sweep: resuming %d live match(es)", len(mids))
+    for mid in mids:
+        await _recover_cipl(context, mid)
 
 
 async def _try_rerender(context, mid):
@@ -348,6 +417,9 @@ def start_heartbeat(application):
                 first=HEARTBEAT_INTERVAL,
                 name=HEARTBEAT_JOB_NAME,
             )
+            application.job_queue.run_once(
+                _startup_cipl_sweep, STARTUP_SWEEP_DELAY,
+                name=STARTUP_SWEEP_JOB_NAME)
             logger.info(f"Heartbeat scheduled via JobQueue (every {HEARTBEAT_INTERVAL}s)")
             return
         except Exception:
@@ -391,6 +463,11 @@ def start_heartbeat(application):
                     return getattr(self.application, "job_queue", None)
 
             ctx = _FakeContext(app)
+            await asyncio.sleep(STARTUP_SWEEP_DELAY)
+            try:
+                await _startup_cipl_sweep(ctx)
+            except Exception:
+                logger.exception("cipl startup sweep failed")
             while True:
                 try:
                     await _heartbeat_tick(ctx)
