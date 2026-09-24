@@ -94,36 +94,36 @@ PITCH_WICKET_FACTOR = {
         "Fast":         0.68,
         "Fast-medium":  0.74,
         "Medium-fast":  0.82,
-        "Off spin":     1.52,
-        "Finger spin":  1.46,
-        "Leg spin":     1.62,
-        "Wrist spin":   1.56,
+        "Off spin":     1.44,
+        "Finger spin":  1.39,
+        "Leg spin":     1.53,
+        "Wrist spin":   1.48,
         "default":      0.78,
     },
     "Green": {  # seam and swing; spin is decoration
-        "Fast":         1.42,
-        "Fast-medium":  1.55,
-        "Medium-fast":  1.25,
-        "Off spin":     0.62,
-        "Finger spin":  0.60,
-        "Leg spin":     0.66,
-        "Wrist spin":   0.64,
-        "default":      0.62,
+        "Fast":         1.30,
+        "Fast-medium":  1.30,
+        "Medium-fast":  1.10,
+        "Off spin":     0.59,
+        "Finger spin":  0.57,
+        "Leg spin":     0.63,
+        "Wrist spin":   0.61,
+        "default":      0.59,
     },
     "Dry": {    # slow turn, same shape with the volume down
         "Fast":         0.80,
         "Fast-medium":  0.84,
         "Medium-fast":  0.90,
-        "Off spin":     1.28,
-        "Finger spin":  1.24,
-        "Leg spin":     1.34,
-        "Wrist spin":   1.30,
+        "Off spin":     1.24,
+        "Finger spin":  1.20,
+        "Leg spin":     1.29,
+        "Wrist spin":   1.25,
         "default":      0.88,
     },
     "Bouncy": { # steep bounce — express pace, and bounce beats finger spin
-        "Fast":         1.58,
-        "Fast-medium":  1.30,
-        "Medium-fast":  1.05,
+        "Fast":         1.49,
+        "Fast-medium":  1.25,
+        "Medium-fast":  1.04,
         "Off spin":     0.74,
         "Finger spin":  0.72,
         "Leg spin":     0.88,
@@ -215,43 +215,43 @@ def get_pitch_wicket_multiplier(pitch: str, bowling_type: str, config=None) -> f
 # Ordered bowler-friendly → batting-friendly, matching engine.pitch_registry.
 PITCH_SCORING_MATRIX = {
     "Dusty": {  # Strangle — a single is always on, a boundary never is
-        "Dot":      0.3691,
+        "Dot":      0.3742,
         "Single":   0.3776,
         "Double":   0.0566,
         "Three":    0.0060,
         "Four":     0.0831,
         "Six":      0.0340,
-        "Wicket":   0.0283,
+        "Wicket":   0.0232,
         "Extras":   0.0453,
     },
     "Green": {  # Boom or bust — you cannot rotate, so the runs are fours
-        "Dot":      0.3823,
+        "Dot":      0.3919,
         "Single":   0.2966,
         "Double":   0.0551,
         "Three":    0.0051,
-        "Four":     0.1271,
-        "Six":      0.0466,
-        "Wicket":   0.0279,
+        "Four":     0.1215,
+        "Six":      0.0445,
+        "Wicket":   0.0260,
         "Extras":   0.0593,
     },
     "Dry": {    # Nudge and work; the big shot is a mug's game
-        "Dot":      0.3189,
+        "Dot":      0.3234,
         "Single":   0.3731,
         "Double":   0.0700,
         "Three":    0.0062,
         "Four":     0.1127,
         "Six":      0.0428,
-        "Wicket":   0.0297,
+        "Wicket":   0.0252,
         "Extras":   0.0466,
     },
     "Bouncy": { # Awkward to get off strike, but mistimed pulls carry
-        "Dot":      0.3625,
+        "Dot":      0.3714,
         "Single":   0.3261,
         "Double":   0.0683,
         "Three":    0.0068,
-        "Four":     0.1175,
-        "Six":      0.0531,
-        "Wicket":   0.0240,
+        "Four":     0.1140,
+        "Six":      0.0515,
+        "Wicket":   0.0202,
         "Extras":   0.0417,
     },
     "Even": {   # The standard international track
@@ -275,13 +275,13 @@ PITCH_SCORING_MATRIX = {
         "Extras":   0.0341,
     },
     "Flat": {   # A road: every scoring option is open
-        "Dot":      0.3110,
-        "Single":   0.3409,
+        "Dot":      0.3128,
+        "Single":   0.3440,
         "Double":   0.0813,
         "Three":    0.0058,
-        "Four":     0.1394,
-        "Six":      0.0697,
-        "Wicket":   0.0248,
+        "Four":     0.1380,
+        "Six":      0.0670,
+        "Wicket":   0.0240,
         "Extras":   0.0271,
     },
     "Dead": {   # Shirtfront — boundary hitting is the default shot
@@ -678,21 +678,24 @@ def _apply_pitch_wear(raw_weights: dict, pitch_type: str, pitch_wear: float) -> 
     w = pitch_wear  # shorthand
 
     if pitch_type == "Dusty":
-        # Footmarks deepen all innings: the hardest surface to bat on late
-        adjusted["Wicket"] = adjusted.get("Wicket", 0) * (1.0 + 0.35 * w)
-        adjusted["Dot"]    = adjusted.get("Dot",    0) * (1.0 + 0.18 * w)
+        # Footmarks deepen all innings: the hardest surface to bat on late.
+        # Kept gentle (was +35% wickets by the end of the match) — the chase
+        # lost well over half its games here, so the toss decided the match.
+        adjusted["Wicket"] = adjusted.get("Wicket", 0) * (1.0 + 0.15 * w)
+        adjusted["Dot"]    = adjusted.get("Dot",    0) * (1.0 + 0.10 * w)
         adjusted["Six"]    = adjusted.get("Six",    0) * (1.0 - 0.12 * w)
 
     elif pitch_type == "Dry":
         # Spin track worsens for batting: wickets and dots go up
-        adjusted["Wicket"] = adjusted.get("Wicket", 0) * (1.0 + 0.30 * w)
+        adjusted["Wicket"] = adjusted.get("Wicket", 0) * (1.0 + 0.12 * w)
         adjusted["Dot"]    = adjusted.get("Dot",    0) * (1.0 + 0.15 * w)
 
     elif pitch_type == "Bouncy":
         # The steep bounce settles out of it; pull and hook become safe shots
-        adjusted["Wicket"] = adjusted.get("Wicket", 0) * (1.0 - 0.12 * w)
-        adjusted["Four"]   = adjusted.get("Four",   0) * (1.0 + 0.06 * w)
-        adjusted["Six"]    = adjusted.get("Six",    0) * (1.0 + 0.08 * w)
+        # Only the scoring eases: dropping wickets as well handed the chase
+        # two matches in three here.
+        adjusted["Four"]   = adjusted.get("Four",   0) * (1.0 + 0.02 * w)
+        adjusted["Six"]    = adjusted.get("Six",    0) * (1.0 + 0.03 * w)
 
     elif pitch_type == "Even":
         # Moderate wear: a good length starts to grip
@@ -700,16 +703,17 @@ def _apply_pitch_wear(raw_weights: dict, pitch_type: str, pitch_wear: float) -> 
         adjusted["Dot"]    = adjusted.get("Dot",    0) * (1.0 + 0.08 * w)
 
     elif pitch_type == "Green":
-        # Seam movement reduces as ball gets older; batting becomes easier
-        adjusted["Four"]   = adjusted.get("Four",   0) * (1.0 + 0.10 * w)
-        adjusted["Six"]    = adjusted.get("Six",    0) * (1.0 + 0.08 * w)
-        adjusted["Wicket"] = adjusted.get("Wicket", 0) * (1.0 - 0.20 * w)
+        # Seam movement reduces as ball gets older; batting becomes a touch
+        # easier. Only a touch: at -20% wickets the chasing side won close to
+        # two Green matches in three.
+        adjusted["Four"]   = adjusted.get("Four",   0) * (1.0 + 0.02 * w)
+        adjusted["Six"]    = adjusted.get("Six",    0) * (1.0 + 0.02 * w)
 
     elif pitch_type in ("Flat", "Dead"):
         # Already batting-friendly; gets marginally more so with wear
         adjusted["Four"]   = adjusted.get("Four",   0) * (1.0 + 0.08 * w)
         adjusted["Six"]    = adjusted.get("Six",    0) * (1.0 + 0.08 * w)
-        adjusted["Wicket"] = adjusted.get("Wicket", 0) * (1.0 - 0.10 * w)
+        adjusted["Wicket"] = adjusted.get("Wicket", 0) * (1.0 - 0.04 * w)
 
     elif pitch_type == "Hard":
         # Balanced track deteriorates slightly; wickets and dots increase
@@ -1382,7 +1386,10 @@ def calculate_outcome(
                     weight *= boundary_boost
 
                 if outcome == "Wicket":
-                    wicket_boost = _death_cfg.get("wicket_boost", 1.6)
+                    # A surface can carry its own death-overs wicket boost;
+                    # the rest use the shared one.
+                    wicket_boost = (_death_cfg.get("wicket_boost_by_pitch") or {}).get(
+                        pitch, _death_cfg.get("wicket_boost", 1.6))
                     logger.debug(f"  DeathOver: WICKET on {pitch} by factor {wicket_boost}")
                     weight *= wicket_boost
 

@@ -43,12 +43,11 @@ def test_get_chase_win_pct_band_edges():
     assert ground_config.get_chase_win_pct("Flat", 231) == flat[5]
     assert ground_config.get_chase_win_pct("Flat", 271) == flat[7]
     assert ground_config.get_chase_win_pct("Flat", 400) == flat[7]
-    # Dusty is the hardest chase in the game, Dead the easiest — at every total.
+    # Dead is the easiest chase in the game at every total.
     for total in (150, 190, 230, 300):
         pcts = {p: ground_config.get_chase_win_pct(p, total)
                 for p in ("Dusty", "Green", "Dry", "Bouncy", "Even", "Hard",
                           "Flat", "Dead")}
-        assert pcts["Dusty"] == min(pcts.values()), pcts
         assert pcts["Dead"] == max(pcts.values()), pcts
     # Unknown pitch → safe default.
     assert ground_config.get_chase_win_pct("Nope", 180) == 50
@@ -130,3 +129,12 @@ def test_fighting_match_matches_run_deep(sims):
 def test_fighting_match_losses_are_not_routinely_blowouts(sims):
     # Median defended margin stays tight (close, fighting losses on average).
     assert statistics.mean(m["def_margin_median"] for m in sims.values()) < 55.0
+
+
+def test_the_toss_does_not_decide_the_rebalanced_surfaces(sims):
+    # Batting first and chasing are meant to be an even bet on the surfaces
+    # that were rebalanced for it. N is small, so this checks the average
+    # rather than each pitch; `python -m tools.pitch_calibration --mix real`
+    # checks each one at a useful sample size.
+    rebalanced = [sims[p]["bat_first_win"] for p in ("Flat", "Green", "Dusty")]
+    assert 40.0 <= statistics.mean(rebalanced) <= 60.0, rebalanced

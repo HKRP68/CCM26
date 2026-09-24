@@ -84,26 +84,47 @@ def make_xi(tag, offset):
     return xi
 
 
-def _run_innings(state, guard=40):
+# How often real captains pick each approach, read off /pitchstats across every
+# surface (overs played per intent / plan). ``--mix real`` draws from these each
+# over so the harness plays the game people actually play — heavy on Ultra
+# Attack and Variation — rather than a match of two Balanced captains, which
+# under-counts wickets by a fifth and hides where a surface's toss skew comes
+# from.
+REAL_BAT_MIX = (("ultra", 32), ("aggressive", 22), ("balanced", 18),
+                ("rotate", 18), ("defensive", 7))
+REAL_BOWL_MIX = (("variation", 33), ("mixed", 29), ("aggressive", 20),
+                 ("defensive", 11), ("balanced", 7))
+
+
+def _pick(mix):
+    keys, weights = zip(*mix)
+    return random.choices(keys, weights=weights)[0]
+
+
+def _run_innings(state, guard=40, mix="balanced"):
     while not cm.is_innings_over(state) and guard > 0:
         state["current_bowler"] = cm.eligible_bowlers(state)[0]
-        state["bowling_approach"] = "balanced"
-        state["batting_approach"] = "balanced"
+        if mix == "real":
+            state["bowling_approach"] = _pick(REAL_BOWL_MIX)
+            state["batting_approach"] = _pick(REAL_BAT_MIX)
+        else:
+            state["bowling_approach"] = "balanced"
+            state["batting_approach"] = "balanced"
         cm.simulate_over(state)
         guard -= 1
 
 
-def simulate_one(pitch, overs=20):
+def simulate_one(pitch, overs=20, mix="balanced"):
     """Play one full headless CIPL match on *pitch*; return a metrics dict."""
     with _muted_logging():
         a, b = make_xi("A", 1), make_xi("B", 101)
         state = cm.build_cipl_state(1, overs, 10, 20, 111, 222, a, b,
                                     "A", "B", -1, pitch, False, ball_format="T20")
-        _run_innings(state)
+        _run_innings(state, mix=mix)
         inn1_runs, inn1_wkts = state["total_runs"], state["total_wickets"]
         inn1_balls = cm.balls_bowled(state)
         cm.end_first_innings(state)
-        _run_innings(state)
+        _run_innings(state, mix=mix)
         inn2_runs, inn2_wkts = state["total_runs"], state["total_wickets"]
         inn2_balls = cm.balls_bowled(state)
         innings_balls = cm.total_balls(state)
@@ -113,6 +134,7 @@ def simulate_one(pitch, overs=20):
         "inn2_runs": inn2_runs, "inn2_wkts": inn2_wkts, "inn2_balls": inn2_balls,
         "innings_balls": innings_balls,
         "chase_won": result["margin_type"] == "wickets",
+        "defended": result["margin_type"] == "runs",
         "margin_type": result["margin_type"], "margin": result["margin"],
     }
 
@@ -124,8 +146,8 @@ def _pct(sorted_vals, q):
     return sorted_vals[idx]
 
 
-def collect(pitch, n):
-    rows = [simulate_one(pitch) for _ in range(n)]
+def collect(pitch, n, mix="balanced"):
+    rows = [simulate_one(pitch, mix=mix) for _ in range(n)]
     inn1 = sorted(r["inn1_runs"] for r in rows)
 
     # Sub-100 Rule: a side bowled out (10 down) under 100 is very rare. Measured
@@ -166,8 +188,17 @@ def collect(pitch, n):
     # Depth: reached the closing 2 overs (ball 108+ of 120).
     deep = sum(1 for r in rows if r["inn2_balls"] >= r["innings_balls"] - 12)
 
+    # Toss balance: how often the side batting first wins, ties left out.
+    decided = [r for r in rows if r["chase_won"] or r["defended"]]
+    bat_first_win = (sum(1 for r in decided if r["defended"]) / len(decided) * 100
+                     if decided else 50.0)
+    balls = sum(r["inn1_balls"] + r["inn2_balls"] for r in rows)
+    wkts = sum(r["inn1_wkts"] + r["inn2_wkts"] for r in rows)
+
     return {
         "n": n, "rows": rows, "inn1_sorted": inn1,
+        "bat_first_win": bat_first_win,
+        "wkts_per_over": (wkts / (balls / 6.0)) if balls else 0.0,
         "blowout_margin": blowout,
         "floor": _pct(inn1, 0.10), "par": statistics.median(inn1),
         "ceiling": _pct(inn1, 0.90), "anomaly": inn1[-1] if inn1 else 0,
@@ -188,7 +219,8 @@ def collect(pitch, n):
 TOL = {"floor_lo": 35, "floor_hi": 35, "par_pad": 10, "ceiling_lo": 35,
        "ceiling_hi": 40, "sub100_max": 6.0, "sub100_global_max": 2.0,
        "chase_band": 20, "capitulation_max": 30,
-       "anomaly_pad": 35, "deep_min": 45.0, "margin_frac": 0.30}
+       "anomaly_pad": 35, "deep_min": 45.0, "margin_frac": 0.30,
+       "toss_skew": 8.0}
 # Chase bands with fewer than this many samples are too noisy to judge — they are
 # reported as an explicit "n<min (not judged)" check rather than silently skipped.
 MIN_BAND_N = 12
@@ -246,6 +278,13 @@ def evaluate(pitch, m):
         f"{m['capitulation_rate']:.0f}% blown out "
         f"(>{m['blowout_margin']} runs or early fold; max {TOL['capitulation_max']}%)")
 
+    # Toss balance: batting first and chasing should be a coin flip on every
+    # surface, so the toss decides nothing on its own. The band is wider than
+    # the 45-55% target to leave room for sampling noise at a few hundred games.
+    chk("toss", abs(m["bat_first_win"] - 50.0) <= TOL["toss_skew"],
+        f"bat first wins {m['bat_first_win']:.0f}% "
+        f"(target 50 ± {TOL['toss_skew']:.0f})")
+
     for mx, st in m["band_stats"].items():
         if st["n"] >= MIN_BAND_N:
             obs = st["won"] / st["n"] * 100
@@ -273,6 +312,8 @@ def print_report(pitch, m, checks, verbose=False):
           f"deep(≥ov18): {m['deep_rate']:.0f}%    "
           f"defended margin median: {m['def_margin_median']:.0f}    "
           f"capitulation: {m['capitulation_rate']:.0f}%")
+    print(f"   bat first wins: {m['bat_first_win']:.0f}%    "
+          f"wickets/over: {m['wkts_per_over']:.3f}")
     print("   chase win% by band: " + "  ".join(
         f"≤{mx}:{(st['won']/st['n']*100 if st['n'] else 0):.0f}%/{st['pct_spec']}%(n{st['n']})"
         for mx, st in m["band_stats"].items()))
@@ -287,6 +328,9 @@ def main(argv=None):
     ap.add_argument("--pitch", default=None, help="single pitch (default: all spec pitches)")
     ap.add_argument("--seed", type=int, default=12345)
     ap.add_argument("--verbose", action="store_true", help="show per-check pass/fail")
+    ap.add_argument("--mix", choices=("balanced", "real"), default="balanced",
+                    help="captaincy: both sides Balanced, or approaches drawn "
+                         "from what real captains pick")
     args = ap.parse_args(argv)
     if args.n <= 0:
         ap.error("--n must be greater than zero")
@@ -296,7 +340,7 @@ def main(argv=None):
     all_pass = True
     sub100 = []
     for pitch in pitches:
-        m = collect(pitch, args.n)
+        m = collect(pitch, args.n, mix=args.mix)
         checks = evaluate(pitch, m)
         if not all(ok for _, ok, _ in checks):
             all_pass = False

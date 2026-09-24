@@ -402,12 +402,17 @@ _PITCH_RULES = {
     "Flat": {"bowl": {"aggressive": _wkt(-0.20), "variation": _wkt(-0.20)}},
     "Dead": {"bowl": {"aggressive": _wkt(-0.20), "variation": _wkt(-0.20)}},
     # Dusty: spin strangles the nudgers; but the field is up in the powerplay
-    # and the ball still comes on, so early aggression cashes in.
-    "Dusty": {"bat": {"rotate": _runs(-1), "defensive": _runs(-1)},
+    # and the ball still comes on, so early aggression cashes in. Ultra Attack
+    # into the rough is still the riskiest call on the card, just not a
+    # guaranteed collapse: it was the top wicket-taking pairing on every
+    # bowling surface in real matches (0.49-0.56 an over).
+    "Dusty": {"bat": {"rotate": _runs(-1), "defensive": _runs(-1),
+                      "ultra": _wkt(-0.06)},
               "bat_phase": {("aggressive", "powerplay"): _runs(+2)}},
     # Dry: the ball doesn't come on — swinging hard is a mug's game, nudging is
     # not. Cutters and slower balls grip.
-    "Dry": {"bat": {"aggressive": _runs(-2), "rotate": _runs(+1)},
+    "Dry": {"bat": {"aggressive": _runs(-2), "rotate": _runs(+1),
+                    "ultra": _wkt(-0.06)},
             "bowl": {"variation": _wkt(+0.10)}},
     # Green: seam does enough early that blocking and playing straight both
     # score less; once the shine goes the attackers cash in. Attacking the

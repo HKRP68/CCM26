@@ -255,3 +255,44 @@ way down to a grid centred on par. Capitulation was already over the harness's
 4. Run `pytest tests/test_pitch_registry.py` — it names every table you missed.
 5. Run `python -m tools.pitch_calibration --pitch <name> --n 300` and tune the
    matrix until par lands in its band.
+
+## Toss and wicket rebalance (Dusty, Green, Dry, Bouncy, Flat)
+
+`/pitchstats` showed the toss deciding matches on five surfaces: batting first
+won 58% on Dusty and 60% on Flat, and only 37% on Green, 41% on Dry and 32% on
+Bouncy. Each pitch was also losing 0.31-0.36 wickets an over. Three layers
+caused the split, and each one was changed:
+
+* **Innings-2 drift.** `_apply_pitch_wear` and `pitch_state.INNINGS2_EVOLUTION`
+  both pushed the same way on each surface: the turners got much harder for
+  the chase, while the green top and the bouncy deck got much easier. Both
+  layers are now small, so each pitch keeps its flavour without handing the
+  match to one side.
+* **Chase grids.** They are still a logistic around each pitch's own par, but
+  gentler (scale 40 rather than ~25), so a total 20 runs off par no longer
+  swings the steer by 20 points. The grid no longer bakes in any surface
+  character; a per-pitch offset of a few points absorbs the engine's residual.
+* **Wickets.** Lower `Wicket` weights in the scoring matrices (the weight
+  moves to dots, not boundaries) and smaller extreme `wicket_factors`. A new
+  `phase_boosts.death_overs.wicket_boost_by_pitch` softens the death on these
+  five pitches only. Par bands, `format_config` par factors, target scores
+  and RRR baselines moved to match.
+
+Even and Hard are deliberately left as they were.
+
+`python -m tools.pitch_calibration --mix real` plays each over with approaches
+drawn from what real captains pick, and it now reports bat-first win % and
+wickets per over. Measured at n=1000 per pitch:
+
+| Pitch | Bat-first win % (balanced / real mix) | Wickets/over, real mix (was) |
+|---|---|---|
+| Dusty | 53 / 51 | 0.316 (0.363) |
+| Green | 50 / 48 | 0.340 (0.352) |
+| Dry | 54 / 53 | 0.323 (0.387) |
+| Bouncy | 50 / 51 | 0.291 (0.329) |
+| Flat | 50 / 51 | 0.225 (0.233) |
+
+Green's wicket cut is the smallest. The bot captain's approach solver
+(`services/bot_tactics`) reads Green's matrix directly, and cutting its base
+wicket rate further leaves Balanced batting and Aggressive bowling with no
+situation where they are the right call (`tests/test_cipl_approach.py`).

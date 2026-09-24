@@ -117,8 +117,8 @@ INNINGS2_EVOLUTION = {
     # The surface settles: the steep, unplayable bounce goes out of it, which
     # costs the quicks their wicket edge and makes the pull and hook safe shots.
     "Bouncy": [
-        (None, merge_multipliers(runs_factor(1.03), wicket_factor(-0.04)),
-         "bounce settles (-4% viciousness), pull/hook on"),
+        (None, wicket_factor(-0.01),
+         "bounce settles a touch, pull/hook on"),
     ],
     # Cracks open. Nothing much changes until they start to matter, and then the
     # death overs become a genuine lottery — the doc's "timing extremely
@@ -127,25 +127,22 @@ INNINGS2_EVOLUTION = {
         (lambda o, t, s: not _at(o, t, 0.80), runs_factor(0.98),
          "surface slowing"),
         (lambda o, t, s: _at(o, t, 0.80),
-         merge_multipliers(runs_factor(0.90), wicket_factor(+0.10)),
-         "cracks open (+10% variable bounce) — death overs dangerous"),
+         merge_multipliers(runs_factor(0.95), wicket_factor(+0.06)),
+         "cracks open (+6% variable bounce) — death overs dangerous"),
     ],
     # Grass burns off. The powerplay stops being a survival exercise around the
     # third over, and from the ninth the pitch is simply flat.
     "Green": [
-        (lambda o, t, s: _between(o, t, 0.15, 0.45), wicket_factor(-0.08),
-         "lateral movement fading (-8%) — powerplay less lethal"),
-        (lambda o, t, s: _at(o, t, 0.45),
-         merge_multipliers(runs_factor(1.05), wicket_factor(-0.15)),
-         "grass gone — pitch has flattened out"),
+        (lambda o, t, s: _at(o, t, 0.45), wicket_factor(-0.02),
+         "grass going — seam movement fading"),
     ],
     # Footmarks deepen. Spin bites all innings, and in the middle overs the
     # batting side simply cannot get off strike.
     "Dusty": [
-        (_spin_only(lambda o, t: True), wicket_factor(+0.15),
-         "footmarks deepen (+15% spin grip)"),
-        (lambda o, t, s: _between(o, t, 0.35, 0.65), runs_factor(0.90),
-         "middle overs are a graveyard"),
+        (_spin_only(lambda o, t: True), wicket_factor(+0.06),
+         "footmarks deepen (+6% spin grip)"),
+        (lambda o, t, s: _between(o, t, 0.35, 0.65), runs_factor(0.96),
+         "middle overs get tighter"),
     ],
 }
 
@@ -157,8 +154,8 @@ EVOLUTION_NOTES = {
     "Even": "Moderate wear; a good length grips and is harder to score off.",
     "Bouncy": "Settled down; less vicious bounce, pull and hook back on.",
     "Dry": "Cracked open; the death overs became a lottery.",
-    "Green": "Grass burnt off; seam faded early and the pitch flattened out.",
-    "Dusty": "Footmarks deepened; the middle overs turned square.",
+    "Green": "Grass thinned; the seam faded a little and runs came easier.",
+    "Dusty": "Footmarks deepened; the spinners found a little more grip.",
 }
 
 
