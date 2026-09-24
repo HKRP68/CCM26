@@ -893,7 +893,12 @@ class PublishTests(RTMCase):
         row = (self.session.query(ChallengePlayer)
                .join(ChallengeTeam, ChallengePlayer.team_id == ChallengeTeam.id)
                .filter(ChallengeTeam.league_id == league.id,
-                       ChallengePlayer.name == lot.name).first())
+                       ChallengePlayer.name == lot.name,
+                       # By card, not name: an unsold second edition of
+                       # the same cricketer can be auto-filled to the other
+                       # squad, so the name alone is no longer unique.
+                       ChallengePlayer.source_player_id == lot.player_id)
+               .first())
         self.assertIsNotNone(row)
         self.assertEqual("rtm", json.loads(row.details_json)["acquisition"])
         from services.cipl_match import cp_to_player_dict

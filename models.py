@@ -3812,6 +3812,19 @@ class AuctionSeason(Base):
     board_message_id = Column(BigInteger, nullable=True)
     announced_event_id = Column(Integer, default=0, nullable=False)
     board_rendered_bid_count = Column(Integer, default=0, nullable=False)
+    # The lot the pinned board was posted for. Each lot gets a FRESH board
+    # (a new message the room is notified about, and the new pin); within a
+    # lot the board is still edited in place. A board whose lot has moved on
+    # is replaced rather than edited, and this is how the sweeper tells.
+    board_lot_id = Column(Integer, nullable=True)
+
+    # ── The accelerated round, automatically ──
+    # When the queue runs dry with players unsold, they come back once as the
+    # "⚡ Accelerated" set before the auction finishes. Integers rather than
+    # booleans for the NULL-reads-falsy reason database._migrate_add_columns
+    # gives; 1/0 are on/off.
+    auto_accelerated = Column(Integer, default=1, nullable=False)
+    accelerated_done = Column(Integer, default=0, nullable=False)
 
     # ── Publication ────────────────────────────────────────────────────
     league_id = Column(Integer, ForeignKey("challenge_leagues.id", ondelete="SET NULL"),
@@ -4142,7 +4155,8 @@ class AuctionEvent(Base):
     # season_started | season_paused | season_resumed | season_cancelled
     # | season_completed | lot_opened | lot_sold | lot_unsold | lot_withdrawn
     # | lot_relisted | bid_undone | sale_undone | timer_extended
-    # | purse_corrected | franchise_added | published
+    # | purse_corrected | franchise_added | published | bid | relist_all
+    # | set_queued | set_order | franchise_removed | autofill | retained …
     kind = Column(String(24), nullable=False)
     # Plain text, rendered once by whoever wrote the event, so the announcer
     # and the website print the same sentence.
@@ -4157,3 +4171,60 @@ class AuctionEvent(Base):
     __table_args__ = (
         Index("ix_auction_event_season", "season_id", "id"),
     )
+
+
+class AuctionRetentionOffer(Base):
+    """An admin's offer to retain a player, waiting on the franchise's answer.
+
+    Retention moves a franchise's money, so the franchise says yes to it: an
+    admin proposes *who* and *for how much*, and only that franchise's owner or
+    a co-owner can press Accept. Accepting runs the ordinary ``retain()`` at
+    the offered price, so every cap still refuses exactly as it did before.
+    """
+    __tablename__ = "auction_retention_offers"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_id = Column(Integer, ForeignKey("auction_seasons.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    franchise_id = Column(Integer, ForeignKey("auction_franchises.id", ondelete="CASCADE"),
+                          nullable=False, index=True)
+    player_id = Column(Integer, ForeignKey("players.id", ondelete="CASCADE"),
+                       nullable=False)
+    player_name = Column(String(150), nullable=False)
+    # NULL = the retention ladder's next slab, resolved when it is accepted.
+    price_lakh = Column(Integer, nullable=True)
+    # pending | accepted | declined | cancelled
+    status = Column(String(12), default="pending", nullable=False, index=True)
+    offered_by_tg_id = Column(BigInteger, nullable=True)
+    answered_by_tg_id = Column(BigInteger, nullable=True)
+    chat_id = Column(BigInteger, nullable=True)
+    message_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    answered_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        # At most ONE pending offer per player per season, held by the
+        # database rather than a read-then-insert: two admins offering the
+        # same player on the same tick would otherwise both pass the check,
+        # and two franchises could then both accept him.
+        Index("ix_auction_ret_offer_pending", "season_id", "player_id",
+              unique=True,
+              sqlite_where=text("status = 'pending'"),
+              postgresql_where=text("status = 'pending'")),
+    )
+
+
+class AuctionAdmin(Base):
+    """Somebody trusted to run auctions without being a bot admin.
+
+    Bot admins (``services.admin_ids``) add them; they get every auction admin
+    command and nothing else — every other admin gate in the bot still reads
+    ``is_admin`` and never sees this table.
+    """
+    __tablename__ = "auction_admins"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tg_id = Column(BigInteger, nullable=False, unique=True, index=True)
+    name = Column(String(120), nullable=True)
+    added_by_tg_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

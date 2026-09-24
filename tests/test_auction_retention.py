@@ -678,7 +678,12 @@ class RetentionPublishTests(AuctionCase):
         row = (self.session.query(ChallengePlayer)
                .join(ChallengeTeam, ChallengePlayer.team_id == ChallengeTeam.id)
                .filter(ChallengeTeam.league_id == league.id,
-                       ChallengePlayer.name == kept.name).first())
+                       ChallengePlayer.name == kept.name,
+                       # By card, not name: an unsold second edition of
+                       # the same cricketer can be auto-filled to the other
+                       # squad, so the name alone is no longer unique.
+                       ChallengePlayer.source_player_id == kept.player_id)
+               .first())
         self.assertIsNotNone(row, "a retained player is in the squad")
         blob = json.loads(row.details_json)
         self.assertEqual("retained", blob["acquisition"])
@@ -840,20 +845,20 @@ class RetentionCommandTests(AuctionCase):
     def test_a_non_admin_cannot_retain(self):
         from handlers import auction as H
         self._run(H.aretain_handler, ALICE, ("Mumbai | Someone",))
-        self.assertIn("Only bot admins", self.replies[-1])
+        self.assertIn("Only auction admins", self.replies[-1])
 
-    def test_aretain_takes_the_ladder_when_no_price_is_given(self):
+    def test_aretainforce_takes_the_ladder_when_no_price_is_given(self):
         from handlers import auction as H
-        self._as_admin(H.aretain_handler, ("Mumbai", "|", self.unique.name))
+        self._as_admin(H.aretainforce_handler, ("Mumbai", "|", self.unique.name))
         self.session.expire_all()
         kept = self.A.retained(self.session, self.mumbai.id)
         self.assertEqual(1, len(kept))
         self.assertEqual(1800, kept[0].sold_price_lakh)
         self.assertIn("₹18 Cr", self.replies[-1])
 
-    def test_aretain_takes_an_explicit_price_in_crore(self):
+    def test_aretainforce_takes_an_explicit_price_in_crore(self):
         from handlers import auction as H
-        self._as_admin(H.aretain_handler,
+        self._as_admin(H.aretainforce_handler,
                        ("Mumbai", "|", self.unique.name, "|", "6"))
         if not self.A.retained(self.session, self.mumbai.id):
             self.fail(f"retain refused: {self.replies[-1]}")

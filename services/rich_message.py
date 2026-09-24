@@ -91,6 +91,25 @@ def link(text, url: str):
     return {"type": "url", "text": text, "url": url}
 
 
+def strikethrough(text):
+    return {"type": "strikethrough", "text": text}
+
+
+def mention(text, tg_id):
+    """A user mention: ``text`` linked to the Telegram account ``tg_id``.
+
+    Rides on the ``url`` node with a ``tg://user`` link, the same link the HTML
+    renderers use for ``<a href="tg://user?id=…">``.
+    """
+    try:
+        tg_id = int(tg_id)
+    except (TypeError, ValueError):
+        return text
+    if tg_id <= 0:
+        return text
+    return link(text, f"tg://user?id={tg_id}")
+
+
 # ── Blocks ───────────────────────────────────────────────────────────
 
 def heading(text, size: int = 3):
@@ -149,6 +168,43 @@ def details(summary, blocks, *, is_open: bool = False):
     if is_open:
         block["is_open"] = True
     return block
+
+
+# The three blocks below are named in the Bot API 10.1 block list (see
+# docs/rich-text-messages.md) but no surface had used them before the Franchise
+# Auction. Their field names follow the conventions of the blocks above; a
+# payload Telegram refuses falls back to the HTML rendering like any other, and
+# does not latch rich sends off.
+
+def pre(text: str, language: str = None):
+    """A preformatted code block, optionally tagged with a ``language``."""
+    block = {"type": "pre", "text": text}
+    if language:
+        block["language"] = language
+    return block
+
+
+def pullquote(text, caption=None):
+    """A large quotation — a headline result, set apart from the body."""
+    block = {"type": "pullquote", "text": text}
+    if caption is not None:
+        block["caption"] = caption
+    return block
+
+
+def list_block(items, *, ordered: bool = False):
+    """A bulleted (or, with ``ordered``, numbered) list of RichText items.
+
+    Each item is its own list of blocks, so a plain RichText item is wrapped
+    in a paragraph; a numbered list carries its number as each item's label.
+    """
+    wrapped = []
+    for number, item in enumerate(items, start=1):
+        entry = {"blocks": [paragraph(item)]}
+        if ordered:
+            entry["label"] = f"{number}."
+        wrapped.append(entry)
+    return {"type": "list", "items": wrapped}
 
 
 # ── Senders ──────────────────────────────────────────────────────────

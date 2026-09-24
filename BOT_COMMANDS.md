@@ -274,6 +274,16 @@ An auction is a group event; these run in the chat the auction is bound to.
 | `/aboard` 👥 | `/auctionboard` | The live auction board, with quick-bid buttons |
 | `/apurse` 👥 | `/apurses` | Every purse, or one franchise's squad |
 | `/artm` 👥 | `/rtm` | Answer a Right To Match on your former player |
+| `/ainfo` 👥 | `/amenu` | Where the auction stands, with a button for every view below |
+| `/asets` 👥 | — | Every set in running order: done, live, next, queued |
+| `/anextset` 👥 | — | The next set's players |
+| `/anextplayer` 👥 | `/anextplayers` | Who comes to the block next |
+| `/asquad` 👥 | `/amysquad` | Your squad (or name a franchise), with purse and max bid |
+| `/asoldlist` 👥 | — | Every player sold, set by set |
+| `/aunsoldlist` 👥 | — | The ⚡ Unsold / Accelerated set |
+
+Every new player is announced with his **player card** and a fresh **pinned
+board**; bids are announced as one short line per burst.
 
 ## 14. Fantasy league
 
@@ -466,6 +476,8 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/aboard` | `/aboard` |
 | `/apurse [franchise]` | `/apurse Mumbai` |
 | `/artm yes\|no` | `/artm yes` |
+| `/asquad [franchise]` | `/asquad` · `/asquad Chennai` |
+| `/anextplayer [n]` | `/anextplayer 10` |
 
 ## A10 · Games
 
@@ -547,7 +559,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 
 | Usage | What it does |
 |-------|--------------|
-| `/auction` | The Franchise Auction reference card |
+| `/adminhelp` · `/auction` | Every Franchise Auction admin command, section by section |
 | `/anew <name>` | Create an auction and bind it here — `/anew Season 2` |
 | `/abind <name>` | Bind an existing auction to this group |
 | `/astart` · `/apause` · `/aresume` | Start, pause and resume the auction clock |
@@ -571,6 +583,21 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/aclone <name>` | Start the next season from this one — `/aclone Season 3` |
 | `/apublish` | Publish bought squads as a Challenge League |
 | `/acancel` | Cancel the auction |
+| `/apool <min>-<max> [\| set] [\| all]` | Add every card in a rating range to the pool as one set — `/apool 85-90 \| Marquee` |
+| `/anextset <set \| 80-85>` | Make a set, or every queued player in a rating range, come next |
+| `/asetorder A, B, C` | Order the whole queue by set |
+| `/aaccelmode on\|off` | The automatic ⚡ Accelerated round for unsold players (default on) |
+| `/aretainforce <franchise> \| <player> \| [price]` | Retain at once, without the franchise's Accept |
+| `/aoffers` · `/aretcancel <player>` | Retention offers waiting, and withdraw one |
+| `/acall [message]` | Tag every owner and co-owner |
+| `/aremoveteam <franchise> [\| confirm]` | Remove a team: players back in the pool, its purse shared equally |
+| `/aadminadd <id \| @user \| reply>` | Bot admins only: make someone an auction admin |
+| `/aadminremove <id \| @user \| reply>` · `/aadmins` | Remove one, or list them |
+
+`/aretain` now **offers** the retention: the franchise's owner or a co-owner
+presses ✅ Accept (nobody else can), and only then is the player kept.
+**Auction admins** may use every command in this table and no other admin
+command in the bot.
 
 ## B5 · Lets Play Tournament
 
@@ -638,7 +665,9 @@ Deep links, typed-reply flows and long rules pages, listed only in the DM menu:
 
 These work from the keyboard but are deliberately unpublished, because both
 player menus sit at Telegram's 100-command ceiling: `/pitchstats`, `/dtrade`,
-`/dtrades`, `/bid`, `/aboard`, `/apurse`.
+`/dtrades`, `/bid`, `/aboard`, `/apurse`, and the auction views `/ainfo`,
+`/asets`, `/anextset`, `/anextplayer`, `/asquad`, `/asoldlist`,
+`/aunsoldlist` (all behind `/ainfo`'s buttons).
 
 ### Disabled
 
@@ -659,6 +688,11 @@ admin panel, but the commands are not registered.
 | `/arelease` | `/aunretain` 🔒 |
 | `/arelistall` | `/aaccel` 🔒 |
 | `/auctionboard` | `/aboard` |
+| `/ahelp` | `/adminhelp` 🔒 |
+| `/acallteams` | `/acall` 🔒 |
+| `/amenu` | `/ainfo` |
+| `/amysquad` | `/asquad` |
+| `/anextplayers` | `/anextplayer` |
 | `/aunpause` | `/aresume` 🔒 |
 | `/apurses` | `/apurse` |
 | `/anextseason` | `/aclone` 🔒 |

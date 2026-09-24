@@ -13,7 +13,10 @@ Three things here are deliberately different from the draft.
 says it out loud. That is what lets the website drive the same auction without
 reaching across the Flask/PTB boundary — and it makes the ``/pick`` invariant
 (never let a Telegram failure roll back a committed action) hold here by
-construction, since there is no Telegram call after the commit at all.
+construction, since there is no Telegram call after the commit at all. The
+two exceptions are replies by nature: ``/acall`` is itself the message (it
+tags every owner), and ``/aretain`` answers with the offer card the franchise
+presses Accept on.
 
 **A successful ``/bid`` gets no reply.** Forty bids inside one lot would be
 forty messages into a room that is already reading a live board; the bid is
@@ -35,6 +38,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from database import get_session
+from services import auction_rich as AR
 from services import auction_service as A
 from services.admin_ids import is_admin
 from services.auction_service import AuctionError
@@ -43,7 +47,8 @@ logger = logging.getLogger(__name__)
 
 GROUP_CHAT_TYPES = ("group", "supergroup")
 
-NOT_ADMIN = "⛔ Only bot admins can manage an auction."
+NOT_ADMIN = "⛔ Only auction admins can manage an auction."
+NOT_BOT_ADMIN = "⛔ Only bot admins can choose who runs auctions."
 GROUP_ONLY = ("❌ Auction commands only work in the group the auction is bound "
               "to.\nAn admin binds one with <code>/abind</code>.")
 NO_AUCTION = ("❌ No auction is running in this chat.\n"
@@ -54,8 +59,10 @@ NOT_YOURS = ("⛔ Only a franchise's owner or a co-owner can bid for it.\n"
              "who must act for an absent owner uses the auction console, which "
              "records the bid as an admin's.")
 
-BID_CB = "au_bid_"
-RTM_CB = "au_rtm_"
+BID_CB = AR.BID_CB
+RTM_CB = AR.RTM_CB
+INFO_CB = AR.INFO_CB
+RET_CB = "au_ret_"
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -75,12 +82,65 @@ def _arg_text(context):
     return " ".join(context.args or []).strip()
 
 
+def _is_auction_admin(user_id):
+    """A bot admin, or an auction admin — who may run every auction command.
+
+    Opens its own short session: the gate runs before the command's own
+    session exists, and a bot admin never needs the query at all.
+    """
+    if user_id is None:
+        return False
+    if is_admin(user_id):
+        return True
+    session = get_session()
+    try:
+        return A.is_auction_admin(session, user_id)
+    finally:
+        session.close()
+
+
 async def _require_admin(update):
     user = update.effective_user
-    if not user or not is_admin(user.id):
+    if not user or not _is_auction_admin(user.id):
         await _reply(update, NOT_ADMIN)
         return False
     return True
+
+
+async def _require_bot_admin(update):
+    user = update.effective_user
+    if not user or not is_admin(user.id):
+        await _reply(update, NOT_BOT_ADMIN)
+        return False
+    return True
+
+
+async def _reply_rich(update, context, blocks, html_text, *, reply_markup=None):
+    """Answer with a rich message, falling back to the HTML rendering.
+
+    Quotes the command in a group, the way ``/pxi`` does, so the answer is
+    attached to whoever asked for it in a busy auction chat.
+    """
+    chat = update.effective_chat
+    bot = getattr(context, "bot", None)
+    if chat is not None and bot is not None and getattr(bot, "_post", None):
+        quote = None
+        message = update.effective_message
+        if chat.type in GROUP_CHAT_TYPES and message is not None:
+            quote = getattr(message, "message_id", None)
+        try:
+            return await AR.send(bot, chat.id, blocks, html_text,
+                                 reply_markup=reply_markup,
+                                 reply_to_message_id=quote)
+        except Exception:
+            logger.warning("auction rich reply failed; replying in HTML",
+                           exc_info=True)
+    parts = AR.html_parts(html_text)
+    sent = None
+    for index, part in enumerate(parts):
+        sent = await _reply(update, part,
+                            reply_markup=reply_markup if index == len(parts) - 1 else None)
+    return sent
 
 
 def _season_for(session, update):
@@ -130,41 +190,12 @@ async def _with_auction(update, work, *, admin=False, allow_dm=False,
 
 
 def bid_keyboard(season, lot):
-    """Quick-bid buttons: the minimum, and one step above it.
+    """Quick-bid buttons (or the RTM holder's answers) for this lot.
 
-    The exact amount rides in the callback data, so a button pressed after the
-    price has moved bids a number that is no longer legal and is refused with
-    "the price has moved" rather than quietly bidding the wrong thing.
+    Lives in ``services.auction_rich`` so the sweeper can put the same buttons
+    on the pinned board without importing a handler module.
     """
-    if lot is not None and lot.status == A.LOT_RTM_OFFERED:
-        # The holder's two answers. The top bidder's final raise is an ordinary
-        # /bid, so it needs no button of its own.
-        if lot.rtm_stage in (A.RTM_INTENT, A.RTM_DECISION):
-            # The lot AND the stage ride in the callback data, for the same
-            # reason the quick-bid buttons carry the exact price: a "yes" from
-            # the *intent* prompt, pressed thirty seconds late, would otherwise
-            # land as a MATCH at the decision stage — signing a player for the
-            # raised number when the franchise only ever agreed to the old one.
-            tag = f"{RTM_CB}{lot.id}_{lot.rtm_stage}_"
-            label = ("🪪 Use RTM" if lot.rtm_stage == A.RTM_INTENT
-                     else f"🪪 Match {A.render_money(A.rtm_price(season, lot), season.currency_label)}")
-            return InlineKeyboardMarkup([[
-                InlineKeyboardButton(label, callback_data=f"{tag}yes"),
-                InlineKeyboardButton("Pass", callback_data=f"{tag}no"),
-            ]])
-        return None
-    if lot is None or lot.status != A.LOT_ON_BLOCK:
-        return None
-    minimum = A.next_min_bid(season, lot)
-    step = A.increment_for(season, minimum)
-    symbol = season.currency_label or "₹"
-    row = [InlineKeyboardButton(f"Bid {A.render_money(minimum, symbol)}",
-                                callback_data=f"{BID_CB}{lot.id}_{minimum}")]
-    if minimum + step <= 1_000_000:
-        row.append(InlineKeyboardButton(
-            f"Bid {A.render_money(minimum + step, symbol)}",
-            callback_data=f"{BID_CB}{lot.id}_{minimum + step}"))
-    return InlineKeyboardMarkup([row])
+    return AR.bid_keyboard(season, lot)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -426,8 +457,9 @@ async def aboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _reply(update, NO_AUCTION)
             return
         lot = A.current_lot(session, season)
-        await _reply(update, A.render_board(session, season, lot),
-                     reply_markup=bid_keyboard(season, lot))
+        await _reply_rich(update, context, AR.board_blocks(session, season, lot),
+                          AR.board_html(session, season, lot),
+                          reply_markup=bid_keyboard(season, lot))
     finally:
         session.close()
 
@@ -442,9 +474,10 @@ async def apurse_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name = _arg_text(context)
         if name:
             franchise = _find_franchise(session, season, name)
-            await _reply(update, A.render_squad(session, season, franchise))
+            await _reply_rich(update, context,
+                              *AR.squad_view(session, season, franchise))
             return
-        await _reply(update, A.render_purses(session, season))
+        await _reply_rich(update, context, *AR.purses_view(session, season))
     except AuctionError as exc:
         await _reply(update, f"⚠️ {html.escape(str(exc))}")
     finally:
@@ -473,47 +506,17 @@ def _find_franchise(session, season, name):
 # Admin
 # ════════════════════════════════════════════════════════════════════
 
-ADMIN_CARD = """🔨 <b>Franchise Auction — admin</b>
-
-<b>Setting up</b>
-<code>/anew &lt;name&gt;</code> — create an auction and bind it to this group
-<code>/abind</code> — bind an existing auction to this group
-<code>/atimer &lt;seconds&gt;</code> — seconds per lot (default 30)
-<code>/asnipe &lt;window&gt; &lt;extend&gt; &lt;max&gt;</code> — anti-snipe, e.g. <code>/asnipe 10 10 5</code>
-<code>/aco &lt;franchise&gt; | &lt;telegram id&gt;</code> — let one more person bid for a franchise
-
-<b>Retention</b> — before the auction opens
-<code>/aretlock</code> — the state of retention, and every franchise's keeps
-<code>/aretain &lt;franchise&gt; | &lt;player&gt; | [price]</code> — leave the price off and the ladder decides
-<code>/aunretain &lt;player&gt;</code> — release one, back into the pool
-<code>/aretlock on</code> — close the window (<code>/astart</code> closes it too)
-
-<b>Running it</b>
-<code>/astart</code> · <code>/apause</code> · <code>/aresume</code>
-<code>/anext</code> — put the next lot on the block
-<code>/aextend [seconds]</code> — add time to the lot on the block
-<code>/asold</code> — sell at the standing bid
-<code>/aunsold</code> — pass the lot (refused while a bid stands)
-<code>/aundobid</code> — void the standing bid and fall back
-<code>/awithdraw &lt;player&gt;</code> — pull a player out of the auction
-
-<b>Money and the end</b>
-<code>/agrant &lt;franchise&gt; | &lt;amount&gt;</code> — correct a purse, e.g. <code>| -2</code> or <code>| 5</code>
-<code>/apublish</code> — publish the bought squads as a Challenge League
-<code>/acancel</code> — cancel the auction
-
-<b>Everyone</b>
-<code>/bid [amount]</code> — bare <code>/bid</code> bids the next minimum
-<code>/aboard</code> — the live board · <code>/apurse [franchise]</code> — purses, or one squad
-
-Amounts are in <b>crore</b> unless you say lakh: <code>/bid 15</code> is ₹15 Cr,
-<code>/bid 75L</code> is ₹75 lakh."""
-
-
 async def aadmin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/adminhelp</code> (and <code>/auction</code>) — every admin command.
+
+    Open to auction admins as well as bot admins; the section on appointing
+    auction admins is shown only to the bot admins who can use it.
+    """
     if not await _require_admin(update):
         return
-    await _reply(update, ADMIN_CARD)
+    user = update.effective_user
+    blocks, html_text = AR.admin_help(bot_admin=bool(user and is_admin(user.id)))
+    await _reply_rich(update, context, blocks, html_text)
 
 
 async def anew_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -764,45 +767,209 @@ async def aco_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _with_auction(update, work, admin=True, context=context)
 
 
-async def aretain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """<code>/aretain Mumbai | Virat Kohli | 18</code> — the price is optional.
+def _retention_args(session, season, raw, usage):
+    parts = [p.strip() for p in raw.split("|")]
+    if len(parts) < 2 or not parts[0] or not parts[1]:
+        raise AuctionError(usage)
+    franchise = _find_franchise(session, season, parts[0])
+    player = _find_player(session, parts[1])
+    price = (A.parse_amount(parts[2])
+             if len(parts) > 2 and parts[2] else None)
+    return franchise, player, price
 
-    Left off, it takes the season's retention ladder for that franchise's next
-    slab, which is the number the admin almost always wants and the one the
-    reply prints back so they can see what they just spent.
+
+def _holder_warning(session, season, franchise, player):
+    held = A.previous_squad_map(session, season).get(player.id)
+    if held is not None and held.id != franchise.id:
+        return (f"\n⚠️ {html.escape(player.name)} was "
+                f"{html.escape(held.name)}'s last season.")
+    if held is None and season.previous_league_id:
+        return (f"\n⚠️ {html.escape(player.name)} was not in last "
+                f"season's league.")
+    return ""
+
+
+async def aretain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aretain Mumbai | Virat Kohli | 18</code> — offer a retention.
+
+    Nothing is signed until the franchise answers: the reply carries Accept /
+    Decline buttons only that franchise's owner or a co-owner can press.
+    Left off, the price is the retention ladder's next slab *at the moment
+    they accept*. <code>/aretainforce</code> keeps the old instant path.
+    """
+    chat = update.effective_chat
+    if chat is None or chat.type not in GROUP_CHAT_TYPES:
+        await _reply(update, GROUP_ONLY)
+        return
+    if not await _require_admin(update):
+        return
+    user = update.effective_user
+    raw = _arg_text(context)
+    session = get_session()
+    try:
+        season = _season_for(session, update)
+        if season is None:
+            await _reply(update, NO_AUCTION)
+            return
+        franchise, player, price = _retention_args(
+            session, season, raw,
+            "Usage: /aretain <franchise> | <player> | [price]\n"
+            "The franchise then accepts it with a button. The price is "
+            "optional — leave it off and the retention ladder decides.")
+        offer = A.offer_retention(session, season, franchise, player, price,
+                                  by_tg_id=user.id if user else None,
+                                  chat_id=chat.id)
+        session.commit()
+        text = (AR.retention_offer_card(session, season, offer)
+                + _holder_warning(session, season, franchise, player))
+        try:
+            sent = await _reply(update, text,
+                                reply_markup=AR.retention_offer_keyboard(offer))
+        except Exception:
+            # The offer is committed but nobody can see its buttons. Withdraw
+            # it rather than leave a pending offer that blocks the next one
+            # for this player until somebody notices.
+            session.rollback()
+            A.cancel_retention_offer(session, season, offer)
+            session.commit()
+            raise
+        message_id = getattr(sent, "message_id", None)
+        if message_id:
+            offer.message_id = message_id
+            session.commit()
+    except AuctionError as exc:
+        session.rollback()
+        await _reply(update, f"⚠️ {html.escape(str(exc))}")
+    except Exception:
+        session.rollback()
+        logger.exception("/aretain failed")
+        try:
+            await _reply(update, "⚠️ Something went wrong. Try again.")
+        except Exception:
+            # The failure may well have been the chat refusing messages.
+            logger.debug("/aretain: could not report the failure",
+                         exc_info=True)
+    finally:
+        session.close()
+
+
+async def aretainforce_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aretainforce Mumbai | Virat Kohli | 18</code> — retain at once.
+
+    The admin override: no offer, no button, exactly what /aretain did before
+    franchises were asked. For the owner who has agreed in person.
     """
     user = update.effective_user
     raw = _arg_text(context)
 
     def work(session, season):
-        parts = [p.strip() for p in raw.split("|")]
-        if len(parts) < 2 or not parts[0] or not parts[1]:
-            raise AuctionError(
-                "Usage: /aretain <franchise> | <player> | [price]\n"
-                "The price is optional — leave it off and the retention "
-                "ladder decides.")
-        franchise = _find_franchise(session, season, parts[0])
-        player = _find_player(session, parts[1])
-        price = (A.parse_amount(parts[2])
-                 if len(parts) > 2 and parts[2] else None)
+        franchise, player, price = _retention_args(
+            session, season, raw,
+            "Usage: /aretainforce <franchise> | <player> | [price]")
         lot = A.retain(session, season, franchise, player, price,
                        by_tg_id=user.id if user else None)
         kept = int(franchise.retained_count or 0)
-        warning = ""
-        held = A.previous_squad_map(session, season).get(player.id)
-        if held is not None and held.id != franchise.id:
-            warning = (f"\n⚠️ {html.escape(player.name)} was "
-                       f"{html.escape(held.name)}'s last season — retained "
-                       f"anyway.")
-        elif held is None and season.previous_league_id:
-            warning = (f"\n⚠️ {html.escape(player.name)} was not in last "
-                       f"season's league — retained anyway.")
         return (f"🔒 <b>{html.escape(franchise.name)}</b> retain "
                 f"{html.escape(lot.name)} for "
                 f"<b>{A.render_money(lot.sold_price_lakh, season.currency_label)}</b> "
                 f"({kept}/{season.max_retentions}).\n"
                 f"💰 {A.render_money(franchise.purse_remaining_lakh, season.currency_label)} "
-                f"left to bid with." + warning)
+                f"left to bid with."
+                + _holder_warning(session, season, franchise, player))
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def retention_offer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Accept / Decline on a retention offer — that franchise's people only."""
+    query = update.callback_query
+    if query is None:
+        return
+    user = update.effective_user
+    try:
+        offer_id, answer = (query.data or "")[len(RET_CB):].split("_", 1)
+        offer_id = int(offer_id)
+    except (ValueError, AttributeError):
+        await query.answer("That button is from an older auction.",
+                           show_alert=True)
+        return
+
+    session = get_session()
+    try:
+        offer = A.retention_offer(session, offer_id)
+        season = None
+        if offer is not None:
+            from models import AuctionSeason
+            season = (session.query(AuctionSeason)
+                      .filter(AuctionSeason.id == offer.season_id).first())
+        if offer is None or season is None:
+            await query.answer("That offer no longer exists.", show_alert=True)
+            return
+        accept = answer == "yes"
+        lot = A.answer_retention_offer(session, season, offer,
+                                       user.id if user else None, accept)
+        session.commit()
+        if lot is not None:
+            await query.answer(f"Retained for "
+                               f"{A.render_money(lot.sold_price_lakh, season.currency_label)}.")
+        else:
+            await query.answer("Declined.")
+        try:
+            await query.edit_message_text(
+                AR.retention_offer_card(session, season, offer),
+                parse_mode="HTML", disable_web_page_preview=True)
+        except Exception:
+            logger.debug("auction: could not update the offer card",
+                         exc_info=True)
+    except AuctionError as exc:
+        session.rollback()
+        await query.answer(str(exc)[:190], show_alert=True)
+    except Exception:
+        session.rollback()
+        logger.exception("auction retention offer button failed")
+        await query.answer("That did not land — try again.", show_alert=True)
+    finally:
+        session.close()
+
+
+async def aoffers_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aoffers</code> — retention offers still waiting on a franchise."""
+    def work(session, season):
+        offers = A.pending_retention_offers(session, season.id)
+        if not offers:
+            return "🔒 No retention offers are waiting."
+        from models import AuctionFranchise
+        lines = [f"🔒 <b>Retention offers waiting — {len(offers)}</b>"]
+        for offer in offers:
+            franchise = (session.query(AuctionFranchise)
+                         .filter(AuctionFranchise.id == offer.franchise_id).first())
+            price = A.offer_price(season, franchise, offer) if franchise else 0
+            lines.append(f"· <b>{html.escape(offer.player_name)}</b> → "
+                         f"{html.escape(franchise.name if franchise else '?')} · "
+                         f"{A.render_money(price, season.currency_label)}")
+        lines.append("\n<i>Withdraw one with</i> <code>/aretcancel &lt;player&gt;</code>")
+        return "\n".join(lines)
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def aretcancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aretcancel Virat Kohli</code> — withdraw a waiting offer."""
+    raw = _arg_text(context).strip().lower()
+
+    def work(session, season):
+        if not raw:
+            raise AuctionError("Usage: /aretcancel <player>")
+        offers = [o for o in A.pending_retention_offers(session, season.id)
+                  if raw in (o.player_name or "").lower()]
+        if not offers:
+            raise AuctionError(f"No waiting offer matches “{raw}”.")
+        if len(offers) > 1:
+            raise AuctionError("That could be " + ", ".join(
+                o.player_name for o in offers[:5]) + " — type more of the name.")
+        A.cancel_retention_offer(session, season, offers[0])
+        return (f"🚫 The retention offer for "
+                f"{html.escape(offers[0].player_name)} is withdrawn.")
 
     await _with_auction(update, work, admin=True, context=context)
 
@@ -1294,3 +1461,410 @@ async def acancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return None
 
     await _with_auction(update, work, admin=True, context=context)
+
+
+# ════════════════════════════════════════════════════════════════════
+# Team views — sets, the next set and player, squads, sold and unsold
+#
+# Open to everyone in the auction's group (and in a DM, where there is no
+# auction to find, they say so). None is in the group slash menu — both player
+# scopes sit at Telegram's 100-command ceiling — so /ainfo puts every one of
+# them behind a button, and the board's footer names them.
+# ════════════════════════════════════════════════════════════════════
+
+async def _view(update, context, build):
+    """Run a read-only view against this chat's auction and send it."""
+    session = get_session()
+    try:
+        season = _season_for(session, update)
+        if season is None:
+            await _reply(update, NO_AUCTION)
+            return
+        result = build(session, season)
+        if isinstance(result, str):
+            await _reply(update, result)
+            return
+        blocks, html_text, *markup = result
+        await _reply_rich(update, context, blocks, html_text,
+                          reply_markup=markup[0] if markup else None)
+    except AuctionError as exc:
+        await _reply(update, f"⚠️ {html.escape(str(exc))}")
+    except Exception:
+        logger.exception("auction view failed")
+        await _reply(update, "⚠️ Something went wrong. Try again.")
+    finally:
+        session.close()
+
+
+def _own_or_named_franchise(session, season, update, name):
+    if name:
+        return _find_franchise(session, season, name)
+    user = update.effective_user
+    franchise = (A.franchise_for_actor(session, season.id, user.id)
+                 if user else None)
+    if franchise is None:
+        raise AuctionError("You do not own a franchise here — name one, e.g. "
+                           "/asquad Mumbai")
+    return franchise
+
+
+async def ainfo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/ainfo</code> — where the auction stands, and a button per view."""
+    user = update.effective_user
+
+    def build(session, season):
+        franchise = (A.franchise_for_actor(session, season.id, user.id)
+                     if user else None)
+        blocks, html_text = AR.info_menu(session, season, franchise)
+        return blocks, html_text, AR.info_keyboard()
+
+    await _view(update, context, build)
+
+
+async def asets_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/asets</code> — every set, in running order, and where it stands."""
+    await _view(update, context, lambda s, season: AR.sets_view(s, season))
+
+
+async def anextset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/anextset</code> — the next set's players.
+
+    For an auction admin, <code>/anextset Marquee</code> or
+    <code>/anextset 85-90</code> makes that set — or every queued player in
+    that rating range — come next instead.
+    """
+    raw = _arg_text(context)
+    if not raw:
+        await _view(update, context, lambda s, season: AR.next_set_view(s, season))
+        return
+    user = update.effective_user
+
+    def work(session, season):
+        label, moved = A.bring_forward(session, season, raw,
+                                       by_tg_id=user.id if user else None)
+        return (f"⏭ <b>{html.escape(label)}</b> comes next — {len(moved)} "
+                f"{'player' if len(moved) == 1 else 'players'}, starting with "
+                f"<b>{html.escape(moved[0].name)}</b>."
+                + ("\n<i>The lot on the block finishes first.</i>"
+                   if A.current_lot(session, season) is not None else ""))
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def anextplayer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/anextplayer [n]</code> — who comes to the block next."""
+    raw = _arg_text(context)
+    count = max(1, min(15, A._as_int(raw, 5))) if raw else 5
+    await _view(update, context,
+                lambda s, season: AR.next_players_view(s, season, count))
+
+
+async def asquad_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/asquad [franchise]</code> — your squad, or any franchise's."""
+    name = _arg_text(context)
+    await _view(update, context, lambda s, season: AR.squad_view(
+        s, season, _own_or_named_franchise(s, season, update, name)))
+
+
+async def asoldlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/asoldlist</code> — every player sold, set by set."""
+    await _view(update, context, lambda s, season: AR.sold_view(s, season))
+
+
+async def aunsoldlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aunsoldlist</code> — the ⚡ Unsold / Accelerated set."""
+    await _view(update, context, lambda s, season: AR.unsold_view(s, season))
+
+
+async def info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """A /ainfo button. Shared by the room; each press answers the presser."""
+    query = update.callback_query
+    if query is None:
+        return
+    key = (query.data or "")[len(INFO_CB):]
+    views = {
+        "sets": lambda s, season: AR.sets_view(s, season),
+        "nextset": lambda s, season: AR.next_set_view(s, season),
+        "next": lambda s, season: AR.next_players_view(s, season),
+        "squad": lambda s, season: AR.squad_view(
+            s, season, _own_or_named_franchise(s, season, update, "")),
+        "sold": lambda s, season: AR.sold_view(s, season),
+        "unsold": lambda s, season: AR.unsold_view(s, season),
+        "purse": lambda s, season: AR.purses_view(s, season),
+    }
+    build = views.get(key)
+    if build is None:
+        await query.answer("That button is from an older auction.",
+                           show_alert=True)
+        return
+    session = get_session()
+    try:
+        season = _season_for(session, update)
+        if season is None:
+            await query.answer("No auction is running here.", show_alert=True)
+            return
+        blocks, html_text = build(session, season)
+        await query.answer()
+        await AR.send(context.bot, update.effective_chat.id, blocks, html_text)
+    except AuctionError as exc:
+        await query.answer(str(exc)[:190], show_alert=True)
+    except Exception:
+        logger.exception("auction info button failed")
+        await query.answer("That did not work — try the command instead.",
+                           show_alert=True)
+    finally:
+        session.close()
+
+
+# ════════════════════════════════════════════════════════════════════
+# Admin — the pool by rating range, and the order sets run in
+# ════════════════════════════════════════════════════════════════════
+
+async def apool_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/apool 85-90 | Marquee</code> — a rating range into the pool as a set.
+
+    The set name is optional (it defaults to the range, "85-90 OVR"). Base
+    cards only unless a third part says <code>all</code>, because two editions
+    of one cricketer in a pool is a squad with the same player twice. Sets run
+    in the order they are added; /anextset and /asetorder change it.
+    """
+    raw = _arg_text(context)
+
+    def work(session, season):
+        parts = [p.strip() for p in raw.split("|")]
+        band = A.parse_rating_range(parts[0]) if parts and parts[0] else None
+        if band is None:
+            raise AuctionError("Usage: /apool <min>-<max> | [set name] | [all]"
+                               " — e.g. /apool 85-90 | Marquee")
+        name = parts[1] if len(parts) > 1 and parts[1] else None
+        editions = len(parts) > 2 and parts[2].lower() in ("all", "editions")
+        added, skipped, label = A.add_rating_range_to_pool(
+            session, season, *band, set_name=name, editions=editions)
+        position = len([e for e in A.list_sets(session, season)
+                        if e["queued"]])
+        return (f"🗂 <b>{html.escape(label)}</b> — {added} "
+                f"{'player' if added == 1 else 'players'} added"
+                + (f", {skipped} already in the auction" if skipped else "")
+                + f".\nIt is set <b>#{position}</b> in the queue — "
+                  f"<code>/anextset {html.escape(label)}</code> brings it "
+                  f"forward.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def asetorder_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/asetorder Marquee, 85-90 OVR, Bowlers</code> — order the queue."""
+    raw = _arg_text(context)
+    user = update.effective_user
+
+    def work(session, season):
+        if not raw:
+            entries = [e for e in A.list_sets(session, season) if e["queued"]]
+            names = ", ".join(e["name"] for e in entries) or "none"
+            raise AuctionError(f"Usage: /asetorder <set>, <set>, … — queued "
+                               f"sets now: {names}")
+        labels = A.set_order(session, season, raw.split(","),
+                             by_tg_id=user.id if user else None)
+        return ("🗂 The queue now runs: "
+                + " → ".join(f"<b>{html.escape(l)}</b>" for l in labels)
+                + ", then everything else as it was.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def aaccelmode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aaccelmode on|off</code> — the automatic accelerated round."""
+    arg = _arg_text(context).strip().lower()
+
+    def work(session, season):
+        if arg in ("on", "yes", "1"):
+            season.auto_accelerated = 1
+        elif arg in ("off", "no", "0"):
+            season.auto_accelerated = 0
+        elif arg:
+            raise AuctionError("Usage: /aaccelmode on|off")
+        on = bool(A._as_int(season.auto_accelerated, 1))
+        done = bool(A._as_int(season.accelerated_done, 0))
+        return ("⚡ Automatic accelerated round: <b>"
+                + ("on" if on else "off") + "</b>"
+                + (" — already run this auction." if on and done else
+                   " — unsold players come back once, as the ⚡ Accelerated "
+                   "set, when the main pool is done." if on else
+                   " — unsold players stay unsold unless you run /aaccel go, "
+                   "and short squads are only auto-filled after a round of "
+                   "it."))
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+# ════════════════════════════════════════════════════════════════════
+# Admin — the teams
+# ════════════════════════════════════════════════════════════════════
+
+async def acall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/acall [message]</code> — tag every owner and co-owner."""
+    chat = update.effective_chat
+    if chat is None or chat.type not in GROUP_CHAT_TYPES:
+        await _reply(update, GROUP_ONLY)
+        return
+    if not await _require_admin(update):
+        return
+    message = _arg_text(context)
+    session = get_session()
+    try:
+        season = _season_for(session, update)
+        if season is None:
+            await _reply(update, NO_AUCTION)
+            return
+        parts = AR.call_html(session, season, message or None)
+    finally:
+        session.close()
+    for part in parts:
+        await context.bot.send_message(chat_id=chat.id, text=part,
+                                       parse_mode="HTML",
+                                       disable_web_page_preview=True)
+
+
+async def aremoveteam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aremoveteam Delhi</code> — what removing a team would do.
+
+    <code>/aremoveteam Delhi | confirm</code> does it: the team's players go
+    back into the pool as a set of their own, and its opening purse is shared
+    equally among the teams that remain.
+    """
+    raw = _arg_text(context)
+    user = update.effective_user
+
+    def work(session, season):
+        parts = [p.strip() for p in raw.split("|")]
+        if not parts or not parts[0]:
+            raise AuctionError("Usage: /aremoveteam <franchise> — then "
+                               "/aremoveteam <franchise> | confirm")
+        franchise = _find_franchise(session, season, parts[0])
+        symbol = season.currency_label
+        confirm = len(parts) > 1 and parts[1].lower() in ("confirm", "yes", "go")
+        if not confirm:
+            preview = A.removal_preview(session, season, franchise)
+            names = ", ".join(html.escape(lot.name) for lot in preview["players"][:12])
+            more = (f" …and {len(preview['players']) - 12} more"
+                    if len(preview["players"]) > 12 else "")
+            return (f"🚪 <b>Remove {html.escape(franchise.name)}?</b>\n"
+                    f"<blockquote>👥 {len(preview['players'])} "
+                    f"{'player goes' if len(preview['players']) == 1 else 'players go'} "
+                    f"back into the auction"
+                    + (f": {names}{more}" if names else "") + "\n"
+                    f"💰 Their {A.render_money(preview['pot'], symbol)} purse is "
+                    f"shared out — about "
+                    f"{A.render_money(preview['share'], symbol)} to each of "
+                    f"{len(preview['others'])} teams</blockquote>\n"
+                    f"Confirm with <code>/aremoveteam "
+                    f"{html.escape(franchise.name)} | confirm</code>")
+        name = franchise.name
+        released, shares = A.remove_franchise(
+            session, season, franchise, by_tg_id=user.id if user else None)
+        return (f"🚪 <b>{html.escape(name)}</b> removed. {len(released)} "
+                f"{'player is' if len(released) == 1 else 'players are'} back "
+                f"in the pool and {len(shares)} purses went up.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+# ════════════════════════════════════════════════════════════════════
+# Auction admins — appointed by bot admins
+# ════════════════════════════════════════════════════════════════════
+
+def _admin_target(session, update, context):
+    """``(tg_id, name)`` from a reply, a numeric id, or an @username."""
+    message = update.effective_message
+    replied = getattr(message, "reply_to_message", None)
+    person = getattr(replied, "from_user", None) if replied is not None else None
+    if person is not None and not context.args:
+        name = (f"@{person.username}" if getattr(person, "username", None)
+                else getattr(person, "first_name", None))
+        return int(person.id), name
+    raw = _arg_text(context).strip()
+    if raw.lstrip("-").isdigit():
+        return int(raw), None
+    if raw:
+        from services.telegram_user_service import resolve_command_target
+        user, _reason = resolve_command_target(session, update, context,
+                                               "aadminadd")
+        if user is not None and getattr(user, "telegram_id", None):
+            name = (f"@{user.username}" if user.username
+                    else user.first_name)
+            return int(user.telegram_id), name
+        raise AuctionError(f"I do not know {raw} — use their numeric Telegram "
+                           f"id, or reply to one of their messages.")
+    raise AuctionError("Reply to their message, or give their Telegram id or "
+                       "@username.")
+
+
+async def aadminadd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aadminadd 123456789</code> (or reply) — let someone run auctions."""
+    if not await _require_bot_admin(update):
+        return
+    user = update.effective_user
+    session = get_session()
+    try:
+        tg_id, name = _admin_target(session, update, context)
+        row = A.add_auction_admin(session, tg_id, name=name,
+                                  by_tg_id=user.id if user else None)
+        session.commit()
+        label = html.escape(row.name or str(row.tg_id))
+        await _reply(update,
+                     f"👮 <a href=\"tg://user?id={row.tg_id}\">{label}</a> is now "
+                     f"an <b>auction admin</b> — every auction command, and no "
+                     f"other admin command. <code>/adminhelp</code> lists them.")
+    except AuctionError as exc:
+        session.rollback()
+        await _reply(update, f"⚠️ {html.escape(str(exc))}")
+    except Exception:
+        session.rollback()
+        logger.exception("/aadminadd failed")
+        await _reply(update, "⚠️ Something went wrong. Try again.")
+    finally:
+        session.close()
+
+
+async def aadminremove_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aadminremove 123456789</code> (or reply) — take it away again."""
+    if not await _require_bot_admin(update):
+        return
+    session = get_session()
+    try:
+        tg_id, _name = _admin_target(session, update, context)
+        row = A.remove_auction_admin(session, tg_id)
+        session.commit()
+        await _reply(update, f"👮 {html.escape(row.name or str(row.tg_id))} is "
+                             f"no longer an auction admin.")
+    except AuctionError as exc:
+        session.rollback()
+        await _reply(update, f"⚠️ {html.escape(str(exc))}")
+    except Exception:
+        session.rollback()
+        logger.exception("/aadminremove failed")
+        await _reply(update, "⚠️ Something went wrong. Try again.")
+    finally:
+        session.close()
+
+
+async def aadmins_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aadmins</code> — everyone who may run auctions."""
+    if not await _require_admin(update):
+        return
+    session = get_session()
+    try:
+        rows = A.auction_admins(session)
+    finally:
+        session.close()
+    if not rows:
+        await _reply(update, "👮 <b>Auction admins</b>\n<i>None yet — bot admins "
+                             "can always run auctions. Add one with "
+                             "</i><code>/aadminadd</code>.")
+        return
+    lines = [f"👮 <b>Auction admins — {len(rows)}</b>",
+             "<i>Plus every bot admin.</i>", ""]
+    for row in rows:
+        lines.append(f"· {html.escape(row.name or 'Admin')} — "
+                     f"<code>{row.tg_id}</code>")
+    await _reply(update, "\n".join(lines))
