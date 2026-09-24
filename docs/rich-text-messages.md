@@ -35,6 +35,9 @@ player's name is.
 | --- | --- |
 | `/pxi`, `/xi`, `/playingxi` | one `table` block — the four section names (batsmen, keeper, all-rounders, bowlers) are full-width header rows inside it |
 | the `📋 View Bench` button | a collapsed `details` block, replacing `<blockquote expandable>` |
+| the Franchise Auction's pinned board, `/aboard` | headings, a lot `table`, and the purses as a striped `table` — edited in place through `auction_rich.edit`, which treats "not modified" as success and latches rich board edits off for the process if Telegram refuses one |
+| `/asquad`, `/apurse`, `/asets`, `/anextset`, `/anextplayer`, `/asoldlist`, `/aunsoldlist`, `/ainfo` | tables, a numbered `list`, and one collapsed `details` per set |
+| `/adminhelp` | one `details` per section, each a two-column `table`, and a `pre` block of examples |
 
 Everything else in the bot still sends HTML, and nothing forces that to change:
 the two are ordinary sends to different endpoints.
@@ -84,8 +87,14 @@ render when pointing at an older Bot API server.
    as `fallback_text`.
 4. Test that both renderings agree on anything the user types back.
 
-Blocks the API offers that this bot does not use yet: `list` (ordered and
-checkbox lists), `collage` and `slideshow` for grouped media, `pre`,
-`mathematical_expression`, `footer`, `pullquote`, `map`, and
-`sendRichMessageDraft` for streaming a message as it is built — a fit for live
-commentary, which currently edits one message over and over.
+`services/rich_message.py` now also has `pre`, `pullquote`, `list_block`,
+`strikethrough` and `mention` (a `url` node pointing at `tg://user?id=…`),
+first used by the Franchise Auction. The auction's module is
+`services/auction_rich.py`; its `send` is wider than `send_rich_message` in one
+way — any failure of the rich attempt, not only a `TelegramError`, falls through
+to HTML — because an auction announcement must never be lost to a renderer bug.
+
+Blocks the API offers that this bot does not use yet: checkbox lists,
+`collage` and `slideshow` for grouped media, `mathematical_expression`, `map`,
+and `sendRichMessageDraft` for streaming a message as it is built — a fit for
+live commentary, which currently edits one message over and over.

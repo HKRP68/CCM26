@@ -129,14 +129,15 @@
             <input type="text" name="amount" placeholder="+2 or -2 (Cr)" style="width:9rem;">
             <button class="btn btn-ghost" type="submit">🧾 Correct purse</button>
           </form>
-          {% if not f.squad_size %}
-          <form method="POST" onsubmit="return confirm('Remove {{ f.name }}?');">
+          {# A franchise with players can be removed too: they go back into
+             the pool and its opening purse is shared among the rest — the
+             same call as /aremoveteam. #}
+          <form method="POST" onsubmit="return confirm({% if f.squad_size %}'Remove {{ f.name }}? Its {{ f.squad_size }} players go back into the auction and its purse is shared among the other franchises.'{% else %}'Remove {{ f.name }}?'{% endif %});">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="action" value="franchise_delete">
             <input type="hidden" name="franchise_id" value="{{ f.id }}">
             <button class="btn btn-ghost danger" type="submit">Remove</button>
           </form>
-          {% endif %}
         </div>
       </div>
       {% endfor %}

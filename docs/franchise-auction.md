@@ -88,17 +88,24 @@ are excluded before you see them.
 | `/aboard` | anyone | A personal copy of the live board, with quick-bid buttons |
 | `/apurse [franchise]` | anyone | Every purse, max bid and squad count (and RTM cards left) — or one franchise's squad |
 | `/artm yes\|no` | the holder's owner + co-owners | Answer an open Right To Match. One verb for both questions it asks |
+| `/ainfo` | anyone | Where the auction stands, and one button per view below |
+| `/asets` · `/anextset` · `/anextplayer` | anyone | Every set and its state, the next set's players, who is up next |
+| `/asquad [franchise]` | anyone | Your own squad (or any franchise's) as a table, with purse and max bid |
+| `/asoldlist` · `/aunsoldlist` | anyone | Everyone sold, set by set; the ⚡ Unsold / Accelerated set |
 
-Admin: `/auction` (the reference card), `/anew`, `/abind`, `/astart`,
+Admin: `/adminhelp` (the reference card, also `/auction`), `/anew`, `/abind`, `/astart`,
 `/apause`, `/aresume`, `/anext`, `/aextend`, `/asold`, `/aunsold`,
 `/aundobid`, `/awithdraw`, `/atimer`, `/asnipe`, `/agrant`, `/aco`,
 `/apublish`, `/acancel`, plus retention's `/aretlock`, `/aretain`,
 `/aunretain`, RTM's `/artmset`, `/artmcards`, `/artmforce`, `/artmundo`, the
 accelerated round's `/aaccel`, `/aclone` for the next season, and the
 expansion picks' `/apick`, `/apicks`, `/apickset`, `/apickskip` and
-`/apickundo`.
+`/apickundo`, and the room features below: `/apool`, `/anextset <set>`,
+`/asetorder`, `/aaccelmode`, `/aretainforce`, `/aoffers`, `/aretcancel`,
+`/acall`, `/aremoveteam`, and — for bot admins only — `/aadminadd`,
+`/aadminremove`, `/aadmins`.
 
-`/bid`, `/artm`, `/aboard` and `/apurse` are **not** in the group slash menu. Both
+`/bid`, `/artm`, `/aboard`, `/apurse` and the team views are **not** in the group slash menu. Both
 player scopes sit exactly at Telegram's 100-command ceiling and `_clamped`
 drops the tail rather than letting `setMyCommands` reject the whole call, so
 publishing them would cost that many existing player commands their entry. It
@@ -149,6 +156,25 @@ while the season is still in **setup**.
 
 …or the **🔒 Retention** card on the auction's setup page, which is where the
 player search and the purse table live.
+
+### The franchise accepts
+
+`/aretain` does not sign anybody. It posts an **offer** — player, franchise,
+price, which slab it is — with ✅ Accept / ❌ Decline buttons, and only that
+franchise's **owner or a co-owner** can press them. Not another owner, and
+deliberately not a bot admin, for the reason `may_bid_for` gives: this spends
+the franchise's money, and the button exists so that they chose to.
+
+Accepting runs the ordinary `retain()` at the offered price, so every cap
+below still refuses — and says why in the button's alert — at the moment of
+acceptance, against the purse as it is then. An offer with no price takes the
+ladder's slab **when it is accepted**. One offer waits per player; `/aoffers`
+lists them and `/aretcancel` withdraws one. They live in
+`auction_retention_offers`, and nothing is announced until one is accepted —
+the `retained` event is the announcement.
+
+`/aretainforce` (and the setup page's retention form) is the old instant path,
+kept as the admin's override for an owner who agreed in person.
 
 ### A retained player is an ordinary sold lot
 
@@ -382,6 +408,13 @@ queue at once, in the order they were first offered.
 …or the console's ⚡ card, whose tick-boxes bring back a chosen few. Same
 service call either way, so the two surfaces cannot drift.
 
+**It also happens on its own.** When the queue runs dry with players unsold,
+`complete_if_done` re-lists them once as the **⚡ Accelerated** set and the
+auction carries on live, rather than finishing. `accelerated_done` makes it
+once only — a manual `/aaccel go` counts as the round — and whoever the room
+passes on twice is what the auto-fill below hands out. `/aaccelmode off` turns
+the automatic round off for an auction (it is carried into a cloned season).
+
 **They come back at the same base price.** A second chance at the same player
 is not a discount: dropping the floor would quietly re-price every lot the room
 had already judged, and an admin who actually wants that has the lot's own base
@@ -403,6 +436,98 @@ matters. A standing bid cannot survive (`pass_lot` refuses while one stands),
 but a lot bid up into the snipe window *spends* extensions, and if that bid is
 then undone and the lot passed, the spend outlives it. Left alone, the second
 outing would quietly run to a shorter clock than the first.
+
+---
+
+## Sets
+
+A lot's `set_name` groups the pool — "Marquee", "85-90 OVR", "⚡ Accelerated".
+The queue is still plain ascending `lot_no`; choosing which set comes next is a
+**renumbering**. `bring_forward` gives the chosen lots the next numbers after
+every number the season has used, in their own order, and the rest of the queue
+follows them — so no two rows can meet on the `(season_id, lot_no)` unique
+index mid-flush, and `next_queued` never has to learn what a set is.
+
+```text
+/apool 85-90 | Marquee      every base card rated 85–90, best first, as one set
+/apool 70-79                the set is named "70-79 OVR"
+/anextset Marquee           that set comes next (the lot on the block finishes first)
+/anextset 88-92             every queued player rated 88–92 comes next
+/asetorder Marquee, Bowlers the whole queue, set by set; unnamed sets keep their place
+```
+
+`list_sets` reads every set's state back — ✅ done, 🔨 live, ⏭ next, ⏳ queued —
+for `/asets`, `/ainfo`, the console's 🗂 Sets card (with a **Bring next** button
+per set) and the lot card, which names the set its player came from. `/apool`
+takes base cards only unless told `| all`: two editions of one cricketer in a
+pool is a squad with the same man twice.
+
+---
+
+## What the room sees
+
+* **Every player is a new message** — his card, captioned with the lot, the
+  set, the base price and the bid to type — and a **fresh board**, which is the
+  message that gets **pinned**. `AuctionSeason.board_lot_id` is how the sweeper
+  tells a board whose lot has moved on; it is replaced, not edited.
+* Inside a lot the board is **edited** as before, and now carries the
+  quick-bid buttons itself.
+* **Bids are announced**, small: every bid inside one sweep is folded into one
+  line (`💸 Mumbai ₹2.2 Cr → Chennai ₹2.4 Cr leads · Kohli`), and consecutive
+  bid lines are at least `BID_MESSAGE_GAP` (4s) apart — a bid that lands inside
+  the gap waits for the next tick instead of being dropped, and never holds up
+  anything queued behind it. Telegram allows a group about twenty messages a
+  minute; a line per two-second tick would be thirty.
+* SOLD, UNSOLD and RETAINED are announced in richer HTML (a quoted result, the
+  buyer's purse and squad after it); everything else still reads its stored
+  `headline`.
+
+## Removing a franchise
+
+`/aremoveteam Delhi` previews; `/aremoveteam Delhi | confirm` (or the setup
+page's Remove button, whatever the squad) does it:
+
+* every player the side holds — bought, retained, matched, picked — goes back
+  into the pool at the tail, as the set **🔁 Released – Delhi**, with no Right
+  To Match attached (the side that held him is gone);
+* its **whole opening purse** is shared equally among the franchises left, the
+  odd lakh one each to the first few by sort order, as a `correction` row on
+  each ledger — so every purse still equals its ledger;
+* its bids, ledger, open retention offers and the franchise row are deleted
+  **explicitly**, because SQLite only honours `ON DELETE CASCADE` with a pragma
+  this project does not set.
+
+Refused while it holds the standing bid (undo it first, so the room sees who
+dropped out), while a Right To Match is being asked of it, once published, and
+for the last franchise standing.
+
+## Short squads at the end
+
+When the queue is done for good, `autofill_short_squads` runs just before the
+auction is marked complete: round-robin, the smallest squad first, each
+franchise under `min_squad_size` takes the best-rated unsold player that fits —
+the squad cap, the overseas cap, owed roles first when role minimums are set,
+and never a second card of a cricketer it already has (a published league keys
+its players by name, so two Kohlis on one squad would collapse into one row).
+It is **free**: `acquisition = autofill`, `sold_price_lakh = 0`, and a
+zero-amount `autofill` ledger row records the signing without moving the purse.
+One `autofill` event lists who went where. `undo_sale` refuses an auto-filled
+player — there was no sale.
+
+## Auction admins
+
+A bot admin appoints them — `/aadminadd` with a Telegram id, an `@username`
+the bot knows, or as a reply — into `auction_admins`. `is_auction_admin` is
+`is_admin` **or** a row there, and the auction handlers' `_require_admin` is
+the only gate that reads it: an auction admin runs every auction admin command
+and nothing else in the bot, because every other admin check still reads
+`services.admin_ids.is_admin`. They cannot appoint each other, and the website
+console stays behind the web login. `/adminhelp` shows each of them the card;
+only bot admins see the appointing section.
+
+`/acall [message]` tags every owner and co-owner, grouped by franchise, as
+HTML mentions (the form Telegram notifies from), split under the 4096-character
+limit.
 
 ---
 
@@ -600,20 +725,18 @@ they are inside the window, and the clock goes out twice for one bid.
 
 ### What reaches Telegram, and when
 
-**No per-second countdown, and no reply to a successful bid.** Forty bids inside
-one lot would be forty messages into a room that is already reading a live
-board.
+**No per-second countdown, and no reply to a successful bid.** The bidder's
+own acknowledgement is still a **reaction on their message**, and a *refused*
+bid always answers, saying what would have worked instead.
 
-* **New messages** go out for discrete events only — a lot opening, a sale, a
-  pass, a pause. That is two or three per lot: roughly 300 across a 100-lot
-  auction, well inside a group's limit.
-* **Everything else is an edit of one pinned board.** `/bid` does not edit it;
-  the sweeper notices `lot.bid_count != season.board_rendered_bid_count` and
-  performs **at most one edit per two-second tick**, so ten bids inside one tick
-  cost one edit.
-* A bidder's own acknowledgement is a **reaction on their own message** — zero
-  messages. A *refused* bid always answers, and always says what would have
-  worked instead; on a thirty-second clock, "invalid bid" is useless.
+* **New messages** go out for discrete events — a lot opening (the player's
+  card, then a fresh pinned board), a sale, a pass, a pause — and **one short
+  line per burst of bids**, at most one every `BID_MESSAGE_GAP` seconds (see
+  *What the room sees*). Roughly five messages a lot.
+* **Everything else is an edit of the lot's pinned board.** `/bid` does not
+  edit it; the sweeper notices `lot.bid_count != season.board_rendered_bid_count`
+  and performs **at most one edit per two-second tick**, so ten bids inside one
+  tick cost one edit.
 
 Every edit goes through a hardened helper modelled on
 `services.match_broadcast.reveal_toss_result`: `RetryAfter` is honoured, and a
@@ -796,6 +919,8 @@ AuctionLot          one player — the lot that goes on the block AND its result
 AuctionBid          every bid, losing and voided ones included
 AuctionLedgerEntry  every movement of a purse, signed, with the balance after
 AuctionEvent        the permanent log, and the queue the group is announced from
+AuctionRetentionOffer  a retention waiting on the franchise's Accept
+AuctionAdmin        someone a bot admin trusted to run auctions
 ```
 
 Six new tables, so `create_all` builds them. Everything the first release
@@ -851,7 +976,8 @@ Two things were on their way to a third copy each, and both fail silently.
 | File | Role |
 | --- | --- |
 | `services/auction_service.py` | The rules: the pool, base prices, the ledger, validation, the bidding claim, the lot lifecycle, publishing, the renderers. Session-first, **commits nothing**, raises `AuctionError` in plain text; only `render_*` emits HTML. Every clock decision is a pure function taking an injected `now` |
-| `services/auction_scheduler.py` | The two-second sweeper, the pinned board, the hardened edit, and the event drain |
+| `services/auction_scheduler.py` | The two-second sweeper, the pinned board (fresh per lot), the lot card, the bid-line coalescing, the hardened edit, and the event drain |
+| `services/auction_rich.py` | Every auction surface as a Bot API 10.1 rich message beside its HTML twin — board, squad, purses, sets, sold/unsold, `/ainfo`, `/adminhelp` — plus the richer announcements and the shared keyboards |
 | `services/player_query.py` | The one master-player filter, and the one `details_json` |
 | `handlers/auction.py` | `/bid`, `/artm` and every other command, plus the `au_bid_` and `au_rtm_` buttons |
 | `models.py` | The six tables |
@@ -864,6 +990,7 @@ Two things were on their way to a third copy each, and both fail silently.
 | `tests/test_auction_retention.py` | The ladder, the money, every cap, the window, what retention does to the pool and the board, publishing a retained player, and the commands |
 | `tests/test_auction_rtm.py` | The proposal's own Ashwin example end to end, every eligibility gate, all three timeouts, the self-raise suspension from both sides, the card, `undo_rtm`, the two-session races, and the autoflush shapes |
 | `tests/test_auction_expansion.py` | Starting a season from a league, who counts as an expansion side, the snake order as a sequence, every cap a pick obeys, and the rule that a player somebody kept cannot be picked |
+| `tests/test_auction_features.py` | Sets and the queue order, removing a franchise and its purse split, the automatic accelerated round, the free auto-fill and its caps, retention offers and who may answer them, auction admins, `/acall`, every team view, the rich builders, and what the sweeper sends per lot and per burst of bids |
 | `tests/test_auction_season.py` | Cloning: every rule carried (and a guard against the rule list falling behind the model), the field and its owners, the purses and their ledger, what is deliberately left behind, the group handover, and the rename that used to lose every holder |
 
 ---

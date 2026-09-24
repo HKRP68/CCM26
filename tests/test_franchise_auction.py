@@ -613,7 +613,7 @@ class PublishTests(AuctionCase):
         from models import ChallengePlayer
         self.build_pool()
         self.start()
-        self._buy(self.mumbai, 400)
+        bought = self._buy(self.mumbai, 400)
         # Pass the rest so the auction completes.
         while self.season.status == self.A.STATUS_LIVE:
             lot = self.A.current_lot(self.session, self.season)
@@ -631,7 +631,12 @@ class PublishTests(AuctionCase):
         rows = (self.session.query(ChallengePlayer)
                 .join(ChallengeTeam, ChallengePlayer.team_id == ChallengeTeam.id)
                 .filter(ChallengeTeam.league_id == league.id,
-                        ChallengePlayer.name == "Virat Kohli").all())
+                        ChallengePlayer.name == "Virat Kohli",
+                        # By card, not name: the Icon edition went unsold and
+                        # was auto-filled to a short squad, so the league
+                        # holds two Virat Kohlis.
+                        ChallengePlayer.source_player_id == bought.player_id)
+                .all())
         self.assertTrue(rows, "the bought player should reach the league")
         blob = json.loads(rows[0].details_json)
         for key in ("source_player_id", "name", "version", "country",
@@ -678,7 +683,7 @@ class PublishTests(AuctionCase):
         from models import ChallengePlayer
         self.build_pool()
         self.start()
-        self._buy(self.mumbai, 400)
+        bought = self._buy(self.mumbai, 400)
         while self.season.status == self.A.STATUS_LIVE:
             lot = self.A.current_lot(self.session, self.season)
             if lot is None:
@@ -693,7 +698,12 @@ class PublishTests(AuctionCase):
         row = (self.session.query(ChallengePlayer)
                .join(ChallengeTeam, ChallengePlayer.team_id == ChallengeTeam.id)
                .filter(ChallengeTeam.league_id == league.id,
-                       ChallengePlayer.name == "Virat Kohli").first())
+                       ChallengePlayer.name == "Virat Kohli",
+                       # By card, not name: an unsold second edition of
+                       # the same cricketer can be auto-filled to the other
+                       # squad, so the name alone is no longer unique.
+                       ChallengePlayer.source_player_id == bought.player_id)
+               .first())
         self.assertEqual(400, json.loads(row.details_json)["auction_price_lakh"])
 
 

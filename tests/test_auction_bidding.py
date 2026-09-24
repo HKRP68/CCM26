@@ -952,10 +952,11 @@ class EventLogTests(AuctionCase):
         self.session.commit()
         self.assertEqual([], self.A.pending_events(self.session, self.season))
 
-    def test_bids_are_reflected_on_the_board_rather_than_announced(self):
+    def test_bids_are_announced_but_coalesced_rather_than_one_each(self):
         from services import auction_scheduler as S
-        self.assertIn("bid", S.SILENT_KINDS,
-                      "announcing every bid would flood the group")
+        self.assertNotIn("bid", S.SILENT_KINDS)
+        self.assertIn("bid", S.COALESCED_KINDS,
+                      "one message per bid would flood the group")
 
 
 class FakeBot:
@@ -1117,10 +1118,19 @@ if __name__ == "__main__":
 # ══════════════════════════════════════════════════════════════════════
 
 class AcceleratedRoundTests(AuctionCase):
-    """Everything the room passed on, back in the queue at once."""
+    """Everything the room passed on, back in the queue at once.
+
+    The MANUAL round: the automatic one is switched off, and there is no
+    minimum squad for the end-of-auction auto-fill to top up — both have their
+    own tests in tests/test_auction_features.py.
+    """
+
+    min_squad = 0
 
     def setUp(self):
         super().setUp()
+        self.season.auto_accelerated = 0
+        self.session.commit()
         self.build_pool()
         self.lot = self.start()
         self.session.commit()

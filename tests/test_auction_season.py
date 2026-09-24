@@ -207,6 +207,7 @@ class RuleCarryTests(SeasonCase):
             # State from a run
             "league_id", "published_at", "board_message_id",
             "announced_event_id", "board_rendered_bid_count",
+            "board_lot_id", "accelerated_done",
             "retention_locked_at", "retention_deadline_at",
             # Which season/league this one follows — set by the clone itself,
             # never copied from the source.

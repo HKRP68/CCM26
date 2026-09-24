@@ -44,9 +44,9 @@ from html import escape
 from sqlalchemy import and_, case, func, or_
 
 from models import (
-    AuctionBid, AuctionEvent, AuctionFranchise, AuctionLedgerEntry, AuctionLot,
-    AuctionSeason, ChallengeLeague, ChallengeMode, ChallengePlayer,
-    ChallengeTeam,
+    AuctionAdmin, AuctionBid, AuctionEvent, AuctionFranchise,
+    AuctionLedgerEntry, AuctionLot, AuctionRetentionOffer, AuctionSeason,
+    ChallengeLeague, ChallengeMode, ChallengePlayer, ChallengeTeam,
 )
 from services import player_query
 
@@ -113,6 +113,9 @@ LEDGER_CORRECTION = "correction"
 LEDGER_RETENTION = "retention"   # phase 2
 LEDGER_RTM = "rtm"               # phase 2
 LEDGER_DRAFT = "draft"           # an expansion side's pre-auction pick
+# A short squad topped up for free from the unsold pile at the very end. A
+# zero-amount row, kept so the ledger still records every signing.
+LEDGER_AUTOFILL = "autofill"
 
 # ── Money ─────────────────────────────────────────────────────────────
 LAKH_PER_CRORE = 100
@@ -145,6 +148,10 @@ ACQ_RTM = "rtm"          # phase 2b
 # expansion pick is a franchise taking somebody nobody kept, and the two
 # answer different questions about how a squad was assembled.
 ACQ_DRAFTED = "drafted"
+# Handed over for nothing when the auction finished with a franchise still
+# under the minimum squad and players left unsold. Not a bid, not a
+# retention: its own kind, so a squad can say how it was completed.
+ACQ_AUTOFILL = "autofill"
 
 # Signed before the auction opened: no bid, no clock, no room watching. What
 # these have in common is what ``pool_counts`` needs — they are not auction
@@ -451,6 +458,8 @@ SEASON_RULE_FIELDS = (
     "rtm_enabled", "rtm_per_team", "rtm_window_seconds", "rtm_extra_lakh",
     # Expansion teams
     "expansion_picks",
+    # Whether unsold players get their accelerated round on their own
+    "auto_accelerated",
 )
 
 # What a franchise takes with it into the next season: who it is and who runs
@@ -1882,7 +1891,8 @@ def unsold(session, season_id):
             .order_by(AuctionLot.lot_no.asc()).all())
 
 
-def relist_all(session, season, *, lot_ids=None, by_tg_id=None):
+def relist_all(session, season, *, lot_ids=None, by_tg_id=None,
+               set_name=None, automatic=False):
     """The accelerated round: every unsold player back into the queue at once.
 
     Re-listing one at a time is the same work done N times, and by the time it
@@ -1897,6 +1907,12 @@ def relist_all(session, season, *, lot_ids=None, by_tg_id=None):
     ``lot_ids`` narrows it to a chosen few, which is what the console's
     tick-boxes send — the same call either way, so the two surfaces cannot
     drift.
+
+    ``set_name`` files every re-listed player under one set — the automatic
+    round uses the ⚡ Accelerated set, so ``/asets`` shows it as a set of its
+    own. ``automatic`` is the queue running dry by itself (see
+    ``complete_if_done``) rather than an admin asking: it words the
+    announcement for a room that did not see it coming.
     """
     if season.status == STATUS_CANCELLED:
         raise AuctionError("This auction was cancelled.")
@@ -1917,6 +1933,8 @@ def relist_all(session, season, *, lot_ids=None, by_tg_id=None):
     for offset, lot in enumerate(rows):
         lot.status = LOT_QUEUED
         lot.lot_no = next_no + offset
+        if set_name:
+            lot.set_name = set_name[:40]
         lot.current_bid_lakh = None
         lot.current_bidder_id = None
         lot.deadline_at = None
@@ -1934,6 +1952,10 @@ def relist_all(session, season, *, lot_ids=None, by_tg_id=None):
     if reopened:
         season.status = STATUS_PAUSED
         season.current_lot_id = None
+    # One accelerated round is what the automatic path promises; an admin who
+    # runs one by hand has had it, so the queue running dry afterwards
+    # finishes the auction instead of starting another.
+    season.accelerated_done = 1
 
     # Flushed before the announcement counts anything: this session is
     # autoflush=False and pool_counts queries the very rows just changed.
@@ -1943,11 +1965,18 @@ def relist_all(session, season, *, lot_ids=None, by_tg_id=None):
             "ready." if reopened else "")
     published = (" Squads were already published, so re-publish when this "
                  "round is done." if season.published_at is not None else "")
-    log_event(session, season, "relist_all",
-              f"⚡ <b>Accelerated round</b> — {len(rows)} unsold "
-              f"{'player goes' if len(rows) == 1 else 'players go'} back into "
-              f"the pool.{note}{published}",
-              by_tg_id=by_tg_id, by_admin=True,
+    if automatic:
+        headline = (f"⚡ <b>Accelerated round</b> — the main pool is done. "
+                    f"{len(rows)} unsold "
+                    f"{'player comes' if len(rows) == 1 else 'players come'} "
+                    f"back as the <b>{_e(set_name or ACCELERATED_SET)}</b> set, "
+                    f"at the same base price.")
+    else:
+        headline = (f"⚡ <b>Accelerated round</b> — {len(rows)} unsold "
+                    f"{'player goes' if len(rows) == 1 else 'players go'} back "
+                    f"into the pool.{note}{published}")
+    log_event(session, season, "relist_all", headline,
+              by_tg_id=by_tg_id, by_admin=not automatic,
               detail={"count": len(rows),
                       "lot_ids": [lot.id for lot in rows]})
     return rows
@@ -2045,8 +2074,9 @@ def open_lot(session, season, lot, *, now=None):
     log_event(session, season, "lot_opened",
               f"🔨 Lot {lot.lot_no}: {_e(lot.name)} ({lot.rating} OVR, "
               f"{_e(lot.category)}) — base "
-              f"{render_money(lot.base_price_lakh, season.currency_label)}.",
-              lot=lot)
+              f"{render_money(lot.base_price_lakh, season.currency_label)} · "
+              f"{_e(set_label(lot))}.",
+              lot=lot, detail={"set": set_label(lot)})
     return lot
 
 
@@ -2076,6 +2106,18 @@ def complete_if_done(session, season):
         return None
     if season.status in (STATUS_COMPLETED, STATUS_CANCELLED):
         return None
+    # The main pool is done but players went unsold: they get one more go, as
+    # the Accelerated set, before anything is final. Once only — the players
+    # the room passes on twice are what the auto-fill below hands out.
+    if (_as_int(getattr(season, "auto_accelerated", 1), 1)
+            and not _as_int(getattr(season, "accelerated_done", 0), 0)
+            and unsold(session, season.id)):
+        relist_all(session, season, set_name=ACCELERATED_SET, automatic=True)
+        session.flush()
+        return None
+    # Squads still under the minimum are topped up for free from whatever is
+    # left unsold, inside the squad and overseas caps.
+    autofill_short_squads(session, season)
     season.status = STATUS_COMPLETED
     season.current_lot_id = None
     log_event(session, season, "season_completed",
@@ -2734,6 +2776,9 @@ def undo_sale(session, season, lot, *, now=None, by_tg_id=None):
         raise AuctionError(f"{lot.name} was an expansion pick, not bought. "
                            f"Undo the pick instead — it gives the pick back "
                            f"as well as the money.")
+    if lot.acquisition == ACQ_AUTOFILL:
+        raise AuctionError(f"{lot.name} was handed to a short squad at the "
+                           f"end, not bought — there is no sale to undo.")
     if (lot.acquisition or ACQ_AUCTION) != ACQ_AUCTION:
         raise AuctionError(f"{lot.name} was retained, not bought. Release the "
                            f"retention instead (/aunretain).")
@@ -3404,6 +3449,713 @@ def publish_to_league(session, season, *, league_name=None):
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Sets — which group of players comes to the block next
+#
+# ``AuctionLot.set_name`` groups the pool ("Marquee", "85-90 OVR", …) and the
+# queue is still simply ascending ``lot_no``. Choosing which set comes next is
+# therefore a renumbering: the chosen lots get the next numbers after
+# everything that exists, in their existing relative order, and the rest of
+# the queue follows them. Nothing else in the feature has to learn what a set
+# is — ``next_queued`` keeps reading the lowest number.
+# ──────────────────────────────────────────────────────────────────────
+
+# Lots nobody filed under a set.
+DEFAULT_SET = "Main pool"
+# Where the automatic accelerated round files the players it brings back.
+ACCELERATED_SET = "⚡ Accelerated"
+# How /asets and /aunsoldlist label players passed on and not yet re-listed.
+UNSOLD_SET = "⚡ Unsold / Accelerated"
+# A removed franchise's players go back into the pool under this.
+RELEASED_SET_PREFIX = "🔁 Released"
+
+
+def set_label(lot):
+    return (lot.set_name or "").strip() or DEFAULT_SET
+
+
+def parse_rating_range(text):
+    """``"85-90"`` / ``"85 to 90"`` / ``"85+"`` / ``"85"`` → ``(low, high)``.
+
+    Returns None when the text is not a rating range at all, so a caller can
+    fall back to treating it as a set name. A range typed backwards is a slip,
+    not a request for nobody.
+    """
+    import re
+    raw = (text or "").strip().lower().replace("ovr", "").strip()
+    if not raw:
+        return None
+    match = re.fullmatch(r"(\d{1,3})\s*(?:-|–|to)\s*(\d{1,3})", raw)
+    if match:
+        low, high = int(match.group(1)), int(match.group(2))
+        return (min(low, high), max(low, high))
+    match = re.fullmatch(r"(\d{1,3})\s*\+", raw)
+    if match:
+        return (int(match.group(1)), 999)
+    if re.fullmatch(r"\d{1,3}", raw):
+        return (int(raw), int(raw))
+    return None
+
+
+def range_set_name(low, high):
+    if high >= 999:
+        return f"{low}+ OVR"
+    if low == high:
+        return f"{low} OVR"
+    return f"{low}-{high} OVR"
+
+
+def add_rating_range_to_pool(session, season, low, high, *, set_name=None,
+                             editions=False):
+    """Every catalogue card rated ``low``–``high`` into the pool, as one set.
+
+    Best first, which is the order the room expects a set to be read out in.
+    ``editions`` includes special editions of a cricketer as well as his base
+    card; off by default, because two cards of one man in the same pool is a
+    squad with the same player twice. Returns ``(added, skipped, set_name)``.
+    """
+    filters = {"rating_min": low, "rating_max": high}
+    if not editions:
+        filters["version_mode"] = "base"
+    query = player_query.master_player_query(session, filters)
+    players = player_query.ordered(query).all()
+    if not players:
+        raise AuctionError(f"No active card is rated {range_set_name(low, high)}.")
+    name = (set_name or "").strip() or range_set_name(low, high)
+    added, skipped = add_players_to_pool(session, season, players,
+                                         set_name=name[:40])
+    return added, skipped, name[:40]
+
+
+def list_sets(session, season):
+    """Every set in the order the room will meet it, with its counts.
+
+    Each entry is a dict: ``name``, ``queued``, ``sold``, ``unsold``,
+    ``withdrawn``, ``total`` and ``state`` — ``done`` (nothing left in it),
+    ``live`` (the lot on the block is from it), ``next`` (the first set still
+    waiting after the live one) or ``queued``. Sets that are finished come
+    first, in the order they ran; the live one; then the queue, in queue order.
+    """
+    rows = lots(session, season.id)
+    live = current_lot(session, season)
+    live_name = set_label(live) if live is not None else None
+    sets = {}
+    for lot in rows:
+        name = set_label(lot)
+        entry = sets.setdefault(name, {
+            "name": name, "queued": 0, "sold": 0, "unsold": 0, "withdrawn": 0,
+            "total": 0, "first_queued": None, "first_any": lot.lot_no})
+        entry["total"] += 1
+        entry["first_any"] = min(entry["first_any"], lot.lot_no)
+        if lot.status == LOT_QUEUED:
+            entry["queued"] += 1
+            if entry["first_queued"] is None or lot.lot_no < entry["first_queued"]:
+                entry["first_queued"] = lot.lot_no
+        elif lot.status == LOT_SOLD:
+            entry["sold"] += 1
+        elif lot.status == LOT_UNSOLD:
+            entry["unsold"] += 1
+        elif lot.status == LOT_WITHDRAWN:
+            entry["withdrawn"] += 1
+
+    def order(entry):
+        if entry["name"] == live_name:
+            return (1, 0)
+        if entry["queued"]:
+            return (2, entry["first_queued"])
+        return (0, entry["first_any"])
+
+    ordered_sets = sorted(sets.values(), key=order)
+    next_marked = False
+    for entry in ordered_sets:
+        if entry["name"] == live_name:
+            entry["state"] = "live"
+        elif entry["queued"] and not next_marked:
+            entry["state"] = "next"
+            next_marked = True
+        elif entry["queued"]:
+            entry["state"] = "queued"
+        else:
+            entry["state"] = "done"
+    return ordered_sets
+
+
+def next_set(session, season):
+    """The first set still waiting behind the live one, or None."""
+    for entry in list_sets(session, season):
+        if entry["state"] == "next":
+            return entry
+    return None
+
+
+def queued_lots(session, season, *, set_name=None, limit=None):
+    query = (session.query(AuctionLot)
+             .filter(AuctionLot.season_id == season.id,
+                     AuctionLot.status == LOT_QUEUED)
+             .order_by(AuctionLot.lot_no.asc()))
+    rows = query.all()
+    if set_name is not None:
+        rows = [lot for lot in rows if set_label(lot) == set_name]
+    return rows[:limit] if limit else rows
+
+
+def _match_set(session, season, text):
+    """``(label, queued lots)`` for what somebody typed: a set or a range.
+
+    A rating range picks queued players by rating whatever set they are in; a
+    name matches a set exactly, then by a unique prefix. It never guesses
+    between two.
+    """
+    queued = queued_lots(session, season)
+    if not queued:
+        raise AuctionError("Nothing is waiting in the queue.")
+    band = parse_rating_range(text)
+    if band is not None:
+        low, high = band
+        picked = [lot for lot in queued if low <= int(lot.rating or 0) <= high]
+        if not picked:
+            raise AuctionError(f"Nobody rated {range_set_name(low, high)} is "
+                               f"waiting in the queue.")
+        return range_set_name(low, high), picked
+    wanted = (text or "").strip().lower()
+    if wanted in ("unsold", "accelerated", "accel"):
+        wanted = ACCELERATED_SET.lower()
+    names = []
+    for lot in queued:
+        name = set_label(lot)
+        if name not in names:
+            names.append(name)
+    exact = [n for n in names if n.lower() == wanted]
+    if not exact:
+        exact = [n for n in names if n.lower().startswith(wanted)]
+    if not exact:
+        exact = [n for n in names if wanted and wanted in n.lower()]
+    if not exact:
+        raise AuctionError(f"No set called “{text}” is waiting. Queued sets: "
+                           + ", ".join(names[:8]))
+    if len(exact) > 1:
+        raise AuctionError("That could be " + ", ".join(exact[:5])
+                           + " — type more of the name.")
+    name = exact[0]
+    return name, [lot for lot in queued if set_label(lot) == name]
+
+
+def _requeue(session, season, front):
+    """Renumber the queue so ``front`` comes next, everything else after it.
+
+    New numbers are all above every number the season has ever used, so no
+    two rows can meet on the ``(season_id, lot_no)`` unique index mid-flush.
+    """
+    queued = queued_lots(session, season)
+    chosen = {lot.id for lot in front}
+    order = list(front) + [lot for lot in queued if lot.id not in chosen]
+    base = _next_lot_no(session, season.id)
+    for offset, lot in enumerate(order):
+        lot.lot_no = base + offset
+    session.flush()
+    return order
+
+
+def bring_forward(session, season, text, *, by_tg_id=None):
+    """Make a set — or every queued player in a rating range — come next.
+
+    Returns ``(label, lots moved)``. The lot on the block is untouched: this
+    reorders what is waiting, so the chosen set opens as soon as the current
+    lot resolves.
+    """
+    if season.status in (STATUS_COMPLETED, STATUS_CANCELLED):
+        raise AuctionError(f"This auction is {season.status}.")
+    label, picked = _match_set(session, season, text)
+    _requeue(session, season, picked)
+    log_event(session, season, "set_queued",
+              f"⏭ Next up: the <b>{_e(label)}</b> set — {len(picked)} "
+              f"{'player' if len(picked) == 1 else 'players'}.",
+              by_tg_id=by_tg_id, by_admin=True,
+              detail={"set": label, "count": len(picked)})
+    return label, picked
+
+
+def set_order(session, season, names, *, by_tg_id=None):
+    """Order the whole queue by set: ``names`` first, in that order.
+
+    Any queued set not named keeps its place behind them. Returns the labels
+    in the order they will run.
+    """
+    if season.status in (STATUS_COMPLETED, STATUS_CANCELLED):
+        raise AuctionError(f"This auction is {season.status}.")
+    names = [n.strip() for n in names or [] if n and n.strip()]
+    if not names:
+        raise AuctionError("Name the sets in the order they should run, "
+                           "separated by commas.")
+    front, labels, seen = [], [], set()
+    for text in names:
+        label, picked = _match_set(session, season, text)
+        fresh = [lot for lot in picked if lot.id not in seen]
+        seen.update(lot.id for lot in fresh)
+        front.extend(fresh)
+        labels.append(label)
+    _requeue(session, season, front)
+    log_event(session, season, "set_order",
+              "🗂 Set order: " + " → ".join(f"<b>{_e(l)}</b>" for l in labels),
+              by_tg_id=by_tg_id, by_admin=True, detail={"sets": labels})
+    return labels
+
+
+def sold_lots(session, season_id):
+    """Every player on a squad, in the order they were signed."""
+    return (session.query(AuctionLot)
+            .filter(AuctionLot.season_id == season_id,
+                    AuctionLot.status == LOT_SOLD)
+            .order_by(AuctionLot.sold_at.asc(), AuctionLot.lot_no.asc()).all())
+
+
+def acquisition_mark(lot):
+    """The mark after a squad line, with its leading space — or nothing."""
+    mark = acquisition_icon(lot)
+    return f" {mark}" if mark else ""
+
+
+def acquisition_icon(lot):
+    return {ACQ_RETAINED: "🔒", ACQ_RTM: "🪪", ACQ_DRAFTED: "🆕",
+            ACQ_AUTOFILL: "🎁"}.get(lot.acquisition or ACQ_AUCTION, "")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Removing a franchise
+# ──────────────────────────────────────────────────────────────────────
+
+def removal_preview(session, season, franchise):
+    """What removing this franchise would do, without doing it."""
+    others = [f for f in franchises(session, season.id) if f.id != franchise.id]
+    pot = int(franchise.purse_total_lakh or 0)
+    share = pot // len(others) if others else 0
+    return {"players": squad(session, franchise.id), "others": others,
+            "pot": pot, "share": share}
+
+
+def remove_franchise(session, season, franchise, *, by_tg_id=None):
+    """Take a franchise out of the auction, mid-way or before it starts.
+
+    * Every player it holds — bought, retained, matched or picked — goes back
+      into the pool at the end of the queue, in a set of its own, at his base
+      price. None of them carries a Right To Match: the side that held him no
+      longer exists.
+    * Its whole **opening purse** is shared equally among the franchises that
+      remain (any odd lakh go one each to the first few, by sort order), as a
+      ``correction`` row on each ledger — so every purse still equals its
+      ledger, and the reason sits beside the money.
+    * Its bids, ledger, open retention offers and the franchise itself are
+      deleted, explicitly rather than by relying on ``ON DELETE CASCADE``,
+      which SQLite only honours with a pragma this project does not set.
+
+    Refused while it holds the standing bid on the block (undo the bid first,
+    so the room sees who drops out), while a Right To Match is being asked of
+    it, once squads are published, and for the last franchise standing.
+    Returns ``(released lots, {franchise: share})``.
+    """
+    if season.status == STATUS_CANCELLED:
+        raise AuctionError("This auction was cancelled.")
+    if season.published_at is not None:
+        raise AuctionError("This auction has been published — its squads are "
+                           "already a league. Remove the team there instead.")
+    field = franchises(session, season.id)
+    others = [f for f in field if f.id != franchise.id]
+    if not others:
+        raise AuctionError(f"{franchise.name} is the only franchise left — "
+                           f"cancel the auction instead.")
+    live = current_lot(session, season)
+    if live is not None and live.current_bidder_id == franchise.id:
+        raise AuctionError(
+            f"{franchise.name} holds the standing bid on {live.name}. Undo it "
+            f"first with /aundobid, then remove the franchise.")
+    if (live is not None and live.status == LOT_RTM_OFFERED
+            and live.previous_franchise_id == franchise.id):
+        raise AuctionError(f"{franchise.name} is being asked a Right To Match "
+                           f"on {live.name}. Settle it first (/artmforce).")
+
+    symbol = season.currency_label or "₹"
+    name = franchise.name
+    held = squad(session, franchise.id)
+    label = f"{RELEASED_SET_PREFIX} – {name}"[:40]
+    base = _next_lot_no(session, season.id)
+    for offset, lot in enumerate(held):
+        lot.status = LOT_QUEUED
+        lot.lot_no = base + offset
+        lot.set_name = label
+        lot.acquisition = ACQ_AUCTION
+        lot.sold_to_id = None
+        lot.sold_price_lakh = None
+        lot.sold_at = None
+        lot.current_bid_lakh = None
+        lot.current_bidder_id = None
+        lot.deadline_at = None
+        lot.going_stage = 0
+        lot.extensions_used = 0
+        lot.rtm_stage = None
+        lot.rtm_base_bid_lakh = None
+        lot.rtm_matched_by_id = None
+    # Nobody may exercise a Right To Match on behalf of a side that is gone.
+    (session.query(AuctionLot)
+     .filter(AuctionLot.season_id == season.id,
+             AuctionLot.previous_franchise_id == franchise.id)
+     .update({"previous_franchise_id": None}, synchronize_session=False))
+    (session.query(AuctionLot)
+     .filter(AuctionLot.season_id == season.id,
+             AuctionLot.current_bidder_id == franchise.id)
+     .update({"current_bidder_id": None}, synchronize_session=False))
+    session.flush()
+
+    # The purse, shared out. One conditional-free UPDATE per franchise: these
+    # only ever ADD money, so there is no floor for a race to break.
+    pot = int(franchise.purse_total_lakh or 0)
+    share, odd = divmod(pot, len(others))
+    shares = {}
+    for index, other in enumerate(others):
+        amount = share + (1 if index < odd else 0)
+        if amount <= 0:
+            continue
+        (session.query(AuctionFranchise)
+         .filter(AuctionFranchise.id == other.id)
+         .update({"purse_total_lakh": AuctionFranchise.purse_total_lakh + amount,
+                  "purse_remaining_lakh":
+                  AuctionFranchise.purse_remaining_lakh + amount},
+                 synchronize_session=False))
+        shares[other.id] = amount
+    session.flush()
+    session.expire_all()
+    for other in others:
+        amount = shares.get(other.id)
+        if not amount:
+            continue
+        fresh = (session.query(AuctionFranchise)
+                 .filter(AuctionFranchise.id == other.id).first())
+        _ledger(session, fresh, LEDGER_CORRECTION, amount,
+                note=f"Redistributed from {name}", by_tg_id=by_tg_id)
+
+    # Explicit, because SQLite ignores ON DELETE without a pragma.
+    session.query(AuctionBid).filter(
+        AuctionBid.franchise_id == franchise.id).delete(synchronize_session=False)
+    session.query(AuctionLedgerEntry).filter(
+        AuctionLedgerEntry.franchise_id == franchise.id).delete(
+            synchronize_session=False)
+    session.query(AuctionRetentionOffer).filter(
+        AuctionRetentionOffer.franchise_id == franchise.id).delete(
+            synchronize_session=False)
+    session.query(AuctionEvent).filter(
+        AuctionEvent.franchise_id == franchise.id).update(
+            {"franchise_id": None}, synchronize_session=False)
+    session.query(AuctionFranchise).filter(
+        AuctionFranchise.id == franchise.id).delete(synchronize_session=False)
+    session.flush()
+    session.expire_all()
+
+    each = render_money(share, symbol)
+    log_event(session, season, "franchise_removed",
+              f"🚪 <b>{_e(name)}</b> have left the auction. "
+              f"{len(held)} {'player goes' if len(held) == 1 else 'players go'} "
+              f"back into the pool, and their "
+              f"{render_money(pot, symbol)} purse is shared out — "
+              f"{each} to each of the {len(others)} franchises left.",
+              by_tg_id=by_tg_id, by_admin=True,
+              detail={"name": name, "released": len(held), "pot_lakh": pot,
+                      "shares": {str(k): v for k, v in shares.items()}})
+    released = (session.query(AuctionLot)
+                .filter(AuctionLot.id.in_([lot.id for lot in held]))
+                .order_by(AuctionLot.lot_no.asc()).all()) if held else []
+    return released, shares
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Topping up short squads at the end
+# ──────────────────────────────────────────────────────────────────────
+
+def autofill_short_squads(session, season, *, now=None):
+    """Hand unsold players, free, to franchises still under the minimum squad.
+
+    Runs once the queue is empty for good — after the accelerated round — so
+    it only ever deals in players the whole room has already passed on twice.
+    Round-robin, the smallest squad choosing first, each taking the
+    best-rated player left that fits: the squad cap, the overseas cap, never
+    a second card of a cricketer the squad already has (a published league
+    keys its players by name, so the two would collapse into one row), and —
+    when role minimums are set — a role the squad still owes before anything
+    else. Stops when nobody is short or nothing left fits.
+
+    Free, because the rule is "given to that team": a zero-amount ledger row
+    records the signing, and the purse is not touched. Returns
+    ``[(franchise name, lot)]`` in the order they were handed out.
+    """
+    now = now or datetime.utcnow()
+    minimum = _as_int(season.min_squad_size, 0)
+    maximum = _as_int(season.max_squad_size, 0)
+    if minimum <= 0:
+        return []
+    pool = (session.query(AuctionLot)
+            .filter(AuctionLot.season_id == season.id,
+                    AuctionLot.status == LOT_UNSOLD)
+            .order_by(AuctionLot.rating.desc(), AuctionLot.lot_no.asc()).all())
+    if not pool:
+        return []
+    field = franchises(session, season.id)
+    overseas_cap = max(0, _as_int(season.max_overseas, 0))
+    overseas = {f.id: overseas_count(session, f.id) for f in field}
+    roles = {f.id: role_counts(session, f.id) for f in field}
+    names = {f.id: {(lot.name or "").strip().lower()
+                    for lot in squad(session, f.id)} for f in field}
+    needs = role_minimums(season)
+    given = []
+
+    while pool:
+        short = sorted((f for f in field
+                        if int(f.squad_size or 0) < minimum
+                        and int(f.squad_size or 0) < maximum),
+                       key=lambda f: (int(f.squad_size or 0), f.sort_order or 0,
+                                      f.name or ""))
+        if not short:
+            break
+        progressed = False
+        for franchise in short:
+            owed = {role for role, need in needs.items()
+                    if roles[franchise.id].get(role, 0) < need}
+
+            def fits(lot):
+                if (lot.name or "").strip().lower() in names[franchise.id]:
+                    return False
+                return not (lot.is_overseas
+                            and overseas[franchise.id] + 1 > overseas_cap)
+
+            candidates = [lot for lot in pool if fits(lot)]
+            if owed:
+                candidates.sort(key=lambda lot: 0 if lot.category in owed else 1)
+            if not candidates:
+                continue
+            lot = candidates[0]
+            pool.remove(lot)
+            lot.status = LOT_SOLD
+            lot.acquisition = ACQ_AUTOFILL
+            lot.sold_to_id = franchise.id
+            lot.sold_price_lakh = 0
+            lot.sold_at = now
+            lot.current_bid_lakh = None
+            lot.current_bidder_id = None
+            franchise.squad_size = int(franchise.squad_size or 0) + 1
+            names[franchise.id].add((lot.name or "").strip().lower())
+            if lot.is_overseas:
+                overseas[franchise.id] += 1
+            roles[franchise.id][lot.category] = roles[franchise.id].get(lot.category, 0) + 1
+            session.flush()
+            _ledger(session, franchise, LEDGER_AUTOFILL, 0, lot=lot,
+                    note=f"Auto-filled: {lot.name}")
+            given.append((franchise.name, lot))
+            progressed = True
+        if not progressed:
+            break
+
+    if given:
+        by_team = {}
+        for team, lot in given:
+            by_team.setdefault(team, []).append(lot.name)
+        summary = "; ".join(f"<b>{_e(team)}</b> ← {len(names)}"
+                            for team, names in by_team.items())
+        log_event(session, season, "autofill",
+                  f"🎁 Short squads topped up from the unsold players, free: "
+                  f"{summary}."[:300],
+                  detail={team: names for team, names in by_team.items()})
+    session.flush()
+    return given
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Retention offers — the admin proposes, the franchise accepts
+# ──────────────────────────────────────────────────────────────────────
+
+OFFER_PENDING = "pending"
+OFFER_ACCEPTED = "accepted"
+OFFER_DECLINED = "declined"
+OFFER_CANCELLED = "cancelled"
+
+
+def offer_retention(session, season, franchise, player, price_lakh=None, *,
+                    by_tg_id=None, chat_id=None):
+    """Propose keeping ``player`` for ``franchise``. Nothing is signed yet.
+
+    The cheap refusals — the window, the count, a player already kept or
+    already offered — are checked now so an admin is not left waiting on an
+    offer that could never be accepted. Everything that depends on money is
+    checked again, for real, by ``retain()`` when the franchise presses
+    Accept, because the purse may well have moved in between.
+    """
+    if season.status != STATUS_SETUP:
+        raise AuctionError("Retention happens before the auction opens — this "
+                           "one is " + str(season.status) + ".")
+    if retention_locked(season):
+        raise AuctionError("Retention is closed for this auction.")
+    left = retention_seconds_left(season)
+    if left is not None and left <= 0:
+        raise AuctionError("The retention deadline has passed.")
+    if not retention_configured(season):
+        raise AuctionError("This auction allows no retentions — set a maximum "
+                           "first.")
+    if int(franchise.retained_count or 0) >= _as_int(season.max_retentions, 0):
+        raise AuctionError(f"{franchise.name} has already retained "
+                           f"{int(franchise.retained_count or 0)}, which is "
+                           f"the maximum.")
+    lot = (session.query(AuctionLot)
+           .filter(AuctionLot.season_id == season.id,
+                   AuctionLot.player_id == player.id).first())
+    if lot is not None and lot.status != LOT_QUEUED:
+        raise AuctionError(f"{lot.name} is already {lot.status} in this "
+                           f"auction.")
+    clash = (session.query(AuctionRetentionOffer)
+             .filter(AuctionRetentionOffer.season_id == season.id,
+                     AuctionRetentionOffer.player_id == player.id,
+                     AuctionRetentionOffer.status == OFFER_PENDING).first())
+    if clash is not None:
+        raise AuctionError(f"{player.name} already has a retention offer "
+                           f"waiting. Withdraw it with /aretcancel first.")
+    price = None if price_lakh is None else _as_int(price_lakh, -1)
+    if price is not None and price < 0:
+        raise AuctionError("A retention price cannot be negative.")
+    offer = AuctionRetentionOffer(
+        season_id=season.id, franchise_id=franchise.id, player_id=player.id,
+        player_name=(player.name or "")[:150], price_lakh=price,
+        status=OFFER_PENDING, offered_by_tg_id=by_tg_id, chat_id=chat_id)
+    session.add(offer)
+    session.flush()
+    return offer
+
+
+def offer_price(season, franchise, offer):
+    """What accepting this offer would cost right now."""
+    if offer.price_lakh is not None:
+        return int(offer.price_lakh)
+    return retention_price_for(season, int(franchise.retained_count or 0) + 1)
+
+
+def retention_offer(session, offer_id):
+    return (session.query(AuctionRetentionOffer)
+            .filter(AuctionRetentionOffer.id == int(offer_id)).first())
+
+
+def pending_retention_offers(session, season_id):
+    return (session.query(AuctionRetentionOffer)
+            .filter(AuctionRetentionOffer.season_id == season_id,
+                    AuctionRetentionOffer.status == OFFER_PENDING)
+            .order_by(AuctionRetentionOffer.id.asc()).all())
+
+
+def answer_retention_offer(session, season, offer, tg_id, accept, *, now=None):
+    """The franchise's answer. Returns the retained lot, or None on decline.
+
+    Only the franchise the offer names may answer — its owner or a co-owner,
+    and deliberately *not* a bot admin, for the reason ``may_bid_for`` gives:
+    this spends the franchise's money, and the whole point of the button is
+    that they chose to.
+    """
+    if offer is None or offer.season_id != season.id:
+        raise AuctionError("That offer is not from this auction.")
+    if offer.status != OFFER_PENDING:
+        raise AuctionError(f"That offer has already been {offer.status}.")
+    franchise = (session.query(AuctionFranchise)
+                 .filter(AuctionFranchise.id == offer.franchise_id).first())
+    if franchise is None:
+        raise AuctionError("That franchise is no longer in the auction.")
+    if not may_bid_for(franchise, tg_id):
+        raise AuctionError(f"Only {franchise.name}'s owner or a co-owner can "
+                           f"answer this.")
+    lot = None
+    if accept:
+        from models import Player
+        player = session.query(Player).filter(Player.id == offer.player_id).first()
+        if player is None:
+            raise AuctionError(f"{offer.player_name} is no longer in the "
+                               f"catalogue.")
+        lot = retain(session, season, franchise, player, offer.price_lakh,
+                     now=now, by_tg_id=tg_id)
+    offer.status = OFFER_ACCEPTED if accept else OFFER_DECLINED
+    offer.answered_by_tg_id = int(tg_id) if tg_id else None
+    offer.answered_at = now or datetime.utcnow()
+    session.flush()
+    return lot
+
+
+def cancel_retention_offer(session, season, offer):
+    if offer is None or offer.season_id != season.id:
+        raise AuctionError("That offer is not from this auction.")
+    if offer.status != OFFER_PENDING:
+        raise AuctionError(f"That offer has already been {offer.status}.")
+    offer.status = OFFER_CANCELLED
+    offer.answered_at = datetime.utcnow()
+    session.flush()
+    return offer
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Auction admins
+# ──────────────────────────────────────────────────────────────────────
+
+def is_auction_admin(session, tg_id):
+    """A bot admin, or somebody a bot admin made an auction admin.
+
+    The second kind may run every auction admin command and nothing else in
+    the bot: every other admin gate reads ``services.admin_ids.is_admin``,
+    which never sees the ``auction_admins`` table.
+    """
+    from services.admin_ids import is_admin
+    if tg_id is None:
+        return False
+    if is_admin(int(tg_id)):
+        return True
+    try:
+        return (session.query(AuctionAdmin.id)
+                .filter(AuctionAdmin.tg_id == int(tg_id)).first()) is not None
+    except Exception:
+        logger.debug("auction admin lookup failed", exc_info=True)
+        return False
+
+
+def auction_admins(session):
+    return session.query(AuctionAdmin).order_by(AuctionAdmin.id.asc()).all()
+
+
+def add_auction_admin(session, tg_id, *, name=None, by_tg_id=None):
+    tg_id = _as_int(tg_id, 0)
+    if tg_id <= 0:
+        raise AuctionError("An auction admin is a positive Telegram user id.")
+    existing = (session.query(AuctionAdmin)
+                .filter(AuctionAdmin.tg_id == tg_id).first())
+    if existing is not None:
+        raise AuctionError(f"{existing.name or tg_id} is already an auction "
+                           f"admin.")
+    row = AuctionAdmin(tg_id=tg_id, name=(name or None) and name[:120],
+                       added_by_tg_id=by_tg_id)
+    session.add(row)
+    session.flush()
+    return row
+
+
+def remove_auction_admin(session, tg_id):
+    tg_id = _as_int(tg_id, 0)
+    row = (session.query(AuctionAdmin)
+           .filter(AuctionAdmin.tg_id == tg_id).first())
+    if row is None:
+        raise AuctionError(f"{tg_id} is not an auction admin.")
+    session.delete(row)
+    session.flush()
+    return row
+
+
+def owner_ids(franchise):
+    """The owner and every co-owner — everyone a /acall should reach."""
+    ids = []
+    if franchise.owner_tg_id:
+        ids.append(int(franchise.owner_tg_id))
+    for tg_id in co_owner_ids(franchise):
+        if tg_id not in ids:
+            ids.append(tg_id)
+    return ids
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Rendering — the only place here that produces HTML
 # ──────────────────────────────────────────────────────────────────────
 
@@ -3568,8 +4320,7 @@ def render_squad(session, season, franchise):
         # and a card was spent to keep him — and an expansion pick is neither:
         # nobody kept him and nobody bid. Squashing any of them together loses
         # the story of how the squad was built.
-        how = {ACQ_RETAINED: " 🔒", ACQ_RTM: " 🪪", ACQ_DRAFTED: " 🆕"}.get(
-            lot.acquisition or ACQ_AUCTION, "")
+        how = acquisition_mark(lot)
         lines.append(f"{mark} {_e(lot.name)} · {lot.rating} · "
                      f"{_e(lot.category)} — "
                      f"{render_money(lot.sold_price_lakh, symbol)}{how}")

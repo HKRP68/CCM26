@@ -22592,14 +22592,19 @@ def _auction_detail_action(db, season, action):
                              AuctionFranchise.season_id == season.id).first())
         if franchise is None:
             abort(404)
-        if int(franchise.squad_size or 0) > 0:
-            raise auction_svc.AuctionError(
-                f"{franchise.name} has already bought {franchise.squad_size} "
-                f"players. Undo those sales before removing the franchise.")
         name = franchise.name
-        db.delete(franchise)
+        if int(franchise.squad_size or 0) > 0 or season.status != auction_svc.STATUS_SETUP:
+            # A franchise with players, or one in an auction under way, goes
+            # the way /aremoveteam takes it: its players back into the pool,
+            # its opening purse shared among the rest, all on the ledger.
+            released, shares = auction_svc.remove_franchise(db, season, franchise)
+            flash(f"🗑 {name} removed — {len(released)} players back in the "
+                  f"pool, purse shared among {len(shares)} franchises.",
+                  "success")
+        else:
+            db.delete(franchise)
+            flash(f"🗑 {name} removed.", "success")
         log_admin(db, "auction_franchise_delete", "auction", season.id, name)
-        flash(f"🗑 {name} removed.", "success")
 
     elif action == "grant":
         franchise = (db.query(AuctionFranchise)
@@ -22944,6 +22949,7 @@ def _console_context(db, season):
         # count is the real one — an admin about to re-list 43 players should
         # see 43, not "15".
         "unsold": auction_svc.unsold(db, season.id),
+        "sets": auction_svc.list_sets(db, season),
     }
 
 
@@ -23052,6 +23058,11 @@ def _auction_console_action(db, season, action):
 
     elif action == "rtm_stand":
         auction_svc.rtm_to_decision(db, season, lot)
+
+    elif action == "set_next":
+        label, moved = auction_svc.bring_forward(
+            db, season, (request.form.get("set_name") or "").strip())
+        flash(f"⏭ {label} comes next — {len(moved)} players.", "success")
 
     elif action == "cancel":
         typed = (request.form.get("confirm_name") or "").strip()

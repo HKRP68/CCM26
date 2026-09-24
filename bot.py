@@ -367,6 +367,8 @@ GROUP_ONLY_COMMANDS = frozenset({
     # changes nothing today; it is the correct entry for the day a private
     # slot frees up.
     "bid", "aboard", "apurse", "artm",
+    "ainfo", "asets", "anextset", "anextplayer", "asquad", "asoldlist",
+    "aunsoldlist",
 })
 
 # Commands that only make sense one-to-one with the bot: deep-link entry
@@ -480,6 +482,15 @@ ADMIN_MENU_COMMANDS = (
     ("apickset", "Admin: how many picks each new side gets"),
     ("apickskip", "Admin: pass on the current expansion pick"),
     ("apickundo", "Admin: undo an expansion pick — money and pick both back"),
+    # The rest of the auction admin family (/asetorder, /aretainforce,
+    # /aoffers, /aretcancel, /aaccelmode, /aadminremove, /aadmins) is on the
+    # /adminhelp card rather than here, which keeps this bucket under the
+    # 100-command ceiling it is exempt from only because it has never filled.
+    ("adminhelp", "Admin: every Franchise Auction admin command"),
+    ("apool", "Admin: add a rating range to the auction pool as a set"),
+    ("acall", "Admin: tag every auction owner and co-owner"),
+    ("aremoveteam", "Admin: remove a team — players back, purse shared"),
+    ("aadminadd", "Admin: let someone run auctions (auction admin)"),
     # Lets Play tournament. Every one of these is bot-admin-only, so they
     # belong in this bucket rather than nowhere: it is exempt from the
     # 100-command clamp and published only into admin DMs, so listing them
@@ -1065,6 +1076,9 @@ async def start_handler(update, context):
         "/aboard - The live auction board\n"
         "/apurse [franchise] - Every purse, or one franchise's squad\n"
         "/artm yes|no - Answer a Right To Match on your former player\n"
+        "/ainfo - Sets, next set, next player, squads, sold & unsold — as buttons\n"
+        "/asets /anextset /anextplayer - The sets, the next set, who is up next\n"
+        "/asquad [team] /asoldlist /aunsoldlist - Squads, sold and unsold players\n"
         "/ctour - Challenge League Tournament hub: table, fixtures, teams\n"
         "/cttable /ctfixtures /ctteams - Tournament table, schedule (done matches struck through), field\n"
         "/ctinjuries - Who is ruled out injured, and for how many more matches 🚑\n"
@@ -2177,6 +2191,13 @@ def main():
             artmundo_handler, aaccel_handler, aclone_handler,
             apick_handler, apicks_handler, apickset_handler,
             apickskip_handler, apickundo_handler,
+            aretainforce_handler, retention_offer_callback, aoffers_handler,
+            aretcancel_handler, ainfo_handler, info_callback, asets_handler,
+            anextset_handler, anextplayer_handler, asquad_handler,
+            asoldlist_handler, aunsoldlist_handler, apool_handler,
+            asetorder_handler, aaccelmode_handler, acall_handler,
+            aremoveteam_handler, aadminadd_handler, aadminremove_handler,
+            aadmins_handler,
         )
         # Not "/b": that is already /buy, registered above, and PTB runs the
         # first handler that matches — the alias would be dead.
@@ -2190,9 +2211,21 @@ def main():
         app.add_handler(CallbackQueryHandler(rtm_callback, pattern=r"^au_rtm_"))
         app.add_handler(CommandHandler(["aboard", "auctionboard"], aboard_handler))
         app.add_handler(CommandHandler(["apurse", "apurses"], apurse_handler))
+        # Team views. Unpublished for the /bid reason; /ainfo puts every one
+        # of them behind a button, and the board's footer names them.
+        app.add_handler(CommandHandler(["ainfo", "amenu"], ainfo_handler))
+        app.add_handler(CallbackQueryHandler(info_callback, pattern=r"^au_info_"))
+        app.add_handler(CommandHandler("asets", asets_handler))
+        app.add_handler(CommandHandler("anextset", anextset_handler))
+        app.add_handler(CommandHandler(["anextplayer", "anextplayers"],
+                                       anextplayer_handler))
+        app.add_handler(CommandHandler(["asquad", "amysquad"], asquad_handler))
+        app.add_handler(CommandHandler("asoldlist", asoldlist_handler))
+        app.add_handler(CommandHandler("aunsoldlist", aunsoldlist_handler))
         # Admin. Registered unconditionally, with the gate inside the handler,
         # so it answers the person who typed it rather than looking like a
         # command that does not exist.
+        app.add_handler(CommandHandler(["adminhelp", "ahelp"], aadmin_handler))
         app.add_handler(CommandHandler("auction", aadmin_handler))
         app.add_handler(CommandHandler("anew", anew_handler))
         app.add_handler(CommandHandler("abind", abind_handler))
@@ -2212,7 +2245,15 @@ def main():
         app.add_handler(CommandHandler("apublish", apublish_handler))
         app.add_handler(CommandHandler("acancel", acancel_handler))
         # Retention: an auction's setup phase, before any lot opens.
+        # /aretain OFFERS a retention; the franchise accepts it with a button
+        # only its owner and co-owners can press. /aretainforce is the old
+        # instant path, for an owner who agreed in person.
         app.add_handler(CommandHandler("aretain", aretain_handler))
+        app.add_handler(CallbackQueryHandler(retention_offer_callback,
+                                             pattern=r"^au_ret_"))
+        app.add_handler(CommandHandler("aretainforce", aretainforce_handler))
+        app.add_handler(CommandHandler("aoffers", aoffers_handler))
+        app.add_handler(CommandHandler("aretcancel", aretcancel_handler))
         app.add_handler(CommandHandler(["aunretain", "arelease"], aunretain_handler))
         app.add_handler(CommandHandler(["aretlock", "aretention"], aretlock_handler))
         # Right To Match, from the admin side: the rules, the card counts, and
@@ -2236,6 +2277,18 @@ def main():
         app.add_handler(CommandHandler(["apickskip", "apickpass"],
                                        apickskip_handler))
         app.add_handler(CommandHandler("apickundo", apickundo_handler))
+        # Sets: the pool by rating range, and the order the sets run in.
+        app.add_handler(CommandHandler("apool", apool_handler))
+        app.add_handler(CommandHandler("asetorder", asetorder_handler))
+        app.add_handler(CommandHandler("aaccelmode", aaccelmode_handler))
+        # The teams: call them all, or take one out of the auction.
+        app.add_handler(CommandHandler(["acall", "acallteams"], acall_handler))
+        app.add_handler(CommandHandler("aremoveteam", aremoveteam_handler))
+        # Auction admins: appointed by bot admins, able to run every auction
+        # command and nothing else in the bot.
+        app.add_handler(CommandHandler("aadminadd", aadminadd_handler))
+        app.add_handler(CommandHandler("aadminremove", aadminremove_handler))
+        app.add_handler(CommandHandler("aadmins", aadmins_handler))
 
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))

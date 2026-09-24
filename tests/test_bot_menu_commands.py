@@ -150,6 +150,14 @@ UNPUBLISHED_ON_PURPOSE = {
     # Franchise Auction — /auction card, the board's footer, and the RTM
     # prompt itself, which names the owner and carries buttons.
     "bid", "artm", "aboard", "apurse",
+    # The auction's team views — every one is a button on /ainfo, and the
+    # pinned board's footer names them.
+    "ainfo", "asets", "anextset", "anextplayer", "asquad", "asoldlist",
+    "aunsoldlist",
+    # Auction admin commands on the /adminhelp card rather than in the admin
+    # bucket, which would otherwise pass the 100-command ceiling.
+    "asetorder", "aretainforce", "aoffers", "aretcancel", "aaccelmode",
+    "aadminremove", "aadmins",
     # Player Draft trades — the precedent the auction followed.
     "dtrade", "dtrades", "dtradecancel",
     # Challenge League tournament views — /help, the hub's buttons, and

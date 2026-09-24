@@ -208,7 +208,7 @@ def init_db():
         StoredAsset,
         PlayerDraft, DraftTeam, DraftPlayer, DraftPick,
         AuctionSeason, AuctionFranchise, AuctionLot, AuctionBid,
-        AuctionLedgerEntry, AuctionEvent,
+        AuctionLedgerEntry, AuctionEvent, AuctionRetentionOffer, AuctionAdmin,
     )
     import logging
     import time as _time
@@ -976,6 +976,13 @@ def _migrate_add_columns():
     _try_add("auction_seasons", "expansion_picks", "INTEGER DEFAULT 0")
     _try_add("auction_franchises", "draft_picks_total", "INTEGER DEFAULT 0")
     _try_add("auction_franchises", "draft_picks_used", "INTEGER DEFAULT 0")
+
+    # ── Franchise Auction: a fresh pinned board per lot, and the automatic
+    # accelerated round ── Integers, not booleans, for the NULL-reads-falsy
+    # reason above; an existing season picks the accelerated round up ON.
+    _try_add("auction_seasons", "board_lot_id", "INTEGER")
+    _try_add("auction_seasons", "auto_accelerated", "INTEGER DEFAULT 1")
+    _try_add("auction_seasons", "accelerated_done", "INTEGER DEFAULT 0")
 
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so

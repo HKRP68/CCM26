@@ -55,6 +55,14 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # that on every press — but the button has to be reachable by them, and
     # the board belongs to nobody.
     "au_rtm_",
+    # The /ainfo view buttons (Sets, Next Set, My Squad, …) are read-only and
+    # answer whoever presses them — "My Squad" resolves the presser's own
+    # franchise — so the card belongs to the whole room.
+    "au_info_",
+    # A retention offer is posted by the ADMIN who ran /aretain, but it is the
+    # franchise that has to answer it. handlers/auction.py lets only that
+    # franchise's owner and co-owners accept or decline, on every press.
+    "au_ret_",
     "cric_join",
     "cric_join_",
     "cric_join:",
