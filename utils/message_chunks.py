@@ -70,3 +70,40 @@ def chunk_blocks(blocks, header="", footer="", limit=DEFAULT_CHUNK_LIMIT):
             # over too, so it gets its own.
             out.append(footer)
     return out
+
+
+# ── Tap-to-expand sections ───────────────────────────────────────────
+#
+# ``<blockquote expandable>`` is Telegram's own collapsible: the client shows
+# the first few lines and a "expand" affordance, and nothing is lost. Every long
+# section in this bot — the ranks past tenth on a stat board, the fixtures past
+# the twentieth, a bench list — rides in one rather than being truncated with
+# "…and 22 more.", which is not an answer to the person whose row was number 23.
+#
+# The catch is that a blockquote is *indivisible* to the packer above. A quote
+# longer than one message cannot be split: every cut lands between the tag and
+# its closing tag, which Telegram rejects outright as unparseable entities — so
+# the section that grew too long stops being sent at all. Wrapping a long body
+# as SEVERAL quotes, each inside the limit, is what keeps it sendable however
+# far the list grows.
+
+_QUOTE_OPEN = "<blockquote expandable>"
+_QUOTE_CLOSE = "</blockquote>"
+
+
+def expandable_quotes(lines, limit=DEFAULT_CHUNK_LIMIT):
+    """``lines`` as expandable blockquotes, each within ``limit`` characters.
+
+    Returns a list of ready-to-send strings — usually one, and more only when
+    the body is longer than a single message can carry. Empty in, empty out, so
+    a caller can splice the result into its output unconditionally.
+
+    Each returned quote is its own block for :func:`chunk_blocks`, which splits
+    between blocks and therefore never inside one of them.
+    """
+    lines = [str(line) for line in lines if line]
+    if not lines:
+        return []
+    budget = max(1, limit - len(_QUOTE_OPEN) - len(_QUOTE_CLOSE))
+    return [_QUOTE_OPEN + body + _QUOTE_CLOSE
+            for body in chunk_blocks(lines, limit=budget)]

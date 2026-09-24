@@ -72,8 +72,14 @@ def table_blocks(session, tour):
     return blocks
 
 
-def fixtures_blocks(session, tour, viewer_tg_id=None, limit=40):
-    """The schedule — the twin of ``render_fixtures``."""
+def fixtures_blocks(session, tour, viewer_tg_id=None, limit=None):
+    """The schedule — the twin of ``render_fixtures``.
+
+    Every fixture is rendered; ``limit`` (default ``L.FIXTURE_OPEN``) only
+    decides how many sit in the open table, the rest going behind a ``details``
+    block the client collapses.
+    """
+    limit = L.FIXTURE_OPEN if limit is None else int(limit)
     fixtures = (session.query(TournamentMatch)
                 .filter_by(tournament_id=tour.id)
                 .order_by(TournamentMatch.match_no, TournamentMatch.round_no,
@@ -116,12 +122,17 @@ def fixtures_blocks(session, tour, viewer_tg_id=None, limit=40):
     if my_rows:
         blocks.append(R.table([header] + my_rows, bordered=True, compact=True,
                               caption=R.bold("👈 Your next matches")))
-    blocks.append(R.table([header] + [row(fx) for fx in fixtures[:limit]],
+    all_rows = [row(fx) for fx in fixtures]
+    blocks.append(R.table([header] + all_rows[:limit],
                           bordered=True, striped=True, compact=True,
-                          caption=R.bold("Full schedule")))
-    if len(fixtures) > limit:
-        blocks.append(R.paragraph(
-            R.italic(f"…and {len(fixtures) - limit} more.")))
+                          caption=R.bold(f"Full schedule · {len(all_rows)} "
+                                         f"matches")))
+    rest = all_rows[limit:]
+    if rest:
+        blocks.append(R.details(
+            R.bold(f"👇 Matches {limit + 1}–{len(all_rows)}"),
+            [R.table([header] + rest, bordered=True, striped=True,
+                     compact=True)]))
     blocks.append(R.footer(["Play your fixture: reply to your opponent with ",
                             R.code("/lptour")]))
     return blocks

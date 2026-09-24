@@ -1,8 +1,11 @@
 """Bot commands for Challenge League Tournament stats.
 
 - ``/statstour <player name>`` — a player's stats in the active tournament.
-- ``/tournamentstats`` — Top-10 stat leaderboards with category buttons (only the
-  user who opened the command can switch categories).
+- ``/tournamentstats`` — stat leaderboards with category buttons (only the user
+  who opened the command can switch categories). Each board ranks the top
+  ``BOARD_LIMIT`` players: the first ten are shown open and the rest sit behind
+  a tap, because 11th place is exactly the position somebody is chasing and a
+  board that stops at 10 cannot tell them how far away they are.
 
 The first of those categories is 🏅 **MVP**: one impact-point total for a whole
 tournament rather than one column of it, so an all-rounder who keeps winning
@@ -29,10 +32,22 @@ from database import get_session
 from models import TournamentPlayerStats
 from services import rich_message as R
 from services import tournament_service
+from utils.message_chunks import expandable_quotes
 
 logger = logging.getLogger(__name__)
 
 NO_ACTIVE = "❌ No Challenge League Tournament is currently active."
+
+# How deep each board is ranked, and how much of it is shown without a tap.
+#
+# A Top 10 answers "who is winning" and nothing else. The player reading it is
+# usually 12th, and the old board could not tell them that — it ended one line
+# above them. So each board now ranks BOARD_LIMIT players and shows BOARD_OPEN
+# of them straight away; the rest ride in a collapsible (a ``details`` block
+# where the server renders one, an expandable blockquote in the HTML), so the
+# card stays the same size on screen and the chase is one tap away.
+BOARD_OPEN = 10
+BOARD_LIMIT = 25
 
 # (callback key, button label). "runs" is the default view.
 _CATEGORIES = [
@@ -69,9 +84,13 @@ def _econ(r):
     return ((r.bowl_runs or 0) / overs) if overs else 0.0
 
 
-def _leaders_for(session, tour, category):
-    """Return a Top-10 list of (name, team, value_str) for the given category."""
-    leaders = tournament_service.stat_leaders(session, tour.id, limit=10)
+def _leaders_for(session, tour, category, limit=BOARD_LIMIT):
+    """``[(name, team, value_str), …]`` for one category, best first.
+
+    Ranked ``limit`` deep rather than ten, and the renderers below decide how
+    much of that is open and how much is behind a tap.
+    """
+    leaders = tournament_service.stat_leaders(session, tour.id, limit=limit)
     out = []
     if category == "runs":
         out = [(r.name, r.team_name, str(r.bat_runs)) for r in leaders["most_runs"]]
@@ -101,31 +120,61 @@ def _leaders_for(session, tour, category):
     return out
 
 
+_MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+
+def _board_caption(rows):
+    """What the board says it is showing: "Top 10", or "Top 10 of 23"."""
+    if len(rows) <= BOARD_OPEN:
+        return f"Top {len(rows)}" if rows else "Top 10"
+    return f"Top {BOARD_OPEN} of {len(rows)}"
+
+
 def _render(tour, category, rows):
-    """Format a Top-10 leaderboard message (HTML) for a category's ranked rows."""
+    """Format a leaderboard message (HTML) for one category's ranked rows.
+
+    The first ``BOARD_OPEN`` places are printed outright and everything below
+    them goes into an expandable blockquote — Telegram's own "tap to expand", so
+    the ranks past tenth cost a tap rather than a screenful.
+    """
     label = _CAT_LABELS.get(category, "Stats")
     lines = [f"🏆 <b>{html.escape(tour.name)}</b> — Tournament Stats",
-             f"<b>{label}</b> · Top 10", ""]
+             f"<b>{label}</b> · {_board_caption(rows)}", ""]
     if not rows:
         lines.append("<i>No qualifying players yet.</i>")
     else:
-        medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-        for i, (name, team, val) in enumerate(rows, 1):
-            rank = medals.get(i, f"{i}.")
-            team_s = f" · {html.escape(team)}" if team else ""
-            lines.append(f"{rank} {html.escape(name or 'Player')}{team_s} — <b>{val}</b>")
+        lines += [_rank_line(i, row) for i, row in enumerate(rows[:BOARD_OPEN], 1)]
+        rest = rows[BOARD_OPEN:]
+        if rest:
+            lines += ["",
+                      f"<b>👇 Ranks {BOARD_OPEN + 1}–{len(rows)}</b> "
+                      f"<i>(tap to expand)</i>"]
+            lines += expandable_quotes(
+                _rank_line(i, row)
+                for i, row in enumerate(rest, BOARD_OPEN + 1))
     if category == "mvp":
         lines += ["", "<i>Impact points across the whole tournament — "
                       "/mvp for the full card.</i>"]
     return "\n".join(lines)
 
 
-def _leaderboard_blocks(tour, category, rows):
-    """The Top-10 board as rich blocks — the block twin of :func:`_render`.
+def _rank_line(position, row):
+    """One ranked line of the HTML board: medal or number, player, team, value."""
+    name, team, value = row
+    rank = _MEDALS.get(position, f"{position}.")
+    team_s = f" · {html.escape(team)}" if team else ""
+    return (f"{rank} {html.escape(name or 'Player')}{team_s} — "
+            f"<b>{html.escape(str(value))}</b>")
 
-    Same heading, same ten rows in the same order, same MVP footnote. The one
-    deliberate difference is the medal column: the table gives the rank its own
-    cell, so 🥇🥈🥉 and "4." line up instead of shunting the names along.
+
+def _leaderboard_blocks(tour, category, rows):
+    """The board as rich blocks — the block twin of :func:`_render`.
+
+    Same heading, same rows in the same order, same split at
+    ``BOARD_OPEN`` and same MVP footnote. Two deliberate differences: the table
+    gives the rank its own cell, so 🥇🥈🥉 and "4." line up instead of shunting
+    the names along; and the ranks past tenth sit in a ``details`` block, which
+    is the client's own collapsible rather than the HTML's quoted stand-in.
     """
     try:
         return _leaderboard_tree(tour, category, rows)
@@ -135,29 +184,39 @@ def _leaderboard_blocks(tour, category, rows):
         return None
 
 
+def _rank_cells(category, rows, start=1):
+    """``rows`` as table rows, headed and numbered from ``start``."""
+    cells = [[R.cell(R.bold("#"), header=True, align="center"),
+              R.cell(R.bold("PLAYER"), header=True),
+              R.cell(R.bold("TEAM"), header=True),
+              R.cell(R.bold(_CAT_COLUMN.get(category, "VALUE")), header=True,
+                     align="right")]]
+    for position, (name, team, value) in enumerate(rows, start):
+        cells.append([
+            R.cell(_MEDALS.get(position, f"{position}."), align="center"),
+            R.cell(name or "Player"),
+            R.cell(team or "—"),
+            R.cell(R.bold(str(value)), align="right"),
+        ])
+    return cells
+
+
 def _leaderboard_tree(tour, category, rows):
     label = _CAT_LABELS.get(category, "Stats")
     blocks = [R.heading(f"🏆 {tour.name}", size=2),
-              R.paragraph([R.bold(label), " · Top 10"])]
+              R.paragraph([R.bold(label), f" · {_board_caption(rows)}"])]
     if not rows:
         blocks.append(R.paragraph(R.italic("No qualifying players yet.")))
         return blocks
 
-    medals = {1: "🥇", 2: "🥈", 3: "🥉"}
-    header = [R.cell(R.bold("#"), header=True, align="center"),
-              R.cell(R.bold("PLAYER"), header=True),
-              R.cell(R.bold("TEAM"), header=True),
-              R.cell(R.bold(_CAT_COLUMN.get(category, "VALUE")), header=True,
-                     align="right")]
-    cells = [header]
-    for position, (name, team, value) in enumerate(rows, 1):
-        cells.append([
-            R.cell(medals.get(position, f"{position}."), align="center"),
-            R.cell(name or "Player"),
-            R.cell(team or "—"),
-            R.cell(R.bold(value), align="right"),
-        ])
-    blocks.append(R.table(cells, bordered=True, striped=True, compact=True))
+    blocks.append(R.table(_rank_cells(category, rows[:BOARD_OPEN]),
+                          bordered=True, striped=True, compact=True))
+    rest = rows[BOARD_OPEN:]
+    if rest:
+        blocks.append(R.details(
+            R.bold(f"👇 Ranks {BOARD_OPEN + 1}–{len(rows)}"),
+            [R.table(_rank_cells(category, rest, start=BOARD_OPEN + 1),
+                     bordered=True, striped=True, compact=True)]))
     if category == "mvp":
         blocks.append(R.footer(["Impact points across the whole tournament — ",
                                 R.code("/mvp"), " for the full card."]))

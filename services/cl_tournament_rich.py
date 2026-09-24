@@ -160,12 +160,18 @@ def _fixture_row(fx, names, mine_ids):
 
 
 @_guarded("fixtures")
-def fixtures_blocks(session, tour, viewer_tg_id=None, limit=40):
+def fixtures_blocks(session, tour, viewer_tg_id=None, limit=None):
     """The schedule — the twin of ``render_fixtures``.
 
     Keeps the HTML version's shape: the viewer's own remaining matches first,
     then the full list. "Yours" still means owner *or* co-owner.
+
+    Every fixture is rendered. ``limit`` (default :data:`V.FIXTURE_OPEN`) only
+    decides how many sit in the open table; the rest go into a ``details``
+    block, which is the client's own collapsible rather than the HTML twin's
+    expandable blockquote.
     """
+    limit = V.FIXTURE_OPEN if limit is None else int(limit)
     from models import TournamentMatch
     fixtures = (session.query(TournamentMatch)
                 .filter_by(tournament_id=tour.id)
@@ -196,12 +202,17 @@ def fixtures_blocks(session, tour, viewer_tg_id=None, limit=40):
         blocks.append(R.table([header] + my_rows, bordered=True, compact=True,
                               caption=R.bold("👈 Your next matches")))
 
-    all_rows = [_fixture_row(fx, names, mine) for fx in fixtures[:limit]]
-    blocks.append(R.table([header] + all_rows, bordered=True, striped=True,
-                          compact=True, caption=R.bold("Full schedule")))
-    if len(fixtures) > limit:
-        blocks.append(R.paragraph(
-            R.italic(f"…and {len(fixtures) - limit} more.")))
+    all_rows = [_fixture_row(fx, names, mine) for fx in fixtures]
+    blocks.append(R.table([header] + all_rows[:limit], bordered=True,
+                          striped=True, compact=True,
+                          caption=R.bold(f"Full schedule · {len(all_rows)} "
+                                         f"matches")))
+    rest = all_rows[limit:]
+    if rest:
+        blocks.append(R.details(
+            R.bold(f"👇 Matches {limit + 1}–{len(all_rows)}"),
+            [R.table([header] + rest, bordered=True, striped=True,
+                     compact=True)]))
     blocks.append(R.footer(R.italic(_LEGEND)))
     return blocks
 
@@ -248,6 +259,9 @@ def team_schedule_blocks(session, tour, team, viewer_tg_id=None, limit=40):
     Every fixture is written from this team's side, won or lost, exactly as the
     HTML version writes it; the results go into a collapsed ``details`` because
     the question the card is opened for is what comes *next*.
+
+    Nothing is dropped. ``limit`` caps how many fixtures the open table holds,
+    and a longer list continues in a second, collapsed one.
     """
     from models import TournamentMatch
     blocks = _team_heading(session, tour, team, viewer_tg_id, "🗓️")
@@ -309,20 +323,24 @@ def team_schedule_blocks(session, tour, team, viewer_tg_id=None, limit=40):
     played = [fx for fx in fixtures if fx.status == "completed"]
 
     if upcoming:
+        open_rows = [row(fx) for fx in upcoming[:limit]]
         blocks.append(R.table(
-            [header] + [row(fx) for fx in upcoming[:limit]],
-            bordered=True, compact=True,
+            [header] + open_rows, bordered=True, compact=True,
             caption=R.bold(f"Next up ({len(upcoming)} to play)")))
-        if len(upcoming) > limit:
-            blocks.append(R.paragraph(
-                R.italic(f"…and {len(upcoming) - limit} more.")))
+        rest = [row(fx) for fx in upcoming[limit:]]
+        if rest:
+            blocks.append(R.details(
+                R.bold(f"👇 {len(rest)} more to play"),
+                [R.table([header] + rest, bordered=True, compact=True)]))
     else:
         blocks.append(R.paragraph(
             R.italic("Nothing left to play — every fixture is done.")))
     if played:
+        # Newest first: a results list is read backwards, and reversing here is
+        # also what stops the oldest ones falling off the end.
         blocks.append(R.details(
             R.bold(f"📜 Results ({len(played)})"),
-            [R.table([header] + [row(fx) for fx in played[-limit:]],
+            [R.table([header] + [row(fx) for fx in reversed(played)],
                      bordered=True, striped=True, compact=True)]))
 
     blocks.append(R.footer(R.italic(

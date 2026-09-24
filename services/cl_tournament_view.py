@@ -18,6 +18,7 @@ from html import escape
 from models import (Tournament, TournamentTeam, TournamentMatch,
                     TournamentPlayerStats)
 from services import tournament_service
+from utils.message_chunks import expandable_quotes
 
 logger = logging.getLogger(__name__)
 
@@ -104,14 +105,28 @@ def render_table(session, tour):
     return "\n".join(out)
 
 
-def render_fixtures(session, tour, viewer_tg_id=None, limit=40):
+# How many fixtures the schedule shows without a tap. Everything past this
+# still ships — it goes into an expandable blockquote (a ``details`` block in
+# the rich rendering), because "…and 22 more." is not a schedule: the fixture
+# somebody opened this card for was usually one of the 22.
+FIXTURE_OPEN = 20
+
+
+def render_fixtures(session, tour, viewer_tg_id=None, limit=None):
     """The fixture list as an HTML message body.
 
     A completed fixture is struck through and carries its result; a live one is
     flagged as in progress. When the viewer owns a team, their own remaining
     fixtures are pulled out into a "Your next matches" block — the thing a team
     owner actually opens this for.
+
+    **Every** fixture is rendered. ``limit`` caps how many are shown open, and
+    defaults to :data:`FIXTURE_OPEN`; the rest are behind Telegram's own tap-to-
+    expand rather than dropped. A schedule long enough to outgrow one message is
+    split across sends by ``rich_message.html_parts``, which never cuts inside a
+    blockquote.
     """
+    limit = FIXTURE_OPEN if limit is None else int(limit)
     fixtures = (session.query(TournamentMatch)
                 .filter_by(tournament_id=tour.id)
                 .order_by(TournamentMatch.round_no, TournamentMatch.match_no,
@@ -138,7 +153,7 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=40):
         return escape(label or "TBD")
 
     my_lines, all_lines = [], []
-    for fx in fixtures[:limit]:
+    for fx in fixtures:
         stage = _STAGE_LABEL.get(fx.stage or "league", (fx.stage or "").title())
         a = _slot(fx.team1_id, fx.slot1_label, fx.home_team_id)
         b = _slot(fx.team2_id, fx.slot2_label, fx.home_team_id)
@@ -160,9 +175,13 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=40):
     out = list(header)
     if my_lines:
         out += ["", "<b>Your next matches</b>"] + my_lines[:8]
-    out += ["", "<b>Full schedule</b>"] + all_lines
-    if len(fixtures) > limit:
-        out.append(f"<i>…and {len(fixtures) - limit} more.</i>")
+    out += ["", f"<b>Full schedule</b> · {len(all_lines)} matches"]
+    out += all_lines[:limit]
+    rest = all_lines[limit:]
+    if rest:
+        out.append(f"<b>👇 Matches {limit + 1}–{len(all_lines)}</b> "
+                   f"<i>(tap to expand)</i>")
+        out += expandable_quotes(rest)
     out += ["", "<i>🏠 home side · 🌱 the pitch this match must be played on · "
                 "struck-through matches are done.</i>"]
     return "\n".join(out)
@@ -343,17 +362,27 @@ def render_team_schedule(session, tour, team, viewer_tg_id=None, limit=40):
     upcoming = [fx for fx in fixtures if fx.status != "completed"]
     played = [fx for fx in fixtures if fx.status == "completed"]
 
+    def _section(title, entries):
+        """A block of fixtures: the first ``limit`` open, the rest a tap away."""
+        lines = [_line(fx) for fx in entries]
+        out = [title] + lines[:limit]
+        rest = lines[limit:]
+        if rest:
+            out.append(f"<b>👇 {len(rest)} more</b> <i>(tap to expand)</i>")
+            out += expandable_quotes(rest)
+        return out
+
     if upcoming:
-        out += ["", f"<b>Next up</b> ({len(upcoming)} to play)"]
-        out += [_line(fx) for fx in upcoming[:limit]]
-        if len(upcoming) > limit:
-            out.append(f"<i>…and {len(upcoming) - limit} more.</i>")
+        out += [""] + _section(f"<b>Next up</b> ({len(upcoming)} to play)",
+                               upcoming)
     else:
         out += ["", "<b>Next up</b>", "<i>Nothing left to play — "
                 "every fixture is done.</i>"]
     if played:
-        out += ["", "<b>Results</b>"]
-        out += [_line(fx) for fx in played[-limit:]]
+        # Newest first, so the ones a tap away are the oldest — which is the
+        # right way round for a results list, and never drops one.
+        out += [""] + _section(f"<b>Results</b> ({len(played)})",
+                               list(reversed(played)))
 
     out += ["", "<i>🏠 home · ✈️ away · 🌱 the pitch this match must be played "
                 "on.</i>"]

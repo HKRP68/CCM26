@@ -706,14 +706,110 @@
     // usable — which meant the page handed out rewards for ads nobody saw. A
     // network that served nothing is a real problem and it has its own answer
     // below (the no-fill pass); silently paying out is not that answer.
-    async function getAdToken() {
-      let show = null;
-      try {
-        show = await adShowFn();
-      } catch (e) {
-        console.warn('[ads] no usable show function', e);
+    // How long the page waits for an ad to APPEAR, and how long it then waits
+    // for the player to finish watching it. Two numbers, because they are two
+    // different waits: the old single 12-second race fired while the ad was
+    // still playing, abandoned the promise, and left the player who had just
+    // watched a full rewarded ad being told no ad was available. See
+    // AD_SHOW_TIMEOUT_MS in templates/webapp.html for the same reasoning.
+    const AD_LOAD_TIMEOUT_MS = 12000;
+    const AD_WATCH_TIMEOUT_MS = 180000;
+    // The SDK events that mean "an ad is on screen now". Names vary between
+    // versions; one that fires none of them keeps the short deadline, so
+    // listening can only ever rescue an ad, never strand one.
+    const AD_START_EVENTS = ['onStart', 'onReward', 'onNonStopShow'];
+
+    // Show one ad, bounded by the load deadline until it starts and by the
+    // watch deadline afterwards. An ad that finishes after we gave up is
+    // registered anyway — the player watched it, so it is banked as a saved ad
+    // rather than thrown away.
+    function showAdBounded(controller) {
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        let timer = null;
+        let detach = () => {};
+        const arm = (ms) => {
+          clearTimeout(timer);
+          timer = setTimeout(() => finish(reject, {
+            nofill: true, message: 'ad request timed out' }), ms);
+        };
+        const finish = (fn, value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          detach();
+          fn(value);
+        };
+        const onStarted = () => {
+          if (settled) return;
+          setStatus('📺 Watching the ad…');
+          arm(AD_WATCH_TIMEOUT_MS);
+        };
+        if (typeof controller?.addEventListener === 'function') {
+          AD_START_EVENTS.forEach(name => {
+            try { controller.addEventListener(name, onStarted); } catch (_) {}
+          });
+          detach = () => AD_START_EVENTS.forEach(name => {
+            try { controller.removeEventListener?.(name, onStarted); } catch (_) {}
+          });
+        }
+        arm(AD_LOAD_TIMEOUT_MS);
+        let shown;
+        try {
+          shown = controller.show();
+        } catch (e) {
+          finish(reject, e);
+          return;
+        }
+        Promise.resolve(shown).then(
+          v => {
+            if (settled) {
+              // Too late for this round, but the ad was genuinely watched:
+              // register it so the ledger keeps it for the next one.
+              if (v && v.done) registerWatchedAd().catch(() => {});
+              return;
+            }
+            finish(resolve, v);
+          },
+          e => { if (!settled) finish(reject, e); });
+      });
+    }
+
+    // Tell the backend an ad was watched; returns its one-shot token or null.
+    // Retried, because the ad is already spent by the time this runs and a
+    // dropped request here is a watched ad turning into nothing. The server is
+    // idempotent over the retry window, so a duplicate binds to the same
+    // receipt rather than minting a second ad.
+    async function registerWatchedAd(attempts = 3) {
+      for (let attempt = 0; attempt < attempts; attempt++) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        try {
+          const res = await fetch('/api/webapp/ad-completed', {
+            method: 'POST', headers: authHeaders(), signal: controller.signal });
+          const data = await res.json().catch(() => ({}));
+          if (data && data.ad_token) return data.ad_token;
+          if (res.status && res.status < 500) return null;   // it decided
+        } catch (e) {
+          console.warn('[ads] could not register the completed ad', e);
+        } finally {
+          clearTimeout(timer);
+        }
+        if (attempt < attempts - 1) {
+          await new Promise(r => setTimeout(r, 500 * (attempt + 1)));
+        }
       }
-      if (!show) {
+      return null;
+    }
+
+    async function getAdToken() {
+      let ctrl = null;
+      try {
+        ctrl = await adController();
+      } catch (e) {
+        console.warn('[ads] no usable ad controller', e);
+      }
+      if (!ctrl) {
         // No ad network configured at all (dev, or a deployment with no block
         // id) — the same mock token the Mini App sends. The server accepts a
         // MOCK- token only when ads really are unconfigured or WEBAPP_DEV_MODE
@@ -733,14 +829,11 @@
       let done = false;
       try {
         // The SDK promise is not guaranteed to settle — a request that dies on
-        // a phone network can hang indefinitely — so it is raced against a
-        // timer rather than awaited outright, which is what used to strand
-        // this page on "LOADING AD…" with nothing ever happening.
-        const result = await Promise.race([
-          show(),
-          new Promise((_, reject) => setTimeout(
-            () => reject({ nofill: true, message: 'ad request timed out' }), 12000)),
-        ]);
+        // a phone network can hang indefinitely — so it is bounded rather than
+        // awaited outright, which is what used to strand this page on
+        // "LOADING AD…" with nothing ever happening. The bound moves once the
+        // ad is on screen; see showAdBounded.
+        const result = await showAdBounded(ctrl);
         // Some SDK versions resolve without `done` when the user closed the ad
         // early. Treat a missing `done` as a skip, not as a completed view.
         done = !!(result && result.done !== false);
@@ -757,22 +850,11 @@
       }
       if (!done) return { error: 'skipped' };
 
-      // Bound the claim request so a stalled ad-completion can't hang the round.
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 15000);
-      try {
-        const res = await fetch('/api/webapp/ad-completed', {
-          method: 'POST', headers: authHeaders(), signal: controller.signal });
-        const data = await res.json().catch(() => ({}));
-        if (data && data.ad_token) return { token: data.ad_token };
-      } catch (e) {
-        console.warn('[ads] could not register the completed ad', e);
-      } finally {
-        clearTimeout(timer);
-      }
-      // The ad was watched. Even if this response was lost, the server wrote
-      // it to the ledger, so the round can go ahead with no token and the
-      // saved ad is redeemed there.
+      const token = await registerWatchedAd();
+      if (token) return { token };
+      // The ad was watched. Even if every one of those responses was lost, the
+      // server wrote it to the ledger (or Adsgram's own postback did), so the
+      // round goes ahead with no token and the saved ad is redeemed there.
       return { token: '' };
     }
 
@@ -890,9 +972,11 @@
       }
     }
 
-    // Returns a zero-arg function that shows one ad and resolves when it was
-    // watched, or null when the SDK isn't usable.
-    async function adShowFn() {
+    // The initialised AdController, or null when the SDK isn't usable.
+    // The controller itself rather than a bare show() closure, because the
+    // caller needs its events: they are what says an ad reached the screen,
+    // and therefore what stops the load deadline firing mid-ad.
+    async function adController() {
       try {
         await window.__adSdkReady;
         const cfg = window.__adConfig;
@@ -900,9 +984,9 @@
         if (!window.__adController) {
           window.__adController = window.Adsgram.init({ blockId: cfg.block_id });
         }
-        return () => window.__adController.show();
+        return window.__adController;
       } catch (e) {
-        console.warn('[ads] no usable show function', e);
+        console.warn('[ads] no usable ad controller', e);
         return null;
       }
     }

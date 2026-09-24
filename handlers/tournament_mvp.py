@@ -26,7 +26,11 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from database import get_session
+# How deep the card ranks, and how much of it opens without a tap: the same
+# two depths /tournamentstats uses, so the sibling cards agree.
+from handlers.tournament import BOARD_LIMIT, BOARD_OPEN
 from services import tournament_mvp
+from utils.message_chunks import expandable_quotes
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +96,14 @@ def _summary(row, board):
     return " · ".join(parts)
 
 
-def render(session, tour, board="overall", limit=10):
-    """The MVP card for one board as an HTML message body."""
+def render(session, tour, board="overall", limit=BOARD_LIMIT):
+    """The MVP card for one board as an HTML message body.
+
+    The first ``BOARD_OPEN`` places are printed outright; the rest ride in an
+    expandable blockquote. A player chasing the table is almost never in the top
+    ten — that is the whole reason they opened it — so the board has to go
+    deeper than ten without costing everyone else a screenful.
+    """
     rows = tournament_mvp.mvp_table(session, tour.id, limit=limit, board=board)
     field = {"batting": "bat_points", "bowling": "bowl_points"}.get(board, "points")
     out = [f"🏅 <b>{escape(tour.name or '—')}</b> — Most Valuable Player",
@@ -104,13 +114,21 @@ def render(session, tour, board="overall", limit=10):
                    "the table fills in as results come in.</i>")
         return "\n".join(out)
 
-    for i, row in enumerate(rows, 1):
-        rank = _MEDALS.get(i, f"{i}.")
+    def _entry(position, row):
+        rank = _MEDALS.get(position, f"{position}.")
         team = f" · {escape(row.team_name)}" if row.team_name else ""
         points = getattr(row, field)
-        out.append(f"{rank} <b>{escape(row.name or 'Player')}</b>{team} — "
-                   f"<b>{points:g}</b> pts")
-        out.append(f"      <i>{_summary(row, board)}</i>")
+        return (f"{rank} <b>{escape(row.name or 'Player')}</b>{team} — "
+                f"<b>{points:g}</b> pts\n"
+                f"      <i>{_summary(row, board)}</i>")
+
+    out += [_entry(i, row) for i, row in enumerate(rows[:BOARD_OPEN], 1)]
+    rest = rows[BOARD_OPEN:]
+    if rest:
+        out += ["", f"<b>👇 Ranks {BOARD_OPEN + 1}–{len(rows)}</b> "
+                    f"<i>(tap to expand)</i>"]
+        out += expandable_quotes(_entry(i, row)
+                                 for i, row in enumerate(rest, BOARD_OPEN + 1))
 
     if board == "overall":
         lead = rows[0]

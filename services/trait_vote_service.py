@@ -328,3 +328,121 @@ def status_line(enabled: bool) -> str:
     """One-line badge for a match card, so nobody has to remember the vote."""
     return (f"{VOTE_EMOJI} <b>Traits:</b> ON" if enabled
             else "🚫 <b>Traits:</b> OFF (both XIs play on card ratings)")
+
+
+# ══════════════════════════════════════════════════════════════════════
+# The same two cards as rich blocks
+# ══════════════════════════════════════════════════════════════════════
+#
+# The vote is the one moment in a Lets Play setup where both captains are
+# reading the same card and weighing it against each other's XI — two team
+# ratings, three outcome rules and two vote states, all of which the HTML has
+# to draw as a column of bullets and hope lines up. They are tables.
+#
+# Both renderings stay live (``docs/rich-text-messages.md``), so these mirror
+# the text above exactly: same ratings, same rules, same "who has answered",
+# same default. A builder that raises answers None and the HTML goes out — two
+# captains are waiting on this to tap something.
+
+
+def prompt_blocks(host_label: str, guest_label: str,
+                  host_strength: float, guest_strength: float,
+                  host_voted: bool = False, guest_voted: bool = False,
+                  timeout: Optional[int] = None):
+    """The traits question as blocks — the twin of :func:`prompt_text`."""
+    try:
+        from services import rich_message as R
+        seconds = vote_timeout() if timeout is None else timeout
+        split = {
+            SPLIT_UNDERDOG: "the lower-rated XI's answer stands",
+            SPLIT_ON: "traits are ON",
+            SPLIT_OFF: "traits are OFF",
+            SPLIT_RANDOM: "it is decided by a coin flip",
+        }[split_rule()]
+        default_label = "YES" if default_vote() == VOTE_YES else "NO"
+
+        def tick(voted):
+            return (["✅ ", R.bold("locked in")] if voted
+                    else ["⏳ ", R.italic("waiting")])
+
+        return [
+            R.heading(f"{VOTE_EMOJI} Traits — yes or no?", size=2),
+            R.table([
+                [R.cell(R.bold(host_label)),
+                 R.cell(R.bold(_fmt(host_strength)), align="right"),
+                 R.cell("ovr"), R.cell(tick(host_voted), align="right")],
+                [R.cell(R.bold(guest_label)),
+                 R.cell(R.bold(_fmt(guest_strength)), align="right"),
+                 R.cell("ovr"), R.cell(tick(guest_voted), align="right")],
+            ], bordered=True, compact=True),
+            R.paragraph(R.italic(
+                "Team Overall shown with the ⚡ Trait Boost included.")),
+            R.paragraph([R.bold("Both captains choose."),
+                         " Answers stay hidden until both are in."]),
+            R.table([
+                [R.cell(R.bold("Yes + Yes")), R.cell(["traits are ", R.bold("ON")])],
+                [R.cell(R.bold("No + No")), R.cell(["traits are ", R.bold("OFF")])],
+                [R.cell(R.bold("One of each")), R.cell(split)],
+            ], bordered=True, striped=True, compact=True),
+            R.footer(R.italic(
+                f"No answer within {seconds}s counts as {default_label}.")),
+        ]
+    except Exception:
+        logger.exception("trait vote prompt blocks failed to build")
+        return None
+
+
+def result_blocks(result: VoteOutcome, host_label: str, guest_label: str,
+                  host_vote: Any = None, guest_vote: Any = None):
+    """The decision as blocks — the twin of :func:`result_text`.
+
+    The verdict is a ``pullquote`` because it is the one thing on the card that
+    changes how the match is played, and the reasoning belongs under it rather
+    than wrapped around it.
+    """
+    try:
+        from services import rich_message as R
+        host = normalize_vote(host_vote)
+        guest = normalize_vote(guest_vote)
+
+        def answer(vote):
+            if vote == VOTE_YES:
+                return "Yes"
+            if vote == VOTE_NO:
+                return "No"
+            return f"no answer ({'Yes' if default_vote() == VOTE_YES else 'No'})"
+
+        if result.outcome == "both_yes":
+            why = "Both captains said yes."
+        elif result.outcome == "both_no":
+            why = "Both captains said no — this one is cards only."
+        elif result.decided_by == "host":
+            why = (f"Split vote — {host_label} field the lower-rated XI, so "
+                   f"their call stands.")
+        elif result.decided_by == "guest":
+            why = (f"Split vote — {guest_label} field the lower-rated XI, so "
+                   f"their call stands.")
+        elif result.decided_by == SPLIT_RANDOM:
+            why = "Split vote — settled by a coin flip."
+        elif result.decided_by == "default":
+            why = ("Split vote — the two XIs are rated dead level, so the "
+                   "default stands.")
+        else:
+            why = "Split vote — settled by the house rule."
+
+        blocks = [R.pullquote(
+            R.bold(f"{VOTE_EMOJI} TRAITS: ON" if result.enabled
+                   else "🚫 TRAITS: OFF"), caption=why)]
+        if result.outcome not in ("both_yes", "both_no"):
+            blocks.append(R.table([
+                [R.cell(R.bold(host_label)), R.cell(answer(host), align="right")],
+                [R.cell(R.bold(guest_label)), R.cell(answer(guest), align="right")],
+            ], bordered=True, compact=True))
+        if not result.enabled:
+            blocks.append(R.footer(R.italic(
+                "No trait effects and no ⚡ Trait Boost for either side. "
+                "Nothing is unequipped — traits are back next match.")))
+        return blocks
+    except Exception:
+        logger.exception("trait vote result blocks failed to build")
+        return None

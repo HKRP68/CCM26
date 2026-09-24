@@ -175,7 +175,7 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/gstats` 💬 | `/globalstats` | Global stats — every owner, every match type 🌍 |
 | `/statscl` 💬 | — | Any Challenge League player's stats |
 | `/statstour` | — | A player's stats in the active tournament |
-| `/tournamentstats` | — | Tournament Top-10 stat leaderboards |
+| `/tournamentstats` | — | Tournament stat leaderboards (top 25, ranks 11+ behind a tap) |
 | `/cmuleaderboard` | `/leaderboard` `/lb` `/top` | The global leaderboard |
 | `/h2h` | `/headtohead` | Head-to-head record vs another player |
 | `/lastmatch` | `/lm` | Your last completed match |
@@ -232,7 +232,7 @@ League commands are **dynamic**: every active league answers to both
 | `/lptable` | `/lptpoints` | Points table (P W L T · Pts · NRR) |
 | `/lptfixtures` | `/lptfix` | Full fixture list, with *your* next matches pulled out |
 | `/lptteams` | — | Who is in the tournament |
-| `/lptstats` | — | Top-10 leaderboards — runs, wickets, sixes, average, economy |
+| `/lptstats` | — | Leaderboards — runs, wickets, sixes, average, economy (top 25) |
 
 Admin commands for running one: [Appendix B](#appendix-b--admin--owner-commands).
 

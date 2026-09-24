@@ -306,7 +306,7 @@ SECTIONS = {
             "<b>/lptfixtures</b> — the whole schedule, with <i>your</i> "
             "remaining matches pulled out at the top\n"
             "<b>/lptteams</b> — who is in it\n"
-            "<b>/lptstats</b> — Top-10 runs, wickets, sixes, average, economy "
+            "<b>/lptstats</b> — runs, wickets, sixes, average, economy "
             "and more\n\n"
             "<b>📋 The rules the bot enforces</b>\n"
             "• Both of you must be entered in the tournament\n"
