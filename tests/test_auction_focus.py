@@ -215,8 +215,6 @@ class TheCacheTests(unittest.TestCase):
 
     def setUp(self):
         F.invalidate()
-        F._generation.clear()
-        self.addCleanup(F._generation.clear)
         self.addCleanup(F.invalidate)
 
     def test_it_names_the_auction_and_caches_the_answer(self):
@@ -281,6 +279,71 @@ class TheCacheTests(unittest.TestCase):
                              "the caller still gets what was true when read")
         self.assertNotIn(-100, F._cache,
                          "a stale answer was left behind for the next caller")
+
+    def test_an_invalidation_elsewhere_also_holds_the_write_back(self):
+        """One epoch for every chat, and that is deliberate.
+
+        A per-chat counter would have to be pruned, and pruning one while a
+        lookup holds its value re-opens the same hole from the other end. One
+        integer has nothing to prune; the price is that an auction changing
+        state costs another chat's in-flight lookup its cache entry, which is a
+        handful of events per auction.
+        """
+        import database
+        from services import auction_service
+        session = SimpleNamespace(close=lambda: None)
+
+        def _lookup(_session, _chat_id):
+            F.invalidate(-999)        # a DIFFERENT chat's auction starts
+            return LIVE
+
+        with patch.object(database, "get_session", lambda: session), \
+                patch.object(auction_service, "season_for_chat", _lookup):
+            self.assertEqual("Season 2", F.locked_season_for_chat(-100))
+        self.assertNotIn(-100, F._cache)
+
+    def test_the_epoch_survives_a_prune(self):
+        """The hole a per-chat counter had: forgotten mid-lookup, it resets.
+
+        With one integer there is nothing to forget, so a prune — even one
+        that empties the whole cache — cannot let a stale answer back in.
+        """
+        import database
+        from services import auction_service
+        session = SimpleNamespace(close=lambda: None)
+
+        def _lookup(_session, _chat_id):
+            F.invalidate(-100)
+            F._cache.clear()          # stands in for the prune
+            return LIVE
+
+        with patch.object(database, "get_session", lambda: session), \
+                patch.object(auction_service, "season_for_chat", _lookup):
+            F.locked_season_for_chat(-100)
+        self.assertNotIn(-100, F._cache)
+
+    def test_an_invalidation_waits_for_the_cache_lock(self):
+        """What makes "check the epoch, then write" one step.
+
+        The compare and the write are two bytecode regions; an invalidation
+        landing between them would be the same lost write again, a microsecond
+        wide instead of a query wide. Pinned by holding the lock and showing
+        that an invalidation on another thread cannot get past it.
+        """
+        import threading
+        done = threading.Event()
+
+        def _invalidate():
+            F.invalidate(-100)
+            done.set()
+
+        with F._lock:
+            thread = threading.Thread(target=_invalidate, daemon=True)
+            thread.start()
+            self.assertFalse(done.wait(0.2),
+                             "invalidate() did not take the cache lock")
+        self.assertTrue(done.wait(2), "invalidate() never finished")
+        thread.join(2)
 
     def test_a_broken_lookup_fails_open(self):
         import database

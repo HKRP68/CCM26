@@ -45,6 +45,7 @@ pin them against plain objects.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 
 from services.command_token import command_name_from_update
@@ -261,14 +262,31 @@ def should_reply(update, bot_username=None) -> bool:
 
 _CACHE_TTL_SECONDS = 10.0
 _cache: dict[int, tuple[float, str | None]] = {}
-# One counter per chat, bumped by every invalidation. A lookup reads it before
-# its query and stores its answer only if it has not moved since — otherwise a
-# lookup that read the season BEFORE an admin's commit could land its stale
-# answer in the cache AFTER the invalidation that commit fired, and the room
-# would keep being refused (or keep being let through) for a whole TTL. The
-# lookups run in worker threads, so this ordering is the normal case rather
-# than an exotic one.
-_generation: dict[int, int] = {}
+
+# ``_epoch`` is bumped by EVERY invalidation, and a lookup may only write what
+# it found if the epoch it read before its query is still the current one.
+# Without that, a lookup that read the season *before* an admin's commit could
+# land its stale answer in the cache *after* the invalidation that commit
+# fired, and the room would keep being refused — or keep being let through —
+# for a whole TTL. These lookups run in worker threads, so that ordering is the
+# ordinary one rather than an exotic one.
+#
+# **One counter for every chat, not one per chat**, and that is the whole
+# point: a per-chat counter has to be pruned or it grows without bound, and
+# pruning one while a lookup is holding its value re-opens the same hole from
+# the other end (the entry vanishes, the lookup's stale value compares equal to
+# the fresh default, and the write goes through). A single integer has nothing
+# to prune. It costs an auction elsewhere one uncached lookup whenever any
+# auction changes state, which is a handful of events per auction.
+#
+# ``_lock`` is what makes "check the epoch, then write" one step. The compare
+# and the write are two bytecode regions, and an invalidation landing between
+# them would be the same lost write again, a microsecond wide instead of a
+# query wide. Every reader and writer of ``_cache``/``_epoch`` takes it; the
+# database query itself deliberately happens OUTSIDE it, because holding a lock
+# across I/O is how a gate that must never block starts blocking.
+_epoch = 0
+_lock = threading.Lock()
 
 
 def invalidate(chat_id=None) -> None:
@@ -277,18 +295,20 @@ def invalidate(chat_id=None) -> None:
     Called by ``auction_service`` whenever an auction's status or focus switch
     moves, so ``/astart`` and ``/afocus off`` land immediately instead of at
     the end of a TTL. Cheap enough to call on any auction write.
+
+    The epoch is bumped even when the chat id is unusable: a spurious bump
+    costs one uncached lookup, and getting that wrong costs a stale lock.
     """
-    if chat_id is None:
-        _cache.clear()
-        for key in list(_generation):
-            _generation[key] += 1
-        return
-    try:
-        key = int(chat_id)
-    except (TypeError, ValueError):
-        return
-    _generation[key] = _generation.get(key, 0) + 1
-    _cache.pop(key, None)
+    global _epoch
+    with _lock:
+        _epoch += 1
+        if chat_id is None:
+            _cache.clear()
+            return
+        try:
+            _cache.pop(int(chat_id), None)
+        except (TypeError, ValueError):
+            pass
 
 
 def locked_season_for_chat(chat_id, *, now=None):
@@ -306,12 +326,13 @@ def locked_season_for_chat(chat_id, *, now=None):
         return None
 
     now = now if now is not None else time.monotonic()
-    cached = _cache.get(chat_id)
-    if cached is not None and now - cached[0] < _CACHE_TTL_SECONDS:
-        return cached[1]
+    with _lock:
+        cached = _cache.get(chat_id)
+        if cached is not None and now - cached[0] < _CACHE_TTL_SECONDS:
+            return cached[1]
+        # Read before the query, compared after it: see ``_epoch``.
+        epoch = _epoch
 
-    # Read before the query, compared after it: see ``_generation``.
-    generation = _generation.get(chat_id, 0)
     name = None
     try:
         from database import get_session
@@ -329,20 +350,19 @@ def locked_season_for_chat(chat_id, *, now=None):
         logger.exception("Auction focus lookup failed (non-fatal)")
         return None
 
-    if _generation.get(chat_id, 0) == generation:
-        # Nothing invalidated this chat while the query was in flight, so this
-        # answer is still the current one. If something did, the answer is
-        # still returned to THIS caller — it was true when it was read — but it
-        # is not left behind for the next one.
-        _cache[chat_id] = (now, name)
-    if len(_cache) > 5000:
-        # list() first: another worker thread may be writing the dict, and
-        # iterating it while it changes raises rather than pruning.
-        for key in [k for k, entry in list(_cache.items())
-                    if now - entry[0] > _CACHE_TTL_SECONDS]:
-            _cache.pop(key, None)
-        for key in [k for k in list(_generation) if k not in _cache]:
-            _generation.pop(key, None)
+    with _lock:
+        if _epoch == epoch:
+            # Nothing was invalidated while the query was in flight, so this
+            # answer is still the current one. If something was, the answer is
+            # still returned to THIS caller — it was true when it was read —
+            # but it is not left behind for the next one.
+            _cache[chat_id] = (now, name)
+        if len(_cache) > 5000:
+            # list() first: the dict is shared, and iterating one while it
+            # changes raises rather than pruning.
+            for key in [k for k, entry in list(_cache.items())
+                        if now - entry[0] > _CACHE_TTL_SECONDS]:
+                _cache.pop(key, None)
     return name
 
 
