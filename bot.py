@@ -361,14 +361,14 @@ GROUP_ONLY_COMMANDS = frozenset({
     # Challenge Draft. It needs a second player to tap Join, so it refuses in a
     # private chat outright.
     "cdraft",
-    # Franchise Auction. An auction IS a group event — every one of these
-    # refuses outside the chat the auction is bound to. They are not in
-    # BOT_MENU_COMMANDS either (see the note there), so listing them here
-    # changes nothing today; it is the correct entry for the day a private
-    # slot frees up.
-    "bid", "aboard", "apurse", "artm",
-    "ainfo", "asets", "anextset", "anextplayer", "asquad", "asoldlist",
-    "aunsoldlist",
+    # Franchise Auction. *Bidding* is a group event — /bid and /artm refuse
+    # outside the chat the auction is bound to, because a bid nobody in the
+    # room saw is how a price gets disputed. The read-only views do run in a
+    # DM (see handlers.auction._read_season), so they are deliberately not
+    # here. None of them is in BOT_MENU_COMMANDS either (see the note there),
+    # so this list changes nothing today; it is the correct entry for the day
+    # a private slot frees up.
+    "bid", "artm",
 })
 
 # Commands that only make sense one-to-one with the bot: deep-link entry
@@ -1076,9 +1076,11 @@ async def start_handler(update, context):
         "/aboard - The live auction board\n"
         "/apurse [franchise] - Every purse, or one franchise's squad\n"
         "/artm yes|no - Answer a Right To Match on your former player\n"
-        "/ainfo - Sets, next set, next player, squads, sold & unsold — as buttons\n"
+        "/ainfo - Rules, sets, next player, squads, purses, sold & unsold — as buttons\n"
+        "/arules - Purse, squad caps, base prices, bid steps, the clock — before you bid\n"
         "/asets /anextset /anextplayer - The sets, the next set, who is up next\n"
         "/asquad [team] /asoldlist /aunsoldlist - Squads, sold and unsold players\n"
+        "/aretlock /apicks - Who kept whom, and the expansion picks\n"
         "/ctour - Challenge League Tournament hub: table, fixtures, teams\n"
         "/cttable /ctfixtures /ctteams - Tournament table, schedule (done matches struck through), field\n"
         "/ctinjuries - Who is ruled out injured, and for how many more matches 🚑\n"
@@ -2193,7 +2195,7 @@ def main():
             apickskip_handler, apickundo_handler,
             aretainforce_handler, retention_offer_callback, aoffers_handler,
             aretcancel_handler, ainfo_handler, info_callback, asets_handler,
-            sets_callback,
+            arules_handler, sets_callback,
             anextset_handler, anextplayer_handler, asquad_handler,
             asoldlist_handler, aunsoldlist_handler, apool_handler,
             asetorder_handler, aaccelmode_handler, acall_handler,
@@ -2216,6 +2218,7 @@ def main():
         # of them behind a button, and the board's footer names them.
         app.add_handler(CommandHandler(["ainfo", "amenu"], ainfo_handler))
         app.add_handler(CallbackQueryHandler(info_callback, pattern=r"^au_info_"))
+        app.add_handler(CommandHandler(["arules", "asettings"], arules_handler))
         app.add_handler(CommandHandler("asets", asets_handler))
         # The Sets card's own buttons: its pages, and one per set to open it.
         app.add_handler(CallbackQueryHandler(sets_callback, pattern=r"^au_sets_"))

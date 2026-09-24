@@ -54,6 +54,9 @@ GROUP_ONLY = ("❌ Auction commands only work in the group the auction is bound 
 NO_AUCTION = ("❌ No auction is running in this chat.\n"
               "An admin can create one with <code>/anew &lt;name&gt;</code> and "
               "bind it here with <code>/abind</code>.")
+NO_AUCTION_DM = ("❌ You do not have a franchise in any auction that is "
+                 "running.\nAsk in the auction's group — every one of these "
+                 "views works there.")
 NOT_YOURS = ("⛔ Only a franchise's owner or a co-owner can bid for it.\n"
              "Admins deliberately cannot bid on someone's behalf — an admin "
              "who must act for an absent owner uses the auction console, which "
@@ -143,11 +146,46 @@ async def _reply_rich(update, context, blocks, html_text, *, reply_markup=None):
     return sent
 
 
+def _no_auction(update):
+    """"No auction" written for where it is being said."""
+    chat = update.effective_chat
+    if chat is not None and chat.type not in GROUP_CHAT_TYPES:
+        return NO_AUCTION_DM
+    return NO_AUCTION
+
+
 def _season_for(session, update):
     chat = update.effective_chat
     if chat is None:
         return None
     return A.season_for_chat(session, chat.id)
+
+
+def _read_season(session, update):
+    """The auction a **read-only** view should answer about.
+
+    This chat's, whenever one is bound here. Failing that — and only in a DM —
+    the auction this user has a team in.
+
+    Bidding stays in the group for the reason ``AuctionSeason.chat_id`` gives:
+    a bid nobody in the room saw is how a price gets disputed. Reading carries
+    none of that, and before the auction starts it is the other way round:
+    working out what your purse can reach, what the sets hold and what
+    retention already cost you is homework, done the night before, and making
+    somebody do it in the group means either not doing it or doing it in front
+    of the people they are about to bid against.
+    """
+    season = _season_for(session, update)
+    if season is not None:
+        return season
+    chat = update.effective_chat
+    if chat is not None and chat.type in GROUP_CHAT_TYPES:
+        # A group with no auction bound to it is not somebody's DM, and
+        # answering with the auction they own elsewhere would put one room's
+        # numbers in another room.
+        return None
+    user = update.effective_user
+    return A.season_for_actor(session, user.id) if user else None
 
 
 async def _with_auction(update, work, *, admin=False, allow_dm=False,
@@ -452,14 +490,22 @@ async def aboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """A personal copy of the board, with the quick-bid buttons under it."""
     session = get_session()
     try:
-        season = _season_for(session, update)
+        season = _read_season(session, update)
         if season is None:
-            await _reply(update, NO_AUCTION)
+            await _reply(update, _no_auction(update))
             return
         lot = A.current_lot(session, season)
+        # The quick-bid buttons only ride on a board shown *in the room*: a
+        # bid is refused outside the bound group, so a button offered anywhere
+        # else is one that can only ever answer "not here".
+        chat = update.effective_chat
+        in_room = chat is not None and season.chat_id == chat.id
         await _reply_rich(update, context, AR.board_blocks(session, season, lot),
                           AR.board_html(session, season, lot),
-                          reply_markup=bid_keyboard(season, lot))
+                          reply_markup=bid_keyboard(season, lot)
+                          if in_room else None)
+    except AuctionError as exc:
+        await _reply(update, f"⚠️ {html.escape(str(exc))}")
     finally:
         session.close()
 
@@ -467,9 +513,9 @@ async def aboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def apurse_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = get_session()
     try:
-        season = _season_for(session, update)
+        season = _read_season(session, update)
         if season is None:
-            await _reply(update, NO_AUCTION)
+            await _reply(update, _no_auction(update))
             return
         name = _arg_text(context)
         if name:
@@ -1030,56 +1076,25 @@ async def aunretain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def aretlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """With no arguments, the state of retention. With ``on``, close it.
+    """The state of retention for anyone; ``on`` closes it, for an admin.
 
-    The readout matters more than the switch: the deadline is enforced lazily
-    (nothing sweeps while an auction is in setup), so an admin who cannot see
-    how long is left only finds out when it refuses them.
+    The readout matters more than the switch, and to more people. The deadline
+    is enforced lazily — nothing sweeps while an auction is in setup — so a
+    window nobody can see only ever announces itself by refusing somebody; and
+    what the rest of the room kept is what every franchise is about to bid
+    against. So the readout is open, and only the switch takes an admin.
     """
     user = update.effective_user
     arg = _arg_text(context).strip().lower()
 
+    if arg not in ("on", "close", "lock"):
+        await _view(update, context,
+                    lambda s, season: AR.retention_view(s, season))
+        return
+
     def work(session, season):
-        if arg in ("on", "close", "lock"):
-            A.lock_retention(session, season,
-                             by_tg_id=user.id if user else None)
-            return "🔒 Retention is closed."
-
-        symbol = season.currency_label
-        if not A.retention_configured(season):
-            return ("🔓 This auction allows no retentions. Set a maximum on "
-                    "the auction's setup page to turn retention on.")
-        left = A.retention_seconds_left(season)
-        if A.retention_locked(season):
-            window = "🔒 <b>Closed</b>"
-        elif left is None:
-            window = "🔓 <b>Open</b> — no deadline set"
-        elif left > 0:
-            window = f"🔓 <b>Open</b> — closes in {A.format_clock(left)}"
-        else:
-            window = f"🔒 <b>Closed</b> — the deadline passed {A.format_clock(-left)} ago"
-
-        lines = [f"🔒 <b>Retention</b> — {window}",
-                 f"Up to <b>{season.max_retentions}</b> per franchise"
-                 + (f", at least <b>{season.min_retentions}</b>"
-                    if season.min_retentions else "")]
-        if season.retention_max_spend_lakh is not None:
-            lines.append(f"Budget: "
-                         f"{A.render_money(season.retention_max_spend_lakh, symbol)}")
-        ladder = ", ".join(A.render_money(r["price_lakh"], symbol)
-                           for r in A.retention_price_rules(season))
-        lines.append(f"Ladder: {ladder}")
-        lines.append("")
-        for f in A.franchises(session, season.id):
-            kept = A.retained(session, f.id)
-            lines.append(
-                f"<b>{html.escape(f.name)}</b> — {len(kept)}"
-                f"/{season.max_retentions} · "
-                f"{A.render_money(A.retention_spent(session, f.id), symbol)}")
-            for lot in kept:
-                lines.append(f"   🔒 {html.escape(lot.name)} — "
-                             f"{A.render_money(lot.sold_price_lakh, symbol)}")
-        return "\n".join(lines)
+        A.lock_retention(session, season, by_tg_id=user.id if user else None)
+        return "🔒 Retention is closed."
 
     await _with_auction(update, work, admin=True, context=context)
 
@@ -1126,53 +1141,13 @@ async def apick_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def apicks_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """<code>/apicks</code> — the running order, whose turn, and what is taken."""
-    def work(session, season):
-        symbol = season.currency_label
-        order = A.pick_order(session, season)
-        if not order:
-            new_sides = A.expansion_franchises(session, season)
-            if not new_sides:
-                return ("🆕 <b>Expansion picks</b> — nobody is new this "
-                        "season, so there are no picks to make.\n"
-                        "<i>A side is 'new' when last season's league records "
-                        "nobody as theirs.</i>")
-            return ("🆕 <b>Expansion picks</b> — none dealt yet.\n"
-                    "New this season: "
-                    + ", ".join(html.escape(f.name) for f in new_sides)
-                    + "\nGive them picks with <code>/apickset 3</code>.")
+    """<code>/apicks</code> — the running order, whose turn, and what is taken.
 
-        turn = A.pick_turn(session, season)
-        lines = ["🆕 <b>Expansion picks</b>"]
-        if turn is not None:
-            lines.append(f"▶️ It is <b>{html.escape(turn.name)}</b>'s pick.")
-        else:
-            lines.append("✅ Every pick is used.")
-        if A.retention_configured(season) and not A.retention_locked(season):
-            lines.append("⚠️ Retention is still open — close it with "
-                         "<code>/aretlock on</code> before picking.")
-        lines.append("")
-        lines.append("<b>Order</b> (it snakes: last in a round picks first in "
-                     "the next)")
-        schedule = A.pick_schedule(session, season)
-        made = sum(int(f.draft_picks_used or 0) for f in order)
-        for i, franchise in enumerate(schedule, start=1):
-            mark = "✅" if i <= made else ("▶️" if i == made + 1 else "  ")
-            lines.append(f"{mark} {i}. {html.escape(franchise.name)}")
-        lines.append("")
-        for franchise in order:
-            taken = A.drafted(session, franchise.id)
-            lines.append(
-                f"<b>{html.escape(franchise.name)}</b> — "
-                f"{A.picks_left(franchise)} left of "
-                f"{int(franchise.draft_picks_total or 0)} · "
-                f"{A.render_money(franchise.purse_remaining_lakh, symbol)}")
-            for lot in taken:
-                lines.append(f"   🆕 {html.escape(lot.name)} — "
-                             f"{A.render_money(lot.sold_price_lakh, symbol)}")
-        return "\n".join(lines)
-
-    await _with_auction(update, work, admin=True, context=context)
+    Open to the room. It is the *new* side that needs the order — their turn
+    is the one coming up — and an auction where only the admin can see whose
+    pick it is makes everybody else ask.
+    """
+    await _view(update, context, lambda s, season: AR.picks_view(s, season))
 
 
 async def apickset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1476,9 +1451,9 @@ async def _view(update, context, build):
     """Run a read-only view against this chat's auction and send it."""
     session = get_session()
     try:
-        season = _season_for(session, update)
+        season = _read_season(session, update)
         if season is None:
-            await _reply(update, NO_AUCTION)
+            await _reply(update, _no_auction(update))
             return
         result = build(session, season)
         if isinstance(result, str):
@@ -1516,9 +1491,21 @@ async def ainfo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         franchise = (A.franchise_for_actor(session, season.id, user.id)
                      if user else None)
         blocks, html_text = AR.info_menu(session, season, franchise)
-        return blocks, html_text, AR.info_keyboard()
+        return blocks, html_text, AR.info_keyboard(season)
 
     await _view(update, context, build)
+
+
+async def arules_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/arules</code> — every number the auction will run by.
+
+    Open to the room, and written for the hour before it starts: the purse, the
+    squad and overseas caps, the reserve the max-bid rule holds back, the base
+    prices, the bid ladder, the clock, retention, RTM and the picks. All of it
+    lived on the admin's setup page, which is no use at all to the people who
+    have to bid against it.
+    """
+    await _view(update, context, lambda s, season: AR.rules_view(s, season))
 
 
 async def asets_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1597,6 +1584,9 @@ async def info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "sold": lambda s, season: AR.sold_view(s, season),
         "unsold": lambda s, season: AR.unsold_view(s, season),
         "purse": lambda s, season: AR.purses_view(s, season),
+        "rules": lambda s, season: AR.rules_view(s, season),
+        "retention": lambda s, season: AR.retention_view(s, season),
+        "picks": lambda s, season: AR.picks_view(s, season),
     }
     build = views.get(key)
     if build is None:
@@ -1605,7 +1595,7 @@ async def info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     session = get_session()
     try:
-        season = _season_for(session, update)
+        season = _read_season(session, update)
         if season is None:
             await query.answer("No auction is running here.", show_alert=True)
             return
@@ -1656,7 +1646,7 @@ async def sets_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     session = get_session()
     try:
-        season = _season_for(session, update)
+        season = _read_season(session, update)
         if season is None:
             await query.answer("No auction is running here.", show_alert=True)
             return
