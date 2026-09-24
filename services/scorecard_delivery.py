@@ -159,17 +159,21 @@ def _visuals(resolve):
         session.close()
 
 
-def _live_style(is_first_innings, team_name=None, user_id=None):
+def _live_style(is_first_innings, team_name=None, user_id=None, event=None):
     """The team's accent, crest and the admin text settings, at render time.
 
     Kept out of the stored payload on purpose: a card redrawn later should
     follow the theme the admins have configured now and the crest the team has
     now, not the ones in force when the match was played.
+
+    ``event`` is the tournament/league identity the payload *does* carry — which
+    competition this was and which side of it the team is. That is match data,
+    not styling: the crest behind it is still read live.
     """
     from services import card_identity
     style = _visuals(lambda s: card_identity.innings_visuals(
         s, team_name=team_name, user_id=user_id,
-        is_first_innings=is_first_innings))
+        is_first_innings=is_first_innings, **(event or {})))
     style.setdefault("accent_hex", None)
     style.setdefault("text_settings", None)
     style.setdefault("team_logo_png", None)
@@ -177,7 +181,8 @@ def _live_style(is_first_innings, team_name=None, user_id=None):
 
 
 def _summary_style(inn1_team=None, inn2_team=None, potm_player_id=None,
-                   inn1_user_id=None, inn2_user_id=None, potm_name=None):
+                   inn1_user_id=None, inn2_user_id=None, potm_name=None,
+                   event=None):
     """Both teams' colours and crests, the POTM portrait, and the text settings.
 
     The summary card used to hardcode its red/blue by innings position while
@@ -189,12 +194,57 @@ def _summary_style(inn1_team=None, inn2_team=None, potm_player_id=None,
     style = _visuals(lambda s: card_identity.summary_visuals(
         s, inn1_team=inn1_team, inn2_team=inn2_team,
         inn1_user_id=inn1_user_id, inn2_user_id=inn2_user_id,
-        potm_player_id=potm_player_id, potm_name=potm_name))
+        potm_player_id=potm_player_id, potm_name=potm_name,
+        potm_card=potm_card_inline(), **(event or {})))
     for key in ("text_settings", "inn1_color", "inn2_color",
-                "inn1_logo_png", "inn2_logo_png", "potm_photo_png"):
+                "inn1_logo_png", "inn2_logo_png", "potm_photo_png",
+                "potm_card_png"):
         style.setdefault(key, None)
     style.setdefault("dynamic_flourish", False)
     return style
+
+
+# The payload keys that say which competition a card belongs to, mapped to the
+# argument ``card_identity`` knows them by. They are stored rather than resolved
+# live for the same reason the team name is: a tournament that has since ended,
+# or a franchise since renamed, still drew *this* match, and /lastscorecard has
+# to be able to say so months later.
+_EVENT_KEYS = {
+    "league_key": "league_key",
+    "tournament_id": "tournament_id",
+}
+_INNINGS_EVENT_KEYS = {
+    "tournament_team_id": "tournament_team_id",
+    "challenge_team_id": "challenge_team_id",
+}
+_SUMMARY_EVENT_KEYS = {
+    "inn1_tournament_team_id": "inn1_team_id",
+    "inn2_tournament_team_id": "inn2_team_id",
+    "inn1_challenge_team_id": "inn1_challenge_team_id",
+    "inn2_challenge_team_id": "inn2_challenge_team_id",
+}
+
+
+def _event_context(payload, extra):
+    """The event identity a stored payload carries, as identity kwargs.
+
+    Absent keys are simply absent: an archived row from before tournaments
+    branded their own cards resolves exactly as it always did.
+    """
+    mapping = dict(_EVENT_KEYS)
+    mapping.update(extra)
+    return {arg: payload[key] for key, arg in mapping.items()
+            if payload.get(key) not in (None, "")}
+
+
+# Payload keys that say *who* rather than *what to draw*. They are read by the
+# identity lookup above and then dropped, because no generator takes them —
+# without this every single card would log a "keys the renderer no longer
+# takes" warning naming them, which is the warning that is supposed to mean a
+# stored row has outlived the code.
+_IDENTITY_KEYS = (set(_EVENT_KEYS) | set(_INNINGS_EVENT_KEYS)
+                  | set(_SUMMARY_EVENT_KEYS)
+                  | {"team_user_id", "inn1_user_id", "inn2_user_id"})
 
 
 def _accepted_kwargs(func, payload):
@@ -216,7 +266,7 @@ def _accepted_kwargs(func, payload):
     known = {name for name, p in params.items()
              if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
                            inspect.Parameter.KEYWORD_ONLY)}
-    dropped = sorted(set(payload) - known)
+    dropped = sorted(set(payload) - known - _IDENTITY_KEYS)
     if dropped:
         logger.warning("scorecard payload for %s carries keys the renderer no "
                        "longer takes: %s", func.__name__, ", ".join(dropped))
@@ -236,9 +286,10 @@ def render_card(card_type, payload):
                                                  generate_bowling_scorecard)
             generate = (generate_batting_scorecard if card_type == CARD_BATTING
                         else generate_bowling_scorecard)
-            payload.update(_live_style(payload.get("is_first_innings", True),
-                                       payload.get("team_name"),
-                                       payload.get("team_user_id")))
+            payload.update(_live_style(
+                payload.get("is_first_innings", True),
+                payload.get("team_name"), payload.get("team_user_id"),
+                event=_event_context(payload, _INNINGS_EVENT_KEYS)))
             return generate(**_accepted_kwargs(generate, payload))
         if card_type == CARD_SUMMARY:
             from services.match_summary_card import generate_match_summary
@@ -247,7 +298,8 @@ def render_card(card_type, payload):
                 payload.get("potm_player_id"),
                 inn1_user_id=payload.get("inn1_user_id"),
                 inn2_user_id=payload.get("inn2_user_id"),
-                potm_name=payload.get("potm_name")))
+                potm_name=payload.get("potm_name"),
+                event=_event_context(payload, _SUMMARY_EVENT_KEYS)))
             # ``match_date`` round-trips through JSON as an ISO string.
             raw_date = payload.get("match_date")
             if isinstance(raw_date, str):
@@ -634,6 +686,30 @@ def _potm_card_enabled():
     return True if value is None else bool(value)
 
 
+def potm_card_inline():
+    """Whether the award winner's card is drawn *into* the summary card.
+
+    Public, like ``potm_card_bytes`` beside it, because the modes that call a
+    generator directly (/cipl, /sim) have to ask the same question — one
+    switch, read in one place, so no mode can drift out of step with the rest.
+
+    On by default. The strip carries the card beside the player's name, which is
+    where someone reading the result looks for it — and a card in the image is
+    one the chat cannot lose, scroll past, or fail to receive when a second
+    photo is rejected.
+
+    Read the same forgiving way as the switch above: unreadable or never
+    written means on, so an install that predates the column is not opted out.
+    """
+    try:
+        from services.config_service import get_config
+        value = get_config().get("scorecard_potm_card_inline")
+    except Exception:
+        logger.exception("inline POTM card toggle lookup failed — assuming on")
+        return True
+    return True if value is None else bool(value)
+
+
 def potm_card_bytes(player_id=None, name=None):
     """Draw the award winner's card. Image bytes or ``None``, never raises.
 
@@ -677,10 +753,12 @@ async def send_potm_card(bot, chat_id, *, player_id=None, name=None, team=None,
                          reply_to_message_id=None):
     """Post the Player of the Match's collectible card after the summary card.
 
-    The summary's POTM strip is 125px tall and the card is 1536×1024, so it
-    cannot be composited in and still be readable — it goes out as its own
-    photo, which also means every mode gets it rather than only the ones whose
-    strip has room.
+    Only when the card is *not* already on the summary card. The strip draws it
+    beside the winner's name now (``scorecard_potm_card_inline``), and posting
+    the same artwork again underneath reads as a duplicate rather than as a
+    second look at it. Turning the inline card off brings this photo back, which
+    is the trade: the standalone photo is far bigger and carries its own
+    caption.
 
     Best-effort from end to end. The summary card has already landed by the time
     this runs, and a player without art, a stale id or a render failure must all
@@ -688,6 +766,8 @@ async def send_potm_card(bot, chat_id, *, player_id=None, name=None, team=None,
     Returns True when a photo was sent.
     """
     if not player_id and not name:
+        return False
+    if potm_card_inline():
         return False
     try:
         png = await asyncio.to_thread(potm_card_bytes, player_id, name)

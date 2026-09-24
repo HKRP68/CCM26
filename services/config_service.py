@@ -59,8 +59,12 @@ DEFAULTS = {
     # Century!, Match Winner!).
     "scorecard_dynamic_flourish": False,
     # Post the Player of the Match's collectible card as a second photo after
-    # the summary card. On by default.
+    # the summary card. On by default — but suppressed while the card is drawn
+    # into the summary card itself (below), so it is never posted twice.
     "scorecard_potm_card": True,
+    # Draw the Player of the Match's collectible card inside the summary card,
+    # beside the winner's name. On by default.
+    "scorecard_potm_card_inline": True,
     # Which cards /wpm and /cm post to the lobby chat on completion.
     "wpm_result_cards": "summary",
     # Maintenance mode

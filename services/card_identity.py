@@ -17,6 +17,8 @@ so every lookup swallows its own failure and returns ``None``.
 
 Identity, first hit wins
 ────────────────────────
+0. **the event's own team** — a ``TournamentTeam`` or ``ChallengeTeam`` row,
+   when the caller is in a tournament or a league and says so. See below.
 1. **user id** — ``users.team_logo_asset_key`` / ``users.team_colour``
 2. **ChallengeTeam** — its ``logo_url`` / ``primary_color``. CIPL sides are
    franchises, not user teams, and both columns already existed unused.
@@ -25,6 +27,26 @@ Identity, first hit wins
 A user id beats a name wherever one is in scope, because names are not reliable
 keys: ``/sim`` passes ``"🤖 Sim XI"`` for a bot side and can pass ``@username``
 or ``"Someone's XI"``, none of which match a ``users.team_name``.
+
+The event crest wins over the manager's own
+───────────────────────────────────────────
+In a tournament or a league nobody is playing *their* team — they are playing a
+franchise the admins entered, with the franchise's name in the table and the
+franchise's crest on the poster. Drawing the manager's personal crest on that
+card mislabels the side, and it was what every /cipl card did: ``user_id`` was
+tried first and a CIPL side always has one.
+
+So whenever a caller passes **event context** — ``tournament_id``,
+``tournament_team_id``, ``challenge_team_id``, ``challenge_team`` or
+``league_key`` — the event's crest and colour are resolved first and win. With
+no event context the order above is unchanged, so a plain /playmatch still
+draws the manager's own crest.
+
+The context is an id wherever one is in scope, because a name is not a key: two
+tournaments can both have a "Super Kings" and a Lets Play side is a *user*
+playing under a team label. ``tournament_tteam_by_user`` (Lets Play) and
+``tournament_team_by_user`` (Challenge League) already carry those ids through
+the match state, so the callers have them without a lookup.
 """
 
 import logging
@@ -139,9 +161,36 @@ def separate_colours(first, second, fallback=None):
 # Team identity
 # ══════════════════════════════════════════════════════════════════════
 
+def _clean(name):
+    return re.sub(r"\s+", " ", str(name or "")).strip()
+
+
+def _league_record(session, league_key):
+    """The ChallengeLeague a ``league_key`` names, or ``None``.
+
+    The resolver lives in ``handlers.challenge`` because it is the one that
+    knows about short codes, commands and duplicate leagues. Imported lazily and
+    behind a guard: a crest is never worth an import cycle at boot, and a key
+    that will not resolve just means the name lookup is not narrowed.
+    """
+    if not league_key or session is None:
+        return None
+    try:
+        from handlers.challenge import _get_challenge_league_record
+        return _get_challenge_league_record(session, league_key)
+    except Exception:
+        logger.debug("league lookup failed for %r", league_key, exc_info=True)
+        return None
+
+
 def _challenge_team(session, team_name, league_key=None):
-    """The ChallengeTeam row for a franchise name, or ``None``."""
-    name = re.sub(r"\s+", " ", str(team_name or "")).strip()
+    """The ChallengeTeam row for a franchise name, or ``None``.
+
+    Narrowed to one league when ``league_key`` resolves: franchise names repeat
+    across leagues (every custom IPL clone has a "Super Kings"), and the bare
+    name lookup would hand back whichever was entered last.
+    """
+    name = _clean(team_name)
     if not name or session is None:
         return None
     try:
@@ -149,18 +198,119 @@ def _challenge_team(session, team_name, league_key=None):
         from models import ChallengeTeam
         query = session.query(ChallengeTeam).filter(
             func.lower(func.trim(ChallengeTeam.name)) == name.lower())
+        league = _league_record(session, league_key)
+        if league is not None:
+            narrowed = query.filter(ChallengeTeam.league_id == league.id)
+            found = narrowed.order_by(ChallengeTeam.id.desc()).first()
+            if found is not None:
+                return found
         return query.order_by(ChallengeTeam.id.desc()).first()
     except Exception:
         logger.warning("challenge team lookup failed for %r", team_name, exc_info=True)
         return None
 
 
-def _challenge_logo_bytes(logo_url):
-    """Bytes behind a ChallengeTeam.logo_url.
+def _challenge_team_by_id(session, challenge_team_id):
+    if not challenge_team_id or session is None:
+        return None
+    try:
+        from models import ChallengeTeam
+        return session.get(ChallengeTeam, int(challenge_team_id))
+    except Exception:
+        logger.warning("challenge team %r lookup failed", challenge_team_id,
+                       exc_info=True)
+        return None
+
+
+def _tournament_team(session, *, tournament_id=None, tournament_team_id=None,
+                     team_name=None, user_tg_id=None):
+    """The ``TournamentTeam`` row a card is being drawn for, or ``None``.
+
+    Keyed on an id wherever the caller has one. The fallbacks matter for the
+    modes that do not carry the mapping: a Lets Play side *is* a Telegram user
+    (``user_tg_id``), and everything else is matched on the team label the
+    tournament itself stores.
+    """
+    if session is None:
+        return None
+    try:
+        from models import TournamentTeam
+        if tournament_team_id:
+            row = session.get(TournamentTeam, int(tournament_team_id))
+            if row is not None:
+                return row
+        if not tournament_id:
+            return None
+        query = (session.query(TournamentTeam)
+                 .filter(TournamentTeam.tournament_id == int(tournament_id)))
+        if user_tg_id:
+            row = query.filter(TournamentTeam.user_tg_id == int(user_tg_id)).first()
+            if row is not None:
+                return row
+        name = _clean(team_name)
+        if name:
+            from sqlalchemy import func
+            return (query.filter(func.lower(func.trim(TournamentTeam.name))
+                                 == name.lower())
+                    .order_by(TournamentTeam.id.desc()).first())
+    except Exception:
+        logger.warning("tournament team lookup failed (tournament=%r name=%r)",
+                       tournament_id, team_name, exc_info=True)
+    return None
+
+
+def _event_teams(session, *, team_name=None, user_id=None, league_key=None,
+                 challenge_team=None, challenge_team_id=None,
+                 tournament_id=None, tournament_team_id=None):
+    """The event rows a card should be branded from, most specific first.
+
+    Returns a list of ``TournamentTeam``/``ChallengeTeam`` rows — a list because
+    a tournament side usually *is* a franchise and inherits nothing but its
+    name: a Challenge League tournament copies ``logo_url`` onto its
+    ``TournamentTeam`` at entry, but a row entered before the copy existed, or
+    one an admin cleared, still has the franchise behind it via
+    ``challenge_team_id``. Falling through to it is the difference between the
+    league's crest and no crest at all.
+
+    Empty when the caller passed no event context. That is the signal the
+    manager's own crest still wins, so a plain /playmatch is untouched.
+    """
+    if session is None:
+        return []
+    if not any((tournament_id, tournament_team_id, challenge_team_id,
+                challenge_team, league_key)):
+        return []
+
+    rows = []
+    tteam = None
+    if tournament_id or tournament_team_id:
+        user = _user(session, user_id)
+        tteam = _tournament_team(
+            session, tournament_id=tournament_id,
+            tournament_team_id=tournament_team_id, team_name=team_name,
+            user_tg_id=getattr(user, "telegram_id", None))
+    if tteam is not None:
+        rows.append(tteam)
+
+    cteam = challenge_team or _challenge_team_by_id(session, challenge_team_id)
+    if cteam is None and tteam is not None:
+        cteam = _challenge_team_by_id(session, getattr(tteam, "challenge_team_id", None))
+    if cteam is None and league_key:
+        cteam = _challenge_team(session, team_name, league_key)
+    if cteam is not None:
+        rows.append(cteam)
+    return rows
+
+
+def _event_logo_bytes(logo_url):
+    """Bytes behind a ``logo_url`` an admin uploaded on the website.
 
     The admin panel stores a Flask static URL (``/static/challenge_leagues/x.png``),
     so this maps it back to disk and heals from the durable store on a miss —
-    the host filesystem is rebuilt on every deploy.
+    the host filesystem is rebuilt on every deploy, which used to leave every
+    league playing with no crest until someone re-uploaded one by hand.
+    ``asset_store.ensure`` refills it from the database, and from the Telegram
+    storage channel behind that.
     """
     raw = str(logo_url or "").strip()
     if not raw:
@@ -177,8 +327,9 @@ def _challenge_logo_bytes(logo_url):
             with open(path, "rb") as handle:
                 return handle.read()
     except Exception:
-        logger.warning("challenge team logo unreadable at %s", path, exc_info=True)
+        logger.warning("event team logo unreadable at %s", path, exc_info=True)
     return None
+
 
 
 def _user(session, user_id):
@@ -192,10 +343,45 @@ def _user(session, user_id):
         return None
 
 
+def event_logo_png(session, **context):
+    """The crest of the tournament/league side a card is for, or ``None``.
+
+    Split out so a caller can ask the question on its own — the website's
+    league pages and the tests both want "what crest does this franchise
+    play under" without a user in scope.
+    """
+    for row in _event_teams(session, **context):
+        found = _event_logo_bytes(getattr(row, "logo_url", None))
+        if found:
+            return found
+    return None
+
+
+def event_colour(session, **context):
+    """The tournament/league side's own ``#rrggbb``, or ``None``."""
+    for row in _event_teams(session, **context):
+        found = normalise_hex(getattr(row, "primary_color", None))
+        if found:
+            return found
+    return None
+
+
 def team_logo_png(session, *, user_id=None, team_name=None, challenge_team=None,
-                  league_key=None):
-    """A team's crest as PNG bytes, or ``None``."""
+                  league_key=None, tournament_id=None, tournament_team_id=None,
+                  challenge_team_id=None):
+    """A team's crest as PNG bytes, or ``None``.
+
+    An event crest wins over the manager's own — see the module docstring. With
+    no event context in the call this is the order it always had.
+    """
     try:
+        found = event_logo_png(
+            session, team_name=team_name, user_id=user_id, league_key=league_key,
+            challenge_team=challenge_team, challenge_team_id=challenge_team_id,
+            tournament_id=tournament_id, tournament_team_id=tournament_team_id)
+        if found:
+            return found
+
         user = _user(session, user_id)
         if user is not None and user.team_logo_asset_key:
             from services.team_logo_service import logo_bytes_for_key
@@ -205,7 +391,7 @@ def team_logo_png(session, *, user_id=None, team_name=None, challenge_team=None,
 
         row = challenge_team or _challenge_team(session, team_name, league_key)
         if row is not None and getattr(row, "logo_url", None):
-            found = _challenge_logo_bytes(row.logo_url)
+            found = _event_logo_bytes(row.logo_url)
             if found:
                 return found
 
@@ -218,9 +404,21 @@ def team_logo_png(session, *, user_id=None, team_name=None, challenge_team=None,
 
 
 def team_colour(session, *, user_id=None, team_name=None, challenge_team=None,
-                league_key=None):
-    """A team's own ``#rrggbb``, or ``None`` to use the admin default."""
+                league_key=None, tournament_id=None, tournament_team_id=None,
+                challenge_team_id=None):
+    """A team's own ``#rrggbb``, or ``None`` to use the admin default.
+
+    Same precedence as the crest: the colour and the crest have to name the
+    same side, or the card says one thing in its bar and another on its badge.
+    """
     try:
+        found = event_colour(
+            session, team_name=team_name, user_id=user_id, league_key=league_key,
+            challenge_team=challenge_team, challenge_team_id=challenge_team_id,
+            tournament_id=tournament_id, tournament_team_id=tournament_team_id)
+        if found:
+            return found
+
         user = _user(session, user_id)
         if user is not None and getattr(user, "team_colour", None):
             found = normalise_hex(user.team_colour)
@@ -363,19 +561,33 @@ def _admin_colours():
 def summary_visuals(session, *, inn1_team=None, inn2_team=None,
                     inn1_user_id=None, inn2_user_id=None,
                     potm_player_id=None, potm_name=None, league_key=None,
-                    include_style=True):
+                    tournament_id=None, inn1_team_id=None, inn2_team_id=None,
+                    inn1_challenge_team_id=None, inn2_challenge_team_id=None,
+                    potm_card=False, include_style=True):
     """Every branded argument the summary card takes.
 
     Spread this into ``generate_match_summary(**payload, **visuals)`` and the
     card gets both crests, both colours, the portrait and — unless
     ``include_style`` is off — the admin's text settings and flourish switch.
+
+    ``inn1_team_id``/``inn2_team_id`` are ``TournamentTeam`` ids and
+    ``inn1_challenge_team_id``/``inn2_challenge_team_id`` are ``ChallengeTeam``
+    ids: pass whichever the mode has, and the event's crest is what the card
+    wears. ``potm_card`` adds the award winner's collectible card to the strip.
     """
     default1, default2, text_settings, dynamic = _admin_colours()
 
+    event1 = {"league_key": league_key, "tournament_id": tournament_id,
+              "tournament_team_id": inn1_team_id,
+              "challenge_team_id": inn1_challenge_team_id}
+    event2 = {"league_key": league_key, "tournament_id": tournament_id,
+              "tournament_team_id": inn2_team_id,
+              "challenge_team_id": inn2_challenge_team_id}
+
     colour1 = team_colour(session, user_id=inn1_user_id, team_name=inn1_team,
-                          league_key=league_key) or default1
+                          **event1) or default1
     colour2 = team_colour(session, user_id=inn2_user_id, team_name=inn2_team,
-                          league_key=league_key) or default2
+                          **event2) or default2
 
     # Only separate when the two sides actually chose colours that clash;
     # the admin defaults are already distinct by design.
@@ -391,12 +603,15 @@ def summary_visuals(session, *, inn1_team=None, inn2_team=None,
         "inn1_color": colour1,
         "inn2_color": colour2,
         "inn1_logo_png": team_logo_png(session, user_id=inn1_user_id,
-                                       team_name=inn1_team, league_key=league_key),
+                                       team_name=inn1_team, **event1),
         "inn2_logo_png": team_logo_png(session, user_id=inn2_user_id,
-                                       team_name=inn2_team, league_key=league_key),
+                                       team_name=inn2_team, **event2),
         "potm_photo_png": potm_portrait_png(session, player_id=potm_player_id,
                                             name=potm_name),
     }
+    if potm_card:
+        visuals["potm_card_png"] = potm_card_png(session, player_id=potm_player_id,
+                                                 name=potm_name)
     if include_style:
         visuals["text_settings"] = text_settings
         visuals["dynamic_flourish"] = dynamic
@@ -405,15 +620,18 @@ def summary_visuals(session, *, inn1_team=None, inn2_team=None,
 
 def innings_visuals(session, *, team_name=None, user_id=None,
                     is_first_innings=True, league_key=None,
-                    include_style=True):
+                    tournament_id=None, tournament_team_id=None,
+                    challenge_team_id=None, include_style=True):
     """The branded arguments the batting and bowling cards take."""
     default1, default2, text_settings, _dynamic = _admin_colours()
-    accent = team_colour(session, user_id=user_id, team_name=team_name,
-                         league_key=league_key)
+    event = {"league_key": league_key, "tournament_id": tournament_id,
+             "tournament_team_id": tournament_team_id,
+             "challenge_team_id": challenge_team_id}
+    accent = team_colour(session, user_id=user_id, team_name=team_name, **event)
     visuals = {
         "accent_hex": accent or (default1 if is_first_innings else default2),
         "team_logo_png": team_logo_png(session, user_id=user_id,
-                                       team_name=team_name, league_key=league_key),
+                                       team_name=team_name, **event),
     }
     if include_style:
         visuals["text_settings"] = text_settings

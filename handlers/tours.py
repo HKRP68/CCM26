@@ -16,6 +16,7 @@ Callback patterns:
   mtb_<tour_id>_<owner_tg>         — /mytours: back to tour list
 """
 
+import html
 import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -781,6 +782,55 @@ async def mytours_info_callback(update: Update, context: ContextTypes.DEFAULT_TY
         session.close()
 
 
+_TOUR_MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
+
+
+def _bat_detail(e):
+    """What a tour's run-scorer actually did, under their name."""
+    parts = []
+    if e.get("bat_balls"):
+        parts.append(f"{e['bat_balls']}b")
+    if e.get("strike_rate") is not None:
+        parts.append(f"SR {e['strike_rate']:.2f}")
+    detail = f"🏃 <b>{e['value']}</b> runs"
+    if parts:
+        detail += " (" + " · ".join(parts) + ")"
+    return detail
+
+
+def _bowl_detail(e):
+    """The same for a wicket-taker: how many overs, and at what cost."""
+    parts = []
+    if e.get("bowl_balls"):
+        parts.append(f"{e['overs']} ov")
+    if e.get("economy") is not None:
+        parts.append(f"Econ {e['economy']:.2f}")
+    detail = f"🎯 <b>{e['value']}</b> wkts"
+    if parts:
+        detail += " (" + " · ".join(parts) + ")"
+    return detail
+
+
+def _leader_lines(entries, detail):
+    """A tour leaderboard as two lines per entry — who, then what.
+
+    Mirrors ``/tournamentstats`` deliberately: the same board in two places
+    should not be read two different ways.
+    """
+    lines = []
+    for rank, e in enumerate(entries, 1):
+        medal = _TOUR_MEDALS.get(rank, f"{rank}.")
+        team = html.escape(str(e.get("team_name") or ""))
+        head = f"{medal} <b>{html.escape(str(e['player_name']))}</b>"
+        if team:
+            head += f" <i>({team})</i>"
+        tail = detail(e)
+        if e.get("matches"):
+            tail += f" · 📊 {e['matches']} M"
+        lines.append(f"{head}\n     — {tail}")
+    return lines
+
+
 async def mytours_stats_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """mts_<tour_id>_<owner_tg>"""
     q = update.callback_query
@@ -813,23 +863,13 @@ async def mytours_stats_callback(update: Update, context: ContextTypes.DEFAULT_T
 
         if stats["most_runs"]:
             lines.append("\n🏏 <b>MOST RUNS</b>")
-            for rank, e in enumerate(stats["most_runs"], 1):
-                medal = "🥇" if rank == 1 else ("🥈" if rank == 2 else "🥉")
-                lines.append(
-                    f"{medal} {e['player_name']} — <b>{e['value']}</b> runs"
-                    f" <i>({e['team_name']})</i>"
-                )
+            lines.extend(_leader_lines(stats["most_runs"], _bat_detail))
         else:
             lines.append("\n<i>No batting stats yet.</i>")
 
         if stats["most_wickets"]:
             lines.append("\n🎯 <b>MOST WICKETS</b>")
-            for rank, e in enumerate(stats["most_wickets"], 1):
-                medal = "🥇" if rank == 1 else ("🥈" if rank == 2 else "🥉")
-                lines.append(
-                    f"{medal} {e['player_name']} — <b>{e['value']}</b> wkts"
-                    f" <i>({e['team_name']})</i>"
-                )
+            lines.extend(_leader_lines(stats["most_wickets"], _bowl_detail))
         else:
             lines.append("\n<i>No bowling stats yet.</i>")
 

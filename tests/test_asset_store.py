@@ -15,6 +15,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _module_swap  # noqa: E402  (sibling helper; see its docstring)
@@ -82,6 +83,17 @@ class KeyScopeTests(unittest.TestCase):
         path = os.path.join(PROJECT_ROOT, "data", "card_templates", "template.png")
         self.assertEqual(_relative_key(path), "data/card_templates/template.png")
 
+    def test_event_crests_are_kept_too(self):
+        """They live under static/ because Flask serves them straight to the
+        admin pages — and until they were listed, a deploy stripped every
+        league and tournament crest off the scorecards with nothing to say so.
+        """
+        from services.asset_store import _relative_key, PROJECT_ROOT
+        path = os.path.join(PROJECT_ROOT, "static", "challenge_leagues",
+                            "team_abc123.png")
+        self.assertEqual(_relative_key(path),
+                         "static/challenge_leagues/team_abc123.png")
+
     def test_paths_outside_the_project_are_refused(self):
         from services.asset_store import _relative_key
         self.assertIsNone(_relative_key("/etc/passwd"))
@@ -89,7 +101,8 @@ class KeyScopeTests(unittest.TestCase):
 
     def test_directories_that_are_not_uploads_are_refused(self):
         from services.asset_store import _relative_key, PROJECT_ROOT
-        for relative in ("bot.py", "services/asset_store.py", "data/players.json"):
+        for relative in ("bot.py", "services/asset_store.py", "data/players.json",
+                         "static/style.css"):
             path = os.path.join(PROJECT_ROOT, relative)
             self.assertIsNone(_relative_key(path), f"{relative} must not be stored")
 
@@ -287,6 +300,107 @@ class RedeploySurvivalTests(unittest.TestCase):
         os.remove(path)
         self.assertTrue(self.store.ensure(path),
                         "an adopted file should be restorable")
+
+
+class TelegramTierTests(unittest.TestCase):
+    """The third copy, behind disk and the database.
+
+    The database is what a redeploy restores from — so an admin who prunes or
+    migrates it would otherwise take every uploaded crest with them. Telegram
+    keeps a file by id forever, and an asset that reached the channel once is
+    not losable by anything done here.
+    """
+
+    def setUp(self):
+        from services import asset_store
+        self.store = asset_store
+        self.key = "static/challenge_leagues/telegram_probe.png"
+        self.path = asset_store.absolute_path(self.key)
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        self.data = _png_bytes()
+        with open(self.path, "wb") as handle:
+            handle.write(self.data)
+
+    def tearDown(self):
+        self.store.drop(self.path)
+        if os.path.isfile(self.path):
+            os.remove(self.path)
+
+    def _stored(self):
+        from database import get_session
+        from models import StoredAsset
+        session = get_session()
+        try:
+            return (session.query(StoredAsset)
+                    .filter(StoredAsset.key == self.key).first())
+        finally:
+            session.close()
+
+    def test_a_stored_asset_is_mirrored_and_its_file_id_kept(self):
+        import services.tg_storage_service as tg
+        with unittest.mock.patch.object(tg, "is_configured", return_value=True), \
+                unittest.mock.patch.object(tg, "upload_bytes_sync",
+                                           return_value="FILE-ID-1") as upload:
+            self.assertTrue(self.store.put(self.path, self.data))
+        upload.assert_called_once()
+        self.assertEqual(self._stored().telegram_file_id, "FILE-ID-1")
+
+    def test_storage_that_is_not_configured_is_simply_skipped(self):
+        import services.tg_storage_service as tg
+        with unittest.mock.patch.object(tg, "is_configured", return_value=False), \
+                unittest.mock.patch.object(tg, "upload_bytes_sync") as upload:
+            self.assertTrue(self.store.put(self.path, self.data))
+        upload.assert_not_called()
+        self.assertIsNone(self._stored().telegram_file_id)
+
+    def test_an_upload_that_fails_does_not_fail_the_save(self):
+        """The file is already on disk and in the database by then. A crest is
+        never worth failing an upload the admin has had confirmed."""
+        import services.tg_storage_service as tg
+        with unittest.mock.patch.object(tg, "is_configured", return_value=True), \
+                unittest.mock.patch.object(tg, "upload_bytes_sync",
+                                           side_effect=RuntimeError("telegram down")):
+            self.assertTrue(self.store.put(self.path, self.data))
+        self.assertTrue(self.store.ensure(self.path))
+
+    def test_a_file_whose_stored_bytes_are_gone_comes_back_from_telegram(self):
+        from database import get_session
+        from models import StoredAsset
+        import services.tg_storage_service as tg
+
+        self.store.put(self.path, self.data)
+        session = get_session()
+        try:
+            row = (session.query(StoredAsset)
+                   .filter(StoredAsset.key == self.key).first())
+            row.data = b""
+            row.telegram_file_id = "FILE-ID-2"
+            session.commit()
+        finally:
+            session.close()
+        os.remove(self.path)
+
+        with unittest.mock.patch.object(tg, "download_file_bytes_sync",
+                                        return_value=self.data) as download:
+            self.assertTrue(self.store.ensure(self.path))
+        download.assert_called_once_with("FILE-ID-2")
+        with open(self.path, "rb") as handle:
+            self.assertEqual(handle.read(), self.data)
+
+    def test_nothing_anywhere_is_a_miss_rather_than_a_crash(self):
+        from database import get_session
+        from models import StoredAsset
+        self.store.put(self.path, self.data)
+        session = get_session()
+        try:
+            row = (session.query(StoredAsset)
+                   .filter(StoredAsset.key == self.key).first())
+            row.data = b""
+            session.commit()
+        finally:
+            session.close()
+        os.remove(self.path)
+        self.assertFalse(self.store.ensure(self.path))
 
 
 if __name__ == "__main__":

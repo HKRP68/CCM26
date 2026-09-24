@@ -10585,6 +10585,11 @@ def _build_potm_card_image(arena, pom):
         if not player_id and not name:
             return None
         from services import scorecard_delivery
+        # The summary card in this same album already carries the card beside
+        # the winner's name. A second copy of the same artwork two slides later
+        # is a duplicate, not a second look.
+        if scorecard_delivery.potm_card_inline():
+            return None
         png = scorecard_delivery.potm_card_bytes(player_id=player_id, name=name)
         if not png:
             return None
@@ -14266,6 +14271,12 @@ def admin_scorecard_settings():
                     "scorecard_color_inn2": c2,
                     "scorecard_text_settings": _json.dumps(text_settings, separators=(",", ":")),
                     "wpm_result_cards": wpm_result_cards,
+                    # The two places the Player of the Match's collectible card
+                    # can appear. Only one of them runs (see
+                    # services/scorecard_delivery.send_potm_card), so this is
+                    # really one choice rendered as two boxes.
+                    "scorecard_potm_card_inline": _checked("scorecard_potm_card_inline"),
+                    "scorecard_potm_card": _checked("scorecard_potm_card"),
                 }, updated_by=session.get("admin_user", "admin"))
                 db.commit()
                 log_admin(db, "scorecard_settings_save", "config", 0,
@@ -14279,10 +14290,18 @@ def admin_scorecard_settings():
 
         cfg = get_config(db)
         from services.config_service import get_wpm_result_cards
+        # An unwritten column reads None, and bool(None) would show the boxes
+        # unticked on exactly the installs that have the feature on.
+        def _on(key):
+            value = cfg.get(key)
+            return True if value is None else bool(value)
+
         return render_template("admin_scorecard_settings.html",
                                cfg=cfg, presets=SCORECARD_COLOR_PRESETS,
                                text_settings=normalize_scorecard_text_settings(cfg.get("scorecard_text_settings")),
                                text_fields=SCORECARD_TEXT_FIELDS,
+                               potm_card_inline=_on("scorecard_potm_card_inline"),
+                               potm_card_photo=_on("scorecard_potm_card"),
                                wpm_result_cards=get_wpm_result_cards(db))
     finally:
         db.close()
@@ -15493,6 +15512,19 @@ def _save_challenge_image(file_storage, prefix="image"):
     safe_name = f"{prefix}_{uuid.uuid4().hex}.{ext}"
     dest = os.path.join(_CHALLENGE_IMAGE_DIR, safe_name)
     file_storage.save(dest)
+    # Keep it. The host filesystem is rebuilt on every deploy, and until this
+    # call existed a release silently stripped every league, tournament, draft
+    # and auction crest off the scorecards — the rows still pointed at files
+    # that were no longer there. asset_store writes the bytes to the database
+    # and mirrors them to the Telegram storage channel, and
+    # card_identity._event_logo_bytes heals the disk copy from either on a read
+    # miss. Best-effort: the file is already saved, so a storage failure must
+    # not fail the admin's upload.
+    try:
+        from services import asset_store
+        asset_store.put(dest, content_type=f"image/{'jpeg' if ext == 'jpg' else ext}")
+    except Exception:
+        logger.exception("challenge image %s could not be stored durably", safe_name)
     return url_for("static", filename=f"challenge_leagues/{safe_name}")
 
 

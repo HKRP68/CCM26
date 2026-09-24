@@ -147,6 +147,30 @@
     </div>
   </div>
 
+  <div class="form-card" style="max-width:100%; margin-top:1.5rem;">
+    <h2 style="margin-top:0; color:var(--accent); font-family:'Bebas Neue', sans-serif; letter-spacing:.04em;">
+      🏅 Player of the Match Card
+    </h2>
+    <p style="color:var(--muted); font-size:.85rem; margin-top:-.4rem;">
+      The winner's collectible card is drawn <strong>into</strong> the summary card,
+      beside their name. Untick this to go back to sending it as a separate,
+      full-size photo underneath instead — it is the same card either way, and
+      only ever one of the two, so it is never posted twice.
+    </p>
+    <div style="display:flex; flex-wrap:wrap; gap:1rem; margin-top:.75rem;">
+      <label style="display:flex; align-items:center; gap:.45rem; padding:.5rem .8rem; border:1px solid var(--border); border-radius:8px; cursor:pointer; background:var(--card);">
+        <input type="checkbox" name="scorecard_potm_card_inline"
+               {% if potm_card_inline %}checked{% endif %}>
+        🖼️ On the summary card
+      </label>
+      <label style="display:flex; align-items:center; gap:.45rem; padding:.5rem .8rem; border:1px solid var(--border); border-radius:8px; cursor:pointer; background:var(--card);">
+        <input type="checkbox" name="scorecard_potm_card"
+               {% if potm_card_photo %}checked{% endif %}>
+        📸 As a separate photo
+      </label>
+    </div>
+  </div>
+
   <div style="display:flex; gap:.75rem; justify-content:flex-end; margin-top:1.2rem;">
     <a href="{{ url_for('admin_economy') }}" class="btn btn-ghost">Cancel</a>
     <button type="submit" class="btn">💾 Save Scorecard Settings</button>

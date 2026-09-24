@@ -704,6 +704,7 @@ def _migrate_add_columns():
         "scorecard_text_settings": "TEXT",
         "scorecard_dynamic_flourish": "BOOLEAN DEFAULT FALSE",
         "scorecard_potm_card": "BOOLEAN DEFAULT TRUE",
+        "scorecard_potm_card_inline": "BOOLEAN DEFAULT TRUE",
         # Which cards /wpm and /cm post to the lobby chat on completion.
         "wpm_result_cards": "VARCHAR(120) DEFAULT 'summary'",
         # Maintenance mode
@@ -852,6 +853,10 @@ def _migrate_add_columns():
     # The team crest an admin approved via /setteamlogo. Only an approved logo
     # is here; a pending submission lives in team_logo_requests and changes
     # nothing until it is decided.
+    # The Telegram storage channel's copy of a website upload — the tier behind
+    # disk and the stored bytes. See services/asset_store.py.
+    _try_add("stored_assets", "telegram_file_id", "VARCHAR(200)")
+
     _try_add("users", "team_logo_asset_key", "VARCHAR(300)")
     _try_add("users", "team_logo_file_id", "VARCHAR(200)")
     _try_add("users", "team_logo_updated_at", "TIMESTAMP")

@@ -6179,6 +6179,68 @@ async def _send_text_scorecard_to_storage(ctx, mid, *, result_text=None,
 
 # ═══════════════════════════ END INNINGS ═════════════════════════════
 
+def _team_user_id(s, team_name):
+    """The ``users.id`` behind a side, matched on its name rather than on which
+    innings it batted in.
+
+    The two are not the same question: at the end of a chase ``bat_team_name``
+    is the second innings and ``bowl_team_name`` the first, but the state is the
+    other way round mid-innings — and this is called from both. Guessing wrong
+    would brand each side with the other's crest. (``handlers.cipl_play`` has
+    the same helper for the same reason.)
+    """
+    wanted = str(team_name or "").strip().lower()
+    if not wanted:
+        return None
+    for name_key, id_key in (("bat_team_name", "bat_team_id"),
+                             ("bowl_team_name", "bowl_team_id")):
+        if str(s.get(name_key) or "").strip().lower() == wanted:
+            return s.get(id_key)
+    return None
+
+
+def _mapped_team_id(s, key, user_id):
+    """One side's row id out of a ``{user id: team id}`` map in the state.
+
+    The map survives a round trip through the state store's JSON, which turns
+    its integer keys into strings — so both spellings are looked up rather than
+    trusting whichever the state happens to be holding right now.
+    """
+    mapping = s.get(key) or {}
+    if not isinstance(mapping, dict) or user_id is None:
+        return None
+    return mapping.get(user_id) or mapping.get(str(user_id))
+
+
+def _event_identity(s, team_name=None, user_id=None):
+    """Which competition this match belongs to, and which side of it a team is.
+
+    Stored in the card payload — it is match data, not styling, and the crest
+    behind it is still resolved live at render time. Without it a tournament
+    card wore whatever crest the *manager* had set, which is the wrong badge on
+    a franchise nobody owns: see services/card_identity.
+
+    ``tournament_tteam_by_user`` is the Lets Play mapping (a side is a user) and
+    ``tournament_team_by_user`` the Challenge League one (a side is a
+    franchise); a match carries whichever applies and neither when it is a
+    friendly.
+    """
+    if user_id is None:
+        user_id = _team_user_id(s, team_name)
+    identity = {}
+    if s.get("tournament_id"):
+        identity["tournament_id"] = s["tournament_id"]
+    if s.get("league_key"):
+        identity["league_key"] = s["league_key"]
+    tteam = _mapped_team_id(s, "tournament_tteam_by_user", user_id)
+    if tteam:
+        identity["tournament_team_id"] = tteam
+    cteam = _mapped_team_id(s, "tournament_team_by_user", user_id)
+    if cteam:
+        identity["challenge_team_id"] = cteam
+    return identity
+
+
 async def _send_innings_scorecards(ctx, mid, innings_num):
     """Send batting + bowling scorecards for the innings that just ended.
 
@@ -6343,6 +6405,13 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
 
         stadium = s.get("stadium")
 
+        # Who each side is. The user id was never in these payloads, so every
+        # card resolved its crest from the team *name* alone; the event keys
+        # beside it are what puts a tournament's own crest on a tournament card
+        # instead of the manager's personal one.
+        bat_user_id = _team_user_id(s, bat_team)
+        bowl_user_id = _team_user_id(s, bowl_team)
+
         # The render-ready values for both cards. Accent colour and text
         # settings are deliberately absent: scorecard_delivery re-reads those
         # live at render time, so a card redrawn weeks later follows whatever
@@ -6364,6 +6433,8 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
                     "is_first_innings": is_first, "match_title": match_title,
                     "target": target, "chase_outcome": chase_outcome,
                     "stadium": stadium, "match_no": mid,
+                    "team_user_id": bat_user_id,
+                    **_event_identity(s, user_id=bat_user_id),
                 },
             },
             {
@@ -6377,6 +6448,8 @@ async def _send_innings_scorecards(ctx, mid, innings_num):
                     "opp_score": total_runs, "opp_wickets": total_wickets,
                     "opp_overs": overs_str, "stadium": stadium,
                     "match_no": mid,
+                    "team_user_id": bowl_user_id,
+                    **_event_identity(s, user_id=bowl_user_id),
                 },
             },
         ]
@@ -6824,12 +6897,18 @@ async def _end_innings(ctx, mid):
             # /lastscorecard can redraw it after the live state is gone. Text
             # settings stay out of the payload — scorecard_delivery re-reads
             # them at render time.
+            inn1_name = s.get("inn1_team", "Team 1")
+            inn2_name = s.get("bat_team_name", "Team 2")
+            inn1_uid = _team_user_id(s, inn1_name)
+            inn2_uid = _team_user_id(s, inn2_name)
+            inn1_event = _event_identity(s, user_id=inn1_uid)
+            inn2_event = _event_identity(s, user_id=inn2_uid)
             summary_payload = {
-                "inn1_team": s.get("inn1_team", "Team 1"),
+                "inn1_team": inn1_name,
                 "inn1_runs": s.get("inn1_runs", 0),
                 "inn1_wickets": s.get("inn1_wickets", 0),
                 "inn1_overs": s.get("inn1_overs", "0"),
-                "inn2_team": s.get("bat_team_name", "Team 2"),
+                "inn2_team": inn2_name,
                 "inn2_runs": s.get("total_runs", 0),
                 "inn2_wickets": s.get("total_wickets", 0),
                 "inn2_overs": format_overs(s),
@@ -6849,6 +6928,19 @@ async def _end_innings(ctx, mid):
                 "match_date": datetime.utcnow().isoformat(),
                 "is_spectator": bool(s.get("is_spectator")),
                 "match_no": mid,
+                # Each side's owner, and the competition this was played in.
+                # Both are looked up per side rather than per innings, because
+                # the state has already swapped by the time this runs.
+                "inn1_user_id": inn1_uid,
+                "inn2_user_id": inn2_uid,
+                "tournament_id": (inn1_event.get("tournament_id")
+                                  or inn2_event.get("tournament_id")),
+                "league_key": (inn1_event.get("league_key")
+                               or inn2_event.get("league_key")),
+                "inn1_tournament_team_id": inn1_event.get("tournament_team_id"),
+                "inn2_tournament_team_id": inn2_event.get("tournament_team_id"),
+                "inn1_challenge_team_id": inn1_event.get("challenge_team_id"),
+                "inn2_challenge_team_id": inn2_event.get("challenge_team_id"),
                 # The performance showcase's five numbers. Archived rows from
                 # before these keys simply fall back to parsing potm_stats.
                 **_potm_showcase(s, potm_name),

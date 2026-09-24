@@ -3911,6 +3911,20 @@ def _cipl_team_user_id(state, team_name):
     return None
 
 
+def _cipl_challenge_team_id(state, user_id):
+    """The ``ChallengeTeam`` id a user is playing in a tournament match.
+
+    ``tournament_team_by_user`` is written at draft time and survives a round
+    trip through the state store's JSON, which turns its integer keys into
+    strings — so both spellings are tried. ``None`` for a casual league match,
+    which has no mapping and falls back to resolving the franchise by name.
+    """
+    mapping = state.get("tournament_team_by_user") or {}
+    if not isinstance(mapping, dict) or user_id is None:
+        return None
+    return mapping.get(user_id) or mapping.get(str(user_id))
+
+
 def _build_cipl_summary_image(state, result):
     """Render the shared post-match summary card from the finished /cipl state."""
     try:
@@ -3988,16 +4002,26 @@ def _build_cipl_summary_image(state, result):
     # whole league renders unbranded cards.
     visuals = {}
     try:
-        from services import card_identity
+        from services import card_identity, scorecard_delivery
         session = card_identity.open_session()
         try:
+            inn1_uid = _cipl_team_user_id(state, inn1_team)
+            inn2_uid = _cipl_team_user_id(state, inn2_team)
             visuals = card_identity.summary_visuals(
                 session,
                 inn1_team=inn1_team, inn2_team=inn2_team,
-                inn1_user_id=_cipl_team_user_id(state, inn1_team),
-                inn2_user_id=_cipl_team_user_id(state, inn2_team),
+                inn1_user_id=inn1_uid, inn2_user_id=inn2_uid,
                 potm_player_id=state.get("potm_player_id"),
                 potm_name=potm_name,
+                # The franchise, not the manager. A CIPL side always has a user
+                # id behind it, so without this every league card wore whatever
+                # crest that person set with /setteamlogo — their own team's,
+                # on a franchise they are only playing for the evening.
+                league_key=state.get("league_key"),
+                tournament_id=state.get("tournament_id"),
+                inn1_challenge_team_id=_cipl_challenge_team_id(state, inn1_uid),
+                inn2_challenge_team_id=_cipl_challenge_team_id(state, inn2_uid),
+                potm_card=scorecard_delivery.potm_card_inline(),
                 include_style=False)
         finally:
             session.close()

@@ -520,7 +520,16 @@ class PotmCardTests(unittest.TestCase):
     It goes out *after* the summary card has already landed, so every failure
     mode here — no identity, a player with no card, a render that raises — has
     to read as "no second photo" and never as an error on a finished match.
+
+    The sends here run with the inline card switched off, which is when this
+    photo goes out at all; the switch itself is covered further down.
     """
+
+    def setUp(self):
+        patched = unittest.mock.patch.object(sd, "potm_card_inline",
+                                             return_value=False)
+        patched.start()
+        self.addCleanup(patched.stop)
 
     def _bot(self, send=None):
         bot = MagicMock()
@@ -632,6 +641,121 @@ class PotmCardTests(unittest.TestCase):
                                         side_effect=RuntimeError("boom")):
             self.assertIsNone(sd.potm_card_bytes(player_id=7))
         session.close.assert_called_once()
+
+
+class IdentityKeyTests(unittest.TestCase):
+    """Who a card is for is not something any generator draws.
+
+    The "keys the renderer no longer takes" warning means a stored row has
+    outlived the code, and it is worth reading. Logging it on every single card
+    because the payload also carries a user id is how a useful warning becomes
+    one nobody looks at.
+    """
+
+    def test_identity_keys_are_dropped_without_a_warning(self):
+        def generator(team_name=None, total_runs=None):
+            return None
+
+        payload = {"team_name": "A", "total_runs": 12, "team_user_id": 11,
+                   "tournament_id": 7, "challenge_team_id": 91}
+        with unittest.mock.patch.object(sd.logger, "warning") as warned:
+            kwargs = sd._accepted_kwargs(generator, payload)
+        self.assertEqual(kwargs, {"team_name": "A", "total_runs": 12})
+        warned.assert_not_called()
+
+    def test_a_genuinely_stale_key_is_still_reported(self):
+        def generator(team_name=None):
+            return None
+
+        with unittest.mock.patch.object(sd.logger, "warning") as warned:
+            sd._accepted_kwargs(generator, {"team_name": "A",
+                                            "some_key_from_2024": "gone"})
+        warned.assert_called_once()
+        self.assertIn("some_key_from_2024", warned.call_args.args[-1])
+
+
+class InlinePotmCardTests(unittest.TestCase):
+    """The card is drawn *into* the summary card now, beside the winner's name.
+
+    Its switch and the second photo's are the same artwork in two places, so
+    exactly one of them runs: turning the inline card off is what brings the
+    standalone photo back.
+    """
+
+    def test_the_inline_switch_ships_on(self):
+        from services.config_service import DEFAULTS
+        self.assertIs(DEFAULTS["scorecard_potm_card_inline"], True)
+
+    def test_it_defaults_on_for_a_row_that_predates_the_migration(self):
+        import services.config_service as config_service
+        with unittest.mock.patch.object(
+                config_service, "get_config",
+                return_value={"scorecard_potm_card_inline": None}):
+            self.assertTrue(sd.potm_card_inline())
+
+    def test_an_explicit_off_is_honoured(self):
+        import services.config_service as config_service
+        with unittest.mock.patch.object(
+                config_service, "get_config",
+                return_value={"scorecard_potm_card_inline": False}):
+            self.assertFalse(sd.potm_card_inline())
+
+    def test_it_defaults_to_on_when_the_config_cannot_be_read(self):
+        import services.config_service as config_service
+        with unittest.mock.patch.object(config_service, "get_config",
+                                        side_effect=RuntimeError("db down")):
+            self.assertTrue(sd.potm_card_inline())
+
+    def test_the_second_photo_stands_down_while_the_card_is_inline(self):
+        """Sending both posts the same card twice under one result."""
+        bot = MagicMock()
+        bot.send_photo = AsyncMock()
+        with unittest.mock.patch.object(sd, "potm_card_inline",
+                                        return_value=True):
+            self.assertFalse(
+                _run(sd.send_potm_card(bot, -1, player_id=7, name="Somebody")))
+        bot.send_photo.assert_not_awaited()
+
+
+class EventContextTests(unittest.TestCase):
+    """Which competition a card belongs to travels in the payload.
+
+    It is match data, not styling: the tournament that was played is fixed,
+    while the crest behind it is still read live at render time — a franchise
+    renamed next season redraws under its new badge, not its old one.
+    """
+
+    def test_an_innings_card_carries_its_own_side(self):
+        payload = {"team_name": "Super Kings", "tournament_id": 12,
+                   "league_key": "ipl", "tournament_team_id": 340,
+                   "challenge_team_id": 91, "total_runs": 180}
+        self.assertEqual(
+            sd._event_context(payload, sd._INNINGS_EVENT_KEYS),
+            {"tournament_id": 12, "league_key": "ipl",
+             "tournament_team_id": 340, "challenge_team_id": 91})
+
+    def test_a_summary_card_carries_both_sides_separately(self):
+        payload = {"tournament_id": 12,
+                   "inn1_tournament_team_id": 340,
+                   "inn2_tournament_team_id": 341,
+                   "inn2_challenge_team_id": 92}
+        self.assertEqual(
+            sd._event_context(payload, sd._SUMMARY_EVENT_KEYS),
+            {"tournament_id": 12, "inn1_team_id": 340, "inn2_team_id": 341,
+             "inn2_challenge_team_id": 92})
+
+    def test_an_archived_friendly_carries_nothing(self):
+        """Rows written before tournaments branded their own cards have none of
+        these keys, and must resolve exactly as they always did."""
+        self.assertEqual(
+            sd._event_context({"team_name": "Anyone"}, sd._INNINGS_EVENT_KEYS),
+            {})
+
+    def test_a_blank_id_is_not_an_identity(self):
+        self.assertEqual(
+            sd._event_context({"tournament_id": None, "league_key": ""},
+                              sd._SUMMARY_EVENT_KEYS),
+            {})
 
 
 class TextFallbackTests(unittest.TestCase):

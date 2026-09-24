@@ -133,28 +133,31 @@ class StatBoardDepthTests(unittest.TestCase):
         from handlers import tournament as T
         self.T = T
         self.tour = type("Tour", (), {"name": "Summer Trophy", "id": 1})()
-        self.rows = [(f"Player {i}", f"Team {i % 4}", str(500 - i))
+        self.rows = [T._leader(f"Player {i}", f"Team {i % 4}", 500 - i,
+                               extras=[f"{100 + i}b"], matches=i,
+                               cells=[("BALLS", str(100 + i)), ("M", str(i))])
                      for i in range(1, T.BOARD_LIMIT + 1)]
 
     def test_the_first_ten_are_open(self):
         body = self.T._render(self.tour, "runs", self.rows)
         head = body.split("<blockquote expandable>")[0]
-        for name, _team, _value in self.rows[:self.T.BOARD_OPEN]:
-            self.assertIn(name, head)
+        for row in self.rows[:self.T.BOARD_OPEN]:
+            self.assertIn(row["name"], head)
 
     def test_the_rest_are_behind_a_tap_rather_than_gone(self):
         body = self.T._render(self.tour, "runs", self.rows)
         self.assertIn("<blockquote expandable>", body)
         tail = body.split("<blockquote expandable>", 1)[1]
-        for name, _team, _value in self.rows[self.T.BOARD_OPEN:]:
-            self.assertIn(name, tail)
+        for row in self.rows[self.T.BOARD_OPEN:]:
+            self.assertIn(row["name"], tail)
 
     def test_the_ranks_keep_counting_past_ten(self):
         body = self.T._render(self.tour, "runs", self.rows)
         # 11th is written "11." — the medals stop at three, and a tail that
         # restarted at 1. would tell the reader they are first.
-        self.assertIn("11. Player 11", body)
-        self.assertIn(f"{self.T.BOARD_LIMIT}. Player {self.T.BOARD_LIMIT}", body)
+        self.assertIn("11. <b>Player 11</b>", body)
+        self.assertIn(f"{self.T.BOARD_LIMIT}. <b>Player {self.T.BOARD_LIMIT}</b>",
+                      body)
 
     def test_a_short_board_grows_no_expander(self):
         body = self.T._render(self.tour, "runs", self.rows[:6])

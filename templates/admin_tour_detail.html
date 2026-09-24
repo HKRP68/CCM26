@@ -166,7 +166,14 @@
       {% for e in stats.most_runs %}
       <tr style="border-top:1px solid var(--border);">
         <td style="padding:.5rem 0; width:30px; color:var(--muted);">#{{ loop.index }}</td>
-        <td style="padding:.5rem 0;"><strong>{{ e.player_name }}</strong></td>
+        <td style="padding:.5rem 0;">
+          <strong>{{ e.player_name }}</strong>
+          {# The figures behind the figure: 383 off 144 in 13 matches reads as
+             a tour, where 383 on its own could be any of them. #}
+          <div style="color:var(--muted); font-size:.74rem;">
+            {{ e.bat_balls }}b{% if e.strike_rate is not none %} · SR {{ '%.2f'|format(e.strike_rate) }}{% endif %}{% if e.matches %} · {{ e.matches }} M{% endif %}
+          </div>
+        </td>
         <td style="padding:.5rem 0; color:var(--muted); font-size:.78rem;">{{ e.team_name }}</td>
         <td style="padding:.5rem 0; text-align:right; font-family:'Bebas Neue', sans-serif; font-size:1.2rem; color:var(--accent);">{{ e.value }}</td>
       </tr>
@@ -185,7 +192,12 @@
       {% for e in stats.most_wickets %}
       <tr style="border-top:1px solid var(--border);">
         <td style="padding:.5rem 0; width:30px; color:var(--muted);">#{{ loop.index }}</td>
-        <td style="padding:.5rem 0;"><strong>{{ e.player_name }}</strong></td>
+        <td style="padding:.5rem 0;">
+          <strong>{{ e.player_name }}</strong>
+          <div style="color:var(--muted); font-size:.74rem;">
+            {{ e.overs }} ov{% if e.economy is not none %} · Econ {{ '%.2f'|format(e.economy) }}{% endif %}{% if e.matches %} · {{ e.matches }} M{% endif %}
+          </div>
+        </td>
         <td style="padding:.5rem 0; color:var(--muted); font-size:.78rem;">{{ e.team_name }}</td>
         <td style="padding:.5rem 0; text-align:right; font-family:'Bebas Neue', sans-serif; font-size:1.2rem; color:var(--accent);">{{ e.value }}</td>
       </tr>

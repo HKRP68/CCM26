@@ -50,13 +50,25 @@ them.
 
 ## What is deliberately *not* in a payload
 
-The teams' colours and logos, the Player of the Match's portrait, and the
-Scorecard Designer's text settings. All of them are re-read live in
+The teams' colours and logos, the Player of the Match's portrait and card, and
+the Scorecard Designer's text settings. All of them are re-read live in
 `render_card`, so a card redrawn next month follows the theme the admins have
 now and the crest the team has now, rather than the ones in force when the
 match was played. See `docs/team-logo-approval.md` for where a crest comes
 from; the portrait is the admin-uploaded card art the bot already holds
 (`services/player_image_service`), found via the payload's `potm_player_id`.
+
+### What *is* — which competition the match was
+
+A payload does carry `tournament_id`, `league_key` and each side's
+`TournamentTeam`/`ChallengeTeam` id, because those are match data rather than
+styling: the tournament a match was played in is fixed forever, while the crest
+behind it is still resolved live. Without them a tournament card wore whatever
+crest the *manager* had set, which is the wrong badge on a franchise nobody
+owns — `docs/team-logo-approval.md` has the precedence and where the ids come
+from. `scorecard_delivery._event_context` maps the payload keys onto the
+arguments `card_identity` knows them by, and a row archived before any of this
+existed simply has none of them.
 
 `/previewsummary` (bot admins) renders a card from canned data through this
 same path, which is the quick way to see the effect of a Scorecard Designer
@@ -120,18 +132,45 @@ One parsing rule is load-bearing and has a test of its own: the batting pattern
 carries a lookbehind so the trailing `(4)` of `4/27 (4)` is not read as "27 runs
 off 4 balls".
 
-## The player card that follows the summary
+## The player card, on the card
 
-Right after the summary card, the winner's own **collectible card** goes out as
-a second photo — the card people actually collect, from
+The winner's own **collectible card** — the one people actually collect, from
 `card_generator.generate_card` (admin custom art → website template →
-procedural tier card, cached per player).
+procedural tier card, cached per player) — is drawn **into the summary card**,
+in the POTM strip beside the winner's name. That is where someone reading the
+result looks for it, and a card in the image is one the chat cannot lose,
+scroll past, or fail to receive when a second photo is rejected.
 
-It is a separate photo rather than part of the summary because it cannot be
-both. The card is 1536×1024 and the summary's POTM strip is 125px tall: fitted
-in there it would land at about a tenth of linear scale, with its own name text
-a few pixels high. Sending it on its own also means every mode gets it, rather
-than only the ones whose strip happens to have room.
+The strip was 125px tall, which is why this used to be impossible: a 1536×1024
+card fitted in there landed at about a tenth of linear scale. So the strip is
+deeper now — `POTM_H` 172, and `CANVAS_H` grew by the same 47px. Everything
+above it keeps the coordinates it was measured at; only the bottom of the
+poster grew. Inside the strip the showcase's three rows are positioned from its
+vertical *centre* rather than its top, so a deeper strip re-centres them instead
+of leaving them pinned under the gold rule.
+
+The band it sits in is wider than the portrait's, because a card is 3:2
+landscape, and the name block shifts right by the difference rather than being
+drawn over — `POTM_NAME_X_CARD` with a card, `POTM_NAME_X` with a portrait,
+`POTM_NAME_X_BARE` with neither. Holding the band open for artwork that is not
+coming leaves a dead gap, so it is only reserved when something is actually in
+it.
+
+**The card displaces the portrait** rather than sitting beside it: the artwork
+already carries the player, and both would show them twice.
+
+It is drawn rounded, gold-edged and with a soft shadow (`_paste_potm_card`).
+Without an edge, full-bleed artwork on a navy bar just collides with it.
+
+**Off switch:** `GameConfig.scorecard_potm_card_inline`, **on by default**.
+
+### The second photo, when the card is not inline
+
+Turning the inline card off brings back the standalone photo this used to be:
+the card at full size with its own caption, sent right after the summary.
+Exactly one of the two runs — the same artwork posted twice under one result is
+a duplicate, not a second look — and `scorecard_delivery.send_potm_card` stands
+down while the inline card is on, so no mode can send both.
 
 | Mode | How it goes out |
 |---|---|
@@ -146,13 +185,12 @@ render that raises all read as "no second photo" and never as an error on a
 finished match. It is sent only when the summary card itself was delivered — on
 its own it would read as an orphan photo.
 
-Resolution is `card_identity.potm_card_png`, which takes the award's
-`player_id` first and falls back to the name, the same order as the portrait
+Resolution is `card_identity.potm_card_png` either way, taking the award's
+`player_id` first and falling back to the name, the same order as the portrait
 lookup beside it. The in-chat modes reach it through
-`scorecard_delivery.potm_card_bytes`, which also owns the session and honours
-the switch below; no call site reads the config itself, so no mode can miss it.
-
-**Off switch:** `GameConfig.scorecard_potm_card`, **on by default**.
+`scorecard_delivery.potm_card_bytes`, which owns the session and honours
+`GameConfig.scorecard_potm_card`; no call site reads the config itself, so no
+mode can miss either switch.
 
 ## `/lastscorecard`
 
@@ -216,6 +254,7 @@ through. Archived rows outlive the code that drew them, and one stale key in
 | File | Role |
 |---|---|
 | `services/scorecard_delivery.py` | persistence, rendering, retrying sends, text fallback |
+| `services/card_identity.py` | whose crest, whose colour, which competition |
 | `models.MatchScorecardImage` | one row per card: payload, caption, `file_id`, delivered flag |
 | `handlers/match.py` | `_send_innings_scorecards`, `_replay_stored_scorecards`, `lastscorecard_handler` |
 | `tests/test_scorecard_delivery.py` | the service, against a throwaway sqlite file |
