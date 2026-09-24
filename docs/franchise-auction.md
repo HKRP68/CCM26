@@ -89,23 +89,28 @@ are excluded before you see them.
 | `/apurse [franchise]` | anyone | Every purse, max bid and squad count (and RTM cards left) — or one franchise's squad |
 | `/artm yes\|no` | the holder's owner + co-owners | Answer an open Right To Match. One verb for both questions it asks |
 | `/ainfo` | anyone | Where the auction stands, and one button per view below |
+| `/arules` (`/asettings`) | anyone | Every number the auction will run by — purse, caps, base prices, bid steps, the clock, retention, RTM, picks |
 | `/asets` · `/anextset` · `/anextplayer` | anyone | Every set and its state, the next set's players, who is up next |
 | `/asquad [franchise]` | anyone | Your own squad (or any franchise's) as a table, with purse and max bid |
+| `/aretlock` · `/apicks` | anyone | Who has kept whom; the expansion pick order and whose turn it is. Their **switches** (`/aretlock on`, `/apickset`) stay the admin's |
 | `/asoldlist` · `/aunsoldlist` | anyone | Everyone sold, set by set; the ⚡ Unsold / Accelerated set |
+
+Every one of those reads answers **before the auction starts**, and every one
+of them answers **in a DM** — see [Before it starts](#before-it-starts).
 
 Admin: `/adminhelp` (the reference card, also `/auction`), `/anew`, `/abind`, `/astart`,
 `/apause`, `/aresume`, `/anext`, `/aextend`, `/asold`, `/aunsold`,
 `/aundobid`, `/awithdraw`, `/atimer`, `/asnipe`, `/agrant`, `/aco`,
-`/apublish`, `/acancel`, plus retention's `/aretlock`, `/aretain`,
+`/apublish`, `/acancel`, plus retention's `/aretlock on`, `/aretain`,
 `/aunretain`, RTM's `/artmset`, `/artmcards`, `/artmforce`, `/artmundo`, the
 accelerated round's `/aaccel`, `/aclone` for the next season, and the
-expansion picks' `/apick`, `/apicks`, `/apickset`, `/apickskip` and
+expansion picks' `/apick`, `/apickset`, `/apickskip` and
 `/apickundo`, and the room features below: `/apool`, `/anextset <set>`,
 `/asetorder`, `/aaccelmode`, `/aretainforce`, `/aoffers`, `/aretcancel`,
 `/acall`, `/aremoveteam`, and — for bot admins only — `/aadminadd`,
 `/aadminremove`, `/aadmins`.
 
-`/bid`, `/artm`, `/aboard`, `/apurse` and the team views are **not** in the group slash menu. Both
+`/bid`, `/artm`, `/aboard`, `/apurse`, `/arules` and the team views are **not** in the group slash menu. Both
 player scopes sit exactly at Telegram's 100-command ceiling and `_clamped`
 drops the tail rather than letting `setMyCommands` reject the whole call, so
 publishing them would cost that many existing player commands their entry. It
@@ -137,6 +142,89 @@ auction having vanished. All three are `admin_live_matches`'s calls, made again.
 `/apublish` (or the button) writes one `ChallengeTeam` per franchise and one
 `ChallengePlayer` per bought lot. Publishing again re-syncs the same league
 rather than creating a second one, so a correction can simply be republished.
+
+---
+
+## Before it starts
+
+An auction is decided before it opens. A franchise works out what it can afford
+to chase and what it has to hold back, and every number that decision is made
+against — the purse, the squad and overseas caps, the reserve the reachability
+rule keeps, the base prices, the bid ladder, how long a lot stays on the block,
+what the rest of the room kept — lived either on the admin's setup page or
+behind an admin-only command. For the people who actually have to bid against
+those numbers, that is the same as them not existing.
+
+So the whole read-only surface answers while the season is still in `setup`,
+and three things changed to make that worth doing.
+
+**`/arules` is all of it on one card.** Not seven commands, because somebody
+reading it has not bid yet and does not know *which* number they are missing:
+the opening purse, `min_squad_size`–`max_squad_size`, the overseas cap and the
+home country, the role minimums, the base-price ladder band by band, the bid
+increment ladder, `bid_seconds` and the anti-snipe rule, and — only when the
+auction uses them — retention, Right To Match, the expansion picks and the
+automatic ⚡ Accelerated round. It names `min_base_price_lakh` out loud as
+"held back for every slot you still have to fill", because that is the one
+rule a franchise otherwise only meets by being refused by it (see
+[Reachability, in money](#reachability-in-money)).
+
+**Two admin readouts became the room's.** `/aretlock` with no arguments and
+`/apicks` are readouts, not switches, and the people they matter most to are
+not the admin: retention spends a *franchise's* purse and everybody else is
+about to bid against what it kept, and the expansion pick order is the new
+side's own turn coming up. `/aretlock on` still takes an admin, and so does
+every `/apickset`, `/apickskip` and `/apickundo` — the switch is the admin's,
+the readout is not.
+
+**`/ainfo` says where setup has got to.** Before the first lot, "0/120 lots
+resolved" is true and useless. In `setup` it prints whether the pool is built
+and into how many sets, how many franchises are in, whether the retention
+window is open and how long is left on it, whose expansion pick it is, and —
+for the reader's own franchise — the purse *and* what it started with, because
+a purse reading ₹73 Cr against an opening ₹100 Cr is retention's bill and
+nobody should have to work that out from two cards. Its button menu asks the
+season what it has: an auction with no retention and no expansion sides is
+offered neither button, rather than two whose only answer is "not a thing
+here".
+
+### A DM answers; a bid still does not
+
+Bidding is bound to the group, for the reason `AuctionSeason.chat_id` gives: a
+bid nobody in the room saw is how a price gets disputed. Reading carries none
+of that, and before the auction it is the other way round — working out what
+your purse can reach, what the sets hold and what retention cost you is
+homework, done the night before, and making somebody do it in the group means
+either not doing it or doing it in front of the people they are about to bid
+against.
+
+So `handlers.auction._read_season` resolves a **read-only** view this way:
+
+```text
+this chat has an auction bound to it   → that one
+this chat is a group, and does not     → nothing (never another room's)
+otherwise (a DM)                       → the auction this user has a team in
+```
+
+`season_for_actor` looks only at `STATUS_ACTIVE` seasons — `setup`, `live`,
+`paused` — because a completed auction is history and answering a question
+about this season with last season's purse is worse than not answering. Two
+live auctions is ambiguous rather than wrong, so it **names them** instead of
+picking one, the same call `_find_franchise` makes for a name that could be
+either of two franchises. Co-ownership lives in a JSON column, so the match is
+made in Python; what keeps that honest is the status filter, which is the
+handful of auctions actually running and not every auction the bot has ever
+run.
+
+A group with no auction bound to it gets nothing, deliberately: answering it
+with the auction the asker owns *somewhere else* would put one room's numbers
+in another room.
+
+`/bid` and `/artm` never come through this path — they keep their own group
+check, and the auction's entry in `GROUP_ONLY_COMMANDS` is now just those two. `/aboard` does
+answer in a DM, without its quick-bid buttons: a bid is refused outside the
+bound group, so a button offered anywhere else is one that can only ever
+answer "not here".
 
 ---
 

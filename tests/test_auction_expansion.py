@@ -790,6 +790,17 @@ class CommandTests(ExpansionCase):
         self.assertIn("Lucknow", body)
         self.assertIn("It is <b>Gujarat</b>'s pick", body)
 
+    def test_a_new_side_reads_its_own_pick_order(self):
+        """The board is the *new side's* business — their turn is the one
+        coming up — so it answers anyone, not just the admin running it."""
+        from handlers import auction as H
+        self._bind()
+        self._run(H.apicks_handler, ALICE)
+        body = self.replies[-1]
+        self.assertNotIn("Only auction admins", body)
+        self.assertIn("Gujarat", body)
+        self.assertIn("It is <b>Gujarat</b>'s pick", body)
+
     def test_apick_signs_a_player(self):
         from handlers import auction as H
         self._bind()

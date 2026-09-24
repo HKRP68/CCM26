@@ -68,14 +68,21 @@ BID_CB = "au_bid_"
 RTM_CB = "au_rtm_"
 INFO_CB = "au_info_"
 
+# The /ainfo menu. ``when`` decides whether a button is worth a slot: None is
+# always, and the rest are asked of the season, because a menu offering
+# 🔒 Retention to an auction that allows none is a button whose only answer is
+# "not a thing here".
 INFO_VIEWS = (
-    ("sets", "🗂 Sets"),
-    ("nextset", "⏭ Next Set"),
-    ("next", "👤 Next Player"),
-    ("squad", "👥 My Squad"),
-    ("sold", "✅ Sold"),
-    ("unsold", "❌ Unsold"),
-    ("purse", "💰 Purse"),
+    ("rules", "📜 Rules", None),
+    ("sets", "🗂 Sets", None),
+    ("nextset", "⏭ Next Set", None),
+    ("next", "👤 Next Player", None),
+    ("squad", "👥 My Squad", None),
+    ("purse", "💰 Purse", None),
+    ("retention", "🔒 Retention", lambda season: A.retention_configured(season)),
+    ("picks", "🆕 Picks", lambda season: A.expansion_configured(season)),
+    ("sold", "✅ Sold", None),
+    ("unsold", "❌ Unsold", None),
 )
 
 
@@ -119,11 +126,16 @@ def bid_keyboard(season, lot):
     return InlineKeyboardMarkup([row])
 
 
-def info_keyboard():
-    """The /ainfo menu: every read-only view, one press each."""
+def info_keyboard(season=None):
+    """The /ainfo menu: every read-only view this auction has, one press each.
+
+    ``season`` is optional so an older caller still gets the whole menu; passed,
+    it drops the views this auction does not use.
+    """
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
     buttons = [InlineKeyboardButton(label, callback_data=f"{INFO_CB}{key}")
-               for key, label in INFO_VIEWS]
+               for key, label, when in INFO_VIEWS
+               if when is None or season is None or when(season)]
     rows = [buttons[i:i + 3] for i in range(0, len(buttons), 3)]
     return InlineKeyboardMarkup(rows)
 
@@ -233,16 +245,17 @@ def board_blocks(session, season, lot=None, *, now=None):
                           striped=True, compact=True,
                           caption=R.bold("💼 Purses")))
     blocks.append(R.footer(["Bid with ", R.code("/bid"), " · views: ",
-                            R.code("/ainfo"), " · ", R.code("/asets"), " · ",
-                            R.code("/asquad")]))
+                            R.code("/ainfo"), " · ", R.code("/arules"), " · ",
+                            R.code("/asets"), " · ", R.code("/asquad")]))
     return blocks
 
 
 def board_html(session, season, lot=None, *, now=None):
     """The HTML board, plus the footer that points at the team views."""
     body = A.render_board(session, season, lot, now=now)
-    return (body + "\n\n<i>Views:</i> <code>/ainfo</code> · <code>/asets</code> "
-            "· <code>/asquad</code> · <code>/asoldlist</code>")
+    return (body + "\n\n<i>Views:</i> <code>/ainfo</code> · <code>/arules</code> "
+            "· <code>/asets</code> · <code>/asquad</code> · "
+            "<code>/asoldlist</code>")
 
 
 # ── The lot card ─────────────────────────────────────────────────────
@@ -350,7 +363,8 @@ def squad_view(session, season, franchise):
                      f" players (min {season.min_squad_size}) · ✈️ "
                      f"{overseas}/{season.max_overseas} overseas"]),
         R.paragraph(["💰 ", R.bold(_money(season, franchise.purse_remaining_lakh)),
-                     " left · spent ", _money(season, spent), " · 🎯 max bid ",
+                     " left of ", _money(season, franchise.purse_total_lakh),
+                     " · spent ", _money(season, spent), " · 🎯 max bid ",
                      R.bold(_money(season, max(0, A.max_bid_now(season, franchise))))]),
     ]
     if rows:
@@ -375,6 +389,381 @@ def purses_view(session, season):
                 f"{f.name} {A.rtm_cards_left(f)}"
                 for f in A.franchises(session, season.id))))
     return blocks, A.render_purses(session, season)
+
+
+# ── Before a lot opens ───────────────────────────────────────────────
+#
+# Everything in this section is readable by anyone, and every one of them is
+# at its most useful *before* the auction starts. A franchise works out what
+# its purse can reach against numbers it has to be able to see first: the
+# squad caps, the reserve the reachability rule holds back, the bid ladder,
+# how long a lot stays on the block, what retention already cost it. Those
+# lived only on the website's setup page and behind two admin-only commands —
+# which, for the people actually doing the bidding, is the same as not
+# existing. `/arules`, `/aretlock` and `/apicks` are the same facts, in the
+# room, before they matter rather than after.
+
+
+def retention_window_text(season, now=None):
+    """Retention's window in one phrase — open, closing, or long shut.
+
+    The deadline is enforced lazily (nothing sweeps while a season is in
+    setup), so a window nobody can see is one that only ever announces itself
+    by refusing somebody. Printed on the rules card, on the retention card and
+    in the /ainfo summary for exactly that reason.
+    """
+    if A.retention_locked(season):
+        return "🔒 Closed"
+    left = A.retention_seconds_left(season, now)
+    if left is None:
+        return "🔓 Open — no deadline set"
+    if left > 0:
+        return f"🔓 Open — closes in {A.format_clock(left)}"
+    return f"🔒 Closed — the deadline passed {A.format_clock(-left)} ago"
+
+
+def _rating_band(row, previous):
+    """One base-price rung, read the way the ladder is: highest band first."""
+    low = row["min_rating"]
+    if low <= 0:
+        return "everyone else"
+    if previous is None:
+        return f"{low}+ OVR"
+    return f"{low}–{previous - 1} OVR"
+
+
+def rules_view(session, season):
+    """📜 Every number that decides what a franchise may do.
+
+    One card rather than seven commands: an owner reading this has not bid yet
+    and does not know which number they are missing, so the answer to "what
+    are the rules" has to be all of them.
+    """
+    symbol = season.currency_label or "₹"
+    counts = A.pool_counts(session, season.id)
+    field = A.franchises(session, season.id)
+    sets = A.queued_sets(session, season)
+    minimums = A.role_minimums(season)
+
+    blocks = [R.heading(f"📜 {season.name} — the rules", size=2),
+              R.paragraph([R.bold(A.status_label(season)), " · ",
+                           f"{len(field)} franchise{'s' if len(field) != 1 else ''}"
+                           f" · {counts.get('total', 0)} lots in {len(sets)} "
+                           f"set{'s' if len(sets) != 1 else ''}"])]
+    lines = [f"📜 <b>{_e(season.name)} — the rules</b>",
+             f"{A.status_label(season)} · {len(field)} franchises · "
+             f"{counts.get('total', 0)} lots in {len(sets)} sets", ""]
+
+    # ── Money and the squad ──
+    purse = A.render_money(season.opening_purse_lakh, symbol)
+    floor = A.render_money(season.min_base_price_lakh, symbol)
+    money = [
+        R.paragraph(["💰 Opening purse: ", R.bold(purse)]),
+        R.paragraph(["👥 Squad: ", R.bold(f"{season.min_squad_size}–"
+                                         f"{season.max_squad_size}"),
+                     " players"]),
+        R.paragraph(["✈️ Overseas: at most ", R.bold(str(season.max_overseas)),
+                     f" — anyone not from {season.home_country}"]),
+    ]
+    body = [f"💰 Opening purse: <b>{purse}</b>",
+            f"👥 Squad: <b>{season.min_squad_size}–{season.max_squad_size}</b> players",
+            f"✈️ Overseas: at most <b>{season.max_overseas}</b> — anyone not "
+            f"from {_e(season.home_country)}"]
+    if minimums:
+        need = ", ".join(f"{role} ×{n}" for role, n in sorted(minimums.items()))
+        money.append(R.paragraph(["🧩 Every squad needs: ", R.bold(need)]))
+        body.append(f"🧩 Every squad needs: <b>{_e(need)}</b>")
+    reserve = (f"🎯 A franchise may never bid its way out of filling that "
+               f"minimum: {floor} is held back for every slot it still has to "
+               f"fill. That is the max bid the board prints — it is not a "
+               f"suggestion, a bid above it is refused.")
+    money.append(R.paragraph(R.italic(reserve)))
+    body.append(f"<i>{reserve}</i>")
+    blocks.append(R.details(R.bold("💰 Money and the squad"), money, is_open=True))
+    lines.append("<b>💰 Money and the squad</b>")
+    lines += body
+    lines.append("")
+
+    # ── The clock ──
+    clock = [R.paragraph(["⏱ A lot stays on the block for ",
+                          R.bold(f"{season.bid_seconds}s"),
+                          " — every bid restarts it."]),
+             R.paragraph(["🛡 Anti-snipe: a bid with ",
+                          R.bold(f"{season.snipe_window_seconds}s"),
+                          " or less left pushes the clock back to ",
+                          R.bold(f"{season.snipe_extend_seconds}s"),
+                          f", up to {season.max_extensions} times a lot."])]
+    blocks.append(R.details(R.bold("⏱ The clock"), clock))
+    lines.append("<b>⏱ The clock</b>")
+    lines.append(f"⏱ A lot stays on the block for <b>{season.bid_seconds}s</b> "
+                 f"— every bid restarts it.")
+    lines.append(f"🛡 Anti-snipe: a bid with <b>{season.snipe_window_seconds}s</b>"
+                 f" or less left pushes the clock back to "
+                 f"<b>{season.snipe_extend_seconds}s</b>, up to "
+                 f"{season.max_extensions} times a lot.")
+    lines.append("")
+
+    # ── The two ladders ──
+    header = [R.cell(R.bold("Rating"), header=True),
+              R.cell(R.bold("Base price"), header=True, align="right")]
+    rows, previous, ladder_lines = [header], None, []
+    for row in A.base_price_rules(season):
+        band = _rating_band(row, previous)
+        price = A.render_money(row["base_lakh"], symbol)
+        rows.append([R.cell(band), R.cell(price, align="right")])
+        ladder_lines.append(f"{band} → <b>{price}</b>")
+        previous = row["min_rating"]
+    blocks.append(R.details(R.bold("🏷 Base prices"),
+                            [R.table(rows, bordered=True, compact=True)]))
+    lines.append("<b>🏷 Base prices</b>")
+    lines += ladder_lines
+    lines.append("")
+
+    header = [R.cell(R.bold("Standing price"), header=True),
+              R.cell(R.bold("Least raise"), header=True, align="right")]
+    rows, step_lines = [header], []
+    for row in A.increment_rules(season):
+        ceiling = row["upto_lakh"]
+        where = (f"under {A.render_money(ceiling, symbol)}" if ceiling > 0
+                 else "above that")
+        step = "+" + A.render_money(row["step_lakh"], symbol)
+        rows.append([R.cell(where), R.cell(step, align="right")])
+        step_lines.append(f"{where} → <b>{step}</b>")
+    blocks.append(R.details(R.bold("📈 Bid increments"),
+                            [R.table(rows, bordered=True, compact=True),
+                             R.paragraph(R.italic(
+                                 "A bare /bid bids the next minimum — the "
+                                 "number the bot just printed."))]))
+    lines.append("<b>📈 Bid increments</b>")
+    lines += step_lines
+    lines.append("<i>A bare /bid bids the next minimum — the number the bot "
+                 "just printed.</i>")
+    lines.append("")
+
+    # ── Retention, RTM, the expansion picks ──
+    if A.retention_configured(season):
+        slabs = ", ".join(A.render_money(r["price_lakh"], symbol)
+                          for r in A.retention_price_rules(season))
+        keep = [R.paragraph([R.bold(retention_window_text(season))]),
+                R.paragraph(["Up to ", R.bold(str(season.max_retentions)),
+                             " per franchise"
+                             + (f", at least {season.min_retentions}"
+                                if season.min_retentions else "")]),
+                R.paragraph(f"Ladder: {slabs}")]
+        keep_lines = [f"<b>{retention_window_text(season)}</b>",
+                      f"Up to <b>{season.max_retentions}</b> per franchise"
+                      + (f", at least {season.min_retentions}"
+                         if season.min_retentions else ""),
+                      f"Ladder: {slabs}"]
+        if season.retention_max_spend_lakh is not None:
+            budget = A.render_money(season.retention_max_spend_lakh, symbol)
+            keep.append(R.paragraph(f"Budget: {budget}"))
+            keep_lines.append(f"Budget: {budget}")
+        keep.append(R.paragraph(R.italic(
+            "What a franchise keeps comes off the top of its purse. /aretlock "
+            "shows who has kept whom.")))
+        keep_lines.append("<i>What a franchise keeps comes off the top of its "
+                          "purse — /aretlock shows who has kept whom.</i>")
+        blocks.append(R.details(R.bold("🔒 Retention"), keep, is_open=True))
+        lines.append("<b>🔒 Retention</b>")
+        lines += keep_lines
+        lines.append("")
+
+    if A.rtm_configured(season):
+        extra = (f"the final bid plus "
+                 f"{A.render_money(season.rtm_extra_lakh, symbol)}"
+                 if season.rtm_extra_lakh else "the final bid")
+        cards = f"{season.rtm_per_team} card" + ("s" if season.rtm_per_team != 1
+                                                 else "")
+        how = ("The holder is asked first, the top bidder then gets one last "
+               "raise, and the match is against that final number.")
+        blocks.append(R.details(R.bold("🪪 Right To Match"), [
+            R.paragraph([R.bold(cards), " each · ",
+                         f"{season.rtm_window_seconds}s to answer"]),
+            R.paragraph(f"Last season's franchise may match at {extra}."),
+            R.paragraph(R.italic(how)),
+        ]))
+        lines.append("<b>🪪 Right To Match</b>")
+        lines.append(f"<b>{cards}</b> each · {season.rtm_window_seconds}s to answer")
+        lines.append(f"Last season's franchise may match at {extra}.")
+        lines.append(f"<i>{how}</i>")
+        lines.append("")
+
+    if A.expansion_configured(season):
+        how_many = (f"{season.expansion_picks} player"
+                    + ("s" if season.expansion_picks != 1 else ""))
+        blocks.append(R.details(R.bold("🆕 Expansion picks"), [
+            R.paragraph(["A side new this season signs ", R.bold(how_many),
+                         " before the auction opens."]),
+            R.paragraph(R.italic("/apicks has the order and whose turn it is.")),
+        ]))
+        lines.append("<b>🆕 Expansion picks</b>")
+        lines.append(f"A side new this season signs <b>{how_many}</b> before "
+                     f"the auction opens.")
+        lines.append("<i>/apicks has the order and whose turn it is.</i>")
+        lines.append("")
+
+    if A._as_int(getattr(season, "auto_accelerated", 1), 1):
+        tail = ("⚡ Anyone unsold comes back once, as the Accelerated set, "
+                "before the auction finishes — and whoever is still unsold "
+                "after that tops up a short squad for free.")
+    else:
+        tail = ("⚡ Unsold players do not come back automatically; whoever is "
+                "still unsold at the end tops up a short squad for free.")
+    blocks.append(R.paragraph(R.italic(tail)))
+    lines.append(f"<i>{tail}</i>")
+    blocks.append(R.footer(["More: ", R.code("/ainfo · /asets · /apurse · "
+                                             "/asquad")]))
+    lines.append("\n<i>More:</i> <code>/ainfo · /asets · /apurse · /asquad</code>")
+    return blocks, "\n".join(lines)
+
+
+def retention_view(session, season):
+    """🔒 Where retention stands, and who has kept whom.
+
+    Open to the room, not just to admins: it is a franchise's own purse being
+    spent, and every other franchise is planning against what it bought. The
+    switch that *closes* the window stays with the admin — /aretlock on.
+    """
+    symbol = season.currency_label or "₹"
+    if not A.retention_configured(season):
+        text = ("🔓 <b>Retention</b> — this auction allows no retentions. "
+                "Every squad is built at the auction.")
+        return [R.heading("🔓 Retention", size=2),
+                R.paragraph("This auction allows no retentions — every squad "
+                            "is built at the auction.")], text
+
+    window = retention_window_text(season)
+    blocks = [R.heading("🔒 Retention", size=2),
+              R.paragraph([R.bold(window)]),
+              R.paragraph(["Up to ", R.bold(str(season.max_retentions)),
+                           " per franchise"
+                           + (f", at least {season.min_retentions}"
+                              if season.min_retentions else "")])]
+    lines = [f"🔒 <b>Retention</b> — {window}",
+             f"Up to <b>{season.max_retentions}</b> per franchise"
+             + (f", at least <b>{season.min_retentions}</b>"
+                if season.min_retentions else "")]
+    if season.retention_max_spend_lakh is not None:
+        budget = A.render_money(season.retention_max_spend_lakh, symbol)
+        blocks.append(R.paragraph(f"Budget: {budget}"))
+        lines.append(f"Budget: {budget}")
+    slabs = ", ".join(A.render_money(r["price_lakh"], symbol)
+                      for r in A.retention_price_rules(season))
+    blocks.append(R.paragraph(f"Ladder: {slabs}"))
+    lines.append(f"Ladder: {slabs}")
+
+    header = [R.cell(R.bold("Franchise"), header=True),
+              R.cell(R.bold("Kept"), header=True, align="center"),
+              R.cell(R.bold("Spent"), header=True, align="right"),
+              R.cell(R.bold("Purse"), header=True, align="right")]
+    rows = [header]
+    lines.append("")
+    keeps = [(f, A.retained(session, f.id))
+             for f in A.franchises(session, season.id)]
+    for franchise, kept in keeps:
+        spent = A.retention_spent(session, franchise.id)
+        rows.append([
+            R.cell(franchise.name),
+            R.cell(f"{len(kept)}/{season.max_retentions}", align="center"),
+            R.cell(A.render_money(spent, symbol), align="right"),
+            R.cell(R.bold(A.render_money(franchise.purse_remaining_lakh, symbol)),
+                   align="right"),
+        ])
+        lines.append(f"<b>{_e(franchise.name)}</b> — {len(kept)}"
+                     f"/{season.max_retentions} · "
+                     f"{A.render_money(spent, symbol)} spent · "
+                     f"{A.render_money(franchise.purse_remaining_lakh, symbol)} left")
+        for lot in kept:
+            lines.append(f"   🔒 {_e(lot.name)} — "
+                         f"{A.render_money(lot.sold_price_lakh, symbol)}")
+    blocks.append(R.table(rows, bordered=True, striped=True, compact=True))
+    for franchise, kept in keeps:
+        if not kept:
+            continue
+        blocks.append(R.details(
+            R.bold(f"🔒 {franchise.name} ({len(kept)})"),
+            [R.list_block([[R.bold(lot.name),
+                            f" · {lot.rating} OVR · "
+                            f"{A.render_money(lot.sold_price_lakh, symbol)}"]
+                           for lot in kept])]))
+    return blocks, "\n".join(lines)
+
+
+def picks_view(session, season):
+    """🆕 The expansion picks: the order, whose turn, and what is taken.
+
+    A new side needs the running order more than the admin running it does —
+    it is their turn that is coming up.
+    """
+    symbol = season.currency_label or "₹"
+    order = A.pick_order(session, season)
+    if not order:
+        new_sides = A.expansion_franchises(session, season)
+        if not new_sides:
+            text = ("🆕 <b>Expansion picks</b> — nobody is new this season, so "
+                    "there are no picks to make.")
+            return [R.heading("🆕 Expansion picks", size=2),
+                    R.paragraph("Nobody is new this season, so there are no "
+                                "picks to make.")], text
+        names = ", ".join(f.name for f in new_sides)
+        text = ("🆕 <b>Expansion picks</b> — none dealt yet.\nNew this season: "
+                + _e(names))
+        return [R.heading("🆕 Expansion picks", size=2),
+                R.paragraph("None dealt yet."),
+                R.paragraph(["New this season: ", R.bold(names)])], text
+
+    turn = A.pick_turn(session, season)
+    blocks = [R.heading("🆕 Expansion picks", size=2)]
+    lines = ["🆕 <b>Expansion picks</b>"]
+    if turn is not None:
+        blocks.append(R.paragraph(["▶️ It is ", R.bold(turn.name), "'s pick."]))
+        lines.append(f"▶️ It is <b>{_e(turn.name)}</b>'s pick.")
+    else:
+        blocks.append(R.paragraph("✅ Every pick is used."))
+        lines.append("✅ Every pick is used.")
+    if A.retention_configured(season) and not A.retention_locked(season):
+        # A pick made while retention is still open can be undone by somebody
+        # else retaining the same player, so the room is told before it plans
+        # around one.
+        warn = ("Retention is still open — the picks are not final until it "
+                "closes.")
+        blocks.append(R.paragraph(["⚠️ ", warn]))
+        lines.append(f"⚠️ {warn}")
+
+    schedule = A.pick_schedule(session, season)
+    made = sum(int(f.draft_picks_used or 0) for f in order)
+    steps = []
+    for i, franchise in enumerate(schedule, start=1):
+        mark = "✅" if i <= made else ("▶️" if i == made + 1 else "⏳")
+        steps.append(f"{mark} {i}. {franchise.name}")
+    blocks.append(R.details(
+        R.bold("Order — it snakes: last in a round picks first in the next"),
+        [R.list_block([[step] for step in steps])], is_open=True))
+    lines.append("")
+    lines.append("<b>Order</b> (it snakes: last in a round picks first in "
+                 "the next)")
+    lines += [_e(step) for step in steps]
+
+    lines.append("")
+    for franchise in order:
+        taken = A.drafted(session, franchise.id)
+        left = A.picks_left(franchise)
+        total = int(franchise.draft_picks_total or 0)
+        purse = A.render_money(franchise.purse_remaining_lakh, symbol)
+        lines.append(f"<b>{_e(franchise.name)}</b> — {left} left of {total} · "
+                     f"{purse}")
+        body = [[R.bold(lot.name),
+                 f" · {A.render_money(lot.sold_price_lakh, symbol)}"]
+                for lot in taken]
+        blocks.append(R.details(
+            R.bold(f"{franchise.name} — {left} left of {total} · {purse}"),
+            [R.list_block(body)] if body else
+            [R.paragraph(R.italic("Nobody taken yet."))]))
+        for lot in taken:
+            lines.append(f"   🆕 {_e(lot.name)} — "
+                         f"{A.render_money(lot.sold_price_lakh, symbol)}")
+    return blocks, "\n".join(lines)
 
 
 # ── Sets: paged, with a set openable in place ────────────────────────
@@ -762,17 +1151,61 @@ def unsold_view(session, season):
     return blocks, "\n".join(lines)
 
 
+def _setup_lines(session, season, counts):
+    """What /ainfo should say about an auction that has not started.
+
+    "0/120 lots resolved" is true and useless before the first lot opens. What
+    a franchise wants at that point is whether the pool is built, whether
+    retention is still open, whether any picks are outstanding, and how long
+    it has to do something about any of it. Returns ``(blocks, lines)``.
+    """
+    sets = A.queued_sets(session, season)
+    field = A.franchises(session, season.id)
+    queued = counts.get(A.LOT_QUEUED, 0)
+    blocks, lines = [], []
+
+    if queued:
+        pool = (f"{queued} player{'s' if queued != 1 else ''} in "
+                f"{len(sets)} set{'s' if len(sets) != 1 else ''}")
+    else:
+        pool = "the pool is not built yet"
+    blocks.append(R.paragraph(["🗂 Pool: ", R.bold(pool), " · 👥 ",
+                               R.bold(f"{len(field)}"), " franchises"]))
+    lines.append(f"🗂 Pool: <b>{pool}</b> · 👥 <b>{len(field)}</b> franchises")
+
+    if A.retention_configured(season):
+        window = retention_window_text(season)
+        kept = counts.get("retained", 0)
+        blocks.append(R.paragraph(["🔒 Retention: ", R.bold(window),
+                                   f" · {kept} kept so far"]))
+        lines.append(f"🔒 Retention: <b>{window}</b> · {kept} kept so far")
+    if A.expansion_configured(season):
+        turn = A.pick_turn(session, season)
+        where = (f"{turn.name} to pick" if turn is not None
+                 else "every pick used")
+        blocks.append(R.paragraph(["🆕 Expansion picks: ", R.bold(where)]))
+        lines.append(f"🆕 Expansion picks: <b>{_e(where)}</b>")
+
+    return blocks, lines
+
+
 def info_menu(session, season, franchise=None):
     """The /ainfo card: where the auction stands, and a button per view."""
     counts = A.pool_counts(session, season.id)
     done = counts.get(A.LOT_SOLD, 0) + counts.get(A.LOT_UNSOLD, 0)
     live = A.current_lot(session, season)
     nxt = A.next_set(session, season)
+    setup = season.status == A.STATUS_SETUP
+    progress = ("not started yet" if setup
+                else f"{done}/{counts.get('total', 0)} lots resolved")
     blocks = [R.heading(f"📋 {season.name}", size=2),
-              R.paragraph([R.bold(A.status_label(season)),
-                           f" · {done}/{counts.get('total', 0)} lots resolved"])]
+              R.paragraph([R.bold(A.status_label(season)), f" · {progress}"])]
     lines = [f"📋 <b>{_e(season.name)}</b> — {A.status_label(season)} · "
-             f"{done}/{counts.get('total', 0)} lots resolved"]
+             f"{progress}"]
+    if setup:
+        extra_blocks, extra_lines = _setup_lines(session, season, counts)
+        blocks += extra_blocks
+        lines += extra_lines
     if live is not None:
         blocks.append(R.paragraph(["🔨 On the block: ", R.bold(live.name),
                                    f" · {A.set_label(live)}"]))
@@ -783,15 +1216,29 @@ def info_menu(session, season, franchise=None):
                                    f" ({nxt['queued']})"]))
         lines.append(f"⏭ Next set: <b>{_e(nxt['name'])}</b> ({nxt['queued']})")
     if franchise is not None:
+        # Before a lot opens the interesting number is not what is left but
+        # what has already gone: a purse that reads ₹73 Cr against an opening
+        # ₹100 Cr is retention's bill, and an owner should not have to work
+        # that out from two cards.
+        spent = max(0, int(franchise.purse_total_lakh or 0)
+                    - int(franchise.purse_remaining_lakh or 0))
+        of_total = (f" of {_money(season, franchise.purse_total_lakh)}"
+                    if setup and spent else "")
         blocks.append(R.paragraph([
             "👛 ", R.bold(franchise.name), ": ",
-            _money(season, franchise.purse_remaining_lakh), " · 👥 ",
+            _money(season, franchise.purse_remaining_lakh), of_total, " · 👥 ",
             f"{franchise.squad_size}/{season.max_squad_size}"]))
         lines.append(f"👛 <b>{_e(franchise.name)}</b>: "
-                     f"{_money(season, franchise.purse_remaining_lakh)} · 👥 "
+                     f"{_money(season, franchise.purse_remaining_lakh)}"
+                     f"{of_total} · 👥 "
                      f"{franchise.squad_size}/{season.max_squad_size}")
-    commands = ("/asets · /anextset · /anextplayer · /asquad · /asoldlist · "
-                "/aunsoldlist · /apurse")
+    if setup:
+        note = ("Bidding has not opened. 📜 /arules has every number it will "
+                "run by.")
+        blocks.append(R.paragraph(R.italic(note)))
+        lines.append(f"<i>{note}</i>")
+    commands = ("/arules · /asets · /anextset · /anextplayer · /asquad · "
+                "/apurse · /asoldlist · /aunsoldlist")
     blocks.append(R.footer(["Or type: ", R.code(commands)]))
     lines.append(f"\n<i>Or type:</i> <code>{commands}</code>")
     return blocks, "\n".join(lines)
@@ -869,7 +1316,7 @@ ADMIN_SECTIONS = (
         ("/aoffers", "Retention offers still waiting"),
         ("/aretcancel <player>", "Withdraw a waiting offer"),
         ("/aunretain <player>", "Release a retained player into the pool"),
-        ("/aretlock [on]", "Retention state, and close the window"),
+        ("/aretlock on", "Close the window — bare /aretlock is the room's readout"),
     )),
     ("🪪 Right To Match", (
         ("/artmset <cards> [seconds] [premium]", "RTM rules — /artmset off turns it off"),
@@ -879,7 +1326,7 @@ ADMIN_SECTIONS = (
     )),
     ("🆕 Expansion picks", (
         ("/apick <team> | <player> | [price]", "A new side signs a player"),
-        ("/apicks · /apickset · /apickskip · /apickundo", "The pick order and its fixes"),
+        ("/apickset · /apickskip · /apickundo", "Deal picks, skip a turn, undo one"),
     )),
     ("🏛 Teams", (
         ("/acall [message]", "Tag every owner and co-owner"),
@@ -902,8 +1349,10 @@ PLAYER_SECTION = ("👥 For owners & everyone", (
     ("/bid [amount]", "Bid — bare /bid is the next minimum"),
     ("/artm yes|no", "Answer a Right To Match"),
     ("/ainfo", "Buttons for every view below"),
+    ("/arules", "Purse, caps, base prices, bid steps, the clock — before a lot opens"),
     ("/asets · /anextset · /anextplayer", "Sets, the next set, the next players"),
     ("/asquad [team] · /apurse [team]", "Your squad, every purse"),
+    ("/aretlock · /apicks", "Who kept whom, and the expansion pick order"),
     ("/asoldlist · /aunsoldlist", "Everyone sold, everyone unsold"),
     ("/aboard", "The live board with quick-bid buttons"),
 ))

@@ -243,7 +243,7 @@ class FeatureCase(unittest.TestCase):
     # ── running a handler ──
 
     def run_handler(self, handler, user_id, args=(), *, chat_type="supergroup",
-                    bot=None, reply_to=None):
+                    bot=None, reply_to=None, chat_id=None):
         replies, markups = [], []
 
         async def reply_text(text, **kwargs):
@@ -258,8 +258,9 @@ class FeatureCase(unittest.TestCase):
             return SimpleNamespace(message_id=700 + len(sent))
 
         update = SimpleNamespace(
-            effective_chat=SimpleNamespace(id=self.season.chat_id,
-                                           type=chat_type),
+            effective_chat=SimpleNamespace(
+                id=self.season.chat_id if chat_id is None else chat_id,
+                type=chat_type),
             effective_user=SimpleNamespace(id=user_id, username="u",
                                            first_name="U"),
             effective_message=SimpleNamespace(reply_text=reply_text,
@@ -1147,9 +1148,28 @@ class RoomViewTests(FeatureCase):
         out = self.run_handler(H.ainfo_handler, ALICE)
         data = [b.callback_data for row in out.markups[-1].inline_keyboard
                 for b in row]
-        self.assertEqual({"au_info_sets", "au_info_nextset", "au_info_next",
-                          "au_info_squad", "au_info_sold", "au_info_unsold",
-                          "au_info_purse"}, set(data))
+        self.assertEqual({"au_info_rules", "au_info_sets", "au_info_nextset",
+                          "au_info_next", "au_info_squad", "au_info_sold",
+                          "au_info_unsold", "au_info_purse"}, set(data))
+
+    def test_ainfo_only_offers_the_views_this_auction_has(self):
+        """🔒 Retention and 🆕 Picks are buttons whose only answer would be
+        "not a thing here" when the auction is configured for neither."""
+        from handlers import auction as H
+        out = self.run_handler(H.ainfo_handler, ALICE)
+        data = {b.callback_data for row in out.markups[-1].inline_keyboard
+                for b in row}
+        self.assertNotIn("au_info_retention", data)
+        self.assertNotIn("au_info_picks", data)
+
+        self.season.max_retentions = 2
+        self.season.expansion_picks = 3
+        self.session.commit()
+        out = self.run_handler(H.ainfo_handler, ALICE)
+        data = {b.callback_data for row in out.markups[-1].inline_keyboard
+                for b in row}
+        self.assertIn("au_info_retention", data)
+        self.assertIn("au_info_picks", data)
 
     def test_my_squad_needs_a_franchise_or_a_name(self):
         from handlers import auction as H
@@ -1170,6 +1190,176 @@ class RoomViewTests(FeatureCase):
         self.assertIn("comes next", out.replies[-1])
         upcoming = self.A.next_queued(self.session, self.season.id)
         self.assertEqual("Others", self.A.set_label(upcoming))
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Before the auction
+#
+# The hour before /astart is when a franchise actually decides what it is
+# going to do, and every number it decides against — the purse, the caps, the
+# reserve the max-bid rule holds back, the bid ladder, the clock, who kept
+# whom — used to live on the admin's setup page or behind an admin-only
+# command. What is pinned here:
+#
+#   • every team view answers while the auction is still in setup;
+#   • /arules prints the numbers the auction will run by, to anyone;
+#   • /aretlock and /apicks read out to the room; only their switches are
+#     the admin's;
+#   • a team view answers in a DM, resolved from the team the asker owns —
+#     and /bid still does not.
+# ══════════════════════════════════════════════════════════════════════
+
+class BeforeTheAuctionTests(FeatureCase):
+
+    def setUp(self):
+        super().setUp()
+        self.build_sets()          # a pool, but deliberately NOT started
+        self.season.max_retentions = 2
+        # A co-owner who exists in this test's auction and in no other. The
+        # DM path resolves an auction from the teams the asker is in, and the
+        # shared database here carries every other test's season, so ALICE is
+        # in a dozen of them by the time this runs.
+        self.solo = 9_000_000 + self.tag
+        self.A.add_co_owner(self.session, self.mumbai, self.solo)
+        self.session.commit()
+
+    def test_every_team_view_answers_before_the_auction_starts(self):
+        from handlers import auction as H
+        self.assertEqual(self.A.STATUS_SETUP, self.season.status)
+        checks = [
+            (H.ainfo_handler, (), "Features"),
+            (H.arules_handler, (), "Opening purse"),
+            (H.asets_handler, (), "Bats"),
+            (H.anextset_handler, (), "Bats"),
+            (H.anextplayer_handler, (), "Next up"),
+            (H.asquad_handler, (), "Mumbai"),
+            (H.apurse_handler, (), "Chennai"),
+            (H.aretlock_handler, (), "Retention"),
+            (H.asoldlist_handler, (), "Sold"),
+            (H.aunsoldlist_handler, (), "Unsold"),
+        ]
+        for handler, args, expected in checks:
+            out = self.run_handler(handler, ALICE, args)
+            self.assertTrue(out.replies, f"{handler.__name__} said nothing")
+            self.assertIn(expected, out.replies[-1], handler.__name__)
+
+    def test_ainfo_says_where_setup_has_got_to_not_zero_lots_resolved(self):
+        """"0/8 lots resolved" is true and useless before the first lot."""
+        from handlers import auction as H
+        out = self.run_handler(H.ainfo_handler, ALICE)
+        body = out.replies[-1]
+        self.assertIn("not started yet", body)
+        self.assertNotIn("lots resolved", body)
+        self.assertIn("Pool", body)
+        self.assertIn("Retention", body)
+        self.assertIn("/arules", body)
+
+    def test_arules_carries_every_number_a_bid_is_decided_against(self):
+        from handlers import auction as H
+        out = self.run_handler(H.arules_handler, ALICE)
+        body = out.replies[-1]
+        for expected in ("Opening purse", "Squad", "Overseas", "Anti-snipe",
+                         "Base prices", "Bid increments", "Retention"):
+            self.assertIn(expected, body, expected)
+        # The reserve the reachability rule holds back is a rule you can only
+        # meet by breaking it unless it is written down.
+        self.assertIn(self.A.render_money(self.season.min_base_price_lakh,
+                                          self.season.currency_label), body)
+
+    def test_arules_leaves_out_what_this_auction_does_not_use(self):
+        from handlers import auction as H
+        out = self.run_handler(H.arules_handler, ALICE)
+        self.assertNotIn("Right To Match", out.replies[-1])
+        self.assertNotIn("Expansion picks", out.replies[-1])
+
+        self.A.set_rtm_rules(self.session, self.season, enabled=True,
+                             per_team=2)
+        self.A.set_expansion_picks(self.session, self.season, 3)
+        self.session.commit()
+        out = self.run_handler(H.arules_handler, ALICE)
+        self.assertIn("Right To Match", out.replies[-1])
+        self.assertIn("Expansion picks", out.replies[-1])
+
+    def test_a_player_reads_retention_and_only_an_admin_closes_it(self):
+        from handlers import auction as H
+        self.A.retain(self.session, self.season, self.mumbai, self.players[0])
+        self.session.commit()
+
+        out = self.run_handler(H.aretlock_handler, ALICE)
+        self.assertIn(self.players[0].name, out.replies[-1])
+        self.assertIn("Mumbai", out.replies[-1])
+        self.assertFalse(self.A.retention_locked(self.season))
+
+        out = self.run_handler(H.aretlock_handler, ALICE, ("on",))
+        self.assertIn("Only auction admins", out.replies[-1])
+        self.session.expire_all()
+        self.assertFalse(self.A.retention_locked(self.season))
+
+        with AdminEnv(CAROL):
+            self.run_handler(H.aretlock_handler, CAROL, ("on",))
+        self.session.expire_all()
+        self.assertTrue(self.A.retention_locked(self.season))
+
+    def test_a_player_reads_the_expansion_pick_order(self):
+        from handlers import auction as H
+        out = self.run_handler(H.apicks_handler, ALICE)
+        self.assertIn("Expansion picks", out.replies[-1])
+        # Nobody is new here, so it says so rather than refusing the reader.
+        self.assertNotIn("Only auction admins", out.replies[-1])
+
+    def test_a_team_view_answers_in_a_dm_and_a_bid_does_not(self):
+        from handlers import auction as H
+
+        def dm(handler, args=()):
+            return self.run_handler(handler, self.solo, args,
+                                    chat_type="private", chat_id=self.solo)
+
+        self.assertIn(self.season.name, dm(H.ainfo_handler).replies[-1])
+        self.assertIn("Opening purse", dm(H.arules_handler).replies[-1])
+        self.assertIn("Mumbai", dm(H.asquad_handler).replies[-1])
+        self.assertIn("Bats", dm(H.asets_handler).replies[-1])
+        self.assertIn("Chennai", dm(H.apurse_handler).replies[-1])
+
+        # A bid nobody in the room saw is how a price gets disputed.
+        out = dm(H.bid_handler)
+        self.assertIn("only work in the group", out.replies[-1])
+
+    def test_a_dm_from_somebody_with_no_team_says_so(self):
+        from handlers import auction as H
+        out = self.run_handler(H.ainfo_handler, 4_321, chat_type="private",
+                               chat_id=4_321)
+        self.assertIn("do not have a franchise", out.replies[-1])
+
+    def test_a_group_with_no_auction_never_borrows_another_rooms(self):
+        """The asker owns Mumbai here; asking in an unrelated group must not
+        answer with this auction's numbers."""
+        from handlers import auction as H
+        out = self.run_handler(H.ainfo_handler, self.solo, chat_id=-999_000)
+        self.assertIn("No auction is running in this chat", out.replies[-1])
+
+    def test_two_auctions_are_named_rather_than_guessed_between(self):
+        from handlers import auction as H
+        other = self.A.create_season(self.session, f"Other {self.tag}")
+        self.A.create_franchise(self.session, other, "Kolkata",
+                                owner_tg_id=self.solo, owner_name="Solo")
+        self.session.commit()
+        out = self.run_handler(H.ainfo_handler, self.solo, chat_type="private",
+                               chat_id=self.solo)
+        self.assertIn("You have a team in", out.replies[-1])
+        self.assertIn(other.name, out.replies[-1])
+        self.assertIn(self.season.name, out.replies[-1])
+
+    def test_the_purse_reads_from_both_ends_once_retention_has_spent(self):
+        from handlers import auction as H
+        self.A.retain(self.session, self.season, self.mumbai, self.players[0],
+                      price_lakh=1800)
+        self.session.commit()
+        start = self.A.render_money(self.mumbai.purse_total_lakh,
+                                    self.season.currency_label)
+        left = self.A.render_money(self.mumbai.purse_remaining_lakh,
+                                   self.season.currency_label)
+        out = self.run_handler(H.asquad_handler, ALICE)
+        self.assertIn(f"{left} left of {start}", out.replies[-1])
 
 
 # ══════════════════════════════════════════════════════════════════════

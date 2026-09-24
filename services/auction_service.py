@@ -68,6 +68,12 @@ STATUS_PAUSED = "paused"
 STATUS_COMPLETED = "completed"
 STATUS_CANCELLED = "cancelled"
 
+# The statuses an auction is still *happening* in. ``setup`` is one of them on
+# purpose: retention, the expansion picks and the whole pool exist before a
+# single lot opens, and a franchise planning against them is looking at a live
+# thing, not at history.
+STATUS_ACTIVE = (STATUS_SETUP, STATUS_LIVE, STATUS_PAUSED)
+
 _STATUS_LABEL = {
     STATUS_SETUP: "📝 Setup",
     STATUS_LIVE: "🟢 Live",
@@ -699,6 +705,51 @@ def franchise_for_actor(session, season_id, tg_id):
         if may_bid_for(franchise, tg_id):
             return franchise
     return None
+
+
+def seasons_for_actor(session, tg_id):
+    """Every auction still running that this user owns or co-owns a team in.
+
+    Newest first. Only the ``STATUS_ACTIVE`` ones: a completed auction is
+    history, and offering it as "your auction" would answer a question about
+    this season with last season's purse.
+
+    Co-ownership lives in a JSON column, so the match is made in Python rather
+    than in SQL. What keeps that honest is the status filter — the handful of
+    auctions actually running at once, not every auction the bot has ever run.
+    """
+    if tg_id is None:
+        return []
+    rows = (session.query(AuctionFranchise, AuctionSeason)
+            .join(AuctionSeason, AuctionFranchise.season_id == AuctionSeason.id)
+            .filter(AuctionSeason.status.in_(STATUS_ACTIVE))
+            .order_by(AuctionSeason.id.desc()).all())
+    found, seen = [], set()
+    for franchise, season in rows:
+        if season.id in seen or not may_bid_for(franchise, tg_id):
+            continue
+        seen.add(season.id)
+        found.append(season)
+    return found
+
+
+def season_for_actor(session, tg_id):
+    """The one auction this user has a team in — what a DM read resolves to.
+
+    Two is ambiguous rather than wrong, so it names them instead of picking one
+    — the same call ``_find_franchise`` makes for a name that could be either
+    of two franchises. Reads only: ``/bid`` never comes through here, because a
+    bid nobody in the room saw is how a price gets disputed.
+    """
+    found = seasons_for_actor(session, tg_id)
+    if not found:
+        return None
+    if len(found) > 1:
+        raise AuctionError(
+            "You have a team in " + ", ".join(s.name for s in found[:5])
+            + " — ask in that auction's group, where the command knows which "
+              "one you mean.")
+    return found[0]
 
 
 def set_co_owners(session, franchise, tg_ids):
@@ -4507,7 +4558,8 @@ def render_squad(session, season, franchise):
                   if lot.acquisition == ACQ_RTM)
     lines = [f"👥 <b>{_e(franchise.name)}</b> — {len(rows)}"
              f"/{season.max_squad_size} players",
-             f"💰 {render_money(franchise.purse_remaining_lakh, symbol)} left · "
+             f"💰 {render_money(franchise.purse_remaining_lakh, symbol)} left "
+             f"of {render_money(franchise.purse_total_lakh, symbol)} · "
              f"spent {render_money(spent, symbol)}"
              + (f" (🔒 {render_money(kept, symbol)} retained · 🔨 "
                 f"{render_money(spent - kept, symbol)} at auction)" if kept else "")]
