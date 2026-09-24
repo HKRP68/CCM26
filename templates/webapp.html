@@ -3854,7 +3854,10 @@ async function onDailyClick() {
     } finally {
       isClaimingDailyAd = false;
     }
-    if (!adToken) {
+    // Watched, but we never got a receipt back: claim with no token and let
+    // the server redeem the ad from the ledger. See AD_TOKEN_LEDGER.
+    if (adToken === AD_TOKEN_LEDGER) adToken = '';
+    else if (!adToken) {
       // showAd already toasted the specific reason (skipped / no fill / no
       // passes left); a second generic error on top of it just adds noise.
       isDailyClaiming = false;
@@ -4844,7 +4847,10 @@ async function onSpinClick() {
       isPreparingSpinAd = false;
       updateSpinButton();
     }
-    if (!adToken) {
+    // Watched, but we never got a receipt back: spin with no token and let the
+    // server redeem the ad from the ledger. See AD_TOKEN_LEDGER.
+    if (adToken === AD_TOKEN_LEDGER) adToken = '';
+    else if (!adToken) {
       resetDeck();
       refreshDashboard();
       return;   // showAd already said why
@@ -5001,17 +5007,49 @@ function _tryInitAdController() {
 // error, is NOT retried: replaying an ad someone just closed is hostile.
 const AD_NOFILL_RETRY_DELAYS = [900, 2200];
 
-// Hard cap on a single _adController.show() call. The SDK promise is not
-// guaranteed to settle — a request that dies on a phone network can hang
-// forever — and an un-timed await on it was the single biggest source of "I
-// tapped spin and nothing happened for a minute". A timed-out attempt is
-// treated exactly like a no-fill: retryable, and never charged to the user.
+// A single _adController.show() call spans two completely different waits, and
+// putting one clock across both of them is what made "ads run but the reward
+// never arrives" a report.
+//
+//   1. WAITING for an ad. The SDK promise is not guaranteed to settle — a
+//      request that dies on a phone network can hang forever — and an un-timed
+//      await on it was the single biggest source of "I tapped spin and nothing
+//      happened for a minute". This wait is short and a timeout is treated
+//      exactly like a no-fill: retryable, never charged to the user.
+//   2. WATCHING the ad. A rewarded ad is 15-30 seconds of the user's own time,
+//      and the promise does not resolve until they reach the end of it. The
+//      12-second cap used to fire HERE, mid-ad: the promise was abandoned,
+//      /api/webapp/ad-completed was never called, and the player watched a full
+//      ad and was then told no ad was available. Nothing about that is the
+//      user's fault and nothing in the old code could tell it apart from a
+//      dead network.
+//
+// So the deadline moves the moment the SDK says an ad reached the screen —
+// see AD_START_EVENTS and _showAdBounded. Once someone is watching, the only
+// thing left to wait for is them, and that gets AD_WATCH_TIMEOUT_MS.
 const AD_SHOW_TIMEOUT_MS = 12000;
+// Cap once the ad is actually on screen. Generous on purpose: this is a
+// backstop against an SDK that never settles, not a limit on the ad, and
+// cutting a watched ad short is the exact bug it exists to prevent.
+const AD_WATCH_TIMEOUT_MS = 180000;
 // Cap on the WHOLE ad phase including retries and backoff. Past this we stop
 // asking and fall back, because more waiting has stopped being worth anything.
+// It bounds the WAITING only — an ad that has started is never cut off by it.
 const AD_PHASE_BUDGET_MS = 26000;
 // Cap on the no-fill pass request that may follow a spent budget.
 const NOFILL_REQUEST_TIMEOUT_MS = 8000;
+// The SDK events that mean "an ad is on screen now". Their names vary between
+// SDK versions and a version that fires none of them simply keeps the short
+// deadline, which is the behaviour before this existed — so listening is a
+// bonus, never a dependency.
+const AD_START_EVENTS = ['onStart', 'onReward', 'onNonStopShow'];
+// What showAd() hands back when the ad WAS watched but the request that
+// registers it never got an answer. It is not a token and must never be sent
+// as one — it means "go ahead with no token", because the ad is already spent
+// and the server redeems it from the ledger (a receipt one of the retries did
+// land, or Adsgram's own postback). Distinct from null, which means the user
+// gets nothing this time, and from '' which is an ordinary free/saved round.
+const AD_TOKEN_LEDGER = '__watched_unregistered__';
 
 // What the spin/daily button says while the ad phase runs. Updated as the
 // phase progresses so a slow ad looks like progress rather than a freeze.
@@ -5035,6 +5073,99 @@ function _withAdTimeout(promise, ms) {
       v => { clearTimeout(timer); resolve(v); },
       e => { clearTimeout(timer); reject(e); });
   });
+}
+
+// Show one ad, bounded by `loadMs` while we are waiting for it and by `watchMs`
+// once it is actually on screen. See AD_SHOW_TIMEOUT_MS for why those are two
+// different numbers rather than one.
+//
+// The deadline is pushed out by the SDK's own "an ad started" events. A
+// version that fires none of them keeps the short deadline — the behaviour
+// before this existed — so this can only ever rescue an ad, never strand one.
+function _showAdBounded(controller, loadMs, watchMs) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let timer = null;
+    let detach = () => {};
+
+    const arm = (ms) => {
+      clearTimeout(timer);
+      timer = setTimeout(() => finish(reject, {
+        error: true, state: 'timeout',
+        description: 'no banner: ad request timed out' }), ms);
+    };
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      detach();
+      fn(value);
+    };
+    // The ad reached the screen. From here the only thing being waited on is
+    // the person watching it, so the clock has to be theirs.
+    const onStarted = () => { if (!settled) { _setAdPhase('Watching…'); arm(watchMs); } };
+
+    if (typeof controller?.addEventListener === 'function') {
+      AD_START_EVENTS.forEach(name => {
+        try { controller.addEventListener(name, onStarted); } catch (_) {}
+      });
+      detach = () => AD_START_EVENTS.forEach(name => {
+        try { controller.removeEventListener?.(name, onStarted); } catch (_) {}
+      });
+    }
+
+    arm(loadMs);
+    let shown;
+    try {
+      shown = controller.show();
+    } catch (e) {
+      finish(reject, e);
+      return;
+    }
+    Promise.resolve(shown).then(
+      v => {
+        // A show() we stopped waiting for can still finish, and by then the
+        // user HAS watched the whole ad. Losing it there is the very complaint
+        // this file exists to answer, so it gets banked instead.
+        if (settled) { _bankLateAd(v); return; }
+        finish(resolve, v);
+      },
+      e => { if (!settled) finish(reject, e); });
+  });
+}
+
+// Register an ad that finished after we had given up on it. The server writes
+// it to the ledger as a saved ad (see services/ad_service.py "Ad credits"), so
+// the player's next tap spends it with no second ad to sit through.
+async function _bankLateAd(result) {
+  if (!(result && result.done)) return;   // not watched — nothing to keep
+  try {
+    const r = await _registerWatchedAd();
+    if (r) toast('📺 Your ad was saved — tap again to use it.', 'info');
+  } catch (e) {
+    console.warn('[ads] could not bank a late ad', e);
+  }
+}
+
+// Tell the backend an ad was watched and take the one-shot token back.
+// Retried, because by the time this runs the ad is already spent: a dropped
+// request here is a watched ad turning into nothing, which is precisely the
+// failure the whole ledger exists to make impossible. The server is
+// idempotent over the retry window (see ad_service.register_client_ad), so a
+// duplicate binds to the same receipt rather than minting a second ad.
+async function _registerWatchedAd(attempts = 3) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    let r = null;
+    try {
+      r = await api('/api/webapp/ad-completed', {});
+    } catch (e) {
+      console.warn('[ads] ad-completed request failed', e);
+    }
+    if (r && r.ok && r.data?.ad_token) return r.data.ad_token;
+    if (r && r.status && r.status !== 0) break;   // the server answered: it decided
+    if (attempt < attempts - 1) await _sleep(500 * (attempt + 1));
+  }
+  return null;
 }
 
 function _adFailureKind(err) {
@@ -5204,17 +5335,25 @@ async function showAd(quotaKind = null) {
       if (timeLeft() <= 0) break;
       try {
         _setAdPhase(attempt === 0 ? 'Getting your ad…' : 'Finding an ad…');
-        // Never await the SDK unbounded — see AD_SHOW_TIMEOUT_MS.
-        const result = await _withAdTimeout(
-          _adController.show(), Math.min(AD_SHOW_TIMEOUT_MS, timeLeft()));
+        // Never await the SDK unbounded — see AD_SHOW_TIMEOUT_MS. The short
+        // deadline covers the WAIT; once the ad is on screen it becomes
+        // AD_WATCH_TIMEOUT_MS, so a 30-second rewarded ad is never cut off
+        // half way through and then reported as "no ad available".
+        const result = await _showAdBounded(
+          _adController, Math.min(AD_SHOW_TIMEOUT_MS, timeLeft()),
+          AD_WATCH_TIMEOUT_MS);
         // SDK promise resolves only if user watched ad till the end
         if (result && result.done) {
           _setAdPhase('Claiming reward…');
           // Tell our backend the ad was completed → returns a single-use token
-          const r = await api('/api/webapp/ad-completed', {});
-          if (r.ok && r.data.ad_token) return r.data.ad_token;
-          toast('Ad watched but the reward didn\'t register — try again', 'error');
-          return null;
+          const token = await _registerWatchedAd();
+          if (token) return token;
+          // Every attempt failed. The ad is watched and gone either way, so
+          // carry on with no token rather than refusing the round: if any of
+          // those requests did reach the server, or Adsgram's own postback
+          // landed, the reward endpoint redeems it from the ledger.
+          toast('Ad watched — claiming your reward…', 'info');
+          return AD_TOKEN_LEDGER;
         }
         // Resolved without `done` — the SDK's "closed early" path on the
         // versions that resolve rather than reject. Say so: returning silently
@@ -6998,7 +7137,10 @@ async function openFreePack() {
   let adToken = '';
   if (!useSavedAd) {
     adToken = await showAd();
-    if (!adToken) {
+    // Watched, but we never got a receipt back: open with no token and let the
+    // server redeem the ad from the ledger. See AD_TOKEN_LEDGER.
+    if (adToken === AD_TOKEN_LEDGER) adToken = '';
+    else if (!adToken) {
       if (btn) { btn.disabled = false; btn.textContent = '📺 Watch ad & open pack'; }
       return;  // showAd already toasted
     }

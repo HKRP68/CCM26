@@ -31,6 +31,7 @@ from models import (
 )
 from services import tournament_service
 from services.tournament_service import KIND_LETSPLAY
+from utils.message_chunks import expandable_quotes
 
 logger = logging.getLogger(__name__)
 
@@ -569,13 +570,23 @@ _STAGE_LABEL = {
 }
 
 
-def render_fixtures(session, tour, viewer_tg_id=None, limit=40):
+# How many fixtures show without a tap; the rest ride in an expandable
+# blockquote. See ``cl_tournament_view.FIXTURE_OPEN`` — the two competitions
+# keep the same shape, and a truncated schedule is no schedule at all.
+FIXTURE_OPEN = 20
+
+
+def render_fixtures(session, tour, viewer_tg_id=None, limit=None):
     """The fixture list as an HTML message body.
 
     When ``viewer_tg_id`` belongs to a participant, their own remaining fixtures
     are pulled out into a "Your next matches" section — the thing a player
     actually opens this for.
+
+    Every fixture is rendered; ``limit`` (default :data:`FIXTURE_OPEN`) only
+    decides how many of them open without a tap.
     """
+    limit = FIXTURE_OPEN if limit is None else int(limit)
     fixtures = (session.query(TournamentMatch)
                 .filter_by(tournament_id=tour.id)
                 .order_by(TournamentMatch.match_no, TournamentMatch.round_no,
@@ -599,7 +610,7 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=40):
         mine = my_team.id if my_team else None
 
     my_lines, all_lines = [], []
-    for fx in fixtures[:limit]:
+    for fx in fixtures:
         stage = _STAGE_LABEL.get(fx.stage or "league", (fx.stage or "").title())
         a = _slot(fx.team1_id, fx.slot1_label)
         b = _slot(fx.team2_id, fx.slot2_label)
@@ -618,9 +629,13 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=40):
     out = list(header)
     if my_lines:
         out += ["", "<b>Your next matches</b>"] + my_lines[:8]
-    out += ["", "<b>Full schedule</b>"] + all_lines
-    if len(fixtures) > limit:
-        out.append(f"<i>…and {len(fixtures) - limit} more.</i>")
+    out += ["", f"<b>Full schedule</b> · {len(all_lines)} matches"]
+    out += all_lines[:limit]
+    rest = all_lines[limit:]
+    if rest:
+        out.append(f"<b>👇 Matches {limit + 1}–{len(all_lines)}</b> "
+                   f"<i>(tap to expand)</i>")
+        out += expandable_quotes(rest)
     return "\n".join(out)
 
 

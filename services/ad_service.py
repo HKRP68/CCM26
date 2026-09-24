@@ -23,6 +23,25 @@ Adsgram describes the reward URL as worth it "for publishers who have more than
 single use and the per-cycle ad quota are what keep it honest.
 
 ────────────────────────────────────────────────────────────────────────
+Two clocks, not one
+────────────────────────────────────────────────────────────────────────
+Worth knowing from this side of the wire, because it produced the loudest
+version of "ads run but the reward never arrives" and none of it was visible
+here: the Mini App used to cap ``AdController.show()`` at twelve seconds. A
+rewarded ad runs fifteen to thirty, so the cap fired *while the player was
+watching it*. The promise was abandoned, /api/webapp/ad-completed was never
+called, and someone who had just sat through a full ad was told no ad was
+available.
+
+The client now bounds the two waits separately — a short one for an ad to
+appear, a long one for the person watching it, switched by the SDK's own
+"started" events — and an ad that finishes after the client gave up is still
+registered here rather than dropped. That last part is why
+``register_client_ad`` has to be idempotent over its repeat window: the client
+retries a lost /ad-completed, and a retry must bind to the same receipt instead
+of minting a second ad.
+
+────────────────────────────────────────────────────────────────────────
 No-fill passes
 ────────────────────────────────────────────────────────────────────────
 An ad network is not a guarantee. Adsgram routinely answers "no banner" for a

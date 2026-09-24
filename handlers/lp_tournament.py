@@ -16,7 +16,7 @@ Following
     /lptable           points table
     /lptfixtures       full schedule, with your own next matches pulled out
     /lptteams          who is in it
-    /lptstats          Top-10 batting / bowling leaderboards
+    /lptstats          batting / bowling leaderboards, 25 deep
 
 Running it (bot admins only — see /lptadmin)
     /lptnew, /lptadd, /lptremove, /lptrename, /lptsync, /lptschedule,
@@ -337,12 +337,12 @@ async def lptteams_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                             lptr.render_blocks(s, t, "teams")))
 
 
-# ── /lptstats: the same Top-10 leaderboards /tournamentstats renders, but for
+# ── /lptstats: the same leaderboards /tournamentstats renders, but for
 #    the active *Lets Play* tournament. The rendering and the category set are
 #    imported rather than duplicated; only the tournament lookup differs.
 
 async def lptstats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/lptstats — Top-10 Lets Play Tournament leaderboards with category buttons."""
+    """/lptstats — Lets Play Tournament leaderboards with category buttons."""
     from handlers.tournament import _leaderboard_blocks, _leaders_for, _render
     session = get_session()
     try:
