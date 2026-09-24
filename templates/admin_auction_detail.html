@@ -2,13 +2,45 @@
 {% block title %}{{ season.name }} — Auction{% endblock %}
 {% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_auction.css') }}">{% endblock %}
 
+{#
+   The setup page is a dozen rule-sets deep and a visit touches one or two of
+   them, so each is a closed <details class="au-fold"> with its live numbers in
+   the summary. Native <details>, not a tab strip: it survives a form POST
+   landing back on an anchor, it is found by the browser's own find-in-page even
+   while closed in the browsers that support that, and it needs no JavaScript to
+   open. The script at the foot adds the two things native folds do not give —
+   opening the fold an anchor points INTO, and remembering what was open across
+   the redirect every save on this page ends with.
+#}
+
+{% macro fold(id, title, summary) %}
+<details class="au-fold" id="{{ id }}" data-fold="{{ id }}">
+  <summary>{{ title }}{% if summary %}<span class="au-sum">{{ summary }}</span>{% endif %}</summary>
+  <div class="au-fold-body">
+{% endmacro %}
+
 {% block content %}
 <div class="au-shell">
   <div style="display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;">
     <h2 style="margin:0;">🔨 {{ season.name }} <span class="status-pill {{ season.status }}">{{ season.status }}</span></h2>
     <div class="au-actions">
+      <button class="btn btn-ghost btn-sm" type="button" id="au-expand-all">⤢ Expand all</button>
       <a class="btn btn-primary" href="{{ url_for('admin_auction_console', season_id=season.id) }}">🔨 Live console</a>
       <a class="btn btn-ghost" href="{{ url_for('admin_auctions_list') }}">← All auctions</a>
+    </div>
+  </div>
+
+  {# A one-line reading of the whole auction, so the closed page still answers
+     "where is this up to" without opening anything. #}
+  <div class="au-card" style="padding:.7rem 1rem;">
+    <div class="au-note" style="display:flex;gap:.4rem 1.1rem;flex-wrap:wrap;margin:0;">
+      <span>🏛 <b>{{ field|length }}</b> franchise{{ '' if field|length == 1 else 's' }}</span>
+      <span>🗂 <b>{{ sets|length }}</b> set{{ '' if sets|length == 1 else 's' }}</span>
+      <span>📋 <b>{{ counts.get('total', 0) }}</b> lots · {{ counts.get('queued', 0) }} waiting
+            · {{ counts.get('sold', 0) }} sold · {{ counts.get('unsold', 0) }} unsold</span>
+      <span>💰 purse <b>{{ money(season.opening_purse_lakh) }}</b></span>
+      <span>👥 squad <b>{{ season.min_squad_size }}–{{ season.max_squad_size }}</b></span>
+      {% if role_rule_line %}<span>🧩 {{ role_rule_line }}</span>{% endif %}
     </div>
   </div>
 
@@ -31,19 +63,16 @@
   {% endif %}
 
   <!-- ── Settings ──────────────────────────────────────────────── -->
-  <div class="au-card">
-    <h3 style="margin-top:0;">Settings</h3>
+  {{ fold("settings", "⚙️ Settings",
+          season.bid_seconds ~ "s per lot · " ~ money(season.opening_purse_lakh) ~ " purse") }}
     <form method="POST" class="au-grid">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="settings">
+      <input type="hidden" name="back_query" value="#settings">
       <div style="grid-column:span 2;"><label>Name</label><input type="text" name="name" value="{{ season.name }}"></div>
       <div><label>Auction group chat id</label><input type="text" name="chat_id" value="{{ season.chat_id or '' }}" placeholder="-1001234567890"></div>
       <div><label>Seconds per lot</label><input type="number" name="bid_seconds" min="5" max="600" value="{{ season.bid_seconds }}"></div>
       <div><label>Opening purse (Cr)</label><input type="text" name="opening_purse" value="{{ (season.opening_purse_lakh / 100)|round(2) }}"></div>
-      <div><label>Min squad</label><input type="number" name="min_squad_size" min="0" max="50" value="{{ season.min_squad_size }}"></div>
-      <div><label>Max squad</label><input type="number" name="max_squad_size" min="1" max="50" value="{{ season.max_squad_size }}"></div>
-      <div><label>Home country</label><input type="text" name="home_country" value="{{ season.home_country }}"></div>
-      <div><label>Max overseas</label><input type="number" name="max_overseas" min="0" max="25" value="{{ season.max_overseas }}"></div>
       <div><label>Anti-snipe window (s)</label><input type="number" name="snipe_window" min="0" max="120" value="{{ season.snipe_window_seconds }}"></div>
       <div><label>Extend to (s)</label><input type="number" name="snipe_extend" min="1" max="300" value="{{ season.snipe_extend_seconds }}"></div>
       <div><label>Max extensions</label><input type="number" name="max_extensions" min="0" max="100" value="{{ season.max_extensions }}"></div>
@@ -59,20 +88,92 @@
       answer.
     </p>
     <p class="au-note" style="margin-bottom:0;">
-      <b>Min squad</b> drives the reachability rule: a franchise may never bid
-      so much that it could not still fill its remaining slots at the pool's
-      cheapest base price ({{ money(season.min_base_price_lakh) }}). Every
-      franchise's ceiling is shown below and on the board, because a rule you
-      only meet once you have broken it is one you cannot plan around.
+      The squad caps and the home country moved into
+      <b>🧩 Squad rules</b> below, next to the role limits they work with.
     </p>
-  </div>
+  </div></details>
+
+  <!-- ── Squad rules ───────────────────────────────────────────── -->
+  {{ fold("squad-rules", "🧩 Squad rules",
+          season.min_squad_size ~ "–" ~ season.max_squad_size ~ " players"
+          ~ (" · " ~ role_rule_line if role_rule_line else " · no role limits")) }}
+    <p class="au-note" style="margin:.2rem 0 .8rem;">
+      What a legal squad looks like — the size, the overseas cap, and how many
+      of each role. Both ends of the role rule are saved together because they
+      constrain each other: a minimum above its own maximum, or minimums adding
+      up past the squad limit, describes a squad nobody could ever finish, and
+      that is refused here rather than half-way through a live lot.
+    </p>
+    <form method="POST" class="au-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="squad_rules">
+      <input type="hidden" name="back_query" value="#squad-rules">
+      <div><label>Min squad</label><input type="number" name="min_squad_size" min="0" max="50" value="{{ season.min_squad_size }}"></div>
+      <div><label>Max squad</label><input type="number" name="max_squad_size" min="1" max="50" value="{{ season.max_squad_size }}"></div>
+      <div><label>Home country</label><input type="text" name="home_country" value="{{ season.home_country }}"></div>
+      <div><label>Max overseas</label><input type="number" name="max_overseas" min="0" max="25" value="{{ season.max_overseas }}"></div>
+
+      <div style="grid-column:1/-1;">
+        <table class="au-table" style="margin-top:.4rem;">
+          <thead>
+            <tr><th>Role</th><th style="width:7rem;">Min</th><th style="width:7rem;">Max</th>
+                <th>Reads as</th></tr>
+          </thead>
+          <tbody>
+          {% for role in squad_roles %}
+          {% set low = role_minimums.get(role, 0) %}
+          {% set high = role_maximums.get(role) %}
+          <tr>
+            <td>{{ role }}</td>
+            <td><input type="number" name="role_min_{{ loop.index0 }}" min="0" max="50"
+                       value="{{ low or '' }}" placeholder="0" style="width:5.5rem;"></td>
+            <td><input type="number" name="role_max_{{ loop.index0 }}" min="0" max="50"
+                       value="{{ high if high is not none else '' }}" placeholder="any"
+                       style="width:5.5rem;"></td>
+            <td class="dim">
+              {% if low and high is not none %}every squad carries {{ low }}–{{ high }}
+              {% elif high is not none %}at most {{ high }}{% if high == 0 %} — none at all{% endif %}
+              {% elif low %}at least {{ low }}
+              {% else %}no rule{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div><button class="btn btn-primary" type="submit">Save squad rules</button></div>
+    </form>
+    <p class="au-note" style="margin-bottom:0;">
+      <b>Blank is not zero.</b> A blank <em>Max</em> means the role has no
+      ceiling; a typed <code>0</code> means none of that role may be signed at
+      all, which is a rule some pools really want. A blank or <code>0</code>
+      <em>Min</em> means no floor.
+    </p>
+    <p class="au-note" style="margin-bottom:0;">
+      The two ends are enforced differently, and they have to be. A
+      <b>maximum</b> is a fact about the squad in front of you, so the bid that
+      would break it is refused outright. A <b>minimum</b> is a promise about a
+      squad that does not exist yet, so it is enforced as
+      <b>reachability</b> — a bid is refused when winning it would leave the
+      franchise without enough slots to still fill what it owes. A rule you only
+      meet once you have broken it is one you cannot plan around.
+    </p>
+    <p class="au-note" style="margin-bottom:0;">
+      <b>Min squad</b> also drives the money side of reachability: a franchise
+      may never bid so much that it could not still fill its remaining slots at
+      the pool's cheapest base price ({{ money(season.min_base_price_lakh) }}).
+      Every franchise's ceiling is shown below and on the board.
+    </p>
+  </div></details>
 
   <!-- ── Base prices ───────────────────────────────────────────── -->
-  <div class="au-card">
-    <h3 style="margin-top:0;">Base prices by rating</h3>
+  {{ fold("base-prices", "💵 Base prices by rating",
+          price_rules|length ~ " band" ~ ("" if price_rules|length == 1 else "s")
+          ~ (" · ⚠️ gaps" if price_gaps else "")) }}
     <form method="POST">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="price_rules">
+      <input type="hidden" name="back_query" value="#base-prices">
       <table class="au-table" id="au-price-rules">
         <thead>
           <tr>
@@ -119,131 +220,191 @@
     <p class="au-note" style="margin-bottom:0;">
       The price is <b>stamped onto each lot when it is added to the pool</b>, so
       editing this table never moves the price of a lot that is already there —
-      and never moves one mid-auction. Override a single player below.
+      and never moves one mid-auction. Override a single player in the pool
+      table below.
     </p>
-  </div>
-
-  <script>
-  // Add / drop a range. The rows are a plain repeated-name form — the POST
-  // handler zips rule_max_rating, rule_min_rating and rule_price by position —
-  // so a new row is a clone of the markup above and needs no ids of its own.
-  (function () {
-    var table = document.getElementById("au-price-rules");
-    if (!table) { return; }
-    var body = table.tBodies[0];
-
-    function blankRow() {
-      var row = document.createElement("tr");
-      row.innerHTML =
-        '<td><input type="number" name="rule_max_rating" min="0" max="100" placeholder="and up" style="width:6rem;"></td>' +
-        '<td><input type="number" name="rule_min_rating" min="0" max="100" placeholder="e.g. 92" style="width:6rem;"></td>' +
-        '<td><input type="text" name="rule_price" placeholder="e.g. 2" style="width:7rem;"></td>' +
-        '<td class="dim">new range</td>' +
-        '<td><button type="button" class="btn btn-sm au-drop-range" title="Remove this range">\u2715</button></td>';
-      return row;
-    }
-
-    document.getElementById("au-add-range").addEventListener("click", function () {
-      var row = blankRow();
-      body.appendChild(row);
-      row.querySelector("input").focus();
-    });
-
-    body.addEventListener("click", function (event) {
-      var button = event.target.closest(".au-drop-range");
-      if (!button) { return; }
-      // Never leave the form with nothing to save: the last row is emptied
-      // rather than removed, because a POST with no bands at all is refused.
-      if (body.rows.length > 1) {
-        button.closest("tr").remove();
-      } else {
-        Array.prototype.forEach.call(
-          button.closest("tr").querySelectorAll("input"),
-          function (input) { input.value = ""; });
-      }
-    });
-  })();
-  </script>
+  </div></details>
 
   <!-- ── Franchises ────────────────────────────────────────────── -->
-  <div class="au-card">
-    <h3 style="margin-top:0;">Franchises</h3>
-    <div class="au-tiles">
-      {% for f in field %}
-      <div class="au-tile">
-        <form method="POST" enctype="multipart/form-data" class="au-grid">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="action" value="franchise">
-          <input type="hidden" name="franchise_id" value="{{ f.id }}">
-          <div style="grid-column:span 2;"><label>Name</label><input type="text" name="name" value="{{ f.name }}"></div>
-          <div><label>Short name</label><input type="text" name="short_name" value="{{ f.short_name or '' }}"></div>
-          <div><label>City / State</label><input type="text" name="city" value="{{ f.city or '' }}"></div>
-          <div><label>Owner name</label><input type="text" name="owner_name" value="{{ f.owner_name or '' }}"></div>
-          <div><label>Owner Telegram id</label><input type="text" name="owner_tg_id" value="{{ f.owner_tg_id or '' }}"></div>
-          <div style="grid-column:span 2;"><label>Co-owners (Telegram ids)</label>
-            <input type="text" name="co_owners" value="{{ (f.co_owner_ids_json or '[]')|replace('[','')|replace(']','') }}" placeholder="111, 222"></div>
-          <div style="grid-column:span 2;"><label>Logo</label><input type="file" name="logo" accept="image/*"></div>
-          <div><button class="btn btn-primary" type="submit">Save</button></div>
-        </form>
-        <div class="au-note" style="margin-top:.5rem;">
-          💰 {{ money(f.purse_remaining_lakh) }} of {{ money(f.purse_total_lakh) }}
-          · 👥 {{ f.squad_size }}/{{ season.max_squad_size }}
-          · 🎯 max bid {{ money([0, max_bid(season, f)]|max) }}
-        </div>
-        <div class="au-actions" style="margin-top:.5rem;">
-          <form method="POST" style="display:flex;gap:.3rem;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="grant">
-            <input type="hidden" name="franchise_id" value="{{ f.id }}">
-            <input type="text" name="amount" placeholder="+2 or -2 (Cr)" style="width:9rem;">
-            <button class="btn btn-ghost" type="submit">🧾 Correct purse</button>
-          </form>
-          {# A franchise with players can be removed too: they go back into
-             the pool and its opening purse is shared among the rest — the
-             same call as /aremoveteam. #}
-          <form method="POST" onsubmit="return confirm({% if f.squad_size %}'Remove {{ f.name }}? Its {{ f.squad_size }} players go back into the auction and its purse is shared among the other franchises.'{% else %}'Remove {{ f.name }}?'{% endif %});">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="franchise_delete">
-            <input type="hidden" name="franchise_id" value="{{ f.id }}">
-            <button class="btn btn-ghost danger" type="submit">Remove</button>
-          </form>
-        </div>
-      </div>
-      {% endfor %}
+  {{ fold("franchises", "🏛 Franchises",
+          field|length ~ " in the field") }}
+    <p class="au-note" style="margin:.2rem 0 .8rem;">
+      Every side, closed. The row is what an admin scans — purse, squad, max
+      bid — and opening one is what shows the form. The owner is a
+      <b>Telegram id</b>, not an account here: an admin builds the field from a
+      list, and some of those people have never messaged the bot. Owner and
+      co-owners are equals for every check <code>/bid</code> makes.
+    </p>
 
-      <div class="au-tile">
-        <b>Add a franchise</b>
-        <form method="POST" enctype="multipart/form-data" class="au-grid" style="margin-top:.5rem;">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="action" value="franchise">
-          <div style="grid-column:span 2;"><label>Name</label><input type="text" name="name" required></div>
-          <div><label>Short name</label><input type="text" name="short_name"></div>
-          <div><label>City / State</label><input type="text" name="city"></div>
-          <div><label>Owner name</label><input type="text" name="owner_name"></div>
-          <div><label>Owner Telegram id</label><input type="text" name="owner_tg_id"></div>
-          <div><label>Purse (Cr)</label><input type="text" name="purse_total" value="{{ (season.opening_purse_lakh / 100)|round(2) }}"></div>
-          <div style="grid-column:span 2;"><label>Co-owners</label><input type="text" name="co_owners" placeholder="111, 222"></div>
-          <div><button class="btn btn-primary" type="submit">Add</button></div>
-        </form>
-        <p class="au-note" style="margin-bottom:0;">
-          The owner is a <b>Telegram id</b>, not an account here — an admin
-          builds the field from a list, and some of those people have never
-          messaged the bot. Owner and co-owners are equals for every check
-          <code>/bid</code> makes.
-        </p>
-      </div>
+    <div class="au-teams">
+      {% for f in field %}
+      {% set owed, over = role_shortfall(f) %}
+      <details class="au-fold au-team" id="team-{{ f.id }}" data-fold="team-{{ f.id }}">
+        <summary>
+          {{ f.name }}{% if f.short_name %} <span class="dim" style="font-weight:500;">({{ f.short_name }})</span>{% endif %}
+          <span class="au-sum">
+            💰 {{ money(f.purse_remaining_lakh) }} / {{ money(f.purse_total_lakh) }}
+            · 👥 {{ f.squad_size }}/{{ season.max_squad_size }}
+            · 🎯 {{ money([0, max_bid(season, f)]|max) }}
+            {%- if owed %} · 🧩 owes {{ owed|length }}{% endif %}
+            {%- if over %} · ⚠️ over {{ over|length }}{% endif %}
+          </span>
+        </summary>
+        <div class="au-fold-body">
+          {% if owed or over %}
+          <p class="au-note" style="margin:.6rem 0 0;">
+            {% if owed %}Still owes {% for role, n in owed.items() %}<b>{{ n }} {{ role }}</b>{{ ", " if not loop.last }}{% endfor %}.{% endif %}
+            {% if over %}<span style="color:#fca5a5;">Over the limit on
+              {% for role, n in over.items() %}<b>{{ role }}</b> by {{ n }}{{ ", " if not loop.last }}{% endfor %} —
+              a rule tightened after this squad was built. Nothing it does next
+              can fix it; correct the rule or the squad.</span>{% endif %}
+          </p>
+          {% endif %}
+
+          <form method="POST" enctype="multipart/form-data" class="au-grid">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="franchise">
+            <input type="hidden" name="franchise_id" value="{{ f.id }}">
+            <input type="hidden" name="back_query" value="#team-{{ f.id }}">
+            <div style="grid-column:span 2;"><label>Name</label><input type="text" name="name" value="{{ f.name }}"></div>
+            <div><label>Short name</label><input type="text" name="short_name" value="{{ f.short_name or '' }}"></div>
+            <div><label>City / State</label><input type="text" name="city" value="{{ f.city or '' }}"></div>
+            <div><label>Owner name</label><input type="text" name="owner_name" value="{{ f.owner_name or '' }}"></div>
+            <div><label>Owner Telegram id</label><input type="text" name="owner_tg_id" value="{{ f.owner_tg_id or '' }}"></div>
+            <div style="grid-column:span 2;"><label>Co-owners (Telegram ids)</label>
+              <input type="text" name="co_owners" value="{{ (f.co_owner_ids_json or '[]')|replace('[','')|replace(']','') }}" placeholder="111, 222"></div>
+            <div style="grid-column:span 2;"><label>Logo</label><input type="file" name="logo" accept="image/*"></div>
+            <div><button class="btn btn-primary" type="submit">💾 Save</button></div>
+          </form>
+
+          {% set roles_here = squad_roles_of(f.id) %}
+          {% if roles_here %}
+          <p class="au-note" style="margin:.6rem 0 0;">
+            Squad by role:
+            {% for role in squad_roles %}{% if roles_here.get(role) %}{{ role }} ×{{ roles_here[role] }}{{ ", " if not loop.last }}{% endif %}{% endfor %}
+          </p>
+          {% endif %}
+
+          <div class="au-actions" style="margin-top:.7rem;align-items:flex-start;">
+            <form method="POST" style="display:flex;gap:.3rem;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="grant">
+              <input type="hidden" name="franchise_id" value="{{ f.id }}">
+              <input type="hidden" name="back_query" value="#team-{{ f.id }}">
+              <input type="text" name="amount" placeholder="+2 or -2 (Cr)" style="width:9rem;">
+              <button class="btn btn-ghost" type="submit">🧾 Correct purse</button>
+            </form>
+
+            {# Removing a franchise is not a bare click. The panel says exactly
+               what happens to its players and its purse, and asks for the name
+               back — checked again on the server, because a confirmation that
+               only lives in the browser is one a stale page or a resent POST
+               walks straight past. #}
+            <details class="au-confirm">
+              <summary class="btn btn-ghost btn-sm danger">🗑 Delete</summary>
+              <div class="au-confirm-body">
+                <p class="au-note" style="margin:0 0 .4rem;">
+                  {% if f.squad_size %}
+                  <b>{{ f.name }}</b> holds {{ f.squad_size }} player{{ '' if f.squad_size == 1 else 's' }}.
+                  They go back into the auction pool and its
+                  {{ money(f.purse_total_lakh) }} opening purse is shared among
+                  the other franchises, all on the ledger.
+                  {% else %}
+                  <b>{{ f.name }}</b> has signed nobody, so it is simply
+                  removed.
+                  {% endif %}
+                  This cannot be undone.
+                </p>
+                <form method="POST" style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="action" value="franchise_delete">
+                  <input type="hidden" name="franchise_id" value="{{ f.id }}">
+                  <input type="hidden" name="back_query" value="#franchises">
+                  <input type="text" name="confirm_name" placeholder="{{ f.name }}"
+                         style="width:11rem;" autocomplete="off">
+                  <button class="btn btn-ghost danger" type="submit">Remove this franchise</button>
+                </form>
+              </div>
+            </details>
+          </div>
+        </div>
+      </details>
+      {% else %}
+      <p class="au-note"><i>No franchises yet.</i> Add one below, or upload a field.</p>
+      {% endfor %}
     </div>
-  </div>
+
+    <h4 style="margin:1.1rem 0 .4rem;">Add a franchise</h4>
+    <form method="POST" enctype="multipart/form-data" class="au-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="franchise">
+      <input type="hidden" name="back_query" value="#franchises">
+      <div style="grid-column:span 2;"><label>Name</label><input type="text" name="name" required></div>
+      <div><label>Short name</label><input type="text" name="short_name"></div>
+      <div><label>City / State</label><input type="text" name="city"></div>
+      <div><label>Owner name</label><input type="text" name="owner_name"></div>
+      <div><label>Owner Telegram id</label><input type="text" name="owner_tg_id"></div>
+      <div><label>Purse (Cr)</label><input type="text" name="purse_total" value="{{ (season.opening_purse_lakh / 100)|round(2) }}"></div>
+      <div style="grid-column:span 2;"><label>Co-owners</label><input type="text" name="co_owners" placeholder="111, 222"></div>
+      <div><button class="btn btn-primary" type="submit">Add</button></div>
+    </form>
+
+    <!-- ── The field, as a file ──────────────────────────────── -->
+    <h4 style="margin:1.1rem 0 .4rem;">📦 The field, as a file</h4>
+    <p class="au-note" style="margin:.2rem 0 .8rem;">
+      Twelve sides with owners, co-owners, cities and purses is twenty minutes
+      of form-filling to reproduce, and every minute of it is a chance to
+      mistype a Telegram id. Download the field, keep it, upload it into the
+      next auction.
+      <br><b>Only what an admin typed is imported</b> — names, short names,
+      cities, owners, co-owners, opening purses, RTM cards and expansion picks.
+      The purse <em>remaining</em>, the squad and the ledger are results, not
+      rules, so an import never touches them. The file carries each squad under
+      <code>"squad"</code> so it reads as a record of the season, and the
+      importer ignores that key.
+    </p>
+    <div class="au-actions" style="align-items:flex-start;">
+      <a class="btn btn-ghost"
+         href="{{ url_for('admin_auction_franchises_json', season_id=season.id) }}">
+        ⬇️ Download franchises (JSON)</a>
+    </div>
+    <form method="POST" enctype="multipart/form-data" class="au-grid" style="margin-top:.8rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="franchise_import">
+      <input type="hidden" name="back_query" value="#franchises">
+      <div style="grid-column:span 2;"><label>Upload a franchise file</label>
+        <input type="file" name="franchise_file" accept=".json,application/json"></div>
+      <div style="grid-column:1/-1;"><label>…or paste the JSON</label>
+        <textarea name="franchise_json" rows="4" placeholder='{"franchises": [{"name": "Mumbai", "owner_tg_id": 111}]}'></textarea></div>
+      <div>
+        <label style="text-transform:none;letter-spacing:0;">
+          <input type="checkbox" name="replace_missing" value="1">
+          Remove franchises the file leaves out
+        </label>
+      </div>
+      <div><button class="btn btn-primary" type="submit">📥 Import franchises</button></div>
+    </form>
+    <p class="au-note" style="margin-bottom:0;">
+      Franchises are matched <b>by name</b>, case aside, which is what makes the
+      same file safe to upload twice: the second upload edits the field the
+      first one created rather than doubling it. A changed opening purse on a
+      franchise that already exists is applied as a <b>ledger correction</b>,
+      not written over the column, so the purse and its ledger never end up
+      describing different auctions.
+      <br><b>Remove franchises the file leaves out</b> takes them the way
+      <code>/aremoveteam</code> does — players back into the pool, purse shared
+      among the rest. It is off by default because an import is far more often
+      "here is the field" than "and nobody else".
+    </p>
+  </div></details>
 
   <!-- ── Retention ─────────────────────────────────────────────── -->
-  <div class="au-card">
-    <h3 style="margin-top:0;">🔒 Retention
-      {% if retention_locked %}<span class="pill">closed</span>
-      {% elif not retention_open %}<span class="pill">unavailable</span>
-      {% elif retention_left is not none and retention_left > 0 %}<span class="pill">closes in {{ clock(retention_left) }}</span>
-      {% elif retention_left is not none %}<span class="pill">deadline passed</span>
-      {% else %}<span class="pill">open</span>{% endif %}
-    </h3>
+  {{ fold("retention", "🔒 Retention",
+          ("closed" if retention_locked else
+           ("unavailable" if not retention_open else
+            ("closes in " ~ clock(retention_left) if retention_left is not none and retention_left > 0
+             else ("deadline passed" if retention_left is not none else "open"))))
+          ~ (" · max " ~ season.max_retentions ~ " each" if season.max_retentions else " · off")) }}
     <p class="au-note" style="margin:.2rem 0 .8rem;">
       Franchises keep some of their existing players before the auction opens,
       and that spend comes off the top of the purse. Retained players are
@@ -257,6 +418,7 @@
     <form method="POST" class="au-grid">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="retention_rules">
+      <input type="hidden" name="back_query" value="#retention">
       <div><label>Max per franchise</label><input type="number" name="max_retentions" min="0" max="20" value="{{ season.max_retentions }}"></div>
       <div><label>Min per franchise</label><input type="number" name="min_retentions" min="0" max="20" value="{{ season.min_retentions }}"></div>
       <div><label>Retention budget (Cr)</label><input type="text" name="retention_max_spend" value="{{ (season.retention_max_spend_lakh / 100)|round(2) if season.retention_max_spend_lakh is not none else '' }}" placeholder="blank = uncapped"></div>
@@ -277,18 +439,17 @@
     <p class="au-note" style="margin-bottom:0;">
       The ladder <b>pre-fills</b> the price for a franchise's next retention —
       it is not binding, and any price can be typed over it. What actually
-      refuses is the count, the budget, the purse, and the same
-      <b>reachability</b> rule bidding uses: a franchise may never retain so
-      much that it could no longer fill its minimum squad at base price.
+      refuses is the count, the budget, the purse, any role ceiling in
+      <b>🧩 Squad rules</b>, and the same <b>reachability</b> rule bidding uses:
+      a franchise may never retain so much that it could no longer fill its
+      minimum squad at base price.
       <br>The deadline is checked when somebody tries to retain — nothing
       sweeps while an auction is in setup — so the countdown above is how you
       see it coming.
     </p>
-  </div>
 
-  {% if season.max_retentions %}
-  <div class="au-card">
-    <h3 style="margin-top:0;">Retained squads</h3>
+    {% if season.max_retentions %}
+    <h4 style="margin:1.1rem 0 .4rem;">Retained squads</h4>
     <table class="au-table">
       <tr><th>Franchise</th><th>Kept</th><th>Starting purse</th><th>Retention spent</th><th>Auction purse</th></tr>
       {% for f in field %}
@@ -320,6 +481,7 @@
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="action" value="unretain">
               <input type="hidden" name="lot_id" value="{{ lot.id }}">
+              <input type="hidden" name="back_query" value="#retention">
               <button class="btn btn-ghost danger" type="submit">Release</button>
             </form>
             {% endif %}
@@ -334,14 +496,15 @@
 
     {% if retention_open %}
     <h4 style="margin:1rem 0 .4rem;">Retain a player</h4>
-    <form method="GET" style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:end;">
+    <form method="GET" style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:end;"
+          action="{{ url_for('admin_auction_detail', season_id=season.id) }}#retention">
       <div><label class="dim" style="font-size:.78rem;">Search the catalogue</label>
         <input type="text" name="retain_q" value="{{ retain_q }}" placeholder="player name"></div>
       <button class="btn btn-ghost" type="submit">Search</button>
       {% if season.previous_league_id %}
       <span class="dim" style="font-size:.82rem;">⭐ marks a franchise's own players from last season.</span>
       {% else %}
-      <span class="dim" style="font-size:.82rem;">Record last season's league above to flag each franchise's own players.</span>
+      <span class="dim" style="font-size:.82rem;">Record last season's league below to flag each franchise's own players.</span>
       {% endif %}
     </form>
 
@@ -364,7 +527,7 @@
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="action" value="retain">
               <input type="hidden" name="player_id" value="{{ player.id }}">
-              <input type="hidden" name="back_query" value="?retain_q={{ retain_q }}">
+              <input type="hidden" name="back_query" value="?retain_q={{ retain_q }}#retention">
               <select name="franchise_id">
                 {% for f in field %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
               </select>
@@ -381,25 +544,29 @@
       <p class="au-note">Nothing matches “{{ retain_q }}”.</p>
     {% endif %}
 
-    <form method="POST" style="margin-top:1rem;"
-          onsubmit="return confirm('Close retention? Squads are then fixed until the auction.');">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="action" value="retention_lock">
-      <button class="btn btn-ghost" type="submit">🔒 Close retention</button>
-    </form>
-    <p class="au-note" style="margin-bottom:0;">
-      Starting the auction closes retention too — this is only for closing it
-      early. Once closed, nothing can be retained or released.
-    </p>
+    <details class="au-confirm" style="margin-top:1rem;">
+      <summary class="btn btn-ghost btn-sm danger">🔒 Close retention</summary>
+      <div class="au-confirm-body">
+        <p class="au-note" style="margin:0 0 .4rem;">
+          Squads are then fixed until the auction, and nothing can be retained
+          or released. Starting the auction closes retention too — this is only
+          for closing it early.
+        </p>
+        <form method="POST">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="retention_lock">
+          <input type="hidden" name="back_query" value="#retention">
+          <button class="btn btn-ghost danger" type="submit">Close it now</button>
+        </form>
+      </div>
+    </details>
     {% endif %}
-  </div>
-  {% endif %}
+    {% endif %}
+  </div></details>
 
   <!-- ── Right To Match ────────────────────────────────────────── -->
-  <div class="au-card">
-    <h3 style="margin-top:0;">🪪 Right To Match
-      {% if season.rtm_enabled %}<span class="pill">on</span>{% else %}<span class="pill">off</span>{% endif %}
-    </h3>
+  {{ fold("rtm", "🪪 Right To Match",
+          ("on · " ~ season.rtm_per_team ~ " each" if season.rtm_enabled else "off")) }}
     <p class="au-note" style="margin:.2rem 0 .8rem;">
       The IPL 2025 rule, in full. When a lot's clock expires, the franchise
       that held the player last season is asked whether it wants to use an
@@ -412,6 +579,7 @@
     <form method="POST" class="au-grid">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="rtm_rules">
+      <input type="hidden" name="back_query" value="#rtm">
       <div><label>Enabled</label>
         <input type="checkbox" name="rtm_enabled" {% if season.rtm_enabled %}checked{% endif %}></div>
       <div><label>RTM per franchise</label>
@@ -442,6 +610,7 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="action" value="rtm_cards">
             <input type="hidden" name="franchise_id" value="{{ f.id }}">
+            <input type="hidden" name="back_query" value="#rtm">
             <input type="number" name="cards" min="0" max="10" value="{{ f.rtm_cards_total }}" style="width:5rem;">
             <button class="btn btn-ghost" type="submit">Set</button>
           </form>
@@ -470,6 +639,7 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="action" value="rtm_undo">
             <input type="hidden" name="lot_id" value="{{ lot.id }}">
+            <input type="hidden" name="back_query" value="#rtm">
             <button class="btn btn-ghost" type="submit">Undo</button>
           </form>
         </td>
@@ -481,12 +651,12 @@
       quietly ate one would leave a franchise poorer for somebody else's slip.
     </p>
     {% endif %}
-  </div>
-
+  </div></details>
 
   <!-- ── Expansion picks ───────────────────────────────────────── -->
-  <div class="au-card">
-    <h3 style="margin-top:0;">🆕 Expansion picks</h3>
+  {{ fold("picks", "🆕 Expansion picks",
+          (season.expansion_picks ~ " each · " ~ new_sides|length ~ " new side"
+           ~ ("" if new_sides|length == 1 else "s")) if season.expansion_picks else "off") }}
     <p class="au-note" style="margin-top:0;">
       A side joining a league that already exists has nobody to retain, so it
       would walk into the auction empty-handed against everyone else's kept
@@ -496,6 +666,7 @@
     <form method="POST" class="au-grid">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="expansion_rules">
+      <input type="hidden" name="back_query" value="#picks">
       <div><label>Picks per new side</label>
         <input type="number" name="expansion_picks" min="0" max="15" value="{{ season.expansion_picks }}"></div>
       <div><button class="btn btn-primary" type="submit">Save and deal</button></div>
@@ -523,6 +694,7 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="action" value="expansion_cards">
             <input type="hidden" name="franchise_id" value="{{ f.id }}">
+            <input type="hidden" name="back_query" value="#picks">
             <input type="number" name="picks" min="0" max="15" value="{{ f.draft_picks_total }}" style="width:5rem;">
             <button class="btn btn-ghost" type="submit">Set</button>
           </form>
@@ -564,7 +736,7 @@
     <p class="au-note" style="margin:.8rem 0 0;">
       It is <b>{{ pick_turn.name }}</b>'s pick, at
       {{ money(next_slab(season, (pick_turn.draft_picks_used or 0) + 1), season.currency_label) }}
-      by default. Find the player in the <b>Retention</b> search below and use
+      by default. Find the player in the <b>Retention</b> search above and use
       <b>🆕 Pick for {{ pick_turn.name }}</b> — one search box, so a pick and a
       retention can never disagree about which card they mean.
     </p>
@@ -573,6 +745,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="expansion_skip">
       <input type="hidden" name="franchise_id" value="{{ pick_turn.id }}">
+      <input type="hidden" name="back_query" value="#picks">
       <button class="btn btn-ghost" type="submit">⏭ Pass this pick</button>
     </form>
     {% endif %}
@@ -592,6 +765,7 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="action" value="expansion_undo">
             <input type="hidden" name="lot_id" value="{{ lot.id }}">
+            <input type="hidden" name="back_query" value="#picks">
             <button class="btn btn-ghost" type="submit">Undo</button>
           </form>
         </td>
@@ -599,97 +773,53 @@
       {% endfor %}
     </table>
     {% endif %}
-  </div>
+  </div></details>
 
-  <!-- ── Last season ───────────────────────────────────────────── -->
-  <div class="au-card">
-    <h3 style="margin-top:0;">Last season's league</h3>
-    <form method="POST" class="au-grid">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="action" value="link_previous">
-      <div style="grid-column:span 2;"><label>Which league this season follows</label>
-        <select name="league_id">
-          <option value="">— pick the previous league —</option>
-          {% for lg in leagues %}<option value="{{ lg.id }}" {% if season.previous_league_id == lg.id %}selected{% endif %}>{{ lg.name }}</option>{% endfor %}
-        </select></div>
-      <div><button class="btn btn-ghost" type="submit">🔗 Record</button></div>
-    </form>
-    <p class="au-note" style="margin-bottom:0;">
-      This is what decides <b>who holds a Right To Match on whom</b>, and it is
-      what lets the retention picker flag each franchise's own players. It can
-      only be changed while the auction is in setup or paused — an RTM may be
-      open right now, and moving the ground under it is how a player ends up
-      matched by the wrong franchise.
-    </p>
-    {% if chain %}
-    <p class="au-note" style="margin-bottom:0;">
-      This auction follows
-      {% for s in chain %}<a href="{{ url_for('admin_auction_detail', season_id=s.id) }}">{{ s.name }}</a>{% if not loop.last %} → {% endif %}{% endfor %},
-      and its franchises are linked to theirs by more than a name — so renaming
-      one here does not lose who held whom.
-    </p>
-    {% endif %}
-  </div>
+  <!-- ── The pool: sets and the builder, one card ──────────────── -->
+  {#
+     Sets and the pool builder were two cards, and they were the same subject
+     read at two altitudes: a set IS a slice of the pool, adding to the pool
+     creates or grows one, and the "In the pool" table's Set column already had
+     to borrow the other card's numbering to be readable. Split, every pool edit
+     meant scrolling between them to see what it had done. Together the order,
+     the builder and the players are one card and one mental model.
 
-  <!-- ── Next season ───────────────────────────────────────────── -->
-  <div class="au-card">
-    <h3 style="margin-top:0;">🌱 Next season</h3>
-    <p class="au-note" style="margin-top:0;">
-      A new auction with <b>every rule and every franchise of this one</b>,
-      owners and co-owners included. Purses go back to the opening purse,
-      squads and RTM cards start again, and the new auction follows this one's
-      published league — so retention and Right To Match already know who held
-      whom, which is the step it is easiest to forget.
-    </p>
-    <form method="POST" class="au-grid">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="action" value="clone">
-      <div style="grid-column:span 2;">
-        <label>Name</label>
-        <input type="text" name="name" placeholder="Season 3" required>
-      </div>
-      <div><button class="btn btn-primary" type="submit">Start next season</button></div>
-    </form>
-    <p class="au-note" style="margin-bottom:0;">
-      The <b>player pool is not copied</b> — by now this season's players are on
-      squads and the catalogue has moved on, so the next one retains first and
-      builds its pool after. The <b>group is not taken over</b> either: this
-      season's pinned board still lives there. Bind the new auction with
-      <code>/abind</code> once this one is finished.
-      {% if not season.league_id %}
-      <br><b>Publish this auction first</b> if you can — an unpublished season
-      leaves no record of its squads, and the new one would start with nobody
-      holding a Right To Match.
-      {% endif %}
-    </p>
-  </div>
-
-  <!-- ── Sets ──────────────────────────────────────────────────── -->
-  {% include "_auction_sets_card.html" %}
-
-  <!-- ── Pool builder ──────────────────────────────────────────── -->
-  <div class="au-card" id="pool">
-    <h3 style="margin-top:0;">Auction pool
+     ``sets_bare`` tells the shared partial to render its contents without a
+     card of its own — the live console still includes it as a standalone card,
+     because there it sits among the console's own controls.
+  #}
+  {{ fold("pool", "📋 Auction pool",
+          counts.get('total', 0) ~ " lots in " ~ sets|length ~ " set"
+          ~ ("" if sets|length == 1 else "s") ~ " · "
+          ~ counts.get('queued', 0) ~ " waiting") }}
+    <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:.6rem;">
       <span class="pill">{{ counts.get('total', 0) }} lots</span>
       <span class="pill">{{ counts.get('queued', 0) }} waiting</span>
       <span class="pill">{{ counts.get('sold', 0) }} sold</span>
       <span class="pill">{{ counts.get('unsold', 0) }} unsold</span>
       {% if counts.get('retained', 0) %}<span class="pill">🔒 {{ counts.get('retained', 0) }} retained</span>{% endif %}
       {% if counts.get('drafted', 0) %}<span class="pill">🆕 {{ counts.get('drafted', 0) }} drafted</span>{% endif %}
-    </h3>
+    </div>
+
+    <h4 style="margin:.6rem 0 .4rem;" id="sets">🗂 Sets — the order they run in</h4>
+    {% include "_auction_sets_card.html" %}
+
+    <h4 style="margin:1.4rem 0 .4rem;" id="builder">➕ Add players from the catalogue</h4>
     <p class="au-note" style="margin:.2rem 0 .8rem;">
       Players come straight out of the global catalogue — filter, preview, then
       add. Adding is <b>idempotent</b>: a player already in the pool is left
       exactly as they are, including one already sold, so a corrected filter can
-      simply be re-applied.
+      simply be re-applied. Naming a <b>Set</b> as you add is what puts the new
+      players into their own slice of the queue above.
     </p>
 
     {# The fragment brings the page back to this card. A GET submit only rewrites
        the query component, so it survives — without it the browser lands at the
        top of a very long page and Preview reads as a dead button. #}
     <form method="GET" class="au-grid"
-          action="{{ url_for('admin_auction_detail', season_id=season.id) }}#pool">
+          action="{{ url_for('admin_auction_detail', season_id=season.id) }}#builder">
       <input type="hidden" name="preview" value="1">
+      {% if retain_q %}<input type="hidden" name="retain_q" value="{{ retain_q }}">{% endif %}
       <div><label>Name</label><input type="text" name="q" value="{{ filters.q }}"></div>
       <div><label>Min rating</label><input type="number" name="rating_min" min="0" max="100" value="{{ filters.rating_min }}"></div>
       <div><label>Max rating</label><input type="number" name="rating_max" min="0" max="100" value="{{ filters.rating_max }}"></div>
@@ -741,7 +871,7 @@
        add a different set of players than the one on screen. #}
     <form method="POST" style="margin-top:1rem;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="back_query" value="?{{ request.query_string.decode('utf-8') }}#pool">
+      <input type="hidden" name="back_query" value="?{{ request.query_string.decode('utf-8') }}#builder">
       <div style="display:flex;gap:.5rem;align-items:end;flex-wrap:wrap;margin-bottom:.6rem;">
         <div><label class="dim" style="font-size:.78rem;">Set name (optional)</label>
           <input type="text" name="set_name" placeholder="Marquee" maxlength="40"></div>
@@ -768,7 +898,7 @@
     {% endif %}
 
     {% if lots %}
-    <h4 style="margin:1rem 0 .4rem;">In the pool</h4>
+    <h4 style="margin:1.4rem 0 .4rem;">In the pool</h4>
     <div class="au-scroll">
       <table class="au-table">
         <tr><th>#</th><th>Set</th><th>Player</th><th>OVR</th><th>Role</th><th>Base</th><th>Status</th><th>Sold to</th><th></th></tr>
@@ -790,6 +920,7 @@
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="action" value="lot_price">
               <input type="hidden" name="lot_id" value="{{ lot.id }}">
+              <input type="hidden" name="back_query" value="#pool">
               <input type="text" name="price" placeholder="Cr" style="width:5rem;">
               <button class="btn btn-ghost" type="submit">Base</button>
             </form>
@@ -797,6 +928,7 @@
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="action" value="lot_remove">
               <input type="hidden" name="lot_id" value="{{ lot.id }}">
+              <input type="hidden" name="back_query" value="#pool">
               <button class="btn btn-ghost danger" type="submit">✕</button>
             </form>
             {% endif %}
@@ -806,29 +938,91 @@
       </table>
     </div>
     {% endif %}
-  </div>
+  </div></details>
+
+  <!-- ── Seasons: the one before, and the one after ────────────── -->
+  {{ fold("seasons", "🔗 Seasons",
+          ("follows a league" if season.previous_league_id else "no previous league recorded")) }}
+    <h4 style="margin:.6rem 0 .4rem;">Last season's league</h4>
+    <form method="POST" class="au-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="link_previous">
+      <input type="hidden" name="back_query" value="#seasons">
+      <div style="grid-column:span 2;"><label>Which league this season follows</label>
+        <select name="league_id">
+          <option value="">— pick the previous league —</option>
+          {% for lg in leagues %}<option value="{{ lg.id }}" {% if season.previous_league_id == lg.id %}selected{% endif %}>{{ lg.name }}</option>{% endfor %}
+        </select></div>
+      <div><button class="btn btn-ghost" type="submit">🔗 Record</button></div>
+    </form>
+    <p class="au-note" style="margin-bottom:0;">
+      This is what decides <b>who holds a Right To Match on whom</b>, and it is
+      what lets the retention picker flag each franchise's own players. It can
+      only be changed while the auction is in setup or paused — an RTM may be
+      open right now, and moving the ground under it is how a player ends up
+      matched by the wrong franchise.
+    </p>
+    {% if chain %}
+    <p class="au-note" style="margin-bottom:0;">
+      This auction follows
+      {% for s in chain %}<a href="{{ url_for('admin_auction_detail', season_id=s.id) }}">{{ s.name }}</a>{% if not loop.last %} → {% endif %}{% endfor %},
+      and its franchises are linked to theirs by more than a name — so renaming
+      one here does not lose who held whom.
+    </p>
+    {% endif %}
+
+    <h4 style="margin:1.2rem 0 .4rem;">🌱 Next season</h4>
+    <p class="au-note" style="margin-top:0;">
+      A new auction with <b>every rule and every franchise of this one</b>,
+      owners and co-owners included. Purses go back to the opening purse,
+      squads and RTM cards start again, and the new auction follows this one's
+      published league — so retention and Right To Match already know who held
+      whom, which is the step it is easiest to forget.
+    </p>
+    <form method="POST" class="au-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="clone">
+      <div style="grid-column:span 2;">
+        <label>Name</label>
+        <input type="text" name="name" placeholder="Season 3" required>
+      </div>
+      <div><button class="btn btn-primary" type="submit">Start next season</button></div>
+    </form>
+    <p class="au-note" style="margin-bottom:0;">
+      The <b>player pool is not copied</b> — by now this season's players are on
+      squads and the catalogue has moved on, so the next one retains first and
+      builds its pool after. The <b>group is not taken over</b> either: this
+      season's pinned board still lives there. Bind the new auction with
+      <code>/abind</code> once this one is finished.
+      {% if not season.league_id %}
+      <br><b>Publish this auction first</b> if you can — an unpublished season
+      leaves no record of its squads, and the new one would start with nobody
+      holding a Right To Match.
+      {% endif %}
+    </p>
+  </div></details>
 
   <!-- ── Publish ───────────────────────────────────────────────── -->
-  <div class="au-card">
-    <h3 style="margin-top:0;">Publish</h3>
+  {{ fold("publish", "📤 Publish",
+          ("published " ~ season.published_at.strftime('%Y-%m-%d %H:%M') ~ " UTC"
+           if season.published_at else "not published yet")) }}
     <p class="au-note" style="margin:.2rem 0 .8rem;">
       Writes every bought squad into a Challenge League so they can play.
       Publishing again re-syncs the same league rather than creating a second
       one, so a correction can simply be republished. Only a
       <b>completed</b> auction can be published.
-      {% if season.published_at %}<br>Last published {{ season.published_at.strftime('%Y-%m-%d %H:%M') }} UTC.{% endif %}
     </p>
     <form method="POST">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="publish">
+      <input type="hidden" name="back_query" value="#publish">
       <button class="btn btn-primary" type="submit">📤 Publish squads</button>
     </form>
-  </div>
+  </div></details>
 
   <!-- ── Event log ─────────────────────────────────────────────── -->
   {% if events %}
-  <div class="au-card">
-    <h3 style="margin-top:0;">Event log</h3>
+  {{ fold("events", "📜 Event log", events|length ~ " recent") }}
     <div class="au-scroll au-log">
       {% for e in events %}
       <div style="padding:.3rem 0;border-bottom:1px solid var(--border);">
@@ -837,7 +1031,119 @@
       </div>
       {% endfor %}
     </div>
-  </div>
+  </div></details>
   {% endif %}
 </div>
+
+<script>
+// Add / drop a base-price range. The rows are a plain repeated-name form — the
+// POST handler zips rule_max_rating, rule_min_rating and rule_price by position
+// — so a new row is a clone of the markup above and needs no ids of its own.
+(function () {
+  var table = document.getElementById("au-price-rules");
+  if (!table) { return; }
+  var body = table.tBodies[0];
+
+  function blankRow() {
+    var row = document.createElement("tr");
+    row.innerHTML =
+      '<td><input type="number" name="rule_max_rating" min="0" max="100" placeholder="and up" style="width:6rem;"></td>' +
+      '<td><input type="number" name="rule_min_rating" min="0" max="100" placeholder="e.g. 92" style="width:6rem;"></td>' +
+      '<td><input type="text" name="rule_price" placeholder="e.g. 2" style="width:7rem;"></td>' +
+      '<td class="dim">new range</td>' +
+      '<td><button type="button" class="btn btn-sm au-drop-range" title="Remove this range">✕</button></td>';
+    return row;
+  }
+
+  document.getElementById("au-add-range").addEventListener("click", function () {
+    var row = blankRow();
+    body.appendChild(row);
+    row.querySelector("input").focus();
+  });
+
+  body.addEventListener("click", function (event) {
+    var button = event.target.closest(".au-drop-range");
+    if (!button) { return; }
+    // Never leave the form with nothing to save: the last row is emptied
+    // rather than removed, because a POST with no bands at all is refused.
+    if (body.rows.length > 1) {
+      button.closest("tr").remove();
+    } else {
+      Array.prototype.forEach.call(
+        button.closest("tr").querySelectorAll("input"),
+        function (input) { input.value = ""; });
+    }
+  });
+})();
+
+// The two things a native <details> does not do on its own.
+//
+// 1. Open the fold an anchor points INTO. Every form on this page redirects
+//    back to a fragment, and a browser that scrolls to an element inside a
+//    closed <details> scrolls to nothing — the save would read as having done
+//    nothing at all.
+// 2. Remember what was open. Every save here is a POST-redirect-GET, so
+//    without this an admin editing retention rules is dropped back at a page
+//    where retention is shut again, three times in a row. Per auction, in
+//    sessionStorage, and every read and write is guarded: a private window or
+//    blocked site data must cost nothing more than the folds being closed.
+(function () {
+  var KEY = "au-open:{{ season.id }}";
+  var folds = Array.prototype.slice.call(document.querySelectorAll("details[data-fold]"));
+  if (!folds.length) { return; }
+
+  function remembered() {
+    try {
+      var raw = window.sessionStorage.getItem(KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch (err) { return []; }
+  }
+
+  function remember() {
+    try {
+      window.sessionStorage.setItem(KEY, JSON.stringify(
+        folds.filter(function (d) { return d.open; })
+             .map(function (d) { return d.getAttribute("data-fold"); })));
+    } catch (err) { /* nothing worth breaking the page over */ }
+  }
+
+  var open = remembered();
+  folds.forEach(function (fold) {
+    if (open.indexOf(fold.getAttribute("data-fold")) !== -1) { fold.open = true; }
+    fold.addEventListener("toggle", remember);
+  });
+
+  function openForHash() {
+    var hash = (window.location.hash || "").slice(1);
+    if (!hash) { return; }
+    var target = document.getElementById(hash);
+    if (!target) { return; }
+    // Every ancestor, not just the nearest: a franchise's own fold sits inside
+    // the Franchises fold, and opening one without the other shows nothing.
+    var node = target.closest("details");
+    while (node) {
+      node.open = true;
+      node = node.parentElement ? node.parentElement.closest("details") : null;
+    }
+    remember();
+    target.scrollIntoView({ block: "start" });
+  }
+
+  window.addEventListener("hashchange", openForHash);
+  openForHash();
+
+  var all = document.getElementById("au-expand-all");
+  if (all) {
+    all.addEventListener("click", function () {
+      // One button, both ways: "expand all" on a page with anything shut,
+      // "collapse all" once everything is open. A second button for the other
+      // direction would be a control that is wrong half the time.
+      var shut = folds.some(function (d) { return !d.open; });
+      folds.forEach(function (d) { d.open = shut; });
+      all.textContent = shut ? "⤡ Collapse all" : "⤢ Expand all";
+      remember();
+    });
+  }
+})();
+</script>
 {% endblock %}

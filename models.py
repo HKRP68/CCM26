@@ -3735,6 +3735,15 @@ class AuctionSeason(Base):
     # {"Wicket Keeper": 1, "Bowler": 4} — same shape and same reachability
     # semantics as PlayerDraft.role_minimums_json. Empty by default.
     role_minimums_json = Column(Text, nullable=True)
+    # {"Bowler": 8} — the other end of the same rule, and a much simpler one:
+    # a minimum is a promise about a squad that does not exist yet and so has
+    # to be enforced as *reachability* (see auction_service.max_bid_now), while
+    # a maximum is a fact about the squad in front of you and refuses the bid
+    # that would break it. A role with no entry has no ceiling, which is why
+    # this is a sparse map rather than one row per role: "no rule" and "a
+    # ceiling of 0" are different answers and a dense map cannot tell them
+    # apart.
+    role_maximums_json = Column(Text, nullable=True)
     home_country = Column(String(60), default="India", nullable=False)
     max_overseas = Column(Integer, default=8, nullable=False)
 

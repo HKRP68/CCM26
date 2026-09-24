@@ -45,9 +45,20 @@ board said.
 **Admin → Tournament Panel → 🔨 Franchise Auctions → Create an auction**, then
 open it.
 
-**Settings** — the group chat id, seconds per lot, the opening purse, squad
-minimum and maximum, home country and the overseas cap, and the three
-anti-snipe numbers.
+The page is a dozen rule-sets deep and a visit touches one or two of them, so
+each is a **closed `<details>` with its live numbers in the summary** — the
+status, the purse, how many franchises, what the role rule says — and a strip
+at the top reads the whole auction back without opening anything. See
+[The setup page, folded](#the-setup-page-folded) for why native `<details>`
+rather than a tab strip, and what the page's script adds to it.
+
+**Settings** — the group chat id, seconds per lot, the opening purse, and the
+three anti-snipe numbers.
+
+**🧩 Squad rules** — the squad minimum and maximum, the home country and the
+overseas cap, and **a minimum and a maximum for each of the four roles**:
+Batsman, Bowler, All-rounder, Wicket Keeper. See
+[Role minimums and maximums](#role-minimums-and-maximums).
 
 **Base prices by rating** — a list of rating **ranges**, one price each, with
 **➕ Add range** to put another rung in. A row is read top first, the way the
@@ -86,15 +97,35 @@ for the reason `DraftTeam` and `TournamentTeam` both use one: an admin builds
 the field from a list, and some of those people have never messaged the bot.
 Owner and co-owners are equals for every check `/bid` makes.
 
-**Auction pool** — filter the global catalogue by name, rating band, country,
-role, batting hand, bowling style and card edition; preview; then add the
-ticked players or everything the filter matches. Career cards and inactive rows
-are excluded before you see them.
+A franchise's own row is a fold too, closed, with its purse, squad, max bid and
+any role it still owes on the row itself. Opening it is what shows the form.
+**Delete asks for the name back** — see
+[Removing a franchise](#removing-a-franchise).
+
+**📦 The field, as a file** — `⬇️ Download franchises (JSON)` and an upload
+beside it. See [The field, as a file](#the-field-as-a-file).
+
+**📋 Auction pool** — one card holding the 🗂 set queue, the two set builders
+and the catalogue filter. Filter by name, rating band, country, role, batting
+hand, bowling style and card edition; preview; then add the ticked players or
+everything the filter matches. Career cards and inactive rows are excluded
+before you see them.
 
 > Adding is **idempotent per player**. A unique `(season_id, player_id)` means
 > re-running the builder with a corrected filter adds what is new and leaves
 > what is already there exactly as it is, including anything already sold. A
 > pool builder you cannot safely run twice is one nobody dares run once.
+
+#### One card for the pool
+
+Sets and the pool builder were two cards, and they were the same subject read at
+two altitudes: a set **is** a slice of the pool, adding to the pool creates or
+grows one, and the "In the pool" table's Set column already had to borrow the
+other card's numbering to be readable at all. Split, every pool edit meant
+scrolling between them to see what it had done — add a set, scroll up to check
+where it landed in the queue, scroll back down to price one of its players.
+Together, the order, the builders and the players are one card and one mental
+model, and the set numbering has one home.
 
 ### Running it (the group)
 
@@ -616,6 +647,33 @@ auction starts (retention, expansion picks) has `queued == 0`, so `order()` file
 it with the done sets and it is numbered ahead of the queue — a "Retained" set
 reading as Set 1 before a ball is bowled.
 
+### Deleting a set, and emptying the pool
+
+```text
+delete_set(session, season, name)    every player in that set who is still waiting
+clear_pool(session, season)          every player still waiting, whatever set
+```
+
+**Only queued lots go.** A set whose players have been sold, passed on or
+withdrawn is a record of what happened, and this is a pool edit, not an undo —
+`undo_sale` is what puts a sold player back. So a half-run set loses what is
+still waiting, keeps what already happened, and stays in `list_sets` as a
+finished set. `clear_pool` follows the same rule, which is why a season still in
+setup comes out genuinely empty and one mid-auction comes out with its history
+intact and its queue gone.
+
+Both take the pool guard `add_players_to_pool` takes rather than the looser
+reordering one: a delete moves `min_base_price_lakh` through
+`_restamp_price_floor`, and that number is what the reachability rule holds
+still once bidding starts.
+
+Neither is a bare click. The row's own panel asks for the set's name back —
+`EMPTY`, for the whole pool — and **the server checks it again**, because a
+confirmation that lives only in the browser is one a stale page, a double submit
+or a resent POST walks straight past. The typed box is a parallel list read at
+the same row index as `set_name`, so three confirm boxes on one form cannot be
+mistaken for one another.
+
 ### The two surfaces
 
 `templates/_auction_sets_card.html` is one card rendered by **both** the setup
@@ -628,6 +686,20 @@ their row's index as the value, the only way one click can say both *what* and
 input, so they cannot be submitted at all. On the console it sits **outside
 `#au-panel`**: that fragment is re-fetched every couple of seconds and would wipe
 a half-typed Set No.
+
+> That index is counted over the rows that **render a `set_name`**, not over
+> `sets`. They are not the same list — a done or live row renders no hidden
+> input, and `list_sets` sorts done sets *first* — so `loop.index0` pointed one
+> row further down the queue for every set that had already run, and a button
+> moved the set below the one it sat in. Harmless enough on ↑; not on 🗑.
+
+On the setup page the card renders **bare**, folded into that page's one
+📋 Auction pool card (see [One card for the pool](#one-card-for-the-pool)); on
+the console it renders as a card of its own, among the console's own controls.
+The route passes `sets_bare`, rather than the template setting it before the
+`include`, because whether a `{% raw %}{% set %}{% endraw %}` reaches an
+`{% raw %}{% include %}{% endraw %}` has changed between Jinja versions and this
+cannot be allowed to depend on that.
 
 `/asets` is paged. A pool is routinely dozens of sets of dozens of players, so
 the card never tries to print all of it: every set on the page is a `details`
@@ -685,6 +757,104 @@ would quietly leave them out of the league.
 Refused while it holds the standing bid (undo it first, so the room sees who
 dropped out), while a Right To Match is being asked of it, once published, and
 for the last franchise standing.
+
+On the website it is **not a bare click**. The panel says exactly what happens
+to the players and to the purse, and asks for the franchise's name typed back —
+checked on the server, not only in the browser, for the reason deleting a whole
+auction already was: a confirmation that lives only in a `confirm()` is one a
+resent POST or a stale page walks straight past, and this one hands a squad back
+to the pool and redistributes a purse.
+
+---
+
+## The field, as a file
+
+A franchise field is the one part of an auction that is typed by hand, is the
+same across seasons and leagues, and is worth having somewhere other than in
+this database. Twelve sides with owners, co-owners, cities and purses is twenty
+minutes of form-filling to reproduce, and every minute of it is a chance to
+mistype a Telegram id.
+
+```text
+GET  /auctions/<id>/franchises.json      the field, as an attachment
+POST action=franchise_import             a file, or JSON pasted into the box
+```
+
+```json
+{
+  "format": "franchise-auction/franchises",
+  "version": 1,
+  "season": "Season 2",
+  "franchises": [
+    {"name": "Mumbai", "short_name": "MI", "city": "Mumbai",
+     "owner_name": "Aarav", "owner_tg_id": 111, "co_owner_tg_ids": [222],
+     "purse_total_lakh": 10000, "rtm_cards_total": 2,
+     "draft_picks_total": 0, "sort_order": 1,
+     "squad": [{"name": "…", "rating": 97, "role": "Batsman",
+                "price_lakh": 1225, "acquisition": "auction"}]}
+  ]
+}
+```
+
+**What is exported is what an admin typed, never what the auction did.** The
+purse *remaining*, the squad size, the retained count, the RTM cards used and
+every lot are results — importing them would write a franchise whose caches
+disagree with its own ledger, which is precisely the drift `reconcile_purses`
+exists to catch. `purse_total_lakh` is in, because it is a rule;
+`purse_remaining_lakh` is out, because it is a score. The file carries each
+squad under `"squad"` so it reads as a record of a season, and
+`import_franchises` ignores that key entirely.
+
+**Matched by name, case aside**, which is what makes the same file safe to
+upload twice: the second upload edits the field the first one created rather
+than refusing it or doubling it. Only keys the file actually carries are
+written, so a hand-trimmed file listing names and purses alone does not blank
+out the cities and owners already recorded.
+
+**A changed `purse_total_lakh` on an existing franchise goes through
+`correct_purse`**, as a real `correction` row for the difference, rather than
+being written over the column. Changing a total after the franchise has spent
+anything would leave the total and the ledger describing different auctions; a
+franchise that has spent nothing therefore ends where a fresh one would, and one
+mid-auction gets an audited adjustment instead of a silent one.
+
+`replace=True` (the page's *Remove franchises the file leaves out*) takes the
+missing sides the way `/aremoveteam` does — players back into the pool, purse
+shared among the rest. It is **off by default**: an import is far more often
+"here is the field" than "and nobody else", and a flag that deletes is a flag
+that has to be asked for.
+
+A file with no `franchises` list, an empty one, an entry with no name, or the
+same name twice is refused **by name** before anything is written. A bare JSON
+list is accepted as readily as the whole file — refusing it would only teach an
+admin to edit the file before uploading it.
+
+---
+
+## The setup page, folded
+
+Every rule-set on the setup page is a `<details class="au-fold">`, closed, with
+its live numbers in the summary. Native `<details>` rather than a tab strip or a
+JavaScript accordion, because native survives a form POST landing back on an
+anchor, works with the browser's own find-in-page, and opens with no script at
+all — which matters on a page whose entire job is forms.
+
+The page's script adds the two things native folds do not do:
+
+* **Open the fold an anchor points into.** Every form here redirects back to a
+  fragment, and a browser scrolling to an element inside a closed `<details>`
+  scrolls to nothing — the save would read as having done nothing at all. It
+  walks *every* ancestor `<details>`, because a franchise's own fold sits inside
+  the Franchises fold and opening one without the other shows nothing.
+* **Remember what was open**, per auction, in `sessionStorage`. Every save is a
+  POST-redirect-GET, so without it an admin editing retention rules is dropped
+  back at a page where retention is shut again, three saves in a row. Every read
+  and write is guarded: a private window or blocked site data must cost nothing
+  worse than the folds being closed.
+
+One `⤢ Expand all` button does both directions — expand while anything is shut,
+collapse once everything is open — rather than two buttons, one of which is
+wrong half the time.
 
 ## Short squads at the end
 
@@ -1020,7 +1190,59 @@ In order, each with its own message naming the number that would have worked:
 4. the squad cap;
 5. the purse;
 6. **reachability**;
-7. the overseas cap, and role minimums as reachability.
+7. the overseas cap;
+8. the **role rule**, both ends of it.
+
+### Role minimums and maximums
+
+`role_minimums_json` and `role_maximums_json` are two sparse maps of role → a
+count, edited together on **🧩 Squad rules** and saved by one call,
+`set_role_rules`, because they constrain each other. Both are empty until an
+admin sets them, and then `check_role_rules` is the only place a bid meets
+either.
+
+```text
+role_minimums(season)   {"Wicket Keeper": 1, "Bowler": 4}
+role_maximums(season)   {"Bowler": 8}
+role_rule_line(season)  "Bowler 4-8, Wicket Keeper 1+"
+role_shortfall(…)       ({"Wicket Keeper": 1}, {})   what a squad owes, and overruns
+```
+
+**The two ends are enforced differently, and they have to be.** A *maximum* is a
+fact about the squad in front of you — an eighth bowler in a seven-bowler squad
+is over the line the moment it is bought — so the bid is refused on a plain
+count. A *minimum* is a promise about a squad that does not exist yet, so it is
+enforced as **reachability**, the same shape as the draft's rule: refused while
+there is still a slot to fix the problem with, never afterwards. A minimum
+enforced as a plain count would only ever fire on a finished squad, which is a
+complaint nobody can act on.
+
+**The maps are sparse, and that is the whole design.** A role missing from
+`role_maximums` has no ceiling; a role mapped to `0` has a ceiling of
+none-at-all, which is a real rule a pool may want ("no specialist keepers
+here"). A dense map — one entry per role, blank meaning "no rule" — cannot hold
+both answers, so the form reads a blank box as *no key at all* and a typed `0`
+as a key. The refusal at `0` gets its own sentence, because "already has 0,
+which is the limit of 0" reads as a bug rather than as a rule.
+
+**A ceiling is checked at every way into a squad, not only at a bid.** A
+franchise that could *retain* its way past one would take an illegal squad into
+an auction that then refuses every bid which might fix it, so
+`_sign_before_auction` calls `check_role_ceiling` — the ceiling alone, since
+before the auction opens every slot is empty and a minimum is trivially
+reachable. `autofill_short_squads` honours it too: a free player is still a
+player, and handing a squad its ninth bowler under an eight-bowler cap would
+build a squad the auction itself would have refused to sell.
+
+`set_role_rules` refuses two configurations outright, at the one moment an admin
+can still fix them: a minimum above its own maximum, and minimums adding up past
+`max_squad_size`. It also refuses maximums that, with **every** role capped, add
+up to less than `min_squad_size` — only then, because one uncapped role can
+always take up the slack. All three describe a squad nobody could ever legally
+finish; surfacing them as a bid refusal in the middle of a live lot would be too
+late for anybody.
+
+`/arules` prints both ends to the room, as it already printed the minimums.
 
 ### Reachability, in money
 
@@ -1169,15 +1391,17 @@ Two things were on their way to a third copy each, and both fail silently.
 | `handlers/auction.py` | `/bid`, `/artm` and every other command, plus the `au_bid_` and `au_rtm_` buttons |
 | `models.py` | The six tables |
 | `admin.py` | `/auctions`, `/auctions/<id>`, `/auctions/<id>/console` and its polled panel |
-| `templates/admin_auctions.html`, `admin_auction_detail.html`, `admin_auction_console.html`, `_auction_console_panel.html` | The pages |
+| `templates/admin_auctions.html`, `admin_auction_detail.html`, `admin_auction_console.html`, `_auction_console_panel.html` | The pages. The setup page is folded — every rule-set a closed `<details>` with its numbers in the summary |
+| `templates/_auction_sets_card.html` | The 🗂 Sets card, rendered bare inside the setup page's one 📋 Auction pool card and as a card of its own on the console |
 | `static/css/admin_auction.css` | Their stylesheet, via `{% block head_extra %}` |
 | `migrate_auction_purse_reconcile.py` | Re-sums every ledger, `--dry-run` first; the work is the service's, shared with the admin button |
-| `tests/test_franchise_auction.py` | The pool, base prices, the ledger, reachability, the overseas cap, and publishing |
+| `tests/test_franchise_auction.py` | The pool, base prices, the ledger, reachability, the overseas cap, both ends of the role rule, deleting a set and emptying the pool, the franchise file, and publishing |
 | `tests/test_auction_bidding.py` | The lifecycle, bidding, two-session concurrency, the clock, anti-snipe, undo, permissions, the commands, the board, and the accelerated round |
 | `tests/test_auction_retention.py` | The ladder, the money, every cap, the window, what retention does to the pool and the board, publishing a retained player, and the commands |
 | `tests/test_auction_rtm.py` | The proposal's own Ashwin example end to end, every eligibility gate, all three timeouts, the self-raise suspension from both sides, the card, `undo_rtm`, the two-session races, and the autoflush shapes |
 | `tests/test_auction_expansion.py` | Starting a season from a league, who counts as an expansion side, the snake order as a sequence, every cap a pick obeys, and the rule that a player somebody kept cannot be picked |
 | `tests/test_auction_features.py` | Sets and the queue order, removing a franchise and its purse split, the automatic accelerated round, the free auto-fill and its caps, retention offers and who may answer them, auction admins, `/acall`, every team view, the rich builders, and what the sweeper sends per lot and per burst of bids |
+| `tests/test_auction_pool_page.py` | The setup page over HTTP: the pool builder's preview, the Sets card's numbering and its deletes, the squad-rules form, the franchise file both ways, and the typed confirmations |
 | `tests/test_auction_season.py` | Cloning: every rule carried (and a guard against the rule list falling behind the model), the field and its owners, the purses and their ledger, what is deliberately left behind, the group handover, and the rename that used to lose every holder |
 
 ---

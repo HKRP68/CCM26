@@ -130,6 +130,13 @@ LAKH_PER_CRORE = 100
 DEFAULT_OPENING_PURSE_LAKH = 10_000
 DEFAULT_MIN_BASE_PRICE_LAKH = 20
 
+# The four roles a card can carry, in the order the setup page lists them. It
+# is ``config.CATEGORIES`` and ``draft_service._CATEGORIES``, spelled the same
+# way, because a role rule is matched against ``AuctionLot.category`` — which is
+# copied verbatim from the catalogue — and a fifth spelling of "All-rounder"
+# would be a rule that silently never fires.
+SQUAD_ROLES = ("Batsman", "Bowler", "All-rounder", "Wicket Keeper")
+
 # Highest band first; the first band whose ``min_rating`` the card meets wins.
 # These are the proposal's example ladder, converted to lakh.
 DEFAULT_BASE_PRICE_RULES = [
@@ -539,7 +546,7 @@ SEASON_RULE_FIELDS = (
     "base_price_rules_json", "bid_increment_rules_json",
     # The squad
     "min_squad_size", "max_squad_size", "role_minimums_json",
-    "home_country", "max_overseas",
+    "role_maximums_json", "home_country", "max_overseas",
     # Retention
     "max_retentions", "min_retentions", "retention_max_spend_lakh",
     "retention_min_rating", "retention_max_rating",
@@ -910,6 +917,209 @@ def create_franchise(session, season, name, *, quiet=False, **fields):
 
 
 # ──────────────────────────────────────────────────────────────────────
+# The field, as a file
+#
+# A franchise field is the one part of an auction that is typed by hand, is the
+# same across seasons and leagues, and is worth having somewhere other than in
+# this database — twelve sides with owners, co-owners, cities and purses is
+# twenty minutes of form-filling to reproduce, and every minute of it is a
+# chance to mistype a Telegram id. So it exports as JSON and imports back.
+#
+# **What is exported is what an admin typed, never what the auction did.** The
+# purse *remaining*, the squad size, the retained count, the RTM cards used and
+# every lot are results — importing them would write a franchise whose caches
+# disagree with its own ledger, which is precisely the drift
+# ``reconcile_purses`` exists to catch. ``purse_total_lakh`` is in, because it
+# is a rule; ``purse_remaining_lakh`` is out, because it is a score. The export
+# carries the results too, under ``"squad"``, but only so the file reads as a
+# record of a season — the importer ignores the key entirely.
+# ──────────────────────────────────────────────────────────────────────
+
+# What a franchise file carries, and what an import will write. Deliberately
+# not derived from the model's columns: a column added later is far more likely
+# to be a cache or a result than something an admin types, and an importer that
+# picked new columns up automatically would write those too.
+FRANCHISE_FILE_FIELDS = ("name", "short_name", "city", "owner_name",
+                         "owner_tg_id", "logo_url", "sort_order")
+
+FRANCHISE_FILE_VERSION = 1
+
+
+def export_franchises(session, season):
+    """The whole field as a plain dict, ready for ``json.dumps``.
+
+    Ordered by ``franchises()``, which is the order the setup page and the
+    expansion draft both run in, so a file re-imported into a fresh season
+    rebuilds the same order rather than whatever the ids happen to be.
+    """
+    field = franchises(session, season.id)
+    rows = []
+    for franchise in field:
+        row = {key: getattr(franchise, key, None)
+               for key in FRANCHISE_FILE_FIELDS}
+        row["purse_total_lakh"] = int(franchise.purse_total_lakh or 0)
+        row["co_owner_tg_ids"] = co_owner_ids(franchise)
+        row["rtm_cards_total"] = int(franchise.rtm_cards_total or 0)
+        row["draft_picks_total"] = int(franchise.draft_picks_total or 0)
+        # Read-only, and ignored on the way back in — see the note above.
+        row["squad"] = [
+            {"name": lot.name, "rating": lot.rating, "role": lot.category,
+             "country": lot.country, "price_lakh": int(lot.sold_price_lakh or 0),
+             "acquisition": lot.acquisition}
+            for lot in squad(session, franchise.id)]
+        rows.append(row)
+    return {
+        "format": "franchise-auction/franchises",
+        "version": FRANCHISE_FILE_VERSION,
+        "season": season.name,
+        "currency_label": season.currency_label or "₹",
+        "opening_purse_lakh": int(season.opening_purse_lakh or 0),
+        "exported_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "franchises": rows,
+    }
+
+
+def _franchise_rows(payload):
+    """The list of franchises inside whatever shape somebody uploaded.
+
+    A file this exported, the ``franchises`` list out of one, or a bare list —
+    all three are the same intent, and refusing two of them would only teach an
+    admin to edit the file before uploading it.
+    """
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict):
+        rows = payload.get("franchises")
+        if rows is None:
+            raise AuctionError(
+                "That file has no “franchises” list. Export one from this page "
+                "to see the shape an import expects.")
+    else:
+        raise AuctionError("A franchise file is a JSON object or a JSON list.")
+    if not isinstance(rows, list) or not rows:
+        raise AuctionError("That file lists no franchises.")
+    cleaned = []
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            raise AuctionError(f"Franchise {index} in that file is not an "
+                               f"object — every entry needs at least a name.")
+        name = str(row.get("name") or "").strip()
+        if not name:
+            raise AuctionError(f"Franchise {index} in that file has no name.")
+        cleaned.append((name, row))
+    seen = {}
+    for name, _row in cleaned:
+        key = name.lower()
+        if key in seen:
+            raise AuctionError(f"“{name}” is listed twice in that file.")
+        seen[key] = True
+    return cleaned
+
+
+def import_franchises(session, season, payload, *, replace=False,
+                      by_tg_id=None):
+    """Write a franchise file into this season. Returns ``(added, updated, removed)``.
+
+    **Matched by name, case aside**, which is what makes the same file safe to
+    upload twice: the second upload updates the field it created rather than
+    refusing it or doubling it. A franchise already in the season keeps its
+    purse, its squad and its ledger — only the typed fields move — because an
+    import is an edit to who the sides are, not a reset of what they have done.
+
+    The one exception is ``purse_total_lakh``. Changing a franchise's *total*
+    after it has spent anything would leave the total and the ledger describing
+    different auctions, so on an existing franchise it is applied through
+    ``correct_purse`` — a real correction row for the difference — rather than
+    written over the column. A franchise that has spent nothing therefore ends
+    up exactly where a fresh one would, and one mid-auction gets an audited
+    adjustment instead of a silent one.
+
+    ``replace`` removes franchises the file does not mention, through
+    ``remove_franchise`` so their players and purses go back where they belong.
+    Off by default: an import is far more often "here is the field" than "and
+    nobody else", and a flag that deletes is a flag that has to be asked for.
+    """
+    rows = _franchise_rows(payload)
+    existing = {(f.name or "").strip().lower(): f
+                for f in franchises(session, season.id)}
+    added = updated = 0
+    touched = set()
+
+    for order, (name, row) in enumerate(rows, start=1):
+        key = name.lower()
+        franchise = existing.get(key)
+        purse = row.get("purse_total_lakh")
+        if purse is None:
+            purse = season.opening_purse_lakh or DEFAULT_OPENING_PURSE_LAKH
+        purse = max(0, _as_int(purse, 0))
+
+        if franchise is None:
+            franchise = create_franchise(session, season, name, quiet=True,
+                                         purse_total_lakh=purse)
+            existing[key] = franchise
+            added += 1
+        else:
+            updated += 1
+            if purse != int(franchise.purse_total_lakh or 0):
+                # Through the ledger, never over the column — see the docstring.
+                correct_purse(session, season, franchise,
+                              purse - int(franchise.purse_total_lakh or 0),
+                              note=f"Imported purse: "
+                                   f"{render_money(purse, season.currency_label)}",
+                              by_tg_id=by_tg_id)
+                franchise.purse_total_lakh = purse
+        touched.add(franchise.id)
+
+        # Only keys the file actually carries are written, so a hand-trimmed
+        # file that lists names and purses alone does not blank out the cities
+        # and owners already recorded here.
+        for field in FRANCHISE_FILE_FIELDS:
+            if field == "name" or field not in row:
+                continue
+            value = row.get(field)
+            if field == "owner_tg_id":
+                franchise.owner_tg_id = _as_int(value, 0) or None
+            elif field == "sort_order":
+                franchise.sort_order = _as_int(value, 0)
+            else:
+                text = str(value).strip() if value is not None else ""
+                setattr(franchise, field, text[:500] or None)
+        if "sort_order" not in row:
+            # The file's own order, which is the order an admin arranged it in.
+            franchise.sort_order = order
+        if "co_owner_tg_ids" in row or "co_owners" in row:
+            set_co_owners(session, franchise,
+                          row.get("co_owner_tg_ids") or row.get("co_owners") or [])
+        if "rtm_cards_total" in row:
+            franchise.rtm_cards_total = max(0, _as_int(row["rtm_cards_total"], 0))
+        if "draft_picks_total" in row:
+            franchise.draft_picks_total = max(0, _as_int(row["draft_picks_total"], 0))
+
+    removed = []
+    if replace:
+        for franchise in franchises(session, season.id):
+            if franchise.id in touched:
+                continue
+            name = franchise.name
+            if int(franchise.squad_size or 0) > 0:
+                # The same path /aremoveteam takes: players back into the pool
+                # and the purse shared out, all on the ledger. A plain delete
+                # would strand both.
+                remove_franchise(session, season, franchise, by_tg_id=by_tg_id)
+            else:
+                session.delete(franchise)
+            removed.append(name)
+
+    session.flush()
+    log_event(session, season, "franchises_imported",
+              f"🏛 The field was imported from a file: {added} added, "
+              f"{updated} updated"
+              + (f", {len(removed)} removed" if removed else "") + ".",
+              by_tg_id=by_tg_id, by_admin=True)
+    return added, updated, removed
+
+
+# ──────────────────────────────────────────────────────────────────────
 # The purse ledger
 # ──────────────────────────────────────────────────────────────────────
 
@@ -1031,6 +1241,124 @@ def role_minimums(season):
     raw = _loads(getattr(season, "role_minimums_json", None), {})
     return {str(k): _as_int(v, 0) for k, v in (raw or {}).items()
             if _as_int(v, 0) > 0}
+
+
+def role_maximums(season):
+    """``{"Bowler": 8}`` — the roles that have a ceiling, and what it is.
+
+    **Sparse on purpose.** A role missing from this map has no ceiling; a role
+    mapped to ``0`` has a ceiling of none-at-all, which is a real rule an admin
+    may want ("no specialist keepers in this pool"). A dense map — one entry per
+    role, blank meaning "no rule" — cannot hold both answers, which is why
+    ``set_role_rules`` below takes ``None`` for "no rule" and writes nothing.
+    """
+    raw = _loads(getattr(season, "role_maximums_json", None), {})
+    out = {}
+    for key, value in (raw or {}).items():
+        number = _as_int(value, -1)
+        if number >= 0:
+            out[str(key)] = number
+    return out
+
+
+def set_role_rules(session, season, minimums, maximums):
+    """Save both ends of the role rule together, because they constrain each other.
+
+    ``minimums`` and ``maximums`` are ``{role: count or None}``; ``None`` — and,
+    for a minimum, ``0`` — means "no rule about this role". They are saved in one
+    call rather than two because every check worth making is between them: a
+    minimum above its own maximum is unsatisfiable, and minimums that add up to
+    more than the squad cap are a squad nobody can ever legally finish. Both are
+    refused here, at the one moment an admin can still fix them, rather than
+    surfacing as a bid refusal in the middle of a live lot.
+    """
+    lows, highs = {}, {}
+    for role, value in (minimums or {}).items():
+        number = _as_int(value, 0)
+        if number > 0:
+            lows[str(role)] = number
+    for role, value in (maximums or {}).items():
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        number = _as_int(value, -1)
+        if number >= 0:
+            highs[str(role)] = number
+
+    for role, low in sorted(lows.items()):
+        high = highs.get(role)
+        if high is not None and high < low:
+            raise AuctionError(
+                f"{role}: the minimum ({low}) is above the maximum ({high}). "
+                f"A squad cannot satisfy both.")
+
+    cap = max(0, _as_int(season.max_squad_size, 0))
+    owed = sum(lows.values())
+    if cap and owed > cap:
+        raise AuctionError(
+            f"The role minimums add up to {owed} players, which is more than "
+            f"the squad limit of {cap} — no squad could ever be legal. Raise "
+            f"the maximum squad size or lower a minimum.")
+
+    # A ceiling cannot be so low that the rest of the roles cannot fill the
+    # squad's MINIMUM size. Only checked when every role is capped, because a
+    # role with no ceiling can always take up the slack.
+    roles_with_a_ceiling = set(highs)
+    floor = max(0, _as_int(season.min_squad_size, 0))
+    if floor and roles_with_a_ceiling >= set(SQUAD_ROLES):
+        room = sum(highs.get(role, 0) for role in SQUAD_ROLES)
+        if room < floor:
+            raise AuctionError(
+                f"The role maximums add up to {room} players, which is fewer "
+                f"than the minimum squad size of {floor} — no squad could ever "
+                f"be legal. Raise a maximum, or lower the minimum squad size.")
+
+    season.role_minimums_json = _dumps(lows) if lows else None
+    season.role_maximums_json = _dumps(highs) if highs else None
+    session.flush()
+    return lows, highs
+
+
+def role_rule_line(season):
+    """"Bowler 4-8, Wicket Keeper 1+" — both ends of the rule in one string.
+
+    Empty when no role has a rule at all, so every caller can print it behind a
+    plain truth test rather than each deciding what "no rules" looks like.
+    """
+    lows, highs = role_minimums(season), role_maximums(season)
+    # The four known roles in the page's own order, then anything else a rule
+    # names — a catalogue that grows a fifth role must not drop out of the line.
+    extra = sorted((set(lows) | set(highs)) - set(SQUAD_ROLES))
+    parts = []
+    for role in SQUAD_ROLES + tuple(extra):
+        low, high = lows.get(role), highs.get(role)
+        if low is None and high is None:
+            continue
+        if low and high is not None:
+            parts.append(f"{role} {low}-{high}")
+        elif high is not None:
+            parts.append(f"{role} up to {high}")
+        else:
+            parts.append(f"{role} {low}+")
+    return ", ".join(parts)
+
+
+def role_shortfall(session, season, franchise):
+    """``(owed, over)`` — the roles this squad still needs, and any it has overrun.
+
+    ``over`` should always be empty while the rules are enforced; it is reported
+    anyway because a rule tightened mid-auction, or a franchise inheriting a
+    squad from a removed one, can land a squad on the wrong side of a ceiling
+    that nothing it does next can fix. A number an admin can see is a number an
+    admin can correct.
+    """
+    counts = role_counts(session, franchise.id)
+    owed = {role: need - counts.get(role, 0)
+            for role, need in role_minimums(season).items()
+            if counts.get(role, 0) < need}
+    over = {role: counts.get(role, 0) - cap
+            for role, cap in role_maximums(season).items()
+            if counts.get(role, 0) > cap}
+    return owed, over
 
 
 def max_bid_now(season, franchise, *, winning_this_lot=True):
@@ -1336,6 +1664,11 @@ def _sign_before_auction(session, season, franchise, player, price, *,
         if overseas_count(session, franchise.id) + 1 > overseas_cap:
             raise AuctionError(f"{franchise.name} is already at the overseas "
                                f"limit of {overseas_cap}.")
+
+    # The role ceiling, not the whole rule: see ``check_role_ceiling``. A
+    # franchise that could retain past a cap would take an illegal squad into
+    # an auction that then refuses every bid which might fix it.
+    check_role_ceiling(session, season, franchise, lot.category)
 
     remaining = int(franchise.purse_remaining_lakh or 0)
     if price > remaining:
@@ -2545,35 +2878,84 @@ def validate_bid(session, season, lot, franchise, amount_lakh, *, now=None):
             raise AuctionError(f"{franchise.name} is already at the overseas "
                                f"limit of {cap}.")
 
-    _check_role_reachability(session, season, franchise, lot)
+    check_role_rules(session, season, franchise, lot)
     return amount
 
 
-def _check_role_reachability(session, season, franchise, lot):
-    """Refuse a buy that would make a role minimum unreachable.
+def check_role_rules(session, season, franchise, lot):
+    """Refuse a buy that breaks either end of the role rule.
 
-    Same shape as the draft's rule and for the same reason: a squad that owes a
-    keeper with one slot left must spend that slot on a keeper, and the refusal
-    has to land *at* that bid rather than as a complaint about a finished squad
-    nobody can act on. Off by default — ``role_minimums_json`` is empty until
-    an admin sets it.
+    **The two ends are enforced differently, and they have to be.** A *maximum*
+    is a fact about the squad in front of you — an eighth bowler in a
+    seven-bowler squad is over the line the moment it is bought, so the refusal
+    is a plain count. A *minimum* is a promise about a squad that does not exist
+    yet, so it is enforced as **reachability**, the same shape as the draft's
+    rule and for the same reason: a squad that owes a keeper with one slot left
+    must spend that slot on a keeper, and the refusal has to land *at* that bid
+    rather than as a complaint about a finished squad nobody can act on.
+
+    A minimum's reachability count deliberately reads the ceilings too: a slot
+    is only free to fix a shortfall if some role that is still short can
+    actually take it.
+
+    Both are off by default — the two JSON columns are empty until an admin sets
+    them, and then this is the only place a bid meets either.
     """
+    counts = dict(role_counts(session, franchise.id))
+    role = lot.category
+    check_role_ceiling(session, season, franchise, role, counts=counts)
+
     minimums = role_minimums(season)
     if not minimums:
         return
-    counts = role_counts(session, franchise.id)
     # Buying this player fills one slot; count what the squad would then owe.
-    counts = dict(counts)
-    counts[lot.category] = counts.get(lot.category, 0) + 1
-    owed = sum(max(0, need - counts.get(role, 0)) for role, need in minimums.items())
+    counts[role] = counts.get(role, 0) + 1
+    owed = sum(max(0, need - counts.get(name, 0))
+               for name, need in minimums.items())
     slots_left = int(season.max_squad_size or 0) - (int(franchise.squad_size or 0) + 1)
     if owed > slots_left:
-        short = [role for role, need in minimums.items()
-                 if counts.get(role, 0) < need]
+        short = [name for name, need in minimums.items()
+                 if counts.get(name, 0) < need]
         raise AuctionError(
             f"{franchise.name} would have no room left for "
             f"{', '.join(sorted(short))} — {owed} still needed with only "
             f"{max(0, slots_left)} squad slots to spare.")
+
+
+def check_role_ceiling(session, season, franchise, role, *, counts=None):
+    """Refuse one more player of ``role`` when the squad is already at its cap.
+
+    Split out of ``check_role_rules`` because the two ends of the rule apply at
+    different moments. A retention or an expansion pick happens before the
+    auction opens, when a minimum is still trivially reachable — every slot is
+    empty — so checking reachability there would only ever fire on a
+    misconfiguration the setup page already refuses. A ceiling is different: a
+    franchise can retain its way past one, and nothing later can undo it.
+    """
+    caps = role_maximums(season)
+    cap = caps.get(role)
+    if cap is None:
+        return
+    if counts is None:
+        counts = role_counts(session, franchise.id)
+    have = counts.get(role, 0)
+    if have + 1 <= cap:
+        return
+    if cap == 0:
+        # A typed 0 is a real rule — "no specialist keepers in this auction" —
+        # and needs its own sentence, because "already has 0, which is the
+        # limit of 0" reads as a bug.
+        raise AuctionError(f"{franchise.name} may not take a {role} at all — "
+                           f"this auction caps the role at 0.")
+    raise AuctionError(
+        f"{franchise.name} already has {have} "
+        f"{role}{'' if have == 1 else 's'}, which is this auction's limit "
+        f"of {cap}.")
+
+
+# The old private name, kept because the reachability half is what it always
+# did and callers outside this module may still reach for it.
+_check_role_reachability = check_role_rules
 
 
 def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
@@ -3982,6 +4364,74 @@ def set_positions(session, season, pairs, *, by_tg_id=None, quiet=False):
                      by_tg_id=by_tg_id, exact=True, quiet=quiet)
 
 
+def delete_set(session, season, name, *, by_tg_id=None, quiet=False):
+    """Take a whole set out of the pool — every player in it still waiting.
+
+    Named *exactly*, through ``_set_exact``, for the reason that helper exists:
+    what a page submits is a name it has just been shown, and a set that
+    finished while the page sat open must be refused rather than matched onto a
+    different one on a substring. Deleting the wrong forty players is not a
+    mistake anybody notices in time.
+
+    **Only queued lots go.** A set whose players have been sold, passed on or
+    withdrawn is a record of what happened, and this is a pool edit, not an
+    undo — ``undo_sale`` is what puts a sold player back. So a half-run set
+    loses what is still waiting and keeps what already happened, and the set
+    stays in ``list_sets`` as a finished one. Returns ``(label, removed)``.
+    """
+    _require_reorderable(season)
+    if season.status not in (STATUS_SETUP, STATUS_PAUSED):
+        raise AuctionError("Pause the auction before changing its pool.")
+    label, picked = _set_exact(session, season, name)
+    live = current_lot(session, season)
+    for lot in picked:
+        # ``_set_exact`` only returns queued lots, so this can only fire on a
+        # lot that opened between the query and here. Cheap, and the
+        # alternative is deleting the row the console is counting down.
+        if live is not None and lot.id == live.id:
+            raise AuctionError(f"{lot.name} is on the block right now — the "
+                               f"set cannot be deleted under a live lot.")
+        session.delete(lot)
+    session.flush()
+    _restamp_price_floor(session, season)
+    if not quiet:
+        log_event(session, season, "set_delete",
+                  f"🗑 <b>{_e(label)}</b> was taken out of the pool — "
+                  f"{len(picked)} player{'' if len(picked) == 1 else 's'} "
+                  f"who had not gone on the block yet.",
+                  by_tg_id=by_tg_id, by_admin=True)
+    return label, len(picked)
+
+
+def clear_pool(session, season, *, by_tg_id=None, quiet=False):
+    """Empty the pool of everything still waiting, whatever set it is in.
+
+    The same rule as ``delete_set`` and for the same reason: sold, unsold and
+    withdrawn lots are the auction's record and stay. A season in ``setup``
+    with nothing sold therefore comes out genuinely empty, which is what
+    "start the pool again" means; one mid-auction comes out with its history
+    intact and its queue gone. Returns how many were removed.
+    """
+    _require_reorderable(season)
+    if season.status not in (STATUS_SETUP, STATUS_PAUSED):
+        raise AuctionError("Pause the auction before changing its pool.")
+    queued = queued_lots(session, season)
+    if not queued:
+        raise AuctionError("Nothing is waiting in the pool.")
+    for lot in queued:
+        session.delete(lot)
+    session.flush()
+    _restamp_price_floor(session, season)
+    if not quiet:
+        log_event(session, season, "pool_clear",
+                  f"🗑 The pool was emptied — {len(queued)} player"
+                  f"{'' if len(queued) == 1 else 's'} who had not gone on the "
+                  f"block yet. Everything already sold or passed on stays on "
+                  f"the record.",
+                  by_tg_id=by_tg_id, by_admin=True)
+    return len(queued)
+
+
 def move_set(session, season, name, delta, *, by_tg_id=None, quiet=False):
     """Move a queued set one place earlier (``-1``) or later (``+1``).
 
@@ -4228,6 +4678,7 @@ def autofill_short_squads(session, season, *, now=None):
     names = {f.id: {(lot.name or "").strip().lower()
                     for lot in squad(session, f.id)} for f in field}
     needs = role_minimums(season)
+    caps = role_maximums(season)
     given = []
 
     while pool:
@@ -4246,8 +4697,14 @@ def autofill_short_squads(session, season, *, now=None):
             def fits(lot):
                 if (lot.name or "").strip().lower() in names[franchise.id]:
                     return False
-                return not (lot.is_overseas
-                            and overseas[franchise.id] + 1 > overseas_cap)
+                if lot.is_overseas and overseas[franchise.id] + 1 > overseas_cap:
+                    return False
+                # A free player is still a player: handing a squad its ninth
+                # bowler under an eight-bowler cap would build a squad the
+                # auction itself would have refused to sell.
+                cap = caps.get(lot.category)
+                return not (cap is not None
+                            and roles[franchise.id].get(lot.category, 0) + 1 > cap)
 
             candidates = [lot for lot in pool if fits(lot)]
             if owed:
