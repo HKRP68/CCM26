@@ -347,5 +347,114 @@ class SetsCardPageTests(PoolPageCase):
         self.assertIn("Marquee", body)
 
 
+# ══════════════════════════════════════════════════════════════════════
+# Base prices, typed as ranges
+#
+# The ladder used to be a column of "rating at least" rows whose upper bound
+# was whatever the row above started at. That is not how a room talks about
+# it — "96 to 92 start at ₹2 Cr" is — and it meant inserting a band in the
+# middle silently re-cut the two around it. Rows are now explicit ranges.
+#
+# What is pinned here:
+#
+#   • a ladder saved the old way prices every rating exactly as it did;
+#   • a range typed top-first is stored and read back as one;
+#   • a rating no band covers is reported, not silently built at the floor.
+# ══════════════════════════════════════════════════════════════════════
+
+class BasePriceRangeTests(PoolPageCase):
+
+    def rules(self):
+        self.session.expire_all()
+        return self.A.base_price_rules(self.season)
+
+    def test_a_ladder_saved_before_ranges_prices_exactly_as_it_did(self):
+        """The old shape carried its top implicitly: each band ran up to just
+        under the band above. Nothing about that may move."""
+        import json
+        self.season.base_price_rules_json = json.dumps(
+            [{"min_rating": 90, "base_lakh": 200},
+             {"min_rating": 80, "base_lakh": 50},
+             {"min_rating": 0, "base_lakh": 20}])
+        self.session.commit()
+        for rating, expected in ((99, 200), (90, 200), (89, 50), (80, 50),
+                                 (79, 20), (0, 20)):
+            self.assertEqual(expected,
+                             self.A.base_price_for(self.season, rating),
+                             f"{rating} OVR")
+        self.assertEqual([], self.A.base_price_gaps(self.season))
+        # And the derived tops are what the page will show.
+        self.assertEqual(["90+", "89-80", "79-0"],
+                         [self.A.render_rating_band(r) for r in self.rules()])
+
+    def test_a_range_typed_on_the_page_is_stored_and_read_back(self):
+        self.post({"action": "price_rules",
+                   "rule_max_rating": ["", "96", "91"],
+                   "rule_min_rating": ["97", "92", "0"],
+                   "rule_price": ["4", "2", "0.2"]})
+        self.assertEqual(["97+", "96-92", "91-0"],
+                         [self.A.render_rating_band(r) for r in self.rules()])
+        for rating, expected in ((99, 400), (97, 400), (96, 200), (92, 200),
+                                 (91, 20), (0, 20)):
+            self.assertEqual(expected,
+                             self.A.base_price_for(self.season, rating),
+                             f"{rating} OVR")
+
+    def test_a_band_added_in_the_middle_leaves_its_neighbours_alone(self):
+        """The whole point of an explicit top. Under the old shape, adding
+        88-85 re-cut the band above it without being asked to."""
+        self.post({"action": "price_rules",
+                   "rule_max_rating": ["", "96"],
+                   "rule_min_rating": ["97", "92"],
+                   "rule_price": ["4", "2"]})
+        self.post({"action": "price_rules",
+                   "rule_max_rating": ["", "96", "91"],
+                   "rule_min_rating": ["97", "92", "0"],
+                   "rule_price": ["4", "2", "0.5"]})
+        self.session.expire_all()
+        self.assertEqual(200, self.A.base_price_for(self.season, 92))
+        self.assertEqual(400, self.A.base_price_for(self.season, 97))
+        self.assertEqual(50, self.A.base_price_for(self.season, 91))
+
+    def test_a_range_typed_backwards_is_read_as_the_slip_it_is(self):
+        self.post({"action": "price_rules",
+                   "rule_max_rating": ["92"],
+                   "rule_min_rating": ["96"],
+                   "rule_price": ["2"]})
+        self.session.expire_all()
+        self.assertEqual(["96-92"],
+                         [self.A.render_rating_band(r) for r in self.rules()])
+        self.assertEqual(200, self.A.base_price_for(self.season, 94))
+
+    def test_a_rating_no_band_covers_is_named_rather_than_left_silent(self):
+        response = self.post({"action": "price_rules",
+                              "rule_max_rating": ["", "96"],
+                              "rule_min_rating": ["97", "92"],
+                              "rule_price": ["4", "2"]})
+        body = response.get_data(as_text=True)
+        self.assertIn("No band covers", body)
+        self.assertIn("91-1", body)
+        self.session.expire_all()
+        self.assertEqual([(1, 91)], self.A.base_price_gaps(self.season))
+        # It is a warning, not a refusal — the ladder still saved.
+        self.assertEqual(200, self.A.base_price_for(self.season, 92))
+        # …and the uncovered cards fall to the floor, which is what it said.
+        self.assertEqual(self.A.DEFAULT_MIN_BASE_PRICE_LAKH,
+                         self.A.base_price_for(self.season, 50))
+
+    def test_the_card_shows_every_range_and_an_add_button(self):
+        body = self.get()
+        self.assertIn("Add range", body)
+        self.assertIn("rule_max_rating", body)
+        self.assertIn("Rating from", body)
+
+    def test_an_empty_ladder_is_refused_rather_than_saved(self):
+        before = self.season.base_price_rules_json
+        self.post({"action": "price_rules", "rule_max_rating": [""],
+                   "rule_min_rating": [""], "rule_price": [""]})
+        self.session.expire_all()
+        self.assertEqual(before, self.season.base_price_rules_json)
+
+
 if __name__ == "__main__":       # pragma: no cover
     unittest.main()

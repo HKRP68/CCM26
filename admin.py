@@ -22498,6 +22498,9 @@ def admin_auction_detail(season_id):
             lots=auction_svc.lots(db, season.id),
             counts=auction_svc.pool_counts(db, season.id),
             price_rules=auction_svc.base_price_rules(season),
+            price_gaps=auction_svc.base_price_gaps(season),
+            rating_band=auction_svc.render_rating_band,
+            base_floor=auction_svc.DEFAULT_MIN_BASE_PRICE_LAKH,
             filters=filters,
             options=player_query.filter_options(db),
             preview=preview,
@@ -22589,25 +22592,44 @@ def _auction_detail_action(db, season, action):
         flash("✅ Settings saved.", "success")
 
     elif action == "price_rules":
+        # One row is a rating RANGE and a price: "96 to 92 → ₹2 Cr". The top
+        # of a range may be left blank, which means "and up" — every ladder
+        # needs one of those or its best cards fall through to the floor.
+        highs = request.form.getlist("rule_max_rating")
         rules = []
-        for rating, price in zip(request.form.getlist("rule_min_rating"),
-                                 request.form.getlist("rule_price")):
-            if not (rating or "").strip() and not (price or "").strip():
+        for index, (low, price) in enumerate(
+                zip(request.form.getlist("rule_min_rating"),
+                    request.form.getlist("rule_price"))):
+            high = highs[index] if index < len(highs) else ""
+            if not any((value or "").strip() for value in (low, high, price)):
                 continue
             try:
                 lakh = auction_svc.parse_amount(price)
             except auction_svc.AuctionError:
                 continue
-            rules.append({"min_rating": _parse_int(rating) or 0,
-                          "base_lakh": lakh})
+            row = {"min_rating": max(0, _parse_int(low) or 0)}
+            top = _parse_int(high)
+            if top is not None:
+                row["max_rating"] = max(0, top)
+            row["base_lakh"] = lakh
+            rules.append(row)
         if not rules:
             raise auction_svc.AuctionError("Give at least one base-price band.")
-        rules.sort(key=lambda r: r["min_rating"], reverse=True)
         season.base_price_rules_json = json.dumps(rules, separators=(",", ":"))
         log_admin(db, "auction_price_rules", "auction", season.id, season.name)
         flash("✅ Base prices saved. They apply to lots added from now on — a "
               "lot already in the pool keeps the price it was built with.",
               "success")
+        # A gap is silent otherwise: those cards are simply built at the floor
+        # and nobody finds out until the pool is already priced.
+        gaps = auction_svc.base_price_gaps(season)
+        if gaps:
+            spans = ", ".join(str(lo) if lo == hi else f"{hi}-{lo}"
+                              for lo, hi in gaps)
+            flash(f"⚠️ No band covers {spans}. Cards in that range will be "
+                  f"built at "
+                  f"{auction_svc.render_money(auction_svc.DEFAULT_MIN_BASE_PRICE_LAKH, season.currency_label)}"
+                  f" — add a range for them, or widen one.", "warning")
 
     elif action == "franchise":
         fid = _parse_int(request.form.get("franchise_id"))

@@ -3707,12 +3707,18 @@ class AuctionSeason(Base):
     # ── Money ──────────────────────────────────────────────────────────
     opening_purse_lakh = Column(Integer, default=10000, nullable=False)
     currency_label = Column(String(10), default="₹", nullable=False)
-    # [{"min_rating": 90, "base_lakh": 200}, ...] highest band first. Read by
-    # auction_service.base_price_for() ONCE, at pool-build time, and stamped
-    # onto AuctionLot.base_price_lakh — so editing the ladder afterwards never
-    # moves the price a lot already went on the block at. A JSON column rather
-    # than a table for the same reason PlayerDraft.tier_order_json is one: a
-    # handful of bands, edited as a whole, never queried by.
+    # [{"min_rating": 92, "max_rating": 96, "base_lakh": 200}, ...] — rating
+    # RANGES, highest band first, and a row with no "max_rating" is an open top
+    # ("97 and up"). Rows saved before ranges existed carry min_rating alone and
+    # meant "up to just under the band above"; auction_service.base_price_rules()
+    # fills that bound in on read, so those seasons price exactly as they did and
+    # neither caller has to know which shape a row came from.
+    #
+    # Read by auction_service.base_price_for() ONCE, at pool-build time, and
+    # stamped onto AuctionLot.base_price_lakh — so editing the ladder afterwards
+    # never moves the price a lot already went on the block at. A JSON column
+    # rather than a table for the same reason PlayerDraft.tier_order_json is
+    # one: a handful of bands, edited as a whole, never queried by.
     base_price_rules_json = Column(Text, nullable=True)
     # [{"upto_lakh": 200, "step_lakh": 10}, ...] — the bid increment ladder.
     bid_increment_rules_json = Column(Text, nullable=True)
