@@ -154,6 +154,11 @@ UNPUBLISHED_ON_PURPOSE = {
     # pinned board's footer names them.
     "ainfo", "asets", "anextset", "anextplayer", "asquad", "asoldlist",
     "aunsoldlist",
+    # Every number the auction runs by. Unpublished for the same ceiling
+    # reason as the views above, and named where somebody asking "what are the
+    # rules" already is: the /auction card, /ainfo's own buttons and the
+    # board's footer. docs/franchise-auction.md says so too.
+    "arules",
     # Auction admin commands on the /adminhelp card rather than in the admin
     # bucket, which would otherwise pass the 100-command ceiling.
     "asetorder", "aretainforce", "aoffers", "aretcancel", "aaccelmode",

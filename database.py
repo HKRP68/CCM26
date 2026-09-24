@@ -995,6 +995,20 @@ def _migrate_add_columns():
     # season written before this behaved, so there is nothing to backfill.
     _try_add("auction_seasons", "role_maximums_json", "TEXT")
 
+    # ── Franchise Auction: focus mode ──
+    # While an auction is live or paused its group answers auction commands and
+    # nothing else (``services/auction_focus.py``). An integer defaulted to 1
+    # for the NULL-reads-falsy reason above, so an auction already running when
+    # this ships picks the lock up ON — which is the behaviour every room that
+    # has run one asked for. ``/afocus off`` is how a room opts out.
+    _try_add("auction_seasons", "focus_mode", "INTEGER DEFAULT 1")
+
+    # ── Franchise Auction: direct bids ──
+    # Whether ``/bid 12`` (naming your own number) is allowed, or only the next
+    # minimum and the board's buttons. Defaulted to 1 for the reason above: an
+    # auction that has always allowed jump bids must keep allowing them.
+    _try_add("auction_seasons", "direct_bids", "INTEGER DEFAULT 1")
+
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so
     # they stay independently fault-tolerant without a round trip each.
@@ -1049,6 +1063,12 @@ def _migrate_add_columns():
         "WHERE career_changes_used IS NULL",
         "UPDATE players SET career_free_changes = 0 "
         "WHERE career_free_changes IS NULL",
+        # Focus mode is non-nullable in the model and a NULL reads back falsy,
+        # which would silently unlock every auction group that existed before
+        # the column did. ``auction_focus.focus_mode_on`` tolerates NULL as ON
+        # for the same reason; this makes the data say it too.
+        "UPDATE auction_seasons SET focus_mode = 1 WHERE focus_mode IS NULL",
+        "UPDATE auction_seasons SET direct_bids = 1 WHERE direct_bids IS NULL",
     ]
     # ─────────────────────────────────────────────────────────────
     # The summary card was redrawn as the light poster, and the saved

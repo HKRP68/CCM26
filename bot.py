@@ -464,6 +464,8 @@ ADMIN_MENU_COMMANDS = (
     ("awithdraw", "Admin: pull a player out of the auction"),
     ("atimer", "Admin: seconds allowed per auction lot"),
     ("asnipe", "Admin: anti-snipe window, extension and cap"),
+    ("afocus", "Admin: lock this group to auction commands while it runs"),
+    ("adirect", "Admin: allow typed bid amounts, or the next step only"),
     ("agrant", "Admin: correct a franchise purse"),
     ("aco", "Admin: add a co-owner who may bid for a franchise"),
     ("apublish", "Admin: publish bought squads as a Challenge League"),
@@ -1611,6 +1613,67 @@ def main():
                 logger.exception("Rookie gate failed (non-fatal)")
         app.add_handler(TypeHandler(_TGUpdate, _rookie_check), group=-10)
 
+        # ── Auction focus gate (group=-5, the last middleware) ──
+        # While an auction bound to a group is live or paused, that group
+        # answers auction commands and nothing else: a thirty-second clock and
+        # a pinned board cannot share a room with /claim, and a bid that
+        # scrolls past unseen is how a price gets disputed. Runs LAST so
+        # "the bot is down", "you are banned" and "you need a membership" all
+        # still win over it — this is the narrowest gate of the five, and the
+        # only one that answers for one chat rather than for the whole bot.
+        #
+        # Cost on ordinary traffic is one dict lookup: a private chat and any
+        # non-command message are answered before the gate looks anything up,
+        # and the "is this chat locked?" query itself is cached per chat for a
+        # few seconds (auction_service invalidates it the moment an admin
+        # starts, pauses, finishes or unlocks one).
+        async def _auction_focus_check(update, context):
+            if _is_storage_only_command(update):
+                return
+            try:
+                from services import auction_focus
+                if not auction_focus.is_group_chat(update):
+                    return
+                bot_username = getattr(context.bot, "username", None)
+                if not auction_focus.is_command_or_button(update, bot_username):
+                    return      # chatter: a room must be able to talk
+                chat = update.effective_chat
+
+                # One hop to a worker thread for every blocking read the
+                # decision needs — the lock lookup and, only for an update it
+                # is about to refuse, the auction-admin bypass.
+                def _blocked_by():
+                    name = auction_focus.locked_season_for_chat(chat.id)
+                    if not name:
+                        return None
+                    if not auction_focus.should_block_update(
+                            update, locked=True, bot_username=bot_username):
+                        return None
+                    return name
+
+                season_name = await asyncio.to_thread(_blocked_by)
+                if season_name is None:
+                    return
+
+                try:
+                    if update.callback_query:
+                        await update.callback_query.answer(
+                            auction_focus.locked_alert(season_name),
+                            show_alert=True)
+                    elif update.message:
+                        await update.message.reply_text(
+                            auction_focus.locked_message(season_name),
+                            parse_mode="HTML")
+                except Exception:
+                    pass
+                raise ApplicationHandlerStop
+            except ApplicationHandlerStop:
+                raise
+            except Exception:
+                # A broken gate must never cost a group its commands.
+                logger.exception("Auction focus gate failed (non-fatal)")
+        app.add_handler(TypeHandler(_TGUpdate, _auction_focus_check), group=-5)
+
         # Record process start time for /botstatus uptime reporting.
         from datetime import datetime as _dt_now
         app.bot_data["bot_start_time"] = _dt_now.utcnow()
@@ -2185,7 +2248,8 @@ def main():
             aadmin_handler, anew_handler, abind_handler, astart_handler,
             apause_handler, anext_handler, aextend_handler, asold_handler,
             aunsold_handler, aundobid_handler, awithdraw_handler,
-            atimer_handler, asnipe_handler, agrant_handler, aco_handler,
+            atimer_handler, asnipe_handler, afocus_handler, adirect_handler,
+            agrant_handler, aco_handler,
             apublish_handler, acancel_handler,
             aretain_handler, aunretain_handler, aretlock_handler,
             artm_handler, rtm_callback,
@@ -2194,6 +2258,7 @@ def main():
             apick_handler, apicks_handler, apickset_handler,
             apickskip_handler, apickundo_handler,
             aretainforce_handler, retention_offer_callback, aoffers_handler,
+            close_callback,
             aretcancel_handler, ainfo_handler, info_callback, asets_handler,
             arules_handler, sets_callback,
             anextset_handler, anextplayer_handler, asquad_handler,
@@ -2222,6 +2287,9 @@ def main():
         app.add_handler(CommandHandler("asets", asets_handler))
         # The Sets card's own buttons: its pages, and one per set to open it.
         app.add_handler(CallbackQueryHandler(sets_callback, pattern=r"^au_sets_"))
+        # ❌ Close, on every card a command posts. Owner-tagged, so only the
+        # person who asked for the card can take it away.
+        app.add_handler(CallbackQueryHandler(close_callback, pattern=r"^au_x_"))
         app.add_handler(CommandHandler("anextset", anextset_handler))
         app.add_handler(CommandHandler(["anextplayer", "anextplayers"],
                                        anextplayer_handler))
@@ -2246,6 +2314,15 @@ def main():
         app.add_handler(CommandHandler("awithdraw", awithdraw_handler))
         app.add_handler(CommandHandler("atimer", atimer_handler))
         app.add_handler(CommandHandler("asnipe", asnipe_handler))
+        # Focus mode: while the auction runs, this group answers auction
+        # commands and nothing else. ON by default — the rules live in
+        # services/auction_focus.py and _auction_focus_check above enforces
+        # them; this command is only the switch.
+        app.add_handler(CommandHandler(["afocus", "afocusmode"], afocus_handler))
+        # Direct bids: may a bidder name their own number, or only take the
+        # next step? On by default; off leaves bare /bid and the buttons.
+        app.add_handler(CommandHandler(["adirect", "adirectbids"],
+                                       adirect_handler))
         app.add_handler(CommandHandler("agrant", agrant_handler))
         app.add_handler(CommandHandler("aco", aco_handler))
         app.add_handler(CommandHandler("apublish", apublish_handler))
