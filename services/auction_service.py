@@ -1256,9 +1256,31 @@ def set_opening_purse(session, season, purse_lakh, *, by_tg_id=None,
         delta = new_purse - _as_int(franchise.purse_total_lakh, 0)
         if delta == 0:
             continue
-        franchise.purse_total_lakh = new_purse
-        franchise.purse_remaining_lakh = (
-            _as_int(franchise.purse_remaining_lakh, 0) + delta)
+        # The move is ONE conditional statement, the same device ``sell_lot``
+        # debits with — and for the same reason, which is not hypothetical
+        # here: this can be saved from the website while the room is bidding,
+        # so a read-then-write would read a balance, have a sale debit it, and
+        # write the pre-sale number back over the top. Money the franchise had
+        # already spent would reappear, and its ledger would stop agreeing with
+        # its purse. The non-negative guard rides in the WHERE for the same
+        # reason: the loop above is a courtesy that says WHY in words, this is
+        # what actually refuses, and it cannot be overtaken.
+        moved = (session.query(AuctionFranchise)
+                 .filter(AuctionFranchise.id == franchise.id,
+                         AuctionFranchise.purse_remaining_lakh + delta >= 0)
+                 .update({"purse_total_lakh": new_purse,
+                          "purse_remaining_lakh":
+                              AuctionFranchise.purse_remaining_lakh + delta},
+                         synchronize_session=False))
+        session.flush()
+        session.expire(franchise)
+        if not moved:
+            raise AuctionError(
+                f"{franchise.name}'s purse moved while this was being saved, "
+                f"and a {render_money(new_purse, symbol)} purse would now put "
+                f"it in the red. Nothing has been changed — try again.")
+        # Refreshed first: ``_ledger`` stamps ``balance_after`` from the row,
+        # and the row the ORM is holding is the one before that UPDATE.
         _ledger(session, franchise, LEDGER_CORRECTION, delta,
                 note=(f"Opening purse {render_money(old_purse, symbol)} → "
                       f"{render_money(new_purse, symbol)}"),

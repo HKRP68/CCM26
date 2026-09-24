@@ -184,7 +184,7 @@ class TheBypassTests(unittest.TestCase):
             self.assertFalse(F.is_bypassed(999))
         self.assertFalse(F.is_bypassed(None))
 
-    def test_a_broken_lookup_fails_open(self):
+    def test_a_broken_admin_lookup_fails_open(self):
         """Not knowing must cost a command, not cost somebody the bot."""
         from services import admin_ids
         def _boom(_id):
@@ -215,6 +215,8 @@ class TheCacheTests(unittest.TestCase):
 
     def setUp(self):
         F.invalidate()
+        F._generation.clear()
+        self.addCleanup(F._generation.clear)
         self.addCleanup(F.invalidate)
 
     def test_it_names_the_auction_and_caches_the_answer(self):
@@ -254,6 +256,31 @@ class TheCacheTests(unittest.TestCase):
             self.assertEqual(F.locked_season_for_chat(-100), "Season 2")
             F.invalidate(-100)
             self.assertIsNone(F.locked_season_for_chat(-100))
+
+    def test_an_invalidation_mid_lookup_is_not_overwritten(self):
+        """A lookup that read before the commit must not cache what it saw.
+
+        The gate's lookups run in worker threads, so "read the season, admin
+        commits, write the cache" is an ordinary interleaving rather than an
+        exotic one — and left alone it would keep refusing the room for a whole
+        TTL after /afocus off.
+        """
+        import database
+        from services import auction_service
+        session = SimpleNamespace(close=lambda: None)
+
+        def _lookup(_session, _chat_id):
+            # Stands in for the admin's commit landing while this read is in
+            # flight: the answer below is already out of date.
+            F.invalidate(-100)
+            return LIVE
+
+        with patch.object(database, "get_session", lambda: session), \
+                patch.object(auction_service, "season_for_chat", _lookup):
+            self.assertEqual("Season 2", F.locked_season_for_chat(-100),
+                             "the caller still gets what was true when read")
+        self.assertNotIn(-100, F._cache,
+                         "a stale answer was left behind for the next caller")
 
     def test_a_broken_lookup_fails_open(self):
         import database

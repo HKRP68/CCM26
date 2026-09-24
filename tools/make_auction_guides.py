@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import sys
+from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
@@ -235,12 +236,15 @@ def steps(items):
 
 
 def code(lines):
+    # Escaped: a command block is where ``<player>`` and ``<seconds>`` live,
+    # and ReportLab's paragraph parser reads those as tags — dropping them
+    # silently, so the guide would print every command without its argument.
     # Alignment is the point of these blocks, so spacing a substitution changed
     # the width of is held by non-breaking spaces.
     # KeepTogether: half a command block at the foot of a page is a command
     # somebody will type half of.
     return KeepTogether(Paragraph(
-        "<br/>".join(T(line, collapse=False).replace(" ", "&nbsp;")
+        "<br/>".join(escape(T(line, collapse=False)).replace(" ", "&nbsp;")
                      for line in lines), S["code"]))
 
 
@@ -248,13 +252,15 @@ def table(rows, widths, header=True, mono_first=True):
     """A bordered table whose first column is monospaced (commands)."""
     data = []
     for index, row in enumerate(rows):
+        # Escaped for ``code()``'s reason — the first column of most of these
+        # tables is a command, and half of those carry a <placeholder>.
         if header and index == 0:
-            data.append([Paragraph(T(cell), S["th"]) for cell in row])
+            data.append([Paragraph(escape(T(cell)), S["th"]) for cell in row])
             continue
         cells = []
         for column, cell in enumerate(row):
             style = "tdmono" if (mono_first and column == 0) else "td"
-            cells.append(Paragraph(T(cell), S[style]))
+            cells.append(Paragraph(escape(T(cell)), S[style]))
         data.append(cells)
     t = Table(data, colWidths=widths, repeatRows=1 if header else 0,
               hAlign="LEFT")
@@ -1046,7 +1052,7 @@ def admin_guide():
           "pre-fills the price and the caps are what refuse. Opening the "
           "auction closes the retention window for you."),
         h2("Right To Match"),
-        code(["/artmset 2 45 200     2 cards each, 45s to answer, +ₒ2 Cr premium",
+        code(["/artmset 2 45 200     2 cards each, 45s to answer, +₹2 Cr premium",
               "/artmset off          turn it off",
               "/artmcards Mumbai 3   one franchise's own card count",
               "/artmforce yes|no|stand   answer an open window for a franchise",
@@ -1073,8 +1079,8 @@ def admin_guide():
     flow += [
         h1("12. Money, and the ledger behind it"),
         code(["/apurse                     every purse, max bid, squad count",
-              "/agrant Mumbai | 5          add ₒ5 Cr",
-              "/agrant Mumbai | -2         take ₒ2 Cr back"]),
+              "/agrant Mumbai | 5          add ₹5 Cr",
+              "/agrant Mumbai | -2         take ₹2 Cr back"]),
         bullets([
             B("A bid moves no money.") + " The purse is debited exactly once, "
             "when a lot sells. Losing bids are kept as history — that is "

@@ -261,6 +261,14 @@ def should_reply(update, bot_username=None) -> bool:
 
 _CACHE_TTL_SECONDS = 10.0
 _cache: dict[int, tuple[float, str | None]] = {}
+# One counter per chat, bumped by every invalidation. A lookup reads it before
+# its query and stores its answer only if it has not moved since — otherwise a
+# lookup that read the season BEFORE an admin's commit could land its stale
+# answer in the cache AFTER the invalidation that commit fired, and the room
+# would keep being refused (or keep being let through) for a whole TTL. The
+# lookups run in worker threads, so this ordering is the normal case rather
+# than an exotic one.
+_generation: dict[int, int] = {}
 
 
 def invalidate(chat_id=None) -> None:
@@ -272,11 +280,15 @@ def invalidate(chat_id=None) -> None:
     """
     if chat_id is None:
         _cache.clear()
+        for key in list(_generation):
+            _generation[key] += 1
         return
     try:
-        _cache.pop(int(chat_id), None)
+        key = int(chat_id)
     except (TypeError, ValueError):
-        pass
+        return
+    _generation[key] = _generation.get(key, 0) + 1
+    _cache.pop(key, None)
 
 
 def locked_season_for_chat(chat_id, *, now=None):
@@ -298,6 +310,8 @@ def locked_season_for_chat(chat_id, *, now=None):
     if cached is not None and now - cached[0] < _CACHE_TTL_SECONDS:
         return cached[1]
 
+    # Read before the query, compared after it: see ``_generation``.
+    generation = _generation.get(chat_id, 0)
     name = None
     try:
         from database import get_session
@@ -315,11 +329,20 @@ def locked_season_for_chat(chat_id, *, now=None):
         logger.exception("Auction focus lookup failed (non-fatal)")
         return None
 
-    _cache[chat_id] = (now, name)
+    if _generation.get(chat_id, 0) == generation:
+        # Nothing invalidated this chat while the query was in flight, so this
+        # answer is still the current one. If something did, the answer is
+        # still returned to THIS caller — it was true when it was read — but it
+        # is not left behind for the next one.
+        _cache[chat_id] = (now, name)
     if len(_cache) > 5000:
-        for key in [k for k, entry in _cache.items()
+        # list() first: another worker thread may be writing the dict, and
+        # iterating it while it changes raises rather than pruning.
+        for key in [k for k, entry in list(_cache.items())
                     if now - entry[0] > _CACHE_TTL_SECONDS]:
             _cache.pop(key, None)
+        for key in [k for k in list(_generation) if k not in _cache]:
+            _generation.pop(key, None)
     return name
 
 

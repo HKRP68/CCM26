@@ -2042,6 +2042,52 @@ class OpeningPurseTests(FeatureCase):
         self.assertEqual(12_000, kochi.purse_total_lakh)
         self.assert_ledger_agrees("after the purse moved")
 
+    def test_the_ledger_row_records_the_balance_after_the_move(self):
+        """``balance_after`` is stamped off the row, so it must be re-read."""
+        self.A.set_opening_purse(self.session, self.season, 12_000)
+        self.session.commit()
+        latest = self.A.ledger(self.session, self.mumbai.id, limit=1)[0]
+        self.assertEqual(self.A.LEDGER_CORRECTION, latest.kind)
+        self.assertEqual(12_000, latest.balance_after)
+        self.assertEqual(12_000, self.mumbai.purse_remaining_lakh)
+
+    def test_a_sale_landing_mid_save_is_not_overwritten(self):
+        """The move is one conditional statement, not a read-then-write.
+
+        Two sessions on purpose: the second is the sweeper selling a lot while
+        the first has the settings page open, which is the case the website
+        makes possible and a read-modify-write would lose.
+        """
+        from database import get_session
+        self.build_sets()
+        self.start()
+        lot = self.A.current_lot(self.session, self.season)
+        self.buy(self.mumbai, lot, price=2_000)      # Mumbai: 10000 → 8000
+
+        other = get_session()
+        try:
+            season = other.get(type(self.season), self.season.id)
+            # This session still believes Mumbai has 8000 …
+            mumbai = [f for f in self.A.franchises(other, season.id)
+                      if f.name == "Mumbai"][0]
+            self.assertEqual(8_000, mumbai.purse_remaining_lakh)
+            # … and meanwhile another ₹10 Cr leaves the purse.
+            self.A.correct_purse(self.session, self.season, self.mumbai,
+                                 -1_000, note="a sale lands mid-save")
+            self.session.commit()
+
+            self.A.set_opening_purse(other, season, 12_000)
+            other.commit()
+        finally:
+            other.close()
+
+        self.session.expire_all()
+        # 12000 total, 4000 spent (2000 + 1000 + … in lakh) — the debit that
+        # landed mid-save survives rather than being written over.
+        self.assertEqual(12_000, self.mumbai.purse_total_lakh)
+        self.assertEqual(12_000 - 3_000, self.mumbai.purse_remaining_lakh)
+        self.assert_ledger_agrees("after a concurrent debit and purse change")
+
     def test_a_new_franchise_still_opens_at_the_season_purse(self):
         self.A.set_opening_purse(self.session, self.season, 12_000)
         late = self.A.create_franchise(self.session, self.season, "Kolkata",
