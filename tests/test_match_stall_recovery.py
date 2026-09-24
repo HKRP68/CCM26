@@ -283,7 +283,11 @@ class HeartbeatCiplRecoveryTests(unittest.TestCase):
     def _recover(self, ctx, armed, resumed=True):
         calls = {"resume": 0}
 
-        async def _resume(c, mid):
+        async def _resume(c, mid, **kwargs):
+            # The heartbeat must only ever take over a match that is really
+            # stalled, re-checked under the lock.
+            self.assertTrue(kwargs.get("only_if_stalled"))
+            self.assertIsNotNone(kwargs.get("lock_timeout"))
             calls["resume"] += 1
             return resumed
 

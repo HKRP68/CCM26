@@ -523,6 +523,191 @@ def update_state_cas(ctx, mid, mutator, max_retries=5):
     return None
 
 
+# ════════════════════════════════════════════════════════════════════
+# Guarded writes — a saved snapshot is never replaced by an older one
+# ════════════════════════════════════════════════════════════════════
+#
+# save_state writes whatever snapshot it is handed. For the Challenge League /
+# Lets Play over-by-over flow that is how a played over came back: a copy of the
+# state from BEFORE the over — one whose DB write had silently failed, or one a
+# second bot process had loaded during a deploy overlap — was re-shown by /rcl
+# and written back over the newer row, and the over was simulated a second time
+# with a different result.
+#
+# The guarded path makes that impossible. Every snapshot carries a revision
+# (``_rev``) that each guarded save bumps, and a save is refused — never applied
+# — when the row already holds that revision or a later one. The caller gets the
+# newer row back instead, so it can carry on from it.
+#
+# The DB half (write_state_guarded, read_row_snapshot) touches only the DB and
+# the lock-guarded shared cache, so it is safe to run in a worker thread; the
+# ctx.bot_data half (adopt_row, sync_from_row) must run on the event loop.
+
+REV_KEY = "_rev"   # guarded-save counter, stored in the JSON
+VER_KEY = "_ver"   # row version an in-memory copy was read at / written as
+NA_KEY = "_na"     # the next_action saved together with the snapshot
+
+SAVE_OK = "ok"
+SAVE_STALE = "stale"
+SAVE_FAILED = "failed"
+
+
+def serialize_state(state):
+    """Canonicalize ``state`` in place and return the JSON a write stores."""
+    _normalize_state(state)
+    return _serialize(state)
+
+
+def _rev_of_json(state_json):
+    try:
+        return int((json.loads(state_json) or {}).get(REV_KEY) or 0)
+    except (TypeError, ValueError, AttributeError):
+        return 0
+
+
+def _row_dict(ms):
+    return {"state_json": ms.state_json, "version": ms.version or 0,
+            "next_action": ms.next_action}
+
+
+def write_state_guarded(mid, state_json, rev, next_action=None,
+                        last_prompt_msg_id=None, force=False, max_retries=3):
+    """Persist ``state_json`` (revision ``rev``) unless the row is already newer.
+
+    Returns a dict whose ``status`` is:
+      * SAVE_OK     — written; ``version`` is the row's new version and
+                      ``inserted`` says whether the row was created.
+      * SAVE_STALE  — the row already holds revision ``rev`` or later. Nothing
+                      was written; ``state_json`` / ``version`` / ``next_action``
+                      carry that newer row so the caller can adopt it.
+      * SAVE_FAILED — the DB could not be reached. Nothing is known to be saved.
+
+    ``force`` skips the revision check (terminal writes: a finished match has
+    nothing left that an older copy could overwrite). The write itself is a
+    compare-and-swap on ``version`` (as in update_state_cas), so two processes
+    racing on the same row can't both win. No ctx: safe off the event loop.
+    """
+    for attempt in range(max_retries):
+        session = get_session()
+        try:
+            ms = session.query(MatchState).filter(MatchState.match_id == mid).first()
+            if not ms:
+                effective_na = next_action or A_PICK_DELIVERY
+                ms = MatchState(
+                    match_id=mid, state_json=state_json, next_action=effective_na,
+                    version=1, ball_seq=0, last_modified=datetime.utcnow(),
+                    last_prompt_msg_id=last_prompt_msg_id)
+                session.add(ms)
+                session.commit()
+                _cache_apply_write(mid, state_json=state_json,
+                                   next_action=effective_na, ball_seq=0,
+                                   version=1)
+                return {"status": SAVE_OK, "version": 1, "inserted": True}
+
+            version = ms.version or 0
+            if not force and _rev_of_json(ms.state_json) >= rev:
+                row = _row_dict(ms)
+                _cache_store_row(mid, ms)
+                return {"status": SAVE_STALE, **row}
+
+            values = {
+                MatchState.state_json: state_json,
+                MatchState.version: version + 1,
+                MatchState.last_modified: datetime.utcnow(),
+            }
+            if next_action is not None:
+                values[MatchState.next_action] = next_action
+            if last_prompt_msg_id is not None:
+                values[MatchState.last_prompt_msg_id] = last_prompt_msg_id
+            updated = (session.query(MatchState)
+                       .filter(MatchState.match_id == mid,
+                               MatchState.version == version)
+                       .update(values, synchronize_session=False))
+            if updated:
+                session.commit()
+                _cache_apply_write(mid, state_json=state_json,
+                                   next_action=next_action, version=version + 1)
+                return {"status": SAVE_OK, "version": version + 1,
+                        "inserted": False}
+            # Another writer committed between our read and write — re-read it
+            # and check the revision again.
+            session.rollback()
+            logger.info("write_state_guarded retrying for match %s after a "
+                        "version conflict (%s/%s)", mid, attempt + 1, max_retries)
+        except Exception:
+            session.rollback()
+            logger.exception("write_state_guarded failed for match %s", mid)
+            return {"status": SAVE_FAILED}
+        finally:
+            session.close()
+    return {"status": SAVE_FAILED}
+
+
+def read_row_snapshot(mid):
+    """The saved row for ``mid`` as a plain dict, or None when there is none.
+
+    Served from the shared cache while it is fresh, else from the DB. Raises on
+    a DB error so the caller can tell "no match" from "couldn't look". No ctx:
+    safe off the event loop.
+    """
+    entry = _cache_fresh(mid)
+    if entry:
+        return {"state_json": entry["state_json"], "version": entry["version"],
+                "next_action": entry["next_action"]}
+    session = get_session()
+    try:
+        ms = session.query(MatchState).filter(MatchState.match_id == mid).first()
+        if not ms:
+            _cache_evict(mid)
+            return None
+        _cache_store_row(mid, ms)
+        return _row_dict(ms)
+    finally:
+        session.close()
+
+
+def adopt_row(ctx, mid, row):
+    """Make the saved ``row`` this process's in-memory copy. Event loop only."""
+    state = _deserialize(row["state_json"])
+    state[VER_KEY] = row.get("version") or 0
+    if row.get("next_action"):
+        state[NA_KEY] = row["next_action"]
+    ctx.bot_data[_mem_key(mid)] = state
+    return state
+
+
+def sync_from_row(ctx, mid, row):
+    """Reconcile the in-memory copy with the saved ``row``. Event loop only.
+
+    The in-memory copy used to be trusted forever. It is kept only while it is
+    the same version as the row, or ahead of it (a save in flight, or one that
+    failed and is waiting to be retried); otherwise the row replaces it. A
+    missing row means the match was finished and cleared — the memory copy goes
+    too, so nothing can resume it.
+    """
+    mem = ctx.bot_data.get(_mem_key(mid))
+    if row is None:
+        ctx.bot_data.pop(_mem_key(mid), None)
+        return None
+    if mem is not None and mem.get(VER_KEY) == row.get("version"):
+        return mem
+    if mem is not None:
+        mem_rev = mem.get(REV_KEY) or 0
+        row_rev = _rev_of_json(row["state_json"])
+        if mem_rev > row_rev:
+            return mem
+        if mem_rev == row_rev and VER_KEY not in mem:
+            # Loaded or saved by the plain get_state/save_state (the heartbeat's
+            # hydration, the Lets Play launch), which don't record the version.
+            # Same revision means it is this row — keep the object callers
+            # already hold and just record where it stands.
+            mem[VER_KEY] = row.get("version") or 0
+            if row.get("next_action"):
+                mem[NA_KEY] = row["next_action"]
+            return mem
+    return adopt_row(ctx, mid, row)
+
+
 def set_next_action(ctx, mid, next_action, last_prompt_msg_id=None):
     """Lightweight: update only the next_action pointer (and optionally msg id).
     Use when the state dict hasn't changed but the pointer has."""

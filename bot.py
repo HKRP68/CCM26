@@ -741,6 +741,17 @@ def _clamped(commands, label, expected=False):
     return commands[:MENU_LIMIT]
 
 
+async def flush_live_matches(application):
+    """On shutdown, save any over-by-over match whose latest state is only in
+    memory (its DB write failed). A deploy's SIGTERM would otherwise take that
+    over with the process, and the next boot would play it again."""
+    try:
+        from handlers.cipl_play import flush_unsaved_matches
+        await flush_unsaved_matches(application)
+    except Exception:
+        logger.exception("Shutdown flush of live matches failed")
+
+
 async def register_bot_menu(application):
     """Publish every registered command, split across Telegram command scopes.
 
@@ -1323,6 +1334,7 @@ def main():
         app = (ApplicationBuilder()
                .token(BOT_TOKEN)
                .post_init(register_bot_menu)
+               .post_shutdown(flush_live_matches)
                .concurrent_updates(concurrent_updates)
                .connection_pool_size(connection_pool_size)
                .pool_timeout(pool_timeout)
