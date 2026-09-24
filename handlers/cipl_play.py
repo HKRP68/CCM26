@@ -48,6 +48,7 @@ from services.match_state_store import (
     SAVE_OK,
     SAVE_STALE,
     SAVE_FAILED,
+    SAVE_GONE,
     A_PICK_CIPL_BOWLER,
     A_PICK_BOWL_APPROACH,
     A_PICK_BAT_APPROACH,
@@ -289,6 +290,19 @@ class StaleMatchState(Exception):
         self.mid = mid
 
 
+class MatchCleared(StaleMatchState):
+    """The match's saved row is gone — it was finished or cleared by an admin.
+
+    Raised by _ss instead of re-creating the row. A StaleMatchState, so every
+    flow that stops quietly on a newer snapshot stops on this too; unlike a
+    newer snapshot there is nothing to resume, so no recovery is scheduled.
+    """
+
+    def __init__(self, mid):
+        Exception.__init__(self, f"match {mid} was cleared")
+        self.mid = mid
+
+
 # A save that fails is retried once or twice in place (a dropped pooled
 # connection usually succeeds on the next one), then handed to a background
 # flush that keeps trying — see _schedule_cipl_flush.
@@ -380,6 +394,10 @@ async def _persist(ctx, mid, s, next_action=None, last_prompt_msg_id=None,
                        "a newer one — continuing from the saved snapshot", mid)
         ctx.bot_data.pop(_dirty_key(mid), None)
         adopt_row(ctx, mid, result)
+    elif status == SAVE_GONE:
+        logger.info("cipl: match %s was cleared — not saving it back", mid)
+        ctx.bot_data.pop(_mem_key(mid), None)
+        ctx.bot_data.pop(_dirty_key(mid), None)
     else:
         logger.error("cipl: match %s could not be saved — keeping it in memory "
                      "and retrying in the background", mid)
@@ -396,6 +414,8 @@ async def _ss(ctx, mid, s, next_action=None, last_prompt_msg_id=None,
     """
     status = await _persist(ctx, mid, s, next_action=next_action,
                             last_prompt_msg_id=last_prompt_msg_id, force=force)
+    if status == SAVE_GONE:
+        raise MatchCleared(mid)
     if status == SAVE_STALE:
         _schedule_cipl_recovery(ctx, mid, force=True)
         raise StaleMatchState(mid)
@@ -406,8 +426,9 @@ async def _ss(ctx, mid, s, next_action=None, last_prompt_msg_id=None,
 async def _flush_dirty_locked(ctx, mid):
     """Write an unsaved in-memory copy back to the DB. Caller holds the lock.
 
-    Returns True once memory and DB agree (nothing to flush, saved, or a newer
-    snapshot turned out to be saved already — memory now holds that one).
+    Returns True once memory and DB agree (nothing to flush, saved, a newer
+    snapshot turned out to be saved already — memory now holds that one — or
+    the match was cleared meanwhile and both copies are gone).
     """
     if not _is_dirty(ctx, mid):
         return True
@@ -993,11 +1014,12 @@ async def _recover_from_error(context, mid, where):
     saved, so the resume re-reads the pointer and re-sends whatever is actually
     outstanding.
     """
-    if isinstance(sys.exc_info()[1], StaleMatchState):
-        # Not a failure: a newer snapshot was already saved, so this step's copy
-        # was dropped and _ss scheduled a resume from the newer one.
-        logger.info("cipl: %s stopped for match %s — a newer snapshot is "
-                    "saved; resuming from it", where, mid)
+    exc = sys.exc_info()[1]
+    if isinstance(exc, StaleMatchState):
+        # Not a failure: a newer snapshot was already saved (this step's copy
+        # was dropped and _ss scheduled a resume from the newer one), or the
+        # match was cleared (MatchCleared — nothing left to resume).
+        logger.info("cipl: %s stopped for match %s — %s", where, mid, exc)
         return
     logger.exception("cipl: %s failed for match %s", where, mid)
     try:

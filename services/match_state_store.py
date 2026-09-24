@@ -550,6 +550,7 @@ NA_KEY = "_na"     # the next_action saved together with the snapshot
 SAVE_OK = "ok"
 SAVE_STALE = "stale"
 SAVE_FAILED = "failed"
+SAVE_GONE = "gone"
 
 
 def serialize_state(state):
@@ -581,9 +582,13 @@ def write_state_guarded(mid, state_json, rev, next_action=None,
                       was written; ``state_json`` / ``version`` / ``next_action``
                       carry that newer row so the caller can adopt it.
       * SAVE_FAILED — the DB could not be reached. Nothing is known to be saved.
+      * SAVE_GONE   — there is no row: the match was finished or cleared (an
+                      admin's /removematch, /clearmatches or the web panel).
+                      Nothing was written.
 
     ``force`` skips the revision check (terminal writes: a finished match has
-    nothing left that an older copy could overwrite). The write itself is a
+    nothing left that an older copy could overwrite) and is the only way to
+    create the row (a new match's first save). The write itself is a
     compare-and-swap on ``version`` (as in update_state_cas), so two processes
     racing on the same row can't both win. No ctx: safe off the event loop.
     """
@@ -592,6 +597,14 @@ def write_state_guarded(mid, state_json, rev, next_action=None,
         try:
             ms = session.query(MatchState).filter(MatchState.match_id == mid).first()
             if not ms:
+                if not force:
+                    # Clearing a match deletes its row, and that can happen
+                    # outside the match lock — a step still in flight, the
+                    # background flush or the shutdown flush would otherwise
+                    # insert it again, and the heartbeat would resume a match
+                    # an admin had removed.
+                    _cache_evict(mid)
+                    return {"status": SAVE_GONE}
                 effective_na = next_action or A_PICK_DELIVERY
                 ms = MatchState(
                     match_id=mid, state_json=state_json, next_action=effective_na,

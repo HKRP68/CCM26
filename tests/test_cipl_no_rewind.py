@@ -381,6 +381,54 @@ class AmbiguousCommitTests(_NoRewindCase):
         self.assertEqual(self.saved()[0]["total_runs"], 55)
 
 
+class ClearedMatchTests(_NoRewindCase):
+    """A match an admin removed (its row deleted, outside the match lock) is
+    never re-created by a save that was still in flight — otherwise the startup
+    sweep and heartbeat would resume it and prompt its players again."""
+
+    def test_an_in_flight_save_after_a_clear_does_not_recreate_the_row(self):
+        ctx = _Ctx()
+        state = self.seed(ctx)
+        # /removematch or /clearmatches — cleanup_state deletes the row (and,
+        # in this process, the memory copy), but the flow still holds `state`.
+        store.cleanup_state(ctx, MID)
+        _play_over6(state)
+        with mock.patch.object(cp, "_schedule_cipl_recovery") as recover:
+            with self.assertRaises(cp.MatchCleared):
+                asyncio.run(cp._ss(ctx, MID, state,
+                                   next_action=A_PICK_CIPL_BOWLER))
+        recover.assert_not_called()                  # nothing to resume
+        self.assertNotIn(MID, self.db.rows)
+        self.assertNotIn(store._mem_key(MID), ctx.bot_data)
+        self.assertFalse(cp._is_dirty(ctx, MID))
+
+    def test_the_web_panel_clear_is_not_undone_by_the_flush(self):
+        """The admin web panel clears with a fresh ctx, so the bot's own memory
+        copy and its unsaved flag survive the clear."""
+        bot = _Ctx()
+        state = self.seed(bot)
+        self.db.fail_commits = 1
+        _play_over6(state)
+        with mock.patch.object(cp, "CIPL_SAVE_RETRY_DELAYS", ()), \
+                mock.patch.object(cp, "_schedule_cipl_flush"):
+            asyncio.run(cp._ss(bot, MID, state, next_action=A_PICK_CIPL_BOWLER))
+        self.assertTrue(cp._is_dirty(bot, MID))
+        store.cleanup_state(_Ctx(), MID)             # admin.py: fresh_ctx()
+        asyncio.run(cp.flush_unsaved_matches(bot))   # or the background flush
+        self.assertNotIn(MID, self.db.rows)
+        self.assertFalse(cp._is_dirty(bot, MID))
+        self.assertNotIn(store._mem_key(MID), bot.bot_data)
+        ok, shown = self.resume(bot)
+        self.assertFalse(ok)
+        self.assertEqual(shown, [])
+
+    def test_a_forced_save_still_creates_a_new_match(self):
+        ctx = _Ctx()
+        self.seed(ctx)                               # begin_cipl_match's save
+        self.assertIn(MID, self.db.rows)
+        self.assertEqual(self.saved()[1], A_PICK_BAT_APPROACH)
+
+
 class TerminalWriteTests(_NoRewindCase):
     def test_force_writes_even_over_a_newer_row(self):
         _, b = _Ctx(), _Ctx()
