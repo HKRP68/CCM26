@@ -1522,8 +1522,14 @@ async def ainfo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def asets_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """<code>/asets</code> — every set, in running order, and where it stands."""
-    await _view(update, context, lambda s, season: AR.sets_view(s, season))
+    """<code>/asets [page]</code> — every set, in running order, with its players.
+
+    Each set on the page opens with a tap for its first few, and a button per set
+    shows the whole thing. <code>/asets 2</code> starts on the second page.
+    """
+    page = A._as_int(_arg_text(context), 1) or 1
+    await _view(update, context,
+                lambda s, season: AR.sets_view(s, season, page=page))
 
 
 async def anextset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1603,14 +1609,74 @@ async def info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if season is None:
             await query.answer("No auction is running here.", show_alert=True)
             return
-        blocks, html_text = build(session, season)
+        # A view may hand back a keyboard of its own — the Sets card does, so
+        # its pages and its per-set buttons work when reached from /ainfo too.
+        blocks, html_text, *markup = build(session, season)
         await query.answer()
-        await AR.send(context.bot, update.effective_chat.id, blocks, html_text)
+        await AR.send(context.bot, update.effective_chat.id, blocks, html_text,
+                      reply_markup=markup[0] if markup else None)
     except AuctionError as exc:
         await query.answer(str(exc)[:190], show_alert=True)
     except Exception:
         logger.exception("auction info button failed")
         await query.answer("That did not work — try the command instead.",
+                           show_alert=True)
+    finally:
+        session.close()
+
+
+async def sets_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """A 🗂 Sets button: turn a page, or open a set.
+
+    Edits the card in place rather than posting another one — a pool of thirty
+    sets is a lot of paging, and a room that gets a fresh message per press
+    cannot follow the auction it is there for. Read-only, so it answers whoever
+    presses, like the /ainfo buttons it sits beside.
+    """
+    query = update.callback_query
+    if query is None:
+        return
+    raw = (query.data or "")[len(AR.SETS_CB):]
+    if raw == "noop":
+        await query.answer()
+        return
+
+    kind, _, rest = raw.partition("_")
+    parts = rest.split("_")
+    if kind == "p":
+        page, expand, lot_page = A._as_int(parts[0], 1) or 1, None, 1
+    elif kind == "x":
+        expand = A._as_int(parts[0], 0)
+        lot_page = A._as_int(parts[1], 1) if len(parts) > 1 else 1
+        page = 1
+    else:
+        await query.answer("That button is from an older auction.",
+                           show_alert=True)
+        return
+
+    session = get_session()
+    try:
+        season = _season_for(session, update)
+        if season is None:
+            await query.answer("No auction is running here.", show_alert=True)
+            return
+        result = AR.sets_view(session, season, page=page, expand=expand,
+                              lot_page=lot_page)
+        if result is None:
+            # The set finished and the numbers moved under the open card. Saying
+            # so beats opening whichever set now holds that number.
+            await query.answer("The sets have moved — press 🗂 Sets again.",
+                               show_alert=True)
+            return
+        blocks, html_text, keyboard = result
+        await query.answer()
+        await AR.edit(context.bot, query.message.chat_id, query.message.message_id,
+                      blocks, reply_markup=keyboard, html_text=html_text)
+    except AuctionError as exc:
+        await query.answer(str(exc)[:190], show_alert=True)
+    except Exception:
+        logger.exception("auction sets button failed")
+        await query.answer("That did not work — try /asets instead.",
                            show_alert=True)
     finally:
         session.close()
@@ -1640,8 +1706,12 @@ async def apool_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         editions = len(parts) > 2 and parts[2].lower() in ("all", "editions")
         added, skipped, label = A.add_rating_range_to_pool(
             session, season, *band, set_name=name, editions=editions)
-        position = len([e for e in A.list_sets(session, season)
-                        if e["queued"]])
+        # The set's own number, not a count of queued sets: those two agree only
+        # until one set finishes, and then every other surface says something
+        # different from this message.
+        entry = next((e for e in A.list_sets(session, season)
+                      if e["name"] == label), None)
+        position = entry["set_no"] if entry else "?"
         return (f"🗂 <b>{html.escape(label)}</b> — {added} "
                 f"{'player' if added == 1 else 'players'} added"
                 + (f", {skipped} already in the auction" if skipped else "")
@@ -1659,8 +1729,11 @@ async def asetorder_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     def work(session, season):
         if not raw:
-            entries = [e for e in A.list_sets(session, season) if e["queued"]]
-            names = ", ".join(e["name"] for e in entries) or "none"
+            entries = A.queued_sets(session, season)
+            # Numbered, so the order named here and the Set No on the website
+            # and in /asets are plainly the same thing.
+            names = ", ".join(f"#{e['set_no']} {e['name']}"
+                              for e in entries) or "none"
             raise AuctionError(f"Usage: /asetorder <set>, <set>, … — queued "
                                f"sets now: {names}")
         labels = A.set_order(session, season, raw.split(","),

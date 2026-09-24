@@ -595,8 +595,11 @@
     </p>
   </div>
 
+  <!-- ── Sets ──────────────────────────────────────────────────── -->
+  {% include "_auction_sets_card.html" %}
+
   <!-- ── Pool builder ──────────────────────────────────────────── -->
-  <div class="au-card">
+  <div class="au-card" id="pool">
     <h3 style="margin-top:0;">Auction pool
       <span class="pill">{{ counts.get('total', 0) }} lots</span>
       <span class="pill">{{ counts.get('queued', 0) }} waiting</span>
@@ -612,7 +615,11 @@
       simply be re-applied.
     </p>
 
-    <form method="GET" class="au-grid">
+    {# The fragment brings the page back to this card. A GET submit only rewrites
+       the query component, so it survives — without it the browser lands at the
+       top of a very long page and Preview reads as a dead button. #}
+    <form method="GET" class="au-grid"
+          action="{{ url_for('admin_auction_detail', season_id=season.id) }}#pool">
       <input type="hidden" name="preview" value="1">
       <div><label>Name</label><input type="text" name="q" value="{{ filters.q }}"></div>
       <div><label>Min rating</label><input type="number" name="rating_min" min="0" max="100" value="{{ filters.rating_min }}"></div>
@@ -645,13 +652,32 @@
       <div><button class="btn btn-primary" type="submit">Preview</button></div>
     </form>
 
+    {# Two guards, not one. ``previewed`` is "Preview was pressed" and ``preview``
+       is "it found somebody" — hanging the whole block off the row list, as this
+       did, meant a filter matching nobody rendered nothing at all, with no count
+       and no message, which is indistinguishable from a broken button. Every
+       box narrows, so filling them all in is the easy way to match nobody. #}
+    {% if previewed and not preview %}
+    <p class="au-note" style="margin-top:1rem;">
+      <b>No catalogue card matches that filter.</b> Every box narrows the search,
+      so filling them all in usually lands on nobody — clear one and press
+      Preview again. Career cards and deactivated cards are never offered.
+    </p>
+    {% endif %}
+
     {% if preview %}
+    {# No ``action`` on this form on purpose: it POSTs to the document's own URL,
+       query string included, and ``_auction_pool_filters()`` re-reads that to
+       rebuild the filter for "Add all N matching". Giving it one would silently
+       add a different set of players than the one on screen. #}
     <form method="POST" style="margin-top:1rem;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="back_query" value="?{{ request.query_string.decode('utf-8') }}">
+      <input type="hidden" name="back_query" value="?{{ request.query_string.decode('utf-8') }}#pool">
       <div style="display:flex;gap:.5rem;align-items:end;flex-wrap:wrap;margin-bottom:.6rem;">
         <div><label class="dim" style="font-size:.78rem;">Set name (optional)</label>
-          <input type="text" name="set_name" placeholder="Marquee"></div>
+          <input type="text" name="set_name" placeholder="Marquee" maxlength="40"></div>
+        <div><label class="dim" style="font-size:.78rem;">Set No</label>
+          <input type="number" name="set_no" min="1" placeholder="last" style="width:5rem;"></div>
         <button class="btn btn-primary" type="submit" name="action" value="add_pool">Add ticked</button>
         <button class="btn btn-ghost" type="submit" name="action" value="add_pool_all">Add all {{ preview_count }} matching</button>
         <span class="dim" style="font-size:.82rem;">{{ preview_count }} match; showing the first {{ preview|length }}.</span>
@@ -676,10 +702,14 @@
     <h4 style="margin:1rem 0 .4rem;">In the pool</h4>
     <div class="au-scroll">
       <table class="au-table">
-        <tr><th>#</th><th>Player</th><th>OVR</th><th>Role</th><th>Base</th><th>Status</th><th>Sold to</th><th></th></tr>
+        <tr><th>#</th><th>Set</th><th>Player</th><th>OVR</th><th>Role</th><th>Base</th><th>Status</th><th>Sold to</th><th></th></tr>
         {% for lot in lots %}
+        {% set set_label = (lot.set_name or '').strip() or 'Main pool' %}
         <tr>
           <td>{{ lot.lot_no }}</td>
+          {# Which set a lot is in, and where that set runs. A lot row carries
+             only the name, so the number comes from the map the route built. #}
+          <td class="dim">{% if set_numbers.get(set_label) %}<span class="mono">{{ set_numbers[set_label] }}</span> {% endif %}{{ set_label }}</td>
           <td>{{ lot.name }}{% if lot.is_overseas %} ✈️{% endif %}</td>
           <td>{{ lot.rating }}</td><td>{{ lot.category }}</td>
           <td>{{ money(lot.base_price_lakh) }}</td>

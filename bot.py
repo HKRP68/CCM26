@@ -2193,6 +2193,7 @@ def main():
             apickskip_handler, apickundo_handler,
             aretainforce_handler, retention_offer_callback, aoffers_handler,
             aretcancel_handler, ainfo_handler, info_callback, asets_handler,
+            sets_callback,
             anextset_handler, anextplayer_handler, asquad_handler,
             asoldlist_handler, aunsoldlist_handler, apool_handler,
             asetorder_handler, aaccelmode_handler, acall_handler,
@@ -2216,6 +2217,8 @@ def main():
         app.add_handler(CommandHandler(["ainfo", "amenu"], ainfo_handler))
         app.add_handler(CallbackQueryHandler(info_callback, pattern=r"^au_info_"))
         app.add_handler(CommandHandler("asets", asets_handler))
+        # The Sets card's own buttons: its pages, and one per set to open it.
+        app.add_handler(CallbackQueryHandler(sets_callback, pattern=r"^au_sets_"))
         app.add_handler(CommandHandler("anextset", anextset_handler))
         app.add_handler(CommandHandler(["anextplayer", "anextplayers"],
                                        anextplayer_handler))

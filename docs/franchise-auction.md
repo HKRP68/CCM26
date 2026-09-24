@@ -459,10 +459,76 @@ index mid-flush, and `next_queued` never has to learn what a set is.
 ```
 
 `list_sets` reads every set's state back — ✅ done, 🔨 live, ⏭ next, ⏳ queued —
-for `/asets`, `/ainfo`, the console's 🗂 Sets card (with a **Bring next** button
-per set) and the lot card, which names the set its player came from. `/apool`
-takes base cards only unless told `| all`: two editions of one cricketer in a
-pool is a squad with the same man twice.
+for `/asets`, `/ainfo`, the 🗂 Sets card and the lot card, which names the set its
+player came from. `/apool` takes base cards only unless told `| all`: two editions
+of one cricketer in a pool is a squad with the same man twice.
+
+### Set No
+
+A set's **Set No** is the order it runs in: 1 goes to the block first, then 2.
+It is `list_sets`'s 1-based position and **nothing stores it**. The queue's order
+already lives in `lot_no`, so a column would be a second copy of the same fact,
+free to drift from it — and read back this way two sets can never hold one
+number, a reorder renumbers for free, and a set the website never created (the
+⚡ Accelerated relist, a 🔁 Released set, `/apool`) is numbered with nothing to
+backfill. Anything that wants the number asks `list_sets`; nothing counts sets
+for itself.
+
+```text
+set_positions(session, season, [(name, no), …])   the numbers typed on a page
+move_set(session, season, name, ±1)               one place earlier or later
+```
+
+Both refuse before moving anything: a number given twice, or one belonging to a
+set that has already run, is named back with the set that holds it. The typed
+number is a **rank**, so 1, 5, 9 orders the same as 1, 2, 3 — they are sorted and
+the queue renumbered, then `list_sets` reads the real number back. Both resolve a
+name **exactly** (`_set_exact`, not `_match_set`): a page echoes back names it
+rendered, and a set that finished while it sat open must be refused rather than
+matched on a substring to a different set.
+
+`_requeue` numbers above the season's high-water mark so no two rows meet on the
+`(season_id, lot_no)` unique index mid-flush — which costs a range per reorder,
+and `lot_no` is on screen as the lot's `#`. So when **no lot has left the queue
+yet** it compacts back to `1..N` in a second pass. The test is per-lot, not
+`season.status`: retention sells lots while the season is still in setup.
+
+Every event is announced to the room (`auction_scheduler.SILENT_KINDS` is empty,
+and `start` does not skip what queued up before it), so the reorder calls take
+`quiet=`. The **setup page is quiet** — it is where an admin nudges the order half
+a dozen times, and those nudges would otherwise save themselves up and land in
+the group the moment the auction starts. The **live console is not**: the room is
+watching, and the order the remaining sets run in is news.
+
+One wart, left alone deliberately: a set whose lots are *all* sold before the
+auction starts (retention, expansion picks) has `queued == 0`, so `order()` files
+it with the done sets and it is numbered ahead of the queue — a "Retained" set
+reading as Set 1 before a ball is bowled.
+
+### The two surfaces
+
+`templates/_auction_sets_card.html` is one card rendered by **both** the setup
+page and the live console, so a fix to either is a fix to both. It is one form
+around the whole table — a `<form>` is not valid inside `<table>`/`<tr>`, and a
+per-row form nested in an outer one is dropped by the browser, which would make ↑
+silently submit "Save order" — and its row buttons name themselves and carry
+their row's index as the value, the only way one click can say both *what* and
+*which set*. Done and live rows render their number as plain text with no hidden
+input, so they cannot be submitted at all. On the console it sits **outside
+`#au-panel`**: that fragment is re-fetched every couple of seconds and would wipe
+a half-typed Set No.
+
+`/asets` is paged. A pool is routinely dozens of sets of dozens of players, so
+the card never tries to print all of it: every set on the page is a `details`
+collapsible (an expandable blockquote in the HTML twin) holding its first few
+players, a button per set opens that set in full — itself paged — by **editing**
+the message rather than posting another one, and the page buttons walk the sets.
+Sets are addressed in callback data by `set_no`, never by name: names carry emoji,
+spaces and commas, Telegram caps callback data at 64 bytes, and `list_sets` maps
+the number back. A number that no longer exists is refused, because opening
+whichever set now holds it is the one failure nobody can notice. `AR.edit` takes
+`html_text` for this card — without it a chat where rich text is off gets no edit
+at all, which is a button that does nothing.
 
 ---
 

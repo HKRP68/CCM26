@@ -1813,7 +1813,10 @@ def add_players_to_pool(session, season, players, *, set_name=None):
             bowl_hand=player.bowl_hand or "Right",
             bowl_style=player.bowl_style or "Medium Pacer",
             bat_rating=player.bat_rating or 0, bowl_rating=player.bowl_rating or 0,
-            set_name=(set_name or None), lot_no=lot_no,
+            # Clipped here rather than by each caller: the column is 40 and the
+            # name is echoed back into pages and buttons that then match it
+            # exactly, so it has to be cut once, on the way in, and never again.
+            set_name=((set_name or "").strip()[:40] or None), lot_no=lot_no,
             base_price_lakh=base_price_for(season, player.rating),
             status=LOT_QUEUED))
         lot_no += 1
@@ -3533,8 +3536,9 @@ def add_rating_range_to_pool(session, season, low, high, *, set_name=None,
 def list_sets(session, season):
     """Every set in the order the room will meet it, with its counts.
 
-    Each entry is a dict: ``name``, ``queued``, ``sold``, ``unsold``,
-    ``withdrawn``, ``total`` and ``state`` — ``done`` (nothing left in it),
+    Each entry is a dict: ``name``, ``set_no`` (its place in this list, which is
+    the number everything else calls its "Set No"), ``queued``, ``sold``,
+    ``unsold``, ``withdrawn``, ``total`` and ``state`` — ``done`` (nothing left in it),
     ``live`` (the lot on the block is from it), ``next`` (the first set still
     waiting after the live one) or ``queued``. Sets that are finished come
     first, in the order they ran; the live one; then the queue, in queue order.
@@ -3570,7 +3574,15 @@ def list_sets(session, season):
 
     ordered_sets = sorted(sets.values(), key=order)
     next_marked = False
-    for entry in ordered_sets:
+    for index, entry in enumerate(ordered_sets):
+        # ``set_no`` is this list's 1-based position — the number the room and
+        # the website both call "Set 3". It is deliberately NOT stored: the
+        # queue's order already lives in ``lot_no``, so a column would be a
+        # second copy of the same fact, free to drift from it. Read back this
+        # way two sets can never hold one number, and a reorder renumbers for
+        # free. Anything that wants the number must ask here rather than count
+        # sets itself.
+        entry["set_no"] = index + 1
         if entry["name"] == live_name:
             entry["state"] = "live"
         elif entry["queued"] and not next_marked:
@@ -3581,6 +3593,11 @@ def list_sets(session, season):
         else:
             entry["state"] = "done"
     return ordered_sets
+
+
+def queued_sets(session, season):
+    """The sets still waiting — the ones a reorder can actually move."""
+    return [entry for entry in list_sets(session, season) if entry["queued"]]
 
 
 def next_set(session, season):
@@ -3650,11 +3667,53 @@ def _match_set(session, season, text):
     return name, [lot for lot in queued if set_label(lot) == name]
 
 
+def _set_exact(session, season, name):
+    """``(label, queued lots)`` for a set named *exactly*, case aside.
+
+    What a page or a button submits is a name it has just been shown, so it
+    needs none of ``_match_set``'s prefix and substring fallbacks — and must not
+    have them. A set that finished while the page was open would otherwise match
+    a *different* set on a substring and get reordered instead of refused, which
+    is the one failure an admin has no way to notice.
+    """
+    queued = queued_lots(session, season)
+    wanted = (name or "").strip().lower()
+    if not wanted:
+        raise AuctionError("Name the set to move.")
+    picked = [lot for lot in queued if set_label(lot).lower() == wanted]
+    if not picked:
+        raise AuctionError(f"No set called “{name}” has anyone waiting — "
+                           f"it may have finished. Reload and try again.")
+    return set_label(picked[0]), picked
+
+
+def _require_reorderable(season):
+    """Reordering the queue is fine while live; it is not once it is over.
+
+    Deliberately looser than ``add_players_to_pool``'s setup-or-paused guard:
+    that one exists because adding lots restamps ``min_base_price_lakh``, which
+    ``max_bid_now``'s reachability rule needs held still once bidding starts.
+    Reordering touches no price, and reordering a live queue is the whole point
+    of the console's Sets card.
+    """
+    if season.status in (STATUS_COMPLETED, STATUS_CANCELLED):
+        raise AuctionError(f"This auction is {season.status}.")
+
+
 def _requeue(session, season, front):
     """Renumber the queue so ``front`` comes next, everything else after it.
 
     New numbers are all above every number the season has ever used, so no
     two rows can meet on the ``(season_id, lot_no)`` unique index mid-flush.
+
+    That high-water-mark trick costs a number range per reorder, and the numbers
+    are on screen: three reorders while building a twenty-lot pool would leave
+    it numbered 61-80 on the setup page, the console and ``/anextset``. So when
+    **nothing in the season has left the queue yet** the numbers are compacted
+    back to ``1..N`` in a second pass. The test is per-lot rather than
+    ``season.status`` on purpose — retention sells lots while the season is
+    still in setup, and renumbering around a sold lot is what the first pass
+    exists to avoid.
     """
     queued = queued_lots(session, season)
     chosen = {lot.id for lot in front}
@@ -3663,52 +3722,151 @@ def _requeue(session, season, front):
     for offset, lot in enumerate(order):
         lot.lot_no = base + offset
     session.flush()
+
+    untouched = (session.query(func.count(AuctionLot.id))
+                 .filter(AuctionLot.season_id == season.id,
+                         AuctionLot.status != LOT_QUEUED).scalar())
+    if not untouched:
+        # Safe in one pass: everything sits above the old high-water mark, so
+        # 1..N is unoccupied and no two rows can collide on the way down.
+        for offset, lot in enumerate(order):
+            lot.lot_no = offset + 1
+        session.flush()
     return order
 
 
-def bring_forward(session, season, text, *, by_tg_id=None):
+def bring_forward(session, season, text, *, by_tg_id=None, quiet=False):
     """Make a set — or every queued player in a rating range — come next.
 
     Returns ``(label, lots moved)``. The lot on the block is untouched: this
     reorders what is waiting, so the chosen set opens as soon as the current
     lot resolves.
+
+    ``quiet`` skips the event, and therefore the announcement — see
+    :func:`set_order` for why the setup page needs that and the console does not.
     """
-    if season.status in (STATUS_COMPLETED, STATUS_CANCELLED):
-        raise AuctionError(f"This auction is {season.status}.")
+    _require_reorderable(season)
     label, picked = _match_set(session, season, text)
     _requeue(session, season, picked)
-    log_event(session, season, "set_queued",
-              f"⏭ Next up: the <b>{_e(label)}</b> set — {len(picked)} "
-              f"{'player' if len(picked) == 1 else 'players'}.",
-              by_tg_id=by_tg_id, by_admin=True,
-              detail={"set": label, "count": len(picked)})
+    if not quiet:
+        log_event(session, season, "set_queued",
+                  f"⏭ Next up: the <b>{_e(label)}</b> set — {len(picked)} "
+                  f"{'player' if len(picked) == 1 else 'players'}.",
+                  by_tg_id=by_tg_id, by_admin=True,
+                  detail={"set": label, "count": len(picked)})
     return label, picked
 
 
-def set_order(session, season, names, *, by_tg_id=None):
+def set_order(session, season, names, *, by_tg_id=None, exact=False,
+              quiet=False):
     """Order the whole queue by set: ``names`` first, in that order.
 
     Any queued set not named keeps its place behind them. Returns the labels
     in the order they will run.
+
+    ``exact`` matches each name exactly instead of through ``_match_set``'s
+    range / prefix / substring ladder. A caller echoing back names it rendered
+    itself — the website's Sets card, its ↑/↓ buttons — wants that; somebody
+    typing ``/asetorder`` does not.
+
+    ``quiet`` skips the event. Every event is announced to the auction's group
+    (``auction_scheduler.SILENT_KINDS`` is empty and ``start`` does not skip
+    what queued up before it), so a page where an admin nudges the order half a
+    dozen times while *setting the season up* would post half a dozen messages —
+    or, before the auction has started, save them all up and dump them into the
+    room the moment it does. The setup page is therefore quiet and the live
+    console, where the room is watching and a reorder is news, is not.
     """
-    if season.status in (STATUS_COMPLETED, STATUS_CANCELLED):
-        raise AuctionError(f"This auction is {season.status}.")
+    _require_reorderable(season)
     names = [n.strip() for n in names or [] if n and n.strip()]
     if not names:
         raise AuctionError("Name the sets in the order they should run, "
                            "separated by commas.")
+    resolve = _set_exact if exact else _match_set
     front, labels, seen = [], [], set()
     for text in names:
-        label, picked = _match_set(session, season, text)
+        label, picked = resolve(session, season, text)
         fresh = [lot for lot in picked if lot.id not in seen]
         seen.update(lot.id for lot in fresh)
         front.extend(fresh)
         labels.append(label)
     _requeue(session, season, front)
-    log_event(session, season, "set_order",
-              "🗂 Set order: " + " → ".join(f"<b>{_e(l)}</b>" for l in labels),
-              by_tg_id=by_tg_id, by_admin=True, detail={"sets": labels})
+    if not quiet:
+        log_event(session, season, "set_order",
+                  "🗂 Set order: " + " → ".join(f"<b>{_e(l)}</b>" for l in labels),
+                  by_tg_id=by_tg_id, by_admin=True, detail={"sets": labels})
     return labels
+
+
+def set_positions(session, season, pairs, *, by_tg_id=None, quiet=False):
+    """``[(set name, Set No)]`` typed on a page → the queue in that order.
+
+    Set No *is* the running order, so two sets cannot hold one number: a repeat
+    is refused naming both, and so is a number belonging to a set that has
+    already run — that set's players are gone from the queue and nothing can be
+    reordered into their place. Every check runs **before** a single lot moves,
+    so a refusal leaves the queue exactly as it was.
+
+    The typed number is a *rank*, not a stored value: the sets are sorted by it
+    and the queue renumbered, then ``list_sets`` reads the real Set No back from
+    the new order. Typing 2, 40, 41 therefore means the same as typing 1, 2, 3.
+    """
+    _require_reorderable(season)
+    entries = list_sets(session, season)
+    ran = {entry["set_no"]: entry["name"] for entry in entries
+           if entry["state"] in ("done", "live")}
+    queued = {entry["name"].lower(): entry["name"]
+              for entry in entries if entry["queued"]}
+
+    wanted = []
+    taken = {}
+    for raw_name, raw_no in pairs or []:
+        name = (raw_name or "").strip()
+        if not name:
+            continue
+        actual = queued.get(name.lower())
+        if actual is None:
+            raise AuctionError(f"“{name}” has nobody waiting — it may have "
+                               f"finished. Reload and try again.")
+        number = _as_int(raw_no, 0)
+        if number < 1:
+            raise AuctionError(f"Give {actual} a Set No of 1 or more.")
+        if number in taken:
+            raise AuctionError(f"Set No {number} is already {taken[number]}'s — "
+                               f"give {actual} a different number.")
+        if number in ran:
+            raise AuctionError(f"Set No {number} is {ran[number]}, which has "
+                               f"already run — give {actual} a number after it.")
+        taken[number] = actual
+        wanted.append((number, actual))
+
+    if not wanted:
+        raise AuctionError("Nothing to reorder — give at least one set a Set No.")
+    wanted.sort()
+    return set_order(session, season, [name for _, name in wanted],
+                     by_tg_id=by_tg_id, exact=True, quiet=quiet)
+
+
+def move_set(session, season, name, delta, *, by_tg_id=None, quiet=False):
+    """Move a queued set one place earlier (``-1``) or later (``+1``).
+
+    Returns the labels in their new order, or None when the set is already at
+    that end of the queue — a no-op rather than an error, because a ↑ on the
+    first set is a misclick, not something to shout about.
+    """
+    _require_reorderable(season)
+    order = [entry["name"] for entry in queued_sets(session, season)]
+    wanted = (name or "").strip().lower()
+    index = next((i for i, n in enumerate(order) if n.lower() == wanted), None)
+    if index is None:
+        raise AuctionError(f"No set called “{name}” has anyone waiting — "
+                           f"it may have finished. Reload and try again.")
+    target = index + (1 if _as_int(delta, 0) > 0 else -1)
+    if not 0 <= target < len(order):
+        return None
+    order[index], order[target] = order[target], order[index]
+    return set_order(session, season, order, by_tg_id=by_tg_id, exact=True,
+                     quiet=quiet)
 
 
 def sold_lots(session, season_id):

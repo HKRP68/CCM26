@@ -59,6 +59,11 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # answer whoever presses them — "My Squad" resolves the presser's own
     # franchise — so the card belongs to the whole room.
     "au_info_",
+    # The 🗂 Sets card's pages and its per-set buttons. Read-only like the
+    # /ainfo views, and posted into a room where every franchise wants to look
+    # at the sets — a card only the admin who typed /asets could page is a card
+    # nobody else can read.
+    "au_sets_",
     # A retention offer is posted by the ADMIN who ran /aretain, but it is the
     # franchise that has to answer it. handlers/auction.py lets only that
     # franchise's owner and co-owners accept or decline, on every press.

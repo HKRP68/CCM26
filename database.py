@@ -1021,6 +1021,12 @@ def _migrate_add_columns():
         # career card?" checks never see NULL.
         "UPDATE players SET is_career = FALSE WHERE is_career IS NULL",
         "UPDATE players SET non_tradable = FALSE WHERE non_tradable IS NULL",
+        # ``is_active`` is nullable in the model with a default of True, so a row
+        # inserted around the ORM holds NULL — and ``is_active == True`` does not
+        # match NULL, which quietly hid those cards from every query that filters
+        # on it (the auction's pool builder among them). The readers tolerate
+        # NULL now; this makes the data say what it means as well.
+        "UPDATE players SET is_active = TRUE WHERE is_active IS NULL",
         "UPDATE quests SET career_only = FALSE WHERE career_only IS NULL",
         "UPDATE users SET career_weekly_streak = 0 WHERE career_weekly_streak IS NULL",
         "UPDATE users SET career_weekly_best_streak = 0 "

@@ -77,9 +77,17 @@ def master_player_query(session, filters=None):
     Unknown or unparseable values are **ignored rather than raising**: these
     come from a query string an admin is typing into, and a half-typed rating
     should narrow nothing, not 500 the page.
+
+    ``is_active`` is NULL on rows written before the column was defaulted, and
+    ``column == True`` does not match NULL in SQL — so a plain
+    ``is_active == True`` drops those rows silently, which reads as "the pool
+    builder found nobody" rather than as a missing backfill. The model's default
+    is True and NULL means "nobody ever said otherwise", so match it too, the
+    same way ``not_career`` matches a NULL ``is_career``.
     """
     filters = filters or {}
-    query = not_career(session.query(Player).filter(Player.is_active == True))  # noqa: E712
+    query = not_career(session.query(Player).filter(
+        or_(Player.is_active == True, Player.is_active.is_(None))))  # noqa: E712
 
     text = str(filters.get("q") or "").strip()
     if text:

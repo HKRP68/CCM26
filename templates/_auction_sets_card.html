@@ -1,0 +1,137 @@
+{# ── 🗂 Sets ──────────────────────────────────────────────────────────
+   Shared by the auction's setup page and its live console, so the two cannot
+   drift. One form around the whole table on purpose: a <form> is not valid
+   inside <table>/<tr>, and a per-row form nested inside an outer one is dropped
+   by the browser — the ↑ buttons would silently submit "Save order" instead.
+   The row buttons therefore live in this same form and identify their row by its
+   index into the parallel set_name inputs, so no set name is ever parsed back
+   out of a string.
+
+   It must stay OUTSIDE the console's #au-panel: that fragment is re-fetched
+   every couple of seconds and would wipe a half-typed Set No.
+#}
+<div class="au-card" id="sets">
+  <h3 style="margin-top:0;">🗂 Sets
+    {% if sets %}<span class="pill">{{ sets|length }}</span>{% endif %}
+  </h3>
+  <p class="au-note" style="margin:.2rem 0 .8rem;">
+    <b>Set No is the order sets run in</b> — 1 goes to the block first, then 2,
+    and so on. Two sets can never hold the same number, so retype the numbers and
+    <b>Save order</b>, or nudge one with ↑ / ↓. The lot on the block always
+    finishes first; a set that has already run keeps the number it ran under.
+  </p>
+
+  {% if sets %}
+  <form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="back_query" value="#sets">
+    <input type="hidden" name="sets_card" value="1">
+    <div class="au-scroll">
+      <table class="au-table">
+        <tr><th>Set No</th><th></th><th>Set</th><th class="cell-num">Left</th>
+            <th class="cell-num">Sold</th><th class="cell-num">Unsold</th><th></th></tr>
+        {% for s in sets %}
+        {% set movable = s.queued and season.status not in (STATUS_COMPLETED, STATUS_CANCELLED) %}
+        <tr>
+          <td>
+            {% if movable %}
+            {# Parallel lists: the server zips set_name with set_no, so a row
+               only counts when both are present. Done and live sets render
+               their number as text with no hidden input, which is what makes
+               them impossible to submit. #}
+            <input type="hidden" name="set_name" value="{{ s.name }}">
+            <input type="number" name="set_no" value="{{ s.set_no }}" min="1"
+                   style="width:4.5rem;">
+            {% else %}
+            <span class="mono dim">{{ s.set_no }}</span>
+            {% endif %}
+          </td>
+          <td>{{ {'done': '✅', 'live': '🔨', 'next': '⏭', 'queued': '⏳'}[s.state] }}</td>
+          <td>{% if s.state in ('live', 'next') %}<b>{{ s.name }}</b>{% else %}{{ s.name }}{% endif %}</td>
+          <td class="cell-num">{{ s.queued }}</td>
+          <td class="cell-num">{{ s.sold }}</td>
+          <td class="cell-num">{{ s.unsold }}</td>
+          <td class="au-actions">
+            {% if movable %}
+            {% if not loop.first %}
+            <button class="btn btn-ghost btn-sm" type="submit" name="move_up"
+                    value="{{ loop.index0 }}" title="One place earlier"
+                    formnovalidate>↑</button>
+            {% endif %}
+            {% if not loop.last %}
+            <button class="btn btn-ghost btn-sm" type="submit" name="move_down"
+                    value="{{ loop.index0 }}" title="One place later"
+                    formnovalidate>↓</button>
+            {% endif %}
+            {% if s.state != 'next' %}
+            <button class="btn btn-ghost btn-sm" type="submit" name="bring_next"
+                    value="{{ loop.index0 }}" formnovalidate>⏭ Bring next</button>
+            {% endif %}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+    </div>
+    {# The row buttons name themselves and carry their row's index as the value,
+       which is the only way one click can say both "what" and "which" — a set
+       name is never parsed back out of a string. They send no ``action`` at all,
+       so the server looks for those keys first; this button carries the action
+       for a plain save. #}
+    <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.6rem;">
+      <button class="btn btn-primary" type="submit" name="action"
+              value="set_positions">💾 Save order</button>
+      <span class="dim" style="font-size:.82rem;">
+        Numbers are a rank — 1, 5, 9 orders the same as 1, 2, 3.
+      </span>
+    </div>
+  </form>
+  {% else %}
+  <p class="au-note" style="margin:.2rem 0 .8rem;">
+    <i>The pool is empty.</i> Build a set below, or from the pool builder.
+  </p>
+  {% endif %}
+
+  {# ── A whole rating band as one set — /apool, on the website ── #}
+  <h4 style="margin:1rem 0 .4rem;">New set from a rating band</h4>
+  {# Mirrors ``add_players_to_pool``'s own guard rather than only checking for a
+     live auction, so a finished or cancelled one does not offer a button that
+     can only throw. #}
+  {% if season.status not in (STATUS_SETUP, STATUS_PAUSED) %}
+  <p class="au-note" style="margin:.2rem 0 0;">
+    {% if season.status == STATUS_LIVE %}
+    <b>Pause the auction to add to its pool.</b> The reachability rule holds the
+    pool's cheapest base price still once bidding starts, so a set cannot be
+    added under a live lot. Reordering what is already queued is fine.
+    {% else %}
+    This auction is <b>{{ season.status }}</b>, so its pool can no longer change.
+    {% endif %}
+  </p>
+  {% else %}
+  <form method="POST" class="au-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="add_set_range">
+    <input type="hidden" name="back_query" value="#sets">
+    <input type="hidden" name="sets_card" value="1">
+    <div><label>Rating band</label>
+      <input type="text" name="range" placeholder="85-90" required></div>
+    <div><label>Set name</label>
+      <input type="text" name="set_name" placeholder="Marquee" maxlength="40"></div>
+    <div><label>Set No</label>
+      <input type="number" name="set_no" min="1" placeholder="last"></div>
+    <div>
+      <label style="text-transform:none;letter-spacing:0;">
+        <input type="checkbox" name="editions" value="1"> Include special editions
+      </label>
+    </div>
+    <div><button class="btn btn-primary" type="submit">🗂 Add set</button></div>
+  </form>
+  <p class="au-note" style="margin:.4rem 0 0;">
+    Every active card in the band, best first, as one set — the same as
+    <code>/apool 85-90 | Marquee</code>. Base cards only unless you tick
+    editions, because two editions of one cricketer in a pool is a squad with the
+    same man twice. Leave <b>Set No</b> blank to put the set at the back of the
+    queue.
+  </p>
+  {% endif %}
+</div>
