@@ -616,8 +616,10 @@ raising its own price. An admin bidding from the console is exempt.
 
 **Every auction card has a ❌ Close**, and belongs to whoever asked for it — the
 `/ainfo` menu and the 🗂 Sets card can only be driven by the person who sent the
-command. The pinned board is the exception on both counts: its quick-bid and RTM
-buttons are the room's, and it cannot be closed.
+command, and an admin command's answer closes the same way. The pinned board is
+the exception on both counts: its quick-bid and RTM buttons are the room's, and
+it cannot be closed. Nor are one-line refusals or a pending retention offer
+(answer it, or withdraw it with `/aretcancel`).
 
 **Changing the opening purse on the setup page now moves every franchise** to
 the new purse — what has already been spent stays spent, and a cut that would

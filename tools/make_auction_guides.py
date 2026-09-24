@@ -515,7 +515,8 @@ def user_guide():
         p("None of these are in the slash menu (both menus are full at "
           "Telegram's 100-command ceiling), so they are listed here and behind "
           + C("/ainfo") + "'s buttons."),
-        p(B("Every card is yours, and closes.") + " A card you asked for carries "
+        p(B("Every card is yours, and closes.") + " Admin answers included — "
+          "a card you asked for carries "
           "a ❌ Close button that takes it out of the chat — useful in a group "
           "where the board is the message everyone is trying to read — and only "
           "you can press it. The " + C("/ainfo") + " menu and the Sets card work "
@@ -957,16 +958,31 @@ def admin_guide():
           "because that is you acting for the franchise, announced as such."),
 
         h2("Every card belongs to whoever asked for it"),
-        p("Each card a command posts — yours included — carries a "
-          + B("❌ Close") + " button, and only the person who asked for it can press "
-          "it. The " + C("/ainfo") + " menu and the 🗂 Sets card go further: "
-          "they answer that person alone, because both re-render under whoever "
-          "presses and a second pair of hands on one genuinely fights the "
-          "first. The " + B("pinned board is the exception on both counts") + ": "
-          "its quick-bid and RTM buttons belong to the room, and it has no "
-          "Close, because a board any passer-by could delete is a board the "
-          "auction loses mid-lot. Delete it yourself if you must, from "
-          "Telegram."),
+        p("Each card a command posts carries a " + B("❌ Close") + " button, "
+          "and only the person who asked for it can press it. That includes "
+          + B("your own answers") + ": “A lot now runs for 45s” is one more "
+          "message on top of the board once the room has read it, so every "
+          "admin command closes the same way — the settings and running "
+          "commands, " + C("/anew") + ", " + C("/abind") + ", " + C("/acall")
+          + ", the " + C("/adminhelp") + " card and the auction-admin "
+          "commands."),
+        p("The " + C("/ainfo") + " menu and the 🗂 Sets card go further: they "
+          "answer the person who sent the command alone, because both "
+          "re-render under whoever presses and a second pair of hands on one "
+          "genuinely fights the first."),
+        bullets([
+            B("The pinned board is the exception on both counts") + ": its "
+            "quick-bid and RTM buttons belong to the room, and it has no Close "
+            "— a board any passer-by could delete is a board the auction loses "
+            "mid-lot. Delete it from Telegram if you must.",
+            B("A refusal is not a card.") + " One-line corrections ("
+            "“only auction admins…”) carry no button: one under every "
+            "error is the clutter this exists to reduce.",
+            B("Nor is a pending retention offer.") + " It already carries the "
+            "two answers that resolve it, and " + C("/aretcancel") + " "
+            "withdraws it — closing the card would hide an offer that is "
+            "still open.",
+        ]),
 
         h1("10. Running the room"),
         table([

@@ -899,12 +899,26 @@ same kind of thing:
   when a restart happens), and **every** card a command posts carries a
   ❌ Close button that only its owner can press.
 
-Close is attached in one place — `handlers.auction._view`, the funnel every
-read-only view already goes through — so a view added later cannot quietly ship
-with no way out. It deletes the message, and falls back to editing the card down
-to one line where Telegram refuses a delete (older than 48 hours, or a group
-whose permissions forbid it), because a button that looks dead is worse than a
-card that stays.
+**Admin answers are cards too.** `⏱ A lot now runs for 45s` is one more message
+on top of the board once it has been read, and the admin who typed the command
+is the one who should be able to take it away. So the Close rides on those as
+well — every command through `_with_auction` (which is all thirty-odd of them),
+`/anew`, `/abind`, `/acall`, the `/adminhelp` card and the auction-admin
+commands.
+
+Two things deliberately do **not** get one. A **refusal** ("⛔ Only auction
+admins…") is a one-line correction, not a card, and a button under every error
+in a busy room is the clutter this feature exists to reduce. A **retention
+offer** already carries the two answers that resolve it, and `/aretcancel`
+withdraws it: a Close there would delete the message while the offer stayed
+open in the database, which is a worse state than the card being in the way.
+
+Close is attached in two places — `handlers.auction._view` for every read-only
+view, and `_reply_card` for every answer a command writes itself — so neither a
+view nor an admin command added later can quietly ship with no way out. It
+deletes the message, and falls back to editing the card down to one line where
+Telegram refuses a delete (older than 48 hours, or a group whose permissions
+forbid it), because a button that looks dead is worse than a card that stays.
 
 ## Removing a franchise
 

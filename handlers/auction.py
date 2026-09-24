@@ -81,6 +81,22 @@ async def _reply(update, text, **kwargs):
     return await msg.reply_text(text, **kwargs)
 
 
+async def _reply_card(update, text, **kwargs):
+    """A command's own answer, with a ❌ Close only its author can press.
+
+    Admin answers are cards like any other: an auction group is a room reading
+    a live board, and "⏱ A lot now runs for 45s" is one more message on top of
+    it once it has been read. The button is owner-tagged, so the admin who
+    typed the command is the one who can take the answer away — and a caller
+    that wants a keyboard of its own passes one, which this adds the Close row
+    to rather than replacing.
+    """
+    user = update.effective_user
+    kwargs["reply_markup"] = AR.with_close(kwargs.get("reply_markup"),
+                                           user.id if user else None)
+    return await _reply(update, text, **kwargs)
+
+
 def _arg_text(context):
     return " ".join(context.args or []).strip()
 
@@ -224,7 +240,7 @@ async def _with_auction(update, work, *, admin=False, allow_dm=False,
     finally:
         session.close()
     if text:
-        await _reply(update, text)
+        await _reply_card(update, text)
 
 
 def bid_keyboard(season, lot):
@@ -590,11 +606,12 @@ async def anew_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         season = A.create_season(session, name)
         A.bind_chat(session, season, chat.id)
         session.commit()
-        await _reply(update,
-                     f"🔨 <b>{html.escape(season.name)}</b> created and bound "
-                     f"to this group.\nBuild the pool and the franchises on the "
-                     f"website, then <code>/astart</code>. "
-                     f"<code>/auction</code> lists every command.")
+        await _reply_card(update,
+                          f"🔨 <b>{html.escape(season.name)}</b> created and "
+                          f"bound to this group.\nBuild the pool and the "
+                          f"franchises on the website, then "
+                          f"<code>/astart</code>. <code>/auction</code> lists "
+                          f"every command.")
     except AuctionError as exc:
         session.rollback()
         await _reply(update, f"⚠️ {html.escape(str(exc))}")
@@ -628,8 +645,9 @@ async def abind_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         A.bind_chat(session, season, chat.id)
         session.commit()
-        await _reply(update, f"🔗 <b>{html.escape(season.name)}</b> is now bound "
-                             f"to this group.")
+        await _reply_card(update,
+                          f"🔗 <b>{html.escape(season.name)}</b> is now bound "
+                          f"to this group.")
     except AuctionError as exc:
         session.rollback()
         await _reply(update, f"⚠️ {html.escape(str(exc))}")
@@ -1918,10 +1936,16 @@ async def acall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = AR.call_html(session, season, message or None)
     finally:
         session.close()
-    for part in parts:
-        await context.bot.send_message(chat_id=chat.id, text=part,
-                                       parse_mode="HTML",
-                                       disable_web_page_preview=True)
+    user = update.effective_user
+    for index, part in enumerate(parts):
+        await context.bot.send_message(
+            chat_id=chat.id, text=part, parse_mode="HTML",
+            disable_web_page_preview=True,
+            # The Close rides on the LAST part, which is where a keyboard on a
+            # split message always goes: a button under the middle of a call
+            # would take away half of it.
+            reply_markup=(AR.with_close(None, user.id if user else None)
+                          if index == len(parts) - 1 else None))
 
 
 async def aremoveteam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2010,10 +2034,11 @@ async def aadminadd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                   by_tg_id=user.id if user else None)
         session.commit()
         label = html.escape(row.name or str(row.tg_id))
-        await _reply(update,
-                     f"👮 <a href=\"tg://user?id={row.tg_id}\">{label}</a> is now "
-                     f"an <b>auction admin</b> — every auction command, and no "
-                     f"other admin command. <code>/adminhelp</code> lists them.")
+        await _reply_card(update,
+                          f"👮 <a href=\"tg://user?id={row.tg_id}\">{label}</a> "
+                          f"is now an <b>auction admin</b> — every auction "
+                          f"command, and no other admin command. "
+                          f"<code>/adminhelp</code> lists them.")
     except AuctionError as exc:
         session.rollback()
         await _reply(update, f"⚠️ {html.escape(str(exc))}")
@@ -2034,8 +2059,9 @@ async def aadminremove_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         tg_id, _name = _admin_target(session, update, context)
         row = A.remove_auction_admin(session, tg_id)
         session.commit()
-        await _reply(update, f"👮 {html.escape(row.name or str(row.tg_id))} is "
-                             f"no longer an auction admin.")
+        await _reply_card(update,
+                          f"👮 {html.escape(row.name or str(row.tg_id))} is "
+                          f"no longer an auction admin.")
     except AuctionError as exc:
         session.rollback()
         await _reply(update, f"⚠️ {html.escape(str(exc))}")
@@ -2057,13 +2083,14 @@ async def aadmins_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         session.close()
     if not rows:
-        await _reply(update, "👮 <b>Auction admins</b>\n<i>None yet — bot admins "
-                             "can always run auctions. Add one with "
-                             "</i><code>/aadminadd</code>.")
+        await _reply_card(update,
+                          "👮 <b>Auction admins</b>\n<i>None yet — bot admins "
+                          "can always run auctions. Add one with "
+                          "</i><code>/aadminadd</code>.")
         return
     lines = [f"👮 <b>Auction admins — {len(rows)}</b>",
              "<i>Plus every bot admin.</i>", ""]
     for row in rows:
         lines.append(f"· {html.escape(row.name or 'Admin')} — "
                      f"<code>{row.tg_id}</code>")
-    await _reply(update, "\n".join(lines))
+    await _reply_card(update, "\n".join(lines))

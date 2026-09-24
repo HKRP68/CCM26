@@ -1182,6 +1182,36 @@ class RoomViewTests(FeatureCase):
         # The pinned board stays the room's.
         self.assertTrue(press("au_bid_4_200", BOB))
 
+    def test_every_admin_card_carries_a_close_button(self):
+        """An admin's answer is a card in the same busy room as everyone's."""
+        from handlers import auction as H
+        checks = (
+            (H.atimer_handler, ("45",)),
+            (H.asnipe_handler, ()),
+            (H.afocus_handler, ()),
+            (H.adirect_handler, ()),
+            (H.aretlock_handler, ()),
+            (H.aadmins_handler, ()),
+            (H.aadmin_handler, ()),          # the /adminhelp reference card
+        )
+        with AdminEnv(ALICE):
+            for handler, args in checks:
+                out = self.run_handler(handler, ALICE, args)
+                markup = out.markups[-1]
+                self.assertIsNotNone(markup,
+                                     f"{handler.__name__} sent no keyboard")
+                data = [b.callback_data for row in markup.inline_keyboard
+                        for b in row]
+                self.assertIn(f"au_x_u{ALICE}", data, handler.__name__)
+
+    def test_a_refusal_is_not_a_card(self):
+        """The Close button is for answers, not for one-line refusals."""
+        from handlers import auction as H
+        with AdminEnv(CAROL):
+            out = self.run_handler(H.atimer_handler, ALICE, ("45",))
+        self.assertIn("Only auction admins", out.replies[-1])
+        self.assertIsNone(out.markups[-1])
+
     def test_every_view_card_carries_a_close_button(self):
         from handlers import auction as H
         for handler, args in ((H.arules_handler, ()), (H.asets_handler, ()),
