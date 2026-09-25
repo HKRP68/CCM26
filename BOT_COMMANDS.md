@@ -566,8 +566,12 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/anext` | Put the next lot on the block |
 | `/aextend [seconds]` | Add seconds to the lot on the block |
 | `/asold` · `/aunsold` | Sell at the standing bid, or pass the lot |
+| `/aunsold <lot no \| player>, …` | Send those players unsold — `/aunsold 67, 88, 89, 53`. Only players on no squad and with no standing bid go; the rest are named with the reason |
+| `/aforce <player \| lot no>` (`/aforcenext`) | That player next — `/aforce Tilak Varma`. Opens at once if the auction is live and nothing is on the block, otherwise straight after the current lot. A withdrawn or unsold player is brought back on the way |
 | `/aundobid` | Void the standing bid |
 | `/awithdraw <player name>` | Pull a player out of the auction |
+| `/areinstate <player \| lot no>, …` (`/aunwithdraw`) | `/awithdraw`'s opposite — a withdrawn (or unsold) player goes back to the end of the queue |
+| `/aincrement 2:10L, 5:20L, 10:25L, 50L` (`/aincrements`) | Bid increments: under ₹2 Cr the least raise is ₹10 L, and so on; one amount alone is a flat step, `reset` restores the default, bare reads it back. Also on the website's setup page |
 | `/atimer <seconds>` | Seconds allowed per lot — `/atimer 45` |
 | `/asnipe <window> <extend> <max>` | Anti-snipe window, extension and cap — `/asnipe 10 10 5` |
 | `/afocus on\|off` | Focus mode: while the auction is live or paused, this group answers auction commands and nothing else (default **on**). Bare `/afocus` reads it back |

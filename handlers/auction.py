@@ -709,13 +709,125 @@ async def asold_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def aunsold_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bare: pass the lot on the block. With a list: send those players unsold.
+
+    <code>/aunsold 67, 88, 89, 53</code> takes lot numbers, names, or a mix.
+    Only a player who is on no squad and has no standing bid goes; the answer
+    names every one that did not, and why, rather than refusing the batch.
+    """
     user = update.effective_user
+    raw = _arg_text(context)
 
     def work(session, season):
-        lot = A.current_lot(session, season)
-        A.pass_lot(session, season, lot, by_tg_id=user.id if user else None,
-                   by_admin=True)
-        return None
+        by = user.id if user else None
+        if not raw:
+            lot = A.current_lot(session, season)
+            A.pass_lot(session, season, lot, by_tg_id=by, by_admin=True)
+            return None
+        found, misses = A.find_lots(session, season, raw)
+        done, skipped = (A.mark_unsold(session, season, found, by_tg_id=by)
+                         if found else ([], []))
+        return _batch_report("❌ Marked unsold", done, skipped, misses)
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+def _batch_report(title, done, skipped, misses):
+    """What a list command did, player by player."""
+    lines = []
+    if done:
+        lines.append(f"<b>{title}</b> — {len(done)}: " +
+                     ", ".join(f"#{lot.lot_no} {html.escape(lot.name)}"
+                               for lot in done))
+    for lot, why in skipped:
+        lines.append(f"⏭ #{lot.lot_no} {html.escape(lot.name)} "
+                     f"{html.escape(why)}")
+    for token, why in misses:
+        lines.append(f"❓ “{html.escape(token)}” {html.escape(why)}")
+    return "\n".join(lines) or "Nothing to do."
+
+
+async def areinstate_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/areinstate &lt;player | lot no&gt;, …</code> — /awithdraw's opposite.
+
+    A withdrawn (or unsold) player goes back to the tail of the queue. For the
+    front of it, <code>/aforce</code>.
+    """
+    user = update.effective_user
+    raw = _arg_text(context)
+
+    def work(session, season):
+        if not raw:
+            raise AuctionError("Usage: /areinstate <player or lot no> — "
+                               "several at once with commas")
+        found, misses = A.find_lots(session, season, raw)
+        done, skipped = [], []
+        for lot in found:
+            if lot.status == A.LOT_QUEUED:
+                skipped.append((lot, "is already waiting in the queue"))
+            elif lot.status in A.LOT_LIVE:
+                skipped.append((lot, "is on the block right now"))
+            elif lot.status == A.LOT_SOLD:
+                buyer = lot.sold_to
+                skipped.append((lot, "is already in " +
+                                (buyer.name if buyer else "a squad")))
+            else:
+                done.append(A.reinstate_lot(
+                    session, season, lot, by_tg_id=user.id if user else None))
+        return _batch_report("↩️ Back in the pool", done, skipped, misses)
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def aforce_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aforce &lt;player | lot no&gt;</code> — this player, next.
+
+    Live with nothing on the block: he opens now. Otherwise he is first in
+    the queue and opens the moment the current lot resolves. A withdrawn or
+    unsold player is brought back on the way.
+    """
+    user = update.effective_user
+    raw = _arg_text(context)
+
+    def work(session, season):
+        if not raw:
+            raise AuctionError("Usage: /aforce <player name or lot no>, e.g. "
+                               "/aforce Tilak Varma")
+        lot = A.find_one_lot(session, season, raw)
+        A.force_next(session, season, lot,
+                     by_tg_id=user.id if user else None)
+        return None      # the sweeper announces it, within a tick
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def aincrement_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aincrement 2:10L, 5:20L, 10:25L, 50L</code> — the bid ladder.
+
+    Bare reads it back; <code>reset</code> restores the default. Applies from
+    the next raise — no bid already made moves.
+    """
+    user = update.effective_user
+    raw = _arg_text(context)
+
+    def work(session, season):
+        usage = ("Change it with <code>/aincrement 2:10L, 5:20L, 10:25L, "
+                 "50L</code> — <i>under ₹2 Cr the least raise is ₹10 L … and "
+                 "₹50 L above ₹10 Cr</i>. One amount is a flat step "
+                 "(<code>/aincrement 25L</code>); <code>/aincrement "
+                 "reset</code> restores the default.")
+        if not raw:
+            return (f"📈 <b>Bid increments</b>\n"
+                    f"{html.escape(A.render_increment_rules(season))}\n\n"
+                    f"{usage}")
+        if raw.strip().lower() in ("reset", "default"):
+            rules = None
+        else:
+            rules = A.parse_increment_rules(raw)
+        A.set_increment_rules(session, season, rules,
+                              by_tg_id=user.id if user else None)
+        return (f"📈 <b>Bid increments saved</b>\n"
+                f"{html.escape(A.render_increment_rules(season))}")
 
     await _with_auction(update, work, admin=True, context=context)
 

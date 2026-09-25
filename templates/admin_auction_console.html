@@ -123,6 +123,30 @@
   </div>
   {% endif %}
 
+  <!-- ── Player controls ─────────────────────────────────────────
+       Outside #au-panel for the Sets card's reason: that fragment is
+       re-fetched every couple of seconds and would wipe a half-typed list. -->
+  <div class="au-card">
+    <h3 style="margin-top:0;">🎯 Player controls</h3>
+    <form method="POST" style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="text" name="players" placeholder="Tilak Varma  ·  or lot numbers: 67, 88, 89"
+             style="flex:1;min-width:14rem;" required>
+      <button class="btn btn-primary" type="submit" name="action" value="lot_force">⏩ Force next</button>
+      <button class="btn" type="submit" name="action" value="lot_unsold"
+              onclick="return confirm('Mark these players unsold?');">❌ Mark unsold</button>
+      <button class="btn" type="submit" name="action" value="lot_reinstate">↩️ Reinstate</button>
+    </form>
+    <p class="au-note" style="margin-bottom:0;">
+      <b>Force next</b> puts one player on the block now if nothing is up,
+      otherwise straight after the current lot. <b>Mark unsold</b> takes a list
+      and skips — by name — anyone already on a squad or with a standing bid.
+      <b>Reinstate</b> is <code>/awithdraw</code>'s opposite. Same calls as
+      <code>/aforce</code>, <code>/aunsold 67, 88</code> and
+      <code>/areinstate</code> in the group.
+    </p>
+  </div>
+
   <!-- ── Sets ──────────────────────────────────────────────────────
        The same card the setup page renders. It deliberately sits OUTSIDE
        #au-panel below: that fragment is re-fetched every couple of seconds and

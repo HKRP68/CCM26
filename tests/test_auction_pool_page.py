@@ -777,5 +777,53 @@ class FranchiseDeleteTests(PoolPageCase):
         self.assertIn("Remove this franchise", body)
 
 
+class PlayerControlsAndIncrementsTests(PoolPageCase):
+    """The website's side of /aincrement, /aunsold <list>, /areinstate and
+    /aforce — the same service calls, from the setup page and the console."""
+
+    def setUp(self):
+        super().setUp()
+        self.A.add_players_to_pool(self.session, self.season, self.players)
+        self.session.commit()
+
+    def lots(self):
+        self.session.expire_all()
+        return self.A.lots(self.session, self.season_id)
+
+    def test_the_increment_ladder_is_saved_from_the_page(self):
+        body = self.get()
+        self.assertIn('name="inc_step"', body)
+        self.post({"action": "increment_rules",
+                   "inc_upto": ["2", "5", ""],
+                   "inc_step": ["10L", "20L", "50L"]})
+        self.session.expire_all()
+        season = self.session.get(type(self.season), self.season_id)
+        self.assertEqual(
+            [{"upto_lakh": 200, "step_lakh": 10},
+             {"upto_lakh": 500, "step_lakh": 20},
+             {"upto_lakh": 0, "step_lakh": 50}],
+            self.A.increment_rules(season))
+
+    def test_a_row_can_be_marked_unsold_and_reinstated(self):
+        lot = self.lots()[1]
+        self.post({"action": "lot_unsold", "lot_id": str(lot.id)})
+        self.assertEqual(self.A.LOT_UNSOLD, self.lots()[1].status)
+        self.post({"action": "lot_reinstate", "lot_id": str(lot.id)})
+        back = [l for l in self.lots() if l.id == lot.id][0]
+        self.assertEqual(self.A.LOT_QUEUED, back.status)
+
+    def test_the_console_forces_a_player_by_name(self):
+        wanted = self.lots()[-1]
+        response = self.client.post(
+            f"/auctions/{self.season_id}/console",
+            data={"action": "lot_force", "players": wanted.name},
+            follow_redirects=True)
+        self.assertEqual(200, response.status_code)
+        self.assertIn("Player controls", response.get_data(as_text=True))
+        self.session.expire_all()
+        self.assertEqual(wanted.id,
+                         self.A.next_queued(self.session, self.season_id).id)
+
+
 if __name__ == "__main__":       # pragma: no cover
     unittest.main()
