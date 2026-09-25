@@ -790,16 +790,13 @@ def ensure_summary_card(match_id, cards, **result):
         if payload is None:
             return cards
         import html as _html
-        if payload["winner_name"] == "Match Tied":
-            result_line = "Match tied"
-        else:
-            result_line = (f"{payload['winner_name']} won "
-                           f"{payload['win_margin_text'] or ''}").rstrip()
-        caption = f"🏆 <b>Match Summary</b> — {_html.escape(result_line)}"
-        if not record_cards(match_id, cards[0].get("chat_id"), [{
-                "card_type": CARD_SUMMARY, "innings": WHOLE_MATCH,
-                "caption": caption, "payload": payload}]):
-            return cards
+        caption = (f"🏆 <b>Match Summary</b> — "
+                   f"{_html.escape(_result_line(payload))}")
+        # A failed write is usually a second /lastscorecard that stored the
+        # same summary a moment earlier (unique key), so reload either way.
+        record_cards(match_id, cards[0].get("chat_id"), [{
+            "card_type": CARD_SUMMARY, "innings": WHOLE_MATCH,
+            "caption": caption, "payload": payload}])
         return load_cards(match_id) or cards
     except Exception:
         logger.exception("deriving a summary card for match %s failed", match_id)
@@ -1051,6 +1048,23 @@ def _fmt_row_name(row):
     return str(row.get("name", "?"))
 
 
+def _result_line(payload):
+    """"<winner> won <margin>" from a summary payload, in any mode's wording.
+
+    /playmatch stores the margin as "by 6 wickets"; /cipl and the Super Over
+    store the whole phrase, "won by 6 wickets" or "won on sixes hit"; a tie
+    stores "Match Tied" as both winner and margin. Joining them blindly read
+    "X won won by 6 wickets" and "Match Tied won Match Tied".
+    """
+    winner = payload.get("winner_name") or "—"
+    margin = str(payload.get("win_margin_text") or "").strip()
+    if winner == "Match Tied":
+        return "Match tied"
+    if margin.lower().startswith("won"):
+        return f"{winner} {margin}"
+    return f"{winner} won {margin}".rstrip()
+
+
 def text_scorecard(cards):
     """A plain-text rendering of a set of innings cards.
 
@@ -1101,8 +1115,7 @@ def text_scorecard(cards):
                 f"• {payload.get('inn2_team', 'Team 2')} "
                 f"{payload.get('inn2_runs', 0)}/{payload.get('inn2_wickets', 0)}"
                 f" ({payload.get('inn2_overs', '0')})",
-                f"• {payload['winner_name']} won "
-                f"{payload.get('win_margin_text', '')}".rstrip(),
+                f"• {_result_line(payload)}",
             ]
             if payload.get("potm_name"):
                 lines.append(f"• POTM {payload['potm_name']}"
@@ -1200,8 +1213,7 @@ def scorecard_blocks(cards):
                             align="right")],
                 ], bordered=True, compact=True, caption=R.bold("🏆 Result")))
                 blocks.append(R.pullquote(
-                    R.bold(f"{payload['winner_name']} won "
-                           f"{payload.get('win_margin_text', '')}".rstrip()),
+                    R.bold(_result_line(payload)),
                     caption="Result"))
                 if payload.get("potm_name"):
                     blocks.append(R.footer(

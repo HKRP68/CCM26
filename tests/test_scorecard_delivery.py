@@ -1016,6 +1016,32 @@ class TextFallbackTests(unittest.TestCase):
             [{"card_type": "summary", "innings": 0, "payload": {}}]))
 
 
+class ResultLineTests(unittest.TestCase):
+    """Every mode words its margin differently; the text must read right."""
+
+    def _text(self, winner, margin):
+        return sd.text_scorecard([{"card_type": sd.CARD_SUMMARY, "payload": {
+            "winner_name": winner, "win_margin_text": margin}}])
+
+    def test_a_playmatch_margin(self):
+        self.assertIn("A won by 6 wickets", self._text("A", "by 6 wickets"))
+
+    def test_a_cipl_margin_is_not_doubled(self):
+        text = self._text("Bot XI", "won by 6 wickets")
+        self.assertIn("Bot XI won by 6 wickets", text)
+        self.assertNotIn("won won", text)
+
+    def test_a_tie(self):
+        text = self._text("Match Tied", "Match Tied")
+        self.assertIn("Match tied", text)
+        self.assertNotIn("Tied won", text)
+
+    def test_the_rich_blocks_agree(self):
+        blocks = sd.scorecard_blocks([{"card_type": sd.CARD_SUMMARY, "payload": {
+            "winner_name": "Bot XI", "win_margin_text": "won by 6 wickets"}}])
+        self.assertNotIn("won won", repr(blocks))
+
+
 class RecordAndSendTests(unittest.TestCase):
     def setUp(self):
         from database import get_session
