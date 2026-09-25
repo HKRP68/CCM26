@@ -1013,7 +1013,7 @@
             </form>
             {% endif %}
             {% if lot.status == 'queued' and season.status not in ('completed', 'cancelled') %}
-            <form method="POST" onsubmit="return confirm('Mark {{ lot.name }} unsold without offering him?');">
+            <form method="POST" onsubmit='return confirm({{ ("Mark " ~ lot.name ~ " unsold without offering him?")|tojson }});'>
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="action" value="lot_unsold">
               <input type="hidden" name="lot_id" value="{{ lot.id }}">

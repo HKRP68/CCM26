@@ -3715,10 +3715,20 @@ def mark_unsold(session, season, picked, *, by_tg_id=None):
             continue
         seen.add(lot.id)
         if lot.status == LOT_QUEUED:
-            lot.status = LOT_UNSOLD
-            lot.deadline_at = None
-            lot.going_stage = 0
-            done.append(lot)
+            # Conditional, like open_lot's own claim: if the sweeper opened
+            # this lot after it was read, the write matches nothing and the
+            # lot stays with the room instead of being marked unsold under it.
+            claimed = (session.query(AuctionLot)
+                       .filter(AuctionLot.id == lot.id,
+                               AuctionLot.status == LOT_QUEUED)
+                       .update({"status": LOT_UNSOLD, "deadline_at": None,
+                                "going_stage": 0},
+                               synchronize_session=False))
+            if claimed:
+                session.refresh(lot)
+                done.append(lot)
+            else:
+                skipped.append((lot, "has just gone on the block"))
         elif lot.status == LOT_ON_BLOCK:
             if lot.current_bidder_id is not None:
                 skipped.append((lot, "has a standing bid — /aundobid first"))
@@ -3746,9 +3756,11 @@ def mark_unsold(session, season, picked, *, by_tg_id=None):
     if live is not None:
         pass_lot(session, season, live, by_tg_id=by_tg_id, by_admin=True)
         done.append(live)
-    elif done:
+    elif done and season.status == STATUS_LIVE:
         # The queue may just have run dry under a live auction with an empty
         # block; this is what finishes it (or starts the accelerated round).
+        # Never before then: in setup or paused it would finish an auction
+        # that has not run — start/resume reach complete_if_done themselves.
         complete_if_done(session, season)
     return done, skipped
 

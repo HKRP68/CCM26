@@ -162,6 +162,23 @@ class BulkUnsoldTests(AuctionCase):
         self.session.refresh(live)
         self.assertEqual(self.A.LOT_ON_BLOCK, live.status)
 
+    def test_emptying_the_queue_in_setup_does_not_finish_the_auction(self):
+        lots = self.A.queued_lots(self.session, self.season)
+        self.A.mark_unsold(self.session, self.season, lots)
+        self.session.commit()
+        self.assertEqual(self.A.STATUS_SETUP, self.season.status)
+        self.assertFalse(self.season.accelerated_done)
+
+    def test_a_lot_opened_after_it_was_read_is_not_marked_unsold(self):
+        from models import AuctionLot
+        lot = self.A.queued_lots(self.session, self.season)[0]
+        (self.session.query(AuctionLot).filter(AuctionLot.id == lot.id)
+         .update({"status": self.A.LOT_ON_BLOCK},
+                 synchronize_session=False))
+        done, skipped = self.A.mark_unsold(self.session, self.season, [lot])
+        self.assertEqual([], done)
+        self.assertIn("just gone on the block", skipped[0][1])
+
     def test_the_lot_on_the_block_is_passed_when_nobody_bid(self):
         live = self.start()
         done, _ = self.A.mark_unsold(self.session, self.season, [live])
