@@ -1786,6 +1786,23 @@ def _describe_scorecard_match(session, match_id):
     return " · ".join(html.escape(p) for p in parts)
 
 
+def _stored_match_result(session, match_id):
+    """The ``Match`` row's result, as ``ensure_summary_card`` keywords."""
+    m = session.get(Match, match_id) if match_id else None
+    if not m:
+        return {}
+    potm_id = getattr(m, "potm_player_id", None)
+    potm_name = None
+    if potm_id:
+        p = session.get(Player, potm_id)
+        potm_name = p.name if p else None
+    return {"winner_user_id": getattr(m, "winner_id", None),
+            "margin_type": getattr(m, "margin_type", None),
+            "margin_value": getattr(m, "margin_value", None),
+            "overs_total": getattr(m, "overs", None),
+            "potm_player_id": potm_id, "potm_name": potm_name}
+
+
 async def lastscorecard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Re-send the scorecard images of the last match played in this chat.
 
@@ -1870,6 +1887,7 @@ async def lastscorecard_handler(update: Update, context: ContextTypes.DEFAULT_TY
             cards = scorecard_delivery.load_cards(match_id, session=session)
 
         header = _describe_scorecard_match(session, match_id)
+        result = _stored_match_result(session, match_id)
     except Exception:
         logger.exception("lastscorecard lookup failed")
         await reply(
@@ -1877,6 +1895,12 @@ async def lastscorecard_handler(update: Update, context: ContextTypes.DEFAULT_TY
         return
     finally:
         session.close()
+
+    # A bowl-out finish, a WSP autoplay match or one archived before summary
+    # cards were stored has only its innings cards. Build the summary from
+    # them so the replay always ends on the Match Summary image.
+    cards = await asyncio.to_thread(
+        scorecard_delivery.ensure_summary_card, match_id, cards, **result)
 
     if not cards:
         await reply(

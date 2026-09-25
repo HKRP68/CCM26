@@ -445,6 +445,82 @@ class SendSummaryCardTests(unittest.TestCase):
         self.assertEqual(sd.load_cards(304), [])
 
 
+def _innings_cards(match_id, runs1=150, wkts1=6, runs2=120, wkts2=10):
+    def bat(team, uid, inn, runs, wkts):
+        return {"card_type": "batting", "innings": inn, "payload": {
+            "team_name": team, "team_user_id": uid, "total_runs": runs,
+            "total_wickets": wkts, "overs_str": "20", "match_no": match_id,
+            "batsmen_rows": [
+                {"name": f"{team} A", "runs": 60, "balls": 40, "status": "out"},
+                {"name": f"{team} B", "runs": 5, "balls": 9, "status": "not_out"},
+                {"name": f"{team} C", "runs": 0, "balls": 0, "status": "dnb"}]}}
+
+    def bowl(team, inn):
+        return {"card_type": "bowling", "innings": inn, "payload": {
+            "team_name": team, "bowlers_rows": [
+                {"name": f"{team} X", "overs": "4", "runs_conceded": 20,
+                 "wickets": 3, "economy": 5.0}]}}
+
+    return [bat("Alpha", 1, 1, runs1, wkts1), bowl("Beta", 1),
+            bat("Beta", 2, 2, runs2, wkts2), bowl("Alpha", 2)]
+
+
+class DerivedSummaryTests(unittest.TestCase):
+    """Bowl-out finishes, WSP autoplay and older matches stored no summary
+    card, so /lastscorecard replayed them without the Match Summary image."""
+
+    def setUp(self):
+        from database import get_session
+        from models import MatchScorecardImage
+        session = get_session()
+        try:
+            session.query(MatchScorecardImage).delete()
+            session.commit()
+        finally:
+            session.close()
+
+    def test_the_result_comes_from_the_match_row(self):
+        payload = sd.derive_summary_payload(
+            _innings_cards(1, runs2=150), winner_user_id=2,
+            margin_type="bowl-out", overs_total=20)
+        self.assertEqual(payload["winner_name"], "Beta")
+        self.assertEqual(payload["win_margin_text"], "the bowl-out")
+        self.assertEqual(payload["inn1_runs"], 150)
+        self.assertEqual(payload["inn2_user_id"], 2)
+
+    def test_without_a_match_row_the_scores_decide(self):
+        payload = sd.derive_summary_payload(_innings_cards(1))
+        self.assertEqual(payload["winner_name"], "Alpha")
+        self.assertEqual(payload["win_margin_text"], "by 30 runs")
+
+    def test_the_panels_are_the_stored_rows(self):
+        panels = sd.derive_summary_payload(
+            _innings_cards(1), potm_name="Alpha A")
+        inn1 = panels["top_per_team"]["inn1"]
+        self.assertEqual([b["name"] for b in inn1["batters"]],
+                         ["Alpha A", "Alpha B"])   # did-not-bat left out
+        self.assertEqual(inn1["bowlers"][0]["runs"], 20)
+        self.assertEqual(panels["potm_stats"], "60 (40)")
+
+    def test_half_a_match_is_not_a_summary(self):
+        self.assertIsNone(sd.derive_summary_payload(_innings_cards(1)[:2]))
+
+    def test_ensure_adds_and_stores_a_missing_summary(self):
+        sd.record_cards(401, -900, _innings_cards(401))
+        cards = sd.ensure_summary_card(401, sd.load_cards(401),
+                                       winner_user_id=1, margin_type="runs",
+                                       margin_value=30)
+        self.assertEqual(cards[-1]["card_type"], sd.CARD_SUMMARY)
+        self.assertEqual(cards[-1]["chat_id"], -900)
+        self.assertIn("Alpha won by 30 runs", cards[-1]["caption"])
+        # Stored, so the next replay reuses it (and its cached file_id).
+        self.assertEqual(len(sd.load_cards(401)), 5)
+
+    def test_ensure_leaves_a_stored_summary_alone(self):
+        cards = [{"card_type": sd.CARD_SUMMARY, "payload": {"winner_name": "Z"}}]
+        self.assertEqual(sd.ensure_summary_card(402, cards), cards)
+
+
 class PersistenceTests(unittest.TestCase):
     """The values outlive the live match state, which is the whole point."""
 

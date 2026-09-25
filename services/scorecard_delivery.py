@@ -630,6 +630,183 @@ def latest_match_id_for_user(user_id, session=None):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# A summary for a match that never stored one
+# ══════════════════════════════════════════════════════════════════════
+
+# How a stored ``Match.margin_type`` reads after "<winner> won".
+_MARGIN_PHRASES = {
+    "super_over": "in the Super Over",
+    "super over": "in the Super Over",
+    "bowl-out": "the bowl-out",
+    "bowlout": "the bowl-out",
+    "forfeit": "by forfeit",
+}
+
+
+def _margin_text(margin_type, margin_value):
+    kind = str(margin_type or "").strip().lower()
+    if kind in ("runs", "wickets") and margin_value not in (None, ""):
+        unit = kind[:-1] if str(margin_value) == "1" else kind
+        return f"by {margin_value} {unit}"
+    return _MARGIN_PHRASES.get(kind, "")
+
+
+def _summary_batters(rows, top_n=4):
+    out = []
+    for row in rows or []:
+        if row.get("status") == "dnb" or not row.get("balls"):
+            continue
+        out.append({
+            "name": row.get("name", "—"), "rating": row.get("rating", "—"),
+            "runs": row.get("runs", 0), "balls": row.get("balls", 0),
+            "fours": row.get("fours", 0), "sixes": row.get("sixes", 0),
+            "out": row.get("status") == "out",
+        })
+    out.sort(key=lambda r: (-(r["runs"] or 0), r["balls"] or 0))
+    return out[:top_n]
+
+
+def _summary_bowlers(rows, top_n=4):
+    out = []
+    for row in rows or []:
+        out.append({
+            "name": row.get("name", "—"), "rating": row.get("rating", "—"),
+            "overs": row.get("overs", "0"), "runs": row.get("runs_conceded", 0),
+            "wickets": row.get("wickets", 0),
+            "econ": row.get("economy", 0.0) or 0.0,
+        })
+    out.sort(key=lambda r: (-(r["wickets"] or 0), r["econ"]))
+    return out[:top_n]
+
+
+def _potm_line(name, bat_rows, bowl_rows):
+    """"54 (31) · 2/18"-style figures for a named player, from the stored rows."""
+    if not name:
+        return None
+    parts = []
+    for row in bat_rows:
+        if row.get("name") == name and row.get("balls"):
+            parts.append(f"{row.get('runs', 0)} ({row.get('balls', 0)})")
+            break
+    for row in bowl_rows:
+        if row.get("name") == name:
+            parts.append(f"{row.get('wickets', 0)}/{row.get('runs_conceded', 0)}")
+            break
+    return " · ".join(parts) or None
+
+
+def derive_summary_payload(cards, *, winner_user_id=None, margin_type=None,
+                           margin_value=None, overs_total=None,
+                           potm_player_id=None, potm_name=None):
+    """A summary card's payload built from a match's stored innings cards.
+
+    Bowl-out finishes, the WSP autoplay path and every match archived before
+    the summary card was stored have their batting and bowling cards but no
+    summary, so /lastscorecard used to replay them without one. The summary's
+    per-innings panels are exactly the rows those cards already hold; the
+    result comes from the ``Match`` row. Returns ``None`` when either innings'
+    batting card is missing — half a match is not a summary.
+    """
+    by_key = {(c.get("innings"), c.get("card_type")): (c.get("payload") or {})
+              for c in cards or []}
+    bat1 = by_key.get((1, CARD_BATTING))
+    bat2 = by_key.get((2, CARD_BATTING))
+    if not bat1 or not bat2:
+        return None
+    bowl1 = by_key.get((1, CARD_BOWLING)) or {}
+    bowl2 = by_key.get((2, CARD_BOWLING)) or {}
+
+    team1 = bat1.get("team_name") or "Team 1"
+    team2 = bat2.get("team_name") or "Team 2"
+    r1, w1 = bat1.get("total_runs", 0) or 0, bat1.get("total_wickets", 0) or 0
+    r2, w2 = bat2.get("total_runs", 0) or 0, bat2.get("total_wickets", 0) or 0
+
+    winner = None
+    if winner_user_id is not None:
+        if bat1.get("team_user_id") == winner_user_id:
+            winner = team1
+        elif bat2.get("team_user_id") == winner_user_id:
+            winner = team2
+    margin = _margin_text(margin_type, margin_value)
+    if winner is None:
+        # No usable Match row: read the result off the scores.
+        if r2 > r1:
+            winner, margin = team2, f"by {max(10 - w2, 0)} wickets"
+        elif r1 > r2:
+            winner, margin = team1, f"by {r1 - r2} runs"
+        else:
+            winner, margin = "Match Tied", "Match Tied"
+
+    bat_rows = list(bat1.get("batsmen_rows") or []) + list(bat2.get("batsmen_rows") or [])
+    bowl_rows = list(bowl1.get("bowlers_rows") or []) + list(bowl2.get("bowlers_rows") or [])
+
+    payload = {
+        "inn1_team": team1, "inn1_runs": r1, "inn1_wickets": w1,
+        "inn1_overs": bat1.get("overs_str", "0"),
+        "inn2_team": team2, "inn2_runs": r2, "inn2_wickets": w2,
+        "inn2_overs": bat2.get("overs_str", "0"),
+        "winner_name": winner, "win_margin_text": margin,
+        "overs_total": overs_total or 0,
+        "potm_name": potm_name,
+        "potm_player_id": potm_player_id,
+        "potm_stats": _potm_line(potm_name, bat_rows, bowl_rows),
+        "top_per_team": {
+            "inn1": {"team": team1, "bowl_team": team2,
+                     "batters": _summary_batters(bat1.get("batsmen_rows")),
+                     "bowlers": _summary_bowlers(bowl1.get("bowlers_rows"))},
+            "inn2": {"team": team2, "bowl_team": team1,
+                     "batters": _summary_batters(bat2.get("batsmen_rows")),
+                     "bowlers": _summary_bowlers(bowl2.get("bowlers_rows"))},
+        },
+        "stadium": bat1.get("stadium"),
+        "match_no": bat1.get("match_no"),
+        "inn1_user_id": bat1.get("team_user_id"),
+        "inn2_user_id": bat2.get("team_user_id"),
+    }
+    for key in ("league_key", "tournament_id"):
+        if bat1.get(key) or bat2.get(key):
+            payload[key] = bat1.get(key) or bat2.get(key)
+    for side, bat in (("inn1", bat1), ("inn2", bat2)):
+        if bat.get("tournament_team_id"):
+            payload[f"{side}_tournament_team_id"] = bat["tournament_team_id"]
+        if bat.get("challenge_team_id"):
+            payload[f"{side}_challenge_team_id"] = bat["challenge_team_id"]
+    return payload
+
+
+def ensure_summary_card(match_id, cards, **result):
+    """``cards`` with a summary card added when the match never stored one.
+
+    The derived card is recorded like any other, so its ``file_id`` is cached
+    on the first send and the next /lastscorecard needs no render. ``result``
+    is passed to :func:`derive_summary_payload`. Never raises: a summary that
+    cannot be derived leaves the innings cards to go out on their own.
+    """
+    cards = list(cards or [])
+    if not cards or any(c.get("card_type") == CARD_SUMMARY for c in cards):
+        return cards
+    try:
+        payload = derive_summary_payload(cards, **result)
+        if payload is None:
+            return cards
+        import html as _html
+        if payload["winner_name"] == "Match Tied":
+            result_line = "Match tied"
+        else:
+            result_line = (f"{payload['winner_name']} won "
+                           f"{payload['win_margin_text'] or ''}").rstrip()
+        caption = f"🏆 <b>Match Summary</b> — {_html.escape(result_line)}"
+        if not record_cards(match_id, cards[0].get("chat_id"), [{
+                "card_type": CARD_SUMMARY, "innings": WHOLE_MATCH,
+                "caption": caption, "payload": payload}]):
+            return cards
+        return load_cards(match_id) or cards
+    except Exception:
+        logger.exception("deriving a summary card for match %s failed", match_id)
+        return cards
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Sending
 # ══════════════════════════════════════════════════════════════════════
 

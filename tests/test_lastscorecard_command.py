@@ -98,6 +98,7 @@ class _Patched:
         delivery.latest_match_id_for_user.return_value = self.latest_user
         delivery.deliver_cards = self.delivered
         delivery.send_text_fallback = self.text_fallback
+        delivery.ensure_summary_card.side_effect = lambda mid, cards, **k: cards
         self.delivery = delivery
         self._patches = [
             mock.patch.object(hm, "scorecard_delivery", delivery),
