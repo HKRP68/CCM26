@@ -3577,10 +3577,15 @@ def _build_approach_card_blocks(state, prompt):
     crr = cipl_match.current_run_rate(state)
     c = cipl_match.chase(state)
     if c and c["runs_required"] > 0:
+        # A pullquote carries text (and an optional credit) only, so the
+        # target and both rates ride on the line under it.
         blocks.append(R.pullquote(
             ["🎯 Need ", R.bold(str(c["runs_required"])), " off ",
-             R.bold(str(c["balls_remaining"])), " balls"],
-            caption=f"Target {c['target']} · RRR {c['rrr']:.2f} · CRR {crr:.2f}"))
+             R.bold(str(c["balls_remaining"])), " balls"]))
+        blocks.append(R.paragraph(
+            ["Target ", R.bold(str(c["target"])),
+             "  ·  RRR ", R.bold(f"{c['rrr']:.2f}"),
+             "  ·  CRR ", R.bold(f"{crr:.2f}")]))
     else:
         blocks.append(R.paragraph(["⚡ ", R.bold("CRR"), f"  {crr:.2f}"]))
 

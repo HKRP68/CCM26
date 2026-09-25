@@ -88,12 +88,18 @@ class ApproachCardBlocksTests(unittest.TestCase, BlockTreeAssertions):
         html_card = cp._approach_card(s)
         self.assertIn(f"Need {c['runs_required']} off {c['balls_remaining']}",
                       html_card)
-        quotes = _of_type(cp._approach_card_blocks(s), "pullquote")
+        blocks = cp._approach_card_blocks(s)
+        quotes = _of_type(blocks, "pullquote")
         self.assertEqual(len(quotes), 1)
-        quote = flatten(quotes[0])
-        self.assertIn(f"Need {c['runs_required']} off {c['balls_remaining']}", quote)
-        self.assertIn(f"RRR {c['rrr']:.2f}", quote)
-        self.assertIn(f"Target {c['target']}", quote)
+        # A pullquote takes text (and credit) only — no caption field.
+        self.assertEqual(set(quotes[0]), {"type", "text"})
+        self.assertIn(f"Need {c['runs_required']} off {c['balls_remaining']}",
+                      flatten(quotes[0]))
+        # Target and both rates sit on the paragraph right under it.
+        after = blocks[blocks.index(quotes[0]) + 1]
+        self.assertEqual(after["type"], "paragraph")
+        self.assertIn(f"Target {c['target']}", flatten(after))
+        self.assertIn(f"RRR {c['rrr']:.2f}", flatten(after))
 
     def test_commentary_sits_collapsed_with_every_ball(self):
         s = _state(overs_played=1)
