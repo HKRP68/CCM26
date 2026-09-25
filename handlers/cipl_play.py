@@ -3886,24 +3886,28 @@ async def _complete_match(context, mid, state):
         # loop so finishing one Challenge League match doesn't freeze every
         # other user's buttons (and other live matches) while the card renders.
         img = await asyncio.to_thread(_build_cipl_summary_image, state, result)
-        if img:
-            # The Spectate / View Match button rides on the scorecard image too,
-            # so anyone can open this exact match in the Mini App.
-            await context.bot.send_photo(
-                state["chat_id"], photo=BytesIO(img),
-                caption=_summary_caption(state, result_line),
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(miniapp_row)
-                if miniapp_row else None)
+        # Archived before the send and retried on the way out, like /playmatch:
+        # one timeout or flood-control answer used to lose this card for good,
+        # and with nothing stored /lastscorecard had nothing to bring back.
+        # The payload is popped so it doesn't ride along in the saved state.
+        from services import scorecard_delivery as _sd
+        # The Spectate / View Match button rides on the scorecard image too,
+        # so anyone can open this exact match in the Mini App.
+        sent_summary = await _sd.send_summary_card(
+            context.bot, state["chat_id"], mid, img,
+            payload=state.pop("_summary_payload", None),
+            caption=_summary_caption(state, result_line),
+            reply_markup=InlineKeyboardMarkup(miniapp_row)
+            if miniapp_row else None)
+        if sent_summary is not None:
             # The winner's own collectible card, straight after the summary
             # whose POTM strip names them.
-            from services import scorecard_delivery as _sd
             award = state.get("_summary_potm") or {}
             await _sd.send_potm_card(
                 context.bot, state["chat_id"],
                 player_id=state.get("potm_player_id"),
                 name=award.get("name"), team=award.get("team"))
-        else:
+        elif not img:
             logger.warning("cipl match summary image came back empty for match %s", mid)
     except Exception:
         logger.exception("cipl match summary image failed for match %s", mid)
@@ -4266,22 +4270,20 @@ def _cipl_challenge_team_id(state, user_id):
 
 
 def _build_cipl_summary_image(state, result):
-    """Render the shared post-match summary card from the finished /cipl state."""
+    """Render the shared post-match summary card from the finished /cipl state.
+
+    Builds the card's values as a stored payload first and draws it through
+    ``scorecard_delivery.render_card`` — the same renderer ``/lastscorecard``
+    uses — so the card posted live and the one replayed later are the same
+    card. The payload is left on ``state["_summary_payload"]`` for the send path
+    to archive; crests, colours, the POTM portrait and the admin text settings
+    are resolved live at render time from the ids it carries.
+    """
     try:
-        from services.match_summary_card import generate_match_summary
+        from services import scorecard_delivery
     except Exception:
         logger.exception("match summary card unavailable for cipl")
         return None
-
-    # Use the SAME admin-configured scorecard text settings as /wpm, /vsbot and
-    # /wpmbot so the batsman-name font (and every other label) renders at the
-    # same size here — without this the card falls back to the smaller defaults.
-    try:
-        from services.config_service import get_config
-        text_settings = get_config().get("scorecard_text_settings")
-    except Exception:
-        logger.exception("cipl summary text settings load failed")
-        text_settings = None
 
     _bpu = cipl_match.balls_per_unit(state)
     inn1_bats, inn1_bowls = _summary_rows(
@@ -4335,64 +4337,54 @@ def _build_cipl_summary_image(state, result):
     inn1_label = with_bot_tag(state, inn1_team)
     inn2_label = with_bot_tag(state, inn2_team)
 
-    # Crests, team colours and the POTM portrait. Resolved from the *clean*
-    # team names and the owning user ids — never from the labels above, which
-    # carry a " (Bot)" suffix that matches nothing. /cipl calls the generator
-    # directly rather than through scorecard_delivery, so without this the
-    # whole league renders unbranded cards.
-    visuals = {}
+    # Crests, team colours and the POTM portrait are not drawn from here: the
+    # payload carries who each side is — the *clean* team names and owning user
+    # ids, never the labels above with their " (Bot)" suffix, which match
+    # nothing — plus the franchise and competition ids, so a CIPL side wears
+    # its franchise's crest rather than whatever its manager set with
+    # /setteamlogo. ``render_card`` resolves the visuals from these.
+    inn1_uid = inn2_uid = None
     try:
-        from services import card_identity, scorecard_delivery
-        session = card_identity.open_session()
-        try:
-            inn1_uid = _cipl_team_user_id(state, inn1_team)
-            inn2_uid = _cipl_team_user_id(state, inn2_team)
-            visuals = card_identity.summary_visuals(
-                session,
-                inn1_team=inn1_team, inn2_team=inn2_team,
-                inn1_user_id=inn1_uid, inn2_user_id=inn2_uid,
-                potm_player_id=state.get("potm_player_id"),
-                potm_name=potm_name,
-                # The franchise, not the manager. A CIPL side always has a user
-                # id behind it, so without this every league card wore whatever
-                # crest that person set with /setteamlogo — their own team's,
-                # on a franchise they are only playing for the evening.
-                league_key=state.get("league_key"),
-                tournament_id=state.get("tournament_id"),
-                inn1_challenge_team_id=_cipl_challenge_team_id(state, inn1_uid),
-                inn2_challenge_team_id=_cipl_challenge_team_id(state, inn2_uid),
-                potm_card=scorecard_delivery.potm_card_inline(),
-                include_style=False)
-        finally:
-            session.close()
+        inn1_uid = _cipl_team_user_id(state, inn1_team)
+        inn2_uid = _cipl_team_user_id(state, inn2_team)
     except Exception:
-        logger.exception("cipl summary branding lookup failed — drawing plain")
+        logger.exception("cipl summary team lookup failed — drawing plain")
 
-    return generate_match_summary(
-        **visuals,
-        inn1_team=inn1_label,
-        inn1_runs=state.get("inn1_runs", 0),
-        inn1_wickets=state.get("inn1_wickets", 0),
-        inn1_overs=inn1_overs_val,
-        inn2_team=inn2_label,
-        inn2_runs=state.get("total_runs", 0),
-        inn2_wickets=state.get("total_wickets", 0),
-        inn2_overs=inn2_overs_val,
-        winner_name=with_bot_tag(state, winner_name),
-        win_margin_text=margin_text,
-        overs_total=overs_total_val,
-        is_hundred=is_hundred,
-        stadium=state.get("stadium"),
-        potm_name=potm_name,
-        potm_stats=potm_stats,
-        potm_team=with_bot_tag(state, potm_team),
-        top_per_team={
+    payload = {
+        "inn1_team": inn1_label,
+        "inn1_runs": state.get("inn1_runs", 0),
+        "inn1_wickets": state.get("inn1_wickets", 0),
+        "inn1_overs": inn1_overs_val,
+        "inn2_team": inn2_label,
+        "inn2_runs": state.get("total_runs", 0),
+        "inn2_wickets": state.get("total_wickets", 0),
+        "inn2_overs": inn2_overs_val,
+        "winner_name": with_bot_tag(state, winner_name),
+        "win_margin_text": margin_text,
+        "overs_total": overs_total_val,
+        "is_hundred": is_hundred,
+        "stadium": state.get("stadium"),
+        "potm_name": potm_name,
+        "potm_stats": potm_stats,
+        "potm_team": with_bot_tag(state, potm_team),
+        "top_per_team": {
             "inn1": {"team": inn1_label, "batters": inn1_bats, "bowlers": inn1_bowls},
             "inn2": {"team": inn2_label, "batters": inn2_bats, "bowlers": inn2_bowls},
         },
-        match_no=state.get("match_id"),
-        text_settings=text_settings,
-    )
+        "match_no": state.get("match_id"),
+        # Identity: read by render_card's branding lookup, never drawn.
+        "inn1_brand_team": inn1_team,
+        "inn2_brand_team": inn2_team,
+        "potm_player_id": state.get("potm_player_id"),
+        "inn1_user_id": inn1_uid,
+        "inn2_user_id": inn2_uid,
+        "league_key": state.get("league_key"),
+        "tournament_id": state.get("tournament_id"),
+        "inn1_challenge_team_id": _cipl_challenge_team_id(state, inn1_uid),
+        "inn2_challenge_team_id": _cipl_challenge_team_id(state, inn2_uid),
+    }
+    state["_summary_payload"] = payload
+    return scorecard_delivery.render_card(scorecard_delivery.CARD_SUMMARY, payload)
 
 
 def _innings_scorecard(state, innings_label=""):

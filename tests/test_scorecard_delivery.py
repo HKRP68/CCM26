@@ -323,6 +323,128 @@ class AcceptedKwargsTests(unittest.TestCase):
         self.assertEqual(calls["team_name"], "Alpha")
 
 
+class RecoverableRejectionTests(unittest.TestCase):
+    """Two ``BadRequest`` answers used to lose a card that could have landed."""
+
+    def test_an_unparseable_caption_is_resent_as_plain_text(self):
+        from telegram.error import BadRequest
+        bot = MagicMock()
+        sent = MagicMock()
+        bot.send_photo = AsyncMock(side_effect=[
+            BadRequest("Can't parse entities: unclosed start tag"), sent])
+        result = _run(sd.send_photo_with_retry(
+            bot, -100, lambda: b"png", caption="<b>Kings &amp; Co"))
+        self.assertIs(result, sent)
+        retry = bot.send_photo.await_args_list[1].kwargs
+        self.assertEqual(retry["caption"], "Kings & Co")
+        self.assertIsNone(retry["parse_mode"])
+
+    def test_an_image_refused_as_a_photo_goes_out_as_a_document(self):
+        import io
+        from telegram.error import BadRequest
+        bot = MagicMock()
+        doc = MagicMock()
+        bot.send_photo = AsyncMock(side_effect=BadRequest("IMAGE_PROCESS_FAILED"))
+        bot.send_document = AsyncMock(return_value=doc)
+        result = _run(sd.send_photo_with_retry(
+            bot, -100, lambda: io.BytesIO(b"png"), caption="c",
+            reply_markup="kb"))
+        self.assertIs(result, doc)
+        self.assertEqual(bot.send_document.await_args.kwargs["reply_markup"], "kb")
+
+    def test_a_rejected_file_id_is_not_sent_as_a_document(self):
+        """The caller re-renders a stale id; a document of it would fail too."""
+        from telegram.error import BadRequest
+        bot = MagicMock()
+        bot.send_photo = AsyncMock(side_effect=BadRequest("wrong file identifier"))
+        bot.send_document = AsyncMock()
+        self.assertIsNone(_run(sd.send_photo_with_retry(
+            bot, -100, lambda: "stale-id")))
+        bot.send_document.assert_not_awaited()
+
+
+class FitCaptionTests(unittest.TestCase):
+    def test_a_short_caption_is_kept_as_is(self):
+        self.assertEqual(sd._fit_caption("<b>ok</b>"), "<b>ok</b>")
+
+    def test_a_long_caption_never_stores_half_a_tag(self):
+        """A 300-character slice of HTML left ``<b>`` open, and Telegram then
+        refused every replay of that card."""
+        caption = "<b>" + ("Kings &amp; Co " * 40) + "</b>"
+        fitted = sd._fit_caption(caption)
+        self.assertLessEqual(len(fitted), 300)
+        self.assertNotIn("<", fitted)
+        self.assertNotRegex(fitted, r"&[a-z]*$")
+
+
+class SendSummaryCardTests(unittest.TestCase):
+    """/cipl, the Challenge League and the Super Over draw their own summary
+    card. It used to go out with one bare send and was never stored, so
+    /lastscorecard had nothing to bring back for any of those matches."""
+
+    def setUp(self):
+        from database import get_session
+        from models import MatchScorecardImage
+        session = get_session()
+        try:
+            session.query(MatchScorecardImage).delete()
+            session.commit()
+        finally:
+            session.close()
+
+    _PAYLOAD = {"inn1_team": "A", "inn1_runs": 150, "inn1_wickets": 4,
+                "inn1_overs": "20", "inn2_team": "B", "inn2_runs": 120,
+                "inn2_wickets": 9, "inn2_overs": "20", "winner_name": "A",
+                "win_margin_text": "won by 30 runs"}
+
+    def test_it_is_archived_and_its_file_id_cached(self):
+        bot = MagicMock()
+        bot.send_photo = AsyncMock(return_value=MagicMock(
+            photo=[MagicMock(file_id="sum-id")]))
+        msg = _run(sd.send_summary_card(
+            bot, -700, 301, b"png", payload=dict(self._PAYLOAD),
+            caption="<b>Summary</b>", reply_markup="kb"))
+        self.assertIsNotNone(msg)
+        self.assertEqual(bot.send_photo.await_args.kwargs["reply_markup"], "kb")
+        stored = sd.load_cards(301)
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0]["card_type"], sd.CARD_SUMMARY)
+        self.assertEqual(stored[0]["chat_id"], -700)
+        self.assertEqual(stored[0]["file_id"], "sum-id")
+        self.assertTrue(stored[0]["delivered"])
+        self.assertEqual(sd.latest_match_id_for_chat(-700), 301)
+
+    def test_a_send_that_never_lands_is_still_replayable(self):
+        bot = MagicMock()
+        bot.send_photo = AsyncMock(side_effect=TimedOut())
+        with unittest.mock.patch.object(sd.asyncio, "sleep", new=AsyncMock()):
+            msg = _run(sd.send_summary_card(
+                bot, -700, 302, b"png", payload=dict(self._PAYLOAD)))
+        self.assertIsNone(msg)
+        stored = sd.load_cards(302)
+        self.assertEqual(len(stored), 1)
+        self.assertFalse(stored[0]["delivered"])
+
+    def test_no_image_posts_the_numbers_as_text(self):
+        bot = MagicMock()
+        bot.send_photo = AsyncMock()
+        bot.send_message = AsyncMock()
+        _run(sd.send_summary_card(bot, -700, 303, None,
+                                  payload=dict(self._PAYLOAD)))
+        bot.send_photo.assert_not_awaited()
+        bot.send_message.assert_awaited_once()
+        self.assertEqual(len(sd.load_cards(303)), 1)
+
+    def test_without_a_payload_it_still_sends_with_retries(self):
+        bot = MagicMock()
+        sent = MagicMock()
+        bot.send_photo = AsyncMock(side_effect=[TimedOut(), sent])
+        with unittest.mock.patch.object(sd.asyncio, "sleep", new=AsyncMock()):
+            msg = _run(sd.send_summary_card(bot, -700, 304, b"png"))
+        self.assertIs(msg, sent)
+        self.assertEqual(sd.load_cards(304), [])
+
+
 class PersistenceTests(unittest.TestCase):
     """The values outlive the live match state, which is the whole point."""
 
@@ -673,6 +795,21 @@ class IdentityKeyTests(unittest.TestCase):
         warned.assert_called_once()
         self.assertIn("some_key_from_2024", warned.call_args.args[-1])
 
+
+    def test_a_summary_brands_from_the_clean_team_name(self):
+        """/cipl draws "RCB (Bot)"; no crest is filed under that name."""
+        with unittest.mock.patch.object(sd, "_summary_style",
+                                        return_value={}) as style, \
+                unittest.mock.patch(
+                    "services.match_summary_card.generate_match_summary",
+                    return_value=b"png"), \
+                unittest.mock.patch.object(sd.logger, "warning") as warned:
+            sd.render_card(sd.CARD_SUMMARY, {
+                "inn1_team": "RCB (Bot)", "inn1_brand_team": "RCB",
+                "inn2_team": "CSK", "inn2_brand_team": "CSK",
+                "potm_player_id": 5})
+        self.assertEqual(style.call_args.args[:2], ("RCB", "CSK"))
+        warned.assert_not_called()
 
 class InlinePotmCardTests(unittest.TestCase):
     """The card is drawn *into* the summary card now, beside the winner's name.

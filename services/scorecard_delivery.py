@@ -82,6 +82,38 @@ def _retry_after_seconds(exc):
         return 1.0
 
 
+def _plain_caption(caption):
+    """A caption with its HTML taken out, for a chat that refused the markup."""
+    import html as _html
+    import re as _re
+    if not caption:
+        return caption
+    return _html.unescape(_re.sub(r"<[^>]+>", "", str(caption)))
+
+
+def _fit_caption(caption, limit=300):
+    """A caption that fits the stored column without cutting a tag in half.
+
+    ``MatchScorecardImage.caption`` holds 300 characters. Slicing HTML at 300
+    can leave ``<b>`` open or an ``&amp;`` split, and Telegram rejects the whole
+    photo over "can't parse entities" — so a replay of a long caption failed
+    every time. Anything too long is stored as escaped plain text instead.
+    """
+    import html as _html
+    if not caption or len(caption) <= limit:
+        return caption or None
+    plain = _plain_caption(caption)
+    out = _html.escape(plain)
+    while len(out) > limit and plain:
+        plain = plain[:-10]
+        out = _html.escape(plain) + "…"
+    return out or None
+
+
+def _is_entity_error(exc):
+    return "entit" in str(exc).lower()
+
+
 async def send_photo_with_retry(bot, chat_id, photo_factory, *, caption=None,
                                 parse_mode="HTML", attempts=SEND_ATTEMPTS,
                                 **kwargs):
@@ -92,11 +124,24 @@ async def send_photo_with_retry(bot, chat_id, photo_factory, *, caption=None,
     upload: re-sending the same exhausted buffer uploads zero bytes and fails
     forever. Calling the factory per attempt hands each one a fresh stream.
 
+    Two ``BadRequest`` answers are recoverable rather than final, and both used
+    to cost the chat its card outright:
+
+      * a caption Telegram cannot parse is re-sent once as plain text — the
+        card matters more than the bold;
+      * an uploaded image Telegram will not accept *as a photo* (dimensions,
+        size, ``IMAGE_PROCESS_FAILED``) goes out once as a document instead.
+
+    A rejected ``file_id`` (a string, not bytes) still returns ``None`` at once
+    so the caller re-renders.
+
     Returns the sent ``Message``, or ``None`` when every attempt failed. A chat
     the bot can no longer post to (``Forbidden``) stops immediately — retrying
     a kick or a block just delays the caller.
     """
-    for attempt in range(attempts):
+    tried_plain = tried_document = False
+    attempt = 0
+    while attempt < attempts:
         photo = None
         try:
             photo = photo_factory()
@@ -116,10 +161,21 @@ async def send_photo_with_retry(bot, chat_id, photo_factory, *, caption=None,
             return None
         except BadRequest as exc:
             # NB: BadRequest subclasses NetworkError in PTB, so it must be
-            # caught before the NetworkError clause below. A stale/rotated
-            # file_id lands here — the caller re-renders instead.
+            # caught before the NetworkError clause below.
             logger.warning("scorecard send rejected (%s) on chat %s", exc, chat_id)
-            return None
+            if caption and parse_mode and not tried_plain and _is_entity_error(exc):
+                tried_plain = True
+                caption, parse_mode = _plain_caption(caption), None
+                continue            # a free retry: nothing was uploaded
+            if isinstance(photo, str):
+                # A stale/rotated file_id — the caller re-renders instead.
+                return None
+            if tried_document:
+                return None
+            tried_document = True
+            return await _send_as_document(bot, chat_id, photo_factory,
+                                           caption=caption,
+                                           parse_mode=parse_mode, **kwargs)
         except (TimedOut, NetworkError):
             # The photo may in fact have landed before the client gave up; a
             # duplicate card is a far smaller cost than a missing one.
@@ -127,9 +183,29 @@ async def send_photo_with_retry(bot, chat_id, photo_factory, *, caption=None,
         except Exception:
             logger.exception("scorecard send failed on chat %s", chat_id)
             await asyncio.sleep(0.75 * (attempt + 1))
+        attempt += 1
     logger.error("scorecard send gave up after %s attempts on chat %s",
                  attempts, chat_id)
     return None
+
+
+async def _send_as_document(bot, chat_id, photo_factory, *, caption=None,
+                            parse_mode=None, **kwargs):
+    """Last resort for an image Telegram refused as a photo: send the file."""
+    try:
+        from telegram import InputFile
+        photo = photo_factory()
+        if photo is None:
+            return None
+        if hasattr(photo, "seek"):
+            photo.seek(0)
+        return await bot.send_document(
+            chat_id=chat_id,
+            document=InputFile(photo, filename="scorecard.png"),
+            caption=caption, parse_mode=parse_mode, **kwargs)
+    except Exception:
+        logger.exception("scorecard document fallback failed on chat %s", chat_id)
+        return None
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -244,7 +320,8 @@ def _event_context(payload, extra):
 # stored row has outlived the code.
 _IDENTITY_KEYS = (set(_EVENT_KEYS) | set(_INNINGS_EVENT_KEYS)
                   | set(_SUMMARY_EVENT_KEYS)
-                  | {"team_user_id", "inn1_user_id", "inn2_user_id"})
+                  | {"team_user_id", "inn1_user_id", "inn2_user_id",
+                     "potm_player_id", "inn1_brand_team", "inn2_brand_team"})
 
 
 def _accepted_kwargs(func, payload):
@@ -293,8 +370,11 @@ def render_card(card_type, payload):
             return generate(**_accepted_kwargs(generate, payload))
         if card_type == CARD_SUMMARY:
             from services.match_summary_card import generate_match_summary
+            # A drawn team name can carry a label (" (Bot)") that no crest is
+            # filed under; a mode that adds one stores the clean name beside it.
             payload.update(_summary_style(
-                payload.get("inn1_team"), payload.get("inn2_team"),
+                payload.get("inn1_brand_team") or payload.get("inn1_team"),
+                payload.get("inn2_brand_team") or payload.get("inn2_team"),
                 payload.get("potm_player_id"),
                 inn1_user_id=payload.get("inn1_user_id"),
                 inn2_user_id=payload.get("inn2_user_id"),
@@ -371,7 +451,7 @@ def record_cards(match_id, chat_id, cards):
                    .first())
             payload_json = json.dumps(card.get("payload") or {},
                                       separators=(",", ":"), default=str)
-            caption = (card.get("caption") or "")[:300] or None
+            caption = _fit_caption(card.get("caption"))
             order = _sort_key(card)
             sort_order = order[0] * 10 + order[1]
             if row is None:
@@ -1006,3 +1086,51 @@ async def record_and_send(bot, chat_id, match_id, cards,
         logger.error("match %s: only %s of %s scorecard images reached chat %s",
                      match_id, sent, len(cards), chat_id)
     return sent
+
+
+async def send_summary_card(bot, chat_id, match_id, png, *, payload=None,
+                            caption=None, **kwargs):
+    """Archive and send a summary card that a mode drew itself.
+
+    /cipl, the Challenge League and the Super Over draw their own summary card
+    rather than going through :func:`record_and_send`. They used to post it with
+    one bare ``send_photo`` and keep nothing: a single timeout or flood-control
+    answer lost the card, and ``/lastscorecard`` had no row to rebuild it from,
+    so it said there was no scorecard at all. This gives them the same path as
+    /playmatch: the payload is stored first, the send is retried, the
+    ``file_id`` is cached, and when there is no image at all the numbers go out
+    as text.
+
+    ``payload`` is the generator's arguments (what :func:`render_card` takes for
+    a summary). Without it the card is still sent with retries, just not
+    archived. ``kwargs`` pass through to ``send_photo`` (e.g. ``reply_markup``).
+
+    Returns the sent ``Message`` or ``None``.
+    """
+    if payload is not None and match_id is not None:
+        record_cards(match_id, chat_id, [{
+            "card_type": CARD_SUMMARY, "innings": WHOLE_MATCH,
+            "caption": caption, "payload": payload,
+        }])
+
+    if not png:
+        if payload is not None:
+            await send_text_fallback(bot, chat_id, [
+                {"card_type": CARD_SUMMARY, "payload": payload}])
+        return None
+
+    msg = await send_photo_with_retry(
+        bot, chat_id, lambda: io.BytesIO(png), caption=caption, **kwargs)
+    if msg is None:
+        logger.error("match %s summary card never reached chat %s — "
+                     "recoverable via /lastscorecard", match_id, chat_id)
+        return None
+    if payload is not None and match_id is not None:
+        file_id = None
+        try:
+            if msg.photo:
+                file_id = msg.photo[-1].file_id
+        except Exception:
+            logger.debug("file_id capture failed (non-fatal)", exc_info=True)
+        mark_delivered(match_id, WHOLE_MATCH, CARD_SUMMARY, file_id=file_id)
+    return msg
