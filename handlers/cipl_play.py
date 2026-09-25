@@ -57,6 +57,7 @@ from services.match_state_store import (
 from services import cipl_match
 from services import impact_player
 from services import milestones
+from services import rich_message as R
 from engine.approach_modifiers import (
     BATTING_APPROACHES, BOWLING_APPROACHES,
 )
@@ -785,7 +786,8 @@ async def _clear_action_reminder(context, state):
             pass
 
 
-async def _new_action_message(context, state, text, keyboard, extras=True):
+async def _new_action_message(context, state, text, keyboard, extras=True,
+                              blocks=None):
     await _clear_action_reminder(context, state)
     # Remove any previous action/picker message BEFORE sending the new one. A
     # re-prompt (a /rcl resume, or the edit-in-place fallback in
@@ -803,21 +805,31 @@ async def _new_action_message(context, state, text, keyboard, extras=True):
             pass
         state["action_msg_id"] = None
     kb = _with_view_match(state, keyboard, extras=extras)
-    sent = await context.bot.send_message(
-        state["chat_id"], text, parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(kb) if kb else None)
+    markup = InlineKeyboardMarkup(kb) if kb else None
+    if blocks and R.rich_text_enabled():
+        # ``text`` is the HTML twin: send_rich_message falls back to it.
+        sent = await R.send_rich_message(context.bot, state["chat_id"], blocks,
+                                         text, reply_markup=markup)
+    else:
+        sent = await context.bot.send_message(
+            state["chat_id"], text, parse_mode="HTML", reply_markup=markup)
     if sent and getattr(sent, "message_id", None):
         state["action_msg_id"] = sent.message_id
         state.setdefault("over_msg_ids", []).append(sent.message_id)
     return sent
 
 
-async def _edit_action_message(context, state, text, keyboard, extras=True):
+async def _edit_action_message(context, state, text, keyboard, extras=True,
+                               blocks=None):
     await _clear_action_reminder(context, state)
     mid_msg = state.get("action_msg_id")
     kb = _with_view_match(state, keyboard, extras=extras)
     markup = InlineKeyboardMarkup(kb) if kb else None
     if mid_msg:
+        if blocks and await R.edit_rich_message(
+                context.bot, state["chat_id"], mid_msg, blocks,
+                reply_markup=markup):
+            return
         try:
             await context.bot.edit_message_text(
                 text, chat_id=state["chat_id"], message_id=mid_msg,
@@ -825,7 +837,8 @@ async def _edit_action_message(context, state, text, keyboard, extras=True):
             return
         except Exception:
             pass
-    await _new_action_message(context, state, text, keyboard, extras=extras)
+    await _new_action_message(context, state, text, keyboard, extras=extras,
+                              blocks=blocks)
 
 
 async def _post_tracked(context, state, text, keyboard=None):
@@ -2116,8 +2129,15 @@ async def _prompt_bowler(context, mid, state=None, first=False):
     text = (f"{_approach_card(state)}\n\n"
             f"🎳 {_mention_tg(state, state['bowl_user_tg'])}, pick your bowler "
             f"for {_unit_word(state)} {state['current_over']}:{part_time_note}")
+    prompt = [["🎳 ", _rich_mention(state, state['bowl_user_tg']),
+               f", pick your bowler for {_unit_word(state)} "
+               f"{state['current_over']}:"]]
+    if only_part_timers:
+        prompt.append(R.italic("⚠️ Front-line bowlers are bowled out — only "
+                               "part-time bowlers (🧤) are left."))
     try:
-        await _new_action_message(context, state, text, rows)
+        await _new_action_message(context, state, text, rows,
+                                  blocks=_approach_card_blocks(state, prompt))
         delivered = True
     except Exception:
         logger.exception("cipl: bowler prompt send failed for match %s", mid)
@@ -2189,7 +2209,13 @@ async def _bot_take_the_ball(context, mid, state):
     # No extras on this one: it is the bot's "hands the ball to X" note, not a
     # prompt anyone acts on, and the human's approach prompt that follows it
     # carries View Match + Impact Player.
-    await _new_action_message(context, state, text, None, extras=False)
+    blocks = _approach_card_blocks(state, [[
+        "🤖 ", R.bold(str(state.get('bowl_team_name', 'Bot'))),
+        " hands the ball to ", R.bold(str(bowler['name'])),
+        f" ({cipl_match.display_rating(bowler, 'bowl_rating')}) for "
+        f"{_unit_word(state)} {state['current_over']}…"]])
+    await _new_action_message(context, state, text, None, extras=False,
+                              blocks=blocks)
     await asyncio.sleep(BOT_THINK_DELAY)
     await _prompt_bowl_approach(context, mid, state)
 
@@ -2213,8 +2239,13 @@ async def _prompt_bowl_approach(context, mid, state, auto=False):
             f"🎳 Bowler: <b>{bowler['name']}</b>{note}\n"
             f"{_mention_tg(state, state['bowl_user_tg'])}, choose your "
             f"<b>Bowling Approach</b>:")
+    blocks = _approach_card_blocks(state, [
+        ["🎳 Bowler: ", R.bold(str(bowler['name'])),
+         R.italic(" (auto-picked bowler)") if auto else ""],
+        [_rich_mention(state, state['bowl_user_tg']), ", choose your ",
+         R.bold("Bowling Approach"), ":"]])
     try:
-        await _edit_action_message(context, state, text, rows)
+        await _edit_action_message(context, state, text, rows, blocks=blocks)
         delivered = True
     except Exception:
         logger.exception("cipl: bowling-approach prompt send failed for match %s",
@@ -2243,8 +2274,12 @@ async def _prompt_bat_approach(context, mid, state, auto=False):
             f"🎳 Bowler: <b>{state['current_bowler']['name']}</b>\n"
             f"🏏 {_mention_tg(state, state['bat_user_tg'])}, choose your "
             f"<b>Batting Approach</b>:")
+    blocks = _approach_card_blocks(state, [
+        ["🎳 Bowler: ", R.bold(str(state['current_bowler']['name']))],
+        ["🏏 ", _rich_mention(state, state['bat_user_tg']), ", choose your ",
+         R.bold("Batting Approach"), ":"]])
     try:
-        await _edit_action_message(context, state, text, rows)
+        await _edit_action_message(context, state, text, rows, blocks=blocks)
         delivered = True
     except Exception:
         logger.exception("cipl: batting-approach prompt send failed for match %s",
@@ -3406,13 +3441,13 @@ def _over_emoji_strip(state):
     return "".join(cipl_match._SYM.get(_sym_key(s), s) for s in tl)
 
 
-def _commentary_block(state):
-    """Last over's ball-by-ball as an expandable Telegram quote (newest first)."""
-    entries = state.get("last_over_commentary") or []
-    if not entries:
-        return ""
-    lines = []
-    for e in reversed(entries):
+def _commentary_rows(state):
+    """Last over's ball-by-ball as ``(over, text, emoji)`` rows, newest first.
+
+    Shared by the HTML card and its block twin so both show the same lines.
+    """
+    rows = []
+    for e in reversed(state.get("last_over_commentary") or []):
         etype = e.get("type")
         # A wicket is emitted as a ball row (rich commentary, carries the W) plus
         # a paired "wicket" summary card; rich Mini App cards (end_of_over /
@@ -3423,10 +3458,17 @@ def _commentary_block(state):
         emoji = _CMT_EMOJI.get(etype, "")
         if etype == "ball" and e.get("isWicket"):
             emoji = "⭕"
-        text = html.escape(str(e.get("text", "")))
-        over = html.escape(str(e.get("over", "")))
-        lines.append(f"{over} {text} {emoji}".rstrip())
-    body = "\n".join(lines)
+        rows.append((str(e.get("over", "")), str(e.get("text", "")), emoji))
+    return rows
+
+
+def _commentary_block(state):
+    """Last over's ball-by-ball as an expandable Telegram quote (newest first)."""
+    rows = _commentary_rows(state)
+    if not rows:
+        return ""
+    body = "\n".join(f"{html.escape(over)} {html.escape(text)} {emoji}".rstrip()
+                     for over, text, emoji in rows)
     return f'\n🟩 <b>COMMENTARY</b>\n<blockquote expandable>"{body}"</blockquote>'
 
 
@@ -3485,6 +3527,196 @@ def _approach_card(state):
     return card
 
 
+def _approach_card_blocks(state, prompt=()):
+    """The block twin of ``_approach_card``, with the prompt that follows it.
+
+    Same sections in the same order, each as the block that fits it: both
+    totals and the two batters as tables (so the columns line up whatever the
+    names), the chase as a pullquote because it is the one number that matters,
+    CHEM/OVR as a two-column match-up, and the last over's commentary behind a
+    ``details`` so the approach buttons stay on screen. ``prompt`` is a list of
+    RichText lines appended as paragraphs under a divider.
+
+    Returns None rather than raising — the caller then sends the HTML card.
+    """
+    try:
+        return _build_approach_card_blocks(state, prompt)
+    except Exception:
+        logger.exception("cipl approach card blocks failed to build")
+        return None
+
+
+def _build_approach_card_blocks(state, prompt):
+    inn = state.get("innings", 1)
+    bat_name = str(state["bat_team_name"])
+    bat_emoji = state.get("bat_team_emoji", "🏏")
+    bat_code = str(state.get("bat_team_code") or "") or bat_name
+    bowl_emoji = state.get("bowl_team_emoji", "🏏")
+    bowl_code = str(state.get("bowl_team_code") or "") or str(state["bowl_team_name"])
+    unit = _unit_word(state, cap=True)
+
+    blocks = [R.heading(f"🏏 Innings {inn} · {bat_name} batting", size=3)]
+
+    # ── Both totals ──
+    score_row = [R.cell(bat_emoji), R.cell(R.bold(bat_code)),
+                 R.cell(R.bold(cipl_match.format_score(state)), align="right"),
+                 R.cell(f"({_progress(state)})", align="right")]
+    if inn == 2:
+        rows = [[R.cell(bowl_emoji), R.cell(bowl_code),
+                 R.cell(f"{state.get('inn1_runs', 0)}/"
+                        f"{state.get('inn1_wickets', 0)}", align="right"),
+                 R.cell(f"({state.get('inn1_overs', '')})", align="right")],
+                score_row]
+    else:
+        rows = [score_row,
+                [R.cell(bowl_emoji), R.cell(bowl_code),
+                 R.cell(R.italic("Yet to bat"), align="right"), R.cell("")]]
+    blocks.append(R.table(rows, bordered=True, compact=True))
+
+    # ── The chase, or the run rate ──
+    crr = cipl_match.current_run_rate(state)
+    c = cipl_match.chase(state)
+    if c and c["runs_required"] > 0:
+        blocks.append(R.pullquote(
+            ["🎯 Need ", R.bold(str(c["runs_required"])), " off ",
+             R.bold(str(c["balls_remaining"])), " balls"],
+            caption=f"Target {c['target']} · RRR {c['rrr']:.2f} · CRR {crr:.2f}"))
+    else:
+        blocks.append(R.paragraph(["⚡ ", R.bold("CRR"), f"  {crr:.2f}"]))
+
+    # ── At the crease ──
+    bs = state["bat_stats"]
+    bat_rows = [[R.cell(R.bold("BATTER"), header=True),
+                 R.cell(R.bold("R"), header=True, align="right"),
+                 R.cell(R.bold("B"), header=True, align="right"),
+                 R.cell(R.bold("4s"), header=True, align="right"),
+                 R.cell(R.bold("6s"), header=True, align="right"),
+                 R.cell(R.bold("SR"), header=True, align="right")]]
+    for idx_key, on_strike in (("striker_idx", True), ("non_striker_idx", False)):
+        player = state["batting_order"][state[idx_key]]
+        st = bs.get(str(player["roster_id"]), {})
+        runs, balls = st.get("runs", 0), st.get("balls", 0)
+        name = impact_player.display_name(player)
+        bat_rows.append([
+            R.cell(R.bold(f"🔹 {name}") if on_strike else f"     {name}"),
+            R.cell(R.bold(str(runs)), align="right"),
+            R.cell(str(balls), align="right"),
+            R.cell(str(st.get("fours", 0)), align="right"),
+            R.cell(str(st.get("sixes", 0)), align="right"),
+            R.cell(f"{runs / balls * 100:.0f}" if balls else "—", align="right"),
+        ])
+    blocks.append(R.table(bat_rows, bordered=True, compact=True,
+                          caption=R.bold(f"{bat_emoji} {bat_code} · Bat")))
+
+    # ── The attack ──
+    bowl_caption = [R.bold(f"{bowl_emoji} {bowl_code} · Bowl"),
+                    f"   Last {unit.lower()}: {_over_emoji_strip(state)}"]
+    bowler = state.get("current_bowler")
+    bws = state["bowl_stats"].get(str(bowler["roster_id"])) if bowler else None
+    if bws:
+        balls = bws.get("balls", 0)
+        overs = f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6)
+        runs = bws.get("runs", 0)
+        blocks.append(R.table([
+            [R.cell(R.bold("BOWLER"), header=True),
+             R.cell(R.bold("O"), header=True, align="right"),
+             R.cell(R.bold("R"), header=True, align="right"),
+             R.cell(R.bold("W"), header=True, align="right"),
+             R.cell(R.bold("ECON"), header=True, align="right")],
+            [R.cell(str(bowler["name"])),
+             R.cell(overs, align="right"),
+             R.cell(str(runs), align="right"),
+             R.cell(R.bold(str(bws.get("wickets", 0))), align="right"),
+             R.cell(f"{runs / (balls / 6.0):.2f}" if balls else "—",
+                    align="right")],
+        ], bordered=True, compact=True, caption=bowl_caption))
+    else:
+        blocks.append(R.paragraph(bowl_caption))
+
+    # ── CHEM / OVR match-up (Lets Play only) ──
+    chem = _chem_badges(state)
+    boost = _trait_boost(state)
+    if chem or boost:
+        header = [R.cell(None, header=True)]
+        if chem:
+            header.append(R.cell(R.bold("🧪 CHEM"), header=True, align="right"))
+        if boost:
+            header.append(R.cell(R.bold("⚡ OVR"), header=True, align="right"))
+        rows = [header]
+        for side, code in ((0, bat_code), (1, bowl_code)):
+            row = [R.cell(R.bold(code))]
+            if chem:
+                row.append(R.cell(chem[side].split("/")[0], align="right"))
+            if boost:
+                b = boost[side]
+                row.append(R.cell([f"{b['base']} → ",
+                                   R.bold(f"{b['effective']:.1f}")],
+                                  align="right"))
+            rows.append(row)
+        blocks.append(R.table(rows, bordered=True, compact=True))
+
+    # ── Last over, ball by ball ──
+    cmt = _commentary_rows(state)
+    if cmt:
+        blocks.append(R.details(
+            R.bold(f"🎙 Commentary — last {unit.lower()}"),
+            [R.blockquote([R.paragraph([R.bold(over), "  ", text,
+                                        f"  {emoji}" if emoji else ""])
+                           for over, text, emoji in cmt])]))
+
+    if prompt:
+        blocks.append(R.divider())
+        blocks.extend(R.paragraph(line) for line in prompt if line)
+    return blocks
+
+
+def _rich_mention(state, tg_id, fallback="Player"):
+    """The block twin of ``_mention_tg``: a bold ``tg://user`` mention node."""
+    if tg_id == BOT_TG_ID_:
+        return R.bold("🤖 Bot")
+    names = state.get("user_names") or {}
+    return R.mention(R.bold(str(names.get(str(tg_id), fallback))), tg_id)
+
+
+def _chem_badges(state):
+    """Both sides' live chemistry badges (``"🟩 88/100"``), or None.
+
+    The data half of ``_chem_line`` — see its docstring for the scoping rule —
+    so the HTML card and its block twin agree on when the numbers show.
+    """
+    if not state.get("is_letsplay"):
+        return None
+    try:
+        from services import chemistry
+        bat = chemistry.live_badge(state.get("bat_xi") or [])
+        bowl = chemistry.live_badge(state.get("bowl_xi") or [])
+    except Exception:
+        logger.exception("letsplay chemistry line failed")
+        return None
+    if not bat or not bowl:
+        return None
+    return bat, bowl
+
+
+def _trait_boost(state):
+    """Both sides' ``team_rating_card`` dicts, or None when there is no boost.
+
+    The data half of ``_trait_boost_line``, shared with the block twin.
+    """
+    if not state.get("is_letsplay"):
+        return None
+    try:
+        from services.trait_rating_service import team_rating_card
+        bat = team_rating_card(state.get("bat_xi") or [])
+        bowl = team_rating_card(state.get("bowl_xi") or [])
+    except Exception:
+        logger.exception("letsplay trait boost line failed")
+        return None
+    if not (bat["bonus"] or bowl["bonus"]):
+        return None
+    return bat, bowl
+
+
 def _chem_line(state):
     """``🧪 CHEM  MI 🟩 88  ·  CSK 🟨 74`` for the board, or '' if it doesn't apply.
 
@@ -3501,17 +3733,10 @@ def _chem_line(state):
     be meaningless. Renders nothing, rather than a wrong number, whenever a side
     can't be scored.
     """
-    if not state.get("is_letsplay"):
+    badges = _chem_badges(state)
+    if not badges:
         return ""
-    try:
-        from services import chemistry
-        bat = chemistry.live_badge(state.get("bat_xi") or [])
-        bowl = chemistry.live_badge(state.get("bowl_xi") or [])
-    except Exception:
-        logger.exception("letsplay chemistry line failed")
-        return ""
-    if not bat or not bowl:
-        return ""
+    bat, bowl = badges
     bat_code = html.escape(str(state.get("bat_team_code")
                                or state.get("bat_team_name") or "Bat"))
     bowl_code = html.escape(str(state.get("bowl_team_code")
@@ -3539,17 +3764,10 @@ def _trait_boost_line(state):
     already in flight when this shipped shows the line too instead of a blank —
     the boost is a pure function of the eleven cards and their traits.
     """
-    if not state.get("is_letsplay"):
+    boost = _trait_boost(state)
+    if not boost:
         return ""
-    try:
-        from services.trait_rating_service import team_rating_card
-        bat = team_rating_card(state.get("bat_xi") or [])
-        bowl = team_rating_card(state.get("bowl_xi") or [])
-    except Exception:
-        logger.exception("letsplay trait boost line failed")
-        return ""
-    if not (bat["bonus"] or bowl["bonus"]):
-        return ""
+    bat, bowl = boost
     bat_code = html.escape(str(state.get("bat_team_code")
                                or state.get("bat_team_name") or "Bat"))
     bowl_code = html.escape(str(state.get("bowl_team_code")
