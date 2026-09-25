@@ -323,6 +323,204 @@ class AcceptedKwargsTests(unittest.TestCase):
         self.assertEqual(calls["team_name"], "Alpha")
 
 
+class RecoverableRejectionTests(unittest.TestCase):
+    """Two ``BadRequest`` answers used to lose a card that could have landed."""
+
+    def test_an_unparseable_caption_is_resent_as_plain_text(self):
+        from telegram.error import BadRequest
+        bot = MagicMock()
+        sent = MagicMock()
+        bot.send_photo = AsyncMock(side_effect=[
+            BadRequest("Can't parse entities: unclosed start tag"), sent])
+        result = _run(sd.send_photo_with_retry(
+            bot, -100, lambda: b"png", caption="<b>Kings &amp; Co"))
+        self.assertIs(result, sent)
+        retry = bot.send_photo.await_args_list[1].kwargs
+        self.assertEqual(retry["caption"], "Kings & Co")
+        self.assertIsNone(retry["parse_mode"])
+
+    def test_an_image_refused_as_a_photo_goes_out_as_a_document(self):
+        import io
+        from telegram.error import BadRequest
+        bot = MagicMock()
+        doc = MagicMock()
+        bot.send_photo = AsyncMock(side_effect=BadRequest("IMAGE_PROCESS_FAILED"))
+        bot.send_document = AsyncMock(return_value=doc)
+        result = _run(sd.send_photo_with_retry(
+            bot, -100, lambda: io.BytesIO(b"png"), caption="c",
+            reply_markup="kb"))
+        self.assertIs(result, doc)
+        self.assertEqual(bot.send_document.await_args.kwargs["reply_markup"], "kb")
+
+    def test_a_rejected_file_id_is_not_sent_as_a_document(self):
+        """The caller re-renders a stale id; a document of it would fail too."""
+        from telegram.error import BadRequest
+        bot = MagicMock()
+        bot.send_photo = AsyncMock(side_effect=BadRequest("wrong file identifier"))
+        bot.send_document = AsyncMock()
+        self.assertIsNone(_run(sd.send_photo_with_retry(
+            bot, -100, lambda: "stale-id")))
+        bot.send_document.assert_not_awaited()
+
+
+class FitCaptionTests(unittest.TestCase):
+    def test_a_short_caption_is_kept_as_is(self):
+        self.assertEqual(sd._fit_caption("<b>ok</b>"), "<b>ok</b>")
+
+    def test_a_long_caption_never_stores_half_a_tag(self):
+        """A 300-character slice of HTML left ``<b>`` open, and Telegram then
+        refused every replay of that card."""
+        caption = "<b>" + ("Kings &amp; Co " * 40) + "</b>"
+        fitted = sd._fit_caption(caption)
+        self.assertLessEqual(len(fitted), 300)
+        self.assertNotIn("<", fitted)
+        self.assertNotRegex(fitted, r"&[a-z]*$")
+
+
+class SendSummaryCardTests(unittest.TestCase):
+    """/cipl, the Challenge League and the Super Over draw their own summary
+    card. It used to go out with one bare send and was never stored, so
+    /lastscorecard had nothing to bring back for any of those matches."""
+
+    def setUp(self):
+        from database import get_session
+        from models import MatchScorecardImage
+        session = get_session()
+        try:
+            session.query(MatchScorecardImage).delete()
+            session.commit()
+        finally:
+            session.close()
+
+    _PAYLOAD = {"inn1_team": "A", "inn1_runs": 150, "inn1_wickets": 4,
+                "inn1_overs": "20", "inn2_team": "B", "inn2_runs": 120,
+                "inn2_wickets": 9, "inn2_overs": "20", "winner_name": "A",
+                "win_margin_text": "won by 30 runs"}
+
+    def test_it_is_archived_and_its_file_id_cached(self):
+        bot = MagicMock()
+        bot.send_photo = AsyncMock(return_value=MagicMock(
+            photo=[MagicMock(file_id="sum-id")]))
+        msg = _run(sd.send_summary_card(
+            bot, -700, 301, b"png", payload=dict(self._PAYLOAD),
+            caption="<b>Summary</b>", reply_markup="kb"))
+        self.assertIsNotNone(msg)
+        self.assertEqual(bot.send_photo.await_args.kwargs["reply_markup"], "kb")
+        stored = sd.load_cards(301)
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0]["card_type"], sd.CARD_SUMMARY)
+        self.assertEqual(stored[0]["chat_id"], -700)
+        self.assertEqual(stored[0]["file_id"], "sum-id")
+        self.assertTrue(stored[0]["delivered"])
+        self.assertEqual(sd.latest_match_id_for_chat(-700), 301)
+
+    def test_a_send_that_never_lands_is_still_replayable(self):
+        bot = MagicMock()
+        bot.send_photo = AsyncMock(side_effect=TimedOut())
+        with unittest.mock.patch.object(sd.asyncio, "sleep", new=AsyncMock()):
+            msg = _run(sd.send_summary_card(
+                bot, -700, 302, b"png", payload=dict(self._PAYLOAD)))
+        self.assertIsNone(msg)
+        stored = sd.load_cards(302)
+        self.assertEqual(len(stored), 1)
+        self.assertFalse(stored[0]["delivered"])
+
+    def test_no_image_posts_the_numbers_as_text(self):
+        bot = MagicMock()
+        bot.send_photo = AsyncMock()
+        bot.send_message = AsyncMock()
+        _run(sd.send_summary_card(bot, -700, 303, None,
+                                  payload=dict(self._PAYLOAD)))
+        bot.send_photo.assert_not_awaited()
+        bot.send_message.assert_awaited_once()
+        self.assertEqual(len(sd.load_cards(303)), 1)
+
+    def test_without_a_payload_it_still_sends_with_retries(self):
+        bot = MagicMock()
+        sent = MagicMock()
+        bot.send_photo = AsyncMock(side_effect=[TimedOut(), sent])
+        with unittest.mock.patch.object(sd.asyncio, "sleep", new=AsyncMock()):
+            msg = _run(sd.send_summary_card(bot, -700, 304, b"png"))
+        self.assertIs(msg, sent)
+        self.assertEqual(sd.load_cards(304), [])
+
+
+def _innings_cards(match_id, runs1=150, wkts1=6, runs2=120, wkts2=10):
+    def bat(team, uid, inn, runs, wkts):
+        return {"card_type": "batting", "innings": inn, "payload": {
+            "team_name": team, "team_user_id": uid, "total_runs": runs,
+            "total_wickets": wkts, "overs_str": "20", "match_no": match_id,
+            "batsmen_rows": [
+                {"name": f"{team} A", "runs": 60, "balls": 40, "status": "out"},
+                {"name": f"{team} B", "runs": 5, "balls": 9, "status": "not_out"},
+                {"name": f"{team} C", "runs": 0, "balls": 0, "status": "dnb"}]}}
+
+    def bowl(team, inn):
+        return {"card_type": "bowling", "innings": inn, "payload": {
+            "team_name": team, "bowlers_rows": [
+                {"name": f"{team} X", "overs": "4", "runs_conceded": 20,
+                 "wickets": 3, "economy": 5.0}]}}
+
+    return [bat("Alpha", 1, 1, runs1, wkts1), bowl("Beta", 1),
+            bat("Beta", 2, 2, runs2, wkts2), bowl("Alpha", 2)]
+
+
+class DerivedSummaryTests(unittest.TestCase):
+    """Bowl-out finishes, WSP autoplay and older matches stored no summary
+    card, so /lastscorecard replayed them without the Match Summary image."""
+
+    def setUp(self):
+        from database import get_session
+        from models import MatchScorecardImage
+        session = get_session()
+        try:
+            session.query(MatchScorecardImage).delete()
+            session.commit()
+        finally:
+            session.close()
+
+    def test_the_result_comes_from_the_match_row(self):
+        payload = sd.derive_summary_payload(
+            _innings_cards(1, runs2=150), winner_user_id=2,
+            margin_type="bowl-out", overs_total=20)
+        self.assertEqual(payload["winner_name"], "Beta")
+        self.assertEqual(payload["win_margin_text"], "the bowl-out")
+        self.assertEqual(payload["inn1_runs"], 150)
+        self.assertEqual(payload["inn2_user_id"], 2)
+
+    def test_without_a_match_row_the_scores_decide(self):
+        payload = sd.derive_summary_payload(_innings_cards(1))
+        self.assertEqual(payload["winner_name"], "Alpha")
+        self.assertEqual(payload["win_margin_text"], "by 30 runs")
+
+    def test_the_panels_are_the_stored_rows(self):
+        panels = sd.derive_summary_payload(
+            _innings_cards(1), potm_name="Alpha A")
+        inn1 = panels["top_per_team"]["inn1"]
+        self.assertEqual([b["name"] for b in inn1["batters"]],
+                         ["Alpha A", "Alpha B"])   # did-not-bat left out
+        self.assertEqual(inn1["bowlers"][0]["runs"], 20)
+        self.assertEqual(panels["potm_stats"], "60 (40)")
+
+    def test_half_a_match_is_not_a_summary(self):
+        self.assertIsNone(sd.derive_summary_payload(_innings_cards(1)[:2]))
+
+    def test_ensure_adds_and_stores_a_missing_summary(self):
+        sd.record_cards(401, -900, _innings_cards(401))
+        cards = sd.ensure_summary_card(401, sd.load_cards(401),
+                                       winner_user_id=1, margin_type="runs",
+                                       margin_value=30)
+        self.assertEqual(cards[-1]["card_type"], sd.CARD_SUMMARY)
+        self.assertEqual(cards[-1]["chat_id"], -900)
+        self.assertIn("Alpha won by 30 runs", cards[-1]["caption"])
+        # Stored, so the next replay reuses it (and its cached file_id).
+        self.assertEqual(len(sd.load_cards(401)), 5)
+
+    def test_ensure_leaves_a_stored_summary_alone(self):
+        cards = [{"card_type": sd.CARD_SUMMARY, "payload": {"winner_name": "Z"}}]
+        self.assertEqual(sd.ensure_summary_card(402, cards), cards)
+
+
 class PersistenceTests(unittest.TestCase):
     """The values outlive the live match state, which is the whole point."""
 
@@ -674,6 +872,21 @@ class IdentityKeyTests(unittest.TestCase):
         self.assertIn("some_key_from_2024", warned.call_args.args[-1])
 
 
+    def test_a_summary_brands_from_the_clean_team_name(self):
+        """/cipl draws "RCB (Bot)"; no crest is filed under that name."""
+        with unittest.mock.patch.object(sd, "_summary_style",
+                                        return_value={}) as style, \
+                unittest.mock.patch(
+                    "services.match_summary_card.generate_match_summary",
+                    return_value=b"png"), \
+                unittest.mock.patch.object(sd.logger, "warning") as warned:
+            sd.render_card(sd.CARD_SUMMARY, {
+                "inn1_team": "RCB (Bot)", "inn1_brand_team": "RCB",
+                "inn2_team": "CSK", "inn2_brand_team": "CSK",
+                "potm_player_id": 5})
+        self.assertEqual(style.call_args.args[:2], ("RCB", "CSK"))
+        warned.assert_not_called()
+
 class InlinePotmCardTests(unittest.TestCase):
     """The card is drawn *into* the summary card now, beside the winner's name.
 
@@ -801,6 +1014,32 @@ class TextFallbackTests(unittest.TestCase):
         self.assertIsNone(sd.text_scorecard([]))
         self.assertIsNone(sd.text_scorecard(
             [{"card_type": "summary", "innings": 0, "payload": {}}]))
+
+
+class ResultLineTests(unittest.TestCase):
+    """Every mode words its margin differently; the text must read right."""
+
+    def _text(self, winner, margin):
+        return sd.text_scorecard([{"card_type": sd.CARD_SUMMARY, "payload": {
+            "winner_name": winner, "win_margin_text": margin}}])
+
+    def test_a_playmatch_margin(self):
+        self.assertIn("A won by 6 wickets", self._text("A", "by 6 wickets"))
+
+    def test_a_cipl_margin_is_not_doubled(self):
+        text = self._text("Bot XI", "won by 6 wickets")
+        self.assertIn("Bot XI won by 6 wickets", text)
+        self.assertNotIn("won won", text)
+
+    def test_a_tie(self):
+        text = self._text("Match Tied", "Match Tied")
+        self.assertIn("Match tied", text)
+        self.assertNotIn("Tied won", text)
+
+    def test_the_rich_blocks_agree(self):
+        blocks = sd.scorecard_blocks([{"card_type": sd.CARD_SUMMARY, "payload": {
+            "winner_name": "Bot XI", "win_margin_text": "won by 6 wickets"}}])
+        self.assertNotIn("won won", repr(blocks))
 
 
 class RecordAndSendTests(unittest.TestCase):

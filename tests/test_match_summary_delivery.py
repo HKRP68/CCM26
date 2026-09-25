@@ -11,6 +11,7 @@ is exactly why it read as "the bot matches don't generate a scorecard".
 
 import asyncio
 import unittest
+from unittest import mock
 from unittest.mock import AsyncMock, MagicMock
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -233,6 +234,31 @@ class EndOfMatchDeliveryTests(unittest.TestCase):
             ma.build_match_analysis_html = real
         self.ctx.bot.send_document.assert_not_called()
         self.assertEqual(cleaned, [42])
+
+    def test_the_summary_is_archived_for_lastscorecard(self):
+        """A /cipl summary used to be sent and forgotten, so /lastscorecard
+        answered "no scorecard yet" for every Challenge League match."""
+        from services import scorecard_delivery as sd
+
+        def build(state, result):
+            state["_summary_payload"] = {"inn1_team": "You", "winner_name": "Bot XI"}
+            return b"PNGDATA"
+
+        cp._build_cipl_summary_image = build
+        recorded = []
+        with mock.patch.object(sd, "record_cards",
+                               side_effect=lambda *a, **k: recorded.append(a)), \
+                mock.patch.object(sd, "mark_delivered"):
+            self._run()
+        self.ctx.bot.send_photo.assert_called_once()
+        self.assertEqual(len(recorded), 1)
+        match_id, chat_id, cards = recorded[0]
+        self.assertEqual(match_id, 42)
+        self.assertEqual(chat_id, self.state["chat_id"])
+        self.assertEqual(cards[0]["card_type"], sd.CARD_SUMMARY)
+        self.assertEqual(cards[0]["payload"]["winner_name"], "Bot XI")
+        # The payload does not ride along in the saved match state.
+        self.assertNotIn("_summary_payload", self.state)
 
 
 if __name__ == "__main__":

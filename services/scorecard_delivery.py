@@ -82,6 +82,38 @@ def _retry_after_seconds(exc):
         return 1.0
 
 
+def _plain_caption(caption):
+    """A caption with its HTML taken out, for a chat that refused the markup."""
+    import html as _html
+    import re as _re
+    if not caption:
+        return caption
+    return _html.unescape(_re.sub(r"<[^>]+>", "", str(caption)))
+
+
+def _fit_caption(caption, limit=300):
+    """A caption that fits the stored column without cutting a tag in half.
+
+    ``MatchScorecardImage.caption`` holds 300 characters. Slicing HTML at 300
+    can leave ``<b>`` open or an ``&amp;`` split, and Telegram rejects the whole
+    photo over "can't parse entities" — so a replay of a long caption failed
+    every time. Anything too long is stored as escaped plain text instead.
+    """
+    import html as _html
+    if not caption or len(caption) <= limit:
+        return caption or None
+    plain = _plain_caption(caption)
+    out = _html.escape(plain)
+    while len(out) > limit and plain:
+        plain = plain[:-10]
+        out = _html.escape(plain) + "…"
+    return out or None
+
+
+def _is_entity_error(exc):
+    return "entit" in str(exc).lower()
+
+
 async def send_photo_with_retry(bot, chat_id, photo_factory, *, caption=None,
                                 parse_mode="HTML", attempts=SEND_ATTEMPTS,
                                 **kwargs):
@@ -92,11 +124,24 @@ async def send_photo_with_retry(bot, chat_id, photo_factory, *, caption=None,
     upload: re-sending the same exhausted buffer uploads zero bytes and fails
     forever. Calling the factory per attempt hands each one a fresh stream.
 
+    Two ``BadRequest`` answers are recoverable rather than final, and both used
+    to cost the chat its card outright:
+
+      * a caption Telegram cannot parse is re-sent once as plain text — the
+        card matters more than the bold;
+      * an uploaded image Telegram will not accept *as a photo* (dimensions,
+        size, ``IMAGE_PROCESS_FAILED``) goes out once as a document instead.
+
+    A rejected ``file_id`` (a string, not bytes) still returns ``None`` at once
+    so the caller re-renders.
+
     Returns the sent ``Message``, or ``None`` when every attempt failed. A chat
     the bot can no longer post to (``Forbidden``) stops immediately — retrying
     a kick or a block just delays the caller.
     """
-    for attempt in range(attempts):
+    tried_plain = tried_document = False
+    attempt = 0
+    while attempt < attempts:
         photo = None
         try:
             photo = photo_factory()
@@ -116,10 +161,21 @@ async def send_photo_with_retry(bot, chat_id, photo_factory, *, caption=None,
             return None
         except BadRequest as exc:
             # NB: BadRequest subclasses NetworkError in PTB, so it must be
-            # caught before the NetworkError clause below. A stale/rotated
-            # file_id lands here — the caller re-renders instead.
+            # caught before the NetworkError clause below.
             logger.warning("scorecard send rejected (%s) on chat %s", exc, chat_id)
-            return None
+            if caption and parse_mode and not tried_plain and _is_entity_error(exc):
+                tried_plain = True
+                caption, parse_mode = _plain_caption(caption), None
+                continue            # a free retry: nothing was uploaded
+            if isinstance(photo, str):
+                # A stale/rotated file_id — the caller re-renders instead.
+                return None
+            if tried_document:
+                return None
+            tried_document = True
+            return await _send_as_document(bot, chat_id, photo_factory,
+                                           caption=caption,
+                                           parse_mode=parse_mode, **kwargs)
         except (TimedOut, NetworkError):
             # The photo may in fact have landed before the client gave up; a
             # duplicate card is a far smaller cost than a missing one.
@@ -127,9 +183,29 @@ async def send_photo_with_retry(bot, chat_id, photo_factory, *, caption=None,
         except Exception:
             logger.exception("scorecard send failed on chat %s", chat_id)
             await asyncio.sleep(0.75 * (attempt + 1))
+        attempt += 1
     logger.error("scorecard send gave up after %s attempts on chat %s",
                  attempts, chat_id)
     return None
+
+
+async def _send_as_document(bot, chat_id, photo_factory, *, caption=None,
+                            parse_mode=None, **kwargs):
+    """Last resort for an image Telegram refused as a photo: send the file."""
+    try:
+        from telegram import InputFile
+        photo = photo_factory()
+        if photo is None:
+            return None
+        if hasattr(photo, "seek"):
+            photo.seek(0)
+        return await bot.send_document(
+            chat_id=chat_id,
+            document=InputFile(photo, filename="scorecard.png"),
+            caption=caption, parse_mode=parse_mode, **kwargs)
+    except Exception:
+        logger.exception("scorecard document fallback failed on chat %s", chat_id)
+        return None
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -244,7 +320,8 @@ def _event_context(payload, extra):
 # stored row has outlived the code.
 _IDENTITY_KEYS = (set(_EVENT_KEYS) | set(_INNINGS_EVENT_KEYS)
                   | set(_SUMMARY_EVENT_KEYS)
-                  | {"team_user_id", "inn1_user_id", "inn2_user_id"})
+                  | {"team_user_id", "inn1_user_id", "inn2_user_id",
+                     "potm_player_id", "inn1_brand_team", "inn2_brand_team"})
 
 
 def _accepted_kwargs(func, payload):
@@ -293,8 +370,11 @@ def render_card(card_type, payload):
             return generate(**_accepted_kwargs(generate, payload))
         if card_type == CARD_SUMMARY:
             from services.match_summary_card import generate_match_summary
+            # A drawn team name can carry a label (" (Bot)") that no crest is
+            # filed under; a mode that adds one stores the clean name beside it.
             payload.update(_summary_style(
-                payload.get("inn1_team"), payload.get("inn2_team"),
+                payload.get("inn1_brand_team") or payload.get("inn1_team"),
+                payload.get("inn2_brand_team") or payload.get("inn2_team"),
                 payload.get("potm_player_id"),
                 inn1_user_id=payload.get("inn1_user_id"),
                 inn2_user_id=payload.get("inn2_user_id"),
@@ -371,7 +451,7 @@ def record_cards(match_id, chat_id, cards):
                    .first())
             payload_json = json.dumps(card.get("payload") or {},
                                       separators=(",", ":"), default=str)
-            caption = (card.get("caption") or "")[:300] or None
+            caption = _fit_caption(card.get("caption"))
             order = _sort_key(card)
             sort_order = order[0] * 10 + order[1]
             if row is None:
@@ -547,6 +627,180 @@ def latest_match_id_for_user(user_id, session=None):
     finally:
         if own_session:
             session.close()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# A summary for a match that never stored one
+# ══════════════════════════════════════════════════════════════════════
+
+# How a stored ``Match.margin_type`` reads after "<winner> won".
+_MARGIN_PHRASES = {
+    "super_over": "in the Super Over",
+    "super over": "in the Super Over",
+    "bowl-out": "the bowl-out",
+    "bowlout": "the bowl-out",
+    "forfeit": "by forfeit",
+}
+
+
+def _margin_text(margin_type, margin_value):
+    kind = str(margin_type or "").strip().lower()
+    if kind in ("runs", "wickets") and margin_value not in (None, ""):
+        unit = kind[:-1] if str(margin_value) == "1" else kind
+        return f"by {margin_value} {unit}"
+    return _MARGIN_PHRASES.get(kind, "")
+
+
+def _summary_batters(rows, top_n=4):
+    out = []
+    for row in rows or []:
+        if row.get("status") == "dnb" or not row.get("balls"):
+            continue
+        out.append({
+            "name": row.get("name", "—"), "rating": row.get("rating", "—"),
+            "runs": row.get("runs", 0), "balls": row.get("balls", 0),
+            "fours": row.get("fours", 0), "sixes": row.get("sixes", 0),
+            "out": row.get("status") == "out",
+        })
+    out.sort(key=lambda r: (-(r["runs"] or 0), r["balls"] or 0))
+    return out[:top_n]
+
+
+def _summary_bowlers(rows, top_n=4):
+    out = []
+    for row in rows or []:
+        out.append({
+            "name": row.get("name", "—"), "rating": row.get("rating", "—"),
+            "overs": row.get("overs", "0"), "runs": row.get("runs_conceded", 0),
+            "wickets": row.get("wickets", 0),
+            "econ": row.get("economy", 0.0) or 0.0,
+        })
+    out.sort(key=lambda r: (-(r["wickets"] or 0), r["econ"]))
+    return out[:top_n]
+
+
+def _potm_line(name, bat_rows, bowl_rows):
+    """"54 (31) · 2/18"-style figures for a named player, from the stored rows."""
+    if not name:
+        return None
+    parts = []
+    for row in bat_rows:
+        if row.get("name") == name and row.get("balls"):
+            parts.append(f"{row.get('runs', 0)} ({row.get('balls', 0)})")
+            break
+    for row in bowl_rows:
+        if row.get("name") == name:
+            parts.append(f"{row.get('wickets', 0)}/{row.get('runs_conceded', 0)}")
+            break
+    return " · ".join(parts) or None
+
+
+def derive_summary_payload(cards, *, winner_user_id=None, margin_type=None,
+                           margin_value=None, overs_total=None,
+                           potm_player_id=None, potm_name=None):
+    """A summary card's payload built from a match's stored innings cards.
+
+    Bowl-out finishes, the WSP autoplay path and every match archived before
+    the summary card was stored have their batting and bowling cards but no
+    summary, so /lastscorecard used to replay them without one. The summary's
+    per-innings panels are exactly the rows those cards already hold; the
+    result comes from the ``Match`` row. Returns ``None`` when either innings'
+    batting card is missing — half a match is not a summary.
+    """
+    by_key = {(c.get("innings"), c.get("card_type")): (c.get("payload") or {})
+              for c in cards or []}
+    bat1 = by_key.get((1, CARD_BATTING))
+    bat2 = by_key.get((2, CARD_BATTING))
+    if not bat1 or not bat2:
+        return None
+    bowl1 = by_key.get((1, CARD_BOWLING)) or {}
+    bowl2 = by_key.get((2, CARD_BOWLING)) or {}
+
+    team1 = bat1.get("team_name") or "Team 1"
+    team2 = bat2.get("team_name") or "Team 2"
+    r1, w1 = bat1.get("total_runs", 0) or 0, bat1.get("total_wickets", 0) or 0
+    r2, w2 = bat2.get("total_runs", 0) or 0, bat2.get("total_wickets", 0) or 0
+
+    winner = None
+    if winner_user_id is not None:
+        if bat1.get("team_user_id") == winner_user_id:
+            winner = team1
+        elif bat2.get("team_user_id") == winner_user_id:
+            winner = team2
+    margin = _margin_text(margin_type, margin_value)
+    if winner is None:
+        # No usable Match row: read the result off the scores.
+        if r2 > r1:
+            winner, margin = team2, f"by {max(10 - w2, 0)} wickets"
+        elif r1 > r2:
+            winner, margin = team1, f"by {r1 - r2} runs"
+        else:
+            winner, margin = "Match Tied", "Match Tied"
+
+    bat_rows = list(bat1.get("batsmen_rows") or []) + list(bat2.get("batsmen_rows") or [])
+    bowl_rows = list(bowl1.get("bowlers_rows") or []) + list(bowl2.get("bowlers_rows") or [])
+
+    payload = {
+        "inn1_team": team1, "inn1_runs": r1, "inn1_wickets": w1,
+        "inn1_overs": bat1.get("overs_str", "0"),
+        "inn2_team": team2, "inn2_runs": r2, "inn2_wickets": w2,
+        "inn2_overs": bat2.get("overs_str", "0"),
+        "winner_name": winner, "win_margin_text": margin,
+        "overs_total": overs_total or 0,
+        "potm_name": potm_name,
+        "potm_player_id": potm_player_id,
+        "potm_stats": _potm_line(potm_name, bat_rows, bowl_rows),
+        "top_per_team": {
+            "inn1": {"team": team1, "bowl_team": team2,
+                     "batters": _summary_batters(bat1.get("batsmen_rows")),
+                     "bowlers": _summary_bowlers(bowl1.get("bowlers_rows"))},
+            "inn2": {"team": team2, "bowl_team": team1,
+                     "batters": _summary_batters(bat2.get("batsmen_rows")),
+                     "bowlers": _summary_bowlers(bowl2.get("bowlers_rows"))},
+        },
+        "stadium": bat1.get("stadium"),
+        "match_no": bat1.get("match_no"),
+        "inn1_user_id": bat1.get("team_user_id"),
+        "inn2_user_id": bat2.get("team_user_id"),
+    }
+    for key in ("league_key", "tournament_id"):
+        if bat1.get(key) or bat2.get(key):
+            payload[key] = bat1.get(key) or bat2.get(key)
+    for side, bat in (("inn1", bat1), ("inn2", bat2)):
+        if bat.get("tournament_team_id"):
+            payload[f"{side}_tournament_team_id"] = bat["tournament_team_id"]
+        if bat.get("challenge_team_id"):
+            payload[f"{side}_challenge_team_id"] = bat["challenge_team_id"]
+    return payload
+
+
+def ensure_summary_card(match_id, cards, **result):
+    """``cards`` with a summary card added when the match never stored one.
+
+    The derived card is recorded like any other, so its ``file_id`` is cached
+    on the first send and the next /lastscorecard needs no render. ``result``
+    is passed to :func:`derive_summary_payload`. Never raises: a summary that
+    cannot be derived leaves the innings cards to go out on their own.
+    """
+    cards = list(cards or [])
+    if not cards or any(c.get("card_type") == CARD_SUMMARY for c in cards):
+        return cards
+    try:
+        payload = derive_summary_payload(cards, **result)
+        if payload is None:
+            return cards
+        import html as _html
+        caption = (f"🏆 <b>Match Summary</b> — "
+                   f"{_html.escape(_result_line(payload))}")
+        # A failed write is usually a second /lastscorecard that stored the
+        # same summary a moment earlier (unique key), so reload either way.
+        record_cards(match_id, cards[0].get("chat_id"), [{
+            "card_type": CARD_SUMMARY, "innings": WHOLE_MATCH,
+            "caption": caption, "payload": payload}])
+        return load_cards(match_id) or cards
+    except Exception:
+        logger.exception("deriving a summary card for match %s failed", match_id)
+        return cards
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -794,6 +1048,23 @@ def _fmt_row_name(row):
     return str(row.get("name", "?"))
 
 
+def _result_line(payload):
+    """"<winner> won <margin>" from a summary payload, in any mode's wording.
+
+    /playmatch stores the margin as "by 6 wickets"; /cipl and the Super Over
+    store the whole phrase, "won by 6 wickets" or "won on sixes hit"; a tie
+    stores "Match Tied" as both winner and margin. Joining them blindly read
+    "X won won by 6 wickets" and "Match Tied won Match Tied".
+    """
+    winner = payload.get("winner_name") or "—"
+    margin = str(payload.get("win_margin_text") or "").strip()
+    if winner == "Match Tied":
+        return "Match tied"
+    if margin.lower().startswith("won"):
+        return f"{winner} {margin}"
+    return f"{winner} won {margin}".rstrip()
+
+
 def text_scorecard(cards):
     """A plain-text rendering of a set of innings cards.
 
@@ -844,8 +1115,7 @@ def text_scorecard(cards):
                 f"• {payload.get('inn2_team', 'Team 2')} "
                 f"{payload.get('inn2_runs', 0)}/{payload.get('inn2_wickets', 0)}"
                 f" ({payload.get('inn2_overs', '0')})",
-                f"• {payload['winner_name']} won "
-                f"{payload.get('win_margin_text', '')}".rstrip(),
+                f"• {_result_line(payload)}",
             ]
             if payload.get("potm_name"):
                 lines.append(f"• POTM {payload['potm_name']}"
@@ -943,8 +1213,7 @@ def scorecard_blocks(cards):
                             align="right")],
                 ], bordered=True, compact=True, caption=R.bold("🏆 Result")))
                 blocks.append(R.pullquote(
-                    R.bold(f"{payload['winner_name']} won "
-                           f"{payload.get('win_margin_text', '')}".rstrip()),
+                    R.bold(_result_line(payload)),
                     caption="Result"))
                 if payload.get("potm_name"):
                     blocks.append(R.footer(
@@ -1006,3 +1275,51 @@ async def record_and_send(bot, chat_id, match_id, cards,
         logger.error("match %s: only %s of %s scorecard images reached chat %s",
                      match_id, sent, len(cards), chat_id)
     return sent
+
+
+async def send_summary_card(bot, chat_id, match_id, png, *, payload=None,
+                            caption=None, **kwargs):
+    """Archive and send a summary card that a mode drew itself.
+
+    /cipl, the Challenge League and the Super Over draw their own summary card
+    rather than going through :func:`record_and_send`. They used to post it with
+    one bare ``send_photo`` and keep nothing: a single timeout or flood-control
+    answer lost the card, and ``/lastscorecard`` had no row to rebuild it from,
+    so it said there was no scorecard at all. This gives them the same path as
+    /playmatch: the payload is stored first, the send is retried, the
+    ``file_id`` is cached, and when there is no image at all the numbers go out
+    as text.
+
+    ``payload`` is the generator's arguments (what :func:`render_card` takes for
+    a summary). Without it the card is still sent with retries, just not
+    archived. ``kwargs`` pass through to ``send_photo`` (e.g. ``reply_markup``).
+
+    Returns the sent ``Message`` or ``None``.
+    """
+    if payload is not None and match_id is not None:
+        record_cards(match_id, chat_id, [{
+            "card_type": CARD_SUMMARY, "innings": WHOLE_MATCH,
+            "caption": caption, "payload": payload,
+        }])
+
+    if not png:
+        if payload is not None:
+            await send_text_fallback(bot, chat_id, [
+                {"card_type": CARD_SUMMARY, "payload": payload}])
+        return None
+
+    msg = await send_photo_with_retry(
+        bot, chat_id, lambda: io.BytesIO(png), caption=caption, **kwargs)
+    if msg is None:
+        logger.error("match %s summary card never reached chat %s — "
+                     "recoverable via /lastscorecard", match_id, chat_id)
+        return None
+    if payload is not None and match_id is not None:
+        file_id = None
+        try:
+            if msg.photo:
+                file_id = msg.photo[-1].file_id
+        except Exception:
+            logger.debug("file_id capture failed (non-fatal)", exc_info=True)
+        mark_delivered(match_id, WHOLE_MATCH, CARD_SUMMARY, file_id=file_id)
+    return msg

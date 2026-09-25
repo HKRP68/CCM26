@@ -1786,6 +1786,23 @@ def _describe_scorecard_match(session, match_id):
     return " · ".join(html.escape(p) for p in parts)
 
 
+def _stored_match_result(session, match_id):
+    """The ``Match`` row's result, as ``ensure_summary_card`` keywords."""
+    m = session.get(Match, match_id) if match_id else None
+    if not m:
+        return {}
+    potm_id = getattr(m, "potm_player_id", None)
+    potm_name = None
+    if potm_id:
+        p = session.get(Player, potm_id)
+        potm_name = p.name if p else None
+    return {"winner_user_id": getattr(m, "winner_id", None),
+            "margin_type": getattr(m, "margin_type", None),
+            "margin_value": getattr(m, "margin_value", None),
+            "overs_total": getattr(m, "overs", None),
+            "potm_player_id": potm_id, "potm_name": potm_name}
+
+
 async def lastscorecard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Re-send the scorecard images of the last match played in this chat.
 
@@ -1800,6 +1817,10 @@ async def lastscorecard_handler(update: Update, context: ContextTypes.DEFAULT_TY
     """
     chat = update.effective_chat
     tg = update.effective_user
+    # ``effective_message``: a command typed by editing an earlier message
+    # arrives with ``update.message`` unset, and the handler used to crash on it.
+    message = getattr(update, "effective_message", None) or update.message
+    reply = message.reply_text
     cid = chat.id
     is_group = chat.type in ("group", "supergroup")
 
@@ -1807,7 +1828,7 @@ async def lastscorecard_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if context.args:
         raw = str(context.args[0]).strip().lstrip("#")
         if not raw.isdigit():
-            await update.message.reply_text(
+            await reply(
                 "❌ Usage: <code>/lastscorecard</code> or "
                 "<code>/lastscorecard &lt;match id&gt;</code>", parse_mode="HTML")
             return
@@ -1819,7 +1840,7 @@ async def lastscorecard_handler(update: Update, context: ContextTypes.DEFAULT_TY
             match_id = requested_id
             cards = scorecard_delivery.load_cards(match_id, session=session)
             if not cards:
-                await update.message.reply_text(
+                await reply(
                     f"🏏 No stored scorecard for match <b>{match_id}</b>.\n\n"
                     f"<i>Only matches played after scorecard archiving was "
                     f"added can be replayed.</i>", parse_mode="HTML")
@@ -1835,7 +1856,7 @@ async def lastscorecard_handler(update: Update, context: ContextTypes.DEFAULT_TY
                 played_in_it = bool(
                     u and m and u.id in (m.user1_id, m.user2_id))
                 if not played_in_it and not _is_bot_admin(tg.id):
-                    await update.message.reply_text(
+                    await reply(
                         f"❌ Match <b>{match_id}</b> wasn't played here.",
                         parse_mode="HTML")
                     return
@@ -1843,7 +1864,7 @@ async def lastscorecard_handler(update: Update, context: ContextTypes.DEFAULT_TY
             match_id = scorecard_delivery.latest_match_id_for_chat(
                 cid, session=session)
             if match_id is None:
-                await update.message.reply_text(
+                await reply(
                     "🏏 <b>No scorecard yet for this group.</b>\n\n"
                     "Play a match here with <code>/playmatch @user</code> — "
                     "its scorecards are archived automatically and "
@@ -1856,7 +1877,7 @@ async def lastscorecard_handler(update: Update, context: ContextTypes.DEFAULT_TY
             match_id = (scorecard_delivery.latest_match_id_for_user(
                 u.id, session=session) if u else None)
             if match_id is None:
-                await update.message.reply_text(
+                await reply(
                     "🏏 <b>No scorecard yet.</b>\n\n"
                     "Play a match with <code>/playmatch @user</code> or "
                     "<code>/vsbot</code> first. In a group, "
@@ -1866,22 +1887,29 @@ async def lastscorecard_handler(update: Update, context: ContextTypes.DEFAULT_TY
             cards = scorecard_delivery.load_cards(match_id, session=session)
 
         header = _describe_scorecard_match(session, match_id)
+        result = _stored_match_result(session, match_id)
     except Exception:
         logger.exception("lastscorecard lookup failed")
-        await update.message.reply_text(
+        await reply(
             "⚠️ Couldn't look up the last scorecard. Try again in a moment.")
         return
     finally:
         session.close()
 
+    # A bowl-out finish, a WSP autoplay match or one archived before summary
+    # cards were stored has only its innings cards. Build the summary from
+    # them so the replay always ends on the Match Summary image.
+    cards = await asyncio.to_thread(
+        scorecard_delivery.ensure_summary_card, match_id, cards, **result)
+
     if not cards:
-        await update.message.reply_text(
+        await reply(
             f"🏏 No stored scorecard images for match <b>{match_id}</b>.",
             parse_mode="HTML")
         return
 
     if cid in _SCORECARD_REPLAYS_IN_FLIGHT:
-        await update.message.reply_text(
+        await reply(
             "⏳ Already sending a scorecard here — hold on.")
         return
 
@@ -1924,7 +1952,7 @@ async def lastscorecard_handler(update: Update, context: ContextTypes.DEFAULT_TY
             # Every image failed. The values are still here, so show them.
             if not await scorecard_delivery.send_text_fallback(
                     context.bot, cid, cards):
-                await update.message.reply_text(
+                await reply(
                     "⚠️ Couldn't rebuild the scorecard images. Try again in a "
                     "moment.")
         elif sent < len(cards):
@@ -1934,7 +1962,7 @@ async def lastscorecard_handler(update: Update, context: ContextTypes.DEFAULT_TY
                       f"couldn't be rebuilt.</i>"), parse_mode="HTML")
     except Exception:
         logger.exception("lastscorecard replay failed for match %s", match_id)
-        await update.message.reply_text(
+        await reply(
             "⚠️ Couldn't re-send the scorecard. Try again in a moment.")
     finally:
         _SCORECARD_REPLAYS_IN_FLIGHT.discard(cid)
@@ -7008,6 +7036,14 @@ async def _end_innings(ctx, mid):
                     await scorecard_delivery.send_potm_card(
                         ctx.bot, cid, player_id=s.get("potm_player_id"),
                         name=potm_name, team=potm_team)
+            else:
+                # The render failed. The row above keeps the values for
+                # /lastscorecard; meanwhile the chat gets the numbers, not
+                # silence.
+                logger.error("match %s summary card could not be rendered", mid)
+                await scorecard_delivery.send_text_fallback(ctx.bot, cid, [{
+                    "card_type": scorecard_delivery.CARD_SUMMARY,
+                    "payload": summary_payload}])
         except _SkipSummary:
             pass
         except Exception:

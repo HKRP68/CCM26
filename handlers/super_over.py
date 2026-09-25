@@ -360,11 +360,24 @@ async def _send_main_scorecard(context, so, result, caption):
         from handlers.cipl_play import _build_cipl_summary_image
         # Offload the CPU-bound Pillow render so it doesn't block the event loop.
         img = await asyncio.to_thread(_build_cipl_summary_image, state, result)
+        # Archived and retried like every other summary card, so a dropped
+        # send can be brought back with /lastscorecard. The Super Over re-sends
+        # this card with the real result, which overwrites the "Match Tied" row.
+        from services import scorecard_delivery
+        payload = state.pop("_summary_payload", None)
         if img:
-            await context.bot.send_photo(
-                so["chat_id"], photo=BytesIO(img), caption=caption,
-                parse_mode="HTML", reply_markup=_spectate_markup(so))
-            return True
+            msg = await scorecard_delivery.send_summary_card(
+                context.bot, so["chat_id"], so.get("mid"), img,
+                payload=payload, caption=caption,
+                reply_markup=_spectate_markup(so))
+            return msg is not None
+        if payload and so.get("mid") is not None:
+            # No image: keep the values so /lastscorecard can try the render
+            # again, and let the caller post its own text scorecard.
+            scorecard_delivery.record_cards(so["mid"], so["chat_id"], [{
+                "card_type": scorecard_delivery.CARD_SUMMARY,
+                "innings": scorecard_delivery.WHOLE_MATCH,
+                "caption": caption, "payload": payload}])
     except Exception:
         logger.exception("Super Over: main scorecard image failed (%s)", so.get("mid"))
     return False
@@ -1924,10 +1937,11 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
         # Offload the CPU-bound Pillow render so it doesn't block the event loop.
         so_img = await asyncio.to_thread(_build_super_over_card, so)
         if so_img:
-            await context.bot.send_photo(
-                so["chat_id"], photo=BytesIO(so_img),
+            from services import scorecard_delivery
+            await scorecard_delivery.send_photo_with_retry(
+                context.bot, so["chat_id"], lambda: BytesIO(so_img),
                 caption=f"🔥 <b>Super Over</b> — {html.escape(win['name'])} {margin_text}",
-                parse_mode="HTML", reply_markup=_spectate_markup(so))
+                reply_markup=_spectate_markup(so))
     except Exception:
         logger.exception("Super Over: sending super-over card failed (%s)", mid)
 
