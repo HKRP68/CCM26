@@ -1378,6 +1378,8 @@ ADMIN_SECTIONS = (
         ("/abind <name>", "Bind an existing auction to this group"),
         ("/atimer <seconds>", "Seconds per lot (default 30)"),
         ("/asnipe <window> <extend> <max>", "Anti-snipe rule, e.g. /asnipe 10 10 5"),
+        ("/aincrement 2:10L, 5:20L, 50L", "Bid increments — bare reads them, "
+                                          "reset restores the default"),
         ("/afocus on|off", "While the auction runs, lock this group to auction "
                            "commands (on by default) — bare /afocus reads it back"),
         ("/adirect on|off", "Allow typed bid amounts (/bid 12), or the next "
@@ -1391,6 +1393,7 @@ ADMIN_SECTIONS = (
         ("/asetorder A, B, C", "Order the whole queue by set"),
         ("/asets", "Every set and where it stands"),
         ("/awithdraw <player>", "Pull a player out of the auction"),
+        ("/areinstate <player | lot no>, …", "Bring a withdrawn player back"),
     )),
     ("▶️ Running it", (
         ("/astart · /apause · /aresume", "Start, pause and resume the clock"),
@@ -1398,6 +1401,10 @@ ADMIN_SECTIONS = (
         ("/aextend [seconds]", "Add time to the lot on the block"),
         ("/asold", "Sell at the standing bid"),
         ("/aunsold", "Pass the lot (refused while a bid stands)"),
+        ("/aunsold 67, 88, 89", "Send those players unsold — only ones on "
+                                "no squad and with no standing bid"),
+        ("/aforce <player | lot no>", "That player next — now, if nothing "
+                                      "is on the block"),
         ("/aundobid", "Void the standing bid and fall back"),
         ("/aaccel [go]", "Re-list everything unsold now"),
     )),

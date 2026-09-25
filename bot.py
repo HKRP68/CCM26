@@ -462,6 +462,9 @@ ADMIN_MENU_COMMANDS = (
     ("aunsold", "Admin: pass the lot on the block"),
     ("aundobid", "Admin: void the standing bid on the lot"),
     ("awithdraw", "Admin: pull a player out of the auction"),
+    ("areinstate", "Admin: bring a withdrawn player back into the auction"),
+    ("aforce", "Admin: put a chosen player on the block next"),
+    ("aincrement", "Admin: set the auction's bid increments"),
     ("atimer", "Admin: seconds allowed per auction lot"),
     ("asnipe", "Admin: anti-snipe window, extension and cap"),
     ("afocus", "Admin: lock this group to auction commands while it runs"),
@@ -2260,6 +2263,7 @@ def main():
             aadmin_handler, anew_handler, abind_handler, astart_handler,
             apause_handler, anext_handler, aextend_handler, asold_handler,
             aunsold_handler, aundobid_handler, awithdraw_handler,
+            areinstate_handler, aforce_handler, aincrement_handler,
             atimer_handler, asnipe_handler, afocus_handler, adirect_handler,
             agrant_handler, aco_handler,
             apublish_handler, acancel_handler,
@@ -2324,6 +2328,13 @@ def main():
         app.add_handler(CommandHandler("aunsold", aunsold_handler))
         app.add_handler(CommandHandler("aundobid", aundobid_handler))
         app.add_handler(CommandHandler("awithdraw", awithdraw_handler))
+        # /awithdraw's opposite, the "this player next" override, and the bid
+        # ladder — see handlers/auction.py.
+        app.add_handler(CommandHandler(["areinstate", "aunwithdraw"],
+                                       areinstate_handler))
+        app.add_handler(CommandHandler(["aforce", "aforcenext"], aforce_handler))
+        app.add_handler(CommandHandler(["aincrement", "aincrements"],
+                                       aincrement_handler))
         app.add_handler(CommandHandler("atimer", atimer_handler))
         app.add_handler(CommandHandler("asnipe", asnipe_handler))
         # Focus mode: while the auction runs, this group answers auction

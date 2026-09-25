@@ -497,6 +497,95 @@ def increment_for(season, standing_lakh):
     return max(1, increment_rules(season)[-1]["step_lakh"])
 
 
+def parse_increment_rules(text):
+    """``2:10L, 5:20L, 10:25L, 50L`` as a ladder. Raises ``AuctionError``.
+
+    Each comma-separated band is ``<under>:<step>`` — "while the standing
+    price is under this, the least raise is that" — and one band may be a bare
+    ``<step>``, which is "and everything above". Amounts read the way ``/bid``
+    reads them: a bare number is crore, lakh needs an ``L``. A single bare
+    step (``/aincrement 25L``) is a flat ladder.
+
+    A ladder with no catch-all gets one at its top step, so a price above the
+    last ceiling never falls off the end.
+    """
+    rules, catch_all = [], None
+    for band in (text or "").split(","):
+        band = band.strip()
+        if not band:
+            continue
+        for sep in ("->", "→", "=", ":"):
+            if sep in band:
+                upto_text, step_text = [p.strip() for p in band.split(sep, 1)]
+                break
+        else:
+            upto_text, step_text = None, band
+        try:
+            step = parse_amount(step_text)
+            upto = parse_amount(upto_text) if upto_text else 0
+        except AuctionError:
+            raise AuctionError(f"“{band}” is not a band. Write "
+                               f"<under>:<step>, e.g. 2:10L means under ₹2 Cr "
+                               f"the least raise is ₹10 L.")
+        if not upto:
+            if catch_all is not None:
+                raise AuctionError("Only one band can be the catch-all "
+                                   "(a step with no ceiling).")
+            catch_all = step
+            continue
+        if step >= upto:
+            raise AuctionError(f"A {render_money(step)} step under "
+                               f"{render_money(upto)} would jump past the "
+                               f"band in one raise — did you mean "
+                               f"{step_text}L?")
+        rules.append({"upto_lakh": upto, "step_lakh": step})
+
+    ceilings = [row["upto_lakh"] for row in rules]
+    if len(ceilings) != len(set(ceilings)):
+        raise AuctionError("Two bands share a ceiling — give each its own.")
+    rules.sort(key=lambda row: row["upto_lakh"])
+    if catch_all is None:
+        if not rules:
+            raise AuctionError("Give at least one band, e.g. /aincrement "
+                               "2:10L, 5:20L, 10:25L, 50L")
+        catch_all = rules[-1]["step_lakh"]
+    rules.append({"upto_lakh": 0, "step_lakh": catch_all})
+    return rules
+
+
+def set_increment_rules(session, season, rules, *, by_tg_id=None,
+                        quiet=False):
+    """Save the bid ladder. ``None`` (or empty) restores the default one.
+
+    Safe mid-auction by construction: ``next_min_bid`` reads the ladder on
+    every bid rather than stamping it on the lot, so the change applies from
+    the next raise and never moves a bid already made. Said out loud unless
+    ``quiet`` — a room whose least raise changes under it needs to hear so.
+    """
+    if season.status == STATUS_CANCELLED:
+        raise AuctionError("This auction was cancelled.")
+    season.bid_increment_rules_json = _dumps(
+        rules if rules else DEFAULT_INCREMENT_RULES)
+    session.flush()
+    if not quiet:
+        log_event(session, season, "increments_changed",
+                  "📈 <b>Bid increments changed</b> — "
+                  + render_increment_rules(season, joiner=" · "),
+                  by_tg_id=by_tg_id, by_admin=True)
+    return increment_rules(season)
+
+
+def render_increment_rules(season, *, joiner="\n"):
+    """The ladder the way the room reads it: ``under ₹2 Cr → +₹10 L``."""
+    symbol = getattr(season, "currency_label", None) or "₹"
+    lines = []
+    for row in increment_rules(season):
+        where = (f"under {render_money(row['upto_lakh'], symbol)}"
+                 if row["upto_lakh"] > 0 else "above that")
+        lines.append(f"{where} → +{render_money(row['step_lakh'], symbol)}")
+    return joiner.join(lines)
+
+
 def next_min_bid(season, lot):
     """The smallest amount that would be a legal bid on this lot right now.
 
@@ -3506,6 +3595,220 @@ def withdraw_lot(session, season, lot, *, by_tg_id=None):
     if was_on_block:
         complete_if_done(session, season)
     return lot
+
+
+def reinstate_lot(session, season, lot, *, by_tg_id=None, quiet=False):
+    """``/awithdraw``'s opposite: put a withdrawn player back in the queue.
+
+    An unsold player is accepted too — it is the same "back into the pool"
+    either way, and an admin should not have to remember which of the two
+    commands a player needs. He goes to the **tail** of the queue, with every
+    trace of his last time on the block cleared; ``force_next`` is how he goes
+    to the front instead.
+
+    A completed auction comes back **paused**, for the reason ``relist_all``
+    gives: a clock starting in an empty room sells to whoever is still looking.
+    """
+    if lot is None:
+        raise AuctionError("No such lot.")
+    if season.status == STATUS_CANCELLED:
+        raise AuctionError("This auction was cancelled.")
+    if lot.status == LOT_QUEUED:
+        raise AuctionError(f"{lot.name} is already waiting in the queue.")
+    if lot.status in LOT_LIVE:
+        raise AuctionError(f"{lot.name} is on the block right now.")
+    if lot.status == LOT_SOLD:
+        raise AuctionError(f"{lot.name} has been sold — undo the sale first.")
+
+    was = lot.status
+    lot.status = LOT_QUEUED
+    lot.lot_no = _next_lot_no(session, season.id)
+    lot.current_bid_lakh = None
+    lot.current_bidder_id = None
+    lot.deadline_at = None
+    lot.going_stage = 0
+    lot.extensions_used = 0
+    lot.rtm_stage = None
+    lot.rtm_base_bid_lakh = None
+    reopened = season.status == STATUS_COMPLETED
+    if reopened:
+        season.status = STATUS_PAUSED
+        season.current_lot_id = None
+    session.flush()
+    if not quiet:
+        note = (" The auction is open again, paused — /astart when the room "
+                "is ready." if reopened else "")
+        verb = "withdrawn" if was == LOT_WITHDRAWN else "unsold"
+        log_event(session, season, "lot_reinstated",
+                  f"↩️ {_e(lot.name)} ({verb}) is back in the auction pool."
+                  f"{note}",
+                  lot=lot, by_tg_id=by_tg_id, by_admin=True,
+                  detail={"was": was})
+    return lot
+
+
+def force_next(session, season, lot, *, now=None, by_tg_id=None):
+    """Make this player the very next lot — and open him now if nothing is up.
+
+    Returns ``(lot, opened)``. ``opened`` is True when the auction was live
+    with an empty block, so he went straight under the hammer; otherwise he
+    waits at the front of the queue and opens the moment the current lot
+    resolves (or when the auction starts).
+
+    A withdrawn or unsold player is reinstated on the way, so "force Tilak
+    Verma" works whatever happened to him earlier. A sold one is refused: he
+    is on a squad, and forcing him would sell him twice.
+    """
+    if lot is None:
+        raise AuctionError("No such lot.")
+    if lot.status in LOT_LIVE:
+        raise AuctionError(f"{lot.name} is already on the block.")
+    if lot.status == LOT_SOLD:
+        raise AuctionError(f"{lot.name} has been sold — undo the sale first.")
+    if lot.status != LOT_QUEUED:
+        reinstate_lot(session, season, lot, by_tg_id=by_tg_id, quiet=True)
+    _require_reorderable(season)
+    _requeue(session, season, [lot])
+
+    opened = (season.status == STATUS_LIVE
+              and current_lot(session, season) is None)
+    if opened:
+        log_event(session, season, "lot_forced",
+                  f"⏩ The auctioneer calls <b>{_e(lot.name)}</b> now.",
+                  lot=lot, by_tg_id=by_tg_id, by_admin=True,
+                  detail={"opened": True})
+        lot = open_lot(session, season, lot, now=now)
+    else:
+        standing = current_lot(session, season)
+        after = (f" — straight after {_e(standing.name)}"
+                 if standing is not None else "")
+        log_event(session, season, "lot_forced",
+                  f"⏩ Next up: <b>{_e(lot.name)}</b>{after}.",
+                  lot=lot, by_tg_id=by_tg_id, by_admin=True,
+                  detail={"opened": False})
+    return lot, opened
+
+
+def mark_unsold(session, season, picked, *, by_tg_id=None):
+    """``/aunsold 67, 88, 89`` — send a batch of players straight to unsold.
+
+    Returns ``(done, skipped)``: the lots that went unsold, and
+    ``(lot, reason)`` pairs for the ones that did not, so the admin is told
+    about each player by name rather than the whole batch failing on one.
+
+    Only a player **nobody has bought and nobody is bidding on** can go:
+
+    * queued (yet to come) — marked unsold without ever opening;
+    * on the block with no bid — passed, exactly as bare ``/aunsold`` does;
+    * on the block with a standing bid, mid Right To Match, sold, already
+      unsold or withdrawn — left alone, with the reason.
+
+    The lot on the block is passed **last**, after the queued ones, so the
+    single ``complete_if_done`` it triggers sees the whole batch at once.
+    """
+    if season.status in (STATUS_COMPLETED, STATUS_CANCELLED):
+        raise AuctionError(f"This auction is {season.status}.")
+    done, skipped, live = [], [], None
+    seen = set()
+    for lot in picked:
+        if lot is None or lot.id in seen:
+            continue
+        seen.add(lot.id)
+        if lot.status == LOT_QUEUED:
+            lot.status = LOT_UNSOLD
+            lot.deadline_at = None
+            lot.going_stage = 0
+            done.append(lot)
+        elif lot.status == LOT_ON_BLOCK:
+            if lot.current_bidder_id is not None:
+                skipped.append((lot, "has a standing bid — /aundobid first"))
+            else:
+                live = lot
+        elif lot.status == LOT_RTM_OFFERED:
+            skipped.append((lot, "is in a Right To Match"))
+        elif lot.status == LOT_SOLD:
+            buyer = getattr(lot, "sold_to", None)
+            skipped.append((lot, "is already in " + (buyer.name if buyer
+                                                     else "a squad")))
+        elif lot.status == LOT_UNSOLD:
+            skipped.append((lot, "is already unsold"))
+        else:
+            skipped.append((lot, "was withdrawn — /areinstate first"))
+
+    session.flush()
+    if done:
+        names = ", ".join(_e(lot.name) for lot in done)
+        log_event(session, season, "lots_unsold",
+                  f"❌ <b>UNSOLD</b> by the auctioneer, before going under "
+                  f"the hammer: {names}.",
+                  by_tg_id=by_tg_id, by_admin=True,
+                  detail={"lot_ids": [lot.id for lot in done]})
+    if live is not None:
+        pass_lot(session, season, live, by_tg_id=by_tg_id, by_admin=True)
+        done.append(live)
+    elif done:
+        # The queue may just have run dry under a live auction with an empty
+        # block; this is what finishes it (or starts the accelerated round).
+        complete_if_done(session, season)
+    return done, skipped
+
+
+def find_lots(session, season, text):
+    """Lots named in ``67, 88, 89`` or ``Tilak Verma, 53``. Returns ``(lots, misses)``.
+
+    A bare number is the **lot number** — the ``#`` the board, the console and
+    ``/anextset`` print. Anything else is a name, matched the way ``/awithdraw``
+    matches one: exact first, then a unique substring. A token that matches
+    nothing, or more than one player, is returned in ``misses`` with the reason
+    rather than raising, so one typo does not throw away the rest of a list.
+    """
+    tokens = []
+    for chunk in (text or "").replace(";", ",").split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        words = chunk.split()
+        if all(w.lstrip("#").isdigit() for w in words):
+            tokens.extend(words)
+        else:
+            tokens.append(chunk)
+
+    rows = (session.query(AuctionLot)
+            .filter(AuctionLot.season_id == season.id).all())
+    by_no = {int(lot.lot_no): lot for lot in rows if lot.lot_no is not None}
+    found, misses = [], []
+    for token in tokens:
+        bare = token.lstrip("#")
+        if bare.isdigit():
+            lot = by_no.get(int(bare))
+            if lot is None:
+                misses.append((token, "no lot has that number"))
+            else:
+                found.append(lot)
+            continue
+        wanted = token.lower()
+        exact = [lot for lot in rows if (lot.name or "").lower() == wanted]
+        hits = exact or [lot for lot in rows
+                         if wanted in (lot.name or "").lower()]
+        if len(hits) == 1 or exact:
+            found.append(hits[0])
+        elif hits:
+            misses.append((token, "could be " +
+                           ", ".join(lot.name for lot in hits[:5])))
+        else:
+            misses.append((token, "is not in this auction's pool"))
+    return found, misses
+
+
+def find_one_lot(session, season, text):
+    """Exactly one lot, by number or name, or an ``AuctionError`` saying why."""
+    found, misses = find_lots(session, season, text)
+    if misses:
+        token, why = misses[0]
+        raise AuctionError(f"“{token}” {why}.")
+    if len(found) != 1:
+        raise AuctionError("Name one player (or one lot number).")
+    return found[0]
 
 
 def undo_last_bid(session, season, lot, *, now=None, by_tg_id=None):

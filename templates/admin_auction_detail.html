@@ -248,6 +248,54 @@
     </p>
   </div></details>
 
+  <!-- ── Bid increments ────────────────────────────────────────── -->
+  {{ fold("bid-increments", "📈 Bid increments",
+          increment_rules|length ~ " band" ~ ("" if increment_rules|length == 1 else "s")) }}
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="increment_rules">
+      <input type="hidden" name="back_query" value="#bid-increments">
+      <table class="au-table" id="au-inc-rules">
+        <thead>
+          <tr>
+            <th style="width:9rem;">While under (Cr)</th>
+            <th style="width:9rem;">Least raise</th>
+            <th>Reads as</th>
+            <th style="width:3rem;"></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for rule in increment_rules %}
+          <tr>
+            <td><input type="text" name="inc_upto" value="{{ (rule.upto_lakh / 100)|round(2) if rule.upto_lakh > 0 else '' }}" placeholder="and above" style="width:8rem;"></td>
+            <td><input type="text" name="inc_step" value="{{ rule.step_lakh }}L" style="width:8rem;"></td>
+            <td class="dim">{% if rule.upto_lakh > 0 %}under {{ money(rule.upto_lakh) }}{% else %}above that{% endif %} → +{{ money(rule.step_lakh) }}</td>
+            <td><button type="button" class="btn btn-sm au-drop-inc" title="Remove this band">✕</button></td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <div style="margin-top:.6rem;display:flex;gap:.5rem;flex-wrap:wrap;">
+        <button type="button" class="btn" id="au-add-inc">➕ Add band</button>
+        <button class="btn btn-primary" type="submit">Save increments</button>
+        <button class="btn btn-ghost" type="submit" name="reset" value="1"
+                onclick="return confirm('Restore the default bid increments?');">↺ Default</button>
+      </div>
+    </form>
+    <p class="au-note" style="margin-bottom:0;">
+      Amounts read the way <code>/bid</code> reads them: a bare number is
+      <b>crore</b>, lakh needs an <code>L</code> — <code>10L</code>,
+      <code>0.25</code>. Leave <b>While under</b> blank on one row for "and
+      everything above". The same ladder can be set from the group with
+      <code>/aincrement 2:10L, 5:20L, 10:25L, 50L</code>.
+    </p>
+    <p class="au-note" style="margin-bottom:0;">
+      <b>Safe mid-auction:</b> the least raise is worked out on every bid, so a
+      change applies from the next raise and never moves a bid already made.
+      Once the auction is running, the group is told.
+    </p>
+  </div></details>
+
   <!-- ── Franchises ────────────────────────────────────────────── -->
   {{ fold("franchises", "🏛 Franchises",
           field|length ~ " in the field") }}
@@ -955,6 +1003,33 @@
               <button class="btn btn-ghost danger" type="submit">✕</button>
             </form>
             {% endif %}
+            {% if lot.status in ('queued', 'unsold', 'withdrawn') and season.status != 'cancelled' %}
+            <form method="POST" title="Put {{ lot.name }} on the block next — now, if nothing is up">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="lot_force">
+              <input type="hidden" name="lot_id" value="{{ lot.id }}">
+              <input type="hidden" name="back_query" value="#pool">
+              <button class="btn btn-ghost" type="submit">⏩ Next</button>
+            </form>
+            {% endif %}
+            {% if lot.status == 'queued' and season.status not in ('completed', 'cancelled') %}
+            <form method="POST" onsubmit="return confirm('Mark {{ lot.name }} unsold without offering him?');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="lot_unsold">
+              <input type="hidden" name="lot_id" value="{{ lot.id }}">
+              <input type="hidden" name="back_query" value="#pool">
+              <button class="btn btn-ghost" type="submit">❌ Unsold</button>
+            </form>
+            {% endif %}
+            {% if lot.status in ('unsold', 'withdrawn') and season.status != 'cancelled' %}
+            <form method="POST">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="lot_reinstate">
+              <input type="hidden" name="lot_id" value="{{ lot.id }}">
+              <input type="hidden" name="back_query" value="#pool">
+              <button class="btn btn-ghost" type="submit">↩️ Reinstate</button>
+            </form>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}
@@ -1089,6 +1164,35 @@
     if (!button) { return; }
     // Never leave the form with nothing to save: the last row is emptied
     // rather than removed, because a POST with no bands at all is refused.
+    if (body.rows.length > 1) {
+      button.closest("tr").remove();
+    } else {
+      Array.prototype.forEach.call(
+        button.closest("tr").querySelectorAll("input"),
+        function (input) { input.value = ""; });
+    }
+  });
+})();
+
+// Bid increment rows: add a band, drop a band (never the last one).
+(function () {
+  var table = document.getElementById("au-inc-rules");
+  var add = document.getElementById("au-add-inc");
+  if (!table || !add) { return; }
+  var body = table.tBodies[0];
+  add.addEventListener("click", function () {
+    var row = document.createElement("tr");
+    row.innerHTML =
+      '<td><input type="text" name="inc_upto" placeholder="e.g. 2" style="width:8rem;"></td>' +
+      '<td><input type="text" name="inc_step" placeholder="e.g. 10L" style="width:8rem;"></td>' +
+      '<td class="dim">new band</td>' +
+      '<td><button type="button" class="btn btn-sm au-drop-inc" title="Remove this band">✕</button></td>';
+    body.appendChild(row);
+    row.querySelector("input").focus();
+  });
+  body.addEventListener("click", function (event) {
+    var button = event.target.closest(".au-drop-inc");
+    if (!button) { return; }
     if (body.rows.length > 1) {
       button.closest("tr").remove();
     } else {

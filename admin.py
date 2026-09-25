@@ -22525,6 +22525,7 @@ def admin_auction_detail(season_id):
             lots=auction_svc.lots(db, season.id),
             counts=auction_svc.pool_counts(db, season.id),
             price_rules=auction_svc.base_price_rules(season),
+            increment_rules=auction_svc.increment_rules(season),
             # Both ends of the role rule, and the four roles the page lists.
             squad_roles=auction_svc.SQUAD_ROLES,
             role_minimums=auction_svc.role_minimums(season),
@@ -22722,6 +22723,37 @@ def _auction_detail_action(db, season, action):
                   f"built at "
                   f"{auction_svc.render_money(auction_svc.DEFAULT_MIN_BASE_PRICE_LAKH, season.currency_label)}"
                   f" — add a range for them, or widen one.", "warning")
+
+    elif action == "increment_rules":
+        # One row is "under this standing price, the least raise is that". A
+        # blank ceiling is the catch-all — "and everything above". Built into
+        # the same text /aincrement takes, so the website and the command are
+        # checked by one parser and cannot disagree about what is legal.
+        if request.form.get("reset"):
+            rules = None
+        else:
+            bands = []
+            for upto, step in zip(request.form.getlist("inc_upto"),
+                                  request.form.getlist("inc_step")):
+                upto, step = (upto or "").strip(), (step or "").strip()
+                if not step:
+                    continue
+                bands.append(f"{upto}:{step}" if upto else step)
+            rules = auction_svc.parse_increment_rules(", ".join(bands))
+        # Quiet while the auction is still being set up — nobody is bidding
+        # yet, and the room reads the ladder in /arules. Once it runs, the
+        # group is told, because its least raise just changed under it.
+        auction_svc.set_increment_rules(
+            db, season, rules,
+            quiet=season.status == auction_svc.STATUS_SETUP)
+        log_admin(db, "auction_increment_rules", "auction", season.id,
+                  season.name)
+        flash("✅ Bid increments saved: "
+              + auction_svc.render_increment_rules(season, joiner=" · ")
+              + ". They apply from the next raise.", "success")
+
+    elif action in ("lot_force", "lot_unsold", "lot_reinstate"):
+        _auction_player_action(db, season, action)
 
     elif action == "franchise":
         fid = _parse_int(request.form.get("franchise_id"))
@@ -23379,6 +23411,56 @@ def admin_auction_console_panel(season_id):
         db.close()
 
 
+def _auction_player_action(db, season, action):
+    """Force next, mark unsold, or reinstate — the website's /aforce,
+    /aunsold <list> and /areinstate, calling the very same service functions.
+
+    Takes a ``lot_id`` (a row's own button) or a ``players`` box holding lot
+    numbers and names, the way the commands do.
+    """
+    if request.form.get("lot_id"):
+        picked = [_auction_lot(db, season, request.form.get("lot_id"))]
+        misses = []
+    else:
+        picked, misses = auction_svc.find_lots(
+            db, season, request.form.get("players") or "")
+    for token, why in misses:
+        flash(f"❓ “{token}” {why}.", "warning")
+    if not picked:
+        if not misses:
+            raise auction_svc.AuctionError("Name a player or a lot number.")
+        return
+
+    if action == "lot_force":
+        if len(picked) != 1:
+            raise auction_svc.AuctionError("Force one player at a time.")
+        lot, opened = auction_svc.force_next(db, season, picked[0])
+        log_admin(db, "auction_lot_force", "auction", season.id, lot.name)
+        flash(f"⏩ {lot.name} is " + ("on the block now." if opened
+                                      else "next in the queue."), "success")
+    elif action == "lot_unsold":
+        done, skipped = auction_svc.mark_unsold(db, season, picked)
+        log_admin(db, "auction_lot_unsold", "auction", season.id,
+                  ", ".join(lot.name for lot in done))
+        if done:
+            flash("❌ Unsold: " + ", ".join(lot.name for lot in done) + ".",
+                  "success")
+        for lot, why in skipped:
+            flash(f"⏭ {lot.name} {why}.", "warning")
+    else:
+        back = []
+        for lot in picked:
+            try:
+                back.append(auction_svc.reinstate_lot(db, season, lot))
+            except auction_svc.AuctionError as exc:
+                flash(f"⏭ {exc}", "warning")
+        log_admin(db, "auction_lot_reinstate", "auction", season.id,
+                  ", ".join(lot.name for lot in back))
+        if back:
+            flash("↩️ Back in the pool: "
+                  + ", ".join(lot.name for lot in back) + ".", "success")
+
+
 def _auction_console_action(db, season, action):
     lot = auction_svc.current_lot(db, season)
 
@@ -23406,6 +23488,8 @@ def _auction_console_action(db, season, action):
     elif action == "relist":
         auction_svc.relist(db, season,
                            _auction_lot(db, season, request.form.get("lot_id")))
+    elif action in ("lot_force", "lot_unsold", "lot_reinstate"):
+        _auction_player_action(db, season, action)
     elif action == "relist_all":
         # The tick-boxes send lot_ids; an empty selection means "everything",
         # which is the button most rooms actually press.

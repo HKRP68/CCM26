@@ -160,7 +160,8 @@ of them answers **in a DM** — see [Before it starts](#before-it-starts).
 
 Admin: `/adminhelp` (the reference card, also `/auction`), `/anew`, `/abind`, `/astart`,
 `/apause`, `/aresume`, `/anext`, `/aextend`, `/asold`, `/aunsold`,
-`/aundobid`, `/awithdraw`, `/atimer`, `/asnipe`, `/afocus`, `/adirect`,
+`/aundobid`, `/awithdraw`, `/areinstate`, `/aforce`, `/aunsold <list>`,
+`/aincrement`, `/atimer`, `/asnipe`, `/afocus`, `/adirect`,
 `/agrant`, `/aco`,
 `/apublish`, `/acancel`, plus retention's `/aretlock on`, `/aretain`,
 `/aunretain`, RTM's `/artmset`, `/artmcards`, `/artmforce`, `/artmundo`, the
@@ -1603,4 +1604,22 @@ Two things were on their way to a third copy each, and both fail silently.
 
 * **A Mini App auction board.** The board is a Telegram message today; the
   `/webapp` plumbing would serve a live web view of the same data.
+
+## The auctioneer's player controls
+
+Four controls for steering individual players, each available as a command in
+the group **and** on the website (the setup page's pool table and the
+console's 🎯 Player controls card) — both call the same service function.
+
+| Command | Website | What it does |
+|---|---|---|
+| `/aforce Tilak Varma` · `/aforce 67` | ⏩ Next / Force next | Moves the player to the front of the queue. If the auction is live and nothing is on the block he opens **now**; otherwise he opens as soon as the current lot resolves (or first, when the auction starts). A withdrawn or unsold player is reinstated on the way; a sold one is refused. |
+| `/aunsold 67, 88, 89, 53` | ❌ Unsold / Mark unsold | Marks each listed player unsold. A queued player goes without ever opening; the lot on the block is passed if nobody has bid. Anyone already on a squad, with a standing bid, mid-RTM, withdrawn or already unsold is skipped **by name, with the reason** — one bad entry never throws the batch away. Bare `/aunsold` still passes the lot on the block. |
+| `/areinstate <player>, …` | ↩️ Reinstate | `/awithdraw`'s opposite. The player goes to the end of the queue with no trace of his last time on the block. A completed auction re-opens **paused**. |
+| `/aincrement 2:10L, 5:20L, 10:25L, 50L` | 📈 Bid increments | The bid ladder. Each band is `<under>:<step>`; one bare amount is the catch-all ("everything above"). A bare number is crore, lakh needs `L` — the same as `/bid`. `reset` restores the default. Applies from the next raise; once the auction is running the group is told. |
+
+Lists take **lot numbers** (the `#` the board, console and `/anextset` show),
+names, or a mix. Players marked unsold before going under the hammer are part
+of the unsold pile like any other, so the automatic ⚡ Accelerated round
+offers them once more unless `/aaccelmode off`.
 
