@@ -452,6 +452,20 @@ async def drain_events(bot, session, season, *, limit=DRAIN_PER_TICK):
     return spoken
 
 
+# ── The staged clock's warnings ──────────────────────────────────────
+
+async def send_warning(bot, session, season, lot, stage, left):
+    """The 1st or 2nd warning, carrying the quick-bid buttons."""
+    from services import auction_rich as AR
+    text = AR.warning_html(session, season, lot, stage, left)
+    markup = AR.bid_keyboard(season, lot)
+    extra = {"reply_markup": markup} if markup is not None else {}
+    sent = await _send(bot, season.chat_id, text, **extra)
+    if sent is not None and markup is not None:
+        await hand_buttons(bot, season.id, season.chat_id, sent)
+    return sent
+
+
 # ── The hammer countdown ─────────────────────────────────────────────
 
 def _lock():
@@ -512,21 +526,47 @@ def maybe_start_countdown(bot, session, season, *, now=None):
     return task
 
 
+async def _edit_count(bot, chat_id, message_id, text, markup=None):
+    """Edit the countdown message in place. False when Telegram refused."""
+    try:
+        await bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                    text=text, parse_mode="HTML",
+                                    reply_markup=markup,
+                                    disable_web_page_preview=True)
+        return True
+    except BadRequest as exc:
+        return "not modified" in str(exc).lower()
+    except Exception:
+        logger.debug("auction countdown edit failed", exc_info=True)
+        return False
+
+
+def _count_text(header, number):
+    return f"{header}\n\n⏳ <b>{number}</b>"
+
+
 async def run_countdown(bot, season_id, lot_id, deadline, seconds, *,
                         sleep=None, clock=None):
-    """Count the room down to the hammer in new messages, then bring it down.
+    """Count the room down to the hammer in ONE message, then bring it down.
 
-    The first message says what is about to happen and carries the first
-    number; each second after that is one more number. Before every message
-    the lot is read again: a bid that moved the deadline (anti-snipe) ends this
-    count — the sweep arms a new one for the new deadline — and a bid that did
-    not move it re-announces who the player is now going to. At the deadline
-    the lot is resolved here rather than up to a sweep later, so "1" is
-    followed by SOLD, not by two seconds of silence.
+    The first number is sent with the header that says what is about to
+    happen (and the bid buttons); every second after that EDITS the same
+    message — 5, 4, 3, 2, 1 — so the whole count costs the room one message
+    rather than five, well inside Telegram's twenty-a-minute group limit. An
+    edit Telegram refuses falls back to a new message.
+
+    Before every number the lot is read again. A bid that did not move the
+    deadline rewrites the header with the new leader. A bid that DID move it
+    (anti-snipe, or the staged clock's reset) ends this count: the message is
+    turned into "🔄 New bid — clock back to 40s" and loses its buttons, so a
+    stale "3" is never left hanging, and the sweep arms a fresh count for the
+    new deadline. At the deadline the lot is resolved here rather than up to a
+    sweep later, so "1" is followed by SOLD, not by two seconds of silence.
     """
     from database import get_session
-    from models import AuctionLot, AuctionSeason
+    from models import AuctionFranchise, AuctionLot, AuctionSeason
     from services import auction_service as A
+    from services import auction_rich as AR
 
     sleep = sleep or asyncio.sleep
     clock = clock or datetime.utcnow
@@ -537,6 +577,9 @@ async def run_countdown(bot, season_id, lot_id, deadline, seconds, *,
             await sleep(wait)
 
     said_for = None
+    header = ""
+    message_id = None
+    chat_id = None
     try:
         left = (deadline - clock()).total_seconds()
         first = max(1, min(int(seconds), int(math.ceil(left))))
@@ -552,25 +595,51 @@ async def run_countdown(bot, season_id, lot_id, deadline, seconds, *,
                         or season.status != A.STATUS_LIVE
                         or lot.status != A.LOT_ON_BLOCK
                         or lot.deadline_at != deadline):
+                    if (message_id and season is not None and lot is not None
+                            and lot.status == A.LOT_ON_BLOCK
+                            and lot.deadline_at is not None
+                            and lot.deadline_at > deadline):
+                        team = (session.query(AuctionFranchise)
+                                .filter(AuctionFranchise.id == lot.current_bidder_id)
+                                .first())
+                        back = int(math.ceil((lot.deadline_at - clock())
+                                             .total_seconds()))
+                        await _edit_count(
+                            bot, chat_id, message_id,
+                            f"🔄 <b>New bid</b> — "
+                            f"{html.escape(team.name if team else '?')} "
+                            f"<b>{A.render_money(lot.current_bid_lakh, season.currency_label)}</b>"
+                            f" on {html.escape(lot.name or '?')} · clock back to "
+                            f"<b>{back}s</b>")
+                        if _live_buttons.get(season_id, (None, None))[1] == message_id:
+                            _live_buttons.pop(season_id, None)
                     return False
                 standing = (lot.current_bidder_id, lot.current_bid_lakh)
-                text = f"<b>{number}</b>"
-                markup = None
+                markup = AR.bid_keyboard(season, lot)
                 if standing != said_for:
-                    text = (countdown_header(session, season, lot)
-                            + f"\n\n{text}")
+                    header = countdown_header(session, season, lot)
                     said_for = standing
-                    # The last seconds are exactly when the buttons matter:
-                    # the header carries them, the bare numbers do not.
-                    from services import auction_rich as AR
-                    markup = AR.bid_keyboard(season, lot)
-                extra = {"reply_markup": markup} if markup is not None else {}
-                sent = await _send(bot, season.chat_id, text, **extra)
-                if sent is not None and markup is not None:
-                    await hand_buttons(bot, season.id, season.chat_id, sent)
+                text = _count_text(header, number)
+                edited = False
+                if message_id is not None:
+                    edited = await _edit_count(bot, chat_id, message_id, text,
+                                               markup)
+                if not edited:
+                    extra = {"reply_markup": markup} if markup is not None else {}
+                    sent = await _send(bot, season.chat_id, text, **extra)
+                    if sent is not None:
+                        message_id = getattr(sent, "message_id", None)
+                        chat_id = season.chat_id
+                        if markup is not None:
+                            await hand_buttons(bot, season.id, season.chat_id,
+                                               sent)
             finally:
                 session.close()
         await until(deadline + timedelta(milliseconds=50))
+        if message_id is not None:
+            # The hammer is coming down: the count keeps its last number but
+            # loses its buttons, so nobody taps into a lot that just closed.
+            await strip_buttons(bot, season_id)
         await _resolve_now(bot, season_id, lot_id, deadline, clock=clock)
         return True
     except asyncio.CancelledError:
@@ -677,12 +746,20 @@ async def _tick_one(context, session, season, now):
         # bidders. An RTM window is one franchise answering one question, so it
         # counts down without the auctioneer's patter.
         stage = (0 if lot.status == A.LOT_RTM_OFFERED
-                 else A.going_stage_for(left))
+                 else A.going_stage_for(left, season))
         moved_on = stage > int(lot.going_stage or 0)
         new_bids = int(lot.bid_count or 0) != int(season.board_rendered_bid_count or 0)
         if moved_on:
             lot.going_stage = stage
             session.commit()
+            # The staged clock says its warnings out loud: "Selling X to
+            # Team for ₹…", with the bid buttons on it. Once per stage per
+            # deadline — a bid resets going_stage, so it re-arms both. Inside
+            # the final count the count itself is the warning.
+            if (A.staged_clock(season) is not None
+                    and left > A.countdown_seconds(season)):
+                await send_warning(context.bot, session, season, lot, stage,
+                                   left)
         # Redraw when something the board says has actually changed — a new
         # leading price, going once/twice, or anything just announced — and
         # whenever there is no board yet, which is the case on the first tick

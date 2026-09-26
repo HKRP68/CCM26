@@ -819,6 +819,9 @@ async def anew_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = get_session()
     try:
         season = A.create_season(session, name)
+        # New auctions run on the staged clock (60 40 20 10 5): warnings
+        # before every hammer, and a bid near the end resets to 40s.
+        A.apply_staged_defaults(season)
         A.bind_chat(session, season, chat.id)
         session.commit()
         await _reply_card(update,
@@ -1093,15 +1096,42 @@ def _find_lot(session, season, name):
     raise AuctionError(f"“{name}” is not in this auction's pool.")
 
 
+def _timer_readout(season):
+    staged = A.staged_clock(season)
+    if staged is None:
+        return (f"⏱ <b>Classic clock</b> — a lot runs for "
+                f"<b>{season.bid_seconds}s</b> (anti-snipe: /asnipe).\n"
+                f"Switch to the staged clock with "
+                f"<code>/atimer 60 40 20 10 5</code>.")
+    open_s, reset, warn1, warn2, count = staged
+    return ("⏱ <b>Staged clock</b>\n<blockquote>"
+            f"🟢 A lot opens with <b>{open_s}s</b>\n"
+            f"🔄 A bid with less than <b>{reset}s</b> left puts it back to "
+            f"<b>{reset}s</b>\n"
+            f"⚠️ 1st warning at <b>{warn1}s</b> — “Selling X to Team”\n"
+            f"⚠️⚠️ 2nd warning at <b>{warn2}s</b>\n"
+            + (f"⏳ Final count <b>{count}</b> → 1, then SOLD"
+               if count else "⏳ No final count — SOLD at 0")
+            + "</blockquote>\n"
+            "Change: <code>/atimer 60 40 20 10 5</code> · no count: "
+            "<code>/atimer 60 40 20 10 off</code> · back to classic: "
+            "<code>/atimer classic</code>")
+
+
 async def atimer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/atimer 60 40 20 10 5</code> — the staged lot clock.
+
+    Open with 60s; a bid with under 40s left resets to 40s; warnings at 20s
+    and 10s ("Selling X to Team for ₹…"); the last 5 counted down in one
+    message. <code>/atimer 45</code> is the classic one-number clock, and
+    <code>/atimer classic</code> goes back to it.
+    """
     raw = _arg_text(context)
 
     def work(session, season):
-        if not raw:
-            return (f"⏱ A lot runs for <b>{season.bid_seconds}s</b>.\n"
-                    f"Change it with <code>/atimer 45</code>.")
-        seconds = A.set_timer(session, season, raw)
-        return f"⏱ A lot now runs for <b>{seconds}s</b>."
+        if raw:
+            A.set_timer(session, season, raw)
+        return _timer_readout(season)
 
     await _with_auction(update, work, admin=True, context=context)
 
@@ -1266,6 +1296,14 @@ async def asnipe_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = list(context.args or [])
 
     def work(session, season):
+        staged = A.staged_clock(season)
+        if staged is not None:
+            return (f"🛡 This auction runs the <b>staged clock</b>: any bid "
+                    f"with less than <b>{staged[1]}s</b> left puts the clock "
+                    f"back to <b>{staged[1]}s</b>, as often as it takes — that "
+                    f"replaces anti-snipe.\nChange it with "
+                    f"<code>/atimer 60 40 20 10 5</code>, or "
+                    f"<code>/atimer classic</code> to use /asnipe again.")
         if not args:
             return (f"🛡 <b>Anti-snipe</b>\n"
                     f"A bid inside the last <b>{season.snipe_window_seconds}s</b> "

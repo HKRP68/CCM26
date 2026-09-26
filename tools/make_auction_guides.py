@@ -426,6 +426,13 @@ def user_guide():
           + " at the same instant, both land, in order. Spam is stopped per "
           "person: one bid attempt a second, and a burst of taps pauses only "
           "your bidding for 15 seconds."),
+        p(B("The clock warns you before the hammer.") + " With the default "
+          "clock (60 40 20 10 5) a player opens with 60 seconds. Any bid with "
+          "less than 40 seconds left puts the clock back to 40. At 20 seconds "
+          "the room gets the " + B("1st warning") + " — “Selling X to Team for "
+          "₹…” — at 10 seconds the " + B("2nd warning") + ", and the last 5 "
+          "are counted down in one message, then SOLD. Both warnings carry the "
+          "bid buttons. " + C("/arules") + " shows this auction's numbers."),
         p(B("A bid that works gets no reply.") + " Forty bids inside one lot "
           "would be forty messages on top of a board you are trying to read. "
           "Your message gets a reaction, and the board carries the new price "
@@ -771,8 +778,8 @@ def admin_guide():
               "   /apickset 3               expansion picks, if any",
               "",
               "Then:",
-              "   /atimer 30                seconds per lot",
-              "   /asnipe 10 10 5           window / extend / max per lot",
+              "   /atimer 60 40 20 10 5     open 60s · bid under 40s → 40s",
+              "                             · warnings 20s & 10s · count 5",
               "   /adirect off              (optional) ladder only, no typed bids",
               "   /acall Auction starts in 10 minutes",
               "   /astart",
@@ -1030,8 +1037,12 @@ def admin_guide():
             ["/aundobid", "Void the standing bid and fall back to the one "
                           "under it."],
             ["/awithdraw <player>", "Pull a player out of the auction."],
-            ["/atimer <seconds>", "Seconds per lot (5–600). Bare /atimer "
-                                  "reads it back."],
+            ["/atimer 60 40 20 10 5", "The staged clock: open with 60s; a bid "
+                                      "with under 40s left resets to 40s; 1st "
+                                      "warning at 20s, 2nd at 10s; the last 5 "
+                                      "counted down, then SOLD. …10 off = no "
+                                      "count · /atimer 45 = classic · bare "
+                                      "reads it back."],
             ["/asnipe <w> <e> <max>", "Anti-snipe. Setting the window equal to "
                                       "the extension gives the rule most rooms "
                                       "want: any bid in the last N seconds "

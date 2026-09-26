@@ -188,16 +188,19 @@ class CountdownTests(AuctionCase):
         self.assertIn("Mumbai", said[head])
         self.assertIn(self.lot.name, said[head])
         self.assertTrue(said[head].endswith("<b>3</b>"))
-        self.assertEqual("<b>2</b>", said[head + 1])
-        self.assertEqual("<b>1</b>", said[head + 2])
-        self.assertTrue(any("SOLD" in text for text in said[head + 3:]))
+        # One message, edited in place: 3 → 2 → 1, then SOLD.
+        counts = [text for _mid, text in self.bot.edits if "Selling" in text]
+        self.assertTrue(counts[0].endswith("<b>2</b>"))
+        self.assertTrue(counts[1].endswith("<b>1</b>"))
+        self.assertFalse([t for t in said if t in ("<b>2</b>", "<b>1</b>")])
+        self.assertTrue(any("SOLD" in text for text in said[head + 1:]))
         self.session.expire_all()
         self.assertEqual(self.A.LOT_SOLD, self.lot.status)
 
     def test_no_bids_counts_down_to_unsold(self):
         self.assertTrue(self.run_countdown())
         self.assertIn("UNSOLD", self.bot.sent[0])
-        self.assertTrue(any("UNSOLD" in text for text in self.bot.sent[3:]))
+        self.assertTrue(any("UNSOLD" in text for text in self.bot.sent[1:]))
         self.session.expire_all()
         self.assertEqual(self.A.LOT_UNSOLD, self.lot.status)
 

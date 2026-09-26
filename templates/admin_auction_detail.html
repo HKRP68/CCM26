@@ -72,7 +72,10 @@
       <input type="hidden" name="back_query" value="#settings">
       <div style="grid-column:span 2;"><label>Name</label><input type="text" name="name" value="{{ season.name }}"></div>
       <div><label>Auction group chat id</label><input type="text" name="chat_id" value="{{ season.chat_id or '' }}" placeholder="-1001234567890"></div>
-      <div><label>Seconds per lot</label><input type="number" name="bid_seconds" min="5" max="600" value="{{ season.bid_seconds }}"></div>
+      <div><label>Seconds per lot (opening clock)</label><input type="number" name="bid_seconds" min="5" max="600" value="{{ season.bid_seconds }}"></div>
+      <div><label>Bid under N s resets to N (0 = classic)</label><input type="number" name="reset_seconds" min="0" max="600" value="{{ season.reset_seconds or 0 }}"></div>
+      <div><label>1st warning at (s)</label><input type="number" name="warn1_seconds" min="0" max="600" value="{{ season.warn1_seconds or 0 }}"></div>
+      <div><label>2nd warning at (s)</label><input type="number" name="warn2_seconds" min="0" max="600" value="{{ season.warn2_seconds or 0 }}"></div>
       <div><label>Opening purse (Cr)</label><input type="text" name="opening_purse" value="{{ (season.opening_purse_lakh / 100)|round(2) }}">
         <small class="au-note" style="display:block;margin-top:.25rem;">Applies to every franchise — spending stays spent.</small></div>
       <div><label>Anti-snipe window (s)</label><input type="number" name="snipe_window" min="0" max="120" value="{{ season.snipe_window_seconds }}"></div>

@@ -298,13 +298,17 @@ def board_blocks(session, season, lot=None, *, now=None):
             blocks.append(R.paragraph(["⏸ ", R.bold("Paused"),
                                        " — bidding is closed."]))
         elif left is not None:
+            staged = A.staged_clock(season)
+            words = ({1: "⚠️ 1st warning", 2: "⚠️⚠️ 2nd warning"} if staged
+                     else {1: "going once", 2: "GOING TWICE"})
             stage = ("" if lot.status == A.LOT_RTM_OFFERED else
-                     {1: "going once", 2: "GOING TWICE"}.get(
-                         A.going_stage_for(left), ""))
+                     words.get(A.going_stage_for(left, season), ""))
             parts = [f"⏳ {A.format_clock(left)} left"]
             if stage:
                 parts += [" · ", R.bold(stage)]
-            if lot.extensions_used and season.max_extensions:
+            if staged and lot.status == A.LOT_ON_BLOCK:
+                parts.append(f"  🔄 a bid under {staged[1]}s resets to {staged[1]}s")
+            if lot.extensions_used and season.max_extensions and not staged:
                 remaining = int(season.max_extensions) - int(lot.extensions_used)
                 parts.append(f"  🛡 {lot.extensions_used} extension"
                              f"{'s' if lot.extensions_used != 1 else ''} used"
@@ -404,6 +408,9 @@ def bid_burst_html(session, season, events, *, now=None):
                            f"{admin(s)}" for s in steps[-6:])
         more = f"<i>+{len(steps) - 6} earlier</i> → " if len(steps) > 6 else ""
         lines = [f"💥 {more}{trail} <i>leads</i>{player}"]
+    reset_to = A._loads(events[-1].detail_json, {}).get("reset_to") if events else None
+    if reset_to:
+        lines.append(f"🔄 Clock back to <b>{int(reset_to)}s</b>")
     if lot is not None and lot.status == A.LOT_ON_BLOCK:
         left = A.seconds_left(lot, now)
         tail = []
@@ -461,6 +468,34 @@ def event_html(session, season, event):
     except Exception:
         logger.debug("auction: rich event render failed", exc_info=True)
     return event.headline
+
+
+def warning_html(session, season, lot, stage, left):
+    """The staged clock's 1st / 2nd warning: who he is going to, and for how much."""
+    label = ("⚠️ <b>1st warning</b>" if stage == 1
+             else "⚠️⚠️ <b>2nd warning</b>")
+    secs = f"⏳ <b>{max(1, int(round(left)))}s</b> left"
+    name = _e(lot.name or "?")
+    if lot.current_bidder_id is None:
+        return (f"{label} — <b>{name}</b> is going <b>UNSOLD</b>\n"
+                f"No bids yet · base {_money(season, lot.base_price_lakh)}\n"
+                f"{secs} · open with <code>/bid</code>")
+    team = _franchise(session, lot.current_bidder_id)
+    price = _money(season, lot.current_bid_lakh)
+    head = (f"{label} — Selling <b>{name}</b> to "
+            f"<b>{_e(team.name if team else '?')}</b> for <b>{price}</b>")
+    try:
+        holder, _ = A.rtm_available(session, season, lot)
+    except Exception:
+        holder = None
+    if holder is not None:
+        head += (f"\n<i>…then {_e(holder.name)} may use a Right To "
+                 f"Match</i>")
+    nxt = A._bid_hint(A.next_min_bid(season, lot))
+    staged = A.staged_clock(season)
+    reset = (f"\n🔄 A bid now puts the clock back to {staged[1]}s"
+             if staged else "")
+    return f"{head}\n{secs} · beat it with <code>/bid {nxt}</code>{reset}"
 
 
 # ── Team views ───────────────────────────────────────────────────────
@@ -720,14 +755,28 @@ def rules_view(session, season):
                           " or less left pushes the clock back to ",
                           R.bold(f"{season.snipe_extend_seconds}s"),
                           f", up to {season.max_extensions} times a lot."])]
+    staged = A.staged_clock(season)
+    if staged is not None:
+        open_s, reset, warn1, warn2, count = staged
+        steps = [f"🟢 A lot opens with {open_s}s.",
+                 f"🔄 A bid with less than {reset}s left puts the clock back "
+                 f"to {reset}s — as often as it takes.",
+                 f"⚠️ 1st warning at {warn1}s, ⚠️⚠️ 2nd warning at {warn2}s: "
+                 f"“Selling X to Team for ₹…”.",
+                 (f"⏳ The last {count} seconds are counted down, then SOLD."
+                  if count else "⏳ SOLD at 0 — no final count.")]
+        clock = [R.paragraph(step) for step in steps]
     blocks.append(R.details(R.bold("⏱ The clock"), clock))
     lines.append("<b>⏱ The clock</b>")
-    lines.append(f"⏱ A lot stays on the block for <b>{season.bid_seconds}s</b> "
-                 f"— every bid restarts it.")
-    lines.append(f"🛡 Anti-snipe: a bid with <b>{season.snipe_window_seconds}s</b>"
-                 f" or less left pushes the clock back to "
-                 f"<b>{season.snipe_extend_seconds}s</b>, up to "
-                 f"{season.max_extensions} times a lot.")
+    if staged is not None:
+        lines += steps
+    else:
+        lines.append(f"⏱ A lot stays on the block for <b>{season.bid_seconds}s</b> "
+                     f"— every bid restarts it.")
+        lines.append(f"🛡 Anti-snipe: a bid with <b>{season.snipe_window_seconds}s</b>"
+                     f" or less left pushes the clock back to "
+                     f"<b>{season.snipe_extend_seconds}s</b>, up to "
+                     f"{season.max_extensions} times a lot.")
     lines.append("")
 
     # ── The room ──
@@ -1557,7 +1606,10 @@ ADMIN_SECTIONS = (
     ("⚙️ Setting up", (
         ("/anew <name>", "Create an auction and bind it to this group"),
         ("/abind <name>", "Bind an existing auction to this group"),
-        ("/atimer <seconds>", "Seconds per lot (default 30)"),
+        ("/atimer 60 40 20 10 5", "The staged clock: open 60s · a bid under "
+                                  "40s resets to 40s · warnings at 20s & 10s "
+                                  "· count 5→1 (default for new auctions). "
+                                  "/atimer 45 = classic, bare reads it back"),
         ("/acountdown <seconds | off>", "The 3-2-1 countdown before a lot "
                                         "is sold or unsold (default 3)"),
         ("/abidgap <seconds | off>", "Seconds every team waits after a bid "

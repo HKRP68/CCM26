@@ -1011,6 +1011,11 @@ def _migrate_add_columns():
     # default — see the one-shot below and auction_service.bid_gap_seconds.
     _try_add("auction_seasons", "bid_gap_seconds", "INTEGER DEFAULT 0")
     _try_add("auction_lots", "last_bid_at", "TIMESTAMP")
+    # The staged lot clock (/atimer 60 40 20 10 5). 0 = the classic clock, so
+    # every season that exists keeps running exactly as it did.
+    _try_add("auction_seasons", "reset_seconds", "INTEGER DEFAULT 0")
+    _try_add("auction_seasons", "warn1_seconds", "INTEGER DEFAULT 0")
+    _try_add("auction_seasons", "warn2_seconds", "INTEGER DEFAULT 0")
 
     # ── Franchise Auction: focus mode ──
     # While an auction is live or paused its group answers auction commands and
