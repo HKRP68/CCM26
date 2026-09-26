@@ -183,9 +183,37 @@ class ComebackScanTests(_DB):
         factory = sessionmaker(bind=self.engine)
         with patch.object(database, "get_session", factory), \
                 patch.object(C, "BATCH_SIZE", 2), \
+                patch.object(C, "_SCAN_CURSOR", 0), \
                 patch.object(C, "tiers", return_value=C.DEFAULT_TIERS):
             jobs = C._scan(now)
         self.assertEqual([(j["user_id"], j["tier"]) for j in jobs], [(due.id, 7)])
+
+    def test_the_cursor_carries_past_the_page_cap_across_ticks(self):
+        import database
+        now = datetime.utcnow()
+        for i in range(30):
+            self._user(tg=6000 + i, created_at=now - timedelta(days=60),
+                       last_seen_at=now - timedelta(days=2),
+                       comeback_tier=1,
+                       comeback_sent_at=now - timedelta(hours=40))
+        due = self._user(tg=9998, created_at=now - timedelta(days=60),
+                         last_seen_at=now - timedelta(days=8))
+        self.s.commit()
+        factory = sessionmaker(bind=self.engine)
+        # One tick reads at most 1 * 5 * 2 = 10 candidates.
+        with patch.object(database, "get_session", factory), \
+                patch.object(C, "BATCH_SIZE", 1), \
+                patch.object(C, "MAX_SCAN_PAGES", 2), \
+                patch.object(C, "_SCAN_CURSOR", 0), \
+                patch.object(C, "tiers", return_value=C.DEFAULT_TIERS):
+            found_on = None
+            for tick in range(1, 6):
+                jobs = C._scan(now)
+                if jobs:
+                    found_on = tick
+                    break
+        self.assertEqual([j["user_id"] for j in jobs], [due.id])
+        self.assertEqual(found_on, 4)  # ticks 1-3 walk the 30 not-due users
 
     def test_teaser_escapes_the_tournament_name(self):
         import database

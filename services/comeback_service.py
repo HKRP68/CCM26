@@ -36,6 +36,8 @@ MAX_INACTIVE_DAYS = int(os.getenv("COMEBACK_MAX_INACTIVE_DAYS", "30"))
 BATCH_SIZE = int(os.getenv("COMEBACK_BATCH_SIZE", "100"))
 # Upper bound on candidate pages read per tick (each page is BATCH_SIZE * 5).
 MAX_SCAN_PAGES = int(os.getenv("COMEBACK_MAX_SCAN_PAGES", "20"))
+# Last user id examined by _scan; the next tick resumes after it (0 = top).
+_SCAN_CURSOR = 0
 SENDS_PER_SECOND = float(os.getenv("COMEBACK_SENDS_PER_SECOND", "8"))
 # Test hook: "minutes" makes a tier of N mean N minutes instead of N days.
 _UNIT = timedelta(minutes=1) if os.getenv("COMEBACK_TIER_UNIT") == "minutes" \
@@ -183,9 +185,13 @@ def _scan(now=None):
         gap = now - 1.5 * _UNIT
         q = q.filter((User.comeback_sent_at.is_(None)) | (User.comeback_sent_at < gap))
         # Page by id until the batch is full: users who are quiet but not due
-        # yet (their tier already sent) must not starve higher-id users.
+        # yet (their tier already sent) must not starve higher-id users. The
+        # cursor survives across ticks, so a tick that hits the page cap picks
+        # up where it stopped next time instead of rescanning from the top.
+        global _SCAN_CURSOR
         page = BATCH_SIZE * 5
-        cursor = 0
+        cursor = _SCAN_CURSOR
+        wrapped = False
         for _ in range(MAX_SCAN_PAGES):
             rows = q.filter(User.id > cursor).order_by(User.id).limit(page).all()
             for u in rows:
@@ -199,8 +205,12 @@ def _scan(now=None):
                              "streak": u.win_streak or 0})
                 if len(jobs) >= BATCH_SIZE:
                     break
-            if len(jobs) >= BATCH_SIZE or len(rows) < page:
+            if len(jobs) >= BATCH_SIZE:
                 break
+            if len(rows) < page:
+                wrapped = True  # reached the end of the candidates
+                break
+        _SCAN_CURSOR = 0 if wrapped else cursor
         s.commit()
     except Exception:
         s.rollback()
