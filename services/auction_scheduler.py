@@ -39,9 +39,12 @@ crosses over.
 """
 
 import asyncio
+import html
 import logging
+import math
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 from telegram.error import (
     BadRequest, Forbidden, NetworkError, RetryAfter, TelegramError, TimedOut,
@@ -67,6 +70,13 @@ COALESCED_KINDS = {"bid"}
 BID_MESSAGE_GAP = 4.0  # seconds
 _last_bid_message = {}
 
+# The one message in the room, besides the pinned board, that carries live
+# quick-bid buttons: the newest bid line, lot card or countdown header. Keyed
+# by season → (chat_id, message_id). When a newer one is sent the old one's
+# buttons are taken off, so the room is never offered a column of stale
+# prices — the buttons are always on the message at the bottom of the chat.
+_live_buttons = {}
+
 # Send the player's card when a lot opens. A switch rather than a constant
 # for the tests, which have no card renderer to spare.
 SEND_LOT_CARD = True
@@ -74,6 +84,16 @@ SEND_LOT_CARD = True
 # Latched off for the process when Telegram refuses a rich board edit, so a
 # payload it does not like costs one refused call, not one every two seconds.
 _board_rich_ok = True
+
+# The hammer countdown ("Selling X to Team for ₹…", 3, 2, 1, SOLD) runs as its
+# own task, because a two-second sweep cannot count in ones. Keyed by season:
+# the lot and the deadline it is counting down to, so a bid that moves the
+# deadline gets a fresh count rather than two overlapping ones.
+_countdowns = {}
+# The sweep and a countdown that brings the hammer down on time must never
+# resolve the same lot at once.
+_resolve_lock = None
+_resolve_lock_loop = None
 
 # How many pending events one tick will say out loud. A backlog (the bot was
 # down while an admin worked through the console) is drained over several
@@ -245,8 +265,39 @@ async def _send_rich(bot, chat_id, blocks, html_text, **kwargs):
     return None
 
 
-async def _send_bid_line(bot, chat_id, text):
-    """Send a bid line. True when it landed or never can; None to retry.
+async def strip_buttons(bot, season_id):
+    """Take the quick-bid buttons off the last message that carried them.
+
+    Best-effort: the message may be gone, too old to edit, or already bare —
+    none of which matters, because a stale button is refused by the price in
+    its own callback data anyway. This only keeps the room tidy.
+    """
+    held = _live_buttons.pop(season_id, None)
+    if held is None:
+        return
+    chat_id, message_id = held
+    try:
+        await bot.edit_message_reply_markup(chat_id=chat_id,
+                                            message_id=message_id,
+                                            reply_markup=None)
+    except Exception:
+        logger.debug("auction: could not strip old buttons", exc_info=True)
+
+
+async def hand_buttons(bot, season_id, chat_id, message):
+    """``message`` now carries the live buttons; the previous holder loses them."""
+    message_id = getattr(message, "message_id", None)
+    if not message_id:
+        return
+    held = _live_buttons.get(season_id)
+    if held is not None and held[1] != message_id:
+        await strip_buttons(bot, season_id)
+    _live_buttons[season_id] = (chat_id, message_id)
+
+
+async def _send_bid_line(bot, chat_id, text, reply_markup=None):
+    """Send a bid line. The message (or True) when it landed or never can;
+    None to retry.
 
     A transient failure — flood control, a timeout, a network error — must not
     advance the drain cursor, or the burst is never announced. A permanent
@@ -254,9 +305,11 @@ async def _send_bid_line(bot, chat_id, text):
     unreachable chat cannot stall the drain forever.
     """
     try:
-        await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML",
-                               disable_web_page_preview=True)
-        return True
+        kwargs = {"reply_markup": reply_markup} if reply_markup is not None else {}
+        sent = await bot.send_message(chat_id=chat_id, text=text,
+                                      parse_mode="HTML",
+                                      disable_web_page_preview=True, **kwargs)
+        return sent if sent is not None else True
     except RetryAfter as exc:
         logger.warning("auction bid line rate-limited: %s", exc)
         return None
@@ -281,6 +334,18 @@ async def send_lot_card(bot, session, season, lot):
     """
     from services import auction_rich as AR
     caption = AR.lot_caption(session, season, lot)
+    # The opening bid is one tap away on the card itself, the way TeleAuction
+    # puts its buttons on the player message.
+    markup = AR.bid_keyboard(season, lot)
+    await strip_buttons(bot, season.id)
+    sent = await _lot_card_message(bot, session, season, lot, caption, markup)
+    if sent is not None and markup is not None:
+        await hand_buttons(bot, season.id, season.chat_id, sent)
+    return sent
+
+
+async def _lot_card_message(bot, session, season, lot, caption, markup):
+    extra = {"reply_markup": markup} if markup is not None else {}
     if SEND_LOT_CARD and lot.player_id:
         try:
             from models import Player
@@ -291,12 +356,17 @@ async def send_lot_card(bot, session, season, lot):
                 sent = await send_player_card(bot=bot, chat_id=season.chat_id,
                                               player=player, caption=caption,
                                               parse_mode="HTML",
-                                              session=session)
+                                              session=session, **extra)
                 if sent is not None:
                     return sent
         except Exception:
             logger.exception("auction lot card failed; sending text")
-    return await _send(bot, season.chat_id, caption)
+    return await _send(bot, season.chat_id, caption, **extra)
+
+
+def last_lot_id(run):
+    """The lot a run of bid events was on (the last one's, if they differ)."""
+    return run[-1].lot_id if run else None
 
 
 # ── The event drain ──────────────────────────────────────────────────
@@ -333,18 +403,33 @@ async def drain_events(bot, session, season, *, limit=DRAIN_PER_TICK):
                 # Hold the burst for a later tick; the board already shows
                 # the price, so nothing the room needs is late.
                 break
+            # The newest bid carries the quick-bid buttons, TeleAuction-style,
+            # so the next raise is one tap at the bottom of the chat rather
+            # than a scroll up to the pinned board.
+            current = A.current_lot(session, season)
+            markup = (AR.bid_keyboard(season, current)
+                      if current is not None and current.id == last_lot_id(run)
+                      else None)
             delivered = await _send_bid_line(
-                bot, season.chat_id, AR.bid_burst_html(session, season, run))
+                bot, season.chat_id, AR.bid_burst_html(session, season, run),
+                reply_markup=markup)
             if delivered is None:
                 # Rate-limited or a network blip: keep the cursor where it
                 # is and send the whole burst again on a later tick.
                 break
+            if markup is not None and delivered is not True:
+                await hand_buttons(bot, season.id, season.chat_id, delivered)
             _last_bid_message[season.id] = time.monotonic()
             spoken += 1
             last = run[-1]
         else:
             last = event
             if event.kind not in SILENT_KINDS:
+                # Anything else that happens — a sale, a pause, a Right To
+                # Match — changes what the buttons would bid on, so the last
+                # set comes off. The next bid line (or lot card) brings them
+                # back at the right price.
+                await strip_buttons(bot, season.id)
                 if event.kind == "lot_opened":
                     lot = A.current_lot(session, season)
                     if lot is None or lot.id != event.lot_id:
@@ -367,6 +452,238 @@ async def drain_events(bot, session, season, *, limit=DRAIN_PER_TICK):
     return spoken
 
 
+# ── The staged clock's warnings ──────────────────────────────────────
+
+async def send_warning(bot, session, season, lot, stage, left):
+    """The 1st or 2nd warning, carrying the quick-bid buttons."""
+    from services import auction_rich as AR
+    text = AR.warning_html(session, season, lot, stage, left)
+    markup = AR.bid_keyboard(season, lot)
+    extra = {"reply_markup": markup} if markup is not None else {}
+    sent = await _send(bot, season.chat_id, text, **extra)
+    if sent is not None and markup is not None:
+        await hand_buttons(bot, season.id, season.chat_id, sent)
+    return sent
+
+
+# ── The hammer countdown ─────────────────────────────────────────────
+
+def _lock():
+    """The resolve lock for the running loop (tests run one loop per case)."""
+    global _resolve_lock, _resolve_lock_loop
+    loop = asyncio.get_running_loop()
+    if _resolve_lock is None or _resolve_lock_loop is not loop:
+        _resolve_lock = asyncio.Lock()
+        _resolve_lock_loop = loop
+    return _resolve_lock
+
+
+def countdown_header(session, season, lot):
+    """What is about to happen to the lot, said before the count starts."""
+    from services import auction_service as A
+    name = html.escape(lot.name or "?")
+    if lot.current_bidder_id is None:
+        return f"⏳ <b>{name}</b> is going <b>UNSOLD</b> — no bids yet"
+    from models import AuctionFranchise
+    team = (session.query(AuctionFranchise)
+            .filter(AuctionFranchise.id == lot.current_bidder_id).first())
+    team_name = A.owner_tag(session, team)
+    price = A.render_money(lot.current_bid_lakh, season.currency_label)
+    holder, _ = A.rtm_available(session, season, lot)
+    if holder is not None:
+        # The hammer is not the end of this one: the old franchise is asked
+        # first, so "selling to" would be a promise the room cannot keep.
+        return (f"⏳ Bidding closes on <b>{name}</b>\n"
+                f"{team_name} lead at <b>{price}</b> — then "
+                f"<b>{html.escape(holder.name)}</b> may use a Right To Match")
+    return (f"⏳ Selling <b>{name}</b>\n"
+            f"to {team_name} for <b>{price}</b>")
+
+
+def maybe_start_countdown(bot, session, season, *, now=None):
+    """Arm the hammer countdown for the lot on the block, once per deadline.
+
+    Armed a little early — up to one sweep before the count is due — so the
+    task can land its first number on time; it sleeps the rest itself.
+    """
+    from services import auction_service as A
+    seconds = A.countdown_seconds(season)
+    if seconds <= 0 or season.status != A.STATUS_LIVE or not season.chat_id:
+        return None
+    lot = A.current_lot(session, season)
+    if lot is None or lot.status != A.LOT_ON_BLOCK or lot.deadline_at is None:
+        return None
+    left = A.seconds_left(lot, now)
+    if left is None or left <= 0 or left > seconds + SWEEP_INTERVAL + 0.5:
+        return None
+    key = (lot.id, lot.deadline_at)
+    running = _countdowns.get(season.id)
+    if running is not None and running[0] == key and not running[1].done():
+        return None
+    task = asyncio.get_running_loop().create_task(
+        run_countdown(bot, season.id, lot.id, lot.deadline_at, seconds))
+    _countdowns[season.id] = (key, task)
+    return task
+
+
+async def _edit_count(bot, chat_id, message_id, text, markup=None):
+    """Edit the countdown message in place. False when Telegram refused."""
+    try:
+        await bot.edit_message_text(chat_id=chat_id, message_id=message_id,
+                                    text=text, parse_mode="HTML",
+                                    reply_markup=markup,
+                                    disable_web_page_preview=True)
+        return True
+    except BadRequest as exc:
+        return "not modified" in str(exc).lower()
+    except Exception:
+        logger.debug("auction countdown edit failed", exc_info=True)
+        return False
+
+
+def _count_text(header, number):
+    return f"{header}\n\n⏳ <b>{number}</b>"
+
+
+async def run_countdown(bot, season_id, lot_id, deadline, seconds, *,
+                        sleep=None, clock=None):
+    """Count the room down to the hammer in ONE message, then bring it down.
+
+    The first number is sent with the header that says what is about to
+    happen (and the bid buttons); every second after that EDITS the same
+    message — 5, 4, 3, 2, 1 — so the whole count costs the room one message
+    rather than five, well inside Telegram's twenty-a-minute group limit. An
+    edit Telegram refuses falls back to a new message.
+
+    Before every number the lot is read again. A bid that did not move the
+    deadline rewrites the header with the new leader. A bid that DID move it
+    (anti-snipe, or the staged clock's reset) ends this count: the message is
+    turned into "🔄 New bid — clock back to 40s" and loses its buttons, so a
+    stale "3" is never left hanging, and the sweep arms a fresh count for the
+    new deadline. At the deadline the lot is resolved here rather than up to a
+    sweep later, so "1" is followed by SOLD, not by two seconds of silence.
+    """
+    from database import get_session
+    from models import AuctionFranchise, AuctionLot, AuctionSeason
+    from services import auction_service as A
+    from services import auction_rich as AR
+
+    sleep = sleep or asyncio.sleep
+    clock = clock or datetime.utcnow
+
+    async def until(moment):
+        wait = (moment - clock()).total_seconds()
+        if wait > 0:
+            await sleep(wait)
+
+    said_for = None
+    header = ""
+    message_id = None
+    chat_id = None
+    try:
+        left = (deadline - clock()).total_seconds()
+        first = max(1, min(int(seconds), int(math.ceil(left))))
+        for number in range(first, 0, -1):
+            await until(deadline - timedelta(seconds=number))
+            session = get_session()
+            try:
+                season = (session.query(AuctionSeason)
+                          .filter(AuctionSeason.id == season_id).first())
+                lot = (session.query(AuctionLot)
+                       .filter(AuctionLot.id == lot_id).first())
+                if (season is None or lot is None
+                        or season.status != A.STATUS_LIVE
+                        or lot.status != A.LOT_ON_BLOCK
+                        or lot.deadline_at != deadline):
+                    if (message_id and season is not None and lot is not None
+                            and lot.status == A.LOT_ON_BLOCK
+                            and lot.deadline_at is not None
+                            and lot.deadline_at > deadline):
+                        team = (session.query(AuctionFranchise)
+                                .filter(AuctionFranchise.id == lot.current_bidder_id)
+                                .first())
+                        back = int(math.ceil((lot.deadline_at - clock())
+                                             .total_seconds()))
+                        await _edit_count(
+                            bot, chat_id, message_id,
+                            f"🔄 <b>New bid</b> — "
+                            f"{A.owner_tag(session, team)} "
+                            f"<b>{A.render_money(lot.current_bid_lakh, season.currency_label)}</b>"
+                            f" on {html.escape(lot.name or '?')} · clock back to "
+                            f"<b>{back}s</b>")
+                        if _live_buttons.get(season_id, (None, None))[1] == message_id:
+                            _live_buttons.pop(season_id, None)
+                    return False
+                standing = (lot.current_bidder_id, lot.current_bid_lakh)
+                markup = AR.bid_keyboard(season, lot)
+                if standing != said_for:
+                    header = countdown_header(session, season, lot)
+                    said_for = standing
+                text = _count_text(header, number)
+                edited = False
+                if message_id is not None:
+                    edited = await _edit_count(bot, chat_id, message_id, text,
+                                               markup)
+                if not edited:
+                    extra = {"reply_markup": markup} if markup is not None else {}
+                    sent = await _send(bot, season.chat_id, text, **extra)
+                    if sent is not None:
+                        message_id = getattr(sent, "message_id", None)
+                        chat_id = season.chat_id
+                        if markup is not None:
+                            await hand_buttons(bot, season.id, season.chat_id,
+                                               sent)
+            finally:
+                session.close()
+        await until(deadline + timedelta(milliseconds=50))
+        if message_id is not None:
+            # The hammer is coming down: the count keeps its last number but
+            # loses its buttons, so nobody taps into a lot that just closed.
+            await strip_buttons(bot, season_id)
+        await _resolve_now(bot, season_id, lot_id, deadline, clock=clock)
+        return True
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("auction countdown failed; the sweep will resolve")
+        return False
+
+
+async def _resolve_now(bot, season_id, lot_id, deadline, *, clock=None):
+    """One sweep of one auction, taken the moment its lot's clock runs out."""
+    from database import get_session
+    from models import AuctionLot, AuctionSeason
+    from services import auction_service as A
+
+    clock = clock or datetime.utcnow
+    async with _lock():
+        session = get_session()
+        try:
+            season = (session.query(AuctionSeason)
+                      .filter(AuctionSeason.id == season_id).first())
+            lot = (session.query(AuctionLot)
+                   .filter(AuctionLot.id == lot_id).first())
+            if (season is None or lot is None
+                    or season.status != A.STATUS_LIVE or not season.chat_id
+                    or lot.status != A.LOT_ON_BLOCK
+                    or lot.deadline_at != deadline):
+                return  # the sweep, a bid or an admin got there first
+            await _tick_one(SimpleNamespace(bot=bot), session, season, clock())
+        except Exception:
+            session.rollback()
+            logger.exception("auction #%s countdown resolve failed", season_id)
+        finally:
+            session.close()
+
+
+def cancel_countdown(season_id):
+    """Drop a running countdown — the auction under it has been reset."""
+    _live_buttons.pop(season_id, None)
+    running = _countdowns.pop(season_id, None)
+    if running is not None and not running[1].done():
+        running[1].cancel()
+
+
 # ── The sweep ────────────────────────────────────────────────────────
 
 async def _auction_tick(context):
@@ -385,7 +702,10 @@ async def _auction_tick(context):
             # One broken auction must not stall the others — the same
             # isolation ``_draft_tick`` uses, for the same reason.
             try:
-                await _tick_one(context, session, season, now)
+                async with _lock():
+                    await _tick_one(context, session, season, now)
+                maybe_start_countdown(context.bot, session, season,
+                                      now=datetime.utcnow())
             except Exception:
                 session.rollback()
                 logger.exception("auction #%s tick failed", season.id)
@@ -426,12 +746,20 @@ async def _tick_one(context, session, season, now):
         # bidders. An RTM window is one franchise answering one question, so it
         # counts down without the auctioneer's patter.
         stage = (0 if lot.status == A.LOT_RTM_OFFERED
-                 else A.going_stage_for(left))
+                 else A.going_stage_for(left, season))
         moved_on = stage > int(lot.going_stage or 0)
         new_bids = int(lot.bid_count or 0) != int(season.board_rendered_bid_count or 0)
         if moved_on:
             lot.going_stage = stage
             session.commit()
+            # The staged clock says its warnings out loud: "Selling X to
+            # Team for ₹…", with the bid buttons on it. Once per stage per
+            # deadline — a bid resets going_stage, so it re-arms both. Inside
+            # the final count the count itself is the warning.
+            if (A.staged_clock(season) is not None
+                    and left > A.countdown_seconds(season)):
+                await send_warning(context.bot, session, season, lot, stage,
+                                   left)
         # Redraw when something the board says has actually changed — a new
         # leading price, going once/twice, or anything just announced — and
         # whenever there is no board yet, which is the case on the first tick

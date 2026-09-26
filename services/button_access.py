@@ -55,6 +55,10 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # that on every press — but the button has to be reachable by them, and
     # the board belongs to nobody.
     "au_rtm_",
+    # 💼 My Purse / 📊 Status ride next to the quick-bid buttons, on messages
+    # the whole room shares. Each press answers only the presser, with a
+    # private popup about their OWN franchise — nothing to fight over.
+    "au_me_",
     # (The /ainfo menu and the 🗂 Sets card used to be listed here. They are
     # owner-locked now — see OWNER_RULES below — because both are a COMMAND's
     # reply rather than the room's board: /ainfo opens views under the person

@@ -322,8 +322,10 @@ An auction is a group event; these run in the chat the auction is bound to.
 
 | Command | Aliases | What it does |
 |---------|---------|--------------|
-| `/bid` 👥 | `/bd` | Bid for the player on the block — bare `/bid` is the next minimum |
+| `/bid` 👥 | `/bd` · `.bid` | Bid for the player on the block — bare `/bid` is the next minimum. Or tap the buttons under the newest bid message (💼 My Purse / 📊 Status are private popups) |
 | `/aboard` 👥 | `/auctionboard` | The live auction board, with quick-bid buttons |
+| `/aleaderboard` 👥 | `/alb` · `.lb` | Franchises ranked by spend, with each one's top buy |
+| `/amybids` 👥 | `/amybidhistory` · `.mybids` | Your franchise's bid history — won, lost, live |
 | `/apurse` 👥 | `/apurses` | Every purse, or one franchise's squad |
 | `/artm` 👥 | `/rtm` | Answer a Right To Match on your former player |
 | `/ainfo` 👥 | `/amenu` | Where the auction stands, with a button for every view below |
@@ -535,6 +537,8 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/apurse [franchise]` | `/apurse Mumbai` |
 | `/artm yes\|no` | `/artm yes` |
 | `/asquad [franchise]` | `/asquad` · `/asquad Chennai` |
+| `/amybids [franchise]` | `/amybids` · `/amybids Chennai` |
+| dot shortcuts | `.bid` · `.bid 2cr` · `.purse` · `.squad` · `.board` · `.lb` |
 | `/anextplayer [n]` | `/anextplayer 10` |
 
 ## A10 · Games
@@ -631,7 +635,10 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/awithdraw <player name>` | Pull a player out of the auction |
 | `/areinstate <player \| lot no>, …` (`/aunwithdraw`) | `/awithdraw`'s opposite — a withdrawn (or unsold) player goes back to the end of the queue |
 | `/aincrement 2:10L, 5:20L, 10:25L, 50L` (`/aincrements`) | Bid increments: under ₹2 Cr the least raise is ₹10 L, and so on; one amount alone is a flat step, `reset` restores the default, bare reads it back. Also on the website's setup page |
-| `/atimer <seconds>` | Seconds allowed per lot — `/atimer 45` |
+| `/atimer 60 40 20 10 5` | The staged lot clock: opens with 60s · a bid with under 40s left resets to 40s · 1st warning at 20s and 2nd at 10s ("Selling X to Team for ₹…", with bid buttons) · last 5 counted down in one edited message, then SOLD. `…10 off` = no count; `/atimer 45` = classic clock; `/atimer classic` switches back; bare reads it |
+| `/acountdown <seconds \| off>` | The hammer countdown: before a lot is sold or unsold the group gets new messages — "Selling *player* to *team* for *price*" with **3**, then **2**, **1**, and SOLD. Default 3, up to 10; bare reads it back |
+| `/abidgap <seconds \| off>` | The room-wide quiet gap after every bid — **off by default**, so many teams can bid at once (spam is stopped per person: one bid attempt a second, a 15s pause for a burst). Set seconds to make every other team wait that long after a bid; a bid inside it is answered with the current bid holder. Bare reads it back |
+| `/arestart confirm` | Restart the whole auction from the first player: every sale, RTM, unsold player and bid is wiped, purses, squad counts and RTM cards go back, and the pool returns to its opening order. Retained players and expansion picks stay. Bare `/arestart` explains and asks for `confirm`. Refused once squads are published |
 | `/asnipe <window> <extend> <max>` | Anti-snipe window, extension and cap — `/asnipe 10 10 5` |
 | `/afocus on\|off` | Focus mode: while the auction is live or paused, this group answers auction commands and nothing else (default **on**). Bare `/afocus` reads it back |
 | `/adirect on\|off` | Direct bids: may a bidder type their own amount (`/bid 12`), or only take the next step? Default **on**. Off still allows bare `/bid` and the board's buttons |

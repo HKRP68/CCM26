@@ -406,12 +406,33 @@ def user_guide():
         code(["/bid           →  the next legal minimum, whatever it is",
               "/bid 2.4       →  ₹2.4 Cr, if that clears the minimum",
               "/bd 2.4        →  the same thing, fewer letters"]),
-        p("The pinned board also carries " + B("quick-bid buttons") + ". They "
-          "are shared, not locked to one franchise — a board the second "
-          "franchise cannot touch is not an auction. Each press is checked "
-          "against the franchise " + B("you") + " own, and the exact price is "
-          "baked into the button, so a stale board can never bid a number "
-          "nobody meant."),
+        p(B("The buttons are always at the bottom of the chat.") + " Every "
+          "new bid message (“💥 Mumbai bids ₹2.2 Cr · ⬆️ Outbids Chennai”), "
+          "the player's card and the countdown carry " + B("quick-bid buttons")
+          + " — the minimum and one step above it — and the older message "
+          "loses its buttons, so you never tap a stale price. The pinned board "
+          "has them too. They are shared: each press is checked against the "
+          "franchise " + B("you") + " own, and the exact price is baked into "
+          "the button."),
+        p(B("💼 My Purse") + " and " + B("📊 Status") + " sit under the bid "
+          "buttons. They answer with a private popup — your purse, max bid, "
+          "squad, overseas count and RTM cards, or who leads the lot and what "
+          "beats it — and add nothing to the chat."),
+        p(B("Dot shortcuts") + " work in the auction group: " + C(".bid")
+          + ", " + C(".bid 2cr") + ", " + C(".purse") + ", " + C(".squad")
+          + ", " + C(".board") + ", " + C(".lb") + ", " + C(".mybids") + "."),
+        p(B("Many teams can bid at once.") + " There is no pause for the room "
+          "after a bid. If you and another team send a bare " + C("/bid")
+          + " at the same instant, both land, in order. Spam is stopped per "
+          "person: one bid attempt a second, and a burst of taps pauses only "
+          "your bidding for 15 seconds."),
+        p(B("The clock warns you before the hammer.") + " With the default "
+          "clock (60 40 20 10 5) a player opens with 60 seconds. Any bid with "
+          "less than 40 seconds left puts the clock back to 40. At 20 seconds "
+          "the room gets the " + B("1st warning") + " — “Selling X to Team for "
+          "₹…” — at 10 seconds the " + B("2nd warning") + ", and the last 5 "
+          "are counted down in one message, then SOLD. Both warnings carry the "
+          "bid buttons. " + C("/arules") + " shows this auction's numbers."),
         p(B("A bid that works gets no reply.") + " Forty bids inside one lot "
           "would be forty messages on top of a board you are trying to read. "
           "Your message gets a reaction, and the board carries the new price "
@@ -655,6 +676,12 @@ def user_guide():
             ["/anextplayer", "anyone", "Who is up next."],
             ["/asoldlist", "anyone", "Everyone sold, set by set."],
             ["/aunsoldlist", "anyone", "Everyone unsold."],
+            ["/aleaderboard · /alb", "anyone",
+             "Franchises ranked by spend, with each one's top buy."],
+            ["/amybids [team]", "anyone",
+             "Every player you bid on — won, lost or live."],
+            [".bid .purse .squad …", "as the command",
+             "Dot shortcuts, in the auction group."],
             ["/aretlock", "anyone", "Who kept whom; the retention window."],
             ["/apicks", "anyone", "The expansion pick order, and whose turn."],
         ], widths=[38 * mm, 30 * mm, None]),
@@ -751,8 +778,8 @@ def admin_guide():
               "   /apickset 3               expansion picks, if any",
               "",
               "Then:",
-              "   /atimer 30                seconds per lot",
-              "   /asnipe 10 10 5           window / extend / max per lot",
+              "   /atimer 60 40 20 10 5     open 60s · bid under 40s → 40s",
+              "                             · warnings 20s & 10s · count 5",
               "   /adirect off              (optional) ladder only, no typed bids",
               "   /acall Auction starts in 10 minutes",
               "   /astart",
@@ -1010,8 +1037,12 @@ def admin_guide():
             ["/aundobid", "Void the standing bid and fall back to the one "
                           "under it."],
             ["/awithdraw <player>", "Pull a player out of the auction."],
-            ["/atimer <seconds>", "Seconds per lot (5–600). Bare /atimer "
-                                  "reads it back."],
+            ["/atimer 60 40 20 10 5", "The staged clock: open with 60s; a bid "
+                                      "with under 40s left resets to 40s; 1st "
+                                      "warning at 20s, 2nd at 10s; the last 5 "
+                                      "counted down, then SOLD. …10 off = no "
+                                      "count · /atimer 45 = classic · bare "
+                                      "reads it back."],
             ["/asnipe <w> <e> <max>", "Anti-snipe. Setting the window equal to "
                                       "the extension gives the rule most rooms "
                                       "want: any bid in the last N seconds "

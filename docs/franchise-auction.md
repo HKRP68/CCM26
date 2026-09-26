@@ -136,9 +136,8 @@ model, and the set numbering has one home.
 ### Running it (the group)
 
 ```text
-/anew Season 2      ← in the group the auction should live in
-/atimer 30
-/asnipe 10 10 5
+/anew Season 2          ← in the group the auction should live in
+/atimer 60 40 20 10 5   ← the staged clock (already the default for a new auction)
 /astart
 ```
 
@@ -154,14 +153,88 @@ model, and the set numbering has one home.
 | `/asquad [franchise]` | anyone | Your own squad (or any franchise's) as a table, with purse and max bid |
 | `/aretlock` · `/apicks` | anyone | Who has kept whom; the expansion pick order and whose turn it is. Their **switches** (`/aretlock on`, `/apickset`) stay the admin's |
 | `/asoldlist` · `/aunsoldlist` | anyone | Everyone sold, set by set; the ⚡ Unsold / Accelerated set |
+| `/aleaderboard` (`/alb`) | anyone | 🏆 Franchises ranked by spend — players, purse left, top buy |
+| `/amybids [franchise]` | anyone | 📊 Every player your franchise bid on: top bid, bids, 🟢 won / 🔴 lost / 🔨 live |
+| `.bid` `.purse` `.squad` `.board` `.lb` `.mybids` … | as the command | **Dot shortcuts** — plain text, so quick on a phone; only in a group with an auction bound |
 
 Every one of those reads answers **before the auction starts**, and every one
 of them answers **in a DM** — see [Before it starts](#before-it-starts).
 
+**The staged clock — `/atimer 60 40 20 10 5`.** A lot's clock has four
+parts, so nobody is ever sold without warning:
+
+| Part | Default | What happens |
+| --- | --- | --- |
+| Open | 60s | The lot opens with 60 seconds |
+| Reset | 40s | A bid with **less than 40s** left puts the clock back to **40s** — as often as it takes (this replaces anti-snipe). A bid with more time left keeps the clock |
+| 1st warning | 20s | "⚠️ **1st warning** — Selling *player* to *team* for *price*", with the bid buttons on it (or "…is going UNSOLD — no bids yet") |
+| 2nd warning | 10s | "⚠️⚠️ **2nd warning**", the same, with buttons |
+| Final count | 5 | **One** message, edited in place: ⏳ 5 → 4 → 3 → 2 → 1, then SOLD / UNSOLD |
+
+Because the reset point is always above the 1st warning, a bid always sends
+the lot back through both warnings. Each bid line says "🔄 Clock back to 40s"
+when it reset the clock, and a bid during the final count turns the count
+message into "🔄 New bid — *team* *price* · clock back to 40s" (its buttons come
+off) so a stale "3" is never left in the chat. The count is edited rather than
+sent as five messages to stay well inside Telegram's ~20 messages a minute per
+group. A warning is said once per stage; a bid re-arms both.
+
+`/atimer 60 40 20 10 off` drops the final count; bare `/atimer` reads the
+clock back; `/atimer 45` is the **classic** one-number clock (with `/asnipe`'s
+anti-snipe and the board's "going once / twice"), and `/atimer classic`
+switches back to it. `/acountdown` still changes just the final count. New
+auctions (`/anew`, or Create on the website) start on the staged clock;
+auctions that existed before it keep the classic clock until `/atimer` says
+otherwise (`reset_seconds = 0`). The website's Settings card has the same
+numbers: *Bid under N s resets to N*, *1st warning at*, *2nd warning at*.
+
+**The hammer countdown (classic clock).** Before a lot is sold or passed, the
+group gets "⏳ Selling *player* to *team* for *price*" with the count edited in
+place, then SOLD (or UNSOLD). It runs in the last seconds of the lot's own
+clock, so a bid during it still counts — a bid that moves the deadline ends the
+count and a fresh one starts, a bid that does not re-announces the new leader.
+`/acountdown 5` changes the length (1–10), `/acountdown off` turns it off, bare
+`/acountdown` reads it back; default 3.
+
+**Many teams can bid together.** There is no room-wide pause after a bid any
+more: two franchises going for the same player at the same moment is the whole
+point, and both bids land in order. A bare `/bid` (or `.bid`) that loses a race
+by a hair — the minimum moved while it was in flight — tries once more at the
+fresh minimum, because "the next step" is what it meant. A typed amount or a
+priced button is never raised for anyone; it is answered with "💨 Beaten to it
+— *team* now lead at *price*. Next bid: *price*".
+
+**Anti-spam is per person** (`services/auction_antispam.py`), never per room:
+
+* one bid attempt per second per person — an extra tap inside that is dropped
+  without a reply (a button gets a small "⏳ Easy" toast);
+* more than five of those dropped taps in ten seconds (a stuck key, a macro)
+  pauses *that person's* bidding for 15 seconds, with one warning — everybody
+  else, co-owners included, carries on. Landed bids never count, so an owner
+  re-bidding every time they are outbid never trips it;
+* the same refusal to the same person on the same lot is said once per six
+  seconds, and a refused typed bid tidies itself out of the group after ~8s.
+
+Auction admins are exempt. It is all in memory; a restart just forgets who was
+typing fast.
+
+**The old gap, if you want it.** `/abidgap 3` still turns on the room-wide
+quiet gap (after every bid no *other* team may bid for that long; a bid inside
+it is answered with the current holder). It is **off by default**, and seasons
+still on the old untouched default of 3 were moved to off once, at boot.
+
+**Starting again.** `/arestart confirm` restarts the whole auction from the
+first player: every sale, Right To Match, auto-fill, unsold player and bid is
+wiped, each franchise gets back its money, squad count and RTM cards (as one
+`refund` ledger row), the pool goes back to the order it had at the first
+`/astart` (sets included), and the first player goes straight on the block.
+Retained players, expansion picks and withdrawn players stay as they are.
+Bare `/arestart` only explains this; refused once squads are published.
+
 Admin: `/adminhelp` (the reference card, also `/auction`), `/anew`, `/abind`, `/astart`,
 `/apause`, `/aresume`, `/anext`, `/aextend`, `/asold`, `/aunsold`,
 `/aundobid`, `/awithdraw`, `/areinstate`, `/aforce`, `/aunsold <list>`,
-`/aincrement`, `/atimer`, `/asnipe`, `/afocus`, `/adirect`,
+`/aincrement`, `/atimer`, `/acountdown`, `/arestart`, `/abidgap`, `/asnipe`, `/afocus`, `/adirect`,
 `/agrant`, `/aco`,
 `/apublish`, `/acancel`, plus retention's `/aretlock on`, `/aretain`,
 `/aunretain`, RTM's `/artmset`, `/artmcards`, `/artmforce`, `/artmundo`, the
@@ -204,6 +277,31 @@ auction having vanished. All three are `admin_live_matches`'s calls, made again.
 `/apublish` (or the button) writes one `ChallengeTeam` per franchise and one
 `ChallengePlayer` per bought lot. Publishing again re-syncs the same league
 rather than creating a second one, so a correction can simply be republished.
+
+**The squads belong to the people who bought them.** A `ChallengeTeam` has no
+owner column, so the owner used to be lost at publish: a tournament built on
+the league needed every owner re-typed, and with *enforce team owner* the
+franchise that bought the players could not even pick its own team. Now
+`tournament_service.league_owner_for_team` follows the league back to the
+auction (after the Tournament Draft, which it always checked) and returns the
+`AuctionFranchise`'s owner and co-owners by team name. Adding a team to a
+tournament — or the tournament page's owner sync — inherits them, and
+`publish_to_league` fills in the unclaimed teams of any tournament that already
+exists on the league. An admin's own assignment always wins. The "published"
+announcement lists every franchise with its owner tagged.
+
+**Tags.** The room is told *who* as a clickable `tg://user` mention, so the
+person gets the notification even in a fast group (`A.owner_tag`,
+`A.person_tag`):
+
+* the SOLD card — `🏆 Mumbai (👤 @alice · bid by @carol)` when a co-owner placed
+  the winning bid; RETAINED the same;
+* the 1st / 2nd warnings and the countdown — "Selling X to Mumbai (👤 @alice)";
+* the bid line — `⬆️ Outbids Chennai (👤 @bob)`, which is the outbid
+  notification (the bidder themselves is not tagged, to keep pings down);
+* every reply to a command in the group starts by tagging the person answered
+  (`<a href="tg://user?id=…">Name</a>, …`) — refused bids, `/artm`, admin
+  answers. DMs are not tagged.
 
 ---
 
@@ -731,14 +829,30 @@ at all, which is a button that does nothing.
   tells a board whose lot has moved on; it is replaced, not edited.
 * Inside a lot the board is **edited** as before, and now carries the
   quick-bid buttons itself.
-* **Bids are announced**, small: every bid inside one sweep is folded into one
-  line (`💸 Mumbai ₹2.2 Cr → Chennai ₹2.4 Cr leads · Kohli`), and consecutive
-  bid lines are at least `BID_MESSAGE_GAP` (4s) apart — a bid that lands inside
-  the gap waits for the next tick instead of being dropped, and never holds up
-  anything queued behind it. Telegram allows a group about twenty messages a
-  minute; a line per two-second tick would be thirty.
-* SOLD, UNSOLD and RETAINED are announced in richer HTML (a quoted result, the
-  buyer's purse and squad after it); everything else still reads its stored
+* **Bids are announced** TeleAuction-style: every bid inside one sweep is one
+  "💥 New Bid" message — `💥 Mumbai bids ₹2.2 Cr · Kohli` / `⬆️ Outbids Chennai
+  (₹2 Cr)` (or `🎯 Opening bid!`) / `⏳ 18s left · next /bid 2.4` — and a burst
+  keeps the trail (`💥 Mumbai ₹2.2 Cr → Chennai ₹2.4 Cr leads · Kohli`).
+  Consecutive bid lines are at least `BID_MESSAGE_GAP` (4s) apart — a bid that
+  lands inside the gap waits for the next tick instead of being dropped, and
+  never holds up anything queued behind it.
+* **The buttons are always at the bottom of the chat.** The newest bid line,
+  the lot card and the countdown header each carry the quick-bid keyboard, and
+  when a newer one is sent the previous message's buttons are taken off
+  (`auction_scheduler.hand_buttons` / `strip_buttons`), so the room is never
+  offered a column of stale prices. Any sale, pause or Right To Match strips
+  them too; the next bid line brings them back at the right price. The pinned
+  board keeps its own set.
+* **The keyboard** is `🎯 Open ₹X` / `💰 Bid ₹X` and `➕ Bid ₹X+step` (the step
+  from the bid ladder), plus a row of **💼 My Purse** and **📊 Status** —
+  private popups (`au_me_`), so any number of owners can check their purse,
+  max bid, squad, overseas count and RTM cards mid-lot without adding a single
+  message. In a Right To Match final offer the top bidder gets a
+  `⬆️ Final raise ₹X` button.
+* SOLD, UNSOLD and RETAINED are announced in richer HTML — the SOLD card
+  quotes the player (flag, rating, role, country), the price and how many
+  times base it went for, the buyer and the bid count, then the buyer's purse
+  left, max bid, players n/max and total spent; everything else still reads its stored
   `headline`.
 
 ## Focus mode: one room, one feature

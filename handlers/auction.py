@@ -38,6 +38,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from database import get_session
+from services import auction_antispam as SPAM
 from services import auction_rich as AR
 from services import auction_service as A
 from services.admin_ids import is_admin
@@ -72,10 +73,22 @@ RET_CB = "au_ret_"
 # Shared plumbing
 # ════════════════════════════════════════════════════════════════════
 
-async def _reply(update, text, **kwargs):
+async def _reply(update, text, *, tag=True, **kwargs):
+    """Reply to the person's own message — and, in a group, tag them.
+
+    The reply quotes their message, but an auction group moves fast: the tag
+    is what makes sure the person answered actually gets the notification.
+    DMs need no tag (it is their chat).
+    """
     msg = update.effective_message
     if msg is None:
         return None
+    chat = update.effective_chat
+    user = update.effective_user
+    if (tag and user is not None and getattr(user, "id", None)
+            and chat is not None and getattr(chat, "type", "") in GROUP_CHAT_TYPES
+            and kwargs.get("parse_mode", "HTML") == "HTML"):
+        text = f"{_tag_user(user)}, {text}"
     kwargs.setdefault("parse_mode", "HTML")
     kwargs.setdefault("disable_web_page_preview", True)
     return await msg.reply_text(text, **kwargs)
@@ -256,6 +269,85 @@ def bid_keyboard(season, lot):
 # /bid — the whole point
 # ════════════════════════════════════════════════════════════════════
 
+# How long a refused typed bid stays in the room before it tidies itself away.
+# The person who typed it has read it by then, and a bidding war must not bury
+# the board under a column of "someone got there first".
+REFUSAL_TTL = 8
+
+
+def _antispam_verdict(chat_id, user_id):
+    """The flood guard's verdict, with auction admins waved through.
+
+    The admin lookup is only made for somebody the guard would hold back, so
+    the ordinary bid costs no query at all.
+    """
+    verdict = SPAM.check_bid(chat_id, user_id)
+    if not verdict.allowed and _is_auction_admin(user_id):
+        return SPAM.Verdict(SPAM.OK)
+    return verdict
+
+
+async def _delete_later(context, chat_id, message_id, delay=REFUSAL_TTL):
+    """Best-effort: take a short-lived reply out of the room after ``delay``."""
+    queue = getattr(context, "job_queue", None)
+    if queue is None or not chat_id or not message_id:
+        return
+
+    async def _drop(ctx):
+        try:
+            await ctx.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except Exception:
+            logger.debug("auction: could not tidy a refusal", exc_info=True)
+
+    try:
+        queue.run_once(_drop, delay, name=f"au_tidy_{chat_id}_{message_id}")
+    except Exception:
+        logger.debug("auction: could not schedule a tidy-up", exc_info=True)
+
+
+async def _refuse(update, context, text, lot_id=0):
+    """Answer a refused typed bid — once, briefly, and then tidy it away.
+
+    The same refusal to the same person on the same lot is said once per few
+    seconds (a thumb on /bid does not get a column of replies), and in a group
+    the reply deletes itself after ``REFUSAL_TTL`` seconds.
+    """
+    chat = update.effective_chat
+    user = update.effective_user
+    if not SPAM.should_say(getattr(chat, "id", 0), getattr(user, "id", 0),
+                           lot_id, text):
+        return None
+    sent = await _reply(update, text)
+    if chat is not None and chat.type in GROUP_CHAT_TYPES:
+        await _delete_later(context, chat.id, getattr(sent, "message_id", None))
+    return sent
+
+
+def _tag_user(user):
+    """A clickable mention of the person being answered.
+
+    The reply already quotes their message, but in a group racing through a
+    lot the tag is what makes sure they actually get the notification.
+    """
+    name = (getattr(user, "first_name", None) or getattr(user, "username", None)
+            or "you")
+    return f'<a href="tg://user?id={int(user.id)}">{html.escape(str(name))}</a>'
+
+
+def _beaten_text(session, season, lot):
+    """"You were beaten to it" — who holds him now, and what beats that."""
+    symbol = season.currency_label or "₹"
+    if lot is None or lot.current_bid_lakh is None:
+        return "💨 The price moved — tap again."
+    from models import AuctionFranchise
+    holder = (session.query(AuctionFranchise)
+              .filter(AuctionFranchise.id == lot.current_bidder_id).first())
+    who = holder.name if holder is not None else "another team"
+    return (f"💨 Beaten to it — {who} now lead at "
+            f"{A.render_money(lot.current_bid_lakh, symbol)}. "
+            f"Next bid: {A.render_money(A.next_min_bid(season, lot), symbol)}.")
+
+
 async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     if chat is None or chat.type not in GROUP_CHAT_TYPES:
@@ -265,8 +357,18 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user is None:
         return
 
+    # The flood guard runs before any database work: an extra tap inside the
+    # cooldown is dropped without a word (the first one is already landing),
+    # and a burst earns one warning and a short pause — for this person only.
+    verdict = _antispam_verdict(chat.id, user.id)
+    if not verdict.allowed:
+        if verdict.warn:
+            await _refuse(update, context, SPAM.muted_message(verdict))
+        return
+
     session = get_session()
     landed = None
+    lot_id = 0
     try:
         season = A.season_for_chat(session, chat.id)
         if season is None:
@@ -274,12 +376,14 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         franchise = A.franchise_for_actor(session, season.id, user.id)
         if franchise is None:
-            await _reply(update, NOT_YOURS)
+            await _refuse(update, context, NOT_YOURS)
             return
         lot = A.current_lot(session, season)
         if lot is None:
-            await _reply(update, "⚠️ Nothing is on the block right now.")
+            await _refuse(update, context,
+                          "⚠️ Nothing is on the block right now.")
             return
+        lot_id = lot.id
 
         raw = _arg_text(context)
         if raw and not A.direct_bids_on(season):
@@ -288,24 +392,59 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # the number this bid would have been rather than just saying no.
             minimum = A.render_money(A.next_min_bid(season, lot),
                                      season.currency_label or "₹")
-            await _reply(update,
-                         f"🪜 <b>Direct bids are off</b> in this auction — "
-                         f"every raise is one step.\nSend <code>/bid</code> "
-                         f"on its own (or tap the board) to bid "
-                         f"<b>{html.escape(minimum)}</b>.")
+            await _refuse(update, context,
+                          f"🪜 <b>Direct bids are off</b> in this auction — "
+                          f"every raise is one step.\nSend <code>/bid</code> "
+                          f"on its own (or tap the board) to bid "
+                          f"<b>{html.escape(minimum)}</b>.", lot_id)
             return
-        # A bare /bid means "the next minimum" — the commonest action in the
-        # room, and the one form that cannot be fat-fingered into a number
-        # nobody meant with ten seconds on the clock.
-        amount = A.next_min_bid(season, lot) if not raw else A.parse_amount(raw)
-
-        A.place_bid(session, season, lot, franchise, amount,
-                    by_tg_id=user.id, source="tg")
+        if raw:
+            amount = A.parse_amount(raw)
+            A.place_bid(session, season, lot, franchise, amount,
+                        by_tg_id=user.id, source="tg")
+        else:
+            # A bare /bid means "the next minimum" — the commonest action in
+            # the room, and the one form that cannot be fat-fingered. When two
+            # franchises send it at the same instant, the one that loses the
+            # race did not mean the OLD minimum, it meant "the next step", so
+            # it tries once more at the fresh one: both bids land, in order.
+            # A typed amount or a priced button is never raised for anyone.
+            amount = A.next_min_bid(season, lot)
+            try:
+                A.place_bid(session, season, lot, franchise, amount,
+                            by_tg_id=user.id, source="tg")
+            except A.PriceMoved:
+                session.rollback()
+                session.expire_all()
+                season = A.season_for_chat(session, chat.id)
+                lot = A.current_lot(session, season) if season else None
+                if lot is None or lot.id != lot_id:
+                    raise
+                amount = A.next_min_bid(season, lot)
+                A.place_bid(session, season, lot, franchise, amount,
+                            by_tg_id=user.id, source="tg")
         session.commit()
         landed = amount
+    except A.BidTooSoon as exc:
+        # Inside the quiet gap after the last bid: not an error, just "this is
+        # who holds him" — the gap itself is never shown.
+        session.rollback()
+        await _refuse(update, context, html.escape(str(exc)), lot_id)
+        return
+    except A.PriceMoved:
+        session.rollback()
+        session.expire_all()
+        try:
+            season = A.season_for_chat(session, chat.id)
+            lot = A.current_lot(session, season) if season else None
+            text = _beaten_text(session, season, lot)
+        except Exception:
+            text = "💨 The price moved — tap again."
+        await _refuse(update, context, html.escape(text), lot_id)
+        return
     except AuctionError as exc:
         session.rollback()
-        await _reply(update, f"⚠️ {html.escape(str(exc))}")
+        await _refuse(update, context, f"⚠️ {html.escape(str(exc))}", lot_id)
         return
     except Exception:
         session.rollback()
@@ -482,6 +621,15 @@ async def bid_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("That button is from an older auction.", show_alert=True)
         return
 
+    chat_id = getattr(update.effective_chat, "id", 0)
+    verdict = _antispam_verdict(chat_id, user.id)
+    if not verdict.allowed:
+        if verdict.state == SPAM.MUTED:
+            await query.answer(SPAM.muted_message(verdict), show_alert=verdict.warn)
+        else:
+            await query.answer("⏳ Easy — your last tap is still landing.")
+        return
+
     session = get_session()
     try:
         from models import AuctionLot
@@ -498,7 +646,20 @@ async def bid_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         A.place_bid(session, season, lot, franchise, amount,
                     by_tg_id=user.id, source="button")
         session.commit()
-        await query.answer(f"Bid {A.render_money(amount, season.currency_label)}")
+        await query.answer(f"✅ Bid {A.render_money(amount, season.currency_label)}")
+    except A.PriceMoved:
+        # Another franchise's tap landed first. Not an error worth an alert:
+        # say who leads and what beats it, and the newest bid message already
+        # carries buttons at the new price.
+        session.rollback()
+        session.expire_all()
+        try:
+            season = A.season_for_chat(session, update.effective_chat.id)
+            lot = A.current_lot(session, season) if season else None
+            text = _beaten_text(session, season, lot)
+        except Exception:
+            text = "💨 The price moved — tap again."
+        await query.answer(text[:190], show_alert=True)
     except AuctionError as exc:
         session.rollback()
         await query.answer(str(exc)[:190], show_alert=True)
@@ -506,6 +667,83 @@ async def bid_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.rollback()
         logger.exception("auction quick-bid failed")
         await query.answer("That did not land — try again.", show_alert=True)
+    finally:
+        session.close()
+
+
+def _purse_popup(session, season, franchise):
+    """💼 My Purse, as a popup: what this franchise can do right now."""
+    symbol = season.currency_label or "₹"
+    lines = [f"🏏 {franchise.name}",
+             f"💰 Purse {A.render_money(franchise.purse_remaining_lakh, symbol)}"
+             f" · 🎯 Max bid "
+             f"{A.render_money(max(0, A.max_bid_now(season, franchise)), symbol)}",
+             f"👥 Squad {franchise.squad_size}/{season.max_squad_size}"
+             f" · ✈️ {A.overseas_count(session, franchise.id)}/"
+             f"{season.max_overseas}"]
+    if A.rtm_configured(season):
+        lines.append(f"🪪 RTM cards left: {A.rtm_cards_left(franchise)}")
+    return "\n".join(lines)
+
+
+def _lot_popup(session, season, lot, franchise=None):
+    """📊 Status, as a popup: the lot, who leads, the clock, the next bid."""
+    symbol = season.currency_label or "₹"
+    if lot is None:
+        return "Nothing is on the block right now."
+    lines = [f"🔨 Lot {lot.lot_no} · {lot.name}"[:60]]
+    if lot.current_bid_lakh is None:
+        lines.append(f"💰 No bids — opens at "
+                     f"{A.render_money(lot.base_price_lakh, symbol)}")
+    else:
+        from models import AuctionFranchise
+        holder = (session.query(AuctionFranchise)
+                  .filter(AuctionFranchise.id == lot.current_bidder_id).first())
+        name = holder.name if holder else "?"
+        if franchise is not None and holder is not None and holder.id == franchise.id:
+            name += " (you)"
+        lines.append(f"💰 {A.render_money(lot.current_bid_lakh, symbol)} — {name}")
+    left = A.seconds_left(lot)
+    if season.status == A.STATUS_PAUSED:
+        lines.append("⏸ Paused")
+    elif left is not None:
+        lines.append(f"⏳ {A.format_clock(left)} left")
+    if lot.status == A.LOT_ON_BLOCK:
+        lines.append(f"➡️ Next bid {A.render_money(A.next_min_bid(season, lot), symbol)}")
+    return "\n".join(lines)
+
+
+async def me_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """💼 My Purse / 📊 Status under every bid message — private popups.
+
+    TeleAuction's best small idea: the room never sees these, so any number of
+    owners can check their purse mid-lot without adding a single message.
+    """
+    query = update.callback_query
+    if query is None:
+        return
+    what = (query.data or "")[len(AR.ME_CB):]
+    user = update.effective_user
+    session = get_session()
+    try:
+        season = _read_season(session, update)
+        if season is None:
+            await query.answer("No auction is running here.", show_alert=True)
+            return
+        franchise = (A.franchise_for_actor(session, season.id, user.id)
+                     if user else None)
+        if what == "lot":
+            text = _lot_popup(session, season, A.current_lot(session, season),
+                              franchise)
+        elif franchise is None:
+            text = ("You don't own a franchise in this auction.\n"
+                    "/apurse shows every team's purse.")
+        else:
+            text = _purse_popup(session, season, franchise)
+        await query.answer(text[:199], show_alert=True)
+    except Exception:
+        logger.exception("auction popup failed")
+        await query.answer("That did not work — try /apurse.", show_alert=True)
     finally:
         session.close()
 
@@ -604,6 +842,9 @@ async def anew_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = get_session()
     try:
         season = A.create_season(session, name)
+        # New auctions run on the staged clock (60 40 20 10 5): warnings
+        # before every hammer, and a bid near the end resets to 40s.
+        A.apply_staged_defaults(season)
         A.bind_chat(session, season, chat.id)
         session.commit()
         await _reply_card(update,
@@ -878,15 +1119,122 @@ def _find_lot(session, season, name):
     raise AuctionError(f"“{name}” is not in this auction's pool.")
 
 
+def _timer_readout(season):
+    staged = A.staged_clock(season)
+    if staged is None:
+        return (f"⏱ <b>Classic clock</b> — a lot runs for "
+                f"<b>{season.bid_seconds}s</b> (anti-snipe: /asnipe).\n"
+                f"Switch to the staged clock with "
+                f"<code>/atimer 60 40 20 10 5</code>.")
+    open_s, reset, warn1, warn2, count = staged
+    return ("⏱ <b>Staged clock</b>\n<blockquote>"
+            f"🟢 A lot opens with <b>{open_s}s</b>\n"
+            f"🔄 A bid with less than <b>{reset}s</b> left puts it back to "
+            f"<b>{reset}s</b>\n"
+            f"⚠️ 1st warning at <b>{warn1}s</b> — “Selling X to Team”\n"
+            f"⚠️⚠️ 2nd warning at <b>{warn2}s</b>\n"
+            + (f"⏳ Final count <b>{count}</b> → 1, then SOLD"
+               if count else "⏳ No final count — SOLD at 0")
+            + "</blockquote>\n"
+            "Change: <code>/atimer 60 40 20 10 5</code> · no count: "
+            "<code>/atimer 60 40 20 10 off</code> · back to classic: "
+            "<code>/atimer classic</code>")
+
+
 async def atimer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/atimer 60 40 20 10 5</code> — the staged lot clock.
+
+    Open with 60s; a bid with under 40s left resets to 40s; warnings at 20s
+    and 10s ("Selling X to Team for ₹…"); the last 5 counted down in one
+    message. <code>/atimer 45</code> is the classic one-number clock, and
+    <code>/atimer classic</code> goes back to it.
+    """
+    raw = _arg_text(context)
+
+    def work(session, season):
+        if raw:
+            A.set_timer(session, season, raw)
+        return _timer_readout(season)
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def acountdown_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/acountdown 3</code> — the hammer countdown, in seconds, or off.
+
+    Before a lot is sold or passed the room gets new messages: "Selling X to
+    Team for ₹…" with the first number, then one number a second, then SOLD.
+    Bare reads it back, the way bare <code>/atimer</code> does.
+    """
     raw = _arg_text(context)
 
     def work(session, season):
         if not raw:
-            return (f"⏱ A lot runs for <b>{season.bid_seconds}s</b>.\n"
-                    f"Change it with <code>/atimer 45</code>.")
-        seconds = A.set_timer(session, season, raw)
-        return f"⏱ A lot now runs for <b>{seconds}s</b>."
+            seconds = A.countdown_seconds(season)
+            state = (f"counts <b>{seconds}</b> before the hammer" if seconds
+                     else "is <b>off</b>")
+            return (f"⏳ The countdown {state}.\n"
+                    f"Change it with <code>/acountdown 5</code>, or "
+                    f"<code>/acountdown off</code>.")
+        seconds = A.set_countdown(session, season, raw)
+        if not seconds:
+            return "⏳ Countdown <b>off</b> — lots resolve without one."
+        return (f"⏳ Countdown set: <b>{seconds}</b> before every sold or "
+                f"unsold lot.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def abidgap_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/abidgap 3</code> — the quiet gap after every bid, or off.
+
+    For that many seconds after a bid no franchise may bid again; a bid that
+    tries is told who holds the lot. Nothing on the board shows it.
+    """
+    raw = _arg_text(context)
+
+    def work(session, season):
+        if not raw:
+            gap = A.bid_gap_seconds(season)
+            state = (f"is <b>{gap}s</b>" if gap else "is <b>off</b>")
+            return (f"🤫 The gap after every bid {state}.\n"
+                    f"Change it with <code>/abidgap 5</code>, or "
+                    f"<code>/abidgap off</code>.")
+        gap = A.set_bid_gap(session, season, raw)
+        if not gap:
+            return "🤫 Gap after a bid <b>off</b> — any team may answer at once."
+        return (f"🤫 After every bid, nobody may bid again for <b>{gap}s</b>.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+ARESTART_WARNING = (
+    "🔄 <b>Restart the auction from the first player?</b>\n"
+    "<blockquote>Every sale, Right To Match, unsold player and bid is wiped. "
+    "Each franchise gets back everything it spent in the auction, its squad "
+    "count and its RTM cards, and the pool goes back to the order the "
+    "auction opened in. Retained players and expansion picks stay "
+    "signed.</blockquote>\n"
+    "This cannot be undone. Type <code>/arestart confirm</code> to go ahead.")
+
+
+async def arestart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/arestart confirm</code> — the whole auction again, from lot one.
+
+    Bare <code>/arestart</code> only explains what it would do: wiping every
+    sale is not something a stray tap should manage.
+    """
+    user = update.effective_user
+    raw = (_arg_text(context) or "").strip().lower()
+
+    def work(session, season):
+        if raw not in ("confirm", "yes"):
+            return ARESTART_WARNING
+        A.restart_auction(session, season,
+                          by_tg_id=user.id if user else None)
+        from services import auction_scheduler as S
+        S.cancel_countdown(season.id)
+        return None      # the sweeper announces it, within a tick
 
     await _with_auction(update, work, admin=True, context=context)
 
@@ -971,6 +1319,14 @@ async def asnipe_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = list(context.args or [])
 
     def work(session, season):
+        staged = A.staged_clock(season)
+        if staged is not None:
+            return (f"🛡 This auction runs the <b>staged clock</b>: any bid "
+                    f"with less than <b>{staged[1]}s</b> left puts the clock "
+                    f"back to <b>{staged[1]}s</b>, as often as it takes — that "
+                    f"replaces anti-snipe.\nChange it with "
+                    f"<code>/atimer 60 40 20 10 5</code>, or "
+                    f"<code>/atimer classic</code> to use /asnipe again.")
         if not args:
             return (f"🛡 <b>Anti-snipe</b>\n"
                     f"A bid inside the last <b>{season.snipe_window_seconds}s</b> "
@@ -1798,6 +2154,87 @@ async def aunsoldlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     await _view(update, context, lambda s, season: AR.unsold_view(s, season))
 
 
+async def aleaderboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aleaderboard</code> — who has spent most, with each one's top buy."""
+    await _view(update, context,
+                lambda session, season: AR.leaderboard_view(session, season))
+
+
+async def amybids_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/amybids [franchise]</code> — every player bid on, won or lost."""
+    name = _arg_text(context)
+    await _view(update, context, lambda session, season: AR.mybids_view(
+        session, season, _own_or_named_franchise(session, season, update, name)))
+
+
+# ── Dot shortcuts ────────────────────────────────────────────────────
+#
+# ``.bid 2``, ``.purse``, ``.squad`` — TeleAuction's habit, and the quickest
+# thing to type on a phone with a clock running. Plain text, so focus mode
+# (which only gates commands and buttons) never touches it, and a no-op in any
+# chat that has no auction bound — a sentence starting with a dot anywhere else
+# is just a sentence.
+DOT_COMMANDS = {
+    "bid": "bid", "bd": "bid", "b": "bid",
+    "purse": "purse", "bal": "purse", "balance": "purse", "apurse": "purse",
+    "squad": "squad", "asquad": "squad", "mysquad": "squad",
+    "board": "board", "status": "board", "aboard": "board",
+    "rtm": "rtm", "artm": "rtm",
+    "info": "info", "menu": "info", "ainfo": "info",
+    "rules": "rules", "arules": "rules",
+    "lb": "leaderboard", "leaderboard": "leaderboard",
+    "mybids": "mybids", "bids": "mybids",
+    "sold": "sold", "unsold": "unsold",
+    "next": "nextplayer",
+}
+
+
+def _dot_target(name):
+    handlers = {
+        "bid": bid_handler, "purse": apurse_handler, "squad": asquad_handler,
+        "board": aboard_handler, "rtm": artm_handler, "info": ainfo_handler,
+        "rules": arules_handler, "leaderboard": aleaderboard_handler,
+        "mybids": amybids_handler, "sold": asoldlist_handler,
+        "unsold": aunsoldlist_handler, "nextplayer": anextplayer_handler,
+    }
+    return handlers.get(DOT_COMMANDS.get(name))
+
+
+def parse_dot_command(text):
+    """``(handler, args)`` for a dot shortcut, or ``(None, None)``."""
+    raw = (text or "").strip()
+    if len(raw) < 2 or raw[0] != "." or raw[1] in ". ":
+        return None, None
+    word, *args = raw[1:].split()
+    word = word.lower().split("@", 1)[0]
+    target = _dot_target(word)
+    if target is None:
+        return None, None
+    return target, args
+
+
+async def dot_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Route ``.bid 2cr`` and friends to the command they stand for."""
+    message = update.effective_message
+    chat = update.effective_chat
+    if message is None or chat is None or chat.type not in GROUP_CHAT_TYPES:
+        return
+    target, args = parse_dot_command(getattr(message, "text", ""))
+    if target is None:
+        return
+    session = get_session()
+    try:
+        bound = A.season_for_chat(session, chat.id) is not None
+    except Exception:
+        bound = False
+    finally:
+        session.close()
+    if not bound:
+        return
+    context.args = list(args)
+    await target(update, context)
+
+
 async def info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """A /ainfo button. Shared by the room; each press answers the presser."""
     query = update.callback_query
@@ -1818,6 +2255,9 @@ async def info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "sold": lambda s, season: AR.sold_view(s, season),
         "unsold": lambda s, season: AR.unsold_view(s, season),
         "purse": lambda s, season: AR.purses_view(s, season),
+        "leaderboard": lambda s, season: AR.leaderboard_view(s, season),
+        "mybids": lambda s, season: AR.mybids_view(
+            s, season, _own_or_named_franchise(s, season, update, "")),
         "rules": lambda s, season: AR.rules_view(s, season),
         "retention": lambda s, season: AR.retention_view(s, season),
         "picks": lambda s, season: AR.picks_view(s, season),

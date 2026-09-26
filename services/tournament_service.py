@@ -534,7 +534,10 @@ def draft_owner_for_team(session, league_id, team_name):
                  .filter(PlayerDraft.league_id == int(league_id))
                  .order_by(PlayerDraft.id.desc()).first())
         if draft is None:
-            return None, None, []
+            # No draft made this league — a Franchise Auction may have. The
+            # people who bought the players are their real owners, so the
+            # tournament inherits them exactly as it would from a draft.
+            return auction_owner_for_team(session, league_id, name)
         dt = (session.query(DraftTeam)
               .filter(DraftTeam.draft_id == draft.id,
                       DraftTeam.name == name).first())
@@ -549,6 +552,44 @@ def draft_owner_for_team(session, league_id, team_name):
     except Exception:
         logger.exception("draft_owner_for_team failed for league %s", league_id)
         return None, None, []
+
+
+def auction_owner_for_team(session, league_id, team_name):
+    """``(owner_tg_id, owner_name, co_owner_ids)`` from the auction that made it.
+
+    ``publish_to_league`` names each ``ChallengeTeam`` after its
+    ``AuctionFranchise``, so the franchise — and the owner and co-owners who
+    bid for it — is found by the league and the name. ``(None, None, [])``
+    when the league did not come from an auction.
+    """
+    name = (team_name or "").strip()
+    if not league_id or not name:
+        return None, None, []
+    try:
+        from models import AuctionFranchise, AuctionSeason
+        season = (session.query(AuctionSeason)
+                  .filter(AuctionSeason.league_id == int(league_id))
+                  .order_by(AuctionSeason.id.desc()).first())
+        if season is None:
+            return None, None, []
+        franchise = (session.query(AuctionFranchise)
+                     .filter(AuctionFranchise.season_id == season.id,
+                             AuctionFranchise.name == name).first())
+        if franchise is None:
+            return None, None, []
+        owner = int(franchise.owner_tg_id) if franchise.owner_tg_id else None
+        extras = [i for i in co_owner_ids(franchise) if i != (owner or 0)]
+        if not owner and not extras:
+            return None, None, []
+        return owner, (franchise.owner_name or None), extras
+    except Exception:
+        logger.exception("auction_owner_for_team failed for league %s", league_id)
+        return None, None, []
+
+
+# The one name every caller uses: a league's owners, from whichever of the
+# Tournament Draft or the Franchise Auction produced it.
+league_owner_for_team = draft_owner_for_team
 
 
 def sync_owners_from_draft(session, tournament_id):

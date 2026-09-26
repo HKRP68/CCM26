@@ -147,6 +147,9 @@ class FeatureCase(unittest.TestCase):
     max_squad = 6
     max_overseas = 8
     purse_lakh = 10_000
+    # The quiet gap after a bid is its own feature (see
+    # tests/test_auction_restart_countdown.py); these tests bid on one tick.
+    bid_gap = 0
 
     def setUp(self):
         from database import get_session
@@ -170,7 +173,8 @@ class FeatureCase(unittest.TestCase):
         self.season = A.create_season(
             self.session, f"Features {self.tag}", min_squad_size=self.min_squad,
             max_squad_size=self.max_squad, max_overseas=self.max_overseas,
-            opening_purse_lakh=self.purse_lakh)
+            opening_purse_lakh=self.purse_lakh,
+            bid_gap_seconds=self.bid_gap)
         A.bind_chat(self.session, self.season, -5000 - self.tag)
         self.mumbai = A.create_franchise(self.session, self.season, "Mumbai",
                                          owner_tg_id=ALICE, owner_name="Alice")
@@ -1157,7 +1161,7 @@ class RoomViewTests(FeatureCase):
     def test_ainfo_carries_a_button_per_view(self):
         views, _data = self._info_buttons()
         self.assertEqual({"rules", "sets", "nextset", "next", "squad", "sold",
-                          "unsold", "purse"}, views)
+                          "unsold", "purse", "leaderboard", "mybids"}, views)
 
     def test_the_card_belongs_to_whoever_asked_for_it(self):
         """Every button names its owner, and the card can be closed."""
@@ -1816,7 +1820,7 @@ class AnnouncementTests(FeatureCase):
         self.tick(NOW + timedelta(seconds=3))
         new = self.bot.sent[before:]
         self.assertEqual(1, len(new), "six bids, one message")
-        self.assertIn("💸", new[0])
+        self.assertIn("💥", new[0])
         self.assertIn("Chennai", new[0])
         self.assertIn("leads", new[0])
         # And the pinned board is edited, with the quick-bid buttons on it.
@@ -1854,16 +1858,16 @@ class AnnouncementTests(FeatureCase):
         real = self.bot.send_message
 
         async def flooded(chat_id=None, text="", **kwargs):
-            if "💸" in text:
+            if "💥" in text:
                 raise RetryAfter(3)
             return await real(chat_id=chat_id, text=text, **kwargs)
 
         self.bot.send_message = flooded
         self.tick(NOW + timedelta(seconds=3))
-        self.assertFalse([t for t in self.bot.sent if "💸" in t])
+        self.assertFalse([t for t in self.bot.sent if "💥" in t])
         self.bot.send_message = real
         self.tick(NOW + timedelta(seconds=4))
-        self.assertEqual(1, len([t for t in self.bot.sent if "💸" in t]),
+        self.assertEqual(1, len([t for t in self.bot.sent if "💥" in t]),
                          "the held burst goes out once the flood clears")
 
     def test_a_sale_is_announced_in_rich_html(self):

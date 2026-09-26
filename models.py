@@ -3918,6 +3918,32 @@ class AuctionSeason(Base):
     # still work. An integer for the NULL-reads-falsy reason above.
     direct_bids = Column(Integer, default=1, nullable=False)
 
+    # ── The hammer countdown ───────────────────────────────────────────
+    # Before a lot is sold or passed, the room is told in new messages:
+    # "Selling X to Team for ₹…", then 3, 2, 1 — and then SOLD. This is how
+    # many seconds that count runs; 0 turns it off. ``/acountdown`` sets it.
+    countdown_seconds = Column(Integer, default=3, nullable=False)
+    # The quiet gap after every bid: for this many seconds no franchise may
+    # bid again, and a bid that tries is told who holds the lot. Not shown on
+    # the board. 0 (the default) turns it off, so many franchises can bid at
+    # once — spam is stopped per person instead; ``/abidgap`` sets it.
+    bid_gap_seconds = Column(Integer, default=0, nullable=False)
+    # The staged lot clock (``/atimer 60 40 20 10 5``). ``bid_seconds`` is the
+    # opening clock and ``countdown_seconds`` the final count; these three are
+    # the middle of it. A bid with less than ``reset_seconds`` left puts the
+    # clock back to ``reset_seconds`` (as often as it takes — this replaces
+    # anti-snipe), and the room is warned at ``warn1_seconds`` and
+    # ``warn2_seconds``: "Selling X to Team for ₹…". 0 reset = the classic
+    # clock, which is what every season written before this runs on.
+    reset_seconds = Column(Integer, default=0, nullable=False)
+    warn1_seconds = Column(Integer, default=0, nullable=False)
+    warn2_seconds = Column(Integer, default=0, nullable=False)
+    # The pool's order when the auction first started, as a JSON list of
+    # ``[lot_id, set_name]``. ``/arestart`` puts the queue back in exactly this
+    # order — the accelerated round renumbers and re-files unsold players, and
+    # without a snapshot "from the first player" would have nothing to mean.
+    opening_order_json = Column(Text, nullable=True)
+
     # ── Publication ────────────────────────────────────────────────────
     league_id = Column(Integer, ForeignKey("challenge_leagues.id", ondelete="SET NULL"),
                        nullable=True, index=True)
@@ -4074,6 +4100,10 @@ class AuctionLot(Base):
     # bid resets it to 0.
     going_stage = Column(Integer, default=0, nullable=False)
     extensions_used = Column(Integer, default=0, nullable=False)
+    # When the standing bid landed. The next bid from ANY franchise waits
+    # ``AuctionSeason.bid_gap_seconds`` after it — checked inside the bid's own
+    # conditional UPDATE, so two bids on one tick cannot both slip through.
+    last_bid_at = Column(DateTime, nullable=True)
     current_bid_lakh = Column(Integer, nullable=True)
     current_bidder_id = Column(Integer, ForeignKey("auction_franchises.id",
                                                    ondelete="SET NULL"),

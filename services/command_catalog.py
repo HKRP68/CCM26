@@ -89,6 +89,8 @@ COMMAND_CATEGORIES = (
         '/asets /anextset /anextplayer - The sets, the next set, who is up next',
         '/asquad [team] /asoldlist /aunsoldlist - Squads, sold and unsold players',
         '/aretlock /apicks - Who kept whom, and the expansion picks',
+        '/aleaderboard /amybids - Who has spent most; your own bid history',
+        '.bid .purse .squad .board .lb - Dot shortcuts in the auction group',
     )),
     ('⚡ Traits', (
         '/traits /tt - Your traits & inventory',

@@ -321,20 +321,78 @@ GOING_ONCE_AT = 10
 GOING_TWICE_AT = 5
 
 
-def going_stage_for(left):
-    """0 running · 1 going once · 2 going twice, from the seconds remaining.
+def going_stage_for(left, season=None):
+    """0 running · 1 going once / 1st warning · 2 going twice / 2nd warning.
 
-    A pure function of one number, deliberately: it is what the sweeper decides
+    A pure function of the seconds remaining (and, on a staged clock, the
+    season's two warning points), deliberately: it is what the sweeper decides
     the room's next message from, and a test should not need a fake bot to
     pin it.
     """
     if left is None:
         return 0
-    if left <= GOING_TWICE_AT:
+    staged = staged_clock(season) if season is not None else None
+    once, twice = ((staged[2], staged[3]) if staged
+                   else (GOING_ONCE_AT, GOING_TWICE_AT))
+    if left <= twice:
         return 2
-    if left <= GOING_ONCE_AT:
+    if left <= once:
         return 1
     return 0
+
+
+# ── The staged clock: /atimer 60 40 20 10 5 ──────────────────────────
+#
+# One lot, four parts. It opens with 60s. A bid with less than 40s left puts
+# the clock back to 40 — as often as it takes, which is what replaces
+# anti-snipe. At 20s the room gets its 1st warning ("Selling X to Team for
+# ₹…"), at 10s the 2nd, and the last 5 are counted down. Because the reset
+# point is always above the 1st warning, no lot can ever sell without both
+# warnings having been said first.
+
+STAGED_DEFAULTS = (60, 40, 20, 10, 5)
+
+
+def staged_clock(season):
+    """``(open, reset, warn1, warn2, countdown)``, or None on the classic clock."""
+    reset = _as_int(getattr(season, "reset_seconds", 0), 0)
+    if reset <= 0:
+        return None
+    return (max(5, _as_int(getattr(season, "bid_seconds", 60), 60)), reset,
+            _as_int(getattr(season, "warn1_seconds", 0), 0),
+            _as_int(getattr(season, "warn2_seconds", 0), 0),
+            countdown_seconds(season))
+
+
+def apply_staged_defaults(season):
+    """Put a brand-new auction on the staged clock (60 40 20 10 5)."""
+    (season.bid_seconds, season.reset_seconds, season.warn1_seconds,
+     season.warn2_seconds, season.countdown_seconds) = STAGED_DEFAULTS
+    return season
+
+
+def validate_staged(open_s, reset, warn1, warn2, count):
+    """Refuse a staged clock whose parts are out of order, naming the rule."""
+    if not 10 <= open_s <= 600:
+        raise AuctionError("The opening clock runs between 10 and 600 seconds.")
+    if not (open_s >= reset > warn1 > warn2 > count >= 0 and warn2 >= 1):
+        raise AuctionError(
+            "The parts must go down: open ≥ reset > 1st warning > 2nd warning "
+            "> countdown — e.g. <code>/atimer 60 40 20 10 5</code>.")
+    if count > COUNTDOWN_MAX:
+        raise AuctionError(f"The final countdown runs up to {COUNTDOWN_MAX} "
+                           f"seconds — or off.")
+
+
+def staged_summary(season):
+    """The staged clock in one line, for /atimer, the board and /arules."""
+    staged = staged_clock(season)
+    if staged is None:
+        return None
+    open_s, reset, warn1, warn2, count = staged
+    return (f"{open_s}s · a bid under {reset}s resets to {reset}s · warnings at "
+            f"{warn1}s & {warn2}s · "
+            + (f"count {count}" if count else "no final count"))
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -652,6 +710,12 @@ SEASON_RULE_FIELDS = (
     "focus_mode",
     # Whether a bidder may name their own number, or only take the next step.
     "direct_bids",
+    # How long the hammer countdown runs before a lot is sold or passed.
+    "countdown_seconds",
+    # The quiet gap every franchise waits after a bid.
+    "bid_gap_seconds",
+    # The staged clock: reset point and the two warnings.
+    "reset_seconds", "warn1_seconds", "warn2_seconds",
 )
 
 # What a franchise takes with it into the next season: who it is and who runs
@@ -2738,6 +2802,7 @@ def open_lot(session, season, lot, *, now=None):
                .update({"status": LOT_ON_BLOCK,
                         "deadline_at": now + timedelta(seconds=max(5, int(season.bid_seconds or 30))),
                         "going_stage": 0, "extensions_used": 0,
+                        "last_bid_at": None,
                         "current_bid_lakh": None, "current_bidder_id": None,
                         "opened_at": now}, synchronize_session=False))
     if not claimed:
@@ -2861,6 +2926,7 @@ def start(session, season, *, now=None, by_tg_id=None):
     # squads are what they are.
     if season.status == STATUS_SETUP:
         lock_retention(session, season, now=now, by_tg_id=by_tg_id, quiet=True)
+        _snapshot_opening_order(session, season)
 
     resuming = season.status == STATUS_PAUSED
     season.status = STATUS_LIVE
@@ -2940,6 +3006,247 @@ def cancel(session, season, *, by_tg_id=None):
               "🚫 The auction has been cancelled.",
               by_tg_id=by_tg_id, by_admin=True)
     return season
+
+
+def _snapshot_opening_order(session, season):
+    """Remember the queue as it stands when the auction first opens.
+
+    What ``restart_auction`` puts back. Taken once, on the first start: a
+    resume is not an opening, and by then the accelerated round may already
+    have renumbered and re-filed the players it relisted.
+    """
+    session.flush()
+    rows = (session.query(AuctionLot)
+            .filter(AuctionLot.season_id == season.id,
+                    AuctionLot.status.in_((LOT_QUEUED,) + LOT_LIVE))
+            .order_by(AuctionLot.lot_no.asc()).all())
+    season.opening_order_json = _dumps([[lot.id, lot.set_name]
+                                        for lot in rows])
+
+
+def restart_auction(session, season, *, now=None, by_tg_id=None):
+    """Start the whole auction again from its first player.
+
+    Every player who came through the auction — bought, matched with a Right
+    To Match, handed out by the auto-fill, passed unsold, on the block, or
+    still waiting — goes back into the queue in the order the auction opened
+    with, with no bids on him. Every franchise gets back what it spent on
+    them, its squad count and its RTM cards; the accelerated round is owed
+    again. What was settled *before* the auction is left alone: retained
+    players and expansion picks stay signed, and a withdrawn player stays
+    withdrawn (``/areinstate`` brings one back).
+
+    The auction comes back LIVE with the first player on the block — that is
+    the command. Refused once squads are published: the league is already
+    playing with them.
+
+    Returns ``(first lot or None, number of players returned to the pool)``.
+    """
+    now = now or datetime.utcnow()
+    if season.status == STATUS_SETUP:
+        raise AuctionError("The auction has not started yet — /astart opens "
+                           "it from the first player.")
+    if season.published_at is not None:
+        raise AuctionError("This auction's squads have been published — the "
+                           "league is playing with them, so it cannot be "
+                           "restarted.")
+    if not season.chat_id:
+        raise AuctionError("Bind the auction to a group first with /abind.")
+    session.flush()
+
+    rows = (session.query(AuctionLot)
+            .filter(AuctionLot.season_id == season.id,
+                    AuctionLot.status != LOT_WITHDRAWN)
+            .all())
+    rows = [lot for lot in rows
+            if not (lot.status == LOT_SOLD
+                    and (lot.acquisition or ACQ_AUCTION) in ACQ_PRE_AUCTION)]
+    if not rows:
+        raise AuctionError("There is nobody in the pool to restart with.")
+
+    # ── Money, squads and cards back ──────────────────────────────────
+    field = {f.id: f for f in franchises(session, season.id)}
+    refunds = {}
+    for lot in rows:
+        if lot.status != LOT_SOLD or lot.sold_to_id not in field:
+            continue
+        back = refunds.setdefault(lot.sold_to_id, [0, 0, 0])
+        back[0] += int(lot.sold_price_lakh or 0)
+        back[1] += 1
+        if lot.acquisition == ACQ_RTM:
+            back[2] += 1
+    for franchise_id, (money, players, cards) in refunds.items():
+        franchise = field[franchise_id]
+        franchise.purse_remaining_lakh = (int(franchise.purse_remaining_lakh or 0)
+                                          + money)
+        franchise.squad_size = max(0, int(franchise.squad_size or 0) - players)
+        franchise.rtm_cards_used = max(0, int(franchise.rtm_cards_used or 0)
+                                       - cards)
+        _ledger(session, franchise, LEDGER_REFUND, money,
+                note=f"Auction restarted — {players} "
+                     f"{'player' if players == 1 else 'players'} back in the "
+                     f"pool", by_tg_id=by_tg_id)
+
+    # ── Every bid on them void ────────────────────────────────────────
+    ids = [lot.id for lot in rows]
+    (session.query(AuctionBid)
+     .filter(AuctionBid.lot_id.in_(ids), AuctionBid.is_void.is_(False))
+     .update({"is_void": True, "voided_by_tg_id": by_tg_id},
+             synchronize_session=False))
+
+    # ── The order the auction opened with ─────────────────────────────
+    opening = _loads(getattr(season, "opening_order_json", None), [])
+    by_id = {lot.id: lot for lot in rows}
+    ordered, seen = [], set()
+    for entry in opening:
+        try:
+            lot_id, set_name = int(entry[0]), entry[1]
+        except (TypeError, ValueError, IndexError):
+            continue
+        lot = by_id.get(lot_id)
+        if lot is None or lot_id in seen:
+            continue
+        lot.set_name = set_name
+        ordered.append(lot)
+        seen.add(lot_id)
+    ordered += sorted((lot for lot in rows if lot.id not in seen),
+                      key=lambda lot: lot.lot_no)
+
+    # The same lot numbers, handed out again in that order. Parked on
+    # negatives first: ``(season_id, lot_no)`` is unique, and swapping two
+    # numbers in place would collide halfway through.
+    numbers = sorted(lot.lot_no for lot in ordered)
+    for offset, lot in enumerate(ordered):
+        lot.lot_no = -(offset + 1)
+    session.flush()
+    for lot, number in zip(ordered, numbers):
+        lot.lot_no = number
+        lot.status = LOT_QUEUED
+        lot.deadline_at = None
+        lot.going_stage = 0
+        lot.extensions_used = 0
+        lot.current_bid_lakh = None
+        lot.current_bidder_id = None
+        lot.bid_count = 0
+        lot.opened_at = None
+        lot.times_unsold = 0
+        lot.sold_to_id = None
+        lot.sold_price_lakh = None
+        lot.sold_at = None
+        lot.acquisition = ACQ_AUCTION
+        lot.rtm_stage = None
+        lot.rtm_base_bid_lakh = None
+        lot.rtm_offered_at = None
+        lot.rtm_matched_by_id = None
+        lot.last_bid_at = None
+
+    season.accelerated_done = 0
+    season.current_lot_id = None
+    season.board_lot_id = None
+    season.board_rendered_bid_count = 0
+    season.status = STATUS_LIVE
+    _focus_changed(season, session)
+    session.flush()
+    log_event(session, season, "season_restarted",
+              f"🔄 <b>{_e(season.name)}</b> is starting again from the first "
+              f"player — {len(ordered)} "
+              f"{'player is' if len(ordered) == 1 else 'players are'} back in "
+              f"the pool, and every franchise has its purse back.",
+              by_tg_id=by_tg_id, by_admin=True,
+              detail={"players": len(ordered),
+                      "refunds": {str(k): v[0] for k, v in refunds.items()}})
+    return (open_next_lot(session, season, now=now), len(ordered))
+
+
+COUNTDOWN_MAX = 10
+BID_GAP_MAX = 10
+
+
+def bid_gap_seconds(season):
+    """The quiet gap after every bid — 0 when it is off, which is the default.
+
+    Off by default because a room-wide gap is the opposite of an auction: two
+    franchises going for the same player at the same moment is the whole
+    point, and a gap turns the second of them away. Spam is stopped per
+    PERSON instead (``services/auction_antispam``), which never holds one team
+    back because another one just bid. ``/abidgap N`` still turns it on.
+    """
+    return max(0, min(BID_GAP_MAX,
+                      _as_int(getattr(season, "bid_gap_seconds", 0), 0)))
+
+
+def set_bid_gap(session, season, seconds):
+    raw = str(seconds or "").strip().lower()
+    value = 0 if raw in ("off", "0", "no", "none") else _as_int(raw, -1)
+    if value < 0 or value > BID_GAP_MAX:
+        raise AuctionError(f"The gap after a bid runs between 1 and "
+                           f"{BID_GAP_MAX} seconds — or off.")
+    season.bid_gap_seconds = value
+    return value
+
+
+class BidTooSoon(AuctionError):
+    """A bid inside the quiet gap after the last one."""
+
+
+class PriceMoved(AuctionError):
+    """The bid was under the next legal bid — someone else got there first.
+
+    Its own class so a bare ``/bid`` (which means "the next minimum", whatever
+    that is by now) can simply try again at the fresh minimum, while a bid that
+    named a number or a button that carried one is never raised on the
+    bidder's behalf.
+    """
+
+
+def bid_holder_message(session, season, lot):
+    """Who holds the lot right now — what a bid inside the gap is told."""
+    team = None
+    if lot is not None and lot.current_bidder_id is not None:
+        team = (session.query(AuctionFranchise)
+                .filter(AuctionFranchise.id == lot.current_bidder_id).first())
+    lines = ["⏳ Current bid holder",
+             f"Player: {lot.name if lot is not None else '?'}",
+             f"Team: {team.name if team is not None else '?'}"]
+    if lot is not None and lot.current_bid_lakh is not None:
+        lines.append(f"Bid: {render_money(lot.current_bid_lakh, season.currency_label)}")
+    lines.append("Bid again in a moment.")
+    return "\n".join(lines)
+
+
+def _in_bid_gap(season, lot, franchise, now, *, by_admin=False):
+    """True while the last bid on this lot is younger than the gap.
+
+    The franchise already holding the lot is left to ``validate_bid``, whose
+    "you already hold the top bid" is the more useful answer. An admin entering
+    a bid is correcting the room, not racing it.
+    """
+    gap = bid_gap_seconds(season)
+    if (not gap or by_admin or lot is None or lot.status != LOT_ON_BLOCK
+            or lot.last_bid_at is None
+            or lot.current_bidder_id == franchise.id):
+        return False
+    return now < lot.last_bid_at + timedelta(seconds=gap)
+
+
+def countdown_seconds(season):
+    """How long the hammer countdown runs — 0 when it is off."""
+    return max(0, min(COUNTDOWN_MAX,
+                      _as_int(getattr(season, "countdown_seconds", 3), 3)))
+
+
+def set_countdown(session, season, seconds):
+    raw = str(seconds or "").strip().lower()
+    value = 0 if raw in ("off", "0", "no", "none") else _as_int(raw, -1)
+    if value < 0 or value > COUNTDOWN_MAX:
+        raise AuctionError(f"The countdown runs between 1 and {COUNTDOWN_MAX} "
+                           f"seconds — or off.")
+    staged = staged_clock(season)
+    if staged is not None and value >= staged[3]:
+        raise AuctionError(f"On the staged clock the countdown must be under "
+                           f"the 2nd warning ({staged[3]}s).")
+    season.countdown_seconds = value
+    return value
 
 
 def _focus_changed(season, session=None):
@@ -3053,9 +3360,37 @@ def set_direct_bids(session, season, on, *, by_tg_id=None, quiet=False):
 
 
 def set_timer(session, season, seconds):
-    seconds = _as_int(seconds, 0)
+    """``/atimer``: one number (the classic clock's length), five (the staged
+    clock: open, reset, 1st warning, 2nd warning, final count — the last may
+    be ``off``), or ``classic`` to go back. Returns the opening seconds."""
+    raw = str(seconds if seconds is not None else "").replace(",", " ").split()
+    if len(raw) == 1 and raw[0].lower() in ("classic", "off", "legacy"):
+        season.reset_seconds = 0
+        season.warn1_seconds = 0
+        season.warn2_seconds = 0
+        return int(season.bid_seconds or 30)
+    if len(raw) in (4, 5):
+        count_raw = raw[4].lower() if len(raw) == 5 else str(countdown_seconds(season))
+        count = 0 if count_raw in ("off", "no", "none") else _as_int(count_raw, -1)
+        parts = [_as_int(x, -1) for x in raw[:4]]
+        if min(parts) < 0 or count < 0:
+            raise AuctionError("Every part is a number of seconds — e.g. "
+                               "<code>/atimer 60 40 20 10 5</code>.")
+        open_s, reset, warn1, warn2 = parts
+        validate_staged(open_s, reset, warn1, warn2, count)
+        (season.bid_seconds, season.reset_seconds, season.warn1_seconds,
+         season.warn2_seconds, season.countdown_seconds) = (
+            open_s, reset, warn1, warn2, count)
+        return open_s
+    if len(raw) != 1:
+        raise AuctionError("Use <code>/atimer 45</code>, or the staged clock "
+                           "<code>/atimer 60 40 20 10 5</code>.")
+    seconds = _as_int(raw[0], 0)
     if seconds < 5 or seconds > 600:
         raise AuctionError("A lot timer runs between 5 and 600 seconds.")
+    staged = staged_clock(season)
+    if staged is not None:
+        validate_staged(seconds, *staged[1:])
     season.bid_seconds = seconds
     return seconds
 
@@ -3208,10 +3543,10 @@ def validate_bid(session, season, lot, franchise, amount_lakh, *, now=None,
             raise AuctionError(f"{lot.name}'s base price is "
                                f"{render_money(minimum, symbol)} — a first bid "
                                f"cannot be under it.")
-        raise AuctionError(f"The bid stands at "
-                           f"{render_money(lot.current_bid_lakh, symbol)}. "
-                           f"The next legal bid is "
-                           f"{render_money(minimum, symbol)}.")
+        raise PriceMoved(f"The bid stands at "
+                         f"{render_money(lot.current_bid_lakh, symbol)}. "
+                         f"The next legal bid is "
+                         f"{render_money(minimum, symbol)}.")
 
     size = int(franchise.squad_size or 0)
     if size + 1 > int(season.max_squad_size or 0):
@@ -3354,6 +3689,8 @@ def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
     twice for one bid.
     """
     now = now or datetime.utcnow()
+    if _in_bid_gap(season, lot, franchise, now, by_admin=by_admin):
+        raise BidTooSoon(bid_holder_message(session, season, lot))
     amount = validate_bid(session, season, lot, franchise, amount_lakh, now=now,
                           by_tg_id=by_tg_id, by_admin=by_admin)
 
@@ -3373,21 +3710,49 @@ def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
     # True exactly when this bid earns an extension: inside the window, and the
     # budget is not spent. Referenced twice below; SQL evaluates every SET
     # expression against the row's OLD values, so both see the same answer.
+    staged = staged_clock(season)
     sniping = (and_(AuctionLot.deadline_at <= snipe_cutoff,
                     AuctionLot.extensions_used < cap)
-               if window and cap and not final_offer else None)
+               if window and cap and not final_offer and staged is None
+               else None)
+    # The staged clock's reset: a bid with less than ``reset`` seconds left
+    # puts the clock back to ``reset``, however many times it takes. It rides
+    # in the same statement as the claim for the same reason anti-snipe does.
+    reset_at = (now + timedelta(seconds=staged[1])
+                if staged is not None and not final_offer else None)
+    resets = bool(reset_at is not None and lot.deadline_at is not None
+                  and lot.deadline_at < reset_at)
+
+    # The quiet gap after a bid: nobody may answer it for ``gap`` seconds, so
+    # a bid must leave the room at least that long (plus one) to answer it —
+    # otherwise a bid two seconds from the end could never be topped.
+    gap = 0 if (final_offer or by_admin) else bid_gap_seconds(season)
+    answerable = now + timedelta(seconds=gap + 1) if gap else None
 
     values = {
         "current_bid_lakh": amount,
         "current_bidder_id": franchise.id,
         "bid_count": AuctionLot.bid_count + 1,
         "going_stage": 0,
+        "last_bid_at": now,
     }
     if sniping is not None:
-        values["deadline_at"] = case((sniping, extended_to),
-                                     else_=AuctionLot.deadline_at)
+        values["deadline_at"] = case(
+            (sniping, max(extended_to, answerable or extended_to)),
+            *([(AuctionLot.deadline_at < answerable, answerable)]
+              if answerable else []),
+            else_=AuctionLot.deadline_at)
         values["extensions_used"] = (AuctionLot.extensions_used
                                      + case((sniping, 1), else_=0))
+    elif reset_at is not None:
+        floor = max(reset_at, answerable or reset_at)
+        values["deadline_at"] = case(
+            (AuctionLot.deadline_at < floor, floor),
+            else_=AuctionLot.deadline_at)
+    elif answerable is not None:
+        values["deadline_at"] = case(
+            (AuctionLot.deadline_at < answerable, answerable),
+            else_=AuctionLot.deadline_at)
 
     claimed = (session.query(AuctionLot)
                .filter(AuctionLot.id == lot.id,
@@ -3405,7 +3770,11 @@ def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
                            AuctionLot.current_bid_lakh < amount),
                        *([] if final_offer else
                          [or_(AuctionLot.current_bidder_id.is_(None),
-                              AuctionLot.current_bidder_id != franchise.id)]))
+                              AuctionLot.current_bidder_id != franchise.id)]),
+                       *([or_(AuctionLot.last_bid_at.is_(None),
+                              AuctionLot.last_bid_at
+                              <= now - timedelta(seconds=gap))]
+                         if gap else []))
                .update(values, synchronize_session=False))
 
     # The UPDATE bypassed the identity map, so every loaded row may be stale.
@@ -3418,6 +3787,8 @@ def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
     if not claimed:
         # Re-read only on the losing path, and say which thing moved — "invalid
         # bid" against a running clock is useless to the person who typed it.
+        if gap and _in_bid_gap(season, lot, franchise, now):
+            raise BidTooSoon(bid_holder_message(session, season, lot))
         raise _why_the_bid_lost(season, lot, franchise, amount, now)
 
     session.add(AuctionBid(season_id=season.id, lot_id=lot.id,
@@ -3436,7 +3807,9 @@ def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
               f"{render_money(amount, season.currency_label)} for {_e(lot.name)}"
               + (" <i>(entered by an admin)</i>." if by_admin else "."),
               lot=lot, franchise=franchise, by_tg_id=by_tg_id,
-              by_admin=by_admin, detail={"amount_lakh": amount})
+              by_admin=by_admin,
+              detail=({"amount_lakh": amount, "reset_to": staged[1]}
+                      if resets else {"amount_lakh": amount}))
     # "One more chance to increase" means one. A landed final offer closes the
     # raise window there and then and puts the number to the RTM holder,
     # rather than leaving the clock running on a bidder who has had their go.
@@ -3459,7 +3832,7 @@ def _why_the_bid_lost(season, lot, franchise, amount, now):
     if lot.current_bidder_id == franchise.id:
         return AuctionError("You already hold the top bid.")
     if lot.current_bid_lakh is not None and lot.current_bid_lakh >= amount:
-        return AuctionError(
+        return PriceMoved(
             f"Someone got there first — the bid is now "
             f"{render_money(lot.current_bid_lakh, symbol)}. The next legal bid "
             f"is {render_money(next_min_bid(season, lot), symbol)}.")
@@ -3924,6 +4297,8 @@ def undo_last_bid(session, season, lot, *, now=None, by_tg_id=None):
                 .order_by(AuctionBid.id.desc()).first())
     lot.current_bid_lakh = previous.amount_lakh if previous else None
     lot.current_bidder_id = previous.franchise_id if previous else None
+    # The bid the gap was counting from is gone; the room may answer now.
+    lot.last_bid_at = None
     lot.bid_count = max(0, int(lot.bid_count or 1) - 1)
     lot.going_stage = 0
     floor = now + timedelta(seconds=max(1, int(season.snipe_extend_seconds or 10)))
@@ -4155,6 +4530,47 @@ def owner_ping(franchise):
     if tg_id <= 0:
         return label
     return f'<a href="tg://user?id={tg_id}">{label}</a>'
+
+
+def person_tag(session, tg_id, fallback="Owner"):
+    """A clickable mention of one person — ``@username`` when we know it."""
+    if not tg_id:
+        return _e(fallback or "Owner")
+    from services.draft_scheduler import mention
+    return mention(session, tg_id, fallback)
+
+
+def owner_tag(session, franchise, *, by_tg_id=None):
+    """``<b>Team</b> (👤 @owner)`` — the franchise, with its owner tagged.
+
+    Tagged so the person actually gets the notification in a busy group: the
+    SOLD card, the warnings and "outbid" all name somebody who needs to know.
+    ``by_tg_id`` — the person who placed the bid — is tagged too when it was a
+    co-owner rather than the owner. An unowned franchise is just its name.
+    """
+    if franchise is None:
+        return "<b>?</b>"
+    label = f"<b>{_e(franchise.name)}</b>"
+    owner = int(franchise.owner_tg_id or 0)
+    people = []
+    if owner > 0:
+        people.append(person_tag(session, owner, franchise.owner_name or franchise.name))
+    if by_tg_id and int(by_tg_id) != owner:
+        people.append("bid by " + person_tag(session, int(by_tg_id), "co-owner"))
+    return f"{label} (👤 {' · '.join(people)})" if people else label
+
+
+def winning_bidder(session, lot):
+    """Who typed the winning bid on a sold lot, or None."""
+    if lot is None or not lot.sold_to_id:
+        return None
+    row = (session.query(AuctionBid)
+           .filter(AuctionBid.lot_id == lot.id,
+                   AuctionBid.franchise_id == lot.sold_to_id,
+                   AuctionBid.is_void.is_(False))
+           .order_by(AuctionBid.amount_lakh.desc(), AuctionBid.id.desc())
+           .first())
+    return int(row.by_tg_id) if row is not None and row.by_tg_id else None
 
 
 def rtm_holder(session, lot):
@@ -4635,6 +5051,19 @@ def publish_to_league(session, season, *, league_name=None):
 
     season.league_id = league.id
     season.published_at = datetime.utcnow()
+    session.flush()
+    # The squads belong to the people who bought them. A tournament already
+    # built on this league gets its unclaimed teams' owners and co-owners
+    # filled in now (an admin's own assignment always wins); one built later
+    # inherits them on its own via tournament_service.league_owner_for_team.
+    try:
+        from models import Tournament
+        from services import tournament_service
+        for tour in (session.query(Tournament)
+                     .filter(Tournament.league_id == league.id).all()):
+            tournament_service.sync_owners_from_draft(session, tour.id)
+    except Exception:
+        logger.exception("auction publish: owner sync failed (non-fatal)")
     log_event(session, season, "published",
               f"📤 Squads published to the “{_e(league.name)}” Challenge League.",
               by_admin=True)
@@ -5693,11 +6122,17 @@ def render_board(session, season, lot=None, *, now=None):
             # "Going once / twice" is the auctioneer calling a contest. An RTM
             # window is one franchise answering one question, so it counts
             # down without the patter.
-            stage = "" if lot.status == LOT_RTM_OFFERED else {
-                1: " · <b>going once</b>",
-                2: " · <b>GOING TWICE</b>"}.get(going_stage_for(left), "")
+            staged = staged_clock(season)
+            words = ({1: " · <b>⚠️ 1st warning</b>",
+                      2: " · <b>⚠️⚠️ 2nd warning</b>"} if staged else
+                     {1: " · <b>going once</b>", 2: " · <b>GOING TWICE</b>"})
+            stage = "" if lot.status == LOT_RTM_OFFERED else words.get(
+                going_stage_for(left, season), "")
             head.append(f"⏳ {format_clock(left)} left{stage}")
-            if lot.extensions_used and season.max_extensions:
+            if staged and lot.status == LOT_ON_BLOCK:
+                head.append(f"🔄 A bid under {staged[1]}s puts the clock back "
+                            f"to {staged[1]}s")
+            if lot.extensions_used and season.max_extensions and not staged:
                 remaining = int(season.max_extensions) - int(lot.extensions_used)
                 head.append(f"🛡 Anti-snipe: {lot.extensions_used} used"
                             + (" · <b>final extension</b>" if remaining <= 0

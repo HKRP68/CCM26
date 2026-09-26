@@ -1019,6 +1019,22 @@ def _migrate_add_columns():
     # season written before this behaved, so there is nothing to backfill.
     _try_add("auction_seasons", "role_maximums_json", "TEXT")
 
+    # ── Franchise Auction: the hammer countdown, and /arestart ──
+    # An integer defaulted to 3 so a running auction picks the countdown up;
+    # the opening order is NULL until the next /astart, and /arestart falls
+    # back to the current queue order without it.
+    _try_add("auction_seasons", "countdown_seconds", "INTEGER DEFAULT 3")
+    _try_add("auction_seasons", "opening_order_json", "TEXT")
+    # The quiet gap after every bid (see AuctionLot.last_bid_at). Off by
+    # default — see the one-shot below and auction_service.bid_gap_seconds.
+    _try_add("auction_seasons", "bid_gap_seconds", "INTEGER DEFAULT 0")
+    _try_add("auction_lots", "last_bid_at", "TIMESTAMP")
+    # The staged lot clock (/atimer 60 40 20 10 5). 0 = the classic clock, so
+    # every season that exists keeps running exactly as it did.
+    _try_add("auction_seasons", "reset_seconds", "INTEGER DEFAULT 0")
+    _try_add("auction_seasons", "warn1_seconds", "INTEGER DEFAULT 0")
+    _try_add("auction_seasons", "warn2_seconds", "INTEGER DEFAULT 0")
+
     # ── Franchise Auction: focus mode ──
     # While an auction is live or paused its group answers auction commands and
     # nothing else (``services/auction_focus.py``). An integer defaulted to 1
@@ -1126,6 +1142,21 @@ def _migrate_add_columns():
         except Exception:
             # The card still renders on its own defaults; never fail the boot.
             log.warning("summary text-settings reset skipped", exc_info=True)
+
+    # ─────────────────────────────────────────────────────────────
+    # Franchise Auction: the room-wide quiet gap after a bid is now OFF by
+    # default, so many franchises can bid on the same player at once (spam is
+    # stopped per person by services/auction_antispam instead). Seasons still
+    # running on the old untouched default of 3 are moved to 0 exactly once;
+    # an admin who wants the gap back sets it again with /abidgap.
+    _gap_sql = ["UPDATE auction_seasons SET bid_gap_seconds = 0 "
+                "WHERE bid_gap_seconds = 3 "
+                "AND status IN ('setup', 'live', 'paused')"]
+    _gap_done, _gap_sig = _migration_signature_matches(
+        "auction_bid_gap_default_off", _gap_sql)
+    if not _gap_done:
+        if not _run_isolated(_gap_sql):
+            _record_migration_signature("auction_bid_gap_default_off", _gap_sig)
 
     done, sig = _migration_signature_matches("backfill", backfill_sql)
     if not done:

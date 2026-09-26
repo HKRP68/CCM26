@@ -16933,7 +16933,7 @@ def admin_tournament_detail(tournament_id):
                         log_admin(db, "tournament_team_add", "tournament", t.id, ct.name)
                         inherited = ""
                         if owner_tg:
-                            inherited = (f" Owner inherited from the draft: "
+                            inherited = (f" Owner inherited from the draft/auction: "
                                          f"{owner_nm or owner_tg}.")
                         if co_ids:
                             inherited += f" Plus {len(co_ids)} co-owner(s)."
@@ -22963,6 +22963,8 @@ def admin_auctions_list():
                 if action == "create":
                     season = auction_svc.create_season(
                         db, request.form.get("name"))
+                    # The staged clock (60 40 20 10 5) for every new auction.
+                    auction_svc.apply_staged_defaults(season)
                     log_admin(db, "auction_create", "auction", season.id,
                               season.name)
                     db.commit()
@@ -23212,7 +23214,20 @@ def _auction_detail_action(db, season, action):
     if action == "settings":
         season.name = (request.form.get("name") or season.name).strip()[:120]
         season.chat_id = _tg_chat_form("chat_id", season.chat_id)
-        season.bid_seconds = _int_form("bid_seconds", season.bid_seconds)
+        # The staged clock: opening seconds, the reset point and the two
+        # warnings (0 reset = the classic clock). Validated together through
+        # the same path /atimer uses, so the web and the group agree.
+        opening = _int_form("bid_seconds", season.bid_seconds)
+        reset = _int_form("reset_seconds", season.reset_seconds or 0)
+        if reset:
+            auction_svc.set_timer(db, season, " ".join(str(x) for x in (
+                opening, reset,
+                _int_form("warn1_seconds", season.warn1_seconds or 0),
+                _int_form("warn2_seconds", season.warn2_seconds or 0),
+                auction_svc.countdown_seconds(season))))
+        else:
+            season.reset_seconds = 0
+            season.bid_seconds = opening
         # The opening purse is not just the default for the NEXT franchise: it
         # is what this field runs on, so changing it carries every franchise
         # with it (spending untouched, each move written as a ledger

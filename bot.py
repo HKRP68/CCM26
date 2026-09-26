@@ -472,6 +472,9 @@ ADMIN_MENU_COMMANDS = (
     ("aforce", "Admin: put a chosen player on the block next"),
     ("aincrement", "Admin: set the auction's bid increments"),
     ("atimer", "Admin: seconds allowed per auction lot"),
+    ("acountdown", "Admin: the 3-2-1 countdown before a lot is sold"),
+    ("arestart", "Admin: restart the auction from the first player"),
+    ("abidgap", "Admin: seconds every team waits after a bid"),
     ("asnipe", "Admin: anti-snipe window, extension and cap"),
     ("afocus", "Admin: lock this group to auction commands while it runs"),
     ("adirect", "Admin: allow typed bid amounts, or the next step only"),
@@ -2297,7 +2300,9 @@ def main():
             apause_handler, anext_handler, aextend_handler, asold_handler,
             aunsold_handler, aundobid_handler, awithdraw_handler,
             areinstate_handler, aforce_handler, aincrement_handler,
-            atimer_handler, asnipe_handler, afocus_handler, adirect_handler,
+            atimer_handler, acountdown_handler, arestart_handler,
+            abidgap_handler,
+            asnipe_handler, afocus_handler, adirect_handler,
             agrant_handler, aco_handler,
             apublish_handler, acancel_handler,
             aretain_handler, aunretain_handler, aretlock_handler,
@@ -2314,12 +2319,24 @@ def main():
             asoldlist_handler, aunsoldlist_handler, apool_handler,
             asetorder_handler, aaccelmode_handler, acall_handler,
             aremoveteam_handler, aadminadd_handler, aadminremove_handler,
-            aadmins_handler,
+            aadmins_handler, me_callback, aleaderboard_handler,
+            amybids_handler, dot_command_handler,
         )
         # Not "/b": that is already /buy, registered above, and PTB runs the
         # first handler that matches — the alias would be dead.
         app.add_handler(CommandHandler(["bid", "bd"], bid_handler))
         app.add_handler(CallbackQueryHandler(bid_callback, pattern=r"^au_bid_"))
+        # 💼 My Purse / 📊 Status under every bid message: private popups, so
+        # checking a purse mid-lot never adds a message to the room.
+        app.add_handler(CallbackQueryHandler(me_callback, pattern=r"^au_me_"))
+        # TeleAuction's dot shortcuts — ".bid 2", ".purse", ".squad". Plain
+        # text, in a group of its own so it never shadows another text handler,
+        # and a no-op in any chat without an auction bound to it.
+        from telegram.ext import filters as _au_filters
+        app.add_handler(MessageHandler(
+            _au_filters.TEXT & _au_filters.ChatType.GROUPS
+            & _au_filters.Regex(r"^\.[A-Za-z]"),
+            dot_command_handler), group=11)
         # Right To Match. Unpublished like /bid, and for the same reason: both
         # player menu scopes are at Telegram's ceiling. The room hears about it
         # when the bot asks them the question, which is the only moment it
@@ -2345,6 +2362,10 @@ def main():
         app.add_handler(CommandHandler(["asquad", "amysquad"], asquad_handler))
         app.add_handler(CommandHandler("asoldlist", asoldlist_handler))
         app.add_handler(CommandHandler("aunsoldlist", aunsoldlist_handler))
+        app.add_handler(CommandHandler(["aleaderboard", "alb"],
+                                       aleaderboard_handler))
+        app.add_handler(CommandHandler(["amybids", "amybidhistory"],
+                                       amybids_handler))
         # Admin. Registered unconditionally, with the gate inside the handler,
         # so it answers the person who typed it rather than looking like a
         # command that does not exist.
@@ -2369,6 +2390,12 @@ def main():
         app.add_handler(CommandHandler(["aincrement", "aincrements"],
                                        aincrement_handler))
         app.add_handler(CommandHandler("atimer", atimer_handler))
+        # The hammer countdown ("Selling X to Team for ₹…", 3, 2, 1, SOLD) and
+        # the whole auction again from lot one — see handlers/auction.py.
+        app.add_handler(CommandHandler("acountdown", acountdown_handler))
+        app.add_handler(CommandHandler("arestart", arestart_handler))
+        # The quiet gap after every bid, before any team may bid again.
+        app.add_handler(CommandHandler("abidgap", abidgap_handler))
         app.add_handler(CommandHandler("asnipe", asnipe_handler))
         # Focus mode: while the auction runs, this group answers auction
         # commands and nothing else. ON by default — the rules live in
