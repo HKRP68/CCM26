@@ -1162,6 +1162,13 @@ def track_event(session, user_id, event_key, count=1, mode="add"):
     """
     now = datetime.utcnow()
     newly_completed = []
+    # The new-player journey listens to the same event stream (claim, daily,
+    # first match…). It pays its own one-off rewards and never raises.
+    try:
+        from services.onboarding_service import on_event as _onboarding_event
+        _onboarding_event(session, user_id, event_key)
+    except Exception:
+        logger.exception("onboarding hook failed (non-fatal)")
     try:
         quests = (session.query(Quest)
                   .filter(Quest.event_key == event_key,

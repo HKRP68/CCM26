@@ -95,6 +95,36 @@ def _build_post_debut_onboarding_markup(chat=None):
     return InlineKeyboardMarkup([[btn]])
 
 
+async def _send_journey_card(update, context, user_id) -> bool:
+    """Post the new-player checklist right after /debut.
+
+    If the player is already in the Official GC, that step is ticked (and
+    paid) before the card is drawn, so the first thing they see is progress.
+    """
+    try:
+        from services import gc_gate, onboarding_rich, onboarding_service
+        from services.rich_message import reply_rich
+        gid = gc_gate.official_group_id()
+        if gid and onboarding_service.gc_step_applies():
+            is_member = await gc_gate.check_membership(
+                context.bot, gid, update.effective_user.id)
+            if is_member:
+                onboarding_service.complete_gc_step_for(update.effective_user.id)
+                onboarding_service.discard_pending(update.effective_user.id)  # the card below says it
+        s = get_session()
+        try:
+            user = s.get(User, user_id)
+            blocks, html_text, kb = onboarding_rich.journey_card(user)
+        finally:
+            s.close()
+        await reply_rich(update.effective_message, blocks, html_text,
+                         reply_markup=kb)
+        return True
+    except Exception:
+        logger.exception("Journey card after debut failed (non-fatal)")
+        return False
+
+
 async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg_user = update.effective_user
     logger.info(f"/debut from user {tg_user.id} ({tg_user.username})")
@@ -104,14 +134,14 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Check enabled flag from BotCommand table
         from services.command_config_service import is_command_enabled, get_disabled_message, get_reward
         if not is_command_enabled(session, "debut"):
-            await update.message.reply_text(
+            await update.effective_message.reply_text(
                 get_disabled_message(session, "debut"), parse_mode="HTML")
             return
 
         existing = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if existing:
             from services.message_service import get_msg
-            await update.message.reply_text(
+            await update.effective_message.reply_text(
                 get_msg("debut_already"), parse_mode="HTML")
             return
 
@@ -140,7 +170,7 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         players = get_players_for_debut(session)
         if not players:
-            await update.message.reply_text(
+            await update.effective_message.reply_text(
                 "⚠️ No players available in the database. Please contact admin."
             )
             session.rollback()
@@ -153,6 +183,15 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session.add(entry)
 
         user.roster_count = len(players)
+        # Start the guided first-session journey (services/onboarding_service).
+        onboarding_on = False
+        try:
+            from services import onboarding_service
+            if onboarding_service.is_enabled():
+                onboarding_service.start(user)
+                onboarding_on = True
+        except Exception:
+            logger.exception("Onboarding start failed (non-fatal)")
         log_activity(session, user.id, 'debut', f'Debut: {len(players)} players, {debut_coins} coins, {debut_gems} gems', coins_change=debut_coins, gems_change=debut_gems)
 
         # ── Referral completion ──
@@ -221,8 +260,15 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             + referral_reward_text
             + branding
         )
-        await update.message.reply_text(
+        await update.effective_message.reply_text(
             text, parse_mode="HTML", disable_web_page_preview=True)
+
+        # New-player journey: a rich checklist of the first six things to do,
+        # each paid once. Replaces the static starter guide below while the
+        # journey is switched on (Website → Maintenance).
+        if onboarding_on and not rookie_mode:
+            if await _send_journey_card(update, context, user.id):
+                onboarding_on = "sent"
 
         # Follow the account creation with a short, actionable starter guide so
         # new users know which system to try next. Keep the text deliverable even
@@ -235,12 +281,15 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             None if rookie_mode
             else _build_post_debut_onboarding_markup(update.effective_chat))
         try:
-            await update.message.reply_text(
-                onboarding_text,
-                parse_mode="HTML",
-                reply_markup=onboarding_markup,
-                disable_web_page_preview=True,
-            )
+            if onboarding_on == "sent":
+                pass  # the journey card already told them what to do next
+            else:
+                await update.effective_message.reply_text(
+                    onboarding_text,
+                    parse_mode="HTML",
+                    reply_markup=onboarding_markup,
+                    disable_web_page_preview=True,
+                )
         except Exception:
             if onboarding_markup is None:
                 logger.exception("Post-debut onboarding guide failed (non-fatal)")
@@ -249,7 +298,7 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Post-debut onboarding guide button failed; retrying without markup"
                 )
                 try:
-                    await update.message.reply_text(
+                    await update.effective_message.reply_text(
                         onboarding_text,
                         parse_mode="HTML",
                         disable_web_page_preview=True,
@@ -266,7 +315,7 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 kb = InlineKeyboardMarkup([[
                     InlineKeyboardButton("⏭️ Skip", callback_data=f"refcode_skip_{user.id}"),
                 ]])
-                await update.message.reply_text(
+                await update.effective_message.reply_text(
                     "🎟️ <b>Got a referral code?</b>\n\n"
                     "If a friend gave you their 6-character code, send it now "
                     "and they'll earn a reward.\n\n"
@@ -283,6 +332,6 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         session.rollback()
         logger.exception(f"Debut error for user {tg_user.id}")
-        await update.message.reply_text("⚠️ Database error. Please try again later.")
+        await update.effective_message.reply_text("⚠️ Database error. Please try again later.")
     finally:
         session.close()

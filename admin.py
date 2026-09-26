@@ -784,6 +784,13 @@ def dashboard():
             "peak_active": peak_active,
             "avg_active_7d": avg_active_7d,
         }
+        # Cohort retention (D1/D7/D30 by /debut day) + the new-player funnel.
+        try:
+            from services.retention_stats import compute as _cohort_stats
+            retention["cohorts"] = _cohort_stats(db)
+        except Exception:
+            logger.exception("cohort retention stats failed (non-fatal)")
+            retention["cohorts"] = None
 
         # ── Who played the most matches today ────────────────────────────
         # The ops tiles answer "how many matches today", and Top Users ranks
@@ -17821,6 +17828,58 @@ def admin_maintenance():
                     else:
                         flash("✅ Rookie message saved", "success")
 
+                elif action in ("gc_enable", "gc_disable", "gc_save",
+                                "retention_save"):
+                    # Forced Official GC join (services/gc_gate.py) and the
+                    # retention switches (onboarding journey, comeback DMs).
+                    if action in ("gc_enable", "gc_disable", "gc_save"):
+                        msg = (request.form.get("gc_join_message", "") or "").strip()[:2000]
+                        row.gc_join_message = msg or None
+                        if action == "gc_enable":
+                            if not row.official_group_id:
+                                flash("⚠️ Set the Official Group ID first "
+                                      "(Settings → Official Group) — there is no "
+                                      "group to force players into.", "error")
+                                return redirect(url_for("admin_maintenance"))
+                            row.force_gc_join = True
+                        elif action == "gc_disable":
+                            row.force_gc_join = False
+                        detail = f"force_gc_join={row.force_gc_join}"
+                    else:
+                        row.onboarding_enabled = bool(request.form.get("onboarding_enabled"))
+                        row.comeback_enabled = bool(request.form.get("comeback_enabled"))
+                        raw = (request.form.get("comeback_rewards_json", "") or "").strip()
+                        if raw:
+                            import json as _json
+                            try:
+                                parsed = _json.loads(raw)
+                                assert isinstance(parsed, dict)
+                                for k, v in parsed.items():
+                                    int(k)
+                                    assert isinstance(v, dict)
+                            except Exception:
+                                flash("⚠️ Comeback rewards must be JSON like "
+                                      '{"1": {"coins": 300, "gems": 0}}', "error")
+                                return redirect(url_for("admin_maintenance"))
+                            row.comeback_rewards_json = _json.dumps(parsed)
+                        else:
+                            row.comeback_rewards_json = None
+                        detail = (f"onboarding={row.onboarding_enabled}, "
+                                  f"comeback={row.comeback_enabled}")
+                    row.updated_at = datetime.utcnow()
+                    row.updated_by = session.get("admin", "admin")
+                    db.commit()
+                    _refresh_cfg(db)
+                    log_admin(db, action, target_type="config",
+                              target_name="retention", detail=detail)
+                    db.commit()
+                    flash({"gc_enable": "📢 Force Official GC join <b>ENABLED</b>. "
+                                        "Make sure the bot is an admin in the group.",
+                           "gc_disable": "✅ Force Official GC join <b>DISABLED</b>.",
+                           "gc_save": "✅ Join message saved",
+                           "retention_save": "✅ Retention settings saved"}[action],
+                          "success")
+
                 elif action == "save_tournament_access":
                     # Manage the Challenge League Tournament command allowlist —
                     # independent of maintenance state. Empty = open to everyone.
@@ -17937,6 +17996,25 @@ def _rookie_panel(db, cfg):
             rookie_gate.ROOKIE_TIER),
         "rookie_free_commands": sorted(rookie_gate.FREE_COMMANDS),
         "rookie_preview": rookie_gate.rookie_required_message(cfg),
+        **_retention_panel(cfg),
+    }
+
+
+def _retention_panel(cfg):
+    """Data for the Maintenance page's Official GC gate + retention panel."""
+    import json as _json
+    from services import comeback_service, gc_gate
+    try:
+        rewards = _json.dumps({str(k): v for k, v in comeback_service.tiers(cfg).items()},
+                              indent=1)
+    except Exception:
+        rewards = ""
+    return {
+        "gc_free_commands": sorted(gc_gate.FREE_COMMANDS),
+        "gc_preview": gc_gate.join_required_message(cfg),
+        "gc_group_id": gc_gate.official_group_id(cfg),
+        "gc_join_url": gc_gate.join_url(cfg),
+        "comeback_rewards_text": (cfg.get("comeback_rewards_json") or rewards),
     }
 
 

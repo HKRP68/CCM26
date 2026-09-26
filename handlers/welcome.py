@@ -9,6 +9,7 @@ When the bot itself is added to a group, it posts an intro too.
 Admins toggle the welcome with /ewm (enable) and /dwm (disable), per group.
 """
 
+import asyncio
 import logging
 import os
 
@@ -112,15 +113,42 @@ def _intro_text(new_name=None):
     )
 
 
-def _welcome_keyboard():
+def _welcome_keyboard(chat_id=None):
+    """Deep-link to /debut in DM, plus a Join button for the Official GC
+    (unless this *is* the Official GC)."""
     uname = _bot_username()
-    if not uname:
-        return None
-    deep_link = f"https://t.me/{uname}?start=debut"
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("🎁 A welcome surprise for you — tap here!",
-                             url=deep_link)
-    ]])
+    rows = []
+    if uname:
+        rows.append([InlineKeyboardButton(
+            "🎁 A welcome surprise for you — tap here!",
+            url=f"https://t.me/{uname}?start=debut")])
+    try:
+        from services import gc_gate
+        gid = gc_gate.official_group_id()
+        url = gc_gate.join_url()
+        if url and gid and chat_id != gid:
+            rows.append([InlineKeyboardButton("💬 Join the Official GC", url=url)])
+    except Exception:
+        logger.debug("welcome GC button failed", exc_info=True)
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+async def _note_official_gc_join(context, chat_id, members):
+    """Someone joined the Official GC: unlock the gate for them straight away
+    and tick the journey step (the player gets their card from the job)."""
+    try:
+        from services import gc_gate, onboarding_service
+        if chat_id != gc_gate.official_group_id():
+            return
+        cache = context.bot_data.get("gc_member_cache")
+        for m in members:
+            if m.is_bot:
+                continue
+            if isinstance(cache, dict):
+                cache.pop(m.id, None)
+            await asyncio.to_thread(onboarding_service.complete_gc_step_for, m.id)
+    except Exception:
+        logger.exception("Official GC join bookkeeping failed (non-fatal)")
 
 
 async def new_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -131,6 +159,7 @@ async def new_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     bot_id = context.bot.id
+    await _note_official_gc_join(context, chat.id, msg.new_chat_members)
     session = get_session()
     try:
         if not _welcome_enabled(session, chat.id):
@@ -138,7 +167,7 @@ async def new_member_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     finally:
         session.close()
 
-    kb = _welcome_keyboard()
+    kb = _welcome_keyboard(chat.id)
 
     # Load the (editable) welcome template once per batch
     session = get_session()

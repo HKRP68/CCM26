@@ -86,28 +86,126 @@ def _get_cooldowns(session):
             "cooldown": daily_cd, "quota_kind": "daily", "miniapp_tab": "daily",
             "button_label": "📅 Open Daily",
             "message": "📅 Your daily reward is ready! Open the Mini App to claim it.",
+            "short": "📅 Daily reward", "command": "/daily",
         },
         {
             "field": "last_gspin", "flag": "notified_gspin_ready",
             "cooldown": gspin_cd, "quota_kind": "spin", "miniapp_tab": "spin",
             "button_label": "🎴 Open Lucky Card Pick",
             "message": "🎴 Your Lucky Card Pick is ready! Open the Mini App to pick a card.",
+            "short": "🎴 Lucky Card Pick", "command": "/gspin",
         },
         {
             "field": "last_claim", "flag": "notified_claim_ready",
             "cooldown": claim_cd, "tiered": True,
             "message": "⏰ Your hourly Claim is ready! Use /claim for a free player + coins.",
+            "short": "⏰ Hourly claim", "command": "/claim",
         },
         {
             "field": "last_free_pack", "flag": "notified_free_pack_ready",
             "cooldown": free_pack_cd,
             "message": "📦 Your Free Pack is ready! Open the app to watch an ad and claim it.",
+            "short": "📦 Free Pack", "command": "the Mini App", "miniapp_tab": "freepack",
+            "button_label": "📦 Open Free Pack",
         },
     ]
 
 
+def _is_ready(cd, user, stats, session, now=None):
+    """True when the cooldown ``cd`` can be used by ``user`` right now."""
+    now = now or datetime.utcnow()
+    quota_kind = cd.get("quota_kind")
+    if quota_kind:
+        try:
+            quota = get_quota_status(stats, quota_kind, session=session, user=user)
+            return not quota["all_used"]
+        except Exception:
+            return False
+    last = getattr(stats, cd["field"], None)
+    if last is None:
+        # Never used: a legacy cooldown is available from the start.
+        return True
+    cd_seconds = cd["cooldown"]
+    if cd.get("tiered"):
+        try:
+            from services.subscription_service import cooldown_seconds as _tier_cd
+            cd_seconds = _tier_cd(user, cd_seconds)
+        except Exception:
+            pass
+    return (now - last).total_seconds() >= cd_seconds
+
+
+def ready_now(session, user, stats):
+    """``(label, command)`` pairs for every reward ``user`` can collect now.
+
+    Shared with the /start status card, so "ready" means the same thing in the
+    DM nudge and on the welcome screen.
+    """
+    if stats is None:
+        return []
+    out = []
+    now = datetime.utcnow()
+    for cd in _get_cooldowns(session):
+        try:
+            if _is_ready(cd, user, stats, session, now):
+                out.append((cd["short"], cd["command"]))
+        except Exception:
+            logger.debug("ready_now check failed for %s", cd.get("field"))
+    return out
+
+
+def _streak_at_risk(stats):
+    """The login streak a user loses at UTC midnight unless they open the bot.
+
+    Returns the streak length when it is 2+ days and today's login has not
+    happened yet (last login was yesterday), else 0.
+    """
+    try:
+        from services.login_streak_service import _yesterday
+        streak = int(getattr(stats, "login_streak", 0) or 0)
+        if streak >= 2 and getattr(stats, "last_login_date", None) == _yesterday():
+            return streak
+    except Exception:
+        pass
+    return 0
+
+
+def _combined_message(cds, streak=0):
+    """One DM for everything that became ready in this tick."""
+    if len(cds) == 1:
+        text = cds[0]["message"]
+    else:
+        lines = ["🎁 <b>Rewards ready for you!</b>", ""]
+        for cd in cds:
+            lines.append(f"• {cd['short']} — {cd['command']}")
+        text = "\n".join(lines)
+    if streak:
+        hours_left = 24 - datetime.utcnow().hour
+        text += (f"\n\n🔥 Your <b>{streak}-day login streak</b> resets in "
+                 f"~{hours_left}h. Open the Mini App to keep it.")
+    return text
+
+
+def _mark_dm_blocked(user_ids):
+    """Remember users Telegram refuses to deliver to (worker thread)."""
+    if not user_ids:
+        return
+    from database import get_session
+    from models import User
+    session = get_session()
+    try:
+        (session.query(User).filter(User.id.in_(list(user_ids)))
+         .update({User.dm_blocked: True}, synchronize_session=False))
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("dm_blocked update failed")
+    finally:
+        session.close()
+
+
 async def _send_dm(application, telegram_id, text, reply_markup=None):
-    """Send a DM; swallow errors (user may have blocked the bot)."""
+    """Send a DM. Returns True, False, or "blocked" when the user blocked the bot."""
     try:
         await application.bot.send_message(
             chat_id=telegram_id, text=text, parse_mode="HTML",
@@ -116,7 +214,9 @@ async def _send_dm(application, telegram_id, text, reply_markup=None):
     except Exception as e:
         # Common: bot blocked, chat not found — don't spam logs
         msg = str(e).lower()
-        if "blocked" not in msg and "not found" not in msg and "deactivated" not in msg:
+        if "blocked" in msg or "deactivated" in msg:
+            return "blocked"
+        if "not found" not in msg:
             logger.debug(f"Cooldown notify send failed for {telegram_id}: {e}")
         return False
 
@@ -146,6 +246,7 @@ def _scan_slice(after_id, quiet):
                 .join(UserStats, UserStats.user_id == User.id)
                 .filter(User.is_banned == False)
                 .filter(User.notifications_enabled.isnot(False))
+                .filter(User.dm_blocked.isnot(True))
                 .filter(User.id > after_id)
                 .order_by(User.id)
                 .limit(SCAN_LIMIT)
@@ -164,24 +265,7 @@ def _scan_slice(after_id, quiet):
                 last = getattr(stats, cd["field"], None)
                 flag_set = getattr(stats, cd["flag"], False)
                 quota_kind = cd.get("quota_kind")
-
-                ready = False
-                if quota_kind:
-                    try:
-                        quota = get_quota_status(stats, quota_kind, session=session, user=user)
-                        ready = not quota["all_used"]
-                    except Exception:
-                        ready = False
-                elif last is not None:
-                    elapsed = (now - last).total_seconds()
-                    cd_seconds = cd["cooldown"]
-                    if cd.get("tiered"):
-                        try:
-                            from services.subscription_service import cooldown_seconds as _tier_cd
-                            cd_seconds = _tier_cd(user, cd_seconds)
-                        except Exception:
-                            pass
-                    ready = elapsed >= cd_seconds
+                ready = _is_ready(cd, user, stats, session, now)
 
                 if last is None and not quota_kind:
                     # Never used this legacy feature — keep flag clear.
@@ -197,6 +281,7 @@ def _scan_slice(after_id, quiet):
                             "telegram_id": user.telegram_id,
                             "user_id": user.id,
                             "cd": cd,
+                            "streak": _streak_at_risk(stats),
                         })
                 elif not ready and flag_set:
                     # User acted (cooldown/quota reset) → clear flag so next ready notifies
@@ -263,27 +348,46 @@ async def run_cooldown_notifications(application):
     if not pending:
         return
 
-    marks = []
-    interval = 1.0 / max(SENDS_PER_SECOND, 1)
+    # Group by user: one DM listing everything that became ready, rather than
+    # up to four separate pings in the same minute.
+    by_user = {}
     for item in pending:
-        cd = item["cd"]
+        entry = by_user.setdefault(item["user_id"], {
+            "telegram_id": item["telegram_id"], "cds": [],
+            "streak": item.get("streak", 0)})
+        entry["cds"].append(item["cd"])
+
+    marks = []
+    blocked = []
+    interval = 1.0 / max(SENDS_PER_SECOND, 1)
+    for user_id, entry in by_user.items():
+        cds = entry["cds"]
         kb_rows = []
-        if cd.get("miniapp_tab"):
-            btn = miniapp_button(cd["button_label"], cd["miniapp_tab"],
-                                 is_private=True)
-            if btn is not None:
-                kb_rows.append([btn])
+        buttons = []
+        for cd in cds:
+            if cd.get("miniapp_tab"):
+                btn = miniapp_button(cd["button_label"], cd["miniapp_tab"],
+                                     is_private=True)
+                if btn is not None:
+                    buttons.append(btn)
+        for i in range(0, len(buttons), 2):
+            kb_rows.append(buttons[i:i + 2])
         # Always offer a one-tap opt-out so users can silence these reminders
         # straight from the message.
         kb_rows.append([InlineKeyboardButton(
             "🔕 Turn off notifications", callback_data="notif_toggle:off")])
 
-        ok = await _send_dm(application, item["telegram_id"], cd["message"],
+        ok = await _send_dm(application, entry["telegram_id"],
+                            _combined_message(cds, entry["streak"]),
                             InlineKeyboardMarkup(kb_rows))
-        if ok:
-            marks.append((item["user_id"], cd["flag"]))
+        if ok is True:
+            marks.extend((user_id, cd["flag"]) for cd in cds)
+        elif ok == "blocked":
+            blocked.append(user_id)
         await asyncio.sleep(interval)
 
+    if blocked:
+        await asyncio.to_thread(_mark_dm_blocked, blocked)
     await asyncio.to_thread(_mark_notified, marks)
     if marks:
         logger.info(f"Cooldown notifications: sent {len(marks)}")

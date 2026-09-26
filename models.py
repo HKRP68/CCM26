@@ -77,6 +77,28 @@ class User(Base):
     # cooldown-ready DM nudges, scheduled FOMO push messages, and echoing
     # this user's Mini App actions into groups. Toggled via /notifications.
     notifications_enabled = Column(Boolean, default=True, nullable=False)
+    # Set when Telegram answers 403 (the user blocked the bot). Every
+    # outbound DM job skips these until the user talks to the bot again.
+    dm_blocked = Column(Boolean, default=False, nullable=False)
+    # Last time the user sent the bot anything at all (command, button, text).
+    # Written by a throttled middleware in bot.py (at most once an hour per
+    # user) — the comeback job reads it to decide who has gone quiet.
+    last_seen_at = Column(DateTime, nullable=True)
+    # ── Guided first session (services/onboarding_service.py) ──
+    # onboarding_started_at is stamped by /debut. NULL means the account
+    # predates the journey, so it is never shown the checklist.
+    # onboarding_steps is the comma-separated list of step keys already
+    # completed (and paid); onboarding_done_at is stamped when all are done.
+    onboarding_started_at = Column(DateTime, nullable=True)
+    onboarding_steps = Column(String(300), nullable=True)
+    onboarding_done_at = Column(DateTime, nullable=True)
+    # ── Comeback nudges (services/comeback_service.py) ──
+    # comeback_tier is the highest inactivity tier already DMed during the
+    # current absence (0 = none); it resets once the user is seen again.
+    # comeback_claim_tier is the tier whose reward is waiting to be claimed.
+    comeback_tier = Column(Integer, default=0, nullable=False)
+    comeback_sent_at = Column(DateTime, nullable=True)
+    comeback_claim_tier = Column(Integer, nullable=True)
     # ── Paid subscription (manually granted by an admin from the website) ──
     # 'none' = free user. 'bronze'/'silver'/'platinum'/'diamond' = the paid
     # tiers declared in config.SUBSCRIPTION_TIERS (cheapest → richest). Access is
@@ -1315,6 +1337,19 @@ class GameConfig(Base):
     # rookie_message replaces the default upsell shown to locked-out users.
     rookie_mode = Column(Boolean, default=False, nullable=False)
     rookie_message = Column(Text, nullable=True)
+    # ── Forced Official GC join (services/gc_gate.py) ──
+    # When force_gc_join is True (and official_group_id is set), every command
+    # and button is locked until the user is a member of the Official GC,
+    # apart from the doorway commands in services/gc_gate.py.
+    # gc_join_message replaces the default join prompt.
+    force_gc_join = Column(Boolean, default=False, nullable=False)
+    gc_join_message = Column(Text, nullable=True)
+    # ── Retention (services/onboarding_service.py, comeback_service.py) ──
+    onboarding_enabled = Column(Boolean, default=True, nullable=False)
+    comeback_enabled = Column(Boolean, default=True, nullable=False)
+    # JSON {"1": {"coins": 500, "gems": 0}, "3": {...}, ...} keyed by days
+    # inactive. NULL = the defaults in services/comeback_service.py.
+    comeback_rewards_json = Column(Text, nullable=True)
     # Comma-separated telegram IDs allowed to use the Challenge League Tournament
     # command. Empty/None = open to everyone (restriction off).
     tournament_allowed_ids = Column(String(500), nullable=True)
@@ -4558,4 +4593,24 @@ class PollVote(Base):
 
     __table_args__ = (
         UniqueConstraint("poll_id", "user_id", name="uq_poll_vote"),
+    )
+
+
+class StartVisit(Base):
+    """One row per Telegram user per IST day that they ran /start.
+
+    ActivityLog needs a ``users`` row, so a visitor who opens the bot and
+    leaves before /debut never shows up there. This table is the top of the
+    onboarding funnel on the website (services/retention_stats.py).
+    """
+    __tablename__ = "start_visits"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, nullable=False)
+    day = Column(String(10), nullable=False)  # IST 'YYYY-MM-DD'
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("telegram_id", "day", name="uq_start_visit_day"),
+        Index("ix_start_visit_day", "day"),
     )

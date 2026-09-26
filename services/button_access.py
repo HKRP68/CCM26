@@ -248,6 +248,10 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # Official GC membership + one-entry itself), so it must never be owner-locked
     # to whoever the sender happened to be.
     "gwjoin_",
+    # The Official GC gate's "✅ I've joined" button. It re-checks whoever
+    # presses it (query.from_user), so it is safe for anyone, and a group
+    # welcome carrying it must work for every newcomer, not just the first.
+    "gcjoin_check",
     # The team-logo review keyboard is sent to the bot admins while handling the
     # *uploader's* update, so the owner lock would pin it to the uploader and
     # answer every admin with "this button is not for you". handlers/team_logo.py
