@@ -32,6 +32,8 @@ from engine import approach_modifiers
 from engine import momentum as momentum_engine
 from engine import pitch_state
 from services import impact_player
+from services import highlights as highlights_log
+from services import weather_drift
 from engine.approach_modifiers import batting_label, bowling_label
 from services.match_engine import note_bowler_ball
 from services.sim_match import (
@@ -709,7 +711,10 @@ def build_cipl_state(match_id, overs, bat_user_id, bowl_user_id,
         "pitch_type": pitch_type or "Hard", "stadium": stadium,
         # Dynamic match conditions from the Pitch Report (None for non-league
         # callers) — drives the environmental weight hook in the ball loop.
-        "conditions": conditions,
+        # ``weather_drift.plan`` adds the in-match forecast: weather and dew
+        # that change as the match goes on (never rain).
+        "conditions": (weather_drift.plan(conditions, overs)
+                       if conditions else conditions),
         "wicket_limit": WICKET_LIMIT,
         # Dramatic-finish steering (armed at the innings break for 20-over chases).
         "scenario": None,
@@ -1818,6 +1823,13 @@ def simulate_over(state):
     # empty for Challenge League players, who carry no traits.
     over_traits = {"bat": set(), "bowl": set()}
 
+    # Weather and dew that have moved since the last over (see
+    # services.weather_drift). Applied before the first ball so the whole over
+    # is bowled in the new conditions; announced in the chat's over summary.
+    weather_events = weather_drift.apply_due(state)
+    # Highlights reel: what the scoreboard looked like before this over.
+    highlights_before = highlights_log.snapshot(state)
+
     # Commentary: announce the bowler taking the new over (into attack / returns).
     _emit_bowler_card(state, bowler)
 
@@ -2373,9 +2385,17 @@ def simulate_over(state):
     if over_completed:
         _emit_end_of_over_card(state, bowler, state["current_over"], over_runs)
 
+    highlights_log.record_over(
+        state, highlights_before, over_no=state["current_over"],
+        bowler_name=bowler.get("name"), over_runs=over_runs,
+        over_wkts=over_wkts, timeline=over_timeline,
+        legal_balls=balls_this_over, bpu=bpu)
+
     summary = {
         "over_no": state["current_over"],
         "bowler": bowler,
+        # In-match weather / dew changes that took effect for this over.
+        "weather_events": weather_events,
         "batting_approach": bat_app,
         "bowling_approach": bowl_app,
         "over_runs": over_runs,

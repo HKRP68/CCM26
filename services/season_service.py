@@ -128,6 +128,14 @@ def _finalize_season(session, season):
     except Exception:
         logger.exception("Club season finalize failed (non-fatal)")
 
+    # Archive + pay the ranked ladder by division.
+    try:
+        from services.ranked_service import finalize_season as _finalize_ranked
+        with session.begin_nested():
+            _finalize_ranked(session, season.season_key)
+    except Exception:
+        logger.exception("Ranked season finalize failed (non-fatal)")
+
 
 def _sync_user_season(session, user, live_key):
     """Reset a user's season counters if they belong to an old season."""

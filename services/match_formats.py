@@ -67,3 +67,37 @@ def phase_for(over, fmt):
     if over >= fmt["death_start"]:
         return "Death"
     return "Middle"
+
+
+# ── Custom overs for /letsplay and the Challenge League commands ──────
+CUSTOM_OVERS_MIN = 1
+CUSTOM_OVERS_MAX = 20
+# A bare number below this is an over count; anything larger is left alone,
+# because a bare number is also how a command names a Telegram user id.
+_OVERS_TOKEN_CEILING = 1000
+
+
+def extract_overs_arg(args, lo=CUSTOM_OVERS_MIN, hi=CUSTOM_OVERS_MAX):
+    """Pull an over count out of a command's arguments.
+
+    Accepts ``5``, ``5ov``, ``5overs`` or ``T5`` anywhere in ``args``. Returns
+    ``(overs or None, remaining_args, error or None)``: the remaining args are
+    what the command's target lookup should see (an ``@username`` or a user
+    id), and ``error`` is a user-facing message for an over count out of range.
+    Pure — no Telegram.
+    """
+    import re
+    overs, rest, error = None, [], None
+    for tok in list(args or []):
+        raw = str(tok).strip()
+        m = re.fullmatch(r"(?i)(?:t(\d{1,3})|(\d{1,3})\s*(?:ov|ovs|over|overs)?)", raw)
+        if overs is None and error is None and m:
+            n = int(m.group(1) or m.group(2))
+            if n < _OVERS_TOKEN_CEILING:
+                if lo <= n <= hi:
+                    overs = n
+                else:
+                    error = f"Overs must be between {lo} and {hi}."
+                continue
+        rest.append(tok)
+    return overs, rest, error

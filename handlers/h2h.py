@@ -134,6 +134,11 @@ async def h2h_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             lines.append("\n🤝 The series is level.")
 
+        from services.rivalry_service import RIVALRY_THRESHOLD
+        if len(matches) >= RIVALRY_THRESHOLD:
+            lines.append("⚔️ <i>This is a rivalry — rounds and bonuses on "
+                         "<code>/rivalry</code>.</i>")
+
         lines.append("")
         lines.append("<b>Recent results</b> (your side):")
         for m in matches[:5]:

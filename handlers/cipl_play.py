@@ -1739,6 +1739,12 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         # XI selection; default to the over-based format if it is missing.
         overs = CIPL_OVERS
         ball_format = draft.get("ball_format", "T20")
+        # A friendly can be shorter (/cipl 6). Tournament, CL Tour and The
+        # Hundred matches are always the full 20 units.
+        if (draft.get("overs") and ball_format == "T20"
+                and not draft.get("is_tournament") and not draft.get("tournament_id")
+                and not draft.get("cl_tour_id")):
+            overs = max(1, min(CIPL_OVERS, int(draft["overs"])))
         settings = random_match_settings()
         # Honour the host's chosen pitch (selected during setup); fall back to the
         # randomised surface only when no pitch was picked.
@@ -1902,6 +1908,17 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
                            pitch_type, bat_team_code="", bowl_team_code="",
                            bat_team_emoji="🏏", bowl_team_emoji="🏏", draft=None,
                            ball_format="T20", bat_bench=None, bowl_bench=None):
+    conditions = (draft or {}).get("conditions")
+    if not conditions:
+        # /letsplay (and any other flow that skipped the Pitch Report) still
+        # gets real conditions, so its weather and dew can change mid-match
+        # like a league match's. Same generator the Pitch Report uses.
+        try:
+            from services.pitch_report import generate_conditions
+            conditions = generate_conditions(pitch_type)
+        except Exception:
+            logger.exception("cipl: could not generate match conditions")
+            conditions = None
     state = cipl_match.build_cipl_state(
         match_id=match.id, overs=match.overs,
         bat_user_id=bat_user.id, bowl_user_id=bowl_user.id,
@@ -1912,7 +1929,7 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         is_private=chat_id > 0, stadium=match.stadium,
         bat_team_code=bat_team_code, bowl_team_code=bowl_team_code,
         bat_team_emoji=bat_team_emoji, bowl_team_emoji=bowl_team_emoji,
-        conditions=(draft or {}).get("conditions"), ball_format=ball_format,
+        conditions=conditions, ball_format=ball_format,
         bat_bench=bat_bench, bowl_bench=bowl_bench)
     state["user_names"] = {
         str(bat_user.telegram_id): bat_user.username or bat_user.first_name or "Player",
@@ -2038,6 +2055,9 @@ def _match_start_announcement(state):
             bits.append(f"🌡️ {cond['temperature']}°C")
         if cond.get("dew"):
             bits.append(f"❄️ {html.escape(str(cond['dew']))} dew")
+        elif cond.get("dew_forecast"):
+            # Dew builds during a night match (services.weather_drift).
+            bits.append(f"❄️ {html.escape(str(cond['dew_forecast']))} dew later")
         cond_line = f"{'  ·  '.join(bits)}\n"
     # Practice match: name the captaincy style the AI drew for this match, so
     # it's clear up front that the bot doesn't play every match the same way.
@@ -3309,6 +3329,9 @@ def _render_over_summary(state, summary):
             lines.append(f"↪️ <i>Into the next {_unit_word(state)}: "
                          f"{html.escape(carry['note'])}.</i>")
     lines.extend(_predictability_lines(state, summary))
+    # Weather / dew that moved before this over (services.weather_drift).
+    for wtxt in summary.get("weather_events") or []:
+        lines.append(f"<i>{html.escape(str(wtxt))}</i>")
     # What the bot has *noticed* is still said out loud — that it has caught the
     # player repeating themselves is a warning, not a plan, so it keeps the mind
     # game visible without handing over the counter.
@@ -3482,6 +3505,31 @@ def _crr_line(state):
     return line
 
 
+def _conditions_text(state):
+    """'🌱 Hard pitch · ☁️ Overcast · 🌡️ 22°C · 💧 Light dew' — plain text.
+
+    The LIVE conditions: weather and dew move during the match
+    (services.weather_drift), so both captains see what they are picking into.
+    Empty only when the match has neither a pitch nor conditions.
+    """
+    bits = []
+    pitch = state.get("pitch_type")
+    if pitch:
+        bits.append(f"🌱 {pitch} pitch")
+    cond = state.get("conditions") or {}
+    if cond.get("weather"):
+        bits.append(f"🌤️ {cond['weather']}")
+    if cond.get("temperature") is not None:
+        bits.append(f"🌡️ {cond['temperature']}°C")
+    if cond.get("wind_strength") in ("Moderate", "Strong"):
+        bits.append(f"💨 {cond['wind_strength']} {str(cond.get('wind_direction') or 'wind').lower()}")
+    if cond.get("dew"):
+        bits.append(f"💧 {cond['dew']} dew")
+    elif cond.get("dew_forecast"):
+        bits.append(f"💧 {cond['dew_forecast']} dew expected")
+    return " · ".join(bits)
+
+
 def _approach_card(state):
     """Full broadcast-style scorecard card used on the approach-select prompts."""
     inn = state.get("innings", 1)
@@ -3507,6 +3555,11 @@ def _approach_card(state):
         f"      {_compact_bat_line(non_striker, bs)}",
         rule,
         _crr_line(state),
+    ]
+    conditions = _conditions_text(state)
+    if conditions:
+        lines.append(html.escape(conditions))
+    lines += [
         rule,
         f"{bowl_emoji} {bowl_code} | Bowl | {_over_emoji_strip(state)}",
     ]
@@ -3588,6 +3641,11 @@ def _build_approach_card_blocks(state, prompt):
              "  ·  CRR ", R.bold(f"{crr:.2f}")]))
     else:
         blocks.append(R.paragraph(["⚡ ", R.bold("CRR"), f"  {crr:.2f}"]))
+
+    # ── Pitch + live weather / dew ──
+    conditions = _conditions_text(state)
+    if conditions:
+        blocks.append(R.paragraph([R.italic(conditions)]))
 
     # ── At the crease ──
     bs = state["bat_stats"]
@@ -3959,6 +4017,14 @@ async def _complete_match(context, mid, state):
             except Exception:
                 logger.exception("CL tour result recording failed for %s", mid)
 
+            # Ranked ladder, rivalry and spectator predictions — one idempotent
+            # call that isolates its own failures (see services.post_match).
+            if match:
+                from services.post_match import process_completed_match
+                process_completed_match(
+                    session, match, count_result=not state.get("stats_disabled"),
+                    state=state)
+
             # ── Match-end quest tracking ──
             # /letsplay and Challenge League finish here, and until now neither
             # fired a single quest event — so a player could win ten /lp matches
@@ -4135,6 +4201,15 @@ async def _complete_match(context, mid, state):
     except Exception:
         logger.exception("cipl match summary image failed for match %s", mid)
 
+    # Ranked / rivalry / predictions card, then the highlights reel — both
+    # best-effort and read from what the finalize above already stored.
+    try:
+        from services.post_match import announce as _announce_post_match
+        await _announce_post_match(context.bot, state["chat_id"], mid)
+    except Exception:
+        logger.exception("cipl post-match card failed for match %s", mid)
+    await _send_highlights(context, state, result)
+
     # The post-match analysis file. Everything above answers "who won"; this
     # answers "why" — phase splits, the worm, both momentum tracks, the live win
     # probability, and the over-by-over record of the approach duel, which
@@ -4159,6 +4234,25 @@ async def _complete_match(context, mid, state):
     await _ss(context, mid, state, next_action=A_COMPLETED, force=True)
     cleanup_state(context, mid)
     release_match_lock(mid)
+
+
+async def _send_highlights(context, state, result):
+    """Post the match highlights reel (services.highlights). Best-effort."""
+    try:
+        from services import highlights
+        highlights.mark_winning_hit(state, result or {})
+        teams = None
+        if state.get("inn1_team") or state.get("bowl_team_name"):
+            teams = (f"{state.get('bowl_team_name') or ''} vs "
+                     f"{state.get('bat_team_name') or ''}")
+        text = highlights.render_reel(state, title_teams=teams)
+        if text:
+            await context.bot.send_message(state["chat_id"], text,
+                                           parse_mode="HTML",
+                                           disable_web_page_preview=True)
+    except Exception:
+        logger.exception("cipl highlights reel failed for match %s",
+                         state.get("match_id"))
 
 
 # Strong references to the in-flight storage-channel uploads (see below).

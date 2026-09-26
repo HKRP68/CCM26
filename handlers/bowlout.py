@@ -425,6 +425,9 @@ async def _finalize_bowlout(context, bowlout_id, winner_user_id, flavor=None):
                     m.status = "completed"
                     m.completed_at = datetime.utcnow()
                     mark_end(m, END_COMPLETED)
+                    # Ranked ladder, rivalry and predictions (services.post_match).
+                    from services.post_match import process_completed_match
+                    process_completed_match(session, m)
             except Exception:
                 logger.exception("Failed to update parent Match winner")
 

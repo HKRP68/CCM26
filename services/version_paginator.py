@@ -17,7 +17,7 @@ from typing import List, Optional, Tuple
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from models import Player, User, UserRoster
-from config import get_buy_value
+from config import get_buy_value, MAX_ROSTER
 from services.player_service import not_career
 
 
@@ -49,6 +49,18 @@ def _format_version_label(player: Player) -> str:
     return v
 
 
+def roster_is_full(user) -> bool:
+    """True when ``user`` has no room left for another card."""
+    return (getattr(user, "roster_count", 0) or 0) >= MAX_ROSTER
+
+
+def roster_full_note(user) -> str:
+    """The caption line a buy card carries when there is no room to buy."""
+    return (f"\n🔴 <b>Roster full ({user.roster_count or 0}/{MAX_ROSTER})</b> — you can "
+            f"look, but release a player first to buy.\n"
+            f"<i>/releasepl &lt;name or position&gt; · /relm &lt;from&gt; &lt;to&gt;</i>")
+
+
 def build_pagination_keyboard(
     *,
     session,
@@ -63,6 +75,7 @@ def build_pagination_keyboard(
     Layout (all rows optional based on count):
       Row 1: ◀ Prev   1/N   Next ▶          (only if N > 1)
       Row 2: 💰 Buy …                       (if not owned + flow=='buy')
+             OR  🔒 Roster full …           (no room — the card still shows)
              OR  ✅ You own this Version    (if owned)
              OR  🔄 Already own (other ver) (if owns sibling)
       Row 3: 1   2   3 ...                  (only if N >= 3 — direct page jumps)
@@ -117,6 +130,16 @@ def build_pagination_keyboard(
                 InlineKeyboardButton(
                     "🚫 Not available to Buy",
                     callback_data=f"plpgnoop_{owner_tg}",
+                ),
+            ])
+        elif roster_is_full(user):
+            # No room: the card is still worth looking at, but the Buy button
+            # would only fail. This one re-checks when tapped — release a
+            # player and tap it, and it turns back into Buy.
+            rows.append([
+                InlineKeyboardButton(
+                    f"🔒 Roster full ({user.roster_count or 0}/{MAX_ROSTER}) — tap after releasing",
+                    callback_data=f"buyfull_{current.id}_{flow}_{owner_tg}",
                 ),
             ])
         else:

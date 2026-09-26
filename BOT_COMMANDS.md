@@ -178,6 +178,10 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/tournamentstats` | — | Tournament stat leaderboards (top 25, ranks 11+ behind a tap) |
 | `/cmuleaderboard` | `/leaderboard` `/lb` `/top` | The global leaderboard |
 | `/h2h` | `/headtohead` | Head-to-head record vs another player |
+| `/rank` | `/myrank` `/elo` | Your ranked rating, division and ladder position 📈 |
+| `/ranked` | `/ladder` `/rladder` | This season's ranked ladder |
+| `/rivalry` | `/rivalries` `/rival` | Your rivalries, or the series with one player ⚔️ |
+| `/halloffame` | `/hof` `/records` | All-time records — top scores, best figures, streaks 🏛️ |
 | `/lastmatch` | `/lm` | Your last completed match |
 | `/lastscorecard` | `/lsc` `/scorecard` | Re-send this chat's last scorecard images |
 | `/recentmatches` 💬 | `/recent` `/matches` | Your recent matches |
@@ -198,6 +202,7 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/wpmbot` | `/wpmb` | Play a bot opponent in the Mini App |
 | `/lpbot` | `/lpb` `/letsplaybot` | Unranked Lets Play practice vs the bot |
 | `/ciplbot` | `/ciplb` `/challengeiplbot` | Unranked league practice vs the bot |
+| `/predict` 👥 | `/pred` | Back a side of the live match in this group with coins 🔮 |
 | `/botvsbot` | `/bvb` | Configure a bot-versus-bot match |
 | `/botmatch` | `/spectate` | Spectate a bot-versus-bot match |
 | `/pbo` | `/bowlout` | Start a standalone player bowl-out |
@@ -211,10 +216,54 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/cmtours` | `/createtour` | Create a tournament |
 | `/mytours` | `/tours` | View your tournaments |
 
+### Ranked ladder, rivalries, predictions & highlights
+
+* **Ranked ladder** — every completed match between two players (Lets Play,
+  CIPL / Challenge League, `/playmatch`, `/wpm`, Super Over and bowl-out
+  finishes) moves both captains' skill rating. Beating a stronger opponent pays
+  more than beating a weaker one; a tie pulls the two ratings together. The
+  first 10 matches are placement matches with bigger swings. Divisions:
+  🥉 Bronze · 🥈 Silver 1050 · 🥇 Gold 1150 · 🔷 Platinum 1250 · 💎 Diamond 1350
+  · 👑 Legend 1450. The ladder runs on the monthly season: at month end everyone
+  with 5+ ranked matches is paid by division (Silver 1,000 coins → Legend
+  20,000 coins + 10 💎), and ratings reset halfway back to 1000. The same pair
+  can only move each other's rating 3 times a UTC day. Matches vs the bot and
+  "won't count" mismatches are never rated.
+* **Rivalries** — after 5 meetings, two players become a named rivalry. The
+  result card then shows the series score after every match, each rivalry win
+  pays +250 coins, and the series is played in rounds of 5: the side that wins
+  more of a round gets +3,000 coins and +2 💎. Old matches count, so a pair with
+  history is a rivalry straight away. Bonuses and rounds only count matches of
+  5+ overs, up to 3 per pair per UTC day; the series score counts every match.
+* **Spectator predictions** — `/predict` in the group while a player-vs-player
+  match is live. Anyone except the two players can back a side with 100, 500,
+  1K or 5K coins, once per match, until the innings break. Winners share the
+  whole pool by stake, plus a 10% bonus on their own stake when someone took
+  the other side. If nobody backed the winner, or the match ends tied or
+  unfinished, everyone is refunded.
+* **Match highlights** — after every Lets Play / Challenge League match, the
+  chat gets a short reel of the 3–5 biggest moments (wickets of set batters,
+  fifties and hundreds, bowling hauls, sixes, big overs, maidens and swings in
+  the chase), plus the *moment of the match*.
+* **Weather and dew during the match** — Lets Play and Challenge League matches
+  now have conditions that change as the match goes on: cloud rolls in or
+  clears, the wind can pick up, and on a night match the dew *builds* — it
+  arrives late in the first innings or during the chase, up to the level the
+  Pitch Report forecast. Each change is announced in the over summary, and the
+  approach card both captains pick from always shows the pitch and the live
+  weather/dew. There is **no rain**: nothing stops play, shortens an innings or
+  sets a DLS target.
+* **Custom overs** — `/letsplay 5 @user` or `/cipl 6` (as a reply) plays a
+  shorter friendly, 1–20 overs. Tournament fixtures, CL Tour matches and The
+  Hundred leagues always play their full length. Matches under 5 overs still
+  pay rewards and count for rivalries, but are not ranked.
+
 ## 9. Challenge Leagues
 
 League commands are **dynamic**: every active league answers to both
 `/c<league>` and `/challenge<league>`. Reply to the person you want to play.
+Add a number for a shorter friendly — `/cipl 6` plays 6 overs (1–20). Tournament,
+CL Tour and The Hundred matches always play their full length.
 
 | Command | What it does |
 |---------|--------------|
@@ -375,7 +424,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/playerinfo <player name>` | `/playerinfo Virat Kohli` |
 | `/searchpl <player name>` | `/searchpl kohli` |
 | `/searchovr <rating>` | `/searchovr 88` |
-| `/buypl <player name>` | `/buypl Jasprit Bumrah` |
+| `/buypl <player name>` — opens the card even with a full roster; the Buy button shows 🔒 until you release a player, then turns back into Buy when tapped | `/buypl Jasprit Bumrah` |
 | `/releasepl <name>` · `/releasepl <position>` | `/releasepl 14` |
 | `/releasemultiple <from> <to>` | `/releasemultiple 20 30` |
 | `/trade @username` | `/trade @rahul` |
@@ -420,6 +469,10 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/statscl <player name>` | `/statscl Virat Kohli` |
 | `/statstour <player name>` | `/statstour Virat Kohli` |
 | `/h2h @username` | `/h2h @rahul` |
+| `/rank [@username]` | `/rank` |
+| `/ranked` | `/ranked` |
+| `/rivalry [@username]` | `/rivalry @rahul` |
+| `/halloffame [bat\|bowl\|team\|career]` | `/hof bowl` |
 | `/pitchstats [pitch\|approaches] [lp\|cl]` | `/pitchstats green lp` |
 | `/lastscorecard` | `/lastscorecard` |
 
@@ -428,6 +481,8 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | Usage | Example |
 |-------|---------|
 | `/letsplay @username` *(or reply)* | `/letsplay @rahul` |
+| `/letsplay <overs> @username` — a shorter friendly, 1–20 overs (tournament fixtures are always 20) | `/lp 5 @rahul` |
+| `/predict [match id]` *(in the group, while a match is live)* | `/predict` |
 | `/playmatch @username` | `/playmatch @rahul` |
 | `/cm @username` | `/cm @rahul` |
 | `/cdraft` | `/cdraft` |
@@ -439,6 +494,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/ciplbot [league]` | `/ciplbot ipl` |
 | `/pbo @username` | `/pbo @rahul` |
 | `/cipl` *(reply to a user)* | `/cipl` |
+| `/cipl <overs>` *(reply to a user)* — a shorter friendly, 1–20 overs | `/cipl 6` |
 | `/matchinfo` | `/matchinfo` |
 | `/resume` · `/rcl` | `/rcl` |
 | `/endmatch` | `/endmatch` |
@@ -681,7 +737,7 @@ audience:
 `/unscramble` · `/ju` · `/eu` · `/su` · `/cu` · `/ewm` · `/dwm` ·
 `/lptour` · `/lpt` · `/lptable` · `/lptfixtures` · `/lptteams` · `/lptstats` ·
 `/pick` · `/dboard` · `/dsquad` · `/dqueue` · `/dsearch` · `/cdraft` ·
-`/bid` · `/aboard` · `/apurse` · `/artm`
+`/bid` · `/aboard` · `/apurse` · `/artm` · `/predict`
 
 ### 🔑 Private-chat entry points
 
@@ -697,7 +753,8 @@ These work from the keyboard but are deliberately unpublished, because both
 player menus sit at Telegram's 100-command ceiling: `/pitchstats`, `/dtrade`,
 `/dtrades`, `/bid`, `/aboard`, `/apurse`, and the auction views `/ainfo`,
 `/asets`, `/anextset`, `/anextplayer`, `/asquad`, `/asoldlist`,
-`/aunsoldlist` (all behind `/ainfo`'s buttons).
+`/aunsoldlist` (all behind `/ainfo`'s buttons), and `/rank`, `/ranked`,
+`/rivalry`, `/predict` and `/halloffame` (all in `/help`).
 
 ### Disabled
 
@@ -770,6 +827,7 @@ admin panel, but the commands are not registered.
 | `/dtradelog` | `/dtrades` |
 | `/dtradex` | `/dtradecancel` |
 | `/dunpause` | `/dresume` 🔒 |
+| `/elo`, `/myrank` | `/rank` |
 | `/em` | `/endmatch` |
 | `/ewc` | `/endchase` |
 | `/fb` | `/feedback` |
@@ -781,11 +839,13 @@ admin panel, but the commands are not registered.
 | `/gs` | `/gspin` |
 | `/guide`, `/help` | `/howto` |
 | `/headtohead` | `/h2h` |
+| `/hof`, `/records` | `/halloffame` |
 | `/howtoplay`, `/mhelp` | `/matchhelp` |
 | `/info`, `/pi` | `/playerinfo` |
 | `/ip` | `/impact` |
 | `/iplsim` | `/ipl160` |
 | `/kickmatch`, `/rmatch` | `/removematch` 🔒 |
+| `/ladder`, `/rladder` | `/ranked` |
 | `/lb`, `/top`, `/leaderboard` | `/cmuleaderboard` |
 | `/letsplaybot`, `/lpb` | `/lpbot` |
 | `/lm` | `/lastmatch` |
@@ -816,6 +876,7 @@ admin panel, but the commands are not registered.
 | `/packs`, `/shop` | `/buypack` |
 | `/pm` | `/playmatch` |
 | `/pp` | `/powerplay` |
+| `/pred` | `/predict` |
 | `/ps`, `/pstats` | `/pitchstats` |
 | `/pxi`, `/xi` | `/playingxi` |
 | `/r` | `/resume` |
@@ -823,6 +884,7 @@ admin panel, but the commands are not registered.
 | `/rel`, `/release` | `/releasepl` |
 | `/relm`, `/rm` | `/releasemultiple` |
 | `/resumecl` | `/rcl` |
+| `/rival`, `/rivalries` | `/rivalry` |
 | `/rtm` | `/artm` |
 | `/rtrait` | `/removetrait` |
 | `/s` | `/start` |
@@ -872,6 +934,8 @@ admin panel, but the commands are not registered.
 | Coins → gems | 1000 coins = 1 gem |
 | Challenge League setup timeout | 5 minutes per turn, with a reminder at 4:30 (`CL_SELECT_WINDOW_SECONDS`) |
 | Slash menu size | 100 commands per scope (Telegram's ceiling) |
+| Ranked: same pair | 3 rated matches per UTC day |
+| `/predict` stake | 100 / 500 / 1,000 / 5,000 coins, one prediction per match, closes at the innings break |
 
 Cooldowns and rewards for many commands are configurable by the operator in the
 admin website (`BotCommand` / `CommandReward` rows), so an individual
