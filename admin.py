@@ -16926,7 +16926,7 @@ def admin_tournament_detail(tournament_id):
                         log_admin(db, "tournament_team_add", "tournament", t.id, ct.name)
                         inherited = ""
                         if owner_tg:
-                            inherited = (f" Owner inherited from the draft: "
+                            inherited = (f" Owner inherited from the draft/auction: "
                                          f"{owner_nm or owner_tg}.")
                         if co_ids:
                             inherited += f" Plus {len(co_ids)} co-owner(s)."

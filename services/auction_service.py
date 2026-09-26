@@ -4532,6 +4532,47 @@ def owner_ping(franchise):
     return f'<a href="tg://user?id={tg_id}">{label}</a>'
 
 
+def person_tag(session, tg_id, fallback="Owner"):
+    """A clickable mention of one person — ``@username`` when we know it."""
+    if not tg_id:
+        return _e(fallback or "Owner")
+    from services.draft_scheduler import mention
+    return mention(session, tg_id, fallback)
+
+
+def owner_tag(session, franchise, *, by_tg_id=None):
+    """``<b>Team</b> (👤 @owner)`` — the franchise, with its owner tagged.
+
+    Tagged so the person actually gets the notification in a busy group: the
+    SOLD card, the warnings and "outbid" all name somebody who needs to know.
+    ``by_tg_id`` — the person who placed the bid — is tagged too when it was a
+    co-owner rather than the owner. An unowned franchise is just its name.
+    """
+    if franchise is None:
+        return "<b>?</b>"
+    label = f"<b>{_e(franchise.name)}</b>"
+    owner = int(franchise.owner_tg_id or 0)
+    people = []
+    if owner > 0:
+        people.append(person_tag(session, owner, franchise.owner_name or franchise.name))
+    if by_tg_id and int(by_tg_id) != owner:
+        people.append("bid by " + person_tag(session, int(by_tg_id), "co-owner"))
+    return f"{label} (👤 {' · '.join(people)})" if people else label
+
+
+def winning_bidder(session, lot):
+    """Who typed the winning bid on a sold lot, or None."""
+    if lot is None or not lot.sold_to_id:
+        return None
+    row = (session.query(AuctionBid)
+           .filter(AuctionBid.lot_id == lot.id,
+                   AuctionBid.franchise_id == lot.sold_to_id,
+                   AuctionBid.is_void.is_(False))
+           .order_by(AuctionBid.amount_lakh.desc(), AuctionBid.id.desc())
+           .first())
+    return int(row.by_tg_id) if row is not None and row.by_tg_id else None
+
+
 def rtm_holder(session, lot):
     """The franchise that held this player last season, or None."""
     if lot is None or not lot.previous_franchise_id:
@@ -5010,6 +5051,19 @@ def publish_to_league(session, season, *, league_name=None):
 
     season.league_id = league.id
     season.published_at = datetime.utcnow()
+    session.flush()
+    # The squads belong to the people who bought them. A tournament already
+    # built on this league gets its unclaimed teams' owners and co-owners
+    # filled in now (an admin's own assignment always wins); one built later
+    # inherits them on its own via tournament_service.league_owner_for_team.
+    try:
+        from models import Tournament
+        from services import tournament_service
+        for tour in (session.query(Tournament)
+                     .filter(Tournament.league_id == league.id).all()):
+            tournament_service.sync_owners_from_draft(session, tour.id)
+    except Exception:
+        logger.exception("auction publish: owner sync failed (non-fatal)")
     log_event(session, season, "published",
               f"📤 Squads published to the “{_e(league.name)}” Challenge League.",
               by_admin=True)

@@ -278,6 +278,31 @@ auction having vanished. All three are `admin_live_matches`'s calls, made again.
 `ChallengePlayer` per bought lot. Publishing again re-syncs the same league
 rather than creating a second one, so a correction can simply be republished.
 
+**The squads belong to the people who bought them.** A `ChallengeTeam` has no
+owner column, so the owner used to be lost at publish: a tournament built on
+the league needed every owner re-typed, and with *enforce team owner* the
+franchise that bought the players could not even pick its own team. Now
+`tournament_service.league_owner_for_team` follows the league back to the
+auction (after the Tournament Draft, which it always checked) and returns the
+`AuctionFranchise`'s owner and co-owners by team name. Adding a team to a
+tournament — or the tournament page's owner sync — inherits them, and
+`publish_to_league` fills in the unclaimed teams of any tournament that already
+exists on the league. An admin's own assignment always wins. The "published"
+announcement lists every franchise with its owner tagged.
+
+**Tags.** The room is told *who* as a clickable `tg://user` mention, so the
+person gets the notification even in a fast group (`A.owner_tag`,
+`A.person_tag`):
+
+* the SOLD card — `🏆 Mumbai (👤 @alice · bid by @carol)` when a co-owner placed
+  the winning bid; RETAINED the same;
+* the 1st / 2nd warnings and the countdown — "Selling X to Mumbai (👤 @alice)";
+* the bid line — `⬆️ Outbids Chennai (👤 @bob)`, which is the outbid
+  notification (the bidder themselves is not tagged, to keep pings down);
+* every reply to a command in the group starts by tagging the person answered
+  (`<a href="tg://user?id=…">Name</a>, …`) — refused bids, `/artm`, admin
+  answers. DMs are not tagged.
+
 ---
 
 ## Before it starts

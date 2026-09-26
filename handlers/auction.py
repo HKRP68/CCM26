@@ -73,10 +73,22 @@ RET_CB = "au_ret_"
 # Shared plumbing
 # ════════════════════════════════════════════════════════════════════
 
-async def _reply(update, text, **kwargs):
+async def _reply(update, text, *, tag=True, **kwargs):
+    """Reply to the person's own message — and, in a group, tag them.
+
+    The reply quotes their message, but an auction group moves fast: the tag
+    is what makes sure the person answered actually gets the notification.
+    DMs need no tag (it is their chat).
+    """
     msg = update.effective_message
     if msg is None:
         return None
+    chat = update.effective_chat
+    user = update.effective_user
+    if (tag and user is not None and getattr(user, "id", None)
+            and chat is not None and getattr(chat, "type", "") in GROUP_CHAT_TYPES
+            and kwargs.get("parse_mode", "HTML") == "HTML"):
+        text = f"{_tag_user(user)}, {text}"
     kwargs.setdefault("parse_mode", "HTML")
     kwargs.setdefault("disable_web_page_preview", True)
     return await msg.reply_text(text, **kwargs)
@@ -309,6 +321,17 @@ async def _refuse(update, context, text, lot_id=0):
     if chat is not None and chat.type in GROUP_CHAT_TYPES:
         await _delete_later(context, chat.id, getattr(sent, "message_id", None))
     return sent
+
+
+def _tag_user(user):
+    """A clickable mention of the person being answered.
+
+    The reply already quotes their message, but in a group racing through a
+    lot the tag is what makes sure they actually get the notification.
+    """
+    name = (getattr(user, "first_name", None) or getattr(user, "username", None)
+            or "you")
+    return f'<a href="tg://user?id={int(user.id)}">{html.escape(str(name))}</a>'
 
 
 def _beaten_text(session, season, lot):

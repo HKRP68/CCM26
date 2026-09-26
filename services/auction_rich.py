@@ -399,7 +399,7 @@ def bid_burst_html(session, season, events, *, now=None):
         except Exception:
             beaten, beaten_at = None, None
         if beaten is not None and beaten.name != step[0]:
-            lines.append(f"⬆️ Outbids {_e(beaten.name)} "
+            lines.append(f"⬆️ Outbids {A.owner_tag(session, beaten)} "
                          f"({_money(season, beaten_at)})")
         elif beaten is None:
             lines.append("🎯 Opening bid!")
@@ -440,7 +440,8 @@ def event_html(session, season, event):
                             f"⭐ {lot.rating} OVR · {_e(lot.category)} · "
                             f"{_e(lot.country)}",
                             price_line,
-                            f"🏆 <b>{_e(buyer.name if buyer else '?')}</b>"
+                            "🏆 " + A.owner_tag(session, buyer,
+                                               by_tg_id=A.winning_bidder(session, lot))
                             + (f" · 🔥 {bids} bid{'s' if bids != 1 else ''}"
                                if bids else "")]
             lines = ["🔨 <b>SOLD!</b> ✅",
@@ -461,9 +462,17 @@ def event_html(session, season, event):
             return (f"❌ <b>UNSOLD</b> — {_flag(lot)} {_e(lot.name)} "
                     f"({lot.rating} OVR · base {_money(season, lot.base_price_lakh)})\n"
                     f"No bids received. {where}")
+        if kind == "published":
+            rows = [f"• {A.owner_tag(session, f)} — "
+                    f"{len(A.squad(session, f.id))} players"
+                    for f in A.franchises(session, season.id)]
+            return (event.headline + "\n<blockquote>"
+                    + "\n".join(rows) + "</blockquote>\n"
+                    "<i>Each squad belongs to its owner — tournaments on this "
+                    "league inherit them.</i>")
         if kind == "retained" and lot is not None:
             return (f"🔒 <b>RETAINED</b>\n<blockquote><b>{_e(lot.name)}</b> stays "
-                    f"with <b>{_e(franchise.name if franchise else '?')}</b> for "
+                    f"with {A.owner_tag(session, franchise)} for "
                     f"<b>{_money(season, lot.sold_price_lakh)}</b></blockquote>")
     except Exception:
         logger.debug("auction: rich event render failed", exc_info=True)
@@ -483,13 +492,13 @@ def warning_html(session, season, lot, stage, left):
     team = _franchise(session, lot.current_bidder_id)
     price = _money(season, lot.current_bid_lakh)
     head = (f"{label} — Selling <b>{name}</b> to "
-            f"<b>{_e(team.name if team else '?')}</b> for <b>{price}</b>")
+            f"{A.owner_tag(session, team)} for <b>{price}</b>")
     try:
         holder, _ = A.rtm_available(session, season, lot)
     except Exception:
         holder = None
     if holder is not None:
-        head += (f"\n<i>…then {_e(holder.name)} may use a Right To "
+        head += (f"\n<i>…then {A.owner_ping(holder)} may use a Right To "
                  f"Match</i>")
     nxt = A._bid_hint(A.next_min_bid(season, lot))
     staged = A.staged_clock(season)

@@ -487,17 +487,17 @@ def countdown_header(session, season, lot):
     from models import AuctionFranchise
     team = (session.query(AuctionFranchise)
             .filter(AuctionFranchise.id == lot.current_bidder_id).first())
-    team_name = html.escape(team.name if team else "?")
+    team_name = A.owner_tag(session, team)
     price = A.render_money(lot.current_bid_lakh, season.currency_label)
     holder, _ = A.rtm_available(session, season, lot)
     if holder is not None:
         # The hammer is not the end of this one: the old franchise is asked
         # first, so "selling to" would be a promise the room cannot keep.
         return (f"⏳ Bidding closes on <b>{name}</b>\n"
-                f"<b>{team_name}</b> lead at <b>{price}</b> — then "
+                f"{team_name} lead at <b>{price}</b> — then "
                 f"<b>{html.escape(holder.name)}</b> may use a Right To Match")
     return (f"⏳ Selling <b>{name}</b>\n"
-            f"to <b>{team_name}</b> for <b>{price}</b>")
+            f"to {team_name} for <b>{price}</b>")
 
 
 def maybe_start_countdown(bot, session, season, *, now=None):
@@ -607,7 +607,7 @@ async def run_countdown(bot, season_id, lot_id, deadline, seconds, *,
                         await _edit_count(
                             bot, chat_id, message_id,
                             f"🔄 <b>New bid</b> — "
-                            f"{html.escape(team.name if team else '?')} "
+                            f"{A.owner_tag(session, team)} "
                             f"<b>{A.render_money(lot.current_bid_lakh, season.currency_label)}</b>"
                             f" on {html.escape(lot.name or '?')} · clock back to "
                             f"<b>{back}s</b>")

@@ -203,7 +203,9 @@ class BidLineTests(RoomCase):
         self.bid(self.chennai, BOB)
         asyncio.run(self.S.drain_events(bot, self.session, self.season))
         second_text, second_markup = bot.sent[-1]
-        self.assertIn("Outbids Mumbai", second_text)
+        self.assertIn("Outbids <b>Mumbai</b>", second_text)
+        self.assertIn(f"tg://user?id={ALICE}", second_text,
+                      "the outbid owner is tagged, so they are notified")
         self.assertIsNotNone(second_markup)
         self.assertEqual([first_id], bot.stripped,
                          "only the newest message keeps live buttons")
