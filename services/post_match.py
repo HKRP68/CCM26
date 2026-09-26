@@ -38,6 +38,23 @@ def _team_owner(state):
     return owners
 
 
+def _innings_owner(state, match):
+    """``[user who batted first, user who batted second]`` or None.
+
+    An id per innings, so the Hall of Fame can tell two captains apart even
+    when they field the same team name.
+    """
+    if not isinstance(state, dict):
+        return None
+    players = (match.user1_id, match.user2_id)
+    first = state.get("inn1_bat_team_id")
+    if first is None and int(state.get("innings") or 1) == 2:
+        first = state.get("bowl_team_id")      # the side now bowling batted first
+    if first not in players:
+        return None
+    return [first, match.user2_id if first == match.user1_id else match.user1_id]
+
+
 def _humans(session, match):
     from models import User
     from services.match_rewards import is_ai_user
@@ -75,6 +92,7 @@ def process_completed_match(session, match, *, count_result=True, state=None):
             summary = {"match_id": match.id, "user1_id": match.user1_id,
                        "user2_id": match.user2_id, "winner_id": match.winner_id,
                        "tie": tie, "team_owner": _team_owner(state),
+                       "innings_owner": _innings_owner(state, match),
                        "ranked": None, "rivalry": None, "predictions": None}
 
             if count_result and _humans(session, match):

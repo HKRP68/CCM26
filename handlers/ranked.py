@@ -71,6 +71,9 @@ async def rank_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = None
         if context.args or (update.message and update.message.reply_to_message):
             target, _reason = resolve_command_target(session, update, context, "rank")
+            if target is None and context.args:
+                await update.message.reply_text("❌ I couldn't find that player.")
+                return
         user = target or me
         if user is None:
             await update.message.reply_text("❌ Use /debut to start first.")
@@ -148,7 +151,8 @@ def render_rivalry(row, me, opp):
                      f"{row.round_played}/{rivalry_service.ROUND_LENGTH}")
         lines.append(f"<i>Each rivalry win +{rivalry_service.WIN_BONUS_COINS} coins · "
                      f"each round won +{rivalry_service.ROUND_BONUS_COINS:,} coins "
-                     f"+{rivalry_service.ROUND_BONUS_GEMS} 💎</i>")
+                     f"+{rivalry_service.ROUND_BONUS_GEMS} 💎 — matches of "
+                     f"5+ overs, up to {rivalry_service.BONUS_MATCHES_PER_DAY} a day</i>")
     else:
         left = rivalry_service.RIVALRY_THRESHOLD - row.played
         lines.append(f"<i>{left} more meeting{'s' if left != 1 else ''} to make it a rivalry.</i>")
@@ -169,6 +173,9 @@ async def rivalry_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target = None
         if context.args or (update.message and update.message.reply_to_message):
             target, _reason = resolve_command_target(session, update, context, "rivalry")
+            if target is None and context.args:
+                await update.message.reply_text("❌ I couldn't find that player.")
+                return
         if target is not None:
             if target.id == me.id:
                 await update.message.reply_text("🤔 You can't be your own rival.")

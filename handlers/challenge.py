@@ -2258,8 +2258,8 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
         if custom_overs and (getattr(league_record, "match_format", "T20")
                              or "T20") != "T20":
             await update.message.reply_text(
-                f"❌ {_esc(str(league_name))} plays The Hundred, which has a "
-                "fixed length — custom overs are for T20 leagues.", parse_mode="HTML")
+                f"❌ {_esc(str(league_name))} has a fixed match length — "
+                "custom overs are only for T20 leagues.", parse_mode="HTML")
             return
         await _send_league_team_picker(
             update, context, challenger=challenger, target=target,

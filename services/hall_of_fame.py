@@ -59,21 +59,40 @@ def _int(v, default=0):
         return default
 
 
-def entries_from_scorecard(scorecard, match=None, team_owner=None):
+def _innings_owners(innings, innings_owner, team_owner):
+    """``[(bat user id, bowl user id)]`` for each main innings.
+
+    ``innings_owner`` is ``[user who batted first, user who batted second]`` —
+    an id per innings, so two captains fielding the same team name are still
+    told apart. The name-keyed ``team_owner`` map is only a fallback, and only
+    when the two batting sides have different names.
+    """
+    ids = [u for u in (innings_owner or []) if u]
+    if len(ids) == 2:
+        return [(ids[i % 2], ids[(i + 1) % 2]) for i in range(len(innings))]
+    team_owner = team_owner or {}
+    names = [i.get("bat_team") for i in innings]
+    if len(set(names)) < len(names):
+        return [(None, None)] * len(innings)
+    return [(team_owner.get(i.get("bat_team") or ""),
+             team_owner.get(i.get("bowl_team") or "")) for i in innings]
+
+
+def entries_from_scorecard(scorecard, match=None, team_owner=None,
+                           innings_owner=None):
     """Record-worthy entries from one scorecard dict. Pure — no DB.
 
-    ``team_owner`` maps a team name to the user id that fielded it. Returns a
-    list of dicts shaped like ``HallOfFameEntry`` columns.
+    ``innings_owner`` is ``[user id batting first, user id batting second]``;
+    ``team_owner`` (team name → user id) is the fallback when that is unknown.
+    Returns a list of dicts shaped like ``HallOfFameEntry`` columns.
     """
-    team_owner = team_owner or {}
     out = []
     innings = [i for i in (scorecard or {}).get("innings") or []
                if not i.get("super_over") and _int(i.get("number"), 1) <= 2]
-    for inn in innings:
+    owners = _innings_owners(innings, innings_owner, team_owner)
+    for inn, (bat_owner, bowl_owner) in zip(innings, owners):
         bat_team = inn.get("bat_team") or ""
         bowl_team = inn.get("bowl_team") or ""
-        bat_owner = team_owner.get(bat_team)
-        bowl_owner = team_owner.get(bowl_team)
         for b in inn.get("batting") or []:
             runs, balls = _int(b.get("runs")), _int(b.get("balls"))
             sixes = _int(b.get("sixes"))
@@ -112,25 +131,35 @@ def entries_from_scorecard(scorecard, match=None, team_owner=None):
         margin = _int(match.margin_value)
         if margin >= MIN_WIN_RUNS:
             winner_team = None
-            for team, uid in team_owner.items():
-                if uid == match.winner_id:
-                    winner_team = team
+            for inn, (bat_owner, _bowl) in zip(innings, owners):
+                if bat_owner and bat_owner == match.winner_id:
+                    winner_team = inn.get("bat_team")
             out.append(dict(category="win_runs", value=margin, tiebreak=0,
                             label=f"won by {margin} runs", player_name=None,
                             team_name=winner_team, user_id=match.winner_id))
     return out
 
 
-def _team_owner(session, match, post_row):
-    """``{team name: user id}`` for a match, from the hook payload or the toss."""
-    owners = {}
+def _owners(match, post_row):
+    """``(innings_owner, team_owner)`` for a match.
+
+    From the post-match payload when the hook ran; otherwise (older matches)
+    from the toss columns, which name who batted first where a mode set them.
+    """
+    payload = {}
     if post_row is not None and post_row.payload_json:
         try:
-            owners = {k: v for k, v in (json.loads(post_row.payload_json)
-                                        .get("team_owner") or {}).items() if v}
+            payload = json.loads(post_row.payload_json) or {}
         except Exception:
-            owners = {}
-    return owners
+            payload = {}
+    players = (match.user1_id, match.user2_id)
+    innings_owner = [u for u in (payload.get("innings_owner") or []) if u in players]
+    if len(innings_owner) != 2 and match.batting_first_id in players:
+        other = (match.user2_id if match.batting_first_id == match.user1_id
+                 else match.user1_id)
+        innings_owner = [match.batting_first_id, other]
+    team_owner = {k: v for k, v in (payload.get("team_owner") or {}).items() if v}
+    return (innings_owner if len(innings_owner) == 2 else None), team_owner
 
 
 def _eligible(session, match, post_row):
@@ -158,19 +187,9 @@ def harvest_match(session, match, scorecard_row, post_row=None):
         sc = json.loads(scorecard_row.scorecard_json or "{}")
     except Exception:
         return 0
-    owners = _team_owner(session, match, post_row)
-    # Old matches have no hook payload; the scorecard's first innings batted
-    # first, so the toss columns (where a mode records them) name its owner.
-    innings = [i for i in sc.get("innings") or [] if not i.get("super_over")]
-    if not owners and match.batting_first_id and innings:
-        first = innings[0].get("bat_team")
-        other = (match.user2_id if match.batting_first_id == match.user1_id
-                 else match.user1_id)
-        if first:
-            owners[first] = match.batting_first_id
-        if len(innings) > 1 and innings[1].get("bat_team"):
-            owners[innings[1]["bat_team"]] = other
-    rows = entries_from_scorecard(sc, match=match, team_owner=owners)
+    innings_owner, team_owner = _owners(match, post_row)
+    rows = entries_from_scorecard(sc, match=match, team_owner=team_owner,
+                                  innings_owner=innings_owner)
     when = match.completed_at or scorecard_row.created_at
     for r in rows:
         session.add(HallOfFameEntry(match_id=match.id, achieved_at=when,

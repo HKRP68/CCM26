@@ -8,6 +8,30 @@ def _user(uid=1, name="Asha"):
     return NS(id=uid, first_name=name, team_name=None, username=None)
 
 
+class UnknownTargetTests(unittest.TestCase):
+    def test_named_unknown_player_is_reported_not_swapped_for_the_caller(self):
+        import asyncio
+        from unittest import mock
+        import handlers.ranked as hr
+
+        class _S:
+            def query(self, *_a): return self
+            def filter(self, *_a): return self
+            def first(self): return NS(id=1, first_name="Me")
+            def commit(self): pass
+            def rollback(self): pass
+            def close(self): pass
+
+        for handler in (hr.rank_handler, hr.rivalry_handler):
+            msg = NS(reply_text=mock.AsyncMock(), reply_to_message=None)
+            update = NS(message=msg, effective_user=NS(id=5))
+            with mock.patch.object(hr, "get_session", return_value=_S()), \
+                    mock.patch.object(hr, "resolve_command_target",
+                                      return_value=(None, "not_found")):
+                asyncio.run(handler(update, NS(args=["@ghost"])))
+            self.assertIn("couldn't find", msg.reply_text.call_args.args[0])
+
+
 class RankCardTests(unittest.TestCase):
     def test_unplayed(self):
         from handlers.ranked import render_rank_card

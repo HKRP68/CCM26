@@ -55,7 +55,7 @@ def render_card(match, sides, pool, open_):
     lines.append("━━━━━━━━━━━━━━━")
     if open_:
         lines.append("Tap a side and a stake. Winners share the whole pool by "
-                     f"stake, plus a {int(ps.HOUSE_BONUS * 100)}% bonus. "
+                     f"stake, plus a {int(ps.HOUSE_BONUS * 100)}% bonus when both sides are backed. "
                      "No winners or no result → everyone is refunded.")
         lines.append("<i>Closes at the innings break · players can't predict "
                      "their own match · one prediction each.</i>")

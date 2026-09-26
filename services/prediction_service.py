@@ -57,7 +57,11 @@ def payout_for(stake, side_total, pool_total):
     if side_total <= 0:
         return stake
     share = stake * pool_total / side_total
-    return int(round(share + stake * HOUSE_BONUS))
+    # The bonus rewards calling a contested match. A pool with nothing on the
+    # other side is just the backers' own coins coming back — a bonus there
+    # would be a guaranteed return for backing a side agreed in advance.
+    bonus = stake * HOUSE_BONUS if pool_total > side_total else 0
+    return round(share + bonus)
 
 
 def predictions_open(state):

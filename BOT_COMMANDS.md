@@ -233,12 +233,14 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
   result card then shows the series score after every match, each rivalry win
   pays +250 coins, and the series is played in rounds of 5: the side that wins
   more of a round gets +3,000 coins and +2 💎. Old matches count, so a pair with
-  history is a rivalry straight away.
+  history is a rivalry straight away. Bonuses and rounds only count matches of
+  5+ overs, up to 3 per pair per UTC day; the series score counts every match.
 * **Spectator predictions** — `/predict` in the group while a player-vs-player
   match is live. Anyone except the two players can back a side with 100, 500,
   1K or 5K coins, once per match, until the innings break. Winners share the
-  whole pool by stake, plus a 10% bonus on their own stake. If nobody backed
-  the winner, or the match ends tied or unfinished, everyone is refunded.
+  whole pool by stake, plus a 10% bonus on their own stake when someone took
+  the other side. If nobody backed the winner, or the match ends tied or
+  unfinished, everyone is refunded.
 * **Match highlights** — after every Lets Play / Challenge League match, the
   chat gets a short reel of the 3–5 biggest moments (wickets of set batters,
   fifties and hundreds, bowling hauls, sixes, big overs, maidens and swings in

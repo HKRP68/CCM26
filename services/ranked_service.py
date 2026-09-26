@@ -113,15 +113,35 @@ def _live_key(session):
     return ensure_current_season(session).season_key
 
 
-def _roll_season(row, live_key):
-    """Soft-reset ``row`` into the live season if it belongs to an older one."""
+def _roll_season(row, live_key, session=None):
+    """Soft-reset ``row`` into the live season if it belongs to an older one.
+
+    The old season is archived and paid first (idempotent). The monthly
+    rollover normally did that already; this is the retry for a rollover whose
+    ranked payout failed — resetting the row first would lose it for good.
+    """
     if row.season_key == live_key:
         return row
+    if session is not None:
+        _ensure_finalized(session, row.season_key)
     row.rating = max(MIN_RATING, soft_reset(row.rating or START_RATING))
     row.peak_rating = row.rating
     row.played = row.wins = row.losses = row.draws = 0
     row.season_key = live_key
     return row
+
+
+def _ensure_finalized(session, season_key):
+    """Archive + pay ``season_key`` if that never happened. Never raises."""
+    from models import RankedSeasonResult
+    try:
+        if (session.query(RankedSeasonResult.id)
+                .filter(RankedSeasonResult.season_key == season_key).first()):
+            return
+        with session.begin_nested():
+            finalize_season(session, season_key)
+    except Exception:
+        logger.exception("ranked: finalize retry for %s failed", season_key)
 
 
 def get_rating(session, user_id, create=False, live_key=None):
@@ -143,7 +163,7 @@ def get_rating(session, user_id, create=False, live_key=None):
         session.add(row)
         session.flush()
         return row
-    return _roll_season(row, live_key)
+    return _roll_season(row, live_key, session)
 
 
 def _pair_games_today(session, a_id, b_id, exclude_match_id=None, now=None):

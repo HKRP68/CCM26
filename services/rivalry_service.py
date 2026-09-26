@@ -10,6 +10,11 @@ then on:
     side that wins more of a round collects the ``ROUND_BONUS`` (a drawn round
     pays nobody).
 
+Bonuses and rounds only count *bonus-eligible* matches: at least
+``ranked_service.MIN_RANKED_OVERS`` overs, and no more than
+``BONUS_MATCHES_PER_DAY`` per pair per UTC day — otherwise two friends could
+farm the bonuses with back-to-back one-over matches.
+
 The first time a pair is seen, its history is back-filled from the matches
 table, so players who already have a long series start as rivals rather than
 from zero. Nothing here commits — the caller owns the transaction.
@@ -25,6 +30,10 @@ ROUND_LENGTH = 5
 WIN_BONUS_COINS = 250
 ROUND_BONUS_COINS = 3000
 ROUND_BONUS_GEMS = 2
+# Anti-farming, same shape as the ranked ladder's guard: only matches of at
+# least ranked length, and at most this many per pair per UTC day, pay a
+# bonus or advance a round. The series score still counts every match.
+BONUS_MATCHES_PER_DAY = 3
 
 
 def _pair(u1, u2):
@@ -82,7 +91,7 @@ def get_or_create(session, u1, u2, exclude_match_id=None):
     a, b = _pair(u1, u2)
     row = Rivalry(user_a_id=a, user_b_id=b, played=0, a_wins=0, b_wins=0, ties=0,
                   round_no=1, round_played=0, round_a_wins=0, round_b_wins=0,
-                  rounds_a=0, rounds_b=0, streak=0)
+                  rounds_a=0, rounds_b=0, streak=0, bonus_matches_today=0)
     # Back-fill: the series so far counts, but only the running totals — the
     # bonus rounds start fresh from the moment the rivalry is recognised.
     for m in _history(session, a, b, exclude_match_id=exclude_match_id):
@@ -183,8 +192,9 @@ def record_match(session, match, pay_bonuses=True):
     win_bonus = None
     round_result = None
     # Rounds and bonuses only run once the pair is a rivalry — and the match
-    # that makes them one is its first rivalry match.
-    if is_rivalry(row):
+    # that makes them one is its first rivalry match — and only for a
+    # bonus-eligible match (see the module docstring).
+    if is_rivalry(row) and _bonus_eligible(row, match):
         row.round_played = (row.round_played or 0) + 1
         if winner == row.user_a_id:
             row.round_a_wins = (row.round_a_wins or 0) + 1
@@ -217,6 +227,20 @@ def record_match(session, match, pay_bonuses=True):
     out["win_bonus"] = win_bonus
     out["round_result"] = round_result
     return out
+
+
+def _bonus_eligible(row, match, now=None):
+    """True (and counted) when this match may pay bonuses / advance a round."""
+    from services.ranked_service import MIN_RANKED_OVERS
+    if (match.overs or 20) < MIN_RANKED_OVERS:
+        return False
+    today = (now or datetime.utcnow()).strftime("%Y-%m-%d")
+    if row.bonus_day != today:
+        row.bonus_day, row.bonus_matches_today = today, 0
+    if (row.bonus_matches_today or 0) >= BONUS_MATCHES_PER_DAY:
+        return False
+    row.bonus_matches_today = (row.bonus_matches_today or 0) + 1
+    return True
 
 
 def _summary(session, row, just_formed=False):

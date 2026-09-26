@@ -173,6 +173,25 @@ class RankedTests(Case):
         self.assertEqual(live.career_peak, 1400)
 
 
+class RankedFinalizeRetryTests(Case):
+    def test_a_stale_row_is_paid_before_it_is_reset(self):
+        from models import RankedRating, RankedSeasonResult
+        from services import ranked_service as rs
+        a = self.user(coins=0)
+        self.s.add(RankedRating(user_id=a.id, season_key="2002-02", rating=1460,
+                                peak_rating=1460, career_peak=1460, played=8,
+                                wins=6, losses=2, draws=0))
+        self.s.flush()
+        # The monthly rollover's payout never happened — the next read retries it.
+        row = rs.get_rating(self.s, a.id)
+        self.assertEqual(row.rating, 1230)
+        res = (self.s.query(RankedSeasonResult)
+               .filter(RankedSeasonResult.season_key == "2002-02",
+                       RankedSeasonResult.user_id == a.id).one())
+        self.assertEqual(res.division, "Legend")
+        self.assertEqual(a.total_coins, 20000)
+
+
 def rs_cap():
     from services import ranked_service
     return ranked_service.PAIR_DAILY_CAP
@@ -182,7 +201,12 @@ def rs_cap():
 
 class RivalryTests(Case):
     def test_backfill_then_formation_then_round_bonus(self):
+        from unittest import mock
         from services import rivalry_service as rv
+        # A whole round in one sitting — lift the daily cap for this test.
+        cap = mock.patch.object(rv, "BONUS_MATCHES_PER_DAY", 99)
+        cap.start()
+        self.addCleanup(cap.stop)
         a, b = self.user(coins=0), self.user(coins=0)
         # Four matches of history before the feature saw them.
         for w in (a, a, b, a):
@@ -212,6 +236,32 @@ class RivalryTests(Case):
         self.assertEqual(a.total_gems, rv.ROUND_BONUS_GEMS)
         self.assertEqual(a.total_coins, 3 * rv.WIN_BONUS_COINS + rv.ROUND_BONUS_COINS)
         self.assertEqual(last["round"]["round_no"], 2)
+
+    def _rival_pair(self):
+        a, b = self.user(coins=0), self.user(coins=0)
+        for _ in range(4):
+            self.match(a, b, winner=a, when=datetime.utcnow() - timedelta(days=3))
+        return a, b
+
+    def test_daily_cap_on_bonuses_but_series_keeps_counting(self):
+        from services import rivalry_service as rv
+        a, b = self._rival_pair()
+        for _ in range(rv.BONUS_MATCHES_PER_DAY + 2):
+            last = rv.record_match(self.s, self.match(a, b, winner=a))
+        self.assertEqual(a.total_coins, rv.BONUS_MATCHES_PER_DAY * rv.WIN_BONUS_COINS)
+        self.assertEqual(last["played"], 4 + rv.BONUS_MATCHES_PER_DAY + 2)
+        self.assertEqual(last["round"]["played"], rv.BONUS_MATCHES_PER_DAY)
+
+    def test_short_matches_pay_no_rivalry_bonus(self):
+        from services import rivalry_service as rv
+        a, b = self._rival_pair()
+        m = self.match(a, b, winner=a)
+        m.overs = 1
+        out = rv.record_match(self.s, m)
+        self.assertTrue(out["is_rivalry"])
+        self.assertIsNone(out["win_bonus"])
+        self.assertEqual(a.total_coins, 0)
+        self.assertEqual(out["round"]["played"], 0)
 
     def test_ai_matches_are_ignored(self):
         from services import rivalry_service as rv
@@ -260,6 +310,17 @@ class PredictionTests(Case):
         out = ps.settle(self.s, self.m)
         self.assertEqual(out["reason"], "nobody backed the winner")
         self.assertEqual(x.total_coins, 1000)
+
+    def test_one_sided_pool_gets_no_bonus(self):
+        from services import prediction_service as ps
+        x = self.user(coins=5000)
+        ps.place(self.s, self.m, x, self.a.id, 5000, state=LIVE)
+        self.m.status, self.m.winner_id, self.m.loser_id = "completed", self.a.id, self.b.id
+        self.m.margin_type = "runs"
+        ps.settle(self.s, self.m)
+        self.assertEqual(x.total_coins, 5000)
+        self.assertEqual(ps.payout_for(100, 100, 100), 100)
+        self.assertEqual(ps.payout_for(100, 100, 300), 310)
 
     def test_refusals(self):
         from services import prediction_service as ps
@@ -358,6 +419,20 @@ class HallOfFameTests(Case):
         self.assertEqual(bat["label"], "104* (50)")
         self.assertEqual(bat["user_id"], 7)
         self.assertFalse(any(r.get("player_name") == "SO" for r in rows))
+
+    def test_same_team_name_keeps_each_owner(self):
+        from services import hall_of_fame as hof
+        sc = _scorecard(bat_team="Kings", bowl_team="Kings")
+        rows = hof.entries_from_scorecard(sc, team_owner={"Kings": 1},
+                                          innings_owner=[7, 8])
+        bat = next(r for r in rows if r["category"] == "bat_score")
+        bowl = next(r for r in rows if r["category"] == "bowl_figures")
+        self.assertEqual(bat["user_id"], 7)      # innings 1 batted first
+        self.assertEqual(bowl["user_id"], 8)     # the other side bowled it
+        # Without per-innings ids, identical names are not guessed at.
+        rows = hof.entries_from_scorecard(sc, team_owner={"Kings": 1})
+        self.assertTrue(all(r["user_id"] is None for r in rows
+                            if r["category"] != "win_runs"))
 
     def test_scan_harvests_once_and_skips_uncounted(self):
         from models import HallOfFameEntry, MatchPostResult, MatchScorecard

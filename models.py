@@ -4352,6 +4352,10 @@ class Rivalry(Base):
     # Current run of consecutive wins in the series, and whose it is.
     streak_user_id = Column(Integer, nullable=True)
     streak = Column(Integer, nullable=False, default=0)
+    # Bonus-eligible rivalry matches this pair has played on ``bonus_day``
+    # (UTC 'YYYY-MM-DD') — caps the paid matches per day.
+    bonus_day = Column(String(10), nullable=True)
+    bonus_matches_today = Column(Integer, nullable=False, default=0)
     last_match_id = Column(Integer, nullable=True)
     became_rivalry_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
