@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import sys
+import time
 from datetime import datetime, timedelta
 from io import BytesIO
 
@@ -2504,21 +2505,107 @@ async def _resume_finished_innings(context, mid, state):
 
 
 RCL_LOCK_TIMEOUT = 15  # seconds /rcl waits for a busy match before saying so
+RCL_COOLDOWN = 5  # seconds between two resumes of the same match
+
+RCL_USAGE = ("ℹ️ Usage: <code>/rcl</code> resumes the match in this chat, "
+             "<code>/rcl &lt;MatchId&gt;</code> resumes a match by its id.")
+
+
+def _parse_match_id(arg):
+    """``123`` / ``#123`` / ``M123`` → 123, or None when it isn't an id."""
+    txt = str(arg or "").strip().lstrip("#").lstrip("Mm").lstrip("#")
+    return int(txt) if txt.isdigit() else None
+
+
+def _rcl_cooldown_left(context, mid):
+    """Seconds until ``mid`` may be resumed again; stamps the clock when 0.
+
+    Two resumes a second apart both re-render the prompt (and restart its
+    timer), so a double-tapped /rcl just spammed the chat — one per window.
+    """
+    key = f"rcl_cd_{mid}"
+    now = time.monotonic()
+    last = context.bot_data.get(key)
+    if isinstance(last, (int, float)) and now - last < RCL_COOLDOWN:
+        return max(1, int(RCL_COOLDOWN - (now - last) + 0.999))
+    context.bot_data[key] = now
+    return 0
+
+
+def _captain_matches_elsewhere(context, tg_id, cid):
+    """Ids of live /cipl matches in other chats where ``tg_id`` is a captain."""
+    if tg_id is None:
+        return []
+    mids = []
+    for k, v in list(context.bot_data.items()):
+        if (isinstance(k, str) and k.startswith("ms_") and isinstance(v, dict)
+                and is_cipl_state(v) and v.get("chat_id") != cid
+                and tg_id in (v.get("bat_user_tg"), v.get("bowl_user_tg"))):
+            try:
+                mids.append(int(k.split("_", 1)[1]))
+            except (ValueError, IndexError):
+                continue
+    return sorted(set(mids), reverse=True)
 
 
 async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/rcl — resume a stuck Challenge League (/cipl) match in this chat."""
+    """/rcl [MatchId] — resume a stuck Challenge League / Lets Play match.
+
+    Also serves /resume and /r whenever the chat's match is an over-by-over
+    one. With no argument it finds the match in this chat; with an id it
+    resumes that match (the prompt is re-sent in the match's own chat).
+    """
     chat = update.effective_chat
     if chat is None:
         return
     cid = chat.id
+    requester = update.effective_user.id if update.effective_user else None
+    args = list(getattr(context, "args", None) or [])
 
-    found_mid, found_state = await _find_cipl_match_in_chat(context, cid)
-    if found_mid is None:
+    if args:
+        found_mid = _parse_match_id(args[0])
+        if found_mid is None:
+            await update.message.reply_text(RCL_USAGE, parse_mode="HTML")
+            return
+        found_state = await _gs(context, found_mid)
+        if not is_cipl_state(found_state):
+            await update.message.reply_text(
+                f"❌ Match #{found_mid} isn't an active Challenge League or "
+                "Lets Play match.")
+            return
+    else:
+        found_mid, found_state = await _find_cipl_match_in_chat(context, cid)
+        if found_mid is None:
+            elsewhere = _captain_matches_elsewhere(context, requester, cid)
+            if elsewhere:
+                ids = ", ".join(f"<code>/rcl {m}</code>" for m in elsewhere[:5])
+                await update.message.reply_text(
+                    "❌ No active match in this chat — but you're captaining "
+                    f"one elsewhere. Resume it with {ids}", parse_mode="HTML")
+                return
+            await update.message.reply_text(
+                "❌ No active Challenge League or Lets Play match in this chat "
+                "to resume.\nStart one with /cipl or /letsplay.\n\n" + RCL_USAGE,
+                parse_mode="HTML")
+            return
+
+    # Only the two captains in this match may resume it — otherwise any group
+    # member could reset another match's prompt/timer flow.
+    captains = {found_state.get("bat_user_tg"), found_state.get("bowl_user_tg")}
+    if requester not in captains:
         await update.message.reply_text(
-            "❌ No active Challenge League or Lets Play match in this chat to "
-            "resume.\nStart one with /cipl or /letsplay.")
+            "❌ Only the two captains in this match can use /rcl to resume it.")
         return
+
+    wait = _rcl_cooldown_left(context, found_mid)
+    if wait:
+        await update.message.reply_text(
+            f"⏳ Please wait {wait}s before resuming match #{found_mid} again.")
+        return
+
+    other_chat = found_state.get("chat_id") not in (None, cid)
+    where_note = ("\n📍 <i>The prompt was re-sent in that match's chat.</i>"
+                  if other_chat else "")
 
     if _super_over_active(context, found_mid):
         # The main match is over and a Super Over is live — re-render its prompt
@@ -2526,7 +2613,8 @@ async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # suspended main flow.
         from handlers.super_over import resume_super_over
         await update.message.reply_text(
-            "🔄 <b>Resuming Super Over…</b>", parse_mode="HTML")
+            f"🔄 <b>Resuming Super Over…</b> (match #{found_mid}){where_note}",
+            parse_mode="HTML")
         ok = await resume_super_over(context, found_mid)
         if not ok:
             await update.message.reply_text(
@@ -2536,15 +2624,6 @@ async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Label the resume after whichever mode this match is (Lets Play vs cipl).
     _label = "Lets Play" if found_state.get("is_letsplay") else "Challenge League"
-
-    # Only the two captains in this match may resume it — otherwise any group
-    # member could reset another match's prompt/timer flow.
-    requester = update.effective_user.id if update.effective_user else None
-    captains = {found_state.get("bat_user_tg"), found_state.get("bowl_user_tg")}
-    if requester not in captains:
-        await update.message.reply_text(
-            "❌ Only the two captains in this match can use /rcl to resume it.")
-        return
 
     # Name the point the match resumes from, read from the saved snapshot (not
     # whatever this process last held), so the chat can see nothing was
@@ -2559,12 +2638,15 @@ async def rcl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.exception("cipl resume score line failed for match %s",
                              found_mid)
     await update.message.reply_text(
-        f"🔄 <b>Resuming {_label} match…</b>{where}", parse_mode="HTML")
+        f"🔄 <b>Resuming {_label} match #{found_mid}…</b>{where}{where_note}",
+        parse_mode="HTML")
     ok = await cipl_resume(context, found_mid, found_state,
                            lock_timeout=RCL_LOCK_TIMEOUT)
     if ok is None:
         # A step of the match (usually the over being simulated) still holds
-        # the lock. Waiting on it forever made /rcl look dead.
+        # the lock. Waiting on it forever made /rcl look dead — and the
+        # cooldown must not block the retry this message asks for.
+        context.bot_data.pop(f"rcl_cd_{found_mid}", None)
         await update.message.reply_text(
             "⏳ The match is still finishing its last step — try /rcl again "
             "in a few seconds.")
@@ -3515,6 +3597,80 @@ def _pitch_text(state):
     return f"🌱 {pitch} pitch" if pitch else ""
 
 
+def _card_heading_parts(state):
+    """``(innings, team, pitch, match_id)`` for the approach card's heading.
+
+    ``pitch`` / ``match_id`` are None when the state doesn't carry them.
+    """
+    return (state.get("innings", 1), str(state["bat_team_name"]),
+            state.get("pitch_type") or None, state.get("match_id"))
+
+
+def _card_heading(state):
+    """``🏏 Innings 1 | Mumbai | 🌱 Hard | 🆔 #123`` — the card's first line."""
+    inn, team, pitch, match_id = _card_heading_parts(state)
+    parts = [f"🏏 <b>Innings {inn}</b>", f"<b>{html.escape(team)}</b>"]
+    if pitch:
+        parts.append(html.escape(_pitch_text(state)))
+    if match_id is not None:
+        parts.append(f"🆔 <code>#{html.escape(str(match_id))}</code>")
+    return " | ".join(parts)
+
+
+def _bowler_rows(state):
+    """The bowling side's attack for the card's expandable bowler list.
+
+    Every active specialist (Bowler / All-rounder) plus anyone who has already
+    bowled. Each row is a dict with the display bits; the current bowler comes
+    first, then the ones who have bowled most, then by rating.
+    """
+    bowl_stats = state.get("bowl_stats") or {}
+    current = state.get("current_bowler") or {}
+    cur_rid = current.get("roster_id")
+    out = []
+    for p in impact_player.active_players(state.get("bowl_xi") or []):
+        rid = p.get("roster_id")
+        st = bowl_stats.get(str(rid)) or {}
+        balls = int(st.get("balls", 0) or 0)
+        if balls == 0 and rid != cur_rid and cipl_match.is_part_time_bowler(p):
+            continue
+        runs = int(st.get("runs", 0) or 0)
+        try:
+            left = cipl_match.overs_left(state, p)
+        except Exception:
+            left = None
+        out.append({
+            "name": impact_player.display_name(p),
+            "rating": cipl_match.display_rating(p, "bowl_rating"),
+            "overs": f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6),
+            "balls": balls,
+            "runs": runs,
+            "wickets": int(st.get("wickets", 0) or 0),
+            "econ": f"{runs / (balls / 6.0):.2f}" if balls else "—",
+            "left": left,
+            "current": rid is not None and rid == cur_rid,
+            "part_time": cipl_match.is_part_time_bowler(p),
+        })
+    out.sort(key=lambda r: (not r["current"], -r["balls"], -r["rating"]))
+    return out
+
+
+def _bowlers_block(state):
+    """The attack as a Telegram expandable quote (tap to see every bowler)."""
+    rows = _bowler_rows(state)
+    if not rows:
+        return ""
+    lines = []
+    for r in rows:
+        mark = "🎯 " if r["current"] else ("🧤 " if r["part_time"] else "▫️ ")
+        left = f" · {r['left']} left" if r["left"] is not None else ""
+        lines.append(f"{mark}{html.escape(r['name'])} ({r['rating']}) — "
+                     f"<b>{r['wickets']}/{r['runs']}</b> ({r['overs']})"
+                     f" · Econ {r['econ']}{left}")
+    return ("\n🎳 <b>BOWLERS</b> <i>(tap to expand)</i>\n"
+            "<blockquote expandable>" + "\n".join(lines) + "</blockquote>")
+
+
 def _approach_card(state):
     """Full broadcast-style scorecard card used on the approach-select prompts."""
     inn = state.get("innings", 1)
@@ -3531,7 +3687,7 @@ def _approach_card(state):
     rule = "—" * 28
 
     lines = [
-        f"Innings {inn} | <b>{bat_name}</b> | Bat",
+        _card_heading(state),
         rule,
         f"{bat_emoji} {bat_code} - <b>{cipl_match.format_score(state)}</b> - "
         f"{cipl_match.format_overs(state)}",
@@ -3541,9 +3697,6 @@ def _approach_card(state):
         rule,
         _crr_line(state),
     ]
-    pitch_line = _pitch_text(state)
-    if pitch_line:
-        lines.append(html.escape(pitch_line))
     lines += [
         rule,
         f"{bowl_emoji} {bowl_code} | Bowl | {_over_emoji_strip(state)}",
@@ -3561,6 +3714,7 @@ def _approach_card(state):
     if boost:
         lines += ([rule] if not chem else []) + [boost]
     card = "\n".join(lines)
+    card += _bowlers_block(state)
     card += _commentary_block(state)
     return card
 
@@ -3593,7 +3747,15 @@ def _build_approach_card_blocks(state, prompt):
     bowl_code = str(state.get("bowl_team_code") or "") or str(state["bowl_team_name"])
     unit = _unit_word(state, cap=True)
 
-    blocks = [R.heading(f"🏏 Innings {inn} · {bat_name} batting", size=3)]
+    _inn, _team, pitch, match_id = _card_heading_parts(state)
+    blocks = [R.heading(f"🏏 Innings {inn} · {bat_name}", size=3)]
+    sub = []
+    if pitch:
+        sub.append(_pitch_text(state))
+    if match_id is not None:
+        sub.append(f"🆔 Match #{match_id}")
+    if sub:
+        blocks.append(R.paragraph([R.italic("  ·  ".join(sub))]))
 
     # ── Both totals ──
     score_row = [R.cell(bat_emoji), R.cell(R.bold(bat_code)),
@@ -3626,11 +3788,6 @@ def _build_approach_card_blocks(state, prompt):
              "  ·  CRR ", R.bold(f"{crr:.2f}")]))
     else:
         blocks.append(R.paragraph(["⚡ ", R.bold("CRR"), f"  {crr:.2f}"]))
-
-    # ── Pitch type ──
-    pitch_line = _pitch_text(state)
-    if pitch_line:
-        blocks.append(R.paragraph([R.italic(pitch_line)]))
 
     # ── At the crease ──
     bs = state["bat_stats"]
@@ -3680,6 +3837,31 @@ def _build_approach_card_blocks(state, prompt):
         ], bordered=True, compact=True, caption=bowl_caption))
     else:
         blocks.append(R.paragraph(bowl_caption))
+
+    # ── Every bowler, collapsed so the approach buttons stay on screen ──
+    brows = _bowler_rows(state)
+    if brows:
+        table = [[R.cell(R.bold("BOWLER"), header=True),
+                  R.cell(R.bold("O"), header=True, align="right"),
+                  R.cell(R.bold("R"), header=True, align="right"),
+                  R.cell(R.bold("W"), header=True, align="right"),
+                  R.cell(R.bold("ECON"), header=True, align="right"),
+                  R.cell(R.bold("LEFT"), header=True, align="right")]]
+        for r in brows:
+            mark = "🎯 " if r["current"] else ("🧤 " if r["part_time"] else "")
+            name = f"{mark}{r['name']} ({r['rating']})"
+            table.append([
+                R.cell(R.bold(name) if r["current"] else name),
+                R.cell(r["overs"], align="right"),
+                R.cell(str(r["runs"]), align="right"),
+                R.cell(R.bold(str(r["wickets"])), align="right"),
+                R.cell(r["econ"], align="right"),
+                R.cell("—" if r["left"] is None else str(r["left"]),
+                       align="right"),
+            ])
+        blocks.append(R.details(
+            R.bold(f"🎳 Bowlers ({len(brows)}) — tap to expand"),
+            [R.table(table, bordered=True, compact=True)]))
 
     # ── CHEM / OVR match-up (Lets Play only) ──
     chem = _chem_badges(state)

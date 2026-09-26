@@ -493,6 +493,85 @@ class ResumeGuardTests(_NoRewindCase):
         self.assertIn("still finishing", replies[-1])
 
 
+class RclCommandTests(_NoRewindCase):
+    """/rcl [MatchId], its 5-second cooldown, and /resume routing to it."""
+
+    def _update(self, chat=-100, user=111):
+        update = mock.MagicMock()
+        update.effective_chat.id = chat
+        update.effective_user.id = user
+        update.message.reply_text = mock.AsyncMock()
+        return update
+
+    def _rcl(self, ctx, update, args=None, handler=None):
+        ctx.args = args or []
+        calls = []
+
+        async def _resume(c, mid, *a, **k):
+            calls.append(mid)
+            return True
+        with mock.patch.object(cp, "cipl_resume", _resume):
+            asyncio.run((handler or cp.rcl_handler)(update, ctx))
+        replies = [c.args[0] for c in update.message.reply_text.await_args_list]
+        return calls, replies
+
+    def test_a_second_rcl_within_five_seconds_is_refused(self):
+        ctx = _Ctx()
+        self.seed(ctx)
+        calls, _ = self._rcl(ctx, self._update())
+        self.assertEqual(calls, [MID])
+        calls, replies = self._rcl(ctx, self._update())
+        self.assertEqual(calls, [])
+        self.assertIn("Please wait", replies[-1])
+
+    def test_rcl_is_allowed_again_after_the_cooldown(self):
+        ctx = _Ctx()
+        self.seed(ctx)
+        self._rcl(ctx, self._update())
+        ctx.bot_data[f"rcl_cd_{MID}"] -= cp.RCL_COOLDOWN + 1
+        calls, _ = self._rcl(ctx, self._update())
+        self.assertEqual(calls, [MID])
+
+    def test_rcl_by_match_id_from_another_chat(self):
+        ctx = _Ctx()
+        self.seed(ctx)
+        calls, replies = self._rcl(ctx, self._update(chat=-999), args=[f"#{MID}"])
+        self.assertEqual(calls, [MID])
+        self.assertIn(f"#{MID}", replies[0])
+        self.assertIn("re-sent in that match's chat", replies[0])
+
+    def test_rcl_by_id_still_needs_a_captain(self):
+        ctx = _Ctx()
+        self.seed(ctx)
+        calls, replies = self._rcl(ctx, self._update(user=333), args=[str(MID)])
+        self.assertEqual(calls, [])
+        self.assertIn("Only the two captains", replies[-1])
+
+    def test_rcl_with_a_bad_id_shows_usage(self):
+        ctx = _Ctx()
+        calls, replies = self._rcl(ctx, self._update(), args=["abc"])
+        self.assertEqual(calls, [])
+        self.assertIn("Usage", replies[-1])
+
+    def test_rcl_points_a_captain_at_their_match_elsewhere(self):
+        ctx = _Ctx()
+        self.seed(ctx)
+        with mock.patch.object(cp, "_find_cipl_match_in_chat",
+                               mock.AsyncMock(return_value=(None, None))):
+            calls, replies = self._rcl(ctx, self._update(chat=-5))
+        self.assertEqual(calls, [])
+        self.assertIn(f"/rcl {MID}", replies[-1])
+
+    def test_resume_on_a_cipl_match_goes_through_rcl(self):
+        from handlers import match as match_handlers
+        ctx = _Ctx()
+        self.seed(ctx)
+        calls, replies = self._rcl(ctx, self._update(),
+                                   handler=match_handlers.resume_handler)
+        self.assertEqual(calls, [MID])
+        self.assertIn(f"match #{MID}", replies[0])
+
+
 class SyncFromRowTests(unittest.TestCase):
     def _row(self, state, version):
         return {"state_json": json.dumps(state), "version": version,

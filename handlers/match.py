@@ -4432,8 +4432,24 @@ async def _recover_stuck(ctx, mid, where):
 
 
 async def resume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Resume a stuck match — finds the live match for this chat and re-renders buttons."""
+    """Resume a stuck match — finds the live match for this chat and re-renders buttons.
+
+    Challenge League / Lets Play matches (and ``/resume <MatchId>``) go through
+    /rcl, which resumes the over-by-over flow under the match lock.
+    """
     cid = update.effective_chat.id
+
+    try:
+        from handlers import cipl_play
+    except Exception:
+        cipl_play = None
+    if cipl_play is not None:
+        cipl_mid = None
+        if not getattr(context, "args", None):
+            cipl_mid, _ = await cipl_play._find_cipl_match_in_chat(context, cid)
+        if getattr(context, "args", None) or cipl_mid is not None:
+            await cipl_play.rcl_handler(update, context)
+            return
 
     # A live Super Over (tied /cipl, /c[league] or /letsplay) is driven from a
     # separate state, not the ms_* match state — re-render its prompt first.
@@ -4454,7 +4470,8 @@ async def resume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Find any ms_* state with this chat_id
     found_mid = None
     for k, v in list(context.bot_data.items()):
-        if k.startswith("ms_") and isinstance(v, dict) and v.get("chat_id") == cid:
+        if (k.startswith("ms_") and isinstance(v, dict) and v.get("chat_id") == cid
+                and v.get("mode") != "cipl_approach"):
             try:
                 found_mid = int(k.split("_", 1)[1])
                 break
