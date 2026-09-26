@@ -962,10 +962,26 @@ def retention_view(session, season):
         budget = A.render_money(season.retention_max_spend_lakh, symbol)
         blocks.append(R.paragraph(f"Budget: {budget}"))
         lines.append(f"Budget: {budget}")
-    slabs = ", ".join(A.render_money(r["price_lakh"], symbol)
-                      for r in A.retention_price_rules(season))
-    blocks.append(R.paragraph(f"Ladder: {slabs}"))
-    lines.append(f"Ladder: {slabs}")
+    from services import retention_negotiation as RN
+    dynamic = RN.is_dynamic(season)
+    slot_by_key = {slot["key"]: slot for slot in RN.slots(season)}
+    if dynamic:
+        blocks.append(R.paragraph([R.bold("Dynamic retention"),
+                                   " — owners negotiate with /retain, "
+                                   "players decide."]))
+        lines.append("<b>Dynamic retention</b> — owners negotiate with "
+                     "<code>/retain &lt;player&gt;</code>, players decide.")
+        for slot in slot_by_key.values():
+            text = (f"{slot['emoji']} {slot['label']} · "
+                    f"{_rating_span(slot)} · from "
+                    f"{A.render_money(slot['floor_lakh'], symbol)}")
+            blocks.append(R.paragraph(text))
+            lines.append(_e(text))
+    else:
+        slabs = ", ".join(A.render_money(r["price_lakh"], symbol)
+                          for r in A.retention_price_rules(season))
+        blocks.append(R.paragraph(f"Ladder: {slabs}"))
+        lines.append(f"Ladder: {slabs}")
 
     header = [R.cell(R.bold("Franchise"), header=True),
               R.cell(R.bold("Kept"), header=True, align="center"),
@@ -989,8 +1005,25 @@ def retention_view(session, season):
                      f"{A.render_money(spent, symbol)} spent · "
                      f"{A.render_money(franchise.purse_remaining_lakh, symbol)} left")
         for lot in kept:
-            lines.append(f"   🔒 {_e(lot.name)} — "
+            slot = slot_by_key.get(getattr(lot, "retention_slot", None) or "")
+            mark = f"{slot['emoji']} " if slot else "🔒 "
+            lines.append(f"   {mark}{_e(lot.name)} — "
                          f"{A.render_money(lot.sold_price_lakh, symbol)}")
+        if dynamic:
+            left = RN.open_slots(session, season, franchise)
+            if left:
+                lines.append("   open: " + ", ".join(
+                    f"{s['emoji']} {_e(s['label'])}" for s in left))
+    if dynamic:
+        talks = RN.open_talks(session, season.id)
+        if talks:
+            lines.append("")
+            lines.append("🤝 <b>In talks</b>")
+            names = {f.id: f.name for f in A.franchises(session, season.id)}
+            for t in talks:
+                lines.append(f"· {_e(t.player_name)} ↔ "
+                             f"{_e(names.get(t.franchise_id, '?'))} · "
+                             f"{RN.chances_left(season, t)} chance(s) left")
     blocks.append(R.table(rows, bordered=True, striped=True, compact=True))
     for franchise, kept in keeps:
         if not kept:
@@ -1639,6 +1672,10 @@ ADMIN_SECTIONS = (
         ("/anextset <set | 80-85>", "Make a set or rating range come next"),
         ("/asetorder A, B, C", "Order the whole queue by set"),
         ("/asets", "Every set and where it stands"),
+        ("/asetsexport [json|csv]", "Download every set as a file"),
+        ("/asetsimport [replace]", "Reply to a .json/.csv file to load its "
+                                   "sets — replace also drops queued players "
+                                   "the file does not list"),
         ("/awithdraw <player>", "Pull a player out of the auction"),
         ("/areinstate <player | lot no>, …", "Bring a withdrawn player back"),
     )),
@@ -1667,6 +1704,13 @@ ADMIN_SECTIONS = (
         ("/aretcancel <player>", "Withdraw a waiting offer"),
         ("/aunretain <player>", "Release a retained player into the pool"),
         ("/aretlock on", "Close the window — bare /aretlock is the room's readout"),
+        ("/aretmode classic|dynamic", "Which retention system — the ladder, "
+                                      "or owners negotiating with players"),
+        ("/aretslot [add|edit|remove|move|preset]", "Dynamic slots: rating "
+                                                    "range and starting price"),
+        ("/aretrule [knob value]", "Dynamic rules: budget, chances, counter, "
+                                   "lowball, jitter, personalities"),
+        ("/aretdemand 83=13-17 | 96=28-32", "The Demand Meter's price curve"),
     )),
     ("🪪 Right To Match", (
         ("/artmset <cards> [seconds] [premium]", "RTM rules — /artmset off turns it off"),
@@ -1701,6 +1745,8 @@ PLAYER_SECTION = ("👥 For owners & everyone", (
     (".bid · .purse · .squad · .board", "Dot shortcuts — the same commands, "
                                         "quicker to type"),
     ("/artm yes|no", "Answer a Right To Match"),
+    ("/retain <player> [| price]", "Dynamic retention: open talks with your "
+                                   "player, then make offers — he decides"),
     ("/ainfo", "Buttons for every view below"),
     ("/arules", "Purse, caps, base prices, bid steps, the clock — before a lot opens"),
     ("/asets · /anextset · /anextplayer", "Sets, the next set, the next players"),
@@ -1748,6 +1794,160 @@ def admin_help(*, bot_admin=False):
                  "/aretain Mumbai | Virat Kohli | 18\n"
                  "/aremoveteam Delhi | confirm</code></pre>")
     return blocks, "\n".join(lines)
+
+
+def _rating_span(slot):
+    low, high = slot["min_rating"], slot["max_rating"]
+    if low <= 0 and high >= 999:
+        return "any rating"
+    if high >= 999:
+        return f"{low}+ OVR"
+    return f"{low}–{high} OVR"
+
+
+def retention_slots_text(season):
+    """/aretslot — the slot table, numbered the way the commands take it."""
+    from services import retention_negotiation as RN
+    symbol = season.currency_label or "₹"
+    table = RN.slots(season)
+    budget = RN.budget(season)
+    floors = sum(slot["floor_lakh"] for slot in table)
+    lines = [f"🎚 <b>Retention slots</b> — "
+             f"{'dynamic' if RN.is_dynamic(season) else 'classic (not in use)'}"]
+    for index, slot in enumerate(table, start=1):
+        lines.append(f"{index}. {slot['emoji']} <b>{_e(slot['label'])}</b> · "
+                     f"{_rating_span(slot)} · from "
+                     f"<b>{A.render_money(slot['floor_lakh'], symbol)}</b>")
+    lines.append(f"\nFloors {A.render_money(floors, symbol)} · budget "
+                 + (A.render_money(budget, symbol) if budget is not None
+                    else "uncapped"))
+    lines.append("\n<i>Edit</i>\n"
+                 "<code>/aretslot add Name | 70-82 | 5 | 🧢</code>\n"
+                 "<code>/aretslot edit 2 | range 86-91</code> · "
+                 "<code>| price 20</code> · <code>| name X</code> · "
+                 "<code>| emoji 🥈</code>\n"
+                 "<code>/aretslot remove 3</code> · "
+                 "<code>/aretslot move Core 1</code> · "
+                 "<code>/aretslot preset 3</code> (or 2)")
+    return "\n".join(lines)
+
+
+def retention_rules_text(season):
+    """/aretrule — every negotiation knob, and how to turn it."""
+    from services import retention_negotiation as RN
+    symbol = season.currency_label or "₹"
+    table = RN.rules(season)
+    budget = RN.budget(season)
+    curve = " · ".join(f"{r}: {A.render_money(lo, symbol)}–"
+                       f"{A.render_money(hi, symbol)}"
+                       for r, lo, hi in table["demand_curve"])
+    persona = []
+    for name in RN.PERSONALITY_ORDER:
+        conf = table["personalities"][name]
+        persona.append(f"{RN.personality_label(name)} ×{conf['factor']:g} "
+                       f"· weight {conf['weight']}"
+                       + ("" if conf["enabled"] else " · <i>off</i>"))
+    lines = [
+        f"⚙️ <b>Retention negotiation rules</b> — mode "
+        f"<b>{RN.mode(season)}</b>",
+        f"💰 Budget: <b>{A.render_money(budget, symbol) if budget is not None else 'uncapped'}</b>",
+        f"🎯 Chances: <b>{table['chances']}</b>",
+        f"💬 Counter when an offer is ≥ <b>{table['counter_pct']}%</b> of "
+        f"his price",
+        f"😤 Lowball under <b>{table['lowball_pct']}%</b> → price "
+        f"+<b>{table['lowball_penalty_pct']}%</b>",
+        f"🎲 Jitter ±<b>{table['jitter_pct']}%</b> · ⭐ Superstar from "
+        f"<b>{table['superstar_min_rating']}</b> OVR",
+        f"🤝 Loyalty −<b>{table['loyal_per_season_pct']}%</b> a season, "
+        f"up to −<b>{table['loyal_max_pct']}%</b>",
+        f"👁 Personality shown on cards: "
+        f"<b>{'yes' if table['reveal_personality'] else 'no'}</b>",
+        "", "<b>Demand curve</b>", _e(curve), "", "<b>Personalities</b>",
+        *persona, "",
+        "<i>Edit</i>",
+        "<code>/aretmode dynamic</code> · <code>/aretmode classic</code>",
+        "<code>/aretrule budget 53</code> · <code>chances 3</code> · "
+        "<code>counter 90</code> · <code>lowball 75 5</code> · "
+        "<code>jitter 4</code> · <code>superstar 93</code> · "
+        "<code>loyal 3 12</code> · <code>reveal on</code>",
+        "<code>/aretrule personality demanding 1.12 25</code> · "
+        "<code>/aretrule personality money off</code>",
+        "<code>/aretdemand 83=13-17 | 89=20-24 | 96=28-32</code>",
+        "<code>/aretrule reset</code>",
+    ]
+    return "\n".join(lines)
+
+
+VERDICT_MARK = {"accept": "✅", "counter": "💰", "reject": "❌",
+                "walkout": "🔴"}
+
+
+def retention_talk_card(session, season, talk):
+    """The negotiation, as the room sees it. HTML — it carries the buttons."""
+    from services import retention_negotiation as RN
+    symbol = season.currency_label or "₹"
+    franchise = _franchise(session, talk.franchise_id)
+    table = RN.rules(season)
+    slot = next((s for s in RN.slots(season) if s["key"] == talk.slot_key),
+                None)
+    low, high = RN.demand_range(table, talk.rating)
+    lines = [f"🤝 <b>Retention talks</b> — {_e(franchise.name if franchise else '?')}",
+             f"<blockquote><b>{_e(talk.player_name)}</b> · {talk.rating} OVR"]
+    if slot:
+        lines.append(f"{slot['emoji']} {_e(slot['label'])} slot · starts at "
+                     f"{A.render_money(slot['floor_lakh'], symbol)}")
+    lines.append(f"📈 Demand: <b>{_e(RN.demand_meter(table, talk.rating))}</b>")
+    lines.append(f"💭 Expected: {A.render_money(low, symbol)}–"
+                 f"{A.render_money(high, symbol)}")
+    if table["reveal_personality"] or talk.status != RN.TALK_OPEN:
+        lines.append(f"🧠 {RN.personality_label(talk.personality)}"
+                     + (f" · {talk.tenure} season(s) with you"
+                        if talk.tenure else ""))
+    lines[-1] += "</blockquote>"
+    if talk.last_offer_lakh is not None and talk.last_verdict:
+        mark = VERDICT_MARK.get(talk.last_verdict, "")
+        lines.append(f"Offer {talk.attempts}: "
+                     f"<b>{A.render_money(talk.last_offer_lakh, symbol)}</b>")
+        lines.append(f"{mark} <i>“{_e(talk.last_reply or '')}”</i>")
+    if talk.status == RN.TALK_SIGNED:
+        lines.append(f"\n✅ <b>PLAYER RETAINED 🔒</b> for "
+                     f"{A.render_money(talk.signed_price_lakh, symbol)}")
+    elif talk.status == RN.TALK_FAILED:
+        lines.append("\n🔴 <b>RETENTION FAILED</b> — he enters the auction 🔨")
+    elif talk.status == RN.TALK_WITHDRAWN:
+        lines.append("\n🚫 <b>Talks withdrawn.</b>")
+    else:
+        left = RN.chances_left(season, talk)
+        lines.append("")
+        lines.append("🎯 Chances left: " + "🟢" * left
+                     + "⚪" * max(0, table["chances"] - left)
+                     + (" ⚠️ <b>Final offer</b>" if left == 1 else ""))
+        if talk.counter_lakh:
+            lines.append(f"💰 He asks <b>{A.render_money(talk.counter_lakh, symbol)}</b>"
+                         f" — take it with the button, or offer again.")
+        budget_left = RN.budget_left(session, season, franchise) if franchise else None
+        if budget_left is not None:
+            lines.append(f"👛 Retention budget left: "
+                         f"{A.render_money(budget_left, symbol)}")
+        lines.append(f"Offer with <code>/retain {_e(talk.player_name)} | "
+                     f"&lt;price&gt;</code>")
+    return "\n".join(lines)
+
+
+def retention_talk_keyboard(season, talk):
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    from services import retention_negotiation as RN
+    if talk.status != RN.TALK_OPEN:
+        return None
+    row = []
+    if talk.counter_lakh:
+        row.append(InlineKeyboardButton(
+            f"✅ Accept {A.render_money(talk.counter_lakh, season.currency_label or '₹')}",
+            callback_data=f"au_rtn_{talk.id}_ask"))
+    row.append(InlineKeyboardButton(
+        "🚫 Cancel talks" if not talk.attempts else "🏳️ Walk away (→ auction)",
+        callback_data=f"au_rtn_{talk.id}_bye"))
+    return InlineKeyboardMarkup([row])
 
 
 def retention_offer_card(session, season, offer):

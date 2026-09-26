@@ -1553,6 +1553,22 @@ async def aoffers_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """<code>/aoffers</code> — retention offers still waiting on a franchise."""
     def work(session, season):
         offers = A.pending_retention_offers(session, season.id)
+        from services import retention_negotiation as RN
+        if RN.is_dynamic(season):
+            talks = RN.open_talks(session, season.id)
+            if not talks:
+                return "🤝 No retention talks are open."
+            names = {f.id: f.name for f in A.franchises(session, season.id)}
+            lines = [f"🤝 <b>Retention talks open — {len(talks)}</b>"]
+            for t in talks:
+                last = (A.render_money(t.last_offer_lakh, season.currency_label)
+                        if t.last_offer_lakh else "no offer yet")
+                lines.append(f"· <b>{html.escape(t.player_name)}</b> ↔ "
+                             f"{html.escape(names.get(t.franchise_id, '?'))} · "
+                             f"{last} · {RN.chances_left(season, t)} left")
+            lines.append("\n<i>Cancel one cleanly with</i> "
+                         "<code>/aretcancel &lt;player&gt;</code>")
+            return "\n".join(lines)
         if not offers:
             return "🔒 No retention offers are waiting."
         from models import AuctionFranchise
@@ -1577,6 +1593,14 @@ async def aretcancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     def work(session, season):
         if not raw:
             raise AuctionError("Usage: /aretcancel <player>")
+        from services import retention_negotiation as RN
+        talks = [t for t in RN.open_talks(session, season.id)
+                 if raw in (t.player_name or "").lower()]
+        if len(talks) == 1:
+            RN.withdraw_talk(session, season, talks[0], admin=True)
+            return (f"🚫 Retention talks with "
+                    f"{html.escape(talks[0].player_name)} are cancelled — "
+                    f"nothing was signed.")
         offers = [o for o in A.pending_retention_offers(session, season.id)
                   if raw in (o.player_name or "").lower()]
         if not offers:
@@ -1587,6 +1611,408 @@ async def aretcancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         A.cancel_retention_offer(session, season, offers[0])
         return (f"🚫 The retention offer for "
                 f"{html.escape(offers[0].player_name)} is withdrawn.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+# ════════════════════════════════════════════════════════════════════
+# Dynamic retention — /retain, and the admin knobs behind it
+# ════════════════════════════════════════════════════════════════════
+
+RTN_CB = "au_rtn_"
+
+
+async def retain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/retain Virat Kohli</code> — open talks; <code>| 26</code> offers.
+
+    Dynamic retention's owner command. The first call puts the negotiation
+    card up — his slot, its starting price, the Demand Meter; each call with a
+    price is an offer, and the player answers on a fresh card. Only a
+    franchise's owner or a co-owner can negotiate for it, for the reason
+    ``may_bid_for`` gives.
+    """
+    from services import retention_negotiation as RN
+    chat = update.effective_chat
+    if chat is None or chat.type not in GROUP_CHAT_TYPES:
+        await _reply(update, GROUP_ONLY)
+        return
+    user = update.effective_user
+    raw = _arg_text(context)
+    session = get_session()
+    try:
+        season = _season_for(session, update)
+        if season is None:
+            await _reply(update, NO_AUCTION)
+            return
+        if not raw:
+            raise AuctionError("Usage: /retain <player> — then "
+                               "/retain <player> | <price> to make an offer.")
+        franchise = (A.franchise_for_actor(session, season.id, user.id)
+                     if user else None)
+        if franchise is None:
+            raise AuctionError("Only a franchise's owner or a co-owner can "
+                               "negotiate a retention.")
+        parts = [p.strip() for p in raw.split("|")]
+        player = _find_player(session, parts[0])
+        price = (A.parse_amount(parts[1])
+                 if len(parts) > 1 and parts[1] else None)
+        talk = RN.start_talk(session, season, franchise, player,
+                             by_tg_id=user.id, chat_id=chat.id)
+        if price is not None:
+            RN.make_offer(session, season, talk, price, user.id)
+        session.commit()
+        text = AR.retention_talk_card(session, season, talk)
+        if talk.attempts == 0:
+            text += _holder_warning(session, season, franchise, player)
+        sent = await _reply(update, text,
+                            reply_markup=AR.retention_talk_keyboard(season, talk))
+        message_id = getattr(sent, "message_id", None)
+        if message_id:
+            talk.message_id = message_id
+            session.commit()
+    except AuctionError as exc:
+        session.rollback()
+        await _reply(update, f"⚠️ {html.escape(str(exc))}")
+    except Exception:
+        session.rollback()
+        logger.exception("/retain failed")
+        try:
+            await _reply(update, "⚠️ Something went wrong. Try again.")
+        except Exception:
+            logger.debug("/retain: could not report the failure",
+                         exc_info=True)
+    finally:
+        session.close()
+
+
+async def retention_talk_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Accept his ask / walk away — the negotiating franchise's people only."""
+    from services import retention_negotiation as RN
+    query = update.callback_query
+    if query is None:
+        return
+    user = update.effective_user
+    try:
+        talk_id, answer = (query.data or "")[len(RTN_CB):].split("_", 1)
+        talk_id = int(talk_id)
+    except (ValueError, AttributeError):
+        await query.answer("That button is from an older auction.",
+                           show_alert=True)
+        return
+    session = get_session()
+    try:
+        talk = RN.talk(session, talk_id)
+        season = None
+        if talk is not None:
+            from models import AuctionSeason
+            season = (session.query(AuctionSeason)
+                      .filter(AuctionSeason.id == talk.season_id).first())
+        if talk is None or season is None:
+            await query.answer("Those talks no longer exist.", show_alert=True)
+            return
+        tg_id = user.id if user else None
+        if answer == "ask":
+            lot = RN.accept_counter(session, season, talk, tg_id)
+            session.commit()
+            await query.answer(
+                f"Retained for "
+                f"{A.render_money(lot.sold_price_lakh, season.currency_label)}.")
+        elif answer == "bye":
+            RN.withdraw_talk(session, season, talk, tg_id)
+            session.commit()
+            await query.answer("Talks over." if talk.status == RN.TALK_FAILED
+                               else "Talks cancelled.")
+        else:
+            await query.answer()
+            return
+        try:
+            await query.edit_message_text(
+                AR.retention_talk_card(session, season, talk),
+                parse_mode="HTML", disable_web_page_preview=True)
+        except Exception:
+            logger.debug("auction: could not update the talks card",
+                         exc_info=True)
+    except AuctionError as exc:
+        session.rollback()
+        await query.answer(str(exc)[:190], show_alert=True)
+    except Exception:
+        session.rollback()
+        logger.exception("auction retention talk button failed")
+        await query.answer("That did not land — try again.", show_alert=True)
+    finally:
+        session.close()
+
+
+async def aretmode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aretmode classic|dynamic</code> — which retention system runs."""
+    from services import retention_negotiation as RN
+    user = update.effective_user
+    arg = _arg_text(context).strip().lower()
+
+    def work(session, season):
+        if not arg:
+            return (f"🔁 Retention is <b>{RN.mode(season)}</b>.\n"
+                    f"<code>/aretmode dynamic</code> — owners negotiate, "
+                    f"players decide.\n<code>/aretmode classic</code> — the "
+                    f"slab ladder and an admin's offer.")
+        RN.set_mode(session, season, arg, by_tg_id=user.id if user else None)
+        if RN.is_dynamic(season):
+            return ("🔁 Retention is now <b>dynamic</b>.\n\n"
+                    + AR.retention_slots_text(season))
+        return "🔁 Retention is now <b>classic</b> — the slab ladder."
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+def _rating_span_arg(text):
+    span = A.parse_rating_range(text)
+    if span is None and (text or "").strip().lower() in ("any", "all"):
+        span = (0, 999)
+    if span is None:
+        raise AuctionError("A range looks like 86-91, 90+ or any.")
+    return span
+
+
+def _slot_fields(text):
+    """``range 86-91`` / ``price 20`` / ``name X`` / ``emoji 🥈`` → kwargs."""
+    word, _, value = text.strip().partition(" ")
+    word, value = word.lower(), value.strip()
+    if not value:
+        raise AuctionError("Say what to change: range 86-91, price 20, "
+                           "name Premium or emoji 🥈.")
+    if word in ("range", "rating", "ratings"):
+        low, high = _rating_span_arg(value)
+        return {"low": low, "high": high}
+    if word in ("price", "floor", "start", "min"):
+        return {"floor_lakh": A.parse_amount(value)}
+    if word in ("name", "label"):
+        return {"label": value}
+    if word == "emoji":
+        return {"emoji": value}
+    raise AuctionError(f"“{word}” is not something a slot has — use range, "
+                       f"price, name or emoji.")
+
+
+async def aretslot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Dynamic retention's slot table: list, add, edit, remove, move, preset."""
+    from services import retention_negotiation as RN
+    user = update.effective_user
+    raw = _arg_text(context)
+    by = user.id if user else None
+
+    def work(session, season):
+        verb, _, rest = raw.strip().partition(" ")
+        verb = verb.lower()
+        rest = rest.strip()
+        if not verb or verb in ("list", "show"):
+            return AR.retention_slots_text(season)
+        if verb == "preset":
+            RN.save_slots(session, season, RN.preset(A._as_int(rest, 3)),
+                          by_tg_id=by)
+        elif verb == "add":
+            parts = [p.strip() for p in rest.split("|")]
+            if len(parts) < 3:
+                raise AuctionError("Usage: /aretslot add Name | 70-82 | 5 "
+                                   "[| emoji] [| position]")
+            low, high = _rating_span_arg(parts[1])
+            RN.add_slot(session, season, parts[0], low, high,
+                        A.parse_amount(parts[2]),
+                        parts[3] if len(parts) > 3 and parts[3] else None,
+                        position=(A._as_int(parts[4], None)
+                                  if len(parts) > 4 and parts[4] else None),
+                        by_tg_id=by)
+        elif verb == "edit":
+            parts = [p.strip() for p in rest.split("|")]
+            if len(parts) < 2:
+                raise AuctionError("Usage: /aretslot edit <slot> | range "
+                                   "86-91 (or price 20, name X, emoji 🥈)")
+            changes = {}
+            for part in parts[1:]:
+                changes.update(_slot_fields(part))
+            RN.edit_slot(session, season, parts[0], by_tg_id=by, **changes)
+        elif verb in ("remove", "delete", "rm"):
+            if not rest:
+                raise AuctionError("Usage: /aretslot remove <slot>")
+            RN.remove_slot(session, season, rest, by_tg_id=by)
+        elif verb == "move":
+            name, _, pos = rest.rpartition(" ")
+            if not name or not pos.strip().isdigit():
+                raise AuctionError("Usage: /aretslot move <slot> <position>")
+            RN.move_slot(session, season, name, int(pos), by_tg_id=by)
+        else:
+            raise AuctionError("Usage: /aretslot [add | edit | remove | move "
+                               "| preset 3|2]")
+        return "✅ Saved.\n\n" + AR.retention_slots_text(season)
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+def _on_off(value):
+    value = (value or "").strip().lower()
+    if value in ("on", "yes", "true", "1", "show"):
+        return True
+    if value in ("off", "no", "false", "0", "hide"):
+        return False
+    raise AuctionError("Say on or off.")
+
+
+async def aretrule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Dynamic retention's negotiation knobs. Bare shows them all."""
+    from services import retention_negotiation as RN
+    raw = _arg_text(context)
+
+    def work(session, season):
+        words = raw.split()
+        if not words:
+            return AR.retention_rules_text(season)
+        key, args = words[0].lower(), words[1:]
+
+        def need(n):
+            if len(args) < n:
+                raise AuctionError(f"/aretrule {key} needs {n} value(s) — "
+                                   f"bare /aretrule shows examples.")
+
+        if key == "reset":
+            RN.reset_rules(session, season)
+        elif key == "budget":
+            need(1)
+            RN.set_budget(session, season, A.parse_amount(args[0]))
+        elif key in ("chances", "counter", "jitter", "superstar"):
+            need(1)
+            field = {"chances": "chances", "counter": "counter_pct",
+                     "jitter": "jitter_pct",
+                     "superstar": "superstar_min_rating"}[key]
+            RN.update_rules(session, season, **{field: args[0]})
+        elif key == "lowball":
+            need(1)
+            changes = {"lowball_pct": args[0]}
+            if len(args) > 1:
+                changes["lowball_penalty_pct"] = args[1]
+            RN.update_rules(session, season, **changes)
+        elif key == "loyal":
+            need(1)
+            changes = {"loyal_per_season_pct": args[0]}
+            if len(args) > 1:
+                changes["loyal_max_pct"] = args[1]
+            RN.update_rules(session, season, **changes)
+        elif key == "reveal":
+            need(1)
+            RN.update_rules(session, season, reveal_personality=_on_off(args[0]))
+        elif key == "personality":
+            need(2)
+            name = args[0].lower().replace("-", "")
+            name = {"moneyminded": "money"}.get(name, name)
+            if name not in RN.PERSONALITY_ORDER:
+                raise AuctionError("Personalities: " +
+                                   ", ".join(RN.PERSONALITY_ORDER) + ".")
+            conf = {}
+            if args[1].lower() in ("on", "off"):
+                conf["enabled"] = _on_off(args[1])
+            else:
+                conf["factor"] = args[1]
+                conf["enabled"] = True
+                if len(args) > 2:
+                    conf["weight"] = args[2]
+            RN.update_rules(session, season, personalities={name: conf})
+        else:
+            raise AuctionError(f"No rule called “{key}” — bare /aretrule "
+                               f"lists them.")
+        return "✅ Saved.\n\n" + AR.retention_rules_text(season)
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def aretdemand_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aretdemand 83=13-17 | 89=20-24 | 96=28-32</code> — in crore."""
+    from services import retention_negotiation as RN
+    raw = _arg_text(context)
+
+    def work(session, season):
+        if not raw.strip():
+            return AR.retention_rules_text(season)
+        RN.update_rules(session, season,
+                        demand_curve=RN.parse_demand_curve(raw))
+        return "✅ Demand curve saved.\n\n" + AR.retention_rules_text(season)
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def asetsexport_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/asetsexport [json|csv]</code> — every set, as a file."""
+    import io
+    from services import auction_sets_io as SIO
+    chat = update.effective_chat
+    if chat is None or chat.type not in GROUP_CHAT_TYPES:
+        await _reply(update, GROUP_ONLY)
+        return
+    if not await _require_admin(update):
+        return
+    fmt = (_arg_text(context).strip().lower() or "json").lstrip(".")
+    if fmt not in ("json", "csv"):
+        await _reply(update, "⚠️ Say json or csv — /asetsexport csv")
+        return
+    session = get_session()
+    try:
+        season = _season_for(session, update)
+        if season is None:
+            await _reply(update, NO_AUCTION)
+            return
+        blob = (SIO.export_sets_csv(session, season) if fmt == "csv"
+                else SIO.export_sets_json(session, season))
+        name = SIO.file_name(season, fmt)
+        sets = len(A.list_sets(session, season))
+    except Exception:
+        logger.exception("/asetsexport failed")
+        await _reply(update, "⚠️ Something went wrong. Try again.")
+        return
+    finally:
+        session.close()
+    document = io.BytesIO(blob)
+    document.name = name
+    await update.effective_message.reply_document(
+        document=document, filename=name,
+        caption=(f"🗂 {sets} set(s). Edit it and send it back: reply to the "
+                 f"file with /asetsimport (add “replace” to drop queued "
+                 f"players it leaves out)."))
+
+
+async def asetsimport_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Reply to a sets file with <code>/asetsimport</code> [replace]."""
+    from services import auction_sets_io as SIO
+    chat = update.effective_chat
+    if chat is None or chat.type not in GROUP_CHAT_TYPES:
+        await _reply(update, GROUP_ONLY)
+        return
+    if not await _require_admin(update):
+        return
+    message = update.effective_message
+    replied = getattr(message, "reply_to_message", None)
+    document = (getattr(replied, "document", None)
+                or getattr(message, "document", None))
+    if document is None:
+        await _reply(update, "⚠️ Reply to a .json or .csv sets file with "
+                             "/asetsimport — /asetsexport makes one.")
+        return
+    replace = _arg_text(context).strip().lower() == "replace"
+    name = (getattr(document, "file_name", "") or "").lower()
+    fmt = "csv" if name.endswith(".csv") else (
+        "json" if name.endswith(".json") else None)
+    if (getattr(document, "file_size", 0) or 0) > SIO.MAX_FILE_BYTES:
+        await _reply(update, "⚠️ That file is over 5 MB.")
+        return
+    try:
+        handle = await document.get_file()
+        blob = bytes(await handle.download_as_bytearray())
+    except Exception:
+        logger.exception("/asetsimport: download failed")
+        await _reply(update, "⚠️ Could not download that file. Try again.")
+        return
+
+    def work(session, season):
+        groups = SIO.parse_sets_file(blob, fmt)
+        result = SIO.import_sets(session, season, groups, replace=replace)
+        return (f"📥 <b>Sets imported</b> — {len(groups)} set(s) in the file\n"
+                + html.escape(SIO.summary_text(result)))
 
     await _with_auction(update, work, admin=True, context=context)
 

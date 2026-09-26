@@ -70,6 +70,10 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # franchise that has to answer it. handlers/auction.py lets only that
     # franchise's owner and co-owners accept or decline, on every press.
     "au_ret_",
+    # Dynamic retention talks: opened by whoever typed /retain, but any of the
+    # franchise's owners may take the player's ask or walk away — and the
+    # handler refuses everybody else on every press.
+    "au_rtn_",
     "cric_join",
     "cric_join_",
     "cric_join:",

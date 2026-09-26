@@ -698,6 +698,7 @@ SEASON_RULE_FIELDS = (
     "max_retentions", "min_retentions", "retention_max_spend_lakh",
     "retention_min_rating", "retention_max_rating",
     "retention_categories_json", "retention_price_rules_json",
+    "retention_mode", "retention_slots_json", "retention_rules_json",
     # Right To Match
     "rtm_enabled", "rtm_per_team", "rtm_window_seconds", "rtm_extra_lakh",
     # Expansion teams
@@ -2011,7 +2012,7 @@ def _sign_before_auction(session, season, franchise, player, price, *,
 
 
 def retain(session, season, franchise, player, price_lakh=None, *,
-           now=None, by_tg_id=None):
+           now=None, by_tg_id=None, slot_key=None, talk_rounds=None):
     """Keep a player for a franchise, at a price, out of its purse.
 
     Every refusal names the number that would have worked. The order matters:
@@ -2040,8 +2041,25 @@ def retain(session, season, franchise, player, price_lakh=None, *,
         raise AuctionError(f"{franchise.name} has already retained {count}, "
                            f"which is the maximum.")
 
-    price = (retention_price_for(season, count + 1) if price_lakh is None
-             else _as_int(price_lakh, -1))
+    # Dynamic retention prices by SLOT, not by order: the player fills the
+    # slot his rating reaches and nothing goes under its floor. Checked here
+    # rather than only in the negotiation so /aretainforce and the setup
+    # page cannot step round the structure either.
+    from services import retention_negotiation as RN
+    dynamic = RN.is_dynamic(season)
+    if dynamic:
+        if price_lakh is None:
+            slot = (RN.find_slot(season, slot_key)[1] if slot_key
+                    else RN.slot_for(session, season, franchise, player.rating))
+            price_lakh = slot["floor_lakh"]
+        price = _as_int(price_lakh, -1)
+        if price < 0:
+            raise AuctionError("A retention price cannot be negative.")
+        slot_key = RN.check_signing(session, season, franchise, player, price,
+                                    slot_key)
+    else:
+        price = (retention_price_for(season, count + 1) if price_lakh is None
+                 else _as_int(price_lakh, -1))
     if price < 0:
         raise AuctionError("A retention price cannot be negative.")
 
@@ -2071,13 +2089,22 @@ def retain(session, season, franchise, player, price_lakh=None, *,
                            f"auction only allows retaining "
                            f"{', '.join(allowed)}.")
 
-    return _sign_before_auction(
+    detail = {"slab": count + 1}
+    if dynamic:
+        detail = {"slot": slot_key}
+        if talk_rounds:
+            detail["rounds"] = int(talk_rounds)
+    lot = _sign_before_auction(
         session, season, franchise, player, price,
         kind=ACQ_RETAINED, counter="retained_count",
         ledger_kind=LEDGER_RETENTION, verb="retain",
         note=f"Retained: {player.name}",
         event_kind="retained", mark="🔒", word="retain",
-        detail={"slab": count + 1}, now=now, by_tg_id=by_tg_id)
+        detail=detail, now=now, by_tg_id=by_tg_id)
+    if dynamic:
+        lot.retention_slot = slot_key
+        session.flush()
+    return lot
 
 
 # ── Expansion picks ──────────────────────────────────────────────────
@@ -2393,6 +2420,7 @@ def unretain(session, season, franchise, lot, *, by_tg_id=None):
     lot.sold_to_id = None
     lot.sold_price_lakh = None
     lot.sold_at = None
+    lot.retention_slot = None
 
     session.flush()      # see retain() — autoflush is off
 
@@ -5876,6 +5904,11 @@ def offer_retention(session, season, franchise, player, price_lakh=None, *,
     if not retention_configured(season):
         raise AuctionError("This auction allows no retentions — set a maximum "
                            "first.")
+    from services import retention_negotiation as RN
+    if RN.is_dynamic(season):
+        raise AuctionError("This auction uses dynamic retention — the "
+                           "franchise's owner negotiates with /retain "
+                           "<player>. /aretainforce still signs at once.")
     if int(franchise.retained_count or 0) >= _as_int(season.max_retentions, 0):
         raise AuctionError(f"{franchise.name} has already retained "
                            f"{int(franchise.retained_count or 0)}, which is "

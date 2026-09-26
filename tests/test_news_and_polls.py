@@ -25,6 +25,7 @@ _MODULE_NAMES = ("database", "models", "config", "services.news_service",
                  "services.poll_service", "services.news_banner",
                  "services.activity_service", "services.display_name",
                  "services.tournament_service", "services.auction_service",
+                 "services.retention_negotiation",
                  "services.hall_of_fame")
 
 

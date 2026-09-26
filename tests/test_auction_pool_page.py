@@ -34,7 +34,8 @@ _ENGINE = None
 # it binds ``get_session`` at import time.
 _MODULE_NAMES = ("database", "models", "config", "admin",
                  "services.player_service", "services.player_query",
-                 "services.auction_service", "services.auction_scheduler",
+                 "services.auction_service", "services.retention_negotiation",
+                 "services.auction_sets_io", "services.auction_scheduler",
                  "services.auction_rich", "handlers.auction")
 
 _PID = itertools.count(1)
@@ -823,6 +824,86 @@ class PlayerControlsAndIncrementsTests(PoolPageCase):
         self.session.expire_all()
         self.assertEqual(wanted.id,
                          self.A.next_queued(self.session, self.season_id).id)
+
+
+
+class RetentionAndSetsFileTests(PoolPageCase):
+    """Dynamic retention's controls and the sets file, over HTTP."""
+
+    def setUp(self):
+        super().setUp()
+        self.A.add_players_to_pool(self.session, self.season,
+                                   self.players[:2], set_name="Marquee")
+        self.A.add_players_to_pool(self.session, self.season,
+                                   self.players[2:], set_name="Rest")
+        self.session.commit()
+
+    def rn(self):
+        from services import retention_negotiation as RN
+        self.session.expire_all()
+        return RN
+
+    def test_the_mode_toggle_and_the_dynamic_panel(self):
+        self.post({"action": "retention_mode", "mode": "dynamic"})
+        self.assertTrue(self.rn().is_dynamic(self.season))
+        body = self.get()
+        self.assertIn("Save slots", body)
+        self.assertIn("Save negotiation rules", body)
+        self.post({"action": "retention_mode", "mode": "classic"})
+        self.assertFalse(self.rn().is_dynamic(self.season))
+        self.assertNotIn("Save slots", self.get())
+
+    def test_slots_save_with_an_added_row_and_a_removed_one(self):
+        self.post({"action": "retention_mode", "mode": "dynamic"})
+        self.post({"action": "retention_negotiation", "ret_budget": "70"})
+        self.post({
+            "action": "retention_slots",
+            "slot_key": ["elite", "premium", "core", ""],
+            "slot_emoji": ["🥇", "🥈", "🥉", "🧢"],
+            "slot_label": ["Icon", "Premium", "Core", "Uncapped"],
+            "slot_min": ["92", "87", "83", "70"],
+            "slot_max": ["99", "91", "86", "82"],
+            "slot_floor": ["25", "18", "12", "4"],
+            "slot_remove": ["2"],
+        })
+        slots = self.rn().slots(self.season)
+        self.assertEqual(["Icon", "Premium", "Uncapped"],
+                         [s["label"] for s in slots])
+        self.assertEqual(2500, slots[0]["floor_lakh"])
+        self.assertEqual(3, self.season.max_retentions)
+
+    def test_negotiation_rules_save(self):
+        self.post({"action": "retention_mode", "mode": "dynamic"})
+        self.post({"action": "retention_negotiation", "chances": "4",
+                   "counter_pct": "85", "demand_curve": "80=10-12 | 95=30-34",
+                   "p_money_enabled": "", "p_balanced_enabled": "1"})
+        rules = self.rn().rules(self.season)
+        self.assertEqual(4, rules["chances"])
+        self.assertEqual([[80, 1000, 1200], [95, 3000, 3400]],
+                         rules["demand_curve"])
+        self.assertFalse(rules["personalities"]["money"]["enabled"])
+
+    def test_sets_download_and_upload(self):
+        for fmt in ("json", "csv"):
+            response = self.client.get(
+                f"/auctions/{self.season_id}/sets.{fmt}")
+            self.assertEqual(200, response.status_code)
+            self.assertIn("attachment", response.headers["Content-Disposition"])
+        blob = self.client.get(
+            f"/auctions/{self.season_id}/sets.json").get_data()
+        import io
+        other = self.A.create_season(self.session, f"Copy {self.tag}")
+        self.session.commit()
+        response = self.client.post(
+            f"/auctions/{other.id}",
+            data={"action": "sets_import",
+                  "sets_file": (io.BytesIO(blob), "sets.json")},
+            content_type="multipart/form-data", follow_redirects=True)
+        self.assertEqual(200, response.status_code)
+        self.session.expire_all()
+        self.assertEqual(
+            ["Marquee", "Rest"],
+            [e["name"] for e in self.A.list_sets(self.session, other)])
 
 
 if __name__ == "__main__":       # pragma: no cover

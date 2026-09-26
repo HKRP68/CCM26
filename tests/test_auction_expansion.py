@@ -38,7 +38,8 @@ _ENGINE = None
 
 _MODULE_NAMES = ("database", "models", "config",
                  "services.player_service", "services.player_query",
-                 "services.auction_service", "services.auction_scheduler",
+                 "services.auction_service", "services.retention_negotiation",
+                 "services.auction_scheduler",
                  "handlers.auction")
 
 _PID = itertools.count(1)

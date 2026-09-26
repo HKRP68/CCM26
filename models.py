@@ -3836,6 +3836,18 @@ class AuctionSeason(Base):
     # Shut the window. ``start()`` stamps this too, so opening the auction
     # closes retention rather than leaving it ajar.
     retention_locked_at = Column(DateTime, nullable=True)
+    # Which retention system this season runs. NULL / ``classic`` is the slab
+    # ladder above with an admin's offer and the franchise's Accept;
+    # ``dynamic`` is the slot table below, where the owner negotiates and the
+    # PLAYER decides (``services/retention_negotiation``). One or the other,
+    # never both — switching is refused once anybody has been kept.
+    retention_mode = Column(String(12), nullable=True)
+    # Dynamic mode's slots, in order: [{"key", "label", "emoji", "min_rating",
+    # "max_rating", "floor_lakh"}, ...]. NULL = the three-slot preset.
+    retention_slots_json = Column(Text, nullable=True)
+    # Dynamic mode's negotiation knobs (chances, demand curve, personalities,
+    # counter and lowball thresholds, jitter). NULL = every default.
+    retention_rules_json = Column(Text, nullable=True)
 
     # ── Right To Match ─────────────────────────────────────────────────
     # The IPL 2025 rule, in full: when a lot's clock expires, the franchise
@@ -4132,6 +4144,10 @@ class AuctionLot(Base):
                                    nullable=True)
     # auction | retained | rtm — how this player came to be on a squad.
     acquisition = Column(String(20), default="auction", nullable=False)
+    # Dynamic retention only: the key of the slot this retained player fills,
+    # so a franchise's open slots are one query rather than a guess from
+    # ratings. NULL on everything else, and cleared by ``unretain``.
+    retention_slot = Column(String(24), nullable=True)
     # Which of the three RTM windows is open: intent | final_offer | decision,
     # NULL whenever the lot is not in one. ``deadline_at`` is reused for
     # whichever window it is, so this is what says which question the clock is
@@ -4292,6 +4308,57 @@ class AuctionEvent(Base):
 
     __table_args__ = (
         Index("ix_auction_event_season", "season_id", "id"),
+    )
+
+
+class AuctionRetentionTalk(Base):
+    """A dynamic-mode retention negotiation between a franchise and a player.
+
+    The franchise offers; the player — ``services/retention_negotiation`` —
+    accepts, counters or rejects against a hidden Minimum Acceptable Price
+    (``map_lakh``) worked out when the talk opened. Every counter or
+    rejection spends one of ``rules.chances``; spending the last one sends the
+    player into the auction (``failed``) and he cannot be approached again.
+    """
+    __tablename__ = "auction_retention_talks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_id = Column(Integer, ForeignKey("auction_seasons.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    franchise_id = Column(Integer, ForeignKey("auction_franchises.id", ondelete="CASCADE"),
+                          nullable=False, index=True)
+    player_id = Column(Integer, ForeignKey("players.id", ondelete="CASCADE"),
+                       nullable=False)
+    player_name = Column(String(150), nullable=False)
+    rating = Column(Integer, default=0, nullable=False)
+    slot_key = Column(String(24), nullable=False)
+    # open | signed | failed | withdrawn
+    status = Column(String(12), default="open", nullable=False, index=True)
+    attempts = Column(Integer, default=0, nullable=False)
+    last_offer_lakh = Column(Integer, nullable=True)
+    # What the player asked for on his last counter; NULL when he has not
+    # countered, or once a new offer has superseded it.
+    counter_lakh = Column(Integer, nullable=True)
+    map_lakh = Column(Integer, nullable=False)
+    personality = Column(String(16), nullable=False)
+    tenure = Column(Integer, default=0, nullable=False)
+    # The player's last line, so the card can be redrawn from the row alone.
+    last_reply = Column(String(300), nullable=True)
+    last_verdict = Column(String(12), nullable=True)
+    signed_price_lakh = Column(Integer, nullable=True)
+    opened_by_tg_id = Column(BigInteger, nullable=True)
+    chat_id = Column(BigInteger, nullable=True)
+    message_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    closed_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        # One live negotiation per player per season, held by the database:
+        # two franchises opening talks with him on one tick must not both win.
+        Index("ix_auction_ret_talk_open", "season_id", "player_id",
+              unique=True,
+              sqlite_where=text("status = 'open'"),
+              postgresql_where=text("status = 'open'")),
     )
 
 
