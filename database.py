@@ -1007,6 +1007,9 @@ def _migrate_add_columns():
     # back to the current queue order without it.
     _try_add("auction_seasons", "countdown_seconds", "INTEGER DEFAULT 3")
     _try_add("auction_seasons", "opening_order_json", "TEXT")
+    # The quiet gap after every bid (see AuctionLot.last_bid_at).
+    _try_add("auction_seasons", "bid_gap_seconds", "INTEGER DEFAULT 3")
+    _try_add("auction_lots", "last_bid_at", "TIMESTAMP")
 
     # ── Franchise Auction: focus mode ──
     # While an auction is live or paused its group answers auction commands and

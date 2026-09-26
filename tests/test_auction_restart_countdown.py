@@ -23,6 +23,8 @@ from tests.test_auction_bidding import (  # noqa: F401 — module fixtures
 
 class RestartTests(AuctionCase):
 
+    bid_gap = 0
+
     def setUp(self):
         super().setUp()
         self.season.auto_accelerated = 0
@@ -145,6 +147,8 @@ class RestartTests(AuctionCase):
 
 class CountdownTests(AuctionCase):
 
+    bid_gap = 0
+
     def setUp(self):
         super().setUp()
         from services import auction_scheduler as S
@@ -229,6 +233,57 @@ class CountdownTests(AuctionCase):
                 now=self.lot.deadline_at - timedelta(seconds=2))
 
         self.assertIsNone(asyncio.run(arm()), "off means no countdown")
+
+
+class BidGapTests(AuctionCase):
+    """After any bid, nobody may bid again for a few seconds."""
+
+    bid_gap = 3
+
+    def setUp(self):
+        super().setUp()
+        self.build_pool()
+        self.lot = self.start()
+        self.session.commit()
+
+    def bid(self, franchise, tg_id, now):
+        amount = self.A.next_min_bid(self.season, self.lot)
+        self.lot = self.A.place_bid(self.session, self.season, self.lot,
+                                    franchise, amount, now=now, by_tg_id=tg_id)
+        self.session.commit()
+        return self.lot
+
+    def test_a_bid_inside_the_gap_is_told_who_holds_the_lot(self):
+        self.bid(self.mumbai, ALICE, NOW)
+        with self.assertRaises(self.A.BidTooSoon) as caught:
+            self.bid(self.chennai, BOB, NOW + timedelta(seconds=2))
+        said = str(caught.exception)
+        self.assertIn("Current bid holder", said)
+        self.assertIn(f"Player: {self.lot.name}", said)
+        self.assertIn("Team: Mumbai", said)
+        self.session.rollback()
+        self.assertEqual(self.mumbai.id, self.lot.current_bidder_id)
+
+    def test_after_the_gap_any_team_may_answer(self):
+        self.bid(self.mumbai, ALICE, NOW)
+        lot = self.bid(self.chennai, BOB, NOW + timedelta(seconds=3))
+        self.assertEqual(self.chennai.id, lot.current_bidder_id)
+
+    def test_a_late_bid_leaves_time_to_answer_it(self):
+        late = self.lot.deadline_at - timedelta(seconds=1)
+        lot = self.bid(self.mumbai, ALICE, late)
+        self.assertGreaterEqual(lot.deadline_at,
+                                late + timedelta(seconds=self.bid_gap + 1))
+
+    def test_the_gap_is_editable_and_can_be_off(self):
+        self.assertEqual(0, self.A.set_bid_gap(self.session, self.season,
+                                               "off"))
+        self.session.commit()
+        self.bid(self.mumbai, ALICE, NOW)
+        lot = self.bid(self.chennai, BOB, NOW)
+        self.assertEqual(self.chennai.id, lot.current_bidder_id)
+        with self.assertRaises(self.A.AuctionError):
+            self.A.set_bid_gap(self.session, self.season, "60")
 
 
 if __name__ == "__main__":

@@ -3888,6 +3888,10 @@ class AuctionSeason(Base):
     # "Selling X to Team for ₹…", then 3, 2, 1 — and then SOLD. This is how
     # many seconds that count runs; 0 turns it off. ``/acountdown`` sets it.
     countdown_seconds = Column(Integer, default=3, nullable=False)
+    # The quiet gap after every bid: for this many seconds no franchise may
+    # bid again, and a bid that tries is told who holds the lot. Not shown on
+    # the board. 0 turns it off; ``/abidgap`` sets it.
+    bid_gap_seconds = Column(Integer, default=3, nullable=False)
     # The pool's order when the auction first started, as a JSON list of
     # ``[lot_id, set_name]``. ``/arestart`` puts the queue back in exactly this
     # order — the accelerated round renumbers and re-files unsold players, and
@@ -4050,6 +4054,10 @@ class AuctionLot(Base):
     # bid resets it to 0.
     going_stage = Column(Integer, default=0, nullable=False)
     extensions_used = Column(Integer, default=0, nullable=False)
+    # When the standing bid landed. The next bid from ANY franchise waits
+    # ``AuctionSeason.bid_gap_seconds`` after it — checked inside the bid's own
+    # conditional UPDATE, so two bids on one tick cannot both slip through.
+    last_bid_at = Column(DateTime, nullable=True)
     current_bid_lakh = Column(Integer, nullable=True)
     current_bidder_id = Column(Integer, ForeignKey("auction_franchises.id",
                                                    ondelete="SET NULL"),

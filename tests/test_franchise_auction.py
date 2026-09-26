@@ -139,6 +139,9 @@ class AuctionCase(unittest.TestCase):
     max_squad = 5
     max_overseas = 8
     purse_lakh = 10_000          # ₹100 Cr
+    # The quiet gap after a bid is its own feature (see
+    # tests/test_auction_restart_countdown.py); these tests bid on one tick.
+    bid_gap = 0
 
     def setUp(self):
         from database import get_session
@@ -165,7 +168,8 @@ class AuctionCase(unittest.TestCase):
         self.season = A.create_season(
             self.session, f"Season {tag}", min_squad_size=self.min_squad,
             max_squad_size=self.max_squad, max_overseas=self.max_overseas,
-            opening_purse_lakh=self.purse_lakh)
+            opening_purse_lakh=self.purse_lakh,
+            bid_gap_seconds=self.bid_gap)
         A.bind_chat(self.session, self.season, -1000 - tag)
         self.mumbai = A.create_franchise(self.session, self.season, "Mumbai",
                                          owner_tg_id=ALICE, owner_name="Alice")

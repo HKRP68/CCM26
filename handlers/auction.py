@@ -303,6 +303,12 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     by_tg_id=user.id, source="tg")
         session.commit()
         landed = amount
+    except A.BidTooSoon as exc:
+        # Inside the quiet gap after the last bid: not an error, just "this is
+        # who holds him" — the gap itself is never shown.
+        session.rollback()
+        await _reply(update, html.escape(str(exc)))
+        return
     except AuctionError as exc:
         session.rollback()
         await _reply(update, f"⚠️ {html.escape(str(exc))}")
@@ -913,6 +919,29 @@ async def acountdown_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return "⏳ Countdown <b>off</b> — lots resolve without one."
         return (f"⏳ Countdown set: <b>{seconds}</b> before every sold or "
                 f"unsold lot.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def abidgap_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/abidgap 3</code> — the quiet gap after every bid, or off.
+
+    For that many seconds after a bid no franchise may bid again; a bid that
+    tries is told who holds the lot. Nothing on the board shows it.
+    """
+    raw = _arg_text(context)
+
+    def work(session, season):
+        if not raw:
+            gap = A.bid_gap_seconds(season)
+            state = (f"is <b>{gap}s</b>" if gap else "is <b>off</b>")
+            return (f"🤫 The gap after every bid {state}.\n"
+                    f"Change it with <code>/abidgap 5</code>, or "
+                    f"<code>/abidgap off</code>.")
+        gap = A.set_bid_gap(session, season, raw)
+        if not gap:
+            return "🤫 Gap after a bid <b>off</b> — any team may answer at once."
+        return (f"🤫 After every bid, nobody may bid again for <b>{gap}s</b>.")
 
     await _with_auction(update, work, admin=True, context=context)
 

@@ -654,6 +654,8 @@ SEASON_RULE_FIELDS = (
     "direct_bids",
     # How long the hammer countdown runs before a lot is sold or passed.
     "countdown_seconds",
+    # The quiet gap every franchise waits after a bid.
+    "bid_gap_seconds",
 )
 
 # What a franchise takes with it into the next season: who it is and who runs
@@ -2740,6 +2742,7 @@ def open_lot(session, season, lot, *, now=None):
                .update({"status": LOT_ON_BLOCK,
                         "deadline_at": now + timedelta(seconds=max(5, int(season.bid_seconds or 30))),
                         "going_stage": 0, "extensions_used": 0,
+                        "last_bid_at": None,
                         "current_bid_lakh": None, "current_bidder_id": None,
                         "opened_at": now}, synchronize_session=False))
     if not claimed:
@@ -3075,6 +3078,7 @@ def restart_auction(session, season, *, now=None, by_tg_id=None):
         lot.rtm_base_bid_lakh = None
         lot.rtm_offered_at = None
         lot.rtm_matched_by_id = None
+        lot.last_bid_at = None
 
     season.accelerated_done = 0
     season.current_lot_id = None
@@ -3095,6 +3099,57 @@ def restart_auction(session, season, *, now=None, by_tg_id=None):
 
 
 COUNTDOWN_MAX = 10
+BID_GAP_MAX = 10
+
+
+def bid_gap_seconds(season):
+    """The quiet gap after every bid — 0 when it is off."""
+    return max(0, min(BID_GAP_MAX,
+                      _as_int(getattr(season, "bid_gap_seconds", 3), 3)))
+
+
+def set_bid_gap(session, season, seconds):
+    raw = str(seconds or "").strip().lower()
+    value = 0 if raw in ("off", "0", "no", "none") else _as_int(raw, -1)
+    if value < 0 or value > BID_GAP_MAX:
+        raise AuctionError(f"The gap after a bid runs between 1 and "
+                           f"{BID_GAP_MAX} seconds — or off.")
+    season.bid_gap_seconds = value
+    return value
+
+
+class BidTooSoon(AuctionError):
+    """A bid inside the quiet gap after the last one."""
+
+
+def bid_holder_message(session, season, lot):
+    """Who holds the lot right now — what a bid inside the gap is told."""
+    team = None
+    if lot is not None and lot.current_bidder_id is not None:
+        team = (session.query(AuctionFranchise)
+                .filter(AuctionFranchise.id == lot.current_bidder_id).first())
+    lines = ["⏳ Current bid holder",
+             f"Player: {lot.name if lot is not None else '?'}",
+             f"Team: {team.name if team is not None else '?'}"]
+    if lot is not None and lot.current_bid_lakh is not None:
+        lines.append(f"Bid: {render_money(lot.current_bid_lakh, season.currency_label)}")
+    lines.append("Bid again in a moment.")
+    return "\n".join(lines)
+
+
+def _in_bid_gap(season, lot, franchise, now, *, by_admin=False):
+    """True while the last bid on this lot is younger than the gap.
+
+    The franchise already holding the lot is left to ``validate_bid``, whose
+    "you already hold the top bid" is the more useful answer. An admin entering
+    a bid is correcting the room, not racing it.
+    """
+    gap = bid_gap_seconds(season)
+    if (not gap or by_admin or lot is None or lot.status != LOT_ON_BLOCK
+            or lot.last_bid_at is None
+            or lot.current_bidder_id == franchise.id):
+        return False
+    return now < lot.last_bid_at + timedelta(seconds=gap)
 
 
 def countdown_seconds(season):
@@ -3525,6 +3580,8 @@ def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
     twice for one bid.
     """
     now = now or datetime.utcnow()
+    if _in_bid_gap(season, lot, franchise, now, by_admin=by_admin):
+        raise BidTooSoon(bid_holder_message(session, season, lot))
     amount = validate_bid(session, season, lot, franchise, amount_lakh, now=now,
                           by_tg_id=by_tg_id, by_admin=by_admin)
 
@@ -3548,17 +3605,31 @@ def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
                     AuctionLot.extensions_used < cap)
                if window and cap and not final_offer else None)
 
+    # The quiet gap after a bid: nobody may answer it for ``gap`` seconds, so
+    # a bid must leave the room at least that long (plus one) to answer it —
+    # otherwise a bid two seconds from the end could never be topped.
+    gap = 0 if (final_offer or by_admin) else bid_gap_seconds(season)
+    answerable = now + timedelta(seconds=gap + 1) if gap else None
+
     values = {
         "current_bid_lakh": amount,
         "current_bidder_id": franchise.id,
         "bid_count": AuctionLot.bid_count + 1,
         "going_stage": 0,
+        "last_bid_at": now,
     }
     if sniping is not None:
-        values["deadline_at"] = case((sniping, extended_to),
-                                     else_=AuctionLot.deadline_at)
+        values["deadline_at"] = case(
+            (sniping, max(extended_to, answerable or extended_to)),
+            *([(AuctionLot.deadline_at < answerable, answerable)]
+              if answerable else []),
+            else_=AuctionLot.deadline_at)
         values["extensions_used"] = (AuctionLot.extensions_used
                                      + case((sniping, 1), else_=0))
+    elif answerable is not None:
+        values["deadline_at"] = case(
+            (AuctionLot.deadline_at < answerable, answerable),
+            else_=AuctionLot.deadline_at)
 
     claimed = (session.query(AuctionLot)
                .filter(AuctionLot.id == lot.id,
@@ -3576,7 +3647,11 @@ def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
                            AuctionLot.current_bid_lakh < amount),
                        *([] if final_offer else
                          [or_(AuctionLot.current_bidder_id.is_(None),
-                              AuctionLot.current_bidder_id != franchise.id)]))
+                              AuctionLot.current_bidder_id != franchise.id)]),
+                       *([or_(AuctionLot.last_bid_at.is_(None),
+                              AuctionLot.last_bid_at
+                              <= now - timedelta(seconds=gap))]
+                         if gap else []))
                .update(values, synchronize_session=False))
 
     # The UPDATE bypassed the identity map, so every loaded row may be stale.
@@ -3589,6 +3664,8 @@ def place_bid(session, season, lot, franchise, amount_lakh, *, now=None,
     if not claimed:
         # Re-read only on the losing path, and say which thing moved — "invalid
         # bid" against a running clock is useless to the person who typed it.
+        if gap and _in_bid_gap(season, lot, franchise, now):
+            raise BidTooSoon(bid_holder_message(session, season, lot))
         raise _why_the_bid_lost(season, lot, franchise, amount, now)
 
     session.add(AuctionBid(season_id=season.id, lot_id=lot.id,
@@ -4095,6 +4172,8 @@ def undo_last_bid(session, season, lot, *, now=None, by_tg_id=None):
                 .order_by(AuctionBid.id.desc()).first())
     lot.current_bid_lakh = previous.amount_lakh if previous else None
     lot.current_bidder_id = previous.franchise_id if previous else None
+    # The bid the gap was counting from is gone; the room may answer now.
+    lot.last_bid_at = None
     lot.bid_count = max(0, int(lot.bid_count or 1) - 1)
     lot.going_stage = 0
     floor = now + timedelta(seconds=max(1, int(season.snipe_extend_seconds or 10)))

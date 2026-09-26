@@ -166,6 +166,14 @@ count and a fresh one starts, a bid that does not re-announces the new leader.
 `/acountdown 5` changes the length (1–10), `/acountdown off` turns it off, bare
 `/acountdown` reads it back; default 3.
 
+**The gap after a bid.** After every bid, no team may bid again for 3 seconds
+(`/abidgap 5` changes it, `/abidgap off` removes it). Nothing on the board
+shows it; a bid inside the gap is answered with the current bid holder —
+player, team and bid — instead of landing. The team already holding the lot
+is told it holds the top bid, as before, and an admin entering a bid from the
+console is not held back. A bid in the last seconds pushes the clock out to
+at least the gap plus one second, so it can always be answered.
+
 **Starting again.** `/arestart confirm` restarts the whole auction from the
 first player: every sale, Right To Match, auto-fill, unsold player and bid is
 wiped, each franchise gets back its money, squad count and RTM cards (as one
@@ -177,7 +185,7 @@ Bare `/arestart` only explains this; refused once squads are published.
 Admin: `/adminhelp` (the reference card, also `/auction`), `/anew`, `/abind`, `/astart`,
 `/apause`, `/aresume`, `/anext`, `/aextend`, `/asold`, `/aunsold`,
 `/aundobid`, `/awithdraw`, `/areinstate`, `/aforce`, `/aunsold <list>`,
-`/aincrement`, `/atimer`, `/acountdown`, `/arestart`, `/asnipe`, `/afocus`, `/adirect`,
+`/aincrement`, `/atimer`, `/acountdown`, `/arestart`, `/abidgap`, `/asnipe`, `/afocus`, `/adirect`,
 `/agrant`, `/aco`,
 `/apublish`, `/acancel`, plus retention's `/aretlock on`, `/aretain`,
 `/aunretain`, RTM's `/artmset`, `/artmcards`, `/artmforce`, `/artmundo`, the

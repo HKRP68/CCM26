@@ -470,6 +470,7 @@ ADMIN_MENU_COMMANDS = (
     ("atimer", "Admin: seconds allowed per auction lot"),
     ("acountdown", "Admin: the 3-2-1 countdown before a lot is sold"),
     ("arestart", "Admin: restart the auction from the first player"),
+    ("abidgap", "Admin: seconds every team waits after a bid"),
     ("asnipe", "Admin: anti-snipe window, extension and cap"),
     ("afocus", "Admin: lock this group to auction commands while it runs"),
     ("adirect", "Admin: allow typed bid amounts, or the next step only"),
@@ -2291,6 +2292,7 @@ def main():
             aunsold_handler, aundobid_handler, awithdraw_handler,
             areinstate_handler, aforce_handler, aincrement_handler,
             atimer_handler, acountdown_handler, arestart_handler,
+            abidgap_handler,
             asnipe_handler, afocus_handler, adirect_handler,
             agrant_handler, aco_handler,
             apublish_handler, acancel_handler,
@@ -2367,6 +2369,8 @@ def main():
         # the whole auction again from lot one — see handlers/auction.py.
         app.add_handler(CommandHandler("acountdown", acountdown_handler))
         app.add_handler(CommandHandler("arestart", arestart_handler))
+        # The quiet gap after every bid, before any team may bid again.
+        app.add_handler(CommandHandler("abidgap", abidgap_handler))
         app.add_handler(CommandHandler("asnipe", asnipe_handler))
         # Focus mode: while the auction runs, this group answers auction
         # commands and nothing else. ON by default — the rules live in

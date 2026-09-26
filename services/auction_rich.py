@@ -1379,6 +1379,8 @@ ADMIN_SECTIONS = (
         ("/atimer <seconds>", "Seconds per lot (default 30)"),
         ("/acountdown <seconds | off>", "The 3-2-1 countdown before a lot "
                                         "is sold or unsold (default 3)"),
+        ("/abidgap <seconds | off>", "Seconds every team waits after a bid "
+                                     "(default 3)"),
         ("/asnipe <window> <extend> <max>", "Anti-snipe rule, e.g. /asnipe 10 10 5"),
         ("/aincrement 2:10L, 5:20L, 50L", "Bid increments — bare reads them, "
                                           "reset restores the default"),
