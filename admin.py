@@ -32,6 +32,8 @@ from services.telegram_user_service import user_lookup_filter
 from services.player_service import not_career
 from services import player_query
 from services import auction_service as auction_svc
+from services import auction_sets_io as auction_sets_io
+from services import retention_negotiation as retention_rn
 from services.match_outcome import (
     mark_end, derive_end_reason, end_reason_filter, match_type_label,
     match_type_family, END_REASONS, END_REASON_LABELS, END_REASON_HINTS,
@@ -23115,7 +23117,46 @@ def admin_auction_detail(season_id):
             # integer, and NULL on a season older than the column means ON.
             focus_mode_on=auction_svc.focus_mode_on(season),
             direct_bids_on=auction_svc.direct_bids_on(season),
+            # ── Dynamic retention ──
+            ret_dynamic=retention_rn.is_dynamic(season),
+            ret_slots=retention_rn.slots(season),
+            ret_rules=retention_rn.rules(season),
+            ret_curve_text=retention_rn.format_demand_curve(season),
+            ret_personalities=retention_rn.PERSONALITY_ORDER,
+            ret_personality_label=retention_rn.personality_label,
+            ret_talks=retention_rn.talks_for(db, season.id),
+            ret_franchise_names={f.id: f.name for f in
+                                 auction_svc.franchises(db, season.id)},
+            ret_slot_names={slot["key"]: slot["label"]
+                            for slot in retention_rn.slots(season)},
+            ret_slot_emoji={slot["key"]: slot["emoji"]
+                            for slot in retention_rn.slots(season)},
+            ret_open_slots=lambda f: retention_rn.open_slots(db, season, f),
+            ret_budget_left=lambda f: retention_rn.budget_left(db, season, f),
         )
+    finally:
+        db.close()
+
+
+@app.route("/auctions/<int:season_id>/sets.<fmt>")
+@login_required
+def admin_auction_sets_file(season_id, fmt):
+    """Every set in the pool as a file — JSON or CSV. A GET, so a link."""
+    if fmt not in ("json", "csv"):
+        abort(404)
+    db = get_session()
+    try:
+        season = _auction_or_404(db, season_id)
+        if fmt == "csv":
+            blob = auction_sets_io.export_sets_csv(db, season)
+            mimetype = "text/csv; charset=utf-8"
+        else:
+            blob = auction_sets_io.export_sets_json(db, season)
+            mimetype = "application/json; charset=utf-8"
+        name = auction_sets_io.file_name(season, fmt)
+        return Response(blob, mimetype=mimetype,
+                        headers={"Content-Disposition":
+                                 f'attachment; filename="{name}"'})
     finally:
         db.close()
 
@@ -23509,6 +23550,106 @@ def _auction_detail_action(db, season, action):
         log_admin(db, "auction_unretain", "auction", season.id, franchise.name,
                   detail=lot.name)
         flash(f"🔓 {lot.name} released into the pool.", "success")
+
+    elif action == "retention_mode":
+        retention_rn.set_mode(db, season, request.form.get("mode"))
+        log_admin(db, "auction_retention_mode", "auction", season.id,
+                  season.name, detail=retention_rn.mode(season))
+        flash(f"🔁 Retention is now {retention_rn.mode(season)}.", "success")
+
+    elif action == "retention_slots":
+        keys = request.form.getlist("slot_key")
+        emojis = request.form.getlist("slot_emoji")
+        labels = request.form.getlist("slot_label")
+        lows = request.form.getlist("slot_min")
+        highs = request.form.getlist("slot_max")
+        floors = request.form.getlist("slot_floor")
+        drop = {int(v) for v in request.form.getlist("slot_remove")
+                if str(v).isdigit()}
+        rows = []
+        for index, label in enumerate(labels):
+            if index in drop:
+                continue
+            floor_raw = floors[index] if index < len(floors) else ""
+            rows.append({
+                "key": keys[index] if index < len(keys) else "",
+                "emoji": emojis[index] if index < len(emojis) else "",
+                "label": label,
+                "min_rating": lows[index] if index < len(lows) else "",
+                "max_rating": highs[index] if index < len(highs) else "",
+                "floor_lakh": (auction_svc.parse_amount(floor_raw)
+                               if str(floor_raw).strip() else -1),
+            })
+        retention_rn.save_slots(db, season, rows)
+        log_admin(db, "auction_retention_slots", "auction", season.id,
+                  season.name, detail=f"{len(rows)} slot(s)")
+        flash(f"✅ {len(rows)} retention slot(s) saved.", "success")
+
+    elif action == "retention_slots_preset":
+        retention_rn.save_slots(
+            db, season, retention_rn.preset(_int_form("preset", 3)))
+        log_admin(db, "auction_retention_slots", "auction", season.id,
+                  season.name, detail="preset")
+        flash("✅ Retention slots reset to the preset.", "success")
+
+    elif action == "retention_negotiation":
+        budget = _money_form("ret_budget", None)
+        if budget is not None:
+            retention_rn.set_budget(db, season, budget)
+        personalities = {}
+        for name in retention_rn.PERSONALITY_ORDER:
+            conf = {"enabled": bool(request.form.get(f"p_{name}_enabled"))}
+            for field in ("factor", "weight"):
+                raw = (request.form.get(f"p_{name}_{field}") or "").strip()
+                if raw:
+                    conf[field] = raw
+            personalities[name] = conf
+        changes = {"personalities": personalities,
+                   "reveal_personality": bool(request.form.get("reveal_personality"))}
+        for key in ("chances", "counter_pct", "lowball_pct",
+                    "lowball_penalty_pct", "jitter_pct",
+                    "superstar_min_rating", "loyal_per_season_pct",
+                    "loyal_max_pct"):
+            raw = (request.form.get(key) or "").strip()
+            if raw:
+                changes[key] = raw
+        curve = (request.form.get("demand_curve") or "").strip()
+        if curve:
+            changes["demand_curve"] = retention_rn.parse_demand_curve(curve)
+        retention_rn.update_rules(db, season, **changes)
+        log_admin(db, "auction_retention_negotiation", "auction", season.id,
+                  season.name)
+        flash("✅ Negotiation rules saved.", "success")
+
+    elif action == "retention_negotiation_reset":
+        retention_rn.reset_rules(db, season)
+        log_admin(db, "auction_retention_negotiation", "auction", season.id,
+                  season.name, detail="reset")
+        flash("↩️ Negotiation rules are back to their defaults.", "success")
+
+    elif action == "retention_talk_cancel":
+        talk = retention_rn.talk(db, _parse_int(request.form.get("talk_id")) or 0)
+        if talk is None or talk.season_id != season.id:
+            abort(404)
+        retention_rn.withdraw_talk(db, season, talk, admin=True)
+        log_admin(db, "auction_retention_talk_cancel", "auction", season.id,
+                  talk.player_name)
+        flash(f"🚫 Talks with {talk.player_name} cancelled.", "success")
+
+    elif action == "sets_import":
+        upload = request.files.get("sets_file")
+        if upload is None or not (upload.filename or "").strip():
+            raise auction_svc.AuctionError("Choose a .json or .csv sets file.")
+        name = (upload.filename or "").lower()
+        fmt = ("csv" if name.endswith(".csv")
+               else "json" if name.endswith(".json") else None)
+        groups = auction_sets_io.parse_sets_file(upload.read(), fmt)
+        result = auction_sets_io.import_sets(
+            db, season, groups, replace=bool(request.form.get("replace_missing")))
+        log_admin(db, "auction_sets_import", "auction", season.id, season.name,
+                  detail=auction_sets_io.summary_text(result)[:200])
+        flash("📥 Sets imported — " + auction_sets_io.summary_text(result),
+              "success" if not result["unmatched"] else "error")
 
     elif action == "retention_lock":
         auction_svc.lock_retention(db, season)

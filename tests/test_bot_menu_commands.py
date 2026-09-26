@@ -163,6 +163,12 @@ UNPUBLISHED_ON_PURPOSE = {
     # bucket, which would otherwise pass the 100-command ceiling.
     "asetorder", "aretainforce", "aoffers", "aretcancel", "aaccelmode",
     "aadminremove", "aadmins",
+    "aretmode", "aretslot", "aretrule", "aretdemand", "asetsexport",
+    "asetsimport",
+    # Dynamic retention's owner command — on /adminhelp's player section, the
+    # /aretlock readout and every negotiation card, which is where an owner
+    # retaining somebody already is.
+    "retain",
     # Player Draft trades — the precedent the auction followed.
     "dtrade", "dtrades", "dtradecancel",
     # Challenge League tournament views — /help, the hub's buttons, and

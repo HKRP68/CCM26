@@ -649,7 +649,13 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/asetorder A, B, C` | Order the whole queue by set — the numbers `/asets` shows are the order it runs in, and the website's Sets card does the same with ↑ / ↓ |
 | `/aaccelmode on\|off` | The automatic ⚡ Accelerated round for unsold players (default on) |
 | `/aretainforce <franchise> \| <player> \| [price]` | Retain at once, without the franchise's Accept |
-| `/aoffers` · `/aretcancel <player>` | Retention offers waiting, and withdraw one |
+| `/aoffers` · `/aretcancel <player>` | Retention offers (or, in dynamic mode, open talks) waiting, and withdraw / cancel one |
+| `/aretmode classic\|dynamic` | Which retention system runs — the slab ladder, or dynamic: owners negotiate, players decide. Only one at a time |
+| `/aretslot [add\|edit\|remove\|move\|preset]` | Dynamic slots — `/aretslot add Uncapped \| 70-82 \| 4 \| 🧢`, `/aretslot edit Elite \| range 92-99 \| price 25`, `/aretslot preset 2` |
+| `/aretrule [knob value]` | Dynamic rules — `budget 53`, `chances 3`, `counter 90`, `lowball 75 5`, `jitter 4`, `superstar 93`, `loyal 3 12`, `reveal on`, `personality money off`, `reset` |
+| `/aretdemand 83=13-17 \| 89=20-24 \| 96=28-32` | The Demand Meter's price curve, in crore |
+| `/asetsexport [json\|csv]` | Download every set as a file |
+| `/asetsimport [replace]` | Reply to a sets file to load it — only queued players move; `replace` drops queued players it leaves out |
 | `/acall [message]` | Tag every owner and co-owner |
 | `/aremoveteam <franchise> [\| confirm]` | Remove a team: players back in the pool, its purse shared equally |
 | `/aadminadd <id \| @user \| reply>` | Bot admins only: make someone an auction admin |
@@ -657,6 +663,14 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 
 `/aretain` now **offers** the retention: the franchise's owner or a co-owner
 presses ✅ Accept (nobody else can), and only then is the player kept.
+
+**Dynamic retention** (`/aretmode dynamic`) replaces that with a negotiation.
+Each player fills a slot by rating (🥇 Elite 92–96 from ₹23 Cr, 🥈 Premium
+87–91 from ₹18 Cr, 🥉 Core 83–86 from ₹12 Cr, within a ₹53 Cr budget, all
+editable). The owner types `/retain <player>` to see his Demand Meter, then
+`/retain <player> | <price>` to make an offer. He ✅ accepts, 💰 counters (take
+his ask with the button) or ❌ rejects. After three rejections he walks into the
+auction and can't be approached again. His price and personality stay hidden.
 **Auction admins** may use every command in this table and no other admin
 command in the bot.
 

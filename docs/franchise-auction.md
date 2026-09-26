@@ -526,6 +526,99 @@ Retention spend is **derived, not cached** — the purse column is a cache for a
 reason that does not apply here, and a second cache is only a second thing to
 drift.
 
+### Dynamic retention: the player decides
+
+Classic retention prices a player by the **order** he is kept in, so a 96 costs
+what an 83 does. `/aretmode dynamic` (or the switch at the top of the
+🔒 Retention fold) prices him by his **rating** and lets him say no. Only one
+system runs per season. Switching is refused once anybody is retained, or while
+an offer or a negotiation is waiting, because a season kept half under one rule
+and half under the other has no single rule to hold a franchise to.
+
+**Slots.** This is an ordered table (`retention_slots_json`). Every row can be
+edited, added, removed and reordered, from the website's slot table or with
+`/aretslot`:
+
+| Preset | Slot | Rating | Starts at |
+|---|---|---|---|
+| 3 | 🥇 Elite | 92–96 | ₹23 Cr |
+| | 🥈 Premium | 87–91 | ₹18 Cr |
+| | 🥉 Core | 83–86 | ₹12 Cr |
+| 2 | 🥇 Elite | 92–96 | ₹23 Cr |
+| | 🥈 Flexible | any | ₹18 Cr |
+
+- A player fills the first open slot whose range holds his rating. Failing
+  that, he fills an open slot entirely below it: a 94 may take Premium once
+  Elite is gone, and his price still follows his rating.
+- No offer goes under a slot's starting price.
+- The retention budget (`retention_max_spend_lakh`, ₹53 Cr when dynamic is
+  switched on) caps the total. So 29 + 12 + 12 is fine, and 15 in the Elite
+  slot is refused however the rest adds up.
+- `max_retentions` follows the number of slots.
+- A slot that a signed player or an open negotiation is using keeps its range
+  and price. It can still be renamed, but it can't be removed.
+
+**Demand.** Every rating has a public expected range, the **Demand Meter**. The
+ranges are interpolated from `demand_curve`, which defaults to 83 → 13–17,
+86 → 16–20, 89 → 20–24, 92 → 24–28 and 96 → 28–32 Cr. Each player also has a
+hidden **Minimum Acceptable Price**, worked out from:
+
+- the middle of his range,
+- × his hidden personality factor: 🦁 Demanding 1.12, ⚖️ Balanced 1.00,
+  🤝 Loyal 0.92, 💰 Money-Minded 1.06, ⭐ Superstar 1.15 (93+ only),
+- × a loyalty discount for Loyal players: −3% per consecutive season with this
+  franchise, up to −12%. Seasons are followed through `previous_season_id` /
+  `carried_from_id`, falling back to last season's league,
+- × ±4% jitter,
+- never below the slot's starting price.
+
+All of it is seeded from `(season, player)`, so walking away and coming back
+can't reroll the price.
+
+**Negotiation.** The owner or a co-owner types `/retain <player>` to open talks,
+then `/retain <player> | <price>` for each offer. There is one open negotiation
+per franchise and one per player. The player replies in one of three ways:
+
+- **✅ ACCEPT** if the offer is at or above his price. He is signed through the
+  ordinary `retain()`.
+- **💰 COUNTER** if the offer is within `counter_pct` (90%) of his price. He
+  names his ask, and the card's button takes it without spending a chance.
+  Money-Minded players never counter.
+- **❌ REJECT** otherwise. An offer below `lowball_pct` (75%) of his price also
+  raises that price by `lowball_penalty_pct` (5%). A Superstar rejects any
+  first offer below the top of his Demand range.
+
+Every counter or rejection spends one of `chances` (3). When the last one is
+spent, the card shows **🔴 RETENTION FAILED**: he goes into the pool under
+"🔨 Walked out", with `previous_franchise_id` set so Right To Match still
+applies. Nobody can approach him again, and the slot stays open.
+
+Walking away before the first offer is free. Walking away after it is final,
+because otherwise a franchise could probe his price and come back with a clean
+slate. `/aretcancel <player>` and the website's Cancel are an admin's clean undo.
+
+Every signing, including `/aretainforce` and the website's form, still goes
+through `retain()`. The count, budget, purse, squad, overseas, role and
+reachability rules and the ledger are therefore the same ones classic uses, and
+in dynamic mode `retain()` also enforces the slot. The hidden price and
+personality appear only on the website's 🤝 Talks table unless
+`reveal_personality` is on.
+
+```text
+/aretmode dynamic                         switch systems (classic switches back)
+/aretslot                                 the slot table
+/aretslot add Uncapped | 70-82 | 4 | 🧢    add a slot (| position optional)
+/aretslot edit Elite | range 92-99 | price 25
+/aretslot remove Core · /aretslot move Core 1 · /aretslot preset 2
+/aretrule                                 every negotiation rule
+/aretrule budget 53 · chances 3 · counter 90 · lowball 75 5 · jitter 4
+/aretrule superstar 93 · loyal 3 12 · reveal on · reset
+/aretrule personality demanding 1.12 25 · /aretrule personality money off
+/aretdemand 83=13-17 | 89=20-24 | 96=28-32
+/retain Virat Kohli                       (owner) open talks
+/retain Virat Kohli | 26                  (owner) make an offer
+```
+
 ---
 
 ## Right To Match
@@ -710,6 +803,32 @@ index mid-flush, and `next_queued` never has to learn what a set is.
 for `/asets`, `/ainfo`, the 🗂 Sets card and the lot card, which names the set its
 player came from. `/apool` takes base cards only unless told `| all`: two editions
 of one cricketer in a pool is a squad with the same man twice.
+
+### The pool, as a file
+
+`/asetsexport [json|csv]` (or **⬇️ Download sets** on the pool card) produces
+the whole pool, set by set in running order. JSON has the shape
+`{"format": "franchise-auction/sets", "sets": [{"name", "set_no", "players":
+[…]}]}`. CSV has one row per player
+(`set, set_no, player_id, name, version, rating, category, base_price_lakh,
+status`), which is easy to rearrange in a spreadsheet.
+
+To load a file, reply to it with `/asetsimport` (add `replace` to drop queued
+players the file leaves out), or use **📥 Upload sets** on the page. It works in
+setup or while paused:
+
+- Players are matched by `player_id` when the name agrees, and otherwise by
+  exact name and edition. The importer never guesses. Anything it can't match
+  is listed back by name.
+- Only **queued** players move. A player already sold, retained or drafted stays
+  where he is.
+- New players are added under the file's set, and players already queued are
+  re-filed into it.
+- A `base_price_lakh` in the file overrides the price.
+- The queue is renumbered in the file's order.
+
+The same file therefore rebuilds a pool in a fresh season, or rearranges this
+one.
 
 ### Set No
 
@@ -1692,6 +1811,8 @@ Two things were on their way to a third copy each, and both fail silently.
 | `services/player_query.py` | The one master-player filter, and the one `details_json` |
 | `services/button_access.py` | Which auction buttons belong to one person and which to the room: the `au_info_`/`au_sets_`/`au_x_` owner rules, and the `au_bid_`/`au_rtm_`/`au_ret_` prefixes the pinned board keeps shared |
 | `services/auction_focus.py` | Focus mode: which commands and buttons a locked group still answers, the cached "is this chat locked?" lookup, and the two refusals. Pure apart from that one lookup |
+| `services/retention_negotiation.py` | Dynamic retention: the mode switch, the editable slots and rules, the Demand Meter, the hidden price and personality, and the negotiation itself. Every signing goes through `retain()` |
+| `services/auction_sets_io.py` | The pool as a file: every set out as JSON or CSV, and back in — matched by id then exact name, queued players only |
 | `handlers/auction.py` | `/bid`, `/artm` and every other command, plus the `au_bid_` and `au_rtm_` buttons |
 | `models.py` | The six tables |
 | `admin.py` | `/auctions`, `/auctions/<id>`, `/auctions/<id>/console` and its polled panel |
@@ -1710,6 +1831,8 @@ Two things were on their way to a third copy each, and both fail silently.
 | `tests/test_auction_features.py` | Sets and the queue order, removing a franchise and its purse split, the automatic accelerated round, the free auto-fill and its caps, retention offers and who may answer them, auction admins, `/acall`, every team view, the rich builders, and what the sweeper sends per lot and per burst of bids |
 | `tests/test_auction_pool_page.py` | The setup page over HTTP: the pool builder's preview, the Sets card's numbering and its deletes, the squad-rules form, the franchise file both ways, and the typed confirmations |
 | `tests/test_auction_focus.py` | Focus mode: what a locked group refuses and what it never touches, that every auction command survives its own lock (pinned against `bot.py` both ways), the admin bypass and when it is asked, the cache and its invalidation, and where the middleware sits |
+| `tests/test_retention_negotiation.py` | Dynamic retention: the toggle, slot editing, floors and the budget, the demand curve, accept / counter / reject / walk-out, the lowball, the personalities, and the commands |
+| `tests/test_auction_sets_io.py` | The sets file: JSON and CSV round trips, re-filing and reordering, replace, signed players left alone, and what is refused or reported |
 | `tests/test_auction_season.py` | Cloning: every rule carried (and a guard against the rule list falling behind the model), the field and its owners, the purses and their ledger, what is deliberately left behind, the group handover, and the rename that used to lose every holder |
 
 ---

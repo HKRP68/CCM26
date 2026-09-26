@@ -2314,6 +2314,9 @@ def main():
             aremoveteam_handler, aadminadd_handler, aadminremove_handler,
             aadmins_handler, me_callback, aleaderboard_handler,
             amybids_handler, dot_command_handler,
+            retain_handler, retention_talk_callback, aretmode_handler,
+            aretslot_handler, aretrule_handler, aretdemand_handler,
+            asetsexport_handler, asetsimport_handler,
         )
         # Not "/b": that is already /buy, registered above, and PTB runs the
         # first handler that matches — the alias would be dead.
@@ -2411,6 +2414,21 @@ def main():
         app.add_handler(CallbackQueryHandler(retention_offer_callback,
                                              pattern=r"^au_ret_"))
         app.add_handler(CommandHandler("aretainforce", aretainforce_handler))
+        # Dynamic retention (/aretmode dynamic): the owner negotiates with
+        # /retain and the player accepts, counters or walks into the auction.
+        # The admin side edits the slots, the rules and the demand curve.
+        app.add_handler(CommandHandler("retain", retain_handler))
+        app.add_handler(CallbackQueryHandler(retention_talk_callback,
+                                             pattern=r"^au_rtn_"))
+        app.add_handler(CommandHandler("aretmode", aretmode_handler))
+        app.add_handler(CommandHandler(["aretslot", "aretslots"],
+                                       aretslot_handler))
+        app.add_handler(CommandHandler(["aretrule", "aretrules"],
+                                       aretrule_handler))
+        app.add_handler(CommandHandler("aretdemand", aretdemand_handler))
+        # The whole pool, set by set, out as a file and back in.
+        app.add_handler(CommandHandler("asetsexport", asetsexport_handler))
+        app.add_handler(CommandHandler("asetsimport", asetsimport_handler))
         app.add_handler(CommandHandler("aoffers", aoffers_handler))
         app.add_handler(CommandHandler("aretcancel", aretcancel_handler))
         app.add_handler(CommandHandler(["aunretain", "arelease"], aunretain_handler))

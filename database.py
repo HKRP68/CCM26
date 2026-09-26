@@ -958,6 +958,12 @@ def _migrate_add_columns():
     # Which ChallengeLeague this season follows. The retention picker needs it
     # before any lot exists, so it cannot be inferred from the lots themselves.
     _try_add("auction_seasons", "previous_league_id", "INTEGER")
+    # Dynamic retention. All nullable: NULL mode reads as ``classic``, and
+    # NULL slots / rules read as the presets, so an old season is unchanged.
+    _try_add("auction_seasons", "retention_mode", "VARCHAR(12)")
+    _try_add("auction_seasons", "retention_slots_json", "TEXT")
+    _try_add("auction_seasons", "retention_rules_json", "TEXT")
+    _try_add("auction_lots", "retention_slot", "VARCHAR(24)")
 
     # ── Franchise Auction: Right To Match ──
     # Phase 2b. ``rtm_enabled`` shipped WITH auction_seasons, so every row

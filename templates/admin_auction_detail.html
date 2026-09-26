@@ -489,11 +489,188 @@
       {% endif %}
     </p>
 
+    <div class="au-actions" style="align-items:center;margin-bottom:.8rem;">
+      <span>System: <b>{{ '🤝 Dynamic — owners negotiate, players decide' if ret_dynamic else '🪜 Classic — slab ladder' }}</b></span>
+      {% if season.status == 'setup' %}
+      <form method="POST" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="retention_mode">
+        <input type="hidden" name="back_query" value="#retention">
+        <input type="hidden" name="mode" value="{{ 'classic' if ret_dynamic else 'dynamic' }}">
+        <button class="btn btn-ghost btn-sm" type="submit">
+          Switch to {{ 'classic' if ret_dynamic else 'dynamic' }}</button>
+      </form>
+      {% endif %}
+    </div>
+    <p class="au-note" style="margin:-.4rem 0 .8rem;">
+      Only one system runs at a time. <b>Classic</b>: an admin offers a
+      retention at the ladder's price and the franchise presses Accept.
+      <b>Dynamic</b>: each player fills a slot by rating, the owner makes offers
+      with <code>/retain &lt;player&gt; | &lt;price&gt;</code>, and the player
+      accepts, counters or — after the last chance — walks into the auction.
+      Switching is refused once anybody is retained.
+    </p>
+
+    {% if ret_dynamic %}
+    <h4 style="margin:.6rem 0 .4rem;" id="ret-slots">🎚 Slots</h4>
+    <form method="POST" id="ret-slot-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="retention_slots">
+      <input type="hidden" name="back_query" value="#ret-slots">
+      <div class="au-scroll">
+      <table class="au-table" id="ret-slot-table">
+        <tr><th>#</th><th>Emoji</th><th>Name</th><th>Min OVR</th><th>Max OVR</th><th>Starts at (Cr)</th><th>Remove</th></tr>
+        {% for slot in ret_slots %}
+        <tr>
+          <td>{{ loop.index }}<input type="hidden" name="slot_key" value="{{ slot.key }}"></td>
+          <td><input type="text" name="slot_emoji" value="{{ slot.emoji }}" style="width:3.2rem;"></td>
+          <td><input type="text" name="slot_label" value="{{ slot.label }}" style="width:8rem;" required></td>
+          <td><input type="number" name="slot_min" value="{{ slot.min_rating }}" min="0" max="999" style="width:5rem;"></td>
+          <td><input type="number" name="slot_max" value="{{ slot.max_rating }}" min="0" max="999" style="width:5rem;"></td>
+          <td><input type="text" name="slot_floor" value="{{ (slot.floor_lakh / 100)|round(2) }}" style="width:6rem;"></td>
+          <td><input type="checkbox" name="slot_remove" value="{{ loop.index0 }}"></td>
+        </tr>
+        {% endfor %}
+      </table>
+      </div>
+      <div class="au-actions" style="margin-top:.5rem;">
+        <button class="btn btn-ghost btn-sm" type="button" onclick="retAddSlot()">+ Add slot</button>
+        <button class="btn btn-primary" type="submit">Save slots</button>
+      </div>
+    </form>
+    <script>
+      function retAddSlot() {
+        var table = document.getElementById('ret-slot-table');
+        var n = table.rows.length;
+        var row = table.insertRow(-1);
+        row.innerHTML =
+          '<td>' + n + '<input type="hidden" name="slot_key" value=""></td>' +
+          '<td><input type="text" name="slot_emoji" value="🔒" style="width:3.2rem;"></td>' +
+          '<td><input type="text" name="slot_label" placeholder="Name" style="width:8rem;" required></td>' +
+          '<td><input type="number" name="slot_min" value="0" min="0" max="999" style="width:5rem;"></td>' +
+          '<td><input type="number" name="slot_max" value="999" min="0" max="999" style="width:5rem;"></td>' +
+          '<td><input type="text" name="slot_floor" placeholder="Cr" style="width:6rem;"></td>' +
+          '<td><button class="btn btn-ghost btn-sm" type="button" onclick="this.closest(\'tr\').remove()">✕</button></td>';
+      }
+    </script>
+    <div class="au-actions" style="margin-top:.4rem;">
+      {% for n, label in [(3, 'Elite / Premium / Core'), (2, 'Elite / Flexible')] %}
+      <form method="POST" style="display:inline;" onsubmit="return confirm('Replace the slots with the {{ n }}-slot preset?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="retention_slots_preset">
+        <input type="hidden" name="preset" value="{{ n }}">
+        <input type="hidden" name="back_query" value="#ret-slots">
+        <button class="btn btn-ghost btn-sm" type="submit">Preset: {{ n }} — {{ label }}</button>
+      </form>
+      {% endfor %}
+    </div>
+    <p class="au-note">
+      A player fills the first open slot whose range holds his rating — or,
+      failing that, an open slot below it (a 94 may take Premium once Elite is
+      gone; his price still follows his rating). No offer goes under a slot's
+      starting price, and the starting prices together cannot exceed the
+      retention budget. A slot somebody already fills, or that an open
+      negotiation holds, keeps its range and price.
+    </p>
+
+    <h4 style="margin:1rem 0 .4rem;" id="ret-rules">⚙️ Negotiation</h4>
+    <form method="POST" class="au-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="retention_negotiation">
+      <input type="hidden" name="back_query" value="#ret-rules">
+      <div><label>Retention budget (Cr)</label><input type="text" name="ret_budget" value="{{ (season.retention_max_spend_lakh / 100)|round(2) if season.retention_max_spend_lakh is not none else '' }}"></div>
+      <div><label>Chances</label><input type="number" name="chances" min="1" max="10" value="{{ ret_rules.chances }}"></div>
+      <div><label>Counter at ≥ % of his price</label><input type="number" name="counter_pct" min="1" max="100" value="{{ ret_rules.counter_pct }}"></div>
+      <div><label>Lowball under %</label><input type="number" name="lowball_pct" min="0" max="100" value="{{ ret_rules.lowball_pct }}"></div>
+      <div><label>Lowball penalty +%</label><input type="number" name="lowball_penalty_pct" min="0" max="100" value="{{ ret_rules.lowball_penalty_pct }}"></div>
+      <div><label>Jitter ±%</label><input type="number" name="jitter_pct" min="0" max="50" value="{{ ret_rules.jitter_pct }}"></div>
+      <div><label>⭐ Superstar from OVR</label><input type="number" name="superstar_min_rating" min="0" max="999" value="{{ ret_rules.superstar_min_rating }}"></div>
+      <div><label>🤝 Loyalty −% per season</label><input type="number" name="loyal_per_season_pct" min="0" max="50" value="{{ ret_rules.loyal_per_season_pct }}"></div>
+      <div><label>🤝 Loyalty cap −%</label><input type="number" name="loyal_max_pct" min="0" max="90" value="{{ ret_rules.loyal_max_pct }}"></div>
+      <div><label style="text-transform:none;letter-spacing:0;">
+        <input type="checkbox" name="reveal_personality" value="1" {{ 'checked' if ret_rules.reveal_personality }}>
+        Show personality on the cards</label></div>
+      <div style="grid-column:1/-1;"><label>Demand curve — rating=low-high in Cr, interpolated between points</label>
+        <input type="text" name="demand_curve" value="{{ ret_curve_text }}"></div>
+      <div style="grid-column:1/-1;">
+        <table class="au-table">
+          <tr><th>Personality</th><th>Price ×</th><th>Weight</th><th>On</th></tr>
+          {% for name in ret_personalities %}
+          {% set conf = ret_rules.personalities[name] %}
+          <tr>
+            <td>{{ ret_personality_label(name) }}</td>
+            <td><input type="text" name="p_{{ name }}_factor" value="{{ conf.factor }}" style="width:5rem;"></td>
+            <td><input type="number" name="p_{{ name }}_weight" min="0" max="1000" value="{{ conf.weight }}" style="width:5rem;"></td>
+            <td><input type="checkbox" name="p_{{ name }}_enabled" value="1" {{ 'checked' if conf.enabled }}></td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+      <div><button class="btn btn-primary" type="submit">Save negotiation rules</button></div>
+    </form>
+    <form method="POST" style="margin-top:.4rem;" onsubmit="return confirm('Put every negotiation rule back to its default?');">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="retention_negotiation_reset">
+      <input type="hidden" name="back_query" value="#ret-rules">
+      <button class="btn btn-ghost btn-sm" type="submit">Reset to defaults</button>
+    </form>
+    <p class="au-note">
+      Every player has a public <b>Demand Meter</b> (the curve's range at his
+      rating) and a hidden minimum price: the middle of that range × his
+      hidden personality × a loyalty discount for seasons at this franchise ×
+      the jitter. It is fixed per player per season, so walking away and
+      coming back never rerolls it. An offer at or above it is accepted; one
+      within the counter % gets his asking price back; anything else is a
+      rejection, and a lowball makes him dig in. Counters and rejections each
+      spend a chance — the last one sends him to the auction.
+    </p>
+
+    {% if ret_talks %}
+    <h4 style="margin:1rem 0 .4rem;">🤝 Talks</h4>
+    <div class="au-scroll">
+    <table class="au-table">
+      <tr><th>Player</th><th>Franchise</th><th>Slot</th><th>Offers</th><th>Last offer</th><th>His price</th><th>Personality</th><th>Status</th><th></th></tr>
+      {% for t in ret_talks %}
+      <tr>
+        <td>{{ t.player_name }} <span class="dim">· {{ t.rating }}</span></td>
+        <td>{{ ret_franchise_names.get(t.franchise_id, '?') }}</td>
+        <td>{{ ret_slot_names.get(t.slot_key, t.slot_key) }}</td>
+        <td>{{ t.attempts }}/{{ ret_rules.chances }}</td>
+        <td>{{ money(t.last_offer_lakh) }}</td>
+        <td class="dim">{{ money(t.map_lakh) }}</td>
+        <td class="dim">{{ ret_personality_label(t.personality) }}</td>
+        <td>{{ t.status }}</td>
+        <td>
+          {% if t.status == 'open' %}
+          <form method="POST" onsubmit="return confirm('Cancel these talks? Nothing is signed and the player is not sent to the auction.');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="retention_talk_cancel">
+            <input type="hidden" name="talk_id" value="{{ t.id }}">
+            <input type="hidden" name="back_query" value="#retention">
+            <button class="btn btn-ghost btn-sm danger" type="submit">Cancel</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    </div>
+    <p class="au-note">“His price” and the personality are hidden from the
+      room — only this page shows them.</p>
+    {% endif %}
+    <h4 style="margin:1rem 0 .4rem;">📋 General retention rules</h4>
+    {% endif %}
+
     <form method="POST" class="au-grid">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="retention_rules">
       <input type="hidden" name="back_query" value="#retention">
+      {% if ret_dynamic %}
+      <input type="hidden" name="max_retentions" value="{{ season.max_retentions }}">
+      <div><label>Max per franchise</label><input type="text" value="{{ season.max_retentions }} — one per slot" disabled></div>
+      {% else %}
       <div><label>Max per franchise</label><input type="number" name="max_retentions" min="0" max="20" value="{{ season.max_retentions }}"></div>
+      {% endif %}
       <div><label>Min per franchise</label><input type="number" name="min_retentions" min="0" max="20" value="{{ season.min_retentions }}"></div>
       <div><label>Retention budget (Cr)</label><input type="text" name="retention_max_spend" value="{{ (season.retention_max_spend_lakh / 100)|round(2) if season.retention_max_spend_lakh is not none else '' }}" placeholder="blank = uncapped"></div>
       <div><label>Deadline (UTC)</label><input type="datetime-local" name="retention_deadline" value="{{ season.retention_deadline_at.strftime('%Y-%m-%dT%H:%M') if season.retention_deadline_at else '' }}"></div>
@@ -501,6 +678,9 @@
       <div><label>Max rating</label><input type="number" name="retention_max_rating" min="0" max="100" value="{{ season.retention_max_rating if season.retention_max_rating is not none else '' }}" placeholder="any"></div>
       <div style="grid-column:span 2;"><label>Roles allowed (comma separated)</label>
         <input type="text" name="retention_categories" value="{{ retention_cats|join(', ') }}" placeholder="any"></div>
+      {% if ret_dynamic %}
+      {% for rule in ladder %}<input type="hidden" name="slab_price" value="{{ (rule.price_lakh / 100)|round(2) }}">{% endfor %}
+      {% else %}
       <div style="grid-column:span 2;"><label>Price ladder — 1st, 2nd, 3rd… retention (Cr)</label>
         <div style="display:flex;gap:.4rem;flex-wrap:wrap;">
           {% for rule in ladder %}
@@ -508,6 +688,7 @@
           {% endfor %}
           <input type="text" name="slab_price" placeholder="+" style="width:6rem;">
         </div></div>
+      {% endif %}
       <div><button class="btn btn-primary" type="submit">Save retention rules</button></div>
     </form>
     <p class="au-note" style="margin-bottom:0;">
@@ -542,12 +723,17 @@
       <div class="au-tile">
         <b>{{ f.name }}</b>
         <div class="dim" style="font-size:.82rem;margin:.2rem 0 .5rem;">
+          {% if ret_dynamic %}
+          open: {% for slot in ret_open_slots(f) %}{{ slot.emoji }} {{ slot.label }}{{ ', ' if not loop.last }}{% else %}none{% endfor %}
+          · budget left {{ money(ret_budget_left(f)) }}
+          {% else %}
           next retention pre-fills at {{ money(next_slab(season, f.retained_count + 1)) }}
+          {% endif %}
           · ceiling {{ money([0, max_bid(season, f)]|max) }}
         </div>
         {% for lot in retained_of(f.id) %}
         <div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;padding:.25rem 0;border-bottom:1px solid var(--border);">
-          <span>🔒 {{ lot.name }} <span class="dim">· {{ lot.rating }} · {{ lot.category }}</span></span>
+          <span>{{ ret_slot_emoji.get(lot.retention_slot, '🔒') }} {{ lot.name }} <span class="dim">· {{ lot.rating }} · {{ lot.category }}{% if lot.retention_slot %} · {{ ret_slot_names.get(lot.retention_slot, lot.retention_slot) }}{% endif %}</span></span>
           <span style="display:flex;gap:.4rem;align-items:center;">
             <b>{{ money(lot.sold_price_lakh) }}</b>
             {% if retention_open %}
@@ -605,7 +791,7 @@
               <select name="franchise_id">
                 {% for f in field %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
               </select>
-              <input type="text" name="price" placeholder="Cr — blank = ladder" style="width:9rem;">
+              <input type="text" name="price" placeholder="{{ 'Cr — blank = slot start' if ret_dynamic else 'Cr — blank = ladder' }}" style="width:9rem;">
               <button class="btn btn-primary" type="submit">Retain</button>
             </form>
             {% endif %}
@@ -877,6 +1063,42 @@
 
     <h4 style="margin:.6rem 0 .4rem;" id="sets">🗂 Sets — the order they run in</h4>
     {% include "_auction_sets_card.html" %}
+
+    <h4 style="margin:1.2rem 0 .4rem;" id="sets-file">💾 Download / upload every set</h4>
+    <p class="au-note" style="margin:.2rem 0 .6rem;">
+      The whole pool as a file, set by set in running order — keep it, edit it
+      in a spreadsheet, or load it into another season. Players are matched by
+      <b>id</b> (when the name agrees) and then by exact name and edition; an
+      import only moves <b>queued</b> players, so anyone already sold, retained
+      or drafted stays where they are. Anything it cannot match is listed back
+      to you by name.
+    </p>
+    <div class="au-actions" style="align-items:flex-start;">
+      <a class="btn btn-ghost"
+         href="{{ url_for('admin_auction_sets_file', season_id=season.id, fmt='json') }}">
+        ⬇️ Download sets (JSON)</a>
+      <a class="btn btn-ghost"
+         href="{{ url_for('admin_auction_sets_file', season_id=season.id, fmt='csv') }}">
+        ⬇️ Download sets (CSV)</a>
+    </div>
+    {% if season.status in ('setup', 'paused') %}
+    <form method="POST" enctype="multipart/form-data" class="au-grid" style="margin-top:.8rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="sets_import">
+      <input type="hidden" name="back_query" value="#sets-file">
+      <div style="grid-column:span 2;"><label>Upload a sets file (.json or .csv)</label>
+        <input type="file" name="sets_file" accept=".json,.csv,application/json,text/csv"></div>
+      <div>
+        <label style="text-transform:none;letter-spacing:0;">
+          <input type="checkbox" name="replace_missing" value="1">
+          Remove queued players the file leaves out
+        </label>
+      </div>
+      <div><button class="btn btn-primary" type="submit">📥 Upload sets</button></div>
+    </form>
+    {% else %}
+    <p class="au-note">Pause the auction to upload sets.</p>
+    {% endif %}
 
     <h4 style="margin:1.4rem 0 .4rem;" id="builder">➕ Add players from the catalogue</h4>
     <p class="au-note" style="margin:.2rem 0 .8rem;">

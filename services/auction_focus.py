@@ -81,6 +81,8 @@ AUCTION_COMMANDS = frozenset({
     "agrant", "aco", "apublish", "acancel",
     "aretain", "aretainforce", "aoffers", "aretcancel", "aunretain",
     "arelease", "aretlock", "aretention",
+    "retain", "aretmode", "aretslot", "aretslots", "aretrule", "aretrules",
+    "aretdemand", "asetsexport", "asetsimport",
     "artmset", "artmrules", "artmcards", "artmforce", "artmundo",
     "aaccel", "arelistall", "aclone", "anextseason",
     "apick", "apicks", "apickboard", "apickset", "apickrules",
