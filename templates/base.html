@@ -514,6 +514,8 @@ hr.pitch-line { border: none; height: 1px; background: linear-gradient(90deg, tr
     <a href="{{ url_for('admin_competitions') }}" class="{{ 'active' if 'competition' in (request.endpoint or '') }}">🏆 Competitions</a>
     <a href="{{ url_for('admin_branding') }}" class="{{ 'active' if 'branding' in (request.endpoint or '') }}">📣 Branding</a>
     <a href="{{ url_for('admin_events') }}" class="{{ 'active' if 'events' in (request.endpoint or '') }}">🎉 Events</a>
+    <a href="{{ url_for('admin_news') }}" class="{{ 'active' if (request.endpoint or '').startswith('admin_news') }}">📰 CMU News{% if pending_news and pending_news > 0 %}<span class="nav-badge">{{ pending_news }}</span>{% endif %}</a>
+    <a href="{{ url_for('admin_polls') }}" class="{{ 'active' if (request.endpoint or '').startswith('admin_polls') }}">🗳 Polls</a>
     <a href="{{ url_for('admin_seasons') }}" class="{{ 'active' if 'season' in (request.endpoint or '') }}">🏆 Seasons</a>
     <a href="{{ url_for('admin_clubs') }}" class="{{ 'active' if 'clubs' in (request.endpoint or '') }}">🛡️ Clubs</a>
     <a href="{{ url_for('admin_fantasy_list') }}" class="{{ 'active' if 'fantasy' in (request.endpoint or '') }}">🏏 Fantasy</a>

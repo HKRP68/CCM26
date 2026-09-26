@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}CMU News{% endblock %}
+{% block content %}
+<style>
+  .nw-card { background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;margin-bottom:1.25rem; }
+  .nw-input { width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font:inherit; }
+  .nw-label { font-size:.8rem;color:var(--muted);display:block;margin-bottom:.2rem; }
+  .nw-tabs { display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem; }
+  .nw-tab { padding:.35rem .8rem;border-radius:999px;border:1px solid var(--border);color:var(--muted);text-decoration:none;font-size:.82rem; }
+  .nw-tab.active { border-color:var(--brand);color:var(--brand);background:var(--brand-light); }
+  .nw-item { display:grid;grid-template-columns:120px 1fr;gap:1rem;padding:1rem 0;border-bottom:1px solid var(--border); }
+  .nw-thumb { width:120px;height:72px;object-fit:cover;border-radius:8px;background:var(--input-bg); }
+  .nw-noimg { width:120px;height:72px;border-radius:8px;background:var(--input-bg);display:grid;place-items:center;font-size:1.6rem; }
+  .nw-meta { font-size:.74rem;color:var(--muted);margin:.2rem 0 .4rem; }
+  .nw-body { font-size:.84rem;white-space:pre-wrap;max-height:6.5em;overflow:hidden; }
+  .nw-actions { display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.6rem;align-items:center; }
+  .nw-actions form { display:inline-flex;gap:.35rem;align-items:center; }
+  .nw-pill { display:inline-block;font-size:.68rem;font-weight:700;padding:.1rem .45rem;border-radius:999px;border:1px solid var(--border);margin-right:.25rem; }
+  @media (max-width:640px){ .nw-item{ grid-template-columns:1fr; } .nw-grid2{ grid-template-columns:1fr !important; } }
+</style>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>📰 CMU News</h2>
+  <a href="{{ url_for('admin_polls') }}" class="btn btn-ghost btn-sm">🗳 Polls →</a>
+</div>
+<p style="color:var(--muted);font-size:.9rem;margin-bottom:1.25rem;">
+  Stories show in the Mini App under <b>Today's CMU News</b> (latest 5, pinned first).
+  Player submissions wait here and in every bot admin's DM (<code>/newsqueue</code>) until approved.
+</p>
+
+<div class="nw-card">
+  <h3 style="margin:0 0 1rem;font-size:1rem;">✍️ Publish a story</h3>
+  <form method="POST" action="{{ url_for('admin_news_create') }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label class="nw-label">Headline</label>
+    <input class="nw-input" type="text" name="headline" required maxlength="{{ limits.headline }}" placeholder="Mumbai Mavericks clinch the CMU Cup!">
+    <div style="margin-top:.8rem;">
+      <label class="nw-label">Image (JPG/PNG, up to 5 MB — optional)</label>
+      <input class="nw-input" type="file" name="image" accept="image/*">
+    </div>
+    <div style="margin-top:.8rem;">
+      <label class="nw-label">Article</label>
+      <textarea class="nw-input" name="body" required rows="8" maxlength="{{ limits.body }}" placeholder="Write the full story… Blank lines start a new paragraph."></textarea>
+    </div>
+    <div style="display:flex;gap:1.25rem;flex-wrap:wrap;margin-top:.8rem;font-size:.85rem;">
+      <label><input type="checkbox" name="pinned" value="1"> 📌 Pin to top</label>
+      <label><input type="checkbox" name="announce" value="1"> 📣 Also post to channel/group</label>
+    </div>
+    <button type="submit" class="btn btn-primary" style="margin-top:1rem;">🚀 Publish</button>
+  </form>
+</div>
+
+<details class="nw-card">
+  <summary style="cursor:pointer;font-weight:700;">⚙️ Settings — rewards &amp; auto-generated news</summary>
+  <form method="POST" action="{{ url_for('admin_news_settings') }}" style="margin-top:1rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="nw-grid2" style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+      <div>
+        <label class="nw-label">Coins paid when a player's story is approved</label>
+        <input class="nw-input" type="number" min="0" name="submit_reward_coins" value="{{ settings.submit_reward_coins }}">
+      </div>
+      <div style="font-size:.85rem;display:flex;flex-direction:column;gap:.4rem;justify-content:flex-end;">
+        <label><input type="checkbox" name="auto_publish" value="1" {% if settings.auto_publish %}checked{% endif %}> Auto stories go live immediately (off = they wait for review)</label>
+        <label><input type="checkbox" name="auto_announce" value="1" {% if settings.auto_announce %}checked{% endif %}> Post auto stories to the channel/group too</label>
+      </div>
+    </div>
+    <div style="margin-top:1rem;">
+      <span class="nw-label">Auto-generate stories for</span>
+      <div style="display:flex;gap:1rem;flex-wrap:wrap;font-size:.85rem;">
+        {% for key, label in auto_kinds.items() %}
+        <label><input type="checkbox" name="auto_kinds" value="{{ key }}" {% if key in settings.auto_kinds %}checked{% endif %}> {{ label }}</label>
+        {% endfor %}
+      </div>
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm" style="margin-top:1rem;">💾 Save settings</button>
+  </form>
+</details>
+
+<div class="nw-tabs">
+  <a class="nw-tab {% if tab == 'published' %}active{% endif %}" href="{{ url_for('admin_news', tab='published') }}">Published</a>
+  <a class="nw-tab {% if tab == 'pending' %}active{% endif %}" href="{{ url_for('admin_news', tab='pending') }}">Pending review{% if pending %} ({{ pending }}){% endif %}</a>
+  <a class="nw-tab {% if tab == 'auto' %}active{% endif %}" href="{{ url_for('admin_news', tab='auto') }}">🤖 Auto</a>
+  <a class="nw-tab {% if tab == 'rejected' %}active{% endif %}" href="{{ url_for('admin_news', tab='rejected') }}">Rejected / archived</a>
+</div>
+
+<div class="nw-card" style="padding-top:.25rem;">
+{% for a in articles %}
+  <div class="nw-item">
+    <div>
+      {% if a.image_key %}<img class="nw-thumb" src="{{ url_for('news_image', article_id=a.id) }}" alt="">
+      {% else %}<div class="nw-noimg">📰</div>{% endif %}
+    </div>
+    <div>
+      <div>
+        {% if a.is_pinned %}<span class="nw-pill">📌 pinned</span>{% endif %}
+        <span class="nw-pill">{{ {'admin':'🛡 admin','user':'👤 player','auto':'🤖 auto'}.get(a.source, a.source) }}</span>
+        <span class="nw-pill">{{ a.status }}</span>
+        <b>{{ a.headline }}</b>
+      </div>
+      <div class="nw-meta">
+        #{{ a.id }} · {{ a.author_name or '—' }}{% if a.author_telegram_id %} (<code>{{ a.author_telegram_id }}</code>){% endif %}
+        · {{ (a.published_at or a.created_at) | ist('%d %b %Y, %I:%M %p') }}
+        · 👁 {{ a.view_count or 0 }}
+        {% for emoji, n in (reactions.get(a.id) or {}).items() %} · {{ emoji }} {{ n }}{% endfor %}
+        {% if a.reviewed_by %} · reviewed by {{ a.reviewed_by }}{% endif %}
+        {% if a.review_note %} · <i>{{ a.review_note }}</i>{% endif %}
+      </div>
+      <div class="nw-body">{{ a.body }}</div>
+
+      <div class="nw-actions">
+        {% if a.status == 'pending' %}
+          <form method="POST" action="{{ url_for('admin_news_action', article_id=a.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="approve">
+            {% if a.source == 'user' %}
+            <input class="nw-input" style="width:90px;padding:.3rem;" type="number" min="0" name="reward_coins" value="{{ a.reward_coins or 0 }}" title="Coins for the author">
+            {% endif %}
+            <label style="font-size:.75rem;white-space:nowrap;"><input type="checkbox" name="announce" value="1"> 📣 Announce</label>
+            <button class="btn btn-primary btn-sm">✅ Approve</button>
+          </form>
+          <form method="POST" action="{{ url_for('admin_news_action', article_id=a.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="reject">
+            <select class="nw-input" style="width:auto;padding:.3rem;" name="reason">
+              {% for key, text in reject_reasons.items() %}<option value="{{ key }}">{{ text }}</option>{% endfor %}
+            </select>
+            <button class="btn btn-ghost btn-sm" style="color:var(--red,#f85149);">❌ Reject</button>
+          </form>
+        {% else %}
+          {% for act, label in ([('unpin','Unpin')] if a.is_pinned else [('pin','📌 Pin')]) + ([('archive','🗄 Archive'),('announce','📣 Announce')] if a.status == 'published' else [('publish','↩️ Re-publish')] if a.status == 'archived' else []) %}
+          <form method="POST" action="{{ url_for('admin_news_action', article_id=a.id) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="{{ act }}">
+            <button class="btn btn-ghost btn-sm">{{ label }}</button>
+          </form>
+          {% endfor %}
+        {% endif %}
+        <form method="POST" action="{{ url_for('admin_news_action', article_id=a.id) }}" onsubmit="return confirm('Delete this story for good?');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="delete">
+          <button class="btn btn-ghost btn-sm" style="color:var(--red,#f85149);">🗑 Delete</button>
+        </form>
+      </div>
+
+      <details style="margin-top:.5rem;">
+        <summary style="cursor:pointer;font-size:.78rem;color:var(--muted);">✏️ Edit</summary>
+        <form method="POST" action="{{ url_for('admin_news_edit', article_id=a.id) }}" enctype="multipart/form-data" style="margin-top:.5rem;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input class="nw-input" type="text" name="headline" value="{{ a.headline }}" maxlength="{{ limits.headline }}" required>
+          <textarea class="nw-input" name="body" rows="6" style="margin-top:.5rem;" maxlength="{{ limits.body }}" required>{{ a.body }}</textarea>
+          <div style="display:flex;gap:1rem;align-items:center;flex-wrap:wrap;margin-top:.5rem;font-size:.8rem;">
+            <input type="file" name="image" accept="image/*">
+            {% if a.image_key %}<label><input type="checkbox" name="remove_image" value="1"> Remove image</label>{% endif %}
+            <button class="btn btn-primary btn-sm">💾 Save</button>
+          </div>
+        </form>
+      </details>
+    </div>
+  </div>
+{% else %}
+  <p style="color:var(--muted);text-align:center;padding:1.5rem 0 1rem;">Nothing here yet.</p>
+{% endfor %}
+</div>
+{% endblock %}

@@ -413,6 +413,7 @@ DM_ONLY_MENU_COMMANDS = frozenset(DM_ONLY_COMMANDS)
 # own them without ever appearing in a player's list.
 ADMIN_MENU_COMMANDS = (
     ("logoqueue", "Admin: review team logos waiting for approval"),
+    ("newsqueue", "Admin: review CMU News stories waiting for approval"),
     ("logounhold", "Admin: let a held user send a team logo again"),
     ("previewsummary", "Admin: render a sample match summary card"),
     ("grant", "Owner: grant a subscription tier to a user"),
@@ -1938,6 +1939,11 @@ def main():
             team_logo_message,
         ), group=9)
         logger.info("Registered /setteamlogo + /logoqueue handlers")
+
+        # ── CMU News: admin review of player-submitted stories ───────
+        from handlers.news import news_callback, newsqueue_handler
+        app.add_handler(CommandHandler("newsqueue", newsqueue_handler))
+        app.add_handler(CallbackQueryHandler(news_callback, pattern=r"^news:"))
 
         # ── Admin reply-forward broadcasts ───────────────────────────
         app.add_handler(CommandHandler("frwd_grp", frwd_grp_handler))

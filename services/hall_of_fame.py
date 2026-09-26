@@ -192,10 +192,52 @@ def harvest_match(session, match, scorecard_row, post_row=None):
                                   innings_owner=innings_owner)
     when = match.completed_at or scorecard_row.created_at
     for r in rows:
-        session.add(HallOfFameEntry(match_id=match.id, achieved_at=when,
-                                    **{k: (v[:120] if isinstance(v, str) else v)
-                                       for k, v in r.items()}))
+        previous_best = _board_top(session, r.get("category"))
+        entry = HallOfFameEntry(match_id=match.id, achieved_at=when,
+                                **{k: (v[:120] if isinstance(v, str) else v)
+                                   for k, v in r.items()})
+        session.add(entry)
+        _record_news(session, entry, previous_best, when)
     return len(rows)
+
+
+# Only a record set recently is news — the first scan back-fills years of
+# history, and every one of those "new records" is old.
+RECORD_NEWS_MAX_AGE_HOURS = 48
+
+
+def _board_top(session, category):
+    if not category:
+        return None
+    top = top_entries(session, category, limit=1)
+    return top[0] if top else None
+
+
+def _record_news(session, entry, previous_best, when):
+    """CMU News when a match takes the #1 spot on a Hall of Fame board."""
+    try:
+        from datetime import datetime, timedelta
+        if previous_best is None or when is None:
+            return
+        if datetime.utcnow() - when > timedelta(hours=RECORD_NEWS_MAX_AGE_HOURS):
+            return
+        if (entry.value, entry.tiebreak or 0) <= (previous_best.value,
+                                                  previous_best.tiebreak or 0):
+            return
+        from services.news_service import auto_story
+        title, emoji = MATCH_CATEGORIES.get(entry.category, ("Hall of Fame record", "🌟"))
+        who = entry.player_name or entry.team_name or "A new name"
+        session.flush()
+        auto_story(
+            session, "hall_of_fame", f"hof:{entry.id}",
+            f"{emoji} New record! {who} — {entry.label}",
+            f"{who}{f' ({entry.team_name})' if entry.player_name and entry.team_name else ''} "
+            f"now holds the Hall of Fame record for {title.lower()}: {entry.label}.\n\n"
+            f"The previous best was {previous_best.label}"
+            f"{f' by {previous_best.player_name or previous_best.team_name}' if (previous_best.player_name or previous_best.team_name) else ''}.",
+            kicker="Hall of Fame")
+    except Exception:
+        logger.exception("hall of fame news failed")
 
 
 def scan(session, limit=200):

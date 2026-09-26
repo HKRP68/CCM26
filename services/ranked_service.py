@@ -332,4 +332,28 @@ def finalize_season(session, season_key):
     session.flush()
     logger.info("Ranked season %s finalized: %s players, %s paid",
                 season_key, len(rows), paid)
+    if rows:
+        _ranked_news(session, season_key, rows[0])
     return len(rows)
+
+
+def _ranked_news(session, season_key, top):
+    """CMU News for the ladder champion. Never raises."""
+    try:
+        from models import User
+        from services.display_name import manager_name
+        from services.news_service import auto_story
+        user = session.get(User, top.user_id)
+        if user is None:
+            return
+        name = manager_name(user)
+        division, _ = division_for(top.rating)
+        auto_story(session, "ranked_season", f"ranked:{season_key}",
+                   f"🥇 {name} is the {season_key} ranked champion!",
+                   f"{name} finished the {season_key} ranked season on top of the "
+                   f"ladder: {top.rating} rating ({division}), "
+                   f"{top.wins or 0} wins from {top.played or 0} games.\n\n"
+                   "The ladder has reset — the climb starts again now.",
+                   kicker="Ranked champion")
+    except Exception:
+        logger.exception("ranked news failed for %s", season_key)

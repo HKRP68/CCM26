@@ -200,7 +200,17 @@ def _inject_nav_badges():
             db.close()
     except Exception:
         unread = 0
-    return {"unread_reports": unread}
+    pending_news = 0
+    try:
+        from services.news_service import pending_count
+        db = get_session()
+        try:
+            pending_news = pending_count(db)
+        finally:
+            db.close()
+    except Exception:
+        pending_news = 0
+    return {"unread_reports": unread, "pending_news": pending_news}
 
 
 def csrf_exempt(view):
@@ -4687,6 +4697,8 @@ def webapp_init():
             "login_streak": _touch_login_safe(db, user, stats),
             "season": _get_season_safe(db, user),
             "events": _get_events_safe(db),
+            "news_unread": _get_news_unread_safe(db, user),
+            "poll": _get_poll_safe(db, user),
         }
     except Exception as e:
         logger.exception("webapp_init failed")
@@ -4795,6 +4807,191 @@ def webapp_suggestion():
         db.rollback()
         logger.exception("webapp_suggestion failed")
         return {"ok": False, "message": "Could not send suggestion. Please try again.", "error": str(e)}, 500
+    finally:
+        db.close()
+
+
+# ─── CMU News + Polls (Mini App) ─────────────────────────────────────
+
+def _get_news_unread_safe(db, user):
+    try:
+        from services.news_service import unread_count
+        return unread_count(db, user)
+    except Exception:
+        db.rollback()
+        logger.exception("news unread count failed")
+        return 0
+
+
+def _get_poll_safe(db, user):
+    try:
+        from services.poll_service import active_poll_for
+        return active_poll_for(db, user)
+    except Exception:
+        db.rollback()
+        logger.exception("active poll failed")
+        return None
+
+
+@app.route("/api/webapp/news/feed", methods=["POST"])
+@csrf_exempt
+def webapp_news_feed():
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.news_service import list_feed
+        return {"ok": True, **list_feed(db, user)}
+    except Exception:
+        logger.exception("webapp_news_feed failed")
+        return {"ok": False, "message": "Could not load news."}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/news/article", methods=["POST"])
+@csrf_exempt
+def webapp_news_article():
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.news_service import get_article
+        payload = request.get_json(silent=True) or {}
+        try:
+            article_id = int(payload.get("id"))
+        except (TypeError, ValueError):
+            return {"ok": False, "message": "Article not found."}, 404
+        data = get_article(db, user, article_id)
+        if data is None:
+            return {"ok": False, "message": "Article not found."}, 404
+        db.commit()
+        return {"ok": True, "article": data}
+    except Exception:
+        db.rollback()
+        logger.exception("webapp_news_article failed")
+        return {"ok": False, "message": "Could not open the article."}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/news/react", methods=["POST"])
+@csrf_exempt
+def webapp_news_react():
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.news_service import react
+        payload = request.get_json(silent=True) or {}
+        try:
+            data = react(db, user, int(payload.get("id") or 0), payload.get("emoji"))
+        except (TypeError, ValueError) as e:
+            db.rollback()
+            return {"ok": False, "message": str(e) or "Could not react."}, 400
+        db.commit()
+        return {"ok": True, **data}
+    except Exception:
+        db.rollback()
+        logger.exception("webapp_news_react failed")
+        return {"ok": False, "message": "Could not react."}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/news/submit", methods=["POST"])
+@csrf_exempt
+def webapp_news_submit():
+    """A player's story: stored pending, then DMed to every bot admin."""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import news_service, news_announce
+        upload = request.files.get("image")
+        raw = upload.read(news_service.MAX_IMAGE_BYTES + 1) if upload else None
+        try:
+            article = news_service.submit_user_article(
+                db, user,
+                headline=request.form.get("headline"),
+                body=request.form.get("body"),
+                image_raw=raw or None)
+        except ValueError as e:
+            db.rollback()
+            return {"ok": False, "message": str(e)}, 400
+        db.commit()
+        news_announce.in_background(news_announce.send_review_to_admins, article.id)
+        return {"ok": True, "id": article.id,
+                "message": "Sent to the admins for approval. We'll DM you when it's live!"}
+    except Exception:
+        db.rollback()
+        logger.exception("webapp_news_submit failed")
+        return {"ok": False, "message": "Could not submit your story. Please try again."}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/news/<int:article_id>/image")
+@csrf_exempt
+def news_image(article_id):
+    """Serve an article's image. Unpublished ones only to logged-in admins."""
+    db = get_session()
+    try:
+        from models import NewsArticle
+        from services.news_service import image_bytes, STATUS_PUBLISHED
+        article = db.get(NewsArticle, article_id)
+        if article is None or (article.status != STATUS_PUBLISHED
+                               and not session.get("admin")):
+            return {"error": "not_found"}, 404
+        data, content_type = image_bytes(db, article)
+        if not data:
+            return {"error": "not_found"}, 404
+        return send_file(io.BytesIO(data), mimetype=content_type,
+                         max_age=86400, conditional=False)
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/poll/active", methods=["POST"])
+@csrf_exempt
+def webapp_poll_active():
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        return {"ok": True, "poll": _get_poll_safe(db, user)}
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/poll/vote", methods=["POST"])
+@csrf_exempt
+def webapp_poll_vote():
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services.poll_service import vote
+        payload = request.get_json(silent=True) or {}
+        try:
+            poll, paid = vote(db, user, payload.get("poll_id") or 0, payload.get("option"))
+        except ValueError as e:
+            db.rollback()
+            return {"ok": False, "message": str(e)}, 400
+        db.commit()
+        msg = f"Vote counted! +{paid} coins" if paid else "Vote counted!"
+        return {"ok": True, "poll": poll, "coins_paid": paid,
+                "balance": int(user.total_coins or 0), "message": msg}
+    except Exception:
+        db.rollback()
+        logger.exception("webapp_poll_vote failed")
+        return {"ok": False, "message": "Could not record your vote."}, 500
     finally:
         db.close()
 
@@ -21574,6 +21771,311 @@ def admin_events_delete(event_id):
     finally:
         db.close()
     return redirect(url_for("admin_events"))
+
+
+# ─── CMU News (Mini App) ─────────────────────────────────────────────
+
+def _news_upload():
+    """Read + normalise the optional image on a website news form."""
+    from services.news_service import normalise_image, MAX_IMAGE_BYTES
+    upload = request.files.get("image")
+    if not upload or not upload.filename:
+        return None
+    return normalise_image(upload.read(MAX_IMAGE_BYTES + 1))
+
+
+@app.route("/news")
+@login_required
+def admin_news():
+    db = get_session()
+    try:
+        from sqlalchemy import func
+        from models import NewsArticle, NewsReaction
+        from services import news_service
+        tab = request.args.get("tab") or "published"
+        query = db.query(NewsArticle)
+        if tab == "pending":
+            query = query.filter(NewsArticle.status == news_service.STATUS_PENDING)
+        elif tab == "auto":
+            query = query.filter(NewsArticle.source == news_service.SOURCE_AUTO)
+        elif tab == "rejected":
+            query = query.filter(NewsArticle.status.in_(
+                (news_service.STATUS_REJECTED, news_service.STATUS_ARCHIVED)))
+        else:
+            tab = "published"
+            query = query.filter(NewsArticle.status == news_service.STATUS_PUBLISHED)
+        articles = (query.order_by(NewsArticle.is_pinned.desc(),
+                                   NewsArticle.created_at.desc())
+                    .limit(100).all())
+        ids = [a.id for a in articles]
+        reactions = {}
+        if ids:
+            for aid, emoji, n in (db.query(NewsReaction.article_id, NewsReaction.emoji,
+                                           func.count(NewsReaction.id))
+                                  .filter(NewsReaction.article_id.in_(ids))
+                                  .group_by(NewsReaction.article_id, NewsReaction.emoji)):
+                reactions.setdefault(aid, {})[emoji] = n
+        return render_template(
+            "admin_news.html", articles=articles, tab=tab, reactions=reactions,
+            settings=news_service.settings(db), auto_kinds=news_service.AUTO_KINDS,
+            reject_reasons=news_service.REJECT_REASONS,
+            pending=news_service.pending_count(db),
+            limits={"headline": news_service.HEADLINE_MAX, "body": news_service.BODY_MAX})
+    finally:
+        db.close()
+
+
+@app.route("/news/create", methods=["POST"])
+@login_required
+def admin_news_create():
+    db = get_session()
+    try:
+        from services import news_service, news_announce
+        image = _news_upload()
+        article = news_service.create_admin_article(
+            db, headline=request.form.get("headline"), body=request.form.get("body"),
+            image=image, pinned=bool(request.form.get("pinned")),
+            admin_name=session.get("admin_user") or "admin")
+        db.commit()
+        if request.form.get("announce"):
+            news_announce.in_background(news_announce.announce_article, article.id)
+        flash(f"✅ Published “{article.headline}”", "info")
+    except ValueError as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+    except Exception as e:
+        db.rollback()
+        logger.exception("news create failed")
+        flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_news"))
+
+
+@app.route("/news/<int:article_id>/edit", methods=["POST"])
+@login_required
+def admin_news_edit(article_id):
+    db = get_session()
+    try:
+        from models import NewsArticle
+        from services import news_service
+        article = db.get(NewsArticle, article_id)
+        if article is None:
+            flash("❌ Article not found", "error")
+        else:
+            headline, body = news_service._clean(request.form.get("headline"),
+                                                 request.form.get("body"))
+            article.headline, article.body = headline, body
+            image = _news_upload()
+            if image:
+                news_service.attach_image(db, article, image,
+                                          uploaded_by=session.get("admin_user") or "admin")
+            elif request.form.get("remove_image"):
+                news_service._drop_image(db, article)
+            db.commit()
+            flash("✅ Article updated", "info")
+    except ValueError as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+    except Exception as e:
+        db.rollback()
+        logger.exception("news edit failed")
+        flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(request.referrer or url_for("admin_news"))
+
+
+@app.route("/news/<int:article_id>/action", methods=["POST"])
+@login_required
+def admin_news_action(article_id):
+    """approve / reject / pin / unpin / archive / publish / delete / announce."""
+    db = get_session()
+    action = request.form.get("action") or ""
+    try:
+        from models import NewsArticle
+        from services import news_service, news_announce
+        article = db.get(NewsArticle, article_id)
+        reviewer = f"web:{session.get('admin_user') or 'admin'}"
+        if article is None:
+            flash("❌ Article not found", "error")
+        elif action == "approve":
+            reward = request.form.get("reward_coins")
+            paid = news_service.approve(
+                db, article, reviewer=reviewer,
+                reward_coins=int(reward) if (reward or "").strip().isdigit() else None)
+            if paid is None:
+                flash(f"⚠️ Already {article.status}", "error")
+            else:
+                db.commit()
+                if article.source == news_service.SOURCE_USER:
+                    news_announce.in_background(news_announce.notify_author_by_id,
+                                                article.id, True, paid)
+                if request.form.get("announce"):
+                    news_announce.in_background(news_announce.announce_article, article.id)
+                flash("✅ Published" + (f" — {paid} coins paid to the author" if paid else ""),
+                      "info")
+        elif action == "reject":
+            note = news_service.reason_text((request.form.get("reason") or "").strip())
+            if not news_service.reject(db, article, reviewer=reviewer, note=note or None):
+                flash(f"⚠️ Already {article.status}", "error")
+            else:
+                db.commit()
+                if article.source == news_service.SOURCE_USER:
+                    news_announce.in_background(news_announce.notify_author_by_id,
+                                                article.id, False)
+                flash("✅ Rejected", "info")
+        elif action in ("pin", "unpin"):
+            article.is_pinned = action == "pin"
+            db.commit()
+            flash("✅ Pinned" if article.is_pinned else "✅ Unpinned", "info")
+        elif action == "archive":
+            news_service.set_status(db, article, news_service.STATUS_ARCHIVED)
+            db.commit()
+            flash("✅ Archived — hidden from the Mini App", "info")
+        elif action == "publish":
+            news_service.set_status(db, article, news_service.STATUS_PUBLISHED)
+            db.commit()
+            flash("✅ Published", "info")
+        elif action == "announce":
+            news_announce.in_background(news_announce.announce_article, article.id)
+            flash("📣 Sending to the channel/group…", "info")
+        elif action == "delete":
+            news_service.delete(db, article)
+            db.commit()
+            flash("✅ Deleted", "info")
+        else:
+            flash("❌ Unknown action", "error")
+    except Exception as e:
+        db.rollback()
+        logger.exception("news action %s failed", action)
+        flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(request.referrer or url_for("admin_news"))
+
+
+@app.route("/news/settings", methods=["POST"])
+@login_required
+def admin_news_settings():
+    db = get_session()
+    try:
+        from services import news_service
+        news_service.save_settings(
+            db,
+            submit_reward_coins=request.form.get("submit_reward_coins") or 0,
+            auto_publish=bool(request.form.get("auto_publish")),
+            auto_announce=bool(request.form.get("auto_announce")),
+            auto_kinds=request.form.getlist("auto_kinds"))
+        db.commit()
+        flash("✅ News settings saved", "info")
+    except Exception as e:
+        db.rollback()
+        logger.exception("news settings failed")
+        flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_news"))
+
+
+# ─── Polls (Mini App) ────────────────────────────────────────────────
+
+def _ist_form_datetime(value):
+    """<input type=datetime-local> value, entered in IST → naive UTC (or None)."""
+    from datetime import datetime as _dt
+    value = (value or "").strip()
+    if not value:
+        return None
+    return _dt.fromisoformat(value) - _IST_OFFSET
+
+
+@app.route("/polls")
+@login_required
+def admin_polls():
+    db = get_session()
+    try:
+        from models import Poll
+        from services import poll_service
+        polls = db.query(Poll).order_by(Poll.created_at.desc()).limit(50).all()
+        from datetime import datetime as _dt
+        now = _dt.utcnow()
+
+        def _state(p):
+            if poll_service.is_open(p, now):
+                return "live"
+            if p.is_active and p.starts_at > now:
+                return "scheduled"
+            return "ended"
+
+        rows = [{"poll": p, "results": poll_service.results(db, p),
+                 "open": poll_service.is_open(p, now), "state": _state(p)} for p in polls]
+        return render_template("admin_polls.html", rows=rows,
+                               max_options=poll_service.MAX_OPTIONS)
+    finally:
+        db.close()
+
+
+@app.route("/polls/create", methods=["POST"])
+@login_required
+def admin_polls_create():
+    db = get_session()
+    try:
+        from services import poll_service, news_announce
+        poll = poll_service.create_poll(
+            db,
+            question=request.form.get("question"),
+            option_labels=request.form.getlist("options"),
+            starts_at=_ist_form_datetime(request.form.get("starts_at")),
+            ends_at=_ist_form_datetime(request.form.get("ends_at")),
+            reward_coins=int(request.form.get("reward_coins") or 0),
+            created_by=session.get("admin_user") or "admin")
+        db.commit()
+        if request.form.get("announce"):
+            news_announce.in_background(news_announce.announce_poll, poll.id)
+        flash("✅ Poll created", "info")
+    except ValueError as e:
+        db.rollback()
+        flash(f"❌ {e}", "error")
+    except Exception as e:
+        db.rollback()
+        logger.exception("poll create failed")
+        flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_polls"))
+
+
+@app.route("/polls/<int:poll_id>/action", methods=["POST"])
+@login_required
+def admin_polls_action(poll_id):
+    db = get_session()
+    action = request.form.get("action") or ""
+    try:
+        from models import Poll
+        from services import poll_service, news_announce
+        poll = db.get(Poll, poll_id)
+        if poll is None:
+            flash("❌ Poll not found", "error")
+        elif action == "end":
+            poll_service.end_now(db, poll)
+            db.commit()
+            flash("✅ Poll ended", "info")
+        elif action == "announce":
+            news_announce.in_background(news_announce.announce_poll, poll.id)
+            flash("📣 Sending to the channel/group…", "info")
+        elif action == "delete":
+            poll_service.delete_poll(db, poll)
+            db.commit()
+            flash("✅ Poll deleted", "info")
+        else:
+            flash("❌ Unknown action", "error")
+    except Exception as e:
+        db.rollback()
+        logger.exception("poll action %s failed", action)
+        flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_polls"))
 
 
 # ─── Seasons ─────────────────────────────────────────────────────────

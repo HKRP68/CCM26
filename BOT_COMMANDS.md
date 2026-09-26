@@ -569,6 +569,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | Usage | What it does |
 |-------|--------------|
 | `/logoqueue` | Review team logos waiting for approval |
+| `/newsqueue` | Review player-submitted CMU News stories waiting for approval |
 | `/logounhold <telegram id>` | Let a held user send a team logo again |
 | `/previewsummary` | Render a sample match summary card |
 | `/setcardid <player name> \| <file_id>` | Pin a Telegram photo as a player's card |

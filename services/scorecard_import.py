@@ -964,6 +964,11 @@ def record_import(session, plan):
         logger.exception("Knockout advancement failed for tournament %s",
                          fixture.tournament_id)
 
+    if fixture.stage == "final" and fixture.winner_team_id:
+        from models import Tournament
+        tournament_service._champion_news(
+            session, session.get(Tournament, fixture.tournament_id), fixture)
+
     logger.info("Imported written scorecard onto fixture %s (winner_team=%s, "
                 "%s player lines)", fixture.id, plan["winner_team_id"],
                 len(plan["lines"]))

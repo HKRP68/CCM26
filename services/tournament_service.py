@@ -1166,6 +1166,9 @@ def record_manual_result(session, fixture_id, *,
     except Exception:
         logger.exception("Knockout advancement failed for tournament %s", tm.tournament_id)
 
+    if tm.stage == "final" and win_id:
+        _champion_news(session, tour, tm)
+
     logger.info("Manually recorded tournament fixture %s (winner_team=%s)", tm.id, win_id)
     return tm
 
@@ -1333,6 +1336,11 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     except Exception:
         logger.exception("Knockout advancement failed for tournament %s", tid)
 
+    # A decided final is CMU News. auto_story never raises and runs in a
+    # savepoint, so a news failure cannot cost the match its result.
+    if tm.stage == "final" and tm.winner_team_id:
+        _champion_news(session, tour, tm)
+
     logger.info("Recorded tournament match for tournament %s (match_id=%s)", tid, match_id)
     return tm
 
@@ -1389,6 +1397,29 @@ def league_stage_complete(session, tournament_id):
     """
     played, total = league_progress(session, tournament_id)
     return total > 0 and played >= total
+
+
+def _champion_news(session, tour, final):
+    """Write the "<team> win <tournament>" CMU News story. Never raises."""
+    try:
+        from services.news_service import auto_story
+        champ = session.get(TournamentTeam, final.winner_team_id)
+        if champ is None:
+            return
+        loser_id = final.team2_id if final.team1_id == champ.id else final.team1_id
+        runner_up = session.get(TournamentTeam, loser_id) if loser_id else None
+        t_name = getattr(tour, "name", None) or "the tournament"
+        body = [f"{champ.name} are the champions of {t_name}!"]
+        if runner_up is not None:
+            body.append(f"They beat {runner_up.name} in the final.")
+        if final.result_text:
+            body.append(final.result_text)
+        body.append("Congratulations to the whole squad — see you in the next one.")
+        auto_story(session, "tournament_champion", f"tourney:{final.tournament_id}",
+                   f"🏆 {champ.name} win {t_name}!", "\n\n".join(body),
+                   kicker="Champions")
+    except Exception:
+        logger.exception("champion news failed for tournament %s", final.tournament_id)
 
 
 def tournament_champion(session, tournament_id):

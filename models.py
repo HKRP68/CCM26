@@ -1390,6 +1390,18 @@ class GameConfig(Base):
     gem_bonus_bps = Column(Integer, default=10, nullable=False)
     gem_bonus_starts_at = Column(DateTime, nullable=True)
     gem_bonus_ends_at = Column(DateTime, nullable=True)
+    # ── CMU News (Mini App) ──
+    # Coins paid to a user when a bot admin approves their submitted article.
+    news_submit_reward_coins = Column(Integer, default=100, nullable=False)
+    # Auto-generated stories (tournament champions, record buys, …) go live
+    # straight away when on; when off they wait in the review queue.
+    news_auto_publish = Column(Boolean, default=True, nullable=False)
+    # Comma list of auto-story kinds that are switched on; NULL means all.
+    # See services/news_service.AUTO_KINDS.
+    news_auto_kinds = Column(Text, nullable=True)
+    # Also post auto stories to the branding channel/group. Off by default so
+    # a busy auction does not flood the channel.
+    news_auto_announce = Column(Boolean, default=False, nullable=False)
     # Updated tracking (existing)
     updated_at = Column(DateTime, default=datetime.utcnow)
     updated_by = Column(String(80), nullable=True)
@@ -4431,4 +4443,119 @@ class HallOfFameEntry(Base):
 
     __table_args__ = (
         Index("ix_hof_category_value", "category", "value", "tiebreak"),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════
+# CMU NEWS + POLLS — the Mini App's community strip
+# ══════════════════════════════════════════════════════════════════════
+
+class NewsArticle(Base):
+    """One CMU News story shown in the Mini App.
+
+    Three sources write here: admins from the website (``admin``), players from
+    the Mini App (``user`` — held ``pending`` until a bot admin approves it, the
+    same moderation rule team logos follow), and the game itself (``auto`` —
+    champions, record buys, season winners; see news_service.auto_story).
+    """
+    __tablename__ = "news_articles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    headline = Column(String(160), nullable=False)
+    body = Column(Text, nullable=False, default="")
+    # asset_store key of the (re-encoded) image, e.g. "data/news/12.jpg".
+    image_key = Column(String(300), nullable=True)
+    # 'pending' | 'published' | 'rejected' | 'archived'
+    status = Column(String(12), nullable=False, default="pending", index=True)
+    # 'admin' | 'user' | 'auto'
+    source = Column(String(10), nullable=False, default="admin")
+    # For auto stories: which moment produced it (see news_service.AUTO_KINDS).
+    kind = Column(String(30), nullable=True)
+    # Unique so a retried hook can never post the same story twice.
+    dedupe_key = Column(String(120), nullable=True, unique=True)
+
+    # Not a foreign key: like TeamLogoRequest, the row is a moderation receipt
+    # and should outlive the account it came from.
+    author_user_id = Column(Integer, nullable=True, index=True)
+    author_telegram_id = Column(BigInteger, nullable=True)
+    author_name = Column(String(80), nullable=True)
+
+    review_note = Column(String(300), nullable=True)
+    reviewed_by = Column(String(80), nullable=True)
+    reward_coins = Column(Integer, nullable=False, default=0)
+    reward_paid = Column(Boolean, nullable=False, default=False)
+
+    is_pinned = Column(Boolean, nullable=False, default=False)
+    view_count = Column(Integer, nullable=False, default=0)
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    published_at = Column(DateTime, nullable=True)
+    decided_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_news_status_published", "status", "published_at"),
+    )
+
+
+class NewsRead(Base):
+    """A user has opened an article — drives the unread badge and view count."""
+    __tablename__ = "news_reads"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    article_id = Column(Integer, ForeignKey("news_articles.id", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    read_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("article_id", "user_id", name="uq_news_read"),
+    )
+
+
+class NewsReaction(Base):
+    """One emoji reaction per user per article; changing it overwrites."""
+    __tablename__ = "news_reactions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    article_id = Column(Integer, ForeignKey("news_articles.id", ondelete="CASCADE"),
+                        nullable=False, index=True)
+    user_id = Column(Integer, nullable=False)
+    emoji = Column(String(8), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("article_id", "user_id", name="uq_news_reaction"),
+    )
+
+
+class Poll(Base):
+    """An admin-run Mini App poll. Shown while ``is_active`` and inside its window."""
+    __tablename__ = "polls"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    question = Column(String(200), nullable=False)
+    # JSON list of 2–6 option labels.
+    options_json = Column(Text, nullable=False)
+    starts_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    ends_at = Column(DateTime, nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
+    # Coins paid once to each voter.
+    reward_coins = Column(Integer, nullable=False, default=0)
+    created_by = Column(String(80), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PollVote(Base):
+    """A user's single vote; the unique constraint is the one-vote guarantee."""
+    __tablename__ = "poll_votes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    poll_id = Column(Integer, ForeignKey("polls.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    user_id = Column(Integer, nullable=False)
+    option_index = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("poll_id", "user_id", name="uq_poll_vote"),
     )

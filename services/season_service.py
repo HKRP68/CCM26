@@ -66,6 +66,25 @@ def ensure_current_season(session):
     return live
 
 
+def _season_news(session, season, podium):
+    """CMU News for the month's top three managers. Never raises."""
+    try:
+        from services.display_name import manager_name
+        from services.news_service import auto_story
+        medals = ("🥇", "🥈", "🥉")
+        lines = [f"{medals[i]} {manager_name(u)} — {u.season_points or 0} pts, "
+                 f"{u.season_wins or 0} wins" for i, u in enumerate(podium)]
+        label = getattr(season, "name", None) or season.season_key
+        auto_story(session, "season_winners", f"season:{season.season_key}",
+                   f"👑 {manager_name(podium[0])} tops the {label} season!",
+                   f"The {label} season is over. Here is the podium:\n\n"
+                   + "\n".join(lines)
+                   + "\n\nPrizes have been paid. A new season starts now — good luck!",
+                   kicker="Season winners")
+    except Exception:
+        logger.exception("season news failed for %s", season.season_key)
+
+
 def _finalize_season(session, season):
     """Pay top finishers + archive standings for a season being closed."""
     if season.finalized:
@@ -120,6 +139,9 @@ def _finalize_season(session, season):
     season.ended_at = datetime.utcnow()
     session.flush()
     logger.info(f"Finalized season {season.season_key}: {len(rows)} ranked")
+
+    if rows:
+        _season_news(session, season, rows[:3])
 
     # Pay top clubs too (combined season points)
     try:
