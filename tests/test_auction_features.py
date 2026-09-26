@@ -1161,7 +1161,7 @@ class RoomViewTests(FeatureCase):
     def test_ainfo_carries_a_button_per_view(self):
         views, _data = self._info_buttons()
         self.assertEqual({"rules", "sets", "nextset", "next", "squad", "sold",
-                          "unsold", "purse"}, views)
+                          "unsold", "purse", "leaderboard", "mybids"}, views)
 
     def test_the_card_belongs_to_whoever_asked_for_it(self):
         """Every button names its owner, and the card can be closed."""
@@ -1820,7 +1820,7 @@ class AnnouncementTests(FeatureCase):
         self.tick(NOW + timedelta(seconds=3))
         new = self.bot.sent[before:]
         self.assertEqual(1, len(new), "six bids, one message")
-        self.assertIn("💸", new[0])
+        self.assertIn("💥", new[0])
         self.assertIn("Chennai", new[0])
         self.assertIn("leads", new[0])
         # And the pinned board is edited, with the quick-bid buttons on it.
@@ -1858,16 +1858,16 @@ class AnnouncementTests(FeatureCase):
         real = self.bot.send_message
 
         async def flooded(chat_id=None, text="", **kwargs):
-            if "💸" in text:
+            if "💥" in text:
                 raise RetryAfter(3)
             return await real(chat_id=chat_id, text=text, **kwargs)
 
         self.bot.send_message = flooded
         self.tick(NOW + timedelta(seconds=3))
-        self.assertFalse([t for t in self.bot.sent if "💸" in t])
+        self.assertFalse([t for t in self.bot.sent if "💥" in t])
         self.bot.send_message = real
         self.tick(NOW + timedelta(seconds=4))
-        self.assertEqual(1, len([t for t in self.bot.sent if "💸" in t]),
+        self.assertEqual(1, len([t for t in self.bot.sent if "💥" in t]),
                          "the held burst goes out once the flood clears")
 
     def test_a_sale_is_announced_in_rich_html(self):

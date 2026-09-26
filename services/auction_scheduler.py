@@ -70,6 +70,13 @@ COALESCED_KINDS = {"bid"}
 BID_MESSAGE_GAP = 4.0  # seconds
 _last_bid_message = {}
 
+# The one message in the room, besides the pinned board, that carries live
+# quick-bid buttons: the newest bid line, lot card or countdown header. Keyed
+# by season → (chat_id, message_id). When a newer one is sent the old one's
+# buttons are taken off, so the room is never offered a column of stale
+# prices — the buttons are always on the message at the bottom of the chat.
+_live_buttons = {}
+
 # Send the player's card when a lot opens. A switch rather than a constant
 # for the tests, which have no card renderer to spare.
 SEND_LOT_CARD = True
@@ -258,8 +265,39 @@ async def _send_rich(bot, chat_id, blocks, html_text, **kwargs):
     return None
 
 
-async def _send_bid_line(bot, chat_id, text):
-    """Send a bid line. True when it landed or never can; None to retry.
+async def strip_buttons(bot, season_id):
+    """Take the quick-bid buttons off the last message that carried them.
+
+    Best-effort: the message may be gone, too old to edit, or already bare —
+    none of which matters, because a stale button is refused by the price in
+    its own callback data anyway. This only keeps the room tidy.
+    """
+    held = _live_buttons.pop(season_id, None)
+    if held is None:
+        return
+    chat_id, message_id = held
+    try:
+        await bot.edit_message_reply_markup(chat_id=chat_id,
+                                            message_id=message_id,
+                                            reply_markup=None)
+    except Exception:
+        logger.debug("auction: could not strip old buttons", exc_info=True)
+
+
+async def hand_buttons(bot, season_id, chat_id, message):
+    """``message`` now carries the live buttons; the previous holder loses them."""
+    message_id = getattr(message, "message_id", None)
+    if not message_id:
+        return
+    held = _live_buttons.get(season_id)
+    if held is not None and held[1] != message_id:
+        await strip_buttons(bot, season_id)
+    _live_buttons[season_id] = (chat_id, message_id)
+
+
+async def _send_bid_line(bot, chat_id, text, reply_markup=None):
+    """Send a bid line. The message (or True) when it landed or never can;
+    None to retry.
 
     A transient failure — flood control, a timeout, a network error — must not
     advance the drain cursor, or the burst is never announced. A permanent
@@ -267,9 +305,11 @@ async def _send_bid_line(bot, chat_id, text):
     unreachable chat cannot stall the drain forever.
     """
     try:
-        await bot.send_message(chat_id=chat_id, text=text, parse_mode="HTML",
-                               disable_web_page_preview=True)
-        return True
+        kwargs = {"reply_markup": reply_markup} if reply_markup is not None else {}
+        sent = await bot.send_message(chat_id=chat_id, text=text,
+                                      parse_mode="HTML",
+                                      disable_web_page_preview=True, **kwargs)
+        return sent if sent is not None else True
     except RetryAfter as exc:
         logger.warning("auction bid line rate-limited: %s", exc)
         return None
@@ -294,6 +334,18 @@ async def send_lot_card(bot, session, season, lot):
     """
     from services import auction_rich as AR
     caption = AR.lot_caption(session, season, lot)
+    # The opening bid is one tap away on the card itself, the way TeleAuction
+    # puts its buttons on the player message.
+    markup = AR.bid_keyboard(season, lot)
+    await strip_buttons(bot, season.id)
+    sent = await _lot_card_message(bot, session, season, lot, caption, markup)
+    if sent is not None and markup is not None:
+        await hand_buttons(bot, season.id, season.chat_id, sent)
+    return sent
+
+
+async def _lot_card_message(bot, session, season, lot, caption, markup):
+    extra = {"reply_markup": markup} if markup is not None else {}
     if SEND_LOT_CARD and lot.player_id:
         try:
             from models import Player
@@ -304,12 +356,17 @@ async def send_lot_card(bot, session, season, lot):
                 sent = await send_player_card(bot=bot, chat_id=season.chat_id,
                                               player=player, caption=caption,
                                               parse_mode="HTML",
-                                              session=session)
+                                              session=session, **extra)
                 if sent is not None:
                     return sent
         except Exception:
             logger.exception("auction lot card failed; sending text")
-    return await _send(bot, season.chat_id, caption)
+    return await _send(bot, season.chat_id, caption, **extra)
+
+
+def last_lot_id(run):
+    """The lot a run of bid events was on (the last one's, if they differ)."""
+    return run[-1].lot_id if run else None
 
 
 # ── The event drain ──────────────────────────────────────────────────
@@ -346,18 +403,33 @@ async def drain_events(bot, session, season, *, limit=DRAIN_PER_TICK):
                 # Hold the burst for a later tick; the board already shows
                 # the price, so nothing the room needs is late.
                 break
+            # The newest bid carries the quick-bid buttons, TeleAuction-style,
+            # so the next raise is one tap at the bottom of the chat rather
+            # than a scroll up to the pinned board.
+            current = A.current_lot(session, season)
+            markup = (AR.bid_keyboard(season, current)
+                      if current is not None and current.id == last_lot_id(run)
+                      else None)
             delivered = await _send_bid_line(
-                bot, season.chat_id, AR.bid_burst_html(session, season, run))
+                bot, season.chat_id, AR.bid_burst_html(session, season, run),
+                reply_markup=markup)
             if delivered is None:
                 # Rate-limited or a network blip: keep the cursor where it
                 # is and send the whole burst again on a later tick.
                 break
+            if markup is not None and delivered is not True:
+                await hand_buttons(bot, season.id, season.chat_id, delivered)
             _last_bid_message[season.id] = time.monotonic()
             spoken += 1
             last = run[-1]
         else:
             last = event
             if event.kind not in SILENT_KINDS:
+                # Anything else that happens — a sale, a pause, a Right To
+                # Match — changes what the buttons would bid on, so the last
+                # set comes off. The next bid line (or lot card) brings them
+                # back at the right price.
+                await strip_buttons(bot, season.id)
                 if event.kind == "lot_opened":
                     lot = A.current_lot(session, season)
                     if lot is None or lot.id != event.lot_id:
@@ -483,11 +555,19 @@ async def run_countdown(bot, season_id, lot_id, deadline, seconds, *,
                     return False
                 standing = (lot.current_bidder_id, lot.current_bid_lakh)
                 text = f"<b>{number}</b>"
+                markup = None
                 if standing != said_for:
                     text = (countdown_header(session, season, lot)
                             + f"\n\n{text}")
                     said_for = standing
-                await _send(bot, season.chat_id, text)
+                    # The last seconds are exactly when the buttons matter:
+                    # the header carries them, the bare numbers do not.
+                    from services import auction_rich as AR
+                    markup = AR.bid_keyboard(season, lot)
+                extra = {"reply_markup": markup} if markup is not None else {}
+                sent = await _send(bot, season.chat_id, text, **extra)
+                if sent is not None and markup is not None:
+                    await hand_buttons(bot, season.id, season.chat_id, sent)
             finally:
                 session.close()
         await until(deadline + timedelta(milliseconds=50))
@@ -529,6 +609,7 @@ async def _resolve_now(bot, season_id, lot_id, deadline, *, clock=None):
 
 def cancel_countdown(season_id):
     """Drop a running countdown — the auction under it has been reset."""
+    _live_buttons.pop(season_id, None)
     running = _countdowns.pop(season_id, None)
     if running is not None and not running[1].done():
         running[1].cancel()

@@ -406,12 +406,26 @@ def user_guide():
         code(["/bid           →  the next legal minimum, whatever it is",
               "/bid 2.4       →  ₹2.4 Cr, if that clears the minimum",
               "/bd 2.4        →  the same thing, fewer letters"]),
-        p("The pinned board also carries " + B("quick-bid buttons") + ". They "
-          "are shared, not locked to one franchise — a board the second "
-          "franchise cannot touch is not an auction. Each press is checked "
-          "against the franchise " + B("you") + " own, and the exact price is "
-          "baked into the button, so a stale board can never bid a number "
-          "nobody meant."),
+        p(B("The buttons are always at the bottom of the chat.") + " Every "
+          "new bid message (“💥 Mumbai bids ₹2.2 Cr · ⬆️ Outbids Chennai”), "
+          "the player's card and the countdown carry " + B("quick-bid buttons")
+          + " — the minimum and one step above it — and the older message "
+          "loses its buttons, so you never tap a stale price. The pinned board "
+          "has them too. They are shared: each press is checked against the "
+          "franchise " + B("you") + " own, and the exact price is baked into "
+          "the button."),
+        p(B("💼 My Purse") + " and " + B("📊 Status") + " sit under the bid "
+          "buttons. They answer with a private popup — your purse, max bid, "
+          "squad, overseas count and RTM cards, or who leads the lot and what "
+          "beats it — and add nothing to the chat."),
+        p(B("Dot shortcuts") + " work in the auction group: " + C(".bid")
+          + ", " + C(".bid 2cr") + ", " + C(".purse") + ", " + C(".squad")
+          + ", " + C(".board") + ", " + C(".lb") + ", " + C(".mybids") + "."),
+        p(B("Many teams can bid at once.") + " There is no pause for the room "
+          "after a bid. If you and another team send a bare " + C("/bid")
+          + " at the same instant, both land, in order. Spam is stopped per "
+          "person: one bid attempt a second, and a burst of taps pauses only "
+          "your bidding for 15 seconds."),
         p(B("A bid that works gets no reply.") + " Forty bids inside one lot "
           "would be forty messages on top of a board you are trying to read. "
           "Your message gets a reaction, and the board carries the new price "
@@ -655,6 +669,12 @@ def user_guide():
             ["/anextplayer", "anyone", "Who is up next."],
             ["/asoldlist", "anyone", "Everyone sold, set by set."],
             ["/aunsoldlist", "anyone", "Everyone unsold."],
+            ["/aleaderboard · /alb", "anyone",
+             "Franchises ranked by spend, with each one's top buy."],
+            ["/amybids [team]", "anyone",
+             "Every player you bid on — won, lost or live."],
+            [".bid .purse .squad …", "as the command",
+             "Dot shortcuts, in the auction group."],
             ["/aretlock", "anyone", "Who kept whom; the retention window."],
             ["/apicks", "anyone", "The expansion pick order, and whose turn."],
         ], widths=[38 * mm, 30 * mm, None]),
