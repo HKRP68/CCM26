@@ -3893,6 +3893,16 @@ class AuctionSeason(Base):
     # the board. 0 (the default) turns it off, so many franchises can bid at
     # once — spam is stopped per person instead; ``/abidgap`` sets it.
     bid_gap_seconds = Column(Integer, default=0, nullable=False)
+    # The staged lot clock (``/atimer 60 40 20 10 5``). ``bid_seconds`` is the
+    # opening clock and ``countdown_seconds`` the final count; these three are
+    # the middle of it. A bid with less than ``reset_seconds`` left puts the
+    # clock back to ``reset_seconds`` (as often as it takes — this replaces
+    # anti-snipe), and the room is warned at ``warn1_seconds`` and
+    # ``warn2_seconds``: "Selling X to Team for ₹…". 0 reset = the classic
+    # clock, which is what every season written before this runs on.
+    reset_seconds = Column(Integer, default=0, nullable=False)
+    warn1_seconds = Column(Integer, default=0, nullable=False)
+    warn2_seconds = Column(Integer, default=0, nullable=False)
     # The pool's order when the auction first started, as a JSON list of
     # ``[lot_id, set_name]``. ``/arestart`` puts the queue back in exactly this
     # order — the accelerated round renumbers and re-files unsold players, and
