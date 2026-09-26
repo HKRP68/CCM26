@@ -58,6 +58,16 @@ def _of_type(blocks, kind):
     return [b for b in blocks if b.get("type") == kind]
 
 
+def _commentary(blocks):
+    return [b for b in _of_type(blocks, "details")
+            if "Commentary" in flatten(b["summary"])]
+
+
+def _bowlers(blocks):
+    return [b for b in _of_type(blocks, "details")
+            if "Bowlers" in flatten(b["summary"])]
+
+
 @unittest.skipUnless(_HAVE_CP, "handlers.cipl_play (python-telegram-bot) not importable")
 class ApproachCardBlocksTests(unittest.TestCase, BlockTreeAssertions):
 
@@ -65,7 +75,7 @@ class ApproachCardBlocksTests(unittest.TestCase, BlockTreeAssertions):
         s = _state()
         blocks = cp._approach_card_blocks(s)
         self.assertGreater(self.assertWellFormed(blocks), 0)
-        self.assertEqual(_of_type(blocks, "details"), [])   # no prior over
+        self.assertEqual(_commentary(blocks), [])           # no prior over
         self.assertEqual(_of_type(blocks, "pullquote"), [])  # no chase yet
         self.assertIn("Yet to bat", flatten(blocks))
 
@@ -105,7 +115,7 @@ class ApproachCardBlocksTests(unittest.TestCase, BlockTreeAssertions):
         s = _state(overs_played=1)
         blocks = cp._approach_card_blocks(s)
         self.assertWellFormed(blocks)
-        details = _of_type(blocks, "details")
+        details = _commentary(blocks)
         self.assertEqual(len(details), 1)
         self.assertNotIn("is_open", details[0])      # buttons stay on screen
         inside = flatten(details[0])
@@ -114,6 +124,53 @@ class ApproachCardBlocksTests(unittest.TestCase, BlockTreeAssertions):
         for over, line, _emoji in rows:
             self.assertIn(over, inside)
             self.assertIn(line, inside)
+
+    def test_heading_names_innings_team_pitch_and_match_id(self):
+        s = _state()
+        s["pitch_type"], s["match_id"] = "Hard", 4321
+        blocks = cp._approach_card_blocks(s)
+        self.assertEqual(blocks[0]["type"], "heading")
+        head = flatten(blocks[0])
+        self.assertIn("Innings 1", head)
+        self.assertIn(str(s["bat_team_name"]), head)
+        sub = flatten(blocks[1])
+        self.assertIn("Hard pitch", sub)
+        self.assertIn("#4321", sub)
+        card = cp._approach_card(s)
+        first = card.split("\n", 1)[0]
+        for bit in ("Innings 1", "Hard pitch", "#4321"):
+            self.assertIn(bit, first)
+
+    def test_every_bowler_sits_collapsed_with_the_current_one_first(self):
+        s = _state(overs_played=2)
+        blocks = cp._approach_card_blocks(s)
+        self.assertWellFormed(blocks)
+        bowlers = _bowlers(blocks)
+        self.assertEqual(len(bowlers), 1)
+        self.assertNotIn("is_open", bowlers[0])       # buttons stay on screen
+        rows = cp._bowler_rows(s)
+        self.assertTrue(rows[0]["current"])
+        self.assertEqual(sum(r["current"] for r in rows), 1)
+        inside = flatten(bowlers[0])
+        for r in rows:
+            self.assertIn(r["name"], inside)
+        # Anyone who has bowled is on the list with their figures.
+        bowled = [r for r in rows if r["balls"]]
+        self.assertTrue(bowled)
+        html_card = cp._approach_card(s)
+        self.assertIn("BOWLERS", html_card)
+        tail = html_card.split("BOWLERS", 1)[1]
+        self.assertIn("<blockquote expandable>", tail)
+        for r in rows:
+            self.assertIn(r["name"], tail)
+
+    def test_hundred_bowler_workload_reads_in_balls(self):
+        s = _state()
+        with patch.object(cm, "balls_per_unit", lambda st: 5):
+            s["bowl_stats"][str(s["current_bowler"]["roster_id"])] = {
+                "balls": 5, "runs": 7, "wickets": 1}
+            rows = cp._bowler_rows(s)
+        self.assertEqual(rows[0]["overs"], "5b")
 
     def test_prompt_lines_follow_a_divider(self):
         s = _state()

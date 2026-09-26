@@ -206,8 +206,8 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/botmatch` | `/spectate` | Spectate a bot-versus-bot match |
 | `/pbo` | `/bowlout` | Start a standalone player bowl-out |
 | `/impact` | `/ip` | Open the Impact Player picker mid-match |
-| `/resume` | `/r` | Resume your active match if the buttons disappear |
-| `/rcl` | `/resumecl` | Resume a stuck Challenge League match |
+| `/resume` | `/r` | Resume your active match if the buttons disappear — works exactly like `/rcl` (incl. `/resume <MatchId>`) |
+| `/rcl` | `/resumecl` | Resume a stuck Challenge League / Lets Play match. `/rcl <MatchId>` resumes by id; one resume per match every 5 seconds |
 | `/endmatch` | `/em` | Request to end your active match (a fine applies) |
 | `/matchinfo` | `/mi` | Live match info — striker, bowler, score, target |
 | `/clearmatches` | `/clearmatch` | Clear stuck matches in this chat (players in the match, or an admin) |
@@ -487,7 +487,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/cipl` *(reply to a user)* | `/cipl` |
 | `/cipl <overs>` *(reply to a user)* — a shorter friendly, 1–20 overs | `/cipl 6` |
 | `/matchinfo` | `/matchinfo` |
-| `/resume` · `/rcl` | `/rcl` |
+| `/resume` · `/rcl` | `/rcl` · `/rcl 1234` |
 | `/endmatch` | `/endmatch` |
 
 ## A7 · Tournaments
