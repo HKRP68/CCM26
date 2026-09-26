@@ -118,12 +118,14 @@ def _roll_season(row, live_key, session=None):
 
     The old season is archived and paid first (idempotent). The monthly
     rollover normally did that already; this is the retry for a rollover whose
-    ranked payout failed — resetting the row first would lose it for good.
+    ranked payout failed — resetting the row first would lose it for good. If
+    the payout still fails, the row is left untouched in its old season (a
+    later read retries); callers that write check ``season_key`` themselves.
     """
     if row.season_key == live_key:
         return row
-    if session is not None:
-        _ensure_finalized(session, row.season_key)
+    if session is not None and not _ensure_finalized(session, row.season_key):
+        return row
     row.rating = max(MIN_RATING, soft_reset(row.rating or START_RATING))
     row.peak_rating = row.rating
     row.played = row.wins = row.losses = row.draws = 0
@@ -132,16 +134,22 @@ def _roll_season(row, live_key, session=None):
 
 
 def _ensure_finalized(session, season_key):
-    """Archive + pay ``season_key`` if that never happened. Never raises."""
+    """Archive + pay ``season_key`` if that never happened. Never raises.
+
+    Returns True once the season is archived (now or earlier), False when the
+    payout failed and must be retried before any row of it is reset.
+    """
     from models import RankedSeasonResult
     try:
         if (session.query(RankedSeasonResult.id)
                 .filter(RankedSeasonResult.season_key == season_key).first()):
-            return
+            return True
         with session.begin_nested():
             finalize_season(session, season_key)
+        return True
     except Exception:
         logger.exception("ranked: finalize retry for %s failed", season_key)
+        return False
 
 
 def get_rating(session, user_id, create=False, live_key=None):
@@ -209,6 +217,11 @@ def apply_result(session, user1_id, user2_id, winner_id=None, tie=False,
     live_key = _live_key(session)
     r1 = get_rating(session, user1_id, create=True, live_key=live_key)
     r2 = get_rating(session, user2_id, create=True, live_key=live_key)
+    if r1.season_key != live_key or r2.season_key != live_key:
+        # A previous season's payout is still failing: rating this match would
+        # write the live result into last season's unpaid row.
+        out["reason"] = "last season's ranked payout is pending"
+        return out
     before1, before2 = r1.rating, r2.rating
     if tie:
         s1 = s2 = 0.5

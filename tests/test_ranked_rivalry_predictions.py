@@ -192,6 +192,31 @@ class RankedFinalizeRetryTests(Case):
         self.assertEqual(a.total_coins, 20000)
 
 
+class RankedFinalizeFailureTests(Case):
+    def test_a_failing_payout_leaves_the_row_unreset_and_the_match_unrated(self):
+        from unittest import mock
+        from models import RankedRating
+        from services import ranked_service as rs
+        a, b = self.user(coins=0), self.user(coins=0)
+        self.s.add(RankedRating(user_id=a.id, season_key="2003-03", rating=1400,
+                                peak_rating=1400, career_peak=1400, played=7,
+                                wins=5, losses=2, draws=0))
+        self.s.flush()
+        with mock.patch.object(rs, "finalize_season",
+                               side_effect=RuntimeError("db down")):
+            row = rs.get_rating(self.s, a.id)
+            self.assertEqual((row.season_key, row.rating, row.played),
+                             ("2003-03", 1400, 7))
+            out = rs.apply_result(self.s, a.id, b.id, winner_id=a.id)
+            self.assertFalse(out["rated"])
+            self.assertIn("pending", out["reason"])
+        self.assertEqual(a.total_coins, 0)
+        # Once the payout works again, the next read pays and resets.
+        row = rs.get_rating(self.s, a.id)
+        self.assertEqual(row.rating, 1200)
+        self.assertEqual(a.total_coins, 10000)
+
+
 def rs_cap():
     from services import ranked_service
     return ranked_service.PAIR_DAILY_CAP
