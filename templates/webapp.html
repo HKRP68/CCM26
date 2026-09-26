@@ -161,6 +161,91 @@
     font-weight: 900; cursor: pointer;
   }
   .suggestion-send:disabled { opacity: 0.55; cursor: wait; }
+
+  /* Collapsible community cards: suggestion box, CMU News, poll */
+  .cm-head {
+    display:flex; align-items:center; gap:0.55rem; width:100%;
+    background:none; border:0; padding:0; color:var(--text); font:inherit;
+    text-align:left; cursor:pointer;
+  }
+  .cm-head .cm-title { font-size:0.84rem; font-weight:900; flex:1; }
+  .cm-chev { color:var(--muted); font-size:0.8rem; transition:transform .2s ease; }
+  .cm-open .cm-chev { transform:rotate(180deg); }
+  .cm-body { display:none; margin-top:0.6rem; }
+  .cm-open .cm-body { display:block; }
+  .suggestion-box.cm-card { padding:0.7rem 0.8rem; }
+  .suggestion-box.cm-card .suggestion-head { margin-bottom:0; }
+  .cm-card { margin: 0.65rem 0.8rem 0; }
+  #poll-box.cm-card { margin-bottom: 0.2rem; }
+  .news-box {
+    padding:0.7rem 0.8rem; border-radius:15px;
+    background:rgba(17,24,39,0.92); border:1px solid rgba(232,184,75,0.3);
+    box-shadow:0 10px 28px rgba(0,0,0,0.22);
+  }
+  .news-unread {
+    background:var(--red); color:#fff; font-size:0.64rem; font-weight:900;
+    padding:0.12rem 0.5rem; border-radius:999px; white-space:nowrap;
+  }
+  .news-row {
+    display:flex; gap:0.6rem; align-items:center; padding:0.5rem 0;
+    border-top:1px solid var(--border); cursor:pointer;
+  }
+  .news-row:first-child { border-top:0; }
+  .news-thumb {
+    width:56px; height:40px; flex:none; border-radius:8px; object-fit:cover;
+    background:var(--input-bg); display:grid; place-items:center; font-size:1.1rem;
+  }
+  .news-row-text { flex:1; min-width:0; }
+  .news-row-title { font-size:0.78rem; font-weight:800; line-height:1.3;
+    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .news-row-meta { font-size:0.64rem; color:var(--muted); margin-top:0.15rem; }
+  .news-dot { width:8px; height:8px; border-radius:50%; background:var(--red); flex:none; }
+  .news-row.read .news-row-title { color:var(--muted); font-weight:700; }
+  .news-submit-btn {
+    width:100%; margin-top:0.55rem; border:1px dashed rgba(232,184,75,0.5);
+    background:rgba(232,184,75,0.08); color:var(--accent); border-radius:10px;
+    padding:0.5rem; font:inherit; font-size:0.75rem; font-weight:900; cursor:pointer;
+  }
+  .poll-box {
+    padding:0.75rem 0.8rem; border-radius:15px;
+    background:linear-gradient(135deg, rgba(167,139,250,0.14), rgba(17,24,39,0.94));
+    border:1px solid rgba(167,139,250,0.4); box-shadow:0 10px 28px rgba(0,0,0,0.22);
+  }
+  .poll-q { font-size:0.84rem; font-weight:800; line-height:1.35; margin-bottom:0.5rem; }
+  .poll-chips { display:flex; gap:0.4rem; flex-wrap:wrap; margin-bottom:0.55rem; }
+  .poll-chip { font-size:0.63rem; font-weight:800; padding:0.15rem 0.5rem; border-radius:999px;
+    border:1px solid var(--border); color:var(--muted); }
+  .poll-chip.coins { color:var(--accent); border-color:rgba(232,184,75,0.45); }
+  .poll-opt {
+    position:relative; width:100%; overflow:hidden; display:flex; justify-content:space-between;
+    gap:0.5rem; margin-top:0.4rem; padding:0.55rem 0.7rem; border-radius:10px;
+    border:1px solid var(--border); background:var(--input-bg); color:var(--text);
+    font:inherit; font-size:0.78rem; font-weight:700; text-align:left; cursor:pointer;
+  }
+  .poll-opt:disabled { cursor:default; }
+  .poll-opt .poll-fill { position:absolute; inset:0 auto 0 0; background:rgba(167,139,250,0.22); z-index:0; transition:width .5s ease; }
+  .poll-opt.mine { border-color:var(--purple); }
+  .poll-opt.mine .poll-fill { background:rgba(167,139,250,0.38); }
+  .poll-opt span { position:relative; z-index:1; }
+  .poll-total { font-size:0.65rem; color:var(--muted); margin-top:0.45rem; }
+
+  /* Full-page article + submit screens */
+  .article-hero { width:100%; max-height:260px; object-fit:cover; border-radius:14px; margin-bottom:0.8rem; background:var(--input-bg); }
+  .article-title { font-size:1.2rem; font-weight:900; line-height:1.3; margin:0 0 0.35rem; }
+  .article-meta { font-size:0.72rem; color:var(--muted); margin-bottom:0.9rem; }
+  .article-body p { font-size:0.9rem; line-height:1.6; margin:0 0 0.8rem; color:var(--text); }
+  .react-bar { display:flex; gap:0.45rem; flex-wrap:wrap; margin:1rem 0 0.4rem; }
+  .react-btn {
+    border:1px solid var(--border); background:var(--card); color:var(--text);
+    border-radius:999px; padding:0.35rem 0.7rem; font:inherit; font-size:0.85rem; cursor:pointer;
+  }
+  .react-btn.mine { border-color:var(--accent); background:rgba(232,184,75,0.14); }
+  .ns-field { margin-bottom:0.8rem; }
+  .ns-field label { display:block; font-size:0.72rem; color:var(--muted); margin-bottom:0.25rem; font-weight:700; }
+  .ns-input { width:100%; border-radius:11px; border:1px solid var(--border); background:var(--input-bg);
+    color:var(--text); padding:0.65rem; font:inherit; font-size:0.82rem; outline:none; }
+  .ns-input:focus { border-color:var(--accent); }
+  .ns-preview { width:100%; max-height:180px; object-fit:cover; border-radius:11px; margin-top:0.45rem; display:none; }
   .appbar h1 {
     margin: 0; font-size: 1.1rem; letter-spacing: 0.04em;
     font-weight: 800; font-family: var(--font-display);
@@ -2238,19 +2323,34 @@
   <button class="quest-teaser-btn" onclick="navigate('quests')">🎯 Reveal my quest rewards</button>
 </div>
 
-<div class="suggestion-box" id="suggestion-box" style="display:none;">
-  <div class="suggestion-head">
-    <div>
-      <div class="suggestion-title">💡 Suggestion Box</div>
-      <div class="suggestion-sub">Send ideas, bugs, or balance feedback straight to the website report box.</div>
+<div class="suggestion-box cm-card" id="suggestion-box" style="display:none;">
+  <button class="cm-head" onclick="toggleCommunityCard('suggestion-box')">
+    <span class="cm-title">💡 Suggestion Box</span>
+    <span class="cm-chev">▾</span>
+  </button>
+  <div class="cm-body">
+    <div class="suggestion-sub" style="margin-bottom:0.45rem;">Send ideas, bugs, or balance feedback straight to the website report box.</div>
+    <textarea class="suggestion-input" id="suggestion-message" maxlength="1000" placeholder="Write your message here…"></textarea>
+    <div class="suggestion-actions">
+      <span class="suggestion-count" id="suggestion-count">0/1000</span>
+      <button class="suggestion-send" id="suggestion-send" onclick="sendSuggestion()">📨 Send</button>
     </div>
   </div>
-  <textarea class="suggestion-input" id="suggestion-message" maxlength="1000" placeholder="Write your message here…"></textarea>
-  <div class="suggestion-actions">
-    <span class="suggestion-count" id="suggestion-count">0/1000</span>
-    <button class="suggestion-send" id="suggestion-send" onclick="sendSuggestion()">📨 Send</button>
+</div>
+
+<div class="news-box cm-card" id="news-box" style="display:none;">
+  <button class="cm-head" onclick="toggleCommunityCard('news-box')">
+    <span class="cm-title">📰 Today's CMU News</span>
+    <span class="news-unread" id="news-unread" style="display:none;"></span>
+    <span class="cm-chev">▾</span>
+  </button>
+  <div class="cm-body">
+    <div id="news-list"><div class="news-row-meta">Loading…</div></div>
+    <button class="news-submit-btn" onclick="openNewsSubmit()">✍️ Submit your own news</button>
   </div>
 </div>
+
+<div class="poll-box cm-card" id="poll-box" style="display:none;"></div>
 
 <div class="toast-container" id="toasts"></div>
 
@@ -3013,6 +3113,35 @@
 </div>
 
 <!-- ════ Player detail screen ════ -->
+<div class="screen" id="screen-newsarticle">
+  <div style="margin-bottom:0.6rem;">
+    <button class="link-btn" onclick="closeNewsScreen()">← Home</button>
+  </div>
+  <div id="newsarticle-content"><div class="empty"><div class="spinner"></div></div></div>
+</div>
+
+<div class="screen" id="screen-newssubmit">
+  <div style="margin-bottom:0.6rem;">
+    <button class="link-btn" onclick="closeNewsScreen()">← Home</button>
+  </div>
+  <h2 class="article-title">✍️ Submit CMU News</h2>
+  <p class="article-meta">Your story goes to the bot admins first. Once approved it appears in CMU News and you earn coins.</p>
+  <div class="ns-field">
+    <label>Headline <span id="ns-headline-count" style="float:right;">0/160</span></label>
+    <input class="ns-input" id="ns-headline" maxlength="160" placeholder="What happened?">
+  </div>
+  <div class="ns-field">
+    <label>Image (optional)</label>
+    <input class="ns-input" id="ns-image" type="file" accept="image/*" onchange="previewNewsImage(this)">
+    <img class="ns-preview" id="ns-preview" alt="">
+  </div>
+  <div class="ns-field">
+    <label>Article <span id="ns-body-count" style="float:right;">0/5000</span></label>
+    <textarea class="ns-input" id="ns-body" rows="9" maxlength="5000" placeholder="Tell the full story. A blank line starts a new paragraph."></textarea>
+  </div>
+  <button class="spin-button" id="ns-send" style="width:100%;" onclick="submitNews()">📨 Send for approval</button>
+</div>
+
 <div class="screen" id="screen-playerdetail">
   <div style="margin-bottom:0.6rem;">
     <button class="link-btn" onclick="navigate('roster')">← Squad</button>
@@ -3354,6 +3483,8 @@ function navigate(screen) {
   }
   currentScreen = screen;
   window.scrollTo(0, 0);
+  syncCommunityCards();
+  if (screen !== 'newsarticle' && screen !== 'newssubmit') showNewsBackButton(false);
   if (screen === 'roster') loadRoster();
   if (screen === 'home') refreshDashboard();
   if (screen === 'leaderboard') loadLeaderboard();
@@ -3474,6 +3605,10 @@ async function refreshDashboard() {
   // Top community links (channel + official group), quest teaser, and suggestion box
   renderTopLinks(data.branding || {});
   renderCommunityPanel(true);
+  updateNewsBadge(data.news_unread || 0);
+  renderPoll(data.poll || null);
+  if (!window._communityRestored) { window._communityRestored = true; restoreCommunityCards(); }
+  else if (document.getElementById('news-box')?.classList.contains('cm-open')) loadNewsFeed();
 
   // Resume live match banner
   renderResumeBanner(data.live_match || null);
@@ -3571,11 +3706,287 @@ function renderTopLinks(branding) {
   el.style.display = 'flex';
 }
 
+let communityReady = false;
 function renderCommunityPanel(show) {
+  communityReady = show;
+  syncCommunityCards();
+}
+
+// The suggestion / news / poll cards belong to the home screen; on every other
+// screen (an open article especially) they would just push content down.
+function syncCommunityCards() {
+  const onHome = communityReady && currentScreen === 'home';
+  // The quest teaser keeps its old everywhere-but-setup behaviour, except over
+  // a news article or the submit form, where it would sit above the story.
   const teaser = document.getElementById('quest-teaser');
+  const onNews = currentScreen === 'newsarticle' || currentScreen === 'newssubmit';
+  if (teaser) teaser.style.display = communityReady && !onNews ? '' : 'none';
   const box = document.getElementById('suggestion-box');
-  if (teaser) teaser.style.display = show ? '' : 'none';
-  if (box) box.style.display = show ? '' : 'none';
+  const news = document.getElementById('news-box');
+  const poll = document.getElementById('poll-box');
+  if (box) box.style.display = onHome ? '' : 'none';
+  if (news) news.style.display = onHome ? '' : 'none';
+  if (poll) poll.style.display = onHome && currentPoll ? '' : 'none';
+}
+
+function _cardPref(id, value) {
+  try {
+    if (value === undefined) return localStorage.getItem('cm_open_' + id);
+    localStorage.setItem('cm_open_' + id, value ? '1' : '0');
+  } catch (e) { return null; }
+}
+
+function toggleCommunityCard(id, forceOpen) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const open = forceOpen === undefined ? !el.classList.contains('cm-open') : !!forceOpen;
+  el.classList.toggle('cm-open', open);
+  _cardPref(id, open);
+  haptic('light');
+  if (id === 'news-box' && open) loadNewsFeed();
+}
+
+function restoreCommunityCards() {
+  // Suggestion box starts closed; News remembers what the user last chose.
+  if (_cardPref('suggestion-box') === '1') document.getElementById('suggestion-box')?.classList.add('cm-open');
+  if (_cardPref('news-box') === '1') {
+    document.getElementById('news-box')?.classList.add('cm-open');
+    loadNewsFeed();
+  }
+}
+
+// ════════════════ CMU News ════════════════
+let newsLoading = false;
+let currentNewsId = null;
+
+function updateNewsBadge(n) {
+  const el = document.getElementById('news-unread');
+  if (!el) return;
+  n = Math.max(0, Number(n) || 0);
+  el.textContent = `${n} Unread`;
+  el.style.display = n > 0 ? '' : 'none';
+}
+
+function timeAgo(iso) {
+  const t = Date.parse(iso);
+  if (!t) return '';
+  const sec = Math.max(0, (Date.now() - t) / 1000);
+  if (sec < 60) return 'just now';
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}
+
+function newsThumb(a) {
+  return a.image_url
+    ? `<img class="news-thumb" src="${escapeHtmlAttr(a.image_url)}" alt="" loading="lazy">`
+    : `<div class="news-thumb">📰</div>`;
+}
+
+async function loadNewsFeed() {
+  if (newsLoading) return;
+  newsLoading = true;
+  const list = document.getElementById('news-list');
+  const { ok, data } = await api('/api/webapp/news/feed', {});
+  newsLoading = false;
+  if (!list) return;
+  if (!ok) { list.innerHTML = '<div class="news-row-meta">Could not load news.</div>'; return; }
+  updateNewsBadge(data.unread_count);
+  const items = data.articles || [];
+  if (!items.length) {
+    list.innerHTML = '<div class="news-row-meta" style="padding:0.4rem 0;">No news yet — be the first to submit a story!</div>';
+    return;
+  }
+  list.innerHTML = items.map(a => `
+    <div class="news-row ${a.is_read ? 'read' : ''}" onclick="openNewsArticle(${a.id})">
+      ${newsThumb(a)}
+      <div class="news-row-text">
+        <div class="news-row-title">${a.pinned ? '📌 ' : ''}${escapeHtml(a.headline)}</div>
+        <div class="news-row-meta">${escapeHtml(timeAgo(a.published_at))}${a.source === 'user' ? ' · by ' + escapeHtml(a.author || 'a player') : a.source === 'auto' ? ' · 🤖 Newsroom' : ''} · 👁 ${a.views}</div>
+      </div>
+      ${a.is_read ? '' : '<span class="news-dot"></span>'}
+    </div>`).join('');
+}
+
+function newsParagraphs(body) {
+  return String(body || '').split(/\n\s*\n/).map(p => p.trim()).filter(Boolean)
+    .map(p => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('');
+}
+
+function showNewsBackButton(show) {
+  try {
+    const bb = tg?.BackButton;
+    if (!bb) return;
+    if (show) { bb.onClick(closeNewsScreen); bb.show(); }
+    else { bb.offClick(closeNewsScreen); bb.hide(); }
+  } catch (e) {}
+}
+
+function closeNewsScreen() {
+  showNewsBackButton(false);
+  currentNewsId = null;
+  navigate('home');
+}
+
+async function openNewsArticle(id) {
+  currentNewsId = id;
+  navigate('newsarticle');
+  showNewsBackButton(true);
+  const box = document.getElementById('newsarticle-content');
+  box.innerHTML = '<div class="empty"><div class="spinner"></div></div>';
+  const { ok, data } = await api('/api/webapp/news/article', { id });
+  if (!ok) {
+    box.innerHTML = `<div class="empty">${escapeHtml(data.message || 'Article not found.')}</div>`;
+    return;
+  }
+  const a = data.article;
+  updateNewsBadge(a.unread_count);
+  const byline = a.source === 'user' ? `By ${escapeHtml(a.author || 'a player')}`
+    : a.source === 'auto' ? '🤖 CMU Newsroom' : '🛡 CMU Desk';
+  box.innerHTML = `
+    ${a.image_url ? `<img class="article-hero" src="${escapeHtmlAttr(a.image_url)}" alt="">` : ''}
+    <h1 class="article-title">${escapeHtml(a.headline)}</h1>
+    <div class="article-meta">${byline} · ${escapeHtml(new Date(a.published_at).toLocaleString())} · 👁 <span>${a.views}</span></div>
+    <div class="article-body">${newsParagraphs(a.body)}</div>
+    <div class="react-bar" id="react-bar"></div>`;
+  renderReactions(a.id, a.reactions, a.my_reaction);
+  // Reflect "read" in the home list without another round trip.
+  const row = document.querySelector(`.news-row[onclick="openNewsArticle(${a.id})"]`);
+  if (row) { row.classList.add('read'); row.querySelector('.news-dot')?.remove(); }
+}
+
+function renderReactions(id, counts, mine) {
+  const bar = document.getElementById('react-bar');
+  if (!bar) return;
+  bar.innerHTML = ['👍', '🔥', '😂', '😮'].map(e =>
+    `<button class="react-btn ${mine === e ? 'mine' : ''}" onclick="reactNews(${id}, '${e}')">${e} ${counts?.[e] || 0}</button>`
+  ).join('');
+}
+
+async function reactNews(id, emoji) {
+  haptic('light');
+  const { ok, data } = await api('/api/webapp/news/react', { id, emoji });
+  if (!ok) { toast(data.message || 'Could not react.', 'error'); return; }
+  renderReactions(id, data.reactions, data.my_reaction);
+}
+
+function openNewsSubmit() {
+  navigate('newssubmit');
+  showNewsBackButton(true);
+}
+
+function previewNewsImage(input) {
+  const img = document.getElementById('ns-preview');
+  const file = input.files && input.files[0];
+  if (!img) return;
+  if (!file) { img.style.display = 'none'; img.removeAttribute('src'); return; }
+  if (file.size > 5 * 1024 * 1024) {
+    toast('Image is over 5 MB — pick a smaller one.', 'error');
+    input.value = ''; img.style.display = 'none'; return;
+  }
+  img.src = URL.createObjectURL(file);
+  img.style.display = 'block';
+}
+
+let newsSubmitting = false;
+async function submitNews() {
+  if (newsSubmitting) return;
+  const headline = document.getElementById('ns-headline').value.trim();
+  const body = document.getElementById('ns-body').value.trim();
+  const file = document.getElementById('ns-image').files[0];
+  if (headline.length < 8) { toast('Headline needs at least 8 characters.', 'error'); return; }
+  if (body.length < 30) { toast('Article needs at least 30 characters.', 'error'); return; }
+  const btn = document.getElementById('ns-send');
+  const form = new FormData();
+  form.append('headline', headline);
+  form.append('body', body);
+  if (file) form.append('image', file);
+  newsSubmitting = true;
+  btn.disabled = true; btn.textContent = 'Sending…';
+  let ok = false, data = {};
+  try {
+    const resp = await fetch('/api/webapp/news/submit', {
+      method: 'POST',
+      headers: { 'Authorization': AUTH_VALUE, ...(START_PARAM ? { 'X-Tg-Start-Param': START_PARAM } : {}) },
+      body: form,
+    });
+    data = await resp.json().catch(() => ({}));
+    ok = resp.ok && data.ok;
+  } catch (e) { data = { message: 'Network error — try again.' }; }
+  newsSubmitting = false;
+  btn.disabled = false; btn.textContent = '📨 Send for approval';
+  if (!ok) { toast(data.message || 'Could not submit.', 'error'); hapticNotif('error'); return; }
+  ['ns-headline', 'ns-body', 'ns-image'].forEach(i => { document.getElementById(i).value = ''; });
+  previewNewsImage(document.getElementById('ns-image'));
+  updateNewsCounters();
+  toast(data.message || 'Sent for approval!', 'success');
+  hapticNotif('success');
+  closeNewsScreen();
+}
+
+function updateNewsCounters() {
+  const h = document.getElementById('ns-headline'), b = document.getElementById('ns-body');
+  const hc = document.getElementById('ns-headline-count'), bc = document.getElementById('ns-body-count');
+  if (h && hc) hc.textContent = `${h.value.length}/160`;
+  if (b && bc) bc.textContent = `${b.value.length}/5000`;
+}
+
+// ════════════════ Poll ════════════════
+let currentPoll = null;
+let pollVoting = false;
+
+function renderPoll(poll) {
+  currentPoll = poll || null;
+  const box = document.getElementById('poll-box');
+  if (!box) return;
+  if (!currentPoll) { box.innerHTML = ''; syncCommunityCards(); return; }
+  const p = currentPoll;
+  const res = p.results;
+  const voted = p.my_vote !== null && p.my_vote !== undefined;
+  const opts = p.options.map((label, i) => {
+    if (res) {
+      const r = res.options[i] || { pct: 0, votes: 0 };
+      return `<button class="poll-opt ${p.my_vote === i ? 'mine' : ''}" disabled>
+        <div class="poll-fill" style="width:${r.pct}%;"></div>
+        <span>${p.my_vote === i ? '✅ ' : ''}${escapeHtml(label)}</span><span>${r.pct}%</span></button>`;
+    }
+    return `<button class="poll-opt" onclick="votePoll(${p.id}, ${i})"><span>${escapeHtml(label)}</span></button>`;
+  }).join('');
+  const ends = p.is_open ? `⏳ Ends in ${formatPollLeft(p.ends_in_seconds)}` : 'Closed';
+  box.innerHTML = `
+    <div class="cm-head" style="cursor:default;margin-bottom:0.45rem;"><span class="cm-title">🗳 Poll</span></div>
+    <div class="poll-q">${escapeHtml(p.question)}</div>
+    <div class="poll-chips">
+      <span class="poll-chip">${ends}</span>
+      ${p.reward_coins ? `<span class="poll-chip coins">🪙 ${voted ? `Earned ${p.reward_coins} coins` : `+${p.reward_coins} coins for voting`}</span>` : ''}
+    </div>
+    ${opts}
+    ${res ? `<div class="poll-total">${res.total} vote${res.total === 1 ? '' : 's'}${voted ? ' · thanks for voting!' : ''}</div>` : ''}`;
+  syncCommunityCards();
+}
+
+function formatPollLeft(sec) {
+  sec = Math.max(0, Number(sec) || 0);
+  if (sec >= 86400) return `${Math.floor(sec / 86400)}d ${Math.floor((sec % 86400) / 3600)}h`;
+  return formatCountdown(sec);
+}
+
+async function votePoll(pollId, option) {
+  if (pollVoting) return;
+  pollVoting = true;
+  haptic('medium');
+  const { ok, data } = await api('/api/webapp/poll/vote', { poll_id: pollId, option });
+  pollVoting = false;
+  if (!ok) { toast(data.message || 'Could not vote.', 'error'); hapticNotif('error'); return; }
+  renderPoll(data.poll);
+  if (data.coins_paid && typeof data.balance === 'number') {
+    const bp = document.getElementById('bp-coins');
+    if (bp) bp.textContent = formatNum(data.balance);
+    const sc = document.getElementById('stat-coins');
+    if (sc) sc.textContent = formatNum(data.balance);
+  }
+  toast(data.message || 'Vote counted!', 'success');
+  hapticNotif('success');
 }
 
 function updateSuggestionCount() {
@@ -3612,6 +4023,7 @@ async function sendSuggestion() {
 
 document.addEventListener('input', (event) => {
   if (event.target && event.target.id === 'suggestion-message') updateSuggestionCount();
+  if (event.target && (event.target.id === 'ns-headline' || event.target.id === 'ns-body')) updateNewsCounters();
 });
 
 function updateEventBanner(events) {
@@ -8878,6 +9290,15 @@ function handleHashDeepLink() {
   // activity back to a group; the tab name is everything before "_c<digits>".
   target = target.replace(/_c-?\d+$/, '');
   target = alias[target] || target;
+  // CMU News / poll links from the channel: news_<id>, poll_<id>, news.
+  const newsLink = target.match(/^news_(\d+)$/);
+  if (newsLink) { openNewsArticle(Number(newsLink[1])); return; }
+  if (target === 'news' || /^poll(_\d+)?$/.test(target)) {
+    const card = document.getElementById(target === 'news' ? 'news-box' : 'poll-box');
+    if (target === 'news') toggleCommunityCard('news-box', true);
+    card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
   if (validScreens.includes(target) && target !== 'home') {
     navigate(target);
   }

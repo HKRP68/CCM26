@@ -916,6 +916,12 @@ def _migrate_add_columns():
     _try_add("game_config", "gem_bonus_starts_at", "TIMESTAMP")
     _try_add("game_config", "gem_bonus_ends_at", "TIMESTAMP")
 
+    # ── CMU News settings (the news/poll tables come from create_all) ──
+    _try_add("game_config", "news_submit_reward_coins", "INTEGER DEFAULT 100")
+    _try_add("game_config", "news_auto_publish", "BOOLEAN DEFAULT TRUE")
+    _try_add("game_config", "news_auto_kinds", "TEXT")
+    _try_add("game_config", "news_auto_announce", "BOOLEAN DEFAULT FALSE")
+
     # ── Tournament Draft: the auto-pinned latest pick ──
     # The draft tables themselves are created by ``create_all``; these two
     # arrived after that first release, so an existing database needs them

@@ -258,6 +258,9 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # authorises each press with is_admin() instead, and the owner's own
     # withdraw button checks the request's telegram_id.
     "tlogo:",
+    # CMU News review cards go to every bot admin; handlers/news.py checks
+    # is_admin() on each press.
+    "news:",
 )
 
 # ════════════════════════════════════════════════════════════════════

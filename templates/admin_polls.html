@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Polls{% endblock %}
+{% block content %}
+<style>
+  .pl-card { background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1.25rem;margin-bottom:1.25rem; }
+  .pl-input { width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font:inherit; }
+  .pl-label { font-size:.8rem;color:var(--muted);display:block;margin-bottom:.2rem; }
+  .pl-bar { height:8px;border-radius:999px;background:var(--input-bg);overflow:hidden;margin:.2rem 0 .55rem; }
+  .pl-bar > span { display:block;height:100%;background:var(--brand); }
+  @media (max-width:640px){ .pl-grid{ grid-template-columns:1fr !important; } }
+</style>
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🗳 Polls</h2>
+  <a href="{{ url_for('admin_news') }}" class="btn btn-ghost btn-sm">📰 CMU News →</a>
+</div>
+<p style="color:var(--muted);font-size:.9rem;margin-bottom:1.25rem;">
+  The newest running poll shows in the Mini App below CMU News. Players see results after they vote;
+  each player votes once. Times are in IST.
+</p>
+
+<div class="pl-card">
+  <h3 style="margin:0 0 1rem;font-size:1rem;">➕ New poll</h3>
+  <form method="POST" action="{{ url_for('admin_polls_create') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label class="pl-label">Question</label>
+    <input class="pl-input" type="text" name="question" required maxlength="200" placeholder="Which team wins the CMU Cup final?">
+    <div id="pl-options" style="margin-top:.8rem;">
+      <span class="pl-label">Options (2–{{ max_options }})</span>
+      <input class="pl-input" type="text" name="options" required maxlength="80" placeholder="Option 1" style="margin-bottom:.4rem;">
+      <input class="pl-input" type="text" name="options" required maxlength="80" placeholder="Option 2" style="margin-bottom:.4rem;">
+    </div>
+    <button type="button" class="btn btn-ghost btn-sm" id="pl-add" onclick="addPollOption()">+ Add option</button>
+    <div class="pl-grid" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;margin-top:.8rem;">
+      <div>
+        <label class="pl-label">Starts (IST, blank = now)</label>
+        <input class="pl-input" type="datetime-local" name="starts_at">
+      </div>
+      <div>
+        <label class="pl-label">Ends (IST)</label>
+        <input class="pl-input" type="datetime-local" name="ends_at" required>
+      </div>
+      <div>
+        <label class="pl-label">🪙 Coins for voting</label>
+        <input class="pl-input" type="number" name="reward_coins" min="0" value="0">
+      </div>
+    </div>
+    <label style="display:block;margin-top:.8rem;font-size:.85rem;"><input type="checkbox" name="announce" value="1"> 📣 Post to channel/group</label>
+    <button type="submit" class="btn btn-primary" style="margin-top:1rem;">🗳 Create poll</button>
+  </form>
+</div>
+
+{% for row in rows %}
+{% set p = row.poll %}
+<div class="pl-card">
+  <div style="display:flex;justify-content:space-between;gap:.5rem;flex-wrap:wrap;">
+    <div>
+      <b>{{ p.question }}</b>
+      <div style="font-size:.74rem;color:var(--muted);margin-top:.2rem;">
+        {% if row.state == 'live' %}<span style="color:var(--green,#3fb950);font-weight:700;">● LIVE</span>
+        {% else %}{{ row.state }}{% endif %}
+        · {{ p.starts_at | ist('%d %b, %I:%M %p') }} → {{ p.ends_at | ist('%d %b, %I:%M %p') }}
+        · {{ row.results.total }} vote{{ '' if row.results.total == 1 else 's' }}
+        {% if p.reward_coins %} · 🪙 {{ p.reward_coins }}/vote{% endif %}
+      </div>
+    </div>
+    <div style="display:flex;gap:.35rem;flex-wrap:wrap;">
+      {% if row.open %}
+      <form method="POST" action="{{ url_for('admin_polls_action', poll_id=p.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="announce">
+        <button class="btn btn-ghost btn-sm">📣 Announce</button>
+      </form>
+      <form method="POST" action="{{ url_for('admin_polls_action', poll_id=p.id) }}" onsubmit="return confirm('End this poll now?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="end">
+        <button class="btn btn-ghost btn-sm">⏹ End now</button>
+      </form>
+      {% endif %}
+      <form method="POST" action="{{ url_for('admin_polls_action', poll_id=p.id) }}" onsubmit="return confirm('Delete this poll and its votes?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="delete">
+        <button class="btn btn-ghost btn-sm" style="color:var(--red,#f85149);">🗑 Delete</button>
+      </form>
+    </div>
+  </div>
+  <div style="margin-top:.8rem;">
+    {% for opt in row.results.options %}
+    <div style="display:flex;justify-content:space-between;font-size:.84rem;"><span>{{ opt.label }}</span><span>{{ opt.votes }} · {{ opt.pct }}%</span></div>
+    <div class="pl-bar"><span style="width:{{ opt.pct }}%;"></span></div>
+    {% endfor %}
+  </div>
+</div>
+{% else %}
+<p style="color:var(--muted);text-align:center;">No polls yet.</p>
+{% endfor %}
+
+<script>
+function addPollOption() {
+  const box = document.getElementById('pl-options');
+  const count = box.querySelectorAll('input').length;
+  if (count >= {{ max_options }}) return;
+  const input = document.createElement('input');
+  input.className = 'pl-input'; input.type = 'text'; input.name = 'options';
+  input.maxLength = 80; input.placeholder = 'Option ' + (count + 1);
+  input.style.marginBottom = '.4rem';
+  box.appendChild(input);
+  if (count + 1 >= {{ max_options }}) document.getElementById('pl-add').style.display = 'none';
+}
+</script>
+{% endblock %}

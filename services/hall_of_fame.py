@@ -191,11 +191,66 @@ def harvest_match(session, match, scorecard_row, post_row=None):
     rows = entries_from_scorecard(sc, match=match, team_owner=team_owner,
                                   innings_owner=innings_owner)
     when = match.completed_at or scorecard_row.created_at
+    # Each board's leader as it stood *before* this match, read before any of
+    # the match's own entries are added.
+    previous_best = {cat: _board_top(session, cat)
+                     for cat in {r.get("category") for r in rows}}
+    best_new = {}
     for r in rows:
-        session.add(HallOfFameEntry(match_id=match.id, achieved_at=when,
-                                    **{k: (v[:120] if isinstance(v, str) else v)
-                                       for k, v in r.items()}))
+        entry = HallOfFameEntry(match_id=match.id, achieved_at=when,
+                                **{k: (v[:120] if isinstance(v, str) else v)
+                                   for k, v in r.items()})
+        session.add(entry)
+        top = best_new.get(entry.category)
+        if top is None or _rank(entry) > _rank(top):
+            best_new[entry.category] = entry
+    # One story per board per match, about the match's best entry — never one
+    # for a performance already overtaken in the same match.
+    for cat, entry in best_new.items():
+        _record_news(session, entry, previous_best.get(cat), when)
     return len(rows)
+
+
+def _rank(entry):
+    return (entry.value, entry.tiebreak or 0)
+
+
+# Only a record set recently is news — the first scan back-fills years of
+# history, and every one of those "new records" is old.
+RECORD_NEWS_MAX_AGE_HOURS = 48
+
+
+def _board_top(session, category):
+    if not category:
+        return None
+    top = top_entries(session, category, limit=1)
+    return top[0] if top else None
+
+
+def _record_news(session, entry, previous_best, when):
+    """CMU News when a match takes the #1 spot on a Hall of Fame board."""
+    try:
+        from datetime import datetime, timedelta
+        if previous_best is None or when is None:
+            return
+        if datetime.utcnow() - when > timedelta(hours=RECORD_NEWS_MAX_AGE_HOURS):
+            return
+        if _rank(entry) <= _rank(previous_best):
+            return
+        from services.news_service import auto_story
+        title, emoji = MATCH_CATEGORIES.get(entry.category, ("Hall of Fame record", "🌟"))
+        who = entry.player_name or entry.team_name or "A new name"
+        session.flush()
+        auto_story(
+            session, "hall_of_fame", f"hof:{entry.id}",
+            f"{emoji} New record! {who} — {entry.label}",
+            f"{who}{f' ({entry.team_name})' if entry.player_name and entry.team_name else ''} "
+            f"now holds the Hall of Fame record for {title.lower()}: {entry.label}.\n\n"
+            f"The previous best was {previous_best.label}"
+            f"{f' by {previous_best.player_name or previous_best.team_name}' if (previous_best.player_name or previous_best.team_name) else ''}.",
+            kicker="Hall of Fame")
+    except Exception:
+        logger.exception("hall of fame news failed")
 
 
 def scan(session, limit=200):

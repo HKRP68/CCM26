@@ -2800,6 +2800,7 @@ def complete_if_done(session, season):
     season.status = STATUS_COMPLETED
     season.current_lot_id = None
     _focus_changed(season, session)
+    _auction_wrap_news(session, season)
     log_event(session, season, "season_completed",
               "🏁 Every lot is resolved — the auction is complete. "
               "An admin can publish the squads now.")
@@ -3538,9 +3539,74 @@ def sell_lot(session, season, lot, *, now=None, by_tg_id=None, by_admin=False):
               f"{render_money(price, season.currency_label)}.",
               lot=lot, franchise=buyer, by_tg_id=by_tg_id, by_admin=by_admin,
               detail={"price_lakh": price})
+    _record_buy_news(session, season, lot, buyer, price)
     season.current_lot_id = None
     complete_if_done(session, season)
     return lot
+
+
+# A "record" over the auction's first couple of lots is no record at all.
+RECORD_NEWS_MIN_PRIOR_SALES = 3
+
+
+def _record_buy_news(session, season, lot, buyer, price):
+    """CMU News when a sale beats every earlier price in this auction."""
+    try:
+        prior = (session.query(func.count(AuctionLot.id),
+                               func.max(AuctionLot.sold_price_lakh))
+                 .filter(AuctionLot.season_id == season.id,
+                         AuctionLot.status == LOT_SOLD,
+                         AuctionLot.id != lot.id).one())
+        count, best = int(prior[0] or 0), int(prior[1] or 0)
+        if count < RECORD_NEWS_MIN_PRIOR_SALES or price <= best:
+            return
+        from services.news_service import auto_story
+        money = render_money(price, season.currency_label)
+        auto_story(
+            session, "auction_record", f"auction_record:{season.id}:{lot.id}",
+            f"💰 Record buy! {buyer.name} sign {lot.name} for {money}",
+            f"{buyer.name} have smashed the {season.name} auction record, "
+            f"signing {lot.name} for {money}.\n\n"
+            f"The previous highest price was "
+            f"{render_money(best, season.currency_label)}.",
+            kicker="Record buy")
+    except Exception:
+        logger.exception("record-buy news failed for lot %s", getattr(lot, "id", None))
+
+
+def _auction_wrap_news(session, season):
+    """CMU News when an auction finishes: the top buys and the big spender."""
+    try:
+        from services.news_service import auto_story
+        lots = (session.query(AuctionLot)
+                .filter(AuctionLot.season_id == season.id,
+                        AuctionLot.status == LOT_SOLD,
+                        AuctionLot.sold_price_lakh.isnot(None))
+                .order_by(AuctionLot.sold_price_lakh.desc()).all())
+        if not lots:
+            return
+        names = {f.id: f.name for f in session.query(AuctionFranchise)
+                 .filter(AuctionFranchise.season_id == season.id)}
+        spend = {}
+        for sold in lots:
+            spend[sold.sold_to_id] = (spend.get(sold.sold_to_id, 0)
+                                      + int(sold.sold_price_lakh or 0))
+        cur = season.currency_label
+        top = "\n".join(
+            f"{i}. {sold.name} → {names.get(sold.sold_to_id, 'a franchise')} "
+            f"({render_money(sold.sold_price_lakh, cur)})"
+            for i, sold in enumerate(lots[:3], 1))
+        big_id = max(spend, key=spend.get)
+        body = (f"The {season.name} auction is done — {len(lots)} players signed.\n\n"
+                f"Top buys:\n{top}\n\n"
+                f"Biggest spender: {names.get(big_id, 'a franchise')} "
+                f"({render_money(spend[big_id], cur)}).")
+        auto_story(session, "auction_complete", f"auction_done:{season.id}",
+                   f"🔨 {season.name} auction wrap: {lots[0].name} goes for "
+                   f"{render_money(lots[0].sold_price_lakh, cur)}",
+                   body, kicker="Auction wrap")
+    except Exception:
+        logger.exception("auction wrap news failed for season %s", season.id)
 
 
 def pass_lot(session, season, lot, *, by_tg_id=None, by_admin=False):
@@ -4363,6 +4429,7 @@ def rtm_decide(session, season, lot, franchise, matching, *, now=None,
               f"({rtm_cards_left(holder)} RTM left)",
               lot=lot, franchise=holder, by_tg_id=by_tg_id,
               detail={"price_lakh": price})
+    _record_buy_news(session, season, lot, holder, price)
     season.current_lot_id = None
     complete_if_done(session, season)
     return lot
