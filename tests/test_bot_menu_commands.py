@@ -157,6 +157,10 @@ UNPUBLISHED_ON_PURPOSE = {
     # pinned board's footer names them.
     "ainfo", "asets", "anextset", "anextplayer", "asquad", "asoldlist",
     "aunsoldlist",
+    # The money readouts — who has spent most, and your own bid history. Same
+    # ceiling; both are on the /adminhelp card's "For owners & everyone"
+    # section, beside the views above.
+    "aleaderboard", "amybids",
     # Every number the auction runs by. Unpublished for the same ceiling
     # reason as the views above, and named where somebody asking "what are the
     # rules" already is: the /auction card, /ainfo's own buttons and the
@@ -165,7 +169,7 @@ UNPUBLISHED_ON_PURPOSE = {
     # Auction admin commands on the /adminhelp card rather than in the admin
     # bucket, which would otherwise pass the 100-command ceiling.
     "asetorder", "aretainforce", "aoffers", "aretcancel", "aaccelmode",
-    "aadminremove", "aadmins",
+    "aadminremove", "aadmins", "apickundo",
     "aretmode", "aretslot", "aretrule", "aretdemand", "asetsexport",
     "asetsimport", "aprevious", "aprevteam",
     # Dynamic retention's owner command — on /adminhelp's player section, the
