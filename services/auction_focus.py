@@ -68,6 +68,7 @@ AUCTION_COMMANDS = frozenset({
     "aboard", "auctionboard", "apurse", "apurses", "ainfo", "amenu",
     "arules", "asettings", "asets", "anextset", "anextplayer", "anextplayers",
     "asquad", "amysquad", "asoldlist", "aunsoldlist",
+    "aleaderboard", "alb", "amybids", "amybidhistory",
     # The admin surface. Registered unconditionally with the gate inside the
     # handler, so a non-admin typing one gets told so rather than silence.
     "adminhelp", "ahelp", "auction",

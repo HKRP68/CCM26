@@ -1103,6 +1103,8 @@ async def start_handler(update, context):
         "/asets /anextset /anextplayer - The sets, the next set, who is up next\n"
         "/asquad [team] /asoldlist /aunsoldlist - Squads, sold and unsold players\n"
         "/aretlock /apicks - Who kept whom, and the expansion picks\n"
+        "/aleaderboard /amybids - Who has spent most; your own bid history\n"
+        ".bid .purse .squad .board .lb - Dot shortcuts in the auction group\n"
         "/ctour - Challenge League Tournament hub: table, fixtures, teams\n"
         "/cttable /ctfixtures /ctteams - Tournament table, schedule (done matches struck through), field\n"
         "/ctinjuries - Who is ruled out injured, and for how many more matches 🚑\n"
@@ -2310,12 +2312,24 @@ def main():
             asoldlist_handler, aunsoldlist_handler, apool_handler,
             asetorder_handler, aaccelmode_handler, acall_handler,
             aremoveteam_handler, aadminadd_handler, aadminremove_handler,
-            aadmins_handler,
+            aadmins_handler, me_callback, aleaderboard_handler,
+            amybids_handler, dot_command_handler,
         )
         # Not "/b": that is already /buy, registered above, and PTB runs the
         # first handler that matches — the alias would be dead.
         app.add_handler(CommandHandler(["bid", "bd"], bid_handler))
         app.add_handler(CallbackQueryHandler(bid_callback, pattern=r"^au_bid_"))
+        # 💼 My Purse / 📊 Status under every bid message: private popups, so
+        # checking a purse mid-lot never adds a message to the room.
+        app.add_handler(CallbackQueryHandler(me_callback, pattern=r"^au_me_"))
+        # TeleAuction's dot shortcuts — ".bid 2", ".purse", ".squad". Plain
+        # text, in a group of its own so it never shadows another text handler,
+        # and a no-op in any chat without an auction bound to it.
+        from telegram.ext import filters as _au_filters
+        app.add_handler(MessageHandler(
+            _au_filters.TEXT & _au_filters.ChatType.GROUPS
+            & _au_filters.Regex(r"^\.[A-Za-z]"),
+            dot_command_handler), group=11)
         # Right To Match. Unpublished like /bid, and for the same reason: both
         # player menu scopes are at Telegram's ceiling. The room hears about it
         # when the bot asks them the question, which is the only moment it
@@ -2341,6 +2355,10 @@ def main():
         app.add_handler(CommandHandler(["asquad", "amysquad"], asquad_handler))
         app.add_handler(CommandHandler("asoldlist", asoldlist_handler))
         app.add_handler(CommandHandler("aunsoldlist", aunsoldlist_handler))
+        app.add_handler(CommandHandler(["aleaderboard", "alb"],
+                                       aleaderboard_handler))
+        app.add_handler(CommandHandler(["amybids", "amybidhistory"],
+                                       amybids_handler))
         # Admin. Registered unconditionally, with the gate inside the handler,
         # so it answers the person who typed it rather than looking like a
         # command that does not exist.

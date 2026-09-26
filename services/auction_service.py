@@ -3103,9 +3103,16 @@ BID_GAP_MAX = 10
 
 
 def bid_gap_seconds(season):
-    """The quiet gap after every bid — 0 when it is off."""
+    """The quiet gap after every bid — 0 when it is off, which is the default.
+
+    Off by default because a room-wide gap is the opposite of an auction: two
+    franchises going for the same player at the same moment is the whole
+    point, and a gap turns the second of them away. Spam is stopped per
+    PERSON instead (``services/auction_antispam``), which never holds one team
+    back because another one just bid. ``/abidgap N`` still turns it on.
+    """
     return max(0, min(BID_GAP_MAX,
-                      _as_int(getattr(season, "bid_gap_seconds", 3), 3)))
+                      _as_int(getattr(season, "bid_gap_seconds", 0), 0)))
 
 
 def set_bid_gap(session, season, seconds):
@@ -3120,6 +3127,16 @@ def set_bid_gap(session, season, seconds):
 
 class BidTooSoon(AuctionError):
     """A bid inside the quiet gap after the last one."""
+
+
+class PriceMoved(AuctionError):
+    """The bid was under the next legal bid — someone else got there first.
+
+    Its own class so a bare ``/bid`` (which means "the next minimum", whatever
+    that is by now) can simply try again at the fresh minimum, while a bid that
+    named a number or a button that carried one is never raised on the
+    bidder's behalf.
+    """
 
 
 def bid_holder_message(session, season, lot):
@@ -3434,10 +3451,10 @@ def validate_bid(session, season, lot, franchise, amount_lakh, *, now=None,
             raise AuctionError(f"{lot.name}'s base price is "
                                f"{render_money(minimum, symbol)} — a first bid "
                                f"cannot be under it.")
-        raise AuctionError(f"The bid stands at "
-                           f"{render_money(lot.current_bid_lakh, symbol)}. "
-                           f"The next legal bid is "
-                           f"{render_money(minimum, symbol)}.")
+        raise PriceMoved(f"The bid stands at "
+                         f"{render_money(lot.current_bid_lakh, symbol)}. "
+                         f"The next legal bid is "
+                         f"{render_money(minimum, symbol)}.")
 
     size = int(franchise.squad_size or 0)
     if size + 1 > int(season.max_squad_size or 0):
@@ -3707,7 +3724,7 @@ def _why_the_bid_lost(season, lot, franchise, amount, now):
     if lot.current_bidder_id == franchise.id:
         return AuctionError("You already hold the top bid.")
     if lot.current_bid_lakh is not None and lot.current_bid_lakh >= amount:
-        return AuctionError(
+        return PriceMoved(
             f"Someone got there first — the bid is now "
             f"{render_money(lot.current_bid_lakh, symbol)}. The next legal bid "
             f"is {render_money(next_min_bid(season, lot), symbol)}.")

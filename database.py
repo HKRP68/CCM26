@@ -1007,8 +1007,9 @@ def _migrate_add_columns():
     # back to the current queue order without it.
     _try_add("auction_seasons", "countdown_seconds", "INTEGER DEFAULT 3")
     _try_add("auction_seasons", "opening_order_json", "TEXT")
-    # The quiet gap after every bid (see AuctionLot.last_bid_at).
-    _try_add("auction_seasons", "bid_gap_seconds", "INTEGER DEFAULT 3")
+    # The quiet gap after every bid (see AuctionLot.last_bid_at). Off by
+    # default — see the one-shot below and auction_service.bid_gap_seconds.
+    _try_add("auction_seasons", "bid_gap_seconds", "INTEGER DEFAULT 0")
     _try_add("auction_lots", "last_bid_at", "TIMESTAMP")
 
     # ── Franchise Auction: focus mode ──
@@ -1118,6 +1119,21 @@ def _migrate_add_columns():
         except Exception:
             # The card still renders on its own defaults; never fail the boot.
             log.warning("summary text-settings reset skipped", exc_info=True)
+
+    # ─────────────────────────────────────────────────────────────
+    # Franchise Auction: the room-wide quiet gap after a bid is now OFF by
+    # default, so many franchises can bid on the same player at once (spam is
+    # stopped per person by services/auction_antispam instead). Seasons still
+    # running on the old untouched default of 3 are moved to 0 exactly once;
+    # an admin who wants the gap back sets it again with /abidgap.
+    _gap_sql = ["UPDATE auction_seasons SET bid_gap_seconds = 0 "
+                "WHERE bid_gap_seconds = 3 "
+                "AND status IN ('setup', 'live', 'paused')"]
+    _gap_done, _gap_sig = _migration_signature_matches(
+        "auction_bid_gap_default_off", _gap_sql)
+    if not _gap_done:
+        if not _run_isolated(_gap_sql):
+            _record_migration_signature("auction_bid_gap_default_off", _gap_sig)
 
     done, sig = _migration_signature_matches("backfill", backfill_sql)
     if not done:

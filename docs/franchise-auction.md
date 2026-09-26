@@ -154,6 +154,9 @@ model, and the set numbering has one home.
 | `/asquad [franchise]` | anyone | Your own squad (or any franchise's) as a table, with purse and max bid |
 | `/aretlock` · `/apicks` | anyone | Who has kept whom; the expansion pick order and whose turn it is. Their **switches** (`/aretlock on`, `/apickset`) stay the admin's |
 | `/asoldlist` · `/aunsoldlist` | anyone | Everyone sold, set by set; the ⚡ Unsold / Accelerated set |
+| `/aleaderboard` (`/alb`) | anyone | 🏆 Franchises ranked by spend — players, purse left, top buy |
+| `/amybids [franchise]` | anyone | 📊 Every player your franchise bid on: top bid, bids, 🟢 won / 🔴 lost / 🔨 live |
+| `.bid` `.purse` `.squad` `.board` `.lb` `.mybids` … | as the command | **Dot shortcuts** — plain text, so quick on a phone; only in a group with an auction bound |
 
 Every one of those reads answers **before the auction starts**, and every one
 of them answers **in a DM** — see [Before it starts](#before-it-starts).
@@ -166,13 +169,32 @@ count and a fresh one starts, a bid that does not re-announces the new leader.
 `/acountdown 5` changes the length (1–10), `/acountdown off` turns it off, bare
 `/acountdown` reads it back; default 3.
 
-**The gap after a bid.** After every bid, no team may bid again for 3 seconds
-(`/abidgap 5` changes it, `/abidgap off` removes it). Nothing on the board
-shows it; a bid inside the gap is answered with the current bid holder —
-player, team and bid — instead of landing. The team already holding the lot
-is told it holds the top bid, as before, and an admin entering a bid from the
-console is not held back. A bid in the last seconds pushes the clock out to
-at least the gap plus one second, so it can always be answered.
+**Many teams can bid together.** There is no room-wide pause after a bid any
+more: two franchises going for the same player at the same moment is the whole
+point, and both bids land in order. A bare `/bid` (or `.bid`) that loses a race
+by a hair — the minimum moved while it was in flight — tries once more at the
+fresh minimum, because "the next step" is what it meant. A typed amount or a
+priced button is never raised for anyone; it is answered with "💨 Beaten to it
+— *team* now lead at *price*. Next bid: *price*".
+
+**Anti-spam is per person** (`services/auction_antispam.py`), never per room:
+
+* one bid attempt per second per person — an extra tap inside that is dropped
+  without a reply (a button gets a small "⏳ Easy" toast);
+* more than five of those dropped taps in ten seconds (a stuck key, a macro)
+  pauses *that person's* bidding for 15 seconds, with one warning — everybody
+  else, co-owners included, carries on. Landed bids never count, so an owner
+  re-bidding every time they are outbid never trips it;
+* the same refusal to the same person on the same lot is said once per six
+  seconds, and a refused typed bid tidies itself out of the group after ~8s.
+
+Auction admins are exempt. It is all in memory; a restart just forgets who was
+typing fast.
+
+**The old gap, if you want it.** `/abidgap 3` still turns on the room-wide
+quiet gap (after every bid no *other* team may bid for that long; a bid inside
+it is answered with the current holder). It is **off by default**, and seasons
+still on the old untouched default of 3 were moved to off once, at boot.
 
 **Starting again.** `/arestart confirm` restarts the whole auction from the
 first player: every sale, Right To Match, auto-fill, unsold player and bid is
@@ -755,14 +777,30 @@ at all, which is a button that does nothing.
   tells a board whose lot has moved on; it is replaced, not edited.
 * Inside a lot the board is **edited** as before, and now carries the
   quick-bid buttons itself.
-* **Bids are announced**, small: every bid inside one sweep is folded into one
-  line (`💸 Mumbai ₹2.2 Cr → Chennai ₹2.4 Cr leads · Kohli`), and consecutive
-  bid lines are at least `BID_MESSAGE_GAP` (4s) apart — a bid that lands inside
-  the gap waits for the next tick instead of being dropped, and never holds up
-  anything queued behind it. Telegram allows a group about twenty messages a
-  minute; a line per two-second tick would be thirty.
-* SOLD, UNSOLD and RETAINED are announced in richer HTML (a quoted result, the
-  buyer's purse and squad after it); everything else still reads its stored
+* **Bids are announced** TeleAuction-style: every bid inside one sweep is one
+  "💥 New Bid" message — `💥 Mumbai bids ₹2.2 Cr · Kohli` / `⬆️ Outbids Chennai
+  (₹2 Cr)` (or `🎯 Opening bid!`) / `⏳ 18s left · next /bid 2.4` — and a burst
+  keeps the trail (`💥 Mumbai ₹2.2 Cr → Chennai ₹2.4 Cr leads · Kohli`).
+  Consecutive bid lines are at least `BID_MESSAGE_GAP` (4s) apart — a bid that
+  lands inside the gap waits for the next tick instead of being dropped, and
+  never holds up anything queued behind it.
+* **The buttons are always at the bottom of the chat.** The newest bid line,
+  the lot card and the countdown header each carry the quick-bid keyboard, and
+  when a newer one is sent the previous message's buttons are taken off
+  (`auction_scheduler.hand_buttons` / `strip_buttons`), so the room is never
+  offered a column of stale prices. Any sale, pause or Right To Match strips
+  them too; the next bid line brings them back at the right price. The pinned
+  board keeps its own set.
+* **The keyboard** is `🎯 Open ₹X` / `💰 Bid ₹X` and `➕ Bid ₹X+step` (the step
+  from the bid ladder), plus a row of **💼 My Purse** and **📊 Status** —
+  private popups (`au_me_`), so any number of owners can check their purse,
+  max bid, squad, overseas count and RTM cards mid-lot without adding a single
+  message. In a Right To Match final offer the top bidder gets a
+  `⬆️ Final raise ₹X` button.
+* SOLD, UNSOLD and RETAINED are announced in richer HTML — the SOLD card
+  quotes the player (flag, rating, role, country), the price and how many
+  times base it went for, the buyer and the bid count, then the buyer's purse
+  left, max bid, players n/max and total spent; everything else still reads its stored
   `headline`.
 
 ## Focus mode: one room, one feature

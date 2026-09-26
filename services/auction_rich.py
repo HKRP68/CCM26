@@ -67,6 +67,9 @@ def _lot(session, lot_id):
 BID_CB = "au_bid_"
 RTM_CB = "au_rtm_"
 INFO_CB = "au_info_"
+# 💼 My Purse / 📊 Status under every bid message: private popups, never a
+# message, so any number of owners can check mid-lot without adding noise.
+ME_CB = "au_me_"
 # ❌ Close. Every card a command posts carries one, because a read in a live
 # auction group is a message on top of the board the room is trying to read —
 # and the person who asked for it is the one who should be able to take it
@@ -120,6 +123,8 @@ INFO_VIEWS = (
     ("next", "👤 Next Player", None),
     ("squad", "👥 My Squad", None),
     ("purse", "💰 Purse", None),
+    ("leaderboard", "🏆 Leaderboard", None),
+    ("mybids", "📊 My Bids", None),
     ("retention", "🔒 Retention", lambda season: A.retention_configured(season)),
     ("picks", "🆕 Picks", lambda season: A.expansion_configured(season)),
     ("sold", "✅ Sold", None),
@@ -127,18 +132,27 @@ INFO_VIEWS = (
 )
 
 
+def _me_row():
+    """💼 My Purse and 📊 Status — the popups every bid keyboard carries."""
+    from telegram import InlineKeyboardButton
+    return [InlineKeyboardButton("💼 My Purse", callback_data=f"{ME_CB}purse"),
+            InlineKeyboardButton("📊 Status", callback_data=f"{ME_CB}lot")]
+
+
 def bid_keyboard(season, lot):
-    """Quick-bid buttons: the minimum, and one step above it.
+    """Quick-bid buttons — the minimum and one step above it — and the popups.
 
     The exact amount rides in the callback data, so a button pressed after the
     price has moved bids a number that is no longer legal and is refused with
-    "the price has moved" rather than quietly bidding the wrong thing.
+    "beaten to it" rather than quietly bidding the wrong thing.
+
+    The second row is 💼 My Purse and 📊 Status: private popups, so checking a
+    purse mid-lot costs the room nothing.
     """
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     if lot is not None and lot.status == A.LOT_RTM_OFFERED:
-        # The holder's two answers. The top bidder's final raise is an ordinary
-        # /bid, so it needs no button of its own.
+        # The holder's two answers.
         if lot.rtm_stage in (A.RTM_INTENT, A.RTM_DECISION):
             # The lot AND the stage ride in the callback data, for the same
             # reason the quick-bid buttons carry the exact price: a "yes" from
@@ -151,20 +165,28 @@ def bid_keyboard(season, lot):
             return InlineKeyboardMarkup([[
                 InlineKeyboardButton(label, callback_data=f"{tag}yes"),
                 InlineKeyboardButton("Pass", callback_data=f"{tag}no"),
-            ]])
+            ], _me_row()])
+        if lot.rtm_stage == A.RTM_FINAL_OFFER:
+            # The top bidder's one final raise, as a button too: the lowest
+            # legal raise. Anyone else pressing it is refused by the rules.
+            minimum = A.next_min_bid(season, lot)
+            return InlineKeyboardMarkup([[InlineKeyboardButton(
+                f"⬆️ Final raise {A.render_money(minimum, season.currency_label or '₹')}",
+                callback_data=f"{BID_CB}{lot.id}_{minimum}")], _me_row()])
         return None
     if lot is None or lot.status != A.LOT_ON_BLOCK:
         return None
     minimum = A.next_min_bid(season, lot)
     step = A.increment_for(season, minimum)
     symbol = season.currency_label or "₹"
-    row = [InlineKeyboardButton(f"Bid {A.render_money(minimum, symbol)}",
+    first = ("🎯 Open" if lot.current_bid_lakh is None else "💰 Bid")
+    row = [InlineKeyboardButton(f"{first} {A.render_money(minimum, symbol)}",
                                 callback_data=f"{BID_CB}{lot.id}_{minimum}")]
     if minimum + step <= 1_000_000:
         row.append(InlineKeyboardButton(
-            f"Bid {A.render_money(minimum + step, symbol)}",
+            f"➕ Bid {A.render_money(minimum + step, symbol)}",
             callback_data=f"{BID_CB}{lot.id}_{minimum + step}"))
-    return InlineKeyboardMarkup([row])
+    return InlineKeyboardMarkup([row, _me_row()])
 
 
 def info_keyboard(season=None, owner_id=None):
@@ -329,8 +351,30 @@ def lot_caption(session, season, lot):
 
 # ── Announcements ────────────────────────────────────────────────────
 
-def bid_burst_html(session, season, events):
-    """One small message for every bid that landed inside one tick."""
+def _outbid(session, lot, amount):
+    """The franchise and bid this one beat — the standing bid just below it."""
+    from models import AuctionBid
+    if lot is None or amount is None:
+        return None, None
+    prev = (session.query(AuctionBid)
+            .filter(AuctionBid.lot_id == lot.id,
+                    AuctionBid.is_void.is_(False),
+                    AuctionBid.amount_lakh < amount)
+            .order_by(AuctionBid.amount_lakh.desc(), AuctionBid.id.desc())
+            .first())
+    if prev is None:
+        return None, None
+    return _franchise(session, prev.franchise_id), prev.amount_lakh
+
+
+def bid_burst_html(session, season, events, *, now=None):
+    """One "💥 New Bid" message for every bid that landed inside one tick.
+
+    TeleAuction's shape — who bid, how much, whom they outbid, how long is
+    left, what beats it — in three short lines, because the message this is
+    sent with carries the quick-bid buttons and is the one the room is
+    actually looking at.
+    """
     steps = []
     lot = None
     for event in events:
@@ -340,14 +384,34 @@ def bid_burst_html(session, season, events):
         name = franchise.name if franchise else "?"
         steps.append((name, amount, event.by_admin))
         lot = lot or _lot(session, event.lot_id)
-    who = lambda s: (f"<b>{_e(s[0])}</b> <code>{_money(season, s[1])}</code>"
-                     + (" <i>(admin)</i>" if s[2] else ""))
+    admin = lambda s: " <i>(admin)</i>" if s[2] else ""
     player = f" · {_e(lot.name)}" if lot is not None else ""
     if len(steps) == 1:
-        return f"💸 {who(steps[0])}{player}"
-    trail = " → ".join(who(s) for s in steps[-6:])
-    more = f"<i>+{len(steps) - 6} earlier</i> → " if len(steps) > 6 else ""
-    return f"💸 {more}{trail} <i>leads</i>{player}"
+        step = steps[0]
+        lines = [f"💥 <b>{_e(step[0])}</b> bids <b>{_money(season, step[1])}</b>"
+                 f"{admin(step)}{player}"]
+        try:
+            beaten, beaten_at = _outbid(session, lot, step[1])
+        except Exception:
+            beaten, beaten_at = None, None
+        if beaten is not None and beaten.name != step[0]:
+            lines.append(f"⬆️ Outbids {_e(beaten.name)} "
+                         f"({_money(season, beaten_at)})")
+        elif beaten is None:
+            lines.append("🎯 Opening bid!")
+    else:
+        trail = " → ".join(f"<b>{_e(s[0])}</b> <code>{_money(season, s[1])}</code>"
+                           f"{admin(s)}" for s in steps[-6:])
+        more = f"<i>+{len(steps) - 6} earlier</i> → " if len(steps) > 6 else ""
+        lines = [f"💥 {more}{trail} <i>leads</i>{player}"]
+    if lot is not None and lot.status == A.LOT_ON_BLOCK:
+        left = A.seconds_left(lot, now)
+        tail = []
+        if left is not None and left > 0:
+            tail.append(f"⏳ {A.format_clock(left)} left")
+        tail.append(f"next <code>/bid {A._bid_hint(A.next_min_bid(season, lot))}</code>")
+        lines.append(" · ".join(tail))
+    return "\n".join(lines)
 
 
 def event_html(session, season, event):
@@ -360,21 +424,36 @@ def event_html(session, season, event):
             buyer = franchise or _franchise(session, lot.sold_to_id)
             price = lot.sold_price_lakh
             bids = int(lot.bid_count or 0)
-            lines = [f"🔨 <b>SOLD!</b>",
-                     f"<blockquote><b>{_e(lot.name)}</b> ({lot.rating} OVR · "
-                     f"{_e(lot.category)})\n"
-                     f"➡️ <b>{_e(buyer.name if buyer else '?')}</b> for "
-                     f"<b>{_money(season, price)}</b>"
-                     + (f" · {bids} bid{'s' if bids != 1 else ''}" if bids else "")
-                     + "</blockquote>"]
+            base = int(lot.base_price_lakh or 0)
+            price_line = f"💰 <b>{_money(season, price)}</b>"
+            if base and price and price > base:
+                times = price / base
+                price_line += (f" · {times:.1f}× base".replace(".0×", "×"))
+            player_lines = [f"{_flag(lot)} <b>{_e(lot.name)}</b>",
+                            f"⭐ {lot.rating} OVR · {_e(lot.category)} · "
+                            f"{_e(lot.country)}",
+                            price_line,
+                            f"🏆 <b>{_e(buyer.name if buyer else '?')}</b>"
+                            + (f" · 🔥 {bids} bid{'s' if bids != 1 else ''}"
+                               if bids else "")]
+            lines = ["🔨 <b>SOLD!</b> ✅",
+                     "<blockquote>" + "\n".join(player_lines) + "</blockquote>"]
             if buyer is not None:
-                lines.append(f"👛 {_e(buyer.name)}: "
-                             f"{_money(season, buyer.purse_remaining_lakh)} left · "
-                             f"👥 {buyer.squad_size}/{season.max_squad_size}")
+                spent = sum(int(l.sold_price_lakh or 0)
+                            for l in A.squad(session, buyer.id))
+                ceiling = max(0, A.max_bid_now(season, buyer))
+                lines.append(
+                    f"📊 <b>{_e(buyer.name)}</b>\n"
+                    f"👛 Purse left: <b>{_money(season, buyer.purse_remaining_lakh)}</b>"
+                    f" · 🎯 Max bid: {_money(season, ceiling)}\n"
+                    f"👥 Players: {buyer.squad_size}/{season.max_squad_size}"
+                    f" · 💸 Spent: {_money(season, spent)}")
             return "\n".join(lines)
         if kind == "lot_unsold" and lot is not None:
-            return (f"❌ <b>UNSOLD</b> — {_e(lot.name)} ({lot.rating} OVR)\n"
-                    f"<i>Moves to the {_e(A.UNSOLD_SET)} set.</i>")
+            where = f"<i>Moves to the {_e(A.UNSOLD_SET)} set.</i>"
+            return (f"❌ <b>UNSOLD</b> — {_flag(lot)} {_e(lot.name)} "
+                    f"({lot.rating} OVR · base {_money(season, lot.base_price_lakh)})\n"
+                    f"No bids received. {where}")
         if kind == "retained" and lot is not None:
             return (f"🔒 <b>RETAINED</b>\n<blockquote><b>{_e(lot.name)}</b> stays "
                     f"with <b>{_e(franchise.name if franchise else '?')}</b> for "
@@ -438,6 +517,108 @@ def purses_view(session, season):
                 f"{f.name} {A.rtm_cards_left(f)}"
                 for f in A.franchises(session, season.id))))
     return blocks, A.render_purses(session, season)
+
+
+MEDALS = ("🥇", "🥈", "🥉")
+
+
+def leaderboard_view(session, season):
+    """🏆 Who has spent most, who has the most players, and each one's big buy."""
+    board = []
+    for franchise in A.franchises(session, season.id):
+        rows = A.squad(session, franchise.id)
+        spent = sum(int(l.sold_price_lakh or 0) for l in rows)
+        top = max(rows, key=lambda l: int(l.sold_price_lakh or 0), default=None)
+        board.append((spent, len(rows), franchise, top))
+    board.sort(key=lambda r: (-r[0], -r[1], r[2].name.lower()))
+
+    header = [R.cell(R.bold("#"), header=True, align="center"),
+              R.cell(R.bold("Franchise"), header=True),
+              R.cell(R.bold("Spent"), header=True, align="right"),
+              R.cell(R.bold("Players"), header=True, align="center"),
+              R.cell(R.bold("Purse left"), header=True, align="right"),
+              R.cell(R.bold("Top buy"), header=True)]
+    table = [header]
+    lines = [f"🏆 <b>{_e(season.name)} — Leaderboard</b>"]
+    for i, (spent, count, franchise, top) in enumerate(board, start=1):
+        rank = MEDALS[i - 1] if i <= len(MEDALS) else f"#{i}"
+        top_text = (f"{_short(top.name)} {_money(season, top.sold_price_lakh)}"
+                    if top is not None else "—")
+        table.append([R.cell(rank, align="center"),
+                      R.cell(franchise.name),
+                      R.cell(R.bold(_money(season, spent)), align="right"),
+                      R.cell(f"{count}/{season.max_squad_size}", align="center"),
+                      R.cell(_money(season, franchise.purse_remaining_lakh),
+                             align="right"),
+                      R.cell(top_text)])
+        lines.append(f"{rank} <b>{_e(franchise.name)}</b> — spent "
+                     f"<b>{_money(season, spent)}</b> · 👥 {count}/"
+                     f"{season.max_squad_size} · 👛 "
+                     f"{_money(season, franchise.purse_remaining_lakh)} left"
+                     + (f"\n   🌟 {_e(top.name)} {_money(season, top.sold_price_lakh)}"
+                        if top is not None else ""))
+    if not board:
+        lines.append("<i>No franchises yet.</i>")
+    blocks = [R.heading(f"🏆 {season.name} — Leaderboard", size=2)]
+    if board:
+        blocks.append(R.table(table, bordered=True, striped=True, compact=True))
+    else:
+        blocks.append(R.paragraph(R.italic("No franchises yet.")))
+    return blocks, "\n".join(lines)
+
+
+def mybids_view(session, season, franchise):
+    """📊 Every player this franchise has bid on: its top bid, and how it ended."""
+    from sqlalchemy import func
+    from models import AuctionBid
+    rows = (session.query(AuctionBid.lot_id,
+                          func.max(AuctionBid.amount_lakh),
+                          func.count(AuctionBid.id))
+            .filter(AuctionBid.season_id == season.id,
+                    AuctionBid.franchise_id == franchise.id,
+                    AuctionBid.is_void.is_(False))
+            .group_by(AuctionBid.lot_id).all())
+    entries = []
+    for lot_id, top, count in rows:
+        lot = _lot(session, lot_id)
+        if lot is None:
+            continue
+        if lot.status == A.LOT_SOLD and lot.sold_to_id == franchise.id:
+            state = "🟢 Won"
+        elif lot.status in (A.LOT_ON_BLOCK, A.LOT_RTM_OFFERED):
+            state = ("🔨 Leading" if lot.current_bidder_id == franchise.id
+                     else "🔨 Outbid")
+        elif lot.status == A.LOT_SOLD:
+            buyer = _franchise(session, lot.sold_to_id)
+            state = f"🔴 Lost to {buyer.name if buyer else '?'}"
+        else:
+            state = "🔴 Lost"
+        entries.append((lot, int(top or 0), int(count or 0), state))
+    entries.sort(key=lambda e: (e[0].lot_no or 0))
+    won = sum(1 for e in entries if e[3].startswith("🟢"))
+
+    header = [R.cell(R.bold("Player"), header=True),
+              R.cell(R.bold("Your top bid"), header=True, align="right"),
+              R.cell(R.bold("Bids"), header=True, align="center"),
+              R.cell(R.bold("Result"), header=True)]
+    table = [header] + [[R.cell(f"{_flag(lot)} {lot.name}"),
+                         R.cell(_money(season, top), align="right"),
+                         R.cell(str(count), align="center"),
+                         R.cell(state)] for lot, top, count, state in entries]
+    summary = (f"{len(entries)} player{'s' if len(entries) != 1 else ''} bid on"
+               f" · 🟢 {won} won · 🔴 {len(entries) - won} not won")
+    blocks = [R.heading(f"📊 {franchise.name} — bid history", size=2),
+              R.paragraph(summary)]
+    lines = [f"📊 <b>{_e(franchise.name)} — bid history</b>", summary, ""]
+    if entries:
+        blocks.append(R.table(table[:QUOTE_ROWS + 1], bordered=True,
+                              striped=True, compact=True))
+        lines += [f"• <b>{_e(lot.name)}</b> — {_money(season, top)} {state}"
+                  for lot, top, count, state in entries]
+    else:
+        blocks.append(R.paragraph(R.italic("No bids yet.")))
+        lines.append("<i>No bids yet.</i>")
+    return blocks, "\n".join(lines)
 
 
 # ── Before a lot opens ───────────────────────────────────────────────
@@ -1380,7 +1561,8 @@ ADMIN_SECTIONS = (
         ("/acountdown <seconds | off>", "The 3-2-1 countdown before a lot "
                                         "is sold or unsold (default 3)"),
         ("/abidgap <seconds | off>", "Seconds every team waits after a bid "
-                                     "(default 3)"),
+                                     "(default off — many teams can bid at "
+                                     "once; spam is stopped per person)"),
         ("/asnipe <window> <extend> <max>", "Anti-snipe rule, e.g. /asnipe 10 10 5"),
         ("/aincrement 2:10L, 5:20L, 50L", "Bid increments — bare reads them, "
                                           "reset restores the default"),
@@ -1453,7 +1635,10 @@ BOT_ADMIN_SECTION = ("👮 Auction admins — bot admins only", (
 ))
 
 PLAYER_SECTION = ("👥 For owners & everyone", (
-    ("/bid [amount]", "Bid — bare /bid is the next minimum"),
+    ("/bid [amount]", "Bid — bare /bid is the next minimum. Or tap the "
+                      "buttons under the newest bid"),
+    (".bid · .purse · .squad · .board", "Dot shortcuts — the same commands, "
+                                        "quicker to type"),
     ("/artm yes|no", "Answer a Right To Match"),
     ("/ainfo", "Buttons for every view below"),
     ("/arules", "Purse, caps, base prices, bid steps, the clock — before a lot opens"),
@@ -1461,6 +1646,7 @@ PLAYER_SECTION = ("👥 For owners & everyone", (
     ("/asquad [team] · /apurse [team]", "Your squad, every purse"),
     ("/aretlock · /apicks", "Who kept whom, and the expansion pick order"),
     ("/asoldlist · /aunsoldlist", "Everyone sold, everyone unsold"),
+    ("/aleaderboard · /amybids", "Who has spent most; your own bid history"),
     ("/aboard", "The live board with quick-bid buttons"),
 ))
 
