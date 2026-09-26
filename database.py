@@ -1001,6 +1001,16 @@ def _migrate_add_columns():
     # season written before this behaved, so there is nothing to backfill.
     _try_add("auction_seasons", "role_maximums_json", "TEXT")
 
+    # ── Franchise Auction: the hammer countdown, and /arestart ──
+    # An integer defaulted to 3 so a running auction picks the countdown up;
+    # the opening order is NULL until the next /astart, and /arestart falls
+    # back to the current queue order without it.
+    _try_add("auction_seasons", "countdown_seconds", "INTEGER DEFAULT 3")
+    _try_add("auction_seasons", "opening_order_json", "TEXT")
+    # The quiet gap after every bid (see AuctionLot.last_bid_at).
+    _try_add("auction_seasons", "bid_gap_seconds", "INTEGER DEFAULT 3")
+    _try_add("auction_lots", "last_bid_at", "TIMESTAMP")
+
     # ── Franchise Auction: focus mode ──
     # While an auction is live or paused its group answers auction commands and
     # nothing else (``services/auction_focus.py``). An integer defaulted to 1

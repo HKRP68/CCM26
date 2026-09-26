@@ -303,6 +303,12 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     by_tg_id=user.id, source="tg")
         session.commit()
         landed = amount
+    except A.BidTooSoon as exc:
+        # Inside the quiet gap after the last bid: not an error, just "this is
+        # who holds him" — the gap itself is never shown.
+        session.rollback()
+        await _reply(update, html.escape(str(exc)))
+        return
     except AuctionError as exc:
         session.rollback()
         await _reply(update, f"⚠️ {html.escape(str(exc))}")
@@ -887,6 +893,86 @@ async def atimer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"Change it with <code>/atimer 45</code>.")
         seconds = A.set_timer(session, season, raw)
         return f"⏱ A lot now runs for <b>{seconds}s</b>."
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def acountdown_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/acountdown 3</code> — the hammer countdown, in seconds, or off.
+
+    Before a lot is sold or passed the room gets new messages: "Selling X to
+    Team for ₹…" with the first number, then one number a second, then SOLD.
+    Bare reads it back, the way bare <code>/atimer</code> does.
+    """
+    raw = _arg_text(context)
+
+    def work(session, season):
+        if not raw:
+            seconds = A.countdown_seconds(season)
+            state = (f"counts <b>{seconds}</b> before the hammer" if seconds
+                     else "is <b>off</b>")
+            return (f"⏳ The countdown {state}.\n"
+                    f"Change it with <code>/acountdown 5</code>, or "
+                    f"<code>/acountdown off</code>.")
+        seconds = A.set_countdown(session, season, raw)
+        if not seconds:
+            return "⏳ Countdown <b>off</b> — lots resolve without one."
+        return (f"⏳ Countdown set: <b>{seconds}</b> before every sold or "
+                f"unsold lot.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def abidgap_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/abidgap 3</code> — the quiet gap after every bid, or off.
+
+    For that many seconds after a bid no franchise may bid again; a bid that
+    tries is told who holds the lot. Nothing on the board shows it.
+    """
+    raw = _arg_text(context)
+
+    def work(session, season):
+        if not raw:
+            gap = A.bid_gap_seconds(season)
+            state = (f"is <b>{gap}s</b>" if gap else "is <b>off</b>")
+            return (f"🤫 The gap after every bid {state}.\n"
+                    f"Change it with <code>/abidgap 5</code>, or "
+                    f"<code>/abidgap off</code>.")
+        gap = A.set_bid_gap(session, season, raw)
+        if not gap:
+            return "🤫 Gap after a bid <b>off</b> — any team may answer at once."
+        return (f"🤫 After every bid, nobody may bid again for <b>{gap}s</b>.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+ARESTART_WARNING = (
+    "🔄 <b>Restart the auction from the first player?</b>\n"
+    "<blockquote>Every sale, Right To Match, unsold player and bid is wiped. "
+    "Each franchise gets back everything it spent in the auction, its squad "
+    "count and its RTM cards, and the pool goes back to the order the "
+    "auction opened in. Retained players and expansion picks stay "
+    "signed.</blockquote>\n"
+    "This cannot be undone. Type <code>/arestart confirm</code> to go ahead.")
+
+
+async def arestart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/arestart confirm</code> — the whole auction again, from lot one.
+
+    Bare <code>/arestart</code> only explains what it would do: wiping every
+    sale is not something a stray tap should manage.
+    """
+    user = update.effective_user
+    raw = (_arg_text(context) or "").strip().lower()
+
+    def work(session, season):
+        if raw not in ("confirm", "yes"):
+            return ARESTART_WARNING
+        A.restart_auction(session, season,
+                          by_tg_id=user.id if user else None)
+        from services import auction_scheduler as S
+        S.cancel_countdown(season.id)
+        return None      # the sweeper announces it, within a tick
 
     await _with_auction(update, work, admin=True, context=context)
 

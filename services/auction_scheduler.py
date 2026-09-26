@@ -39,9 +39,12 @@ crosses over.
 """
 
 import asyncio
+import html
 import logging
+import math
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 from telegram.error import (
     BadRequest, Forbidden, NetworkError, RetryAfter, TelegramError, TimedOut,
@@ -74,6 +77,16 @@ SEND_LOT_CARD = True
 # Latched off for the process when Telegram refuses a rich board edit, so a
 # payload it does not like costs one refused call, not one every two seconds.
 _board_rich_ok = True
+
+# The hammer countdown ("Selling X to Team for ₹…", 3, 2, 1, SOLD) runs as its
+# own task, because a two-second sweep cannot count in ones. Keyed by season:
+# the lot and the deadline it is counting down to, so a bid that moves the
+# deadline gets a fresh count rather than two overlapping ones.
+_countdowns = {}
+# The sweep and a countdown that brings the hammer down on time must never
+# resolve the same lot at once.
+_resolve_lock = None
+_resolve_lock_loop = None
 
 # How many pending events one tick will say out loud. A backlog (the bot was
 # down while an admin worked through the console) is drained over several
@@ -367,6 +380,160 @@ async def drain_events(bot, session, season, *, limit=DRAIN_PER_TICK):
     return spoken
 
 
+# ── The hammer countdown ─────────────────────────────────────────────
+
+def _lock():
+    """The resolve lock for the running loop (tests run one loop per case)."""
+    global _resolve_lock, _resolve_lock_loop
+    loop = asyncio.get_running_loop()
+    if _resolve_lock is None or _resolve_lock_loop is not loop:
+        _resolve_lock = asyncio.Lock()
+        _resolve_lock_loop = loop
+    return _resolve_lock
+
+
+def countdown_header(session, season, lot):
+    """What is about to happen to the lot, said before the count starts."""
+    from services import auction_service as A
+    name = html.escape(lot.name or "?")
+    if lot.current_bidder_id is None:
+        return f"⏳ <b>{name}</b> is going <b>UNSOLD</b> — no bids yet"
+    from models import AuctionFranchise
+    team = (session.query(AuctionFranchise)
+            .filter(AuctionFranchise.id == lot.current_bidder_id).first())
+    team_name = html.escape(team.name if team else "?")
+    price = A.render_money(lot.current_bid_lakh, season.currency_label)
+    holder, _ = A.rtm_available(session, season, lot)
+    if holder is not None:
+        # The hammer is not the end of this one: the old franchise is asked
+        # first, so "selling to" would be a promise the room cannot keep.
+        return (f"⏳ Bidding closes on <b>{name}</b>\n"
+                f"<b>{team_name}</b> lead at <b>{price}</b> — then "
+                f"<b>{html.escape(holder.name)}</b> may use a Right To Match")
+    return (f"⏳ Selling <b>{name}</b>\n"
+            f"to <b>{team_name}</b> for <b>{price}</b>")
+
+
+def maybe_start_countdown(bot, session, season, *, now=None):
+    """Arm the hammer countdown for the lot on the block, once per deadline.
+
+    Armed a little early — up to one sweep before the count is due — so the
+    task can land its first number on time; it sleeps the rest itself.
+    """
+    from services import auction_service as A
+    seconds = A.countdown_seconds(season)
+    if seconds <= 0 or season.status != A.STATUS_LIVE or not season.chat_id:
+        return None
+    lot = A.current_lot(session, season)
+    if lot is None or lot.status != A.LOT_ON_BLOCK or lot.deadline_at is None:
+        return None
+    left = A.seconds_left(lot, now)
+    if left is None or left <= 0 or left > seconds + SWEEP_INTERVAL + 0.5:
+        return None
+    key = (lot.id, lot.deadline_at)
+    running = _countdowns.get(season.id)
+    if running is not None and running[0] == key and not running[1].done():
+        return None
+    task = asyncio.get_running_loop().create_task(
+        run_countdown(bot, season.id, lot.id, lot.deadline_at, seconds))
+    _countdowns[season.id] = (key, task)
+    return task
+
+
+async def run_countdown(bot, season_id, lot_id, deadline, seconds, *,
+                        sleep=None, clock=None):
+    """Count the room down to the hammer in new messages, then bring it down.
+
+    The first message says what is about to happen and carries the first
+    number; each second after that is one more number. Before every message
+    the lot is read again: a bid that moved the deadline (anti-snipe) ends this
+    count — the sweep arms a new one for the new deadline — and a bid that did
+    not move it re-announces who the player is now going to. At the deadline
+    the lot is resolved here rather than up to a sweep later, so "1" is
+    followed by SOLD, not by two seconds of silence.
+    """
+    from database import get_session
+    from models import AuctionLot, AuctionSeason
+    from services import auction_service as A
+
+    sleep = sleep or asyncio.sleep
+    clock = clock or datetime.utcnow
+
+    async def until(moment):
+        wait = (moment - clock()).total_seconds()
+        if wait > 0:
+            await sleep(wait)
+
+    said_for = None
+    try:
+        left = (deadline - clock()).total_seconds()
+        first = max(1, min(int(seconds), int(math.ceil(left))))
+        for number in range(first, 0, -1):
+            await until(deadline - timedelta(seconds=number))
+            session = get_session()
+            try:
+                season = (session.query(AuctionSeason)
+                          .filter(AuctionSeason.id == season_id).first())
+                lot = (session.query(AuctionLot)
+                       .filter(AuctionLot.id == lot_id).first())
+                if (season is None or lot is None
+                        or season.status != A.STATUS_LIVE
+                        or lot.status != A.LOT_ON_BLOCK
+                        or lot.deadline_at != deadline):
+                    return False
+                standing = (lot.current_bidder_id, lot.current_bid_lakh)
+                text = f"<b>{number}</b>"
+                if standing != said_for:
+                    text = (countdown_header(session, season, lot)
+                            + f"\n\n{text}")
+                    said_for = standing
+                await _send(bot, season.chat_id, text)
+            finally:
+                session.close()
+        await until(deadline + timedelta(milliseconds=50))
+        await _resolve_now(bot, season_id, lot_id, deadline, clock=clock)
+        return True
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("auction countdown failed; the sweep will resolve")
+        return False
+
+
+async def _resolve_now(bot, season_id, lot_id, deadline, *, clock=None):
+    """One sweep of one auction, taken the moment its lot's clock runs out."""
+    from database import get_session
+    from models import AuctionLot, AuctionSeason
+    from services import auction_service as A
+
+    clock = clock or datetime.utcnow
+    async with _lock():
+        session = get_session()
+        try:
+            season = (session.query(AuctionSeason)
+                      .filter(AuctionSeason.id == season_id).first())
+            lot = (session.query(AuctionLot)
+                   .filter(AuctionLot.id == lot_id).first())
+            if (season is None or lot is None
+                    or season.status != A.STATUS_LIVE or not season.chat_id
+                    or lot.status != A.LOT_ON_BLOCK
+                    or lot.deadline_at != deadline):
+                return  # the sweep, a bid or an admin got there first
+            await _tick_one(SimpleNamespace(bot=bot), session, season, clock())
+        except Exception:
+            session.rollback()
+            logger.exception("auction #%s countdown resolve failed", season_id)
+        finally:
+            session.close()
+
+
+def cancel_countdown(season_id):
+    """Drop a running countdown — the auction under it has been reset."""
+    running = _countdowns.pop(season_id, None)
+    if running is not None and not running[1].done():
+        running[1].cancel()
+
+
 # ── The sweep ────────────────────────────────────────────────────────
 
 async def _auction_tick(context):
@@ -385,7 +552,10 @@ async def _auction_tick(context):
             # One broken auction must not stall the others — the same
             # isolation ``_draft_tick`` uses, for the same reason.
             try:
-                await _tick_one(context, session, season, now)
+                async with _lock():
+                    await _tick_one(context, session, season, now)
+                maybe_start_countdown(context.bot, session, season,
+                                      now=datetime.utcnow())
             except Exception:
                 session.rollback()
                 logger.exception("auction #%s tick failed", season.id)
