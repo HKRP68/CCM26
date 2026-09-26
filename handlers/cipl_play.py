@@ -3505,29 +3505,14 @@ def _crr_line(state):
     return line
 
 
-def _conditions_text(state):
-    """'🌱 Hard pitch · ☁️ Overcast · 🌡️ 22°C · 💧 Light dew' — plain text.
+def _pitch_text(state):
+    """'🌱 Hard pitch' for the approach card, or '' when no pitch is set.
 
-    The LIVE conditions: weather and dew move during the match
-    (services.weather_drift), so both captains see what they are picking into.
-    Empty only when the match has neither a pitch nor conditions.
+    Only the surface: the weather and dew stay in the over summary, where a
+    change is announced, and off the card the captains pick from.
     """
-    bits = []
     pitch = state.get("pitch_type")
-    if pitch:
-        bits.append(f"🌱 {pitch} pitch")
-    cond = state.get("conditions") or {}
-    if cond.get("weather"):
-        bits.append(f"🌤️ {cond['weather']}")
-    if cond.get("temperature") is not None:
-        bits.append(f"🌡️ {cond['temperature']}°C")
-    if cond.get("wind_strength") in ("Moderate", "Strong"):
-        bits.append(f"💨 {cond['wind_strength']} {str(cond.get('wind_direction') or 'wind').lower()}")
-    if cond.get("dew"):
-        bits.append(f"💧 {cond['dew']} dew")
-    elif cond.get("dew_forecast"):
-        bits.append(f"💧 {cond['dew_forecast']} dew expected")
-    return " · ".join(bits)
+    return f"🌱 {pitch} pitch" if pitch else ""
 
 
 def _approach_card(state):
@@ -3556,9 +3541,9 @@ def _approach_card(state):
         rule,
         _crr_line(state),
     ]
-    conditions = _conditions_text(state)
-    if conditions:
-        lines.append(html.escape(conditions))
+    pitch_line = _pitch_text(state)
+    if pitch_line:
+        lines.append(html.escape(pitch_line))
     lines += [
         rule,
         f"{bowl_emoji} {bowl_code} | Bowl | {_over_emoji_strip(state)}",
@@ -3642,10 +3627,10 @@ def _build_approach_card_blocks(state, prompt):
     else:
         blocks.append(R.paragraph(["⚡ ", R.bold("CRR"), f"  {crr:.2f}"]))
 
-    # ── Pitch + live weather / dew ──
-    conditions = _conditions_text(state)
-    if conditions:
-        blocks.append(R.paragraph([R.italic(conditions)]))
+    # ── Pitch type ──
+    pitch_line = _pitch_text(state)
+    if pitch_line:
+        blocks.append(R.paragraph([R.italic(pitch_line)]))
 
     # ── At the crease ──
     bs = state["bat_stats"]
@@ -4017,7 +4002,7 @@ async def _complete_match(context, mid, state):
             except Exception:
                 logger.exception("CL tour result recording failed for %s", mid)
 
-            # Ranked ladder, rivalry and spectator predictions — one idempotent
+            # Ranked ladder and rivalry — one idempotent
             # call that isolates its own failures (see services.post_match).
             if match:
                 from services.post_match import process_completed_match
@@ -4201,7 +4186,7 @@ async def _complete_match(context, mid, state):
     except Exception:
         logger.exception("cipl match summary image failed for match %s", mid)
 
-    # Ranked / rivalry / predictions card, then the highlights reel — both
+    # Ranked / rivalry card, then the highlights reel — both
     # best-effort and read from what the finalize above already stored.
     try:
         from services.post_match import announce as _announce_post_match

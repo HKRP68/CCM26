@@ -1,4 +1,4 @@
-"""The /rank, /ranked, /rivalry and /predict cards render (pure, no DB)."""
+"""The /rank, /ranked and /rivalry cards render (pure, no DB)."""
 
 import unittest
 from types import SimpleNamespace as NS
@@ -70,25 +70,12 @@ class RivalryCardTests(unittest.TestCase):
         self.assertIn("Bala <b>2</b> – <b>5</b> Asha", render_rivalry(row, b, a))
 
 
-class PredictCardTests(unittest.TestCase):
-    def test_card_and_keyboard(self):
-        from handlers.predict import _keyboard, render_card
-        m = NS(id=42)
-        sides = [(1, "Kings"), (2, "Royals")]
-        text = render_card(m, sides, {1: {"stake": 300, "count": 2}}, True)
-        self.assertIn("Kings", text)
-        self.assertIn("300", text)
-        self.assertIn("100% of pool", text)
-        kb = _keyboard(42, sides, True)
-        data = [b.callback_data for row in kb.inline_keyboard for b in row]
-        self.assertIn("pred_p_42_1_100", data)
-        self.assertIn("pred_r_42", data)
-        closed = _keyboard(42, sides, False)
-        self.assertEqual(len(closed.inline_keyboard), 1)
-
-    def test_pred_buttons_are_shared(self):
+class PredictRemovedTests(unittest.TestCase):
+    def test_predict_is_gone(self):
+        import importlib.util
         from services.button_access import SHARED_CALLBACK_PREFIXES
-        self.assertIn("pred_", SHARED_CALLBACK_PREFIXES)
+        self.assertIsNone(importlib.util.find_spec("handlers.predict"))
+        self.assertNotIn("pred_", SHARED_CALLBACK_PREFIXES)
 
 
 if __name__ == "__main__":

@@ -182,10 +182,10 @@ UNPUBLISHED_ON_PURPOSE = {
     # Team colour — same ceiling, same reason. Named in /help and /howto next
     # to /setteamlogo, and offered by /teamname to anyone without one.
     "setteamcolour",
-    # Ranked ladder, rivalries, spectator predictions and the Hall of Fame.
+    # Ranked ladder, rivalries and the Hall of Fame.
     # Both player scopes are at the ceiling; all five are in /help, and the
     # post-match card (ranked + rivalry lines) and /h2h point at them.
-    "rank", "ranked", "rivalry", "predict", "halloffame",
+    "rank", "ranked", "rivalry", "halloffame",
     # Forward-only mode: a separate run path where this is the ONLY command
     # registered at all, so there is no menu for it to be in.
     "frwd",

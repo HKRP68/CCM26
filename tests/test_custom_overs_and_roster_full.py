@@ -42,20 +42,31 @@ class LetsPlayOversTests(unittest.TestCase):
         self.assertIn("6 Overs", repr(blocks))
 
 
-class ConditionsLineTests(unittest.TestCase):
-    def test_live_conditions(self):
-        from handlers.cipl_play import _conditions_text
-        text = _conditions_text({
-            "pitch_type": "Green",
-            "conditions": {"weather": "Overcast", "temperature": 21,
-                           "wind_strength": "Strong", "wind_direction": "Crosswind",
-                           "dew": None, "dew_forecast": "Heavy"}})
-        for bit in ("Green pitch", "Overcast", "21°C", "Strong crosswind",
-                    "Heavy dew expected"):
-            self.assertIn(bit, text)
-        self.assertIn("Light dew", _conditions_text(
-            {"pitch_type": "Hard", "conditions": {"dew": "Light"}}))
-        self.assertEqual(_conditions_text({}), "")
+class ApproachCardPitchTests(unittest.TestCase):
+    def test_only_the_pitch_type(self):
+        from handlers.cipl_play import _pitch_text
+        state = {"pitch_type": "Green",
+                 "conditions": {"weather": "Overcast", "temperature": 21,
+                                "dew": "Light", "dew_forecast": "Heavy"}}
+        self.assertEqual(_pitch_text(state), "🌱 Green pitch")
+        self.assertEqual(_pitch_text({}), "")
+
+    def test_approach_card_has_no_weather(self):
+        import sys, os
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from test_over_limit_resume import _state
+        import handlers.cipl_play as cp
+        s = _state(overs=5)
+        s["conditions"] = {"weather": "Overcast", "temperature": 20,
+                           "dew": "Light", "dew_forecast": "Heavy"}
+        s["current_bowler"] = s["bowl_xi"][0]
+        card = cp._approach_card(s)
+        self.assertIn("Hard pitch", card)
+        for word in ("Overcast", "°C", "dew"):
+            self.assertNotIn(word, card)
+        blocks = repr(cp._build_approach_card_blocks(s, ()))
+        self.assertIn("Hard pitch", blocks)
+        self.assertNotIn("Overcast", blocks)
 
 
 class _NoOwnedSession:

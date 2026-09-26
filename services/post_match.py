@@ -1,4 +1,4 @@
-"""The post-match layer: ranked ladder, rivalry and spectator predictions.
+"""The post-match layer: ranked ladder and rivalry.
 
 Every flow that finishes a match with a result calls
 :func:`process_completed_match` inside its own finalize transaction, right
@@ -6,12 +6,11 @@ after it has written the winner onto the ``Match`` row. That one call:
 
   1. rates the match on the ranked ladder (``services.ranked_service``),
   2. folds it into the pair's rivalry (``services.rivalry_service``),
-  3. settles the spectators' predictions (``services.prediction_service``),
 
 and stores what happened in a ``MatchPostResult`` row, keyed on the match id,
 so a replayed finalize changes nothing the second time. After the caller has
-committed, :func:`announce` posts the short "📈 Ranked · ⚔️ Rivalry · 🔮
-Predictions" card into the match chat.
+committed, :func:`announce` posts the short "📈 Ranked · ⚔️ Rivalry" card
+into the match chat.
 
 Everything is best-effort: the work runs in a savepoint and any failure is
 logged and swallowed, because a match that has already been paid out must never
@@ -93,7 +92,7 @@ def process_completed_match(session, match, *, count_result=True, state=None):
                        "user2_id": match.user2_id, "winner_id": match.winner_id,
                        "tie": tie, "team_owner": _team_owner(state),
                        "innings_owner": _innings_owner(state, match),
-                       "ranked": None, "rivalry": None, "predictions": None}
+                       "ranked": None, "rivalry": None}
 
             if count_result and _humans(session, match):
                 from services import ranked_service, rivalry_service
@@ -107,9 +106,6 @@ def process_completed_match(session, match, *, count_result=True, state=None):
                         session, match.user1_id, match.user2_id,
                         winner_id=match.winner_id, tie=tie, match_id=match.id)
                 summary["rivalry"] = rivalry_service.record_match(session, match)
-
-            from services import prediction_service
-            summary["predictions"] = prediction_service.settle(session, match)
 
             row.rated = bool((summary["ranked"] or {}).get("rated"))
             row.ranked_done = True
@@ -192,15 +188,6 @@ def render_card(summary, users):
             lines.append(f"⚔️ <i>{left} more meeting{'s' if left > 1 else ''} and "
                          f"this becomes a rivalry.</i>")
 
-    pred = summary.get("predictions") or {}
-    if pred.get("settled"):
-        if pred.get("refunded"):
-            lines.append(f"🔮 <b>Predictions</b>: {pred['settled']} stake(s) refunded "
-                         f"— {html.escape(pred.get('reason') or 'no result')}.")
-        else:
-            lines.append(f"🔮 <b>Predictions</b>: {pred['winners']} of "
-                         f"{pred['settled']} called it · pool {pred['pool']:,} → "
-                         f"paid {pred['paid']:,} coins (best {pred['top_payout']:,})")
     return "\n".join(lines)
 
 

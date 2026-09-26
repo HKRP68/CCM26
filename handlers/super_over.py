@@ -1898,7 +1898,7 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
         except Exception:
             logger.exception("Super Over pitch stats recording failed (%s)", mid)
 
-        # Ranked ladder, rivalry and spectator predictions (services.post_match)
+        # Ranked ladder and rivalry (services.post_match)
         # — idempotent, and isolated in its own savepoint.
         if m:
             from services.post_match import process_completed_match
@@ -1978,7 +1978,7 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
         parse_mode="HTML", reply_markup=_spectate_markup(so),
         disable_web_page_preview=True)
 
-    # Ranked / rivalry / predictions card, then the main match's highlights.
+    # Ranked / rivalry card, then the main match's highlights.
     try:
         from services.post_match import announce as _announce_post_match
         await _announce_post_match(context.bot, so["chat_id"], mid)
