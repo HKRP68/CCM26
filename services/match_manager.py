@@ -442,7 +442,7 @@ class MatchManager:
                 match_row.inn2_runs = s.get("total_runs", 0)
                 match_row.inn2_wickets = s.get("total_wickets", 0)
                 match_row.completed_at = datetime.utcnow()
-                # Ranked ladder, rivalry and predictions (services.post_match).
+                # Ranked ladder and rivalry (services.post_match).
                 from services.post_match import process_completed_match
                 process_completed_match(session, match_row, state=s)
             session.commit()

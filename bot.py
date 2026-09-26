@@ -1117,7 +1117,6 @@ async def start_handler(update, context):
         "/rank [@user] - Your ranked rating, division and ladder position 📈\n"
         "/ranked - This season's ranked ladder (paid by division at month end)\n"
         "/rivalry [@user] - Your rivalries, or the series with one player ⚔️\n"
-        "/predict - Back a side of the live match in this group with coins 🔮\n"
         "/halloffame /hof - All-time records: top scores, best figures, streaks 🏛️\n"
         "/challengeIPL /cipl [overs] - Reply to a user to start an IPL challenge "
         "(20 overs, or 1-20: /cipl 6)\n"
@@ -1861,17 +1860,14 @@ def main():
             ["recentmatches", "recent", "matches"],
             dm_only("recentmatches", recentmatches_handler)))
         app.add_handler(CommandHandler(["h2h", "headtohead"], h2h_handler))
-        # ── Ranked ladder, rivalries, spectator predictions, Hall of Fame ──
+        # ── Ranked ladder, rivalries, Hall of Fame ──
         # Not in BOT_MENU_COMMANDS: both slash menus sit at Telegram's
         # 100-command ceiling. Documented in BOT_COMMANDS.md.
         from handlers.ranked import rank_handler, ranked_handler, rivalry_handler
-        from handlers.predict import predict_handler, predict_callback
         from handlers.halloffame import halloffame_handler, halloffame_callback
         app.add_handler(CommandHandler(["rank", "myrank", "elo"], rank_handler))
         app.add_handler(CommandHandler(["ranked", "ladder", "rladder"], ranked_handler))
         app.add_handler(CommandHandler(["rivalry", "rivalries", "rival"], rivalry_handler))
-        app.add_handler(CommandHandler(["predict", "pred"], predict_handler))
-        app.add_handler(CallbackQueryHandler(predict_callback, pattern=r"^pred_"))
         app.add_handler(CommandHandler(["halloffame", "hof", "records"],
                                        halloffame_handler))
         app.add_handler(CallbackQueryHandler(halloffame_callback, pattern=r"^hof_"))
@@ -2998,22 +2994,39 @@ def main():
         except Exception:
             logger.exception("Failed to schedule season rollover")
 
-        # ── Spectator predictions + Hall of Fame background work ──
-        # The sweep settles or refunds predictions on matches that ended
-        # outside the normal finish (forfeits, clears, admin ends); the scan
-        # harvests finished scorecards into the Hall of Fame, back-filling
-        # history 200 matches at a time.
+        # ── Hall of Fame background work ──
+        # The scan harvests finished scorecards into the Hall of Fame,
+        # back-filling history 200 matches at a time.
         try:
-            from handlers.predict import prediction_sweep_job
             from handlers.halloffame import hall_of_fame_scan_job
             if app.job_queue:
-                app.job_queue.run_repeating(prediction_sweep_job, interval=600,
-                                             first=180, name="prediction_sweep")
                 app.job_queue.run_repeating(hall_of_fame_scan_job, interval=900,
                                              first=240, name="hall_of_fame_scan")
-                logger.info("Prediction sweep + Hall of Fame scan jobs scheduled")
+                logger.info("Hall of Fame scan job scheduled")
         except Exception:
-            logger.exception("Failed to schedule prediction / Hall of Fame jobs")
+            logger.exception("Failed to schedule the Hall of Fame job")
+
+        # ── /predict was removed: hand back any stake still open ──
+        try:
+            async def _refund_open_predictions(context):
+                def _run():
+                    from database import get_session
+                    from services.prediction_service import refund_all_open
+                    s = get_session()
+                    try:
+                        refund_all_open(s)
+                        s.commit()
+                    except Exception:
+                        s.rollback()
+                        logger.exception("Refunding open predictions failed")
+                    finally:
+                        s.close()
+                await asyncio.to_thread(_run)
+            if app.job_queue:
+                app.job_queue.run_once(_refund_open_predictions, when=60,
+                                       name="refund_open_predictions")
+        except Exception:
+            logger.exception("Failed to schedule the prediction refund")
 
         # ── Fantasy auto-lock ──
         # Locks any open fantasy league whose admin-set lock time (IST) has

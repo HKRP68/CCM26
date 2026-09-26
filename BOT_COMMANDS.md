@@ -202,7 +202,6 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/wpmbot` | `/wpmb` | Play a bot opponent in the Mini App |
 | `/lpbot` | `/lpb` `/letsplaybot` | Unranked Lets Play practice vs the bot |
 | `/ciplbot` | `/ciplb` `/challengeiplbot` | Unranked league practice vs the bot |
-| `/predict` 👥 | `/pred` | Back a side of the live match in this group with coins 🔮 |
 | `/botvsbot` | `/bvb` | Configure a bot-versus-bot match |
 | `/botmatch` | `/spectate` | Spectate a bot-versus-bot match |
 | `/pbo` | `/bowlout` | Start a standalone player bowl-out |
@@ -216,7 +215,7 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/cmtours` | `/createtour` | Create a tournament |
 | `/mytours` | `/tours` | View your tournaments |
 
-### Ranked ladder, rivalries, predictions & highlights
+### Ranked ladder, rivalries & highlights
 
 * **Ranked ladder** — every completed match between two players (Lets Play,
   CIPL / Challenge League, `/playmatch`, `/wpm`, Super Over and bowl-out
@@ -235,12 +234,6 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
   more of a round gets +3,000 coins and +2 💎. Old matches count, so a pair with
   history is a rivalry straight away. Bonuses and rounds only count matches of
   5+ overs, up to 3 per pair per UTC day; the series score counts every match.
-* **Spectator predictions** — `/predict` in the group while a player-vs-player
-  match is live. Anyone except the two players can back a side with 100, 500,
-  1K or 5K coins, once per match, until the innings break. Winners share the
-  whole pool by stake, plus a 10% bonus on their own stake when someone took
-  the other side. If nobody backed the winner, or the match ends tied or
-  unfinished, everyone is refunded.
 * **Match highlights** — after every Lets Play / Challenge League match, the
   chat gets a short reel of the 3–5 biggest moments (wickets of set batters,
   fifties and hundreds, bowling hauls, sixes, big overs, maidens and swings in
@@ -249,10 +242,9 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
   now have conditions that change as the match goes on: cloud rolls in or
   clears, the wind can pick up, and on a night match the dew *builds* — it
   arrives late in the first innings or during the chase, up to the level the
-  Pitch Report forecast. Each change is announced in the over summary, and the
-  approach card both captains pick from always shows the pitch and the live
-  weather/dew. There is **no rain**: nothing stops play, shortens an innings or
-  sets a DLS target.
+  Pitch Report forecast. Each change is announced in the over summary; the
+  approach card both captains pick from shows the pitch type. There is **no
+  rain**: nothing stops play, shortens an innings or sets a DLS target.
 * **Custom overs** — `/letsplay 5 @user` or `/cipl 6` (as a reply) plays a
   shorter friendly, 1–20 overs. Tournament fixtures, CL Tour matches and The
   Hundred leagues always play their full length. Matches under 5 overs still
@@ -482,7 +474,6 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 |-------|---------|
 | `/letsplay @username` *(or reply)* | `/letsplay @rahul` |
 | `/letsplay <overs> @username` — a shorter friendly, 1–20 overs (tournament fixtures are always 20) | `/lp 5 @rahul` |
-| `/predict [match id]` *(in the group, while a match is live)* | `/predict` |
 | `/playmatch @username` | `/playmatch @rahul` |
 | `/cm @username` | `/cm @rahul` |
 | `/cdraft` | `/cdraft` |
@@ -738,7 +729,7 @@ audience:
 `/unscramble` · `/ju` · `/eu` · `/su` · `/cu` · `/ewm` · `/dwm` ·
 `/lptour` · `/lpt` · `/lptable` · `/lptfixtures` · `/lptteams` · `/lptstats` ·
 `/pick` · `/dboard` · `/dsquad` · `/dqueue` · `/dsearch` · `/cdraft` ·
-`/bid` · `/aboard` · `/apurse` · `/artm` · `/predict`
+`/bid` · `/aboard` · `/apurse` · `/artm`
 
 ### 🔑 Private-chat entry points
 
@@ -755,7 +746,7 @@ player menus sit at Telegram's 100-command ceiling: `/pitchstats`, `/dtrade`,
 `/dtrades`, `/bid`, `/aboard`, `/apurse`, and the auction views `/ainfo`,
 `/asets`, `/anextset`, `/anextplayer`, `/asquad`, `/asoldlist`,
 `/aunsoldlist` (all behind `/ainfo`'s buttons), and `/rank`, `/ranked`,
-`/rivalry`, `/predict` and `/halloffame` (all in `/help`).
+`/rivalry` and `/halloffame` (all in `/help`).
 
 ### Disabled
 
@@ -877,7 +868,6 @@ admin panel, but the commands are not registered.
 | `/packs`, `/shop` | `/buypack` |
 | `/pm` | `/playmatch` |
 | `/pp` | `/powerplay` |
-| `/pred` | `/predict` |
 | `/ps`, `/pstats` | `/pitchstats` |
 | `/pxi`, `/xi` | `/playingxi` |
 | `/r` | `/resume` |
@@ -936,7 +926,6 @@ admin panel, but the commands are not registered.
 | Challenge League setup timeout | 5 minutes per turn, with a reminder at 4:30 (`CL_SELECT_WINDOW_SECONDS`) |
 | Slash menu size | 100 commands per scope (Telegram's ceiling) |
 | Ranked: same pair | 3 rated matches per UTC day |
-| `/predict` stake | 100 / 500 / 1,000 / 5,000 coins, one prediction per match, closes at the innings break |
 
 Cooldowns and rewards for many commands are configurable by the operator in the
 admin website (`BotCommand` / `CommandReward` rows), so an individual

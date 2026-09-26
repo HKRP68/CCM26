@@ -3054,7 +3054,7 @@ def finalize_webapp_match(session, match_id):
     except Exception:
         logger.exception("webapp match-end quest tracking failed")
 
-    # Ranked ladder, rivalry and spectator predictions (services.post_match) —
+    # Ranked ladder and rivalry (services.post_match) —
     # idempotent and isolated in its own savepoint. Mini App results post no
     # chat card of their own; the numbers show up on /rank and /rivalry.
     try:

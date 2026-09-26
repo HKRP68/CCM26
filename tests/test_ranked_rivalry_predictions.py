@@ -1,4 +1,4 @@
-"""Ranked ladder, rivalries, spectator predictions, the post-match hook and the
+"""Ranked ladder, rivalries, the retired predictions' refund, the post-match hook and the
 Hall of Fame harvest — against a real (temporary SQLite) database.
 """
 
@@ -298,79 +298,28 @@ class RivalryTests(Case):
         return self.s.query(User).filter(User.telegram_id == -1).first() is not None
 
 
-# ── predictions ──────────────────────────────────────────────────────
+# ── predictions (retired) ────────────────────────────────────────────
 
-LIVE = {"innings": 1}
+class PredictionRefundTests(Case):
+    """/predict is gone; any stake still open is handed back once."""
 
-
-class PredictionTests(Case):
-    def setUp(self):
-        super().setUp()
-        self.a, self.b = self.user(), self.user()
-        self.m = self.match(self.a, self.b, status="playing")
-
-    def test_pool_is_shared_by_stake_plus_bonus(self):
+    def test_open_stakes_are_refunded_once_and_settled_ones_untouched(self):
+        from models import MatchPrediction
         from services import prediction_service as ps
-        x, y, z = self.user(coins=1000), self.user(coins=1000), self.user(coins=1000)
-        ps.place(self.s, self.m, x, self.a.id, 100, state=LIVE)
-        ps.place(self.s, self.m, y, self.a.id, 300, state=LIVE)
-        ps.place(self.s, self.m, z, self.b.id, 400, state=LIVE)
-        self.assertEqual(z.total_coins, 600)
-        self.m.status, self.m.winner_id, self.m.loser_id = "completed", self.a.id, self.b.id
-        self.m.margin_type = "runs"
-        out = ps.settle(self.s, self.m)
-        self.assertEqual(out["winners"], 2)
-        # Pool 800, winning side 400: x gets 200 + 10 bonus, y 600 + 30.
-        self.assertEqual(x.total_coins, 900 + 210)
-        self.assertEqual(y.total_coins, 700 + 630)
-        self.assertEqual(z.total_coins, 600)
-        self.assertIsNone(ps.settle(self.s, self.m))   # idempotent
-
-    def test_refunds(self):
-        from services import prediction_service as ps
-        x = self.user(coins=1000)
-        ps.place(self.s, self.m, x, self.b.id, 500, state=LIVE)
-        self.m.status, self.m.winner_id, self.m.loser_id = "completed", self.a.id, self.b.id
-        self.m.margin_type = "runs"
-        out = ps.settle(self.s, self.m)
-        self.assertEqual(out["reason"], "nobody backed the winner")
-        self.assertEqual(x.total_coins, 1000)
-
-    def test_one_sided_pool_gets_no_bonus(self):
-        from services import prediction_service as ps
-        x = self.user(coins=5000)
-        ps.place(self.s, self.m, x, self.a.id, 5000, state=LIVE)
-        self.m.status, self.m.winner_id, self.m.loser_id = "completed", self.a.id, self.b.id
-        self.m.margin_type = "runs"
-        ps.settle(self.s, self.m)
-        self.assertEqual(x.total_coins, 5000)
-        self.assertEqual(ps.payout_for(100, 100, 100), 100)
-        self.assertEqual(ps.payout_for(100, 100, 300), 310)
-
-    def test_refusals(self):
-        from services import prediction_service as ps
-        x = self.user(coins=50)
-        with self.assertRaises(ps.PredictionError):
-            ps.place(self.s, self.m, self.a, self.a.id, 100, state=LIVE)   # own match
-        with self.assertRaises(ps.PredictionError):
-            ps.place(self.s, self.m, x, self.a.id, 100, state=LIVE)        # too poor
-        rich = self.user(coins=10_000)
-        with self.assertRaises(ps.PredictionError):
-            ps.place(self.s, self.m, rich, self.a.id, 100, state={"innings": 2})
-        with self.assertRaises(ps.PredictionError):
-            ps.place(self.s, self.m, rich, self.a.id, 100, state=None)     # match over
-        ps.place(self.s, self.m, rich, self.a.id, 100, state=LIVE)
-        with self.assertRaises(ps.PredictionError):
-            ps.place(self.s, self.m, rich, self.b.id, 100, state=LIVE)     # twice
-
-    def test_sweep_refunds_an_abandoned_match(self):
-        from services import prediction_service as ps
-        x = self.user(coins=1000)
-        ps.place(self.s, self.m, x, self.a.id, 1000, state=LIVE)
-        self.m.status = "abandoned"
-        out = dict((m.id, s) for m, s in ps.sweep(self.s))
-        self.assertEqual(out[self.m.id]["refunded"], 1)
-        self.assertEqual(x.total_coins, 1000)
+        a, b = self.user(), self.user()
+        m = self.match(a, b, status="playing")
+        x, y = self.user(coins=0), self.user(coins=0)
+        self.s.add(MatchPrediction(match_id=m.id, user_id=x.id,
+                                   pick_user_id=a.id, stake=500, status="open"))
+        self.s.add(MatchPrediction(match_id=m.id, user_id=y.id,
+                                   pick_user_id=b.id, stake=100, status="won",
+                                   payout=210))
+        self.s.flush()
+        self.assertEqual(ps.refund_all_open(self.s), 1)
+        self.assertEqual(x.total_coins, 500)
+        self.assertEqual(y.total_coins, 0)
+        self.assertEqual(ps.refund_all_open(self.s), 0)
+        self.assertEqual(x.total_coins, 500)
 
 
 # ── post-match hook ──────────────────────────────────────────────────

@@ -6845,7 +6845,7 @@ async def _end_innings(ctx, mid):
                             bool(s.get("is_vsbot")), winner_uid)
                     except Exception:
                         logger.exception("Match-end quest tracking failed")
-            # Ranked ladder, rivalry and spectator predictions (services.post_match).
+            # Ranked ladder and rivalry (services.post_match).
             if m and not s.get("is_spectator") and not s.get("is_bot_vs_bot"):
                 from services.post_match import process_completed_match
                 process_completed_match(
@@ -7066,7 +7066,7 @@ async def _end_innings(ctx, mid):
         summary_msg = f"<blockquote expandable>{msg}</blockquote>"
         sent = await ctx.bot.send_message(cid, summary_msg, parse_mode="HTML")
 
-        # Ranked / rivalry / predictions card (no-op when there is nothing).
+        # Ranked / rivalry card (no-op when there is nothing).
         if not s.get("is_spectator"):
             from services.post_match import announce as _announce_post_match
             await _announce_post_match(ctx.bot, cid, mid)
