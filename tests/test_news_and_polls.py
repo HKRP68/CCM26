@@ -24,7 +24,8 @@ _ENGINE = None
 _MODULE_NAMES = ("database", "models", "config", "services.news_service",
                  "services.poll_service", "services.news_banner",
                  "services.activity_service", "services.display_name",
-                 "services.tournament_service", "services.auction_service")
+                 "services.tournament_service", "services.auction_service",
+                 "services.hall_of_fame")
 
 
 def setUpModule():
@@ -305,6 +306,163 @@ class AuctionHookTests(_DbCase):
         story = self.db.query(NewsArticle).one()
         self.assertEqual(story.kind, "auction_record")
         self.assertIn("Player 5", story.headline)
+
+
+class ReviewFixTests(_DbCase):
+    """Regression tests for the PR #465 review findings."""
+
+    def test_decompression_bomb_is_refused_before_decoding(self):
+        from PIL import Image
+        from services import news_service as ns
+        buf = io.BytesIO()
+        Image.new("L", (6000, 6000), 0).save(buf, "PNG")
+        self.assertLess(len(buf.getvalue()), ns.MAX_IMAGE_BYTES)
+        with mock.patch.object(Image.Image, "load", side_effect=AssertionError("decoded")):
+            with self.assertRaises(ValueError) as caught:
+                ns.normalise_image(buf.getvalue())
+        self.assertIn("too large", str(caught.exception))
+
+    def _pending(self, author):
+        from services import news_service as ns
+        article = ns.submit_user_article(self.db, author, headline="Race condition story",
+                                         body=BODY)
+        self.db.commit()
+        return article.id
+
+    def test_concurrent_approvals_pay_once(self):
+        from database import get_session
+        from models import NewsArticle, User
+        from services import news_service as ns
+        author = self.user(coins=0)
+        aid = self._pending(author)
+        bot, web = get_session(), get_session()
+        try:
+            a_bot, a_web = bot.get(NewsArticle, aid), web.get(NewsArticle, aid)
+            self.assertEqual((a_bot.status, a_web.status), ("pending", "pending"))
+            self.assertEqual(ns.approve(bot, a_bot, reviewer="@bot"), 100)
+            bot.commit()
+            self.assertIsNone(ns.approve(web, a_web, reviewer="web"))
+            self.assertFalse(ns.reject(web, a_web, reviewer="web", note="late"))
+            web.commit()
+        finally:
+            bot.close(); web.close()
+        self.db.expire_all()
+        self.assertEqual(self.db.get(User, author.id).total_coins, 100)
+        self.assertEqual(self.db.get(NewsArticle, aid).status, "published")
+
+    def test_reject_then_approve_loses(self):
+        from database import get_session
+        from models import NewsArticle, User
+        from services import news_service as ns
+        author = self.user(coins=0)
+        aid = self._pending(author)
+        one, two = get_session(), get_session()
+        try:
+            a1, a2 = one.get(NewsArticle, aid), two.get(NewsArticle, aid)
+            self.assertTrue(ns.reject(one, a1, reviewer="x", note="spam"))
+            one.commit()
+            self.assertIsNone(ns.approve(two, a2, reviewer="y"))
+            two.commit()
+        finally:
+            one.close(); two.close()
+        self.db.expire_all()
+        self.assertEqual(self.db.get(User, author.id).total_coins or 0, 0)
+
+    def test_read_race_does_not_error_or_double_count(self):
+        from database import get_session
+        from models import NewsRead
+        from services import news_service as ns
+        reader = self.user()
+        article = ns.create_admin_article(self.db, headline="Opened twice at once",
+                                          body=BODY)
+        self.db.commit()
+        # The session has already looked (no read row)… then a parallel request
+        # writes one before this session inserts.
+        other = get_session()
+        other.add(NewsRead(article_id=article.id, user_id=reader.id))
+        other.commit(); other.close()
+        # Hide that row from this session's "already read?" check, as if it had
+        # looked a moment before the other request committed.
+        with mock.patch("sqlalchemy.orm.Query.first", side_effect=[None]):
+            data = ns.get_article(self.db, reader, article.id)
+        self.db.commit()
+        self.assertIsNotNone(data)
+        self.db.refresh(article)
+        self.assertEqual(article.view_count or 0, 0)
+
+    def test_hall_of_fame_posts_only_the_best_new_entry(self):
+        from types import SimpleNamespace
+        from models import HallOfFameEntry, NewsArticle
+        from services import hall_of_fame as hof
+        self.db.add(HallOfFameEntry(category="bat_score", value=100, tiebreak=0,
+                                    label="100 (60)", player_name="Old Guard"))
+        self.db.commit()
+        rows = [dict(category="bat_score", value=110, tiebreak=0, label="110 (61)",
+                     player_name="First Beater"),
+                dict(category="bat_score", value=130, tiebreak=0, label="130 (70)",
+                     player_name="Real Record")]
+        match = SimpleNamespace(id=None, completed_at=datetime.utcnow())
+        sc_row = SimpleNamespace(scorecard_json="{}", created_at=datetime.utcnow())
+        with mock.patch.object(hof, "_eligible", return_value=True), \
+                mock.patch.object(hof, "_owners", return_value=(None, None)), \
+                mock.patch.object(hof, "entries_from_scorecard", return_value=rows):
+            hof.harvest_match(self.db, match, sc_row)
+        self.db.commit()
+        stories = self.db.query(NewsArticle).all()
+        self.assertEqual(len(stories), 1)
+        self.assertIn("Real Record", stories[0].headline)
+        self.assertIn("Old Guard", stories[0].body)
+
+    def test_deleting_a_final_retracts_the_champion_story(self):
+        from models import NewsArticle, Tournament, TournamentTeam, TournamentMatch
+        from services import tournament_service
+        tour = Tournament(name="Replay Cup", kind="letsplay")
+        self.db.add(tour); self.db.flush()
+        a = TournamentTeam(tournament_id=tour.id, name="Alphas")
+        b = TournamentTeam(tournament_id=tour.id, name="Betas")
+        self.db.add_all([a, b]); self.db.flush()
+        final = TournamentMatch(tournament_id=tour.id, team1_id=a.id, team2_id=b.id,
+                                winner_team_id=a.id, stage="final", status="completed",
+                                match_no=1)
+        self.db.add(final); self.db.flush()
+        tournament_service._champion_news(self.db, tour, final)
+        self.db.commit()
+        tournament_service.delete_tournament_match(self.db, final.id)
+        self.db.commit()
+        self.assertEqual(self.db.query(NewsArticle).count(), 0)
+        final.status, final.winner_team_id = "completed", b.id
+        self.db.flush()
+        tournament_service._champion_news(self.db, tour, final)
+        self.db.commit()
+        self.assertIn("Betas", self.db.query(NewsArticle).one().headline)
+
+    def test_announce_waits_for_commit_and_skips_rollback(self):
+        from services import news_service as ns
+        ns.save_settings(self.db, submit_reward_coins=100, auto_publish=True,
+                         auto_announce=True, auto_kinds=list(ns.AUTO_KINDS))
+        self.db.commit()
+        from models import NewsRead
+        reader = self.user()
+        with mock.patch("services.news_announce.in_background") as dispatch:
+            story = ns.auto_story(self.db, "season_winners", "season:a", "Winners A",
+                                  "Body", render_banner=False)
+            dispatch.assert_not_called()
+            # A savepoint rolling back later in the same transaction (here a
+            # losing duplicate insert) must not drop the queued announcement.
+            self.assertTrue(ns._insert_once(self.db, NewsRead(article_id=story.id,
+                                                              user_id=reader.id)))
+            self.assertFalse(ns._insert_once(self.db, NewsRead(article_id=story.id,
+                                                               user_id=reader.id)))
+            dispatch.assert_not_called()   # savepoint release is not the commit
+            self.db.commit()
+            self.assertEqual(dispatch.call_count, 1)
+            self.assertEqual(dispatch.call_args.args[1], story.id)
+
+            ns.auto_story(self.db, "season_winners", "season:b", "Winners B",
+                          "Body", render_banner=False)
+            self.db.rollback()
+            self.user()          # an unrelated later commit
+            self.assertEqual(dispatch.call_count, 1)
 
 
 class PollTests(_DbCase):

@@ -42,6 +42,12 @@ UNREAD_WINDOW = timedelta(hours=24)
 HEADLINE_MIN, HEADLINE_MAX = 8, 160
 BODY_MIN, BODY_MAX = 30, 5000
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
+# The byte cap bounds the *compressed* file only. A flat-colour PNG of
+# 13000×13000 is a few KB and over 1 GB once decoded — and Flask runs inside
+# the bot process — so the decoded size is capped too, read from the header
+# before anything is decoded.
+MAX_IMAGE_PIXELS = 25_000_000   # ~5000×5000
+_TOO_LARGE = "The image is too large — use one under 5000×5000px."
 IMAGE_MAX_WIDTH = 1280
 # Every submission is a DM an admin has to action.
 DAILY_SUBMISSION_CAP = 3
@@ -122,10 +128,18 @@ def normalise_image(raw):
         raise ValueError(f"The image is {len(raw) / 1024 / 1024:.1f} MB. "
                          f"The limit is {MAX_IMAGE_BYTES // 1024 // 1024} MB.")
     try:
-        probe = Image.open(io.BytesIO(raw))
+        probe = Image.open(io.BytesIO(raw))   # reads the header only
+        width, height = probe.size
+    except Exception:
+        raise ValueError("That does not look like an image. Use a JPG or PNG.")
+    if width * height > MAX_IMAGE_PIXELS:
+        raise ValueError(_TOO_LARGE)
+    try:
         probe.verify()
         image = Image.open(io.BytesIO(raw))
         image.load()
+    except Image.DecompressionBombError:
+        raise ValueError(_TOO_LARGE)
     except Exception:
         raise ValueError("That does not look like an image. Use a JPG or PNG.")
     if min(image.size) < 120:
@@ -270,48 +284,75 @@ def submit_user_article(db, user, *, headline, body, image_raw=None):
     return article
 
 
+def _claim(db, article, values):
+    """Move a pending article to a decision, first writer wins.
+
+    One conditional UPDATE, so the bot and the website — separate sessions,
+    possibly separate admins pressing at the same instant — cannot both see
+    ``pending`` and both decide. Returns True only for the call that won.
+    """
+    from sqlalchemy import update
+    from models import NewsArticle
+    if article is None or article.id is None:
+        return False
+    won = db.execute(
+        update(NewsArticle)
+        .where(NewsArticle.id == article.id,
+               NewsArticle.status == STATUS_PENDING)
+        .values(**values)
+        .execution_options(synchronize_session=False)).rowcount
+    db.refresh(article)
+    return won == 1
+
+
+def _credit_coins(db, user_id, amount):
+    """Add coins with an SQL increment — a Python read-modify-write would lose
+    a balance change made by another session in between."""
+    from sqlalchemy import func, update
+    from models import User
+    db.execute(update(User).where(User.id == user_id)
+               .values(total_coins=func.coalesce(User.total_coins, 0) + amount)
+               .execution_options(synchronize_session=False))
+    for obj in list(db.identity_map.values()):
+        if isinstance(obj, User) and obj.id == user_id:
+            db.expire(obj, ["total_coins"])
+
+
 def approve(db, article, *, reviewer=None, reward_coins=None):
     """Publish a pending article and pay its author once.
 
-    Returns the coins paid (0 when none), or None when the article was not
-    pending — so the bot and the website can race without double-publishing.
+    Returns the coins paid (0 when none), or None when this call did not win
+    the decision (already decided, or another reviewer got there first).
     """
-    from models import User
-    if article is None or article.status != STATUS_PENDING:
-        return None
     now = datetime.utcnow()
-    article.status = STATUS_PUBLISHED
-    article.published_at = now
-    article.decided_at = now
-    article.reviewed_by = (reviewer or "admin")[:80]
+    values = {"status": STATUS_PUBLISHED, "published_at": now, "decided_at": now,
+              "reviewed_by": (reviewer or "admin")[:80], "reward_paid": True}
     if reward_coins is not None:
-        article.reward_coins = max(0, int(reward_coins))
+        values["reward_coins"] = max(0, int(reward_coins))
+    if not _claim(db, article, values):
+        return None
     paid = 0
     if (article.source == SOURCE_USER and article.author_user_id
-            and not article.reward_paid and (article.reward_coins or 0) > 0):
-        user = db.get(User, article.author_user_id)
-        if user is not None:
-            paid = int(article.reward_coins)
-            user.total_coins = (user.total_coins or 0) + paid
-            try:
-                from services.activity_service import log_activity
-                log_activity(db, user.id, "news_reward",
-                             f"News approved: {article.headline[:80]}",
-                             coins_change=paid)
-            except Exception:
-                logger.exception("news: activity log failed")
-    article.reward_paid = True
+            and (article.reward_coins or 0) > 0):
+        paid = int(article.reward_coins)
+        _credit_coins(db, article.author_user_id, paid)
+        try:
+            from services.activity_service import log_activity
+            log_activity(db, article.author_user_id, "news_reward",
+                         f"News approved: {article.headline[:80]}",
+                         coins_change=paid)
+        except Exception:
+            logger.exception("news: activity log failed")
     return paid
 
 
 def reject(db, article, *, reviewer=None, note=None):
-    """Reject a pending article. Returns False if it was not pending."""
-    if article is None or article.status != STATUS_PENDING:
+    """Reject a pending article. Returns False if this call did not win."""
+    values = {"status": STATUS_REJECTED, "decided_at": datetime.utcnow(),
+              "reviewed_by": (reviewer or "admin")[:80],
+              "review_note": (note or "")[:300] or None}
+    if not _claim(db, article, values):
         return False
-    article.status = STATUS_REJECTED
-    article.decided_at = datetime.utcnow()
-    article.reviewed_by = (reviewer or "admin")[:80]
-    article.review_note = (note or "")[:300] or None
     _drop_image(db, article)
     return True
 
@@ -395,6 +436,23 @@ def reaction_counts(db, article_id):
     return {e: int(counts.get(e, 0)) for e in REACTIONS}
 
 
+def _insert_once(db, row):
+    """Insert a row guarded by a unique constraint; False if one already exists.
+
+    The SELECT-then-INSERT callers can lose a race to a concurrent request from
+    the same user (a double tap); the savepoint keeps that loss from poisoning
+    the caller's transaction.
+    """
+    from sqlalchemy.exc import IntegrityError
+    try:
+        with db.begin_nested():
+            db.add(row)
+            db.flush()
+        return True
+    except IntegrityError:
+        return False
+
+
 def get_article(db, user, article_id):
     """Full article for the reader; marks it read (first view counts once)."""
     from models import NewsArticle, NewsRead, NewsReaction
@@ -404,10 +462,14 @@ def get_article(db, user, article_id):
     seen = (db.query(NewsRead)
             .filter(NewsRead.article_id == article.id, NewsRead.user_id == user.id)
             .first())
-    if seen is None:
-        db.add(NewsRead(article_id=article.id, user_id=user.id))
-        article.view_count = (article.view_count or 0) + 1
-        db.flush()
+    if seen is None and _insert_once(db, NewsRead(article_id=article.id,
+                                                  user_id=user.id)):
+        # Counted in SQL: two readers opening at once must both count.
+        from sqlalchemy import func, update
+        db.execute(update(NewsArticle).where(NewsArticle.id == article.id)
+                   .values(view_count=func.coalesce(NewsArticle.view_count, 0) + 1)
+                   .execution_options(synchronize_session=False))
+        db.refresh(article)
     mine = (db.query(NewsReaction.emoji)
             .filter(NewsReaction.article_id == article.id,
                     NewsReaction.user_id == user.id)
@@ -436,14 +498,40 @@ def react(db, user, article_id, emoji):
            .first())
     mine = emoji
     if row is None:
-        db.add(NewsReaction(article_id=article.id, user_id=user.id, emoji=emoji))
-    elif row.emoji == emoji:
+        if _insert_once(db, NewsReaction(article_id=article.id, user_id=user.id,
+                                         emoji=emoji)):
+            return {"reactions": reaction_counts(db, article.id), "my_reaction": mine}
+        # A concurrent tap inserted first — act on the row it wrote.
+        row = (db.query(NewsReaction)
+               .filter(NewsReaction.article_id == article.id,
+                       NewsReaction.user_id == user.id)
+               .one())
+    if row.emoji == emoji:
         db.delete(row)
         mine = None
     else:
         row.emoji = emoji
     db.flush()
     return {"reactions": reaction_counts(db, article.id), "my_reaction": mine}
+
+
+def retract_auto_story(db, dedupe_key):
+    """Delete the auto story behind ``dedupe_key`` so a corrected one can be
+    written — e.g. a tournament final whose result was removed. Never raises."""
+    from models import NewsArticle
+    try:
+        article = (db.query(NewsArticle)
+                   .filter(NewsArticle.dedupe_key == dedupe_key,
+                           NewsArticle.source == SOURCE_AUTO).first())
+        if article is None:
+            return False
+        with db.begin_nested():
+            delete(db, article)
+            db.flush()
+        return True
+    except Exception:
+        logger.exception("news: could not retract %s", dedupe_key)
+        return False
 
 
 def pending_count(db):
@@ -501,27 +589,51 @@ def auto_story(db, kind, dedupe_key, headline, body, *, kicker=None, image_png=N
                 db.flush()
         logger.info("news: auto story #%s (%s) %s", article.id, kind, headline)
         if publish and conf["auto_announce"]:
-            _queue_announce(article.id)
+            _queue_announce(db, article.id)
         return article
     except Exception:
         logger.exception("news: auto story %s failed", kind)
         return None
 
 
-def _queue_announce(article_id):
-    """Announce after the caller commits: a short delay then a fresh read."""
-    import threading
+_ANNOUNCE_KEY = "news_announce_ids"
 
-    def _later():
-        import time
-        time.sleep(3)
-        try:
-            from services.news_announce import announce_article
-            announce_article(article_id)
-        except Exception:
-            logger.exception("news: auto announce failed")
 
+def _queue_announce(db, article_id):
+    """Announce once the caller's outer transaction commits.
+
+    The announce runs in a new session, so it can only see the article after
+    the commit; a timer is no transaction boundary. Only the outer commit
+    dispatches (savepoint releases are skipped), and an outer rollback drops
+    the queue so a story that never landed is never announced.
+    """
+    from sqlalchemy import event
+    pending = db.info.setdefault(_ANNOUNCE_KEY, [])
+    pending.append(article_id)
+    if not event.contains(db, "after_commit", _flush_announces):
+        event.listen(db, "after_commit", _flush_announces)
+        event.listen(db, "after_soft_rollback", _clear_announces)
+
+
+def _flush_announces(session):
+    # after_commit also fires when a *savepoint* is released (the read and
+    # reaction inserts use them); only the outer commit makes the story visible
+    # to the announcer's own session.
+    if session.in_nested_transaction():
+        return
+    ids = session.info.pop(_ANNOUNCE_KEY, None) or []
+    if not ids:
+        return
     try:
-        threading.Thread(target=_later, daemon=True).start()
+        from services.news_announce import announce_article, in_background
+        for article_id in ids:
+            in_background(announce_article, article_id)
     except Exception:
-        logger.exception("news: could not spawn announce thread")
+        logger.exception("news: could not dispatch announcements %s", ids)
+
+
+def _clear_announces(session, previous_transaction):
+    # Fires for savepoint rollbacks too (auto_story's own, the read/reaction
+    # inserts); only the outer transaction rolling back loses the stories.
+    if previous_transaction.parent is None:
+        session.info.pop(_ANNOUNCE_KEY, None)

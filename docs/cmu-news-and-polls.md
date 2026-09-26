@@ -23,7 +23,7 @@ A submission is stored as `pending`, and every bot admin gets a DM with the imag
 - The first decision wins. A second press, or a decision from the other surface, is refused because the story is no longer pending.
 - On approval the author gets their coins, **once**. The default is 100, and it can be changed under Settings or per story on the website.
 - The author is DMed either way.
-- Limits: headline 8–160 characters, article 30–5000, image up to 5 MB (re-encoded to JPEG, max 1280px wide, EXIF stripped). Each player can submit 3 stories a day.
+- Limits: headline 8–160 characters, article 30–5000, image up to 5 MB and 25 megapixels, checked from the header before decoding (re-encoded to JPEG, max 1280px wide, EXIF stripped). Each player can submit 3 stories a day.
 
 ### Auto-generated stories
 

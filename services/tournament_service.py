@@ -1049,6 +1049,11 @@ def delete_tournament_match(session, tournament_match_id):
     if not tm:
         return None
     tid = tm.tournament_id
+    # A removed final takes its champion story with it — otherwise that story's
+    # dedupe key would block the one for the corrected result.
+    if tm.stage == "final" and tm.status == "completed":
+        from services.news_service import retract_auto_story
+        retract_auto_story(session, f"tourney:{tid}")
     # Undo any knockout advancement this result caused, so the next round doesn't
     # keep showing the now-removed team as qualified.
     try:

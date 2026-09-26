@@ -191,14 +191,28 @@ def harvest_match(session, match, scorecard_row, post_row=None):
     rows = entries_from_scorecard(sc, match=match, team_owner=team_owner,
                                   innings_owner=innings_owner)
     when = match.completed_at or scorecard_row.created_at
+    # Each board's leader as it stood *before* this match, read before any of
+    # the match's own entries are added.
+    previous_best = {cat: _board_top(session, cat)
+                     for cat in {r.get("category") for r in rows}}
+    best_new = {}
     for r in rows:
-        previous_best = _board_top(session, r.get("category"))
         entry = HallOfFameEntry(match_id=match.id, achieved_at=when,
                                 **{k: (v[:120] if isinstance(v, str) else v)
                                    for k, v in r.items()})
         session.add(entry)
-        _record_news(session, entry, previous_best, when)
+        top = best_new.get(entry.category)
+        if top is None or _rank(entry) > _rank(top):
+            best_new[entry.category] = entry
+    # One story per board per match, about the match's best entry — never one
+    # for a performance already overtaken in the same match.
+    for cat, entry in best_new.items():
+        _record_news(session, entry, previous_best.get(cat), when)
     return len(rows)
+
+
+def _rank(entry):
+    return (entry.value, entry.tiebreak or 0)
 
 
 # Only a record set recently is news — the first scan back-fills years of
@@ -221,8 +235,7 @@ def _record_news(session, entry, previous_best, when):
             return
         if datetime.utcnow() - when > timedelta(hours=RECORD_NEWS_MAX_AGE_HOURS):
             return
-        if (entry.value, entry.tiebreak or 0) <= (previous_best.value,
-                                                  previous_best.tiebreak or 0):
+        if _rank(entry) <= _rank(previous_best):
             return
         from services.news_service import auto_story
         title, emoji = MATCH_CATEGORIES.get(entry.category, ("Hall of Fame record", "🌟"))
