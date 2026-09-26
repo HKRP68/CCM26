@@ -77,6 +77,16 @@ DEFAULTS = {
     # everyone until an admin turns it on. See services/rookie_gate.py.
     "rookie_mode": False,
     "rookie_message": None,
+    # Forced Official GC join — OFF by default. See services/gc_gate.py.
+    "force_gc_join": False,
+    "gc_join_message": None,
+    "official_group_id": None,
+    "official_group_link": None,
+    "branding_group_username": None,
+    # Retention: guided first session + comeback DMs.
+    "onboarding_enabled": True,
+    "comeback_enabled": True,
+    "comeback_rewards_json": None,
     "tournament_allowed_ids": None,
     # Match gameplay style. Telegram restores the original in-chat buttons;
     # webapp opts every newly started match into the Mini App board.

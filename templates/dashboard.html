@@ -402,6 +402,56 @@
   </div>
 </div>
 
+{% if retention.cohorts %}
+{% set rc = retention.cohorts %}
+<!-- New-player retention: cohorts by /debut day + onboarding funnel -->
+<div class="twocol">
+  <div class="panel">
+    <h3>🧪 New-Player Retention <span class="retention-sub">— share of each /debut-day cohort active N days later (IST)</span></h3>
+    <div class="retention-kpis">
+      <div class="ret-kpi accent-teal"><span class="lbl">Day 1</span>
+        <span class="num">{{ rc.avg_d1 if rc.avg_d1 is not none else '—' }}{% if rc.avg_d1 is not none %}%{% endif %}</span>
+        <span class="sub">came back the next day</span></div>
+      <div class="ret-kpi accent-gold"><span class="lbl">Day 7</span>
+        <span class="num">{{ rc.avg_d7 if rc.avg_d7 is not none else '—' }}{% if rc.avg_d7 is not none %}%{% endif %}</span>
+        <span class="sub">active a week later</span></div>
+      <div class="ret-kpi accent-purple"><span class="lbl">Day 30</span>
+        <span class="num">{{ rc.avg_d30 if rc.avg_d30 is not none else '—' }}{% if rc.avg_d30 is not none %}%{% endif %}</span>
+        <span class="sub">active a month later</span></div>
+    </div>
+    <table class="cohort-table" style="width:100%;border-collapse:collapse;font-size:.85rem;">
+      <thead><tr><th style="text-align:left;">Cohort</th><th>New</th><th>D1</th><th>D7</th><th>D30</th></tr></thead>
+      <tbody>
+      {% for r in rc.cohorts[:14] %}
+        <tr>
+          <td>{{ r.label }}</td><td style="text-align:center;">{{ r.size }}</td>
+          {% for k in ['d1','d7','d30'] %}
+            {% set v = r[k] %}
+            <td style="text-align:center;{% if v is not none %}background:rgba(0,201,167,{{ '%.2f'|format(0.08 + v/100*0.6) }});{% endif %}">
+              {{ v ~ '%' if v is not none else '·' }}</td>
+          {% endfor %}
+        </tr>
+      {% else %}
+        <tr><td colspan="5" style="color:var(--muted);">No new players in this window yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="panel">
+    <h3>🧭 New-Player Funnel <span class="retention-sub">— last {{ rc.days }} days</span></h3>
+    {% for f in rc.funnel %}
+      <div style="margin:.45rem 0;">
+        <div style="display:flex;justify-content:space-between;font-size:.85rem;">
+          <span>{{ f.label }}</span><strong>{{ f.count }}</strong></div>
+        <div style="background:var(--border);border-radius:4px;height:10px;">
+          <div style="width:{{ [f.pct, 1]|max }}%;height:10px;border-radius:4px;background:#00C9A7;"></div>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 <!-- Charts -->
 <div class="twocol">
   <div class="panel">

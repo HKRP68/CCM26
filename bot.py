@@ -100,6 +100,10 @@ from handlers.challenge import (
     challenge_xi_useprev_callback,
     challenge_pitch_callback, challenge_deny_match_callback,
 )
+from handlers.onboarding import (
+    send_start_card, commands_handler, gcjoin_check_callback,
+    onboarding_callback, comeback_claim_callback,
+)
 from handlers.unscramble import unscramble_handler, join_handler as unscramble_join_handler, exit_handler as unscramble_exit_handler, start_handler as unscramble_start_handler, cancel_handler as unscramble_cancel_handler, answer_callback as unscramble_answer_callback
 from handlers.report import report_handler
 from handlers.coins2gems import coins2gems_handler, coins2gems_callback
@@ -547,7 +551,7 @@ def is_forward_only_mode() -> bool:
     }
 
 BOT_MENU_COMMANDS = (
-    ("start", "Show the welcome message and command overview"),
+    ("start", "Welcome card: what to do next and what is ready"),
     ("debut", "Create your account and receive a starting squad"),
     ("claim", "Claim your hourly player and coin reward"),
     ("gspin", "Lucky Card Pick — pick a card, win a reward"),
@@ -1055,110 +1059,12 @@ async def start_handler(update, context):
         await send_ipl160_launch(update, context)
         return
 
-    await update.message.reply_text(
-        "🏏 <b>Welcome to Cricket Simulator Bot!</b>\n\n"
-        "Use /debut (or /d) to create your account and receive your starting squad.\n"
-        + _get_start_rookie_notice() +
-        "\n<b>Commands</b> <i>(short aliases in brackets)</i>:\n"
-        "/debut /d - Create account & get your starter XI\n"
-        "/claim /c - Claim 1 player + coins (hourly)\n"
-        "/daily /dl - Daily reward (24h)\n"
-        "/gspin /gs - Lucky Card Pick (8h)\n"
-        "/myroster /mr - View your roster\n"
-        "/playingxi /pxi /xi - Playing XI\n"
-        "/ximage /xiimg - Playing XI as an image\n"
-        "/playerinfo /pi [name] - Player details\n"
-        "/stats /st [name] - Player game stats\n"
-        "/gstats [name] - Global stats — every owner, every match type\n"
-        "/owners [name] - Who owns this player in this group\n"
-        "/searchpl /sp [name] - Search player\n"
-        "/searchovr /so [rating] - Search by OVR\n"
-        "/buypl /buy /b [name] - Buy a player\n"
-        "/swapplayers /swap [n1] [n2] - Swap positions\n"
-        "/setcaptain /cap [name] - Set captain\n"
-        "/teamname /tn [name] - Set team name\n"
-        "/setteamlogo - Set your team crest (DM, needs admin approval)\n"
-        "/setteamcolour [#hex] - Set your team's scorecard colour\n"
-        "/purse /p - Check balance\n"
-        "/catch [bet] [height] - Risk purse coins in the catching game\n"
-        "/cm @user - Two-wicket challenge mode\n"
-        "/cdraft - Challenge Draft: someone joins, then you both build an XI "
-        "pick by pick from the full player pool (11 slots, two same-role cards "
-        "a slot — you take one, your opponent gets the other), and play it out\n"
-        "/letsplay /lp [overs] @user - Reply or tag to play with your own roster "
-        "(20 overs, or 1-20: /lp 5 @user)\n"
-        "/lptour @user - Play your Lets Play Tournament fixture (official result)\n"
-        "/lpt - Lets Play Tournament hub: table, fixtures, teams\n"
-        "/lptable /lptfixtures /lptteams /lptstats - Tournament table, schedule, field, leaders\n"
-        "/pick <player> - Tournament Draft: make your pick when you're on the clock\n"
-        "/dboard /dsquad /dqueue - Draft board, your squad, your auto-pick wishlist\n"
-        "/dtrade /dtrades - Trade players with another franchise once the draft is done\n"
-        "\n<b>Franchise Auction</b>\n"
-        "/bid [amount] - Bid for the player on the block (bare /bid = the next minimum)\n"
-        "/aboard - The live auction board\n"
-        "/apurse [franchise] - Every purse, or one franchise's squad\n"
-        "/artm yes|no - Answer a Right To Match on your former player\n"
-        "/ainfo - Rules, sets, next player, squads, purses, sold & unsold — as buttons\n"
-        "/arules - Purse, squad caps, base prices, bid steps, the clock — before you bid\n"
-        "/asets /anextset /anextplayer - The sets, the next set, who is up next\n"
-        "/asquad [team] /asoldlist /aunsoldlist - Squads, sold and unsold players\n"
-        "/aretlock /apicks - Who kept whom, and the expansion picks\n"
-        "/aleaderboard /amybids - Who has spent most; your own bid history\n"
-        ".bid .purse .squad .board .lb - Dot shortcuts in the auction group\n"
-        "/ctour - Challenge League Tournament hub: table, fixtures, teams\n"
-        "/cttable /ctfixtures /ctteams - Tournament table, schedule (done matches struck through), field\n"
-        "/ctinjuries - Who is ruled out injured, and for how many more matches 🚑\n"
-        "/clsd <team> - One team's schedule: standing, form, next matches, results\n"
-        "/teamtourstats [team] - Your team's tournament by the numbers: standing, "
-        "what you score and concede, best and worst totals, and your top run-scorers "
-        "and wicket-takers\n"
-        "/mvp - Tournament Most Valuable Player: batting + bowling + wins + POTM "
-        "awards in one impact-point total\n"
-        "/remindmatch [team] [vs team] - Admin: nudge two teams to play what "
-        "they still owe — posts here and DMs both sides' owners and co-owners\n"
-        "/pitchstats /ps [pitch] - What each pitch actually does in Lets Play & "
-        "League matches: runs/over, wickets/over, bat-first vs chasing win %, "
-        "and which approaches earn\n"
-        "/rank [@user] - Your ranked rating, division and ladder position 📈\n"
-        "/ranked - This season's ranked ladder (paid by division at month end)\n"
-        "/rivalry [@user] - Your rivalries, or the series with one player ⚔️\n"
-        "/halloffame /hof - All-time records: top scores, best figures, streaks 🏛️\n"
-        "/challengeIPL /cipl [overs] - Reply to a user to start an IPL challenge "
-        "(20 overs, or 1-20: /cipl 6)\n"
-        "/challengeBBL /cbbl - Reply to a user to start a BBL challenge\n"
-        "/challengeINT /cint - Reply to a user to start an international challenge\n"
-        "/unscramble - Create an Unscramble Player lobby\n"
-        "/release /rel [name|pos] - Release for coins\n"
-        "/releasemultiple /relm [from] [to] - Range release\n"
-        "/trade /tr @user - Trade players\n"
-        "/playmatch /pm @user - Play a match\n"
-        "/wpm [overs] [@user] - Match lobby up to 20 overs; tag/reply to invite a player (Mini App)\n"
-        "/vsbot [overs] - Play a bot opponent in chat\n"
-        "/wpmbot [overs] - Play a bot opponent in the Mini App (up to 20 overs)\n"
-        "/lpbot /lpb - Practice Lets Play vs the bot, your roster, 20 overs (unranked)\n"
-        "/ciplbot /ciplb [league] - Practice a league match vs the bot (unranked)\n"
-        "/endmatch /em - End match (fine applies)\n"
-        "/clearmatches - Players in the match (or a bot admin) clear stuck matches here (no winner)\n"
-        "/removematch @user - Admin: remove a player stuck in a match\n"
-        "/resume /r - If buttons disappear mid-match\n"
-        "/rcl - Resume a stuck Challenge League (/cipl) match\n"
-        "/botstatus - Bot ping, uptime & status\n"
-        "/myprofile /me - Your profile\n"
-        "/traits /tt - Your traits & inventory\n"
-        "/traitlist /tlist - Every trait, effect and price\n"
-        "/traitboost - What your equipped traits add to your XI's Team Overall ⚡\n"
-        "/traitshop /tshop - Daily trait shop\n"
-        "/traitapply /tapply - Apply trait to player\n"
-        "/traitupgrade /tup - Level up a trait\n"
-        "/traitreplace /trep - Replace a trait\n"
-        "/removetrait /rtrait - Remove a trait (back to inventory)\n"
-        "/selltrait /tsell - Sell an inventory trait for gems\n"
-        "/tradetrait /ttrade @user - Swap a trait, same level both ways\n"
-        "/leaderboard /lb /top - Leaderboard"
-        + _get_start_branding(),
-        parse_mode="HTML",
-        disable_web_page_preview=True,
-    )
+    # Bare /start: a short rich card instead of the full command wall — the
+    # newcomer's three steps, the running journey, or a "ready now" status.
+    # The full list lives behind /commands (services/command_catalog.py).
+    await send_start_card(
+        update, context,
+        extra_html=_get_start_rookie_notice() + _get_start_branding())
 
 
 def _get_start_rookie_notice():
@@ -1641,6 +1547,100 @@ def main():
                 logger.exception("Rookie gate failed (non-fatal)")
         app.add_handler(TypeHandler(_TGUpdate, _rookie_check), group=-10)
 
+        # ── Last-seen tracker (group=-45) ──
+        # Stamps User.last_seen_at at most once an hour per user, off the event
+        # loop. The comeback job (services/comeback_service.py) reads it to find
+        # who has gone quiet, and it clears a stale dm_blocked flag: someone
+        # talking to the bot has evidently unblocked it.
+        _seen_mem = {}
+        _SEEN_EVERY = 3600
+
+        async def _touch_last_seen(update, context):
+            try:
+                user = update.effective_user
+                if not user or user.is_bot:
+                    return
+                now = time.monotonic()
+                if now - _seen_mem.get(user.id, -_SEEN_EVERY) < _SEEN_EVERY:
+                    return
+                _seen_mem[user.id] = now
+                if len(_seen_mem) > 50000:
+                    _seen_mem.clear()
+                from services.comeback_service import touch_last_seen
+                asyncio.get_running_loop().run_in_executor(
+                    None, touch_last_seen, user.id)
+            except Exception:
+                pass
+        app.add_handler(TypeHandler(_TGUpdate, _touch_last_seen), group=-45)
+
+        # ── Official GC join gate (group=-12, just before the Rookie gate) ──
+        # While "Force Official GC join" is ON, every command and button is
+        # locked until the user joins the Official GC; doorway commands
+        # (/start, /debut, /help…) stay open — see services/gc_gate.py.
+        # Membership is cached per user: members for GC_CACHE_TTL_SECONDS
+        # (10 min), non-members for 30 s so a fresh join unlocks quickly even
+        # without the "I've joined" button. A failed lookup fails OPEN.
+        gc_member_ttl = float(os.getenv("GC_CACHE_TTL_SECONDS", "600"))
+        gc_nonmember_ttl = 30.0
+        gc_cache = {}
+        app.bot_data["gc_member_cache"] = gc_cache
+
+        async def _gc_check(update, context):
+            if _is_storage_only_command(update):
+                return
+            try:
+                from services import gc_gate
+                from services.config_service import get_config
+                cfg = get_config()
+                if not gc_gate.is_gc_gate_active(cfg):
+                    return
+                user_data = getattr(context, "user_data", None) or {}
+                allow_text = bool(user_data.get("awaiting_referral_code"))
+                bot_username = getattr(context.bot, "username", None)
+                if not gc_gate.needs_check(update, bot_username=bot_username,
+                                           cfg=cfg, allow_text=allow_text):
+                    return
+
+                user = update.effective_user
+                now = time.monotonic()
+                cached = gc_cache.get(user.id)
+                if cached and now < cached[0]:
+                    is_member = cached[1]
+                else:
+                    is_member = await gc_gate.check_membership(
+                        context.bot, gc_gate.official_group_id(cfg), user.id)
+                    if is_member is not None:
+                        ttl = gc_member_ttl if is_member else gc_nonmember_ttl
+                        gc_cache[user.id] = (now + ttl, is_member)
+                        if len(gc_cache) > 20000:
+                            for uid in [u for u, e in gc_cache.items() if e[0] < now]:
+                                gc_cache.pop(uid, None)
+                if not gc_gate.should_block_update(
+                        update, is_member=is_member, bot_username=bot_username,
+                        cfg=cfg, allow_text=allow_text):
+                    return
+
+                if gc_gate.should_reply(update, bot_username):
+                    try:
+                        if update.callback_query:
+                            await update.callback_query.answer(
+                                gc_gate.join_required_alert(), show_alert=True)
+                        elif update.message:
+                            await update.message.reply_text(
+                                gc_gate.join_required_message(
+                                    cfg, first_name=user.first_name),
+                                parse_mode="HTML",
+                                reply_markup=gc_gate.join_keyboard(cfg),
+                                disable_web_page_preview=True)
+                    except Exception:
+                        pass
+                raise ApplicationHandlerStop
+            except ApplicationHandlerStop:
+                raise
+            except Exception:
+                logger.exception("Official GC gate failed (non-fatal)")
+        app.add_handler(TypeHandler(_TGUpdate, _gc_check), group=-12)
+
         # ── Auction focus gate (group=-5, the last middleware) ──
         # While an auction bound to a group is live or paused, that group
         # answers auction commands and nothing else: a thirty-second clock and
@@ -1712,6 +1712,13 @@ def main():
         app.add_handler(CommandHandler(["botstatus", "bstatus", "ping"], botstatus_handler))
         app.add_handler(CommandHandler(["start", "s"], start_handler))
         app.add_handler(CommandHandler(["debut", "d"], debut_handler))
+        app.add_handler(CommandHandler(["commands", "cmds"], commands_handler))
+        app.add_handler(CallbackQueryHandler(gcjoin_check_callback,
+                                             pattern=r"^gcjoin_check$"))
+        app.add_handler(CallbackQueryHandler(onboarding_callback,
+                                             pattern=r"^onb_"))
+        app.add_handler(CallbackQueryHandler(comeback_claim_callback,
+                                             pattern=r"^comeback_claim_\d+$"))
         app.add_handler(CommandHandler(["claim", "c"], claim_handler))
         app.add_handler(CommandHandler(["gspin", "gs"], gspin_handler))
         app.add_handler(CommandHandler(["daily", "dl"], daily_handler))
@@ -3001,6 +3008,33 @@ def main():
                 logger.info("Cooldown notification job scheduled (every 5 min)")
         except Exception:
             logger.exception("Failed to schedule cooldown notifications")
+
+        # ── Retention jobs: journey cards + comeback nudges ──
+        try:
+            async def _onboarding_flush_job(context):
+                try:
+                    from services.onboarding_service import flush_pending
+                    await flush_pending(context.application.bot)
+                except Exception:
+                    logger.exception("Onboarding card flush failed")
+
+            async def _comeback_job(context):
+                try:
+                    from services.comeback_service import run_comeback_tick
+                    await run_comeback_tick(context.application)
+                except Exception:
+                    logger.exception("Comeback nudge tick failed")
+
+            if app.job_queue:
+                app.job_queue.run_repeating(_onboarding_flush_job, interval=20,
+                                            first=30, name="onboarding_cards")
+                comeback_every = int(os.getenv("COMEBACK_INTERVAL_SECONDS", "3600"))
+                app.job_queue.run_repeating(_comeback_job, interval=comeback_every,
+                                            first=300, name="comeback_nudges")
+                logger.info("Retention jobs scheduled (journey cards 20s, comeback %ss)",
+                            comeback_every)
+        except Exception:
+            logger.exception("Failed to schedule retention jobs")
 
         # ── Monthly season rollover safety net ──
         try:

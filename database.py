@@ -760,6 +760,13 @@ def _migrate_add_columns():
     # an admin turns the gate on from the website.
     _try_add("game_config", "rookie_mode", "BOOLEAN DEFAULT FALSE NOT NULL")
     _try_add("game_config", "rookie_message", "TEXT")
+    # Forced Official GC join + retention switches. The gate ships OFF; the
+    # onboarding journey and comeback DMs ship ON.
+    _try_add("game_config", "force_gc_join", "BOOLEAN DEFAULT FALSE NOT NULL")
+    _try_add("game_config", "gc_join_message", "TEXT")
+    _try_add("game_config", "onboarding_enabled", "BOOLEAN DEFAULT TRUE NOT NULL")
+    _try_add("game_config", "comeback_enabled", "BOOLEAN DEFAULT TRUE NOT NULL")
+    _try_add("game_config", "comeback_rewards_json", "TEXT")
     # Player card rendering — alternate admin-uploaded template card style
     _try_add("game_config", "card_style", "VARCHAR(20) DEFAULT 'tier' NOT NULL")
     _try_add("game_config", "card_template_image_path", "VARCHAR(300)")
@@ -879,6 +886,17 @@ def _migrate_add_columns():
     _try_add("users", "career_weekly_streak", "INTEGER DEFAULT 0")
     _try_add("users", "career_weekly_best_streak", "INTEGER DEFAULT 0")
     _try_add("users", "career_weekly_last_period", "VARCHAR(10)")
+    # Retention: DM reachability, last-seen, onboarding journey, comeback
+    # nudges. onboarding_started_at stays NULL on existing rows, which is what
+    # keeps pre-existing players out of the new-player checklist.
+    _try_add("users", "dm_blocked", "BOOLEAN DEFAULT FALSE NOT NULL")
+    _try_add("users", "last_seen_at", "TIMESTAMP")
+    _try_add("users", "onboarding_started_at", "TIMESTAMP")
+    _try_add("users", "onboarding_steps", "VARCHAR(300)")
+    _try_add("users", "onboarding_done_at", "TIMESTAMP")
+    _try_add("users", "comeback_tier", "INTEGER DEFAULT 0 NOT NULL")
+    _try_add("users", "comeback_sent_at", "TIMESTAMP")
+    _try_add("users", "comeback_claim_tier", "INTEGER")
     # Career-only quests are assigned solely to users who have a career player.
     _try_add("quests", "career_only", "BOOLEAN DEFAULT FALSE")
     # ── Trait rarity ──

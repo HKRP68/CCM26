@@ -150,6 +150,9 @@ UNPUBLISHED_ON_PURPOSE = {
     # Franchise Auction — /auction card, the board's footer, and the RTM
     # prompt itself, which names the owner and carries buttons.
     "bid", "artm", "aboard", "apurse",
+    # The full command catalogue. /start's card links it on every render
+    # (footer + "📋 All commands" button), so it needs no menu slot of its own.
+    "commands",
     # The auction's team views — every one is a button on /ainfo, and the
     # pinned board's footer names them.
     "ainfo", "asets", "anextset", "anextplayer", "asquad", "asoldlist",

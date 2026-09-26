@@ -283,6 +283,77 @@
   {% endif %}
 </div>
 
+<!-- Forced Official GC join (services/gc_gate.py) -->
+<div class="panel" style="border-color: {% if cfg.force_gc_join %}#2aa3ef{% else %}var(--border){% endif %};">
+  <h3>📢 Force Official GC Join</h3>
+  <p style="color:var(--muted);font-size:.9rem;margin-top:0;line-height:1.6;">
+    {% if cfg.force_gc_join %}
+      <strong style="color:#2aa3ef;">Status: ON</strong> — players must be in the
+      Official GC to use any command or button.
+    {% else %}
+      <strong style="color:var(--green,#00C9A7);">Status: OFF</strong> — joining is
+      encouraged (it is step one of the new-player journey) but not required.
+    {% endif %}
+  </p>
+  <ul style="color:var(--muted);line-height:1.7;padding-left:1.2rem;font-size:.88rem;">
+    <li><strong>Official GC:</strong>
+      {% if gc_group_id %}<code>{{ gc_group_id }}</code>{% if gc_join_url %} · <a href="{{ gc_join_url }}" target="_blank">{{ gc_join_url }}</a>{% else %} · <span style="color:#e55;">no invite link set</span>{% endif %}
+      {% else %}<span style="color:#e55;">not configured</span> — set it under Settings first{% endif %}</li>
+    <li><strong>The bot must be an admin in that group</strong>, or Telegram won't
+      tell it who is a member. If a lookup fails the gate lets the player through
+      rather than locking the bot.</li>
+    <li><strong>Still open before joining:</strong>
+      {% for command in gc_free_commands %}<code>/{{ command }}</code>{% if not loop.last %} {% endif %}{% endfor %}</li>
+    <li>Players get a <em>Join</em> link and an <em>✅ I've joined</em> button that
+      unlocks them instantly. Anything said inside the Official GC always works.</li>
+    <li>Admins on the bypass list are never locked out.</li>
+  </ul>
+  <form method="POST" action="{{ url_for('admin_maintenance') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-row">
+      <label>Custom join message (HTML allowed)</label>
+      <textarea name="gc_join_message" placeholder="Leave blank for the default">{{ cfg.gc_join_message or '' }}</textarea>
+    </div>
+    <div style="display:flex;gap:.6rem;flex-wrap:wrap;">
+      {% if cfg.force_gc_join %}
+      <button type="submit" name="action" value="gc_disable" class="btn btn-green">✅ Disable</button>
+      {% else %}
+      <button type="submit" name="action" value="gc_enable" class="btn btn-red"
+              onclick="return confirm('Force every player to join the Official GC before using the bot?')">
+        📢 Enable Force Join
+      </button>
+      {% endif %}
+      <button type="submit" name="action" value="gc_save" class="btn btn-blue">💾 Save Message</button>
+    </div>
+  </form>
+  {% if gc_preview %}
+  <div class="preview-box" style="margin-top:1rem;">{{ gc_preview|safe }}</div>
+  {% endif %}
+</div>
+
+<!-- Retention: onboarding journey + comeback DMs -->
+<div class="panel">
+  <h3>🔁 Retention</h3>
+  <form method="POST" action="{{ url_for('admin_maintenance') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-row">
+      <label><input type="checkbox" name="onboarding_enabled" value="1" {% if cfg.onboarding_enabled %}checked{% endif %}>
+        🧭 New-player journey: a checklist after <code>/debut</code> (join GC, claim, daily,
+        first match, pack, first win), each step paid once, plus a finale bonus.</label>
+    </div>
+    <div class="form-row">
+      <label><input type="checkbox" name="comeback_enabled" value="1" {% if cfg.comeback_enabled %}checked{% endif %}>
+        🎁 Comeback DMs: players quiet for 1 / 3 / 7 / 14 days get one DM per tier with a
+        reward to claim. Respects <code>/notifications</code> and quiet hours.</label>
+    </div>
+    <div class="form-row">
+      <label>Comeback rewards (JSON, days → reward; add <code>"enabled": false</code> to skip a tier)</label>
+      <textarea name="comeback_rewards_json" rows="6" style="font-family:monospace;">{{ comeback_rewards_text }}</textarea>
+    </div>
+    <button type="submit" name="action" value="retention_save" class="btn btn-blue">💾 Save Retention Settings</button>
+  </form>
+</div>
+
 <!-- Tournament command access panel (independent of maintenance) -->
 <div class="panel">
   <h3>🏆 Tournament Command Access</h3>

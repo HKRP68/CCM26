@@ -62,7 +62,7 @@ message (see `format_branding_html` in
 | 7 | Go to the group and play: `/letsplay @user`, `/cipl` (reply to someone), or `/lpbot` against the AI | Group |
 
 ```
-/start        →  welcome + the channel and group links
+/start        →  a short welcome card: the 3 steps to get going (or, later, what's ready to collect)
 /debut        →  create your account, get your starter XI
 /claim        →  first hourly player + coins
 /autobuild    →  best available XI picked for you
@@ -74,6 +74,16 @@ welcome messages for that chat, `/dwm` turns them off (group admins only).
 
 > **Members-only (Rookie) mode.** If the operator has turned Rookie mode on,
 > `/start` says so and most commands need a membership — see `/membership`.
+
+> **Official GC required.** If the operator has turned on *Force Official GC
+> join*, every command except `/start`, `/debut`, `/help`, `/feedback` and
+> `/commands` asks you to join the Official GC first. Tap **✅ I've joined**
+> once you're in and everything unlocks.
+
+> **New-player journey.** Right after `/debut` you get a checklist: join the
+> Official GC, `/claim`, `/daily`, play a first match, open a pack, win a match.
+> Each step pays coins/gems the first time, and finishing them all pays a bonus.
+> `/start` shows your progress until you're done.
 
 ---
 
@@ -93,7 +103,8 @@ welcome messages for that chat, `/dwm` turns them off (group admins only).
 
 | Command | Aliases | What it does |
 |---------|---------|--------------|
-| `/start` | `/s` | Welcome message, command overview, channel & group links |
+| `/start` | `/s` | Welcome card: next steps (new players), your journey, or what's ready to collect |
+| `/commands` | `/cmds` | Every command, grouped by category (collapsible) |
 | `/debut` | `/d` | Create your account and receive a starting squad |
 | `/claim` | `/c` | Claim your hourly player + coin reward |
 | `/daily` | `/dl` | Daily reward — grows with your login streak |
