@@ -66,6 +66,10 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # franchise that has to answer it. handlers/auction.py lets only that
     # franchise's owner and co-owners accept or decline, on every press.
     "au_ret_",
+    # /predict: the prediction card is posted for the whole group — any
+    # spectator backs a side from it. services.prediction_service refuses the
+    # two players themselves and anyone who already predicted.
+    "pred_",
     "cric_join",
     "cric_join_",
     "cric_join:",

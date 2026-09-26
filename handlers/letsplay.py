@@ -2181,6 +2181,15 @@ async def _launch_match(context, draft, decision, winner_side):
 
     _drop_draft(context, draft["invite_id"])
 
+    # Match conditions — the same generator the Challenge League Pitch Report
+    # uses — so weather and dew can change as the match goes on
+    # (services.weather_drift; never rain).
+    try:
+        from services.pitch_report import generate_conditions
+        conditions = generate_conditions(pitch_type)
+    except Exception:
+        logger.exception("letsplay: could not generate match conditions")
+        conditions = None
     state = cipl_match.build_cipl_state(
         match_id=match_id, overs=LETSPLAY_OVERS,
         bat_user_id=bat_info["user_id"], bowl_user_id=bowl_info["user_id"],
@@ -2190,7 +2199,7 @@ async def _launch_match(context, draft, decision, winner_side):
         chat_id=draft["chat_id"], pitch_type=pitch_type,
         is_private=draft["chat_id"] > 0, stadium=stadium,
         bat_team_code=_team_code(bat_team_name), bowl_team_code=_team_code(bowl_team_name),
-        bat_team_emoji="🏏", bowl_team_emoji="🏏",
+        bat_team_emoji="🏏", bowl_team_emoji="🏏", conditions=conditions,
         bat_bench=bat_bench, bowl_bench=bowl_bench)
     state["user_names"] = {
         str(bat_info["tg_id"]): bat_team_name,
@@ -2308,6 +2317,14 @@ async def _announce(context, state, pitch_type):
     # The match starts without traits only when both captains agreed to it, and
     # the card they follow the match from is where that agreement belongs — a
     # trait that never fires is otherwise indistinguishable from a bug.
+    cond_line = ""
+    try:
+        from services.weather_drift import conditions_line
+        strip = conditions_line(state.get("conditions"))
+        if strip:
+            cond_line = f"{html.escape(strip)}\n"
+    except Exception:
+        logger.exception("letsplay: conditions line failed")
     traits_line = ""
     if state.get("traits_enabled") is False:
         from services.trait_vote_service import status_line as _trait_status
@@ -2319,7 +2336,8 @@ async def _announce(context, state, pitch_type):
         + f"⚔️ <b>{bat}</b>  🆚  <b>{bowl}</b>\n"
         f"🏟️ {stadium} • 20 overs\n"
         f"🌱 <b>Pitch:</b> {pitch}\n"
-        f"🏏 {bat} batting first\n"
+        + cond_line
+        + f"🏏 {bat} batting first\n"
         + traits_line
         + chem_line
         + bot_line

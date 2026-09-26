@@ -4273,3 +4273,158 @@ class AuctionAdmin(Base):
     name = Column(String(120), nullable=True)
     added_by_tg_id = Column(BigInteger, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# RANKED LADDER, RIVALRIES, SPECTATOR PREDICTIONS, HALL OF FAME
+# ══════════════════════════════════════════════════════════════════════
+
+class RankedRating(Base):
+    """A user's skill rating on the 1v1 ranked ladder (see services/ranked_service).
+
+    One row per user. ``season_key`` is the monthly season the numbers belong
+    to; when it falls behind the live season the row is soft-reset lazily on
+    its next read or write (after the old season has been finalized and paid).
+    """
+    __tablename__ = "ranked_ratings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=False, unique=True, index=True)
+    season_key = Column(String(7), nullable=False, index=True)
+    rating = Column(Integer, nullable=False, default=1000)
+    peak_rating = Column(Integer, nullable=False, default=1000)
+    played = Column(Integer, nullable=False, default=0)
+    wins = Column(Integer, nullable=False, default=0)
+    losses = Column(Integer, nullable=False, default=0)
+    draws = Column(Integer, nullable=False, default=0)
+    # All-time best, never reset — the Hall of Fame reads this.
+    career_peak = Column(Integer, nullable=False, default=1000)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class RankedSeasonResult(Base):
+    """Archived final ladder position for one user in one finished season."""
+    __tablename__ = "ranked_season_results"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_key = Column(String(7), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    rank = Column(Integer, nullable=False)
+    rating = Column(Integer, nullable=False)
+    division = Column(String(20), nullable=False)
+    played = Column(Integer, nullable=False, default=0)
+    wins = Column(Integer, nullable=False, default=0)
+    prize_coins = Column(Integer, nullable=False, default=0)
+    prize_gems = Column(Integer, nullable=False, default=0)
+    recorded_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("season_key", "user_id", name="uq_ranked_season_user"),
+    )
+
+
+class Rivalry(Base):
+    """The running series between two users (see services/rivalry_service).
+
+    ``user_a_id`` is always the lower user id so a pair has exactly one row.
+    A pair is a *rivalry* once ``played`` reaches the threshold; from then on
+    the series is also played in rounds of five, and each round pays its winner.
+    """
+    __tablename__ = "rivalries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_a_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_b_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(120), nullable=True)
+    played = Column(Integer, nullable=False, default=0)
+    a_wins = Column(Integer, nullable=False, default=0)
+    b_wins = Column(Integer, nullable=False, default=0)
+    ties = Column(Integer, nullable=False, default=0)
+    # Current rivalry round (only counted once the pair is a rivalry).
+    round_no = Column(Integer, nullable=False, default=1)
+    round_played = Column(Integer, nullable=False, default=0)
+    round_a_wins = Column(Integer, nullable=False, default=0)
+    round_b_wins = Column(Integer, nullable=False, default=0)
+    rounds_a = Column(Integer, nullable=False, default=0)
+    rounds_b = Column(Integer, nullable=False, default=0)
+    # Current run of consecutive wins in the series, and whose it is.
+    streak_user_id = Column(Integer, nullable=True)
+    streak = Column(Integer, nullable=False, default=0)
+    last_match_id = Column(Integer, nullable=True)
+    became_rivalry_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("user_a_id", "user_b_id", name="uq_rivalry_pair"),
+    )
+
+
+class MatchPrediction(Base):
+    """A spectator's coin stake on who wins a live match (pari-mutuel pool)."""
+    __tablename__ = "match_predictions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(Integer, ForeignKey("matches.id", ondelete="CASCADE"), nullable=False, index=True)
+    chat_id = Column(BigInteger, nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    pick_user_id = Column(Integer, nullable=False)   # the side (user) backed to win
+    stake = Column(Integer, nullable=False)
+    # open | won | lost | refunded
+    status = Column(String(12), nullable=False, default="open", index=True)
+    payout = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    settled_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("match_id", "user_id", name="uq_prediction_match_user"),
+    )
+
+
+class MatchPostResult(Base):
+    """Bookkeeping for the post-match layer, one row per match.
+
+    Makes every post-match effect idempotent: the ladder and rivalry update run
+    once (``ranked_done``), and the Hall of Fame scan reads each scorecard once
+    (``hof_done``). ``payload_json`` keeps what the chat announcement needs and
+    which user fielded which team name (the scorecard only knows team names).
+    """
+    __tablename__ = "match_post_results"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(Integer, ForeignKey("matches.id", ondelete="CASCADE"),
+                      nullable=False, unique=True, index=True)
+    counted = Column(Boolean, nullable=False, default=True)
+    ranked_done = Column(Boolean, nullable=False, default=False)
+    # True when this match actually moved the ladder (not capped or unrated).
+    rated = Column(Boolean, nullable=False, default=False)
+    hof_done = Column(Boolean, nullable=False, default=False)
+    payload_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class HallOfFameEntry(Base):
+    """One record-worthy performance, harvested from a finished match.
+
+    ``category`` names the board (see services/hall_of_fame.CATEGORIES);
+    ``value`` is what the board sorts on (higher is better) and ``tiebreak``
+    breaks ties the same way (e.g. fewer runs conceded is stored negated).
+    """
+    __tablename__ = "hall_of_fame_entries"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    category = Column(String(30), nullable=False, index=True)
+    value = Column(Integer, nullable=False)
+    tiebreak = Column(Integer, nullable=False, default=0)
+    label = Column(String(60), nullable=False)          # e.g. "124* (58)"
+    player_name = Column(String(120), nullable=True)
+    team_name = Column(String(120), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    match_id = Column(Integer, ForeignKey("matches.id", ondelete="CASCADE"), nullable=True, index=True)
+    achieved_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_hof_category_value", "category", "value", "tiebreak"),
+    )

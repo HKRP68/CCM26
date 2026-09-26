@@ -1898,6 +1898,15 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
         except Exception:
             logger.exception("Super Over pitch stats recording failed (%s)", mid)
 
+        # Ranked ladder, rivalry and spectator predictions (services.post_match)
+        # — idempotent, and isolated in its own savepoint.
+        if m:
+            from services.post_match import process_completed_match
+            process_completed_match(
+                session, m,
+                count_result=not bool((so.get("main_state") or {}).get("stats_disabled")),
+                state=so.get("main_state"))
+
         session.commit()
     except Exception:
         session.rollback()
@@ -1968,6 +1977,21 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
         so["chat_id"], _final_reward_text(so, win, lose, prize, margin_text),
         parse_mode="HTML", reply_markup=_spectate_markup(so),
         disable_web_page_preview=True)
+
+    # Ranked / rivalry / predictions card, then the main match's highlights.
+    try:
+        from services.post_match import announce as _announce_post_match
+        await _announce_post_match(context.bot, so["chat_id"], mid)
+    except Exception:
+        logger.exception("Super Over post-match card failed (%s)", mid)
+    try:
+        main_state = so.get("main_state") or {}
+        if main_state.get("highlight_log"):
+            from handlers.cipl_play import _send_highlights
+            await _send_highlights(context, dict(main_state, chat_id=so["chat_id"]),
+                                   {"tie": False})
+    except Exception:
+        logger.exception("Super Over highlights failed (%s)", mid)
 
     # The post-match analysis file, same as a match that finished inside the
     # 20 overs — the main match is exactly as worth analysing when it happened to

@@ -1111,6 +1111,11 @@ async def start_handler(update, context):
         "/pitchstats /ps [pitch] - What each pitch actually does in Lets Play & "
         "League matches: runs/over, wickets/over, bat-first vs chasing win %, "
         "and which approaches earn\n"
+        "/rank [@user] - Your ranked rating, division and ladder position 📈\n"
+        "/ranked - This season's ranked ladder (paid by division at month end)\n"
+        "/rivalry [@user] - Your rivalries, or the series with one player ⚔️\n"
+        "/predict - Back a side of the live match in this group with coins 🔮\n"
+        "/halloffame /hof - All-time records: top scores, best figures, streaks 🏛️\n"
         "/challengeIPL /cipl - Reply to a user to start an IPL challenge\n"
         "/challengeBBL /cbbl - Reply to a user to start a BBL challenge\n"
         "/challengeINT /cint - Reply to a user to start an international challenge\n"
@@ -1852,6 +1857,20 @@ def main():
             ["recentmatches", "recent", "matches"],
             dm_only("recentmatches", recentmatches_handler)))
         app.add_handler(CommandHandler(["h2h", "headtohead"], h2h_handler))
+        # ── Ranked ladder, rivalries, spectator predictions, Hall of Fame ──
+        # Not in BOT_MENU_COMMANDS: both slash menus sit at Telegram's
+        # 100-command ceiling. Documented in BOT_COMMANDS.md.
+        from handlers.ranked import rank_handler, ranked_handler, rivalry_handler
+        from handlers.predict import predict_handler, predict_callback
+        from handlers.halloffame import halloffame_handler, halloffame_callback
+        app.add_handler(CommandHandler(["rank", "myrank", "elo"], rank_handler))
+        app.add_handler(CommandHandler(["ranked", "ladder", "rladder"], ranked_handler))
+        app.add_handler(CommandHandler(["rivalry", "rivalries", "rival"], rivalry_handler))
+        app.add_handler(CommandHandler(["predict", "pred"], predict_handler))
+        app.add_handler(CallbackQueryHandler(predict_callback, pattern=r"^pred_"))
+        app.add_handler(CommandHandler(["halloffame", "hof", "records"],
+                                       halloffame_handler))
+        app.add_handler(CallbackQueryHandler(halloffame_callback, pattern=r"^hof_"))
         app.add_handler(CommandHandler(["matchinfo", "mi"], info_handler))
 
         # ── User feedback ────────────────────────────────────────────
@@ -2968,6 +2987,23 @@ def main():
                 logger.info("Season rollover job scheduled (hourly)")
         except Exception:
             logger.exception("Failed to schedule season rollover")
+
+        # ── Spectator predictions + Hall of Fame background work ──
+        # The sweep settles or refunds predictions on matches that ended
+        # outside the normal finish (forfeits, clears, admin ends); the scan
+        # harvests finished scorecards into the Hall of Fame, back-filling
+        # history 200 matches at a time.
+        try:
+            from handlers.predict import prediction_sweep_job
+            from handlers.halloffame import hall_of_fame_scan_job
+            if app.job_queue:
+                app.job_queue.run_repeating(prediction_sweep_job, interval=600,
+                                             first=180, name="prediction_sweep")
+                app.job_queue.run_repeating(hall_of_fame_scan_job, interval=900,
+                                             first=240, name="hall_of_fame_scan")
+                logger.info("Prediction sweep + Hall of Fame scan jobs scheduled")
+        except Exception:
+            logger.exception("Failed to schedule prediction / Hall of Fame jobs")
 
         # ── Fantasy auto-lock ──
         # Locks any open fantasy league whose admin-set lock time (IST) has

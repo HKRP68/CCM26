@@ -3054,6 +3054,17 @@ def finalize_webapp_match(session, match_id):
     except Exception:
         logger.exception("webapp match-end quest tracking failed")
 
+    # Ranked ladder, rivalry and spectator predictions (services.post_match) —
+    # idempotent and isolated in its own savepoint. Mini App results post no
+    # chat card of their own; the numbers show up on /rank and /rivalry.
+    try:
+        from services.post_match import process_completed_match
+        process_completed_match(
+            session, m, count_result=not bool((state or {}).get("stats_disabled")),
+            state=state)
+    except Exception:
+        logger.exception("webapp post-match processing failed (non-fatal)")
+
     # ── Tour result hook ──
     # Mini-App matches that belong to a tour (launched /wpm-style from /mytours)
     # must update the tour standings exactly like the in-chat flow does. This is
