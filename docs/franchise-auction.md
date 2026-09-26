@@ -526,6 +526,34 @@ Retention spend is **derived, not cached** — the purse column is a cache for a
 reason that does not apply here, and a second cache is only a second thing to
 drift.
 
+### Retention is from last season's squad only
+
+A franchise retains its **own** players, so every retention path —
+`/aretain`, `/aretainforce`, `/retain`, the tap-to-pick buttons and the setup
+page — resolves the player inside the squad that franchise had in the league
+the auction follows, and nowhere else (`find_retention_player`,
+`check_previous_holder` in `services/retention_negotiation.py`). The card is
+`ChallengePlayer.source_player_id`, the one actually held, which is why a
+cricketer with two editions in the catalogue is never an edition question.
+Inside the squad a name matches exactly, then word by word ("gill"), then as a
+substring; two hits ask for more and list both. A season following no league
+refuses with a pointer to `/aprevious`.
+
+`/aretain Kochi` (or `/aretainforce Kochi`, or a bare `/retain` for an owner)
+lists the squad as buttons — 🔒 kept, 🤝 in talks and 🔨 in the auction are
+shown without one — and a tap does what the command would have done.
+
+**Which team each franchise was** (`previous_team_links`) is resolved by, in
+order: the stored `AuctionFranchise.previous_team_id`; the carried link of a
+cloned season; and a name match that ignores case, punctuation and filler words
+(FC, XI, Team, Club…) and counts `short_name`, accepted only when unique both
+ways. Linking a league pins every match by id (`pin_previous_teams`), so a
+later rename on either side changes nothing. A side renamed *between* the
+seasons matches nothing: `/aprevious` marks it ❓ with a button per unclaimed
+old team, `/aprevteam Kochi | Kochi Tuskers` does it by typing, and the 🔗
+Seasons fold has a select per franchise. A team is never linked to two
+franchises. The same links feed Right To Match.
+
 ### Dynamic retention: the player decides
 
 Classic retention prices a player by the **order** he is kept in, so a 96 costs
@@ -1831,6 +1859,7 @@ Two things were on their way to a third copy each, and both fail silently.
 | `tests/test_auction_features.py` | Sets and the queue order, removing a franchise and its purse split, the automatic accelerated round, the free auto-fill and its caps, retention offers and who may answer them, auction admins, `/acall`, every team view, the rich builders, and what the sweeper sends per lot and per burst of bids |
 | `tests/test_auction_pool_page.py` | The setup page over HTTP: the pool builder's preview, the Sets card's numbering and its deletes, the squad-rules form, the franchise file both ways, and the typed confirmations |
 | `tests/test_auction_focus.py` | Focus mode: what a locked group refuses and what it never touches, that every auction command survives its own lock (pinned against `bot.py` both ways), the admin bypass and when it is asked, the cache and its invalidation, and where the middleware sits |
+| `tests/test_retention_previous_squad.py` | Retention from last season's squad: the strict, edition-free name lookup, renamed sides and the stored team link, the tap-to-pick list, `/aprevious` and `/aprevteam` |
 | `tests/test_retention_negotiation.py` | Dynamic retention: the toggle, slot editing, floors and the budget, the demand curve, accept / counter / reject / walk-out, the lowball, the personalities, and the commands |
 | `tests/test_auction_sets_io.py` | The sets file: JSON and CSV round trips, re-filing and reordering, replace, signed players left alone, and what is refused or reported |
 | `tests/test_auction_season.py` | Cloning: every rule carried (and a guard against the rule list falling behind the model), the field and its owners, the purses and their ledger, what is deliberately left behind, the group handover, and the rename that used to lose every holder |

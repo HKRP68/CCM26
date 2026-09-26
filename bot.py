@@ -2324,6 +2324,7 @@ def main():
             retain_handler, retention_talk_callback, aretmode_handler,
             aretslot_handler, aretrule_handler, aretdemand_handler,
             asetsexport_handler, asetsimport_handler,
+            retention_pick_callback, aprevious_handler, aprevteam_handler,
         )
         # Not "/b": that is already /buy, registered above, and PTB runs the
         # first handler that matches — the alias would be dead.
@@ -2433,6 +2434,13 @@ def main():
         app.add_handler(CommandHandler(["aretrule", "aretrules"],
                                        aretrule_handler))
         app.add_handler(CommandHandler("aretdemand", aretdemand_handler))
+        # Retention is from last season's squad only: the tap-to-pick list,
+        # and which team each franchise was (by id, so a rename is harmless).
+        app.add_handler(CallbackQueryHandler(retention_pick_callback,
+                                             pattern=r"^au_rpk_"))
+        app.add_handler(CommandHandler(["aprevious", "alastseason"],
+                                       aprevious_handler))
+        app.add_handler(CommandHandler("aprevteam", aprevteam_handler))
         # The whole pool, set by set, out as a file and back in.
         app.add_handler(CommandHandler("asetsexport", asetsexport_handler))
         app.add_handler(CommandHandler("asetsimport", asetsimport_handler))

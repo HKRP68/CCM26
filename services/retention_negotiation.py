@@ -1066,3 +1066,112 @@ def withdraw_talk(session, season, t, tg_id=None, *, admin=False, now=None):
 def personality_label(name):
     emoji, label = PERSONALITY_INFO.get(name, ("⚖️", "Balanced"))
     return f"{emoji} {label}"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Who a franchise may retain: last season's squad, and nobody else
+#
+# Retention is keeping your OWN players, so every retention command resolves
+# names here rather than in the whole catalogue. The card is the one this
+# franchise actually held last season (``ChallengePlayer.source_player_id``),
+# which is why an edition never has to be named: two editions of one cricketer
+# are two cards, and only one of them was on this squad.
+# ──────────────────────────────────────────────────────────────────────
+
+NOT_LINKED = ("This auction isn't linked to last season's league, so there is "
+              "no squad to retain from. Link it with /aprevious <league> or "
+              "on the setup page.")
+
+
+def previous_squad(session, season, franchise):
+    """The cards this franchise held last season, best first."""
+    from models import Player
+    if not getattr(season, "previous_league_id", None):
+        raise AuctionError(NOT_LINKED)
+    ids = [pid for pid, holder in A.previous_squad_map(session, season).items()
+           if holder.id == franchise.id]
+    if not ids:
+        return []
+    rows = session.query(Player).filter(Player.id.in_(ids)).all()
+    return sorted(rows, key=lambda p: (-(p.rating or 0), (p.name or "").lower()))
+
+
+def candidate_state(session, season, player_id):
+    """``(state, note)``: ``free``, ``kept``, ``talks`` or ``gone``."""
+    lot = (session.query(AuctionLot)
+           .filter(AuctionLot.season_id == season.id,
+                   AuctionLot.player_id == player_id).first())
+    if lot is not None and lot.status == A.LOT_SOLD:
+        holder = (session.query(AuctionFranchise)
+                  .filter(AuctionFranchise.id == lot.sold_to_id).first())
+        return "kept", holder.name if holder else ""
+    talk_row = (session.query(AuctionRetentionTalk)
+                .filter(AuctionRetentionTalk.season_id == season.id,
+                        AuctionRetentionTalk.player_id == player_id,
+                        AuctionRetentionTalk.status.in_((TALK_OPEN, TALK_FAILED)))
+                .first())
+    if talk_row is not None:
+        return (("talks", "") if talk_row.status == TALK_OPEN
+                else ("gone", "walked out"))
+    if lot is not None and lot.status != A.LOT_QUEUED:
+        return "gone", lot.status
+    return "free", ""
+
+
+def retention_candidates(session, season, franchise):
+    """``[(player, state, note)]`` for the picker, best first."""
+    return [(p, *candidate_state(session, season, p.id))
+            for p in previous_squad(session, season, franchise)]
+
+
+def _words(text):
+    return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split()
+
+
+def find_retention_player(session, season, franchise, name):
+    """The card on ``franchise``'s last-season squad that ``name`` means.
+
+    Exact name first, then every typed word matching a whole word of the name
+    ("gill", "shubman gill"), then a plain substring. Never guesses between
+    two; never reaches outside the squad.
+    """
+    text = (name or "").strip()
+    if not text:
+        raise AuctionError("Name the player.")
+    squad = previous_squad(session, season, franchise)
+    if not squad:
+        raise AuctionError(f"{franchise.name} has nobody from last season — "
+                           f"check its last-season team with /aprevious.")
+    wanted = text.lower()
+    typed = _words(text)
+    exact = [p for p in squad if (p.name or "").strip().lower() == wanted]
+    words = [p for p in squad
+             if typed and all(w in _words(p.name) for w in typed)]
+    partial = [p for p in squad if wanted in (p.name or "").lower()]
+    for pool in (exact, words, partial):
+        if len(pool) == 1:
+            return pool[0]
+        if len(pool) > 1:
+            raise AuctionError(
+                "That could be " + ", ".join(
+                    f"{p.name} ({p.version or 'Base'}, {p.rating})"
+                    for p in pool[:6])
+                + " — type more of the name, or tap the player in "
+                  "the list (the team name alone shows it).")
+    shown = ", ".join(p.name for p in squad[:12])
+    raise AuctionError(f"“{text}” wasn't on {franchise.name}'s squad last "
+                       f"season. Its players: {shown}"
+                       + (" …" if len(squad) > 12 else ""))
+
+
+def check_previous_holder(session, season, franchise, player):
+    """Refuse a card this franchise did not hold last season."""
+    if not getattr(season, "previous_league_id", None):
+        raise AuctionError(NOT_LINKED)
+    holder = A.previous_squad_map(session, season).get(player.id)
+    if holder is None or holder.id != franchise.id:
+        raise AuctionError(
+            f"{player.name} wasn't on {franchise.name}'s squad last season"
+            + (f" — he was {holder.name}'s." if holder is not None else ".")
+            + " Retention is only for your own players.")
+    return player

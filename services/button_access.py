@@ -74,6 +74,10 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # franchise's owners may take the player's ask or walk away — and the
     # handler refuses everybody else on every press.
     "au_rtn_",
+    # The last-season squad picker and the last-season team buttons. Checked
+    # on every press: an admin's picker needs an auction admin, an owner's
+    # /retain list needs that franchise's owner or a co-owner.
+    "au_rpk_",
     "cric_join",
     "cric_join_",
     "cric_join:",

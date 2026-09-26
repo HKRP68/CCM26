@@ -906,5 +906,45 @@ class RetentionAndSetsFileTests(PoolPageCase):
             [e["name"] for e in self.A.list_sets(self.session, other)])
 
 
+class RetentionFromLastSeasonPageTests(PoolPageCase):
+    """The setup page retains from last season's squad only."""
+
+    def setUp(self):
+        super().setUp()
+        from tests._previous_league import link_squads
+        self.mumbai = self.A.create_franchise(self.session, self.season,
+                                              "Mumbai")
+        self.kochi = self.A.create_franchise(self.session, self.season,
+                                             "Kochi")
+        self.season.max_retentions = 2
+        self.session.commit()
+        link_squads(self.session, self.A, self.season,
+                    {"Mumbai": [self.players[0]],
+                     "Kochi Tuskers": [self.players[1]]})
+
+    def test_the_page_lists_each_squad_and_refuses_a_stranger(self):
+        body = self.get()
+        self.assertIn(self.players[0].name, body)
+        response = self.post({"action": "retain",
+                              "franchise_id": self.mumbai.id,
+                              "player_id": self.players[2].id})
+        self.assertIn("squad last season", response.get_data(as_text=True))
+        self.session.expire_all()
+        self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
+
+    def test_a_renamed_side_is_tied_on_the_page(self):
+        team = self.A.league_teams(self.session,
+                                   self.season.previous_league_id)
+        tuskers = next(t for t in team if t.name == "Kochi Tuskers")
+        self.post({"action": "previous_team", "franchise_id": self.kochi.id,
+                   "team_id": tuskers.id})
+        self.post({"action": "retain", "franchise_id": self.kochi.id,
+                   "player_id": self.players[1].id, "price": "5"})
+        self.session.expire_all()
+        self.assertEqual([self.players[1].id],
+                         [l.player_id for l in
+                          self.A.retained(self.session, self.kochi.id)])
+
+
 if __name__ == "__main__":       # pragma: no cover
     unittest.main()

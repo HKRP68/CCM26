@@ -4036,6 +4036,11 @@ class AuctionFranchise(Base):
     # renames a franchise between seasons, and breaks silently: every Right To
     # Match and every retention candidate simply vanishes.
     carried_from_id = Column(Integer, nullable=True)
+    # The ChallengeTeam this franchise WAS in the league the season follows.
+    # The strongest link of all (see ``previous_team_links``): set by hand for
+    # a side that changed its name, or pinned when the league is linked, so a
+    # rename on either side afterwards cannot lose its squad.
+    previous_team_id = Column(Integer, nullable=True)
 
     # ── Expansion picks ─────────────────────────────────────────────────
     # Per franchise rather than per season, because "how many picks does this

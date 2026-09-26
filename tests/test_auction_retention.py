@@ -810,6 +810,18 @@ class RetentionCommandTests(AuctionCase):
                              bowl_rating=40, is_active=True, version="Base")
         self.session.add(self.unique)
         self.session.commit()
+        # Retention is only from last season's squad: Mumbai held these.
+        from tests._previous_league import link_squads
+        from models import Player
+        self.namesake = Player(name=f"Solo Keeper {next(_PID)}", rating=80,
+                               category="Wicket Keeper", country="India",
+                               bat_hand="Right", bowl_hand="Right",
+                               bowl_style="Medium Pacer", bat_rating=80,
+                               bowl_rating=30, is_active=True, version="Base")
+        self.session.add(self.namesake)
+        self.session.flush()
+        link_squads(self.session, self.A, self.season,
+                    {"Mumbai": [self.unique, self.namesake]})
         self.replies = []
 
     def _run(self, handler, user_id, args=(), chat_type="supergroup"):
@@ -872,10 +884,18 @@ class RetentionCommandTests(AuctionCase):
         self.assertEqual(600, kept[0].sold_price_lakh)
 
     def test_an_ambiguous_player_name_is_never_guessed(self):
-        """Retaining the wrong card costs a franchise real money to undo."""
+        """Retaining the wrong card costs a franchise real money to undo —
+        two editions on one squad are told apart by edition, not guessed."""
         from handlers import auction as H
-        self._as_admin(H.aretain_handler, ("Mumbai", "|", "Rashid"))
+        self._as_admin(H.aretain_handler, ("Mumbai", "|", "Solo"))
         self.assertIn("type more of the name", self.replies[-1])
+        self.assertIn(self.namesake.name, self.replies[-1])
+        self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
+
+    def test_a_player_from_another_squad_is_refused(self):
+        from handlers import auction as H
+        self._as_admin(H.aretainforce_handler, ("Mumbai", "|", "Rashid Khan"))
+        self.assertIn("on Mumbai&#x27;s squad last season", self.replies[-1])
         self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
 
     def test_aunretain_puts_the_player_back(self):

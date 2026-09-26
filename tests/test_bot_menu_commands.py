@@ -167,7 +167,7 @@ UNPUBLISHED_ON_PURPOSE = {
     "asetorder", "aretainforce", "aoffers", "aretcancel", "aaccelmode",
     "aadminremove", "aadmins",
     "aretmode", "aretslot", "aretrule", "aretdemand", "asetsexport",
-    "asetsimport",
+    "asetsimport", "aprevious", "aprevteam",
     # Dynamic retention's owner command — on /adminhelp's player section, the
     # /aretlock readout and every negotiation card, which is where an owner
     # retaining somebody already is.

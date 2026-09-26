@@ -755,53 +755,55 @@
     </div>
 
     {% if retention_open %}
-    <h4 style="margin:1rem 0 .4rem;">Retain a player</h4>
-    <form method="GET" style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:end;"
-          action="{{ url_for('admin_auction_detail', season_id=season.id) }}#retention">
-      <div><label class="dim" style="font-size:.78rem;">Search the catalogue</label>
-        <input type="text" name="retain_q" value="{{ retain_q }}" placeholder="player name"></div>
-      <button class="btn btn-ghost" type="submit">Search</button>
-      {% if season.previous_league_id %}
-      <span class="dim" style="font-size:.82rem;">⭐ marks a franchise's own players from last season.</span>
-      {% else %}
-      <span class="dim" style="font-size:.82rem;">Record last season's league below to flag each franchise's own players.</span>
-      {% endif %}
-    </form>
-
-    {% if retain_hits %}
-    <div class="au-scroll" style="margin-top:.6rem;">
+    <h4 style="margin:1rem 0 .4rem;">Retain a player — from last season's squad</h4>
+    {% if not season.previous_league_id %}
+    <p class="au-note">
+      Retention is only ever from a franchise's <b>own</b> players, so link
+      <b>last season's league</b> in the 🔗 Seasons fold below first — then
+      each franchise's squad appears here.
+    </p>
+    {% else %}
+    <p class="au-note" style="margin:.2rem 0 .6rem;">
+      Each franchise's squad from last season. Only these players can be
+      retained, and each is the exact card that franchise held — no edition to
+      choose. A franchise with nobody listed was probably renamed: tie it to
+      its old team in the 🔗 Seasons fold.
+    </p>
+    {% for f in field %}
+    {% set cands = ret_candidates(f) %}
+    <details class="au-confirm" style="margin:.3rem 0;">
+      <summary class="btn btn-ghost btn-sm">{{ f.name }} — {{ cands|length }} from last season</summary>
+      <div class="au-scroll" style="margin-top:.4rem;">
       <table class="au-table">
-        <tr><th></th><th>Player</th><th>OVR</th><th>Role</th><th>Last season</th><th>Retain for</th><th></th></tr>
-        {% for player, held, pooled in retain_hits %}
+        <tr><th>Player</th><th>OVR</th><th>Role</th><th>Retain for</th></tr>
+        {% for player, state, note in cands %}
         <tr>
-          <td>{% if held %}⭐{% endif %}</td>
-          <td>{{ player.name }}</td>
+          <td>{{ player.name }} <span class="dim">· {{ player.version or 'Base' }}</span></td>
           <td>{{ player.rating }}</td>
           <td>{{ player.category }}</td>
-          <td class="dim">{{ held.name if held else '—' }}</td>
-          <td colspan="2">
-            {% if pooled and pooled != 'queued' %}
-              <span class="dim">already {{ pooled }} in this auction</span>
-            {% else %}
+          <td>
+            {% if state == 'free' %}
             <form method="POST" style="display:flex;gap:.3rem;align-items:center;">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="action" value="retain">
               <input type="hidden" name="player_id" value="{{ player.id }}">
-              <input type="hidden" name="back_query" value="?retain_q={{ retain_q }}#retention">
-              <select name="franchise_id">
-                {% for f in field %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
-              </select>
+              <input type="hidden" name="franchise_id" value="{{ f.id }}">
+              <input type="hidden" name="back_query" value="#retention">
               <input type="text" name="price" placeholder="{{ 'Cr — blank = slot start' if ret_dynamic else 'Cr — blank = ladder' }}" style="width:9rem;">
-              <button class="btn btn-primary" type="submit">Retain</button>
+              <button class="btn btn-primary btn-sm" type="submit">Retain</button>
             </form>
+            {% else %}
+            <span class="dim">{{ {'kept': '🔒 kept', 'talks': '🤝 in talks', 'gone': '🔨 in the auction'}.get(state, state) }}{% if note %} — {{ note }}{% endif %}</span>
             {% endif %}
           </td>
         </tr>
+        {% else %}
+        <tr><td colspan="4" class="dim">Nobody found — is this franchise tied to its last-season team?</td></tr>
         {% endfor %}
       </table>
-    </div>
-    {% elif retain_q %}
-      <p class="au-note">Nothing matches “{{ retain_q }}”.</p>
+      </div>
+    </details>
+    {% endfor %}
     {% endif %}
 
     <details class="au-confirm" style="margin-top:1rem;">
@@ -1115,7 +1117,6 @@
     <form method="GET" class="au-grid"
           action="{{ url_for('admin_auction_detail', season_id=season.id) }}#builder">
       <input type="hidden" name="preview" value="1">
-      {% if retain_q %}<input type="hidden" name="retain_q" value="{{ retain_q }}">{% endif %}
       <div><label>Name</label><input type="text" name="q" value="{{ filters.q }}"></div>
       <div><label>Min rating</label><input type="number" name="rating_min" min="0" max="100" value="{{ filters.rating_min }}"></div>
       <div><label>Max rating</label><input type="number" name="rating_max" min="0" max="100" value="{{ filters.rating_max }}"></div>
@@ -1278,6 +1279,38 @@
         </select></div>
       <div><button class="btn btn-ghost" type="submit">🔗 Record</button></div>
     </form>
+    {% if season.previous_league_id %}
+    <h4 style="margin:1rem 0 .4rem;" id="prev-teams">Which team each franchise was</h4>
+    <p class="au-note" style="margin:.2rem 0 .6rem;">
+      Matched by id when set here (📌), otherwise by name — ignoring case and
+      words like FC or XI. A franchise that changed its name will not match:
+      pick its old team, and the link holds whatever either side is called
+      later. Retention, the pick lists and Right To Match all read this.
+    </p>
+    <table class="au-table">
+      <tr><th>Franchise</th><th>Last season</th><th></th></tr>
+      {% for f in field %}
+      {% set link = prev_links.get(f.id) %}
+      <tr>
+        <td>{{ f.name }}</td>
+        <td>
+          <form method="POST" style="display:flex;gap:.3rem;align-items:center;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="previous_team">
+            <input type="hidden" name="franchise_id" value="{{ f.id }}">
+            <input type="hidden" name="back_query" value="#prev-teams">
+            <select name="team_id">
+              <option value="">— none —</option>
+              {% for t in prev_teams %}<option value="{{ t.id }}" {% if link and link[1].id == t.id %}selected{% endif %}>{{ t.name }}</option>{% endfor %}
+            </select>
+            <button class="btn btn-ghost btn-sm" type="submit">Save</button>
+          </form>
+        </td>
+        <td>{% if link %}{{ '📌' if f.previous_team_id == link[1].id else '✅' }}{% else %}❓ no match{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
     <p class="au-note" style="margin-bottom:0;">
       This is what decides <b>who holds a Right To Match on whom</b>, and it is
       what lets the retention picker flag each franchise's own players. It can
