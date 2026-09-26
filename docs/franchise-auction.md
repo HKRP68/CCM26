@@ -158,10 +158,26 @@ model, and the set numbering has one home.
 Every one of those reads answers **before the auction starts**, and every one
 of them answers **in a DM** — see [Before it starts](#before-it-starts).
 
+**The hammer countdown.** Before a lot is sold or passed, the group gets new
+messages: "⏳ Selling *player* to *team* for *price*" with **3**, then **2**,
+then **1**, then SOLD (or UNSOLD). It runs in the last seconds of the lot's own
+clock, so a bid during it still counts — a bid that moves the deadline ends the
+count and a fresh one starts, a bid that does not re-announces the new leader.
+`/acountdown 5` changes the length (1–10), `/acountdown off` turns it off, bare
+`/acountdown` reads it back; default 3.
+
+**Starting again.** `/arestart confirm` restarts the whole auction from the
+first player: every sale, Right To Match, auto-fill, unsold player and bid is
+wiped, each franchise gets back its money, squad count and RTM cards (as one
+`refund` ledger row), the pool goes back to the order it had at the first
+`/astart` (sets included), and the first player goes straight on the block.
+Retained players, expansion picks and withdrawn players stay as they are.
+Bare `/arestart` only explains this; refused once squads are published.
+
 Admin: `/adminhelp` (the reference card, also `/auction`), `/anew`, `/abind`, `/astart`,
 `/apause`, `/aresume`, `/anext`, `/aextend`, `/asold`, `/aunsold`,
 `/aundobid`, `/awithdraw`, `/areinstate`, `/aforce`, `/aunsold <list>`,
-`/aincrement`, `/atimer`, `/asnipe`, `/afocus`, `/adirect`,
+`/aincrement`, `/atimer`, `/acountdown`, `/arestart`, `/asnipe`, `/afocus`, `/adirect`,
 `/agrant`, `/aco`,
 `/apublish`, `/acancel`, plus retention's `/aretlock on`, `/aretain`,
 `/aunretain`, RTM's `/artmset`, `/artmcards`, `/artmforce`, `/artmundo`, the

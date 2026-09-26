@@ -1377,6 +1377,8 @@ ADMIN_SECTIONS = (
         ("/anew <name>", "Create an auction and bind it to this group"),
         ("/abind <name>", "Bind an existing auction to this group"),
         ("/atimer <seconds>", "Seconds per lot (default 30)"),
+        ("/acountdown <seconds | off>", "The 3-2-1 countdown before a lot "
+                                        "is sold or unsold (default 3)"),
         ("/asnipe <window> <extend> <max>", "Anti-snipe rule, e.g. /asnipe 10 10 5"),
         ("/aincrement 2:10L, 5:20L, 50L", "Bid increments — bare reads them, "
                                           "reset restores the default"),
@@ -1398,6 +1400,8 @@ ADMIN_SECTIONS = (
     ("▶️ Running it", (
         ("/astart · /apause · /aresume", "Start, pause and resume the clock"),
         ("/anext", "Put the next lot on the block"),
+        ("/arestart confirm", "Restart the whole auction from the first "
+                              "player — every sale undone, purses back"),
         ("/aextend [seconds]", "Add time to the lot on the block"),
         ("/asold", "Sell at the standing bid"),
         ("/aunsold", "Pass the lot (refused while a bid stands)"),

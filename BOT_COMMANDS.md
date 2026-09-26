@@ -621,6 +621,8 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/areinstate <player \| lot no>, …` (`/aunwithdraw`) | `/awithdraw`'s opposite — a withdrawn (or unsold) player goes back to the end of the queue |
 | `/aincrement 2:10L, 5:20L, 10:25L, 50L` (`/aincrements`) | Bid increments: under ₹2 Cr the least raise is ₹10 L, and so on; one amount alone is a flat step, `reset` restores the default, bare reads it back. Also on the website's setup page |
 | `/atimer <seconds>` | Seconds allowed per lot — `/atimer 45` |
+| `/acountdown <seconds \| off>` | The hammer countdown: before a lot is sold or unsold the group gets new messages — "Selling *player* to *team* for *price*" with **3**, then **2**, **1**, and SOLD. Default 3, up to 10; bare reads it back |
+| `/arestart confirm` | Restart the whole auction from the first player: every sale, RTM, unsold player and bid is wiped, purses, squad counts and RTM cards go back, and the pool returns to its opening order. Retained players and expansion picks stay. Bare `/arestart` explains and asks for `confirm`. Refused once squads are published |
 | `/asnipe <window> <extend> <max>` | Anti-snipe window, extension and cap — `/asnipe 10 10 5` |
 | `/afocus on\|off` | Focus mode: while the auction is live or paused, this group answers auction commands and nothing else (default **on**). Bare `/afocus` reads it back |
 | `/adirect on\|off` | Direct bids: may a bidder type their own amount (`/bid 12`), or only take the next step? Default **on**. Off still allows bare `/bid` and the board's buttons |

@@ -891,6 +891,63 @@ async def atimer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _with_auction(update, work, admin=True, context=context)
 
 
+async def acountdown_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/acountdown 3</code> — the hammer countdown, in seconds, or off.
+
+    Before a lot is sold or passed the room gets new messages: "Selling X to
+    Team for ₹…" with the first number, then one number a second, then SOLD.
+    Bare reads it back, the way bare <code>/atimer</code> does.
+    """
+    raw = _arg_text(context)
+
+    def work(session, season):
+        if not raw:
+            seconds = A.countdown_seconds(season)
+            state = (f"counts <b>{seconds}</b> before the hammer" if seconds
+                     else "is <b>off</b>")
+            return (f"⏳ The countdown {state}.\n"
+                    f"Change it with <code>/acountdown 5</code>, or "
+                    f"<code>/acountdown off</code>.")
+        seconds = A.set_countdown(session, season, raw)
+        if not seconds:
+            return "⏳ Countdown <b>off</b> — lots resolve without one."
+        return (f"⏳ Countdown set: <b>{seconds}</b> before every sold or "
+                f"unsold lot.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
+ARESTART_WARNING = (
+    "🔄 <b>Restart the auction from the first player?</b>\n"
+    "<blockquote>Every sale, Right To Match, unsold player and bid is wiped. "
+    "Each franchise gets back everything it spent in the auction, its squad "
+    "count and its RTM cards, and the pool goes back to the order the "
+    "auction opened in. Retained players and expansion picks stay "
+    "signed.</blockquote>\n"
+    "This cannot be undone. Type <code>/arestart confirm</code> to go ahead.")
+
+
+async def arestart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/arestart confirm</code> — the whole auction again, from lot one.
+
+    Bare <code>/arestart</code> only explains what it would do: wiping every
+    sale is not something a stray tap should manage.
+    """
+    user = update.effective_user
+    raw = (_arg_text(context) or "").strip().lower()
+
+    def work(session, season):
+        if raw not in ("confirm", "yes"):
+            return ARESTART_WARNING
+        A.restart_auction(session, season,
+                          by_tg_id=user.id if user else None)
+        from services import auction_scheduler as S
+        S.cancel_countdown(season.id)
+        return None      # the sweeper announces it, within a tick
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
 async def afocus_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """<code>/afocus on|off</code> — lock this group to auction commands, or don't.
 

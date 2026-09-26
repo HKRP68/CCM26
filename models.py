@@ -3883,6 +3883,17 @@ class AuctionSeason(Base):
     # still work. An integer for the NULL-reads-falsy reason above.
     direct_bids = Column(Integer, default=1, nullable=False)
 
+    # ── The hammer countdown ───────────────────────────────────────────
+    # Before a lot is sold or passed, the room is told in new messages:
+    # "Selling X to Team for ₹…", then 3, 2, 1 — and then SOLD. This is how
+    # many seconds that count runs; 0 turns it off. ``/acountdown`` sets it.
+    countdown_seconds = Column(Integer, default=3, nullable=False)
+    # The pool's order when the auction first started, as a JSON list of
+    # ``[lot_id, set_name]``. ``/arestart`` puts the queue back in exactly this
+    # order — the accelerated round renumbers and re-files unsold players, and
+    # without a snapshot "from the first player" would have nothing to mean.
+    opening_order_json = Column(Text, nullable=True)
+
     # ── Publication ────────────────────────────────────────────────────
     league_id = Column(Integer, ForeignKey("challenge_leagues.id", ondelete="SET NULL"),
                        nullable=True, index=True)
