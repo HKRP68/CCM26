@@ -118,7 +118,9 @@ def _is_ready(cd, user, stats, session, now=None):
     if quota_kind:
         try:
             quota = get_quota_status(stats, quota_kind, session=session, user=user)
-            return not quota["all_used"]
+            # Usable right now — not merely "not exhausted": during an ad gap
+            # neither slot can be taken even though all_used is still False.
+            return bool(quota.get("free_available") or quota.get("ad_available"))
         except Exception:
             return False
     last = getattr(stats, cd["field"], None)

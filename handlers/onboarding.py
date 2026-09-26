@@ -172,7 +172,11 @@ async def gcjoin_check_callback(update: Update, context: ContextTypes.DEFAULT_TY
         import time
         cache[user.id] = (time.monotonic() + 600, True)
 
-    result = await asyncio.to_thread(onboarding_service.complete_gc_step_for, user.id)
+    # A failed lookup (None) still lets the player through — the gate fails
+    # open — but the journey reward is only paid for a confirmed membership.
+    result = None
+    if is_member is True:
+        result = await asyncio.to_thread(onboarding_service.complete_gc_step_for, user.id)
     if result:
         onboarding_service.discard_pending(user.id)
     has_account = await asyncio.to_thread(_has_account, user.id)

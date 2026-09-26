@@ -17942,6 +17942,17 @@ def admin_maintenance():
             "tournament_allowed_ids": row.tournament_allowed_ids or "",
             "rookie_mode": row.rookie_mode or False,
             "rookie_message": row.rookie_message,
+            # Official GC gate + retention panels. The two retention switches
+            # default ON, so a NULL must read as enabled — otherwise the
+            # checkbox renders unchecked and the next save turns them off.
+            "force_gc_join": bool(row.force_gc_join),
+            "gc_join_message": row.gc_join_message,
+            "official_group_id": row.official_group_id,
+            "official_group_link": row.official_group_link,
+            "branding_group_username": row.branding_group_username,
+            "onboarding_enabled": row.onboarding_enabled is not False,
+            "comeback_enabled": row.comeback_enabled is not False,
+            "comeback_rewards_json": row.comeback_rewards_json,
         }
         # Convert UTC → IST for the datetime-local input value
         until_ist_str = ""

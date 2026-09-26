@@ -212,14 +212,15 @@ def on_event(session, user_id, event_key):
         return None
     try:
         from models import User
-        user = session.get(User, user_id)
-        if user is None or not is_in_onboarding(user):
-            return None
-        result = None
-        for key in keys:
-            result = complete_step(session, user, key) or result
-        if result:
-            session.flush()
+        # Never flush the caller's pending state from here: the caller owns
+        # the transaction, and its own commit persists the journey changes.
+        with session.no_autoflush:
+            user = session.get(User, user_id)
+            if user is None or not is_in_onboarding(user):
+                return None
+            result = None
+            for key in keys:
+                result = complete_step(session, user, key) or result
         return result
     except Exception:
         logger.exception("onboarding on_event failed (non-fatal)")

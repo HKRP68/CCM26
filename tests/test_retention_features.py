@@ -146,6 +146,103 @@ class ComebackClaimTests(_DB):
             self.assertEqual(u.total_coins, 1000 + r["coins"])
             self.assertIsNone(C.claim(self.s, u, 3))
 
+    def test_a_stale_second_claim_pays_nothing(self):
+        # Two taps that both read comeback_claim_tier == 3 before either
+        # wrote: only the conditional UPDATE decides, so the second pays 0.
+        u = self._user(comeback_claim_tier=3)
+        self.s.commit()
+        other = sessionmaker(bind=self.engine)()
+        try:
+            stale = other.get(User, u.id)
+            self.assertEqual(stale.comeback_claim_tier, 3)
+            with patch.object(C, "tiers", return_value=C.DEFAULT_TIERS):
+                self.assertIsNotNone(C.claim(self.s, u, 3))
+                self.s.commit()
+                self.assertIsNone(C.claim(other, stale, 3))
+        finally:
+            other.close()
+        self.s.expire_all()
+        self.assertEqual(self.s.get(User, u.id).total_coins,
+                         1000 + C.DEFAULT_TIERS[3]["coins"])
+
+
+class ComebackScanTests(_DB):
+    def test_a_due_user_is_found_behind_a_page_of_users_not_due(self):
+        import database
+        now = datetime.utcnow()
+        # 30 users quiet for 2 days who already got their day-1 nudge 40 h
+        # ago: past the 36 h gap, but nothing new is due for them.
+        for i in range(30):
+            self._user(tg=5000 + i, created_at=now - timedelta(days=60),
+                       last_seen_at=now - timedelta(days=2),
+                       comeback_tier=1,
+                       comeback_sent_at=now - timedelta(hours=40))
+        due = self._user(tg=9999, created_at=now - timedelta(days=60),
+                         last_seen_at=now - timedelta(days=8))
+        self.s.commit()
+        factory = sessionmaker(bind=self.engine)
+        with patch.object(database, "get_session", factory), \
+                patch.object(C, "BATCH_SIZE", 2), \
+                patch.object(C, "tiers", return_value=C.DEFAULT_TIERS):
+            jobs = C._scan(now)
+        self.assertEqual([(j["user_id"], j["tier"]) for j in jobs], [(due.id, 7)])
+
+    def test_teaser_escapes_the_tournament_name(self):
+        import database
+        from models import Tournament
+        t = Tournament(name="Bat & <Ball> Cup", is_active=True)
+        self.s.add(t)
+        try:
+            self.s.commit()
+        except Exception:
+            self.skipTest("Tournament needs more required fields in this schema")
+        with patch.object(database, "get_session", sessionmaker(bind=self.engine)):
+            text = C._teaser()
+        self.assertIn("Bat &amp; &lt;Ball&gt; Cup", text)
+
+
+class GcVerifyTests(unittest.TestCase):
+    def test_unknown_membership_pays_no_journey_reward(self):
+        import asyncio
+        from handlers import onboarding as H
+        answers = []
+
+        class Q:
+            data = "gcjoin_check"
+            from_user = SimpleNamespace(id=7, first_name="A")
+            message = None
+
+            async def answer(self, *a, **k):
+                answers.append(a)
+
+            async def edit_message_text(self, *a, **k):
+                pass
+
+        class Bot:
+            async def get_chat_member(self, gid, uid):
+                raise Exception("Bad Request: chat not found")  # → None
+
+        ctx = SimpleNamespace(bot=Bot(), bot_data={})
+        with patch("services.gc_gate.official_group_id", return_value=-100123), \
+                patch.object(O, "complete_gc_step_for") as pay, \
+                patch.object(H, "_has_account", return_value=True):
+            asyncio.run(H.gcjoin_check_callback(SimpleNamespace(callback_query=Q()), ctx))
+        pay.assert_not_called()
+        self.assertTrue(answers)
+
+
+class AdminCfgTests(unittest.TestCase):
+    def test_maintenance_page_cfg_carries_the_new_settings(self):
+        from pathlib import Path
+        src = (Path(__file__).resolve().parent.parent / "admin.py").read_text()
+        start = src.index('"rookie_message": row.rookie_message,')
+        block = src[start:src.index("}", start)]
+        for key in ("force_gc_join", "gc_join_message", "official_group_id",
+                    "official_group_link", "onboarding_enabled",
+                    "comeback_enabled", "comeback_rewards_json"):
+            self.assertIn(f'"{key}"', block, key)
+        self.assertIn('row.onboarding_enabled is not False', block)
+
 
 class CardTests(unittest.TestCase):
     def _user(self, **kw):

@@ -34,6 +34,8 @@ DEFAULT_TIERS = {
 }
 MAX_INACTIVE_DAYS = int(os.getenv("COMEBACK_MAX_INACTIVE_DAYS", "30"))
 BATCH_SIZE = int(os.getenv("COMEBACK_BATCH_SIZE", "100"))
+# Upper bound on candidate pages read per tick (each page is BATCH_SIZE * 5).
+MAX_SCAN_PAGES = int(os.getenv("COMEBACK_MAX_SCAN_PAGES", "20"))
 SENDS_PER_SECOND = float(os.getenv("COMEBACK_SENDS_PER_SECOND", "8"))
 # Test hook: "minutes" makes a tier of N mean N minutes instead of N days.
 _UNIT = timedelta(minutes=1) if os.getenv("COMEBACK_TIER_UNIT") == "minutes" \
@@ -176,16 +178,29 @@ def _scan(now=None):
              .filter(User.created_at < newest))
         q = q.filter((User.last_seen_at > horizon) | (User.last_match_date > horizon)
                      | (User.created_at > horizon))
-        for u in q.order_by(User.id).limit(BATCH_SIZE * 5):
-            if len(jobs) >= BATCH_SIZE:
+        # The 36-hour gap in due_tier, done in SQL so recently nudged users
+        # never take up a page.
+        gap = now - 1.5 * _UNIT
+        q = q.filter((User.comeback_sent_at.is_(None)) | (User.comeback_sent_at < gap))
+        # Page by id until the batch is full: users who are quiet but not due
+        # yet (their tier already sent) must not starve higher-id users.
+        page = BATCH_SIZE * 5
+        cursor = 0
+        for _ in range(MAX_SCAN_PAGES):
+            rows = q.filter(User.id > cursor).order_by(User.id).limit(page).all()
+            for u in rows:
+                cursor = u.id
+                tier = due_tier(u, now, table)
+                if tier is None:
+                    continue
+                jobs.append({"user_id": u.id, "telegram_id": u.telegram_id,
+                             "tier": tier, "reward": table[tier],
+                             "name": u.first_name or u.username or "",
+                             "streak": u.win_streak or 0})
+                if len(jobs) >= BATCH_SIZE:
+                    break
+            if len(jobs) >= BATCH_SIZE or len(rows) < page:
                 break
-            tier = due_tier(u, now, table)
-            if tier is None:
-                continue
-            jobs.append({"user_id": u.id, "telegram_id": u.telegram_id,
-                         "tier": tier, "reward": table[tier],
-                         "name": u.first_name or u.username or "",
-                         "streak": u.win_streak or 0})
         s.commit()
     except Exception:
         s.rollback()
@@ -233,10 +248,20 @@ def claim(session, user, tier):
     if not reward:
         user.comeback_claim_tier = None
         return None
-    user.total_coins = (user.total_coins or 0) + reward["coins"]
-    user.total_gems = (user.total_gems or 0) + reward["gems"]
-    user.comeback_claim_tier = None
-    user.last_seen_at = datetime.utcnow()
+    # One conditional UPDATE: a double tap (or two devices) can pass the check
+    # above together, but only one of them matches the WHERE and pays.
+    from sqlalchemy import func
+    from models import User
+    won = (session.query(User)
+           .filter(User.id == user.id, User.comeback_claim_tier == tier)
+           .update({User.total_coins: func.coalesce(User.total_coins, 0) + reward["coins"],
+                    User.total_gems: func.coalesce(User.total_gems, 0) + reward["gems"],
+                    User.comeback_claim_tier: None,
+                    User.last_seen_at: datetime.utcnow()},
+                   synchronize_session=False))
+    if won != 1:
+        return None
+    session.expire(user)
     try:
         from services.activity_service import log_activity
         log_activity(session, user.id, "comeback",
@@ -260,7 +285,8 @@ def _teaser():
                     .filter(Tournament.is_active == True)  # noqa: E712
                     .first())
             if live is not None:
-                return f"🏆 <b>{live.name}</b> is live right now."
+                import html as _h
+                return f"🏆 <b>{_h.escape(live.name or '')}</b> is live right now."
         finally:
             s.close()
     except Exception:
