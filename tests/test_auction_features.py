@@ -966,8 +966,11 @@ class RetentionOfferTests(FeatureCase):
         from handlers import auction as H
         from models import Player
         name = f"Unposted Player {self.tag}"
-        self.session.add(Player(name=name, rating=90, **PLAYER_DEFAULTS))
+        player = Player(name=name, rating=90, **PLAYER_DEFAULTS)
+        self.session.add(player)
         self.session.commit()
+        from tests._previous_league import link_squads
+        link_squads(self.session, self.A, self.season, {"Mumbai": [player]})
 
         async def refuse(text, **kwargs):
             raise RuntimeError("telegram said no")
@@ -992,8 +995,11 @@ class RetentionOfferTests(FeatureCase):
         from handlers import auction as H
         name = f"Offer Player {self.tag}"
         from models import Player
-        self.session.add(Player(name=name, rating=90, **PLAYER_DEFAULTS))
+        player = Player(name=name, rating=90, **PLAYER_DEFAULTS)
+        self.session.add(player)
         self.session.commit()
+        from tests._previous_league import link_squads
+        link_squads(self.session, self.A, self.season, {"Mumbai": [player]})
         with AdminEnv(CAROL):
             out = self.run_handler(H.aretain_handler, CAROL,
                                    ("Mumbai", "|", name, "|", "5"))

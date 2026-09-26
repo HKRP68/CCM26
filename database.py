@@ -982,6 +982,8 @@ def _migrate_add_columns():
     _try_add("auction_seasons", "retention_slots_json", "TEXT")
     _try_add("auction_seasons", "retention_rules_json", "TEXT")
     _try_add("auction_lots", "retention_slot", "VARCHAR(24)")
+    # Last season's team, tied by id — survives a franchise being renamed.
+    _try_add("auction_franchises", "previous_team_id", "INTEGER")
 
     # ── Franchise Auction: Right To Match ──
     # Phase 2b. ``rtm_enabled`` shipped WITH auction_seasons, so every row

@@ -1698,8 +1698,15 @@ ADMIN_SECTIONS = (
         ("/agrant <team> | <amount>", "Correct a purse — | 5 adds ₹5 Cr, | -2 takes ₹2 Cr"),
     )),
     ("🔒 Retention", (
-        ("/aretain <team> | <player> | [price]", "Offer a retention — the team must press Accept"),
-        ("/aretainforce <team> | <player> | [price]", "Retain at once, no acceptance"),
+        ("/aprevious [league]", "Last season's league, and which team each "
+                                "franchise was — retention needs it"),
+        ("/aprevteam <team> | <last season's team>", "Tie a renamed side to "
+                                                     "last season's team"),
+        ("/aretain <team> [| <player> | price]", "Offer a retention from last "
+                                                 "season's squad — bare team "
+                                                 "name lists it as buttons"),
+        ("/aretainforce <team> [| <player> | price]", "Retain at once, no "
+                                                      "acceptance"),
         ("/aoffers", "Retention offers still waiting"),
         ("/aretcancel <player>", "Withdraw a waiting offer"),
         ("/aunretain <player>", "Release a retained player into the pool"),
@@ -1745,8 +1752,9 @@ PLAYER_SECTION = ("👥 For owners & everyone", (
     (".bid · .purse · .squad · .board", "Dot shortcuts — the same commands, "
                                         "quicker to type"),
     ("/artm yes|no", "Answer a Right To Match"),
-    ("/retain <player> [| price]", "Dynamic retention: open talks with your "
-                                   "player, then make offers — he decides"),
+    ("/retain [player] [| price]", "Dynamic retention: bare lists last "
+                                   "season's squad; then make offers — he "
+                                   "decides"),
     ("/ainfo", "Buttons for every view below"),
     ("/arules", "Purse, caps, base prices, bid steps, the clock — before a lot opens"),
     ("/asets · /anextset · /anextplayer", "Sets, the next set, the next players"),
@@ -2101,3 +2109,131 @@ async def edit(bot, chat_id, message_id, blocks, *, reply_markup=None,
             return True
         logger.warning("auction HTML edit failed: %s", exc)
         return False
+
+
+# ── Retention: last season's squad, and last season's teams ─────────
+
+PICK_CB = "au_rpk_"
+PICK_PAGE = 24
+PICK_MARK = {"kept": "🔒", "talks": "🤝", "gone": "🔨"}
+
+
+def retention_picker(session, season, franchise, mode, page=0):
+    """``(html, keyboard)``: the franchise's last-season squad as buttons.
+
+    ``mode`` is what a tap does — ``o`` posts an /aretain offer, ``f`` retains
+    at once (/aretainforce), ``r`` opens dynamic talks (/retain). Players who
+    are already kept, in talks or gone to the auction are listed without a
+    button, so the list doubles as the franchise's retention sheet.
+    """
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    from services import retention_negotiation as RN
+    symbol = season.currency_label or "₹"
+    rows = RN.retention_candidates(session, season, franchise)
+    verb = {"o": "offer a retention", "f": "retain at once",
+            "r": "open talks"}.get(mode, "pick")
+    lines = [f"🔒 <b>{_e(franchise.name)}</b> — last season's squad "
+             f"({len(rows)})"]
+    if not rows:
+        lines.append("Nobody from last season was found for this franchise. "
+                     "Check its last-season team with /aprevious.")
+        return "\n".join(lines), None
+    dynamic = RN.is_dynamic(season)
+    table = RN.rules(season) if dynamic else None
+    pages = max(1, (len(rows) + PICK_PAGE - 1) // PICK_PAGE)
+    page = max(0, min(int(page), pages - 1))
+    chunk = rows[page * PICK_PAGE:(page + 1) * PICK_PAGE]
+    buttons, row = [], []
+    for player, state, note in chunk:
+        mark = PICK_MARK.get(state, "▫️")
+        extra = ""
+        if dynamic and state == "free":
+            low, high = RN.demand_range(table, player.rating)
+            extra = (f" · {A.render_money(low, symbol)}–"
+                     f"{A.render_money(high, symbol)}")
+        tail = f" — {_e(note)}" if note else ""
+        lines.append(f"{mark} {_e(player.name)} · {player.rating} · "
+                     f"{_e(player.category or '')}{extra}{tail}")
+        if state == "free":
+            row.append(InlineKeyboardButton(
+                f"{player.name} · {player.rating}"[:40],
+                callback_data=f"{PICK_CB}{mode}_{franchise.id}_{player.id}"))
+            if len(row) == 2:
+                buttons.append(row)
+                row = []
+    if row:
+        buttons.append(row)
+    if pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton(
+                "◀", callback_data=f"{PICK_CB}pg_{mode}_{franchise.id}_{page - 1}"))
+        nav.append(InlineKeyboardButton(f"{page + 1}/{pages}",
+                                        callback_data=f"{PICK_CB}noop"))
+        if page < pages - 1:
+            nav.append(InlineKeyboardButton(
+                "▶", callback_data=f"{PICK_CB}pg_{mode}_{franchise.id}_{page + 1}"))
+        buttons.append(nav)
+    lines.append(f"\n<i>Tap a player to {verb}.</i> 🔒 kept · 🤝 in talks · "
+                 f"🔨 in the auction")
+    if mode == "o":
+        lines.append("<i>A tap uses the ladder's price; for another, type "
+                     f"</i><code>/aretain {_e(franchise.name)} | name | 20</code>")
+    return "\n".join(lines), (InlineKeyboardMarkup(buttons) if buttons else None)
+
+
+def previous_teams_view(session, season):
+    """``(html, keyboard)``: which team each franchise was last season.
+
+    A franchise nobody could match — usually one that changed its name — gets
+    a row of buttons, one per last-season team still unclaimed.
+    """
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    league_id = getattr(season, "previous_league_id", None)
+    if not league_id:
+        return ("🗓 <b>Last season</b> — this auction follows no league yet, "
+                "so nobody can be retained.\n"
+                "Link one with <code>/aprevious &lt;league name or id&gt;</code>."
+                ), None
+    from models import ChallengeLeague, ChallengePlayer
+    league = (session.query(ChallengeLeague)
+              .filter(ChallengeLeague.id == int(league_id)).first())
+    links = A.previous_team_links(session, season)
+    claimed = {team.id for _f, team in links.values()}
+    free = [t for t in A.league_teams(session, league_id) if t.id not in claimed]
+    lines = [f"🗓 <b>Last season</b> — "
+             f"{_e(league.name if league else f'league #{league_id}')}"]
+    buttons = []
+    for franchise in A.franchises(session, season.id):
+        link = links.get(franchise.id)
+        if link is not None:
+            team = link[1]
+            count = (session.query(ChallengePlayer.id)
+                     .filter(ChallengePlayer.team_id == team.id,
+                             ChallengePlayer.source_player_id.isnot(None))
+                     .count())
+            pinned = "📌" if franchise.previous_team_id == team.id else "✅"
+            same = (team.name or "").strip().lower() == (franchise.name or "").strip().lower()
+            lines.append(f"{pinned} <b>{_e(franchise.name)}</b>"
+                         + ("" if same else f" ← was <b>{_e(team.name)}</b>")
+                         + f" · {count} players")
+        else:
+            lines.append(f"❓ <b>{_e(franchise.name)}</b> — no team found")
+            row = []
+            for team in free[:6]:
+                row.append(InlineKeyboardButton(
+                    f"{franchise.name[:14]} = {team.name[:18]}",
+                    callback_data=f"{PICK_CB}tm_{franchise.id}_{team.id}"))
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
+    if free:
+        lines.append("\nUnclaimed last-season teams: "
+                     + ", ".join(_e(t.name) for t in free))
+    lines.append("\n📌 pinned by id — a rename can't break it.\n"
+                 "<i>Fix one by hand:</i> "
+                 "<code>/aprevteam Kochi | Kochi Tuskers</code> "
+                 "(<code>| none</code> clears it)")
+    return "\n".join(lines), (InlineKeyboardMarkup(buttons) if buttons else None)

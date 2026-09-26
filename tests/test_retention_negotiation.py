@@ -400,7 +400,10 @@ class CommandTests(DynamicCase):
                       bowl_rating=40, is_active=True)
         self.session.add(solo)
         self.session.commit()
-        self._run(H.retain_handler, ALICE, (solo.name,))
+        from tests._previous_league import link_squads
+        link_squads(self.session, self.A, self.season,
+                    {"Mumbai": [solo], "Chennai": [self.p("Jasprit Bumrah")]})
+        self._run(H.retain_handler, ALICE, (solo.name.split()[-1],))
         self.assertIn("Retention talks", self.replies[-1])
         self.assertIn("Premium", self.replies[-1])
         self._run(H.retain_handler, ALICE, (solo.name, "|", "18"))
@@ -412,8 +415,9 @@ class CommandTests(DynamicCase):
             # A generous hidden price could make 18 Cr an instant yes.
             self.assertEqual(1, len(self.A.retained(self.session,
                                                     self.mumbai.id)))
+        # Chennai never held him: refused before any talk opens.
         self._run(H.retain_handler, BOB, (solo.name, "|", "30"))
-        self.assertIn("⚠️", self.replies[-1])
+        self.assertIn("on Chennai&#x27;s squad last season", self.replies[-1])
 
     def test_aretmode_is_admin_only(self):
         from handlers import auction as H

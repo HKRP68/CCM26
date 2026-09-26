@@ -1817,38 +1817,165 @@ def previous_squad_map(session, season, league_id=None):
     league_id = league_id or getattr(season, "previous_league_id", None)
     if not league_id:
         return {}
-    rows = (session.query(ChallengePlayer.source_player_id, ChallengeTeam.name)
-            .join(ChallengeTeam, ChallengePlayer.team_id == ChallengeTeam.id)
-            .filter(ChallengeTeam.league_id == int(league_id),
-                    ChallengePlayer.source_player_id.isnot(None)).all())
-    if not rows:
+    links = previous_team_links(session, season, league_id)
+    if not links:
         return {}
+    by_team = {team.id: franchise for franchise, team in links.values()}
+    rows = (session.query(ChallengePlayer.source_player_id, ChallengePlayer.team_id)
+            .filter(ChallengePlayer.team_id.in_(list(by_team)),
+                    ChallengePlayer.source_player_id.isnot(None)).all())
+    return {source_id: by_team[team_id] for source_id, team_id in rows
+            if team_id in by_team}
+
+
+# Words a side's name carries or drops between seasons without becoming a
+# different side: "Mumbai FC" is "Mumbai", "The Kochi XI" is "Kochi".
+_TEAM_NOISE = {"the", "fc", "xi", "team", "club", "cc", "cricket"}
+
+
+def _team_key(name):
+    """A team name reduced to what identifies it, for matching across seasons."""
+    import re
+    words = re.sub(r"[^a-z0-9]+", " ", (name or "").lower()).split()
+    return " ".join(w for w in words if w not in _TEAM_NOISE)
+
+
+def league_teams(session, league_id):
+    if not league_id:
+        return []
+    return (session.query(ChallengeTeam)
+            .filter(ChallengeTeam.league_id == int(league_id))
+            .order_by(ChallengeTeam.sort_order.asc(),
+                      ChallengeTeam.name.asc()).all())
+
+
+def previous_team_links(session, season, league_id=None):
+    """``{franchise_id: (franchise, ChallengeTeam)}`` — who was who last season.
+
+    Resolved in order of how much each route can be trusted:
+
+    1. **The stored link**, ``previous_team_id``. Set by an admin with
+       /aprevteam or the setup page, or pinned automatically when the league is
+       linked. It always wins, which is what makes a rename harmless: once a
+       franchise is tied to last season's team by id, neither side's name
+       matters again.
+    2. **The carried link** a cloned season has — ``carried_from_id`` to last
+       season's franchise, whose team ``publish_to_league`` named after it.
+    3. **The name**, forgivingly: case, punctuation and filler words such as
+       FC / XI / Team are ignored, and ``short_name`` counts. Accepted only
+       when it is unique both ways — one franchise, one team — because a guess
+       between two would hand a squad to the wrong side in silence.
+
+    A team is never given to two franchises.
+    """
+    league_id = league_id or getattr(season, "previous_league_id", None)
+    teams = league_teams(session, league_id)
+    if not teams:
+        return {}
+    by_id = {t.id: t for t in teams}
     here = franchises(session, season.id)
-    by_name = {(f.name or "").strip().lower(): f for f in here}
+    links, claimed = {}, set()
 
-    # The exact route, for a season cloned from another. Last season's teams
-    # were named after last season's franchises by ``publish_to_league``, so
-    # team name -> old franchise is safe *within that season*; the hop from
-    # there to this season's franchise is the stored link, not a name.
-    carried = {f.carried_from_id: f for f in here if f.carried_from_id}
-    previous_by_name = {}
+    for franchise in here:
+        team = by_id.get(getattr(franchise, "previous_team_id", None) or 0)
+        if team is not None and team.id not in claimed:
+            links[franchise.id] = (franchise, team)
+            claimed.add(team.id)
+
+    carried = {f.carried_from_id: f for f in here
+               if f.carried_from_id and f.id not in links}
     if carried and getattr(season, "previous_season_id", None):
-        previous_by_name = {
-            (f.name or "").strip().lower(): f
-            for f in franchises(session, int(season.previous_season_id))}
-
-    mapping = {}
-    for source_id, team_name in rows:
-        key = (team_name or "").strip().lower()
-        franchise = None
-        was = previous_by_name.get(key)
-        if was is not None:
+        team_by_exact = {}
+        for team in teams:
+            team_by_exact.setdefault((team.name or "").strip().lower(), []).append(team)
+        for was in franchises(session, int(season.previous_season_id)):
             franchise = carried.get(was.id)
-        if franchise is None:
-            franchise = by_name.get(key)
-        if franchise is not None:
-            mapping[source_id] = franchise
-    return mapping
+            found = team_by_exact.get((was.name or "").strip().lower(), [])
+            found = [t for t in found if t.id not in claimed]
+            if franchise is not None and len(found) == 1:
+                links[franchise.id] = (franchise, found[0])
+                claimed.add(found[0].id)
+
+    def keys(*names):
+        return {k for k in (_team_key(n) for n in names if n) if k}
+
+    free_teams = [t for t in teams if t.id not in claimed]
+    free_here = [f for f in here if f.id not in links]
+    team_keys = {t.id: keys(t.name, t.short_name) for t in free_teams}
+    here_keys = {f.id: keys(f.name, f.short_name) for f in free_here}
+    for franchise in free_here:
+        matches = [t for t in free_teams if team_keys[t.id] & here_keys[franchise.id]]
+        if len(matches) != 1:
+            continue
+        team = matches[0]
+        rivals = [f for f in free_here if team_keys[team.id] & here_keys[f.id]]
+        if len(rivals) == 1 and team.id not in claimed:
+            links[franchise.id] = (franchise, team)
+            claimed.add(team.id)
+    return links
+
+
+def pin_previous_teams(session, season):
+    """Store every link that resolves, so a later rename cannot undo it.
+
+    Returns ``(linked, unlinked franchises, unclaimed teams)`` for the report.
+    """
+    links = previous_team_links(session, season)
+    for franchise, team in links.values():
+        franchise.previous_team_id = team.id
+    session.flush()
+    here = franchises(session, season.id)
+    claimed = {team.id for _f, team in links.values()}
+    return (links,
+            [f for f in here if f.id not in links],
+            [t for t in league_teams(session, season.previous_league_id)
+             if t.id not in claimed])
+
+
+def set_previous_team(session, season, franchise, team_name):
+    """Tie a franchise to last season's team by hand — or ``none`` to clear.
+
+    For the side that changed its name: "Kochi" this season was "Kochi
+    Tuskers" last season, and no name rule should be trusted to know that.
+    """
+    if not season.previous_league_id:
+        raise AuctionError("Link last season's league first — /aprevious "
+                           "<league>.")
+    text = (team_name or "").strip()
+    if text.lower() in ("none", "clear", "-", "off"):
+        franchise.previous_team_id = None
+        session.flush()
+        return None
+    teams = league_teams(session, season.previous_league_id)
+    wanted = text.lower()
+    team = None
+    if text.isdigit():
+        team = next((t for t in teams if t.id == int(text)), None)
+    if team is None:
+        exact = [t for t in teams if (t.name or "").strip().lower() == wanted
+                 or (t.short_name or "").strip().lower() == wanted]
+        loose = [t for t in teams if _team_key(text)
+                 and _team_key(text) in (_team_key(t.name), _team_key(t.short_name))]
+        partial = [t for t in teams if wanted and wanted in (t.name or "").lower()]
+        for pool in (exact, loose, partial):
+            if len(pool) == 1:
+                team = pool[0]
+                break
+            if len(pool) > 1:
+                raise AuctionError("That could be " + ", ".join(
+                    t.name for t in pool[:6]) + " — type more of the name.")
+    if team is None:
+        raise AuctionError(f"No team called “{text}” in last season's league. "
+                           f"Its teams: " + ", ".join(t.name for t in teams[:20]))
+    for other in franchises(session, season.id):
+        if other.id != franchise.id and other.previous_team_id == team.id:
+            raise AuctionError(f"{team.name} is already linked to "
+                               f"{other.name}. Clear that first with "
+                               f"/aprevteam {other.name} | none.")
+    # A link another franchise only has by name gives way to an explicit one.
+    franchise.previous_team_id = team.id
+    session.flush()
+    return team
 
 
 # ── Retaining ────────────────────────────────────────────────────────
@@ -2767,7 +2894,13 @@ def link_previous_season(session, season, league_id):
     # Remembered, not just used: the retention picker needs to know whose
     # players were whose BEFORE any lot exists, so it cannot re-derive this
     # from the lots the way this function does.
+    if season.previous_league_id != int(league_id):
+        # A different league: last season's team ids mean nothing any more.
+        for franchise in franchises(session, season.id):
+            franchise.previous_team_id = None
+        session.flush()
     season.previous_league_id = int(league_id)
+    pin_previous_teams(session, season)
     mapping = previous_squad_map(session, season, league_id)
     if not mapping:
         return 0

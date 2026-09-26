@@ -23080,20 +23080,6 @@ def admin_auction_detail(season_id):
         # deliberately NOT restricted to last season's squad — an admin
         # building a first season by hand has no last season, and the warning
         # on save is the right weight for "that is not who held them".
-        retain_hits = []
-        retain_q = (request.args.get("retain_q") or "").strip()
-        if retain_q:
-            held = auction_svc.previous_squad_map(db, season)
-            rows = player_query.ordered(
-                player_query.master_player_query(db, {"q": retain_q})).limit(40).all()
-            pooled = {row[0]: row[1] for row in
-                      db.query(AuctionLot.player_id, AuctionLot.status)
-                      .filter(AuctionLot.season_id == season.id).all()}
-            retain_hits = [(p, held.get(p.id), pooled.get(p.id)) for p in rows]
-            # A franchise's own former players first — that is who retention is
-            # normally for, and scrolling past forty strangers to find them is
-            # the difference between a usable picker and a search box.
-            retain_hits.sort(key=lambda row: (row[1] is None, -(row[0].rating or 0)))
 
         filters = _auction_pool_filters()
         # ``previewed`` is NOT ``bool(preview)``: a filter that matches nobody
@@ -23167,8 +23153,11 @@ def admin_auction_detail(season_id):
             retention_cats=auction_svc.retention_categories(season),
             clock=auction_svc.format_clock,
             previous_squad=auction_svc.previous_squad_map(db, season),
-            retain_q=(request.args.get("retain_q") or "").strip(),
-            retain_hits=retain_hits,
+            ret_candidates=lambda f: (
+                retention_rn.retention_candidates(db, season, f)
+                if season.previous_league_id else []),
+            prev_links=auction_svc.previous_team_links(db, season),
+            prev_teams=auction_svc.league_teams(db, season.previous_league_id),
             cards_left=auction_svc.rtm_cards_left,
             # Every match made so far, so the undo has somewhere to live. It
             # is the only operation in the feature that hands a *card* back,
@@ -23617,15 +23606,10 @@ def _auction_detail_action(db, season, action):
         if player is None:
             abort(404)
         raw = (request.form.get("price") or "").strip()
+        # Retention is only ever from the franchise's own last-season squad.
+        retention_rn.check_previous_holder(db, season, franchise, player)
         lot = auction_svc.retain(db, season, franchise, player,
                                  auction_svc.parse_amount(raw) if raw else None)
-        held = auction_svc.previous_squad_map(db, season).get(player.id)
-        if season.previous_league_id and (held is None or held.id != franchise.id):
-            # A warning, never a refusal: an admin correcting a mess has to be
-            # able to put a player somewhere the record does not expect.
-            flash(f"⚠️ {player.name} was "
-                  + (f"{held.name}'s" if held else "not in")
-                  + " last season — retained anyway.", "error")
         log_admin(db, "auction_retain", "auction", season.id, franchise.name,
                   detail=player.name)
         flash(f"🔒 {franchise.name} retain {lot.name} for "
@@ -23812,6 +23796,17 @@ def _auction_detail_action(db, season, action):
               "success")
         # The whole point is landing on the new auction, not the old one.
         return url_for("admin_auction_detail", season_id=fresh.id)
+
+    elif action == "previous_team":
+        franchise = _auction_franchise(db, season, request.form.get("franchise_id"))
+        team_id = (request.form.get("team_id") or "").strip()
+        team = auction_svc.set_previous_team(db, season, franchise,
+                                             team_id or "none")
+        log_admin(db, "auction_previous_team", "auction", season.id,
+                  franchise.name, detail=team.name if team else "cleared")
+        flash(f"📌 {franchise.name} was {team.name} last season." if team
+              else f"🧹 {franchise.name}'s last-season team is cleared.",
+              "success")
 
     elif action == "link_previous":
         stamped = auction_svc.link_previous_season(

@@ -644,7 +644,9 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/adirect on\|off` | Direct bids: may a bidder type their own amount (`/bid 12`), or only take the next step? Default **on**. Off still allows bare `/bid` and the board's buttons |
 | `/agrant <franchise> \| <amount>` | Correct a franchise purse |
 | `/aco <franchise> \| <telegram id>` | Add a co-owner who may bid |
-| `/aretain <franchise> \| <player> \| [price]` | Retain a player — `/aretain Mumbai \| Virat Kohli \| 18` |
+| `/aretain <franchise> [\| <player> \| price]` | Retain one of that franchise's **last-season** players — `/aretain Kochi \| Gill \| 25`. The name is looked up in its old squad only, so no edition is ever asked for and a surname is enough. `/aretain Kochi` alone lists the squad as buttons |
+| `/aprevious [league name \| id]` (`/alastseason`) | Link last season's league, and see which team each franchise was. A franchise nobody matched (a renamed side) gets buttons to pick its old team |
+| `/aprevteam <franchise> \| <last season's team>` | Tie a renamed side to its old team by id — `/aprevteam Kochi \| Kochi Tuskers`; `\| none` clears it |
 | `/aunretain <player name>` | Release a retained player into the pool |
 | `/aretlock [on]` · `/aretention` | Retention state, and close the window |
 | `/artmset <cards> [seconds] [max]` · `/artmset off` | Right To Match rules — `/artmset 2 45 200` |
@@ -659,7 +661,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/anextset <set \| 80-85>` | Make a set, or every queued player in a rating range, come next |
 | `/asetorder A, B, C` | Order the whole queue by set — the numbers `/asets` shows are the order it runs in, and the website's Sets card does the same with ↑ / ↓ |
 | `/aaccelmode on\|off` | The automatic ⚡ Accelerated round for unsold players (default on) |
-| `/aretainforce <franchise> \| <player> \| [price]` | Retain at once, without the franchise's Accept |
+| `/aretainforce <franchise> [\| <player> \| price]` | Retain at once, without the franchise's Accept — same last-season squad rule, and the bare team name lists it as buttons |
 | `/aoffers` · `/aretcancel <player>` | Retention offers (or, in dynamic mode, open talks) waiting, and withdraw / cancel one |
 | `/aretmode classic\|dynamic` | Which retention system runs — the slab ladder, or dynamic: owners negotiate, players decide. Only one at a time |
 | `/aretslot [add\|edit\|remove\|move\|preset]` | Dynamic slots — `/aretslot add Uncapped \| 70-82 \| 4 \| 🧢`, `/aretslot edit Elite \| range 92-99 \| price 25`, `/aretslot preset 2` |
@@ -672,6 +674,13 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/aadminadd <id \| @user \| reply>` | Bot admins only: make someone an auction admin |
 | `/aadminremove <id \| @user \| reply>` · `/aadmins` | Remove one, or list them |
 
+**Retention is only ever from last season's squad.** Every retention command,
+the buttons and the setup page look the player up in the squad that franchise
+had in the league the auction follows (`/aprevious`), so the exact card is
+known, no edition is asked for, and a player from another team is refused.
+A side that changed its name is tied to its old team once with `/aprevteam`
+(or the buttons `/aprevious` shows), by id, so later renames change nothing.
+
 `/aretain` now **offers** the retention: the franchise's owner or a co-owner
 presses ✅ Accept (nobody else can), and only then is the player kept.
 
@@ -679,7 +688,8 @@ presses ✅ Accept (nobody else can), and only then is the player kept.
 Each player fills a slot by rating (🥇 Elite 92–96 from ₹23 Cr, 🥈 Premium
 87–91 from ₹18 Cr, 🥉 Core 83–86 from ₹12 Cr, within a ₹53 Cr budget, all
 editable). The owner types `/retain <player>` to see his Demand Meter, then
-`/retain <player> | <price>` to make an offer. He ✅ accepts, 💰 counters (take
+`/retain <player> | <price>` to make an offer (bare `/retain` lists your
+last-season squad as buttons). He ✅ accepts, 💰 counters (take
 his ask with the button) or ❌ rejects. After three rejections he walks into the
 auction and can't be approached again. His price and personality stay hidden.
 **Auction admins** may use every command in this table and no other admin
