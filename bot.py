@@ -75,6 +75,7 @@ from handlers.search import (
 from handlers.buy import (
     buypl_handler, buypl_confirm_callback, buypl_cancel_callback,
     buypl_close_callback, player_page_callback, player_page_noop_callback,
+    buy_roster_full_callback,
 )
 from handlers.team import (teamname_handler, teamcolour_handler, purse_handler,
                            stats_handler, statscl_handler)
@@ -1080,7 +1081,8 @@ async def start_handler(update, context):
         "/cdraft - Challenge Draft: someone joins, then you both build an XI "
         "pick by pick from the full player pool (11 slots, two same-role cards "
         "a slot — you take one, your opponent gets the other), and play it out\n"
-        "/letsplay /lp @user - Reply or tag to play 20 overs with your own roster\n"
+        "/letsplay /lp [overs] @user - Reply or tag to play with your own roster "
+        "(20 overs, or 1-20: /lp 5 @user)\n"
         "/lptour @user - Play your Lets Play Tournament fixture (official result)\n"
         "/lpt - Lets Play Tournament hub: table, fixtures, teams\n"
         "/lptable /lptfixtures /lptteams /lptstats - Tournament table, schedule, field, leaders\n"
@@ -1116,7 +1118,8 @@ async def start_handler(update, context):
         "/rivalry [@user] - Your rivalries, or the series with one player ⚔️\n"
         "/predict - Back a side of the live match in this group with coins 🔮\n"
         "/halloffame /hof - All-time records: top scores, best figures, streaks 🏛️\n"
-        "/challengeIPL /cipl - Reply to a user to start an IPL challenge\n"
+        "/challengeIPL /cipl [overs] - Reply to a user to start an IPL challenge "
+        "(20 overs, or 1-20: /cipl 6)\n"
         "/challengeBBL /cbbl - Reply to a user to start a BBL challenge\n"
         "/challengeINT /cint - Reply to a user to start an international challenge\n"
         "/unscramble - Create an Unscramble Player lobby\n"
@@ -2659,6 +2662,7 @@ def main():
         app.add_handler(CallbackQueryHandler(buypl_close_callback, pattern=r"^buyclose_"))
         app.add_handler(CallbackQueryHandler(player_page_callback, pattern=r"^plpg_"))
         app.add_handler(CallbackQueryHandler(player_page_noop_callback, pattern=r"^plpgnoop_"))
+        app.add_handler(CallbackQueryHandler(buy_roster_full_callback, pattern=r"^buyfull_"))
 
         # ── Match callbacks ──────────────────────────────────────────
         app.add_handler(CallbackQueryHandler(cric_join_callback, pattern=r"^cric_join$"))

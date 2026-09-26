@@ -1739,6 +1739,12 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         # XI selection; default to the over-based format if it is missing.
         overs = CIPL_OVERS
         ball_format = draft.get("ball_format", "T20")
+        # A friendly can be shorter (/cipl 6). Tournament, CL Tour and The
+        # Hundred matches are always the full 20 units.
+        if (draft.get("overs") and ball_format == "T20"
+                and not draft.get("is_tournament") and not draft.get("tournament_id")
+                and not draft.get("cl_tour_id")):
+            overs = max(1, min(CIPL_OVERS, int(draft["overs"])))
         settings = random_match_settings()
         # Honour the host's chosen pitch (selected during setup); fall back to the
         # randomised surface only when no pitch was picked.
@@ -3499,6 +3505,31 @@ def _crr_line(state):
     return line
 
 
+def _conditions_text(state):
+    """'🌱 Hard pitch · ☁️ Overcast · 🌡️ 22°C · 💧 Light dew' — plain text.
+
+    The LIVE conditions: weather and dew move during the match
+    (services.weather_drift), so both captains see what they are picking into.
+    Empty only when the match has neither a pitch nor conditions.
+    """
+    bits = []
+    pitch = state.get("pitch_type")
+    if pitch:
+        bits.append(f"🌱 {pitch} pitch")
+    cond = state.get("conditions") or {}
+    if cond.get("weather"):
+        bits.append(f"🌤️ {cond['weather']}")
+    if cond.get("temperature") is not None:
+        bits.append(f"🌡️ {cond['temperature']}°C")
+    if cond.get("wind_strength") in ("Moderate", "Strong"):
+        bits.append(f"💨 {cond['wind_strength']} {str(cond.get('wind_direction') or 'wind').lower()}")
+    if cond.get("dew"):
+        bits.append(f"💧 {cond['dew']} dew")
+    elif cond.get("dew_forecast"):
+        bits.append(f"💧 {cond['dew_forecast']} dew expected")
+    return " · ".join(bits)
+
+
 def _approach_card(state):
     """Full broadcast-style scorecard card used on the approach-select prompts."""
     inn = state.get("innings", 1)
@@ -3524,6 +3555,11 @@ def _approach_card(state):
         f"      {_compact_bat_line(non_striker, bs)}",
         rule,
         _crr_line(state),
+    ]
+    conditions = _conditions_text(state)
+    if conditions:
+        lines.append(html.escape(conditions))
+    lines += [
         rule,
         f"{bowl_emoji} {bowl_code} | Bowl | {_over_emoji_strip(state)}",
     ]
@@ -3605,6 +3641,11 @@ def _build_approach_card_blocks(state, prompt):
              "  ·  CRR ", R.bold(f"{crr:.2f}")]))
     else:
         blocks.append(R.paragraph(["⚡ ", R.bold("CRR"), f"  {crr:.2f}"]))
+
+    # ── Pitch + live weather / dew ──
+    conditions = _conditions_text(state)
+    if conditions:
+        blocks.append(R.paragraph([R.italic(conditions)]))
 
     # ── At the crease ──
     bs = state["bat_stats"]

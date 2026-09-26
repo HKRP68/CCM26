@@ -311,6 +311,17 @@ class PostMatchTests(Case):
         self.assertIn("Ranked", card)
         self.assertIn("Asha", card)
 
+    def test_short_custom_match_is_unrated_but_counts_for_the_rivalry(self):
+        from services import post_match
+        a, b = self.user(), self.user()
+        m = self.match(a, b, winner=a)
+        m.overs = 3
+        out = post_match.process_completed_match(self.s, m)
+        self.assertFalse(out["ranked"]["rated"])
+        self.assertIn("under 5 overs", out["ranked"]["reason"])
+        self.assertEqual(out["rivalry"]["played"], 1)
+        self.assertIn("Unrated", post_match.render_card(out, {}))
+
     def test_uncounted_match_is_not_rated(self):
         from services import post_match
         a, b = self.user(), self.user()

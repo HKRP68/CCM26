@@ -247,13 +247,21 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
   now have conditions that change as the match goes on: cloud rolls in or
   clears, the wind can pick up, and on a night match the dew *builds* — it
   arrives late in the first innings or during the chase, up to the level the
-  Pitch Report forecast. Each change is announced in the over summary. There is
-  **no rain**: nothing stops play, shortens an innings or sets a DLS target.
+  Pitch Report forecast. Each change is announced in the over summary, and the
+  approach card both captains pick from always shows the pitch and the live
+  weather/dew. There is **no rain**: nothing stops play, shortens an innings or
+  sets a DLS target.
+* **Custom overs** — `/letsplay 5 @user` or `/cipl 6` (as a reply) plays a
+  shorter friendly, 1–20 overs. Tournament fixtures, CL Tour matches and The
+  Hundred leagues always play their full length. Matches under 5 overs still
+  pay rewards and count for rivalries, but are not ranked.
 
 ## 9. Challenge Leagues
 
 League commands are **dynamic**: every active league answers to both
 `/c<league>` and `/challenge<league>`. Reply to the person you want to play.
+Add a number for a shorter friendly — `/cipl 6` plays 6 overs (1–20). Tournament,
+CL Tour and The Hundred matches always play their full length.
 
 | Command | What it does |
 |---------|--------------|
@@ -414,7 +422,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/playerinfo <player name>` | `/playerinfo Virat Kohli` |
 | `/searchpl <player name>` | `/searchpl kohli` |
 | `/searchovr <rating>` | `/searchovr 88` |
-| `/buypl <player name>` | `/buypl Jasprit Bumrah` |
+| `/buypl <player name>` — opens the card even with a full roster; the Buy button shows 🔒 until you release a player, then turns back into Buy when tapped | `/buypl Jasprit Bumrah` |
 | `/releasepl <name>` · `/releasepl <position>` | `/releasepl 14` |
 | `/releasemultiple <from> <to>` | `/releasemultiple 20 30` |
 | `/trade @username` | `/trade @rahul` |
@@ -471,6 +479,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | Usage | Example |
 |-------|---------|
 | `/letsplay @username` *(or reply)* | `/letsplay @rahul` |
+| `/letsplay <overs> @username` — a shorter friendly, 1–20 overs (tournament fixtures are always 20) | `/lp 5 @rahul` |
 | `/predict [match id]` *(in the group, while a match is live)* | `/predict` |
 | `/playmatch @username` | `/playmatch @rahul` |
 | `/cm @username` | `/cm @rahul` |
@@ -483,6 +492,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/ciplbot [league]` | `/ciplbot ipl` |
 | `/pbo @username` | `/pbo @rahul` |
 | `/cipl` *(reply to a user)* | `/cipl` |
+| `/cipl <overs>` *(reply to a user)* — a shorter friendly, 1–20 overs | `/cipl 6` |
 | `/matchinfo` | `/matchinfo` |
 | `/resume` · `/rcl` | `/rcl` |
 | `/endmatch` | `/endmatch` |

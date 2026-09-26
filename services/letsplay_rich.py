@@ -101,7 +101,7 @@ def invite_blocks(draft, host_preview=None):
     facts = [
         [R.cell(R.bold("🎮 Match type")),
          R.cell("Tournament (official)" if lpt else "Lets Play")],
-        [R.cell(R.bold("⏱️ Format")), R.cell("20 Overs")],
+        [R.cell(R.bold("⏱️ Format")), R.cell(f"{draft.get('overs') or 20} Overs")],
         [R.cell(R.bold("📋 Roster")), R.cell("Own Roster")],
     ]
     if host_preview:
@@ -194,7 +194,7 @@ def _side_blocks(caption, xi_rows, bench_rows):
 
 
 @_guarded("playing XI")
-def playing_xi_blocks(*, vs_bot, pitch, host_label, guest_label,
+def playing_xi_blocks(*, vs_bot, pitch, host_label, guest_label, overs=20,
                       host_xi, guest_xi, host_bench=None, guest_bench=None,
                       trait_status=None, fairness=None, start_prompt=None):
     """The 'both XIs locked' card, as blocks.
@@ -211,7 +211,7 @@ def playing_xi_blocks(*, vs_bot, pitch, host_label, guest_label,
              else "🧾 Lets Play — Playing XI")
     blocks = [R.heading(title, size=2),
               R.paragraph([R.bold("🌱 Pitch: "), _pitch_label(pitch),
-                           "  ·  20 overs"])]
+                           f"  ·  {overs} overs"])]
     if trait_status:
         blocks.append(R.paragraph(trait_status))
     blocks.append(R.paragraph(R.italic(

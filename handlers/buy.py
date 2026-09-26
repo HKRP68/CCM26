@@ -145,10 +145,10 @@ async def buypl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _refuse_second_buy(update, pending, tg_user.id)
             return
 
-        if user.roster_count >= MAX_ROSTER:
-            await update.message.reply_text(
-                f"❌ Roster full ({MAX_ROSTER}/{MAX_ROSTER})! Release players first.")
-            return
+        # A full roster no longer stops the card from opening: the player is
+        # still worth looking at. The card says so, and its Buy button becomes
+        # a 🔒 that turns back into Buy once a player has been released
+        # (services.version_paginator.roster_is_full / buyfull_ callback).
 
         # Find any matching player
         from services.version_paginator import (
@@ -283,6 +283,9 @@ async def _send_version_page(*, session, user, versions, current_idx, owner_tg,
         return
 
     caption_lines.append(f"\n💳 Your Balance: <b>{user.total_coins:,}</b> 🪙")
+    from services.version_paginator import roster_full_note, roster_is_full
+    if roster_is_full(user):
+        caption_lines.append(roster_full_note(user))
     caption = "\n".join(caption_lines)
 
     keyboard = build_pagination_keyboard(
@@ -477,6 +480,55 @@ async def player_page_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         session.close()
 
 
+async def buy_roster_full_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """buyfull_<player_id>_<flow>_<owner_tg> — the 🔒 Roster full button.
+
+    Still full → a pop-up saying how to make room (the card stays as it is).
+    Room now → the page is redrawn, so the Buy button comes back.
+    """
+    q = update.callback_query
+    try:
+        _, player_id, flow, owner_tg = q.data.split("_")
+        player_id, owner_tg = int(player_id), int(owner_tg)
+    except (ValueError, AttributeError):
+        await q.answer("Invalid")
+        return
+    if q.from_user.id != owner_tg:
+        await q.answer("Not your card!", show_alert=True)
+        return
+    session = get_session()
+    try:
+        user = session.query(User).filter(User.telegram_id == owner_tg).first()
+        target = session.get(Player, player_id)
+        if not user or not target:
+            await q.answer("This card has expired — send /buypl again.", show_alert=True)
+            return
+        from services.version_paginator import (
+            get_versions_ordered, page_number_for, roster_is_full)
+        if roster_is_full(user):
+            await q.answer(
+                f"Your roster is full ({user.roster_count}/{MAX_ROSTER}).\n\n"
+                "Release a player first — /releasepl <name or position>, or "
+                "/relm <from> <to> for several — then tap this button again.",
+                show_alert=True)
+            return
+        await q.answer("✅ You have room now — the Buy button is back.")
+        base_id = target.parent_player_id or target.id
+        versions = get_versions_ordered(session, base_id) or [target]
+        await _send_version_page(
+            session=session, user=user, versions=versions,
+            current_idx=page_number_for(versions, target.id), owner_tg=owner_tg,
+            send_to=None, context=context, edit_query=q)
+    except Exception:
+        logger.exception("buy_roster_full_callback failed")
+        try:
+            await q.answer("⚠️ Error", show_alert=True)
+        except Exception:
+            pass
+    finally:
+        session.close()
+
+
 async def player_page_noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Callback for plpgnoop_ — page indicator / owned-marker. Just acknowledge."""
     q = update.callback_query
@@ -494,7 +546,6 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
     if not claim_once(key):
         await query.answer("Already processing…")
         return
-    await query.answer()
 
     parts = query.data.split("_")  # buypl_{player_id}_{user_id}
     player_id = int(parts[1])
@@ -506,7 +557,22 @@ async def buypl_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
         if not user or user.telegram_id != tg_user.id:
             # Not the owner — don't strip their button; just drop the claim.
             release(key)
+            await query.answer()
             return
+
+        # Roster filled up since the card opened (a /claim, a pack, a trade):
+        # say so in a pop-up and leave the card open, rather than stripping
+        # its buttons and posting a bare "Roster full" line into the chat.
+        from services.version_paginator import roster_is_full
+        if roster_is_full(user):
+            release(key)
+            await query.answer(
+                f"Your roster is full ({user.roster_count}/{MAX_ROSTER}).\n\n"
+                "Release a player first — /releasepl <name or position>, or "
+                "/relm <from> <to> — then tap Buy again.",
+                show_alert=True)
+            return
+        await query.answer()
 
         # Owner confirmed — now remove the keyboard so the client can't re-fire it.
         # Answering the card frees the one-buy-at-a-time slot, whichever way the

@@ -676,6 +676,8 @@ def _challenge_created_blocks(draft, session=None):
     if draft.get("cl_tour_id"):
         series = (f"CL Tour · Match {draft.get('cl_tour_match_no')}"
                   f"/{draft.get('cl_tour_match_count')}")
+    if draft.get("overs") and not series:
+        series = f"⏱️ {draft['overs']}-over match"
     bot_xi = None
     if draft.get("vs_bot"):
         names = draft.get("bot_xi_names") or []
@@ -976,6 +978,8 @@ def _challenge_created_text(draft, session=None):
         lines.append(
             f"🏆 <i>CL Tour · Match {draft.get('cl_tour_match_no')}"
             f"/{draft.get('cl_tour_match_count')}</i>")
+    elif draft.get("overs"):
+        lines.append(f"⏱️ <i>{draft['overs']}-over match</i>")
     lines.extend([
         "═════════════════════════════",
         f"👑 <b>Host:</b>  {_mention(host.get('tg_id'), host.get('name') or 'User 1')}",
@@ -1650,7 +1654,7 @@ def _local_static_path(image_url):
     return None
 
 
-async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None, tournament_name=None, is_tournament=False, vs_bot=False, owner_locked=False, host_teams=None, guest_teams=None):
+async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None, tournament_name=None, is_tournament=False, vs_bot=False, owner_locked=False, host_teams=None, guest_teams=None, overs=None):
     # ``effective_message`` rather than ``update.message`` so this also works when
     # the picker is opened from a button (the /ciplbot Rematch), where
     # ``update.message`` is None.
@@ -1720,6 +1724,9 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
         # /ciplbot: the "target" is the AI opponent. It picks its own team and
         # Playing XI, calls nothing, and the match is unranked practice.
         "vs_bot": bool(vs_bot),
+        # Custom length for a friendly (/cipl 6); None = the full 20. Never set
+        # for a tournament match — see cipl_play._launch_after_toss.
+        "overs": (int(overs) if overs and not is_tournament else None),
         "teams": teams,
         "team_codes": team_codes,
         "turn": "host",
@@ -2207,6 +2214,21 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
         if not league_key:
             return
 
+        # Custom length for a friendly: /cipl 6 (as a reply). Tournament and CL
+        # Tour matches never come through here, so they stay full length.
+        from services.match_formats import extract_overs_arg
+        # League commands arrive through a MessageHandler regex, which leaves
+        # context.args unset — read the words after the command instead.
+        _msg = update.effective_message
+        _words = ((getattr(_msg, "text", None) or "").split()[1:]
+                  if getattr(context, "args", None) is None else context.args)
+        custom_overs, _rest, overs_error = extract_overs_arg(_words)
+        if overs_error:
+            await update.message.reply_text(
+                f"❌ {overs_error}\nExample: reply to someone with "
+                f"<code>/{_esc(command_name)} 6</code>", parse_mode="HTML")
+            return
+
         target_tg = _reply_target_telegram_user(update)
         if not target_tg:
             await update.message.reply_text(CHALLENGE_REPLY_REQUIRED_MESSAGE)
@@ -2233,10 +2255,17 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
         if not teams:
             await update.message.reply_text(f"❌ No teams configured for {league_name} yet.")
             return
+        if custom_overs and (getattr(league_record, "match_format", "T20")
+                             or "T20") != "T20":
+            await update.message.reply_text(
+                f"❌ {_esc(str(league_name))} plays The Hundred, which has a "
+                "fixed length — custom overs are for T20 leagues.", parse_mode="HTML")
+            return
         await _send_league_team_picker(
             update, context, challenger=challenger, target=target,
             league_key=league_key, league_name=league_name,
             league_record=league_record, teams=teams, session=session,
+            overs=custom_overs,
         )
     finally:
         # The bot-alias branch above closes and clears the session before

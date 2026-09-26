@@ -32,6 +32,9 @@ PLACEMENT_GAMES = 10
 K_PLACEMENT = 40
 K_STANDARD = 24
 PAIR_DAILY_CAP = 3
+# Custom-length friendlies (/letsplay 5, /cipl 6) shorter than this are not
+# rated — a two-over slog is a coin flip, not a measure of skill.
+MIN_RANKED_OVERS = 5
 # Played games needed in a season for the end-of-season division reward.
 MIN_GAMES_FOR_REWARD = 5
 

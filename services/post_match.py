@@ -79,9 +79,15 @@ def process_completed_match(session, match, *, count_result=True, state=None):
 
             if count_result and _humans(session, match):
                 from services import ranked_service, rivalry_service
-                summary["ranked"] = ranked_service.apply_result(
-                    session, match.user1_id, match.user2_id,
-                    winner_id=match.winner_id, tie=tie, match_id=match.id)
+                if (match.overs or 20) < ranked_service.MIN_RANKED_OVERS:
+                    summary["ranked"] = {
+                        "rated": False, "players": {},
+                        "reason": (f"matches under {ranked_service.MIN_RANKED_OVERS}"
+                                   f" overs don't count")}
+                else:
+                    summary["ranked"] = ranked_service.apply_result(
+                        session, match.user1_id, match.user2_id,
+                        winner_id=match.winner_id, tie=tie, match_id=match.id)
                 summary["rivalry"] = rivalry_service.record_match(session, match)
 
             from services import prediction_service
@@ -126,8 +132,9 @@ def render_card(summary, users):
             parts.append(f"{_name(users, uid)} {p['after']} "
                          f"({sign}{p['delta']}) {p.get('emoji', '')}{move}")
         lines.append("📈 <b>Ranked</b> · " + "  ·  ".join(parts))
-    elif ranked.get("reason") and "daily cap" in ranked["reason"]:
-        lines.append(f"📈 <i>Unrated — {html.escape(ranked['reason'])}.</i>")
+    elif ranked.get("reason") and ("daily cap" in ranked["reason"]
+                                   or "overs don't count" in ranked["reason"]):
+        lines.append(f"📈 <i>Unrated — {html.escape(ranked['reason'], quote=False)}.</i>")
 
     riv = summary.get("rivalry") or {}
     if riv.get("is_rivalry"):

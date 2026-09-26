@@ -59,7 +59,16 @@ logger = logging.getLogger(__name__)
 INVITE_TIMEOUT = 30    # seconds the guest has to accept/deny
 SETUP_TIMEOUT = 180    # seconds a setup stage (pitch/xi/toss) may stall before
                        # the accepted draft is abandoned and the chat freed
-LETSPLAY_OVERS = 20    # /letsplay is always a 20-over contest
+LETSPLAY_OVERS = 20    # default length; /letsplay 5 plays a 5-over match
+# (tournament fixtures are always LETSPLAY_OVERS — see letsplay_handler).
+
+
+def draft_overs(draft):
+    """Overs for this draft's match: the custom count, else the default."""
+    try:
+        return int((draft or {}).get("overs") or LETSPLAY_OVERS)
+    except (TypeError, ValueError):
+        return LETSPLAY_OVERS
 
 # Shared with the block renderer so the two live cards can't disagree about
 # what a pitch looks like.
@@ -480,6 +489,21 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
     if msg is None or tg is None or chat is None:
         return
 
+    # Custom length: /letsplay 5 @user (or reply with /lp 5). A tournament
+    # fixture is always the full LETSPLAY_OVERS, whatever was typed.
+    overs = LETSPLAY_OVERS
+    if not tour_ctx:
+        from services.match_formats import extract_overs_arg
+        custom, rest, overs_error = extract_overs_arg(getattr(context, "args", None))
+        if overs_error:
+            await msg.reply_text(
+                f"❌ {overs_error}\nExample: <code>/letsplay 5 @username</code>",
+                parse_mode="HTML")
+            return
+        if custom:
+            overs = custom
+            context.args = rest
+
     session = get_session()
     try:
         host = sync_telegram_user(session, tg)
@@ -520,7 +544,9 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await msg.reply_text(
                 "🏏 <b>Lets Play</b> — challenge another player with your own roster.\n\n"
                 "• Reply to their message with <code>/letsplay</code>, or\n"
-                "• <code>/letsplay @username</code>",
+                "• <code>/letsplay @username</code>\n\n"
+                "Shorter match? Add the overs (1-20): "
+                "<code>/letsplay 5 @username</code>",
                 parse_mode="HTML")
             return
         if guest_user.id == host.id:
@@ -612,6 +638,7 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         "created_at": datetime.utcnow().isoformat(),
         # Official Lets Play Tournament fixture, or None for a friendly.
         "lpt": dict(tour_ctx) if tour_ctx else None,
+        "overs": overs,
     }
     context.bot_data[_dkey(invite_id)] = draft
 
@@ -630,7 +657,7 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         "━━━━━━━━━━━━━━━━━━━\n"
         + ("🎮 <b>Match type:</b> Tournament (official)\n" if lpt
            else "🎮 <b>Match type:</b> Lets Play\n")
-        + "⏱️ <b>Format:</b> 20 Overs\n"
+        + f"⏱️ <b>Format:</b> {overs} Over{'s' if overs != 1 else ''}\n"
         "📋 <b>Roster:</b> Own Roster\n"
         + (f"📊 <b>Host XI:</b> {host_preview['ovr']} OVR "
            f"(avg {host_preview['avg']:.1f})\n"
@@ -1191,7 +1218,8 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
     parts = [
         title,
         "━━━━━━━━━━━━━━━━━━━",
-        f"🌱 <b>Pitch:</b> {_PITCH_EMOJI.get(pitch, '🏏')} {pitch} • 20 overs",
+        f"🌱 <b>Pitch:</b> {_PITCH_EMOJI.get(pitch, '🏏')} {pitch} • "
+        f"{draft_overs(draft)} overs",
         # Only when the captains actually answered the question — a match that
         # never held a vote reads exactly as it did before the vote existed.
         (_trait_status(traits_on) if "traits_enabled" in draft else ""),
@@ -1278,6 +1306,7 @@ def _show_xi_blocks(draft, host_pairs, guest_pairs,
 
         return lpr.playing_xi_blocks(
             vs_bot=vs_bot, pitch=draft.get("pitch_type", "Hard"),
+            overs=draft_overs(draft),
             host_label=draft["host"]["name"], guest_label=guest_label,
             host_xi=_xi_rows(host_pairs, host_traits),
             guest_xi=_xi_rows(guest_pairs, guest_traits),
@@ -2146,7 +2175,7 @@ async def _launch_match(context, draft, decision, winner_side):
         pitch_type = draft.get("pitch_type") or settings["pitch_type"]
         match = Match(
             user1_id=host.id, user2_id=guest.id, status="active",
-            match_type=TYPE_LETSPLAY, overs=LETSPLAY_OVERS,
+            match_type=TYPE_LETSPLAY, overs=draft_overs(draft),
             toss_winner_id=(host.id if winner_side == "host" else guest.id),
             toss_decision=decision,
             batting_first_id=bat_info["user_id"], bowling_first_id=bowl_info["user_id"],
@@ -2191,7 +2220,7 @@ async def _launch_match(context, draft, decision, winner_side):
         logger.exception("letsplay: could not generate match conditions")
         conditions = None
     state = cipl_match.build_cipl_state(
-        match_id=match_id, overs=LETSPLAY_OVERS,
+        match_id=match_id, overs=draft_overs(draft),
         bat_user_id=bat_info["user_id"], bowl_user_id=bowl_info["user_id"],
         bat_user_tg=bat_info["tg_id"], bowl_user_tg=bowl_info["tg_id"],
         bat_xi=bat_xi, bowl_xi=bowl_xi,
@@ -2334,7 +2363,7 @@ async def _announce(context, state, pitch_type):
         f"{rule}\n"
         + tour_line
         + f"⚔️ <b>{bat}</b>  🆚  <b>{bowl}</b>\n"
-        f"🏟️ {stadium} • 20 overs\n"
+        f"🏟️ {stadium} • {state.get('overs', LETSPLAY_OVERS)} overs\n"
         f"🌱 <b>Pitch:</b> {pitch}\n"
         + cond_line
         + f"🏏 {bat} batting first\n"
