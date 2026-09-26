@@ -3627,6 +3627,7 @@ def _bowler_rows(state):
     bowl_stats = state.get("bowl_stats") or {}
     current = state.get("current_bowler") or {}
     cur_rid = current.get("roster_id")
+    bpu = cipl_match.balls_per_unit(state)
     out = []
     for p in impact_player.active_players(state.get("bowl_xi") or []):
         rid = p.get("roster_id")
@@ -3642,7 +3643,9 @@ def _bowler_rows(state):
         out.append({
             "name": impact_player.display_name(p),
             "rating": cipl_match.display_rating(p, "bowl_rating"),
-            "overs": f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6),
+            # The Hundred shows bowler workload in balls; T20 in overs.balls.
+            "overs": (f"{balls}b" if bpu != 6 else
+                      f"{balls // 6}.{balls % 6}" if balls % 6 else str(balls // 6)),
             "balls": balls,
             "runs": runs,
             "wickets": int(st.get("wickets", 0) or 0),

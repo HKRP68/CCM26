@@ -164,6 +164,14 @@ class ApproachCardBlocksTests(unittest.TestCase, BlockTreeAssertions):
         for r in rows:
             self.assertIn(r["name"], tail)
 
+    def test_hundred_bowler_workload_reads_in_balls(self):
+        s = _state()
+        with patch.object(cm, "balls_per_unit", lambda st: 5):
+            s["bowl_stats"][str(s["current_bowler"]["roster_id"])] = {
+                "balls": 5, "runs": 7, "wickets": 1}
+            rows = cp._bowler_rows(s)
+        self.assertEqual(rows[0]["overs"], "5b")
+
     def test_prompt_lines_follow_a_divider(self):
         s = _state()
         s["user_names"] = {"5": "Khalid Hasan"}
