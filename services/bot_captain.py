@@ -1012,6 +1012,27 @@ def _bowl_value(p):
     return float(p.get("bowl_rating") or p.get("rating") or 0)
 
 
+def _best_legal_swap(state, side, bench, outgoing_pool, value):
+    """``(in_rid, out_rid)`` for the most valuable swap that keeps the XI within
+    the Playing XI rules, or None when no legal swap improves the side.
+
+    Weakest outgoing first, each paired with the best substitute who may
+    legally replace them — so a keeper or the fifth bowling option is only
+    swapped for someone who keeps the XI legal.
+    """
+    from services import impact_player
+    for outgoing in sorted(outgoing_pool, key=value):
+        legal = impact_player.cipl_incoming_for(
+            state, side, outgoing.get("roster_id"), bench)
+        if not legal:
+            continue
+        incoming = max(legal, key=value)
+        if value(incoming) <= value(outgoing):
+            continue
+        return incoming["roster_id"], outgoing["roster_id"]
+    return None
+
+
 def pick_impact_swap(state, user_id, next_action):
     """Should the AI captain use its Impact Player now, and for whom?
 
@@ -1038,12 +1059,11 @@ def pick_impact_swap(state, user_id, next_action):
     if opts["side"] == "bowl":
         if not (state.get("innings") == 2 and (state.get("current_over") or 1) <= 1):
             return None
-        incoming = max(bench, key=_bowl_value)
-        outgoing = min(replaceable, key=_bowl_value)
-        if _bowl_value(incoming) <= _bowl_value(outgoing):
+        pair = _best_legal_swap(state, "bowl", bench, replaceable, _bowl_value)
+        if pair is None:
             return None
         # They bat next innings only if there is one — position is harmless here.
-        return incoming["roster_id"], outgoing["roster_id"], None
+        return pair[0], pair[1], None
 
     # Batting: only worth a swap while there is still an innings left to save.
     chase = cipl_match.chase(state)
@@ -1062,8 +1082,7 @@ def pick_impact_swap(state, user_id, next_action):
     candidates = [p for p in replaceable if p.get("roster_id") in to_come]
     if not candidates:
         return None
-    incoming = max(bench, key=_bat_value)
-    outgoing = min(candidates, key=_bat_value)
-    if _bat_value(incoming) <= _bat_value(outgoing):
+    pair = _best_legal_swap(state, "bat", bench, candidates, _bat_value)
+    if pair is None:
         return None
-    return incoming["roster_id"], outgoing["roster_id"], nb
+    return pair[0], pair[1], nb

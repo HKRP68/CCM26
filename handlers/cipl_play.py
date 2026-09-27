@@ -1954,6 +1954,17 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
                                     if draft.get("is_tournament") else None)
         state["cl_tour_match_no"] = draft.get("cl_tour_match_no")
         state["cl_tour_match_count"] = draft.get("cl_tour_match_count")
+        # The Playing XI rules the picker enforced (keeper, bowling options,
+        # overseas min/max, a tournament's rating rules), so an Impact Player
+        # swap can be held to the same rules. See impact_player.cipl_swap_error.
+        try:
+            from handlers.challenge import _challenge_xi_limits
+            lo, hi, rules = _challenge_xi_limits(draft)
+            state["xi_rules"] = {"min_overseas": lo, "max_overseas": hi,
+                                 "rating_rules": rules}
+        except Exception:
+            logger.exception("cipl: could not carry the XI rules onto match %s",
+                             match.id)
         # A mode that is not a league names itself (e.g. Challenge Draft).
         if draft.get("mode") == "cdraft":
             state["mode_name"] = draft.get("league_name") or "Challenge Draft"
@@ -3018,10 +3029,16 @@ async def cipl_impact_out_callback(update: Update, context: ContextTypes.DEFAULT
             await q.answer(opts.get("blocked_note") or opts["message"],
                            show_alert=True)
             return
+        # Only substitutes who keep the XI within the Playing XI rules.
+        legal_in = impact_player.cipl_incoming_for(
+            state, opts["side"], out_rid, opts["incoming_options"])
+        if not legal_in:
+            await q.answer(impact_player.NO_LEGAL_SWAP_MESSAGE, show_alert=True)
+            return
         await q.answer()
         owner_tg = q.from_user.id
         rows, row = [], []
-        for p in opts["incoming_options"]:
+        for p in legal_in:
             row.append(InlineKeyboardButton(
                 f"{p['name']} ({cipl_match.display_rating(p)})",
                 callback_data=_imp_cb("cipl_impi_", owner_tg, mid, out_rid,
@@ -3062,6 +3079,13 @@ async def cipl_impact_in_callback(update: Update, context: ContextTypes.DEFAULT_
         if not incoming or not outgoing:
             await q.answer(opts.get("blocked_note") or opts["message"],
                            show_alert=True)
+            return
+        rule_error = impact_player.cipl_swap_error(
+            state, opts["side"], out_rid, incoming)
+        if rule_error:
+            await q.answer(
+                f"🚫 Impact swap breaks the Playing XI rule: {rule_error}",
+                show_alert=True)
             return
         await q.answer()
 

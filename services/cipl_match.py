@@ -397,6 +397,14 @@ _SYM = {0: "0️⃣", 1: "1️⃣", 2: "2️⃣", 3: "3️⃣", 4: "4️⃣", 6:
 # Player conversion (ChallengePlayer ORM → engine-friendly dict)
 # ════════════════════════════════════════════════════════════════════
 
+def _is_overseas(cp):
+    try:
+        from services.xi_rules import challenge_is_overseas
+        return bool(challenge_is_overseas(cp))
+    except Exception:
+        return False
+
+
 def cp_to_player_dict(cp):
     """Convert a ChallengePlayer row into the player dict the engine expects.
 
@@ -446,6 +454,9 @@ def cp_to_player_dict(cp):
         "card_bat_rating": bat_rating,
         "card_bowl_rating": bowl_rating,
         "category": category,
+        # Read by the Impact Player check that keeps the XI within the league's
+        # overseas limits (services.impact_player.cipl_swap_error).
+        "is_overseas": _is_overseas(cp),
         "bowl_style": _g("bowl_style", default="") or "",
         "bowl_hand": _g("bowl_hand", default="Right") or "Right",
         "bat_hand": _g("bat_hand", default="Right") or "Right",
