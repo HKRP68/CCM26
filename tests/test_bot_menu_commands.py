@@ -165,7 +165,7 @@ UNPUBLISHED_ON_PURPOSE = {
     # Auction admin commands on the /adminhelp card rather than in the admin
     # bucket, which would otherwise pass the 100-command ceiling.
     "asetorder", "aretainforce", "aoffers", "aretcancel", "aaccelmode",
-    "aadminremove", "aadmins",
+    "aadminremove", "aadmins", "afinish",
     "aretmode", "aretslot", "aretrule", "aretdemand", "asetsexport",
     "asetsimport", "aprevious", "aprevteam",
     # Dynamic retention's owner command — on /adminhelp's player section, the

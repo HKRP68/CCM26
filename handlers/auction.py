@@ -2609,6 +2609,75 @@ async def aaccel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _with_auction(update, work, admin=True, context=context)
 
 
+async def afinish_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/afinish</code> (<code>/aend</code>, <code>/askip</code>) — end
+    the auction now, simulating the rest.
+
+    Bare, it reads out what would happen: a whole auction's worth of lots is
+    not a thing to end from muscle memory. <code>/afinish go</code> runs it —
+    every remaining lot through a simulated bidding war inside every rule,
+    short squads topped up, the auction completed — and the room then watches
+    it play out one lot per message. <code>/afinish go quick</code> puts five
+    lots in a message; <code>/afinish mute</code> skips a playback still
+    running straight to the final summary.
+    """
+    from services import auction_scheduler as SCH
+    from services import auction_simulator as S
+
+    user = update.effective_user
+    args = [a.lower() for a in (context.args or [])]
+    quick = "quick" in args or "fast" in args
+    go = quick or bool({"go", "yes", "confirm", "do"} & set(args))
+
+    def work(session, season):
+        symbol = season.currency_label
+        if "mute" in args or "stop" in args:
+            skipped = S.mute_playback(session, season)
+            return (f"🔇 Skipped {skipped} playback "
+                    f"{'message' if skipped == 1 else 'messages'} — the final "
+                    f"summary is next.")
+        if not go:
+            info = S.preview(session, season)
+            rows = []
+            for team in info["teams"]:
+                need = (f"needs {team['short']}" if team["short"]
+                        else "minimum met")
+                rows.append(f"   • <b>{html.escape(team['name'])}</b> — "
+                            f"{team['size']}/{season.min_squad_size} ({need}) · "
+                            f"{A.render_money(team['purse'], symbol)} · max bid "
+                            f"{A.render_money(team['max_bid'], symbol)}")
+            rules = [f"👥 Squads {season.min_squad_size}–{season.max_squad_size}"
+                     f" · ✈️ max {season.max_overseas} overseas"]
+            if A.role_rule_line(season):
+                rules.append(f"🎭 {html.escape(A.role_rule_line(season))}")
+            if A.rating_rule_line(season):
+                rules.append(f"⭐ {html.escape(A.rating_rule_line(season))}")
+            return (f"⏩ <b>Finish the auction now?</b>\n"
+                    f"{info['remaining']} lots left"
+                    + (f" and {info['unsold']} unsold" if info["unsold"] else "")
+                    + " would be <b>simulated</b>: every team bids by its needs "
+                      "and purse, inside every rule —\n"
+                    + "\n".join(rules) + "\n\n" + "\n".join(rows) + "\n\n"
+                    f"Squads still short at the end get unsold players free, "
+                    f"then the auction completes. Playback takes about "
+                    f"{max(1, round(info['est_seconds'] / 60))} min "
+                    f"(~{max(1, round(info['est_seconds_quick'] / 60))} min "
+                    f"quick).\n\n"
+                    f"⚠️ This cannot be undone except by /arestart.\n"
+                    f"Confirm with <code>/afinish go</code> "
+                    f"(or <code>/afinish go quick</code>).")
+        summary = S.simulate_finish(session, season,
+                                    by_tg_id=user.id if user else None,
+                                    quick=quick)
+        SCH.cancel_countdown(season.id)
+        sold = summary["sold"] + summary["accel_sold"] + summary["rtm"]
+        return (f"⏩ Simulating the rest of the auction — {sold} players "
+                f"signed{', ' + str(summary['autofilled']) + ' free' if summary['autofilled'] else ''}. "
+                f"Watch the room; <code>/afinish mute</code> skips to the end.")
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
 async def artmset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """The Right To Match rules: read them, or set them in one line.
 
