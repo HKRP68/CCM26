@@ -495,9 +495,9 @@ ADMIN_MENU_COMMANDS = (
     ("apicks", "Admin: the expansion picking order and whose turn it is"),
     ("apickset", "Admin: how many picks each new side gets"),
     ("apickskip", "Admin: pass on the current expansion pick"),
-    ("apickundo", "Admin: undo an expansion pick — money and pick both back"),
     # The rest of the auction admin family (/asetorder, /aretainforce,
-    # /aoffers, /aretcancel, /aaccelmode, /aadminremove, /aadmins) is on the
+    # /aoffers, /aretcancel, /aaccelmode, /aadminremove, /aadmins,
+    # /apickundo, the dynamic-retention knobs, /aprevious) is on the
     # /adminhelp card rather than here, which keeps this bucket under the
     # 100-command ceiling it is exempt from only because it has never filled.
     ("adminhelp", "Admin: every Franchise Auction admin command"),
