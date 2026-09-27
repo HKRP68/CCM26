@@ -210,17 +210,25 @@ def challenge_bowl_rating(player):
         player, ("bowl_rating", "bowling_rating", "bowl"), default=0.0)
 
 
-def challenge_is_wicket_keeper(player):
+def _category_is_keeper(category):
     # Deliberately loose: an admin role that didn't match a normalisation rule
     # (e.g. "Wicketkeeper Batter") still comes through here as a keeper.
-    category = challenge_player_category(player).lower()
+    category = str(category or "").lower().strip()
     return "wicket" in category or category == "wk"
 
 
-def challenge_is_bowling_option(player):
-    category = challenge_player_category(player).lower().replace("-", " ")
+def _category_is_bowling_option(category):
+    category = str(category or "").lower().replace("-", " ")
     return ("bowler" in category or "all rounder" in category
-            or "allrounder" in category)
+            or "allrounder" in category or category.strip() in ("bowl", "alr"))
+
+
+def challenge_is_wicket_keeper(player):
+    return _category_is_keeper(challenge_player_category(player))
+
+
+def challenge_is_bowling_option(player):
+    return _category_is_bowling_option(challenge_player_category(player))
 
 
 def challenge_is_overseas(player):
@@ -279,4 +287,43 @@ def validate_challenge_xi(players, min_overseas=0, max_overseas=11,
     rating_error = challenge_rating_rule_error(players, rating_rules)
     if rating_error:
         return False, f"⭐ {rating_error}"
+    return True, ""
+
+
+def validate_challenge_xi_dicts(players, min_overseas=0, max_overseas=11,
+                                rating_rules=None):
+    """``validate_challenge_xi`` for engine player dicts (a live match's XI).
+
+    Used to stop an Impact Player swap from leaving a Challenge League XI that
+    the picker would have refused. The dicts come from
+    ``services.cipl_match.cp_to_player_dict``: ``category`` is the raw role,
+    ``is_overseas`` the overseas flag and ``card_rating`` the squad-sheet
+    rating (never touched by match balancing). The "exactly 11" check is left
+    out — a swap is one-for-one, so it cannot change the count.
+    Returns ``(valid, error)``.
+    """
+    players = [p for p in players or () if isinstance(p, dict)]
+    if not any(_category_is_keeper(p.get("category")) for p in players):
+        return False, "Wicket Keeper is Must"
+    bowling_options = sum(1 for p in players
+                          if _category_is_bowling_option(p.get("category")))
+    if bowling_options < 5:
+        return False, "At least 5 Bowling Option Must (Bowlers + Allrounders)"
+    overseas = sum(1 for p in players if p.get("is_overseas"))
+    if overseas > max_overseas:
+        return False, f"Max {max_overseas} overseas ✈️ allowed in XI (you have {overseas})"
+    if overseas < min_overseas:
+        return False, f"Min {min_overseas} overseas ✈️ required in XI (you have {overseas})"
+    if rating_rules:
+        from services import rating_rules as RR
+        ratings = []
+        for p in players:
+            value = p.get("card_rating", p.get("rating"))
+            try:
+                ratings.append(int(value) if value is not None else None)
+            except (TypeError, ValueError):
+                ratings.append(None)
+        rating_error = RR.xi_error(rating_rules, ratings)
+        if rating_error:
+            return False, f"⭐ {rating_error}"
     return True, ""

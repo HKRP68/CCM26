@@ -281,6 +281,48 @@ def cipl_available_to(state, user_id):
     return bool(cipl_bench_for(state, side, usage))
 
 
+NO_LEGAL_SWAP_MESSAGE = (
+    "No Impact swap keeps your Playing XI legal — every substitute would break "
+    "a Playing XI rule (Wicket Keeper, 5 bowling options, overseas limit or "
+    "rating rule)."
+)
+
+
+def cipl_swap_error(state, side, out_roster_id, incoming):
+    """``""`` when swapping ``incoming`` for ``out_roster_id`` keeps ``side``'s
+    XI within the Playing XI rules, else the rule it breaks.
+
+    The rules are the ones the XI picker enforced, carried onto the state at
+    launch as ``state["xi_rules"]`` (Challenge League and tournament matches
+    only). A state without them — /letsplay, or a match started before the
+    rules were carried — is not checked, exactly as before.
+    """
+    rules = state.get("xi_rules")
+    if not isinstance(rules, dict) or not isinstance(incoming, dict):
+        return ""
+    from services.xi_rules import validate_challenge_xi_dicts
+    after = [p for p in active_players(state.get(f"{side}_xi") or [])
+             if p.get("roster_id") != out_roster_id]
+    after.append(incoming)
+    try:
+        lo = int(rules.get("min_overseas") or 0)
+    except (TypeError, ValueError):
+        lo = 0
+    try:
+        hi = int(rules.get("max_overseas", 11))
+    except (TypeError, ValueError):
+        hi = 11
+    ok, error = validate_challenge_xi_dicts(
+        after, lo, hi, rules.get("rating_rules") or None)
+    return "" if ok else error
+
+
+def cipl_incoming_for(state, side, out_roster_id, bench):
+    """The substitutes in ``bench`` that may legally replace ``out_roster_id``."""
+    return [p for p in bench or ()
+            if not cipl_swap_error(state, side, out_roster_id, p)]
+
+
 def cipl_options(state, user_id, next_action):
     """What this captain may do with their Impact Player right now.
 
@@ -317,15 +359,29 @@ def cipl_options(state, user_id, next_action):
         blocked_note = ("The bowler already picked for this over cannot be "
                         "replaced — swap before picking the bowler.")
 
+    # Only offer swaps that keep the XI within the Playing XI rules: an
+    # outgoing player with no legal substitute, and a substitute who could
+    # replace nobody legally, are left off the picker entirely.
+    all_bench, all_replaceable = bench, replaceable
+    if state.get("xi_rules") and bench and replaceable:
+        legal = {p.get("roster_id"): cipl_incoming_for(
+                     state, side, p.get("roster_id"), bench)
+                 for p in replaceable}
+        replaceable = [p for p in replaceable if legal.get(p.get("roster_id"))]
+        legal_in = {q.get("roster_id") for ins in legal.values() for q in ins}
+        bench = [p for p in bench if p.get("roster_id") in legal_in]
+
     if used:
         message = "Impact Player already used."
     elif not legal_label:
         message = NOT_A_BREAK_MESSAGE
-    elif not bench:
+    elif not all_bench:
         message = ("No substitutes available — every player in your squad is "
                    "already in the Playing XI.")
-    elif not replaceable:
+    elif not all_replaceable:
         message = blocked_note
+    elif not replaceable:
+        message = NO_LEGAL_SWAP_MESSAGE
     else:
         message = f"Impact Player is available ({legal_label})."
 
@@ -342,6 +398,10 @@ def cipl_options(state, user_id, next_action):
         "message": message,
         "incoming_options": bench,
         "replaceable_players": replaceable,
+        # The same two lists before the Playing XI rule filter, so a stale
+        # button naming a filtered player gets the rule it breaks as the reason.
+        "bench_all": all_bench,
+        "replaceable_all": all_replaceable,
         "summary": summary(state),
     }
 
@@ -407,14 +467,18 @@ def cipl_use(state, user_id, in_roster_id, out_roster_id, next_action,
         return False, NOT_A_BREAK_MESSAGE, None
 
     side = opts["side"]
-    incoming = next((p for p in opts["incoming_options"]
+    incoming = next((p for p in opts.get("bench_all", opts["incoming_options"])
                      if p.get("roster_id") == in_roster_id), None)
-    outgoing = next((p for p in opts["replaceable_players"]
+    outgoing = next((p for p in opts.get("replaceable_all",
+                                         opts["replaceable_players"])
                      if p.get("roster_id") == out_roster_id), None)
     if not incoming:
         return False, "Pick a substitute from outside your Playing XI.", None
     if not outgoing:
         return False, opts.get("blocked_note") or opts["message"], None
+    rule_error = cipl_swap_error(state, side, out_roster_id, incoming)
+    if rule_error:
+        return False, f"🚫 Impact swap breaks the Playing XI rule: {rule_error}", None
 
     # Mark the substitute BEFORE they are filed anywhere. apply_to_identity_list
     # stamps its own copy for the XI list, but batting_order gets this dict —
