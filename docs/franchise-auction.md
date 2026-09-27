@@ -661,9 +661,9 @@ not a straight match, but *intent → one final offer → decision*:
 > *final* number, not the one that triggered the window.
 
 ```text
-/artmset 2                  two cards each, 30s a window, no premium
-/artmset 2 45 2             …a 45s window, and ₹2 Cr on top of the final bid
-/artmcards Mumbai 3         one franchise's own count
+/artmset on                 RTM on, 30s a window, no premium
+/artmset on 45 2            …a 45s window, and ₹2 Cr on top of the final bid
+/artmcards Mumbai 3         override one franchise's count
 /artm yes | /artm no        the holder answers — both questions, one verb
 /artmforce yes|no           an admin answers for them
 /artmundo Ashwin            money and card both back, lot on the block
@@ -672,6 +672,25 @@ not a straight match, but *intent → one final offer → decision*:
 …or the **🪪 Right To Match** card on the setup page and the console's stage
 buttons. Off by default: `rtm_enabled` is `False` and `rtm_per_team` is 0, so
 an auction nobody configured never offers one.
+
+**The card count is automatic.** Each franchise gets
+`RTM = max_retentions − retained_count`: the retention spots it did not use
+come back as Right To Match cards (`auction_service.rtm_auto_cards`). The
+count is re-dealt (`sync_rtm_cards`) whenever a retention is made or released,
+the window closes, the rules are saved, or the auction starts; once the
+auction is live it stops, so `/artmcards` remains a real override, and a card
+already spent is never taken back. A season with retention off
+(`max_retentions == 0`) has no spots to count and falls back to the flat
+`rtm_per_team`.
+
+### Rating rule
+
+`/aratingrule 83 4` (or the setup page's squad rules) — every squad must end
+with at least 4 players rated 83 or lower. Stored as
+`auction_seasons.rating_rules_json`; several rules may stand at once and each
+is checked on its own. It is enforced like the role minimums, as
+**reachability**: a bid, retention, RTM or auto-fill is refused once a squad
+would owe a rule more players than it has slots left.
 
 ### Three windows on one clock
 

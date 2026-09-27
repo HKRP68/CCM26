@@ -335,6 +335,7 @@ An auction is a group event; these run in the chat the auction is bound to.
 | `/asquad` 👥 | `/amysquad` | Your squad (or name a franchise), with purse and max bid |
 | `/asoldlist` 👥 | — | Every player sold, set by set |
 | `/aunsoldlist` 👥 | — | The ⚡ Unsold / Accelerated set |
+| `/aretained` 👥 | `/allretained` | Every franchise's retained players — one tap-to-expand list per team, with its retention count and RTM cards |
 
 Every new player is announced with his **player card** and a fresh **pinned
 board**; bids are announced as one short line per burst.
@@ -649,8 +650,9 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/aprevteam <franchise> \| <last season's team>` | Tie a renamed side to its old team by id — `/aprevteam Kochi \| Kochi Tuskers`; `\| none` clears it |
 | `/aunretain <player name>` | Release a retained player into the pool |
 | `/aretlock [on]` · `/aretention` | Retention state, and close the window |
-| `/artmset <cards> [seconds] [max]` · `/artmset off` | Right To Match rules — `/artmset 2 45 200` |
-| `/artmcards <franchise> <cards>` | One franchise's own RTM count — `/artmcards Mumbai 3` |
+| `/artmset on [seconds] [premium]` · `/artmset off` | Right To Match rules — `/artmset on 45 2`. Cards are **automatic**: RTM = retention spots − players retained, per franchise (a season with retention off uses a flat count, `/artmset 2`) |
+| `/artmcards <franchise> <cards>` | Override one franchise's RTM count — `/artmcards Mumbai 3` (the automatic count stops being re-dealt once the auction opens) |
+| `/aratingrule <max rating> <min players>` | Squad rating rule — `/aratingrule 83 4`: every squad must end with at least 4 players rated 83 or lower. `/aratingrule off 83`, `/aratingrule clear`; bare lists the rules and each team's progress |
 | `/artmforce yes\|no` | Answer an open RTM on the franchise's behalf |
 | `/artmundo <player>` | Undo a match — card and money both back |
 | `/aaccel [go]` | Accelerated round — re-list everything unsold |
@@ -744,6 +746,7 @@ overdraw somebody is refused by name.
 | `/tpointsclear <TEAM>` | Clear a team's points adjustment |
 | `/taddmatch <match number>` · `/addmatch` *(reply to a scorecard)* | Record a fixture played off the bot |
 | `/tfixsync` | Un-stick fixtures still showing as live |
+| `/tratingrule [#id] <max rating> <min players>` | Tournament rating rule — `/tratingrule 83 3`: every Playing XI must field at least 3 players rated 83 or lower (bot XIs too). `/tratingrule off 83`, `/tratingrule clear`; bare lists it. Also on the tournament's admin page |
 | `/remindmatch [team] [vs team] [force]` | Nudge two teams to play their pending fixture |
 
 ---

@@ -172,6 +172,13 @@ UNPUBLISHED_ON_PURPOSE = {
     # /aretlock readout and every negotiation card, which is where an owner
     # retaining somebody already is.
     "retain",
+    # Every team's retained players — a button on /ainfo (📋 Retained) and a
+    # line on /adminhelp; the squad rating rule sits on /adminhelp beside the
+    # other squad rules, and the admin bucket is already at the ceiling.
+    "aretained", "aratingrule",
+    # The tournament rating rule — admin-only, set on the tournament's admin
+    # page beside the overseas rule; the admin bucket is at the ceiling.
+    "tratingrule",
     # Player Draft trades — the precedent the auction followed.
     "dtrade", "dtrades", "dtradecancel",
     # Challenge League tournament views — /help, the hub's buttons, and

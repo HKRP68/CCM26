@@ -640,6 +640,9 @@ def render_overview(session, tour):
         out.append("<b>Schedule:</b> free-play (no fixture list)")
     if lo > 0 or hi < 11:
         out.append(f"<b>Overseas in XI:</b> min {lo} · max {hi}")
+    rating_line = tournament_service.rating_rule_line(tour)
+    if rating_line:
+        out.append(f"<b>Rating rule (XI):</b> {escape(rating_line)}")
     from services import league_schedule_service
     if league_schedule_service.pitch_locked(tour):
         out.append("<b>Pitch:</b> fixed per fixture — see 🗓️ Fixtures")

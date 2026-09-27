@@ -126,6 +126,7 @@ INFO_VIEWS = (
     ("leaderboard", "🏆 Leaderboard", None),
     ("mybids", "📊 My Bids", None),
     ("retention", "🔒 Retention", lambda season: A.retention_configured(season)),
+    ("retained", "📋 Retained", lambda season: A.retention_configured(season)),
     ("picks", "🆕 Picks", lambda season: A.expansion_configured(season)),
     ("sold", "✅ Sold", None),
     ("unsold", "❌ Unsold", None),
@@ -316,9 +317,12 @@ def board_blocks(session, season, lot=None, *, now=None):
                                 else f" · {remaining} left"))
             blocks.append(R.paragraph(parts))
     blocks.append(R.divider())
-    blocks.append(R.table(_purse_rows(session, season), bordered=True,
-                          striped=True, compact=True,
-                          caption=R.bold("💼 Purses")))
+    # Team purses fold away behind a tap: the board is re-posted on every
+    # lot, and a table of every purse was most of its height. /apurse and
+    # the 💼 My Purse popup still answer in full.
+    blocks.append(R.details(R.bold("💼 Team Purses — tap to expand"),
+                            [R.table(_purse_rows(session, season), bordered=True,
+                                     striped=True, compact=True)]))
     blocks.append(R.footer(["Bid with ", R.code("/bid"), " · views: ",
                             R.code("/ainfo"), " · ", R.code("/arules"), " · ",
                             R.code("/asets"), " · ", R.code("/asquad")]))
@@ -451,11 +455,12 @@ def event_html(session, season, event):
                             for l in A.squad(session, buyer.id))
                 ceiling = max(0, A.max_bid_now(season, buyer))
                 lines.append(
-                    f"📊 <b>{_e(buyer.name)}</b>\n"
+                    f"📊 <b>{_e(buyer.name)}</b> — tap to expand\n"
+                    f"<blockquote expandable>"
                     f"👛 Purse left: <b>{_money(season, buyer.purse_remaining_lakh)}</b>"
                     f" · 🎯 Max bid: {_money(season, ceiling)}\n"
                     f"👥 Players: {buyer.squad_size}/{season.max_squad_size}"
-                    f" · 💸 Spent: {_money(season, spent)}")
+                    f" · 💸 Spent: {_money(season, spent)}</blockquote>")
             return "\n".join(lines)
         if kind == "lot_unsold" and lot is not None:
             where = f"<i>Moves to the {_e(A.UNSOLD_SET)} set.</i>"
@@ -539,6 +544,9 @@ def squad_view(session, season, franchise):
                      " · spent ", _money(season, spent), " · 🎯 max bid ",
                      R.bold(_money(season, max(0, A.max_bid_now(season, franchise))))]),
     ]
+    rating = A.rating_progress_line(session, season, franchise)
+    if rating:
+        blocks.append(R.paragraph(["⭐ Rating rule: ", R.bold(rating)]))
     if rows:
         blocks.append(R.table(table, bordered=True, striped=True, compact=True))
     else:
@@ -548,6 +556,8 @@ def squad_view(session, season, franchise):
     html_text = (A.render_squad(session, season, franchise)
                  + f"\n\n✈️ {overseas}/{season.max_overseas} overseas · "
                    f"🎯 max bid <b>{_money(season, max(0, A.max_bid_now(season, franchise)))}</b>")
+    if rating:
+        html_text += f"\n⭐ Rating rule: <b>{_e(rating)}</b>"
     return blocks, html_text
 
 
@@ -744,6 +754,12 @@ def rules_view(session, season):
         caps = ", ".join(f"{role} ≤{n}" for role, n in sorted(ceilings.items()))
         money.append(R.paragraph(["🚧 No squad may exceed: ", R.bold(caps)]))
         body.append(f"🚧 No squad may exceed: <b>{_e(caps)}</b>")
+    # The rating rule: "at least N players rated X or lower" in a finished
+    # squad, enforced as reachability like the role minimums above.
+    rating_line = A.rating_rule_line(season)
+    if rating_line:
+        money.append(R.paragraph(["⭐ Rating rule: ", R.bold(rating_line)]))
+        body.append(f"⭐ Rating rule: <b>{_e(rating_line)}</b>")
     reserve = (f"🎯 A franchise may never bid its way out of filling that "
                f"minimum: {floor} is held back for every slot it still has to "
                f"fill. That is the max bid the board prints — it is not a "
@@ -887,19 +903,41 @@ def rules_view(session, season):
         extra = (f"the final bid plus "
                  f"{A.render_money(season.rtm_extra_lakh, symbol)}"
                  if season.rtm_extra_lakh else "the final bid")
-        cards = f"{season.rtm_per_team} card" + ("s" if season.rtm_per_team != 1
-                                                 else "")
+        spots = int(season.max_retentions or 0)
+        if spots > 0:
+            cards = (f"RTM = {spots} retention spots − players retained")
+        else:
+            cards = (f"{season.rtm_per_team} card"
+                     + ("s" if season.rtm_per_team != 1 else "") + " each")
         how = ("The holder is asked first, the top bidder then gets one last "
                "raise, and the match is against that final number.")
-        blocks.append(R.details(R.bold("🪪 Right To Match"), [
-            R.paragraph([R.bold(cards), " each · ",
+        per_team = [A.rtm_card_line(season, f) for f in field]
+        rtm_rows = [[R.cell(R.bold("Franchise"), header=True),
+                     R.cell(R.bold("Kept"), header=True, align="center"),
+                     R.cell(R.bold("🪪 RTM"), header=True, align="center"),
+                     R.cell(R.bold("Left"), header=True, align="center")]]
+        for f in field:
+            kept = (f"{int(f.retained_count or 0)}/{spots}" if spots
+                    else "—")
+            rtm_rows.append([R.cell(f.name), R.cell(kept, align="center"),
+                             R.cell(str(int(f.rtm_cards_total or 0)),
+                                    align="center"),
+                             R.cell(str(A.rtm_cards_left(f)), align="center")])
+        rtm_blocks = [
+            R.paragraph([R.bold(cards), " · ",
                          f"{season.rtm_window_seconds}s to answer"]),
             R.paragraph(f"Last season's franchise may match at {extra}."),
-            R.paragraph(R.italic(how)),
-        ]))
+        ]
+        if field:
+            rtm_blocks.append(R.table(rtm_rows, bordered=True, striped=True,
+                                      compact=True))
+        rtm_blocks.append(R.paragraph(R.italic(how)))
+        blocks.append(R.details(R.bold("🪪 Right To Match"), rtm_blocks))
         lines.append("<b>🪪 Right To Match</b>")
-        lines.append(f"<b>{cards}</b> each · {season.rtm_window_seconds}s to answer")
+        lines.append(f"<b>{_e(cards)}</b> · {season.rtm_window_seconds}s to answer")
         lines.append(f"Last season's franchise may match at {extra}.")
+        for f, line in zip(field, per_team):
+            lines.append(f"· {_e(f.name)} — {_e(line)}")
         lines.append(f"<i>{how}</i>")
         lines.append("")
 
@@ -1035,6 +1073,65 @@ def retention_view(session, season):
                             f"{A.render_money(lot.sold_price_lakh, symbol)}"]
                            for lot in kept])]))
     return blocks, "\n".join(lines)
+
+
+def retained_view(session, season):
+    """🔒 Every franchise's retained players, one tap-to-expand list per team.
+
+    ``/aretained`` — the answer to "who did everybody keep?" without the
+    window/ladder/purse detail of ``/aretlock``. Each team's header carries
+    its retention count and the Right To Match cards the unused spots turned
+    into, because those two numbers are read together.
+    """
+    symbol = season.currency_label or "₹"
+    from services import retention_negotiation as RN
+    slot_by_key = {slot["key"]: slot for slot in RN.slots(season)}
+    spots = int(season.max_retentions or 0)
+    keeps = [(f, A.retained(session, f.id))
+             for f in A.franchises(session, season.id)]
+    total = sum(len(kept) for _f, kept in keeps)
+
+    blocks = [R.heading(f"🔒 {season.name} — retained players", size=2),
+              R.paragraph([R.bold(str(total)), " retained across ",
+                           f"{len(keeps)} franchise"
+                           + ("s" if len(keeps) != 1 else "")])]
+    lines = [f"🔒 <b>{_e(season.name)} — retained players</b>",
+             f"<b>{total}</b> retained across {len(keeps)} franchises"]
+    if not A.retention_configured(season):
+        blocks.append(R.paragraph(R.italic(
+            "This auction allows no retentions.")))
+        lines.append("<i>This auction allows no retentions.</i>")
+    lines.append("")
+
+    for franchise, kept in keeps:
+        count = f"{len(kept)}/{spots}" if spots else str(len(kept))
+        head = f"🔒 {franchise.name} · {count}"
+        if A.rtm_configured(season):
+            head += f" · 🪪 {int(franchise.rtm_cards_total or 0)} RTM"
+        player_lines = []
+        items = []
+        for lot in kept:
+            slot = slot_by_key.get(getattr(lot, "retention_slot", None) or "")
+            mark = f"{slot['emoji']} " if slot else ""
+            price = A.render_money(lot.sold_price_lakh, symbol)
+            player_lines.append(
+                f"{mark}{_flag(lot)} <b>{_e(lot.name)}</b> · {lot.rating} OVR · "
+                f"{_e(lot.category or '')} · {price}")
+            items.append([mark + f"{_flag(lot)} ", R.bold(lot.name),
+                          f" · {lot.rating} OVR · {lot.category or ''} · {price}"])
+        if not kept:
+            player_lines.append("<i>Nobody retained.</i>")
+            body = [R.paragraph(R.italic("Nobody retained."))]
+        else:
+            body = [R.list_block(items)]
+        blocks.append(R.details(R.bold(head), body))
+        lines.append(f"<b>{_e(head)}</b>")
+        lines.append("<blockquote expandable>" + "\n".join(player_lines)
+                     + "</blockquote>")
+        # A blank line between teams: html_parts cuts a long listing there,
+        # never inside a team's quote.
+        lines.append("")
+    return blocks, "\n".join(lines).rstrip("\n")
 
 
 def picks_view(session, season):
@@ -1718,10 +1815,18 @@ ADMIN_SECTIONS = (
         ("/aretrule [knob value]", "Dynamic rules: budget, chances, counter, "
                                    "lowball, jitter, personalities"),
         ("/aretdemand 83=13-17 | 96=28-32", "The Demand Meter's price curve"),
+        ("/aretained", "Every team's retained players — open to anyone"),
+    )),
+    ("⭐ Rating rule", (
+        ("/aratingrule <max rating> <min players>", "e.g. 83 4 — every squad "
+                                                    "needs 4+ players rated ≤83"),
+        ("/aratingrule off <rating> · clear", "Remove one rule, or all"),
     )),
     ("🪪 Right To Match", (
-        ("/artmset <cards> [seconds] [premium]", "RTM rules — /artmset off turns it off"),
-        ("/artmcards <team> <cards>", "One franchise's own card count"),
+        ("/artmset on [seconds] [premium]", "RTM on — cards are automatic: "
+                                            "retention spots − retained. "
+                                            "/artmset off turns it off"),
+        ("/artmcards <team> <cards>", "Override one franchise's card count"),
         ("/artmforce yes|no|stand", "Answer an open RTM for a franchise"),
         ("/artmundo <player>", "Undo a match — money and card back"),
     )),

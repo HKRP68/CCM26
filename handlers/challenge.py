@@ -1142,6 +1142,9 @@ def _load_team_players_with_retry(draft, side, attempts=2):
                             session, tour, league)
                         league_cfg["overseas_min"] = lo
                         league_cfg["overseas_max"] = hi
+                        # "At least N players rated ≤X" in every XI.
+                        league_cfg["rating_rules"] = (
+                            tournament_service.rating_rules(tour))
             # Injured players are taken out of the squad entirely rather than
             # shown and refused: the picker's numbering, the typed quick-select
             # and the bot's XI builder all work off this one list, so removing
@@ -1267,6 +1270,27 @@ def _challenge_overseas_limits(draft):
     return lo, hi
 
 
+def _challenge_xi_limits(draft):
+    """``(min_overseas, max_overseas, rating_rules)`` — every XI rule the
+    draft carries beyond the fixed keeper / bowling ones."""
+    lo, hi = _challenge_overseas_limits(draft)
+    return lo, hi, list(draft.get("rating_rules") or [])
+
+
+def _rating_rule_checks(draft, picked):
+    """``[(met, "⭐ Rated ≤83: 2/3")]`` — the tournament's rating rules as
+    live checkboxes for the XI picker; empty when there are none."""
+    from services import rating_rules as RR
+    rules = draft.get("rating_rules") or []
+    ratings = [xi_rules.challenge_rating_or_none(p) for p in picked]
+    out = []
+    for rule, have in RR.progress(rules, ratings):
+        need = rule["min_players"]
+        out.append((have >= need,
+                    f"⭐ Rated ≤{rule['max_rating']}: {have}/{need} (min {need})"))
+    return out
+
+
 def _injury_note(draft, side):
     """Lines naming the players this side is missing, or [] when nobody is out.
 
@@ -1354,6 +1378,8 @@ def _challenge_xi_text(draft, side, team_name, players, selected_ids):
             f"{_challenge_rule_checkbox(overseas_ok)} Overseas ✈️ {overseas_count} "
             f"(min {min_overseas} / max {max_overseas})"
         )
+    for ok, text in _rating_rule_checks(draft, selected_players):
+        lines.append(f"{_challenge_rule_checkbox(ok)} {text}")
     lines.append("• Selection order becomes batting order")
     lines.extend(_injury_note(draft, side))
     if selected_players:
@@ -1461,6 +1487,7 @@ def _challenge_xi_picker_tree(draft, side, team_name, players, selected_ids):
     if lo > 0 or hi < 11:
         rules.append((lo <= overseas <= hi,
                       f"Overseas ✈️ {overseas} (min {lo} / max {hi})"))
+    rules.extend(_rating_rule_checks(draft, picked))
 
     blocks = [
         R.heading(f"🏏 {team_name} — Playing XI Selection", size=3),
@@ -2333,7 +2360,13 @@ def _autoconfirm_bot_xi(draft):
     session = get_session()
     try:
         players = _query_team_players(session, draft, "target")
-        xi = build_challenge_bot_xi(players, *_challenge_overseas_limits(draft))
+        if "rating_rules" not in draft and draft.get("is_tournament") \
+                and draft.get("tournament_id"):
+            from models import Tournament
+            from services import tournament_service
+            tour = session.get(Tournament, int(draft["tournament_id"]))
+            draft["rating_rules"] = tournament_service.rating_rules(tour)
+        xi = build_challenge_bot_xi(players, *_challenge_xi_limits(draft))
         if len(xi) != 11:
             logger.error("ciplbot: could not build an XI for %s (%s players)",
                          draft.get("target_team"), len(players))
@@ -3044,7 +3077,8 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
         # picker render and confirm callbacks enforce them without re-hitting the
         # DB. ``.get`` throughout: a league that failed to resolve still returns a
         # dict carrying the injury list, and must not clobber earlier values.
-        for key in ("overseas_min", "overseas_max", "ball_format"):
+        for key in ("overseas_min", "overseas_max", "ball_format",
+                    "rating_rules"):
             if key in league_cfg:
                 draft[key] = league_cfg[key]
         # Who this side is missing, for the note on the picker.
@@ -3163,7 +3197,7 @@ async def challenge_xi_useprev_callback(update: Update, context: ContextTypes.DE
     # Fully valid saved XI → one-tap select + confirm.
     if len(saved_subset) == 11:
         selected_players = [player_map[pid] for pid in saved_subset if pid in player_map]
-        valid, _error = _challenge_xi_validation(selected_players, *_challenge_overseas_limits(draft))
+        valid, _error = _challenge_xi_validation(selected_players, *_challenge_xi_limits(draft))
         if valid:
             await query.answer("Loaded & confirmed your last XI!")
             await _finalize_xi_confirm(context, query, draft, draft_id, side,
@@ -3238,7 +3272,7 @@ async def challenge_xi_pick_callback(update: Update, context: ContextTypes.DEFAU
         proposed_ids = selected_ids + [player_id]
         proposed_players = [player_map[pid] for pid in proposed_ids if pid in player_map]
         if len(proposed_ids) == 11:
-            valid, error = _challenge_xi_validation(proposed_players, *_challenge_overseas_limits(draft))
+            valid, error = _challenge_xi_validation(proposed_players, *_challenge_xi_limits(draft))
             if not valid:
                 await query.answer(error, show_alert=True)
                 return
@@ -3295,7 +3329,7 @@ async def challenge_xi_confirm_callback(update: Update, context: ContextTypes.DE
         return
 
     selected_players = [player_map[pid] for pid in selected_ids if pid in player_map]
-    valid, error = _challenge_xi_validation(selected_players, *_challenge_overseas_limits(draft))
+    valid, error = _challenge_xi_validation(selected_players, *_challenge_xi_limits(draft))
     if not valid:
         await query.answer(error, show_alert=True)
         return
@@ -3517,7 +3551,7 @@ async def challenge_xi_quickselect(update: Update, context: ContextTypes.DEFAULT
     # A full XI must satisfy the rules; a partial pick (<11) is accepted as-is
     # and simply won't surface the Confirm XI button until it reaches 11.
     if len(numbers) == 11:
-        valid, error = _challenge_xi_validation(selected_players, *_challenge_overseas_limits(draft))
+        valid, error = _challenge_xi_validation(selected_players, *_challenge_xi_limits(draft))
         if not valid:
             await message.reply_text(f"❌ {error}")
             return
@@ -3612,7 +3646,7 @@ async def challenge_change_handler(update: Update, context: ContextTypes.DEFAULT
         return
 
     new_players = [pid_map[pid] for pid in new_ids if pid in pid_map]
-    valid, error = _challenge_xi_validation(new_players, *_challenge_overseas_limits(draft))
+    valid, error = _challenge_xi_validation(new_players, *_challenge_xi_limits(draft))
     if not valid:
         await message.reply_text(f"❌ {error}\nNo change made.")
         return

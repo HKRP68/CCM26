@@ -540,6 +540,10 @@ def overview_blocks(session, tour):
     if lo > 0 or hi < 11:
         facts.append([R.cell(R.bold("Overseas in XI")),
                       R.cell(f"min {lo} · max {hi}")])
+    rating_line = tournament_service.rating_rule_line(tour)
+    if rating_line:
+        facts.append([R.cell(R.bold("Rating rule (XI)")),
+                      R.cell(rating_line)])
 
     from services import league_schedule_service
     if league_schedule_service.pitch_locked(tour):

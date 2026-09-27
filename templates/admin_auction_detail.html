@@ -122,7 +122,8 @@
   <!-- ── Squad rules ───────────────────────────────────────────── -->
   {{ fold("squad-rules", "🧩 Squad rules",
           season.min_squad_size ~ "–" ~ season.max_squad_size ~ " players"
-          ~ (" · " ~ role_rule_line if role_rule_line else " · no role limits")) }}
+          ~ (" · " ~ role_rule_line if role_rule_line else " · no role limits")
+          ~ (" · " ~ rating_rule_line if rating_rule_line else "")) }}
     <p class="au-note" style="margin:.2rem 0 .8rem;">
       What a legal squad looks like — the size, the overseas cap, and how many
       of each role. Both ends of the role rule are saved together because they
@@ -167,6 +168,31 @@
           </tbody>
         </table>
       </div>
+
+      <div style="grid-column:1/-1;">
+        <table class="au-table" style="margin-top:.4rem;">
+          <thead>
+            <tr><th>⭐ Rating rule — rated at most</th>
+                <th style="width:9rem;">Min players</th><th>Reads as</th></tr>
+          </thead>
+          <tbody>
+          {% for rule in rating_rules + [{}] * ([3 - rating_rules|length, 1]|max) %}
+          <tr>
+            <td><input type="number" name="rating_rule_max" min="1" max="99"
+                       value="{{ rule.max_rating or '' }}" placeholder="e.g. 83"
+                       style="width:6rem;"></td>
+            <td><input type="number" name="rating_rule_min" min="0" max="50"
+                       value="{{ rule.min_players or '' }}" placeholder="e.g. 4"
+                       style="width:6rem;"></td>
+            <td class="dim">
+              {% if rule.max_rating %}at least {{ rule.min_players }} player{{ '' if rule.min_players == 1 else 's' }} rated {{ rule.max_rating }} or lower
+              {% else %}no rule{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
       <div><button class="btn btn-primary" type="submit">Save squad rules</button></div>
     </form>
     <p class="au-note" style="margin-bottom:0;">
@@ -183,6 +209,13 @@
       <b>reachability</b> — a bid is refused when winning it would leave the
       franchise without enough slots to still fill what it owes. A rule you only
       meet once you have broken it is one you cannot plan around.
+    </p>
+    <p class="au-note" style="margin-bottom:0;">
+      <b>Rating rule.</b> "83 / 4" means every finished squad must hold at
+      least 4 players rated 83 or lower. Like a role minimum it is enforced as
+      reachability: a bid (or retention, RTM or auto-fill) is refused once the
+      squad would owe the rule more players than it has slots left. Leave both
+      boxes blank to remove a row.
     </p>
     <p class="au-note" style="margin-bottom:0;">
       <b>Min squad</b> also drives the money side of reachability: a franchise
@@ -828,7 +861,8 @@
 
   <!-- ── Right To Match ────────────────────────────────────────── -->
   {{ fold("rtm", "🪪 Right To Match",
-          ("on · " ~ season.rtm_per_team ~ " each" if season.rtm_enabled else "off")) }}
+          (("on · automatic: retention spots − retained" if season.max_retentions
+            else "on · " ~ season.rtm_per_team ~ " each") if season.rtm_enabled else "off")) }}
     <p class="au-note" style="margin:.2rem 0 .8rem;">
       The IPL 2025 rule, in full. When a lot's clock expires, the franchise
       that held the player last season is asked whether it wants to use an
@@ -844,8 +878,15 @@
       <input type="hidden" name="back_query" value="#rtm">
       <div><label>Enabled</label>
         <input type="checkbox" name="rtm_enabled" {% if season.rtm_enabled %}checked{% endif %}></div>
+      {% if season.max_retentions %}
       <div><label>RTM per franchise</label>
+        <div class="dim" style="padding:.4rem 0;">Automatic — {{ season.max_retentions }}
+          retention spots − players retained</div>
+        <input type="hidden" name="rtm_per_team" value="{{ season.rtm_per_team }}"></div>
+      {% else %}
+      <div><label>RTM per franchise (retention is off)</label>
         <input type="number" name="rtm_per_team" min="0" max="10" value="{{ season.rtm_per_team }}"></div>
+      {% endif %}
       <div><label>Window (seconds)</label>
         <input type="number" name="rtm_window_seconds" min="5" max="600" value="{{ season.rtm_window_seconds }}"></div>
       <div><label>Premium on top (Cr)</label>
@@ -855,17 +896,22 @@
     <p class="au-note" style="margin-bottom:0;">
       A <b>premium of 0</b> is the pure IPL rule — matching costs exactly the
       final bid. Set it higher and holding a card costs something to use.
-      Saving deals the card count out to every franchise that has not spent one
-      yet; a franchise mid-auction keeps whatever it has left.
+      <b>The card count is automatic:</b> RTM = retention spots − players
+      retained, re-dealt every time a retention is made or released and when
+      the auction opens. A franchise mid-auction keeps whatever it has left;
+      the per-team box below overrides one side once the auction is live.
     </p>
 
     {% if season.rtm_enabled %}
     <table class="au-table" style="margin-top:.8rem;">
-      <tr><th>Franchise</th><th>Held last season</th><th>RTM left</th><th></th></tr>
+      <tr><th>Franchise</th><th>Held last season</th><th>Retained</th>
+          <th>Auto RTM</th><th>RTM left</th><th></th></tr>
       {% for f in field %}
       <tr>
         <td>{{ f.name }}</td>
         <td class="dim">{{ previous_squad.values()|select('eq', f)|list|length }} players</td>
+        <td>{{ f.retained_count or 0 }}{% if season.max_retentions %} / {{ season.max_retentions }}{% endif %}</td>
+        <td>{{ rtm_auto_cards(f) }}</td>
         <td>{{ cards_left(f) }} of {{ f.rtm_cards_total }}</td>
         <td>
           <form method="POST" style="display:flex;gap:.3rem;">

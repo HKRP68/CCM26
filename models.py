@@ -2714,6 +2714,10 @@ class Tournament(Base):
     # are nullable rather than defaulted.
     min_overseas = Column(Integer, nullable=True)
     max_overseas = Column(Integer, nullable=True)
+    # [{"max_rating": 83, "min_players": 3}] — every Playing XI in this
+    # tournament must field at least 3 players rated 83 or lower. NULL = none.
+    # See services/rating_rules.py.
+    rating_rules_json = Column(Text, nullable=True)
 
     # Team ownership. When true, a participating team may only be picked by the
     # Telegram user set as its owner (``TournamentTeam.owner_tg_id``) — this is
@@ -3791,6 +3795,10 @@ class AuctionSeason(Base):
     # ceiling of 0" are different answers and a dense map cannot tell them
     # apart.
     role_maximums_json = Column(Text, nullable=True)
+    # [{"max_rating": 83, "min_players": 4}] — "a finished squad holds at
+    # least 4 players rated 83 or lower". Enforced as reachability, like the
+    # role minimums; see services/rating_rules.py. NULL = no rating rule.
+    rating_rules_json = Column(Text, nullable=True)
     home_country = Column(String(60), default="India", nullable=False)
     max_overseas = Column(Integer, default=8, nullable=False)
 

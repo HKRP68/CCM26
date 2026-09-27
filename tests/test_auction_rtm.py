@@ -993,6 +993,30 @@ class CommandTests(RTMCase):
         self.assertIn("admin", self.replies[-1].lower())
         self.assertEqual(self.cards, self.season.rtm_per_team)
 
+    def test_artmset_on_keeps_the_automatic_count(self):
+        from handlers import auction as H
+        self._run(H.artmset_handler, CAROL, ("on", "40"))
+        self.assertTrue(self.season.rtm_enabled)
+        self.assertEqual(40, self.season.rtm_window_seconds)
+        self.assertEqual(self.cards, self.season.rtm_per_team,
+                         "'on' is not a card count")
+        self.assertIn("Right To Match", self.replies[-1])
+
+    def test_aratingrule_sets_lists_and_clears(self):
+        from handlers import auction as H
+        self._run(H.aratingrule_handler, CAROL, ("83", "2"))
+        self.assertEqual([{"max_rating": 83, "min_players": 2}],
+                         self.A.rating_rules(self.season))
+        self.assertIn("Min 2 players rated ≤83", self.replies[-1])
+        self._run(H.aratingrule_handler, CAROL, ("clear",))
+        self.assertEqual([], self.A.rating_rules(self.season))
+
+    def test_aratingrule_is_admin_only(self):
+        from handlers import auction as H
+        self._run(H.aratingrule_handler, BOB, ("83", "2"))
+        self.assertIn("admin", self.replies[-1].lower())
+        self.assertEqual([], self.A.rating_rules(self.season))
+
     def test_artmcards_gives_one_franchise_its_own_count(self):
         from handlers import auction as H
         self._run(H.artmcards_handler, CAROL, ("Mumbai", "3"))

@@ -343,7 +343,69 @@ def _fix_overseas(xi, bench, min_overseas, max_overseas):
     return xi, bench
 
 
-def build_challenge_bot_xi(players, min_overseas=0, max_overseas=11):
+def _fix_rating_rules(xi, bench, rating_rules, min_overseas, max_overseas):
+    """Swap players in until the XI meets every "N players rated ≤X" rule.
+
+    Tightest cap first. Each swap brings in the best-rated bench player under
+    the cap and drops the lowest-rated XI player who is *not* needed for any
+    rating rule, and only when the swap keeps the keeper, bowling-option and
+    overseas rules intact — a rating rule met by breaking another rule is no
+    fix at all.
+    """
+    from services import rating_rules as RR
+    rating_of = xi_rules.challenge_rating_or_none
+    rules = sorted(rating_rules or (), key=lambda r: r["max_rating"])
+
+    def _eligible(player, cap):
+        rating = rating_of(player)
+        return rating is not None and rating <= cap
+
+    def _met(squad, rule):
+        """How much of ``rule`` a squad satisfies, capped at what it asks."""
+        have = RR.count_at_or_below([rating_of(p) for p in squad],
+                                    rule["max_rating"])
+        return min(have, rule["min_players"])
+
+    def _still_legal(trial):
+        keepers, bowling, overseas = _counts(trial)
+        if not (keepers >= 1 and bowling >= 5
+                and min_overseas <= overseas <= max_overseas):
+            return False
+        # A swap must not give back progress already made on another rule.
+        return all(_met(trial, r) >= _met(xi, r) for r in rules)
+
+    for rule in rules:
+        cap, need = rule["max_rating"], rule["min_players"]
+        for _ in range(11):
+            have = sum(1 for p in xi if _eligible(p, cap))
+            if have >= need:
+                break
+            ins = sorted((p for p in bench if _eligible(p, cap)),
+                         key=_cp_rating, reverse=True)
+            outs = sorted((p for p in xi if not _eligible(p, cap)),
+                          key=_cp_rating)
+            swapped = False
+            for in_player in ins:
+                for out_player in outs:
+                    trial = [p for p in xi if p is not out_player] + [in_player]
+                    if not _still_legal(trial):
+                        continue
+                    xi[xi.index(out_player)] = in_player
+                    bench.remove(in_player)
+                    bench.append(out_player)
+                    swapped = True
+                    break
+                if swapped:
+                    break
+            if not swapped:
+                # The squad cannot meet this rule legally — stop rather than
+                # spin; the validation in the caller reports it.
+                break
+    return xi, bench
+
+
+def build_challenge_bot_xi(players, min_overseas=0, max_overseas=11,
+                           rating_rules=None):
     """Pick the bot's Playing XI out of one league team's squad.
 
     ``players`` is that team's ``ChallengePlayer`` rows (see
@@ -380,8 +442,12 @@ def build_challenge_bot_xi(players, min_overseas=0, max_overseas=11):
         xi.append(remaining.pop(0))
 
     xi, remaining = _fix_overseas(xi, remaining, min_overseas, max_overseas)
+    if rating_rules:
+        xi, remaining = _fix_rating_rules(xi, remaining, rating_rules,
+                                          min_overseas, max_overseas)
 
-    ok, error = xi_rules.validate_challenge_xi(xi, min_overseas, max_overseas)
+    ok, error = xi_rules.validate_challenge_xi(xi, min_overseas, max_overseas,
+                                               rating_rules)
     if not ok:
         logger.warning("ciplbot: generated XI failed validation (%s) — "
                        "falling back to the top 11 by rating", error)

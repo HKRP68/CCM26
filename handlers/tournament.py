@@ -399,42 +399,66 @@ def _leaderboard_tree(tour, category, rows):
     return blocks
 
 
-def _player_stats_blocks(tour, rows):
+def _player_stats_blocks(tour, rows, careers=None):
     """One card per matched player — the block twin of :func:`statstour_handler`.
 
-    Batting and bowling are separate tables rather than one run-on paragraph,
-    because they are read separately; a second or third match for the same name
-    is collapsed behind a ``details`` so the first one stays the answer.
+    Each player gets two tap-to-expand sections: **This Tournament Stats** and
+    **Total Stats** across every season of the competition. Batting and bowling
+    are separate tables inside each, because they are read separately.
     """
     try:
-        return _player_stats_tree(tour, rows)
+        return _player_stats_tree(tour, rows, careers)
     except Exception:
         logger.exception("tournament player-stats blocks failed to build")
         return None
 
 
-def _player_stats_tree(tour, rows):
+def _stat_tables(r):
+    return [R.paragraph(["🎮 Matches: ", R.bold(str(r.matches or 0))]),
+            R.table(_batting_rows(r), bordered=True, compact=True,
+                    caption=R.bold("🏏 Batting")),
+            R.table(_bowling_rows(r), bordered=True, compact=True,
+                    caption=R.bold("🎯 Bowling"))]
+
+
+def _seasons_label(career):
+    n = int(getattr(career, "seasons", 0) or 0)
+    return f"all {n} season{'s' if n != 1 else ''}"
+
+
+def _player_stats_tree(tour, rows, careers=None):
+    careers = careers or [None] * len(rows)
     blocks = [R.heading(f"🏆 {tour.name}", size=2),
-              R.paragraph(R.italic("Player tournament stats"))]
-    for index, r in enumerate(rows):
-        header = ["👤 ", R.bold(r.name or "Player")]
+              R.paragraph(R.italic("Player tournament stats — tap a section "
+                                   "to expand"))]
+    for r, career in zip(rows, careers):
+        name = r.name or "Player"
+        header = ["👤 ", R.bold(name)]
         if r.team_name:
             header.append(f"  ·  {r.team_name}")
-        body = [R.paragraph(header),
-                R.paragraph(["🎮 Matches: ", R.bold(str(r.matches or 0))]),
-                R.table(_batting_rows(r), bordered=True, compact=True,
-                        caption=R.bold("🏏 Batting")),
-                R.table(_bowling_rows(r), bordered=True, compact=True,
-                        caption=R.bold("🎯 Bowling"))]
-        if index == 0:
-            blocks.extend(body)
-        else:
+        blocks.append(R.paragraph(header))
+        blocks.append(R.details(R.bold(f"📊 This Tournament Stats — {name}"),
+                                _stat_tables(r)))
+        if career is not None:
             blocks.append(R.details(
-                R.bold(f"👤 {r.name or 'Player'}"
-                       + (f" · {r.team_name}" if r.team_name else "")),
-                body[1:]))
+                R.bold(f"📚 Total Stats — {name} ({_seasons_label(career)})"),
+                _stat_tables(career)))
     blocks.append(R.footer(["Leaderboards: ", R.code("/tournamentstats")]))
     return blocks
+
+
+def _stats_html(r):
+    """The stat lines for one row — tournament or career — as HTML."""
+    fig = (f"{r.best_bowl_wickets}/{r.best_bowl_runs}"
+           if r.best_bowl_wickets is not None and r.best_bowl_runs is not None
+           and r.best_bowl_runs >= 0 else "—")
+    avg = tournament_service.batting_average(r)
+    avg_s = f"{avg:.2f}" if avg is not None else "—"
+    return (f"🎮 Matches: {r.matches}\n"
+            f"🏏 Runs: {r.bat_runs} ({r.bat_balls}b) · SR {_sr(r):.1f} · Avg {avg_s}\n"
+            f"   4s: {r.bat_fours} · 6s: {r.bat_sixes} · HS: {r.highest_score}\n"
+            f"🎯 Wickets: {r.bowl_wickets} · Runs: {r.bowl_runs} · Econ {_econ(r):.2f}\n"
+            f"   Best: {fig}")
 
 
 def _batting_rows(r):
@@ -559,23 +583,30 @@ async def statstour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         exact = [r for r in rows if (r.name or "").strip().lower() == search.lower()]
         rows = exact or rows
         rows = sorted(rows, key=lambda r: (r.bat_runs or 0), reverse=True)[:3]
-
-        blocks = [f"🏆 <b>{html.escape(tour.name)}</b> — Player Tournament Stats"]
+        careers = []
         for r in rows:
-            fig = (f"{r.best_bowl_wickets}/{r.best_bowl_runs}"
-                   if r.best_bowl_wickets is not None and r.best_bowl_runs is not None
-                   and r.best_bowl_runs >= 0 else "—")
+            try:
+                careers.append(tournament_service.career_player_stats(
+                    session, tour, r))
+            except Exception:
+                logger.exception("/statstour career aggregate failed")
+                careers.append(None)
+
+        blocks = [f"🏆 <b>{html.escape(tour.name)}</b> — Player Tournament Stats",
+                  "<i>Tap a section to expand.</i>"]
+        for r, career in zip(rows, careers):
+            name = html.escape(r.name or "Player")
             team = f" · {html.escape(r.team_name)}" if r.team_name else ""
-            avg = tournament_service.batting_average(r)
-            avg_s = f"{avg:.2f}" if avg is not None else "—"
-            blocks.append(
-                f"\n👤 <b>{html.escape(r.name or 'Player')}</b>{team}\n"
-                f"🎮 Matches: {r.matches}\n"
-                f"🏏 Runs: {r.bat_runs} ({r.bat_balls}b) · SR {_sr(r):.1f} · Avg {avg_s}\n"
-                f"   4s: {r.bat_fours} · 6s: {r.bat_sixes} · HS: {r.highest_score}\n"
-                f"🎯 Wickets: {r.bowl_wickets} · Runs: {r.bowl_runs} · Econ {_econ(r):.2f}\n"
-                f"   Best: {fig}")
-        await R.reply_rich(update.message, _player_stats_blocks(tour, rows),
+            blocks.append(f"\n👤 <b>{name}</b>{team}")
+            blocks.append(f"<b>📊 This Tournament Stats — {name}</b>")
+            blocks.append(f"<blockquote expandable>{_stats_html(r)}</blockquote>")
+            if career is not None:
+                blocks.append(f"<b>📚 Total Stats — {name} "
+                              f"({_seasons_label(career)})</b>")
+                blocks.append(f"<blockquote expandable>{_stats_html(career)}"
+                              f"</blockquote>")
+        await R.reply_rich(update.message,
+                           _player_stats_blocks(tour, rows, careers),
                            "\n".join(blocks))
     except Exception:
         logger.exception("/statstour failed")

@@ -1027,6 +1027,11 @@ def _migrate_add_columns():
     # season written before this behaved, so there is nothing to backfill.
     _try_add("auction_seasons", "role_maximums_json", "TEXT")
 
+    # ── Rating rules: "at least N players rated X or lower" ──
+    # NULL is "no rating rule" on both tables, so nothing to backfill.
+    _try_add("auction_seasons", "rating_rules_json", "TEXT")
+    _try_add("tournaments", "rating_rules_json", "TEXT")
+
     # ── Franchise Auction: the hammer countdown, and /arestart ──
     # An integer defaulted to 3 so a running auction picks the countdown up;
     # the opening order is NULL until the next /astart, and /arestart falls

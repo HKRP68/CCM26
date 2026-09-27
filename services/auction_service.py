@@ -49,6 +49,7 @@ from models import (
     ChallengeLeague, ChallengeMode, ChallengePlayer, ChallengeTeam,
 )
 from services import player_query
+from services import rating_rules as RR
 
 logger = logging.getLogger(__name__)
 
@@ -693,7 +694,7 @@ SEASON_RULE_FIELDS = (
     "base_price_rules_json", "bid_increment_rules_json",
     # The squad
     "min_squad_size", "max_squad_size", "role_minimums_json",
-    "role_maximums_json", "home_country", "max_overseas",
+    "role_maximums_json", "rating_rules_json", "home_country", "max_overseas",
     # Retention
     "max_retentions", "min_retentions", "retention_max_spend_lakh",
     "retention_min_rating", "retention_max_rating",
@@ -765,7 +766,7 @@ def clone_season(session, source, name, *, chat_id=None, by_tg_id=None):
             session, season, old.name, quiet=True,
             purse_total_lakh=season.opening_purse_lakh,
             carried_from_id=old.id,
-            rtm_cards_total=_as_int(season.rtm_per_team, 0),
+            rtm_cards_total=rtm_auto_cards(season, None),
             **{f: getattr(old, f) for f in FRANCHISE_CARRY_FIELDS})
 
     # Flushed before anything counts the rows just written: this session is
@@ -835,7 +836,7 @@ def season_from_league(session, league, name, *, template=None, chat_id=None,
         create_franchise(session, season, team.name, quiet=True,
                          short_name=team.short_name, logo_url=team.logo_url,
                          sort_order=team.sort_order,
-                         rtm_cards_total=_as_int(season.rtm_per_team, 0))
+                         rtm_cards_total=rtm_auto_cards(season, None))
 
     # Flushed before ``link_previous_season`` reads the franchises back
     # through a query: this session is autoflush=False.
@@ -1075,6 +1076,9 @@ def create_franchise(session, season, name, *, quiet=False, **fields):
                   f"🏛 {_e(name)} joined with "
                   f"{render_money(purse, season.currency_label)}.",
                   franchise=franchise)
+    # A side added after the RTM rules were saved still gets its cards.
+    if "rtm_cards_total" not in (fields or {}) and rtm_configured(season):
+        franchise.rtm_cards_total = rtm_auto_cards(season, franchise)
     return franchise
 
 
@@ -1587,6 +1591,75 @@ def set_role_rules(session, season, minimums, maximums):
     return lows, highs
 
 
+# ── Rating rules: "at least N players rated X or lower" ──────────────
+#
+# The same reachability semantics as the role minimums: the rule is about the
+# FINISHED squad, so a signing is refused only once the squad could no longer
+# get there — when what it still owes a rule is more than the slots left.
+
+def rating_rules(season):
+    return RR.parse(getattr(season, "rating_rules_json", None))
+
+
+def set_rating_rules(session, season, rules):
+    """Save the rating rules, refusing any the squad size makes impossible."""
+    cap = max(0, _as_int(season.max_squad_size, 0))
+    for rule in rules or ():
+        need = _as_int((rule or {}).get("min_players"), 0)
+        if cap and need > cap:
+            raise AuctionError(
+                f"{RR.describe({'max_rating': rule.get('max_rating'), 'min_players': need})}"
+                f" is more than the squad limit of {cap}.")
+    clean = RR.normalize(rules)
+    season.rating_rules_json = RR.dump(clean)
+    session.flush()
+    return clean
+
+
+def squad_ratings(session, franchise_id):
+    """Every signed player's rating for one franchise."""
+    return [int(r[0]) for r in
+            session.query(AuctionLot.rating)
+            .filter(AuctionLot.sold_to_id == franchise_id,
+                    AuctionLot.status == LOT_SOLD).all()
+            if r[0] is not None]
+
+
+def check_rating_rules(session, season, franchise, lot):
+    """Refuse a signing that would leave a rating rule unreachable."""
+    rules = rating_rules(season)
+    if not rules:
+        return
+    ratings = squad_ratings(session, franchise.id)
+    if lot is not None and lot.rating is not None:
+        ratings.append(int(lot.rating))
+    slots_left = (int(season.max_squad_size or 0)
+                  - (int(franchise.squad_size or 0) + 1))
+    missed = RR.shortfalls(rules, ratings, slots_left)
+    if missed:
+        rule, owed = missed[0]
+        raise AuctionError(
+            f"{franchise.name} still need {owed} player(s) rated "
+            f"≤{rule['max_rating']} ({RR.describe(rule)}) and would have only "
+            f"{max(0, slots_left)} slot(s) left after this one.")
+
+
+def rating_rule_line(season):
+    """``"Min 4 players rated ≤83"`` — empty when there is no rating rule."""
+    return " · ".join(RR.describe(rule) for rule in rating_rules(season))
+
+
+def rating_progress_line(session, season, franchise):
+    """``"≤83: 3/4 · ≤80: 1/2"`` for one squad; empty when there are no rules."""
+    rules = rating_rules(season)
+    if not rules:
+        return ""
+    have = RR.progress(rules, squad_ratings(session, franchise.id))
+    return " · ".join(f"≤{rule['max_rating']}: {count}/{rule['min_players']}"
+                      + (" ✅" if count >= rule["min_players"] else "")
+                      for rule, count in have)
+
+
 def role_rule_line(season):
     """"Bowler 4-8, Wicket Keeper 1+" — both ends of the rule in one string.
 
@@ -1786,6 +1859,7 @@ def lock_retention(session, season, *, now=None, by_tg_id=None, quiet=False):
     if retention_locked(season):
         return season
     season.retention_locked_at = now or datetime.utcnow()
+    sync_rtm_cards(session, season)
     if not quiet:
         log_event(session, season, "retention_locked",
                   "🔒 Retention is closed. Every squad is now what it will "
@@ -2065,6 +2139,7 @@ def _sign_before_auction(session, season, franchise, player, price, *,
     # franchise that could retain past a cap would take an illegal squad into
     # an auction that then refuses every bid which might fix it.
     check_role_ceiling(session, season, franchise, lot.category)
+    check_rating_rules(session, season, franchise, lot)
 
     remaining = int(franchise.purse_remaining_lakh or 0)
     if price > remaining:
@@ -2231,6 +2306,7 @@ def retain(session, season, franchise, player, price_lakh=None, *,
     if dynamic:
         lot.retention_slot = slot_key
         session.flush()
+    sync_rtm_cards(session, season)
     return lot
 
 
@@ -2558,6 +2634,7 @@ def unretain(session, season, franchise, lot, *, by_tg_id=None):
               f"{render_money(price, season.currency_label)} back in the purse, "
               f"and the player goes into the auction.",
               lot=lot, franchise=franchise, by_tg_id=by_tg_id, by_admin=True)
+    sync_rtm_cards(session, season)
     return lot
 
 
@@ -3087,6 +3164,7 @@ def start(session, season, *, now=None, by_tg_id=None):
     # squads are what they are.
     if season.status == STATUS_SETUP:
         lock_retention(session, season, now=now, by_tg_id=by_tg_id, quiet=True)
+        sync_rtm_cards(session, season)
         _snapshot_opening_order(session, season)
 
     resuming = season.status == STATUS_PAUSED
@@ -3776,6 +3854,7 @@ def check_role_rules(session, season, franchise, lot):
     counts = dict(role_counts(session, franchise.id))
     role = lot.category
     check_role_ceiling(session, season, franchise, role, counts=counts)
+    check_rating_rules(session, season, franchise, lot)
 
     minimums = role_minimums(season)
     if not minimums:
@@ -4633,15 +4712,64 @@ def rtm_cards_left(franchise):
                - int(franchise.rtm_cards_used or 0))
 
 
+def rtm_auto_cards(season, franchise):
+    """How many RTM cards a franchise is owed, worked out — never typed.
+
+    **RTM = retention spots − retentions used.** A side that kept fewer players
+    than it was allowed gets the difference back as Right To Match cards, the
+    IPL's own trade-off: keep a player now at a fixed price, or let him go and
+    match whatever the room pays for him later. A season with retention off
+    (``max_retentions == 0``) has no spots to count, so it falls back to the
+    flat ``rtm_per_team`` an admin set with ``/artmset``.
+    """
+    spots = _as_int(getattr(season, "max_retentions", 0), 0)
+    if spots <= 0:
+        return max(0, _as_int(getattr(season, "rtm_per_team", 0), 0))
+    kept = _as_int(getattr(franchise, "retained_count", 0), 0) if franchise else 0
+    return max(0, spots - kept)
+
+
+def sync_rtm_cards(session, season, *, force=False):
+    """Deal every franchise its automatic RTM card count.
+
+    Runs whenever the inputs move before the auction opens — a retention made
+    or released, the window closing, the rules saved, the auction starting.
+    Once the auction is live it stops (unless ``force``), so ``/artmcards``
+    remains a real override for one side. A card already spent is never taken
+    back: the total never drops below what has been used.
+    """
+    if not rtm_configured(season):
+        return
+    if not force and season.status != STATUS_SETUP:
+        return
+    for franchise in franchises(session, season.id):
+        franchise.rtm_cards_total = max(int(franchise.rtm_cards_used or 0),
+                                        rtm_auto_cards(season, franchise))
+    session.flush()
+
+
+def rtm_card_line(season, franchise):
+    """``"Retention spots 4 · kept 2 → 🪪 2 RTM (1 left)"`` for one side."""
+    total = int(franchise.rtm_cards_total or 0)
+    left = rtm_cards_left(franchise)
+    spots = _as_int(season.max_retentions, 0)
+    if spots > 0:
+        head = (f"Retention spots {spots} · kept "
+                f"{int(franchise.retained_count or 0)} → ")
+    else:
+        head = ""
+    return f"{head}🪪 {total} RTM ({left} left)"
+
+
 def set_rtm_rules(session, season, *, enabled=None, per_team=None,
                   window_seconds=None, extra_lakh=None):
     """Save the Right To Match rules and deal the cards out.
 
-    Card counts live on the franchise so an admin can hand one side an extra,
-    but the common case is "everybody gets N" — so saving the rules deals them
-    out to anyone who has not spent one yet. A franchise mid-auction that has
-    already used a card keeps whatever it has left, because taking a card back
-    from underneath a live auction is a way to lose one.
+    The card count is automatic — see ``rtm_auto_cards``: each franchise gets
+    its unused retention spots back as RTM cards (or ``per_team`` when the
+    season has no retention). A franchise that has already used a card keeps
+    at least what it spent, because taking a card back from underneath a live
+    auction is a way to lose one.
     """
     if enabled is not None:
         season.rtm_enabled = bool(enabled)
@@ -4653,7 +4781,7 @@ def set_rtm_rules(session, season, *, enabled=None, per_team=None,
         season.rtm_extra_lakh = max(0, _as_int(extra_lakh, 0))
     for franchise in franchises(session, season.id):
         if int(franchise.rtm_cards_used or 0) == 0:
-            franchise.rtm_cards_total = _as_int(season.rtm_per_team, 0)
+            franchise.rtm_cards_total = rtm_auto_cards(season, franchise)
     session.flush()
     return season
 
@@ -4779,6 +4907,10 @@ def rtm_available(session, season, lot):
                       f"{render_money(price, season.currency_label)}")
     if price > max_bid_now(season, holder):
         return (None, f"{holder.name} could not fill its squad afterwards")
+    try:
+        check_rating_rules(session, season, holder, lot)
+    except AuctionError:
+        return (None, f"{holder.name} would break the rating rule")
     return (holder, None)
 
 
@@ -5938,6 +6070,8 @@ def autofill_short_squads(session, season, *, now=None):
                     for lot in squad(session, f.id)} for f in field}
     needs = role_minimums(season)
     caps = role_maximums(season)
+    rating_needs = rating_rules(season)
+    ratings = {f.id: squad_ratings(session, f.id) for f in field}
     given = []
 
     while pool:
@@ -5966,8 +6100,19 @@ def autofill_short_squads(session, season, *, now=None):
                             and roles[franchise.id].get(lot.category, 0) + 1 > cap)
 
             candidates = [lot for lot in pool if fits(lot)]
+            # A rating rule still owed ("≥4 rated ≤83") is served first, the
+            # role minimums next — both stable sorts, so best-rated stays the
+            # tie-break inside each group.
+            owed_caps = [rule["max_rating"] for rule in rating_needs
+                         if RR.count_at_or_below(ratings[franchise.id],
+                                                 rule["max_rating"])
+                         < rule["min_players"]]
             if owed:
                 candidates.sort(key=lambda lot: 0 if lot.category in owed else 1)
+            if owed_caps:
+                candidates.sort(key=lambda lot: -sum(
+                    1 for cap in owed_caps
+                    if lot.rating is not None and int(lot.rating) <= cap))
             if not candidates:
                 continue
             lot = candidates[0]
@@ -5984,6 +6129,8 @@ def autofill_short_squads(session, season, *, now=None):
             if lot.is_overseas:
                 overseas[franchise.id] += 1
             roles[franchise.id][lot.category] = roles[franchise.id].get(lot.category, 0) + 1
+            if lot.rating is not None:
+                ratings[franchise.id].append(int(lot.rating))
             session.flush()
             _ledger(session, franchise, LEDGER_AUTOFILL, 0, lot=lot,
                     note=f"Auto-filled: {lot.name}")
@@ -6307,16 +6454,22 @@ def render_board(session, season, lot=None, *, now=None):
     head.append(f"\n📊 <b>{done}/{counts.get('total', 0)}</b> lots resolved"
                 + (f" · 🔒 {counts['retained']} retained"
                    if counts.get("retained") else ""))
-    head.append("\n<b>Purses</b>")
+    # Folded behind Telegram's tap-to-expand quote: the board is re-posted on
+    # every lot and the purse list was most of its height.
+    head.append("\n<b>💼 Team Purses</b> — tap to expand")
+    purse_lines = []
     for franchise in franchises(session, season.id):
         ceiling = max_bid_now(season, franchise)
         kept = int(franchise.retained_count or 0)
-        head.append(
+        purse_lines.append(
             f"· {_e(franchise.name)} — "
             f"{render_money(franchise.purse_remaining_lakh, symbol)} · "
             f"{franchise.squad_size}/{season.max_squad_size}"
             + (f" (🔒{kept})" if kept else "")
             + f" · max bid {render_money(max(0, ceiling), symbol)}")
+    if purse_lines:
+        head.append("<blockquote expandable>" + "\n".join(purse_lines)
+                    + "</blockquote>")
     return "\n".join(head)
 
 
