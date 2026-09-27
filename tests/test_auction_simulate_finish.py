@@ -249,6 +249,115 @@ class PlaybackTests(SimulateCase):
         self.assertNotIn(self.season.id, ids)
 
 
+class PlaybackSpeedTests(SimulateCase):
+    """A running playback can be switched to quick, and back."""
+
+    def setUp(self):
+        super().setUp()
+        self.start()
+        self.session.commit()
+        self.S.simulate_finish(self.session, self.season, seed=2)
+        self.session.commit()
+
+    def pending(self):
+        return [e for e in self.A.pending_events(self.session, self.season,
+                                                 limit=1000)
+                if e.kind.startswith("sim_")]
+
+    def snapshot(self):
+        return [(e.id, e.kind, e.detail_json) for e in self.pending()]
+
+    def test_quick_folds_the_remaining_lots_five_to_a_message(self):
+        before = self.snapshot()
+        lots_before = [e[2] for e in before if e[1] == "sim_lot"]
+        sendable = self.S.playback_pending(self.session, self.season)
+        changed, left = self.S.set_playback_speed(self.session, self.season,
+                                                  True)
+        self.assertGreater(changed, 0)
+        self.assertLess(left, sendable)
+        events = self.pending()
+        entries = []
+        for e in events:
+            if e.kind == "sim_batch":
+                lots = self.A._loads(e.detail_json, {})["lots"]
+                self.assertLessEqual(len(lots), self.S.QUICK_BATCH)
+                entries += [self.A._dumps(entry) for entry in lots]
+            elif e.kind == "sim_lot":
+                entries.append(e.detail_json)
+        self.assertEqual(sorted(lots_before), sorted(entries))
+
+    def test_a_batch_never_crosses_a_set_or_a_squad_completing(self):
+        self.S.set_playback_speed(self.session, self.season, True)
+        events = self.pending()
+        for i, e in enumerate(events):
+            if e.kind != "sim_batch":
+                continue
+            span = len(self.A._loads(e.detail_json, {})["lots"])
+            folded = events[i + 1:i + span]
+            self.assertTrue(all(f.kind == "sim_folded" for f in folded),
+                            [f.kind for f in folded])
+
+    def test_quick_then_slow_restores_the_playback_exactly(self):
+        before = self.snapshot()
+        self.S.set_playback_speed(self.session, self.season, True)
+        self.S.set_playback_speed(self.session, self.season, False)
+        after = [(i, k, d) for i, k, d in self.snapshot()]
+        self.assertEqual([(i, k) for i, k, _ in before],
+                         [(i, k) for i, k, _ in after])
+        for (_, _, a), (_, _, b) in zip(before, after):
+            self.assertEqual(self.A._loads(a, {}), self.A._loads(b, {}))
+
+    def test_what_the_room_has_already_seen_is_never_rewritten(self):
+        events = self.pending()
+        lots = [e for e in events if e.kind == "sim_lot"]
+        seen = lots[3]
+        self.season.announced_event_id = seen.id
+        self.session.flush()
+        kept = [(e.id, e.kind, e.detail_json) for e in events
+                if e.id <= seen.id]
+        self.S.set_playback_speed(self.session, self.season, True)
+        from models import AuctionEvent
+        now = [(e.id, e.kind, e.detail_json) for e in
+               self.session.query(AuctionEvent)
+               .filter(AuctionEvent.id.in_([k[0] for k in kept]))
+               .order_by(AuctionEvent.id).all()]
+        self.assertEqual(kept, now)
+
+    def test_folded_lots_are_passed_in_silence(self):
+        from services import auction_scheduler as SCH
+        SCH._last_sim_message.clear()
+        SCH.SEND_LOT_CARD = False
+        # Skip ahead to the first lot so the first message sent is a batch.
+        first_lot = next(e for e in self.pending() if e.kind == "sim_lot")
+        self.season.announced_event_id = first_lot.id - 1
+        self.S.set_playback_speed(self.session, self.season, True)
+        self.session.commit()
+        sent = []
+
+        async def send_message(**kwargs):
+            sent.append(kwargs["text"])
+            return SimpleNamespace(message_id=len(sent))
+
+        async def noop(**kwargs):
+            return True
+        bot = SimpleNamespace(send_message=send_message,
+                              edit_message_text=noop,
+                              edit_message_reply_markup=noop)
+        asyncio.run(SCH.drain_events(bot, self.session, self.season,
+                                     limit=10))
+        self.assertEqual(1, len(sent))
+        self.assertIn("Lots", sent[0])
+        nxt = self.A.pending_events(self.session, self.season, limit=1)
+        self.assertNotEqual("sim_folded", nxt[0].kind)
+
+    def test_status_reports_the_mode(self):
+        self.assertEqual("slow",
+                         self.S.playback_status(self.session, self.season)["mode"])
+        self.S.set_playback_speed(self.session, self.season, True)
+        self.assertEqual("quick",
+                         self.S.playback_status(self.session, self.season)["mode"])
+
+
 class FinishCommandTests(SimulateCase):
 
     def setUp(self):
@@ -304,6 +413,31 @@ class FinishCommandTests(SimulateCase):
         self._run(ALICE, ("go",))
         self.assertIn("admin", self.replies[-1].lower())
         self.assertEqual(self.A.STATUS_LIVE, self.season.status)
+
+
+    def test_during_playback_quick_switches_the_speed(self):
+        self.start()
+        self._run(CAROL, ("go",))
+        self._run(CAROL, ("quick",))
+        self.assertIn("Switched to quick", self.replies[-1])
+        self._run(CAROL, ("slow",))
+        self.assertIn("Switched to slow", self.replies[-1])
+
+    def test_go_during_playback_does_not_simulate_twice(self):
+        self.start()
+        self._run(CAROL, ("go",))
+        sold = len(self.A.sold_lots(self.session, self.season.id))
+        self._run(CAROL, ("go",))
+        self.assertIn("already playing", self.replies[-1])
+        self.assertEqual(sold, len(self.A.sold_lots(self.session,
+                                                    self.season.id)))
+
+    def test_bare_afinish_during_playback_shows_what_is_left(self):
+        self.start()
+        self._run(CAROL, ("go",))
+        self._run(CAROL)
+        self.assertIn("messages left", self.replies[-1])
+        self.assertIn("/afinish quick", self.replies[-1])
 
 
 if __name__ == "__main__":

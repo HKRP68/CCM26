@@ -594,13 +594,101 @@ def _summary(session, season, teams, stats, autofilled):
 # Playback control
 # ──────────────────────────────────────────────────────────────────────
 
+# A lot folded into the batch message ahead of it by a switch to quick. The
+# row stays — the event log is permanent, and keeping it is what lets a switch
+# back to slow unfold it again — but the scheduler passes over it in silence.
+FOLDED = SIM_PREFIX + "folded"
+
+
+def _pending_sim(session, season):
+    return (session.query(AuctionEvent)
+            .filter(AuctionEvent.season_id == season.id,
+                    AuctionEvent.id > int(season.announced_event_id or 0),
+                    AuctionEvent.kind.like(SIM_PREFIX + "%"))
+            .order_by(AuctionEvent.id.asc()).all())
+
+
 def playback_pending(session, season):
     """How many ``sim_*`` messages the room has still to be shown."""
     return int(session.query(AuctionEvent)
                .filter(AuctionEvent.season_id == season.id,
                        AuctionEvent.id > int(season.announced_event_id or 0),
-                       AuctionEvent.kind.like(SIM_PREFIX + "%"))
+                       AuctionEvent.kind.like(SIM_PREFIX + "%"),
+                       AuctionEvent.kind != FOLDED)
                .count())
+
+
+def playback_status(session, season):
+    """``{"left", "mode", "est_seconds"}`` for a playback still running."""
+    pending = [e for e in _pending_sim(session, season) if e.kind != FOLDED]
+    lots = sum(1 for e in pending if e.kind == SIM_PREFIX + "lot")
+    batches = sum(1 for e in pending if e.kind == SIM_PREFIX + "batch")
+    mode = "quick" if batches and not lots else "slow" if lots else "summary"
+    return {"left": len(pending), "mode": mode,
+            "est_seconds": int(len(pending) * (SIM_MESSAGE_GAP + 1))}
+
+
+def _set_detail(event, detail):
+    event.detail_json = A._dumps(detail)
+
+
+def set_playback_speed(session, season, quick):
+    """Regroup the lot messages the room has not seen yet.
+
+    The simulation is already final; only the telling changes. To quick,
+    every unbroken run of single-lot messages is folded ``QUICK_BATCH`` at a
+    time into the first message of each group — a set header or a squad
+    completing ends a run, so the story is still told in order. To slow,
+    exactly those folds are undone. Messages already sent are never touched.
+    Returns ``(changed, messages_left)``.
+    """
+    pending = _pending_sim(session, season)
+    if not pending:
+        raise AuctionError("No simulation is playing back right now.")
+    changed = 0
+    if quick:
+        runs, run = [], []
+        for event in pending:
+            if event.kind == SIM_PREFIX + "lot":
+                run.append(event)
+                continue
+            if event.kind == FOLDED:
+                continue
+            if run:
+                runs.append(run)
+            run = []
+        if run:
+            runs.append(run)
+        for run in runs:
+            for start in range(0, len(run), QUICK_BATCH):
+                group = run[start:start + QUICK_BATCH]
+                if len(group) < 2:
+                    continue
+                entries = [A._loads(e.detail_json, {}) or {} for e in group]
+                head = group[0]
+                head.kind = SIM_PREFIX + "batch"
+                _set_detail(head, {"lots": entries, "own": entries[0]})
+                head.headline = (f"🔨 {len(entries)} lots: " + "; ".join(
+                    _lot_headline(season, e) for e in entries))[:300]
+                for event in group[1:]:
+                    event.kind = FOLDED
+                changed += len(group)
+    else:
+        for event in pending:
+            if event.kind == FOLDED:
+                event.kind = SIM_PREFIX + "lot"
+                changed += 1
+            elif event.kind == SIM_PREFIX + "batch":
+                detail = A._loads(event.detail_json, {}) or {}
+                own = detail.get("own")
+                if not own:
+                    continue      # quick from the start: nothing to unfold
+                event.kind = SIM_PREFIX + "lot"
+                _set_detail(event, own)
+                event.headline = _lot_headline(season, own)[:300]
+                changed += 1
+    session.flush()
+    return changed, playback_pending(session, season)
 
 
 def mute_playback(session, season):
