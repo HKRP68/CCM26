@@ -651,80 +651,113 @@ async def tratingrule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ──────────────────────────────────────────────────────────────────────
 
 async def tseasons_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Link the running tournament to its past seasons.
+    """Link a running tournament to completed seasons, by number.
 
-    ``/tseasons`` lists every season it could link to, numbered, with ✅ on the
-    linked ones. ``/tseasons link 2 5`` / ``/tseasons unlink 2`` edit the
-    links; ``/tseasons auto`` clears them, so every season in the same league
-    counts. Past seasons include 📦 saved seasons — deleted tournaments whose
-    stats were kept. A leading ``#7`` picks the tournament.
+    ``/tseasons`` lists 🟢 running tournaments and ✅ completed ones (📦 saved
+    seasons included), each numbered. Then:
+
+        /tseasons 2 | 3        running #2 adds completed #3
+        /tseasons 2 | 3 5      …and #5
+        /tseasons 2 | -3       unlink #3
+        /tseasons 2 | auto     back to "every season in the league"
+        /tseasons 2            what running #2 is linked to
     """
     if not await _require_admin(update):
         return
-    from services import season_archive
-    args = list(context.args or [])
+    from services import season_archive as SA
+    raw = " ".join(context.args or [])
     session = get_session()
     try:
         try:
-            tour = _resolve_tournament(session, args)
+            action, run_no, numbers = SA.parse_link_command(raw)
         except ValueError as exc:
-            await _reply(update, str(exc))
+            await _reply(update, f"{html.escape(str(exc))}\n\n{_TSEASONS_USAGE}")
             return
-        choices = season_archive.season_choices(session, tour)
-        verb = args[0].lower() if args else ""
-        note = ""
-        if verb in ("link", "unlink", "add", "remove"):
-            try:
-                picks = [int(a) for a in args[1:]]
-            except ValueError:
-                picks = []
-            if not picks or any(not 1 <= n <= len(choices) for n in picks):
-                await _reply(update, "Give the numbers from the list, e.g. "
-                                     "<code>/tseasons link 2 5</code>.")
-                return
-            refs = season_archive.linked_refs(tour)
-            chosen = [choices[n - 1]["ref"] for n in picks]
-            if verb in ("link", "add"):
-                refs += [r for r in chosen if r not in refs]
-            else:
-                refs = [r for r in refs if r not in chosen]
-            season_archive.set_linked_refs(session, tour, refs)
-            session.commit()
-            choices = season_archive.season_choices(session, tour)
-            note = "✅ Saved.\n\n"
-        elif verb in ("auto", "clear", "reset"):
-            season_archive.set_linked_refs(session, tour, [])
-            session.commit()
-            choices = season_archive.season_choices(session, tour)
-            note = "✅ Links cleared.\n\n"
-        elif verb:
-            await _reply(update, "Usage: <code>/tseasons</code> · "
-                                 "<code>/tseasons link 2 5</code> · "
-                                 "<code>/tseasons unlink 2</code> · "
-                                 "<code>/tseasons auto</code>")
+        running = SA.running_tournaments(session)
+        completed = SA.completed_seasons(session)
+
+        if action == "list":
+            await _reply_long(update, _tseasons_listing(session, SA, running, completed))
+            return
+        if not 1 <= run_no <= len(running):
+            await _reply_long(update, f"There is no running tournament #{run_no}.\n\n"
+                              + _tseasons_listing(session, SA, running, completed))
+            return
+        tour = running[run_no - 1]
+        if numbers and any(not 1 <= n <= len(completed) for n in numbers):
+            await _reply_long(update, "Those numbers aren't all on the completed list.\n\n"
+                              + _tseasons_listing(session, SA, running, completed))
             return
 
-        auto = not season_archive.linked_refs(tour)
-        lines = [f"{note}📚 <b>{html.escape(tour.name)}</b> — season history",
-                 ("<i>Automatic: Total Season Stats adds every season in "
-                  f"{html.escape(tour.league_name or 'this league')}.</i>"
-                  if auto else
-                  "<i>Total Season Stats adds this season and the ✅ ones.</i>"),
-                 ""]
-        if not choices:
-            lines.append("No other seasons yet.")
-        for n, c in enumerate(choices, start=1):
-            mark = "✅" if c["linked"] else "▫️"
-            icon = "📦" if c["saved"] else "🏆"
-            extra = " · ".join(x for x in (c["league"], c["when"]) if x)
-            lines.append(f"{mark} <code>{n}</code> {icon} {html.escape(c['label'])}"
-                         + (f" <i>({html.escape(extra)})</i>" if extra else ""))
-        lines += ["", "<code>/tseasons link 2 5</code> · "
-                      "<code>/tseasons unlink 2</code> · <code>/tseasons auto</code>"]
-        await _reply(update, "\n".join(lines))
+        note = ""
+        if action in ("link", "unlink", "auto"):
+            refs = SA.linked_refs(tour)
+            chosen = [completed[n - 1]["ref"] for n in (numbers or [])]
+            if action == "link":
+                refs += [r for r in chosen if r not in refs]
+                note = "🔗 Linked."
+            elif action == "unlink":
+                refs = [r for r in refs if r not in chosen]
+                note = "✂️ Unlinked."
+            else:
+                refs = []
+                note = "♻️ Back to automatic."
+            SA.set_linked_refs(session, tour, refs)
+            session.commit()
+
+        labels = SA.link_labels(session, tour)
+        lines = [f"{note}\n" if note else "",
+                 f"🟢 <b>{html.escape(tour.name)}</b> — Total Season Stats adds:"]
+        if labels:
+            lines += [f"   ✅ {html.escape(label)}" for label in labels]
+        else:
+            lines.append("   <i>every season in "
+                         f"{html.escape(tour.league_name or 'the same league')} "
+                         "(automatic)</i>")
+        await _reply(update, "\n".join(line for line in lines if line is not None).strip())
     except Exception:
         session.rollback()
         logger.exception("tseasons failed")
         await _reply(update, "⚠️ Couldn't update the season links — check the logs.")
     finally:
         session.close()
+
+
+_TSEASONS_USAGE = ("<code>/tseasons 2 | 3</code> link · "
+                   "<code>/tseasons 2 | 3 5</code> several · "
+                   "<code>/tseasons 2 | -3</code> unlink · "
+                   "<code>/tseasons 2 | auto</code> reset")
+
+
+def _tseasons_listing(session, SA, running, completed):
+    """The two numbered lists, with each running tournament's links."""
+    lines = ["📚 <b>Season links</b> — which past seasons each running "
+             "tournament's <b>Total Season Stats</b> adds up", "",
+             "🟢 <b>Running tournaments</b>"]
+    if not running:
+        lines.append("   <i>none</i>")
+    for n, t in enumerate(running, start=1):
+        labels = SA.link_labels(session, t)
+        linked = (", ".join(html.escape(l) for l in labels) if labels
+                  else "<i>auto: whole league</i>")
+        lines.append(f"<code>{n}</code> {html.escape(t.name)}"
+                     + (f" <i>({html.escape(t.league_name)})</i>" if t.league_name else ""))
+        lines.append(f"     ↳ {linked}")
+    lines += ["", "✅ <b>Completed tournaments</b> (📦 = deleted, stats kept)"]
+    if not completed:
+        lines.append("   <i>none yet</i>")
+    for n, c in enumerate(completed, start=1):
+        extra = " · ".join(x for x in (c["league"], c["when"]) if x)
+        lines.append(f"<code>{n}</code> {'📦 ' if c['saved'] else ''}"
+                     f"{html.escape(c['label'])}"
+                     + (f" <i>({html.escape(extra)})</i>" if extra else ""))
+    lines += ["", _TSEASONS_USAGE]
+    return "\n".join(lines)
+
+
+async def _reply_long(update, text):
+    """Send ``text`` split at line breaks into messages Telegram accepts."""
+    from utils.message_chunks import chunk_blocks
+    # chunk_blocks drops empty blocks; a lone space keeps the blank lines.
+    for part in chunk_blocks([line or " " for line in text.split("\n")]):
+        await _reply(update, part)

@@ -338,6 +338,71 @@
   </section>
   {% endif %}
 
+  <!-- ============ LINK SEASONS ============ -->
+  <section class="section-card" id="link-seasons">
+    <div class="section-header">
+      <div>
+        <h2 class="section-title"><i class="fas fa-link"></i> 🔗 Link seasons</h2>
+        <div class="section-subtitle">Pick a running tournament and tick the completed
+          seasons its /statstour <b>Total Season Stats</b> should add up. Nothing ticked =
+          every season in its league. Same as <code>/tseasons 2 | 3</code> in Telegram.</div>
+      </div>
+    </div>
+    {% if link_running and link_completed %}
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="link_seasons">
+      <div class="form-grid" style="margin-top:0;">
+        <div style="grid-column:1/-1;">
+          <label>🟢 Running tournament</label>
+          <select name="tournament_id" id="linkRunning">
+            {% for r in link_running %}
+            <option value="{{ r.id }}">{{ loop.index }}. {{ r.name }}{% if r.league %} ({{ r.league }}){% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <label style="margin-top:.6rem; display:block;">✅ Completed seasons it adds up</label>
+      {% for c in link_completed %}
+      <label style="display:block; text-transform:none; letter-spacing:0; font-size:.9rem; margin:.15rem 0;">
+        <input type="checkbox" name="season_ref" value="{{ c.ref }}" class="link-ref">
+        {{ loop.index }}. {{ '📦 ' if c.saved else '' }}{{ c.label }}
+        <span style="opacity:.65;">{{ ('· ' ~ c.league) if c.league else '' }}{{ (' · ' ~ c.when) if c.when else '' }}</span>
+      </label>
+      {% endfor %}
+      <button class="action-btn play-btn" type="submit" style="margin-top:.6rem;">Save links</button>
+    </form>
+    <script>
+      (function () {
+        var links = {{ link_running|tojson }};
+        var select = document.getElementById('linkRunning');
+        function sync() {
+          var chosen = links.find(function (r) { return String(r.id) === select.value; });
+          var refs = chosen ? chosen.refs : [];
+          document.querySelectorAll('.link-ref').forEach(function (box) {
+            box.checked = refs.indexOf(box.value) !== -1;
+          });
+        }
+        select.addEventListener('change', sync);
+        sync();
+      })();
+    </script>
+    <table class="data-table" style="width:100%; margin-top:1rem;">
+      <tr><th>#</th><th>Running tournament</th><th>Total Season Stats adds</th></tr>
+      {% for r in link_running %}
+      <tr>
+        <td>{{ loop.index }}</td>
+        <td>{{ r.name }}</td>
+        <td>{% if r.labels %}{{ r.labels|join(', ') }}{% else %}<span style="opacity:.65;">auto — every season in {{ r.league or 'its league' }}</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <div class="empty-state"><i class="fas fa-link"></i>
+      <p>Linking needs a running tournament and at least one completed one (or a 📦 saved season).</p></div>
+    {% endif %}
+  </section>
+
   <!-- ============ SAVED SEASONS ============ -->
   {% if saved_seasons %}
   <section class="section-card">

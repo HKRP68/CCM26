@@ -16537,6 +16537,20 @@ def admin_tournaments_list():
                         dest = ("admin_tournament_detail" if tf == "groups_knockout"
                                 else "admin_tournament_dashboard")
                         return redirect(url_for(dest, tournament_id=t.id))
+                elif action == "link_seasons":
+                    from services import season_archive
+                    t = db.get(Tournament, _int_form("tournament_id"))
+                    if not t:
+                        flash("Pick a running tournament to link.", "error")
+                    else:
+                        refs = season_archive.set_linked_refs(
+                            db, t, request.form.getlist("season_ref"))
+                        log_admin(db, "tournament_season_links", "tournament",
+                                  t.id, t.name)
+                        flash(f"🔗 {t.name}: Total Season Stats now adds "
+                              f"{len(refs)} linked season(s)." if refs else
+                              f"♻️ {t.name}: back to automatic — every season "
+                              f"in its league.", "success")
                 elif action == "delete_saved_season":
                     from services import season_archive
                     nm = season_archive.delete_saved_season(
@@ -16590,10 +16604,17 @@ def admin_tournaments_list():
                 .filter(ChallengeTeam.league_id == lg.id)
                 .order_by(ChallengeTeam.sort_order, ChallengeTeam.name).all()]
         from services import season_archive
+        running = season_archive.running_tournaments(db)
         return render_template(
             "admin_tournaments.html",
             current=current, history=history, leagues=leagues, league_teams=league_teams,
-            saved_seasons=season_archive.saved_seasons(db))
+            saved_seasons=season_archive.saved_seasons(db),
+            link_running=[{"id": t.id, "name": t.name,
+                           "league": t.league_name or "",
+                           "refs": season_archive.linked_refs(t),
+                           "labels": season_archive.link_labels(db, t)}
+                          for t in running],
+            link_completed=season_archive.completed_seasons(db))
     finally:
         db.close()
 

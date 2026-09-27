@@ -747,7 +747,7 @@ overdraw somebody is refused by name.
 | `/tpointsclear <TEAM>` | Clear a team's points adjustment |
 | `/taddmatch <match number>` · `/addmatch` *(reply to a scorecard)* | Record a fixture played off the bot |
 | `/tfixsync` | Un-stick fixtures still showing as live |
-| `/tseasons [#id]` · `link 2 5` · `unlink 2` · `auto` | Season history: which past seasons (live tournaments or 📦 saved ones) /statstour's **Total Season Stats** adds to this one. Bare lists them numbered; `auto` = every season in the league. Also the 📚 Season history card on the tournament's admin page |
+| `/tseasons` · `/tseasons 2 \| 3` | Season links. Bare lists 🟢 **running** and ✅ **completed** tournaments (📦 = deleted, stats kept), each numbered. `/tseasons 2 \| 3` — running #2's **Total Season Stats** adds completed #3; `2 \| 3 5` several; `2 \| -3` unlink; `2 \| auto` back to every season in the league; `/tseasons 2` shows its links. Also the 🔗 Link seasons card on the admin Tournaments page |
 | `/tratingrule [#id] <max rating> <min players>` | Tournament rating rule — `/tratingrule 83 3`: every Playing XI must field at least 3 players rated 83 or lower (bot XIs too). `/tratingrule off 83`, `/tratingrule clear`; bare lists it. Also on the tournament's admin page |
 | `/remindmatch [team] [vs team] [force]` | Nudge two teams to play their pending fixture |
 
