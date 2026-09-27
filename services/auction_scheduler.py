@@ -46,6 +46,8 @@ import time
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+from sqlalchemy import func
+
 from telegram.error import (
     BadRequest, Forbidden, NetworkError, RetryAfter, TelegramError, TimedOut,
 )
@@ -94,6 +96,13 @@ _countdowns = {}
 # resolve the same lot at once.
 _resolve_lock = None
 _resolve_lock_loop = None
+
+# ``/afinish`` playback: a simulated auction is told one message at a time, at
+# most one every ``SIM_MESSAGE_GAP`` seconds (see ``services.auction_simulator``),
+# so the room watches the rest of the auction happen instead of receiving it
+# as a wall of text. Keyed by season → the monotonic time of the last one.
+SIM_PREFIX = "sim_"
+_last_sim_message = {}
 
 # How many pending events one tick will say out loud. A backlog (the bot was
 # down while an admin worked through the console) is drained over several
@@ -424,6 +433,14 @@ async def drain_events(bot, session, season, *, limit=DRAIN_PER_TICK):
             last = run[-1]
         else:
             last = event
+            if event.kind.startswith(SIM_PREFIX):
+                from services.auction_simulator import SIM_MESSAGE_GAP
+                since = time.monotonic() - _last_sim_message.get(season.id, 0.0)
+                if since < SIM_MESSAGE_GAP:
+                    # The playback is paced on purpose; the rest waits for a
+                    # later tick, and the cursor stays where it is.
+                    break
+                _last_sim_message[season.id] = time.monotonic()
             if event.kind not in SILENT_KINDS:
                 # Anything else that happens — a sale, a pause, a Right To
                 # Match — changes what the buttons would bid on, so the last
@@ -686,6 +703,41 @@ def cancel_countdown(season_id):
 
 # ── The sweep ────────────────────────────────────────────────────────
 
+def playback_seasons(session):
+    """Finished auctions whose ``/afinish`` playback the room has not yet seen.
+
+    The simulation completes the season in the same transaction that writes
+    the playback, and the live sweep only looks at live seasons. Scoped to
+    pending ``sim_*`` events so an old finished auction never suddenly
+    re-announces whatever it happened to leave undrained.
+    """
+    from models import AuctionEvent, AuctionSeason
+    from services import auction_service as A
+
+    return (session.query(AuctionSeason)
+            .filter(AuctionSeason.status == A.STATUS_COMPLETED,
+                    AuctionSeason.chat_id.isnot(None),
+                    session.query(AuctionEvent.id)
+                    .filter(AuctionEvent.season_id == AuctionSeason.id,
+                            AuctionEvent.id > func.coalesce(
+                                AuctionSeason.announced_event_id, 0),
+                            AuctionEvent.kind.like(SIM_PREFIX + "%"))
+                    .exists())
+            .all())
+
+
+async def _playback_tick(context, session, season):
+    """Say the next message of a simulated finish; redraw the board at the end."""
+    from services import auction_service as A
+
+    await drain_events(context.bot, session, season)
+    session.commit()
+    if not A.pending_events(session, season, limit=1):
+        _last_sim_message.pop(season.id, None)
+        await refresh_board(context.bot, session, season, force=True)
+        session.commit()
+
+
 async def _auction_tick(context):
     """One sweep: move the going-once clock on, and resolve what has expired."""
     from database import get_session
@@ -709,6 +761,13 @@ async def _auction_tick(context):
             except Exception:
                 session.rollback()
                 logger.exception("auction #%s tick failed", season.id)
+        for season in playback_seasons(session):
+            try:
+                async with _lock():
+                    await _playback_tick(context, session, season)
+            except Exception:
+                session.rollback()
+                logger.exception("auction #%s playback failed", season.id)
     finally:
         session.close()
 

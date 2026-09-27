@@ -479,8 +479,153 @@ def event_html(session, season, event):
             return (f"🔒 <b>RETAINED</b>\n<blockquote><b>{_e(lot.name)}</b> stays "
                     f"with {A.owner_tag(session, franchise)} for "
                     f"<b>{_money(season, lot.sold_price_lakh)}</b></blockquote>")
+        if kind.startswith("sim_"):
+            return sim_html(season, event)
     except Exception:
         logger.debug("auction: rich event render failed", exc_info=True)
+    return event.headline
+
+
+# ── /afinish playback ────────────────────────────────────────────────
+
+_SIM_ROLE = {"Batsman": "BAT", "Bowler": "BOWL", "All Rounder": "AR",
+             "All-rounder": "AR", "Wicket Keeper": "WK"}
+_SIM_ROLE_ORDER = ("Wicket Keeper", "Batsman", "All Rounder", "All-rounder",
+                   "Bowler")
+
+
+def _sim_role(role):
+    return _SIM_ROLE.get(role or "", _e(role or "?"))
+
+
+def _sim_lot_lines(season, entry, *, compact=False):
+    """One simulated lot: who he is, the last few bids, where he went."""
+    flag = "✈️" if entry.get("overseas") else "🏠"
+    head = (f"#{entry['lot_no']} {flag} <b>{_e(entry['name'])}</b> "
+            f"⭐{entry.get('rating')} · {_sim_role(entry.get('role'))}")
+    outcome = entry.get("outcome")
+    if outcome == "unsold":
+        tail = (f"❌ <b>UNSOLD</b> · base {_money(season, entry.get('base'))}")
+        return [head, tail] if not compact else [f"{head} — {tail}"]
+    price = int(entry.get("price") or 0)
+    base = int(entry.get("base") or 0)
+    times = (f" · {price / base:.1f}× base".replace(".0×", "×")
+             if base and price > base else "")
+    if outcome == "rtm":
+        tail = (f"🪪 <b>RTM!</b> {_e(entry.get('team'))} match "
+                f"{_e(entry.get('rtm_from'))} — <b>{_money(season, price)}</b>")
+    elif entry.get("standing"):
+        tail = (f"🔨 <b>SOLD</b> to {_e(entry.get('team'))} at the standing bid "
+                f"— <b>{_money(season, price)}</b>")
+    else:
+        tail = (f"🔨 <b>SOLD</b> to {_e(entry.get('team'))} — "
+                f"<b>{_money(season, price)}</b>{times}")
+    if compact:
+        return [f"{head}\n   {tail}"]
+    lines = [head]
+    trail = entry.get("trail") or []
+    if len(trail) > 1 or (trail and outcome == "rtm"):
+        steps = " → ".join(f"{_e(team)} {_money(season, amount)}"
+                           for team, amount in trail)
+        more = int(entry.get("bids") or 0) - len(trail)
+        lines.append(("… " if more > 0 else "") + steps)
+    lines.append(tail + (f" · 🔥 {entry['bids']} bids"
+                         if int(entry.get("bids") or 0) > 1 else ""))
+    return lines
+
+
+def _sim_squad(season, detail):
+    players = detail.get("players") or []
+    by_role = {}
+    for player in players:
+        by_role.setdefault(player.get("role") or "?", []).append(player)
+    order = [r for r in _SIM_ROLE_ORDER if r in by_role]
+    order += sorted(r for r in by_role if r not in order)
+    rows = []
+    for role in order:
+        names = ", ".join(
+            f"{_e(p['name'])}{' ✈️' if p.get('overseas') else ''} "
+            f"({p.get('rating')}"
+            + (f", {_money(season, p['price'])}" if p.get("price") else
+               (", free" if p.get("how") == A.ACQ_AUTOFILL else ""))
+            + ")"
+            for p in by_role[role])
+        rows.append(f"<b>{_sim_role(role)}</b>: {names}")
+    return rows
+
+
+def sim_html(season, event):
+    """The ``/afinish`` playback, one message per ``sim_*`` event."""
+    detail = A._loads(event.detail_json, {}) or {}
+    kind = event.kind[len("sim_"):]
+    if kind == "intro":
+        rows = [f"• {_e(t['name'])} — {t['size']} players · "
+                f"{_money(season, t['purse'])}" for t in detail.get("teams", [])]
+        return ("⏩ <b>FAST-FORWARD</b> — the rest of the auction is being "
+                "simulated\n"
+                f"<b>{_e(detail.get('season', season.name))}</b> · "
+                f"{detail.get('lots', 0)} lots left · squads "
+                f"{detail.get('min')}–{detail.get('max')}\n"
+                "<blockquote>" + "\n".join(rows) + "</blockquote>\n"
+                "<i>Every team bids by its needs, its purse and the rules. "
+                "Sit back…</i>")
+    if kind == "set":
+        return (f"📦 <b>Next set: {_e(detail.get('set'))}</b> — "
+                f"{detail.get('count')} players")
+    if kind == "lot":
+        lines = _sim_lot_lines(season, detail)
+        if detail.get("total"):
+            lines.append(f"<i>Lot {detail['index']}/{detail['total']}</i>")
+        return "\n".join(lines)
+    if kind == "batch":
+        chunks = ["\n".join(_sim_lot_lines(season, e, compact=True))
+                  for e in detail.get("lots", [])]
+        return "🔨 <b>Lots</b>\n" + "\n".join(chunks)
+    if kind == "accel":
+        return (f"⚡ <b>ACCELERATED ROUND</b> — {detail.get('count')} unsold "
+                f"players go round once more at base price.")
+    if kind == "team_done":
+        return (f"✅ <b>{_e(detail.get('team'))}</b> have their minimum squad — "
+                f"{detail.get('size')}/{detail.get('min')} "
+                f"(max {detail.get('max')}) · "
+                f"{_money(season, detail.get('purse'))} left")
+    if kind == "team":
+        owed = detail.get("owed") or {}
+        status = ("✅ complete" if detail.get("size", 0) >= detail.get("min", 0)
+                  and not owed else "⚠️ short")
+        lines = [f"🏏 <b>{_e(detail.get('team'))}</b> — {status}",
+                 f"👥 {detail.get('size')}/{detail.get('min')}–{detail.get('max')}"
+                 f" · ✈️ {detail.get('overseas')}/{detail.get('max_overseas')}"
+                 f" · 👛 {_money(season, detail.get('purse'))} left"]
+        if owed:
+            lines.append("Still owed: " + ", ".join(
+                f"{_e(role)} ×{n}" for role, n in owed.items()))
+        text = "\n".join(lines) + ("\n<blockquote expandable>"
+                                   + "\n".join(_sim_squad(season, detail))
+                                   + "</blockquote>")
+        return text if len(text) < TEXT_LIMIT - 96 else "\n".join(lines)
+    if kind == "outro":
+        lines = ["🏁 <b>AUCTION COMPLETE</b> — every squad is final",
+                 f"🔨 {detail.get('sold', 0) + detail.get('accel_sold', 0)} sold"
+                 f" · 🪪 {detail.get('rtm', 0)} RTM"
+                 f" · 🎁 {detail.get('autofilled', 0)} free"
+                 f" · ❌ {detail.get('unsold', 0)} unsold"]
+        buys = detail.get("top_buys") or []
+        if buys:
+            lines.append("\n💎 <b>Top buys</b>")
+            lines += [f"{i}. {_e(b['name'])} → {_e(b['team'])} "
+                      f"({_money(season, b['price'])})"
+                      for i, b in enumerate(buys, 1)]
+        teams = sorted(detail.get("teams") or [],
+                       key=lambda t: -int(t.get("spent") or 0))
+        if teams:
+            lines.append("\n📊 <b>Squads</b>")
+            lines += [f"{'✅' if t.get('complete') else '⚠️'} {_e(t['name'])} — "
+                      f"{t['size']} players · spent {_money(season, t['spent'])}"
+                      f" · {_money(season, t['purse'])} left" for t in teams]
+        lines.append("\n<i>An admin can publish the squads with "
+                     "<code>/apublish</code>.</i>")
+        return "\n".join(lines)
     return event.headline
 
 
@@ -1790,6 +1935,9 @@ ADMIN_SECTIONS = (
                                       "is on the block"),
         ("/aundobid", "Void the standing bid and fall back"),
         ("/aaccel [go]", "Re-list everything unsold now"),
+        ("/afinish [go | go quick | mute]", "End the auction now — the rest "
+                                            "is simulated lot by lot and every "
+                                            "squad completed by the rules"),
     )),
     ("💰 Money", (
         ("/agrant <team> | <amount>", "Correct a purse — | 5 adds ₹5 Cr, | -2 takes ₹2 Cr"),

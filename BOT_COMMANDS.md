@@ -656,6 +656,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/artmforce yes\|no` | Answer an open RTM on the franchise's behalf |
 | `/artmundo <player>` | Undo a match — card and money both back |
 | `/aaccel [go]` | Accelerated round — re-list everything unsold |
+| `/afinish [go \| go quick \| mute]` · `/aend` · `/askip` | End or skip the rest of the auction. Bare previews it; `go` simulates every remaining lot as a bidding war (needs, purse, max bid, squad/overseas/role/rating rules, RTM), runs an accelerated round, tops short squads up free, and completes the auction — then plays it back in the group one lot per message. `go quick` posts 5 lots per message; `mute` skips to the final summary |
 | `/aclone <name>` | Start the next season from this one — `/aclone Season 3` |
 | `/apublish` | Publish bought squads as a Challenge League |
 | `/acancel` | Cancel the auction |

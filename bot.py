@@ -497,8 +497,8 @@ ADMIN_MENU_COMMANDS = (
     ("apickskip", "Admin: pass on the current expansion pick"),
     ("apickundo", "Admin: undo an expansion pick — money and pick both back"),
     # The rest of the auction admin family (/asetorder, /aretainforce,
-    # /aoffers, /aretcancel, /aaccelmode, /aadminremove, /aadmins) is on the
-    # /adminhelp card rather than here, which keeps this bucket under the
+    # /aoffers, /aretcancel, /aaccelmode, /aadminremove, /aadmins, /afinish)
+    # is on the /adminhelp card rather than here, which keeps this bucket under the
     # 100-command ceiling it is exempt from only because it has never filled.
     ("adminhelp", "Admin: every Franchise Auction admin command"),
     ("apool", "Admin: add a rating range to the auction pool as a set"),
@@ -2311,7 +2311,7 @@ def main():
             aretained_handler, aratingrule_handler,
             artm_handler, rtm_callback,
             artmset_handler, artmcards_handler, artmforce_handler,
-            artmundo_handler, aaccel_handler, aclone_handler,
+            artmundo_handler, aaccel_handler, afinish_handler, aclone_handler,
             apick_handler, apicks_handler, apickset_handler,
             apickskip_handler, apickundo_handler,
             aretainforce_handler, retention_offer_callback, aoffers_handler,
@@ -2463,6 +2463,9 @@ def main():
         app.add_handler(CommandHandler("artmundo", artmundo_handler))
         # The accelerated round: everything unsold, back in the queue at once.
         app.add_handler(CommandHandler(["aaccel", "arelistall"], aaccel_handler))
+        # End the auction now: the rest simulated, every squad completed.
+        app.add_handler(CommandHandler(["afinish", "aend", "askip"],
+                                       afinish_handler))
         # Next season, from this one: every rule and every franchise carried.
         app.add_handler(CommandHandler(["aclone", "anextseason"], aclone_handler))
         # Expansion picks: a new side signing players before the auction opens.
