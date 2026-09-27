@@ -45,9 +45,9 @@ class SeasonCase(unittest.TestCase):
         self.session.add_all([self.user, self.player])
         self.session.flush()
 
-        def tour(league, name, year):
+        def tour(league, name, year, status="completed"):
             t = Tournament(name=name, league_id=league.id,
-                           league_name=league.name,
+                           league_name=league.name, status=status,
                            created_at=datetime(year, 1, 1))
             self.session.add(t)
             self.session.flush()
@@ -67,7 +67,7 @@ class SeasonCase(unittest.TestCase):
 
         self.s1 = tour(self.league, "Season 1", 2024)
         self.s2 = tour(self.league, "Season 2", 2025)
-        self.s3 = tour(self.league, "Season 3", 2026)
+        self.s3 = tour(self.league, "Season 3", 2026, status="active")
         self.cup = tour(self.other_league, "Other Cup", 2025)
         stats(self.s1, 100, 1)
         stats(self.s2, 200, 2)
@@ -170,7 +170,8 @@ class LinkTests(SeasonCase):
 
 
 class TseasonsCommandTests(SeasonCase):
-    """/tseasons, driven the way Telegram drives it."""
+    """/tseasons, driven the way Telegram drives it: two numbered lists,
+    then ``running | completed``."""
 
     ADMIN = 4242
 
@@ -188,32 +189,70 @@ class TseasonsCommandTests(SeasonCase):
         update = SimpleNamespace(
             effective_user=SimpleNamespace(id=self.ADMIN),
             effective_message=SimpleNamespace(reply_text=reply_text))
-        context = SimpleNamespace(args=[f"#{self.s3.id}", *args])
+        context = SimpleNamespace(args=list(args))
         self.session.commit()
         with patch.object(H, "is_admin", lambda uid: uid == self.ADMIN):
             asyncio.run(H.tseasons_handler(update, context))
         self.session.expire_all()
-        return replies[-1]
+        return "\n".join(replies)
 
-    def number_of(self, ref):
-        refs = [c["ref"] for c in self.SA.season_choices(self.session, self.s3)]
+    def running_no(self, tour):
+        ids = [t.id for t in self.SA.running_tournaments(self.session)]
+        return str(ids.index(tour.id) + 1)
+
+    def completed_no(self, ref):
+        refs = [c["ref"] for c in self.SA.completed_seasons(self.session)]
         return str(refs.index(ref) + 1)
 
-    def test_lists_links_and_unlinks(self):
+    def test_bare_lists_running_and_completed(self):
         text = self.run_cmd()
-        self.assertIn("Automatic", text)
-        self.assertIn("Season 1", text)
-        n = self.number_of(self.SA.tour_ref(self.s1.id))
-        text = self.run_cmd("link", n)
-        self.assertIn("✅ Saved", text)
-        self.assertEqual([self.SA.tour_ref(self.s1.id)],
+        self.assertIn("Running tournaments", text)
+        self.assertIn("Completed tournaments", text)
+        running, completed = text.split("Completed tournaments", 1)
+        # Tournaments from other tests share this database, so check by
+        # this test's own league name and the service's own lists.
+        self.assertIn(f"Season 3 <i>({self.league.name})</i>", running)
+        self.assertIn(f"Season 1 <i>({self.league.name}", completed)
+        running_ids = [t.id for t in self.SA.running_tournaments(self.session)]
+        self.assertIn(self.s3.id, running_ids)
+        self.assertNotIn(self.s1.id, running_ids)
+
+    def test_pipe_links_unlinks_and_resets(self):
+        r = self.running_no(self.s3)
+        c1 = self.completed_no(self.SA.tour_ref(self.s1.id))
+        c2 = self.completed_no(self.SA.tour_ref(self.s2.id))
+        text = self.run_cmd(r, "|", c1, c2)
+        self.assertIn("Linked", text)
+        self.assertEqual({self.SA.tour_ref(self.s1.id), self.SA.tour_ref(self.s2.id)},
+                         set(self.SA.linked_refs(self.s3)))
+        self.run_cmd(f"{r}|-{c1}")          # no spaces works too
+        self.assertEqual([self.SA.tour_ref(self.s2.id)],
                          self.SA.linked_refs(self.s3))
-        self.run_cmd("unlink", n)
+        self.assertIn("Season 2", self.run_cmd(r))
+        self.run_cmd(r, "|", "auto")
         self.assertEqual([], self.SA.linked_refs(self.s3))
 
     def test_a_bad_number_is_refused(self):
-        text = self.run_cmd("link", "99")
-        self.assertIn("numbers from the list", text)
+        r = self.running_no(self.s3)
+        self.assertIn("aren't all on the completed list",
+                      self.run_cmd(r, "|", "999"))
+        self.assertIn("no running tournament #999", self.run_cmd("999", "|", "1"))
+        self.assertEqual([], self.SA.linked_refs(self.s3))
+
+
+class ParseTests(unittest.TestCase):
+
+    def test_parse_link_command(self):
+        from services.season_archive import parse_link_command as parse
+        self.assertEqual(("list", None, None), parse(""))
+        self.assertEqual(("show", 2, None), parse("2"))
+        self.assertEqual(("link", 2, [3]), parse("2 | 3"))
+        self.assertEqual(("link", 2, [3, 5]), parse("2|3,5"))
+        self.assertEqual(("unlink", 2, [3]), parse("2 | -3"))
+        self.assertEqual(("auto", 2, None), parse("2 | auto"))
+        for bad in ("x | 3", "2 |", "2 | 3 -5", "2 | abc"):
+            with self.assertRaises(ValueError):
+                parse(bad)
 
 
 if __name__ == "__main__":

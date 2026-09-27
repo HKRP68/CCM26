@@ -171,6 +171,81 @@ def season_choices(session, tour):
     return choices
 
 
+# ── The two lists linking works from ─────────────────────────────────
+#
+# /tseasons and the website's 🔗 Link seasons card both number the same two
+# lists, so "/tseasons 2 | 3" means "running #2 adds completed #3". Both are
+# computed the same way every time, so the numbers are stable between the
+# listing and the command.
+
+RUNNING_STATUSES = ("draft", "scheduled", "active", "paused")
+
+
+def running_tournaments(session):
+    """Tournaments still being played (or set up), oldest first."""
+    return (session.query(Tournament)
+            .filter(Tournament.status.in_(RUNNING_STATUSES))
+            .order_by(Tournament.created_at.asc(), Tournament.id.asc()).all())
+
+
+def completed_seasons(session):
+    """Finished tournaments and 📦 saved seasons, newest first.
+
+    ``[{"ref", "label", "league", "when", "saved"}]`` — the seasons a running
+    tournament can add to its Total Season Stats.
+    """
+    out = []
+    for t in (session.query(Tournament)
+              .filter(Tournament.status.notin_(RUNNING_STATUSES)).all()):
+        out.append({"ref": tour_ref(t.id), "label": t.name,
+                    "league": t.league_name or "", "saved": False,
+                    "date": _tour_date(t), "when": _when(_tour_date(t))})
+    for s in session.query(StatsSeason).all():
+        out.append({"ref": saved_ref(s.id), "label": s.name,
+                    "league": s.league_name or "", "saved": True,
+                    "date": _saved_date(s), "when": _when(_saved_date(s))})
+    out.sort(key=lambda c: (c["date"] or datetime.min, c["ref"]), reverse=True)
+    return out
+
+
+def link_labels(session, tour):
+    """Names of the seasons a tournament is linked to; ``[]`` when automatic."""
+    return [describe_ref(session, ref)[0] for ref in linked_refs(tour)]
+
+
+def parse_link_command(text):
+    """Parse ``/tseasons`` arguments.
+
+    ``""`` → ``("list", None, None)``; ``"2"`` → ``("show", 2, None)``;
+    ``"2 | 3 5"`` → ``("link", 2, [3, 5])``; ``"2 | -3"`` → ``("unlink", 2,
+    [3])``; ``"2 | auto"`` → ``("auto", 2, None)``. Raises ``ValueError``.
+    """
+    text = (text or "").strip()
+    if not text:
+        return "list", None, None
+    left, bar, right = text.partition("|")
+    try:
+        running = int(left.strip().lstrip("#"))
+    except ValueError:
+        raise ValueError("Start with the running tournament's number, e.g. 2 | 3")
+    if not bar:
+        return "show", running, None
+    right = right.strip().lower()
+    if right in ("auto", "clear", "none", "reset", "0"):
+        return "auto", running, None
+    tokens = right.replace(",", " ").split()
+    if not tokens:
+        raise ValueError("Name the completed season after the bar, e.g. 2 | 3")
+    unlink = all(tok.startswith("-") for tok in tokens)
+    if not unlink and any(tok.startswith("-") for tok in tokens):
+        raise ValueError("Link or unlink in one go, not both.")
+    try:
+        numbers = [int(tok.lstrip("-")) for tok in tokens]
+    except ValueError:
+        raise ValueError("Use numbers from the list, e.g. 2 | 3 5")
+    return ("unlink" if unlink else "link"), running, numbers
+
+
 # ── Saving and deleting ──────────────────────────────────────────────
 
 def archive_tournament(session, tour):
