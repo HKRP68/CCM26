@@ -219,9 +219,9 @@ class TournamentStatsBlockTests(unittest.TestCase, BlockTreeAssertions):
         details = [b for b in blocks if b.get("type") == "details"]
         summaries = [flatten(d.get("summary")) for d in details]
         self.assertEqual(summaries, [
-            "📊 This Tournament Stats — Kohli",
-            "📚 Total Stats — Kohli (all 3 seasons)",
-            "📊 This Tournament Stats — Kohli Jr",
+            "📊 This Season Stats — Kohli",
+            "📚 Total Season Stats — Kohli (3 seasons)",
+            "📊 This Season Stats — Kohli Jr",
         ])
         self.assertTrue(all(not d.get("is_open") for d in details),
                         "every section starts collapsed — tap to expand")

@@ -2194,7 +2194,7 @@ def main():
         from handlers.tournament_admin import (
             tpoints_handler, tpointsclear_handler, taddmatch_handler,
             taddmatch_callback, tfixsync_handler, CB_IMPORT,
-            tratingrule_handler,
+            tratingrule_handler, tseasons_handler,
         )
         app.add_handler(CommandHandler(["tpoints", "tpts"], tpoints_handler))
         app.add_handler(CommandHandler(["tpointsclear", "tptsclear"],
@@ -2205,6 +2205,7 @@ def main():
                                              pattern=r"^" + CB_IMPORT))
         app.add_handler(CommandHandler(["tfixsync", "tfixheal"], tfixsync_handler))
         app.add_handler(CommandHandler(["tratingrule", "tratingrules"], tratingrule_handler))
+        app.add_handler(CommandHandler(["tseasons", "tseason"], tseasons_handler))
 
         # ── Tournament Draft ─────────────────────────────────────────
         # Teams pick their squads live in one bound group chat; the finished

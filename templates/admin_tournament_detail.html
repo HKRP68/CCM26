@@ -565,13 +565,45 @@
   </section>
   {% endif %}
 
+  <!-- Season history: which seasons "Total Season Stats" adds up -->
+  <section class="tour-card" id="season-history">
+    <h3 style="margin-top:0;">📚 Season history</h3>
+    <p style="color:var(--muted); font-size:.85rem; margin:.2rem 0 .6rem;">
+      /statstour shows each player's <b>This Season Stats</b> and <b>Total Season Stats</b>.
+      Tick the past seasons the total should add to this one — live tournaments, or
+      📦 saved seasons kept when an old tournament was deleted.
+      {% if season_links_auto %}<br><b>Nothing ticked:</b> the total uses every season in
+      {{ t.league_name or 'this league' }} automatically.{% endif %}
+    </p>
+    {% if season_choices %}
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="save_season_links">
+      {% for c in season_choices %}
+      <label style="display:block; text-transform:none; letter-spacing:0; font-size:.9rem; color:var(--text); margin:.15rem 0;">
+        <input type="checkbox" name="season_ref" value="{{ c.ref }}" {{ 'checked' if c.linked else '' }}>
+        {{ '📦 ' if c.saved else '🏆 ' }}{{ c.label }}
+        <span style="color:var(--muted);">{{ ('· ' ~ c.league) if c.league else '' }}{{ (' · ' ~ c.when) if c.when else '' }}{{ ' · saved' if c.saved else '' }}</span>
+      </label>
+      {% endfor %}
+      <button class="btn btn-primary" type="submit" style="margin-top:.5rem;">Save season links</button>
+    </form>
+    {% else %}
+    <p style="color:var(--muted); font-size:.85rem;">No other seasons yet — this is the first.</p>
+    {% endif %}
+  </section>
+
   <!-- Data management -->
   <section class="tour-card">
     <h3 style="margin-top:0;">Data management</h3>
     <div class="lifecycle">
       <form method="POST" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="recompute_stats"><button class="btn" type="submit">📊 Recompute stats</button></form>
       <form method="POST" style="display:inline;" onsubmit="return confirm('Reset ALL match records, player stats and standings? Team list and settings are kept.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="reset"><button class="btn" type="submit">♻️ Reset tournament data</button></form>
-      <form method="POST" style="display:inline;" onsubmit="return confirm('Permanently delete this tournament and all its data?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete"><button class="btn danger" type="submit">🗑️ Delete tournament</button></form>
+      <form method="POST" style="display:inline;" onsubmit="return confirm(this.keep_stats.checked ? 'Delete this tournament? Its player stats are saved as a past season and keep counting in Total Season Stats.' : 'Permanently delete this tournament AND all of its player stats?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete">
+        <label style="text-transform:none; letter-spacing:0; font-size:.9rem; margin-right:.5rem;">
+          <input type="checkbox" name="keep_stats" value="1" checked> Keep player stats for future seasons
+        </label>
+        <button class="btn danger" type="submit">🗑️ Delete tournament</button></form>
     </div>
   </section>
 </div>

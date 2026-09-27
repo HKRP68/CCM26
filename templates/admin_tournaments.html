@@ -27,8 +27,8 @@
       {% else %}
       <form method="POST" class="inline-form" style="flex:1;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="activate"><input type="hidden" name="tournament_id" value="{{ t.id }}"><button class="action-btn play-btn" type="submit">Activate</button></form>
       {% endif %}
-      <form method="POST" class="inline-form" style="flex:0 0 auto;" onsubmit="return confirm('Delete this tournament and all its data?');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete"><input type="hidden" name="tournament_id" value="{{ t.id }}"><button class="action-btn danger-btn" type="submit" title="Delete"><i class="fas fa-trash"></i></button></form>
     {% endif %}
+      <form method="POST" class="inline-form" style="flex:0 0 auto;" onsubmit="return confirm('Delete this tournament? Its player stats are saved as a past season and keep counting in Total Season Stats. (To wipe the stats too, delete it from its Manage page.)');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete"><input type="hidden" name="keep_stats" value="1"><input type="hidden" name="tournament_id" value="{{ t.id }}"><button class="action-btn danger-btn" type="submit" title="Delete (stats kept)"><i class="fas fa-trash"></i></button></form>
   </div>
 </div>
 {% endmacro %}
@@ -335,6 +335,39 @@
       {{ tour_tile(t, False) }}
       {% endfor %}
     </div>
+  </section>
+  {% endif %}
+
+  <!-- ============ SAVED SEASONS ============ -->
+  {% if saved_seasons %}
+  <section class="section-card">
+    <div class="section-header">
+      <div>
+        <h2 class="section-title"><i class="fas fa-box-archive"></i> 📦 Saved seasons</h2>
+        <div class="section-subtitle">Deleted tournaments whose player stats were kept. They still
+          count in /statstour's Total Season Stats — link them from a tournament's
+          📚 Season history card.</div>
+      </div>
+    </div>
+    <table class="data-table" style="width:100%;">
+      <tr><th>Season</th><th>League</th><th>Players</th><th>Saved</th><th></th></tr>
+      {% for s, count in saved_seasons %}
+      <tr>
+        <td>{{ s.name }}</td>
+        <td>{{ s.league_name or '—' }}</td>
+        <td>{{ count }}</td>
+        <td>{{ s.archived_at.strftime('%d %b %Y') if s.archived_at else '—' }}</td>
+        <td>
+          <form method="POST" class="inline-form" onsubmit='return confirm("Remove the saved stats of " + {{ s.name|tojson }} + " for good?");'>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="delete_saved_season">
+            <input type="hidden" name="season_id" value="{{ s.id }}">
+            <button class="action-btn danger-btn" type="submit" title="Remove saved stats"><i class="fas fa-trash"></i></button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
   </section>
   {% endif %}
 </div>

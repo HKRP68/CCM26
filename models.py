@@ -2718,6 +2718,11 @@ class Tournament(Base):
     # tournament must field at least 3 players rated 83 or lower. NULL = none.
     # See services/rating_rules.py.
     rating_rules_json = Column(Text, nullable=True)
+    # Which past seasons "Total Season Stats" adds up for this tournament:
+    # ["t:12", "s:3"] — ``t:`` a live tournament, ``s:`` a saved season
+    # (StatsSeason). NULL/empty = every season in the same league. See
+    # services/season_archive.py.
+    linked_seasons_json = Column(Text, nullable=True)
 
     # Team ownership. When true, a participating team may only be picked by the
     # Telegram user set as its owner (``TournamentTeam.owner_tg_id``) — this is
@@ -2998,6 +3003,60 @@ class TournamentPlayerStats(Base):
         Index("ix_tournament_player_lookup", "tournament_id", "user_id", "player_id"),
         Index("ix_tournament_player_roster", "tournament_id", "user_id", "roster_id"),
     )
+
+
+class StatsSeason(Base):
+    """A deleted tournament's player stats, kept as a past season.
+
+    Deleting a tournament cascades away its fixtures, table and
+    ``TournamentPlayerStats``. Deleting with "keep stats" first copies those
+    player rows here, so the season still counts toward "Total Season Stats"
+    in /statstour. Deliberately no foreign key to ``tournaments`` — the
+    tournament is gone; ``source_tournament_id`` is only a record of which one.
+    """
+    __tablename__ = "stats_seasons"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_tournament_id = Column(Integer, nullable=True, index=True)
+    name = Column(String(120), nullable=False)
+    league_id = Column(Integer, nullable=True, index=True)
+    league_name = Column(String(120), nullable=True)
+    kind = Column(String(20), nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    archived_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    players = relationship("StatsSeasonPlayer", back_populates="season",
+                           cascade="all, delete-orphan")
+
+
+class StatsSeasonPlayer(Base):
+    """One player's line in a saved season — same stat columns as
+    ``TournamentPlayerStats`` so every formatter reads it unchanged."""
+    __tablename__ = "stats_season_players"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_id = Column(Integer, ForeignKey("stats_seasons.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    player_id = Column(Integer, nullable=True, index=True)
+    name = Column(String(150), nullable=True)
+    team_name = Column(String(120), nullable=True)
+
+    matches = Column(Integer, default=0, nullable=False)
+    bat_innings = Column(Integer, default=0, nullable=False)
+    bat_runs = Column(Integer, default=0, nullable=False)
+    bat_balls = Column(Integer, default=0, nullable=False)
+    bat_fours = Column(Integer, default=0, nullable=False)
+    bat_sixes = Column(Integer, default=0, nullable=False)
+    bat_outs = Column(Integer, default=0, nullable=False)
+    highest_score = Column(Integer, default=0, nullable=False)
+    bowl_innings = Column(Integer, default=0, nullable=False)
+    bowl_wickets = Column(Integer, default=0, nullable=False)
+    bowl_runs = Column(Integer, default=0, nullable=False)
+    bowl_balls = Column(Integer, default=0, nullable=False)
+    best_bowl_wickets = Column(Integer, default=0, nullable=False)
+    best_bowl_runs = Column(Integer, default=-1, nullable=False)
+
+    season = relationship("StatsSeason", back_populates="players")
 
 
 class TournamentInjury(Base):

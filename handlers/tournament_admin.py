@@ -644,3 +644,87 @@ async def tratingrule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         await _reply(update, "⚠️ Couldn't update the rating rule — check the logs.")
     finally:
         session.close()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /tseasons — which past seasons "Total Season Stats" adds up
+# ──────────────────────────────────────────────────────────────────────
+
+async def tseasons_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Link the running tournament to its past seasons.
+
+    ``/tseasons`` lists every season it could link to, numbered, with ✅ on the
+    linked ones. ``/tseasons link 2 5`` / ``/tseasons unlink 2`` edit the
+    links; ``/tseasons auto`` clears them, so every season in the same league
+    counts. Past seasons include 📦 saved seasons — deleted tournaments whose
+    stats were kept. A leading ``#7`` picks the tournament.
+    """
+    if not await _require_admin(update):
+        return
+    from services import season_archive
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+        except ValueError as exc:
+            await _reply(update, str(exc))
+            return
+        choices = season_archive.season_choices(session, tour)
+        verb = args[0].lower() if args else ""
+        note = ""
+        if verb in ("link", "unlink", "add", "remove"):
+            try:
+                picks = [int(a) for a in args[1:]]
+            except ValueError:
+                picks = []
+            if not picks or any(not 1 <= n <= len(choices) for n in picks):
+                await _reply(update, "Give the numbers from the list, e.g. "
+                                     "<code>/tseasons link 2 5</code>.")
+                return
+            refs = season_archive.linked_refs(tour)
+            chosen = [choices[n - 1]["ref"] for n in picks]
+            if verb in ("link", "add"):
+                refs += [r for r in chosen if r not in refs]
+            else:
+                refs = [r for r in refs if r not in chosen]
+            season_archive.set_linked_refs(session, tour, refs)
+            session.commit()
+            choices = season_archive.season_choices(session, tour)
+            note = "✅ Saved.\n\n"
+        elif verb in ("auto", "clear", "reset"):
+            season_archive.set_linked_refs(session, tour, [])
+            session.commit()
+            choices = season_archive.season_choices(session, tour)
+            note = "✅ Links cleared.\n\n"
+        elif verb:
+            await _reply(update, "Usage: <code>/tseasons</code> · "
+                                 "<code>/tseasons link 2 5</code> · "
+                                 "<code>/tseasons unlink 2</code> · "
+                                 "<code>/tseasons auto</code>")
+            return
+
+        auto = not season_archive.linked_refs(tour)
+        lines = [f"{note}📚 <b>{html.escape(tour.name)}</b> — season history",
+                 ("<i>Automatic: Total Season Stats adds every season in "
+                  f"{html.escape(tour.league_name or 'this league')}.</i>"
+                  if auto else
+                  "<i>Total Season Stats adds this season and the ✅ ones.</i>"),
+                 ""]
+        if not choices:
+            lines.append("No other seasons yet.")
+        for n, c in enumerate(choices, start=1):
+            mark = "✅" if c["linked"] else "▫️"
+            icon = "📦" if c["saved"] else "🏆"
+            extra = " · ".join(x for x in (c["league"], c["when"]) if x)
+            lines.append(f"{mark} <code>{n}</code> {icon} {html.escape(c['label'])}"
+                         + (f" <i>({html.escape(extra)})</i>" if extra else ""))
+        lines += ["", "<code>/tseasons link 2 5</code> · "
+                      "<code>/tseasons unlink 2</code> · <code>/tseasons auto</code>"]
+        await _reply(update, "\n".join(lines))
+    except Exception:
+        session.rollback()
+        logger.exception("tseasons failed")
+        await _reply(update, "⚠️ Couldn't update the season links — check the logs.")
+    finally:
+        session.close()

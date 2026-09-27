@@ -423,7 +423,13 @@ def _stat_tables(r):
 
 def _seasons_label(career):
     n = int(getattr(career, "seasons", 0) or 0)
-    return f"all {n} season{'s' if n != 1 else ''}"
+    return f"{n} season{'s' if n != 1 else ''}"
+
+
+def _season_line(label, s):
+    """``"Season 1 · 5 m · 412 runs · HS 98 · 9 wkts"`` — one season, one line."""
+    return (f"{label} · {s.matches or 0} m · {s.bat_runs or 0} runs · "
+            f"HS {s.highest_score or 0} · {s.bowl_wickets or 0} wkts")
 
 
 def _player_stats_tree(tour, rows, careers=None):
@@ -437,12 +443,18 @@ def _player_stats_tree(tour, rows, careers=None):
         if r.team_name:
             header.append(f"  ·  {r.team_name}")
         blocks.append(R.paragraph(header))
-        blocks.append(R.details(R.bold(f"📊 This Tournament Stats — {name}"),
+        blocks.append(R.details(R.bold(f"📊 This Season Stats — {name}"),
                                 _stat_tables(r)))
         if career is not None:
             blocks.append(R.details(
-                R.bold(f"📚 Total Stats — {name} ({_seasons_label(career)})"),
+                R.bold(f"📚 Total Season Stats — {name} ({_seasons_label(career)})"),
                 _stat_tables(career)))
+            breakdown = getattr(career, "breakdown", None) or []
+            if len(breakdown) > 1:
+                blocks.append(R.details(
+                    R.bold("🗂 Season by season"),
+                    [R.list_block([[_season_line(label, s)]
+                                   for label, s in breakdown])]))
     blocks.append(R.footer(["Leaderboards: ", R.code("/tournamentstats")]))
     return blocks
 
@@ -598,13 +610,19 @@ async def statstour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             name = html.escape(r.name or "Player")
             team = f" · {html.escape(r.team_name)}" if r.team_name else ""
             blocks.append(f"\n👤 <b>{name}</b>{team}")
-            blocks.append(f"<b>📊 This Tournament Stats — {name}</b>")
+            blocks.append(f"<b>📊 This Season Stats — {name}</b>")
             blocks.append(f"<blockquote expandable>{_stats_html(r)}</blockquote>")
             if career is not None:
-                blocks.append(f"<b>📚 Total Stats — {name} "
+                blocks.append(f"<b>📚 Total Season Stats — {name} "
                               f"({_seasons_label(career)})</b>")
                 blocks.append(f"<blockquote expandable>{_stats_html(career)}"
                               f"</blockquote>")
+                breakdown = getattr(career, "breakdown", None) or []
+                if len(breakdown) > 1:
+                    blocks.append("<b>🗂 Season by season</b>")
+                    blocks.append("<blockquote expandable>" + "\n".join(
+                        html.escape(_season_line(label, s))
+                        for label, s in breakdown) + "</blockquote>")
         await R.reply_rich(update.message,
                            _player_stats_blocks(tour, rows, careers),
                            "\n".join(blocks))
