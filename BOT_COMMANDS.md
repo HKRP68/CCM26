@@ -185,7 +185,7 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/stats` 💬 | `/st` | A player's game statistics |
 | `/gstats` 💬 | `/globalstats` | Global stats — every owner, every match type 🌍 |
 | `/statscl` 💬 | — | Any Challenge League player's stats |
-| `/statstour` | — | A player's stats in the active tournament |
+| `/statstour` | — | A player's **This Season Stats** and **Total Season Stats** (this season plus the linked past seasons — deleted tournaments' saved stats included), plus a season-by-season list, each tap-to-expand |
 | `/tournamentstats` | — | Tournament stat leaderboards (top 25, ranks 11+ behind a tap) |
 | `/cmuleaderboard` | `/leaderboard` `/lb` `/top` | The global leaderboard |
 | `/h2h` | `/headtohead` | Head-to-head record vs another player |
@@ -746,6 +746,7 @@ overdraw somebody is refused by name.
 | `/tpointsclear <TEAM>` | Clear a team's points adjustment |
 | `/taddmatch <match number>` · `/addmatch` *(reply to a scorecard)* | Record a fixture played off the bot |
 | `/tfixsync` | Un-stick fixtures still showing as live |
+| `/tseasons [#id]` · `link 2 5` · `unlink 2` · `auto` | Season history: which past seasons (live tournaments or 📦 saved ones) /statstour's **Total Season Stats** adds to this one. Bare lists them numbered; `auto` = every season in the league. Also the 📚 Season history card on the tournament's admin page |
 | `/tratingrule [#id] <max rating> <min players>` | Tournament rating rule — `/tratingrule 83 3`: every Playing XI must field at least 3 players rated 83 or lower (bot XIs too). `/tratingrule off 83`, `/tratingrule clear`; bare lists it. Also on the tournament's admin page |
 | `/remindmatch [team] [vs team] [force]` | Nudge two teams to play their pending fixture |
 

@@ -60,7 +60,7 @@
     <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="start"><input type="hidden" name="tournament_id" value="{{ t.id }}"><button class="btn" type="submit">▶ Start</button></form>
     {% endif %}
     <form method="POST" onsubmit='return confirm("Mark " + {{ t.name|tojson }} + " completed?");'><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="complete"><input type="hidden" name="tournament_id" value="{{ t.id }}"><button class="btn" type="submit">✅ Complete</button></form>
-    <form method="POST" onsubmit='return confirm("Delete " + {{ t.name|tojson }} + " and all of its data?");'><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete"><input type="hidden" name="tournament_id" value="{{ t.id }}"><button class="btn danger" type="submit" title="Delete"><i class="fas fa-trash"></i></button></form>
+    <form method="POST" onsubmit='return confirm("Delete " + {{ t.name|tojson }} + "? Its player stats are saved as a past season.");'><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete"><input type="hidden" name="keep_stats" value="1"><input type="hidden" name="tournament_id" value="{{ t.id }}"><button class="btn danger" type="submit" title="Delete"><i class="fas fa-trash"></i></button></form>
   </div>
   {% endif %}
 </div>

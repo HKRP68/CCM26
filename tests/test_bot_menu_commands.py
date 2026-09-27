@@ -179,6 +179,9 @@ UNPUBLISHED_ON_PURPOSE = {
     # The tournament rating rule — admin-only, set on the tournament's admin
     # page beside the overseas rule; the admin bucket is at the ceiling.
     "tratingrule",
+    # Season links for Total Season Stats — admin-only, and the tournament's
+    # 📚 Season history card on the admin site does the same.
+    "tseasons",
     # Player Draft trades — the precedent the auction followed.
     "dtrade", "dtrades", "dtradecancel",
     # Challenge League tournament views — /help, the hub's buttons, and

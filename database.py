@@ -1031,6 +1031,8 @@ def _migrate_add_columns():
     # NULL is "no rating rule" on both tables, so nothing to backfill.
     _try_add("auction_seasons", "rating_rules_json", "TEXT")
     _try_add("tournaments", "rating_rules_json", "TEXT")
+    # Past seasons "Total Season Stats" adds up (services/season_archive.py).
+    _try_add("tournaments", "linked_seasons_json", "TEXT")
 
     # ── Franchise Auction: the hammer countdown, and /arestart ──
     # An integer defaulted to 3 so a running auction picks the countdown up;

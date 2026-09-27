@@ -2553,6 +2553,24 @@ def users_list():
         db.close()
 
 
+def _delete_tournament_keeping_stats(db, t):
+    """Delete a tournament from an admin form; returns the flash message.
+
+    The form's ``keep_stats`` box (ticked by default) saves every player's
+    stats as a past season first — see services/season_archive.py — so the
+    season still counts in /statstour's Total Season Stats.
+    """
+    from services import season_archive
+    keep = bool(request.form.get("keep_stats"))
+    nm = t.name
+    season = season_archive.delete_tournament(db, t, keep_stats=keep)
+    if season is None:
+        return f"Removed {nm} and all of its stats."
+    count = getattr(season, "player_count", 0)
+    return (f"Removed {nm} — stats of {count} player(s) saved as a past "
+            f"season, still counted in Total Season Stats.")
+
+
 def _parse_int(s):
     """Parse a request arg to int, returns None for blank/invalid."""
     if not s: return None
@@ -16519,6 +16537,15 @@ def admin_tournaments_list():
                         dest = ("admin_tournament_detail" if tf == "groups_knockout"
                                 else "admin_tournament_dashboard")
                         return redirect(url_for(dest, tournament_id=t.id))
+                elif action == "delete_saved_season":
+                    from services import season_archive
+                    nm = season_archive.delete_saved_season(
+                        db, _int_form("season_id"))
+                    if nm is None:
+                        flash("Saved season not found.", "error")
+                    else:
+                        log_admin(db, "stats_season_delete", "tournament", 0, nm)
+                        flash(f"Removed the saved stats of {nm}.", "info")
                 elif action in {"activate", "deactivate", "delete"}:
                     t = db.get(Tournament, _int_form("tournament_id"))
                     if not t:
@@ -16532,10 +16559,9 @@ def admin_tournaments_list():
                         log_admin(db, "tournament_deactivate", "tournament", t.id, t.name)
                         flash(f"{t.name} deactivated.", "info")
                     else:
-                        nm = t.name
-                        db.delete(t)
-                        log_admin(db, "tournament_delete", "tournament", t.id, nm)
-                        flash(f"Removed tournament {nm}.", "info")
+                        nm, tid = t.name, t.id
+                        flash(_delete_tournament_keeping_stats(db, t), "info")
+                        log_admin(db, "tournament_delete", "tournament", tid, nm)
                 else:
                     flash("Unknown tournament action.", "error")
                 db.commit()
@@ -16563,9 +16589,11 @@ def admin_tournaments_list():
                 for ct in db.query(ChallengeTeam)
                 .filter(ChallengeTeam.league_id == lg.id)
                 .order_by(ChallengeTeam.sort_order, ChallengeTeam.name).all()]
+        from services import season_archive
         return render_template(
             "admin_tournaments.html",
-            current=current, history=history, leagues=leagues, league_teams=league_teams)
+            current=current, history=history, leagues=leagues, league_teams=league_teams,
+            saved_seasons=season_archive.saved_seasons(db))
     finally:
         db.close()
 
@@ -17073,11 +17101,19 @@ def admin_tournament_detail(tournament_id):
                                             season_id=fresh.id))
                 elif action == "delete":
                     nm = t.name
-                    db.delete(t)
+                    flash(_delete_tournament_keeping_stats(db, t), "info")
                     log_admin(db, "tournament_delete", "tournament", tournament_id, nm)
                     db.commit()
-                    flash(f"Removed {nm}.", "info")
                     return redirect(url_for("admin_tournaments_list"))
+                elif action == "save_season_links":
+                    from services import season_archive
+                    refs = season_archive.set_linked_refs(
+                        db, t, request.form.getlist("season_ref"))
+                    log_admin(db, "tournament_season_links", "tournament", t.id, t.name)
+                    flash(f"✅ Total Season Stats now adds up {len(refs)} linked "
+                          f"season(s)." if refs else
+                          "✅ Season links cleared — Total Season Stats uses every "
+                          "season in this league.", "success")
                 else:
                     flash("Unknown action.", "error")
                 db.commit()
@@ -17133,8 +17169,11 @@ def admin_tournament_detail(tournament_id):
         team_challenge = {str(tt.id): str(tt.challenge_team_id or "")
                           for tt in teams}
         from services import tournament_service as _ts_rr
+        from services import season_archive as _sa
         return render_template("admin_tournament_detail.html", t=t, teams=teams,
                                rating_rules=_ts_rr.rating_rules(t),
+                               season_choices=_sa.season_choices(db, t),
+                               season_links_auto=not _sa.linked_refs(t),
                                available=available, groups=groups,
                                league_played=lg_played, league_total=lg_total,
                                lp_users=lp_users, pitch_types=FIXTURE_PITCHES,
@@ -17409,10 +17448,9 @@ def admin_lp_tournaments_list():
                     log_admin(db, f"lp_tournament_{action}", "tournament", t.id, t.name)
                     flash(f"✅ “{t.name}” is now {status}.", "success")
                 elif action == "delete":
-                    nm = t.name
-                    db.delete(t)
-                    log_admin(db, "lp_tournament_delete", "tournament", t.id, nm)
-                    flash(f"Removed “{nm}”.", "info")
+                    nm, tid = t.name, t.id
+                    flash(_delete_tournament_keeping_stats(db, t), "info")
+                    log_admin(db, "lp_tournament_delete", "tournament", tid, nm)
                 else:
                     flash("Unknown action.", "error")
                 db.commit()

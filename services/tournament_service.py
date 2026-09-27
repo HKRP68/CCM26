@@ -21,8 +21,6 @@ import logging
 from datetime import datetime
 from types import SimpleNamespace
 
-from sqlalchemy import func
-
 from models import (
     Tournament, TournamentTeam, TournamentMatch, TournamentPlayerStats,
     ChallengeLeague, ChallengeTeam,
@@ -1644,6 +1642,7 @@ class CareerStats:
         self.best_bowl_wickets = 0
         self.best_bowl_runs = -1
         self.seasons = 0
+        self.breakdown = []
 
     def add(self, row):
         for field in self._SUMMED:
@@ -1657,31 +1656,24 @@ class CareerStats:
 
 
 def career_player_stats(session, tour, row):
-    """``row``'s player summed across every season of ``tour``'s competition.
+    """``row``'s player summed across this season and its linked seasons.
 
-    "Every season" is every tournament in the same league (or, for a tournament
-    with no league, every tournament of the same kind) — this one included.
-    The player is matched by master ``player_id`` when the row has one, since
-    a roster id is per team and per season; otherwise by name, case-insensitive.
-    Returns a ``CareerStats``.
+    Which seasons count is ``services.season_archive``'s call: the ones linked
+    on the tournament (live tournaments and saved, deleted ones alike), or by
+    default every season in the same league. The player is matched by master
+    ``player_id`` when the row has one, since a roster id is per team and per
+    season; otherwise by name, case-insensitive.
+
+    Returns a ``CareerStats`` whose ``breakdown`` is ``[(season label,
+    CareerStats)]``, oldest season first.
     """
-    q = (session.query(TournamentPlayerStats)
-         .join(Tournament, Tournament.id == TournamentPlayerStats.tournament_id))
-    if tour.league_id:
-        q = q.filter(Tournament.league_id == tour.league_id)
-    else:
-        q = q.filter(kind_filter(tour.kind or KIND_CHALLENGE))
-    if row.player_id is not None:
-        q = q.filter(TournamentPlayerStats.player_id == row.player_id)
-    else:
-        q = q.filter(func.lower(TournamentPlayerStats.name)
-                     == (row.name or "").strip().lower())
+    from services import season_archive
+    breakdown = season_archive.stat_rows_for(session, tour, row)
     total = CareerStats(row.name)
-    tours = set()
-    for other in q.all():
-        total.add(other)
-        tours.add(other.tournament_id)
-    total.seasons = len(tours)
+    for _label, season in breakdown:
+        total.add(season)
+    total.seasons = len(breakdown)
+    total.breakdown = breakdown
     return total
 
 
