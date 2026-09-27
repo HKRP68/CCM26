@@ -317,9 +317,11 @@ class FranchiseCarryTests(SeasonCase):
             self.assertEqual(0, f.squad_size)
             self.assertEqual(0, f.retained_count)
             self.assertEqual(0, f.rtm_cards_used)
-            self.assertEqual(fresh.rtm_per_team, f.rtm_cards_total,
+            # RTM is automatic: unused retention spots come back as cards,
+            # and nobody has retained anybody yet in a fresh season.
+            self.assertEqual(fresh.max_retentions, f.rtm_cards_total,
                              "a new season deals the cards its own rules say")
-            self.assertEqual(2, self.A.rtm_cards_left(f))
+            self.assertEqual(3, self.A.rtm_cards_left(f))
 
     def test_the_room_hears_one_line_not_one_per_franchise(self):
         fresh = self.clone()

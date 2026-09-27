@@ -592,3 +592,55 @@ async def taddmatch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "Points table, net run rate and the player leaderboards have been "
         "rebuilt. Remove it from the admin dashboard to undo.",
         parse_mode="HTML")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /tratingrule — "at least N players rated X or lower" in every XI
+# ──────────────────────────────────────────────────────────────────────
+
+async def tratingrule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Read or set the tournament's rating rule.
+
+    ``/tratingrule 83 3`` — every Playing XI must field at least 3 players
+    rated 83 or lower. ``/tratingrule off 83`` drops that rule,
+    ``/tratingrule clear`` drops them all, and a bare ``/tratingrule`` lists
+    them. A leading ``#7`` picks the tournament when more than one is running.
+    """
+    if not await _require_admin(update):
+        return
+    from services import rating_rules as RR
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+            action, cap, need = RR.parse_command(args)
+        except ValueError as exc:
+            await _reply(update,
+                         f"{html.escape(str(exc))}\nUsage: "
+                         "<code>/tratingrule [#id] &lt;max rating&gt; &lt;min players&gt;</code>"
+                         " · <code>/tratingrule off 83</code> · "
+                         "<code>/tratingrule clear</code>")
+            return
+        rules = tournament_service.rating_rules(tour)
+        if action != "list":
+            rules = tournament_service.set_rating_rules(
+                session, tour, RR.apply_command(rules, action, cap, need))
+            session.commit()
+        if not rules:
+            await _reply(update,
+                         f"⭐ <b>{html.escape(tour.name)}</b> — no rating rule.\n"
+                         "Add one with <code>/tratingrule 83 3</code> — every XI "
+                         "must field at least 3 players rated 83 or lower.")
+            return
+        lines = [f"⭐ <b>{html.escape(tour.name)}</b> — rating rule"]
+        lines += [f"· {html.escape(RR.describe(rule))} in every XI" for rule in rules]
+        lines += ["", "<i>The XI picker shows it as a live check, and the "
+                      "bot's XI follows it too.</i>"]
+        await _reply(update, "\n".join(lines))
+    except Exception:
+        session.rollback()
+        logger.exception("tratingrule failed")
+        await _reply(update, "⚠️ Couldn't update the rating rule — check the logs.")
+    finally:
+        session.close()

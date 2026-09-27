@@ -2194,6 +2194,7 @@ def main():
         from handlers.tournament_admin import (
             tpoints_handler, tpointsclear_handler, taddmatch_handler,
             taddmatch_callback, tfixsync_handler, CB_IMPORT,
+            tratingrule_handler,
         )
         app.add_handler(CommandHandler(["tpoints", "tpts"], tpoints_handler))
         app.add_handler(CommandHandler(["tpointsclear", "tptsclear"],
@@ -2203,6 +2204,7 @@ def main():
         app.add_handler(CallbackQueryHandler(taddmatch_callback,
                                              pattern=r"^" + CB_IMPORT))
         app.add_handler(CommandHandler(["tfixsync", "tfixheal"], tfixsync_handler))
+        app.add_handler(CommandHandler(["tratingrule", "tratingrules"], tratingrule_handler))
 
         # ── Tournament Draft ─────────────────────────────────────────
         # Teams pick their squads live in one bound group chat; the finished
@@ -2306,6 +2308,7 @@ def main():
             agrant_handler, aco_handler,
             apublish_handler, acancel_handler,
             aretain_handler, aunretain_handler, aretlock_handler,
+            aretained_handler, aratingrule_handler,
             artm_handler, rtm_callback,
             artmset_handler, artmcards_handler, artmforce_handler,
             artmundo_handler, aaccel_handler, aclone_handler,
@@ -2448,6 +2451,9 @@ def main():
         app.add_handler(CommandHandler("aretcancel", aretcancel_handler))
         app.add_handler(CommandHandler(["aunretain", "arelease"], aunretain_handler))
         app.add_handler(CommandHandler(["aretlock", "aretention"], aretlock_handler))
+        # Every team's retained players, for anyone; and the squad rating rule.
+        app.add_handler(CommandHandler(["aretained", "allretained"], aretained_handler))
+        app.add_handler(CommandHandler(["aratingrule", "aratingrules"], aratingrule_handler))
         # Right To Match, from the admin side: the rules, the card counts, and
         # the two things an admin needs when a window is open and the owner is
         # not — answer it for them, or put a match back.

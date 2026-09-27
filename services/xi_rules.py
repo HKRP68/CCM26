@@ -235,11 +235,33 @@ def challenge_is_overseas(player):
     return bool(challenge_player_details(player).get("is_overseas"))
 
 
-def validate_challenge_xi(players, min_overseas=0, max_overseas=11):
+def challenge_rating_or_none(player):
+    """A ChallengePlayer's OVR as an int, or None when it has no numeric rating.
+
+    Rating rules count players *at or under* a cap, so an unknown rating must
+    count as nothing rather than as 0 — which would satisfy every cap.
+    """
+    value = challenge_player_rating(player)
+    return value if isinstance(value, int) else None
+
+
+def challenge_rating_rule_error(players, rating_rules):
+    """``""`` when ``players`` meet every rating rule, else the failure message."""
+    if not rating_rules:
+        return ""
+    from services import rating_rules as RR
+    return RR.xi_error(rating_rules,
+                       [challenge_rating_or_none(p) for p in players])
+
+
+def validate_challenge_xi(players, min_overseas=0, max_overseas=11,
+                          rating_rules=None):
     """Validate a Challenge League Playing XI. Returns ``(valid, error)``.
 
     Unlike the roster rulebook this reports a single error string, because the
-    XI picker surfaces it in a Telegram alert popup.
+    XI picker surfaces it in a Telegram alert popup. ``rating_rules`` is a
+    tournament's "at least N players rated X or lower" list
+    (see ``services.rating_rules``); None / empty means no such rule.
     """
     if len(players) != 11:
         return False, "Select exactly 11 players."
@@ -254,4 +276,7 @@ def validate_challenge_xi(players, min_overseas=0, max_overseas=11):
         return False, f"Max {max_overseas} overseas ✈️ allowed in XI (you have {overseas})"
     if overseas < min_overseas:
         return False, f"Min {min_overseas} overseas ✈️ required in XI (you have {overseas})"
+    rating_error = challenge_rating_rule_error(players, rating_rules)
+    if rating_error:
+        return False, f"⭐ {rating_error}"
     return True, ""

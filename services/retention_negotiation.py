@@ -213,6 +213,7 @@ def set_mode(session, season, new_mode, *, by_tg_id=None):
         if season.retention_max_spend_lakh is None:
             season.retention_max_spend_lakh = DEFAULT_BUDGET_LAKH
     session.flush()
+    A.sync_rtm_cards(session, season)
     A.log_event(session, season, "retention_mode",
                 "🔁 Retention is now <b>"
                 + ("dynamic — owners negotiate, players decide"
@@ -337,6 +338,7 @@ def save_slots(session, season, rows, *, by_tg_id=None):
     if is_dynamic(season):
         season.max_retentions = len(cleaned)
     session.flush()
+    A.sync_rtm_cards(session, season)
     return cleaned
 
 

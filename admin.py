@@ -16640,6 +16640,20 @@ def admin_tournament_detail(tournament_id):
                             and t.min_overseas > t.max_overseas):
                         t.min_overseas, t.max_overseas = t.max_overseas, t.min_overseas
                         flash("Min overseas was above max — the two were swapped.", "info")
+                    # Rating rule rows: "at least N players rated ≤X in every
+                    # XI". Only a form that carries the rows (Challenge League
+                    # tournaments) touches the rule; a row with a blank box is
+                    # no rule.
+                    if "rating_rule_max" in request.form:
+                        from services import tournament_service as _ts_rr
+                        rating_rows = []
+                        for cap, need in zip(request.form.getlist("rating_rule_max"),
+                                             request.form.getlist("rating_rule_min")):
+                            cap, need = (cap or "").strip(), (need or "").strip()
+                            if cap and need:
+                                rating_rows.append({"max_rating": _parse_int(cap),
+                                                    "min_players": _parse_int(need)})
+                        _ts_rr.set_rating_rules(db, t, rating_rows)
                     t.enforce_team_owner = _checked("enforce_team_owner")
                     t.injuries_enabled = _checked("injuries_enabled")
                     t.injury_chance = max(0, min(100, _int_form(
@@ -17118,7 +17132,9 @@ def admin_tournament_detail(tournament_id):
                         {"id": cp.id, "name": cp.name})
         team_challenge = {str(tt.id): str(tt.challenge_team_id or "")
                           for tt in teams}
+        from services import tournament_service as _ts_rr
         return render_template("admin_tournament_detail.html", t=t, teams=teams,
+                               rating_rules=_ts_rr.rating_rules(t),
                                available=available, groups=groups,
                                league_played=lg_played, league_total=lg_total,
                                lp_users=lp_users, pitch_types=FIXTURE_PITCHES,
@@ -23112,6 +23128,9 @@ def admin_auction_detail(season_id):
             role_minimums=auction_svc.role_minimums(season),
             role_maximums=auction_svc.role_maximums(season),
             role_rule_line=auction_svc.role_rule_line(season),
+            rating_rules=auction_svc.rating_rules(season),
+            rating_rule_line=auction_svc.rating_rule_line(season),
+            rtm_auto_cards=lambda f: auction_svc.rtm_auto_cards(season, f),
             role_shortfall=lambda f: auction_svc.role_shortfall(db, season, f),
             squad_roles_of=lambda fid: auction_svc.role_counts(db, fid),
             price_gaps=auction_svc.base_price_gaps(season),
@@ -23314,11 +23333,23 @@ def _auction_detail_action(db, season, action):
         season.home_country = (request.form.get("home_country")
                                or season.home_country or "India").strip()[:60]
         auction_svc.set_role_rules(db, season, lows, highs)
+        # The rating rule rows: "at least N players rated X or lower". A row
+        # with either box blank is no rule.
+        rating_rows = []
+        for cap, need in zip(request.form.getlist("rating_rule_max"),
+                             request.form.getlist("rating_rule_min")):
+            cap, need = (cap or "").strip(), (need or "").strip()
+            if cap and need:
+                rating_rows.append({"max_rating": _parse_int(cap),
+                                    "min_players": _parse_int(need)})
+        auction_svc.set_rating_rules(db, season, rating_rows)
         log_admin(db, "auction_squad_rules", "auction", season.id, season.name)
         line = auction_svc.role_rule_line(season)
+        rating_line = auction_svc.rating_rule_line(season)
         flash("✅ Squad rules saved." + (f" Roles: {line}." if line else
                                         " No role has a rule, so any mix of "
-                                        "roles is legal."), "success")
+                                        "roles is legal.")
+              + (f" Rating: {rating_line}." if rating_line else ""), "success")
 
     elif action == "price_rules":
         # One row is a rating RANGE and a price: "96 to 92 → ₹2 Cr". The top
@@ -23549,6 +23580,8 @@ def _auction_detail_action(db, season, action):
 
     elif action == "retention_rules":
         season.max_retentions = _int_form("max_retentions", season.max_retentions)
+        # RTM = retention spots − retained, so new spots mean new cards.
+        auction_svc.sync_rtm_cards(db, season)
         season.min_retentions = _int_form("min_retentions", season.min_retentions)
         season.retention_max_spend_lakh = _money_form("retention_max_spend", None)
         season.retention_deadline_at = _dt_form("retention_deadline")

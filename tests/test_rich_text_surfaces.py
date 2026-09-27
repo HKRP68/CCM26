@@ -200,20 +200,32 @@ class TournamentStatsBlockTests(unittest.TestCase, BlockTreeAssertions):
         self.assertIn("412", flat)
         self.assertIn("1/18", flat)
 
-    def test_second_match_for_a_name_is_collapsed_behind_the_first(self):
-        def row(name):
-            return SimpleNamespace(
-                name=name, team_name="RCB", matches=1, bat_runs=10,
+    def test_each_player_gets_tournament_and_total_sections_to_expand(self):
+        def row(name, runs=10, seasons=None):
+            r = SimpleNamespace(
+                name=name, team_name="RCB", matches=1, bat_runs=runs,
                 bat_balls=10, bat_fours=1, bat_sixes=0, highest_score=10,
                 bowl_wickets=0, bowl_runs=0, bowl_balls=0,
                 best_bowl_wickets=None, best_bowl_runs=None)
+            if seasons is not None:
+                r.seasons = seasons
+            return r
         with patch.object(tour_handler.tournament_service, "batting_average",
                           return_value=None):
             blocks = tour_handler._player_stats_blocks(
-                self.tour, [row("Kohli"), row("Kohli Jr")])
+                self.tour, [row("Kohli"), row("Kohli Jr")],
+                [row("Kohli", runs=999, seasons=3), None])
+        self.assertWellFormed(blocks)
         details = [b for b in blocks if b.get("type") == "details"]
-        self.assertEqual(len(details), 1)
-        self.assertIn("Kohli Jr", flatten(details[0]))
+        summaries = [flatten(d.get("summary")) for d in details]
+        self.assertEqual(summaries, [
+            "📊 This Tournament Stats — Kohli",
+            "📚 Total Stats — Kohli (all 3 seasons)",
+            "📊 This Tournament Stats — Kohli Jr",
+        ])
+        self.assertTrue(all(not d.get("is_open") for d in details),
+                        "every section starts collapsed — tap to expand")
+        self.assertIn("999", flatten(details[1]))
 
 
 # ── Challenge League fixtures, table and team cards ──────────────────

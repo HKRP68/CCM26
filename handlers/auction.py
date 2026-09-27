@@ -2363,6 +2363,58 @@ async def aretlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _with_auction(update, work, admin=True, context=context)
 
 
+async def aretained_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/aretained — every franchise's retained players, open to anyone.
+
+    One tap-to-expand list per team, with its retention count and the Right
+    To Match cards its unused spots became.
+    """
+    await _view(update, context,
+                lambda s, season: AR.retained_view(s, season))
+
+
+async def aratingrule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """The squad rating rule: "at least N players rated X or lower".
+
+    <code>/aratingrule 83 4</code> — every squad must end with at least 4
+    players rated 83 or lower. <code>/aratingrule off 83</code> removes that
+    rule, <code>/aratingrule clear</code> removes them all, and a bare
+    <code>/aratingrule</code> lists what stands. Several rules may stand at
+    once (e.g. ≤83 ×4 and ≤80 ×2); each is enforced on its own.
+    """
+    from services import rating_rules as RR
+    args = list(context.args or [])
+
+    def work(session, season):
+        try:
+            action, cap, need = RR.parse_command(args)
+        except ValueError as exc:
+            raise AuctionError(
+                f"{exc}\nUsage: /aratingrule <max rating> <min players> · "
+                f"/aratingrule off <max rating> · /aratingrule clear")
+        rules = A.rating_rules(season)
+        if action != "list":
+            rules = A.set_rating_rules(
+                session, season, RR.apply_command(rules, action, cap, need))
+        if not rules:
+            return ("⭐ <b>Rating rule</b> — none set.\n"
+                    "Add one with <code>/aratingrule 83 4</code> — every squad "
+                    "must end with at least 4 players rated 83 or lower.")
+        lines = ["⭐ <b>Rating rule</b>"]
+        lines += [f"· {html.escape(RR.describe(rule))}" for rule in rules]
+        lines.append("")
+        for franchise in A.franchises(session, season.id):
+            progress = A.rating_progress_line(session, season, franchise)
+            lines.append(f"<b>{html.escape(franchise.name)}</b> — "
+                         f"{html.escape(progress)}")
+        lines.append("")
+        lines.append("<i>A bid is refused once a squad could no longer reach "
+                     "a rule with the slots it has left.</i>")
+        return "\n".join(lines)
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
 async def apick_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """<code>/apick Gujarat | Hardik Pandya | 15</code> — the price is optional.
 
@@ -2560,11 +2612,12 @@ async def aaccel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def artmset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """The Right To Match rules: read them, or set them in one line.
 
-    <code>/artmset 2</code> — two cards each, the default 30s window, no
-    premium. <code>/artmset 2 45 200</code> — the same with a 45s window and
-    the proposal's optional premium on top of the final bid.
-    <code>/artmset off</code> turns it off without touching the numbers, so
-    turning it back on does not mean typing them again.
+    The card count is automatic: <b>RTM = retention spots − retentions
+    used</b>, per franchise. <code>/artmset on</code> turns it on (30s
+    window, no premium); <code>/artmset on 45 2</code> adds a 45s window and
+    a ₹2 Cr premium on top of the final bid. <code>/artmset 2</code> still
+    works — the number is the flat count used only when retention is off.
+    <code>/artmset off</code> turns it off without touching the numbers.
     """
     args = list(context.args or [])
 
@@ -2575,31 +2628,42 @@ async def artmset_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return "🪪 Right To Match is off."
         if args:
             if len(args) > 3:
-                raise AuctionError("Usage: /artmset <cards> [seconds] "
-                                   "[premium], e.g. /artmset 2 30")
+                raise AuctionError("Usage: /artmset on [seconds] [premium], "
+                                   "e.g. /artmset on 30")
+            per_team = None
+            if args[0].lower() not in ("on", "yes", "auto"):
+                per_team = args[0]
             seconds = args[1] if len(args) > 1 else None
             # The premium is money, so it is read the way every other amount
             # in this feature is: "2" means two crore, not two lakh.
             extra = A.parse_amount(args[2]) if len(args) > 2 else None
-            A.set_rtm_rules(session, season, enabled=True, per_team=args[0],
+            A.set_rtm_rules(session, season, enabled=True, per_team=per_team,
                             window_seconds=seconds, extra_lakh=extra)
 
         if not A.rtm_configured(season):
             return ("🪪 Right To Match is <b>off</b>.\n"
-                    "Turn it on with <code>/artmset 2</code> — two cards each.")
-        lines = [f"🪪 <b>Right To Match</b> — on",
-                 f"{season.rtm_per_team} card(s) each · "
-                 f"{season.rtm_window_seconds}s to answer each question"
+                    "Turn it on with <code>/artmset on</code> — each "
+                    "franchise gets its unused retention spots as cards.")
+        spots = int(season.max_retentions or 0)
+        if spots > 0:
+            rule = (f"Automatic: <b>{spots} retention spots − retained</b> "
+                    f"= cards per franchise")
+        else:
+            rule = (f"Retention is off, so a flat {season.rtm_per_team} "
+                    f"card(s) each")
+        lines = ["🪪 <b>Right To Match</b> — on",
+                 rule,
+                 f"⏱ {season.rtm_window_seconds}s to answer each question"
                  + (f" · premium {A.render_money(season.rtm_extra_lakh, symbol)}"
                     if season.rtm_extra_lakh else "")]
         lines.append("")
         for franchise in A.franchises(session, season.id):
             lines.append(f"<b>{html.escape(franchise.name)}</b> — "
-                         f"{A.rtm_cards_left(franchise)} left of "
-                         f"{int(franchise.rtm_cards_total or 0)}")
+                         f"{A.rtm_card_line(season, franchise)}")
         lines.append("")
-        lines.append("<i>Give one franchise a different number with "
-                     "<code>/artmcards &lt;franchise&gt; &lt;n&gt;</code>.</i>")
+        lines.append("<i>Override one franchise with "
+                     "<code>/artmcards &lt;franchise&gt; &lt;n&gt;</code> "
+                     "once the auction is live.</i>")
         return "\n".join(lines)
 
     await _with_auction(update, work, admin=True, context=context)
@@ -2953,6 +3017,7 @@ async def info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             s, season, _own_or_named_franchise(s, season, update, "")),
         "rules": lambda s, season: AR.rules_view(s, season),
         "retention": lambda s, season: AR.retention_view(s, season),
+        "retained": lambda s, season: AR.retained_view(s, season),
         "picks": lambda s, season: AR.picks_view(s, season),
     }
     build = views.get(key)

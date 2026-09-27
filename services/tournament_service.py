@@ -21,6 +21,8 @@ import logging
 from datetime import datetime
 from types import SimpleNamespace
 
+from sqlalchemy import func
+
 from models import (
     Tournament, TournamentTeam, TournamentMatch, TournamentPlayerStats,
     ChallengeLeague, ChallengeTeam,
@@ -623,6 +625,31 @@ def sync_owners_from_draft(session, tournament_id):
 # ──────────────────────────────────────────────────────────────────────
 # Overseas-in-XI limits
 # ──────────────────────────────────────────────────────────────────────
+
+def rating_rules(tour):
+    """The tournament's "at least N players rated ≤X in every XI" rules.
+
+    ``[]`` when none are set. The rules are the tournament's own — there is no
+    league-level fallback, unlike the overseas limits below.
+    """
+    from services import rating_rules as RR
+    return RR.parse(getattr(tour, "rating_rules_json", None)) if tour else []
+
+
+def set_rating_rules(session, tour, rules):
+    """Save a tournament's rating rules (clamped to an XI of 11)."""
+    from services import rating_rules as RR
+    clean = RR.normalize(rules, cap_players=11)
+    tour.rating_rules_json = RR.dump(clean)
+    session.flush()
+    return clean
+
+
+def rating_rule_line(tour):
+    """``"Min 3 players rated ≤83"`` — empty when there is no rating rule."""
+    from services import rating_rules as RR
+    return " · ".join(RR.describe(rule) for rule in rating_rules(tour))
+
 
 def overseas_limits(session, tour, league=None):
     """``(min_overseas, max_overseas)`` in force for a tournament.
@@ -1594,6 +1621,68 @@ def _milestone_rows(lines):
         elif runs >= 50:
             entry["fifties"] += 1
     return agg
+
+
+class CareerStats:
+    """A player's tournament stats summed over several tournaments.
+
+    Carries the same attribute names as ``TournamentPlayerStats`` so every
+    formatter that reads a tournament row (strike rate, economy, average, the
+    stat tables) reads this one unchanged. ``seasons`` is how many distinct
+    tournaments went into it.
+    """
+    _SUMMED = ("matches", "bat_innings", "bat_runs", "bat_balls", "bat_fours",
+               "bat_sixes", "bat_outs", "bowl_innings", "bowl_wickets",
+               "bowl_runs", "bowl_balls")
+
+    def __init__(self, name=None):
+        self.name = name
+        self.team_name = None
+        for field in self._SUMMED:
+            setattr(self, field, 0)
+        self.highest_score = 0
+        self.best_bowl_wickets = 0
+        self.best_bowl_runs = -1
+        self.seasons = 0
+
+    def add(self, row):
+        for field in self._SUMMED:
+            setattr(self, field, getattr(self, field) + int(getattr(row, field, 0) or 0))
+        self.highest_score = max(self.highest_score, int(row.highest_score or 0))
+        w = int(row.best_bowl_wickets or 0)
+        r = int(row.best_bowl_runs if row.best_bowl_runs is not None else -1)
+        if r >= 0 and _better_figure(w, r, self.best_bowl_wickets,
+                                     self.best_bowl_runs):
+            self.best_bowl_wickets, self.best_bowl_runs = w, r
+
+
+def career_player_stats(session, tour, row):
+    """``row``'s player summed across every season of ``tour``'s competition.
+
+    "Every season" is every tournament in the same league (or, for a tournament
+    with no league, every tournament of the same kind) — this one included.
+    The player is matched by master ``player_id`` when the row has one, since
+    a roster id is per team and per season; otherwise by name, case-insensitive.
+    Returns a ``CareerStats``.
+    """
+    q = (session.query(TournamentPlayerStats)
+         .join(Tournament, Tournament.id == TournamentPlayerStats.tournament_id))
+    if tour.league_id:
+        q = q.filter(Tournament.league_id == tour.league_id)
+    else:
+        q = q.filter(kind_filter(tour.kind or KIND_CHALLENGE))
+    if row.player_id is not None:
+        q = q.filter(TournamentPlayerStats.player_id == row.player_id)
+    else:
+        q = q.filter(func.lower(TournamentPlayerStats.name)
+                     == (row.name or "").strip().lower())
+    total = CareerStats(row.name)
+    tours = set()
+    for other in q.all():
+        total.add(other)
+        tours.add(other.tournament_id)
+    total.seasons = len(tours)
+    return total
 
 
 def batting_average(row):

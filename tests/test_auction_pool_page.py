@@ -611,6 +611,31 @@ class SquadRulesPageTests(PoolPageCase):
             self.assertIn(f'name="role_max_{index}"', body)
             self.assertIn(role, body)
 
+    def test_rating_rule_rows_save_and_render(self):
+        self.save({}, {}, rating_rule_max=["83", "", "80"],
+                  rating_rule_min=["4", "", "2"])
+        self.session.expire_all()
+        self.assertEqual([{"max_rating": 83, "min_players": 4},
+                          {"max_rating": 80, "min_players": 2}],
+                         self.A.rating_rules(self.season))
+        body = self.get()
+        self.assertIn('name="rating_rule_max"', body)
+        self.assertIn("rated 83 or lower", body)
+        # Blank rows clear the rule.
+        self.save({}, {}, rating_rule_max=[""], rating_rule_min=[""])
+        self.session.expire_all()
+        self.assertEqual([], self.A.rating_rules(self.season))
+
+    def test_the_rtm_card_shows_the_automatic_count(self):
+        self.season.max_retentions = 3
+        self.A.create_franchise(self.session, self.season, "Mumbai",
+                                owner_tg_id=1)
+        self.A.set_rtm_rules(self.session, self.season, enabled=True)
+        self.session.commit()
+        body = self.get()
+        self.assertIn("automatic: retention spots − retained", body)
+        self.assertIn("Auto RTM", body)
+
 
 class FranchiseFileTests(PoolPageCase):
     """The field, downloaded and uploaded."""
