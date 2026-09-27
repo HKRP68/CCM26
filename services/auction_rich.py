@@ -1935,9 +1935,12 @@ ADMIN_SECTIONS = (
                                       "is on the block"),
         ("/aundobid", "Void the standing bid and fall back"),
         ("/aaccel [go]", "Re-list everything unsold now"),
-        ("/afinish [go | go quick | mute]", "End the auction now — the rest "
-                                            "is simulated lot by lot and every "
-                                            "squad completed by the rules"),
+        ("/afinish [go | go quick]", "End the auction now — the rest is "
+                                     "simulated lot by lot and every squad "
+                                     "completed by the rules"),
+        ("/afinish quick | slow | mute", "While it plays back: five lots a "
+                                         "message, one a message, or straight "
+                                         "to the summary"),
     )),
     ("💰 Money", (
         ("/agrant <team> | <amount>", "Correct a purse — | 5 adds ₹5 Cr, | -2 takes ₹2 Cr"),

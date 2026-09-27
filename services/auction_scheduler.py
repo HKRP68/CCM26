@@ -102,6 +102,9 @@ _resolve_lock_loop = None
 # so the room watches the rest of the auction happen instead of receiving it
 # as a wall of text. Keyed by season → the monotonic time of the last one.
 SIM_PREFIX = "sim_"
+# Lots folded into a batch by a mid-playback switch to quick: already told by
+# the batch message, so the cursor passes them without a word or a wait.
+SIM_SILENT = {"sim_folded"}
 _last_sim_message = {}
 
 # How many pending events one tick will say out loud. A backlog (the bot was
@@ -433,6 +436,11 @@ async def drain_events(bot, session, season, *, limit=DRAIN_PER_TICK):
             last = run[-1]
         else:
             last = event
+            if event.kind in SIM_SILENT:
+                season.announced_event_id = last.id
+                session.commit()
+                index += 1
+                continue
             if event.kind.startswith(SIM_PREFIX):
                 from services.auction_simulator import SIM_MESSAGE_GAP
                 since = time.monotonic() - _last_sim_message.get(season.id, 0.0)

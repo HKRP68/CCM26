@@ -2618,8 +2618,14 @@ async def afinish_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     every remaining lot through a simulated bidding war inside every rule,
     short squads topped up, the auction completed — and the room then watches
     it play out one lot per message. <code>/afinish go quick</code> puts five
-    lots in a message; <code>/afinish mute</code> skips a playback still
-    running straight to the final summary.
+    lots in a message.
+
+    While the playback is still running the same command steers it:
+    <code>/afinish quick</code> regroups the lots not yet shown five to a
+    message, <code>/afinish slow</code> goes back to one per message,
+    <code>/afinish mute</code> skips straight to the final summary, and a bare
+    <code>/afinish</code> says how much is left. The results themselves are
+    already final — only the telling changes.
     """
     from services import auction_scheduler as SCH
     from services import auction_simulator as S
@@ -2627,7 +2633,11 @@ async def afinish_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = [a.lower() for a in (context.args or [])]
     quick = "quick" in args or "fast" in args
+    slow = "slow" in args
     go = quick or bool({"go", "yes", "confirm", "do"} & set(args))
+
+    def minutes(seconds):
+        return f"~{max(1, round(seconds / 60))} min"
 
     def work(session, season):
         symbol = season.currency_label
@@ -2636,6 +2646,32 @@ async def afinish_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return (f"🔇 Skipped {skipped} playback "
                     f"{'message' if skipped == 1 else 'messages'} — the final "
                     f"summary is next.")
+        if S.playback_pending(session, season):
+            # A simulation is already decided and being told: steer the
+            # telling rather than trying to run a second one.
+            if quick or slow:
+                changed, left = S.set_playback_speed(session, season, quick)
+                status = S.playback_status(session, season)
+                if not changed:
+                    return (f"⏩ The playback is already "
+                            f"{'quick' if quick else 'as slow as it goes'} — "
+                            f"{left} messages left "
+                            f"({minutes(status['est_seconds'])}).")
+                return (f"{'⏩ Switched to quick' if quick else '🐢 Switched to slow'}"
+                        f" — {left} messages left "
+                        f"({minutes(status['est_seconds'])}).")
+            status = S.playback_status(session, season)
+            head = ("⏩ A simulated finish is already playing"
+                    if go else "⏩ <b>Simulated finish — playing back</b>")
+            return (f"{head}: {status['left']} messages left, "
+                    f"{status['mode']} mode "
+                    f"({minutes(status['est_seconds'])}).\n"
+                    f"<code>/afinish quick</code> five lots a message · "
+                    f"<code>/afinish slow</code> one lot a message · "
+                    f"<code>/afinish mute</code> straight to the summary.")
+        if slow:
+            raise AuctionError("Nothing is playing back. Use /afinish go to "
+                               "simulate the rest of the auction.")
         if not go:
             info = S.preview(session, season)
             rows = []
@@ -2673,7 +2709,8 @@ async def afinish_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sold = summary["sold"] + summary["accel_sold"] + summary["rtm"]
         return (f"⏩ Simulating the rest of the auction — {sold} players "
                 f"signed{', ' + str(summary['autofilled']) + ' free' if summary['autofilled'] else ''}. "
-                f"Watch the room; <code>/afinish mute</code> skips to the end.")
+                f"Watch the room; <code>/afinish quick</code> speeds it up, "
+                f"<code>/afinish mute</code> skips to the end.")
 
     await _with_auction(update, work, admin=True, context=context)
 
