@@ -61,6 +61,8 @@ A_COMPLETED = "COMPLETED"
 A_PICK_CIPL_BOWLER = "PICK_CIPL_BOWLER"      # bowling side picks bowler for the over
 A_PICK_BOWL_APPROACH = "PICK_BOWL_APPROACH"  # bowling side picks bowling approach
 A_PICK_BAT_APPROACH = "PICK_BAT_APPROACH"    # batting side picks batting approach
+# batting side picks the new batsman after a mid-over wicket (bot matches)
+A_PICK_CIPL_NEW_BATSMAN = "PICK_CIPL_NEW_BATSMAN"
 
 
 def _mem_key(mid):

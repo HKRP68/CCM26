@@ -211,8 +211,8 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/wpm` | — | Match lobby up to 20 overs (Mini App) — tag/reply to invite |
 | `/vsbot` | `/vsb` | Play a bot opponent in chat |
 | `/wpmbot` | `/wpmb` | Play a bot opponent in the Mini App |
-| `/lpbot` | `/lpb` `/letsplaybot` | Unranked Lets Play practice vs the bot |
-| `/ciplbot` | `/ciplb` `/challengeiplbot` | Unranked league practice vs the bot |
+| `/lpbot` | `/lpb` `/letsplaybot` | Unranked Lets Play practice vs the bot — play each over in chat or the Mini App; pick your new batsman after a wicket |
+| `/ciplbot` | `/ciplb` `/challengeiplbot` | Unranked league practice vs the bot — play each over in chat or the Mini App; pick your new batsman after a wicket |
 | `/botvsbot` | `/bvb` | Configure a bot-versus-bot match |
 | `/botmatch` | `/spectate` | Spectate a bot-versus-bot match |
 | `/pbo` | `/bowlout` | Start a standalone player bowl-out |

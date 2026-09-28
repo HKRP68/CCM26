@@ -779,7 +779,15 @@ function applyMatchState(nextState, { force = false } = {}) {
     return;
   }
 
-  if (matchState.commentary && matchState.commentary.length > 0) {
+  // Over-by-over matches (vs the bot) land a whole over at once; approach.js
+  // plays it back ball by ball instead of flashing only the last delivery.
+  const approachMode = !!matchState.approachMode;
+  document.getElementById('autoplay-strip')?.classList.toggle('hidden', approachMode);
+  if (approachMode && typeof handleApproachPlayback === 'function') {
+    handleApproachPlayback();
+  }
+
+  if (!approachMode && matchState.commentary && matchState.commentary.length > 0) {
     // Find the latest actual delivery. Styled event cards (wicket / new_batsman
     // / over_complete) can sit ahead of it in the reversed feed, so we must not
     // assume index 0 is the ball — otherwise wicket/over deliveries skip the
@@ -1259,6 +1267,16 @@ function renderControlsSection() {
   };
 
   renderAutoplayStatusMessage();
+
+  // Over-by-over "Approach" match: bowler → approaches → new batsman, in
+  // approach.js.
+  if (matchState.approachMode && typeof renderApproachControls === 'function') {
+    hideActionSections();
+    incomingCard.classList.add('hidden');
+    renderApproachControls({ promptText, promptSubtitle, waitingBlock });
+    return;
+  }
+  document.getElementById('approach-controls')?.classList.add('hidden');
 
   // Spectator role
   if (matchState.myRole === 'spectator') {

@@ -53,6 +53,7 @@ from services.match_state_store import (
     A_PICK_CIPL_BOWLER,
     A_PICK_BOWL_APPROACH,
     A_PICK_BAT_APPROACH,
+    A_PICK_CIPL_NEW_BATSMAN,
     A_COMPLETED,
 )
 from services import cipl_match
@@ -863,9 +864,13 @@ def _miniapp_row(state):
     """
     try:
         from services.match_broadcast import play_match_keyboard
+        # A practice match against the bot can be PLAYED from the Mini App
+        # (bowler, approaches, new batsman); every other over-by-over match
+        # is spectate-only there.
+        label = "🎮 Play in Mini App" if _is_bot_match(state) else "📊 View Match"
         kb = play_match_keyboard(
             state["match_id"], chat_id=state.get("chat_id"),
-            is_private=bool(state.get("is_private")), label="📊 View Match")
+            is_private=bool(state.get("is_private")), label=label)
         return [list(row) for row in kb.inline_keyboard] if kb else None
     except Exception:
         logger.exception("cipl view-match button build failed")
@@ -1052,7 +1057,7 @@ async def _recover_from_error(context, mid, where):
 def _idle_actor(state, expected):
     """Return (idle_uid, idle_tg, idle_name, win_uid, win_tg, win_name) for a
     live-match timeout, based on whose turn it is to act."""
-    if expected == A_PICK_BAT_APPROACH:
+    if expected in (A_PICK_BAT_APPROACH, A_PICK_CIPL_NEW_BATSMAN):
         return (state.get("bat_team_id"), state.get("bat_user_tg"),
                 state.get("bat_team_name", "Batting side"),
                 state.get("bowl_team_id"), state.get("bowl_user_tg"),
@@ -1086,7 +1091,11 @@ async def _on_remind(context):
                 pass
         # A practice match against the bot costs nothing to walk away from, so
         # don't threaten a fine that will never be charged.
-        if _is_bot_match(state):
+        if expected == A_PICK_CIPL_NEW_BATSMAN:
+            nag = (f"⏳ {_mention(idle_tg, idle_name)}, pick your next batsman "
+                   f"within <b>{secs} seconds</b> — or the next in your batting "
+                   f"order walks in.")
+        elif _is_bot_match(state):
             nag = (f"⏳ {_mention(idle_tg, idle_name)}, you have "
                    f"<b>{secs} seconds</b> to play your turn — or the practice "
                    f"match closes. No fine, it's just practice.")
@@ -1125,6 +1134,15 @@ async def _on_timeout(context):
             except Exception:
                 logger.exception("cipl timeout re-prompt failed for match %s", mid)
                 _arm_timer(context, mid, expected)
+            return
+        if expected == A_PICK_CIPL_NEW_BATSMAN:
+            # Nobody is fined or forfeited for this one: the next batsman in
+            # the order walks in and the over carries on.
+            try:
+                await _clear_action_reminder(context, state)
+                await _send_in_batsman(context, mid, state, None)
+            except Exception:
+                await _recover_from_error(context, mid, "auto new batsman")
             return
         try:
             if _is_bot_match(state):
@@ -2079,7 +2097,8 @@ def _match_start_announcement(state):
             from services.bot_captain import difficulty_label, persona_label
             bot_line = (f"🤖 <b>Bot captain:</b> {html.escape(persona_label(state))}"
                         f" • {html.escape(difficulty_label(state))}"
-                        f" • <i>unranked</i>\n")
+                        f" • <i>unranked</i>\n"
+                        f"🎮 Play every over here or in the Mini App\n")
         except Exception:
             logger.exception("cipl: bot persona line failed")
     # No Team Chemistry line here: this card is Challenge League's, and a league
@@ -2322,6 +2341,83 @@ async def _prompt_bat_approach(context, mid, state, auto=False):
 
 
 # ════════════════════════════════════════════════════════════════════
+# New batsman — a wicket mid-over, and the human batting captain picks
+# who walks in (bot matches). The over waits, then carries on.
+# ════════════════════════════════════════════════════════════════════
+
+def _human_picks_batsman(state):
+    """Should a wicket this over stop for the batting captain's pick?
+
+    Only in a practice match against the AI, and only when the human is the one
+    batting — the bot sends its batsmen in batting order without a pause.
+    """
+    return _is_bot_match(state) and not _bot_bats(state)
+
+
+def _over_strip(timeline, bpu=6):
+    """``1 · 4 · W · _ · _`` — the over so far, with the balls still to come."""
+    marks = [str(t) for t in (timeline or [])]
+    legal = sum(1 for t in marks if t not in ("WD", "NB"))
+    marks += ["_"] * max(0, bpu - legal)
+    return " · ".join(marks)
+
+
+async def _prompt_new_batsman(context, mid, state, summary=None):
+    """Ask the batting captain who walks in after a mid-over wicket."""
+    order = state.get("batting_order") or []
+    out = order[state.get("striker_idx", 0)] if order else {}
+    bs = (state.get("bat_stats") or {}).get(str(out.get("roster_id")), {})
+    progress = state.get("over_in_progress") or {}
+    timeline = (summary or {}).get("over_timeline") or progress.get("over_timeline")
+    bpu = cipl_match.balls_per_unit(state)
+    legal = sum(1 for t in (timeline or []) if t not in ("WD", "NB"))
+    left = max(0, bpu - legal)
+
+    rows, row = [], []
+    for p in cipl_match.available_batsmen(state):
+        row.append(InlineKeyboardButton(
+            f"{p['name']} ({cipl_match.display_rating(p, 'bat_rating')})",
+            callback_data=f"cipl_newbat_{mid}_{p['roster_id']}"))
+        if len(row) == 2:
+            rows.append(row); row = []
+    if row:
+        rows.append(row)
+
+    dismissal = bs.get("dismissal") or bs.get("how_out") or "out"
+    balls_note = (f"{left} ball{'s' if left != 1 else ''} left in the "
+                  f"{_unit_word(state)}" if left else
+                  f"last ball of the {_unit_word(state)}")
+    text = (f"{_header(state)}\n\n"
+            f"🔴 <b>WICKET!</b> {html.escape(str(out.get('name', 'Batter')))} "
+            f"{int(bs.get('runs', 0) or 0)}({int(bs.get('balls', 0) or 0)}) — "
+            f"{html.escape(str(dismissal))}\n"
+            f"This {_unit_word(state)}: <code>{html.escape(_over_strip(timeline, bpu))}</code>\n\n"
+            f"🏏 {_mention_tg(state, state['bat_user_tg'])}, who walks in? "
+            f"<i>({balls_note})</i>\n"
+            f"<i>No pick in time and the next in your batting order walks in.</i>")
+    try:
+        await _edit_action_message(context, state, text, rows)
+        delivered = True
+    except Exception:
+        logger.exception("cipl: new-batsman prompt send failed for match %s", mid)
+        delivered = False
+    await _mark_prompt_delivered(context, mid, state, delivered,
+                                 A_PICK_CIPL_NEW_BATSMAN)
+
+
+async def _send_in_batsman(context, mid, state, roster_id=None):
+    """Put the chosen (or next-in-order) batsman in and bowl the rest of the over.
+
+    Call with the match lock held.
+    """
+    if cipl_match.needs_new_batsman(state):
+        if cipl_match.bring_in_batsman(state, roster_id) is None:
+            cipl_match.bring_in_batsman(state)
+        await _ss(context, mid, state)
+    await _run_over(context, mid, state)
+
+
+# ════════════════════════════════════════════════════════════════════
 # Resume (/rcl) — re-render the current over prompt from saved state
 # ════════════════════════════════════════════════════════════════════
 
@@ -2463,7 +2559,15 @@ async def _resume_locked(context, mid, only_if_stalled=False):
         # bowler resume replaces it via _new_action_message (which deletes the
         # old picker first). Either way the buttons reappear even if the
         # previous prompt was deleted — the edit falls back to a fresh send.
-        if action == A_PICK_BOWL_APPROACH and state.get("current_bowler"):
+        if cipl_match.awaiting_new_batsman(state) and state.get("current_bowler"):
+            # An over parked on a wicket: re-ask for the batsman, or — when the
+            # pick already landed and only the rest of the over is missing —
+            # bowl it.
+            if cipl_match.needs_new_batsman(state):
+                await _prompt_new_batsman(context, mid, state)
+            else:
+                await _run_over(context, mid, state)
+        elif action == A_PICK_BOWL_APPROACH and state.get("current_bowler"):
             await _prompt_bowl_approach(context, mid, state)
         elif action == A_PICK_BAT_APPROACH and state.get("current_bowler"):
             await _prompt_bat_approach(context, mid, state)
@@ -2720,132 +2824,171 @@ async def _find_cipl_match_in_chat(context, cid):
 # Callbacks
 # ════════════════════════════════════════════════════════════════════
 
-async def cipl_bowler_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
+# Every pick in the over flow goes through submit_pick, whichever surface it
+# came from — a chat button or the Mini App (services.bot_bridge) — so both
+# enforce exactly the same rules and drive exactly the same continuation.
+PICK_BOWLER = "bowler"
+PICK_BOWL_APPROACH = "bowl_approach"
+PICK_BAT_APPROACH = "bat_approach"
+PICK_NEW_BATSMAN = "new_batsman"
+
+_PICK_ACTION = {
+    PICK_BOWLER: A_PICK_CIPL_BOWLER,
+    PICK_BOWL_APPROACH: A_PICK_BOWL_APPROACH,
+    PICK_BAT_APPROACH: A_PICK_BAT_APPROACH,
+    PICK_NEW_BATSMAN: A_PICK_CIPL_NEW_BATSMAN,
+}
+_PICK_ALREADY = {
+    PICK_BOWLER: "Bowler already chosen.",
+    PICK_BOWL_APPROACH: "Already chosen.",
+    PICK_BAT_APPROACH: "Already chosen.",
+    PICK_NEW_BATSMAN: "The new batsman is already in.",
+}
+
+
+def _pick_actor_error(state, kind, actor_tg):
+    """The refusal for a pick made by the wrong captain, or None."""
+    if kind in (PICK_BOWLER, PICK_BOWL_APPROACH):
+        if actor_tg != state.get("bowl_user_tg"):
+            return ("Only the bowling captain picks the bowler."
+                    if kind == PICK_BOWLER else
+                    "Only the bowling captain picks this.")
+    elif actor_tg != state.get("bat_user_tg"):
+        return ("Only the batting captain picks the new batsman."
+                if kind == PICK_NEW_BATSMAN else
+                "Only the batting captain picks this.")
+    return None
+
+
+async def submit_pick(context, mid, actor_tg, kind, value, on_accept=None):
+    """Validate and apply one pick of the over flow, then carry the match on.
+
+    ``kind`` is one of PICK_BOWLER (``value`` = roster id), PICK_BOWL_APPROACH /
+    PICK_BAT_APPROACH (``value`` = index into the approach list) or
+    PICK_NEW_BATSMAN (``value`` = roster id). ``on_accept`` is awaited the moment
+    the pick passes validation — before the (slow) continuation — so a chat
+    button can be acknowledged and a Mini App request answered straight away.
+
+    Returns ``(True, None)`` when the pick was taken, else ``(False, reason)``.
+    """
+    if kind not in _PICK_ACTION:
+        return False, "Invalid selection."
     try:
-        _, _, mid, rid = q.data.split("_")
-        mid, rid = int(mid), int(rid)
-    except Exception:
-        await q.answer("Invalid selection.", show_alert=True)
-        return
+        value = int(value)
+    except (TypeError, ValueError):
+        return False, "Invalid selection."
     async with get_match_lock(mid):
         state = await _gs(context, mid)
         if not state:
-            await q.answer("Match not found.", show_alert=True)
-            return
+            return False, "Match not found."
         if _super_over_active(context, mid):
-            await q.answer("🔥 Super Over in progress — the main match is over.",
-                           show_alert=True)
-            return
-        if q.from_user.id != state["bowl_user_tg"]:
-            await q.answer("Only the bowling captain picks the bowler.", show_alert=True)
-            return
+            return False, "🔥 Super Over in progress — the main match is over."
+        err = _pick_actor_error(state, kind, actor_tg)
+        if err:
+            return False, err
         if _innings_quota_used(state):
-            await q.answer("This innings is already over — the full quota of "
-                           "overs has been bowled.", show_alert=True)
-            return
-        if await _get_next_action(context, mid) != A_PICK_CIPL_BOWLER:
-            await q.answer("Bowler already chosen.", show_alert=True)
-            return
+            return False, ("This innings is already over — the full quota of "
+                           "overs has been bowled.")
+        if await _get_next_action(context, mid) != _PICK_ACTION[kind]:
+            return False, _PICK_ALREADY[kind]
+
         # Enforce eligibility server-side too: a stale button (or tampered
-        # callback data) must not bypass the quota / no-back-to-back / part-time
-        # rules the picker applies.
-        allowed = {p["roster_id"] for p in cipl_match.eligible_bowlers(state)}
-        if rid not in allowed:
-            await q.answer("That bowler isn't eligible for this over.", show_alert=True)
-            return
-        bowler = cipl_match.find_player(state["bowl_xi"], rid)
-        if not bowler:
-            await q.answer("Bowler not available.", show_alert=True)
-            return
-        await q.answer()
+        # callback data / Mini App request) must not bypass the quota /
+        # no-back-to-back / part-time rules the picker applies.
+        if kind == PICK_BOWLER:
+            allowed = {p["roster_id"] for p in cipl_match.eligible_bowlers(state)}
+            if value not in allowed:
+                return False, "That bowler isn't eligible for this over."
+            bowler = cipl_match.find_player(state["bowl_xi"], value)
+            if not bowler:
+                return False, "Bowler not available."
+        elif kind == PICK_BOWL_APPROACH:
+            if not (0 <= value < len(BOWLING_APPROACHES)):
+                return False, "Invalid approach."
+        elif kind == PICK_BAT_APPROACH:
+            if not (0 <= value < len(BATTING_APPROACHES)):
+                return False, "Invalid approach."
+        else:
+            if not cipl_match.needs_new_batsman(state):
+                return False, _PICK_ALREADY[kind]
+            if value not in {p.get("roster_id")
+                             for p in cipl_match.available_batsmen(state)}:
+                return False, "That batsman isn't available."
+
+        if on_accept is not None:
+            try:
+                await on_accept()
+            except Exception:
+                logger.debug("cipl pick acknowledgement failed", exc_info=True)
         _cancel_timer(context, mid)
-        state["current_bowler"] = bowler
-        try:
-            await _ss(context, mid, state)
-            await _prompt_bowl_approach(context, mid, state)
-        except Exception:
-            await _recover_from_error(context, mid, "bowling-approach prompt")
+
+        if kind == PICK_BOWLER:
+            state["current_bowler"] = bowler
+            try:
+                await _ss(context, mid, state)
+                await _prompt_bowl_approach(context, mid, state)
+            except Exception:
+                await _recover_from_error(context, mid, "bowling-approach prompt")
+        elif kind == PICK_BOWL_APPROACH:
+            state["bowling_approach"] = BOWLING_APPROACHES[value][0]
+            try:
+                await _ss(context, mid, state)
+                await _prompt_bat_approach(context, mid, state)
+            except Exception:
+                await _recover_from_error(context, mid, "batting-approach prompt")
+        elif kind == PICK_BAT_APPROACH:
+            state["batting_approach"] = BATTING_APPROACHES[value][0]
+            try:
+                await _ss(context, mid, state)
+                await _run_over(context, mid, state)
+            except Exception:
+                await _recover_from_error(context, mid, "over simulation")
+        else:
+            try:
+                await _send_in_batsman(context, mid, state, value)
+            except Exception:
+                await _recover_from_error(context, mid, "over resume")
+    return True, None
+
+
+async def _pick_from_callback(update):
+    """Parse ``cipl_<x>_<mid>_<value>`` and hand it to submit_pick."""
+    q = update.callback_query
+    try:
+        _, _, mid, value = q.data.split("_")
+        mid, value = int(mid), int(value)
+    except Exception:
+        await q.answer("Invalid selection.", show_alert=True)
+        return None
+    return q, mid, value
+
+
+async def _run_pick_callback(update, context, kind):
+    parsed = await _pick_from_callback(update)
+    if parsed is None:
+        return
+    q, mid, value = parsed
+    ok, reason = await submit_pick(context, mid, q.from_user.id, kind, value,
+                                   on_accept=q.answer)
+    if not ok:
+        await q.answer(reason, show_alert=True)
+
+
+async def cipl_bowler_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _run_pick_callback(update, context, PICK_BOWLER)
 
 
 async def cipl_bowlapp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    try:
-        _, _, mid, idx = q.data.split("_")
-        mid, idx = int(mid), int(idx)
-    except Exception:
-        await q.answer("Invalid selection.", show_alert=True)
-        return
-    async with get_match_lock(mid):
-        state = await _gs(context, mid)
-        if not state:
-            await q.answer("Match not found.", show_alert=True)
-            return
-        if _super_over_active(context, mid):
-            await q.answer("🔥 Super Over in progress — the main match is over.",
-                           show_alert=True)
-            return
-        if q.from_user.id != state["bowl_user_tg"]:
-            await q.answer("Only the bowling captain picks this.", show_alert=True)
-            return
-        if _innings_quota_used(state):
-            await q.answer("This innings is already over — the full quota of "
-                           "overs has been bowled.", show_alert=True)
-            return
-        if await _get_next_action(context, mid) != A_PICK_BOWL_APPROACH:
-            await q.answer("Already chosen.", show_alert=True)
-            return
-        if not (0 <= idx < len(BOWLING_APPROACHES)):
-            await q.answer("Invalid approach.", show_alert=True)
-            return
-        await q.answer()
-        _cancel_timer(context, mid)
-        state["bowling_approach"] = BOWLING_APPROACHES[idx][0]
-        try:
-            await _ss(context, mid, state)
-            await _prompt_bat_approach(context, mid, state)
-        except Exception:
-            await _recover_from_error(context, mid, "batting-approach prompt")
+    await _run_pick_callback(update, context, PICK_BOWL_APPROACH)
 
 
 async def cipl_batapp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    try:
-        _, _, mid, idx = q.data.split("_")
-        mid, idx = int(mid), int(idx)
-    except Exception:
-        await q.answer("Invalid selection.", show_alert=True)
-        return
-    async with get_match_lock(mid):
-        state = await _gs(context, mid)
-        if not state:
-            await q.answer("Match not found.", show_alert=True)
-            return
-        if _super_over_active(context, mid):
-            await q.answer("🔥 Super Over in progress — the main match is over.",
-                           show_alert=True)
-            return
-        if q.from_user.id != state["bat_user_tg"]:
-            await q.answer("Only the batting captain picks this.", show_alert=True)
-            return
-        if _innings_quota_used(state):
-            await q.answer("This innings is already over — the full quota of "
-                           "overs has been bowled.", show_alert=True)
-            return
-        if await _get_next_action(context, mid) != A_PICK_BAT_APPROACH:
-            await q.answer("Already chosen.", show_alert=True)
-            return
-        if not (0 <= idx < len(BATTING_APPROACHES)):
-            await q.answer("Invalid approach.", show_alert=True)
-            return
-        await q.answer()
-        _cancel_timer(context, mid)
-        state["batting_approach"] = BATTING_APPROACHES[idx][0]
-        try:
-            await _ss(context, mid, state)
-            await _run_over(context, mid, state)
-        except Exception:
-            await _recover_from_error(context, mid, "over simulation")
+    await _run_pick_callback(update, context, PICK_BAT_APPROACH)
+
+
+async def cipl_newbat_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """``cipl_newbat_<mid>_<rid>`` — the batting captain sends in a batsman."""
+    await _run_pick_callback(update, context, PICK_NEW_BATSMAN)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -2856,8 +2999,9 @@ async def cipl_batapp_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 # Impact Player — one swap per side, between overs or at the innings break
 # ════════════════════════════════════════════════════════════════════
 #
-# The Mini App is spectate-only for these matches (see
-# services.crickidex_arena: cipl_view_only), so the picker lives in the chat.
+# The Mini App never makes this swap for these matches (even a bot match, which
+# is otherwise playable there — see services.crickidex_arena), so the picker
+# lives in the chat.
 # Three taps — who goes out, who comes in, where they bat — then confirm.
 #
 # The window is simply "before the over is simulated": an over runs in one go,
@@ -3298,16 +3442,32 @@ async def _run_over(context, mid, state):
 
     _cancel_timer(context, mid)
     bowler_name = state["current_bowler"]["name"]
+    resuming = cipl_match.awaiting_new_batsman(state)
     await _edit_action_message(
         context, state,
-        f"{_header(state)}\n\n⏳ Simulating {_unit_word(state)} {state['current_over']} — "
-        f"{bowler_name} bowling…", None)
+        f"{_header(state)}\n\n⏳ "
+        + (f"Play resumes — {bowler_name} runs in again…" if resuming else
+           f"Simulating {_unit_word(state)} {state['current_over']} — "
+           f"{bowler_name} bowling…"), None)
 
     # The over simulation is CPU-bound pure Python (6 balls + pressure/scenario
     # engines). Run it in a worker thread so it can't block the event loop — and
     # every other user's command/button — for the duration of the over.
-    before_milestones = milestones.snapshot(state)
-    summary = await asyncio.to_thread(cipl_match.simulate_over, state)
+    #
+    # An over that stopped on a wicket for the new-batsman pick measures its
+    # milestones from where the WHOLE over started, not from the wicket.
+    before_milestones = (state.pop("over_milestones_before", None)
+                         if resuming else None) or milestones.snapshot(state)
+    pause = {"pause_on_wicket": True} if _human_picks_batsman(state) else {}
+    summary = await asyncio.to_thread(cipl_match.simulate_over, state, **pause)
+
+    if summary.get("paused"):
+        # A wicket, and the human batting captain chooses who walks in. The
+        # rest of the over waits for that pick (or its timeout).
+        state["over_milestones_before"] = before_milestones
+        await _ss(context, mid, state, next_action=A_PICK_CIPL_NEW_BATSMAN)
+        await _prompt_new_batsman(context, mid, state, summary)
+        return
 
     # Feed the over back to the AI captain: what the human picked, and what it
     # cost them. Later overs counter the habits this builds up. No-op (and never
