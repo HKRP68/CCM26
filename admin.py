@@ -4726,6 +4726,7 @@ def webapp_init():
             "events": _get_events_safe(db),
             "news_unread": _get_news_unread_safe(db, user),
             "poll": _get_poll_safe(db, user),
+            "tournament": _get_live_tournament_safe(db),
         }
     except Exception as e:
         logger.exception("webapp_init failed")
@@ -4858,6 +4859,112 @@ def _get_poll_safe(db, user):
         db.rollback()
         logger.exception("active poll failed")
         return None
+
+
+def _get_live_tournament_safe(db):
+    """Which tournaments are live, for the Mini App's Tournament tab."""
+    try:
+        from services.tournament_webapp import live_summary
+        return live_summary(db)
+    except Exception:
+        db.rollback()
+        logger.exception("live tournament lookup failed")
+        return {"live": False, "tournaments": []}
+
+
+def _refresh_tournament_throttled(db, tour):
+    """Heal a tournament's aggregates at most once per TTL (as the dashboard does)."""
+    import time
+    now = time.time()
+    if now - _tournament_recompute_at.get(tour.id, 0) <= _TOURNAMENT_RECOMPUTE_TTL:
+        return
+    try:
+        from services import tournament_service, league_schedule_service
+        tournament_service.recompute_tournament(db, tour.id)
+        league_schedule_service.heal_live_fixtures(db, tour.id)
+        db.commit()
+        _tournament_recompute_at[tour.id] = now
+    except Exception:
+        db.rollback()
+        logger.exception("webapp tournament recompute failed for %s", tour.id)
+
+
+@app.route("/api/webapp/tournament", methods=["POST"])
+@csrf_exempt
+def webapp_tournament():
+    """The live tournament: header, points table, fixtures, injuries.
+
+    Body: ``{tournament_id?}`` — omitted means the first live tournament.
+    """
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import tournament_webapp as tw
+        data = request.get_json(silent=True) or {}
+        live = tw.live_summary(db)
+        tour = tw.resolve_live(db, data.get("tournament_id"))
+        if tour is None:
+            return {"ok": True, "live": False, "live_tournaments": live["tournaments"]}
+        _refresh_tournament_throttled(db, tour)
+        payload = tw.tournament_payload(db, tour, tg_id=tg_id)
+        return {"ok": True, "live": True, "live_tournaments": live["tournaments"],
+                **payload}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_tournament failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/tournament/stats", methods=["POST"])
+@csrf_exempt
+def webapp_tournament_stats():
+    """Stat boards and the MVP race for a live tournament. Body: ``{tournament_id}``"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import tournament_webapp as tw
+        data = request.get_json(silent=True) or {}
+        tour = tw.resolve_live(db, data.get("tournament_id"))
+        if tour is None:
+            return {"ok": False, "live": False,
+                    "message": "This tournament is not live."}, 404
+        return {"ok": True, "tournament_id": tour.id, **tw.stats_payload(db, tour)}
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_tournament_stats failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
+
+
+@app.route("/api/webapp/tournament/match", methods=["POST"])
+@csrf_exempt
+def webapp_tournament_match():
+    """One fixture's scorecard. Body: ``{tournament_id, fixture_id}``"""
+    auth, tg_id, err = _webapp_auth()
+    if err:
+        return err
+    db, user, tg_id = auth
+    try:
+        from services import tournament_webapp as tw
+        data = request.get_json(silent=True) or {}
+        tour = tw.resolve_live(db, data.get("tournament_id"))
+        if tour is None:
+            return {"ok": False, "message": "This tournament is not live."}, 404
+        out = tw.fixture_scorecard(db, tour, data.get("fixture_id"), user.id)
+        return out if out.get("ok") else (out, 404)
+    except Exception as e:
+        db.rollback()
+        logger.exception("webapp_tournament_match failed")
+        return {"ok": False, "error": "internal", "message": str(e)}, 500
+    finally:
+        db.close()
 
 
 @app.route("/api/webapp/news/feed", methods=["POST"])
