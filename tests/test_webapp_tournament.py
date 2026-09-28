@@ -245,6 +245,16 @@ class WebappTournamentTests(unittest.TestCase):
                                {"tournament_id": self.tid, "fixture_id": self.m1})
         self.assertEqual(status, 404)
 
+    def test_a_non_numeric_id_reads_as_not_live(self):
+        status, data = self._post("/api/webapp/tournament", {"tournament_id": "abc"})
+        self.assertEqual(status, 200)
+        self.assertFalse(data["live"])
+        status, _ = self._post("/api/webapp/tournament/stats", {"tournament_id": "abc"})
+        self.assertEqual(status, 404)
+        status, _ = self._post("/api/webapp/tournament/match",
+                               {"tournament_id": self.tid, "fixture_id": "x"})
+        self.assertEqual(status, 404)
+
     # ── /tournament/stats ───────────────────────────────────────────────
     def test_stats_boards_and_mvp(self):
         self._post("/api/webapp/tournament")  # triggers the recompute

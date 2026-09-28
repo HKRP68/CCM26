@@ -4911,10 +4911,10 @@ def webapp_tournament():
         payload = tw.tournament_payload(db, tour, tg_id=tg_id)
         return {"ok": True, "live": True, "live_tournaments": live["tournaments"],
                 **payload}
-    except Exception as e:
+    except Exception:
         db.rollback()
         logger.exception("webapp_tournament failed")
-        return {"ok": False, "error": "internal", "message": str(e)}, 500
+        return {"ok": False, "error": "internal", "message": "Could not load the tournament."}, 500
     finally:
         db.close()
 
@@ -4935,10 +4935,10 @@ def webapp_tournament_stats():
             return {"ok": False, "live": False,
                     "message": "This tournament is not live."}, 404
         return {"ok": True, "tournament_id": tour.id, **tw.stats_payload(db, tour)}
-    except Exception as e:
+    except Exception:
         db.rollback()
         logger.exception("webapp_tournament_stats failed")
-        return {"ok": False, "error": "internal", "message": str(e)}, 500
+        return {"ok": False, "error": "internal", "message": "Could not load tournament stats."}, 500
     finally:
         db.close()
 
@@ -4959,10 +4959,10 @@ def webapp_tournament_match():
             return {"ok": False, "message": "This tournament is not live."}, 404
         out = tw.fixture_scorecard(db, tour, data.get("fixture_id"), user.id)
         return out if out.get("ok") else (out, 404)
-    except Exception as e:
+    except Exception:
         db.rollback()
         logger.exception("webapp_tournament_match failed")
-        return {"ok": False, "error": "internal", "message": str(e)}, 500
+        return {"ok": False, "error": "internal", "message": "Could not load the scorecard."}, 500
     finally:
         db.close()
 
