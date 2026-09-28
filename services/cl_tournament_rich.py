@@ -23,7 +23,7 @@ import logging
 
 from services import cl_tournament_view as V
 from services import rich_message as R
-from services import tournament_service
+from services import league_schedule_service, tournament_service
 
 logger = logging.getLogger(__name__)
 
@@ -273,10 +273,11 @@ def team_schedule_blocks(session, tour, team, viewer_tg_id=None, limit=40):
         if extras:
             line.append(f"  🤝 +{extras}")
         blocks.append(R.paragraph(line))
-    home_pitch = (team.home_pitch or "").strip()
-    if home_pitch:
-        blocks.append(R.paragraph([R.bold("🏟️ Home pitch: "),
-                                   f"🌱 {home_pitch}"]))
+    from services import league_schedule_service
+    pitch_label = league_schedule_service.team_pitch_label(tour, team)
+    if pitch_label:
+        blocks.append(R.paragraph([R.bold(f"🏟️ {pitch_label[0]}: "),
+                                   f"🌱 {pitch_label[1]}"]))
 
     fixtures = (session.query(TournamentMatch)
                 .filter_by(tournament_id=tour.id)
@@ -489,7 +490,7 @@ def teams_blocks(session, tour):
     header = [R.cell(R.bold("#"), header=True, align="center"),
               R.cell(R.bold("TEAM"), header=True),
               R.cell(R.bold("OWNER"), header=True),
-              R.cell(R.bold("🌱 HOME"), header=True)]
+              R.cell(R.bold("🌱 PITCHES"), header=True)]
     cells = [header]
     for position, tt in enumerate(rows, 1):
         # Plain text, never a mention: a team list must not ping everyone in it.
@@ -506,7 +507,8 @@ def teams_blocks(session, tour):
         cells.append([R.cell(str(position), align="center"),
                       R.cell(R.bold(tt.name or "—")),
                       R.cell(who),
-                      R.cell((tt.home_pitch or "").strip() or "—")])
+                      R.cell((league_schedule_service.team_pitch_label(tour, tt)
+                              or (None, "—"))[1])])
     blocks.append(R.table(cells, bordered=True, striped=True, compact=True))
     if owned:
         blocks.append(R.footer(R.italic(
@@ -546,9 +548,9 @@ def overview_blocks(session, tour):
                       R.cell(rating_line)])
 
     from services import league_schedule_service
-    if league_schedule_service.pitch_locked(tour):
-        facts.append([R.cell(R.bold("Pitch")),
-                      R.cell("fixed per fixture — see 🗓️ Fixtures")])
+    pitch_rule = league_schedule_service.pitch_rule_text(tour)
+    if pitch_rule:
+        facts.append([R.cell(R.bold("Pitch")), R.cell(pitch_rule)])
     if tournament_service.owner_enforced(tour):
         facts.append([R.cell(R.bold("Team rule")),
                       R.cell("🔒 owner-locked — only a team's owner and "

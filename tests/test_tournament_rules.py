@@ -15,9 +15,11 @@ What these cover:
 """
 
 import itertools
+import random
 import os
 import sys
 import tempfile
+from collections import Counter
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -485,6 +487,185 @@ class FixtureVenueTests(TournamentCase):
         self.assertEqual(
             self.lss.locked_pitch_for_pair(self.session, self.tour, "Alpha", "Bravo"),
             (None, None))
+
+
+# ══════════════════════════════════════════════════════════════════════
+# Preferred pitches
+# ══════════════════════════════════════════════════════════════════════
+
+class PreferredPitchPlannerTests(unittest.TestCase):
+    """The pure quota planner — no database."""
+
+    def setUp(self):
+        from services import league_schedule_service
+        self.lss = league_schedule_service
+        self.rng = random.Random(7)
+
+    def plan(self, n, pool, pct, history=()):
+        slots = [{"id": i, "decider": "tour", "pool": pool, "pitch": None}
+                 for i in range(n)]
+        slots += [{"id": "h%d" % i, "decider": "tour", "pool": pool, "pitch": p}
+                  for i, p in enumerate(history)]
+        return self.lss.plan_preferred_pitches(slots, pct, rng=self.rng)
+
+    def test_the_share_hits_the_quota_exactly(self):
+        pool = ["Green", "Dusty", "Flat", "Hard"]
+        for n, pct, want in ((10, 80, 8), (12, 80, 10), (5, 80, 4), (7, 50, 4)):
+            out = self.plan(n, pool, pct)
+            self.assertEqual(sum(p in pool for p in out.values()), want, (n, pct))
+
+    def test_preferred_pitches_rotate_evenly(self):
+        pool = ["Green", "Dusty", "Flat", "Hard"]
+        out = self.plan(20, pool, 80)
+        on = Counter(p for p in out.values() if p in pool)
+        self.assertEqual(set(on.values()), {4})
+
+    def test_hundred_and_zero_percent(self):
+        pool = ["Green", "Dusty"]
+        self.assertTrue(all(p in pool for p in self.plan(9, pool, 100).values()))
+        self.assertFalse(any(p in pool for p in self.plan(9, pool, 0).values()))
+
+    def test_a_pool_covering_every_pitch_is_always_on_list(self):
+        pool = list(self.lss.FIXTURE_PITCHES)
+        self.assertTrue(all(p in pool for p in self.plan(6, pool, 0).values()))
+
+    def test_history_counts_toward_the_quota(self):
+        # Four matches already on-list: the fifth must go elsewhere at 80%.
+        out = self.plan(1, ["Green"], 80, history=["Green"] * 4)
+        self.assertNotEqual(out[0], "Green")
+
+    def test_junk_lists_read_as_empty(self):
+        self.assertEqual(self.lss.parse_pitch_list("{not json"), [])
+        self.assertEqual(self.lss.parse_pitch_list('"Green"'), [])
+        self.assertEqual(self.lss.parse_pitch_list('["Green","Mud","Green","Flat"]'),
+                         ["Green", "Flat"])
+
+
+class PreferredPitchScheduleTests(TournamentCase):
+    def use(self, mode, pct=80, limit=4, tour_list=None):
+        self.tour.pitch_mode = mode
+        self.tour.league_format = "double_rr"
+        self.tour.preferred_pitch_pct = pct
+        self.tour.preferred_pitch_limit = limit
+        if tour_list is not None:
+            self.lss.set_tour_preferred_pitches(self.tour, tour_list)
+        self.session.commit()
+
+    def fixtures(self):
+        return self.lss.list_fixtures(self.session, self.tour.id)
+
+    def test_new_modes_lock_the_pitch(self):
+        for mode in ("tour_preferred", "team_preferred"):
+            self.tour.pitch_mode = mode
+            self.assertTrue(self.lss.pitch_locked(self.tour))
+
+    def test_tournament_list_gets_its_share(self):
+        pool = ["Green", "Dusty", "Flat", "Hard"]
+        self.use("tour_preferred", tour_list=pool)
+        self.lss.generate_schedule(self.session, self.tour.id)
+        self.session.commit()
+        fixtures = self.fixtures()
+        self.assertEqual(len(fixtures), 12)
+        self.assertEqual(sum(fx.pitch_type in pool for fx in fixtures), 10)
+        self.assertEqual({fx.pitch_type for fx in fixtures} & set(pool), set(pool))
+
+    def test_the_percentage_is_editable(self):
+        pool = ["Green", "Dusty"]
+        self.use("tour_preferred", pct=50, tour_list=pool)
+        self.lss.generate_schedule(self.session, self.tour.id)
+        self.session.commit()
+        self.assertEqual(sum(fx.pitch_type in pool for fx in self.fixtures()), 6)
+
+    def test_the_limit_is_enforced_and_editable(self):
+        self.tour.preferred_pitch_limit = 2
+        with self.assertRaises(ValueError):
+            self.lss.set_tour_preferred_pitches(self.tour, ["Green", "Dusty", "Flat"])
+        with self.assertRaises(ValueError):
+            self.lss.set_team_preferred_pitches(
+                self.tour, self.tteams[0], ["Green", "Dusty", "Flat"])
+        with self.assertRaises(ValueError):
+            self.lss.set_tour_preferred_pitches(self.tour, ["Mud"])
+        self.tour.preferred_pitch_limit = 3
+        self.assertEqual(self.lss.set_tour_preferred_pitches(
+            self.tour, ["Green", "Dusty", "Flat"]), ["Green", "Dusty", "Flat"])
+
+    def test_a_shared_team_pitch_wins(self):
+        self.use("team_preferred", pct=100)
+        for tt in self.tteams:
+            first = "Green" if tt.name == "Alpha" else "Flat"
+            self.lss.set_team_preferred_pitches(self.tour, tt, [first, "Dusty"])
+        self.session.commit()
+        self.lss.generate_schedule(self.session, self.tour.id)
+        self.session.commit()
+        # Every pair shares "Dusty" (and non-Alpha pairs also share "Flat").
+        alpha = self.by_name("Alpha").id
+        for fx in self.fixtures():
+            if alpha in (fx.team1_id, fx.team2_id):
+                self.assertEqual(fx.pitch_type, "Dusty")
+            else:
+                self.assertIn(fx.pitch_type, ("Flat", "Dusty"))
+
+    def test_the_home_side_decides_without_a_shared_pitch(self):
+        self.use("team_preferred", pct=100)
+        lists = {"Alpha": ["Green"], "Bravo": ["Dusty"],
+                 "Charlie": ["Flat"], "Delta": ["Hard"]}
+        for tt in self.tteams:
+            self.lss.set_team_preferred_pitches(self.tour, tt, lists[tt.name])
+        self.session.commit()
+        self.lss.generate_schedule(self.session, self.tour.id)
+        self.session.commit()
+        names = {tt.id: tt.name for tt in self.tteams}
+        for fx in self.fixtures():
+            self.assertEqual([fx.pitch_type], lists[names[fx.home_team_id]])
+
+    def test_the_legacy_home_pitch_counts_as_a_preference(self):
+        self.use("team_preferred", pct=100)
+        for tt in self.tteams:
+            tt.home_pitch = "Bouncy"
+        self.session.commit()
+        self.lss.generate_schedule(self.session, self.tour.id)
+        self.session.commit()
+        self.assertTrue(all(fx.pitch_type == "Bouncy" for fx in self.fixtures()))
+
+    def test_teams_without_a_list_fall_back_to_the_tournament_list(self):
+        self.use("team_preferred", pct=100, tour_list=["Hard"])
+        self.lss.generate_schedule(self.session, self.tour.id)
+        self.session.commit()
+        self.assertTrue(all(fx.pitch_type == "Hard" for fx in self.fixtures()))
+
+    def test_the_bot_describes_the_rule_and_the_team_lists(self):
+        self.use("tour_preferred", pct=75, tour_list=["Green", "Dusty"])
+        self.assertIn("75% of matches on Green, Dusty",
+                      self.lss.pitch_rule_text(self.tour))
+        team = self.tteams[0]
+        self.assertIsNone(self.lss.team_pitch_label(self.tour, team))
+        team.home_pitch = "Flat"
+        self.assertEqual(self.lss.team_pitch_label(self.tour, team),
+                         ("Home pitch", "Flat"))
+        self.lss.set_team_preferred_pitches(self.tour, team, ["Green", "Hard"])
+        self.assertEqual(self.lss.team_pitch_label(self.tour, team),
+                         ("Preferred pitches", "Green, Hard"))
+        self.tour.pitch_mode = "host"
+        self.assertIsNone(self.lss.pitch_rule_text(self.tour))
+
+    def test_a_second_pass_changes_nothing(self):
+        self.use("tour_preferred", tour_list=["Green", "Dusty"])
+        self.lss.generate_schedule(self.session, self.tour.id)
+        self.session.commit()
+        self.assertEqual(self.lss.assign_fixture_venues(self.session, self.tour.id), 0)
+
+    def test_an_added_fixture_keeps_the_running_share(self):
+        pool = ["Green"]
+        self.use("tour_preferred", tour_list=pool)
+        self.lss.generate_schedule(self.session, self.tour.id)
+        self.session.commit()
+        a, b = self.tteams[0].id, self.tteams[1].id
+        for _ in range(3):
+            self.lss.add_fixture(self.session, self.tour.id, a, b)
+        self.session.commit()
+        fixtures = self.fixtures()
+        self.assertEqual(len(fixtures), 15)
+        self.assertEqual(sum(fx.pitch_type in pool for fx in fixtures), 12)
 
 
 # ══════════════════════════════════════════════════════════════════════

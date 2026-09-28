@@ -2739,6 +2739,17 @@ class Tournament(Base):
     pitch_mode = Column(String(20), default="host", server_default="host",
                         nullable=False)
 
+    # Preferred pitches (``pitch_mode`` "tour_preferred" / "team_preferred").
+    # ``preferred_pitches_json`` is the tournament-wide list (a JSON array of
+    # pitch names); ``preferred_pitch_pct`` is the share of matches the
+    # schedule puts on a preferred surface; ``preferred_pitch_limit`` caps how
+    # many pitches the tournament — and each team — may prefer.
+    preferred_pitches_json = Column(Text, nullable=True)
+    preferred_pitch_pct = Column(Integer, default=80, server_default="80",
+                                 nullable=True)
+    preferred_pitch_limit = Column(Integer, default=4, server_default="4",
+                                   nullable=True)
+
     # ── Injuries ──────────────────────────────────────────────────────────
     # A cricket injury system, off by default. When on, a completed tournament
     # match can leave a player carrying a knock that rules them out of their
@@ -2846,6 +2857,11 @@ class TournamentTeam(Base):
     # tournament's ``pitch_mode`` is "home": every fixture the team hosts is
     # played on it. NULL falls back to a random surface.
     home_pitch = Column(String(20), nullable=True)
+
+    # This team's preferred surfaces (JSON array, at most the tournament's
+    # ``preferred_pitch_limit``). Used when ``pitch_mode`` is "team_preferred";
+    # NULL falls back to ``home_pitch`` when that is set.
+    preferred_pitches_json = Column(Text, nullable=True)
 
     # Standings
     played = Column(Integer, default=0, nullable=False)

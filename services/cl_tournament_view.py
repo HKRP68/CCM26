@@ -17,7 +17,7 @@ from html import escape
 
 from models import (Tournament, TournamentTeam, TournamentMatch,
                     TournamentPlayerStats)
-from services import tournament_service
+from services import league_schedule_service, tournament_service
 from utils.message_chunks import expandable_quotes
 
 logger = logging.getLogger(__name__)
@@ -322,9 +322,10 @@ def render_team_schedule(session, tour, team, viewer_tg_id=None, limit=40):
     if owner or extras:
         who = f"👤 {escape(owner)}" if owner else "👤 <i>no owner</i>"
         out.append(who + (f" 🤝 +{extras}" if extras else ""))
-    home_pitch = (team.home_pitch or "").strip()
-    if home_pitch:
-        out.append(f"🏟️ <b>Home pitch:</b> 🌱 {escape(home_pitch)}")
+    from services import league_schedule_service
+    pitch_label = league_schedule_service.team_pitch_label(tour, team)
+    if pitch_label:
+        out.append(f"🏟️ <b>{pitch_label[0]}:</b> 🌱 {escape(pitch_label[1])}")
 
     if not fixtures:
         out += ["", "No fixtures are scheduled for this team yet — this "
@@ -612,9 +613,9 @@ def render_teams(session, tour):
             suffix = " · <i>unowned</i>" if owned else ""
         if extras:
             suffix += f" 🤝 +{extras}"
-        home = (tt.home_pitch or "").strip()
-        if home:
-            suffix += f" · 🌱 {escape(home)}"
+        pitch_label = league_schedule_service.team_pitch_label(tour, tt)
+        if pitch_label:
+            suffix += f" · 🌱 {escape(pitch_label[1])}"
         out.append(f"{i}. <b>{escape(tt.name or '—')}</b>{suffix}")
     if owned:
         out += ["", "<i>🔒 Owner-locked: only a team's owner and its co-owners "
@@ -644,8 +645,9 @@ def render_overview(session, tour):
     if rating_line:
         out.append(f"<b>Rating rule (XI):</b> {escape(rating_line)}")
     from services import league_schedule_service
-    if league_schedule_service.pitch_locked(tour):
-        out.append("<b>Pitch:</b> fixed per fixture — see 🗓️ Fixtures")
+    pitch_rule = league_schedule_service.pitch_rule_text(tour)
+    if pitch_rule:
+        out.append(f"<b>Pitch:</b> {escape(pitch_rule)}")
     if tournament_service.owner_enforced(tour):
         out.append("<b>Team rule:</b> 🔒 owner-locked — only a team's owner "
                    "and co-owners may play with it")

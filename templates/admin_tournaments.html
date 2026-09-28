@@ -168,7 +168,19 @@
               <option value="host">Host picks (default)</option>
               <option value="fixture">Fixed per fixture — random</option>
               <option value="home">Fixed per fixture — home team's pitch</option>
+              <option value="tour_preferred">Tournament preferred pitches</option>
+              <option value="team_preferred">Team preferred pitches</option>
             </select>
+          </div>
+          <div><label>Preferred pitch share %</label><input type="number" name="preferred_pitch_pct" min="0" max="100" value="80"></div>
+          <div><label>Max preferred pitches</label><input type="number" name="preferred_pitch_limit" min="1" max="{{ pitch_types|length }}" value="4"></div>
+          <div style="grid-column:1 / -1;"><label>Tournament preferred pitches</label>
+            <span style="display:flex;gap:.8rem;flex-wrap:wrap;">
+              {% for pt in pitch_types %}
+              <label style="text-transform:none;letter-spacing:0;"><input type="checkbox" name="preferred_pitches" value="{{ pt }}" style="width:auto;"> {{ pt }}</label>
+              {% endfor %}
+            </span>
+            <small style="color:var(--muted);">Teams set their own lists on the tournament's Manage page after creation.</small>
           </div>
           <div><label>Team ownership</label>
             <label style="text-transform:none;letter-spacing:0;">

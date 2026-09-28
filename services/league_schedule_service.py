@@ -22,8 +22,10 @@ Design notes
   the note below protects.
 """
 
+import json
 import logging
 import random
+from collections import Counter
 
 from services.pitch_report import PITCH_TYPES
 
@@ -37,13 +39,21 @@ FIXTURE_PITCHES = list(PITCH_TYPES)
 PITCH_MODE_HOST = "host"        # host picks during setup (original behaviour)
 PITCH_MODE_FIXTURE = "fixture"  # each fixture carries its own surface
 PITCH_MODE_HOME = "home"        # ditto, seeded from the home team's home_pitch
-PITCH_MODES = (PITCH_MODE_HOST, PITCH_MODE_FIXTURE, PITCH_MODE_HOME)
+PITCH_MODE_TOUR_PREF = "tour_preferred"  # a share of matches on the tournament's list
+PITCH_MODE_TEAM_PREF = "team_preferred"  # a share of matches on each team's list
+PITCH_MODES = (PITCH_MODE_HOST, PITCH_MODE_FIXTURE, PITCH_MODE_HOME,
+               PITCH_MODE_TOUR_PREF, PITCH_MODE_TEAM_PREF)
+PREFERRED_MODES = (PITCH_MODE_TOUR_PREF, PITCH_MODE_TEAM_PREF)
+
+# Defaults for the preferred-pitch settings (both editable per tournament).
+DEFAULT_PREFERRED_PCT = 80
+DEFAULT_PREFERRED_LIMIT = 4
 
 
 def pitch_locked(tour):
     """True when fixtures — not the host — decide the surface for ``tour``."""
     return (getattr(tour, "pitch_mode", PITCH_MODE_HOST) or PITCH_MODE_HOST) \
-        in (PITCH_MODE_FIXTURE, PITCH_MODE_HOME)
+        in (PITCH_MODE_FIXTURE, PITCH_MODE_HOME) + PREFERRED_MODES
 
 # NOTE: SQLAlchemy / model imports are intentionally deferred into the DB-facing
 # functions below so the pure ``round_robin_rounds`` helper (and its unit tests)
@@ -113,6 +123,232 @@ def pick_pitch(mode, home_team_id=None, home_pitches=None, rng=None):
     return rng.choice(FIXTURE_PITCHES)
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Preferred pitches
+# ──────────────────────────────────────────────────────────────────────
+
+def preferred_pct(tour):
+    """Share (0–100) of matches a preferred-pitch schedule puts on the list."""
+    raw = getattr(tour, "preferred_pitch_pct", None)
+    try:
+        pct = int(raw) if raw is not None else DEFAULT_PREFERRED_PCT
+    except (TypeError, ValueError):
+        pct = DEFAULT_PREFERRED_PCT
+    return max(0, min(100, pct))
+
+
+def preferred_limit(tour):
+    """How many pitches the tournament — and each team — may prefer."""
+    raw = getattr(tour, "preferred_pitch_limit", None)
+    try:
+        limit = int(raw) if raw is not None else DEFAULT_PREFERRED_LIMIT
+    except (TypeError, ValueError):
+        limit = DEFAULT_PREFERRED_LIMIT
+    return max(1, min(len(FIXTURE_PITCHES), limit))
+
+
+def parse_pitch_list(raw, limit=None):
+    """A clean pitch list from a JSON column (or a list): known names only,
+    no duplicates, original order, at most ``limit``. Junk reads as ``[]``."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw.strip() else []
+        except ValueError:
+            return []
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out = []
+    for name in raw:
+        name = str(name or "").strip()
+        if name in FIXTURE_PITCHES and name not in out:
+            out.append(name)
+    return out[:limit] if limit else out
+
+
+def tour_preferred_pitches(tour):
+    """The tournament-wide preferred list."""
+    return parse_pitch_list(getattr(tour, "preferred_pitches_json", None),
+                            preferred_limit(tour))
+
+
+def team_preferred_pitches(team, limit=None):
+    """A team's preferred list, falling back to its legacy ``home_pitch``."""
+    pitches = parse_pitch_list(getattr(team, "preferred_pitches_json", None), limit)
+    if not pitches:
+        home = (getattr(team, "home_pitch", None) or "").strip()
+        if home in FIXTURE_PITCHES:
+            pitches = [home]
+    return pitches
+
+
+def team_pitch_label(tour, team):
+    """``("Home pitch" | "Preferred pitches", "Green, Dusty")`` or ``None``."""
+    pitches = team_preferred_pitches(team, preferred_limit(tour) if tour else None)
+    if not pitches:
+        return None
+    return ("Home pitch" if len(pitches) == 1 else "Preferred pitches",
+            ", ".join(pitches))
+
+
+def pitch_rule_text(tour):
+    """One plain-text line describing how fixture pitches are decided, or None."""
+    if not pitch_locked(tour):
+        return None
+    tail = " — see 🗓️ Fixtures"
+    mode = tour.pitch_mode
+    pct = preferred_pct(tour)
+    if mode == PITCH_MODE_TOUR_PREF:
+        pitches = tour_preferred_pitches(tour)
+        if pitches:
+            return "%d%% of matches on %s%s" % (pct, ", ".join(pitches), tail)
+    elif mode == PITCH_MODE_TEAM_PREF:
+        return "%d%% of each team's home matches on its preferred pitches%s" % (
+            pct, tail)
+    return "fixed per fixture" + tail
+
+
+def _validated_pitch_list(pitches, limit):
+    """Validate a requested list; raise ``ValueError`` rather than trim it."""
+    out = []
+    for name in pitches or ():
+        name = str(name or "").strip()
+        if not name:
+            continue
+        if name not in FIXTURE_PITCHES:
+            raise ValueError("Unknown pitch %r. Choose from: %s"
+                             % (name, ", ".join(FIXTURE_PITCHES)))
+        if name not in out:
+            out.append(name)
+    if len(out) > limit:
+        raise ValueError("Pick at most %d preferred pitch%s (you picked %d)."
+                         % (limit, "" if limit == 1 else "es", len(out)))
+    return out
+
+
+def set_tour_preferred_pitches(tour, pitches):
+    """Store the tournament-wide list. Caller commits (and re-stamps venues)."""
+    clean = _validated_pitch_list(pitches, preferred_limit(tour))
+    tour.preferred_pitches_json = json.dumps(clean) if clean else None
+    return clean
+
+
+def set_team_preferred_pitches(tour, team, pitches):
+    """Store one team's list (capped by the tournament's limit). Caller commits."""
+    clean = _validated_pitch_list(pitches, preferred_limit(tour))
+    team.preferred_pitches_json = json.dumps(clean) if clean else None
+    return clean
+
+
+def _quota_wants_preferred(total, preferred, pct):
+    """True when the next match should go on a preferred pitch.
+
+    Keeps a running quota rather than rolling dice: after ``n`` matches exactly
+    ``round(n * pct / 100)`` (half up) are on the list, so "80%" really means
+    four matches in five instead of "anywhere from 60 to 100%".
+    """
+    return ((total + 1) * pct * 2 + 100) // 200 > preferred
+
+
+def plan_preferred_pitches(slots, pct, *, pitches=None, rng=None):
+    """Pick a surface for every unstamped slot. Pure — no database.
+
+    ``slots`` is a list of dicts with ``id``, ``decider`` (whose quota the match
+    counts toward; ``None`` = unconstrained), ``pool`` (that decider's preferred
+    pitches for this match) and ``pitch`` (the surface already set, or falsy).
+    Slots that already carry a pitch are history: they seed the quota counters
+    and the rotation, so filling one new fixture keeps the running share on
+    target. Returns ``{id: pitch}`` for the slots that had none.
+
+    Inside the pool the least-used pitch (for that decider) is taken, ties at
+    random, so the preferred pitches rotate instead of one hogging the season.
+    Off-list matches rotate across the remaining surfaces the same way.
+    """
+    rng = rng or random
+    pitches = list(pitches or FIXTURE_PITCHES)
+    counts = {}           # decider -> [matches, on-list matches]
+    usage = Counter()     # (decider, pitch) -> matches
+    for s in slots:
+        if s.get("pitch"):
+            usage[(s.get("decider"), s["pitch"])] += 1
+            if s.get("decider") is not None:
+                c = counts.setdefault(s["decider"], [0, 0])
+                c[0] += 1
+                c[1] += s["pitch"] in (s.get("pool") or ())
+    todo = [s for s in slots if not s.get("pitch")]
+    rng.shuffle(todo)
+    out = {}
+    for s in todo:
+        decider = s.get("decider")
+        pool = [p for p in (s.get("pool") or ()) if p in pitches]
+        if decider is None or not pool:
+            choices = pitches
+        else:
+            c = counts.setdefault(decider, [0, 0])
+            others = [p for p in pitches if p not in pool]
+            on_list = _quota_wants_preferred(c[0], c[1], pct) or not others
+            choices = pool if on_list else others
+            c[0] += 1
+            c[1] += on_list
+        low = min(usage[(decider, p)] for p in choices)
+        pick = rng.choice([p for p in choices if usage[(decider, p)] == low])
+        usage[(decider, pick)] += 1
+        out[s["id"]] = pick
+    return out
+
+
+def _preferred_slot(mode, fx, tour_list, team_lists):
+    """``(decider, pool)`` for one fixture under a preferred-pitch mode.
+
+    Team mode: a pitch both sides prefer wins; otherwise the home side's list
+    decides (the other side's on a neutral venue or when home has none); with
+    no team lists at all the tournament list is used, else anything goes.
+    """
+    if mode == PITCH_MODE_TEAM_PREF:
+        home = fx.home_team_id if fx.home_team_id in (fx.team1_id, fx.team2_id) \
+            else None
+        first = home or fx.team1_id or fx.team2_id
+        second = fx.team2_id if first == fx.team1_id else fx.team1_id
+        l1 = team_lists.get(first) or []
+        l2 = team_lists.get(second) or []
+        shared = [p for p in l1 if p in l2]
+        if shared:
+            return first, shared
+        if l1:
+            return first, l1
+        if l2:
+            return second, l2
+    if tour_list:
+        return "tour", tour_list
+    return None, []
+
+
+def _assign_preferred_pitches(session, tour, fixtures, overwrite):
+    """Stamp the preferred-mode surfaces. Returns the number of pitches set."""
+    from models import TournamentTeam
+    mode = tour.pitch_mode
+    limit = preferred_limit(tour)
+    tour_list = tour_preferred_pitches(tour)
+    team_lists = {}
+    if mode == PITCH_MODE_TEAM_PREF:
+        for tt in (session.query(TournamentTeam)
+                   .filter_by(tournament_id=tour.id).all()):
+            team_lists[tt.id] = team_preferred_pitches(tt, limit)
+    slots, by_id = [], {}
+    for fx in fixtures:
+        replan = fx.status == "scheduled" and (
+            overwrite or not (fx.pitch_type or "").strip())
+        decider, pool = _preferred_slot(mode, fx, tour_list, team_lists)
+        slots.append({"id": fx.id, "decider": decider, "pool": pool,
+                      "pitch": None if replan else (fx.pitch_type or "").strip()})
+        by_id[fx.id] = fx
+    changed = 0
+    for fid, pitch in plan_preferred_pitches(slots, preferred_pct(tour)).items():
+        if by_id[fid].pitch_type != pitch:
+            by_id[fid].pitch_type = pitch
+            changed += 1
+    return changed
+
+
 def assign_fixture_venues(session, tournament_id, *, overwrite=False):
     """Give every unplayed fixture a home side and a surface. Caller commits.
 
@@ -132,7 +368,9 @@ def assign_fixture_venues(session, tournament_id, *, overwrite=False):
     home_pitches = _home_pitch_map(session, tid) if mode == PITCH_MODE_HOME else {}
     changed = 0
     for fx in (session.query(TournamentMatch)
-               .filter_by(tournament_id=tid, status="scheduled").all()):
+               .filter_by(tournament_id=tid, status="scheduled")
+               .order_by(TournamentMatch.round_no, TournamentMatch.match_no,
+                         TournamentMatch.id).all()):
         # The home side defaults to slot 1 — the round-robin generator already
         # alternates the slots between legs, so this gives a balanced home/away
         # split for free. A dangling reference (the team was swapped out) is
@@ -154,9 +392,20 @@ def assign_fixture_venues(session, tournament_id, *, overwrite=False):
                 fx.pitch_type = None
                 changed += 1
             continue
+        if mode in PREFERRED_MODES:
+            continue  # planned together below, so the quota spans the season
         if overwrite or not (fx.pitch_type or "").strip():
             fx.pitch_type = pick_pitch(mode, fx.home_team_id, home_pitches)
             changed += 1
+    if mode in PREFERRED_MODES:
+        # Every fixture takes part: played and live ones are history that seeds
+        # the quota; unplayed ones are (re)stamped.
+        changed += _assign_preferred_pitches(
+            session, tour,
+            (session.query(TournamentMatch).filter_by(tournament_id=tid)
+             .order_by(TournamentMatch.round_no, TournamentMatch.match_no,
+                       TournamentMatch.id).all()),
+            overwrite)
     if changed:
         session.flush()
     return changed
@@ -416,7 +665,11 @@ def add_fixture(session, tournament_id, team1_id, team2_id, group_id=None, round
     session.flush()
     # Fill this one fixture's surface without disturbing the rest of the schedule.
     mode = (tour.pitch_mode or PITCH_MODE_HOST) if tour else PITCH_MODE_HOST
-    if mode != PITCH_MODE_HOST:
+    if mode in PREFERRED_MODES:
+        # Only blank fixtures are filled, so the rest of the schedule stays put
+        # while the new match still counts toward the preferred-pitch quota.
+        assign_fixture_venues(session, tid)
+    elif mode != PITCH_MODE_HOST:
         tm.pitch_type = pick_pitch(mode, t1, _home_pitch_map(session, tid))
         session.flush()
     return tm

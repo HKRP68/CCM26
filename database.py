@@ -638,6 +638,11 @@ def _migrate_add_columns():
     _try_add("tournament_teams", "home_pitch", "VARCHAR(20)")
     _try_add("tournament_matches", "pitch_type", "VARCHAR(20)")
     _try_add("tournament_matches", "home_team_id", "INTEGER")
+    # Preferred pitches (tournament-wide list or one list per team).
+    _try_add("tournaments", "preferred_pitches_json", "TEXT")
+    _try_add("tournaments", "preferred_pitch_pct", "INTEGER DEFAULT 80")
+    _try_add("tournaments", "preferred_pitch_limit", "INTEGER DEFAULT 4")
+    _try_add("tournament_teams", "preferred_pitches_json", "TEXT")
     _try_add("tournament_matches", "venue", "VARCHAR(120)")
     # Public tournament-info command for a league (/iplfixtures & friends).
     _try_add("challenge_leagues", "fixtures_command", "VARCHAR(60)")
