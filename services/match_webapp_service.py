@@ -22,6 +22,8 @@ from services.match_outcome import (
 from services.match_state_store import (
     A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_SHOT, A_PICK_NEW_BATSMAN,
     A_PICK_NEW_BOWLER, A_INNINGS_BREAK, A_COMPLETED, CasAbort,
+    A_PICK_CIPL_BOWLER, A_PICK_BOWL_APPROACH, A_PICK_BAT_APPROACH,
+    A_PICK_CIPL_NEW_BATSMAN,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,17 +45,70 @@ VIEW_ONLY_MESSAGE = ("Challenge League matches are played in chat — "
                      "the Mini App is view-only (spectate).")
 
 
-def is_view_only_match(state):
-    """True when the live match must not be driven from the Mini App.
+def is_approach_match(state):
+    """True for an over-by-over "Approach" match (/cipl, /letsplay, /lpbot,
+    /ciplbot and friends).
 
-    Challenge League (/cipl) matches run as an over-by-over "Approach" game that
-    is played entirely from the Telegram chat (coin call, toss, per-over
-    bowler/approach inline buttons in cipl_play.py). For those matches the Mini
-    App is a read-only spectate board for EVERYONE — including the two captains —
-    so every gameplay mutator below refuses to act on them.
+    Those matches are driven by ``handlers.cipl_play`` — bowler, bowling
+    approach, batting approach per over — never by the ball-by-ball delivery /
+    shot flow in this module, so every ball-by-ball mutator below refuses them.
     """
     return bool(state) and state.get("mode") == "cipl_approach"
 
+
+def is_view_only_match(state):
+    """True when the live match must not be driven from the Mini App at all.
+
+    Human-vs-human approach matches are played entirely from the Telegram chat
+    (coin call, toss, per-over inline buttons in cipl_play.py), and for them the
+    Mini App is a read-only spectate board for EVERYONE — including the two
+    captains.
+
+    A practice match against the AI captain started for the Mini App
+    (``/lpbot app``, ``/ciplbot app``) is the exception: its human captain plays
+    every over there (``handlers.cipl_play.submit_pick`` via
+    ``services.bot_bridge``), Impact Player included. Started for the chat, it
+    is played with the chat buttons and the Mini App only spectates.
+    """
+    return is_approach_match(state) and not is_app_played_match(state)
+
+
+def is_app_played_match(state):
+    """True for a bot match whose picks are made in the Mini App."""
+    return (bool(state) and bool(state.get("is_bot_match"))
+            and state.get("play_mode") == "app")
+
+
+
+# Mini App actions for an over-by-over match against the bot, and the pick each
+# one makes in handlers.cipl_play.submit_pick.
+APPROACH_ACTION_TYPES = {
+    "cipl_bowler": "bowler",
+    "cipl_bowl_approach": "bowl_approach",
+    "cipl_bat_approach": "bat_approach",
+    "cipl_new_batsman": "new_batsman",
+}
+
+
+def approach_pick_value(kind, act):
+    """The ``submit_pick`` value for a Mini App approach action, or None.
+
+    Bowler / new batsman picks carry a roster id; approach picks carry the
+    approach key, which maps to its index in the approach list.
+    """
+    from engine.approach_modifiers import BATTING_APPROACHES, BOWLING_APPROACHES
+    act = act if isinstance(act, dict) else {}
+    if kind in ("bowler", "new_batsman"):
+        try:
+            return int(act.get("rosterId", act.get("roster_id")))
+        except (TypeError, ValueError):
+            return None
+    options = BOWLING_APPROACHES if kind == "bowl_approach" else BATTING_APPROACHES
+    key = str(act.get("key") or "").strip().lower()
+    for idx, (k, _emoji, _label) in enumerate(options):
+        if k == key:
+            return idx
+    return None
 
 
 def _player_dict_from_roster(entry, player):
@@ -430,7 +485,7 @@ def use_impact_player(session, match_id, user_id, in_roster_id, out_roster_id):
     state = mwa.get_state(match_id)
     if not state:
         return False, "Match not found.", None
-    if is_view_only_match(state):
+    if is_approach_match(state):
         return False, VIEW_ONLY_MESSAGE, None
     if user_id not in (state.get("bat_team_id"), state.get("bowl_team_id")):
         return False, "Spectators cannot use Impact Player.", None
@@ -863,6 +918,11 @@ def turn_state_name(next_action):
         A_PICK_SHOT: "batting_shot",
         A_PICK_NEW_BATSMAN: "selecting_wicket_batsman",
         A_PICK_NEW_BOWLER: "selecting_over_bowler",
+        # Over-by-over approach matches (played from the Mini App vs the bot)
+        A_PICK_CIPL_BOWLER: "selecting_over_bowler",
+        A_PICK_BOWL_APPROACH: "bowling_approach",
+        A_PICK_BAT_APPROACH: "batting_approach",
+        A_PICK_CIPL_NEW_BATSMAN: "selecting_wicket_batsman",
     }.get(next_action)
 
 
@@ -871,9 +931,11 @@ def whose_turn(state, next_action, user_id):
     Returns (turn_side, is_my_turn) where turn_side is 'bowler'/'batsman'/None.
     Based on status/turnState + batting team id + current user (per spec)."""
     turn_side = None
-    if next_action in (A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_NEW_BOWLER):
+    if next_action in (A_PICK_DELIVERY, A_PICK_LENGTH, A_PICK_NEW_BOWLER,
+                       A_PICK_CIPL_BOWLER, A_PICK_BOWL_APPROACH):
         turn_side = "bowler"
-    elif next_action in (A_PICK_SHOT, A_PICK_NEW_BATSMAN):
+    elif next_action in (A_PICK_SHOT, A_PICK_NEW_BATSMAN,
+                         A_PICK_BAT_APPROACH, A_PICK_CIPL_NEW_BATSMAN):
         turn_side = "batsman"
     role = role_for(state, user_id)
     is_mine = ((turn_side == "bowler" and role == "bowler") or
@@ -1229,7 +1291,7 @@ def continue_past_innings_break(match_id, user_id):
     side may call this — it's just a UI gate, not a competitive action — and
     it's idempotent (a no-op once the match has already moved on)."""
     def _mutate(state):
-        if is_view_only_match(state):
+        if is_approach_match(state):
             raise CasAbort((False, VIEW_ONLY_MESSAGE))
         if user_id not in (state.get("bat_team_id"), state.get("bowl_team_id")):
             raise CasAbort((False, "Spectators can't skip the innings break."))
@@ -1254,7 +1316,7 @@ def select_openers(match_id, user_id, striker_rid, non_striker_rid):
     retry attempt, instead of racing two independent whole-state overwrites.
     """
     def _mutate(state):
-        if is_view_only_match(state):
+        if is_approach_match(state):
             raise CasAbort((False, False, VIEW_ONLY_MESSAGE))
         if user_id != state.get("bat_team_id"):
             raise CasAbort((False, False, "Only the batting side picks openers."))
@@ -1299,7 +1361,7 @@ def select_bowler(match_id, user_id, bowler_rid):
     concurrent openers pick from the batting side.
     """
     def _mutate(state):
-        if is_view_only_match(state):
+        if is_approach_match(state):
             raise CasAbort((False, False, VIEW_ONLY_MESSAGE))
         if user_id != state.get("bowl_team_id"):
             raise CasAbort((False, False, "Only the bowling side picks the bowler."))
@@ -1528,7 +1590,7 @@ def set_delivery(match_id, user_id, variation, length=None):
     state = mwa.get_state(match_id)
     if not state:
         return False, "Match not found."
-    if is_view_only_match(state):
+    if is_approach_match(state):
         return False, VIEW_ONLY_MESSAGE
     if user_id != state.get("bowl_team_id"):
         return False, "Only the bowling side delivers."
@@ -1657,7 +1719,7 @@ def set_delivery_action(match_id, user_id, delivery, speed=None):
     state = mwa.get_state(match_id)
     if not state:
         return False, "Match not found.", None
-    if is_view_only_match(state):
+    if is_approach_match(state):
         return False, VIEW_ONLY_MESSAGE, None
     # user must be in the match and NOT batting (i.e. must be the bowler)
     if user_id != state.get("bowl_team_id"):
@@ -1726,7 +1788,7 @@ def set_shot_action(match_id, user_id, shot):
     state = mwa.get_state(match_id)
     if not state:
         return False, "Match not found.", None
-    if is_view_only_match(state):
+    if is_approach_match(state):
         return False, VIEW_ONLY_MESSAGE, None
     if user_id != state.get("bat_team_id"):
         return False, "Only the batting side plays shots.", None
@@ -1777,7 +1839,7 @@ def select_wicket_batsman(match_id, user_id, index):
     state = mwa.get_state(match_id)
     if not state:
         return False, "Match not found.", None
-    if is_view_only_match(state):
+    if is_approach_match(state):
         return False, VIEW_ONLY_MESSAGE, None
     if user_id != state.get("bat_team_id"):
         return False, "Only the batting side selects the next batsman.", None
@@ -2126,7 +2188,7 @@ def play_shot(match_id, user_id, shot_index, state=None):
         state = mwa.get_state(match_id)
     if not state:
         return False, "Match not found."
-    if is_view_only_match(state):
+    if is_approach_match(state):
         return False, VIEW_ONLY_MESSAGE
     if user_id != state.get("bat_team_id"):
         return False, "Only the batting side plays shots."
@@ -2256,7 +2318,7 @@ def select_new_bowler(match_id, user_id, bowler_rid):
     state = mwa.get_state(match_id)
     if not state:
         return False, "Match not found."
-    if is_view_only_match(state):
+    if is_approach_match(state):
         return False, VIEW_ONLY_MESSAGE
     if user_id != state.get("bowl_team_id"):
         return False, "Only the bowling side picks the bowler."

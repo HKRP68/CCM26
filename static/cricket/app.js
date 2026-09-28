@@ -779,7 +779,15 @@ function applyMatchState(nextState, { force = false } = {}) {
     return;
   }
 
-  if (matchState.commentary && matchState.commentary.length > 0) {
+  // Over-by-over matches (vs the bot) land a whole over at once; approach.js
+  // plays it back ball by ball instead of flashing only the last delivery.
+  const approachMode = !!matchState.approachMode;
+  document.getElementById('autoplay-strip')?.classList.toggle('hidden', approachMode);
+  if (approachMode && typeof handleApproachPlayback === 'function') {
+    handleApproachPlayback();
+  }
+
+  if (!approachMode && matchState.commentary && matchState.commentary.length > 0) {
     // Find the latest actual delivery. Styled event cards (wicket / new_batsman
     // / over_complete) can sit ahead of it in the reversed feed, so we must not
     // assume index 0 is the ball — otherwise wicket/over deliveries skip the
@@ -1260,6 +1268,16 @@ function renderControlsSection() {
 
   renderAutoplayStatusMessage();
 
+  // Over-by-over "Approach" match: bowler → approaches → new batsman, in
+  // approach.js.
+  if (matchState.approachMode && typeof renderApproachControls === 'function') {
+    hideActionSections();
+    incomingCard.classList.add('hidden');
+    renderApproachControls({ promptText, promptSubtitle, waitingBlock });
+    return;
+  }
+  document.getElementById('approach-controls')?.classList.add('hidden');
+
   // Spectator role
   if (matchState.myRole === 'spectator') {
     wasMyTurn = false;
@@ -1579,6 +1597,25 @@ function renderImpactPlayerPicker() {
     if (ready) {
       summary.classList.remove('hidden');
       summary.innerHTML = `<b>${impactSelection.incoming.name}</b> comes in for <b>${impactSelection.outgoing.name}</b>`;
+      // Over-by-over matches: the batting side also picks where the sub bats.
+      const slots = impactSelection.outgoing.battingSlots || [];
+      if (slots.length) {
+        if (!slots.some(sl => sl.index === impactSelection.batPosition)) {
+          impactSelection.batPosition = slots[0].index;
+        }
+        const wrap = document.createElement('div');
+        wrap.className = 'impact-slots';
+        wrap.innerHTML = '<span class="impact-slots-label">Bats at</span>';
+        slots.forEach(sl => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = `impact-slot${sl.index === impactSelection.batPosition ? ' selected' : ''}`;
+          b.textContent = `#${sl.index + 1} · ${sl.label}`;
+          b.onclick = () => { impactSelection.batPosition = sl.index; renderImpactPlayerPicker(); };
+          wrap.appendChild(b);
+        });
+        summary.appendChild(wrap);
+      }
     } else {
       summary.classList.add('hidden');
       summary.innerHTML = '';
@@ -1599,7 +1636,8 @@ async function submitImpactPlayer() {
         userId,
         matchId,
         inRosterId: impactSelection.incoming.id,
-        outRosterId: impactSelection.outgoing.id
+        outRosterId: impactSelection.outgoing.id,
+        batPosition: impactSelection.batPosition ?? null
       })
     });
     const data = await res.json();

@@ -8961,16 +8961,97 @@ def _match_rest_user_and_match(db, user_id, match_id=None):
 
 
 def _match_rest_view_only_block(match_id):
-    """For Challenge League (/cipl) matches the Mini App is spectate-only: the
-    over-by-over approach game is driven entirely from the Telegram chat, so any
-    manual gameplay action from the Mini App is rejected here. Returns a JSON
-    error response tuple to short-circuit on, or None for interactive matches."""
-    from services.match_webapp_service import is_view_only_match
+    """Reject the ball-by-ball actions on an over-by-over "Approach" match.
+
+    Human-vs-human approach matches (/cipl, /letsplay) are spectate-only in the
+    Mini App: the game is driven entirely from the Telegram chat. A practice
+    match against the bot (/lpbot, /ciplbot) is playable from the Mini App, but
+    only through the approach actions (``_APPROACH_ACTION_TYPES``) — never the
+    delivery / shot / setup endpoints this guards. Returns a JSON error response
+    tuple to short-circuit on, or None for ball-by-ball matches."""
+    from services.match_webapp_service import is_approach_match, is_view_only_match
     from services.match_webapp_access import get_state
-    if is_view_only_match(get_state(match_id)):
+    state = get_state(match_id)
+    if is_view_only_match(state):
         from services.match_webapp_service import VIEW_ONLY_MESSAGE
         return ({"ok": False, "error": "view_only", "message": VIEW_ONLY_MESSAGE}, 400)
+    if is_approach_match(state):
+        return ({"ok": False, "error": "approach_match",
+                 "message": "This match is played over by over — pick the "
+                            "bowler and approaches instead."}, 400)
     return None
+
+
+from services.match_webapp_service import APPROACH_ACTION_TYPES as _APPROACH_ACTION_TYPES
+
+
+def _match_rest_approach_impact(db, match, user, data):
+    """Impact Player swap for an over-by-over bot match played in the Mini App.
+
+    Same rules as the chat picker (``handlers.cipl_play.submit_impact``), run on
+    the bot's loop so the swap and the chat notice land together. Batting-side
+    swaps may name ``batPosition`` (an index from the option's battingSlots).
+    """
+    from services import bot_bridge
+    from handlers.cipl_play import submit_impact
+    in_rid = data.get("inRosterId") or data.get("in_roster_id")
+    out_rid = data.get("outRosterId") or data.get("out_roster_id")
+    pos = data.get("batPosition", data.get("bat_position"))
+    mid, actor_tg = match.id, user.telegram_id
+
+    async def _go(ctx, accept):
+        return await submit_impact(ctx, mid, actor_tg, in_rid, out_rid, pos,
+                                   on_accept=accept, source="app")
+
+    ok, msg = bot_bridge.submit_and_wait_for_accept(_go)
+    if not ok:
+        return {"ok": False, "error": msg, "message": msg}, 400
+    from services.crickidex_arena import serialize_match_state
+    return {"ok": True, "message": msg,
+            "matchState": serialize_match_state(db, match, user)}
+
+
+def _match_rest_approach_action(db, match, user, state, data):
+    """Play one pick of an over-by-over bot match from the Mini App.
+
+    Runs the very same ``handlers.cipl_play.submit_pick`` a chat button does, on
+    the bot's event loop, so both surfaces share every rule and the chat prompt
+    moves on too. The request returns once the pick is accepted; the rest of
+    the step (the AI captain's reply, the over itself) lands on the next poll.
+    """
+    from services.match_webapp_service import (
+        approach_pick_value, is_approach_match, is_view_only_match,
+        VIEW_ONLY_MESSAGE)
+    if not is_approach_match(state):
+        return {"ok": False, "error": "not_approach_match",
+                "message": "This match isn't played over by over."}, 400
+    if is_view_only_match(state):
+        return {"ok": False, "error": "view_only", "message": VIEW_ONLY_MESSAGE}, 400
+    kind = _APPROACH_ACTION_TYPES[data.get("type")]
+    act = data.get("action") if isinstance(data.get("action"), dict) else {}
+    value = approach_pick_value(kind, act)
+    if value is None:
+        return {"ok": False, "error": "Invalid selection.",
+                "message": "Invalid selection."}, 400
+
+    from services import bot_bridge
+    from handlers.cipl_play import submit_pick
+    mid, actor_tg = match.id, user.telegram_id
+
+    async def _go(ctx, accept):
+        return await submit_pick(ctx, mid, actor_tg, kind, value,
+                                 on_accept=accept, source="app")
+
+    ok, reason = bot_bridge.submit_and_wait_for_accept(_go)
+    if not ok:
+        return {"ok": False, "error": reason, "message": reason}, 400
+    match_state = None
+    try:
+        from services.crickidex_arena import serialize_match_state
+        match_state = serialize_match_state(db, match, user)
+    except Exception:
+        logger.exception("could not serialize post-approach state")
+    return {"ok": True, "success": True, "pending": True, "matchState": match_state}
 
 
 def _match_rest_full_state(db, match_id, user_id):
@@ -9221,6 +9302,11 @@ def match_rest_impact_player():
             data.get("matchId") or data.get("match_id"))
         if err:
             return err
+        from services.match_webapp_access import get_state as _get_state
+        from services.match_webapp_service import is_app_played_match
+        live = _get_state(match.id)
+        if is_app_played_match(live):
+            return _match_rest_approach_impact(db, match, user, data)
         vo = _match_rest_view_only_block(match.id)
         if vo:
             return vo
@@ -9271,6 +9357,8 @@ def match_rest_action():
         if state.get("played_via") == "wsp":
             return {"ok": False, "error": "auto_simulated",
                     "message": "This match is auto-simulated — no manual actions allowed."}, 400
+        if data.get("type") in _APPROACH_ACTION_TYPES:
+            return _match_rest_approach_action(db, match, user, state, data)
         vo = _match_rest_view_only_block(match.id)
         if vo:
             return vo
@@ -13600,15 +13688,23 @@ def admin_commentary_export():
 # ═══════════════════════════════════════════════════════════════════════
 
 # Cross-thread bot reference — set by bot.py at startup so Flask can send
-_BOT_REF = {"bot": None, "loop": None}
+_BOT_REF = {"bot": None, "loop": None, "app": None}
 
 
-def set_bot_for_admin(bot, loop):
+def set_bot_for_admin(bot, loop, application=None):
     """Called by bot.py at startup with the bot instance + asyncio loop.
     Lets the Flask 'Send Now' button schedule sends on the bot's event loop.
+    ``application`` (the PTB Application) lets the Mini App drive a live
+    over-by-over bot match through the same handlers the chat uses.
     """
     _BOT_REF["bot"] = bot
     _BOT_REF["loop"] = loop
+    _BOT_REF["app"] = application
+    try:
+        from services import bot_bridge
+        bot_bridge.configure(application, loop)
+    except Exception:
+        logger.exception("bot bridge wiring failed")
 
 
 @app.route("/notifications")

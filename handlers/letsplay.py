@@ -2270,11 +2270,14 @@ async def _launch_match(context, draft, decision, winner_side):
     if draft.get("vs_bot"):
         # /lpbot: unranked practice, and the AI captain plays the bot's turns.
         # Nothing is at stake, so the anti stat-farming gap check is moot.
-        from handlers.botlevel import level_for_match
+        from handlers.botlevel import level_for_match, play_mode_for
         from handlers.cipl_play import mark_bot_match
         mark_bot_match(state, guest_info["user_id"],
                        difficulty=level_for_match(context.bot_data,
-                                                  host_info["user_id"]))
+                                                  host_info["user_id"],
+                                                  tg_id=host_info.get("tg_id")),
+                       play_mode=play_mode_for(context.bot_data,
+                                               host_info.get("tg_id")))
     elif not lpt and is_stat_farming_mismatch(bat_xi, bowl_xi):
         # Fair-match stat gate: if the two XIs are too far apart in Team Overall,
         # flag the match so no career stats are recorded (anti stat-farming). The

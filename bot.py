@@ -2072,7 +2072,8 @@ def main():
         # Challenge League over-by-over "approach" match flow
         from handlers.cipl_play import (
             cipl_coin_callback, cipl_toss_callback, cipl_bowler_callback,
-            cipl_bowlapp_callback, cipl_batapp_callback, rcl_handler,
+            cipl_bowlapp_callback, cipl_batapp_callback, cipl_newbat_callback,
+            rcl_handler,
             cipl_impact_callback, cipl_impact_out_callback,
             cipl_impact_in_callback, cipl_impact_pos_callback,
             cipl_impact_cancel_callback, impact_handler,
@@ -2082,6 +2083,7 @@ def main():
         app.add_handler(CallbackQueryHandler(cipl_bowler_callback, pattern=r"^cipl_bowler_"))
         app.add_handler(CallbackQueryHandler(cipl_bowlapp_callback, pattern=r"^cipl_bowlapp_"))
         app.add_handler(CallbackQueryHandler(cipl_batapp_callback, pattern=r"^cipl_batapp_"))
+        app.add_handler(CallbackQueryHandler(cipl_newbat_callback, pattern=r"^cipl_newbat_"))
         # Impact Player — one swap per side, between overs or at the innings
         # break. Shared by /letsplay and every Challenge League mode, since both
         # run on the same over-by-over engine. Longer prefixes are registered
@@ -2137,9 +2139,11 @@ def main():
                                        ciplbot_handler))
         app.add_handler(CallbackQueryHandler(botmatch_again_callback,
                                              pattern=r"^botmatch_again_"))
-        from handlers.botlevel import difficulty_callback
+        from handlers.botlevel import difficulty_callback, play_mode_callback
         app.add_handler(CallbackQueryHandler(difficulty_callback,
                                              pattern=r"^botdiff_"))
+        app.add_handler(CallbackQueryHandler(play_mode_callback,
+                                             pattern=r"^botplay_"))
 
         # ── Lets Play Tournament ─────────────────────────────────────
         # A CIPL-style competition whose teams are users, entered by Telegram id.
@@ -3165,7 +3169,7 @@ def main():
                 loop = _asyncio.get_event_loop()
             except RuntimeError:
                 loop = _asyncio.new_event_loop()
-            set_bot_for_admin(app.bot, loop)
+            set_bot_for_admin(app.bot, loop, app)
         except Exception:
             logger.exception("Failed to wire bot for admin notifications")
 

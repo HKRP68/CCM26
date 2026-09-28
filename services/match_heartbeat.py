@@ -436,33 +436,11 @@ def start_heartbeat(application):
 
         import asyncio
         async def _loop():
-            class _FakeContext:
-                """A PTB-shaped context for the fallback loop.
+            # A PTB-shaped context for the fallback loop: the tick and
+            # everything it reaches read bot_data, bot and job_queue off it.
+            from services.bot_bridge import BotContext
 
-                The tick and everything it reaches — the state store, the
-                renderers, the Challenge League resume — read ``bot_data``,
-                ``bot`` and ``job_queue`` off the context. Exposing only
-                ``application`` made the very first state lookup raise
-                AttributeError, so this fallback heartbeat never actually
-                recovered anything.
-                """
-
-                def __init__(self, app):
-                    self.application = app
-
-                @property
-                def bot_data(self):
-                    return self.application.bot_data
-
-                @property
-                def bot(self):
-                    return self.application.bot
-
-                @property
-                def job_queue(self):
-                    return getattr(self.application, "job_queue", None)
-
-            ctx = _FakeContext(app)
+            ctx = BotContext(app)
             await asyncio.sleep(STARTUP_SWEEP_DELAY)
             try:
                 await _startup_cipl_sweep(ctx)

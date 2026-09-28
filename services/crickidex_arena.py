@@ -429,7 +429,12 @@ def _serialize_match_state_impl(session, match, viewer_user):
     # force the read-only spectator view: no batting/bowling controls, no "your
     # turn" prompts, no Impact Player picker. The action endpoints reject manual
     # submissions too (services.match_webapp_service.is_view_only_match).
-    cipl_view_only = state.get("mode") == "cipl_approach"
+    from services.match_webapp_service import is_approach_match, is_view_only_match
+    approach_mode = is_approach_match(state)
+    # A practice match against the bot (/lpbot, /ciplbot) is the exception: its
+    # human captain plays every over from here too — bowler, approaches and the
+    # new batsman after a wicket (see _approach_payload).
+    cipl_view_only = is_view_only_match(state)
     if cipl_view_only:
         role = "spectator"
         my_role = "spectator"
@@ -736,7 +741,14 @@ def _serialize_match_state_impl(session, match, viewer_user):
 
     # ── Impact Player availability/summary ──
     impact_player = {"canUse": False, "used": False, "summary": _impact_summary_for_result(state)}
-    if viewer_uid and status != "completed" and not cipl_view_only:
+    # Over-by-over matches: a Mini App bot match swaps here (the chat's own
+    # rules, services.impact_player.cipl_options); every other one in the chat.
+    if viewer_uid and status != "completed" and approach_mode and not cipl_view_only:
+        try:
+            impact_player = _approach_impact_payload(state, viewer_uid, next_action)
+        except Exception:
+            logger.exception("approach impact player options failed (non-fatal)")
+    elif viewer_uid and status != "completed" and not approach_mode:
         try:
             from services.match_webapp_service import get_impact_player_options
             opts = get_impact_player_options(session, match_id, viewer_uid)
@@ -855,7 +867,209 @@ def _serialize_match_state_impl(session, match, viewer_user):
         "inn1PartnershipHistory": inn1_partnerships,
         "inn2PartnershipHistory": inn2_partnerships,
         "winProbability": win_probability,
+        "approachMode": approach_mode,
+        "approach": (_approach_payload(state, next_action, my_role)
+                     if approach_mode else None),
     }
+
+
+# ── over-by-over "Approach" matches (Mini App play vs the bot) ────────
+
+def _approach_impact_payload(state, viewer_uid, next_action):
+    """``impactPlayer`` for an over-by-over bot match played in the Mini App.
+
+    Same shape the Arena's picker already reads, plus ``battingSlots`` on each
+    replaceable player when the viewer is batting — where the substitute will
+    bat, as the chat picker offers.
+    """
+    from services import impact_player as ip
+    opts = ip.cipl_options(state, viewer_uid, next_action)
+    summary = _impact_summary_for_result(state)
+    if not opts.get("ok"):
+        return {"canUse": False, "used": False, "summary": summary}
+    side = opts.get("side")
+    replaceable = []
+    for p in opts.get("replaceable_players", []):
+        row = {**_p(p), "disabled": False, "disabledReason": None}
+        if side == "bat":
+            row["battingSlots"] = [
+                {"index": k, "label": label}
+                for k, label in ip.cipl_batting_slots(state, p.get("roster_id"))]
+        replaceable.append(row)
+    return {
+        "canUse": bool(opts.get("can_use")),
+        "used": bool(opts.get("used")),
+        "legalBreak": opts.get("legal_break"),
+        "message": opts.get("message"),
+        "side": side,
+        "incomingOptions": [_p(p) for p in opts.get("incoming_options", [])],
+        "replaceablePlayers": replaceable,
+        "summary": summary,
+    }
+
+
+def _approach_options(options, blurbs):
+    return [{"key": k, "emoji": e, "label": label,
+             "desc": (blurbs.get(k) or ("", 3))[0],
+             "risk": (blurbs.get(k) or ("", 3))[1]}
+            for k, e, label in options]
+
+
+def _ball_rows(entries):
+    """Commentary rows for single deliveries (they carry ``runs``)."""
+    rows = []
+    for e in entries or []:
+        if isinstance(e, dict) and "runs" in e:
+            rows.append({"text": e.get("text") or "", "runs": e.get("runs", 0),
+                         "isWicket": bool(e.get("isWicket")),
+                         "eventKey": e.get("eventKey"),
+                         "over": e.get("over")})
+    return rows
+
+
+def _approach_last_over(state):
+    """The over just bowled, for the Mini App's ball-by-ball playback."""
+    from engine.approach_modifiers import batting_label, bowling_label
+    log = state.get("approach_log") or state.get("inn1_approach_log") or []
+    if not log:
+        return None
+    last = log[-1]
+    bowler_rid = last.get("bowler_rid")
+    bws = (state.get("bowl_stats") or {}).get(str(bowler_rid), {}) if bowler_rid else {}
+    figures = None
+    if bws:
+        from services.cipl_match import _bowler_figures, balls_per_unit
+        figures = _bowler_figures(bws, balls_per_unit(state))
+    from services import cipl_match as _cm
+    bot_uid = state.get("bot_user_id")
+    # Which side the bot was on for that over: the log entry's innings tells
+    # whether the batting side has changed since.
+    same_innings = int(last.get("innings") or state.get("innings", 1)) == int(state.get("innings", 1))
+    bat_uid = state.get("bat_team_id") if same_innings else state.get("bowl_team_id")
+    bot_batted = bool(bot_uid is not None and bat_uid == bot_uid)
+    bat_app = {"key": last.get("bat"), "label": batting_label(last.get("bat"))}
+    bowl_app = {"key": last.get("bowl"), "label": bowling_label(last.get("bowl"))}
+    # The bot's plan stays secret — reading it back after every over would hand
+    # the player the bot's habits. Easy is the exception: a learner's setting.
+    revealed = _bot_plan_revealed(state)
+    hidden = {"key": None, "label": "🔒 Hidden", "hidden": True}
+    if state.get("is_bot_match") and not revealed:
+        if bot_batted:
+            bat_app = hidden
+        else:
+            bowl_app = hidden
+    return {
+        "key": f"{last.get('innings') or state.get('innings', 1)}-{last.get('over')}",
+        "innings": last.get("innings") or state.get("innings", 1),
+        "overNo": last.get("over"),
+        "timeline": list(last.get("timeline") or []),
+        "balls": _ball_rows(state.get("last_over_commentary")) if same_innings else [],
+        "runs": last.get("runs", 0),
+        "wickets": last.get("wickets", 0),
+        "bowler": last.get("bowler"),
+        "bowlerFigures": figures,
+        "battingApproach": bat_app,
+        "bowlingApproach": bowl_app,
+        "botBatted": bot_batted,
+        "botPlanRevealed": revealed or not state.get("is_bot_match"),
+        # The combination name and its line give the bot's plan away too.
+        "combo": last.get("combo") if (revealed or not state.get("is_bot_match")) else None,
+        "flavour": (_cm.approach_modifiers.over_flavour(last.get("bat"), last.get("bowl"))[1]
+                    if (revealed or not state.get("is_bot_match")) else None),
+    }
+
+
+def _bot_plan_revealed(state):
+    """Is the bot's approach shown after each over? Only on Easy."""
+    try:
+        from services.bot_captain import normalize_difficulty
+        return normalize_difficulty(state.get("bot_difficulty")) == "easy"
+    except Exception:
+        return False
+
+
+def _approach_payload(state, next_action, my_role):
+    """Everything the Arena needs to play an over-by-over match.
+
+    Options for each pick (bowlers with overs left, the five approaches with a
+    description and risk, the batsmen still to come), the over paused on a
+    wicket, the over just bowled (for the playback), and a few hints — the
+    phase, how readable the viewer has been, the AI captain's style.
+    """
+    from engine import approach_modifiers as am
+    from services import cipl_match as cm
+    from services.match_state_store import (
+        A_PICK_CIPL_BOWLER, A_PICK_CIPL_NEW_BATSMAN)
+    payload = {
+        "battingOptions": _approach_options(am.BATTING_APPROACHES, am.BATTING_BLURBS),
+        "bowlingOptions": _approach_options(am.BOWLING_APPROACHES, am.BOWLING_BLURBS),
+        "overBowlers": [],
+        "incomingBatsmen": [],
+        "overInProgress": None,
+        "lastOver": None,
+        "hints": {},
+        "unitWord": "set" if cm.is_hundred(state) else "over",
+        "currentOver": state.get("current_over"),
+        "isBotMatch": bool(state.get("is_bot_match")),
+        "playMode": state.get("play_mode") or "chat",
+        "botPlanRevealed": _bot_plan_revealed(state),
+    }
+    try:
+        if next_action == A_PICK_CIPL_BOWLER and my_role == "bowling":
+            for p in cm.eligible_bowlers(state):
+                bws = (state.get("bowl_stats") or {}).get(str(p.get("roster_id"))) or {}
+                payload["overBowlers"].append({
+                    **_p(p),
+                    "displayRating": cm.display_rating(p, "bowl_rating"),
+                    "oversLeft": cm.overs_left(state, p),
+                    "partTime": bool(cm.is_part_time_bowler(p)),
+                    # Figures so far ("2-0-14-1"), None before their first ball.
+                    "figures": (cm._bowler_figures(bws, cm.balls_per_unit(state))
+                                if bws.get("balls") else None),
+                })
+        progress = state.get("over_in_progress")
+        if isinstance(progress, dict):
+            cut = progress.get("cmt_start") or 0
+            payload["overInProgress"] = {
+                "timeline": list(progress.get("over_timeline") or []),
+                "balls": _ball_rows((state.get("commentary_log") or [])[cut:]),
+            }
+        if next_action == A_PICK_CIPL_NEW_BATSMAN and cm.needs_new_batsman(state):
+            for p in cm.available_batsmen(state):
+                payload["incomingBatsmen"].append({
+                    **_p(p), "displayRating": cm.display_rating(p, "bat_rating")})
+            order = state.get("batting_order") or []
+            out = order[state.get("striker_idx", 0)] if order else {}
+            bs = (state.get("bat_stats") or {}).get(str(out.get("roster_id")), {})
+            payload["outBatsman"] = {
+                "name": out.get("name"), "runs": bs.get("runs", 0),
+                "balls": bs.get("balls", 0),
+                "dismissal": bs.get("dismissal") or bs.get("how_out") or "out"}
+        payload["lastOver"] = _approach_last_over(state)
+
+        hints = {"phase": cm.approach_phase(state),
+                 "repeatFrom": am.REPEAT_FROM}
+        if my_role == "batting":
+            hints["lastPick"] = state.get("last_bat_approach")
+            hints["repeat"] = int(state.get("bat_repeat") or 0)
+        elif my_role == "bowling":
+            hints["lastPick"] = state.get("last_bowl_approach")
+            hints["repeat"] = int(state.get("bowl_repeat") or 0)
+        if state.get("is_bot_match"):
+            try:
+                from services.bot_captain import difficulty_label, persona_label
+                hints["botStyle"] = persona_label(state)
+                hints["botDifficulty"] = difficulty_label(state)
+            except Exception:
+                logger.debug("bot captain labels unavailable", exc_info=True)
+        cc = cm.chase_chance_now(state) if state.get("innings") == 2 else None
+        if cc:
+            hints["chasingChance"] = cc.get("chasing_chance")
+            hints["runsNeeded"] = cc.get("runs_needed")
+        payload["hints"] = hints
+    except Exception:
+        logger.exception("arena approach payload failed (non-fatal)")
+    return payload
 
 
 

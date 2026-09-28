@@ -15,6 +15,8 @@ against a tournament or a CL Tour series.
 Usage:
   /ciplbot            → IPL (the default league)
   /ciplbot bbl        → a specific league by short code
+  /ciplbot app        → play it in the Mini App (``chat`` = in the chat;
+                        the choice is remembered)
   /c<league>bot       → an admin league's own command with a "bot" suffix
 """
 
@@ -98,6 +100,11 @@ async def ciplbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text.startswith("/"):
         command_name = text.split()[0]
     args = list(getattr(context, "args", None) or [])
+    # "/ciplbot [league] app|chat" — where the match is played (sticky).
+    from handlers.botlevel import remember_play_mode, split_play_mode
+    play_mode, args = split_play_mode(args)
+    if play_mode:
+        remember_play_mode(context.bot_data, tg.id, play_mode)
 
     session = get_session()
     try:

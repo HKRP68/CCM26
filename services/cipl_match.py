@@ -1756,10 +1756,18 @@ def is_innings_over(state):
 # Over simulation
 # ════════════════════════════════════════════════════════════════════
 
-def simulate_over(state):
+def simulate_over(state, pause_on_wicket=False):
     """Simulate the current over using the stored approaches. Mutates state and
     returns a summary dict for rendering. Auto-advances batsmen on wickets and
     stops early on all-out / target reached / innings end.
+
+    ``pause_on_wicket`` lets the batting captain choose who walks in. When a
+    wicket falls and there is a real choice to make (the innings goes on and at
+    least two batsmen are still to come), the over stops right after that ball:
+    the partly-bowled over is parked in ``state["over_in_progress"]`` and a
+    ``{"paused": True, ...}`` dict is returned instead of the summary. Put the
+    new batsman in with :func:`bring_in_batsman`, then call this again — it picks
+    the over up at the next ball and returns the summary of the WHOLE over.
     """
     bat_app = state.get("batting_approach")
     bowl_app = state.get("bowling_approach")
@@ -1799,50 +1807,84 @@ def simulate_over(state):
     fielding_q = _fielding_quality(
         impact_player.active_players(state.get("bowl_xi")))
     bws = state["bowl_stats"].setdefault(bowler_rid, _new_bowl_stat())
-    bws["this_over_balls"] = 0
-    bws["this_over_runs"] = 0
-    bowl_wkts_before = bws["wickets"]
 
-    # The Approach Interaction System's situational layers for this match-up —
-    # pitch, phase, the mind game, momentum, fatigue, partnership chemistry and
-    # anything the previous over's special combination carried in. Built once,
-    # from the state as it stands BEFORE the first ball, so every delivery in
-    # the over is bowled under the same conditions the captains picked into.
-    approach_ctx = approach_context(state, bowler)
+    # An over that stopped on a wicket for the batting captain to pick the new
+    # batsman (see pause_on_wicket) carries on from where it stopped: same
+    # conditions, same over-so-far, and none of the once-per-over set-up below
+    # (weather, the bowler's card, the per-over counters) is repeated.
+    resume = state.pop("over_in_progress", None)
+    if not isinstance(resume, dict):
+        resume = None
+    elif _striker_is_out(state):
+        # Resumed without a pick (a recovery path that skipped the prompt):
+        # never let a dismissed batsman face again — send in the next one.
+        bring_in_batsman(state)
+
+    if resume is None:
+        bws["this_over_balls"] = 0
+        bws["this_over_runs"] = 0
+        bowl_wkts_before = bws["wickets"]
+        # The Approach Interaction System's situational layers for this
+        # match-up — pitch, phase, the mind game, momentum, fatigue,
+        # partnership chemistry and anything the previous over's special
+        # combination carried in. Built once, from the state as it stands
+        # BEFORE the first ball, so every delivery in the over is bowled under
+        # the same conditions the captains picked into.
+        approach_ctx = approach_context(state, bowler)
+    else:
+        bowl_wkts_before = resume.get("bowl_wkts_before", bws["wickets"])
+        approach_ctx = resume.get("approach_ctx") or approach_context(state, bowler)
     # The name of the special combination these two picks make (None for most
     # pairs) and the line that describes the over they tend to produce.
     combo_name, combo_flavour = approach_modifiers.over_flavour(bat_app, bowl_app)
 
     ball_history = list(state.get("ball_history", []))
     streaks = dict(state.get("batter_streaks", {}))
-
-    over_timeline = []
-    over_events = []
-    runs_before = state["total_runs"]
-    wkts_before = state["total_wickets"]
-    # Momentum's partnership milestones (8A) are crossings, so the stand has to
-    # be measured from where it stood when the over started.
-    partnership_at_over_start = state.get("partnership_runs", 0)
-    momentum_before = state.get("momentum_prev", 0.0)
     free_hit = state.get("free_hit", False)
-
-    balls_this_over = 0
-    deliveries = 0
     chased = bool(target) and state["total_runs"] >= target
-    cmt_start = len(state.get("commentary_log", []))
-    # Traits that fire this over (populated by the per-ball trait hook). Stays
-    # empty for Challenge League players, who carry no traits.
-    over_traits = {"bat": set(), "bowl": set()}
 
-    # Weather and dew that have moved since the last over (see
-    # services.weather_drift). Applied before the first ball so the whole over
-    # is bowled in the new conditions; announced in the chat's over summary.
-    weather_events = weather_drift.apply_due(state)
-    # Highlights reel: what the scoreboard looked like before this over.
-    highlights_before = highlights_log.snapshot(state)
+    if resume is None:
+        over_timeline = []
+        over_events = []
+        runs_before = state["total_runs"]
+        wkts_before = state["total_wickets"]
+        # Momentum's partnership milestones (8A) are crossings, so the stand
+        # has to be measured from where it stood when the over started.
+        partnership_at_over_start = state.get("partnership_runs", 0)
+        momentum_before = state.get("momentum_prev", 0.0)
+        balls_this_over = 0
+        deliveries = 0
+        cmt_start = len(state.get("commentary_log", []))
+        # Traits that fire this over (populated by the per-ball trait hook).
+        # Stays empty for Challenge League players, who carry no traits.
+        over_traits = {"bat": set(), "bowl": set()}
 
-    # Commentary: announce the bowler taking the new over (into attack / returns).
-    _emit_bowler_card(state, bowler)
+        # Weather and dew that have moved since the last over (see
+        # services.weather_drift). Applied before the first ball so the whole
+        # over is bowled in the new conditions; announced in the chat's over
+        # summary.
+        weather_events = weather_drift.apply_due(state)
+        # Highlights reel: what the scoreboard looked like before this over.
+        highlights_before = highlights_log.snapshot(state)
+
+        # Commentary: announce the bowler taking the new over (into attack /
+        # returns).
+        _emit_bowler_card(state, bowler)
+    else:
+        over_timeline = list(resume.get("over_timeline") or [])
+        over_events = list(resume.get("over_events") or [])
+        runs_before = resume.get("runs_before", state["total_runs"])
+        wkts_before = resume.get("wkts_before", state["total_wickets"])
+        partnership_at_over_start = resume.get("partnership_at_over_start", 0)
+        momentum_before = resume.get("momentum_before", 0.0)
+        balls_this_over = int(resume.get("balls_this_over", 0) or 0)
+        deliveries = int(resume.get("deliveries", 0) or 0)
+        cmt_start = resume.get("cmt_start", len(state.get("commentary_log", [])))
+        over_traits = {k: set((resume.get("over_traits") or {}).get(k) or [])
+                       for k in ("bat", "bowl")}
+        weather_events = list(resume.get("weather_events") or [])
+        highlights_before = resume.get("highlights_before") or highlights_log.snapshot(state)
+    pause_now = False
 
     # Defensive: if some other code path shortened the innings, recompute the
     # over-derived inputs so this over's balls-left / required-rate / phase
@@ -2192,8 +2234,14 @@ def simulate_over(state):
             state.setdefault("wkt_marks", []).append(balls_bowled(state))
             free_hit = False
             streaks.pop(srid, None)
+            # The batting captain picks who walks in: stop the over after this
+            # ball (the rest of its bookkeeping still runs below) and hand the
+            # choice back. Only when there is a real choice — the innings goes
+            # on and at least two batsmen are still waiting.
+            if pause_on_wicket and _can_pause_for_batsman(state):
+                pause_now = True
             # Auto-promote next batsman (order fixed in Playing XI)
-            if state["next_batsman_idx"] < len(state["batting_order"]):
+            elif state["next_batsman_idx"] < len(state["batting_order"]):
                 state["striker_idx"] = state["next_batsman_idx"]
                 state["next_batsman_idx"] += 1
                 # Commentary: announce the incoming batsman (unless the innings
@@ -2275,6 +2323,27 @@ def simulate_over(state):
         ball_history = ball_history[-BALL_HISTORY_WINDOW:]
         if target is not None and state["total_runs"] >= target:
             chased = True
+        if pause_now:
+            break
+
+    if pause_now:
+        return _park_over(
+            state, bowler, scenario_eng, free_hit, ball_history, streaks, {
+                "balls_this_over": balls_this_over,
+                "deliveries": deliveries,
+                "over_timeline": list(over_timeline),
+                "over_events": list(over_events),
+                "runs_before": runs_before,
+                "wkts_before": wkts_before,
+                "partnership_at_over_start": partnership_at_over_start,
+                "momentum_before": momentum_before,
+                "cmt_start": cmt_start,
+                "over_traits": {k: sorted(v) for k, v in over_traits.items()},
+                "weather_events": list(weather_events or []),
+                "highlights_before": highlights_before,
+                "bowl_wkts_before": bowl_wkts_before,
+                "approach_ctx": approach_ctx,
+            })
 
     # ── End of over bookkeeping ──
     over_runs = state["total_runs"] - runs_before
@@ -2361,6 +2430,8 @@ def simulate_over(state):
         # derived later because the picks are cleared the moment the over ends.
         state.setdefault("approach_log", []).append({
             "over": state["current_over"],
+            "innings": state.get("innings", 1),
+            "bowler_rid": bowler.get("roster_id"),
             "phase": approach_phase(state),
             "bat": bat_app,
             "bowl": bowl_app,
@@ -2443,6 +2514,100 @@ def simulate_over(state):
 def _swap_strike(state):
     state["striker_idx"], state["non_striker_idx"] = (
         state["non_striker_idx"], state["striker_idx"])
+
+
+# ════════════════════════════════════════════════════════════════════
+# New batsman pick — an over paused on a wicket (simulate_over's
+# pause_on_wicket) waits here for the batting captain's choice.
+# ════════════════════════════════════════════════════════════════════
+
+def available_batsmen(state):
+    """The batsmen still to come in, in batting-order order."""
+    order = state.get("batting_order") or []
+    nxt = int(state.get("next_batsman_idx", len(order)) or 0)
+    return [p for p in order[nxt:] if p]
+
+
+def awaiting_new_batsman(state):
+    """True while an over is parked on a wicket for the new-batsman pick."""
+    return bool(state) and isinstance(state.get("over_in_progress"), dict)
+
+
+def needs_new_batsman(state):
+    """True while a parked over is still waiting for its new batsman."""
+    return awaiting_new_batsman(state) and _striker_is_out(state)
+
+
+def _striker_is_out(state):
+    order = state.get("batting_order") or []
+    idx = state.get("striker_idx", 0)
+    if not (0 <= idx < len(order)):
+        return False
+    st = (state.get("bat_stats") or {}).get(str(order[idx].get("roster_id")), {})
+    return bool(st.get("out"))
+
+
+def _can_pause_for_batsman(state):
+    """A wicket has just fallen: is there a real pick for the batting captain?"""
+    if is_innings_over(state):
+        return False
+    return len(available_batsmen(state)) >= 2
+
+
+def _park_over(state, bowler, scenario_eng, free_hit, ball_history, streaks,
+               progress):
+    """Stop the over on a wicket and park what the resume needs."""
+    state["over_in_progress"] = progress
+    state["free_hit"] = free_hit
+    state["ball_history"] = ball_history[-BALL_HISTORY_WINDOW:]
+    state["batter_streaks"] = streaks
+    _save_scenario_engine(state, scenario_eng)
+    out = state["batting_order"][state["striker_idx"]]
+    bs = state["bat_stats"].get(str(out["roster_id"]), {})
+    return {
+        "paused": True,
+        "over_no": state["current_over"],
+        "bowler": bowler,
+        "over_timeline": list(progress["over_timeline"]),
+        "over_events": list(progress["over_events"]),
+        "over_runs": state["total_runs"] - progress["runs_before"],
+        "over_wickets": state["total_wickets"] - progress["wkts_before"],
+        "balls_left": max(0, balls_per_unit(state) - progress["balls_this_over"]),
+        "out_batsman": {
+            "roster_id": out.get("roster_id"),
+            "name": out.get("name", "Batter"),
+            "runs": int(bs.get("runs", 0) or 0),
+            "balls": int(bs.get("balls", 0) or 0),
+            "dismissal": bs.get("dismissal") or bs.get("how_out") or "out",
+        },
+    }
+
+
+def bring_in_batsman(state, roster_id=None):
+    """Send the chosen batsman out to replace the one just dismissed.
+
+    ``roster_id`` must be one of :func:`available_batsmen`; ``None`` takes the
+    next batsman in the batting order (the timeout / auto path). The chosen
+    player is moved up to the next batting slot so the rest of the order keeps
+    its shape, then promoted exactly as the automatic path does. Returns the
+    player dict, or ``None`` when ``roster_id`` is not available.
+    """
+    order = state.get("batting_order") or []
+    nxt = int(state.get("next_batsman_idx", len(order)) or 0)
+    if nxt >= len(order):
+        return None
+    if roster_id is not None:
+        pos = next((i for i in range(nxt, len(order))
+                    if str(order[i].get("roster_id")) == str(roster_id)), None)
+        if pos is None:
+            return None
+        if pos != nxt:
+            order.insert(nxt, order.pop(pos))
+    state["striker_idx"] = nxt
+    state["next_batsman_idx"] = nxt + 1
+    player = order[nxt]
+    _emit_new_batsman_card(state, player)
+    return player
 
 
 def _run_event(runs):

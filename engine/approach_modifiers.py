@@ -80,6 +80,24 @@ BOWLING_APPROACHES = [
 BATTING_KEYS = {k for k, _, _ in BATTING_APPROACHES}
 BOWLING_KEYS = {k for k, _, _ in BOWLING_APPROACHES}
 
+# One-line player-facing descriptions and a 1-5 risk rating, for the Mini App's
+# approach cards. Display only — the numbers that decide an over are the
+# multiplier tables below.
+BATTING_BLURBS = {
+    "defensive": ("Protect the wicket. Few boundaries, few risks.", 1),
+    "rotate": ("Work the gaps — singles and twos keep it ticking.", 2),
+    "balanced": ("Play on merit and punish the bad ball.", 3),
+    "aggressive": ("Hunt boundaries every over.", 4),
+    "ultra": ("All-out attack: a huge over or quick wickets.", 5),
+}
+BOWLING_BLURBS = {
+    "defensive": ("Tight lines to dry up the runs.", 1),
+    "balanced": ("Stock plan — control with a wicket threat.", 3),
+    "mixed": ("Keep the batter guessing; smothers the big hits.", 3),
+    "aggressive": ("Attack the stumps. Wickets, but runs leak.", 5),
+    "variation": ("Slower balls and pace-off to fool the hitters.", 4),
+}
+
 DEFAULT_BATTING = "balanced"
 DEFAULT_BOWLING = "balanced"
 

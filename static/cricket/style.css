@@ -2806,3 +2806,324 @@ body {
   font-weight: 700;
   font-size: 0.9rem;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Over-by-over "Approach" play (approach.js) — /lpbot, /ciplbot
+   ═══════════════════════════════════════════════════════════════ */
+.ap-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.ap-chip {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--primary-dim);
+  border: 1px solid var(--card-border-bright);
+  color: var(--text-primary);
+}
+
+.ap-warn {
+  font-size: 12px;
+  line-height: 1.4;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: var(--border-radius-sm);
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  color: var(--text-primary);
+}
+
+.ap-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.ap-grid .ap-card:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+.ap-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 96px;
+  padding: 12px;
+  text-align: left;
+  font-family: inherit;
+  color: var(--text-primary);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--border-radius-md);
+  cursor: pointer;
+  transition: var(--transition-smooth);
+}
+
+.ap-card:active {
+  transform: scale(0.98);
+}
+
+.ap-card.selected {
+  background: rgba(var(--accent-rgb), 0.16);
+  border: 2px solid var(--primary-accent);
+  padding: 11px;
+  box-shadow: var(--glow-accent);
+}
+
+.ap-emoji {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.ap-label {
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.ap-desc {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.ap-last {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: rgba(var(--contrast-rgb), 0.08);
+  color: var(--text-secondary);
+  vertical-align: middle;
+}
+
+.ap-risk {
+  display: flex;
+  gap: 3px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.ap-risk-dot {
+  width: 14px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(var(--contrast-rgb), 0.12);
+}
+
+.ap-risk-dot.on {
+  background: var(--primary-accent);
+}
+
+.ap-card[data-key="ultra"] .ap-risk-dot.on,
+.ap-card[data-key="aggressive"] .ap-risk-dot.on {
+  background: var(--danger-accent);
+}
+
+.ap-out {
+  font-size: 13px;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.ap-partial {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.ap-partial-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+/* Ball chips — shared by the partial-over strip and the over playback */
+.ov-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ov-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text-primary);
+  background: rgba(var(--contrast-rgb), 0.08);
+  border: 1px solid var(--card-border);
+  animation: ov-pop 0.28s ease-out;
+}
+
+.ov-chip.ov-dot { color: var(--text-secondary); }
+.ov-chip.ov-four { background: rgba(var(--info-rgb), 0.22); border-color: var(--blue-accent); }
+.ov-chip.ov-six { background: rgba(var(--success-rgb), 0.24); border-color: var(--success-accent); }
+.ov-chip.ov-wkt { background: var(--danger-accent); border-color: var(--danger-accent); color: #fff; }
+.ov-chip.ov-extra { font-size: 11px; background: rgba(var(--gold-rgb), 0.18); }
+.ov-chip.ov-empty {
+  background: transparent;
+  border-style: dashed;
+  animation: none;
+}
+
+@keyframes ov-pop {
+  from { transform: scale(0.4); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.over-playback {
+  margin: 10px 0;
+  padding: 12px 14px;
+  border-radius: var(--border-radius-md);
+  background: var(--card-bg);
+  border: 1px solid var(--card-border-bright);
+  box-shadow: var(--shadow-soft);
+}
+
+.op-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.op-title {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--primary-accent);
+}
+
+.op-score {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text-primary);
+}
+
+.op-skip {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--card-border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.op-comm {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  min-height: 18px;
+}
+
+.op-duel {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.op-side {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--border-radius-sm);
+  background: var(--inset-bg);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.op-side small {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.op-vs {
+  align-self: center;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--text-muted);
+}
+
+.op-combo {
+  margin-top: 10px;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--gold-accent);
+}
+
+.op-fig {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* Impact Player — batting position chips (over-by-over matches) */
+.impact-slots {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.impact-slots-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.impact-slot {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--card-border);
+  background: var(--card-bg);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.impact-slot.selected {
+  border-color: var(--primary-accent);
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
+.op-hidden-note {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* While the Impact picker is open, its own entry banner is redundant. */
+.impact-picking .impact-entry-banner { display: none; }

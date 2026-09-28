@@ -60,13 +60,74 @@ def remember_level(bot_data, user_id, level):
     return level
 
 
-def level_for_match(bot_data, user_id):
-    """The difficulty a match for this player should be built with."""
-    return remembered_level(bot_data, user_id) or DEFAULT_DIFFICULTY
+def level_for_match(bot_data, user_id, tg_id=None):
+    """The difficulty a match for this player should be built with.
+
+    The choice is stored under the player's Telegram id (the button tap is all
+    the prompt knows), so pass ``tg_id`` whenever the caller has it — the
+    database id alone never found the stored pick.
+    """
+    for key in (tg_id, user_id):
+        if key is not None:
+            level = remembered_level(bot_data, key)
+            if level:
+                return level
+    return DEFAULT_DIFFICULTY
 
 
-def _rows(mode, league, current, owner_id):
-    """The three difficulty buttons, with the player's last pick marked."""
+# ── Where the match is played: the chat, or the Mini App ────────────
+# Also per player and sticky. ``/lpbot app`` / ``/lpbot chat`` (and the same
+# words after /ciplbot) set it; with no word the last choice is kept, and the
+# difficulty prompt carries a one-tap switch.
+PLAY_CHAT = "chat"
+PLAY_APP = "app"
+PLAY_MODES = (PLAY_CHAT, PLAY_APP)
+DEFAULT_PLAY_MODE = PLAY_CHAT
+PLAY_LABELS = {PLAY_CHAT: "💬 Chat", PLAY_APP: "📱 Mini App"}
+_MODE_STORE = "bot_play_mode_by_user"
+_MODE_WORDS = {
+    "chat": PLAY_CHAT, "c": PLAY_CHAT, "group": PLAY_CHAT,
+    "app": PLAY_APP, "miniapp": PLAY_APP, "mini": PLAY_APP, "webapp": PLAY_APP,
+}
+
+
+def normalize_play_mode(mode):
+    return mode if mode in PLAY_MODES else DEFAULT_PLAY_MODE
+
+
+def split_play_mode(args):
+    """``(mode or None, remaining args)`` — pulls "app"/"chat" out of the args."""
+    mode, rest = None, []
+    for a in list(args or []):
+        word = str(a).strip().lower().lstrip("/")
+        if word in _MODE_WORDS and mode is None:
+            mode = _MODE_WORDS[word]
+        else:
+            rest.append(a)
+    return mode, rest
+
+
+def remember_play_mode(bot_data, tg_id, mode):
+    mode = normalize_play_mode(mode)
+    try:
+        bot_data.setdefault(_MODE_STORE, {})[int(tg_id)] = mode
+    except Exception:
+        logger.exception("bot play mode: could not remember the choice")
+    return mode
+
+
+def play_mode_for(bot_data, tg_id):
+    """The play mode a match for this player (by Telegram id) is built with."""
+    try:
+        stored = (bot_data.get(_MODE_STORE) or {}).get(int(tg_id))
+    except Exception:
+        stored = None
+    return normalize_play_mode(stored)
+
+
+def _rows(mode, league, current, owner_id, play_mode=DEFAULT_PLAY_MODE):
+    """The three difficulty buttons, with the player's last pick marked, and a
+    second row that switches where the match is played."""
     buttons = []
     for key in DIFFICULTY_ORDER:
         label = DIFFICULTIES[key]["label"]
@@ -74,7 +135,30 @@ def _rows(mode, league, current, owner_id):
             label = f"• {label} •"
         buttons.append(InlineKeyboardButton(
             label, callback_data=f"botdiff_{key}_{mode}_{league}_{owner_id}"))
-    return InlineKeyboardMarkup([buttons])
+    where = []
+    for pm in PLAY_MODES:
+        label = PLAY_LABELS[pm]
+        if pm == play_mode:
+            label = f"✅ {label}"
+        where.append(InlineKeyboardButton(
+            label, callback_data=f"botplay_{pm}_{mode}_{league}_{owner_id}"))
+    return InlineKeyboardMarkup([buttons, where])
+
+
+def _prompt_text(play_mode):
+    lines = "\n".join(
+        f"{DIFFICULTIES[k]['label']} — <i>{BLURBS[k]}</i>" for k in DIFFICULTY_ORDER)
+    where = ("📱 <b>Play in:</b> Mini App — every pick in the app, the chat "
+             "just follows the score." if play_mode == PLAY_APP else
+             "💬 <b>Play in:</b> Chat — every pick with the buttons here.")
+    return (
+        "🤖 <b>How hard should the bot play?</b>\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"{lines}\n"
+        "━━━━━━━━━━━━━━━━━━━\n"
+        f"{where}\n"
+        "<i>Every setting plays with the same squad and the same rules — only "
+        "the captaincy gets sharper.</i>")
 
 
 async def prompt_difficulty(update, context, mode, league=""):
@@ -89,16 +173,36 @@ async def prompt_difficulty(update, context, mode, league=""):
     if message is None or user is None:
         return
     current = remembered_level(context.bot_data, user.id)
-    lines = "\n".join(
-        f"{DIFFICULTIES[k]['label']} — <i>{BLURBS[k]}</i>" for k in DIFFICULTY_ORDER)
+    play_mode = play_mode_for(context.bot_data, user.id)
     await message.reply_text(
-        "🤖 <b>How hard should the bot play?</b>\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        f"{lines}\n"
-        "━━━━━━━━━━━━━━━━━━━\n"
-        "<i>Every setting plays with the same squad and the same rules — only "
-        "the captaincy gets sharper.</i>",
-        parse_mode="HTML", reply_markup=_rows(mode, league, current, user.id))
+        _prompt_text(play_mode), parse_mode="HTML",
+        reply_markup=_rows(mode, league, current, user.id, play_mode))
+
+
+async def play_mode_callback(update, context):
+    """``botplay_<chat|app>_<mode>_<league>_<owner>`` — switch where the match
+    is played, keeping the difficulty prompt open."""
+    query = update.callback_query
+    parts = (query.data or "").split("_")   # botplay, pm, mode, league, owner
+    pm = normalize_play_mode(parts[1] if len(parts) > 1 else "")
+    mode = parts[2] if len(parts) > 2 else "lp"
+    league = parts[3] if len(parts) > 3 else ""
+    owner = parts[4] if len(parts) > 4 else ""
+    user = update.effective_user
+    if owner and user is not None and str(user.id) != owner:
+        await query.answer("This isn't your match — send /lpbot or /ciplbot "
+                           "to start your own.", show_alert=True)
+        return
+    remember_play_mode(context.bot_data, user.id, pm)
+    await query.answer(f"Playing in: {PLAY_LABELS[pm]}")
+    try:
+        await query.edit_message_text(
+            _prompt_text(pm), parse_mode="HTML",
+            reply_markup=_rows(mode, league,
+                               remembered_level(context.bot_data, user.id),
+                               user.id, pm))
+    except Exception:
+        logger.debug("bot play mode: prompt refresh failed", exc_info=True)
 
 
 def take_pending_choice(context):
@@ -140,9 +244,11 @@ async def difficulty_callback(update, context):
         logger.debug("bot difficulty: no user_data to flag", exc_info=True)
 
     try:
+        pm = play_mode_for(context.bot_data, user.id) if user else DEFAULT_PLAY_MODE
         await query.edit_message_text(
             f"🤖 <b>Bot difficulty:</b> {DIFFICULTIES[level]['label']}\n"
-            f"<i>{BLURBS[level]}</i>", parse_mode="HTML")
+            f"<i>{BLURBS[level]}</i>\n"
+            f"<b>Play in:</b> {PLAY_LABELS[pm]}", parse_mode="HTML")
     except Exception:
         logger.debug("bot difficulty: clearing the prompt failed", exc_info=True)
 
