@@ -1597,6 +1597,25 @@ function renderImpactPlayerPicker() {
     if (ready) {
       summary.classList.remove('hidden');
       summary.innerHTML = `<b>${impactSelection.incoming.name}</b> comes in for <b>${impactSelection.outgoing.name}</b>`;
+      // Over-by-over matches: the batting side also picks where the sub bats.
+      const slots = impactSelection.outgoing.battingSlots || [];
+      if (slots.length) {
+        if (!slots.some(sl => sl.index === impactSelection.batPosition)) {
+          impactSelection.batPosition = slots[0].index;
+        }
+        const wrap = document.createElement('div');
+        wrap.className = 'impact-slots';
+        wrap.innerHTML = '<span class="impact-slots-label">Bats at</span>';
+        slots.forEach(sl => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = `impact-slot${sl.index === impactSelection.batPosition ? ' selected' : ''}`;
+          b.textContent = `#${sl.index + 1} · ${sl.label}`;
+          b.onclick = () => { impactSelection.batPosition = sl.index; renderImpactPlayerPicker(); };
+          wrap.appendChild(b);
+        });
+        summary.appendChild(wrap);
+      }
     } else {
       summary.classList.add('hidden');
       summary.innerHTML = '';
@@ -1617,7 +1636,8 @@ async function submitImpactPlayer() {
         userId,
         matchId,
         inRosterId: impactSelection.incoming.id,
-        outRosterId: impactSelection.outgoing.id
+        outRosterId: impactSelection.outgoing.id,
+        batPosition: impactSelection.batPosition ?? null
       })
     });
     const data = await res.json();

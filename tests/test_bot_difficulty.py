@@ -160,10 +160,17 @@ class DifficultyPlumbingTests(unittest.TestCase):
     def test_the_button_row_belongs_to_the_player_who_asked(self):
         """In a group the prompt is public, so the callback carries an owner."""
         markup = botlevel._rows("lp", "", "hard", owner_id=4242)
-        datas = [b.callback_data for row in markup.inline_keyboard for b in row]
+        difficulty_row, play_row = markup.inline_keyboard
+        datas = [b.callback_data for b in difficulty_row]
         self.assertEqual(len(datas), len(bc.DIFFICULTY_ORDER))
         for data in datas:
             self.assertTrue(data.startswith("botdiff_"))
+        # The second row switches where the match is played (chat / Mini App).
+        play = [b.callback_data for b in play_row]
+        self.assertEqual(len(play), len(botlevel.PLAY_MODES))
+        for data in play:
+            self.assertTrue(data.startswith("botplay_"))
+        for data in datas + play:
             self.assertTrue(data.endswith("_4242"))
             # Telegram hard-limits callback data to 64 bytes.
             self.assertLessEqual(len(data.encode()), 64)

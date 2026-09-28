@@ -64,12 +64,19 @@ def is_view_only_match(state):
     Mini App is a read-only spectate board for EVERYONE — including the two
     captains.
 
-    A practice match against the AI captain (/lpbot, /ciplbot) is the
-    exception: its human captain can play every over from the Mini App too
-    (``handlers.cipl_play.submit_pick`` via ``services.bot_bridge``), in any mix
-    with the chat buttons.
+    A practice match against the AI captain started for the Mini App
+    (``/lpbot app``, ``/ciplbot app``) is the exception: its human captain plays
+    every over there (``handlers.cipl_play.submit_pick`` via
+    ``services.bot_bridge``), Impact Player included. Started for the chat, it
+    is played with the chat buttons and the Mini App only spectates.
     """
-    return is_approach_match(state) and not state.get("is_bot_match")
+    return is_approach_match(state) and not is_app_played_match(state)
+
+
+def is_app_played_match(state):
+    """True for a bot match whose picks are made in the Mini App."""
+    return (bool(state) and bool(state.get("is_bot_match"))
+            and state.get("play_mode") == "app")
 
 
 

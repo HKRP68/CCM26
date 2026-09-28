@@ -8985,6 +8985,32 @@ def _match_rest_view_only_block(match_id):
 from services.match_webapp_service import APPROACH_ACTION_TYPES as _APPROACH_ACTION_TYPES
 
 
+def _match_rest_approach_impact(db, match, user, data):
+    """Impact Player swap for an over-by-over bot match played in the Mini App.
+
+    Same rules as the chat picker (``handlers.cipl_play.submit_impact``), run on
+    the bot's loop so the swap and the chat notice land together. Batting-side
+    swaps may name ``batPosition`` (an index from the option's battingSlots).
+    """
+    from services import bot_bridge
+    from handlers.cipl_play import submit_impact
+    in_rid = data.get("inRosterId") or data.get("in_roster_id")
+    out_rid = data.get("outRosterId") or data.get("out_roster_id")
+    pos = data.get("batPosition", data.get("bat_position"))
+    mid, actor_tg = match.id, user.telegram_id
+
+    async def _go(ctx, accept):
+        return await submit_impact(ctx, mid, actor_tg, in_rid, out_rid, pos,
+                                   on_accept=accept, source="app")
+
+    ok, msg = bot_bridge.submit_and_wait_for_accept(_go)
+    if not ok:
+        return {"ok": False, "error": msg, "message": msg}, 400
+    from services.crickidex_arena import serialize_match_state
+    return {"ok": True, "message": msg,
+            "matchState": serialize_match_state(db, match, user)}
+
+
 def _match_rest_approach_action(db, match, user, state, data):
     """Play one pick of an over-by-over bot match from the Mini App.
 
@@ -9013,7 +9039,8 @@ def _match_rest_approach_action(db, match, user, state, data):
     mid, actor_tg = match.id, user.telegram_id
 
     async def _go(ctx, accept):
-        return await submit_pick(ctx, mid, actor_tg, kind, value, on_accept=accept)
+        return await submit_pick(ctx, mid, actor_tg, kind, value,
+                                 on_accept=accept, source="app")
 
     ok, reason = bot_bridge.submit_and_wait_for_accept(_go)
     if not ok:
@@ -9275,6 +9302,11 @@ def match_rest_impact_player():
             data.get("matchId") or data.get("match_id"))
         if err:
             return err
+        from services.match_webapp_access import get_state as _get_state
+        from services.match_webapp_service import is_app_played_match
+        live = _get_state(match.id)
+        if is_app_played_match(live):
+            return _match_rest_approach_impact(db, match, user, data)
         vo = _match_rest_view_only_block(match.id)
         if vo:
             return vo

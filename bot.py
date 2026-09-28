@@ -2139,9 +2139,11 @@ def main():
                                        ciplbot_handler))
         app.add_handler(CallbackQueryHandler(botmatch_again_callback,
                                              pattern=r"^botmatch_again_"))
-        from handlers.botlevel import difficulty_callback
+        from handlers.botlevel import difficulty_callback, play_mode_callback
         app.add_handler(CallbackQueryHandler(difficulty_callback,
                                              pattern=r"^botdiff_"))
+        app.add_handler(CallbackQueryHandler(play_mode_callback,
+                                             pattern=r"^botplay_"))
 
         # ── Lets Play Tournament ─────────────────────────────────────
         # A CIPL-style competition whose teams are users, entered by Telegram id.

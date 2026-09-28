@@ -564,7 +564,7 @@ def _draft_key(draft_id):
 # Bot matches (/lpbot, /ciplbot) — unranked practice vs the AI captain
 # ════════════════════════════════════════════════════════════════════
 
-def mark_bot_match(state, bot_user_id, difficulty=None):
+def mark_bot_match(state, bot_user_id, difficulty=None, play_mode=None):
     """Tag a freshly built state as an unranked practice match vs the bot.
 
     ``stats_disabled`` is the existing gate every reward/stat path already
@@ -581,6 +581,9 @@ def mark_bot_match(state, bot_user_id, difficulty=None):
     """
     state["is_bot_match"] = True
     state["bot_user_id"] = bot_user_id
+    # "chat" — every pick with the chat buttons (the Mini App spectates);
+    # "app" — every pick in the Mini App (the chat just follows the score).
+    state["play_mode"] = "app" if play_mode == "app" else "chat"
     state["stats_disabled"] = True
     state["unranked"] = True
     try:
@@ -652,6 +655,16 @@ def _bot_bats(state):
     return (_is_bot_match(state)
             and state.get("bot_user_id") is not None
             and state.get("bat_team_id") == state.get("bot_user_id"))
+
+
+def _app_mode(state):
+    """True when this bot match is played in the Mini App (``/lpbot app``).
+
+    The chat then carries no pick buttons at all — just the Play button, the
+    over summaries and the result — and chat buttons from an older message are
+    refused, so the two surfaces can never race each other.
+    """
+    return _is_bot_match(state) and state.get("play_mode") == "app"
 
 
 UNRANKED_NOTE = ("🎯 <i>Practice match — unranked. No career stats, coins, gems, "
@@ -767,7 +780,8 @@ def _view_and_impact_rows(state, mid=None):
     to a row of its own instead of disappearing with it.
     """
     rows = [list(r) for r in (_miniapp_row(state) or [])]
-    impact = _impact_button(state, mid)
+    # In a Mini App match the swap is made in the app, next to the picks.
+    impact = None if _app_mode(state) else _impact_button(state, mid)
     if impact is None:
         return rows
     if rows:
@@ -864,10 +878,10 @@ def _miniapp_row(state):
     """
     try:
         from services.match_broadcast import play_match_keyboard
-        # A practice match against the bot can be PLAYED from the Mini App
-        # (bowler, approaches, new batsman); every other over-by-over match
-        # is spectate-only there.
-        label = "🎮 Play in Mini App" if _is_bot_match(state) else "📊 View Match"
+        # A bot match started with "/lpbot app" is PLAYED from the Mini App
+        # (bowler, approaches, new batsman, Impact Player); every other
+        # over-by-over match is spectate-only there.
+        label = "🎮 Play in Mini App" if _app_mode(state) else "📊 View Match"
         kb = play_match_keyboard(
             state["match_id"], chat_id=state.get("chat_id"),
             is_private=bool(state.get("is_private")), label=label)
@@ -1091,14 +1105,15 @@ async def _on_remind(context):
                 pass
         # A practice match against the bot costs nothing to walk away from, so
         # don't threaten a fine that will never be charged.
+        where = " in the Mini App" if _app_mode(state) else ""
         if expected == A_PICK_CIPL_NEW_BATSMAN:
-            nag = (f"⏳ {_mention(idle_tg, idle_name)}, pick your next batsman "
-                   f"within <b>{secs} seconds</b> — or the next in your batting "
-                   f"order walks in.")
+            nag = (f"⏳ {_mention(idle_tg, idle_name)}, pick your next batsman"
+                   f"{where} within <b>{secs} seconds</b> — or the next in your "
+                   f"batting order walks in.")
         elif _is_bot_match(state):
             nag = (f"⏳ {_mention(idle_tg, idle_name)}, you have "
-                   f"<b>{secs} seconds</b> to play your turn — or the practice "
-                   f"match closes. No fine, it's just practice.")
+                   f"<b>{secs} seconds</b> to play your turn{where} — or the "
+                   f"practice match closes. No fine, it's just practice.")
         else:
             nag = (f"⏳ {_mention(idle_tg, idle_name)}, you have "
                    f"<b>{secs} seconds</b> to play your turn — or you forfeit "
@@ -1990,10 +2005,14 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
     # This clears the tournament/tour identity set just above, so a practice
     # match can never be recorded against a real competition.
     if draft and draft.get("vs_bot"):
-        from handlers.botlevel import level_for_match
+        from handlers.botlevel import level_for_match, play_mode_for
+        host_tg = ((draft.get("host") or {}).get("tg_id")
+                   or draft.get("host_tg_id"))
         mark_bot_match(state, draft.get("target_user_id"),
                        difficulty=level_for_match(context.bot_data,
-                                                  draft.get("host_user_id")))
+                                                  draft.get("host_user_id"),
+                                                  tg_id=host_tg),
+                       play_mode=play_mode_for(context.bot_data, host_tg))
         state["user_names"][str(BOT_TG_ID_)] = "🤖 Bot"
         # (league_key, which the Rematch button reads to reopen the same
         # league, is carried for every match above.)
@@ -2098,7 +2117,9 @@ def _match_start_announcement(state):
             bot_line = (f"🤖 <b>Bot captain:</b> {html.escape(persona_label(state))}"
                         f" • {html.escape(difficulty_label(state))}"
                         f" • <i>unranked</i>\n"
-                        f"🎮 Play every over here or in the Mini App\n")
+                        + ("📱 <b>Played in the Mini App</b> — tap 🎮 Play in Mini App\n"
+                           if _app_mode(state) else
+                           "💬 <b>Played here in the chat</b>\n"))
         except Exception:
             logger.exception("cipl: bot persona line failed")
     # No Team Chemistry line here: this card is Challenge League's, and a league
@@ -2148,6 +2169,36 @@ def _header(state):
     return f"Innings {inn} • {_unit_word(state, cap=True)} {state['current_over']}\n{line}"
 
 
+_APP_TURN_TEXT = {
+    A_PICK_CIPL_BOWLER: "pick your bowler",
+    A_PICK_BOWL_APPROACH: "choose your bowling plan",
+    A_PICK_BAT_APPROACH: "choose your batting plan",
+    A_PICK_CIPL_NEW_BATSMAN: "pick your next batsman",
+}
+
+
+async def _prompt_in_app(context, mid, state, action, actor_tg, lead="",
+                         fresh=False):
+    """The chat side of a Mini App match's turn: one line and the Play button.
+
+    The pick itself is made in the app (``submit_pick`` via the bot bridge);
+    the clock, reminder and recovery are exactly the chat prompt's.
+    """
+    text = (f"{_header(state)}\n\n{lead}"
+            f"📱 {_mention_tg(state, actor_tg)}, {_APP_TURN_TEXT[action]} for "
+            f"{_unit_word(state)} {state['current_over']} in the Mini App.")
+    try:
+        if fresh:
+            await _new_action_message(context, state, text, None)
+        else:
+            await _edit_action_message(context, state, text, None)
+        delivered = True
+    except Exception:
+        logger.exception("cipl: Mini App turn note failed for match %s", mid)
+        delivered = False
+    await _mark_prompt_delivered(context, mid, state, delivered, action)
+
+
 async def _prompt_bowler(context, mid, state=None, first=False):
     if state is None:
         state = await _gs(context, mid)
@@ -2157,6 +2208,10 @@ async def _prompt_bowler(context, mid, state=None, first=False):
         await _delete_prev_over(context, state)
     if _bot_bowls(state):
         await _bot_take_the_ball(context, mid, state)
+        return
+    if _app_mode(state):
+        await _prompt_in_app(context, mid, state, A_PICK_CIPL_BOWLER,
+                             state["bowl_user_tg"], fresh=True)
         return
     elig = cipl_match.eligible_bowlers(state)
     # When the front-line attack is exhausted, eligible_bowlers falls back to
@@ -2252,6 +2307,11 @@ async def _bot_take_the_ball(context, mid, state):
 
     state["current_bowler"] = bowler
     await _ss(context, mid, state)
+    if _app_mode(state):
+        # The Mini App shows the bowler; the chat stays quiet between overs.
+        await asyncio.sleep(BOT_THINK_DELAY)
+        await _prompt_bowl_approach(context, mid, state)
+        return
     text = (f"{_approach_card(state)}\n\n"
             f"🤖 <b>{html.escape(str(state.get('bowl_team_name', 'Bot')))}</b> "
             f"hands the ball to <b>{html.escape(str(bowler['name']))}</b> "
@@ -2280,6 +2340,10 @@ async def _prompt_bowl_approach(context, mid, state, auto=False):
             bot_captain.pick_bowling_approach, state)
         await _ss(context, mid, state)
         await _prompt_bat_approach(context, mid, state)
+        return
+    if _app_mode(state):
+        await _prompt_in_app(context, mid, state, A_PICK_BOWL_APPROACH,
+                             state["bowl_user_tg"])
         return
     bowler = state["current_bowler"]
     rows = [[InlineKeyboardButton(f"{emoji} {label}",
@@ -2315,6 +2379,11 @@ async def _prompt_bat_approach(context, mid, state, auto=False):
         await _ss(context, mid, state)
         await asyncio.sleep(BOT_THINK_DELAY)
         await _run_over(context, mid, state)
+        return
+    if _app_mode(state):
+        await _prompt_in_app(
+            context, mid, state, A_PICK_BAT_APPROACH, state["bat_user_tg"],
+            lead=(f"🎳 {html.escape(str(state['current_bowler']['name']))} to bowl.\n"))
         return
     rows = [[InlineKeyboardButton(f"{emoji} {label}",
                                   callback_data=f"cipl_batapp_{mid}_{idx}")]
@@ -2384,6 +2453,13 @@ async def _prompt_new_batsman(context, mid, state, summary=None):
         rows.append(row)
 
     dismissal = bs.get("dismissal") or bs.get("how_out") or "out"
+    if _app_mode(state):
+        await _prompt_in_app(
+            context, mid, state, A_PICK_CIPL_NEW_BATSMAN, state["bat_user_tg"],
+            lead=(f"🔴 <b>WICKET!</b> {html.escape(str(out.get('name', 'Batter')))} "
+                  f"{int(bs.get('runs', 0) or 0)}({int(bs.get('balls', 0) or 0)}) — "
+                  f"{html.escape(str(dismissal))}\n"))
+        return
     balls_note = (f"{left} ball{'s' if left != 1 else ''} left in the "
                   f"{_unit_word(state)}" if left else
                   f"last ball of the {_unit_word(state)}")
@@ -2846,6 +2922,16 @@ _PICK_ALREADY = {
 }
 
 
+def _pick_surface_error(state, source):
+    """The refusal for a pick made on the wrong surface, or None."""
+    if source == "app" and not _app_mode(state):
+        return ("💬 This match is played in the chat. Start it with "
+                "/lpbot app (or /ciplbot app) to play in the Mini App.")
+    if source == "chat" and _app_mode(state):
+        return "📱 This match is played in the Mini App — tap 🎮 Play in Mini App."
+    return None
+
+
 def _pick_actor_error(state, kind, actor_tg):
     """The refusal for a pick made by the wrong captain, or None."""
     if kind in (PICK_BOWLER, PICK_BOWL_APPROACH):
@@ -2860,7 +2946,8 @@ def _pick_actor_error(state, kind, actor_tg):
     return None
 
 
-async def submit_pick(context, mid, actor_tg, kind, value, on_accept=None):
+async def submit_pick(context, mid, actor_tg, kind, value, on_accept=None,
+                      source="chat"):
     """Validate and apply one pick of the over flow, then carry the match on.
 
     ``kind`` is one of PICK_BOWLER (``value`` = roster id), PICK_BOWL_APPROACH /
@@ -2868,6 +2955,10 @@ async def submit_pick(context, mid, actor_tg, kind, value, on_accept=None):
     PICK_NEW_BATSMAN (``value`` = roster id). ``on_accept`` is awaited the moment
     the pick passes validation — before the (slow) continuation — so a chat
     button can be acknowledged and a Mini App request answered straight away.
+
+    ``source`` is ``"chat"`` (a button) or ``"app"`` (the Mini App). A bot match
+    is played on the surface it was started for (``/lpbot chat`` / ``app``); a
+    pick from the other one is refused.
 
     Returns ``(True, None)`` when the pick was taken, else ``(False, reason)``.
     """
@@ -2884,6 +2975,9 @@ async def submit_pick(context, mid, actor_tg, kind, value, on_accept=None):
         if _super_over_active(context, mid):
             return False, "🔥 Super Over in progress — the main match is over."
         err = _pick_actor_error(state, kind, actor_tg)
+        if err:
+            return False, err
+        err = _pick_surface_error(state, source)
         if err:
             return False, err
         if _innings_quota_used(state):
@@ -3317,6 +3411,67 @@ async def cipl_impact_pos_callback(update: Update, context: ContextTypes.DEFAULT
                 f"{_impact_slot_line(rec)}", None)
         except Exception:
             logger.exception("cipl impact confirmation render failed for %s", mid)
+
+
+async def submit_impact(context, mid, actor_tg, in_rid, out_rid, bat_position=None,
+                        on_accept=None, source="app"):
+    """Make a captain's Impact Player swap — the Mini App's way in.
+
+    The same rules as the chat picker (``impact_player.cipl_use``: one swap,
+    between overs only, a legal Playing XI, a batter at the crease stays).
+    Returns ``(ok, message)``.
+    """
+    try:
+        in_rid, out_rid = int(in_rid), int(out_rid)
+        bat_position = None if bat_position in (None, "") else int(bat_position)
+    except (TypeError, ValueError):
+        return False, "Pick both players."
+    async with get_match_lock(mid):
+        state = await _gs(context, mid)
+        if not state or not is_cipl_state(state):
+            return False, "Match not found."
+        if _super_over_active(context, mid):
+            return False, "🔥 Super Over in progress."
+        err = _pick_surface_error(state, source)
+        if err:
+            return False, err
+        user_id = _user_id_for_tg(state, actor_tg)
+        if user_id is None:
+            return False, "Only the two captains can use Impact Player."
+        na = await _get_next_action(context, mid)
+        ok, msg, rec = impact_player.cipl_use(
+            state, user_id, in_rid, out_rid, na, bat_position=bat_position)
+        if not ok:
+            return False, msg
+        try:
+            await _ss(context, mid, state)
+        except StaleMatchState:
+            return False, "The match moved on while you picked — try again."
+        if on_accept is not None:
+            try:
+                await on_accept()
+            except Exception:
+                logger.debug("impact acknowledgement failed", exc_info=True)
+        try:
+            _fire_milestones_async(context, state["chat_id"], [("impact_player", {
+                "team": rec.get("team_name") or "",
+                "player": rec.get("in_player") or "",
+                "opponent": rec.get("out_player") or "",
+                "score": _score_or_blank(state),
+                "overs": "", "runs": "",
+            })])
+        except Exception:
+            logger.exception("impact player media failed for match %s", mid)
+        try:
+            await context.bot.send_message(
+                state["chat_id"],
+                f"🔄 <b>Impact Player — {html.escape(str(rec.get('team_name') or 'Team'))}</b>\n"
+                f"⬅️ Off: {html.escape(str(rec.get('out_player') or ''))}\n"
+                f"➡️ On: <b>{html.escape(str(rec.get('in_player') or ''))}</b>"
+                f"{_impact_slot_line(rec)}", parse_mode="HTML")
+        except Exception:
+            logger.exception("impact player chat notice failed for match %s", mid)
+    return True, msg
 
 
 def _score_or_blank(state):

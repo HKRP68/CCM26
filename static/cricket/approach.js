@@ -24,6 +24,32 @@ function escHtml(v) {
   }[c]));
 }
 
+function haptic(kind) {
+  try {
+    const h = window.Telegram?.WebApp?.HapticFeedback;
+    if (!h) return;
+    if (kind === 'select') h.selectionChanged();
+    else if (kind === 'wicket') h.notificationOccurred('error');
+    else if (kind === 'big') h.notificationOccurred('success');
+    else h.impactOccurred(kind || 'light');
+  } catch (e) { /* haptics are a nicety */ }
+}
+
+// The Impact Player picker (app.js) lives in this mount on the pick sheets.
+// Swaps are legal before the over is bowled: bowler and both plan picks.
+const APPROACH_IMPACT_MOUNT = 'impact-entry-approach';
+const IMPACT_TURNS = ['selecting_over_bowler', 'bowling_approach', 'batting_approach'];
+
+function impactMountHtml() {
+  return IMPACT_TURNS.includes(matchState.turnState)
+    ? `<div class="impact-entry-mount" id="${APPROACH_IMPACT_MOUNT}"></div>` : '';
+}
+
+function refreshApproachImpact() {
+  if (typeof renderImpactEntry !== 'function') return;
+  if (document.getElementById(APPROACH_IMPACT_MOUNT)) renderImpactEntry(APPROACH_IMPACT_MOUNT);
+}
+
 function approachData() {
   return (matchState && matchState.approach) || {};
 }
@@ -120,6 +146,10 @@ function renderApproachControls({ promptText, promptSubtitle, waitingBlock }) {
       selecting_wicket_batsman: ['⚠️ NEW BATSMAN INCOMING', 'The next batsman is walking out…'],
     };
     const [h, m] = waits[matchState.turnState] || ['⏳ PLEASE WAIT', 'The match is moving on…'];
+    if (matchState.myRole === 'spectator' && isBot && a.playMode === 'chat') {
+      showWaiting('💬 PLAYED IN THE CHAT', 'Make your picks with the chat buttons — this board follows along live. Start with /lpbot app to play here.');
+      return;
+    }
     showWaiting(matchState.myRole === 'spectator' ? '👁️ SPECTATOR MODE' : h, m);
     return;
   }
@@ -135,11 +165,21 @@ function renderApproachControls({ promptText, promptSubtitle, waitingBlock }) {
   // would swap the buttons out from under a finger mid-tap, so keep the DOM
   // while this pick (and what it offers) is unchanged.
   const renderKey = `${sig}|${matchState.turnState}|${(a.overBowlers || []).length}|${(a.incomingBatsmen || []).length}|${a.hints?.repeat}`;
-  const unchanged = section.dataset.renderKey === renderKey
+  const impactKey = `${matchState.impactPlayer?.canUse}|${matchState.impactPlayer?.used}`;
+  const unchanged = section.dataset.renderKey === `${renderKey}|${impactKey}`
     && !section.classList.contains('hidden') && section.childElementCount > 0;
   section.classList.remove('hidden');
-  if (unchanged) return;
-  section.dataset.renderKey = renderKey;
+  const pickerOpenHere = typeof impactSelection !== 'undefined'
+    && impactSelection.open && impactSelection.mountId === APPROACH_IMPACT_MOUNT;
+  if (unchanged || (pickerOpenHere && document.getElementById(APPROACH_IMPACT_MOUNT))) {
+    refreshApproachImpact();
+    return;
+  }
+  if (typeof homeImpactPicker === 'function') homeImpactPicker();
+  if (pickerOpenHere && typeof closeImpactPlayerPicker === 'function') {
+    closeImpactPlayerPicker({ silent: true });
+  }
+  section.dataset.renderKey = `${renderKey}|${impactKey}`;
 
   if (matchState.turnState === 'selecting_over_bowler') {
     promptText.innerText = '🎳 PICK YOUR BOWLER';
@@ -173,6 +213,7 @@ function renderApproachBowlers(section, a) {
   }
   const partTimeOnly = list.every(p => p.partTime);
   section.innerHTML = `
+    ${impactMountHtml()}
     ${approachHintsHtml(a, 'bowling', false)}
     ${partTimeOnly ? '<p class="warning-text">Front-line bowlers are bowled out — only part-timers (🧤) left.</p>' : ''}
     <div class="selection-list mb-3" id="approach-bowler-list"></div>`;
@@ -184,15 +225,17 @@ function renderApproachBowlers(section, a) {
     div.innerHTML = `
       <span class="selection-item-name">${escHtml(p.name)}${p.partTime ? ' 🧤' : ''}</span>
       <span class="selection-item-meta">${escHtml(p.displayRating ?? p.bowling_ovr ?? '')} BOWL •
-        ${escHtml(p.bowler_type || 'Bowler')} • <b>${left}</b> ${unitWord()}${left === 1 ? '' : 's'} left</span>`;
+        ${escHtml(p.bowler_type || 'Bowler')} • ${p.figures ? `${escHtml(p.figures)} • ` : ''}<b>${left}</b> ${unitWord()}${left === 1 ? '' : 's'} left</span>`;
     div.onclick = () => {
       if (approachSubmitInFlight) return;
+      haptic('medium');
       div.classList.add('selected');
       submitApproach('cipl_bowler', { rosterId: p.roster_id ?? p.id },
         '🎳 BOWLER SET', `${p.name} has the ball…`);
     };
     box.appendChild(div);
   });
+  refreshApproachImpact();
 }
 
 function approachHintsHtml(a, side, withRepeat = true) {
@@ -226,6 +269,7 @@ function renderApproachCards(section, a, side) {
   if (!approachChoice || approachChoice.turn !== turn) approachChoice = { turn, key: null };
   const lastPick = a.hints?.lastPick;
   section.innerHTML = `
+    ${impactMountHtml()}
     ${approachHintsHtml(a, side)}
     <div class="ap-grid"></div>
     <button class="btn btn-primary btn-block btn-green mt-3 ap-confirm" disabled>
@@ -255,6 +299,7 @@ function renderApproachCards(section, a, side) {
     card.onclick = () => {
       if (approachSubmitInFlight) return;
       approachChoice.key = o.key;
+      haptic('select');
       paint();
     };
     grid.appendChild(card);
@@ -262,6 +307,7 @@ function renderApproachCards(section, a, side) {
   confirm.onclick = () => {
     const o = opts.find(x => x.key === approachChoice.key);
     if (!o || approachSubmitInFlight) return;
+    haptic('medium');
     if (side === 'batting') {
       submitApproach('cipl_bat_approach', { key: o.key },
         `🏏 ${o.label.toUpperCase()}`, `Bowling the ${unitWord()}…`);
@@ -272,6 +318,7 @@ function renderApproachCards(section, a, side) {
     }
   };
   paint();
+  refreshApproachImpact();
 }
 
 function renderApproachBatsmen(section, a) {
@@ -296,6 +343,7 @@ function renderApproachBatsmen(section, a) {
       <span class="selection-item-meta">${escHtml(p.displayRating ?? p.batting_ovr ?? '')} BAT • ${escHtml(p.role || 'Batsman')}</span>`;
     div.onclick = () => {
       if (approachSubmitInFlight) return;
+      haptic('medium');
       div.classList.add('selected');
       submitApproach('cipl_new_batsman', { rosterId: p.roster_id ?? p.id },
         '🏏 NEW BATSMAN', `${p.name} walks out to the middle…`);
@@ -418,6 +466,8 @@ function playOver({ timeline, balls, from, title, done }) {
       isWicket: String(timeline[shown]) === 'W', text: '' };
     shown += 1;
     paint(ball.text);
+    if (ball.isWicket) haptic('wicket');
+    else if (Number(ball.runs) >= 4) haptic('big');
     try {
       triggerMatchEvent({ type: 'ball', runs: ball.runs, isWicket: ball.isWicket,
         eventKey: ball.eventKey, text: ball.text });
@@ -462,5 +512,6 @@ function renderOverSummary(lo) {
     </div>
     ${lo.combo ? `<div class="op-combo">✨ ${escHtml(lo.combo)}</div>` : ''}
     ${lo.flavour ? `<div class="op-comm">${escHtml(lo.flavour)}</div>` : ''}
-    ${lo.bowler ? `<div class="op-fig">🎳 ${escHtml(lo.bowler)}${lo.bowlerFigures ? ` · ${escHtml(lo.bowlerFigures)}` : ''}</div>` : ''}`;
+    ${lo.bowler ? `<div class="op-fig">🎳 ${escHtml(lo.bowler)}${lo.bowlerFigures ? ` · ${escHtml(lo.bowlerFigures)}` : ''}</div>` : ''}
+    ${(bat.hidden || bowl.hidden) ? '<div class="op-hidden-note">🔒 The bot keeps its plan secret — it is only revealed on 🟢 Easy.</div>' : ''}`;
 }

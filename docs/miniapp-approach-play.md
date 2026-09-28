@@ -1,14 +1,24 @@
 # Playing /lpbot and /ciplbot from the Mini App
 
-Practice matches against the AI captain (`/lpbot`, `/ciplbot` and every
-`/c<league>bot` alias) can be played over by over from the Mini App as well as
-from the chat, in any mix. Human-vs-human over-by-over matches (`/cipl`,
-`/letsplay`) are still played in the chat, and the Mini App stays a read-only
-board for them.
+A practice match against the AI captain is played in one of two places, chosen
+when you start it:
+
+| Command | Played in | The chat shows |
+|---|---|---|
+| `/lpbot chat`, `/ciplbot [league] chat` | the chat, with buttons | everything, as before; the Mini App only spectates |
+| `/lpbot app`, `/ciplbot [league] app` | the Mini App | one "📱 pick X in the Mini App" line with the 🎮 Play button, the over summaries and the result |
+
+The choice is remembered per player. A bare `/lpbot` keeps your last choice,
+and the difficulty prompt has a 💬 Chat / 📱 Mini App row to switch it
+(`app` also accepts `miniapp`/`mini`). A pick sent from the wrong place is
+refused with a pointer to the right one, so the two can never race.
+Human-vs-human over-by-over matches (`/cipl`, `/letsplay`) are always played in
+the chat.
 
 ## The over, in the Mini App
 
-The chat's "🎮 Play in Mini App" button opens the Arena on the match.
+In an app-mode match the chat's "🎮 Play in Mini App" button opens the Arena
+on the match.
 
 | Your side | You pick | Then |
 |---|---|---|
@@ -22,16 +32,29 @@ played the same plan for `REPEAT_FROM - 1` overs in a row, just before the
 opposition starts reading it.
 
 When the over is bowled, it plays back ball by ball: chips, commentary, the
-usual sounds and GIFs, and a **Skip** button. It ends on a summary card: runs and
-wickets, your plan vs the bot's (revealed only now), the special combination
-and its flavour line, and the bowler's figures.
+usual sounds, GIFs and haptics, and a **Skip** button. It ends on a summary
+card: runs and wickets, your plan, and the bowler's figures.
+
+**The bot's approach stays secret.** On 🟡 Normal and 🔴 Hard the summary shows
+the bot's side as "🔒 Hidden", and it leaves out the special combination and
+its flavour line too, since those would give the plan away. Only on 🟢 Easy,
+the learner's setting, is the bot's approach revealed after each over.
+
+**Impact Player** is made in the app, on the pick sheets (before the bowler or
+either plan is chosen — never mid-over). Pick the substitute, the player going
+off, and, when batting, where the substitute bats. The chat gets a one-line
+notice. These are the same rules as the chat picker
+(`impact_player.cipl_use`).
+
+The bowler list shows each bowler's figures so far next to their overs left.
 
 ## New batsman, mid-over
 
 In a bot match, when **your** batsman is out and there is a real choice (the
 innings goes on and at least two batsmen are waiting), the over stops after
-that ball. You pick who walks in, from the Mini App sheet or from the chat
-buttons (`cipl_newbat_<mid>_<rid>`), and the rest of the over is bowled. If
+that ball. You pick who walks in where the match is played — the chat buttons
+(`cipl_newbat_<mid>_<rid>`) or the Mini App sheet — and the rest of the over is
+bowled. If
 nobody picks within `CIPL_TIMEOUT_SECONDS`, the next batsman in the batting
 order walks in and play continues. Nobody is fined and the match is not closed.
 
@@ -58,12 +81,20 @@ Human-vs-human matches keep the fixed batting order too.
   loop, and the request returns as soon as the pick is validated. The rest (the
   bot's reply, the over) lands on the next poll. `bot.py` hands the PTB
   Application over through `admin.set_bot_for_admin`.
+* `handlers/botlevel.py`: `split_play_mode`, `remember_play_mode` and
+  `play_mode_for`, keyed by Telegram id. `mark_bot_match(..., play_mode=)`
+  stores it as `state["play_mode"]`. The difficulty is now also looked up by
+  Telegram id (`level_for_match(..., tg_id=)`); a database-id lookup never found
+  the stored pick.
+* `submit_pick(..., source="chat"|"app")` and
+  `submit_impact(context, mid, actor_tg, in_rid, out_rid, bat_position)`, the
+  latter reached through `POST /api/match/impact-player` (with `batPosition`).
 * `POST /api/match/action` with `type` = `cipl_bowler {rosterId}`,
   `cipl_bowl_approach {key}`, `cipl_bat_approach {key}` or
   `cipl_new_batsman {rosterId}`.
 * `services/match_webapp_service.py`: `is_approach_match` (every ball-by-ball
-  mutator refuses these) vs `is_view_only_match` (approach matches that are
-  *not* against the bot).
+  mutator refuses these) vs `is_view_only_match` (every approach match except
+  an app-mode bot match, `is_app_played_match`).
 * `services/crickidex_arena.py`: `approachMode` plus an `approach` block with
   the options, `overBowlers`, `incomingBatsmen`, `overInProgress`, `lastOver`
   and `hints`. The turn states are `selecting_over_bowler`, `bowling_approach`,

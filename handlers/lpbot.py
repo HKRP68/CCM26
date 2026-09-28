@@ -11,7 +11,7 @@ Match credit, no coins or gems, no Win/Loss, no streak. Walk away mid-over and
 nothing is charged.
 
 Flow:
-  /lpbot
+  /lpbot [chat|app]   (where it is played — remembered; bare /lpbot keeps it)
     → your roster is validated as a legal Playing XI (else it won't start)
     → you pick the pitch
     → your XI (auto batting order, tweakable with /change) and the bot's XI
@@ -50,6 +50,14 @@ async def lpbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     if msg is None or tg is None or chat is None:
         return
+
+    # "/lpbot app" / "/lpbot chat" — where the match is played. Remembered per
+    # player, so a bare /lpbot keeps the last choice.
+    from handlers.botlevel import (
+        PLAY_LABELS, play_mode_for, remember_play_mode, split_play_mode)
+    play_mode, _rest = split_play_mode(getattr(context, "args", None))
+    if play_mode:
+        remember_play_mode(context.bot_data, tg.id, play_mode)
 
     # Difficulty first: the prompt sends a keyboard and this returns, and the
     # button re-enters here with the choice already banked.
@@ -142,6 +150,8 @@ async def lpbot_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🤖 <b>Opponent:</b> {BOT_TEAM_NAME} <i>(auto-picked XI)</i>\n"
         "⏱️ <b>Format:</b> 20 Overs • Own Roster\n"
         "🎯 <b>Unranked practice</b> — no stats, coins, gems or Win/Loss\n"
+        f"🕹️ <b>Play in:</b> {PLAY_LABELS[play_mode_for(context.bot_data, tg.id)]}"
+        " <i>(/lpbot chat · /lpbot app)</i>\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         "Pick the pitch below to get started.",
         parse_mode="HTML")

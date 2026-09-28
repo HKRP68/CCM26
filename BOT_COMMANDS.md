@@ -211,8 +211,8 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/wpm` | — | Match lobby up to 20 overs (Mini App) — tag/reply to invite |
 | `/vsbot` | `/vsb` | Play a bot opponent in chat |
 | `/wpmbot` | `/wpmb` | Play a bot opponent in the Mini App |
-| `/lpbot` | `/lpb` `/letsplaybot` | Unranked Lets Play practice vs the bot — play each over in chat or the Mini App; pick your new batsman after a wicket |
-| `/ciplbot` | `/ciplb` `/challengeiplbot` | Unranked league practice vs the bot — play each over in chat or the Mini App; pick your new batsman after a wicket |
+| `/lpbot` | `/lpb` `/letsplaybot` | Unranked Lets Play practice vs the bot — `/lpbot chat` plays it here, `/lpbot app` in the Mini App (remembered); pick your new batsman after a wicket |
+| `/ciplbot` | `/ciplb` `/challengeiplbot` | Unranked league practice vs the bot — add `chat` or `app` (e.g. `/ciplbot bbl app`) to choose where it is played; pick your new batsman after a wicket |
 | `/botvsbot` | `/bvb` | Configure a bot-versus-bot match |
 | `/botmatch` | `/spectate` | Spectate a bot-versus-bot match |
 | `/pbo` | `/bowlout` | Start a standalone player bowl-out |
@@ -495,8 +495,8 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/wpm <overs 1-20> [@user]` | `/wpm 10 @rahul` |
 | `/vsbot <overs 1-20>` *(default 5)* | `/vsbot 10` |
 | `/wpmbot <overs 1-20>` | `/wpmbot 20` |
-| `/lpbot` | `/lpbot` |
-| `/ciplbot [league]` | `/ciplbot ipl` |
+| `/lpbot [chat\|app]` | `/lpbot app` |
+| `/ciplbot [league] [chat\|app]` | `/ciplbot ipl app` |
 | `/pbo @username` | `/pbo @rahul` |
 | `/cipl` *(reply to a user)* | `/cipl` |
 | `/cipl <overs>` *(reply to a user)* — a shorter friendly, 1–20 overs | `/cipl 6` |

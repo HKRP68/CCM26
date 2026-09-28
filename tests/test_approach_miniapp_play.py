@@ -40,7 +40,7 @@ HUMAN_UID, BOT_UID = 7, 99
 HUMAN_TG, BOT_TG = 7007, -1
 
 
-def _state(human_bats=True, bot_match=True):
+def _state(human_bats=True, bot_match=True, play_mode="chat", difficulty=None):
     if human_bats:
         bat_uid, bowl_uid, bat_tg, bowl_tg = HUMAN_UID, BOT_UID, HUMAN_TG, BOT_TG
     else:
@@ -51,7 +51,7 @@ def _state(human_bats=True, bot_match=True):
         bat_team_name="Bat side", bowl_team_name="Bowl side", bowl_xi=_xi(500),
         chat_id=1, pitch_type="Hard")
     if bot_match:
-        cp.mark_bot_match(s, BOT_UID)
+        cp.mark_bot_match(s, BOT_UID, difficulty=difficulty, play_mode=play_mode)
     return s
 
 
@@ -193,7 +193,8 @@ class PausableOverTests(unittest.TestCase):
 # Chat / shared pick flow
 # ════════════════════════════════════════════════════════════════════
 
-class SubmitPickFlowTests(unittest.TestCase):
+class _Harness(unittest.TestCase):
+    """Real cipl_play flow on a fake store and a fake Telegram bot."""
     def setUp(self):
         self._saved = {name: getattr(cp, name) for name in
                        ("_gs", "_ss", "_get_next_action", "_miniapp_row",
@@ -257,6 +258,8 @@ class SubmitPickFlowTests(unittest.TestCase):
             out.append((str(text), c.kwargs.get("reply_markup")))
         return out
 
+
+class SubmitPickFlowTests(_Harness):
     def test_a_human_wicket_pauses_for_the_pick_then_the_over_resumes(self):
         self._bat_ready()
         with _Script(["1", "W", "4", "0", "6", "1", "1", "1", "1", "1", "1", "1"]):
@@ -400,6 +403,9 @@ class SubmitPickFlowTests(unittest.TestCase):
         mb.play_match_keyboard = fake_kb
         try:
             cp._miniapp_row(s)
+            self.assertEqual(seen["label"], "📊 View Match")    # chat mode
+            s["play_mode"] = "app"
+            cp._miniapp_row(s)
             self.assertEqual(seen["label"], "🎮 Play in Mini App")
             s.pop("is_bot_match")
             cp._miniapp_row(s)
@@ -413,13 +419,15 @@ class SubmitPickFlowTests(unittest.TestCase):
 # ════════════════════════════════════════════════════════════════════
 
 class MiniAppAccessTests(unittest.TestCase):
-    def test_only_bot_approach_matches_are_playable(self):
+    def test_only_app_mode_bot_matches_are_playable(self):
         from services.match_webapp_service import is_approach_match, is_view_only_match
-        bot = _state()
+        app = _state(play_mode="app")
+        chat = _state(play_mode="chat")
         pvp = _state(bot_match=False)
-        self.assertTrue(is_approach_match(bot))
-        self.assertTrue(is_approach_match(pvp))
-        self.assertFalse(is_view_only_match(bot))
+        for s in (app, chat, pvp):
+            self.assertTrue(is_approach_match(s))
+        self.assertFalse(is_view_only_match(app))
+        self.assertTrue(is_view_only_match(chat))
         self.assertTrue(is_view_only_match(pvp))
         self.assertFalse(is_approach_match({"mode": "classic"}))
 
@@ -460,7 +468,7 @@ class MiniAppAccessTests(unittest.TestCase):
         self.assertTrue(p["isBotMatch"])
 
         # An over bowled → the playback payload reveals both plans.
-        s = _ready_to_bowl(_state())
+        s = _ready_to_bowl(_state(difficulty="easy"))
         s["bowling_approach"] = "variation"
         with _Script(["1", "4", "0", "6", "1", "1"]):
             cm.simulate_over(s)
@@ -483,6 +491,175 @@ class MiniAppAccessTests(unittest.TestCase):
                          [b["roster_id"] for b in cm.available_batsmen(s)])
         self.assertEqual(p["outBatsman"]["name"],
                          s["batting_order"][s["striker_idx"]]["name"])
+
+
+class AppModeTests(_Harness):
+    """Bot matches played in the Mini App (``/lpbot app``)."""
+
+    def _buttons(self):
+        out = []
+        for call in (self.ctx.bot.send_message.call_args_list
+                     + self.ctx.bot.edit_message_text.call_args_list):
+            kb = call.kwargs.get("reply_markup")
+            for row in (kb.inline_keyboard if kb else []):
+                out.extend(row)
+        return out
+
+    def test_the_chat_shows_no_pick_buttons(self):
+        s = _state(human_bats=False, play_mode="app")
+        self._install(s, None)
+        asyncio.run(cp._prompt_bowler(self.ctx, 42, s, first=True))
+        self.assertEqual(self.store["next"], A_PICK_CIPL_BOWLER)
+        self.assertEqual(self.armed, [A_PICK_CIPL_BOWLER])
+        self.assertFalse([b for b in self._buttons() if b.callback_data])
+        texts = [t for t, _ in self._sent_texts()]
+        self.assertTrue(any("in the Mini App" in t for t in texts))
+
+    def test_picks_must_come_from_the_right_surface(self):
+        s = _state(play_mode="app")
+        s["current_bowler"] = cm.eligible_bowlers(s)[0]
+        s["bowling_approach"] = "balanced"
+        self._install(s, A_PICK_BAT_APPROACH)
+        ok, why = asyncio.run(cp.submit_pick(
+            self.ctx, 42, HUMAN_TG, cp.PICK_BAT_APPROACH, self._bat_idx()))
+        self.assertFalse(ok)
+        self.assertIn("Mini App", why)
+
+        chat = self._bat_ready()          # chat-mode match
+        ok, why = asyncio.run(cp.submit_pick(
+            self.ctx, 42, HUMAN_TG, cp.PICK_BAT_APPROACH, self._bat_idx(),
+            source="app"))
+        self.assertFalse(ok)
+        self.assertIn("chat", why)
+        self.assertEqual(cm.balls_bowled(chat), 0)
+
+    def test_an_app_match_plays_from_app_picks_through_a_wicket(self):
+        s = _state(play_mode="app")
+        s["current_bowler"] = cm.eligible_bowlers(s)[0]
+        s["bowling_approach"] = "balanced"
+        self._install(s, A_PICK_BAT_APPROACH)
+        with _Script(["W"] + ["1"] * 12):
+            ok, why = asyncio.run(cp.submit_pick(
+                self.ctx, 42, HUMAN_TG, cp.PICK_BAT_APPROACH, self._bat_idx(),
+                source="app"))
+            self.assertTrue(ok, why)
+            self.assertEqual(self.store["next"], A_PICK_CIPL_NEW_BATSMAN)
+            rid = cm.available_batsmen(self.store["state"])[1]["roster_id"]
+            ok, why = asyncio.run(cp.submit_pick(
+                self.ctx, 42, HUMAN_TG, cp.PICK_NEW_BATSMAN, rid, source="app"))
+            self.assertTrue(ok, why)
+        self.assertGreaterEqual(cm.balls_bowled(self.store["state"]), 6)
+        self.assertFalse([b for b in self._buttons() if b.callback_data])
+
+    def test_impact_player_from_the_app(self):
+        s = _state(human_bats=False, play_mode="app")
+        s["bowl_bench"] = [_mk(900, "Sub Bowler", "Bowler", 30, 88)]
+        self._install(s, A_PICK_CIPL_BOWLER)
+        out_rid = s["bowl_xi"][0]["roster_id"]
+        ok, msg = asyncio.run(cp.submit_impact(self.ctx, 42, HUMAN_TG, 900, out_rid))
+        self.assertTrue(ok, msg)
+        state = self.store["state"]
+        self.assertTrue(state["impact_players"]["usage"][str(HUMAN_UID)]["used"])
+        self.assertIn(900, [p["roster_id"] for p in state["bowl_xi"] if p.get("active", True)])
+        # One swap only.
+        ok, msg = asyncio.run(cp.submit_impact(self.ctx, 42, HUMAN_TG, 900, out_rid))
+        self.assertFalse(ok)
+        # Never from a chat-mode match through the app.
+        chat = _state(human_bats=False)
+        chat["bowl_bench"] = [_mk(901, "Sub", "Bowler", 30, 88)]
+        self._install(chat, A_PICK_CIPL_BOWLER)
+        ok, _msg = asyncio.run(cp.submit_impact(
+            self.ctx, 42, HUMAN_TG, 901, chat["bowl_xi"][0]["roster_id"]))
+        self.assertFalse(ok)
+
+    def test_impact_waits_for_the_break(self):
+        s = _state(play_mode="app")
+        s["bat_bench"] = [_mk(902, "Sub Bat", "Batsman", 85, 20)]
+        self._install(s, A_PICK_CIPL_NEW_BATSMAN)   # mid-over: not a legal window
+        ok, msg = asyncio.run(cp.submit_impact(
+            self.ctx, 42, HUMAN_TG, 902, s["batting_order"][5]["roster_id"]))
+        self.assertFalse(ok)
+
+
+class PlayModeChoiceTests(unittest.TestCase):
+    def test_mode_words_are_pulled_out_of_the_args(self):
+        from handlers.botlevel import split_play_mode
+        self.assertEqual(split_play_mode(["app"]), ("app", []))
+        self.assertEqual(split_play_mode(["bbl", "chat"]), ("chat", ["bbl"]))
+        self.assertEqual(split_play_mode(["MiniApp", "ipl"]), ("app", ["ipl"]))
+        self.assertEqual(split_play_mode(["ipl"]), (None, ["ipl"]))
+        self.assertEqual(split_play_mode(None), (None, []))
+
+    def test_the_choice_sticks_per_player(self):
+        from handlers.botlevel import play_mode_for, remember_play_mode
+        data = {}
+        self.assertEqual(play_mode_for(data, 5), "chat")
+        remember_play_mode(data, 5, "app")
+        self.assertEqual(play_mode_for(data, 5), "app")
+        self.assertEqual(play_mode_for(data, 6), "chat")
+        remember_play_mode(data, 5, "nonsense")
+        self.assertEqual(play_mode_for(data, 5), "chat")
+
+    def test_difficulty_is_found_by_telegram_id(self):
+        from handlers.botlevel import level_for_match, remember_level
+        data = {}
+        remember_level(data, 7007, "hard")         # the button tap: Telegram id
+        self.assertEqual(level_for_match(data, 12, tg_id=7007), "hard")
+        self.assertEqual(level_for_match(data, 12), "normal")
+
+    def test_mark_bot_match_records_the_mode(self):
+        self.assertEqual(cp.mark_bot_match({}, 99, play_mode="app")["play_mode"], "app")
+        self.assertEqual(cp.mark_bot_match({}, 99)["play_mode"], "chat")
+        self.assertEqual(cp.mark_bot_match({}, 99, play_mode="zzz")["play_mode"], "chat")
+
+
+class BotPlanSecrecyTests(unittest.TestCase):
+    def _over(self, difficulty, human_bats=True):
+        from services.crickidex_arena import _approach_payload
+        s = _ready_to_bowl(_state(human_bats=human_bats, difficulty=difficulty,
+                                  play_mode="app"))
+        s["bowling_approach"] = "variation"
+        s["batting_approach"] = "ultra"
+        with _Script(["1"] * 6):
+            cm.simulate_over(s)
+        role = "batting" if human_bats else "bowling"
+        return _approach_payload(s, A_PICK_BAT_APPROACH, role)["lastOver"]
+
+    def test_hidden_on_normal_and_hard(self):
+        for level in ("normal", "hard"):
+            lo = self._over(level)
+            self.assertTrue(lo["bowlingApproach"].get("hidden"))
+            self.assertIsNone(lo["bowlingApproach"]["key"])
+            self.assertEqual(lo["battingApproach"]["key"], "ultra")   # your own
+            self.assertIsNone(lo["combo"])
+            self.assertIsNone(lo["flavour"])
+            self.assertFalse(lo["botPlanRevealed"])
+
+    def test_hidden_when_the_bot_bats_too(self):
+        lo = self._over("hard", human_bats=False)
+        self.assertTrue(lo["battingApproach"].get("hidden"))
+        self.assertEqual(lo["bowlingApproach"]["key"], "variation")
+
+    def test_revealed_on_easy(self):
+        lo = self._over("easy")
+        self.assertEqual(lo["bowlingApproach"]["key"], "variation")
+        self.assertTrue(lo["botPlanRevealed"])
+
+
+class ApproachImpactPayloadTests(unittest.TestCase):
+    def test_batting_side_gets_positions(self):
+        from services.crickidex_arena import _approach_impact_payload
+        s = _state(play_mode="app")
+        s["bat_bench"] = [_mk(903, "Sub Bat", "Batsman", 85, 20)]
+        p = _approach_impact_payload(s, HUMAN_UID, A_PICK_BAT_APPROACH)
+        self.assertTrue(p["canUse"])
+        self.assertEqual([x["roster_id"] for x in p["incomingOptions"]], [903])
+        crease = {s["batting_order"][0]["roster_id"], s["batting_order"][1]["roster_id"]}
+        self.assertFalse(crease & {x["roster_id"] for x in p["replaceablePlayers"]})
+        self.assertTrue(all(x["battingSlots"] for x in p["replaceablePlayers"]))
+        # Mid-over (new-batsman pick) is not a legal window.
+        self.assertFalse(_approach_impact_payload(
+            s, HUMAN_UID, A_PICK_CIPL_NEW_BATSMAN)["canUse"])
 
 
 class BotBridgeTests(unittest.TestCase):
