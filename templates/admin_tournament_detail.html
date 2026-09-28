@@ -131,7 +131,30 @@
             <option value="host" {{ 'selected' if (t.pitch_mode or 'host') == 'host' else '' }}>Host picks (default)</option>
             <option value="fixture" {{ 'selected' if t.pitch_mode == 'fixture' else '' }}>Fixed per fixture — random</option>
             <option value="home" {{ 'selected' if t.pitch_mode == 'home' else '' }}>Fixed per fixture — home team's pitch</option>
+            <option value="tour_preferred" {{ 'selected' if t.pitch_mode == 'tour_preferred' else '' }}>Tournament preferred pitches</option>
+            <option value="team_preferred" {{ 'selected' if t.pitch_mode == 'team_preferred' else '' }}>Team preferred pitches</option>
           </select>
+        </div>
+        <div><label>Preferred pitch share %</label>
+          <input type="number" name="preferred_pitch_pct" min="0" max="100" value="{{ pref_pct }}"
+                 title="Share of matches played on a preferred pitch (preferred-pitch modes only).">
+        </div>
+        <div><label>Max preferred pitches</label>
+          <input type="number" name="preferred_pitch_limit" min="1" max="{{ pitch_types|length }}" value="{{ pref_limit }}"
+                 title="How many pitches the tournament — and each team — may prefer.">
+        </div>
+        <div style="grid-column:1 / -1;"><label>Tournament preferred pitches</label>
+          <span style="display:flex; gap:.8rem; flex-wrap:wrap; font-size:.9rem;">
+            {% for pt in pitch_types %}
+            <label style="text-transform:none; letter-spacing:0; font-size:.9rem; color:var(--text); margin:0;">
+              <input type="checkbox" name="preferred_pitches" value="{{ pt }}" style="width:auto;"
+                     {{ 'checked' if pt in tour_pref_pitches else '' }}> {{ pt }}
+            </label>
+            {% endfor %}
+          </span>
+          <small style="color:var(--muted);">Up to {{ pref_limit }} pitches · {{ pref_pct }}% of matches.
+            Used by “Tournament preferred pitches”, and as the fallback for teams with no list of their own.
+            The share is a quota, not a dice roll: {{ pref_pct }}% really means {{ pref_pct }}% (to the nearest match).</small>
         </div>
         <div><label>Team ownership</label>
           <label style="text-transform:none; letter-spacing:0; font-size:.9rem; color:var(--text);">
@@ -227,7 +250,7 @@
             {%- elif co_ids %} <em>no owner</em>
             {%- else %} <em>unowned</em>{% endif %}
             {%- if co_ids %} · 🤝 {{ co_ids|length }} co-owner{{ '' if co_ids|length == 1 else 's' }}{% endif %}
-            {%- if tt.home_pitch %} · 🌱 {{ tt.home_pitch }}{% endif %}</span>
+            {%- if team_pref_pitches.get(tt.id) %} · 🌱 {{ team_pref_pitches[tt.id]|join(', ') }}{% endif %}</span>
         </span>
         <span style="display:flex; gap:.4rem; flex-wrap:wrap;">
           <form method="POST" style="display:flex; gap:.3rem;">
@@ -251,12 +274,18 @@
           </form>
           <form method="POST" style="display:flex; gap:.3rem;">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input type="hidden" name="action" value="set_team_home_pitch">
+            <input type="hidden" name="action" value="set_team_preferred_pitches">
             <input type="hidden" name="team_id" value="{{ tt.id }}">
-            <select name="home_pitch" onchange="this.form.submit()" title="Home pitch">
-              <option value="">— no home pitch —</option>
-              {% for pt in pitch_types %}<option value="{{ pt }}" {{ 'selected' if tt.home_pitch == pt else '' }}>{{ pt }}</option>{% endfor %}
-            </select>
+            <details>
+              <summary class="btn" title="Preferred pitches (up to {{ pref_limit }}).">🌱 Pitches{% if team_pref_pitches.get(tt.id) %} ({{ team_pref_pitches[tt.id]|length }}){% endif %}</summary>
+              <span style="display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.3rem;">
+                {% for pt in pitch_types %}
+                <label style="font-size:.85rem;"><input type="checkbox" name="preferred_pitches" value="{{ pt }}"
+                  {{ 'checked' if pt in team_pref_pitches.get(tt.id, []) else '' }}> {{ pt }}</label>
+                {% endfor %}
+                <button class="btn" type="submit">Save</button>
+              </span>
+            </details>
           </form>
           <form method="POST" style="display:inline;" onsubmit='return confirm("Remove " + {{ tt.name|tojson }} + " from the tournament?");'><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="remove_team"><input type="hidden" name="team_id" value="{{ tt.id }}"><button class="btn danger" type="submit">Remove</button></form>
         </span>

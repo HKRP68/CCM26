@@ -16665,9 +16665,9 @@ def admin_tournaments_list():
                     }
                     tf = (request.form.get("tour_format") or "round_robin").strip()
                     lf, kt, label = _FMT.get(tf, _FMT["round_robin"])
-                    from services.league_schedule_service import PITCH_MODES
+                    from services import league_schedule_service as _lss
                     pitch_mode = (request.form.get("pitch_mode") or "host").strip()
-                    if pitch_mode not in PITCH_MODES:
+                    if pitch_mode not in _lss.PITCH_MODES:
                         pitch_mode = "host"
                     if not name:
                         flash("Tournament name is required.", "error")
@@ -16693,8 +16693,19 @@ def admin_tournaments_list():
                             injury_chance=max(0, min(100, _int_form("injury_chance", 12))),
                             injury_max_matches=max(1, min(5, _int_form("injury_max_matches", 3))),
                             pitch_mode=pitch_mode,
+                            preferred_pitch_pct=max(0, min(100, _int_form(
+                                "preferred_pitch_pct", _lss.DEFAULT_PREFERRED_PCT))),
+                            preferred_pitch_limit=max(1, min(
+                                len(_lss.FIXTURE_PITCHES),
+                                _int_form("preferred_pitch_limit",
+                                          _lss.DEFAULT_PREFERRED_LIMIT))),
                             status="draft",
                         )
+                        try:
+                            _lss.set_tour_preferred_pitches(
+                                t, request.form.getlist("preferred_pitches"))
+                        except ValueError as e:
+                            flash(f"Preferred pitches not set: {e}", "error")
                         db.add(t)
                         db.flush()
                         for cid in request.form.getlist("team_ids"):
@@ -16807,6 +16818,7 @@ def admin_tournaments_list():
                 .filter(ChallengeTeam.league_id == lg.id)
                 .order_by(ChallengeTeam.sort_order, ChallengeTeam.name).all()]
         from services import season_archive
+        from services.league_schedule_service import FIXTURE_PITCHES
         running = season_archive.running_tournaments(db)
         return render_template(
             "admin_tournaments.html",
@@ -16817,7 +16829,8 @@ def admin_tournaments_list():
                            "refs": season_archive.linked_refs(t),
                            "labels": season_archive.link_labels(db, t)}
                           for t in running],
-            link_completed=season_archive.completed_seasons(db))
+            link_completed=season_archive.completed_seasons(db),
+            pitch_types=FIXTURE_PITCHES)
     finally:
         db.close()
 
@@ -16914,16 +16927,34 @@ def admin_tournament_detail(tournament_id):
                     t.injury_max_matches = max(1, min(5, _int_form(
                         "injury_max_matches", t.injury_max_matches
                         if t.injury_max_matches is not None else 3)))
-                    from services.league_schedule_service import (
-                        PITCH_MODES, assign_fixture_venues)
+                    from services import league_schedule_service as _lss
+                    old_mode = t.pitch_mode or "host"
+                    old_pref = (_lss.tour_preferred_pitches(t),
+                                _lss.preferred_pct(t), _lss.preferred_limit(t))
                     pm = (request.form.get("pitch_mode") or "host").strip()
-                    if pm in PITCH_MODES and pm != (t.pitch_mode or "host"):
+                    if pm in _lss.PITCH_MODES:
                         t.pitch_mode = pm
+                    if "preferred_pitch_pct" in request.form:
+                        t.preferred_pitch_pct = max(0, min(100, _int_form(
+                            "preferred_pitch_pct", _lss.preferred_pct(t))))
+                        t.preferred_pitch_limit = max(1, min(
+                            len(_lss.FIXTURE_PITCHES),
+                            _int_form("preferred_pitch_limit", _lss.preferred_limit(t))))
+                        try:
+                            _lss.set_tour_preferred_pitches(
+                                t, request.form.getlist("preferred_pitches"))
+                        except ValueError as e:
+                            flash(f"Preferred pitches not changed: {e}", "error")
+                    new_pref = (_lss.tour_preferred_pitches(t),
+                                _lss.preferred_pct(t), _lss.preferred_limit(t))
+                    new_mode = t.pitch_mode or "host"
+                    if new_mode != old_mode or (new_mode in _lss.PREFERRED_MODES
+                                                and new_pref != old_pref):
                         db.flush()
-                        n = assign_fixture_venues(db, t.id, overwrite=True)
+                        n = _lss.assign_fixture_venues(db, t.id, overwrite=True)
                         if n:
-                            flash(f"Pitch mode changed — {n} unplayed fixture(s) "
-                                  "re-stamped.", "info")
+                            flash(f"Pitch settings changed — {n} unplayed "
+                                  "fixture(s) re-stamped.", "info")
                     log_admin(db, "tournament_edit", "tournament", t.id, t.name)
                     flash("✅ Saved tournament settings.", "success")
                 elif action == "save_knockout":
@@ -17117,6 +17148,28 @@ def admin_tournament_detail(tournament_id):
                         tt.home_pitch = pitch if pitch in FIXTURE_PITCHES else None
                         flash(f"✅ {tt.name} home pitch: {tt.home_pitch or 'none'}.",
                               "success")
+                elif action == "set_team_preferred_pitches":
+                    from services import league_schedule_service as _lss
+                    tt = db.get(TournamentTeam, _int_form("team_id"))
+                    if not tt or tt.tournament_id != t.id:
+                        flash("Team not found in this tournament.", "error")
+                    else:
+                        try:
+                            picked = _lss.set_team_preferred_pitches(
+                                t, tt, request.form.getlist("preferred_pitches"))
+                        except ValueError as e:
+                            flash(f"{tt.name}: {e}", "error")
+                        else:
+                            # The list replaces the legacy single home pitch.
+                            tt.home_pitch = None
+                            msg = (f"✅ {tt.name} preferred pitches: "
+                                   f"{', '.join(picked) or 'none'}.")
+                            if (t.pitch_mode or "host") == _lss.PITCH_MODE_TEAM_PREF:
+                                db.flush()
+                                n = _lss.assign_fixture_venues(db, t.id, overwrite=True)
+                                if n:
+                                    msg += f" {n} unplayed fixture(s) re-stamped."
+                            flash(msg, "success")
                 elif action == "sync_owners":
                     n = tournament_service.sync_owners_from_draft(db, t.id)
                     flash((f"✅ Inherited {n} team owner(s) from the draft.") if n
@@ -17370,6 +17423,7 @@ def admin_tournament_detail(tournament_id):
         if tg_ids:
             for u in db.query(User).filter(User.telegram_id.in_(tg_ids)).all():
                 lp_users[int(u.telegram_id)] = u
+        from services import league_schedule_service as _lss
         from services.league_schedule_service import FIXTURE_PITCHES
         from services import injury_service
         # Co-owner lists are a JSON column; decode once here so the template
@@ -17401,6 +17455,13 @@ def admin_tournament_detail(tournament_id):
                                available=available, groups=groups,
                                league_played=lg_played, league_total=lg_total,
                                lp_users=lp_users, pitch_types=FIXTURE_PITCHES,
+                               tour_pref_pitches=_lss.tour_preferred_pitches(t),
+                               team_pref_pitches={
+                                   tt.id: _lss.team_preferred_pitches(
+                                       tt, _lss.preferred_limit(t))
+                                   for tt in teams},
+                               pref_pct=_lss.preferred_pct(t),
+                               pref_limit=_lss.preferred_limit(t),
                                co_owners=co_owners, injuries=injuries,
                                squads_json=json.dumps(squads),
                                team_challenge_json=json.dumps(team_challenge),
