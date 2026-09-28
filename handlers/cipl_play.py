@@ -658,13 +658,26 @@ def _bot_bats(state):
 
 
 def _app_mode(state):
-    """True when this bot match is played in the Mini App (``/lpbot app``).
+    """True when this match is played in the Mini App.
 
-    The chat then carries no pick buttons at all — just the Play button, the
-    over summaries and the result — and chat buttons from an older message are
-    refused, so the two surfaces can never race each other.
+    A bot match is started there (``/lpbot app``); any match can be moved there
+    mid-game with ``/playapp`` (handlers/cipl_pause.py). The chat then carries
+    no pick buttons at all — just the Play button, the over summaries and the
+    result — and chat buttons from an older message are refused, so the two
+    surfaces can never race each other.
     """
-    return _is_bot_match(state) and state.get("play_mode") == "app"
+    return bool(state) and state.get("play_mode") == "app"
+
+
+def _private_plans(state):
+    """True when neither captain's plans may be shown to the other.
+
+    Two humans playing in the Mini App pick privately, so the chat's over
+    summary leaves out everything that gives a plan away (the match-up name,
+    its flavour line, the carry-over note, who has been repeating themselves).
+    Bot matches have their own, older rule for the bot's side.
+    """
+    return _app_mode(state) and not _is_bot_match(state)
 
 
 UNRANKED_NOTE = ("🎯 <i>Practice match — unranked. No career stats, coins, gems, "
@@ -1114,11 +1127,15 @@ async def _on_remind(context):
             nag = (f"⏳ {_mention(idle_tg, idle_name)}, you have "
                    f"<b>{secs} seconds</b> to play your turn{where} — or the "
                    f"practice match closes. No fine, it's just practice.")
+        elif _saves_on_timeout(state):
+            nag = (f"⏳ {_mention(idle_tg, idle_name)}, you have "
+                   f"<b>{secs} seconds</b> to play your turn{where} — or the "
+                   f"match is paused and saved (a second time-out forfeits it).")
         else:
             nag = (f"⏳ {_mention(idle_tg, idle_name)}, you have "
-                   f"<b>{secs} seconds</b> to play your turn — or you forfeit "
-                   f"the match (−{CIPL_FORFEIT_COINS:,} 🪙 "
-                   f"−{CIPL_FORFEIT_GEMS} 💎).")
+                   f"<b>{secs} seconds</b> to play your turn{where} — or you "
+                   f"forfeit the match (−{CIPL_FORFEIT_COINS:,} 🪙 "
+                   f"−{CIPL_FORFEIT_GEMS} 💎). <i>Need a break? /pause</i>")
         try:
             sent = await context.bot.send_message(
                 state["chat_id"], nag, parse_mode="HTML")
@@ -1162,10 +1179,24 @@ async def _on_timeout(context):
         try:
             if _is_bot_match(state):
                 await _close_idle_bot_match(context, mid, state)
+            elif _saves_on_timeout(state):
+                from handlers.cipl_pause import autosave_idle_match
+                if not await autosave_idle_match(context, mid, state, expected):
+                    await _forfeit_live_match(context, mid, state, expected)
             else:
                 await _forfeit_live_match(context, mid, state, expected)
         except Exception:
             logger.exception("cipl timeout forfeit failed for match %s", mid)
+
+
+def _saves_on_timeout(state):
+    """A tournament match's first idle timeout saves it (see cipl_pause)."""
+    try:
+        from handlers.cipl_pause import saves_on_timeout
+        return saves_on_timeout(state)
+    except Exception:
+        logger.exception("cipl: saves_on_timeout check failed")
+        return False
 
 
 async def _close_idle_bot_match(context, mid, state):
@@ -1176,6 +1207,20 @@ async def _close_idle_bot_match(context, mid, state):
     """
     _cancel_timer(context, mid)
     chat_id = state.get("chat_id")
+
+    # Keep a copy so the player can pick the practice match up again later
+    # (/continue) instead of starting over. Best-effort: a failed save only
+    # means the old behaviour, a match that is simply closed.
+    saved = False
+    try:
+        from services import saved_match_service as _svc
+        na = await _get_next_action(context, mid)
+        if _svc.is_saveable(state, na):
+            await asyncio.to_thread(_svc.save_snapshot, mid, state, na,
+                                    _svc.REASON_AUTO)
+            saved = True
+    except Exception:
+        logger.exception("saving idle bot match %s failed", mid)
 
     prev = state.pop("action_remind_msg_id", None)
     if prev and chat_id is not None:
@@ -1210,14 +1255,21 @@ async def _close_idle_bot_match(context, mid, state):
             pass
 
     if chat_id is not None:
+        rows = _rematch_row(state)
+        note = ""
+        if saved:
+            note = (f"\n💾 Saved where you left it — <code>/continue {mid}</code> "
+                    f"picks it up again.")
+            rows = [[InlineKeyboardButton("▶️ Continue",
+                                          callback_data=f"svm_go_{mid}")]] + rows
         try:
             await context.bot.send_message(
                 chat_id,
                 "🤖 <b>Practice match closed</b>\n"
                 "Nobody played a turn in time, so the bot has packed up. "
-                "Nothing was lost — no fine, no stats.",
+                "Nothing was lost — no fine, no stats." + note,
                 parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup(_rematch_row(state)))
+                reply_markup=InlineKeyboardMarkup(rows))
         except Exception:
             logger.exception("bot practice-match close notice failed for %s", mid)
 
@@ -2137,7 +2189,11 @@ def _match_start_announcement(state):
         f"🏏 {bat} batting first\n"
         f"{rule}\n"
         f"{bat_emoji} <b>{bat}</b>   vs   {bowl_emoji} <b>{bowl}</b>\n"
-        f"📺 Live scorecard, commentary &amp; XI inside\n\n"
+        f"📺 Live scorecard, commentary &amp; XI inside\n"
+        f"⏸️ /pause saves the match for later"
+        + ("" if _is_bot_match(state) else
+           " · 📱 /playapp plays it in the Mini App with private plans")
+        + "\n\n"
         f"👇 Tap <b>Watch Match</b> to follow the action live")
 
 
@@ -2925,10 +2981,11 @@ _PICK_ALREADY = {
 def _pick_surface_error(state, source):
     """The refusal for a pick made on the wrong surface, or None."""
     if source == "app" and not _app_mode(state):
-        return ("💬 This match is played in the chat. Start it with "
-                "/lpbot app (or /ciplbot app) to play in the Mini App.")
+        return ("💬 This match is played in the chat. Type /playapp in the "
+                "chat to move it to the Mini App.")
     if source == "chat" and _app_mode(state):
-        return "📱 This match is played in the Mini App — tap 🎮 Play in Mini App."
+        return ("📱 This match is played in the Mini App — tap 🎮 Play in Mini "
+                "App (or /playchat to move it back to the chat).")
     return None
 
 
@@ -3685,6 +3742,10 @@ def _predictability_lines(state, summary):
     """
     from engine.approach_modifiers import REPEAT_FROM
 
+    # With private plans each captain gets this warning in the Mini App, about
+    # their own picks only; saying it in the chat would tell the opponent.
+    if _private_plans(state):
+        return []
     bot_uid = state.get("bot_user_id") if _is_bot_match(state) else None
     out = []
     for side, label, word in (("bat", state.get("bat_team_name"), "intent"),
@@ -3738,7 +3799,12 @@ def _render_over_summary(state, summary):
     # picks are published is a bot that can be written down. Between two humans
     # the reveal is symmetric — each captain gives up exactly what they learn —
     # and it is what makes an over feel like an event rather than a number.
-    if not _is_bot_match(state):
+    #
+    # Two humans who moved the match to the Mini App (/playapp) chose private
+    # plans, so the reveal is left out for them too.
+    if _private_plans(state):
+        lines.append("🔒 <i>Plans stay private — played in the Mini App.</i>")
+    elif not _is_bot_match(state):
         combo, flavour = summary.get("combo"), summary.get("flavour")
         if combo:
             lines.append(f"⚔️ <b>{html.escape(combo)}</b> — "

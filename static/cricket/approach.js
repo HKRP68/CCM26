@@ -146,8 +146,8 @@ function renderApproachControls({ promptText, promptSubtitle, waitingBlock }) {
       selecting_wicket_batsman: ['⚠️ NEW BATSMAN INCOMING', 'The next batsman is walking out…'],
     };
     const [h, m] = waits[matchState.turnState] || ['⏳ PLEASE WAIT', 'The match is moving on…'];
-    if (matchState.myRole === 'spectator' && isBot && a.playMode === 'chat') {
-      showWaiting('💬 PLAYED IN THE CHAT', 'Make your picks with the chat buttons — this board follows along live. Start with /lpbot app to play here.');
+    if (matchState.myRole === 'spectator' && a.playMode === 'chat') {
+      showWaiting('💬 PLAYED IN THE CHAT', 'Picks are made with the chat buttons — this board follows along live. A captain can type /playapp in the chat to play here, with private plans.');
       return;
     }
     showWaiting(matchState.myRole === 'spectator' ? '👁️ SPECTATOR MODE' : h, m);
@@ -497,8 +497,18 @@ function renderOverSummary(lo) {
   const bat = lo.battingApproach || {};
   const bowl = lo.bowlingApproach || {};
   const a = approachData();
-  const batWho = lo.botBatted ? '🤖 Bot' : (matchState.myRole === 'batting' ? 'You' : 'Batting');
-  const bowlWho = lo.botBatted ? (matchState.myRole === 'spectator' ? 'Bowling' : 'You') : (a.isBotMatch ? '🤖 Bot' : 'Bowling');
+  let batWho;
+  let bowlWho;
+  if (a.isBotMatch) {
+    batWho = lo.botBatted ? '🤖 Bot' : (matchState.myRole === 'batting' ? 'You' : 'Batting');
+    bowlWho = lo.botBatted ? (matchState.myRole === 'spectator' ? 'Bowling' : 'You') : '🤖 Bot';
+  } else {
+    // viewerSide is the viewer's side during THAT over (the innings may have turned).
+    batWho = lo.viewerSide === 'bat' ? 'You' : (lo.viewerSide === 'bowl' ? 'Opponent' : 'Batting');
+    bowlWho = lo.viewerSide === 'bowl' ? 'You' : (lo.viewerSide === 'bat' ? 'Opponent' : 'Bowling');
+  }
+  const hiddenNote = lo.hiddenNote
+    || ((bat.hidden || bowl.hidden) ? '🔒 The bot keeps its plan secret — it is only revealed on 🟢 Easy.' : '');
   box.innerHTML = `
     <div class="op-head">
       <span class="op-title">End of ${unitWord()} ${escHtml(lo.overNo)}</span>
@@ -513,5 +523,5 @@ function renderOverSummary(lo) {
     ${lo.combo ? `<div class="op-combo">✨ ${escHtml(lo.combo)}</div>` : ''}
     ${lo.flavour ? `<div class="op-comm">${escHtml(lo.flavour)}</div>` : ''}
     ${lo.bowler ? `<div class="op-fig">🎳 ${escHtml(lo.bowler)}${lo.bowlerFigures ? ` · ${escHtml(lo.bowlerFigures)}` : ''}</div>` : ''}
-    ${(bat.hidden || bowl.hidden) ? '<div class="op-hidden-note">🔒 The bot keeps its plan secret — it is only revealed on 🟢 Easy.</div>' : ''}`;
+    ${(bat.hidden || bowl.hidden) && hiddenNote ? `<div class="op-hidden-note">${escHtml(hiddenNote)}</div>` : ''}`;
 }

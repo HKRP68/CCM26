@@ -389,7 +389,7 @@ class SubmitPickFlowTests(_Harness):
         self.assertTrue(any("who walks in" in t for t, _ in self._sent_texts()))
         self.assertTrue(cm.needs_new_batsman(self.store["state"]))
 
-    def test_bot_matches_offer_play_in_mini_app(self):
+    def test_app_mode_matches_offer_play_in_mini_app(self):
         s = _state()
         cp._miniapp_row = self._saved["_miniapp_row"]
         import services.match_broadcast as mb
@@ -407,7 +407,11 @@ class SubmitPickFlowTests(_Harness):
             s["play_mode"] = "app"
             cp._miniapp_row(s)
             self.assertEqual(seen["label"], "🎮 Play in Mini App")
+            # Two humans who moved the match to the app (/playapp) play there too.
             s.pop("is_bot_match")
+            cp._miniapp_row(s)
+            self.assertEqual(seen["label"], "🎮 Play in Mini App")
+            s["play_mode"] = "chat"
             cp._miniapp_row(s)
             self.assertEqual(seen["label"], "📊 View Match")
         finally:
