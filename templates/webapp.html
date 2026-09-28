@@ -2301,6 +2301,104 @@
     font: inherit; font-weight: 800; cursor: pointer;
   }
 
+
+  /* ════ Tournament tab ════ */
+  .tab .tab-live-dot {
+    position: absolute; top: 3px; right: calc(50% - 20px);
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--red); box-shadow: 0 0 0 0 rgba(255,77,109,.7);
+    animation: tnPulse 1.6s infinite;
+  }
+  @keyframes tnPulse {
+    0% { box-shadow: 0 0 0 0 rgba(255,77,109,.7); }
+    70% { box-shadow: 0 0 0 7px rgba(255,77,109,0); }
+    100% { box-shadow: 0 0 0 0 rgba(255,77,109,0); }
+  }
+  @media (max-width: 360px) { .tab { font-size: 0.6rem; } .tab .icon { font-size: 1.2rem; } }
+  .tn-head { position: relative; }
+  .tn-head h2 { margin: 0.15rem 0 0.2rem; font-size: 1.15rem; font-family: var(--font-display); padding-right: 2.2rem; }
+  .tn-meta { font-size: 0.74rem; color: var(--muted); }
+  .tn-pill {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    font-size: 0.66rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+    padding: 0.18rem 0.5rem; border-radius: 20px;
+    background: rgba(255,77,109,.14); color: var(--red);
+  }
+  .tn-pill.muted { background: var(--card); color: var(--muted); }
+  .tn-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: tnPulse 1.6s infinite; }
+  .tn-refresh {
+    position: absolute; top: 0.8rem; right: 0.8rem;
+    background: var(--card); border: 1px solid var(--border); color: var(--muted);
+    width: 32px; height: 32px; border-radius: 50%; cursor: pointer; font-size: 0.95rem;
+  }
+  .tn-progress { height: 6px; border-radius: 3px; background: var(--card); overflow: hidden; margin: 0.55rem 0 0.25rem; }
+  .tn-progress > div { height: 100%; background: linear-gradient(90deg, var(--accent), #ffd966); border-radius: 3px; }
+  .tn-champ {
+    margin-top: 0.6rem; padding: 0.55rem 0.7rem; border-radius: 10px;
+    background: linear-gradient(90deg, rgba(232,184,75,.18), transparent);
+    border: 1px solid rgba(232,184,75,.35); font-weight: 800;
+  }
+  .tn-subtabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .tn-subtabs::-webkit-scrollbar { display: none; }
+  .tn-subtabs .chip { flex-shrink: 0; }
+  .tn-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+  .tn-table th {
+    color: var(--muted); font-weight: 700; font-size: 0.64rem; text-transform: uppercase;
+    letter-spacing: .05em; padding: 0.35rem 0.25rem; text-align: right; border-bottom: 1px solid var(--border);
+  }
+  .tn-table th:nth-child(1), .tn-table th:nth-child(2) { text-align: left; }
+  .tn-table td { padding: 0.5rem 0.25rem; text-align: right; border-bottom: 1px solid rgba(30,45,69,.6); font-variant-numeric: tabular-nums; }
+  .tn-table td.pos { text-align: left; color: var(--muted); font-weight: 800; width: 1.4rem; }
+  .tn-table td.team { text-align: left; max-width: 0; width: 45%; }
+  .tn-table td.team .nm { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tn-table td.pts { font-weight: 900; color: var(--accent); }
+  .tn-table tr.me td { background: rgba(232,184,75,.08); }
+  .tn-table tr.q td.pos { color: var(--green); }
+  .tn-table tr.cut td { border-bottom: 1px dashed rgba(0,212,170,.5); }
+  .tn-form { display: flex; gap: 3px; margin-top: 3px; }
+  .tn-form span { width: 13px; height: 13px; border-radius: 3px; font-size: 0.5rem; font-weight: 900; display: inline-flex; align-items: center; justify-content: center; color: #0a0f1a; }
+  .tn-form .W { background: var(--green); } .tn-form .L { background: var(--red); color: #fff; } .tn-form .T { background: #f2c94c; }
+  .tn-foot { font-size: 0.68rem; color: var(--muted); margin-top: 0.5rem; }
+  .tn-fx {
+    background: var(--card-2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 0.7rem 0.8rem; margin-bottom: 0.5rem; cursor: default;
+  }
+  .tn-fx.clickable { cursor: pointer; }
+  .tn-fx.clickable:active { transform: scale(0.99); }
+  .tn-fx.live { border-color: rgba(255,77,109,.55); }
+  .tn-fx.next { border-color: var(--accent); }
+  .tn-fx.mine { background: linear-gradient(90deg, rgba(232,184,75,.08), var(--card-2)); }
+  .tn-fx-top { display: flex; justify-content: space-between; align-items: center; font-size: 0.66rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 700; margin-bottom: 0.4rem; gap: 0.4rem; }
+  .tn-fx-row { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.12rem 0; }
+  .tn-fx-row .nm { font-weight: 700; font-size: 0.88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tn-fx-row .sc { font-weight: 800; font-size: 0.85rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tn-fx-row.win .nm, .tn-fx-row.win .sc { color: var(--accent); }
+  .tn-fx-row.lose { opacity: .7; }
+  .tn-fx-res { font-size: 0.74rem; color: var(--green); margin-top: 0.35rem; }
+  .tn-fx-sub { font-size: 0.7rem; color: var(--muted); margin-top: 0.3rem; }
+  .tn-badge { font-size: 0.6rem; font-weight: 900; padding: 0.1rem 0.4rem; border-radius: 6px; background: rgba(232,184,75,.18); color: var(--accent); }
+  .tn-badge.live { background: rgba(255,77,109,.18); color: var(--red); }
+  .tn-logo { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; flex-shrink: 0; background: var(--card); display: inline-flex; align-items: center; justify-content: center; font-size: 0.55rem; font-weight: 900; color: var(--muted); }
+  .tn-team { display: flex; align-items: center; gap: 0.45rem; min-width: 0; }
+  .tn-cells { display: flex; gap: 0.6rem; font-size: 0.68rem; color: var(--muted); margin-top: 2px; flex-wrap: wrap; }
+  .tn-cells b { color: var(--text); font-weight: 700; }
+  .tn-hl { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+  .tn-hl > div { background: var(--card-2); border: 1px solid var(--border); border-radius: 12px; padding: 0.6rem 0.7rem; min-width: 0; }
+  .tn-hl .lbl { font-size: 0.62rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 700; }
+  .tn-hl .val { font-size: 1.05rem; font-weight: 900; color: var(--accent); margin-top: 0.15rem; }
+  .tn-hl .who { font-size: 0.78rem; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tn-hl .tm { font-size: 0.66rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tn-sec { font-size: 0.7rem; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); font-weight: 700; margin: 0.9rem 0 0.5rem; font-family: var(--font-display); display: flex; justify-content: space-between; align-items: center; }
+  .tn-sec button { background: none; border: none; color: var(--accent); font-size: 0.7rem; font-weight: 700; cursor: pointer; font-family: inherit; }
+  .tn-seg { display: flex; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 3px; margin-bottom: 0.7rem; }
+  .tn-seg button { flex: 1; background: none; border: none; color: var(--muted); padding: 0.45rem; border-radius: 9px; font-family: inherit; font-weight: 700; font-size: 0.78rem; cursor: pointer; }
+  .tn-seg button.active { background: rgba(232,184,75,.15); color: var(--accent); }
+  .tn-inj { display: flex; justify-content: space-between; gap: 0.5rem; }
+  .tn-inj .sev { font-size: 0.62rem; font-weight: 800; padding: 0.1rem 0.4rem; border-radius: 6px; background: rgba(242,201,76,.16); color: #f2c94c; white-space: nowrap; align-self: flex-start; }
+  .tn-inj .sev.serious { background: rgba(255,77,109,.16); color: var(--red); }
+  .tn-inj .sev.strain { background: rgba(255,150,70,.16); color: #ff9646; }
+  .lm-sc-result { font-size: 0.78rem; color: var(--green); margin-bottom: 0.6rem; font-weight: 700; }
+  .lm-sc-note { font-size: 0.68rem; color: var(--muted); margin-top: 0.6rem; }
 </style>
 </head>
 <body>
@@ -3079,6 +3177,12 @@
   </div>
 </div>
 
+<!-- ════ TOURNAMENT (live competition) ════ -->
+<div class="screen" id="screen-tournament">
+  <div id="tn-switch" class="filters" style="display:none;"></div>
+  <div id="tn-content"><div class="empty"><div class="spinner"></div></div></div>
+</div>
+
 <!-- ════ Bottom tabs ════ -->
 <div class="tabs" id="bottom-nav">
   <button class="tab active" data-screen="home" onclick="navigate('home')">
@@ -3096,6 +3200,11 @@
   <button class="tab" data-screen="roster" onclick="navigate('roster')">
     <div class="icon">👥</div>
     <div>Squad</div>
+  </button>
+  <button class="tab" id="tab-tournament" data-screen="tournament" style="display:none;" onclick="navigate('tournament')">
+    <span class="tab-live-dot"></span>
+    <div class="icon">🏟️</div>
+    <div>Tourney</div>
   </button>
   <button class="tab" data-screen="leaderboard" onclick="navigate('leaderboard')">
     <div class="icon">🏆</div>
@@ -3498,6 +3607,7 @@ function navigate(screen) {
   if (screen === 'packs') loadPacks();
   if (screen === 'achievements') loadAchievements();
   if (screen === 'season') loadSeason();
+  if (screen === 'tournament') loadTournament();
   if (screen === 'clubs') loadClubs();
   if (screen === 'browse') {
     loadCountries().then(() => {
@@ -3619,6 +3729,9 @@ async function refreshDashboard() {
     if (sub && data.season.me.rank) sub.textContent = `Rank #${data.season.me.rank}`;
   }
   window._seasonInfo = data.season || null;
+
+  // Tournament tab: only while a tournament is live.
+  updateTournamentTab(data.tournament || null);
 
   // Keep the first screen useful: surface missions and the free reward state.
   refreshHomeHighlights();
@@ -9163,6 +9276,7 @@ function renderScorecard() {
     </tr>`).join('') : `<tr><td colspan="6" style="color:var(--muted);">—</td></tr>`;
 
   document.getElementById('lm-drawer-body').innerHTML = `
+    ${d.result_text ? `<div class="lm-sc-result">🏁 ${escapeHtml(d.result_text)}</div>` : ''}
     <div style="font-weight:800;margin-bottom:0.5rem;">
       ${escapeHtml(inn.bat_team)} — ${inn.runs}/${inn.wickets} (${inn.overs}${d.ball_format==='The100'?'':' ov'})
     </div>
@@ -9175,6 +9289,7 @@ function renderScorecard() {
       <thead><tr><th>Bowler</th><th style="text-align:right;">O</th><th style="text-align:right;">M</th><th style="text-align:right;">R</th><th style="text-align:right;">W</th><th style="text-align:right;">Econ</th></tr></thead>
       <tbody>${bowlRows}</tbody>
     </table>
+    ${d.summary_only ? `<div class="lm-sc-note">Summary scorecard — this result was entered without ball-by-ball details.</div>` : ''}
   `;
 }
 
@@ -9188,6 +9303,373 @@ async function lmAbandon() {
   toast('Match forfeited', 'info');
   stopMatchPolling();
   navigate('home');
+}
+
+// ════════════════ Tournament tab (live competition) ════════════════
+// The tab only exists while a tournament is live: /api/webapp/init says which
+// ones are, and the screen follows one of them (chip switcher when there are two).
+const TN_SUBS = [
+  ['overview', '📋 Overview'], ['table', '📊 Table'], ['matches', '🏏 Matches'],
+  ['stats', '📈 Stats'], ['mvp', '🏅 MVP'], ['injuries', '🩹 Injuries'],
+];
+let tnLive = [];            // [{id, name, kind, kind_label}]
+let tnId = null;            // tournament being viewed
+let tnData = null;          // /api/webapp/tournament payload
+let tnStats = null;         // /api/webapp/tournament/stats payload
+let tnSub = 'overview';
+let tnSeg = 'results';      // matches: results | upcoming
+let tnBoard = 'runs';
+let tnLoading = false;
+try {
+  tnSub = sessionStorage.getItem('tn_sub') || tnSub;
+  tnBoard = sessionStorage.getItem('tn_board') || tnBoard;
+  tnSeg = sessionStorage.getItem('tn_seg') || tnSeg;
+} catch (_) {}
+
+function tnRemember(k, v) { try { sessionStorage.setItem(k, v); } catch (_) {} }
+
+function updateTournamentTab(info) {
+  tnLive = (info && info.live && info.tournaments) ? info.tournaments : [];
+  const tab = document.getElementById('tab-tournament');
+  if (tab) tab.style.display = tnLive.length ? '' : 'none';
+  if (tnId && !tnLive.some(t => t.id === tnId)) { tnId = null; tnData = null; tnStats = null; }
+  // Tournament ended while the screen was open: back home.
+  if (!tnLive.length && currentScreen === 'tournament') navigate('home');
+}
+
+function renderTnSwitch() {
+  const el = document.getElementById('tn-switch');
+  if (tnLive.length < 2) { el.style.display = 'none'; return; }
+  el.style.display = 'flex';
+  el.innerHTML = tnLive.map(t => `
+    <button class="chip ${t.id === tnId ? 'active' : ''}" onclick="tnSelect(${t.id})">
+      ${t.kind === 'letsplay' ? '🎮' : '🏆'} ${escapeHtml(t.name)}
+    </button>`).join('');
+}
+
+function tnSelect(id) {
+  if (id === tnId) return;
+  haptic('light');
+  tnId = id; tnData = null; tnStats = null;
+  loadTournament();
+}
+
+async function loadTournament(force = false) {
+  const el = document.getElementById('tn-content');
+  if (!tnId && tnLive.length) tnId = tnLive[0].id;
+  renderTnSwitch();
+  if (tnData && !force && tnData.tournament.id === tnId) { renderTournament(); }
+  else el.innerHTML = `<div class="empty"><div class="spinner"></div><div style="margin-top:0.6rem;">Loading tournament…</div></div>`;
+  if (tnLoading) return;
+  tnLoading = true;
+  const { ok, data } = await api('/api/webapp/tournament', tnId ? { tournament_id: tnId } : {});
+  tnLoading = false;
+  if (!ok) {
+    if (!tnData) el.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Could not load the tournament')}</div>`;
+    return;
+  }
+  if (Array.isArray(data.live_tournaments)) {
+    updateTournamentTab({ live: data.live_tournaments.length > 0, tournaments: data.live_tournaments });
+  }
+  if (!data.live) {
+    tnData = null;
+    el.innerHTML = `<div class="empty"><div class="icon">🏟️</div>No tournament is live right now.</div>`;
+    return;
+  }
+  tnData = data;
+  tnId = data.tournament.id;
+  renderTnSwitch();
+  if (force) tnStats = null;
+  renderTournament();
+  if (['overview', 'stats', 'mvp'].includes(tnSub)) loadTnStats();
+}
+
+async function loadTnStats() {
+  if (!tnId) return;
+  if (tnStats && tnStats.tournament_id === tnId) return;
+  const id = tnId;
+  const { ok, data } = await api('/api/webapp/tournament/stats', { tournament_id: id });
+  if (id !== tnId) return;
+  tnStats = ok ? data : { tournament_id: id, error: data.message || 'Could not load stats', boards: [], mvp: [] };
+  if (currentScreen === 'tournament') renderTournament();
+}
+
+function tnSetSub(sub) {
+  haptic('light');
+  tnSub = sub; tnRemember('tn_sub', sub);
+  renderTournament();
+  if (['overview', 'stats', 'mvp'].includes(sub)) loadTnStats();
+}
+function tnSetSeg(seg) { haptic('light'); tnSeg = seg; tnRemember('tn_seg', seg); renderTournament(); }
+function tnSetBoard(b) { haptic('light'); tnBoard = b; tnRemember('tn_board', b); renderTournament(); }
+
+function tnLogo(team) {
+  if (!team) return `<span class="tn-logo">?</span>`;
+  if (team.logo_url) return `<img class="tn-logo" src="${escapeHtml(team.logo_url)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">`;
+  return `<span class="tn-logo">${escapeHtml((team.short_name || team.name || '?').slice(0, 3))}</span>`;
+}
+
+function tnNrr(v) {
+  const n = Number(v || 0);
+  return (n > 0 ? '+' : '') + n.toFixed(3);
+}
+
+function renderTournament() {
+  const el = document.getElementById('tn-content');
+  const d = tnData;
+  if (!d) return;
+  const t = d.tournament;
+  const subs = TN_SUBS.filter(([k]) => k !== 'injuries' || d.injuries_enabled);
+  if (!subs.some(([k]) => k === tnSub)) tnSub = 'overview';
+  const pct = t.matches_total ? Math.round(t.matches_played * 100 / t.matches_total) : 0;
+  const live = t.status === 'active';
+  const head = `
+    <div class="card tn-head">
+      <button class="tn-refresh" onclick="haptic('light');loadTournament(true)" aria-label="Refresh">↻</button>
+      <span class="tn-pill ${live ? '' : 'muted'}">${live ? '<span class="dot"></span>' : ''}${escapeHtml(t.status_label || t.status)}</span>
+      <h2>${escapeHtml(t.name)}</h2>
+      <div class="tn-meta">${escapeHtml(t.kind_label)} · ${t.teams} teams · ${t.overs} overs${t.format ? ' · ' + escapeHtml(t.format) : ''}</div>
+      <div class="tn-progress"><div style="width:${pct}%"></div></div>
+      <div class="tn-meta">Match ${t.matches_played} of ${t.matches_total} played${t.league_total && t.league_total !== t.matches_total && t.league_played < t.league_total ? ` · League ${t.league_played}/${t.league_total}` : ''}</div>
+      ${t.champion ? `<div class="tn-champ">🏆 Champions: ${escapeHtml(t.champion.name)}</div>` : ''}
+    </div>`;
+  const tabs = `<div class="filters tn-subtabs">${subs.map(([k, label]) =>
+    `<button class="chip ${k === tnSub ? 'active' : ''}" onclick="tnSetSub('${k}')">${label}</button>`).join('')}</div>`;
+  let body = '';
+  if (tnSub === 'overview') body = tnOverview(d);
+  else if (tnSub === 'table') body = tnTableView(d);
+  else if (tnSub === 'matches') body = tnMatchesView(d);
+  else if (tnSub === 'stats') body = tnStatsView();
+  else if (tnSub === 'mvp') body = tnMvpView();
+  else if (tnSub === 'injuries') body = tnInjuriesView(d);
+  el.innerHTML = head + tabs + body;
+}
+
+function tnTeamName(fx, n) {
+  const team = n === 1 ? fx.team1 : fx.team2;
+  return team ? team.name : (n === 1 ? fx.slot1_label : fx.slot2_label) || 'TBD';
+}
+
+function tnFixtureCard(fx) {
+  const mine = (tnData.my_team_ids || []);
+  const isMine = (fx.team1 && mine.includes(fx.team1.id)) || (fx.team2 && mine.includes(fx.team2.id));
+  const done = fx.status === 'completed';
+  const liveNow = fx.status === 'live';
+  const clickable = (done || liveNow) && fx.has_scorecard;
+  const rowCls = n => {
+    if (!done || !fx.winner_team_id) return '';
+    const team = n === 1 ? fx.team1 : fx.team2;
+    return team && team.id === fx.winner_team_id ? 'win' : 'lose';
+  };
+  const badge = liveNow ? `<span class="tn-badge live">● LIVE</span>`
+    : fx.is_next ? `<span class="tn-badge">NEXT</span>`
+    : isMine ? `<span class="tn-badge">YOUR TEAM</span>` : '';
+  const sub = [];
+  if (!done) {
+    if (fx.venue) sub.push('📍 ' + escapeHtml(fx.venue));
+    if (fx.pitch_type) sub.push('🌱 ' + escapeHtml(fx.pitch_type.replace(/_/g, ' ')) + ' pitch');
+  }
+  return `
+    <div class="tn-fx ${clickable ? 'clickable' : ''} ${liveNow ? 'live' : ''} ${fx.is_next ? 'next' : ''} ${isMine ? 'mine' : ''}"
+         ${clickable ? `onclick="openTournamentScorecard(${fx.id})"` : ''}>
+      <div class="tn-fx-top"><span>Match ${fx.match_no || '—'} · ${escapeHtml(fx.stage_label)}</span>${badge}</div>
+      <div class="tn-fx-row ${rowCls(1)}"><div class="tn-team">${tnLogo(fx.team1)}<span class="nm">${escapeHtml(tnTeamName(fx, 1))}</span></div><span class="sc">${fx.score1 ? escapeHtml(fx.score1) : ''}</span></div>
+      <div class="tn-fx-row ${rowCls(2)}"><div class="tn-team">${tnLogo(fx.team2)}<span class="nm">${escapeHtml(tnTeamName(fx, 2))}</span></div><span class="sc">${fx.score2 ? escapeHtml(fx.score2) : ''}</span></div>
+      ${done && fx.result_text ? `<div class="tn-fx-res">${escapeHtml(fx.result_text)}</div>` : ''}
+      ${sub.length ? `<div class="tn-fx-sub">${sub.join(' · ')}</div>` : ''}
+      ${clickable ? `<div class="tn-fx-sub">Tap for scorecard ›</div>` : ''}
+    </div>`;
+}
+
+function tnHighlight(label, board, fallback) {
+  const r = board && board.rows && board.rows[0];
+  if (!r) return `<div><div class="lbl">${label}</div><div class="val">—</div><div class="tm">${fallback}</div></div>`;
+  return `<div><div class="lbl">${label}</div><div class="val">${escapeHtml(r.value)}</div>
+    <div class="who">${escapeHtml(r.name || '')}</div><div class="tm">${escapeHtml(r.team || '')}</div></div>`;
+}
+
+function tnOverview(d) {
+  const fx = d.fixtures || [];
+  const liveNow = fx.filter(f => f.status === 'live');
+  const next = fx.find(f => f.id === d.next_fixture_id);
+  const results = fx.filter(f => f.status === 'completed')
+    .sort((a, b) => (b.completed_at || '').localeCompare(a.completed_at || '') || b.match_no - a.match_no).slice(0, 3);
+  const mine = d.table.filter(r => r.is_mine);
+  let html = '';
+  if (mine.length) {
+    html += `<div class="tn-sec">Your team</div>` + mine.map(r => `
+      <div class="lb-row me" onclick="tnSetSub('table')">
+        <div class="lb-rank ${r.pos === 1 ? 'gold' : r.pos === 2 ? 'silver' : r.pos === 3 ? 'bronze' : ''}">${r.pos}</div>
+        <div class="lb-info"><div class="lb-name">${escapeHtml(r.name)}</div>
+          <div class="lb-team">P ${r.played} · W ${r.won} · L ${r.lost} · NRR ${tnNrr(r.nrr)}</div></div>
+        <div class="lb-value">${r.points} pts</div>
+      </div>`).join('');
+  }
+  if (liveNow.length) html += `<div class="tn-sec">Live now</div>` + liveNow.map(tnFixtureCard).join('');
+  if (next) html += `<div class="tn-sec">Up next <button onclick="tnSeg='upcoming';tnSetSub('matches')">All fixtures ›</button></div>` + tnFixtureCard(next);
+  if (results.length) html += `<div class="tn-sec">Latest results <button onclick="tnSeg='results';tnSetSub('matches')">All results ›</button></div>` + results.map(tnFixtureCard).join('');
+
+  // Stat highlights
+  const s = tnStats && tnStats.tournament_id === d.tournament.id ? tnStats : null;
+  const bd = k => s && (s.boards || []).find(b => b.key === k);
+  const mvp = s && s.mvp && s.mvp[0];
+  html += `<div class="tn-sec">Leaders <button onclick="tnSetSub('stats')">All stats ›</button></div>`;
+  if (!s) html += `<div class="empty"><div class="spinner"></div></div>`;
+  else html += `<div class="tn-hl">
+      ${tnHighlight('🏏 Most runs', bd('runs'), 'No runs yet')}
+      ${tnHighlight('🎯 Most wickets', bd('wkts'), 'No wickets yet')}
+      ${tnHighlight('💯 Highest score', bd('hs'), '—')}
+      ${tnHighlight('🔥 Best figures', bd('fig'), '—')}
+    </div>
+    ${mvp ? `<div class="lb-row" style="margin-top:0.5rem;" onclick="tnSetSub('mvp')">
+      <div class="lb-rank gold">🏅</div>
+      <div class="lb-info"><div class="lb-name">${escapeHtml(mvp.name)}</div><div class="lb-team">MVP leader · ${escapeHtml(mvp.team || '')}</div></div>
+      <div class="lb-value">${mvp.points} pts</div></div>` : ''}`;
+  // Top of the table
+  if (d.table.length) {
+    html += `<div class="tn-sec">Top of the table <button onclick="tnSetSub('table')">Full table ›</button></div>`;
+    html += `<div class="card" style="padding:0.5rem 0.7rem;">${tnTableHtml(d.table.slice(0, 4), null)}</div>`;
+  }
+  return html || `<div class="empty"><div class="icon">🏟️</div>Nothing to show yet.</div>`;
+}
+
+function tnTableHtml(rows, qualify) {
+  if (!rows.length) return `<div class="empty">No teams yet</div>`;
+  return `<table class="tn-table">
+    <thead><tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>L</th><th>NR</th><th>NRR</th><th>Pts</th></tr></thead>
+    <tbody>${rows.map(r => `
+      <tr class="${r.is_mine ? 'me' : ''} ${qualify && r.pos <= qualify ? 'q' : ''} ${qualify && r.pos === qualify && rows.length > qualify ? 'cut' : ''}">
+        <td class="pos">${r.pos}</td>
+        <td class="team"><div class="tn-team">${tnLogo(r)}<div style="min-width:0;"><div class="nm">${escapeHtml(r.name)}${r.points_adjust ? ' <span style="color:var(--muted);">*</span>' : ''}</div>
+          ${r.form && r.form.length ? `<div class="tn-form">${r.form.map(f => `<span class="${f}">${f}</span>`).join('')}</div>` : ''}</div></div></td>
+        <td>${r.played}</td><td>${r.won}</td><td>${r.lost}</td><td>${r.no_result + r.tied}</td>
+        <td>${tnNrr(r.nrr)}</td><td class="pts">${r.points}</td>
+      </tr>`).join('')}</tbody></table>`;
+}
+
+function tnTableView(d) {
+  const t = d.tournament;
+  const q = t.qualify;
+  let html = '';
+  if (d.group_tables && d.group_tables.length) {
+    html += d.group_tables.map(g => `<div class="card"><div class="card-title">${escapeHtml(g.name)}</div>${tnTableHtml(g.rows, q)}</div>`).join('');
+  } else {
+    html += `<div class="card" style="padding:0.6rem 0.7rem;">${tnTableHtml(d.table, q)}</div>`;
+  }
+  const foot = [];
+  foot.push(`Win ${t.points_win} · Tie ${t.points_tie} · No result ${t.points_no_result} · Loss ${t.points_loss} pts. NR column counts ties and no-results.`);
+  if (q) foot.push(`Top ${q}${d.group_tables && d.group_tables.length ? ' of each group' : ''} qualify for the knockouts.`);
+  (d.points_footnote || []).forEach(f => foot.push('* ' + escapeHtml(f)));
+  html += `<div class="tn-foot">${foot.join('<br>')}</div>`;
+  return html;
+}
+
+function tnMatchesView(d) {
+  const fx = d.fixtures || [];
+  const liveNow = fx.filter(f => f.status === 'live');
+  const results = fx.filter(f => f.status === 'completed').slice().reverse();
+  const upcoming = fx.filter(f => f.status === 'scheduled');
+  let html = `<div class="tn-seg">
+    <button class="${tnSeg === 'results' ? 'active' : ''}" onclick="tnSetSeg('results')">Results (${results.length})</button>
+    <button class="${tnSeg === 'upcoming' ? 'active' : ''}" onclick="tnSetSeg('upcoming')">Remaining (${upcoming.length})</button>
+  </div>`;
+  if (liveNow.length) html += `<div class="tn-sec">Live now</div>` + liveNow.map(tnFixtureCard).join('');
+  if (tnSeg === 'results') {
+    html += results.length ? results.map(tnFixtureCard).join('')
+      : `<div class="empty"><div class="icon">🏏</div>No results yet — the first match is still to come.</div>`;
+  } else {
+    if (!upcoming.length) {
+      html += `<div class="empty"><div class="icon">✅</div>No matches left to play.</div>`;
+    } else {
+      // Group the remaining fixtures by stage so the knockout reads as its own block.
+      let lastStage = null;
+      upcoming.forEach(f => {
+        const stageKey = (f.stage === 'league' || f.stage === 'group') ? 'League stage' : f.stage_label;
+        if (stageKey !== lastStage) { html += `<div class="tn-sec">${escapeHtml(stageKey)}</div>`; lastStage = stageKey; }
+        html += tnFixtureCard(f);
+      });
+    }
+  }
+  return html;
+}
+
+function tnStatsView() {
+  const s = tnStats && tnStats.tournament_id === tnId ? tnStats : null;
+  if (!s) return `<div class="empty"><div class="spinner"></div></div>`;
+  if (s.error) return `<div class="empty">❌ ${escapeHtml(s.error)}</div>`;
+  const boards = s.boards || [];
+  if (!boards.some(b => b.key === tnBoard)) tnBoard = 'runs';
+  const board = boards.find(b => b.key === tnBoard) || boards[0];
+  let html = `<div class="filters tn-subtabs">${boards.map(b =>
+    `<button class="chip ${b.key === tnBoard ? 'active' : ''}" onclick="tnSetBoard('${b.key}')">${b.icon} ${escapeHtml(b.label)}</button>`).join('')}</div>`;
+  if (!board || !board.rows.length) {
+    html += `<div class="empty"><div class="icon">📊</div>No entries on this board yet.</div>`;
+  } else {
+    html += board.rows.map((r, i) => `
+      <div class="lb-row">
+        <div class="lb-rank ${i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : ''}">${i + 1}</div>
+        <div class="lb-info">
+          <div class="lb-name">${escapeHtml(r.name || 'Player')}</div>
+          <div class="lb-team">${escapeHtml(r.team || '')}</div>
+          <div class="tn-cells">${(r.cells || []).map(c => `<span>${escapeHtml(c.label)} <b>${escapeHtml(c.value)}</b></span>`).join('')}${r.matches ? `<span>M <b>${r.matches}</b></span>` : ''}</div>
+        </div>
+        <div class="lb-value">${escapeHtml(r.value)}${board.unit ? `<div style="font-size:0.6rem;color:var(--muted);text-align:right;">${escapeHtml(board.unit)}</div>` : ''}</div>
+      </div>`).join('');
+  }
+  if (tnBoard === 'sr') html += `<div class="tn-foot">Minimum ${s.min_balls_for_sr} balls faced.</div>`;
+  if (tnBoard === 'econ') html += `<div class="tn-foot">Minimum ${s.min_balls_for_econ} balls bowled.</div>`;
+  return html;
+}
+
+function tnMvpView() {
+  const s = tnStats && tnStats.tournament_id === tnId ? tnStats : null;
+  if (!s) return `<div class="empty"><div class="spinner"></div></div>`;
+  if (s.error) return `<div class="empty">❌ ${escapeHtml(s.error)}</div>`;
+  if (!s.mvp || !s.mvp.length) return `<div class="empty"><div class="icon">🏅</div>The MVP race starts after the first match.</div>`;
+  return s.mvp.map((r, i) => `
+    <div class="lb-row">
+      <div class="lb-rank ${i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : ''}">${i + 1}</div>
+      <div class="lb-info">
+        <div class="lb-name">${escapeHtml(r.name || 'Player')}${r.awards ? ` <span style="font-size:0.72rem;">${'⭐'.repeat(Math.min(r.awards, 5))}</span>` : ''}</div>
+        <div class="lb-team">${escapeHtml(r.team || '')}</div>
+        <div class="tn-cells"><span>Runs <b>${r.bat_runs || 0}</b></span><span>Wkts <b>${r.bowl_wickets || 0}</b></span><span>M <b>${r.matches || 0}</b></span><span>Wins <b>${r.wins || 0}</b></span></div>
+        <div class="tn-cells"><span>Bat <b>${r.bat_points}</b></span><span>Bowl <b>${r.bowl_points}</b></span><span>Result <b>${r.result_points}</b></span><span>PoM <b>${r.award_points}</b></span></div>
+      </div>
+      <div class="lb-value">${r.points}<div style="font-size:0.6rem;color:var(--muted);text-align:right;">pts</div></div>
+    </div>`).join('') + `<div class="tn-foot">Impact points from batting, bowling, team wins and Player of the Match awards. ⭐ = PoM award.</div>`;
+}
+
+function tnInjuriesView(d) {
+  const inj = d.injuries || [];
+  if (!inj.length) return `<div class="empty"><div class="icon">💪</div>Everyone is fit — no injuries right now.</div>`;
+  return inj.map(i => `
+    <div class="lb-row tn-inj">
+      <div class="lb-info">
+        <div class="lb-name">🩹 ${escapeHtml(i.player_name || 'Player')}</div>
+        <div class="lb-team">${escapeHtml(i.team || '')} · ${escapeHtml(i.injury_type || '')}</div>
+        ${i.how ? `<div class="tn-cells">${escapeHtml(i.how)}</div>` : ''}
+        <div class="tn-cells"><span>Out for <b>${i.matches_remaining}</b> more match${i.matches_remaining === 1 ? '' : 'es'}</span></div>
+      </div>
+      <span class="sev ${escapeHtml(i.severity || '')}">${escapeHtml(i.severity_label || i.severity || '')}</span>
+    </div>`).join('');
+}
+
+// Scorecard for a tournament fixture, in the shared bottom-sheet drawer —
+// without leaving the Tournament screen.
+async function openTournamentScorecard(fixtureId) {
+  haptic('light');
+  document.getElementById('lm-drawer-backdrop').style.display = 'block';
+  document.getElementById('lm-drawer').classList.add('open');
+  document.getElementById('lm-drawer-tabs').innerHTML = '';
+  document.getElementById('lm-drawer-body').innerHTML = `<div class="empty"><div class="spinner"></div></div>`;
+  const { ok, data } = await api('/api/webapp/tournament/match', { tournament_id: tnId, fixture_id: fixtureId });
+  if (!ok || !data.innings || !data.innings.length) {
+    document.getElementById('lm-drawer-body').innerHTML = `<div class="empty">${escapeHtml((data && data.message) || 'Scorecard unavailable')}</div>`;
+    return;
+  }
+  lmScorecardData = data;
+  lmScorecardTab = data.current_innings || 1;
+  renderScorecard();
 }
 
 // ════════════════ Initial load ════════════════
