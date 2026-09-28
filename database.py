@@ -895,6 +895,8 @@ def _migrate_add_columns():
     # nudges. onboarding_started_at stays NULL on existing rows, which is what
     # keeps pre-existing players out of the new-player checklist.
     _try_add("users", "dm_blocked", "BOOLEAN DEFAULT FALSE NOT NULL")
+    # Admin "Reset user": the account must /debut again (user_reset_service).
+    _try_add("users", "needs_debut", "BOOLEAN DEFAULT FALSE NOT NULL")
     _try_add("users", "last_seen_at", "TIMESTAMP")
     _try_add("users", "onboarding_started_at", "TIMESTAMP")
     _try_add("users", "onboarding_steps", "VARCHAR(300)")

@@ -19,6 +19,7 @@
 {% macro result_form(fx) %}
 <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="rr-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
   <input type="hidden" name="action" value="record_result">
   <input type="hidden" name="fixture_id" value="{{ fx.id }}">
   <div class="rr-row">

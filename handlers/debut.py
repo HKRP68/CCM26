@@ -139,7 +139,10 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         existing = session.query(User).filter(User.telegram_id == tg_user.id).first()
-        if existing:
+        # An admin "Reset user" keeps the row but flags it: that player debuts
+        # again on the same account instead of being told they already have.
+        redebut = bool(existing is not None and getattr(existing, "needs_debut", False))
+        if existing and not redebut:
             from services.message_service import get_msg
             await update.effective_message.reply_text(
                 get_msg("debut_already"), parse_mode="HTML")
@@ -154,19 +157,28 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         debut_gems = (cr.gem_amount if cr and cr.gem_amount > 0
                        else cfg["debut_gems"])
 
-        user = User(
-            telegram_id=tg_user.id,
-            username=tg_user.username or "",
-            first_name=tg_user.first_name or "",
-            total_coins=debut_coins,
-            total_gems=debut_gems,
-            roster_count=0,
-        )
-        session.add(user)
+        if redebut:
+            user = existing
+            user.username = tg_user.username or user.username or ""
+            user.first_name = tg_user.first_name or user.first_name or ""
+            user.total_coins = debut_coins
+            user.total_gems = debut_gems
+            user.roster_count = 0
+            user.needs_debut = False
+        else:
+            user = User(
+                telegram_id=tg_user.id,
+                username=tg_user.username or "",
+                first_name=tg_user.first_name or "",
+                total_coins=debut_coins,
+                total_gems=debut_gems,
+                roster_count=0,
+            )
+            session.add(user)
         session.flush()
 
-        stats = UserStats(user_id=user.id)
-        session.add(stats)
+        if not session.query(UserStats).filter(UserStats.user_id == user.id).first():
+            session.add(UserStats(user_id=user.id))
 
         players = get_players_for_debut(session)
         if not players:
@@ -199,29 +211,32 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # complete it now that the user has a real account.
         referral_reward_text = ""
         referral_completed_now = False
-        try:
-            from services.referral_service import record_referral, complete_referral
-            from models import User as _U
-            pending_inviter_tg = context.user_data.get("pending_inviter_tg_id") if hasattr(context, 'user_data') else None
-            if pending_inviter_tg:
-                inviter = session.query(_U).filter(_U.telegram_id == pending_inviter_tg).first()
-                if inviter:
-                    record_referral(session, inviter.id, user.id)
-                context.user_data.pop("pending_inviter_tg_id", None)
-            # Complete any referral pointing at this invitee (whether just
-            # created or pre-existing from the start handler)
-            cr = complete_referral(session, user.id)
-            if cr:
-                referral_completed_now = True
-                if cr["paid_coins"] > 0 or cr["paid_gems"] > 0:
-                    parts = []
-                    if cr["paid_coins"]: parts.append(f"+{cr['paid_coins']:,} 🪙")
-                    if cr["paid_gems"]: parts.append(f"+{cr['paid_gems']} 💎")
-                    referral_reward_text = (
-                        "\n\n🎁 Your inviter received " + " ".join(parts) + " for inviting you!"
-                    )
-        except Exception:
-            logger.exception("Referral completion failed (non-fatal)")
+        # A re-debut after an admin reset never pays a referral again: it was
+        # settled on the first debut.
+        if not redebut:
+            try:
+                from services.referral_service import record_referral, complete_referral
+                from models import User as _U
+                pending_inviter_tg = context.user_data.get("pending_inviter_tg_id") if hasattr(context, 'user_data') else None
+                if pending_inviter_tg:
+                    inviter = session.query(_U).filter(_U.telegram_id == pending_inviter_tg).first()
+                    if inviter:
+                        record_referral(session, inviter.id, user.id)
+                    context.user_data.pop("pending_inviter_tg_id", None)
+                # Complete any referral pointing at this invitee (whether just
+                # created or pre-existing from the start handler)
+                cr = complete_referral(session, user.id)
+                if cr:
+                    referral_completed_now = True
+                    if cr["paid_coins"] > 0 or cr["paid_gems"] > 0:
+                        parts = []
+                        if cr["paid_coins"]: parts.append(f"+{cr['paid_coins']:,} 🪙")
+                        if cr["paid_gems"]: parts.append(f"+{cr['paid_gems']} 💎")
+                        referral_reward_text = (
+                            "\n\n🎁 Your inviter received " + " ".join(parts) + " for inviting you!"
+                        )
+            except Exception:
+                logger.exception("Referral completion failed (non-fatal)")
 
         # Branding (admin-configurable)
         try:
@@ -309,7 +324,7 @@ async def debut_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # If no referral was completed by the link path, ask for a code.
         # Sets a flag so the text-message catcher knows they're a fresh
         # debutant whose next typed line might be a referral code.
-        if not referral_completed_now:
+        if not referral_completed_now and not redebut:
             try:
                 context.user_data["awaiting_referral_code"] = True
                 kb = InlineKeyboardMarkup([[

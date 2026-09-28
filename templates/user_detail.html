@@ -260,9 +260,10 @@
 <details style="background:rgba(196,30,58,.05);border:1px solid rgba(196,30,58,.3);border-radius:10px;padding:.5rem .85rem;margin-bottom:1rem;">
   <summary style="cursor:pointer;color:#ff4757;font-size:.85rem;font-weight:600;">⚠️ Reset User Data (DANGER ZONE)</summary>
   <div style="margin-top:.6rem;color:var(--muted);font-size:.85rem;line-height:1.5;">
-    Wipes <strong>all</strong> data for this user: roster, stats, activity log, quest progress, achievements, trait inventory, trades. Resets coins/gems/QP/match counts to 0.
-    The User row (telegram_id mapping) is preserved so they can <code>/debut</code> again.
-    Match history rows are kept (so opponents keep their records).
+    {% if user.needs_debut %}<div style="color:#ffa502;font-weight:600;margin-bottom:.4rem;">🔄 This account was reset and is waiting for the player to run <code>/debut</code>.</div>{% endif %}
+    Wipes this user's progress: squad, career player, traits, packs, stats, quests, achievements, market slots, open trades, ranked rating and activity log. Coins/gems/QP/match counts go to 0.
+    Their next command tells them to run <code>/debut</code>, which gives them a fresh starter XI and the debut coins &amp; gems again.
+    Kept: Telegram id, names, team name/logo, membership, ban state, club, and match history (so opponents keep their records).
     <br><br>
     <strong style="color:#ff4757;">This is permanent and cannot be undone.</strong>
   </div>
