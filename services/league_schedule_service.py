@@ -675,18 +675,60 @@ def add_fixture(session, tournament_id, team1_id, team2_id, group_id=None, round
     return tm
 
 
-def delete_fixture(session, fixture_id):
-    """Delete a *scheduled* fixture only. Caller commits."""
-    from models import TournamentMatch
+def delete_fixture(session, fixture_id, *, force=False):
+    """Delete a fixture from the schedule. Caller commits.
+
+    A *scheduled* fixture simply goes. A *live* or *completed* one only goes with
+    ``force=True``, because each takes something with it:
+
+    * live — the match playing it carries on, but its result no longer has this
+      row to land on (``record_tournament_match`` falls back to another open
+      fixture for the pair, or records nothing).
+    * completed — its result leaves the points table, NRR and player stats,
+      which are rebuilt without it, and any knockout advancement it caused is
+      undone.
+
+    Rows pointing at the fixture are cleared by hand rather than trusting the
+    database's ON DELETE rules, which SQLite does not enforce by default.
+    Returns the tournament id, or None when the fixture doesn't exist.
+    """
+    from models import TournamentMatch, TournamentInjury, TournamentMatchReminder
     tm = session.get(TournamentMatch, int(fixture_id))
     if not tm:
         return None
-    if tm.status != "scheduled":
-        raise ValueError("Only scheduled fixtures can be deleted "
-                         "(this one is %s)." % tm.status)
+    if tm.status != "scheduled" and not force:
+        raise ValueError("This fixture is %s — tick “force” to delete it anyway."
+                         % tm.status)
     tid = tm.tournament_id
+    was_completed = tm.status == "completed"
+    if was_completed:
+        if tm.stage == "final":
+            from services.news_service import retract_auto_story
+            retract_auto_story(session, f"tourney:{tid}")
+        try:
+            from services import knockout_service
+            knockout_service.retract_bracket(session, tm)
+        except Exception:
+            logger.exception("retract_bracket failed for fixture %s", tm.id)
+
+    fid = tm.id
+    (session.query(TournamentMatch)
+     .filter(TournamentMatch.feeds_winner_to_id == fid)
+     .update({TournamentMatch.feeds_winner_to_id: None}, synchronize_session=False))
+    (session.query(TournamentMatch)
+     .filter(TournamentMatch.feeds_loser_to_id == fid)
+     .update({TournamentMatch.feeds_loser_to_id: None}, synchronize_session=False))
+    (session.query(TournamentInjury)
+     .filter(TournamentInjury.tournament_match_id == fid)
+     .update({TournamentInjury.tournament_match_id: None}, synchronize_session=False))
+    (session.query(TournamentMatchReminder)
+     .filter(TournamentMatchReminder.tournament_match_id == fid)
+     .delete(synchronize_session=False))
     session.delete(tm)
     session.flush()
+    if was_completed:
+        from services.tournament_service import recompute_tournament
+        recompute_tournament(session, tid)
     return tid
 
 

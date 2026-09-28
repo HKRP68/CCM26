@@ -3090,83 +3090,20 @@ def admin_reset_user(user_id):
             return redirect(url_for("user_detail", user_id=user_id))
 
         try:
-            orig_state = {
-                "coins": user.total_coins or 0,
-                "gems": user.total_gems or 0,
-                "qp": user.quest_points or 0,
-                "roster_count": user.roster_count or 0,
-                "matches_played": user.matches_played or 0,
-                "first_name": user.first_name or "",
-                "username": user.username or "",
-            }
-
-            from models import (
-                UserRoster, UserStats, ActivityLog, UserQuestProgress,
-                UserAchievement, Trade, PlayerTrait, TraitInventory,
-            )
-
-            deleted_counts = {}
-            for model, attr in [
-                (UserRoster, "user_id"),
-                (UserStats, "user_id"),
-                (ActivityLog, "user_id"),
-                (UserQuestProgress, "user_id"),
-                (UserAchievement, "user_id"),
-                (TraitInventory, "user_id"),
-            ]:
-                try:
-                    n = (db.query(model)
-                           .filter(getattr(model, attr) == user_id)
-                           .delete(synchronize_session=False))
-                    deleted_counts[model.__tablename__] = n
-                except Exception as e:
-                    deleted_counts[model.__tablename__] = f"ERR:{e}"
-
-            try:
-                n = (db.query(PlayerTrait)
-                       .filter(PlayerTrait.user_id == user_id)
-                       .delete(synchronize_session=False))
-                deleted_counts["player_traits"] = n
-            except Exception as e:
-                deleted_counts["player_traits"] = f"ERR:{e}"
-
-            try:
-                n = (db.query(Trade)
-                        .filter((Trade.from_user_id == user_id) |
-                                (Trade.to_user_id == user_id))
-                        .delete(synchronize_session=False))
-                deleted_counts["trades"] = n
-            except Exception as e:
-                deleted_counts["trades"] = f"ERR:{e}"
-
-            # Reset User counters
-            user.total_coins = 0
-            user.total_gems = 0
-            user.quest_points = 0
-            user.roster_count = 0
-            user.matches_played = 0
-            user.matches_won = 0
-            user.matches_lost = 0
-            if hasattr(user, "win_streak"):
-                user.win_streak = 0
-            if hasattr(user, "trade_count"):
-                user.trade_count = 0
-
-            new_stats = UserStats(user_id=user_id)
-            db.add(new_stats)
-            db.commit()
-
+            from services.user_reset_service import reset_user
+            name = user.first_name or user.username or str(user_id)
+            result = reset_user(db, user)
+            before, deleted = result["before"], result["deleted"]
             log_admin(db, "reset_user", target_type="user",
-                      target_id=user.id,
-                      target_name=user.first_name or user.username or "",
-                      detail=(f"RESET — was: coins={orig_state['coins']:,}, "
-                              f"gems={orig_state['gems']}, QP={orig_state['qp']}, "
-                              f"roster={orig_state['roster_count']}, "
-                              f"matches={orig_state['matches_played']}. "
-                              f"Deleted: {deleted_counts}"))
+                      target_id=user_id, target_name=name,
+                      detail=(f"RESET — was: coins={before['coins']:,}, "
+                              f"gems={before['gems']}, QP={before['qp']}, "
+                              f"roster={before['roster']}, "
+                              f"matches={before['matches']}. "
+                              f"Deleted: {deleted}"))
             db.commit()
-            flash(f"✅ Reset complete for <b>{orig_state['first_name'] or orig_state['username'] or user_id}</b>. "
-                  f"User must /debut again to play.",
+            flash(f"✅ Reset complete for <b>{html_lib.escape(name)}</b>. "
+                  f"Their next command asks them to /debut again.",
                   "success")
         except Exception as e:
             db.rollback()
@@ -4410,6 +4347,8 @@ def _webapp_auth(allow_not_debuted=False):
 
     db = get_session()
     user = db.query(User).filter(User.telegram_id == tg_id).first()
+    if user is not None and getattr(user, "needs_debut", False):
+        user = None  # reset by an admin: must /debut again before playing
     if not user and not allow_not_debuted:
         db.close()
         return None, tg_id, ({"ok": False, "error": "not_debuted",
@@ -17060,8 +16999,15 @@ def admin_tournament_detail(tournament_id):
                         fx = db.get(TournamentMatch, _int_form("fixture_id"))
                         if not fx or fx.tournament_id != t.id:
                             raise ValueError("Fixture not found in this tournament.")
-                        league_schedule_service.delete_fixture(db, fx.id)
-                        flash("Fixture removed.", "info")
+                        was = fx.status
+                        label = f"match {fx.match_no or fx.id} ({fx.stage}, {was})"
+                        league_schedule_service.delete_fixture(
+                            db, fx.id, force=bool(request.form.get("force")))
+                        _tournament_recompute_at.pop(t.id, None)
+                        log_admin(db, "tournament_fixture_delete", "tournament", t.id, label)
+                        flash("🗑️ Fixture removed." + (
+                            " Points table and stats rebuilt without it."
+                            if was == "completed" else ""), "info")
                     except ValueError as ve:
                         db.rollback()
                         flash(f"⚠️ {ve}", "error")
@@ -17401,7 +17347,12 @@ def admin_tournament_detail(tournament_id):
                 db.rollback()
                 logger.exception("tournament detail mutation failed")
                 flash(f"Error: {e}", "error")
-            return redirect(url_for("admin_tournament_detail", tournament_id=t.id))
+            # Forms on the Schedule / Dashboard pages post here (those routes are
+            # GET-only) and ask to be sent back where they came from.
+            back = {"schedule": "admin_tournament_schedule",
+                    "dashboard": "admin_tournament_dashboard"}.get(
+                        request.form.get("return_to") or "", "admin_tournament_detail")
+            return redirect(url_for(back, tournament_id=t.id))
 
         teams = (db.query(TournamentTeam).filter_by(tournament_id=t.id)
                  .order_by(TournamentTeam.sort_order, TournamentTeam.name).all())
@@ -17597,7 +17548,8 @@ def admin_tournament_schedule(tournament_id):
                                rounds=rounds, fixtures=fixtures, knockout=knockout,
                                pitch_types=league_schedule_service.FIXTURE_PITCHES,
                                pitch_locked=league_schedule_service.pitch_locked(t),
-                               league_played=league_played, league_total=league_total)
+                               league_played=league_played, league_total=league_total,
+                               return_to="schedule")
     finally:
         db.close()
 

@@ -16,7 +16,7 @@
 <div style="display:flex; gap:.4rem; flex-wrap:wrap; align-items:center; width:100%;">
   {% if fx.team1_id and fx.team2_id %}
   <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" style="display:flex; gap:.3rem; align-items:center;">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule">
     <input type="hidden" name="action" value="set_fixture_home">
     <input type="hidden" name="fixture_id" value="{{ fx.id }}">
     <span title="Home team">🏠</span>
@@ -31,7 +31,7 @@
   {% endif %}
   {% if pitch_locked %}
   <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" style="display:flex; gap:.3rem; align-items:center;">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule">
     <input type="hidden" name="action" value="set_fixture_pitch">
     <input type="hidden" name="fixture_id" value="{{ fx.id }}">
     <span title="The only pitch this match may be played on">🌱</span>
@@ -71,7 +71,7 @@
         {% if is_ko_only %}
         <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"
               onsubmit="return confirm('Regenerate the knockout bracket? Unplayed bracket matches are replaced.');">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule">
           <input type="hidden" name="action" value="generate_knockout">
           <button class="action-btn accent-btn" type="submit" style="width:auto;"><i class="fas fa-sitemap"></i> Regenerate bracket</button>
         </form>
@@ -79,7 +79,7 @@
         <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"
               style="display:flex;gap:.4rem;align-items:center;"
               onsubmit="return confirm('Regenerate the series? Unplayed matches are replaced.');">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule">
           <input type="hidden" name="action" value="generate_series">
           <input type="number" name="series_matches" value="{{ fixtures|length or 3 }}" min="1" max="15" style="width:64px;" title="Number of matches">
           <button class="action-btn accent-btn" type="submit" style="width:auto;"><i class="fas fa-list-ol"></i> Regenerate series</button>
@@ -87,7 +87,7 @@
         {% else %}
         <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"
               onsubmit="return confirm('Generate (or regenerate) the schedule? Unplayed fixtures are replaced.');">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule">
           <input type="hidden" name="action" value="generate_schedule">
           <button class="action-btn accent-btn" type="submit" style="width:auto;"><i class="fas fa-wand-magic-sparkles"></i> Generate / regenerate</button>
         </form>
@@ -95,7 +95,7 @@
         {% if pitch_locked %}
         <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"
               onsubmit="return confirm('Re-roll the pitch on every unplayed fixture?');">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule">
           <input type="hidden" name="action" value="assign_venues">
           <input type="hidden" name="overwrite_venues" value="on">
           <button class="action-btn" type="submit" style="width:auto;"><i class="fas fa-seedling"></i> Re-roll pitches</button>
@@ -141,10 +141,18 @@
               <div class="score-display">{{ fx.inn2_runs }}/{{ fx.inn2_wickets }}</div></div>
           </div>
           {% if fx.result_text %}<div class="result-banner"><i class="fas fa-trophy"></i> {{ fx.result_text }}</div>{% endif %}
+          <div class="fixture-footer">
+            <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="inline-form"
+                  onsubmit="return confirm({% if fx.status == 'completed' %}'Delete this completed fixture? Its result is removed and the points table, NRR and player stats are rebuilt without it.'{% else %}'Delete this live fixture? The match being played will no longer count for it.'{% endif %});">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule"><input type="hidden" name="action" value="delete_fixture">
+              <input type="hidden" name="fixture_id" value="{{ fx.id }}"><input type="hidden" name="force" value="1">
+              <button class="action-btn danger-btn" type="submit"><i class="fas fa-trash"></i> Delete {{ fx.status }} fixture</button>
+            </form>
+          </div>
         {% else %}
           <div class="teams-versus" style="align-items:stretch;">
-            <form method="POST" style="flex:1;">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="swap_team">
+            <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" style="flex:1;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule"><input type="hidden" name="action" value="swap_team">
               <input type="hidden" name="fixture_id" value="{{ fx.id }}"><input type="hidden" name="slot" value="1">
               <select name="new_team_id" onchange="this.form.submit()" style="width:100%;">
                 <option value="">TBD</option>
@@ -152,8 +160,8 @@
               </select>
             </form>
             <div class="vs-divider">VS</div>
-            <form method="POST" style="flex:1;">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="swap_team">
+            <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" style="flex:1;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule"><input type="hidden" name="action" value="swap_team">
               <input type="hidden" name="fixture_id" value="{{ fx.id }}"><input type="hidden" name="slot" value="2">
               <select name="new_team_id" onchange="this.form.submit()" style="width:100%;">
                 <option value="">TBD</option>
@@ -166,8 +174,8 @@
             {% if fx.team1_id and fx.team2_id %}
             <details class="rr-toggle"><summary>✍️ Record result</summary>{{ result_form(fx) }}</details>
             {% endif %}
-            <form method="POST" class="inline-form" onsubmit="return confirm('Delete this fixture?');">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete_fixture">
+            <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="inline-form" onsubmit="return confirm('Delete this fixture?');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule"><input type="hidden" name="action" value="delete_fixture">
               <input type="hidden" name="fixture_id" value="{{ fx.id }}">
               <button class="action-btn danger-btn" type="submit"><i class="fas fa-trash"></i> Delete fixture</button>
             </form>
@@ -209,11 +217,20 @@
           {% if fx.team1_id and fx.team2_id %}
           <details class="rr-toggle"><summary>✍️ Record result</summary>{{ result_form(fx) }}</details>
           {% endif %}
-          <form method="POST" class="inline-form" onsubmit="return confirm('Delete this knockout match?');">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="delete_fixture">
+          <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="inline-form" onsubmit="return confirm('Delete this knockout match?');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule"><input type="hidden" name="action" value="delete_fixture">
             <input type="hidden" name="fixture_id" value="{{ fx.id }}">
             <button class="action-btn danger-btn" type="submit"><i class="fas fa-trash"></i> Delete</button>
           </form>
+        </div>
+        {% else %}
+        <div class="fixture-footer">
+          <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="inline-form"
+                  onsubmit="return confirm({% if fx.status == 'completed' %}'Delete this completed fixture? Its result is removed and the points table, NRR and player stats are rebuilt without it.'{% else %}'Delete this live fixture? The match being played will no longer count for it.'{% endif %});">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule"><input type="hidden" name="action" value="delete_fixture">
+              <input type="hidden" name="fixture_id" value="{{ fx.id }}"><input type="hidden" name="force" value="1">
+              <button class="action-btn danger-btn" type="submit"><i class="fas fa-trash"></i> Delete {{ fx.status }} match</button>
+            </form>
         </div>
         {% endif %}
       </div>
@@ -227,7 +244,7 @@
     <div class="section-header"><div><h2 class="section-title"><i class="fas fa-plus"></i> Add a fixture</h2></div></div>
     <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"
           style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:end;">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule">
       <input type="hidden" name="action" value="add_fixture">
       <div><label class="field-label">Team 1</label><select name="team1_id">{% for tt in teams %}<option value="{{ tt.id }}">{{ tt.name }}</option>{% endfor %}</select></div>
       <div><label class="field-label">Team 2</label><select name="team2_id">{% for tt in teams %}<option value="{{ tt.id }}">{{ tt.name }}</option>{% endfor %}</select></div>

@@ -134,6 +134,10 @@ class User(Base):
     is_banned = Column(Boolean, default=False, nullable=False)
     ban_reason = Column(String(500), nullable=True)
     banned_at = Column(DateTime, nullable=True)
+    # Set by the admin "Reset user" action (services/user_reset_service.py):
+    # the account has been emptied and the player must run /debut again. The
+    # bot middleware sends them there; /debut re-runs the setup and clears it.
+    needs_debut = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

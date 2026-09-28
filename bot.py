@@ -1426,7 +1426,7 @@ def main():
             now = time.monotonic()
             cached = ban_cache.get(user.id)
             if cached and now - cached[0] < ban_cache_ttl:
-                is_banned, reason = cached[1], cached[2]
+                is_banned, reason, needs_debut = cached[1], cached[2], cached[3]
             else:
                 # Cold cache: the ban lookup is a blocking DB query. Offload it
                 # to a worker thread so it doesn't stall the loop before the real
@@ -1440,13 +1440,16 @@ def main():
                              .filter(_User.telegram_id == user.id)
                              .first())
                         if u and u.is_banned:
-                            return True, (u.ban_reason or "").strip()
-                        return False, ""
+                            return True, (u.ban_reason or "").strip(), False
+                        return False, "", bool(u and getattr(u, "needs_debut", False))
                     finally:
                         s.close()
                 try:
-                    is_banned, reason = await asyncio.to_thread(_query_ban)
-                    ban_cache[user.id] = (now, is_banned, reason)
+                    is_banned, reason, needs_debut = await asyncio.to_thread(_query_ban)
+                    # A reset account is re-read every time, so the /debut that
+                    # clears the flag unlocks the bot on the very next command.
+                    if not needs_debut:
+                        ban_cache[user.id] = (now, is_banned, reason, False)
                 except Exception:
                     logger.exception("Ban-check middleware failed (non-fatal)")
                     return
@@ -1460,6 +1463,24 @@ def main():
                             "You are banned.", show_alert=True)
                     elif update.message:
                         await update.message.reply_text(txt, parse_mode="HTML")
+                except Exception:
+                    pass
+                raise ApplicationHandlerStop
+
+            # Admin "Reset user": everything but the doorway commands points
+            # the player back to /debut (services/user_reset_service.py).
+            if needs_debut:
+                from services import user_reset_service
+                bot_username = getattr(context.bot, "username", None)
+                if not user_reset_service.should_block_update(update, bot_username):
+                    return
+                try:
+                    if update.callback_query:
+                        await update.callback_query.answer(
+                            user_reset_service.RESET_ALERT, show_alert=True)
+                    elif update.message:
+                        await update.message.reply_text(
+                            user_reset_service.RESET_NOTICE, parse_mode="HTML")
                 except Exception:
                     pass
                 raise ApplicationHandlerStop
