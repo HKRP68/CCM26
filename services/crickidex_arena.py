@@ -927,8 +927,14 @@ def _ball_rows(entries):
     return rows
 
 
-def _approach_last_over(state):
-    """The over just bowled, for the Mini App's ball-by-ball playback."""
+def _approach_last_over(state, my_role=None):
+    """The over just bowled, for the Mini App's ball-by-ball playback.
+
+    ``my_role`` is the viewer's side now (``"batting"`` / ``"bowling"`` /
+    ``"spectator"``). Between two humans playing in the Mini App the plans are
+    private: each captain sees their own and "🔒 Hidden" for the other's, and a
+    spectator sees neither.
+    """
     from engine.approach_modifiers import batting_label, bowling_label
     log = state.get("approach_log") or state.get("inn1_approach_log") or []
     if not log:
@@ -958,6 +964,23 @@ def _approach_last_over(state):
             bat_app = hidden
         else:
             bowl_app = hidden
+    # The viewer's side during THAT over: the innings may have turned since.
+    viewer_side = {"batting": "bat", "bowling": "bowl"}.get(my_role)
+    if viewer_side and not same_innings:
+        viewer_side = "bowl" if viewer_side == "bat" else "bat"
+    private = (not state.get("is_bot_match")
+               and state.get("play_mode") == "app")
+    hidden_note = None
+    if private:
+        if viewer_side != "bat":
+            bat_app = hidden
+        if viewer_side != "bowl":
+            bowl_app = hidden
+        revealed = False
+        hidden_note = "🔒 Plans are private in the Mini App — you only see your own."
+    elif state.get("is_bot_match") and not revealed:
+        hidden_note = "🔒 The bot keeps its plan secret — it is only revealed on 🟢 Easy."
+    shows_matchup = revealed or not (state.get("is_bot_match") or private)
     return {
         "key": f"{last.get('innings') or state.get('innings', 1)}-{last.get('over')}",
         "innings": last.get("innings") or state.get("innings", 1),
@@ -972,10 +995,13 @@ def _approach_last_over(state):
         "bowlingApproach": bowl_app,
         "botBatted": bot_batted,
         "botPlanRevealed": revealed or not state.get("is_bot_match"),
-        # The combination name and its line give the bot's plan away too.
-        "combo": last.get("combo") if (revealed or not state.get("is_bot_match")) else None,
+        "viewerSide": viewer_side,
+        "privatePlans": private,
+        "hiddenNote": hidden_note,
+        # The combination name and its line give the hidden plan away too.
+        "combo": last.get("combo") if shows_matchup else None,
         "flavour": (_cm.approach_modifiers.over_flavour(last.get("bat"), last.get("bowl"))[1]
-                    if (revealed or not state.get("is_bot_match")) else None),
+                    if shows_matchup else None),
     }
 
 
@@ -1045,7 +1071,7 @@ def _approach_payload(state, next_action, my_role):
                 "name": out.get("name"), "runs": bs.get("runs", 0),
                 "balls": bs.get("balls", 0),
                 "dismissal": bs.get("dismissal") or bs.get("how_out") or "out"}
-        payload["lastOver"] = _approach_last_over(state)
+        payload["lastOver"] = _approach_last_over(state, my_role)
 
         hints = {"phase": cm.approach_phase(state),
                  "repeatFrom": am.REPEAT_FROM}

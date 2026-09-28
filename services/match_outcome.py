@@ -26,10 +26,11 @@ END_ENDED_BY_USER = "ended_by_user"    # /endmatch — a player forfeited it
 END_CLEARED_BY_USER = "cleared_by_user"  # /clearmatches, /removematch
 END_ENDED_BY_ADMIN = "ended_by_admin"  # admin panel force-end
 END_AUTO = "auto_ended"                # cleanup job: stale invite / stuck match
+END_PAUSED = "paused"                  # /pause — saved, the players can /continue it
 END_UNKNOWN = "unknown"                # legacy row, ended before this was tracked
 
 END_REASONS = (END_COMPLETED, END_ENDED_BY_USER, END_CLEARED_BY_USER,
-               END_ENDED_BY_ADMIN, END_AUTO, END_UNKNOWN)
+               END_ENDED_BY_ADMIN, END_AUTO, END_PAUSED, END_UNKNOWN)
 
 END_REASON_LABELS = {
     END_COMPLETED: "Completed",
@@ -37,6 +38,7 @@ END_REASON_LABELS = {
     END_CLEARED_BY_USER: "Cleared by user",
     END_ENDED_BY_ADMIN: "Ended by admin",
     END_AUTO: "Automatically ended",
+    END_PAUSED: "Paused",
     END_UNKNOWN: "Unrecorded",
 }
 
@@ -52,6 +54,7 @@ END_REASON_HINTS = {
     END_CLEARED_BY_USER: "Wiped with /clearmatches or /removematch — no winner.",
     END_ENDED_BY_ADMIN: "Force-ended from the admin panel.",
     END_AUTO: "Stopped by the system: an idle-player timeout, or the cleanup sweep.",
+    END_PAUSED: "Paused with /pause and saved — the players can /continue it.",
     END_UNKNOWN: "Finished before end reasons were recorded.",
 }
 
@@ -62,6 +65,7 @@ END_REASON_TONES = {
     END_CLEARED_BY_USER: "warn",
     END_ENDED_BY_ADMIN: "bad",
     END_AUTO: "bad",
+    END_PAUSED: "muted",
     END_UNKNOWN: "muted",
 }
 
@@ -71,6 +75,7 @@ END_REASON_ICONS = {
     END_CLEARED_BY_USER: "🧹",
     END_ENDED_BY_ADMIN: "🛡",
     END_AUTO: "⏱",
+    END_PAUSED: "⏸",
     END_UNKNOWN: "❔",
 }
 

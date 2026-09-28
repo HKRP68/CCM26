@@ -12,8 +12,12 @@ The choice is remembered per player. A bare `/lpbot` keeps your last choice,
 and the difficulty prompt has a 💬 Chat / 📱 Mini App row to switch it
 (`app` also accepts `miniapp`/`mini`). A pick sent from the wrong place is
 refused with a pointer to the right one, so the two can never race.
-Human-vs-human over-by-over matches (`/cipl`, `/letsplay`) are always played in
-the chat.
+Human-vs-human over-by-over matches (`/cipl`, `/letsplay`, tournament fixtures)
+start in the chat. Either captain can move a live match with `/playapp` (and
+back with `/playchat`) — see [saved-matches.md](saved-matches.md). In the Mini
+App each captain picks privately: the over summary shows **your** plan and
+"🔒 Hidden" for the opponent's, spectators see neither, and the chat's summary
+leaves out the match-up name, its flavour line and the "has it read" warning.
 
 ## The over, in the Mini App
 

@@ -190,6 +190,11 @@ UNPUBLISHED_ON_PURPOSE = {
     "clsd", "teamtourstats", "mvp",
     # In-match, offered by the match's own keyboard at the moment it applies.
     "impact", "pitchstats",
+    # Saved matches and the Mini App switch — named on the match-start card,
+    # the turn reminder, every paused / saved / resumed card (which carry
+    # ▶️ Continue and 📂 Saved buttons), /resume's "no live match" reply, /rcl,
+    # /matchhelp and /help. Both player scopes are at the ceiling.
+    "pause", "saved", "continue", "playapp", "playchat",
     # Scorecard replay — named under every match result, in /help and in
     # /matchhelp, which is where someone whose card went missing is looking.
     "lastscorecard",

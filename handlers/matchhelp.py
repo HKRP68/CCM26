@@ -173,7 +173,14 @@ PAGES = [
         "3️⃣ Toss — the winner bats or bowls\n"
         "4️⃣ Pick your XI and batting order\n"
         "5️⃣ Play the over loop below\n\n"
-        "Stuck? <b>/rcl</b> resumes a Challenge League match, <b>/r</b> any other."
+        "Stuck? <b>/rcl</b> resumes a Challenge League match, <b>/r</b> any other.\n\n"
+        "<b>Breaks and the Mini App</b>\n"
+        "⏸️ <b>/pause</b> saves the match exactly where it is — "
+        "<b>/continue</b> picks it up later, in any group (the other captain "
+        "taps ✅ Ready). <b>/saved</b> lists yours. A cleared match, and a "
+        "tournament match's first time-out, are saved the same way.\n"
+        "📱 <b>/playapp</b> moves the match to the Mini App: each captain picks "
+        "privately and neither plan is ever shown. <b>/playchat</b> moves it back."
     )),
     ("over", "🔁", "How an over works", lambda: (
         "Every over is a <b>simultaneous guess</b>. Neither captain sees the "

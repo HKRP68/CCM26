@@ -41,8 +41,9 @@ INNINGS_BREAK_SECONDS = 8
 
 # Message returned when a manual Mini-App action is rejected because the match is
 # spectate-only (see is_view_only_match).
-VIEW_ONLY_MESSAGE = ("Challenge League matches are played in chat — "
-                     "the Mini App is view-only (spectate).")
+VIEW_ONLY_MESSAGE = ("This match is played in the chat — the Mini App is "
+                     "view-only here. A captain can type /playapp in the chat "
+                     "to play it in the Mini App.")
 
 
 def is_approach_match(state):
@@ -73,10 +74,34 @@ def is_view_only_match(state):
     return is_approach_match(state) and not is_app_played_match(state)
 
 
+# Keys of a live over-by-over state that carry a captain's plan: the pick made
+# for the over being set up (the batter must not see the bowler's), and the
+# history a private-plans opponent must not read either.
+HIDDEN_PLAN_KEYS = ("bowling_approach", "batting_approach", "approach_log",
+                    "inn1_approach_log", "last_bat_approach",
+                    "last_bowl_approach", "bat_repeat", "bowl_repeat")
+
+
+def strip_hidden_plans(state):
+    """``state`` without the plan keys, for a raw-state response to a client.
+
+    The Arena payload decides per viewer what to show; the raw state has no
+    viewer, so the plans simply go. Returns a new dict; non-approach states
+    come back unchanged.
+    """
+    if not is_approach_match(state):
+        return state
+    return {k: v for k, v in state.items() if k not in HIDDEN_PLAN_KEYS}
+
+
 def is_app_played_match(state):
-    """True for a bot match whose picks are made in the Mini App."""
-    return (bool(state) and bool(state.get("is_bot_match"))
-            and state.get("play_mode") == "app")
+    """True for an over-by-over match whose picks are made in the Mini App.
+
+    A bot match started with ``/lpbot app`` / ``/ciplbot app``, or any match a
+    captain moved there with ``/playapp`` (handlers/cipl_pause.py) — two humans
+    included, each then picking privately.
+    """
+    return is_approach_match(state) and state.get("play_mode") == "app"
 
 
 

@@ -9057,7 +9057,8 @@ def _match_rest_approach_action(db, match, user, state, data):
 def _match_rest_full_state(db, match_id, user_id):
     import copy as _copy
     from services.match_webapp_service import (
-        build_snapshot, role_for, load_final_scorecard, A_COMPLETED)
+        build_snapshot, role_for, load_final_scorecard, strip_hidden_plans,
+        A_COMPLETED)
     from services.match_webapp_access import get_state, get_next_action, get_ball_seq
     state = get_state(match_id)
     if not state:
@@ -9105,7 +9106,9 @@ def _match_rest_full_state(db, match_id, user_id):
         "ball_seq": get_ball_seq(match_id),
         "roles": participant_roles,
         "snapshot": build_snapshot(db, match_id, user_id),
-        "state": _copy.deepcopy(state),
+        # An over-by-over match's plans are secret until the over is bowled
+        # (and for good, with private plans) — never hand them out raw.
+        "state": _copy.deepcopy(strip_hidden_plans(state)),
         # Autoplay is a paid perk (Silver and above). The client renders the
         # toggle locked when `premium` is false.
         "autoplay": {"premium": _user_has_autoplay(db, user_id)},

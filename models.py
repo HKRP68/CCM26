@@ -4799,3 +4799,44 @@ class StartVisit(Base):
         UniqueConstraint("telegram_id", "day", name="uq_start_visit_day"),
         Index("ix_start_visit_day", "day"),
     )
+
+
+class SavedMatch(Base):
+    """A paused, cleared or timed-out over-by-over match that can be resumed.
+
+    ``/pause`` parks a live Challenge League / Lets Play match here, and so do
+    ``/clearmatches``, ``/removematch`` and a tournament match's idle timeout
+    (see ``services.saved_match_service``). ``state_json`` is the match state
+    exactly as it stood, with ``next_action`` the pick it was waiting on, so
+    ``/continue`` puts the very same ``Match`` row back into play from that
+    point — no over is replayed and nothing is lost.
+
+    One row per match: pausing a match that was paused before overwrites the
+    older snapshot.
+    """
+    __tablename__ = "saved_matches"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    match_id = Column(Integer, ForeignKey("matches.id", ondelete="CASCADE"),
+                      unique=True, nullable=False, index=True)
+    chat_id = Column(BigInteger, nullable=True)
+    user1_id = Column(Integer, nullable=True, index=True)
+    user2_id = Column(Integer, nullable=True, index=True)
+    user1_tg = Column(BigInteger, nullable=True)
+    user2_tg = Column(BigInteger, nullable=True)
+    tournament_id = Column(Integer, nullable=True, index=True)
+    # "paused" (/pause), "cleared" (/clearmatches, /removematch) or
+    # "auto_ended" (an idle timeout that saved instead of forfeiting).
+    reason = Column(String(20), nullable=False, default="paused")
+    # "saved" → resumable; "resumed" / "discarded" / "void" → done.
+    status = Column(String(20), nullable=False, default="saved", index=True)
+    # One line for the /saved list: "RCB 87/3 (11.0) vs CSK · 1st innings".
+    title = Column(String(200), nullable=True)
+    state_json = Column(Text, nullable=False)
+    next_action = Column(String(40), nullable=True)
+    # The Match row's status before it was parked, to put back on resume.
+    prev_status = Column(String(30), nullable=True)
+    saved_by_id = Column(Integer, nullable=True)
+    saved_at = Column(DateTime, default=datetime.utcnow)
+    resumed_at = Column(DateTime, nullable=True)
+    times_saved = Column(Integer, nullable=False, default=1)

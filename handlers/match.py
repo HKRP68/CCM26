@@ -2516,6 +2516,10 @@ async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     # no Match row, so the row-based permission check above never sees it —
     # scope the sweep by caller instead, or a bystander could kill a live
     # negotiation between two other players.
+    #
+    # A Challenge League / Lets Play match is saved first, so a clear never
+    # throws away the overs already played: /continue picks it up again.
+    saved_ids = _save_cleared_matches(context, cleared, clearer_uid)
     lp_cleared, lp_skipped = (
         _clear_letsplay_drafts(context, cid, None if is_admin else tg.id)
         if wipe_chat_memory else (0, 0))
@@ -2555,9 +2559,35 @@ async def clearmatches_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         f"🧹 <b>Matches cleared.</b>\n\n"
         f"All ongoing matches in this chat were marked "
         f"<b>Completed — no team won</b>.\n"
-        f"<i>{n} match{'es' if n != 1 else ''} cleared.</i>{lp_note}\n\n"
+        f"<i>{n} match{'es' if n != 1 else ''} cleared.</i>{lp_note}"
+        f"{_saved_note(saved_ids)}\n\n"
         f"You can start a fresh match now. 🏏",
         parse_mode="HTML")
+
+
+def _save_cleared_matches(context, mids, by_user_id=None):
+    """Save each over-by-over match about to be wiped. Returns the saved ids.
+
+    Must run before ``cleanup_state`` — the live state is what gets saved.
+    """
+    saved = []
+    try:
+        from handlers.cipl_pause import snapshot_before_clear
+    except Exception:
+        logger.exception("saved matches unavailable — clearing without saving")
+        return saved
+    for mid in mids:
+        if snapshot_before_clear(context, mid, by_user_id):
+            saved.append(mid)
+    return saved
+
+
+def _saved_note(saved_ids):
+    if not saved_ids:
+        return ""
+    ids = ", ".join(f"<code>/continue {m}</code>" for m in saved_ids[:5])
+    return (f"\n💾 <b>Saved, not lost:</b> {ids} picks "
+            f"{'it' if len(saved_ids) == 1 else 'them'} up from the same ball.")
 
 
 def _cancel_all_match_timers(context, mid):
@@ -2628,6 +2658,7 @@ async def removematch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         removed = [(m.id, m.chat_id) for m in rows]
         removed_ids = [m.id for m in rows]
         remover = session.query(User).filter(User.telegram_id == tg.id).first()
+        remover_uid = remover.id if remover else None
         for m in rows:
             m.status = "completed"
             m.completed_at = datetime.utcnow()
@@ -2673,6 +2704,9 @@ async def removematch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     finally:
         session.close()
 
+    # Save the over-by-over ones first, so the players can /continue them.
+    saved_ids = _save_cleared_matches(context, [mid for mid, _c in removed],
+                                      remover_uid)
     # In-memory teardown for every match the user was in.
     for mid, m_chat in removed:
         try:
@@ -2699,7 +2733,7 @@ async def removematch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(
         f"🧹 <b>Removed {target_label} from "
         f"{len(removed)} match{'es' if len(removed) != 1 else ''}.</b>\n"
-        f"They can start a fresh game now. 🏏",
+        f"They can start a fresh game now. 🏏{_saved_note(saved_ids)}",
         parse_mode="HTML")
 
 
@@ -4479,7 +4513,10 @@ async def resume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 continue
 
     if not found_mid:
-        await update.message.reply_text("❌ No active match in this chat to resume.")
+        await update.message.reply_text(
+            "❌ No active match in this chat to resume.\n"
+            "Paused or cleared a Challenge League / Lets Play match? "
+            "/saved lists them — /continue picks one up.")
         return
 
     # Nothing to resume once the match is decided — the innings quota is spent,

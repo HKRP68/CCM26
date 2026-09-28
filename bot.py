@@ -2097,6 +2097,18 @@ def main():
         app.add_handler(CommandHandler(["impact", "ip"], impact_handler))
         # /rcl — resume a stuck Challenge League match from where it left off
         app.add_handler(CommandHandler(["rcl", "resumecl"], rcl_handler))
+        # Pause / save / continue a Challenge League or Lets Play match, and
+        # move a live one between the chat buttons and the Mini App.
+        from handlers.cipl_pause import (
+            continue_handler, pause_handler, playapp_handler, playchat_handler,
+            saved_callback, saved_handler,
+        )
+        app.add_handler(CommandHandler(["pause", "pausematch"], pause_handler))
+        app.add_handler(CommandHandler(["saved", "savedmatches"], saved_handler))
+        app.add_handler(CommandHandler(["continue", "unpause"], continue_handler))
+        app.add_handler(CommandHandler(["playapp", "appmode"], playapp_handler))
+        app.add_handler(CommandHandler(["playchat", "chatmode"], playchat_handler))
+        app.add_handler(CallbackQueryHandler(saved_callback, pattern=r"^svm_"))
         # Super Over (tied /cipl, /c[league] and /letsplay matches) — interactive
         # user-vs-user, ball by ball; outcomes from the SimCricketX engine.
         from handlers.super_over import (
