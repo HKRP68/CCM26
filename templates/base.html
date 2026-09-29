@@ -497,6 +497,7 @@ hr.pitch-line { border: none; height: 1px; background: linear-gradient(90deg, tr
     <a href="{{ url_for('admin_card_template') }}" class="{{ 'active' if 'card_template' in (request.endpoint or '') or 'career_face' in (request.endpoint or '') }}">🎴 Card Template</a>
     <a href="{{ url_for('admin_career') }}" class="{{ 'active' if (request.endpoint or '').startswith('admin_career') and 'face' not in (request.endpoint or '') and 'change' not in (request.endpoint or '') }}">🎖 Career Players</a>
     <a href="{{ url_for('admin_career_changes') }}" class="{{ 'active' if 'career_change' in (request.endpoint or '') }}">✏️ Name Changes</a>
+    <a href="{{ url_for('admin_team_names') }}" class="{{ 'active' if 'team_name' in (request.endpoint or '') }}">🏷 Team Names</a>
     <a href="{{ url_for('admin_conditions') }}" class="{{ 'active' if (request.endpoint or '').startswith('admin_conditions') }}">🏟️ Stadiums &amp; Conditions</a>
     <a href="{{ url_for('admin_simulation') }}" class="{{ 'active' if request.endpoint in ('admin_simulation','admin_simulation_test') }}">🎲 Simulation</a>
     <a href="{{ url_for('admin_media_list') }}" class="{{ 'active' if request.endpoint in ('admin_media_list','admin_media_detail') }}">🎬 Media</a>

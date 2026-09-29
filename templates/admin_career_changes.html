@@ -58,8 +58,10 @@
 
     <div style="margin-bottom:.9rem;">
       <label style="display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;">
-        Blocked words — one per line or comma separated. Matched against the name with spaces and
-        punctuation stripped out, so <code>s.l u-r</code> can't sneak past <code>slur</code>.
+        Blocked words — one per line or comma separated. <strong>Shared with team names</strong>
+        (<a href="{{ url_for('admin_team_names') }}">Team Names</a> also holds the allowed-words list).
+        Matched through spacing, punctuation and look-alike symbols, so <code>s.l u-r</code> and
+        <code>$lur</code> can't sneak past <code>slur</code>.
       </label>
       <textarea name="blocklist" rows="3"
                 style="width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:monospace;">{{ settings.blocklist }}</textarea>

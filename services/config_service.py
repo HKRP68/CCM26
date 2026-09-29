@@ -124,6 +124,9 @@ DEFAULTS = {
     "career_custom_names_open": True,
     "career_custom_names_need_approval": True,
     "career_name_blocklist": None,
+    # Innocent words that contain a banned one ("scunthorpe"); cut out of a
+    # name before the blocklist is checked. Shared by team and career names.
+    "name_allowlist": None,
     # Elite Signing Bonus — a limited-time offer, not a permanent rule. These
     # defaults reproduce what shipped hard-coded (on, 96+, 0.1%, no end date);
     # read them through services/buy_bonus.py, which applies the window.

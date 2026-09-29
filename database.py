@@ -930,6 +930,7 @@ def _migrate_add_columns():
     _try_add("game_config", "career_custom_names_need_approval",
              "BOOLEAN DEFAULT TRUE")
     _try_add("game_config", "career_name_blocklist", "TEXT")
+    _try_add("game_config", "name_allowlist", "TEXT")
 
     # ── Elite Signing Bonus (limited-time offer) ──
     # Defaults reproduce the behaviour that shipped hard-coded — on, 96+, 0.1%

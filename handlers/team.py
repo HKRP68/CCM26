@@ -25,11 +25,12 @@ from models import (
 from config import get_buy_value, get_sell_value, MAX_ROSTER
 from services.activity_service import log_activity
 from services.flags import get_flag
+from services import name_filter
 from services import rich_message as R
 
 logger = logging.getLogger(__name__)
 
-TEAM_NAME_REGEX = re.compile(r"^[a-zA-Z0-9 '\-]{3,50}$")
+TEAM_NAME_REGEX = name_filter.TEAM_NAME_REGEX
 
 # Telegram caps photo captions at 1024 characters, measured on the *visible*
 # text (HTML tags are parsed into entities and don't count) in UTF-16 code units.
@@ -65,6 +66,14 @@ async def teamname_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     session = get_session()
     try:
+        # The banned-words list is shared with career names and managed on the
+        # website's Team Names page. The reply never repeats the word it hit.
+        if name_filter.blocked_word(name, session=session):
+            logger.info("teamname refused by the blocklist for %s", tg_user.id)
+            await update.message.reply_text(
+                "❌ That team name isn't allowed. Please pick another one.")
+            return
+
         user = session.query(User).filter(User.telegram_id == tg_user.id).first()
         if not user:
             await update.message.reply_text("❌ Do /debut first!")
