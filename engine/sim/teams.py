@@ -49,6 +49,11 @@ def pick_xi(country, rows=None):
     attack += [r for r in bowlers if r not in attack][:5 - len(attack)]
     bats = [r for r in uniq if r not in bowlers]
     bats = sorted(bats, key=lambda r: -(r.get("Batting Rating") or 0))[:11 - len(attack)]
+    # Short of specialists in one discipline: fill from whoever is left.
+    spare = [r for r in uniq if r not in bats and r not in attack]
+    bats += sorted(spare, key=lambda r: -(r.get("Batting Rating") or 0))[:11 - len(bats) - len(attack)]
+    if len(bats) + len(attack) < 11:
+        raise ValueError(f"{country!r} has only {len(uniq)} players in data/players.json; an XI needs 11")
     xi = sorted(bats, key=lambda r: -(r.get("Batting Rating") or 0)) + \
         sorted(attack, key=lambda r: -(r.get("Batting Rating") or 0))
     return Team(name=country, players=[_to_engine(r, i) for i, r in enumerate(xi)],

@@ -546,3 +546,45 @@ def test_level_follow_on_leaves_one_run_to_chase(monkeypatch):
     assert len(res["innings"]) == 4
     assert res["innings"][3]["target"] == 1
     assert res["result"]["margin"] != "draw"
+
+
+def _rows(country, n_bat, n_bowl):
+    rows = [{"Player Name": f"{country} bat {i}", "Country": country, "Category": "Batsman",
+             "Batting Rating": 70 - i, "Bowling Rating": 20, "Bowling Style": "Right arm medium",
+             "overall all": 70 - i} for i in range(n_bat)]
+    rows += [{"Player Name": f"{country} bowl {i}", "Country": country, "Category": "Bowler",
+              "Batting Rating": 20, "Bowling Rating": 75 - i, "Bowling Style": "Right arm fast",
+              "overall all": 60 - i} for i in range(n_bowl)]
+    return rows
+
+
+def test_pick_xi_needs_eleven_players():
+    from engine.sim import teams
+    with pytest.raises(ValueError):
+        teams.pick_xi("Tiny", rows=_rows("Tiny", 1, 1))
+    assert len(teams.pick_xi("Batty", rows=_rows("Batty", 10, 2)).players) == 11
+
+
+def test_odd_runs_off_a_no_ball_swap_the_strike(monkeypatch):
+    from engine.sim import match as match_mod
+
+    real = outcome.resolve
+    seen = []
+    calls = {"n": 0}
+
+    def fake(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return outcome.BallResult("Extras", runs=1, extra_type="No Ball", extra_runs=1, legal=False)
+        return real(*a, **k)
+
+    orig = match_mod._Match._apply_result
+
+    def spy(self, inn, batter, bowler, res, over_idx, rng):
+        seen.append(batter.id)
+        return orig(self, inn, batter, bowler, res, over_idx, rng)
+
+    monkeypatch.setattr(outcome, "resolve", fake)
+    monkeypatch.setattr(match_mod._Match, "_apply_result", spy)
+    _play("T20", 2)
+    assert seen[0] != seen[1]

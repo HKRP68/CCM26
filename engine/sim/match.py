@@ -486,7 +486,9 @@ class _Match:
                 else:
                     inn.non_striker = idx
             self._collapse_check(inn, over_idx)
-        if res.legal and not res.is_wicket and (res.runs + (res.extra_runs if res.extra_type in ("Leg Bye", "Bye") else 0)) % 2 == 1:
+        # Odd runs actually run swap ends — including off the bat from a no-ball.
+        ran = res.runs + (res.extra_runs if res.extra_type in ("Leg Bye", "Bye") else 0)
+        if not res.is_wicket and (res.legal or res.extra_type == "No Ball") and ran % 2 == 1:
             inn.striker, inn.non_striker = inn.non_striker, inn.striker
         return total
 
