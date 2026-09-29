@@ -4844,3 +4844,26 @@ class SavedMatch(Base):
     saved_at = Column(DateTime, default=datetime.utcnow)
     resumed_at = Column(DateTime, nullable=True)
     times_saved = Column(Integer, nullable=False, default=1)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# CONDITIONS ENGINE — stadiums and modifiers edited from the admin site
+# ══════════════════════════════════════════════════════════════════════
+
+class SimEngineSetting(Base):
+    """One saved version of an admin-edited Conditions Engine document.
+
+    ``key`` is ``"stadiums"`` (the full stadium list) or ``"modifiers"`` (the
+    overrides on top of ``config/sim_engine.json``). Every save inserts a new
+    row, so the table is also the history: the newest row per key is live, and
+    restoring an old version inserts a copy of it. ``payload`` NULL means
+    "back to the shipped files". See ``engine/sim/store.py``.
+    """
+    __tablename__ = "sim_engine_settings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    key = Column(String(40), nullable=False, index=True)
+    payload = Column(Text, nullable=True)
+    note = Column(String(300), nullable=True)
+    created_by = Column(String(100), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

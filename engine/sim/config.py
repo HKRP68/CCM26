@@ -81,11 +81,12 @@ def validate(cfg):
     return warns
 
 
-def build(override=None, path=None, local_path=None):
-    """Build a validated config: defaults ← local file ← ``override`` dict.
+def build(override=None, path=None, local_path=None, use_store=False):
+    """Build a validated config:
+    defaults ← local file ← admin overrides (``use_store``) ← ``override`` dict.
 
-    Pure apart from reading the files; used by :func:`get_config` and by tests
-    that want a tweaked config without touching disk.
+    Pure apart from reading the files (and the database when ``use_store``);
+    used by :func:`get_config` and by tests that want a tweaked config.
     """
     cfg = _read(path or DEFAULT_PATH)
     lp = local_path if local_path is not None else os.environ.get("SIM_ENGINE_CONFIG", LOCAL_PATH)
@@ -94,6 +95,11 @@ def build(override=None, path=None, local_path=None):
             cfg = deep_merge(cfg, _read(lp))
         except Exception as exc:  # a broken local file must not stop the bot
             logger.warning("sim_engine: ignoring unreadable %s: %s", lp, exc)
+    if use_store:
+        from engine.sim import store
+        saved = store.current("modifiers")
+        if isinstance(saved, dict):
+            cfg = deep_merge(cfg, saved)
     if override:
         cfg = deep_merge(cfg, override)
     warns = validate(cfg)
@@ -108,7 +114,7 @@ def get_config():
         with _lock:
             if _cache is None:
                 try:
-                    _cache = build()
+                    _cache = build(use_store=True)
                 except Exception as exc:
                     logger.error("sim_engine: config failed to load: %s", exc)
                     _cache = {"_warnings": [str(exc)], "_broken": True}

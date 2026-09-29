@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Import Stadiums & Modifiers{% endblock %}
+{% block content %}
+
+<a href="{{ url_for('admin_conditions') }}" style="color:var(--muted); text-decoration:none;">← Back to stadiums</a>
+<h1 style="margin:1rem 0;">📥 Import stadiums &amp; modifiers</h1>
+
+{% if not plan %}
+<form method="POST" enctype="multipart/form-data" class="form-card">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="step" value="preview">
+  <div class="form-group">
+    <label>Upload a file (.json or .csv)</label>
+    <input type="file" name="file" accept=".json,.csv,.txt">
+  </div>
+  <div class="form-group">
+    <label>…or paste JSON / CSV</label>
+    <textarea name="text_content" rows="10" style="font-family:monospace; font-size:.82rem;"
+              placeholder='{"stadiums": [{"name": "Perth Stadium", "boundaryM": {"squareLeg": 72, "fineLeg": 68, "longOn": 82, "longOff": 80}, "outfieldSpeed": 88, "typicalPitch": "Bouncy", "modifiers": {"bounce": 1.15}}]}'></textarea>
+  </div>
+  <div class="form-row">
+    <div class="form-group">
+      <label>Mode</label>
+      <select name="mode">
+        <option value="merge">Merge — add/update what's in the file, keep the rest</option>
+        <option value="replace">Replace — the file becomes the whole list / all overrides</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Import</label>
+      <select name="only">
+        <option value="all">Everything in the file</option>
+        <option value="stadiums">Stadiums only</option>
+        <option value="modifiers">Modifiers only</option>
+      </select>
+    </div>
+  </div>
+  <button class="btn btn-primary" type="submit">Preview changes →</button>
+  <p style="color:var(--muted); font-size:.85rem; margin-top:1rem;">
+    Nothing is saved until you confirm the preview. Accepted: an export bundle from this page, a list of stadiums,
+    a single stadium, a <code>sim_engine.json</code>-style object (full or partial), or the stadiums CSV.
+    Out-of-range values are clamped and unknown keys dropped — each one is listed in the preview.
+  </p>
+</form>
+
+{% else %}
+<div class="form-card" style="max-width:none;">
+  <h2 style="margin-bottom:.5rem;">Preview — {{ plan.mode }}{% if filename %} · {{ filename }}{% endif %}</h2>
+
+  {% if plan.errors %}
+  <div style="border-left:4px solid var(--accent); padding:.5rem 1rem; margin:.8rem 0;">
+    <strong>Can't import — fix these first:</strong>
+    <ul style="margin:.3rem 0 0 1.2rem;">{% for e in plan.errors %}<li>{{ e }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+
+  {% if plan.stadiums %}
+  <h3 style="margin-top:1rem;">🏟️ Stadiums</h3>
+  <p>
+    <strong style="color:var(--green);">{{ plan.stadiums.added|length }} added</strong> ·
+    <strong style="color:var(--amber-dark);">{{ plan.stadiums.changed|length }} changed</strong> ·
+    <strong style="color:var(--accent);">{{ plan.stadiums.removed|length }} removed</strong> ·
+    {{ plan.stadiums.unchanged }} unchanged → {{ plan.stadiums.result|length }} stadiums after import
+  </p>
+  {% if plan.stadiums.added %}<p><strong>Added:</strong> {{ plan.stadiums.added|join(', ') }}</p>{% endif %}
+  {% if plan.stadiums.removed %}<p style="color:var(--accent);"><strong>Removed:</strong> {{ plan.stadiums.removed|join(', ') }}</p>{% endif %}
+  {% if plan.stadiums.changed %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Stadium</th><th>Field</th><th>Now</th><th>After import</th></tr></thead>
+    <tbody>
+    {% for c in plan.stadiums.changed %}{% for f in c.fields %}
+      <tr><td>{% if loop.first %}<strong>{{ c.name }}</strong>{% endif %}</td>
+          <td><code>{{ f[0] }}</code></td><td>{{ f[1] if f[1] is not none else '—' }}</td><td>{{ f[2] if f[2] is not none else '—' }}</td></tr>
+    {% endfor %}{% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+  {% endif %}
+
+  {% if plan.modifiers %}
+  <h3 style="margin-top:1rem;">⚙️ Modifiers — {{ plan.modifiers.changes|length }} value(s) change</h3>
+  {% if plan.modifiers.changes %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Setting</th><th>Now</th><th>After import</th></tr></thead>
+    <tbody>{% for c in plan.modifiers.changes %}
+      <tr><td><code>{{ c[0] }}</code></td><td>{{ c[1] if c[1] is not none else '—' }}</td><td>{{ c[2] if c[2] is not none else '—' }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% endif %}
+  {% endif %}
+
+  {% if plan.warnings %}
+  <details style="margin-top:1rem;" open>
+    <summary><strong>{{ plan.warnings|length }} warning(s)</strong> — adjusted automatically</summary>
+    <ul style="margin:.3rem 0 0 1.2rem; font-size:.85rem;">{% for w in plan.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+
+  <div class="actions" style="margin-top:1.2rem;">
+    {% if not plan.errors %}
+    <form method="POST" style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="step" value="apply">
+      <input type="hidden" name="mode" value="{{ mode }}">
+      <input type="hidden" name="only" value="{{ only }}">
+      <input type="hidden" name="filename" value="{{ filename }}">
+      <textarea name="payload" hidden>{{ payload }}</textarea>
+      <input name="note" placeholder="Note for History (optional)" style="max-width:320px;">
+      <button class="btn btn-green" type="submit">✅ Apply import</button>
+    </form>
+    {% endif %}
+    <a class="btn btn-ghost" href="{{ url_for('admin_conditions_import') }}">Start over</a>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}

@@ -30,9 +30,20 @@ _lock = threading.Lock()
 _db = None
 
 
+# Per-ground modifiers: JSON name → FactorSet channel, and how the summary says it.
+MODIFIER_CHANNELS = {
+    "swing": ("swing", "swing"), "seam": ("seam", "seam movement"),
+    "pace": ("pace", "pace"), "spin": ("spin", "turn"), "bounce": ("bounce", "bounce"),
+    "battingEase": ("bat_ease", "easy batting"), "sixes": ("six", "sixes"),
+    "fours": ("four_carry", "fours"), "paceWickets": ("pace_wkt", "wickets for pace"),
+    "spinWickets": ("spin_wkt", "wickets for spin"),
+}
+
+
 def from_dict(d):
     b = d.get("boundaryM") or {}
     bm = tuple((r, float(b.get(r, 70))) for r in BOUNDARY_REGIONS)
+    mods = d.get("modifiers") or {}
     return Stadium(
         name=d.get("name", "Neutral Venue"),
         city=d.get("city", ""), country=d.get("country", ""),
@@ -44,6 +55,9 @@ def from_dict(d):
         avg_first_innings=int(d.get("avgFirstInningsScore", 170)),
         slope=bool(d.get("slope", False)),
         climate=tuple(sorted((d.get("climate") or {}).items())),
+        aliases=tuple(str(a) for a in (d.get("aliases") or [])),
+        modifiers=tuple(sorted((k, float(v)) for k, v in mods.items()
+                               if k in MODIFIER_CHANNELS)),
     )
 
 
@@ -54,11 +68,12 @@ def to_dict(s):
         "outfieldSpeed": s.outfield_speed, "dewFactor": s.dew_factor,
         "typicalPitch": s.typical_pitch, "avgFirstInningsScore": s.avg_first_innings,
         "slope": s.slope, "climate": dict(s.climate),
+        "aliases": list(s.aliases), "modifiers": dict(s.modifiers),
     }
 
 
-def load_db(path=None):
-    """``[(stadium_dict, Stadium)]`` from the JSON database."""
+def file_rows(path=None):
+    """The stadium dicts shipped in ``data/stadiums.json``."""
     try:
         with open(path or DB_PATH, "r", encoding="utf-8") as fh:
             raw = json.load(fh)
@@ -66,7 +81,24 @@ def load_db(path=None):
         logger.warning("stadiums: cannot read %s: %s", path or DB_PATH, exc)
         return []
     rows = raw.get("stadiums", raw) if isinstance(raw, dict) else raw
-    return [(r, from_dict(r)) for r in rows if isinstance(r, dict) and r.get("name")]
+    return [r for r in rows if isinstance(r, dict) and r.get("name")]
+
+
+def live_rows(use_store=True):
+    """The stadium dicts in play: the admin-saved list if there is one
+    (``engine.sim.store``), else the shipped file."""
+    if use_store:
+        from engine.sim import store
+        saved = store.current("stadiums")
+        if isinstance(saved, list):
+            return [r for r in saved if isinstance(r, dict) and r.get("name")]
+    return file_rows()
+
+
+def load_db(path=None, use_store=False):
+    """``[(stadium_dict, Stadium)]`` — from *path*, or the live list."""
+    rows = file_rows(path) if path else live_rows(use_store=use_store)
+    return [(r, from_dict(r)) for r in rows]
 
 
 def _get_db():
@@ -74,7 +106,7 @@ def _get_db():
     if _db is None:
         with _lock:
             if _db is None:
-                _db = load_db()
+                _db = load_db(use_store=True)
     return _db
 
 
@@ -173,6 +205,16 @@ def apply(fs, cond, cfg):
         fs.mul("four_carry", alt["carry"], key="altitude",
                text=f"{s.altitude_m:.0f} m of altitude — the ball carried and swung less")
         fs.mul("swing", alt["swing"])
+
+    if s.modifiers:
+        lo = cfg["stadium"].get("modifierBounds", {}).get("min", 0.5)
+        hi = cfg["stadium"].get("modifierBounds", {}).get("max", 2.0)
+        for name, value in s.modifiers:
+            channel, words = MODIFIER_CHANNELS[name]
+            v = max(lo, min(hi, float(value)))
+            text = (f"{s.name} gave extra {words} (x{v:.2f})" if v > 1
+                    else f"{s.name} took some {words} away (x{v:.2f})")
+            fs.mul(channel, v, key=f"ground_{name}" if abs(v - 1) >= 0.04 else None, text=text)
 
     if s.slope:
         fs.mul("seam", cfg["stadium"]["slopeSeam"], key="slope",

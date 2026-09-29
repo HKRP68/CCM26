@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Stadiums & Conditions{% endblock %}
+{% block content %}
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; flex-wrap:wrap; gap:.5rem;">
+  <div>
+    <h1>🏟️ Stadiums &amp; Conditions</h1>
+    <div style="color:var(--muted); font-size:.85rem;">
+      Conditions Engine v4 — grounds and every tuning modifier. Changes apply to the next ball; every save is kept in History.
+    </div>
+  </div>
+  <div class="actions">
+    <a class="btn btn-primary" href="{{ url_for('admin_conditions_import') }}">📥 Import</a>
+    <a class="btn btn-ghost" href="{{ url_for('admin_conditions_export', what='all') }}">📤 Export all (JSON)</a>
+    <a class="btn btn-ghost" href="{{ url_for('admin_conditions_export', what='stadiums') }}">Stadiums JSON</a>
+    <a class="btn btn-ghost" href="{{ url_for('admin_conditions_export', fmt='csv') }}">Stadiums CSV</a>
+    <a class="btn btn-ghost" href="{{ url_for('admin_conditions_export', what='modifiers') }}">Modifiers JSON</a>
+    <a class="btn btn-green" href="{{ url_for('admin_conditions_stadium') }}">+ New stadium</a>
+  </div>
+</div>
+
+{% if warnings %}
+<div class="form-card" style="max-width:none; margin-bottom:1rem; border-left:4px solid var(--accent);">
+  <strong>Config warnings</strong> — values were clamped into range:
+  <ul style="margin:.4rem 0 0 1.2rem;">{% for w in warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<div class="stats-grid">
+  <div class="stat-card"><div class="label">Stadiums</div><div class="value blue">{{ rows|length }}</div>
+    <div style="font-size:.75rem; color:var(--muted);">{{ 'saved in the database' if stadiums_saved else 'shipped file (data/stadiums.json)' }}</div></div>
+  <div class="stat-card"><div class="label">Modifier overrides</div><div class="value gold">{{ overrides|length }}</div>
+    <div style="font-size:.75rem; color:var(--muted);">values changed from config/sim_engine.json</div></div>
+  <div class="stat-card"><div class="label">Grounds with own character</div><div class="value green">{{ rows|selectattr('modifiers')|list|length }}</div>
+    <div style="font-size:.75rem; color:var(--muted);">per-stadium modifiers set</div></div>
+</div>
+
+<form method="GET" style="display:flex; gap:.5rem; max-width:420px; margin-bottom:1rem;">
+  <input name="q" value="{{ q }}" placeholder="Search name, alias or country">
+  <button class="btn btn-ghost btn-sm" type="submit">Search</button>
+</form>
+
+<div class="table-wrap">
+<table>
+  <thead><tr>
+    <th>Stadium</th><th>Pitch</th><th>Boundaries (SL/FL/LOn/LOff)</th><th>Six ×</th>
+    <th>Outfield</th><th>Dew</th><th>Altitude</th><th>Own modifiers</th><th></th>
+  </tr></thead>
+  <tbody>
+  {% for s in rows %}
+    <tr>
+      <td><strong>{{ s.name }}</strong><div style="font-size:.75rem; color:var(--muted);">{{ s.city }}{% if s.country %}, {{ s.country }}{% endif %}{% if s.aliases %} · {{ s.aliases|join(', ') }}{% endif %}</div></td>
+      <td>{{ s.typicalPitch }}{% if s.slope %} · slope{% endif %}</td>
+      <td style="white-space:nowrap;">{{ s.boundaryM.squareLeg }}/{{ s.boundaryM.fineLeg }}/{{ s.boundaryM.longOn }}/{{ s.boundaryM.longOff }} m</td>
+      <td>×{{ s.report.six }}</td>
+      <td>{{ s.outfieldSpeed }}</td>
+      <td>{{ s.dewFactor }}{% if s.report.dew_full %} 💧{% endif %}</td>
+      <td>{{ s.altitudeMeters }} m{% if s.report.altitude %} ⛰️{% endif %}</td>
+      <td style="font-size:.8rem;">{% for k, v in s.modifiers.items() %}<span style="white-space:nowrap;">{{ k }} ×{{ v }}</span>{% if not loop.last %}, {% endif %}{% else %}<span style="color:var(--muted);">—</span>{% endfor %}</td>
+      <td class="actions" style="white-space:nowrap;">
+        <a class="btn btn-ghost btn-sm" href="{{ url_for('admin_conditions_stadium', name=s.name) }}">Edit</a>
+        <form method="POST" action="{{ url_for('admin_conditions_stadium_delete') }}" style="display:inline;"
+              onsubmit="return confirm('Delete {{ s.name|e }}? It stays in History.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="name" value="{{ s.name }}">
+          <button class="btn btn-red btn-sm" type="submit">Delete</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="9" style="color:var(--muted);">No stadiums match.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% if overrides %}
+<h2 style="margin:1.5rem 0 .5rem;">Modifier overrides</h2>
+<div class="table-wrap"><table>
+  <thead><tr><th>Setting</th><th>Value</th></tr></thead>
+  <tbody>{% for k, v in overrides.items() %}<tr><td><code>{{ k }}</code></td><td>{{ v }}</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endif %}
+
+<h2 style="margin:1.5rem 0 .5rem;">History</h2>
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(420px,1fr)); gap:1rem;">
+{% for title, key, hist in [('Stadiums', 'stadiums', history_stadiums), ('Modifiers', 'modifiers', history_modifiers)] %}
+  <div class="table-wrap">
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:.7rem 1rem;">
+      <strong>{{ title }}</strong>
+      <form method="POST" action="{{ url_for('admin_conditions_reset', key=key) }}"
+            onsubmit="return confirm('Reset {{ title|lower }} to the shipped defaults? The current version stays in History.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-ghost btn-sm" type="submit">Reset to shipped</button>
+      </form>
+    </div>
+    <table>
+      <thead><tr><th>#</th><th>When (UTC)</th><th>What</th><th></th></tr></thead>
+      <tbody>
+      {% for h in hist %}
+        <tr>
+          <td>{{ h.id }}</td>
+          <td style="white-space:nowrap;">{{ h.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td style="font-size:.8rem;">{% if h.reset %}shipped defaults{% else %}{{ h.note or '' }}{% if h.size is not none %} <span style="color:var(--muted);">({{ h.size }})</span>{% endif %}{% endif %}</td>
+          <td>{% if h.live %}<span style="color:var(--green); font-weight:800;">live</span>{% else %}
+            <form method="POST" action="{{ url_for('admin_conditions_restore', version_id=h.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-ghost btn-sm" type="submit">Restore</button>
+            </form>{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" style="color:var(--muted);">No saved versions — the shipped file is in use.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endfor %}
+</div>
+
+{% endblock %}
