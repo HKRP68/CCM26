@@ -710,6 +710,21 @@ def _pitch_section(state, pitch):
     return "".join(body)
 
 
+def _conditions_section(state):
+    """What the weather, the clock and the ground did — the Conditions Engine's
+    tally (``engine.sim.hook``). Empty for matches played without it."""
+    try:
+        from engine.sim.hook import influence_summary
+        rows = influence_summary(state, n=6)
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    return "<ul class='trace'>" + "".join(
+        f"<li>{_e(r['text'])} <span class='dim'>— {_e(r['overs'])} overs</span></li>"
+        for r in rows) + "</ul>"
+
+
 # ── the page ─────────────────────────────────────────────────────────
 
 def build_match_analysis_html(state, result=None, scorecard=None, potm=None):
@@ -805,6 +820,9 @@ def build_match_analysis_html(state, result=None, scorecard=None, potm=None):
     pitch_html = _pitch_section(state, pitch)
     if pitch_html:
         sections.append(("How the pitch changed", pitch_html))
+    cond_html = _conditions_section(state)
+    if cond_html:
+        sections.append(("What the conditions did", cond_html))
 
     body = "".join(f"<section><h2>{title}</h2>{content}</section>"
                    for title, content in sections if content)

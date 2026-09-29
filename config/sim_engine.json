@@ -1,0 +1,179 @@
+{
+  "_readme": "Conditions Engine v4 tuning file. Every number the engine uses lives here; see docs/conditions-engine-v4.md. Overrides: put only the keys you change in config/sim_engine.local.json (or point SIM_ENGINE_CONFIG at a file) and they are deep-merged over this one. Pitch values are clamped to 0.1-3.0.",
+  "version": 4,
+
+  "meta": {
+    "seed": null,
+    "enabled_live": {"T20": true, "The100": true, "ODI": true},
+    "live_strength": 0.6,
+    "live_bounds": {"min": 0.8, "max": 1.25},
+    "standalone_bounds": {"min": 0.2, "max": 4.0},
+    "neutral_reference": {
+      "cloudCover": 30, "humidity": 55, "temperatureC": 28, "windKPH": 8,
+      "session": "Afternoon", "hour": 15.0, "ballColor": "White",
+      "boundaryM": 71, "outfieldSpeed": 65, "dewFactor": 0, "altitudeMeters": 0
+    }
+  },
+
+  "pitches": {
+    "Dusty":  {"paceHelp": 0.75, "seamHelp": 0.70, "swingHelp": 0.85, "spinTurn": 2.00, "bounce": 0.80, "battingEase": 0.58, "paceWicketChance": 0.72, "spinWicketChance": 1.85, "crackRate": 1.80},
+    "Green":  {"paceHelp": 1.30, "seamHelp": 1.80, "swingHelp": 1.40, "spinTurn": 0.60, "bounce": 1.15, "battingEase": 1.00, "paceWicketChance": 1.55, "spinWicketChance": 0.60, "crackRate": 0.40},
+    "Dry":    {"paceHelp": 0.90, "seamHelp": 0.80, "swingHelp": 0.90, "spinTurn": 1.50, "bounce": 0.85, "battingEase": 0.74, "paceWicketChance": 0.85, "spinWicketChance": 1.45, "crackRate": 1.40},
+    "Bouncy": {"paceHelp": 1.50, "seamHelp": 1.10, "swingHelp": 1.00, "spinTurn": 0.90, "bounce": 1.80, "battingEase": 1.15, "paceWicketChance": 1.45, "spinWicketChance": 0.85, "crackRate": 0.50},
+    "Even":   {"paceHelp": 1.05, "seamHelp": 1.05, "swingHelp": 1.05, "spinTurn": 1.05, "bounce": 1.05, "battingEase": 1.12, "paceWicketChance": 1.00, "spinWicketChance": 1.00, "crackRate": 0.70},
+    "Hard":   {"paceHelp": 1.15, "seamHelp": 1.00, "swingHelp": 1.00, "spinTurn": 0.95, "bounce": 1.30, "battingEase": 1.38, "paceWicketChance": 0.95, "spinWicketChance": 0.85, "crackRate": 0.40},
+    "Flat":   {"paceHelp": 0.80, "seamHelp": 0.70, "swingHelp": 0.80, "spinTurn": 0.80, "bounce": 1.00, "battingEase": 1.40, "paceWicketChance": 0.70, "spinWicketChance": 0.70, "crackRate": 0.30},
+    "Dead":   {"paceHelp": 0.60, "seamHelp": 0.50, "swingHelp": 0.60, "spinTurn": 0.60, "bounce": 0.80, "battingEase": 1.75, "paceWicketChance": 0.55, "spinWicketChance": 0.60, "crackRate": 0.20}
+  },
+
+  "pitchCentering": {
+    "_readme": "When enabled, each pitch's bowling-help and wicket-chance values are divided by the pitch's best bowling option (mode 'best': captains bowl whoever the surface favours) or by the attack-weighted mean (mode 'mean', paceShare of overs to pace), so they decide WHO takes the wickets and battingEase alone decides how hard batting is. Turn off to let raw help values change totals too.",
+    "enabled": true,
+    "mode": "best",
+    "strength": 0.6,
+    "paceShare": 0.6
+  },
+
+  "pitchDecay": {
+    "_readme": "Test matches: crack accumulates by crackRate per session. Each crack point adds these deltas.",
+    "spinTurnPerCrack": 0.06,
+    "bouncePerCrack": -0.02,
+    "battingEasePerCrack": -0.015,
+    "paceWicketPerCrack": 0.01,
+    "spinWicketPerCrack": 0.03,
+    "maxCrack": 20,
+    "limitedOversInnings2Crack": 0.5
+  },
+
+  "grass": {
+    "Heavy":    {"seam": 1.15, "swing": 1.05, "spin": 0.92},
+    "Medium":   {"seam": 1.05, "swing": 1.00, "spin": 0.98},
+    "Little":   {"seam": 1.00, "swing": 1.00, "spin": 1.00},
+    "No Grass": {"seam": 0.94, "swing": 1.00, "spin": 1.06}
+  },
+
+  "timeOfDay": {
+    "sessionStartHour": {"Morning": 10.0, "Afternoon": 14.0, "Evening": 17.0, "Night": 19.5},
+    "minutesPerOver": {"T20": 4.2, "The100": 4.2, "ODI": 3.6, "Test": 4.0},
+    "inningsBreakMinutes": {"T20": 20, "The100": 20, "ODI": 40, "Test": 10},
+    "morning":   {"swing": 1.4, "seam": 1.2, "cloudThreshold": 60, "cloudBonus": 1.1, "untilHour": 12.5},
+    "afternoon": {"crackPerSession": 0.1, "spinPerSession": 0.1, "fromHour": 12.5, "untilHour": 17.0},
+    "eveningNight": {"dewFromHour": 18.0, "dewRampHours": 1.0, "shineRestorePerOver": 1.5, "spinGripPenalty": 0.7, "dropBonus": 0.15, "seamPenalty": 0.9, "boundaryBonus": 1.06},
+    "pinkBall":  {"swing": 1.3, "overs": 15},
+    "test": {"minefieldDays": [4, 5], "minefieldPitches": ["Dry", "Dusty"], "spinWicket": 2.0},
+    "sessionHours": {
+      "Test":   [{"name": "Morning", "start": 10.5}, {"name": "Afternoon", "start": 13.1}, {"name": "Evening", "start": 15.5}],
+      "TestDN": [{"name": "Afternoon", "start": 14.0}, {"name": "Evening", "start": 16.7}, {"name": "Night", "start": 19.0}]
+    }
+  },
+
+  "weather": {
+    "swingBase": 0.6,
+    "swingCloudScale": 1.2,
+    "swingHumidityScale": 0.2,
+    "driftPerOver": {"cloudCover": 2.5, "humidity": 1.5, "windKPH": 1.2, "temperatureC": 0.15},
+    "heat": {"threshold": 35, "staminaDrain": 1.5, "crackRate": 1.3, "boundaryBonus": 1.03},
+    "cold": {"threshold": 16, "seam": 1.08},
+    "wind": {"threshold": 25, "spinDrift": 1.3, "sixDownwind": 1.10, "sixUpwind": 0.95, "paceWithWind": 1.04},
+    "humidity": {"threshold": 80, "swingWindowExtraOvers": 5},
+    "rain": {
+      "_readme": "Rain is rare by design. perOverProb = basePerOverProb * rainChance/50 (x cloudyBoost when cloud > 70). At rainChance 50 that is ~0.6% of T20s and ~1.5% of ODIs; showers that cost no overs are reported but change nothing.",
+      "basePerOverProb": 0.00015,
+      "cloudyBoost": 1.5,
+      "maxInterruptionsPerMatch": 1,
+      "oversLost": {"T20": [2, 6], "The100": [2, 5], "ODI": [5, 18], "Test": [10, 45]},
+      "minOversPerSide": {"T20": 5, "The100": 5, "ODI": 20},
+      "outfieldAfterRain": -20,
+      "swingAfterRain": 1.1
+    }
+  },
+
+  "stadium": {
+    "sixProbBands": [
+      {"maxM": 62, "mult": 1.5},
+      {"maxM": 70, "mult": 1.2},
+      {"maxM": 78, "mult": 1.0},
+      {"maxM": 999, "mult": 0.75}
+    ],
+    "outfield": {"candidateShare": {"1": 0.03, "2": 0.12, "3": 0.45}, "neutralSpeed": 65, "slowTwoBonus": 0.25},
+    "dew": {"threshold": 60, "_readme": "dewFactor at or above threshold = full dew; below it the effect scales down linearly. The dew effect sizes live in timeOfDay.eveningNight."},
+    "altitude": {"threshold": 800, "carry": 1.08, "swing": 0.85, "six": 1.10, "sixPer1000mAbove": 0.04},
+    "slopeSeam": 1.05
+  },
+
+  "ballAging": {
+    "decayPerOver": {"shine": 2.6, "hardness": 1.7, "roughness": 1.8},
+    "abrasivePitches": {"Dry": 1.5, "Dusty": 1.8, "Flat": 1.1, "Hard": 1.2},
+    "new":    {"untilOver": 10, "swing": 1.6, "seam": 1.4, "pace": 1.1},
+    "mid":    {"untilOver": 25, "swingStart": 1.0, "swingEnd": 0.7, "seam": 1.0},
+    "old":    {"untilOver": 40, "swing": 0.7, "reverseSwing": 1.8, "reverseShineBelow": 40, "reversePitches": ["Dry", "Dusty", "Flat", "Hard", "Even", "Dead"], "reverseMinPace": 70, "reverseMinSkill": 60, "roughnessSpinAbove": 50, "roughnessSpin": 1.3},
+    "veryOld": {"hardnessBelow": 30, "pace": 0.85, "spin": 1.5, "batSpeed": 1.05},
+    "newBall": {"odiTwoBalls": true, "testEvery": 80}
+  },
+
+  "situation": {
+    "pressure": {"rrrThreshold": 8.0, "formats": ["T20", "The100"], "aggression": 1.4, "wicket": 1.6, "rampPerRun": 0.25},
+    "momentum": {"shotQuality": 1.05, "bowling": 1.05},
+    "newBatter": {"balls": 5, "shotQuality": 0.8},
+    "tail": {"positionAbove": 8, "shotQuality": 0.5},
+    "choke": {"targetBelow": 50, "wicketsInHand": 5, "shotQuality": 0.9, "accuracy": 1.15},
+    "death": {"overs": {"T20": [16, 20], "The100": [14, 17], "ODI": [45, 50]}, "specialist": 1.3, "yorkerAccuracy": 0.2, "aggression": 100},
+    "fatigue": {"staminaPerOver": {"pace": 4.0, "spin": 2.0}, "recoverPerOver": 3.0, "lowStaminaBelow": 40, "lowStaminaAccuracy": 0.9}
+  },
+
+  "drama": {
+    "dramaSlider": 50,
+    "eventChanceDivisor": 1000,
+    "events": {"droppedCatch": 3, "directHit": 2, "stumping": 1.5, "hugeOver": 1.5, "drsOverturn": 2, "rainScare": 1, "crunchMisfield": 1.5},
+    "closeFinish": {"strength": 0.35, "fromFraction": 0.75},
+    "baseDropChance": 0.05
+  },
+
+  "outcome": {
+    "_readme": "Neutral base distribution per format (before pitch, conditions and players). The engine scales these with multipliers and renormalises.",
+    "base": {
+      "T20":  {"Dot": 0.280, "Single": 0.360, "Double": 0.075, "Three": 0.006, "Four": 0.185, "Six": 0.090, "Wicket": 0.034, "Extras": 0.028},
+      "ODI":  {"Dot": 0.420, "Single": 0.340, "Double": 0.075, "Three": 0.008, "Four": 0.118, "Six": 0.032, "Wicket": 0.0175, "Extras": 0.022},
+      "Test": {"Dot": 0.660, "Single": 0.190, "Double": 0.042, "Three": 0.010, "Four": 0.084, "Six": 0.005, "Wicket": 0.0088, "Extras": 0.015}
+    },
+    "sensitivity": {"wicket": 1.25, "boundary": 1.1, "dot": 0.5, "extras": 0.6},
+    "_dampingReadme": "Conditions compound (pitch x weather x ball x time). These exponents compress each channel before it meets the players: 1.0 = raw, 0.5 = square-root. Lower = conditions matter less.",
+    "damping": {"bowlerHelp": 0.35, "battingEase": 0.6, "wicketChance": 0.6, "six": 0.8, "fourCarry": 1.0,
+                "byFormat": {"ODI": {"battingEase": 0.45}, "Test": {"battingEase": 0.35, "bowlerHelp": 0.3, "wicketChance": 0.5}}},
+    "skillWeights": {"technique": 0.5, "matchup": 0.5},
+    "formRange": [0.85, 1.15],
+    "aggression": {"boundaryLow": 0.8, "boundaryHigh": 1.25, "wicketLow": 0.9, "wicketHigh": 1.15},
+    "bowlingMix": {"pace": {"pace": 0.35, "swing": 0.3, "seam": 0.35}, "bounceWeight": 0.25},
+    "wicketTypes": {
+      "pace": {"Caught": 0.55, "Bowled": 0.2, "LBW": 0.17, "Run Out": 0.05, "Hit Wicket": 0.01, "Caught Behind": 0.02},
+      "spin": {"Caught": 0.5, "Bowled": 0.15, "LBW": 0.18, "Stumped": 0.12, "Run Out": 0.05}
+    },
+    "extrasSplit": {"Wide": 0.6, "No Ball": 0.15, "Leg Bye": 0.2, "Bye": 0.05}
+  },
+
+  "formats": {
+    "T20":  {"overs": 20, "maxBowlerOvers": 4, "ballColor": "White", "powerplayOvers": 6},
+    "The100": {"overs": 17, "maxBowlerOvers": 4, "ballColor": "White", "powerplayOvers": 5},
+    "ODI":  {"overs": 50, "maxBowlerOvers": 10, "ballColor": "White", "powerplayOvers": 10, "dlsG50": 245},
+    "Test": {"days": 5, "sessionsPerDay": 3, "oversPerDay": 90, "followOn": 200, "followOnOptional": true, "followOnEnforceChance": 0.75, "declareAbove": 550, "declareLeadInnings3": 380, "maxSpellOvers": {"pace": 7, "spin": 14}}
+  },
+
+  "playerDerivation": {
+    "jitter": 6,
+    "defaultForm": 55,
+    "defaultStamina": 75,
+    "aggressionByCategory": {"Batsman": 58, "Wicket Keeper": 60, "Wicketkeeper": 60, "All-Rounder": 64, "All-rounder": 64, "Bowler": 45},
+    "paceByStyle": {"fast": 90, "fast-medium": 82, "fast medium": 82, "medium-fast": 74, "medium fast": 74, "medium": 64},
+    "spinKeywords": ["spin", "break", "orthodox", "googly", "chinaman", "off", "leg", "wrist", "finger"],
+    "deathSpecialistMinBowl": 82,
+    "deathTraitKeys": ["bowl_death", "bowl_yorker"]
+  },
+
+  "output": {
+    "commentary": true,
+    "wagonWheel": true,
+    "topInfluences": 6,
+    "pitchInfluenceSlots": 2,
+    "topTurningPoints": 6
+  }
+}
