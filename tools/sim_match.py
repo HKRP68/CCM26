@@ -84,7 +84,11 @@ def main(argv=None):
         time = MatchTime(session=session, is_day_night=args.daynight or session in ("Evening", "Night"),
                          ball_color=ball, start_hour=start)
 
-    setup = MatchSetup(fmt=args.format, team1=_team(args.team1, rows), team2=_team(args.team2, rows),
+    try:
+        team1, team2 = _team(args.team1, rows), _team(args.team2, rows)
+    except ValueError as exc:
+        ap.error(str(exc))
+    setup = MatchSetup(fmt=args.format, team1=team1, team2=team2,
                        pitch=args.pitch, stadium=st, weather=weather, time=time, grass=args.grass,
                        seed=args.seed, commentary=not args.no_commentary)
     res = simulate_match(setup, cfg)

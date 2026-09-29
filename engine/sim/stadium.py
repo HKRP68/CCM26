@@ -98,11 +98,15 @@ def find(name, db=None):
     for raw, s in rows:
         if s.name.lower() == q or q in (a.lower() for a in raw.get("aliases", [])):
             return s
+    # Substring fallback: the longest matching name wins, so "Kensington Oval,
+    # Barbados" resolves to Kensington Oval rather than The Oval's "Oval".
+    best, best_len = None, 0
     for raw, s in rows:
         names = [s.name.lower()] + [a.lower() for a in raw.get("aliases", [])]
-        if any(q in n or n in q for n in names if len(n) >= 4):
-            return s
-    return None
+        for n in names:
+            if len(n) >= 4 and (q in n or n in q) and len(n) > best_len:
+                best, best_len = s, len(n)
+    return best
 
 
 def neutral(cfg):

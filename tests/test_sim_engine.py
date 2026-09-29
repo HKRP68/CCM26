@@ -487,3 +487,62 @@ def test_live_engine_runs_with_the_hook():
     assert state.get("sim_influences")
     html = match_analysis.build_match_analysis_html(state)
     assert "What the conditions did" in html
+
+
+# ── review follow-ups ───────────────────────────────────────────────────
+
+def test_find_prefers_the_most_specific_name():
+    assert stadium.find("Kensington Oval, Barbados").name == "Kensington Oval"
+    assert stadium.find("Kennington Oval, London").name == "The Oval"
+
+
+def test_pick_xi_rejects_an_unknown_country():
+    from engine.sim import teams
+    with pytest.raises(ValueError):
+        teams.pick_xi("Atlantis", rows=[])
+
+
+def test_no_ball_boundaries_count_for_the_batter(monkeypatch):
+    real = outcome.resolve
+    calls = {"n": 0}
+
+    def fake(*a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return outcome.BallResult("Extras", runs=4, extra_type="No Ball", extra_runs=1, legal=False)
+        return real(*a, **k)
+
+    monkeypatch.setattr(outcome, "resolve", fake)
+    res = _play("T20", 1)
+    opener = res["innings"][0]["batting"][0]
+    assert opener["fours"] >= 1
+
+
+def test_chase_clock_starts_when_the_first_innings_ended():
+    c = sim_config.get_config()
+    state = dict(LIVE_STATE, overs=20)
+    full, _ = hook.conditions_for(state, 0, 2, c)
+    early, _ = hook.conditions_for(dict(state, inn1_balls=60), 0, 2, c)
+    assert early.hour < full.hour
+
+
+def test_level_follow_on_leaves_one_run_to_chase(monkeypatch):
+    from engine.sim import match as match_mod
+
+    # Scripted innings totals: 400, 150 (follow-on enforced), 250 → level.
+    totals = iter([400, 150, 250, 1])
+
+    def fake_play(self, inn, lead_before):
+        inn.runs = next(totals)
+        inn.wkts = 10
+        inn.all_out = True
+        if inn.target is not None and inn.runs >= inn.target:
+            inn.all_out, inn.wkts = False, 0
+
+    monkeypatch.setattr(match_mod._Match, "play_test_innings", fake_play)
+    forced = sim_config.build(override={"formats": {"Test": {"followOnOptional": False}}}, local_path="")
+    res = simulate_match(MatchSetup(fmt="Test", team1=_xi("A", 80, 80), team2=_xi("B", 80, 80),
+                                    seed=1, commentary=False), forced)
+    assert len(res["innings"]) == 4
+    assert res["innings"][3]["target"] == 1
+    assert res["result"]["margin"] != "draw"

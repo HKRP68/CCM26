@@ -34,6 +34,8 @@ def pick_xi(country, rows=None):
 
     cfg = get_config()
     rows = [r for r in (rows or load_rows()) if r.get("Country") == country]
+    if not rows:
+        raise ValueError(f"no players for country {country!r} in data/players.json")
     seen, uniq = set(), []
     for r in sorted(rows, key=lambda r: -(r.get("overall all") or 0)):
         if r["Player Name"] in seen:

@@ -98,7 +98,11 @@ def conditions_for(state, over_idx, innings, cfg):
     overs_total = int(state.get("overs") or 20)
     elapsed = over_idx * mpo
     if innings == 2:
-        elapsed += overs_total * mpo + t["inningsBreakMinutes"].get(fmt, 20)
+        # When the first innings really ended (an early all-out starts the chase
+        # sooner, before the dew), falling back to the full quota if unrecorded.
+        inn1_balls = state.get("inn1_balls")
+        inn1_overs = inn1_balls / 6.0 if inn1_balls else overs_total
+        elapsed += inn1_overs * mpo + t["inningsBreakMinutes"].get(fmt, 20)
     hour = start + elapsed / 60.0
 
     wear = AGE_WEAR.get(c.get("pitch_age"), 0.0)

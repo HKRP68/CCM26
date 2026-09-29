@@ -153,7 +153,10 @@ class _Match:
         mpo = t["minutesPerOver"][self.fmt]
         start = self.time.start_hour
         if inn_number == 2:
-            start += (self.overs * mpo + t["inningsBreakMinutes"][self.fmt]) / 60.0
+            # The chase starts when the first innings actually ended, not when
+            # its full quota would have — an early all-out brings the dew in later.
+            inn1_overs = self.innings[0].legal_balls / 6.0 if self.innings else self.overs
+            start += (inn1_overs * mpo + t["inningsBreakMinutes"][self.fmt]) / 60.0
         return start + (balls / 6.0) * mpo / 60.0
 
     def _test_session_info(self):
@@ -428,13 +431,14 @@ class _Match:
                 wstat["dots"] += 1
         elif res.extra_type == "No Ball":
             bstat["balls"] += 1
-        if res.runs == 4 and not res.extra_type:
+        off_bat = res.extra_type in (None, "No Ball")   # byes/leg byes are not hits
+        if res.runs == 4 and off_bat:
             bstat["fours"] += 1
             inn.last_event = "bat"
-        elif res.runs == 6:
+        elif res.runs == 6 and off_bat:
             bstat["sixes"] += 1
             inn.last_event = "bat"
-        if res.runs and not res.extra_type:
+        if res.runs and off_bat:
             zone = rng.choice(_ZONES)
             inn.wagon[zone] = inn.wagon.get(zone, 0) + res.runs
         if res.dropped:
@@ -662,7 +666,7 @@ class _Match:
             if self.test_over() and not i3.all_out:
                 return self._test_result()
             need = lead - i3.runs
-            if need < 0:
+            if need <= 0:            # level scores still leave one run to get
                 i4 = _Innings(4, a, b, self.cfg)
                 i4.target = -need + 1
                 inns.append(i4)
