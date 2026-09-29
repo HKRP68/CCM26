@@ -62,6 +62,10 @@ class Stadium:
     avg_first_innings: int = 170
     slope: bool = False
     climate: Tuple[Tuple[str, float], ...] = ()
+    aliases: Tuple[str, ...] = ()
+    # The ground's own character on top of the formulas, e.g. (("spin", 1.1),)
+    # — see engine.sim.stadium.MODIFIER_CHANNELS for the names.
+    modifiers: Tuple[Tuple[str, float], ...] = ()
 
     @property
     def boundaries(self) -> Dict[str, float]:

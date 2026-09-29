@@ -24604,6 +24604,258 @@ def _auction_console_action(db, season, action):
     log_admin(db, f"auction_{action}", "auction", season.id, season.name)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# CONDITIONS ENGINE — stadiums & modifiers: edit, export, import, history
+# ═══════════════════════════════════════════════════════════════════════
+# Saved to the database (engine/sim/store.py), not to the repo's JSON files:
+# the container filesystem is reset on every deploy. See
+# docs/conditions-engine-v4.md, "Stadiums and modifiers from the admin site".
+
+_COND_MAX_UPLOAD = 2 * 1024 * 1024
+
+
+def _cond_reload():
+    try:
+        from engine.sim import store as sim_store
+        sim_store.reload_engine()
+    except Exception:
+        logger.exception("conditions: engine reload failed")
+
+
+def _cond_form_to_raw(form):
+    """The stadium edit form → a raw stadium dict for conditions_io.clean_stadium."""
+    from engine.sim.models import BOUNDARY_REGIONS
+    from engine.sim.stadium import MODIFIER_CHANNELS
+    raw = {k: form.get(k, "") for k in ("name", "aliases", "city", "country", "altitudeMeters",
+                                        "outfieldSpeed", "dewFactor", "typicalPitch",
+                                        "avgFirstInningsScore")}
+    raw["slope"] = bool(form.get("slope"))
+    raw["boundaryM"] = {r: form.get(f"boundary_{r}", "") for r in BOUNDARY_REGIONS}
+    raw["climate"] = {k: form.get(f"climate_{k}", "")
+                      for k in ("cloudCover", "humidity", "rainChance", "temperatureC", "windKPH")}
+    raw["modifiers"] = {k: form.get(f"mod_{k}", "") for k in MODIFIER_CHANNELS}
+    return raw
+
+
+@app.route("/conditions")
+@login_required
+def admin_conditions():
+    from engine import pitch_registry
+    from engine.sim import stadium as sim_stadium, store as sim_store
+    from engine.sim.config import get_config
+    from services import conditions_io
+    db = get_session()
+    try:
+        cfg = get_config()
+        rows = []
+        for raw in sim_stadium.live_rows():
+            try:
+                clean, _ = conditions_io.clean_stadium(raw)
+            except ValueError:
+                continue
+            rows.append({**clean, "report": conditions_io.ground_report(clean, cfg)})
+        q = (request.args.get("q") or "").strip().lower()
+        if q:
+            rows = [r for r in rows if q in r["name"].lower() or q in r["country"].lower()
+                    or any(q in a.lower() for a in r["aliases"])]
+        overrides = conditions_io.live_modifier_overrides()
+        return render_template(
+            "admin_conditions.html", rows=rows, q=q,
+            stadiums_saved=sim_store.current("stadiums", db) is not None,
+            overrides=conditions_io._flatten(overrides),
+            history_stadiums=sim_store.history("stadiums", db, limit=10),
+            history_modifiers=sim_store.history("modifiers", db, limit=10),
+            warnings=cfg.get("_warnings") or [], pitches=pitch_registry.PITCHES)
+    finally:
+        db.close()
+
+
+@app.route("/conditions/export")
+@login_required
+def admin_conditions_export():
+    from flask import Response
+    from services import conditions_io
+    what = request.args.get("what", "all")
+    if what not in ("all", "stadiums", "modifiers"):
+        what = "all"
+    stamp = datetime.utcnow().strftime("%Y%m%d-%H%M")
+    if request.args.get("fmt") == "csv":
+        body = conditions_io.stadiums_to_csv()
+        return Response(body, mimetype="text/csv", headers={
+            "Content-Disposition": f"attachment; filename=stadiums-{stamp}.csv"})
+    body = json.dumps(conditions_io.export_bundle(what), indent=1, ensure_ascii=False, default=str)
+    return Response(body, mimetype="application/json", headers={
+        "Content-Disposition": f"attachment; filename=conditions-{what}-{stamp}.json"})
+
+
+@app.route("/conditions/import", methods=["GET", "POST"])
+@login_required
+def admin_conditions_import():
+    from services import conditions_io
+    if request.method == "GET":
+        return render_template("admin_conditions_import.html", plan=None)
+
+    step = request.form.get("step", "preview")
+    mode = request.form.get("mode", "merge")
+    if mode not in ("merge", "replace"):
+        mode = "merge"
+    only = request.form.get("only", "all")       # all | stadiums | modifiers
+    filename = ""
+    if step == "apply":
+        content = request.form.get("payload", "")
+        filename = request.form.get("filename", "")
+    else:
+        f = request.files.get("file")
+        if f and f.filename:
+            data = f.read(_COND_MAX_UPLOAD + 1)
+            if len(data) > _COND_MAX_UPLOAD:
+                flash("That file is over 2 MB — not a conditions export.", "error")
+                return redirect(url_for("admin_conditions_import"))
+            content, filename = data.decode("utf-8-sig", errors="replace"), f.filename
+        else:
+            content = request.form.get("text_content", "")
+    try:
+        parsed = conditions_io.parse_upload(content, filename)
+        if only == "stadiums":
+            parsed["modifiers"] = None
+        elif only == "modifiers":
+            parsed["stadiums"] = None
+        if parsed.get("stadiums") is None and parsed.get("modifiers") is None:
+            raise ValueError("nothing to import with that selection")
+        plan = conditions_io.plan_import(parsed, mode=mode)
+    except ValueError as exc:
+        flash(f"Import failed: {exc}", "error")
+        return redirect(url_for("admin_conditions_import"))
+
+    if step != "apply" or plan["errors"]:
+        return render_template("admin_conditions_import.html", plan=plan, payload=content,
+                               filename=filename, mode=mode, only=only)
+
+    db = get_session()
+    try:
+        done = conditions_io.apply_plan(plan, db, created_by="admin",
+                                        note=(request.form.get("note") or "").strip() or None)
+        log_admin(db, "conditions_import", "conditions", 0, ",".join(done),
+                  f"mode={mode} file={filename or 'pasted'}")
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.exception("conditions import failed")
+        flash(f"Import failed: {exc}", "error")
+        return redirect(url_for("admin_conditions_import"))
+    finally:
+        db.close()
+    _cond_reload()
+    flash(f"✅ Imported {' and '.join(done)} ({mode}). The previous version is in History "
+          "if you need it back.", "info")
+    return redirect(url_for("admin_conditions"))
+
+
+@app.route("/conditions/stadium", methods=["GET", "POST"])
+@login_required
+def admin_conditions_stadium():
+    from engine import pitch_registry
+    from engine.sim import stadium as sim_stadium
+    from engine.sim.models import BOUNDARY_REGIONS
+    from services import conditions_io
+    original = (request.values.get("original") or request.args.get("name") or "").strip()
+    if request.method == "POST":
+        raw = _cond_form_to_raw(request.form)
+        db = get_session()
+        try:
+            clean, warns = conditions_io.upsert_stadium(raw, db, original_name=original or None,
+                                                        created_by="admin")
+            log_admin(db, "conditions_stadium_save", "stadium", 0, clean["name"],
+                      f"was {original}" if original and original != clean["name"] else None)
+            db.commit()
+        except ValueError as exc:
+            db.rollback()
+            flash(f"Not saved: {exc}", "error")
+            return render_template("admin_conditions_stadium.html", s=raw, original=original,
+                                   regions=BOUNDARY_REGIONS, pitches=pitch_registry.PITCHES,
+                                   modifiers=sim_stadium.MODIFIER_CHANNELS)
+        finally:
+            db.close()
+        _cond_reload()
+        for w in warns:
+            flash(w, "info")
+        flash(f"✅ Saved {clean['name']}.", "info")
+        return redirect(url_for("admin_conditions"))
+
+    s = None
+    if original:
+        for raw in sim_stadium.live_rows():
+            if raw.get("name", "").lower() == original.lower():
+                s = conditions_io.clean_stadium(raw)[0]
+                break
+        if s is None:
+            flash(f"No stadium called {original!r}.", "error")
+            return redirect(url_for("admin_conditions"))
+    return render_template("admin_conditions_stadium.html", s=s, original=original,
+                           regions=BOUNDARY_REGIONS, pitches=pitch_registry.PITCHES,
+                           modifiers=sim_stadium.MODIFIER_CHANNELS)
+
+
+@app.route("/conditions/stadium/delete", methods=["POST"])
+@login_required
+def admin_conditions_stadium_delete():
+    from services import conditions_io
+    name = (request.form.get("name") or "").strip()
+    db = get_session()
+    try:
+        conditions_io.delete_stadium(name, db, created_by="admin")
+        log_admin(db, "conditions_stadium_delete", "stadium", 0, name)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        flash(str(exc), "error")
+        return redirect(url_for("admin_conditions"))
+    finally:
+        db.close()
+    _cond_reload()
+    flash(f"🗑 Deleted {name}. Restore it from History if that was a mistake.", "info")
+    return redirect(url_for("admin_conditions"))
+
+
+@app.route("/conditions/restore/<int:version_id>", methods=["POST"])
+@login_required
+def admin_conditions_restore(version_id):
+    from engine.sim import store as sim_store
+    db = get_session()
+    try:
+        row = sim_store.restore(version_id, db, created_by="admin")
+        log_admin(db, "conditions_restore", "conditions", version_id, row.key)
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        flash(str(exc), "error")
+        return redirect(url_for("admin_conditions"))
+    finally:
+        db.close()
+    _cond_reload()
+    flash(f"↩ Restored version #{version_id}.", "info")
+    return redirect(url_for("admin_conditions"))
+
+
+@app.route("/conditions/reset/<key>", methods=["POST"])
+@login_required
+def admin_conditions_reset(key):
+    from engine.sim import store as sim_store
+    if key not in sim_store.KEYS:
+        flash("Unknown settings.", "error")
+        return redirect(url_for("admin_conditions"))
+    db = get_session()
+    try:
+        sim_store.save(key, None, db, created_by="admin", note="reset to shipped file")
+        log_admin(db, "conditions_reset", "conditions", 0, key)
+        db.commit()
+    finally:
+        db.close()
+    _cond_reload()
+    flash(f"Reset {key} to the shipped defaults (the old version is in History).", "info")
+    return redirect(url_for("admin_conditions"))
+
+
 # ── Run ──────────────────────────────────────────────────────────────
 
 

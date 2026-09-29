@@ -98,7 +98,8 @@
     "outfield": {"candidateShare": {"1": 0.03, "2": 0.12, "3": 0.45}, "neutralSpeed": 65, "slowTwoBonus": 0.25},
     "dew": {"threshold": 60, "_readme": "dewFactor at or above threshold = full dew; below it the effect scales down linearly. The dew effect sizes live in timeOfDay.eveningNight."},
     "altitude": {"threshold": 800, "carry": 1.08, "swing": 0.85, "six": 1.10, "sixPer1000mAbove": 0.04},
-    "slopeSeam": 1.05
+    "slopeSeam": 1.05,
+    "modifierBounds": {"min": 0.5, "max": 2.0, "_readme": "Per-ground modifiers in data/stadiums.json (or the admin Conditions page) are clamped to this range."}
   },
 
   "ballAging": {

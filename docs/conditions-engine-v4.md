@@ -9,7 +9,9 @@ to rebalance.
 |---|---|
 | All tuning multipliers | `config/sim_engine.json` |
 | Your local overrides (only the keys you change) | `config/sim_engine.local.json`, or the file in `SIM_ENGINE_CONFIG` |
-| Stadium database (editable) | `data/stadiums.json` |
+| Stadium database (shipped defaults) | `data/stadiums.json` |
+| Admin edits, imports and their history | the `sim_engine_settings` table, via `engine/sim/store.py` |
+| Export / import | admin **🏟️ Stadiums & Conditions** (`/conditions`), `python -m tools.conditions_io`, `services/conditions_io.py` |
 | The rules, one module each | `engine/sim/` — `pitch`, `weather`, `time_of_day`, `stadium`, `ball_aging`, `situation`, `drama`, `rain_dls` |
 | Composing them / the ball outcome | `engine/sim/factors.py`, `engine/sim/outcome.py` |
 | Standalone match loop, commentary, summary | `engine/sim/match.py`, `commentary.py`, `report.py` |
@@ -184,6 +186,69 @@ Known gaps: Tests finish inside five days more often than real ones do (draws
 are rare), and the CLI's country XIs are picked by rating from
 `data/players.json`, which mixes men's and women's cards — pass a team file for
 a specific XI.
+
+## Stadiums and modifiers from the admin site
+
+**Game Settings → 🏟️ Stadiums & Conditions** (`/conditions`) lists every ground
+with what the formulas make of it (six multiplier after altitude, dew, altitude)
+and its own modifiers, and lets you add, edit, rename and delete grounds.
+
+### Per-ground modifiers
+
+A ground can carry its own character on top of the formulas: `swing`, `seam`,
+`pace`, `spin`, `bounce`, `battingEase`, `sixes`, `fours`, `paceWickets`,
+`spinWickets`. 1.0 is no effect; values are clamped to
+`stadium.modifierBounds` (0.5–2.0). They show up in the match summary ("Eden
+Gardens gave extra turn (x1.10)") and reach the live game through the hook like
+any other condition. Shipped: Eden Gardens spin 1.10, Newlands seam and swing
+1.10, Chepauk spin 1.12, Galle spin 1.12, Wanderers bounce 1.10 and pace 1.05,
+Sabina Park bounce 1.08, Sheikh Zayed spin 1.05.
+
+### Export
+
+- **Export all (JSON)** — one bundle with every stadium *and* the full effective
+  modifier config: `{"format": "ccm26-conditions", "version": 1, "stadiums": [...], "modifiers": {...}}`.
+- **Stadiums JSON / Modifiers JSON** — either half on its own.
+- **Stadiums CSV** — one row per ground, for editing in a spreadsheet:
+  `boundary_*`, `climate_*` and `mod_*` columns, aliases separated by `|`.
+
+### Import
+
+Upload or paste any of: an export bundle, a stadium list, a single stadium, a
+full or partial `sim_engine.json`, or the CSV. Nothing is saved until you have
+seen the **preview**: stadiums added, changed field by field, and removed;
+every modifier value that changes; and every value that was clamped or key that
+was dropped, as warnings. Rows that cannot be used at all (no name, text where a
+number goes) are errors and block the import.
+
+- **Merge** adds new grounds and updates known ones field by field — a file
+  that only sets Eden Gardens' `dewFactor` changes only that — and keeps
+  everything else. Set a ground modifier to 1.0 to remove it.
+- **Replace** makes the file the whole stadium list / the whole set of overrides.
+- **Import** everything, stadiums only, or modifiers only.
+
+Modifier overrides are stored minimal — only the values that differ from the
+shipped `config/sim_engine.json` — so importing a full exported config does not
+freeze every other default at today's value.
+
+### Where it is saved, and History
+
+Edits and imports go to the database (`sim_engine_settings`), not to the repo
+files: the container's filesystem is reset on every deploy. The engine reads
+defaults ← local file ← database, and the page's changes apply from the next
+ball. Every save is a new version; **History** keeps the last 25 per kind with
+**Restore**, and **Reset to shipped** goes back to the files (itself a version,
+so it can be undone).
+
+### From a shell
+
+```
+python -m tools.conditions_io export conditions.json          # bundle (or .csv for stadiums)
+python -m tools.conditions_io import conditions.json          # preview only
+python -m tools.conditions_io import conditions.json --apply  # save to the DB, with history
+python -m tools.conditions_io import tuned.json --to-files    # write data/stadiums.json +
+                                                              # config/sim_engine.local.json for git
+```
 
 ## Balancing workflow
 

@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit ' ~ original if original else 'New stadium' }}{% endblock %}
+{% block content %}
+{% set s = s or {} %}
+{% set b = s.get('boundaryM') or {} %}
+{% set c = s.get('climate') or {} %}
+{% set m = s.get('modifiers') or {} %}
+
+<a href="{{ url_for('admin_conditions') }}" style="color:var(--muted); text-decoration:none;">← Back to stadiums</a>
+<h1 style="margin:1rem 0;">{{ '✏️ ' ~ original if original else '🏟️ New stadium' }}</h1>
+
+<form method="POST" class="form-card" style="max-width:900px;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="original" value="{{ original }}">
+
+  <div class="form-row">
+    <div class="form-group"><label>Name</label><input name="name" required maxlength="80" value="{{ s.get('name', '') }}"></div>
+    <div class="form-group"><label>Aliases (separate with |)</label>
+      <input name="aliases" value="{{ (s.get('aliases') or [])|join('|') if s.get('aliases') is not string else s.get('aliases') }}"></div>
+  </div>
+  <div class="form-row">
+    <div class="form-group"><label>City</label><input name="city" value="{{ s.get('city', '') }}"></div>
+    <div class="form-group"><label>Country</label><input name="country" value="{{ s.get('country', '') }}"></div>
+  </div>
+
+  <h3 style="margin:.5rem 0;">Ground</h3>
+  <div class="form-row">
+    {% for r in regions %}
+    <div class="form-group"><label>Boundary {{ r }} (m, 40–100)</label>
+      <input name="boundary_{{ r }}" type="number" step="0.5" min="40" max="100" value="{{ b.get(r, '') }}"></div>
+    {% endfor %}
+  </div>
+  <div class="form-row">
+    <div class="form-group"><label>Outfield speed (0 mud – 100 lightning)</label>
+      <input name="outfieldSpeed" type="number" min="0" max="100" value="{{ s.get('outfieldSpeed', 65) }}"></div>
+    <div class="form-group"><label>Dew factor (0–100; 60+ = full dew after 6pm)</label>
+      <input name="dewFactor" type="number" min="0" max="100" value="{{ s.get('dewFactor', 0) }}"></div>
+    <div class="form-group"><label>Altitude (m; 800+ = ball carries)</label>
+      <input name="altitudeMeters" type="number" min="0" max="5000" value="{{ s.get('altitudeMeters', 0) }}"></div>
+    <div class="form-group"><label>Avg first-innings score (T20)</label>
+      <input name="avgFirstInningsScore" type="number" min="60" max="350" value="{{ s.get('avgFirstInningsScore', 170) }}"></div>
+    <div class="form-group"><label>Typical pitch</label>
+      <select name="typicalPitch">{% for p in pitches %}<option value="{{ p }}" {{ 'selected' if s.get('typicalPitch', 'Even') == p }}>{{ p }}</option>{% endfor %}</select></div>
+    <div class="form-group"><label>Slope (Lord's style: seam ×1.05)</label>
+      <input type="checkbox" name="slope" value="1" {{ 'checked' if s.get('slope') }} style="width:auto;"></div>
+  </div>
+
+  <h3 style="margin:.5rem 0;">Climate (seeds the match weather)</h3>
+  <div class="form-row">
+    {% for k, lab in [('cloudCover','Cloud %'), ('humidity','Humidity %'), ('rainChance','Rain chance %'), ('temperatureC','Temperature °C'), ('windKPH','Wind km/h')] %}
+    <div class="form-group"><label>{{ lab }}</label><input name="climate_{{ k }}" type="number" step="0.1" value="{{ c.get(k, '') }}"></div>
+    {% endfor %}
+  </div>
+
+  <h3 style="margin:.5rem 0;">The ground's own modifiers</h3>
+  <p style="color:var(--muted); font-size:.82rem; margin-bottom:.6rem;">
+    Multipliers on top of the formulas, only at this ground. Blank or 1.0 = no effect; clamped to 0.5–2.0.
+    Example: Eden Gardens spin 1.10, Newlands seam 1.10 + swing 1.10.
+  </p>
+  <div class="form-row">
+    {% for k in modifiers %}
+    <div class="form-group"><label>{{ k }}</label>
+      <input name="mod_{{ k }}" type="number" step="0.01" min="0.5" max="2" placeholder="1.00" value="{{ m.get(k, '') }}"></div>
+    {% endfor %}
+  </div>
+
+  <button class="btn btn-primary" type="submit">Save stadium</button>
+</form>
+{% endblock %}
