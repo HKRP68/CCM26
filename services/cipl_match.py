@@ -1020,6 +1020,19 @@ def _make_environment_hook(conditions, ctx):
         return None
 
 
+def _make_conditions_hook(state, striker, bowler, ctx):
+    """Conditions Engine v4 hook (``engine.sim.hook``), or None when it is
+    switched off for this format, there are no conditions, or anything fails."""
+    if not state.get("conditions"):
+        return None
+    try:
+        from engine.sim.hook import make_conditions_hook
+        return make_conditions_hook(state, striker, bowler, ctx)
+    except Exception:
+        logger.exception("conditions engine hook failed; falling back")
+        return None
+
+
 # Progressive throttle on the Wicket weight once wickets have already fallen in
 # the CURRENT over. The momentum/collapse/consecutive-wicket layers in the
 # game-state engine are recomputed after every ball, so each fresh wicket pushes
@@ -2038,10 +2051,18 @@ def simulate_over(state, pause_on_wicket=False):
             # Dynamic conditions hook (dew/weather/overs progression) for
             # Challenge League matches. None for callers without conditions, and
             # composed after traits so it layers on the final weights.
-            env_hook = _make_environment_hook(
-                state.get("conditions"),
-                {"over": state["current_over"], "total_overs": overs_total,
-                 "innings": innings})
+            # Conditions Engine v4 (engine/sim, config/sim_engine.json): weather,
+            # clock, stadium and ball age as one bounded delta. When it is on it
+            # REPLACES the string-table env hook — both describe the same
+            # weather, and applying both would count it twice.
+            env_hook = _make_conditions_hook(
+                state, striker, bowler,
+                {"over": state["current_over"], "innings": innings})
+            if env_hook is None:
+                env_hook = _make_environment_hook(
+                    state.get("conditions"),
+                    {"over": state["current_over"], "total_overs": overs_total,
+                     "innings": innings})
             # Anti-cascade: throttle the wicket weight once wickets have already
             # fallen in THIS over, so the recomputed momentum/collapse layers
             # can't stack into a 4-5 wicket over (see _make_wicket_cluster_hook).

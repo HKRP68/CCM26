@@ -114,12 +114,29 @@ def _run_innings(state, guard=40, mix="balanced"):
         guard -= 1
 
 
+# ``--conditions``: roll a Pitch Report (weather, dew, clock) and a venue for
+# every match, so the sweep measures the game as /letsplay actually plays it —
+# including the Conditions Engine hook (engine/sim/hook.py). Off by default so
+# the historical numbers stay comparable.
+WITH_CONDITIONS = False
+
+
+def _match_conditions(pitch):
+    if not WITH_CONDITIONS:
+        return None, None
+    from services.match_constants import STADIUMS
+    from services.pitch_report import generate_conditions
+    return generate_conditions(pitch, rng=random), random.choice(STADIUMS)
+
+
 def simulate_one(pitch, overs=20, mix="balanced"):
     """Play one full headless CIPL match on *pitch*; return a metrics dict."""
     with _muted_logging():
         a, b = make_xi("A", 1), make_xi("B", 101)
+        conditions, venue = _match_conditions(pitch)
         state = cm.build_cipl_state(1, overs, 10, 20, 111, 222, a, b,
-                                    "A", "B", -1, pitch, False, ball_format="T20")
+                                    "A", "B", -1, pitch, False, ball_format="T20",
+                                    conditions=conditions, stadium=venue)
         _run_innings(state, mix=mix)
         inn1_runs, inn1_wkts = state["total_runs"], state["total_wickets"]
         inn1_balls = cm.balls_bowled(state)
@@ -331,7 +348,11 @@ def main(argv=None):
     ap.add_argument("--mix", choices=("balanced", "real"), default="balanced",
                     help="captaincy: both sides Balanced, or approaches drawn "
                          "from what real captains pick")
+    ap.add_argument("--conditions", action="store_true",
+                    help="roll weather/venue per match (exercises the Conditions Engine)")
     args = ap.parse_args(argv)
+    global WITH_CONDITIONS
+    WITH_CONDITIONS = args.conditions
     if args.n <= 0:
         ap.error("--n must be greater than zero")
 
