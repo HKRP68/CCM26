@@ -1413,10 +1413,13 @@ class GameConfig(Base):
     # off makes custom names instant — the pool names always are.
     career_custom_names_open = Column(Boolean, default=True, nullable=False)
     career_custom_names_need_approval = Column(Boolean, default=True, nullable=False)
-    # Newline/comma separated words a custom name may not contain. Checked
-    # against the name with everything but letters and digits stripped out, so
-    # spacing and punctuation can't be used to slip one through.
+    # Newline/comma separated words a custom name may not contain. Shared by
+    # team names (/teamname) and custom career names — see
+    # services/name_filter.py for how a name is matched against it.
     career_name_blocklist = Column(Text, nullable=True)
+    # Innocent words that contain a banned one ("scunthorpe"). Cut out of a
+    # name before the blocklist is checked.
+    name_allowlist = Column(Text, nullable=True)
     # ── Elite Signing Bonus (limited-time offer) ──
     # Buying a card rated at or above gem_bonus_min_rating pays gem_bonus_bps
     # basis points of the coins spent back as gems (10 bps = 0.1%). It is an

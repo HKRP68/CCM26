@@ -88,6 +88,7 @@ def settings(session=None, cfg=None):
         "custom_open": bool(cfg.get("career_custom_names_open", True)),
         "needs_approval": bool(cfg.get("career_custom_names_need_approval", True)),
         "blocklist": cfg.get("career_name_blocklist") or "",
+        "allowlist": cfg.get("name_allowlist") or "",
     }
 
 
@@ -202,18 +203,22 @@ def _squash(value):
 
 
 def blocked_words(conf=None):
-    """The website's blocklist as a list of squashed terms."""
+    """The shared blocklist (see :mod:`services.name_filter`) as terms."""
+    from services import name_filter
     conf = conf if isinstance(conf, dict) and "blocklist" in conf else settings()
-    raw = re.split(r"[,\n\r]+", conf.get("blocklist") or "")
-    return [w for w in (_squash(part) for part in raw) if w]
+    return name_filter.terms(conf.get("blocklist"))
 
 
 def name_is_blocked(name, conf=None):
-    """The blocklist term this name contains, or ``None``."""
-    squashed = _squash(name)
-    if not squashed:
-        return None
-    return next((word for word in blocked_words(conf) if word in squashed), None)
+    """The blocklist term this name contains, or ``None``.
+
+    The list is shared with team names, and is matched through spacing,
+    punctuation, look-alike symbols and stretched letters, minus the allowed
+    words — all in :func:`services.name_filter.blocked_word`.
+    """
+    from services import name_filter
+    conf = conf if isinstance(conf, dict) and "blocklist" in conf else settings()
+    return name_filter.blocked_word(name, conf)
 
 
 def validate_name(session, player, name, *, source, conf=None):

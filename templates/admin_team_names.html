@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}Team names{% endblock %}
+{% block content %}
+{% set field = "width:100%;padding:.5rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);" %}
+{% set card = "background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem;" %}
+{% set label = "display:block;color:var(--muted);font-size:.78rem;margin-bottom:.2rem;" %}
+
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:.5rem;">
+  <h2>🏷 Team names</h2>
+  <a href="{{ url_for('admin_career_changes') }}" class="btn btn-ghost btn-sm">✏️ Career name changes</a>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:.75rem;margin-bottom:1.25rem;">
+  <div style="{{ card }}"><div style="color:var(--muted);font-size:.78rem;">Users</div><div style="font-size:1.4rem;font-weight:800;">{{ '{:,}'.format(total_users) }}</div></div>
+  <div style="{{ card }}"><div style="color:var(--muted);font-size:.78rem;">With a team name</div><div style="font-size:1.4rem;font-weight:800;">{{ '{:,}'.format(named) }}</div></div>
+  <div style="{{ card }}{% if flagged_count %}border-color:#c0392b;{% endif %}"><div style="color:var(--muted);font-size:.78rem;">Flagged names</div><div style="font-size:1.4rem;font-weight:800;{% if flagged_count %}color:#e05a4a;{% endif %}">{{ flagged_count }}</div></div>
+  <div style="{{ card }}"><div style="color:var(--muted);font-size:.78rem;">Banned / allowed words</div><div style="font-size:1.4rem;font-weight:800;">{{ banned_count }} / {{ allowed_count }}</div></div>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:1rem;margin-bottom:1.5rem;">
+  <div style="{{ card }}">
+    <div style="font-weight:700;margin-bottom:.4rem;">🚫 Banned words</div>
+    <p style="color:var(--muted);font-size:.8rem;line-height:1.5;margin-bottom:.7rem;">
+      One list for <strong>team names</strong> and typed <strong>career names</strong>. Separate words with
+      commas or new lines. A name is blocked if it <em>contains</em> a word, even when it's disguised:
+      spaces and punctuation (<code>s.l u-r</code>), look-alike symbols (<code>$lur</code>, <code>5lur</code>, <code>sh1t</code>)
+      and stretched letters (<code>sluuur</code>).
+    </p>
+    <form method="POST" action="{{ url_for('admin_team_names_settings') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label style="{{ label }}">Banned words</label>
+      <textarea name="blocklist" rows="4" style="{{ field }}font-family:monospace;margin-bottom:.7rem;">{{ settings.blocklist }}</textarea>
+      <label style="{{ label }}">Allowed words: innocent words that contain a banned one, e.g. <code>scunthorpe</code>, <code>assassins</code></label>
+      <textarea name="allowlist" rows="2" style="{{ field }}font-family:monospace;margin-bottom:.7rem;">{{ settings.allowlist }}</textarea>
+      <button type="submit" class="btn btn-primary btn-sm">Save words</button>
+    </form>
+  </div>
+
+  <div style="{{ card }}">
+    <div style="font-weight:700;margin-bottom:.4rem;">🧪 Test a name</div>
+    <p style="color:var(--muted);font-size:.8rem;line-height:1.5;margin-bottom:.7rem;">
+      See what <code>/teamname</code> would say before a user tries it.
+    </p>
+    <form method="GET" action="{{ url_for('admin_team_names') }}" style="display:flex;gap:.5rem;">
+      <input type="text" name="test" value="{{ test.name if test else '' }}" placeholder="e.g. Royal Challengers" style="{{ field }}">
+      <button type="submit" class="btn btn-ghost btn-sm">Test</button>
+    </form>
+    {% if test %}
+    <div style="margin-top:.8rem;font-size:.85rem;line-height:1.6;">
+      {% if test.word %}
+        ❌ <strong>Blocked</strong>: contains the banned word <code>{{ test.word }}</code>.
+      {% elif not test.valid %}
+        ⚠️ No banned word, but <code>/teamname</code> refuses it: it must be 3-50 letters, numbers, spaces, <code>'</code> or <code>-</code>.
+      {% else %}
+        ✅ <strong>Allowed.</strong>
+      {% endif %}
+      <div style="color:var(--muted);font-size:.78rem;">Checked as: {% for s in test.shapes %}<code>{{ s }}</code>{{ ', ' if not loop.last }}{% endfor %}</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% if flagged_count %}
+<div style="{{ card }}border-color:#c0392b;margin-bottom:1.25rem;">
+  <div style="font-weight:700;margin-bottom:.3rem;">⚠️ {{ flagged_count }} team name{{ 's' if flagged_count != 1 }} contain{{ 's' if flagged_count == 1 }} a banned word</div>
+  <p style="color:var(--muted);font-size:.8rem;margin-bottom:.7rem;">
+    These were set before the word was banned. Fix them one by one below, or clear them all at once.
+    Cleared owners get a message asking them to pick a new name with <code>/teamname</code>.
+  </p>
+  <form method="POST" action="{{ url_for('admin_team_names_reset_flagged') }}"
+        style="display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;"
+        onsubmit="return confirmResetFlagged(this, {{ flagged_count }});">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="confirm" value="">
+    <label style="display:flex;align-items:center;gap:.4rem;font-size:.85rem;">
+      <input type="checkbox" name="notify" checked style="width:auto;margin:0;"> Message the owners
+    </label>
+    <button type="submit" class="btn btn-sm" style="background:#c0392b;color:#fff;">🧹 Reset all flagged</button>
+  </form>
+</div>
+{% endif %}
+
+<div style="display:flex;justify-content:space-between;gap:.6rem;flex-wrap:wrap;margin-bottom:1rem;">
+  <div style="display:flex;gap:.4rem;flex-wrap:wrap;">
+    <a href="{{ url_for('admin_team_names', filter='all', q=q or None) }}" class="btn btn-sm {{ 'btn-primary' if view == 'all' else 'btn-ghost' }}">All</a>
+    <a href="{{ url_for('admin_team_names', filter='flagged', q=q or None) }}" class="btn btn-sm {{ 'btn-primary' if view == 'flagged' else 'btn-ghost' }}">Flagged ({{ flagged_count }})</a>
+    <a href="{{ url_for('admin_team_names', filter='unnamed', q=q or None) }}" class="btn btn-sm {{ 'btn-primary' if view == 'unnamed' else 'btn-ghost' }}">No name ({{ total_users - named }})</a>
+  </div>
+  <form method="GET" action="{{ url_for('admin_team_names') }}" style="display:flex;gap:.5rem;flex:0 1 380px;">
+    <input type="hidden" name="filter" value="{{ view }}">
+    <input type="text" name="q" value="{{ q }}" placeholder="Team, name, @username or Telegram ID" style="{{ field }}">
+    <button type="submit" class="btn btn-ghost btn-sm">Search</button>
+  </form>
+</div>
+
+{% if not entries %}
+<div style="{{ card }}padding:2rem;text-align:center;color:var(--muted);">No users match.</div>
+{% else %}
+<div style="overflow-x:auto;">
+<table style="width:100%;border-collapse:collapse;font-size:.88rem;">
+  <thead>
+    <tr style="text-align:left;color:var(--muted);font-size:.78rem;border-bottom:1px solid var(--border);">
+      <th style="padding:.5rem;">User</th>
+      <th style="padding:.5rem;">Telegram ID</th>
+      <th style="padding:.5rem;">Team name</th>
+      <th style="padding:.5rem;min-width:320px;">Change</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for e in entries %}
+    <tr style="border-bottom:1px solid var(--border);{% if e.blocked_word %}background:rgba(192,57,43,.08);{% endif %}">
+      <td style="padding:.5rem;">
+        <a href="{{ url_for('user_detail', user_id=e.id) }}">{{ e.first_name or ('#' ~ e.id) }}</a>
+        {% if e.username %}<div style="color:var(--muted);font-size:.78rem;">@{{ e.username }}</div>{% endif %}
+      </td>
+      <td style="padding:.5rem;font-family:monospace;color:var(--muted);">{{ e.telegram_id }}</td>
+      <td style="padding:.5rem;">
+        {% if e.team_name %}<strong>{{ e.team_name }}</strong>{% else %}<span style="color:var(--muted);">(none)</span>{% endif %}
+        {% if e.blocked_word %}
+        <div><span style="font-size:.72rem;padding:.1rem .45rem;border-radius:999px;background:#c0392b;color:#fff;">banned: {{ e.blocked_word }}</span></div>
+        {% endif %}
+      </td>
+      <td style="padding:.5rem;">
+        <form method="POST" action="{{ url_for('admin_team_name_set', user_id=e.id) }}"
+              style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="q" value="{{ q }}">
+          <input type="hidden" name="filter" value="{{ view }}">
+          <input type="hidden" name="page" value="{{ page }}">
+          <input type="text" name="team_name" value="{{ e.team_name or '' }}" maxlength="50"
+                 placeholder="Empty = clear" style="{{ field }}flex:1 1 150px;width:auto;">
+          <label title="Message the owner on Telegram" style="display:flex;align-items:center;gap:.25rem;font-size:.78rem;color:var(--muted);">
+            <input type="checkbox" name="notify" checked style="width:auto;margin:0;"> notify
+          </label>
+          <button type="submit" class="btn btn-primary btn-sm">Save</button>
+          {% if e.team_name %}
+          <button type="submit" class="btn btn-ghost btn-sm" data-name="{{ e.team_name }}"
+                  onclick="if (!confirm('Clear the team name \u201c' + this.dataset.name + '\u201d?')) return false; this.form.team_name.value = ''; return true;">Reset</button>
+          {% endif %}
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+
+{% if pages > 1 %}
+<div style="display:flex;gap:.4rem;justify-content:center;align-items:center;margin-top:1rem;">
+  {% if page > 1 %}<a class="btn btn-ghost btn-sm" href="{{ url_for('admin_team_names', filter=view, q=q or None, page=page-1) }}">← Prev</a>{% endif %}
+  <span style="color:var(--muted);font-size:.85rem;">Page {{ page }} of {{ pages }} · {{ '{:,}'.format(matched) }} users</span>
+  {% if page < pages %}<a class="btn btn-ghost btn-sm" href="{{ url_for('admin_team_names', filter=view, q=q or None, page=page+1) }}">Next →</a>{% endif %}
+</div>
+{% endif %}
+{% endif %}
+
+<script>
+function confirmResetFlagged(form, count) {
+  var typed = prompt("This clears " + count + " team name(s). Type RESET to confirm.");
+  if (!typed || typed.trim().toUpperCase() !== "RESET") {
+    alert("Not reset. You need to type RESET.");
+    return false;
+  }
+  form.confirm.value = "RESET";
+  return true;
+}
+</script>
+{% endblock %}

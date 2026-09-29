@@ -21594,6 +21594,264 @@ def admin_career_delete(player_id):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# TEAM NAMES — who is called what, and the shared banned-words list
+# ══════════════════════════════════════════════════════════════════════
+
+TEAM_NAMES_PAGE_SIZE = 100
+
+
+def _tg_send(telegram_id, text):
+    """Send one Telegram message as the bot. Returns ``(ok, error)``."""
+    token = os.getenv("BOT_TOKEN", "").strip()
+    if not token:
+        return False, "BOT_TOKEN not configured"
+    import requests
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": telegram_id, "text": text, "parse_mode": "HTML",
+                  "disable_web_page_preview": True},
+            timeout=10,
+        )
+        data = resp.json()
+    except Exception as e:
+        logger.warning("telegram send failed: %s", e)
+        return False, str(e)
+    if data.get("ok"):
+        return True, None
+    return False, data.get("description", "unknown error")
+
+
+def _team_name_changed(db, user, old, new, *, notify, reason=None):
+    """Log an admin team-name change and, if asked, tell the owner."""
+    from services.activity_service import log_activity
+    log_activity(db, user.id, "teamname",
+                 f"Admin: {old or 'None'} → {new or 'None'}")
+    log_admin(db, "team_name", target_type="user", target_id=user.id,
+              target_name=user.first_name or "",
+              detail=f"{old or 'None'} → {new or 'None'}"
+                     + (f" ({reason})" if reason else ""))
+    try:
+        from services import team_logo_service
+        team_logo_service.invalidate_cache(user.id, old)
+    except Exception:
+        logger.warning("team name cache invalidation failed", exc_info=True)
+    if not notify or not user.telegram_id or user.telegram_id <= 0:
+        return None
+    from html import escape
+    if new:
+        text = (f"🏷 An admin changed your team name to <b>{escape(new)}</b>.")
+    else:
+        text = ("🏷 Your team name was removed because it isn't allowed.\n"
+                "Set a new one with /teamname &lt;name&gt;.")
+    ok, _err = _tg_send(user.telegram_id, text)
+    return ok
+
+
+@app.route("/team-names", methods=["GET"])
+@login_required
+def admin_team_names():
+    """Every user's team name, searchable, with the banned words beside it.
+
+    Names that contain a banned word are flagged in red — including ones set
+    before the word was banned — and can be fixed one by one or all at once.
+    """
+    from services import name_filter
+
+    db = get_session()
+    try:
+        conf = name_filter.settings(db)
+        q = (request.args.get("q") or "").strip()
+        view = request.args.get("filter") or "all"
+        if view not in ("all", "flagged", "unnamed"):
+            view = "all"
+        page = max(1, request.args.get("page", 1, type=int) or 1)
+
+        base = db.query(User).filter(User.telegram_id > 0)
+        total_users = base.count()
+        named = base.filter(User.team_name.isnot(None),
+                            User.team_name != "").count()
+        flagged_pairs = name_filter.find_flagged_users(db, conf)
+        flagged_ids = {u.id: word for u, word in flagged_pairs}
+
+        rows = base
+        if q:
+            like = f"%{q}%"
+            conds = [User.team_name.ilike(like), User.first_name.ilike(like),
+                     User.username.ilike(like.replace("@", ""))]
+            if q.lstrip("-").isdigit():
+                conds += [User.telegram_id == int(q), User.id == int(q)]
+            rows = rows.filter(or_(*conds))
+        if view == "flagged":
+            rows = rows.filter(User.id.in_(list(flagged_ids) or [-1]))
+        elif view == "unnamed":
+            rows = rows.filter(or_(User.team_name.is_(None),
+                                   User.team_name == ""))
+        matched = rows.count()
+        users = (rows.order_by(User.team_name.is_(None), func.lower(User.team_name),
+                               User.id)
+                 .offset((page - 1) * TEAM_NAMES_PAGE_SIZE)
+                 .limit(TEAM_NAMES_PAGE_SIZE).all())
+
+        entries = [{
+            "id": u.id,
+            "telegram_id": u.telegram_id,
+            "first_name": u.first_name,
+            "username": u.username,
+            "team_name": u.team_name,
+            "blocked_word": (flagged_ids.get(u.id)
+                             or (name_filter.blocked_word(u.team_name, conf)
+                                 if u.team_name else None)),
+        } for u in users]
+
+        test_name = (request.args.get("test") or "").strip()
+        test = None
+        if test_name:
+            test = {
+                "name": test_name,
+                "word": name_filter.blocked_word(test_name, conf),
+                "shapes": [shape for shape, _ in name_filter.variants(test_name)],
+                "valid": bool(name_filter.TEAM_NAME_REGEX.match(test_name)),
+            }
+
+        return render_template(
+            "admin_team_names.html", entries=entries, settings=conf,
+            q=q, view=view, page=page, matched=matched,
+            pages=max(1, -(-matched // TEAM_NAMES_PAGE_SIZE)),
+            total_users=total_users, named=named,
+            flagged_count=len(flagged_ids),
+            banned_count=len(name_filter.terms(conf["blocklist"])),
+            allowed_count=len(name_filter.terms(conf["allowlist"])),
+            test=test)
+    finally:
+        db.close()
+
+
+@app.route("/team-names/settings", methods=["POST"])
+@login_required
+def admin_team_names_settings():
+    """Save the shared banned and allowed words."""
+    from services import name_filter
+    from services.config_service import save_config
+
+    db = get_session()
+    try:
+        blocklist = (request.form.get("blocklist") or "").strip()
+        allowlist = (request.form.get("allowlist") or "").strip()
+        save_config(db, {"career_name_blocklist": blocklist,
+                         "name_allowlist": allowlist},
+                    updated_by=session.get("admin_user", "admin"))
+        log_admin(db, "team_name_settings",
+                  detail=f"banned={len(name_filter.terms(blocklist))} "
+                         f"allowed={len(name_filter.terms(allowlist))}")
+        db.commit()
+        flagged = len(name_filter.find_flagged_users(db))
+        flash("✅ Banned words saved."
+              + (f" {flagged} team name(s) now break the rules — see Flagged."
+                 if flagged else ""), "success")
+    except Exception as e:
+        db.rollback()
+        logger.exception("team name settings save failed")
+        flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_team_names"))
+
+
+@app.route("/team-names/<int:user_id>/set", methods=["POST"])
+@login_required
+def admin_team_name_set(user_id):
+    """Rename one user's team, or clear it when the box is left empty."""
+    from services import name_filter
+
+    # Back to the same search/filter/page the row was edited from.
+    back = redirect(url_for(
+        "admin_team_names", q=request.form.get("q") or None,
+        filter=request.form.get("filter") or None,
+        page=request.form.get("page", type=int) or None))
+    db = get_session()
+    try:
+        user = db.get(User, user_id)
+        if not user:
+            flash(f"User {user_id} not found", "error")
+            return back
+        new = " ".join((request.form.get("team_name") or "").split()) or None
+        if new and not name_filter.TEAM_NAME_REGEX.match(new):
+            flash("❌ Team name must be 3-50 letters, numbers, spaces, ' or -.",
+                  "error")
+            return back
+        if new:
+            word = name_filter.blocked_word(new, session=db)
+            if word:
+                flash(f"❌ “{new}” contains the banned word “{word}”.", "error")
+                return back
+        old = user.team_name
+        if (old or None) == new:
+            flash("Nothing to change.", "info")
+            return back
+        user.team_name = new
+        notified = _team_name_changed(db, user, old, new,
+                                      notify=bool(request.form.get("notify")))
+        db.commit()
+        who = user.first_name or user.telegram_id
+        msg = (f"✅ {who}'s team is now “{new}”." if new
+               else f"✅ Cleared {who}'s team name.")
+        if notified is False:
+            msg += " (Couldn't message them on Telegram.)"
+        elif notified:
+            msg += " They've been told."
+        flash(msg, "success")
+    except Exception as e:
+        db.rollback()
+        logger.exception("admin team name set failed")
+        flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return back
+
+
+@app.route("/team-names/reset-flagged", methods=["POST"])
+@login_required
+def admin_team_names_reset_flagged():
+    """Clear every team name that contains a banned word and tell the owners.
+
+    It touches many users at once, so ``RESET`` has to be typed back — checked
+    here as well as in the browser, so a re-sent form can't fire it alone.
+    """
+    from services import name_filter
+
+    if (request.form.get("confirm") or "").strip().upper() != "RESET":
+        flash("Type RESET to confirm clearing the flagged team names.", "error")
+        return redirect(url_for("admin_team_names", filter="flagged"))
+
+    db = get_session()
+    try:
+        flagged = name_filter.find_flagged_users(db)
+        notify = bool(request.form.get("notify"))
+        sent = 0
+        for user, word in flagged:
+            old = user.team_name
+            user.team_name = None
+            if _team_name_changed(db, user, old, None, notify=notify,
+                                  reason=f"banned word: {word}"):
+                sent += 1
+        db.commit()
+        if not flagged:
+            flash("No flagged team names — nothing to reset.", "info")
+        else:
+            flash(f"✅ Reset {len(flagged)} team name(s)."
+                  + (f" Messaged {sent} owner(s)." if notify else ""),
+                  "success")
+    except Exception as e:
+        db.rollback()
+        logger.exception("reset flagged team names failed")
+        flash(f"❌ {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_team_names", filter="flagged"))
+
+
+# ══════════════════════════════════════════════════════════════════════
 # CAREER PLAYER — name / country change requests
 # ══════════════════════════════════════════════════════════════════════
 
