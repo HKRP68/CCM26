@@ -90,10 +90,14 @@ def review_caption(article):
 
 
 def send_review_to_admins(article_id):
-    """DM every bot admin a review card for a pending article."""
+    """DM every approval reviewer a review card for a pending article.
+
+    Bot admins/owners plus the added reviewers — never the maintenance-bypass
+    testers. See services/admin_ids.configured_reviewer_ids.
+    """
     from database import get_session
     from models import NewsArticle
-    from services.admin_ids import configured_admin_ids
+    from services.admin_ids import configured_reviewer_ids
     from services import news_service
     db = get_session()
     try:
@@ -103,7 +107,7 @@ def send_review_to_admins(article_id):
         photo, ptype = news_service.image_bytes(db, article)
         caption = review_caption(article)
         sent = 0
-        for admin_id in sorted(configured_admin_ids()):
+        for admin_id in sorted(configured_reviewer_ids()):
             body = _send(admin_id, caption, markup=review_markup(article.id),
                          photo=photo, photo_type=ptype or "image/jpeg")
             if body and body.get("ok"):

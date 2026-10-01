@@ -272,11 +272,11 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # The team-logo review keyboard is sent to the bot admins while handling the
     # *uploader's* update, so the owner lock would pin it to the uploader and
     # answer every admin with "this button is not for you". handlers/team_logo.py
-    # authorises each press with is_admin() instead, and the owner's own
+    # authorises each press with is_reviewer() instead, and the owner's own
     # withdraw button checks the request's telegram_id.
     "tlogo:",
     # CMU News review cards go to every bot admin; handlers/news.py checks
-    # is_admin() on each press.
+    # is_reviewer() on each press.
     "news:",
 )
 

@@ -18176,6 +18176,36 @@ def admin_maintenance():
                            "retention_save": "✅ Retention settings saved"}[action],
                           "success")
 
+                elif action == "save_approval_reviewers":
+                    # Extra reviewers for team logos + CMU News. Bot admins and
+                    # owners from the environment always review; this only adds.
+                    from services.admin_ids import format_id_list, parse_id_list
+                    raw_ids = (request.form.get("approval_reviewer_ids", "") or "").strip()
+                    parsed = sorted(parse_id_list([raw_ids]))
+                    kept, canonical = [], None
+                    for i in parsed:
+                        candidate = format_id_list(kept + [i])
+                        if len(candidate) > 500:
+                            break
+                        kept, canonical = kept + [i], candidate
+                    row.approval_reviewer_ids = canonical
+                    row.updated_at = datetime.utcnow()
+                    db.commit()
+                    _refresh_cfg(db)
+                    log_admin(db, "approval_reviewers_edit", target_type="config",
+                              target_name="approval_reviewer_ids",
+                              detail=f"ids={len(kept)}" if kept else "cleared")
+                    db.commit()
+                    if raw_ids and not parsed:
+                        flash("⚠️ No valid Telegram IDs found — the added reviewer "
+                              "list is now empty.", "error")
+                    elif len(kept) < len(parsed):
+                        flash(f"⚠️ List too long — saved the first {len(kept)} ID(s).",
+                              "error")
+                    else:
+                        flash(f"✅ Approval reviewers saved ({len(kept)} added).",
+                              "success")
+
                 elif action == "save_tournament_access":
                     # Manage the Challenge League Tournament command allowlist —
                     # independent of maintenance state. Empty = open to everyone.
@@ -18236,6 +18266,7 @@ def admin_maintenance():
             "maintenance_started_at": row.maintenance_started_at,
             "maintenance_bypass_ids": row.maintenance_bypass_ids or "",
             "tournament_allowed_ids": row.tournament_allowed_ids or "",
+            "approval_reviewer_ids": row.approval_reviewer_ids or "",
             "rookie_mode": row.rookie_mode or False,
             "rookie_message": row.rookie_message,
             # Official GC gate + retention panels. The two retention switches
@@ -19465,6 +19496,8 @@ def admin_market_settings_save():
         updates = {
             "market_min_rating": int(request.form.get("market_min_rating", 87)),
             "market_default_slots": int(request.form.get("market_default_slots", 6)),
+            "market_repeat_cooldown_days": int(request.form.get(
+                "market_repeat_cooldown_days", 4)),
             "market_refresh_hour_ist": int(request.form.get("market_refresh_hour_ist", 0)),
             "market_refresh_interval_hours": request.form.get(
                 "market_refresh_interval_hours", 24),
@@ -19477,6 +19510,8 @@ def admin_market_settings_save():
         # Clamp
         updates["market_min_rating"] = max(50, min(100, updates["market_min_rating"]))
         updates["market_default_slots"] = max(1, min(20, updates["market_default_slots"]))
+        updates["market_repeat_cooldown_days"] = max(
+            0, min(30, updates["market_repeat_cooldown_days"]))
         updates["market_refresh_hour_ist"] = max(0, min(23, updates["market_refresh_hour_ist"]))
         updates["trait_market_default_slots"] = max(1, min(15, updates["trait_market_default_slots"]))
         # Only divisors of 24 tile a day evenly — anything else would drift the
@@ -19501,6 +19536,7 @@ def admin_market_settings_save():
                              updates["trait_market_refresh_interval_hours"])
         log_admin(db, "market_settings", "config", 0, "market",
                   f"min_rating={updates['market_min_rating']}, slots={updates['market_default_slots']}, "
+                  f"no_repeat={updates['market_repeat_cooldown_days']}d, "
                   f"refresh every {updates['market_refresh_interval_hours']}h "
                   f"at {player_times} IST, "
                   f"trait_slots={updates['trait_market_default_slots']}, "

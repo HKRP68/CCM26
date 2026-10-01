@@ -720,6 +720,23 @@ def build_xi_from_draft(session, draft, side):
     return [cipl_match.cp_to_player_dict(cp) for cp in ordered]
 
 
+def _injured_ids_for_draft(session, draft, challenge_team_id):
+    """``ChallengePlayer`` ids a tournament draft's team may not field.
+
+    Empty outside a tournament, or when injuries are off — so it is safe to
+    call for every league match.
+    """
+    if not (draft.get("is_tournament") and draft.get("tournament_id")
+            and challenge_team_id):
+        return set()
+    from models import Tournament
+    from services import injury_service
+    tour = session.get(Tournament, int(draft["tournament_id"]))
+    hurt_ids, _rows = injury_service.unavailable_for_team(
+        session, tour, challenge_team_id)
+    return hurt_ids
+
+
 def build_bench_from_draft(session, draft, side):
     """Squad members left out of ``side``'s XI, as engine player dicts.
 
@@ -749,6 +766,12 @@ def build_bench_from_draft(session, draft, side):
                     .order_by(ChallengePlayer.sort_order.asc())
                     .all())
         bench = [r for r in rows if int(r.id) not in selected_ids]
+        # An injured player is ruled out of the whole match, not just the
+        # starting XI — the substitutes' bench must not bring them back on.
+        if draft.get("mode") != "cdraft":
+            hurt = _injured_ids_for_draft(session, draft, team_id)
+            if hurt:
+                bench = [r for r in bench if int(r.id) not in hurt]
         return [cipl_match.cp_to_player_dict(cp) for cp in bench]
     except Exception:
         logger.exception("cipl: could not build the Impact Player bench for %s", side)
@@ -1756,6 +1779,20 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
             tid = draft.get("tournament_id")
             host_cid = _resolve_challenge_team_id(host_team, league_key, session)
             target_cid = _resolve_challenge_team_id(target_team, league_key, session)
+            # The XI was picked against the injury list as it stood then. If a
+            # knock landed since (the team finished another fixture in the
+            # meantime), the injured player must not walk out — checked here,
+            # before the fixture is reserved, so a refusal leaves nothing held.
+            from handlers.challenge import _challenge_xi_selection
+            for _side, _cid in (("host", host_cid), ("target", target_cid)):
+                _hurt = _injured_ids_for_draft(session, draft, _cid)
+                _picked = {int(pid) for pid in
+                           _challenge_xi_selection(draft, _side).get("player_ids", [])}
+                if _hurt & _picked:
+                    await _fail("🚑 A player in your Playing XI was injured after "
+                                "the XI was picked. Restart the challenge and "
+                                "pick a fit XI.")
+                    return
             tournament_id = tid
             draft["tournament_team_by_user"] = {host.id: host_cid, target.id: target_cid}
             # For a fixture-gated tournament, atomically reserve this pair's open

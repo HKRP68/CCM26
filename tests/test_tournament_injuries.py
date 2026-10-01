@@ -12,6 +12,7 @@ What these pin down:
     workload — a spectator on the bench is never injured
   • the Playing XI picker really is handed a squad without the injured in it,
     and an injury is scoped to its own tournament
+  • the Impact Player bench never offers an injured player as a substitute
   • resetting a tournament empties the treatment room with the results
   • Lets Play tournaments are excluded: there is no squad to rule anyone out of
 """
@@ -35,7 +36,8 @@ _ENGINE = None
 _MODULE_NAMES = ("database", "models", "config",
                  "services.tournament_service", "services.injury_service",
                  "services.cl_tournament_view", "handlers.challenge",
-                 "services.league_schedule_service", "services.knockout_service")
+                 "services.league_schedule_service", "services.knockout_service",
+                 "handlers.cipl_play")
 
 
 def setUpModule():
@@ -445,6 +447,52 @@ class XiPickerTests(InjuryCase):
         self.assertEqual(challenge._injury_note({}, "host"), [])
 
 
+class ImpactBenchTests(InjuryCase):
+    """An injured player is out of the match, substitutes' bench included."""
+
+    CHANCE = 0
+
+    def _bench(self, *, is_tournament=True):
+        from unittest import mock
+        import handlers.cipl_play as cipl_play
+        xi = [p.id for p in self.squad(0)[:11]]
+        draft = {
+            "league_key": "inj", "is_tournament": is_tournament,
+            "tournament_id": self.tour.id if is_tournament else None,
+            "host_team": self.cteams[0].name,
+            "xi_selections": {"host": {"player_ids": xi, "confirmed": True}},
+        }
+        with mock.patch.object(cipl_play, "_resolve_challenge_team_id",
+                               return_value=self.cteams[0].id):
+            return [p["roster_id"] for p in
+                    cipl_play.build_bench_from_draft(self.session, draft, "host")]
+
+    def test_an_injured_player_is_not_offered_as_an_impact_sub(self):
+        victim = self.squad(0)[12]
+        self.inj.add_manual(self.session, self.tour.id, self.tteams[0].id,
+                            victim.id, matches=2, player_name=victim.name)
+        self.session.commit()
+        bench = self._bench()
+        self.assertNotIn(victim.id, bench)
+        self.assertEqual(len(bench), SQUAD - 11 - 1)
+
+    def test_a_casual_match_keeps_the_whole_bench(self):
+        victim = self.squad(0)[12]
+        self.inj.add_manual(self.session, self.tour.id, self.tteams[0].id,
+                            victim.id, matches=2, player_name=victim.name)
+        self.session.commit()
+        self.assertIn(victim.id, self._bench(is_tournament=False))
+
+    def test_a_recovered_player_is_back_on_the_bench(self):
+        victim = self.squad(0)[12]
+        row = self.inj.add_manual(self.session, self.tour.id, self.tteams[0].id,
+                                  victim.id, matches=1, player_name=victim.name)
+        self.session.commit()
+        self.inj.heal(self.session, row.id)
+        self.session.commit()
+        self.assertIn(victim.id, self._bench())
+
+
 class ReportTests(InjuryCase):
     def test_the_chat_card_names_the_player_the_team_and_the_layoff(self):
         report = self.play(seed=6)
@@ -453,6 +501,17 @@ class ReportTests(InjuryCase):
         row = report["new"][0]
         self.assertIn(row.player_name, text)
         self.assertIn(row.injury_type, text)
+
+    def test_the_card_lists_who_is_still_recovering(self):
+        first = self.play(seed=6)["new"][0]
+        report = self.play(seed=7)
+        if first.matches_out > 1:
+            self.assertIn(first.id, [r.id for r in report["ongoing"]])
+            text = self.inj.render_report(self.session, self.tour.id, report)
+            self.assertIn("still recovering", text)
+        else:
+            self.assertIn(first.id, [r.id for r in report["recovered"]])
+            self.assertNotIn(first.id, [r.id for r in report["ongoing"]])
 
     def test_nothing_happened_renders_nothing(self):
         self.assertEqual(

@@ -147,6 +147,10 @@ def test_no_scope_has_duplicates():
 # This is an allowlist, not an amnesty: a command added without a menu entry
 # and without a line here still fails the test below.
 UNPUBLISHED_ON_PURPOSE = {
+    # Owner-level reviewer management (list/add/remove in one command). Run
+    # rarely, documented in BOT_COMMANDS.md, and the admin bucket is at the
+    # ceiling already.
+    "approvers",
     # Franchise Auction — /auction card, the board's footer, and the RTM
     # prompt itself, which names the owner and carries buttons.
     "bid", "artm", "aboard", "apurse",

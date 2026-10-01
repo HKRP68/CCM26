@@ -1974,6 +1974,12 @@ def main():
         app.add_handler(CommandHandler("newsqueue", newsqueue_handler))
         app.add_handler(CallbackQueryHandler(news_callback, pattern=r"^news:"))
 
+        # ── Who reviews team logos + CMU News ────────────────────────
+        # One command (list / add / remove) and kept out of the admin menu,
+        # which is already at Telegram's per-scope ceiling.
+        from handlers.approval_reviewers import approvers_handler
+        app.add_handler(CommandHandler("approvers", approvers_handler))
+
         # ── Admin reply-forward broadcasts ───────────────────────────
         app.add_handler(CommandHandler("frwd_grp", frwd_grp_handler))
         app.add_handler(CommandHandler("frwd_prvt", frwd_prvt_handler))

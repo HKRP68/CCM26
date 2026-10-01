@@ -91,3 +91,71 @@ def is_owner(user_id: int | None) -> bool:
     if not owners:
         return is_admin(user_id)
     return int(user_id) in owners
+
+
+# ════════════════════════════════════════════════════════════════════
+# Approval reviewers — who sees and decides player submissions
+# ════════════════════════════════════════════════════════════════════
+#
+# Team logos and CMU News stories are shown to everyone once approved, so the
+# review DMs (and the ✅/❌ buttons) go to a deliberately narrow set:
+#
+#   * the bot admins and owners named in the environment, plus
+#   * the extra reviewers in ``GameConfig.approval_reviewer_ids``, which the
+#     owners manage from the website or with /approvers.
+#
+# The ``maintenance_bypass_ids`` list is NOT part of it. That list is for
+# people testing the bot during maintenance, and counting them as admins is
+# how review cards ended up in testers' DMs.
+
+def env_admin_ids() -> set[int]:
+    """Bot admins and owners from the environment only — no admin-config IDs."""
+    return (parse_id_list(os.getenv(name) for name in ADMIN_ID_ENV_VARS)
+            | configured_owner_ids())
+
+
+def extra_reviewer_ids() -> set[int]:
+    """The reviewers added on top of the bot admins (admin config)."""
+    try:
+        return parse_id_list([(get_config() or {}).get("approval_reviewer_ids")])
+    except Exception:
+        logger.exception("Failed to load approval reviewer IDs")
+        return set()
+
+
+def configured_reviewer_ids() -> set[int]:
+    """Everyone who receives team-logo / CMU News review DMs.
+
+    A deployment that names its admins only through the admin config (no
+    environment IDs, no extra reviewers) falls back to that list rather than
+    leaving every submission without a reviewer.
+    """
+    reviewers = env_admin_ids() | extra_reviewer_ids()
+    return reviewers or configured_admin_ids()
+
+
+def is_reviewer(user_id: int | None) -> bool:
+    """May this Telegram user approve or reject a player submission?"""
+    if user_id is None:
+        return False
+    return int(user_id) in configured_reviewer_ids()
+
+
+def can_manage_reviewers(user_id: int | None) -> bool:
+    """Only an environment admin/owner may change the reviewer list.
+
+    An added reviewer must not be able to add more reviewers, and neither may
+    a maintenance-bypass tester.
+    """
+    if user_id is None:
+        return False
+    managers = env_admin_ids()
+    if not managers:
+        return is_admin(user_id)
+    return int(user_id) in managers
+
+
+def format_id_list(ids: Iterable[int]) -> str | None:
+    """Canonical storage form: sorted, comma-separated, ``None`` when empty."""
+    out = ", ".join(str(i) for i in sorted(set(ids)))
+    return out or None
