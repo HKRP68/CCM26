@@ -415,29 +415,19 @@ class PrivatePlanTests(unittest.TestCase):
             self.assertEqual("has it read" in text, shown, mode)
             self.assertEqual("Plans stay private" in text, not shown, mode)
 
-    def test_each_captain_sees_only_their_own_plan_in_the_app(self):
+    def test_the_app_shows_no_plan_to_anyone(self):
         from services.crickidex_arena import _approach_last_over
-        s = _pvp("app")
-        cm.simulate_over(s)
-        bat = _approach_last_over(s, "batting")
-        self.assertEqual(bat["battingApproach"]["key"], "aggressive")
-        self.assertTrue(bat["bowlingApproach"]["hidden"])
-        self.assertIsNone(bat["combo"])
-        self.assertIsNone(bat["flavour"])
-        self.assertEqual(bat["viewerSide"], "bat")
-        bowl = _approach_last_over(s, "bowling")
-        self.assertEqual(bowl["bowlingApproach"]["key"], "variation")
-        self.assertTrue(bowl["battingApproach"]["hidden"])
-        spec = _approach_last_over(s, "spectator")
-        self.assertTrue(spec["battingApproach"]["hidden"])
-        self.assertTrue(spec["bowlingApproach"]["hidden"])
-        # Played in the chat, the match-up is revealed to everyone as before.
-        s = _pvp("chat")
-        cm.simulate_over(s)
-        lo = _approach_last_over(s, "spectator")
-        self.assertEqual(lo["bowlingApproach"]["key"], "variation")
+        for mode in ("app", "chat"):
+            s = _pvp(mode)
+            cm.simulate_over(s)
+            for role in ("batting", "bowling", "spectator"):
+                lo = _approach_last_over(s, role)
+                for key in ("battingApproach", "bowlingApproach", "combo",
+                            "flavour", "hiddenNote", "privatePlans"):
+                    self.assertNotIn(key, lo, (mode, role))
+                self.assertNotIn("Hidden", str(lo))
 
-    def test_a_new_innings_flips_whose_plan_the_viewer_owned(self):
+    def test_a_new_innings_flips_the_viewers_side(self):
         from services.crickidex_arena import _approach_last_over
         s = _pvp("app")
         cm.simulate_over(s)
@@ -445,7 +435,6 @@ class PrivatePlanTests(unittest.TestCase):
         s["innings"] = 2      # the viewer batted that over and bowls now
         lo = _approach_last_over(s, "bowling")
         self.assertEqual(lo["viewerSide"], "bat")
-        self.assertEqual(lo["battingApproach"]["key"], "aggressive")
 
     def test_the_raw_state_never_carries_a_plan(self):
         from services.match_webapp_service import HIDDEN_PLAN_KEYS, strip_hidden_plans

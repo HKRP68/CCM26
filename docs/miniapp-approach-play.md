@@ -15,9 +15,8 @@ refused with a pointer to the right one, so the two can never race.
 Human-vs-human over-by-over matches (`/cipl`, `/letsplay`, tournament fixtures)
 start in the chat. Either captain can move a live match with `/playapp` (and
 back with `/playchat`) — see [saved-matches.md](saved-matches.md). In the Mini
-App each captain picks privately: the over summary shows **your** plan and
-"🔒 Hidden" for the opponent's, spectators see neither, and the chat's summary
-leaves out the match-up name, its flavour line and the "has it read" warning.
+App each captain picks privately: the over summary shows no approaches at
+all, and the chat's summary leaves out the match-up name, its flavour line and the "has it read" warning.
 
 ## The over, in the Mini App
 
@@ -37,12 +36,12 @@ opposition starts reading it.
 
 When the over is bowled, it plays back ball by ball: chips, commentary, the
 usual sounds, GIFs and haptics, and a **Skip** button. It ends on a summary
-card: runs and wickets, your plan, and the bowler's figures.
+card: runs and wickets and the bowler's figures.
 
-**The bot's approach stays secret.** On 🟡 Normal and 🔴 Hard the summary shows
-the bot's side as "🔒 Hidden", and it leaves out the special combination and
-its flavour line too, since those would give the plan away. Only on 🟢 Easy,
-the learner's setting, is the bot's approach revealed after each over.
+**No approaches in the summary.** The Mini App's over summary never shows a
+plan — not yours, not the bot's or the opponent's, and no "🔒 Hidden"
+placeholder — nor the special combination or its flavour line. This holds on
+every difficulty and for human-vs-human matches too.
 
 **Impact Player** is made in the app, on the pick sheets (before the bowler or
 either plan is chosen — never mid-over). Pick the substitute, the player going

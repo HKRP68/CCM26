@@ -931,11 +931,11 @@ def _approach_last_over(state, my_role=None):
     """The over just bowled, for the Mini App's ball-by-ball playback.
 
     ``my_role`` is the viewer's side now (``"batting"`` / ``"bowling"`` /
-    ``"spectator"``). Between two humans playing in the Mini App the plans are
-    private: each captain sees their own and "🔒 Hidden" for the other's, and a
-    spectator sees neither.
+    ``"spectator"``). The approaches are never sent: the Mini App's over
+    summary shows the score, the balls and the bowler's figures only — no
+    plan, no "🔒 Hidden" placeholder, no match-up name or flavour line, for
+    human-vs-human and bot matches alike.
     """
-    from engine.approach_modifiers import batting_label, bowling_label
     log = state.get("approach_log") or state.get("inn1_approach_log") or []
     if not log:
         return None
@@ -946,41 +946,16 @@ def _approach_last_over(state, my_role=None):
     if bws:
         from services.cipl_match import _bowler_figures, balls_per_unit
         figures = _bowler_figures(bws, balls_per_unit(state))
-    from services import cipl_match as _cm
     bot_uid = state.get("bot_user_id")
     # Which side the bot was on for that over: the log entry's innings tells
     # whether the batting side has changed since.
     same_innings = int(last.get("innings") or state.get("innings", 1)) == int(state.get("innings", 1))
     bat_uid = state.get("bat_team_id") if same_innings else state.get("bowl_team_id")
     bot_batted = bool(bot_uid is not None and bat_uid == bot_uid)
-    bat_app = {"key": last.get("bat"), "label": batting_label(last.get("bat"))}
-    bowl_app = {"key": last.get("bowl"), "label": bowling_label(last.get("bowl"))}
-    # The bot's plan stays secret — reading it back after every over would hand
-    # the player the bot's habits. Easy is the exception: a learner's setting.
-    revealed = _bot_plan_revealed(state)
-    hidden = {"key": None, "label": "🔒 Hidden", "hidden": True}
-    if state.get("is_bot_match") and not revealed:
-        if bot_batted:
-            bat_app = hidden
-        else:
-            bowl_app = hidden
     # The viewer's side during THAT over: the innings may have turned since.
     viewer_side = {"batting": "bat", "bowling": "bowl"}.get(my_role)
     if viewer_side and not same_innings:
         viewer_side = "bowl" if viewer_side == "bat" else "bat"
-    private = (not state.get("is_bot_match")
-               and state.get("play_mode") == "app")
-    hidden_note = None
-    if private:
-        if viewer_side != "bat":
-            bat_app = hidden
-        if viewer_side != "bowl":
-            bowl_app = hidden
-        revealed = False
-        hidden_note = "🔒 Plans are private in the Mini App — you only see your own."
-    elif state.get("is_bot_match") and not revealed:
-        hidden_note = "🔒 The bot keeps its plan secret — it is only revealed on 🟢 Easy."
-    shows_matchup = revealed or not (state.get("is_bot_match") or private)
     return {
         "key": f"{last.get('innings') or state.get('innings', 1)}-{last.get('over')}",
         "innings": last.get("innings") or state.get("innings", 1),
@@ -991,27 +966,9 @@ def _approach_last_over(state, my_role=None):
         "wickets": last.get("wickets", 0),
         "bowler": last.get("bowler"),
         "bowlerFigures": figures,
-        "battingApproach": bat_app,
-        "bowlingApproach": bowl_app,
         "botBatted": bot_batted,
-        "botPlanRevealed": revealed or not state.get("is_bot_match"),
         "viewerSide": viewer_side,
-        "privatePlans": private,
-        "hiddenNote": hidden_note,
-        # The combination name and its line give the hidden plan away too.
-        "combo": last.get("combo") if shows_matchup else None,
-        "flavour": (_cm.approach_modifiers.over_flavour(last.get("bat"), last.get("bowl"))[1]
-                    if shows_matchup else None),
     }
-
-
-def _bot_plan_revealed(state):
-    """Is the bot's approach shown after each over? Only on Easy."""
-    try:
-        from services.bot_captain import normalize_difficulty
-        return normalize_difficulty(state.get("bot_difficulty")) == "easy"
-    except Exception:
-        return False
 
 
 def _approach_payload(state, next_action, my_role):
@@ -1038,7 +995,6 @@ def _approach_payload(state, next_action, my_role):
         "currentOver": state.get("current_over"),
         "isBotMatch": bool(state.get("is_bot_match")),
         "playMode": state.get("play_mode") or "chat",
-        "botPlanRevealed": _bot_plan_revealed(state),
     }
     try:
         if next_action == A_PICK_CIPL_BOWLER and my_role == "bowling":

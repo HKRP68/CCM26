@@ -53,8 +53,8 @@ With `play_mode = "app"` between two humans:
 * the over summary in the chat omits the combination, its flavour, the
   carry-over note and the predictability warning, and says
   "🔒 Plans stay private";
-* the Arena's `lastOver` shows the viewer's own plan and hides the other
-  (`viewerSide`, `privatePlans`, `hiddenNote`); spectators see neither;
+* the Arena's `lastOver` carries no approaches at all — the Mini App's over
+  summary shows neither plan (not even a "🔒 Hidden" placeholder) to anyone;
 * the raw `/api/match` state never carries plan keys
   (`match_webapp_service.strip_hidden_plans`) — this applies to every
   over-by-over match.
