@@ -354,6 +354,28 @@
   </form>
 </div>
 
+<!-- Who reviews team logos + CMU News -->
+<div class="panel">
+  <h3>🛂 Approval Reviewers (Team Logos &amp; News)</h3>
+  <p style="color:var(--muted);font-size:.9rem;margin-top:0;">
+    Team logo and CMU News review DMs go <strong>only</strong> to the bot admins/owners
+    set in the environment (<code>BOT_ADMIN_IDS</code>, <code>OWNER_IDS</code>, …) plus the
+    IDs listed here. The maintenance bypass list above does <strong>not</strong> receive them.
+    Bot admins can also use <code>/approvers</code>, <code>/approvers add &lt;id&gt;</code> and
+    <code>/approvers remove &lt;id&gt;</code> in Telegram.
+  </p>
+  <form method="POST" action="{{ url_for('admin_maintenance') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="save_approval_reviewers">
+    <div class="form-row">
+      <label>Extra reviewer IDs (comma-separated)</label>
+      <input type="text" name="approval_reviewer_ids" value="{{ cfg.approval_reviewer_ids }}" placeholder="123456789, 987654321">
+      <div class="hint">Telegram user IDs that should also approve/reject team logos and news.</div>
+    </div>
+    <button type="submit" class="btn btn-blue">💾 Save Reviewers</button>
+  </form>
+</div>
+
 <!-- Tournament command access panel (independent of maintenance) -->
 <div class="panel">
   <h3>🏆 Tournament Command Access</h3>

@@ -20,12 +20,12 @@ from database import get_session
 from models import NewsArticle
 from services import news_service
 from services import news_announce
-from services.admin_ids import is_admin
+from services.admin_ids import is_reviewer
 
 logger = logging.getLogger(__name__)
 
 CB = "news"
-_NOT_ADMIN = "These buttons are for bot admins."
+_NOT_ADMIN = "These buttons are for bot admins and approval reviewers."
 
 
 def _review_keyboard(article_id):
@@ -78,7 +78,7 @@ async def news_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         return
     value = parts[3] if len(parts) > 3 else None
-    if not is_admin(query.from_user.id):
+    if not is_reviewer(query.from_user.id):
         await query.answer(_NOT_ADMIN, show_alert=True)
         return
 
@@ -140,7 +140,7 @@ async def newsqueue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
     if message is None:
         return
-    if not is_admin(update.effective_user.id):
+    if not is_reviewer(update.effective_user.id):
         await message.reply_text("That command is bot-admin only.")
         return
     db = get_session()

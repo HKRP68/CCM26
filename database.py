@@ -718,6 +718,10 @@ def _migrate_add_columns():
         "maintenance_until": "TIMESTAMP",
         "maintenance_started_at": "TIMESTAMP",
         "maintenance_bypass_ids": "VARCHAR(500)",
+        # Extra reviewers for team logos / CMU News submissions.
+        "approval_reviewer_ids": "VARCHAR(500)",
+        # Days before the auto-rerolled player market may list a player again.
+        "market_repeat_cooldown_days": "INTEGER DEFAULT 4",
         # Telegram IDs allowed to use the Challenge League Tournament command.
         "tournament_allowed_ids": "VARCHAR(500)",
     }

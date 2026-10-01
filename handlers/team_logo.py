@@ -25,7 +25,7 @@ from database import get_session
 from models import User, TeamLogoRequest
 from services import team_logo_service as tls
 from services.activity_service import log_activity
-from services.admin_ids import configured_admin_ids, configured_owner_ids, is_admin
+from services.admin_ids import configured_reviewer_ids, is_admin, is_reviewer
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ AWAIT_REASON = "tlogo_await_reason"
 # The review message is sent to admins while handling the *uploader's* update,
 # so services/button_access.py must treat this prefix as shared — see the entry
 # it has in SHARED_CALLBACK_PREFIXES. Authorisation happens here instead.
-_NOT_ADMIN = "These buttons are for bot admins."
+_NOT_ADMIN = "These buttons are for bot admins and approval reviewers."
 
 
 def _cb(action, request_id, value=None):
@@ -85,8 +85,11 @@ def _review_caption(request, uploader, opaque=False):
 
 
 def _admin_ids():
-    """Everyone who may decide. Owners are admins for this purpose."""
-    return sorted(configured_admin_ids() | configured_owner_ids())
+    """Everyone who may decide: the bot admins/owners plus the added reviewers.
+
+    Not the maintenance-bypass testers — see services/admin_ids.py.
+    """
+    return sorted(configured_reviewer_ids())
 
 
 async def _dm(bot, chat_id, text, **kwargs):
@@ -379,7 +382,7 @@ async def team_logo_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if action == "cancel":
             await _withdraw(query, session, request)
             return
-        if not is_admin(query.from_user.id):
+        if not is_reviewer(query.from_user.id):
             await query.answer(_NOT_ADMIN, show_alert=True)
             return
         if action == "ok":
@@ -482,7 +485,7 @@ async def _take_typed_reason(update, context, request_id, text):
         context.user_data.pop(AWAIT_REASON, None)
         await message.reply_text("Cancelled — the request is still pending.")
         return
-    if not is_admin(update.effective_user.id):
+    if not is_reviewer(update.effective_user.id):
         context.user_data.pop(AWAIT_REASON, None)
         return
 
@@ -577,7 +580,7 @@ async def logounhold_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     message = update.effective_message
     if message is None:
         return
-    if not is_admin(update.effective_user.id):
+    if not is_reviewer(update.effective_user.id):
         await message.reply_text("That command is bot-admin only.")
         return
     if not context.args:
@@ -622,7 +625,9 @@ async def logounhold_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def logoqueue_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
-    if message is None or not is_admin(update.effective_user.id):
+    if message is None:
+        return
+    if not is_reviewer(update.effective_user.id):
         await message.reply_text("That command is bot-admin only.")
         return
 

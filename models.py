@@ -1332,6 +1332,13 @@ class GameConfig(Base):
     # Comma-separated telegram IDs allowed to use commands during maintenance
     # (admins testing the bot, for example).
     maintenance_bypass_ids = Column(String(500), nullable=True)
+    # Extra Telegram IDs who review player submissions (team logos, CMU News)
+    # alongside the bot admins/owners from the environment. Maintenance-bypass
+    # testers are deliberately NOT reviewers. See services/admin_ids.py.
+    approval_reviewer_ids = Column(String(500), nullable=True)
+    # The auto-rerolled player market will not list a player again within this
+    # many days of their last listing (0 = off). See services/global_market.py.
+    market_repeat_cooldown_days = Column(Integer, default=4)
     # ── Rookie mode (membership gate) ──
     # When rookie_mode is True, using the bot at all requires an active
     # subscription of at least the ``rookie`` tier: every command, button and
@@ -1502,6 +1509,22 @@ class GlobalPlayerMarket(Base):
     purchased_count = Column(Integer, default=0)        # how many already sold
     listed_at = Column(DateTime, default=datetime.utcnow)
     is_active = Column(Boolean, default=True)
+
+
+class MarketListingHistory(Base):
+    """One row per player the shared market listed, and when.
+
+    The auto-reroll reads it to keep a card that was just on sale from coming
+    straight back — see ``services.global_market.reroll_player_market`` and
+    ``GameConfig.market_repeat_cooldown_days``. Old rows are pruned on reroll.
+    """
+    __tablename__ = "market_listing_history"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    player_id = Column(Integer, ForeignKey("players.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    listed_at = Column(DateTime, default=datetime.utcnow, nullable=False,
+                       index=True)
 
 
 class GlobalTraitMarket(Base):

@@ -56,6 +56,15 @@
              style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
     </div>
     <div>
+      <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;"
+             title="A player listed by the market is kept out of the auto-reroll for this many days. 0 = off.">
+        No-repeat window (days)
+      </label>
+      <input type="number" name="market_repeat_cooldown_days" min="0" max="30" required
+             value="{{ cfg.market_repeat_cooldown_days if cfg.market_repeat_cooldown_days is not none else 4 }}"
+             style="width:100%; padding:.5rem; background:var(--input-bg); border:1px solid var(--border); border-radius:5px; color:var(--text);">
+    </div>
+    <div>
       <label style="display:block; font-size:.8rem; color:var(--muted); margin-bottom:.25rem;">
         Trait slots / reroll
       </label>

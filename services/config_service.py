@@ -46,6 +46,8 @@ DEFAULTS = {
     "market_default_slots": 6,
     "market_refresh_hour_ist": 0,
     "market_refresh_interval_hours": 24,
+    # A player listed by the auto-reroll stays out of it for this many days.
+    "market_repeat_cooldown_days": 4,
     "trait_market_default_slots": 5,
     # Each market runs its own schedule — see models.GameConfig for why.
     "trait_market_refresh_interval_hours": 24,
@@ -73,6 +75,9 @@ DEFAULTS = {
     "maintenance_until": None,
     "maintenance_started_at": None,
     "maintenance_bypass_ids": None,
+    # Extra Telegram IDs who review team logos and CMU News (on top of the bot
+    # admins/owners from the environment). See services/admin_ids.py.
+    "approval_reviewer_ids": None,
     # Rookie mode — the membership gate. OFF by default: the bot stays open to
     # everyone until an admin turns it on. See services/rookie_gate.py.
     "rookie_mode": False,

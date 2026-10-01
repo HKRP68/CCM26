@@ -90,18 +90,7 @@ PLAYER_RATING_BUCKETS = [           # (weight, low, high)
 
 def _pick_player_for_slot(session, min_rating=None):
     """Pick a random player at or above min_rating. Excludes inactive + variants."""
-    q = (not_career(session.query(Player))
-         .filter(Player.is_active == True,
-                 Player.parent_player_id.is_(None)))
-    if min_rating is not None:
-        q = q.filter(Player.rating >= min_rating)
-    pool = q.all()
-    if not pool:
-        # Drop the rating filter as a fallback
-        pool = (not_career(session.query(Player))
-                .filter(Player.is_active == True,
-                        Player.parent_player_id.is_(None))
-                .all())
+    pool = _player_pool(session, min_rating=min_rating)
     return random.choice(pool) if pool else None
 
 
@@ -113,15 +102,86 @@ def _calc_player_price(player):
     return get_buy_value(player.rating)
 
 
+DEFAULT_REPEAT_COOLDOWN_DAYS = 4
+# History older than this is never consulted (the cooldown is capped well
+# below it), so a reroll deletes it rather than letting the table grow forever.
+_HISTORY_KEEP_DAYS = 60
+
+
+def _player_pool(session, min_rating=None):
+    """Every player the market may list: active, base cards, never a career card."""
+    base = (not_career(session.query(Player))
+            .filter(Player.is_active == True,
+                    Player.parent_player_id.is_(None)))
+    pool = base.filter(Player.rating >= min_rating).all() if min_rating is not None else []
+    return pool or base.all()
+
+
+def _repeat_cooldown_days(cfg):
+    """The no-repeat window in days; NULL/garbage reads as the default."""
+    raw = (cfg or {}).get("market_repeat_cooldown_days")
+    try:
+        days = DEFAULT_REPEAT_COOLDOWN_DAYS if raw is None else int(raw)
+    except (TypeError, ValueError):
+        days = DEFAULT_REPEAT_COOLDOWN_DAYS
+    return max(0, min(30, days))
+
+
+def _last_listed(session, since):
+    """``{player_id: last listed_at}`` for every listing on or after ``since``."""
+    from sqlalchemy import func
+    from models import MarketListingHistory
+    rows = (session.query(MarketListingHistory.player_id,
+                          func.max(MarketListingHistory.listed_at))
+            .filter(MarketListingHistory.listed_at >= since)
+            .group_by(MarketListingHistory.player_id).all())
+    return {int(pid): ts for pid, ts in rows}
+
+
+def pick_market_players(pool, num_slots, recent, rng=None):
+    """Choose ``num_slots`` distinct players, keeping recent listings out.
+
+    ``recent`` maps player id → when they were last listed inside the cooldown
+    window. Anyone not in it is fair game and drawn at random. Only when the
+    pool is too small to fill every slot without a repeat does a recent player
+    come back — and then the one unseen the longest comes back first, so even
+    a tiny pool rotates instead of serving the same handful.
+    """
+    rng = rng or random
+    fresh = [p for p in pool if p.id not in recent]
+    if len(fresh) >= num_slots:
+        return rng.sample(fresh, num_slots)
+    chosen = list(fresh)
+    rng.shuffle(chosen)
+    stale = [p for p in pool if p.id in recent]
+    rng.shuffle(stale)  # random among equals; the sort below is stable
+    stale.sort(key=lambda p: recent[p.id])
+    chosen += stale[:num_slots - len(chosen)]
+    return chosen
+
+
+def record_market_listing(session, player_ids, when=None):
+    """Note that these players were just listed. Caller commits."""
+    from models import MarketListingHistory
+    when = when or datetime.utcnow()
+    for pid in player_ids:
+        session.add(MarketListingHistory(player_id=int(pid), listed_at=when))
+
+
 def reroll_player_market(session, num_slots=None, min_rating=None):
     """Wipe and regenerate the player market.
 
     Reads market_min_rating + market_default_slots from GameConfig if not
-    explicitly provided. Returns count generated.
+    explicitly provided. A player listed within the last
+    ``market_repeat_cooldown_days`` (default 4) is not listed again unless the
+    pool is too small to fill the market without them — see
+    :func:`pick_market_players`. Returns count generated.
     """
+    from datetime import timedelta
+    cfg = {}
     try:
         from services.config_service import get_config
-        cfg = get_config(session)
+        cfg = get_config(session) or {}
         if num_slots is None:
             num_slots = cfg.get("market_default_slots", 6)
         if min_rating is None:
@@ -135,20 +195,19 @@ def reroll_player_market(session, num_slots=None, min_rating=None):
     session.query(GlobalPlayerMarket).delete()
     session.flush()
 
+    now = datetime.utcnow()
+    pool = _player_pool(session, min_rating=min_rating)
+    cooldown = _repeat_cooldown_days(cfg)
+    recent = {}
+    if cooldown:
+        try:
+            recent = _last_listed(session, now - timedelta(days=cooldown))
+        except Exception:
+            logger.exception("market listing history unreadable; rerolling without it")
+    picks = pick_market_players(pool, int(num_slots or 0), recent)
+
     generated = 0
-    used_player_ids = set()
-    for slot in range(num_slots):
-        for _ in range(20):
-            p = _pick_player_for_slot(session, min_rating=min_rating)
-            if not p:
-                break
-            if p.id not in used_player_ids:
-                used_player_ids.add(p.id)
-                break
-        else:
-            continue
-        if not p:
-            continue
+    for slot, p in enumerate(picks):
         base_price = _calc_player_price(p)
         # Base price IS the sell price — the market lists at the normal /buy
         # value and gives nobody a blanket discount. The only thing that lowers
@@ -162,12 +221,25 @@ def reroll_player_market(session, num_slots=None, min_rating=None):
             final_price=final_price,
             quantity=UNLIMITED,
             purchased_count=0,
-            listed_at=datetime.utcnow(),
+            listed_at=now,
             is_active=True,
         )
         session.add(row)
         generated += 1
     session.flush()
+
+    # Remember who was listed, and forget anything too old to matter. A
+    # savepoint keeps a history hiccup from costing the reroll itself.
+    try:
+        from models import MarketListingHistory
+        with session.begin_nested():
+            record_market_listing(session, [p.id for p in picks], now)
+            (session.query(MarketListingHistory)
+             .filter(MarketListingHistory.listed_at
+                     < now - timedelta(days=_HISTORY_KEEP_DAYS))
+             .delete(synchronize_session=False))
+    except Exception:
+        logger.exception("failed to record market listing history")
 
     # Mark the refresh time so /playermarket knows when to auto-reroll next
     try:
@@ -489,6 +561,8 @@ def add_player_to_market(session, player_id, custom_price=None,
         is_active=True,
     )
     session.add(row)
+    # A hand-listed card counts too: the next auto-reroll should not re-list it.
+    record_market_listing(session, [player.id])
     session.flush()
     return True, next_slot
 
@@ -772,6 +846,8 @@ def add_trait_to_market(session, trait_id, custom_price=None,
         is_active=True,
     )
     session.add(row)
+    # A hand-listed card counts too: the next auto-reroll should not re-list it.
+    record_market_listing(session, [player.id])
     session.flush()
     return True, next_slot
 

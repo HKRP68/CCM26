@@ -585,6 +585,9 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/logoqueue` | Review team logos waiting for approval |
 | `/newsqueue` | Review player-submitted CMU News stories waiting for approval |
 | `/logounhold <telegram id>` | Let a held user send a team logo again |
+| `/approvers` | List who gets team logo / CMU News review DMs |
+| `/approvers add <telegram_id>` | Add a team logo / CMU News reviewer (or reply to their message with `/approvers add`) |
+| `/approvers remove <telegram_id>` | Remove an added reviewer |
 | `/previewsummary` | Render a sample match summary card |
 | `/setcardid <player name> \| <file_id>` | Pin a Telegram photo as a player's card |
 | `/setmilestone` | Set in-match milestone messages and media |

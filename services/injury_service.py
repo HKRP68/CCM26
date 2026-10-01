@@ -412,7 +412,7 @@ def process_match(session, tour, tm, lines, *, user_by_team=None, rng=None):
     does not have it counted as a match already served. Both steps live inside
     the match-recording transaction, which is idempotent on ``match_id``.
     """
-    blank = {"new": [], "recovered": []}
+    blank = {"new": [], "recovered": [], "ongoing": []}
     if not enabled_for(tour) or tm is None:
         return blank
     team_ids = [tid for tid in (getattr(tm, "team1_id", None),
@@ -433,7 +433,14 @@ def process_match(session, tour, tm, lines, *, user_by_team=None, rng=None):
                 tournament_match_id=tm.id, rng=rng)
             if injury is not None:
                 created.append(injury)
-        return {"new": created, "recovered": recovered}
+        # Everyone from these two sides still sitting out after this match, so
+        # the chat card can say who is still in the physio's room — not just who
+        # walked in and who walked out.
+        fresh = {r.id for r in created}
+        ongoing = [r for tid in team_ids
+                   for r in active_injuries(session, tour.id, tid)
+                   if r.id not in fresh]
+        return {"new": created, "recovered": recovered, "ongoing": ongoing}
     except Exception:
         # An injury roll must never cost somebody their match result.
         logger.exception("Injury processing failed for tournament %s", tour.id)
@@ -444,6 +451,7 @@ def render_report(session, tournament_id, report):
     """The injury news for one match as an HTML block, or "" when there is none."""
     new = (report or {}).get("new") or []
     recovered = (report or {}).get("recovered") or []
+    ongoing = (report or {}).get("ongoing") or []
     if not new and not recovered:
         return ""
     from html import escape
@@ -461,5 +469,12 @@ def render_report(session, tournament_id, report):
     for row in recovered:
         out.append(
             f"✅ <b>{escape(row.player_name or 'Player')}</b> "
-            f"({escape(names.get(row.tournament_team_id, 'Team'))}) is fit again.")
+            f"({escape(names.get(row.tournament_team_id, 'Team'))}) has completed "
+            f"recovery — fit for the next match.")
+    for row in ongoing:
+        n = int(row.matches_remaining or 0)
+        out.append(
+            f"🩹 <b>{escape(row.player_name or 'Player')}</b> "
+            f"({escape(names.get(row.tournament_team_id, 'Team'))}) still "
+            f"recovering — out {n} more match{'' if n == 1 else 'es'}.")
     return "\n".join(out)
