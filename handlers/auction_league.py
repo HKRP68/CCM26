@@ -243,6 +243,9 @@ def _lot_rows(state, lot):
     first = []
     if ok:
         first.append((f"🔨 Bid {money(price)}", f"al:bid:{seq}"))
+        jump = AL.user_jump_price(state)
+        if jump:
+            first.append((f"🚀 {money(jump)}", f"al:jump:{seq}:{jump}"))
     first.append(("🙅 Pass", f"al:pass:{seq}"))
     fast = "🐢 Bid by bid" if state.get("fast") else "⚡ Fast"
     return [first,
@@ -904,6 +907,9 @@ async def _cb_lot(q, context, car, action, seq, arg=None):
         if action == "bid":
             AL.user_bid(state)
             await q.answer("Bid placed!")
+        elif action == "jump":
+            AL.user_bid(state, to_price=int(arg))
+            await q.answer(f"🚀 Jumped to {money(int(arg))}!")
         elif action == "pass":
             AL.user_pass(state)
             await q.answer("Passed")
@@ -1335,6 +1341,8 @@ async def auction_league_callback(update: Update, context: ContextTypes.DEFAULT_
                                note="▶️ <i>Auction resumed.</i>" if was_paused else "")
             elif action in ("bid", "pass") and args:
                 await _cb_lot(q, context, car, action, args[0])
+            elif action == "jump" and len(args) >= 2:
+                await _cb_lot(q, context, car, "jump", args[0], args[1])
             elif action == "rtm" and len(args) >= 2:
                 await _cb_lot(q, context, car, "rtm", args[0], args[1])
             elif action in ("skip", "fast", "pause") and args:

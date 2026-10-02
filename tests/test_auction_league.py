@@ -240,16 +240,40 @@ class Auction(unittest.TestCase):
         self.assertIsNone(st["lot"])
         self.assertFalse(st.get("autopilot"))
 
-    def test_prices_stay_moderate(self):
+    def test_ipl_like_prices_and_purses_spent(self):
+        lefts, tops = [], []
         for seed in range(4):
             st = new_state(seed=seed)
             AL.apply_retentions(st, [])
             AL.simulate_to_last(st)
-            for e in st["sold_log"]:
-                if e["how"] in (AL.HOW_AUCTION, AL.HOW_RTM):
-                    base = AL.base_price(AL.card(st, e["pid"])["rating"])
-                    # The ceiling, plus the one increment a war can add.
-                    self.assertLessEqual(e["price"], base * AL.MAX_PRICE_MULTIPLE + 25)
+            AL.finish_auction(st)
+            prices = [e["price"] for e in st["sold_log"]
+                      if e["how"] in (AL.HOW_AUCTION, AL.HOW_RTM)]
+            self.assertLessEqual(max(prices), AL.RECORD_PRICE)
+            tops.append(max(prices))
+            lefts += [t["purse"] for n, t in st["teams"].items()
+                      if n != st["user_team"]]
+        # Stars go big, as at the IPL…
+        self.assertTrue(all(t >= 1500 for t in tops), tops)
+        # …and the AI spends its purse down to a few crore.
+        lefts.sort()
+        self.assertLessEqual(lefts[len(lefts) // 2], 400, lefts)
+
+    def test_jump_bid(self):
+        st = new_state()
+        AL.apply_retentions(st, [])
+        for _ in range(300):
+            lot = AL.open_next_lot(st)
+            if lot["status"] == "open" and lot["leader"] is not None:
+                break
+            if st.get("lot"):
+                AL.user_pass(st)
+        jump = AL.user_jump_price(st)
+        self.assertEqual(jump, lot["price"] + AL.jump_amount(lot["price"]))
+        with self.assertRaises(AL.AuctionLeagueError):
+            AL.user_bid(st, to_price=lot["price"])        # stale / below next
+        AL.user_bid(st, to_price=jump)
+        self.assertIn([st["user_team"], jump], lot["trail"])
 
     def test_cannot_overspend(self):
         st = new_state()

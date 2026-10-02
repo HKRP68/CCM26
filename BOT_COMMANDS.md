@@ -365,14 +365,19 @@ is run by the AI.
    automatic sets: ⭐ Marquee (91+), then rating bands by role (Batsmen 90–87,
    All-rounders 90–87, Wicket-keepers 90–87, Bowlers 90–87, then 86–83, …),
    then 🌱 Emerging, then one ⚡ Accelerated round for the unsold. Bidding goes
-   **bid by bid**: after every AI raise it is your call — **Bid** or **Pass**,
-   20 seconds each. Tap **⚡ Fast** to let the AI sides settle among themselves
+   **bid by bid**: after every AI raise it is your call — **Bid** (the next
+   step), **🚀 Jump** (₹50 L higher, ₹1 Cr from ₹5 Cr up) or **Pass**, 20
+   seconds each. Tap **⚡ Fast** to let the AI sides settle among themselves
    first, **⏭ Skip player** to have the player decided at once, or **⏸ Pause**
-   to stop the clock until you resume. The AI bids smart and moderately: each
-   franchise has a personality (Aggressive, Balanced, Thrifty, Moneyball),
-   chases the roles it still needs, keeps enough purse to finish a squad, and
-   never pays more than about 5½× a player's base price (a ₹2 Cr marquee star
-   tops out around ₹11 Cr).
+   to stop the clock until you resume.
+   The AI bids like a real IPL franchise: it plans its purse (money left ÷
+   slots left, weighted by how good the player is), so marquee stars go for
+   ₹10–27 Cr, good regulars for ₹5–8 Cr and squad players near their base —
+   and it gets more urgent as the pool thins, so AI purses usually end the
+   auction with ₹4 Cr or less. Each franchise has a personality (Aggressive,
+   Balanced, Thrifty, Moneyball), chases the roles it still needs, always
+   keeps enough to finish a legal squad, and never leaves another side short
+   of a role it still has to fill. Nobody pays more than the IPL record, ₹27 Cr.
 4. **Squad rules** — at least 4 BAT, 4 BOWL, 1 WK and 2 AR; at most 18
    players and 8 overseas. A squad still short when the auction ends is
    topped up from the unsold players at base price.
