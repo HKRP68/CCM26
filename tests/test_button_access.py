@@ -339,3 +339,34 @@ class OwnerTagTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JobOwnerTests(unittest.TestCase):
+    """A job must never send buttons registered to an unrelated user.
+
+    A job inherits the context of whichever update armed the scheduler's
+    timer. Without the reset, a lot card posted by the Auction League clock
+    (or any bot-captain turn) was registered to that other user, and the
+    real owner was told "This button is not for you" in their own DM.
+    """
+
+    def test_job_runs_with_no_button_owner(self):
+        import asyncio
+        from telegram.ext import ApplicationBuilder, Job
+
+        button_access.install_button_access_defaults()
+        seen = []
+
+        async def callback(context):
+            seen.append(button_access._current_button_owner.get())
+
+        async def scenario():
+            app = ApplicationBuilder().token("123:ABC").build()
+            # As if user 111's update armed the job and is still bound.
+            button_access._current_button_owner.set(111)
+            await Job(callback)._run(app)
+            # The handler's own context is untouched by the job.
+            seen.append(button_access._current_button_owner.get())
+
+        asyncio.run(scenario())
+        self.assertEqual(seen, [None, 111])

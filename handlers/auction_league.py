@@ -6,12 +6,15 @@ and the IPL playoffs — against them. The rules and the AI live in
 ``services.auction_league_service``; this module is the Telegram face of it.
 
 Commands (all DM-only):
-  /auctionleague /al /rcpl   the hub — start, continue or review a career
+  /auctionleague /al /rcpl   the hub — start, continue or review a career;
+                             /rcpl IPL goes straight to that league's teams
   /simset [n]                simulate the rest of this set (or up to set n)
   /simtolast /alsim          simulate the rest of the auction
   /alsets  /alsquad  /alpurse  /altable  /alfixtures  /alstats
   /alplay                    play your next fixture
-  /alquit                    abandon the career
+  /skipplayer                simulate the player on the block
+  /alpause /alresume         pause and resume the auction
+  /alquit /aldiscard         discard the career (needed before a new one)
 
 Every button carries the lot's sequence number, so a stale Bid button from an
 earlier lot is refused instead of bidding on whoever is on the block now. One
@@ -34,6 +37,9 @@ from utils.message_chunks import chunk_blocks
 logger = logging.getLogger(__name__)
 
 LOT_SECONDS = 20
+# What starting a career costs — paid once, when you tap ✅ Start career.
+ENTRY_FEE_GEMS = 100
+HELP_LINE = "❓ Need help? Join @Cmugames or ask admin @lost_in_space14"
 DIFFICULTIES = ("easy", "normal", "hard")
 DIFF_LABEL = {"easy": "🟢 Easy", "normal": "🟡 Normal", "hard": "🔴 Hard"}
 
@@ -222,7 +228,9 @@ def _lot_text(state, lot, note=""):
     if lot.get("status") == "rtm":
         lines += ["", f"🔁 <b>Right To Match!</b> {_esc(c['name'])} was yours. "
                       f"Match {money(lot['price'])} and keep him?"]
-    lines.append(f"⏱️ {LOT_SECONDS}s to answer")
+    mode = "⚡ Fast — the AI teams bid among themselves first" if state.get("fast") \
+        else "🐢 Bid by bid — you answer every raise"
+    lines.append(f"{mode}\n⏱️ {LOT_SECONDS}s to answer")
     return "\n".join(lines)
 
 
@@ -236,8 +244,11 @@ def _lot_rows(state, lot):
     if ok:
         first.append((f"🔨 Bid {money(price)}", f"al:bid:{seq}"))
     first.append(("🙅 Pass", f"al:pass:{seq}"))
+    fast = "🐢 Bid by bid" if state.get("fast") else "⚡ Fast"
     return [first,
-            [("⏩ Sim set", f"al:simset:{seq}"), ("⏭ Sim to end", f"al:simall:{seq}")],
+            [("⏭ Skip player", f"al:skip:{seq}"), ("⏩ Sim set", f"al:simset:{seq}"),
+             ("⏭⏭ Sim to end", f"al:simall:{seq}")],
+            [(fast, f"al:fast:{seq}"), ("⏸ Pause", f"al:pause:{seq}")],
             [("📋 My squad", "al:squad"), ("💰 Purses", "al:purse"), ("📦 Sets", "al:sets")]]
 
 
@@ -353,24 +364,26 @@ def _hub(state, row):
             f"Your franchise: <b>{_esc(me)}</b> · AI: {DIFF_LABEL.get(state.get('difficulty'), '')}")
     phase = state["phase"]
     if phase == AL.PHASE_RETENTION:
-        return head + "\n\n🔒 Retention window is open.", [
-            [("🔒 Retentions", "al:rtview")], [("🗑 Abandon career", "al:quit")]]
+        return head + f"\n\n🔒 Retention window is open.\n\n{HELP_LINE}", [
+            [("🔒 Retentions", "al:rtview")], [("🗑 Discard career", "al:quit")]]
     if phase == AL.PHASE_AUCTION:
-        return (head + f"\n\n🔨 The auction is live — set {state['set_idx'] + 1}"
-                f"/{len(state['sets'])}.\n{_purse_line(state)}"), [
-            [("🔨 Resume auction", "al:resume")],
+        status = "⏸ The auction is <b>paused</b>" if state.get("paused") \
+            else "🔨 The auction is live"
+        return (head + f"\n\n{status} — set {state['set_idx'] + 1}"
+                f"/{len(state['sets'])}.\n{_purse_line(state)}\n\n{HELP_LINE}"), [
+            [("▶️ Resume auction", "al:resume")],
             [("📦 Sets", "al:sets"), ("📋 My squad", "al:squad"), ("💰 Purses", "al:purse")],
-            [("🗑 Abandon career", "al:quit")]]
+            [("🗑 Discard career", "al:quit")]]
     if phase == AL.PHASE_SEASON:
         fx = AL.next_user_fixture(state)
         nxt = (f"Next: {_fixture_line(state, fx)}" if fx else "You're out — the rest is simulated.")
         pos = AL.standings(state).index(me) + 1
         played = any(r["p"] for r in (state.get("table") or {}).values())
         where = f" · you're <b>#{pos}</b> in the table" if played else ""
-        return (head + f"\n\n📅 Season under way{where}\n{nxt}"), [
+        return (head + f"\n\n📅 Season under way{where}\n{nxt}\n\n{HELP_LINE}"), [
             [("▶️ Next fixture", f"al:play:{row.id}")],
             [("📊 Table", f"al:table:{row.id}"), ("📅 Fixtures", "al:fix"), ("🟠 Caps", "al:caps")],
-            [("📋 My squad", "al:squad"), ("🗑 Abandon", "al:quit")]]
+            [("📋 My squad", "al:squad"), ("🗑 Discard", "al:quit")]]
     return _season_end_text(state), [[("🆕 New career", "al:new")],
                                      [("📊 Final table", f"al:table:{row.id}"),
                                       ("🟠 Caps", "al:caps")]]
@@ -504,7 +517,7 @@ async def _lot_timeout(context):
         car = _open(tg_id)
         try:
             state = car.state
-            if not state or state["phase"] != AL.PHASE_AUCTION:
+            if not state or state["phase"] != AL.PHASE_AUCTION or state.get("paused"):
                 return
             lot = state.get("lot")
             if not lot or lot["seq"] != seq:
@@ -537,16 +550,66 @@ async def auction_league_handler(update: Update, context: ContextTypes.DEFAULT_T
         session.commit()
     finally:
         session.close()
+    chat_id = update.effective_chat.id
+    args = [a for a in (context.args or []) if a]
+    wanted = " ".join(args).strip()
     car = _open(tg.id, include_completed=True)
     try:
-        if car.row is None or (car.state["phase"] == AL.PHASE_COMPLETED
-                               and context.args and context.args[0].lower() == "new"):
-            await _start_new(update.effective_chat.id, context)
+        active = car.row is not None and car.state["phase"] in AL.ACTIVE_STATUSES
+        if active and wanted:
+            # One career at a time: a new one needs the old one discarded.
+            await _send_one_career_notice(context, chat_id, car.state)
             return
-        text, rows = _hub(car.state, car.row)
-        await _send(context, update.effective_chat.id, text, rows)
+        if active or (car.row is not None and not wanted):
+            text, rows = _hub(car.state, car.row)
+            await _send(context, chat_id, text, rows)
+            return
+        if wanted and wanted.lower() != "new":
+            league_id = _find_league_id(wanted)
+            if league_id is None:
+                await _send(context, chat_id,
+                            f"❌ No league called <b>{_esc(wanted)}</b>. Pick one:")
+                await _start_new(chat_id, context)
+                return
+            await _send(context, chat_id, INTRO.rsplit("\n\n", 1)[0])
+            await _send_team_picker(context, chat_id, league_id)
+            return
+        await _start_new(chat_id, context)
     finally:
         car.session.close()
+
+
+async def _send_one_career_notice(context, chat_id, state):
+    await _send(context, chat_id,
+                f"⚠️ You already have an Auction League career in progress "
+                f"(<b>{_esc(state['user_team'])}</b>, {_esc(state['league']['name'])}).\n"
+                f"Finish it, or discard it, before starting a new one.\n\n{HELP_LINE}",
+                [[("▶️ Continue", "al:hub"), ("🗑 Discard career", "al:quit")]])
+
+
+def _find_league_id(wanted):
+    """The active league matching ``wanted`` by name, short code or command."""
+    from handlers.challenge import normalize_challenge_league
+    from models import ChallengeLeague
+    key = normalize_challenge_league(wanted)
+    session = get_session()
+    try:
+        leagues = (session.query(ChallengeLeague)
+                   .filter(ChallengeLeague.is_active.is_(True)).all())
+        for lg in leagues:
+            names = {normalize_challenge_league(lg.name),
+                     normalize_challenge_league(lg.short_code or ""),
+                     normalize_challenge_league((lg.command or "").lstrip("/"))}
+            if key and key in names:
+                return lg.id
+        # "/rcpl ipl" for a league whose command is /cipl
+        for lg in leagues:
+            cmd = normalize_challenge_league((lg.command or "").lstrip("/"))
+            if key and cmd == "c" + key:
+                return lg.id
+        return None
+    finally:
+        session.close()
 
 
 INTRO = (
@@ -560,7 +623,10 @@ INTRO = (
     "5️⃣ Season: everyone plays everyone once, then the IPL playoffs — "
     "your matches ball by ball, 20 overs\n\n"
     "🏆 Champions earn 25,000 coins + 15 💎 (runners-up 10,000 + 5 💎, "
-    "playoffs 4,000). Matches themselves are unranked practice.\n\n"
+    "playoffs 4,000). Matches themselves are unranked practice.\n"
+    f"🎟 Entry fee: <b>{ENTRY_FEE_GEMS} 💎</b>, paid when you start the career.\n\n"
+    "💡 Tip: <code>/rcpl IPL</code> jumps straight to a league's teams.\n"
+    f"{HELP_LINE}\n\n"
     "Choose your league:"
 )
 
@@ -588,18 +654,23 @@ def _league_key(session, league):
 
 
 async def _cb_league(q, context, league_id):
+    err = await _send_team_picker(context, q.message.chat_id, league_id)
+    await q.answer(err or None, show_alert=bool(err))
+
+
+async def _send_team_picker(context, chat_id, league_id):
+    """Post a league's franchises to pick from. Returns an error text, or None."""
     session = get_session()
     try:
         from models import ChallengeLeague
         league = session.get(ChallengeLeague, int(league_id))
         if league is None:
-            await q.answer("That league no longer exists.", show_alert=True)
-            return
+            return "That league no longer exists."
         teams = AL.league_teams(session, league)
         playable = [t for t in teams if len(t["players"]) >= 11]
         if len(teams) < 4:
-            await q.answer("This league needs at least four teams.", show_alert=True)
-            return
+            await _send(context, chat_id, "❌ This league needs at least four teams.")
+            return "This league needs at least four teams."
         context.user_data["al_setup"] = {"league_id": league.id, "ai_retain": True,
                                          "difficulty": "normal"}
         rows, row = [], []
@@ -612,9 +683,9 @@ async def _cb_league(q, context, league_id):
             rows.append(row)
         note = "" if len(playable) == len(teams) else \
             "\n<i>(Some squads are small — the auction will fill them.)</i>"
-        await q.answer()
-        await _send(context, q.message.chat_id,
+        await _send(context, chat_id,
                     f"🏆 <b>{_esc(league.name)}</b> — pick your franchise:{note}", rows)
+        return None
     finally:
         session.close()
 
@@ -624,13 +695,15 @@ def _setup_text(setup, team):
             f"Franchise: <b>{_esc(team)}</b>\n"
             f"AI retentions: <b>{'On' if setup['ai_retain'] else 'Off'}</b> "
             f"<i>(AI keeps up to 3 of its stars — the league's top 20%)</i>\n"
-            f"AI captaincy: <b>{DIFF_LABEL[setup['difficulty']]}</b>")
+            f"AI captaincy: <b>{DIFF_LABEL[setup['difficulty']]}</b>\n\n"
+            f"🎟 Entry fee: <b>{ENTRY_FEE_GEMS} 💎</b> — paid when you tap ✅ Start career "
+            f"(not refunded if you discard it).\n{HELP_LINE}")
 
 
 def _setup_rows(setup):
     return [[(f"🔁 AI retentions: {'On' if setup['ai_retain'] else 'Off'}", "al:sret")],
             [(f"🎚 Difficulty: {DIFF_LABEL[setup['difficulty']]}", "al:sdiff")],
-            [("✅ Start career", "al:sgo")]]
+            [(f"✅ Start career ({ENTRY_FEE_GEMS} 💎)", "al:sgo")]]
 
 
 async def _cb_team(q, context, idx):
@@ -689,15 +762,38 @@ async def _cb_setup_go(q, context):
         if league is None:
             await q.answer("That league no longer exists.", show_alert=True)
             return
+        if AL.active_save(session, tg_id) is not None:
+            await q.answer("Finish or discard your current career first.", show_alert=True)
+            return
+        from models import User
+        user = session.query(User).filter(User.telegram_id == tg_id).first()
+        if user is None:
+            await q.answer("Use /debut first.", show_alert=True)
+            return
+        gems = int(user.total_gems or 0)
+        if gems < ENTRY_FEE_GEMS:
+            await q.answer(f"🎟 Entry fee is {ENTRY_FEE_GEMS} 💎 — you have {gems}.",
+                           show_alert=True)
+            return
         teams = AL.league_teams(session, league)
         state = AL.new_state(AL.league_dict(league, _league_key(session, league)), teams,
                              setup["team"], ai_retain=setup["ai_retain"],
                              difficulty=setup["difficulty"])
         state["pending_retain"] = []
+        state["entry_fee_gems"] = ENTRY_FEE_GEMS
+        # The fee and the new save commit together: no charge without a career.
+        user.total_gems = gems - ENTRY_FEE_GEMS
+        try:
+            from services.activity_service import log_activity
+            log_activity(session, user.id, "auction_league_entry",
+                         f"Auction League entry fee: -{ENTRY_FEE_GEMS} gems",
+                         gems_change=-ENTRY_FEE_GEMS)
+        except Exception:
+            logger.exception("auction league: could not log the entry fee")
         AL.create_save(session, tg_id, state)
         session.commit()
         context.user_data.pop("al_setup", None)
-        await q.answer("Career started!")
+        await q.answer(f"Career started! −{ENTRY_FEE_GEMS} 💎")
         try:
             await q.edit_message_reply_markup(reply_markup=None)
         except Exception:
@@ -801,6 +897,9 @@ async def _cb_lot(q, context, car, action, seq, arg=None):
     if state["phase"] != AL.PHASE_AUCTION or not lot or lot["seq"] != int(seq):
         await q.answer("That lot is already closed.", show_alert=False)
         return
+    if state.get("paused"):
+        await q.answer("⏸ The auction is paused — tap ▶️ Resume first.", show_alert=True)
+        return
     try:
         if action == "bid":
             AL.user_bid(state)
@@ -833,9 +932,43 @@ async def _cb_lot(q, context, car, action, seq, arg=None):
     await _advance(context, car, chat_id, tg_id)
 
 
+async def _skip_player(context, car, chat_id, tg_id):
+    """/skipplayer — the player on the block is decided at once (autopilot)."""
+    state = car.state
+    _cancel_timer(context, tg_id)
+    state.pop("paused", None)
+    lot = AL.simulate_lot(state)
+    if lot is None:
+        await _advance(context, car, chat_id, tg_id)
+        return
+    # _advance turns the old card into this lot's result line, then moves on.
+    await _advance(context, car, chat_id, tg_id, note="⏭ <i>Player skipped — simulated.</i>")
+
+
+async def _pause(context, car, chat_id, tg_id, message=None):
+    state = car.state
+    _cancel_timer(context, tg_id)
+    state["paused"] = True
+    mid = state.setdefault("ui", {}).pop("lot_msg", None)
+    car.save()
+    text = ("⏸ <b>Auction paused.</b> Nothing moves and no clock runs until you "
+            "resume.\n\n/alresume or tap below to carry on.")
+    rows = [[("▶️ Resume auction", "al:resume")], [("📋 My squad", "al:squad"),
+                                                   ("💰 Purses", "al:purse")]]
+    if mid:
+        try:
+            await context.bot.edit_message_text(text, chat_id=chat_id, message_id=mid,
+                                                parse_mode="HTML", reply_markup=_kb(rows))
+            return
+        except Exception:
+            pass
+    await _send(context, chat_id, text, rows)
+
+
 async def _do_sim(context, car, chat_id, tg_id, *, upto=None, all_=False):
     state = car.state
     _cancel_timer(context, tg_id)
+    state.pop("paused", None)
     lot = state.get("lot")
     if lot:
         await _close_card(context, state, chat_id, "⏩ <i>Simulated…</i>")
@@ -875,6 +1008,54 @@ async def simtolast_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _require_dm(update, context):
         return
     await _locked_auction_cmd(update, context, all_=True)
+
+
+async def skipplayer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/skipplayer — simulate the player on the block."""
+    if not await _require_dm(update, context):
+        return
+    await _locked_auction_action(update, context, "skip")
+
+
+async def alpause_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/alpause — pause the auction."""
+    if not await _require_dm(update, context):
+        return
+    await _locked_auction_action(update, context, "pause")
+
+
+async def alresume_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/alresume — resume a paused auction."""
+    if not await _require_dm(update, context):
+        return
+    await _locked_auction_action(update, context, "resume")
+
+
+async def _locked_auction_action(update, context, action):
+    tg_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    async with _lock(context, tg_id):
+        car = _open(tg_id)
+        try:
+            if car.row is None or car.state["phase"] != AL.PHASE_AUCTION:
+                await update.effective_message.reply_text(
+                    "❌ No auction is running. /auctionleague to see your career.")
+                return
+            if action == "skip":
+                await _skip_player(context, car, chat_id, tg_id)
+            elif action == "pause":
+                if car.state.get("paused"):
+                    await update.effective_message.reply_text("⏸ Already paused — /alresume.")
+                    return
+                await _pause(context, car, chat_id, tg_id)
+            else:
+                car.state.pop("paused", None)
+                car.state.setdefault("ui", {}).pop("lot_msg", None)
+                await _advance(context, car, chat_id, tg_id, note="▶️ <i>Auction resumed.</i>")
+        except AuctionLeagueError as exc:
+            await update.effective_message.reply_text(f"❌ {exc}")
+        finally:
+            car.session.close()
 
 
 async def _locked_auction_cmd(update, context, *, upto=None, all_=False):
@@ -1077,8 +1258,9 @@ async def alquit_handler(update, context):
     if not await _require_dm(update, context):
         return
     await _send(context, update.effective_chat.id,
-                "🗑 Abandon your Auction League career? This can't be undone.",
-                [[("Yes, abandon", "al:quitok"), ("No", "al:hub")]])
+                "🗑 Discard your Auction League career? This can't be undone, and the "
+                f"{ENTRY_FEE_GEMS} 💎 entry fee is not refunded.",
+                [[("Yes, discard", "al:quitok"), ("No", "al:hub")]])
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1098,7 +1280,8 @@ async def auction_league_callback(update: Update, context: ContextTypes.DEFAULT_
         car = _open(tg_id)
         try:
             if car.row is not None:
-                await q.answer("Finish or /alquit your current career first.", show_alert=True)
+                await q.answer()
+                await _send_one_career_notice(context, chat_id, car.state)
                 return
         finally:
             car.session.close()
@@ -1141,17 +1324,40 @@ async def auction_league_callback(update: Update, context: ContextTypes.DEFAULT_
                 if state["phase"] != AL.PHASE_AUCTION:
                     await q.answer("The auction isn't running.", show_alert=True)
                     return
-                await q.answer()
+                await q.answer("Resumed" if state.get("paused") else None)
                 try:
                     await q.edit_message_reply_markup(reply_markup=None)
                 except Exception:
                     pass
+                was_paused = bool(state.pop("paused", None))
                 state.setdefault("ui", {}).pop("lot_msg", None)
-                await _advance(context, car, chat_id, tg_id)
+                await _advance(context, car, chat_id, tg_id,
+                               note="▶️ <i>Auction resumed.</i>" if was_paused else "")
             elif action in ("bid", "pass") and args:
                 await _cb_lot(q, context, car, action, args[0])
             elif action == "rtm" and len(args) >= 2:
                 await _cb_lot(q, context, car, "rtm", args[0], args[1])
+            elif action in ("skip", "fast", "pause") and args:
+                lot = state.get("lot")
+                if state["phase"] != AL.PHASE_AUCTION or not lot or lot["seq"] != int(args[0]):
+                    await q.answer("That lot is already closed.")
+                    return
+                if action == "skip":
+                    await q.answer("Simulating this player…")
+                    await _skip_player(context, car, chat_id, tg_id)
+                elif action == "pause":
+                    await q.answer("Paused")
+                    await _pause(context, car, chat_id, tg_id)
+                else:
+                    state["fast"] = not state.get("fast")
+                    car.save()
+                    await q.answer("⚡ Fast bidding on" if state["fast"]
+                                   else "🐢 Bid by bid")
+                    try:
+                        await q.edit_message_text(_lot_text(state, lot), parse_mode="HTML",
+                                                  reply_markup=_kb(_lot_rows(state, lot)))
+                    except Exception:
+                        pass
             elif action in ("simset", "simall") and args:
                 lot = state.get("lot")
                 if state["phase"] != AL.PHASE_AUCTION or (lot and lot["seq"] != int(args[0])):
@@ -1206,14 +1412,17 @@ async def auction_league_callback(update: Update, context: ContextTypes.DEFAULT_
             elif action == "quit":
                 await q.answer()
                 await _send(context, chat_id,
-                            "🗑 Abandon your Auction League career? This can't be undone.",
-                            [[("Yes, abandon", "al:quitok"), ("No", "al:hub")]])
+                            "🗑 Discard your Auction League career? This can't be undone, "
+                            f"and the {ENTRY_FEE_GEMS} 💎 entry fee is not refunded.",
+                            [[("Yes, discard", "al:quitok"), ("No", "al:hub")]])
             elif action == "quitok":
                 _cancel_timer(context, tg_id)
                 state["phase"] = AL.PHASE_ABANDONED
                 car.save()
-                await q.answer("Career abandoned")
-                await _send(context, chat_id, "🗑 Career abandoned. /auctionleague to start a new one.")
+                await q.answer("Career discarded")
+                await _send(context, chat_id,
+                            "🗑 Career discarded. <code>/rcpl IPL</code> (or /auctionleague) "
+                            "to start a new one.")
             elif action == "hub":
                 await q.answer()
                 text, rows = _hub(state, car.row)
@@ -1243,5 +1452,8 @@ def register(app):
     app.add_handler(CommandHandler("alfixtures", alfixtures_handler))
     app.add_handler(CommandHandler("alstats", alstats_handler))
     app.add_handler(CommandHandler("alplay", alplay_handler))
-    app.add_handler(CommandHandler("alquit", alquit_handler))
+    app.add_handler(CommandHandler(["alquit", "aldiscard"], alquit_handler))
+    app.add_handler(CommandHandler("skipplayer", skipplayer_handler))
+    app.add_handler(CommandHandler("alpause", alpause_handler))
+    app.add_handler(CommandHandler("alresume", alresume_handler))
     app.add_handler(CallbackQueryHandler(auction_league_callback, pattern=r"^al:"))

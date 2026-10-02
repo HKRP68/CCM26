@@ -201,6 +201,56 @@ class Auction(unittest.TestCase):
         self.assertEqual(st["last_lot"]["winner"], "Team A")
         self.assertEqual(st["last_lot"]["price"], lot["base"])
 
+    def test_bid_by_bid_one_raise_at_a_time(self):
+        st = new_state()
+        AL.apply_retentions(st, [])
+        # Find a player an AI side opens on (pass the ones nobody wants).
+        for _ in range(300):
+            lot = AL.open_next_lot(st)
+            if lot["status"] == "open" and lot["leader"] is not None:
+                break
+            if st.get("lot"):
+                AL.user_pass(st)
+        # One AI bid at base, and then it is your call.
+        self.assertEqual((lot["bids"], lot["price"]), (1, lot["base"]))
+        self.assertTrue(AL.user_may_bid(st)[0])
+        out = AL.user_bid(st)
+        if out == "user":
+            # Your raise, then exactly one AI answer.
+            self.assertEqual(lot["bids"], 3)
+            self.assertNotEqual(lot["leader"], st["user_team"])
+
+    def test_fast_mode_lets_the_ai_settle_first(self):
+        slow, fast = new_state(seed=21), new_state(seed=21)
+        fast["fast"] = True
+        for st in (slow, fast):
+            AL.apply_retentions(st, [])
+        a, b = AL.open_next_lot(slow), AL.open_next_lot(fast)
+        self.assertEqual(a["pid"], b["pid"])
+        self.assertGreaterEqual(b["bids"], a["bids"])
+
+    def test_simulate_lot_decides_exactly_one_player(self):
+        st = new_state()
+        AL.apply_retentions(st, [])
+        AL.open_next_lot(st)
+        first = st["lot"]["pid"] if st.get("lot") else st["last_lot"]["pid"]
+        lot = AL.simulate_lot(st)
+        self.assertEqual(lot["pid"], first)
+        self.assertIn(lot["status"], ("sold", "unsold"))
+        self.assertIsNone(st["lot"])
+        self.assertFalse(st.get("autopilot"))
+
+    def test_prices_stay_moderate(self):
+        for seed in range(4):
+            st = new_state(seed=seed)
+            AL.apply_retentions(st, [])
+            AL.simulate_to_last(st)
+            for e in st["sold_log"]:
+                if e["how"] in (AL.HOW_AUCTION, AL.HOW_RTM):
+                    base = AL.base_price(AL.card(st, e["pid"])["rating"])
+                    # The ceiling, plus the one increment a war can add.
+                    self.assertLessEqual(e["price"], base * AL.MAX_PRICE_MULTIPLE + 25)
+
     def test_cannot_overspend(self):
         st = new_state()
         AL.apply_retentions(st, [])

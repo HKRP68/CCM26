@@ -67,6 +67,10 @@ BAND_FLOOR = 71
 AI_RETAIN_TOP_FRACTION = 0.20
 AI_RETAIN_CHANCE = 0.85
 
+# No AI franchise values a player above this multiple of his base price —
+# a ₹2 Cr marquee name tops out around ₹11 Cr, a ₹50 L squad player at ₹2.75 Cr.
+MAX_PRICE_MULTIPLE = 5.5
+
 BID_LIMIT = 500          # a bidding war this long is a bug, not an auction
 
 PHASE_RETENTION = "retention"
@@ -648,24 +652,32 @@ def ai_value(state, team, c, rng, *, accelerated=False):
         if counts[c["category"]] >= ROLE_MIN[c["category"]] + 2 and rng.random() > 0.35 + star / 2:
             return 0
 
-    value = base * (1.0 + 8.0 * (star ** 2) * pers["star_bias"])
+    # Kept moderate: a base-₹2 Cr marquee name tops out around ₹9–12 Cr, a
+    # squad player stays within a crore or two of his base.
+    value = base * (1.0 + 4.0 * (star ** 2) * pers["star_bias"])
     if role_owed:
-        value *= 1.3
+        value *= 1.2
     if short:
-        value *= 1.12
+        value *= 1.08
     if pers is PERSONALITIES["moneyball"] and 0.3 <= star < 0.6:
         value *= 1.2       # undervalued squad players are its whole plan
     value *= pers["mult"]
     # Money left per slot still to fill — a side sitting on a fat purse late
     # in the auction spends it, as real franchises do.
     per_slot = t["purse"] / max(1, target - size)
-    value *= max(0.85, min(1.8, per_slot / 450.0))
+    value *= max(0.9, min(1.3, per_slot / 550.0))
     if accelerated:
         value = base * (1.0 + star)
 
     slots_left = max(1, target - size)
-    budget = t["purse"] / slots_left * (1.0 + 3.0 * star)
-    value = min(value, budget) * rng.uniform(0.8, 1.25)
+    budget = t["purse"] / slots_left * (1.0 + 2.0 * star)
+    value = min(value, budget) * rng.uniform(0.85, 1.15)
+    # The hard ceiling that keeps prices moderate whatever the multipliers
+    # above stack up to: nobody pays more than a few times a player's base.
+    # It scales with quality and varies by franchise, so prices spread out
+    # instead of piling up at one number.
+    ceiling_multiple = 1.5 + (MAX_PRICE_MULTIPLE - 1.5) * star
+    value = min(value, base * ceiling_multiple * rng.uniform(0.7, 1.0))
     value = min(int(value), ceiling)
     if role_owed and ceiling >= base:
         # A side that still needs this role never lets one go for nothing.
@@ -782,8 +794,20 @@ def user_may_bid(state):
     return price <= max_bid(state, state["user_team"], c), price
 
 
+def bid_by_bid(state):
+    """True when you answer every single AI raise (the default).
+
+    ``state['fast']`` (the ⚡ Fast toggle) lets the AI franchises settle among
+    themselves first, so you are only asked once one of them is left standing.
+    """
+    return not state.get("fast") and not state.get("autopilot")
+
+
 def settle(state, rng):
     """Run the AI's bidding until the user has to answer or the lot is decided.
+
+    Bid by bid (the default) you get the next move after every AI raise you
+    can afford to answer; in ⚡ Fast mode the AI bids among itself first.
 
     Returns ``"user"`` (your call: Bid or Pass), ``"rtm"`` (your Right To Match
     decision) or ``"done"`` (sold or unsold — see ``state['lot']``).
@@ -793,6 +817,7 @@ def settle(state, rng):
     if state.get("autopilot"):
         _user_value(state, rng)
     ai = _ai_teams(state)
+    one_at_a_time = bid_by_bid(state) and not lot.get("user_out")
     while lot["bids"] < BID_LIMIT:
         step = next_price(lot)
         contenders = [n for n in ai
@@ -807,6 +832,8 @@ def settle(state, rng):
         lot["price"] = step
         lot["bids"] += 1
         lot["trail"] = (lot["trail"] + [[leader, step]])[-6:]
+        if one_at_a_time and user_may_bid(state)[0]:
+            return "user"
     if not state.get("autopilot"):
         ok, _price = user_may_bid(state)
         if ok and lot["leader"] != state["user_team"]:
@@ -920,8 +947,11 @@ def _esc(s):
 # Simulating the auction: one set, or to the end
 # ════════════════════════════════════════════════════════════════════
 
-def _sim_lots(state, stop):
-    """Run lots on autopilot until ``stop()``; returns the resolved lots."""
+def _sim_lots(state, stop, max_lots=None):
+    """Run lots on autopilot until ``stop()`` (or ``max_lots`` are decided).
+
+    Returns the resolved lots.
+    """
     rng = rng_for(state, "sim")
     resolved = []
     state["autopilot"] = True
@@ -937,6 +967,8 @@ def _sim_lots(state, stop):
         guard = 0
         while guard < 5000:
             guard += 1
+            if max_lots is not None and len(resolved) >= max_lots:
+                break
             # Step the cursor first (it never opens a lot), so the stop test
             # sees which set the NEXT player belongs to.
             if _advance_cursor(state) is None or stop():
@@ -949,6 +981,18 @@ def _sim_lots(state, stop):
     finally:
         state["autopilot"] = False
     return resolved
+
+
+def simulate_lot(state):
+    """/skipplayer — decide the player on the block (or the next one) at once.
+
+    Your side bids on the same autopilot as the AI, exactly as in /simset.
+    Returns the resolved lot, or None when nothing was left to sell.
+    """
+    if state["phase"] != PHASE_AUCTION:
+        raise AuctionLeagueError("The auction isn't running.")
+    lots = _sim_lots(state, lambda: False, max_lots=1)
+    return lots[0] if lots else None
 
 
 def simulate_set(state, upto=None):
