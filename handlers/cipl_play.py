@@ -690,6 +690,12 @@ def _rematch_row(state):
     The callback carries the mode and, for a league match, the league — so the
     rematch reopens the same competition instead of silently dropping to IPL.
     """
+    if state.get("auction_league"):
+        save_id = (state.get("auction_league") or {}).get("save_id")
+        return [[InlineKeyboardButton("▶️ Next fixture",
+                                      callback_data=f"al:play:{save_id}"),
+                 InlineKeyboardButton("📊 Table",
+                                      callback_data=f"al:table:{save_id}")]]
     if state.get("is_letsplay"):
         data = "botmatch_again_lp"
     else:
@@ -706,12 +712,11 @@ def build_xi_from_draft(session, draft, side):
     selected_ids = [int(pid) for pid in selection.get("player_ids", [])]
     if not selected_ids:
         return []
-    if draft.get("mode") == "cdraft":
-        # A /cdraft squad lives on the draft itself — there are no
-        # ChallengePlayer rows to query.
-        from services import cdraft_service
-        rows = cdraft_service.squad_cards(draft.get("cdraft") or {}, side)
-    else:
+    from handlers.challenge import inline_squad_cards
+    # A /cdraft or Auction League squad lives on the draft itself — there are
+    # no ChallengePlayer rows to query.
+    rows = inline_squad_cards(draft, side)
+    if rows is None:
         rows = (session.query(ChallengePlayer)
                 .filter(ChallengePlayer.id.in_(selected_ids))
                 .all())
@@ -751,10 +756,10 @@ def build_bench_from_draft(session, draft, side):
         selection = _challenge_xi_selection(draft, side)
         selected_ids = {int(pid) for pid in selection.get("player_ids", [])}
 
-        if draft.get("mode") == "cdraft":
-            from services import cdraft_service
-            rows = cdraft_service.squad_cards(draft.get("cdraft") or {}, side)
-        else:
+        from handlers.challenge import inline_squad_cards
+        rows = inline_squad_cards(draft, side)
+        team_id = None
+        if rows is None:
             team_name = draft.get("host_team" if side == "host" else "target_team")
             team_id = _resolve_challenge_team_id(
                 team_name, draft.get("league_key"), session)
@@ -768,7 +773,7 @@ def build_bench_from_draft(session, draft, side):
         bench = [r for r in rows if int(r.id) not in selected_ids]
         # An injured player is ruled out of the whole match, not just the
         # starting XI — the substitutes' bench must not bring them back on.
-        if draft.get("mode") != "cdraft":
+        if team_id is not None:
             hurt = _injured_ids_for_draft(session, draft, team_id)
             if hurt:
                 bench = [r for r in bench if int(r.id) not in hurt]
@@ -2090,6 +2095,8 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         # A mode that is not a league names itself (e.g. Challenge Draft).
         if draft.get("mode") == "cdraft":
             state["mode_name"] = draft.get("league_name") or "Challenge Draft"
+        elif draft.get("mode") == "auction_league":
+            state["mode_name"] = draft.get("league_name") or "Auction League"
     # /ciplbot: unranked practice, and the AI captain owns one side's turns.
     # This clears the tournament/tour identity set just above, so a practice
     # match can never be recorded against a real competition.
@@ -2105,6 +2112,10 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         state["user_names"][str(BOT_TG_ID_)] = "🤖 Bot"
         # (league_key, which the Rematch button reads to reopen the same
         # league, is carried for every match above.)
+    # An Auction League fixture: the save and fixture its result belongs to.
+    # Set after mark_bot_match, which clears every other competition tag.
+    if draft and draft.get("auction_league"):
+        state["auction_league"] = dict(draft["auction_league"])
     await _ss(context, match.id, state, next_action=A_PICK_CIPL_BOWLER,
               force=True)
     # Clear the pre-match setup chatter (keep the toss result) and pin a polished
@@ -4628,6 +4639,18 @@ async def _complete_match(context, mid, state):
                             session, state["cl_tour_match_id"], winner_for_tour)
             except Exception:
                 logger.exception("CL tour result recording failed for %s", mid)
+
+            # Auction League: the fixture this match was, back into the season.
+            try:
+                if state.get("auction_league"):
+                    from services import auction_league_service as _als
+                    with session.begin_nested():
+                        _als.record_user_result(
+                            session, state,
+                            winner_user_id=(None if result["tie"] or not match
+                                            else match.winner_id))
+            except Exception:
+                logger.exception("auction league result recording failed for %s", mid)
 
             # Ranked ladder and rivalry — one idempotent
             # call that isolates its own failures (see services.post_match).

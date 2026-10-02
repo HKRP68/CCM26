@@ -27,6 +27,7 @@ the exact ones the bot answers to.
 | 11 | [Challenge League Tournament](#11-challenge-league-tournament) |
 | 12 | [Tournament Draft](#12-tournament-draft) |
 | 13 | [Franchise Auction](#13-franchise-auction) |
+| 13a | [Auction League (solo career)](#13a-auction-league-solo-career) |
 | 14 | [Fantasy league](#14-fantasy-league) |
 | 15 | [Mini games & social games](#15-mini-games--social-games) |
 | 16 | [Quests, achievements & referrals](#16-quests-achievements--referrals) |
@@ -345,6 +346,52 @@ An auction is a group event; these run in the chat the auction is bound to.
 Every new player is announced with his **player card** and a fresh **pinned
 board**; bids are announced as one short line per burst.
 
+## 13a. Auction League (solo career)
+
+A single-player, RCPL-style career in a Challenge League (IPL by default),
+played **in a DM with the bot**. You run one franchise; every other franchise
+is run by the AI.
+
+1. **Pick your franchise** — and choose whether the AI retains players and how
+   hard its captaincy is (Easy / Normal / Hard).
+2. **Retention** — keep up to 3 of your own players: slot 1 costs ₹18 Cr,
+   slot 2 ₹14 Cr, slot 3 ₹10 Cr. With AI retentions on, each AI side keeps up
+   to 3 of its stars (players in the league's top 20% by rating). A side that
+   keeps 2 or fewer gets one 🔁 **Right To Match** card for its former players.
+3. **Auction** — every purse starts at **₹120 Cr**. The players come in
+   automatic sets: ⭐ Marquee (91+), then rating bands by role (Batsmen 90–87,
+   All-rounders 90–87, Wicket-keepers 90–87, Bowlers 90–87, then 86–83, …),
+   then 🌱 Emerging, then one ⚡ Accelerated round for the unsold. Tap **Bid**
+   or **Pass** — you have 20 seconds a lot. The AI bids smart: each franchise
+   has a personality (Aggressive, Balanced, Thrifty, Moneyball), chases the
+   roles it still needs and keeps enough purse to finish a squad.
+4. **Squad rules** — at least 4 BAT, 4 BOWL, 1 WK and 2 AR; at most 18
+   players and 8 overseas. A squad still short when the auction ends is
+   topped up from the unsold players at base price.
+5. **Season** — everyone plays everyone once, then the IPL playoffs
+   (Qualifier 1: 1 v 2, Eliminator: 3 v 4, Qualifier 2, Final). Your matches
+   are played ball by ball (20 overs, the /ciplbot flow — pitch, Playing XI,
+   toss, Impact Player); the AI-vs-AI matches are simulated instantly. Points
+   table with NRR, Orange and Purple Caps.
+
+Matches are unranked practice. The **season** pays: champions 25,000 coins
++ 15 💎, runners-up 10,000 + 5 💎, playoffs 4,000 coins — once per career, at
+most one paid season every 48 hours, and not if you conceded a match.
+
+| Command | Aliases | What it does |
+|---------|---------|--------------|
+| `/auctionleague` 💬 | `/al` `/rcpl` | The hub — start a career, continue it, or see how the last one ended (`/auctionleague new` starts over after a finished season) |
+| `/simset [n]` 💬 | — | Simulate the rest of the live set (your side bids on autopilot), or every set up to set *n* — you get who went where |
+| `/simtolast` 💬 | `/alsim` | Simulate the whole rest of the auction — one list per team of who they bought and for how much |
+| `/alsets` 💬 | — | The auction's sets in order, done / live / queued |
+| `/alsquad` 💬 | — | Your squad, purse and what the rules still need |
+| `/alpurse` 💬 | — | Every franchise's purse, squad size and RTM cards |
+| `/alplay` 💬 | — | Simulate the other matches up to your next fixture, then play it (or concede) |
+| `/altable` 💬 | — | Points table with NRR |
+| `/alfixtures` 💬 | — | Your fixtures and results, and the playoffs |
+| `/alstats` 💬 | — | Orange Cap and Purple Cap races |
+| `/alquit` 💬 | — | Abandon your career |
+
 ## 14. Fantasy league
 
 | Command | Aliases | What it does |
@@ -548,6 +595,14 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/amybids [franchise]` | `/amybids` · `/amybids Chennai` |
 | dot shortcuts | `.bid` · `.bid 2cr` · `.purse` · `.squad` · `.board` · `.lb` |
 | `/anextplayer [n]` | `/anextplayer 10` |
+
+**Auction League (solo):**
+
+| Usage | Example |
+|-------|---------|
+| `/auctionleague [new]` | `/auctionleague` · `/auctionleague new` |
+| `/simset [n]` | `/simset` · `/simset 6` |
+| `/simtolast` | `/simtolast` |
 
 ## A10 · Games
 

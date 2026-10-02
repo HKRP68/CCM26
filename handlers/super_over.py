@@ -1846,6 +1846,16 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
                         session, cl_state["cl_tour_match_id"], winner_uid)
         except Exception:
             logger.exception("CL tour Super Over recording failed (%s)", mid)
+        # Auction League fixture decided by the Super Over.
+        try:
+            al_state = so.get("main_state") or {}
+            if al_state.get("auction_league"):
+                from services import auction_league_service as _als
+                with session.begin_nested():
+                    _als.record_user_result(session, al_state,
+                                            winner_user_id=winner_uid)
+        except Exception:
+            logger.exception("auction league Super Over recording failed (%s)", mid)
         # Player-of-the-Match career credit — taken from the MAIN match (same as
         # the reward text) with the Super Over winner as the winning team, so
         # /statscl's POTM(s) count reflects Super-Over-decided matches too.
