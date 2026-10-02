@@ -67,6 +67,33 @@ BAND_FLOOR = 71
 AI_RETAIN_TOP_FRACTION = 0.20
 AI_RETAIN_CHANCE = 0.85
 
+# The IPL's record fee (₹27 Cr). No AI franchise ever values a player above it.
+RECORD_PRICE = 2_700
+# How hard the AI leans on its purse as the auction runs down. Real
+# franchises are patient in the marquee sets and get urgent once the pool
+# thins out — that late urgency is what runs purses down to a few crore,
+# where an even share per slot leaves the last, uncontested places cheap
+# and the money unspent. Stars stay spread out because the early sets are
+# priced at about an even share.
+SPEND_DRIVE_START = 1.0
+SPEND_DRIVE_END = 3.4
+
+
+def _auction_progress(state):
+    """0 at the first lot, 1 when every listed player has been decided."""
+    listed = sum(len(s["pids"]) for s in state.get("sets") or []
+                 if not s.get("accelerated"))
+    if not listed:
+        return 0.0
+    decided = sum(1 for e in state.get("sold_log") or [] if e["how"] != HOW_RETAINED)
+    decided += len(state.get("unsold") or [])
+    return max(0.0, min(1.0, decided / listed))
+
+
+def _spend_drive(state):
+    progress = _auction_progress(state)
+    return SPEND_DRIVE_START + (SPEND_DRIVE_END - SPEND_DRIVE_START) * progress ** 1.0
+
 BID_LIMIT = 500          # a bidding war this long is a bug, not an auction
 
 PHASE_RETENTION = "retention"
@@ -102,10 +129,10 @@ REWARD_COOLDOWN_HOURS = 48
 # auctions play out the same. ``mult`` scales what it will pay, ``target`` is
 # the squad size it aims for, ``star_bias`` how much it chases big names.
 PERSONALITIES = {
-    "aggressive": {"label": "Aggressive", "mult": 1.15, "target": 15, "star_bias": 1.25},
-    "balanced": {"label": "Balanced", "mult": 1.0, "target": 16, "star_bias": 1.0},
-    "thrifty": {"label": "Thrifty", "mult": 0.9, "target": 17, "star_bias": 0.85},
-    "moneyball": {"label": "Moneyball", "mult": 0.95, "target": 17, "star_bias": 0.75},
+    "aggressive": {"label": "Aggressive", "mult": 1.1, "target": 17, "star_bias": 1.25},
+    "balanced": {"label": "Balanced", "mult": 1.0, "target": 18, "star_bias": 1.0},
+    "thrifty": {"label": "Thrifty", "mult": 0.92, "target": 18, "star_bias": 0.85},
+    "moneyball": {"label": "Moneyball", "mult": 0.97, "target": 18, "star_bias": 0.75},
 }
 
 
@@ -430,7 +457,51 @@ def can_add(state, team, c):
     if cap and c.get("is_overseas") and overseas_count(state, team) >= cap:
         return False
     # After this signing, the free slots left must still cover what is owed.
-    return SQUAD_MAX - (size + 1) >= owed_slots(state, team, extra=c)
+    if SQUAD_MAX - (size + 1) < owed_slots(state, team, extra=c):
+        return False
+    return _leaves_enough_for_others(state, team, c)
+
+
+def _domestic_owed(state, team):
+    domestic = sum(1 for e in state["teams"][team]["squad"]
+                   if not card(state, e["pid"]).get("is_overseas"))
+    return max(0, required_domestic(state) - domestic)
+
+
+def _leaves_enough_for_others(state, team, c):
+    """Whether signing ``c`` still leaves every OTHER side able to finish legally.
+
+    A side buying a role it no longer needs (depth) must leave enough players of
+    that role in the pool for everyone still short of it — otherwise the last
+    all-rounders can all end up as somebody's fifth, and a side that needs one
+    finishes with an illegal squad. The same for domestic players when the
+    league caps overseas. A role the buyer itself still owes is always fine:
+    that signing is one of the players the count already reserves.
+    """
+    if state.get("phase") != PHASE_AUCTION:
+        return True
+    role = c["category"]
+    checks = []
+    if owed_roles(state, team).get(role, 0) == 0:
+        checks.append(("role", role))
+    if (state.get("overseas_cap") and not c.get("is_overseas")
+            and _domestic_owed(state, team) == 0 and required_domestic(state)):
+        checks.append(("domestic", None))
+    if not checks:
+        return True
+    taken = taken_pids(state)
+    spare = [x for x in state["pool"].values() if x["id"] not in taken]
+    others = [n for n in state["team_order"] if n != team]
+    for kind, value in checks:
+        if kind == "role":
+            supply = sum(1 for x in spare if x["category"] == value)
+            owed = sum(owed_roles(state, n).get(value, 0) for n in others)
+        else:
+            supply = sum(1 for x in spare if not x.get("is_overseas"))
+            owed = sum(_domestic_owed(state, n) for n in others)
+        if supply - 1 < owed:
+            return False
+    return True
 
 
 def max_bid(state, team, c):
@@ -607,14 +678,23 @@ def _squad_median(state, team):
     return ratings[len(ratings) // 2] if ratings else 0
 
 
+def _spendable(state, team, c):
+    """Money ``team`` can put into ``c`` and still afford every compulsory signing."""
+    reserve = MIN_BASE * owed_slots(state, team, extra=c)
+    return max(0, int(state["teams"][team]["purse"]) - reserve)
+
+
 def ai_value(state, team, c, rng, *, accelerated=False):
     """The most this franchise would pay for ``c``, or 0 for "not interested".
 
-    Ported from ``services.auction_simulator._valuation`` onto the JSON state:
-    base price scaled steeply with rating, pushed up for a role still owed and
-    while the squad is short, capped by a per-slot budget so the first star
-    does not take the whole purse, flavoured by the franchise's personality
-    and jittered so no two auctions are the same.
+    How a real franchise plans an auction: the money it has left, spread over
+    the slots it still wants to fill, weighted by how good the player is. A
+    marquee star is worth several slots' money, a squad filler a fraction of
+    one. Because that per-slot figure is recomputed for every lot, a side that
+    has been outbid on stars carries a fat purse into the later sets and
+    spends it there — so purses run down to a few crore by the end, as they do
+    at the IPL. Role needs, the franchise's personality and a little jitter
+    shape it; the IPL record (``RECORD_PRICE``) caps it.
     """
     ceiling = max_bid(state, team, c)
     base = base_price(c["rating"])
@@ -624,51 +704,39 @@ def ai_value(state, team, c, rng, *, accelerated=False):
     t = state["teams"][team]
     size = len(t["squad"])
     target = int(pers["target"])
+    if size >= SQUAD_MAX:
+        return 0
     star = _star(c)
     owed = owed_roles(state, team)
     role_owed = owed.get(c["category"], 0) > 0
-    short = max(0, SQUAD_MIN - size)
+    counts = role_counts(state, team)
 
-    if not role_owed and size >= SQUAD_MIN:
-        # A legal squad buys depth and value — rarely a passenger.
-        if size >= target:
-            want = 0.12 * star
-        else:
-            want = 0.25 + 0.7 * star
-        if int(c["rating"]) < _squad_median(state, team) - 1:
-            want *= 0.25
-        if accelerated:
-            want *= 0.6
-        if rng.random() > want:
+    slots = max(1, target - size)
+    per_slot = _spendable(state, team, c) / slots
+    # Quality weight: ~3.5 slots' money for the very best, ~1 for a good
+    # regular, ~0.3 for a filler.
+    weight = 0.3 + 3.2 * (star ** 2) * pers["star_bias"]
+    if slots <= 2:
+        # The last places in the squad: spend what is left on them.
+        weight = max(weight, 1.4)
+    if size >= target:
+        # Squad planned out — only a real upgrade tempts it.
+        if star < 0.6 or rng.random() > 0.35:
             return 0
-    elif not role_owed:
-        # Still short of eleven, but this role is covered: a role already
-        # three deep is not where the money goes.
-        counts = role_counts(state, team)
-        if counts[c["category"]] >= ROLE_MIN[c["category"]] + 2 and rng.random() > 0.35 + star / 2:
-            return 0
-
-    value = base * (1.0 + 8.0 * (star ** 2) * pers["star_bias"])
+        weight *= 0.5
     if role_owed:
-        value *= 1.3
-    if short:
-        value *= 1.12
-    if pers is PERSONALITIES["moneyball"] and 0.3 <= star < 0.6:
-        value *= 1.2       # undervalued squad players are its whole plan
-    value *= pers["mult"]
-    # Money left per slot still to fill — a side sitting on a fat purse late
-    # in the auction spends it, as real franchises do.
-    per_slot = t["purse"] / max(1, target - size)
-    value *= max(0.85, min(1.8, per_slot / 450.0))
-    if accelerated:
-        value = base * (1.0 + star)
+        weight *= 1.2
+    elif counts[c["category"]] >= ROLE_MIN[c["category"]] + 2 and star < 0.6:
+        # A fourth or fifth of a role it already has is depth, not a priority.
+        weight *= 0.55
+    if pers is PERSONALITIES["moneyball"] and 0.3 <= star < 0.65:
+        weight *= 1.25     # undervalued squad players are its whole plan
 
-    slots_left = max(1, target - size)
-    budget = t["purse"] / slots_left * (1.0 + 3.0 * star)
-    value = min(value, budget) * rng.uniform(0.8, 1.25)
+    value = per_slot * weight * _spend_drive(state) * pers["mult"] * rng.uniform(0.85, 1.15)
+    value = min(value, RECORD_PRICE * rng.uniform(0.85, 1.0))
     value = min(int(value), ceiling)
-    if role_owed and ceiling >= base:
-        # A side that still needs this role never lets one go for nothing.
+    if (role_owed or size < SQUAD_MIN) and ceiling >= base:
+        # A side that still needs bodies never lets one go for nothing.
         value = max(value, base)
     return value if value >= base else 0
 
@@ -782,8 +850,20 @@ def user_may_bid(state):
     return price <= max_bid(state, state["user_team"], c), price
 
 
+def bid_by_bid(state):
+    """True when you answer every single AI raise (the default).
+
+    ``state['fast']`` (the ⚡ Fast toggle) lets the AI franchises settle among
+    themselves first, so you are only asked once one of them is left standing.
+    """
+    return not state.get("fast") and not state.get("autopilot")
+
+
 def settle(state, rng):
     """Run the AI's bidding until the user has to answer or the lot is decided.
+
+    Bid by bid (the default) you get the next move after every AI raise you
+    can afford to answer; in ⚡ Fast mode the AI bids among itself first.
 
     Returns ``"user"`` (your call: Bid or Pass), ``"rtm"`` (your Right To Match
     decision) or ``"done"`` (sold or unsold — see ``state['lot']``).
@@ -793,12 +873,16 @@ def settle(state, rng):
     if state.get("autopilot"):
         _user_value(state, rng)
     ai = _ai_teams(state)
+    one_at_a_time = bid_by_bid(state) and not lot.get("user_out")
+    # No squad changes while a lot is being bid on, so each side's ceiling is
+    # worked out once rather than at every step of the war.
+    caps = {n: max_bid(state, n, c) for n in ai if lot["values"].get(n, 0) > 0}
     while lot["bids"] < BID_LIMIT:
         step = next_price(lot)
-        contenders = [n for n in ai
+        contenders = [n for n in caps
                       if n != lot["leader"]
                       and lot["values"].get(n, 0) >= step
-                      and step <= max_bid(state, n, c)]
+                      and step <= caps[n]]
         if not contenders:
             break
         weights = [max(1, lot["values"][n] - step + 1) for n in contenders]
@@ -807,6 +891,8 @@ def settle(state, rng):
         lot["price"] = step
         lot["bids"] += 1
         lot["trail"] = (lot["trail"] + [[leader, step]])[-6:]
+        if one_at_a_time and user_may_bid(state)[0]:
+            return "user"
     if not state.get("autopilot"):
         ok, _price = user_may_bid(state)
         if ok and lot["leader"] != state["user_team"]:
@@ -814,8 +900,26 @@ def settle(state, rng):
     return _hammer(state, rng)
 
 
-def user_bid(state, rng=None):
-    """You raise to the next price; the AI answers. Returns as ``settle``."""
+def jump_amount(price):
+    """How far a 🚀 Jump bid moves the price: ₹50 L, or ₹1 Cr from ₹5 Cr up."""
+    return 100 if int(price or 0) >= 500 else 50
+
+
+def user_jump_price(state):
+    """The price a 🚀 Jump bid would offer now, or None when it can't be made."""
+    ok, price = user_may_bid(state)
+    if not ok:
+        return None
+    lot = state["lot"]
+    jump = (lot["price"] or 0) + jump_amount(lot["price"] or lot["base"])
+    jump = max(jump, price + 1)
+    c = card(state, lot["pid"])
+    return jump if jump <= max_bid(state, state["user_team"], c) else None
+
+
+def user_bid(state, rng=None, to_price=None):
+    """You raise — to the next price, or to ``to_price`` (a 🚀 Jump bid) — and
+    the AI answers. Returns as ``settle``."""
     lot = state.get("lot")
     if not lot or lot["status"] != "open":
         raise AuctionLeagueError("There is no player on the block.")
@@ -823,6 +927,13 @@ def user_bid(state, rng=None):
     if not ok:
         raise AuctionLeagueError("You can't bid on this player — check your "
                                  "purse and squad needs (/alsquad).")
+    if to_price is not None:
+        to_price = int(to_price)
+        if to_price < price:
+            raise AuctionLeagueError("The price has moved — check the card and bid again.")
+        if to_price > max_bid(state, state["user_team"], card(state, lot["pid"])):
+            raise AuctionLeagueError("That's more than you can spend on him.")
+        price = to_price
     lot["leader"] = state["user_team"]
     lot["price"] = price
     lot["bids"] += 1
@@ -920,8 +1031,11 @@ def _esc(s):
 # Simulating the auction: one set, or to the end
 # ════════════════════════════════════════════════════════════════════
 
-def _sim_lots(state, stop):
-    """Run lots on autopilot until ``stop()``; returns the resolved lots."""
+def _sim_lots(state, stop, max_lots=None):
+    """Run lots on autopilot until ``stop()`` (or ``max_lots`` are decided).
+
+    Returns the resolved lots.
+    """
     rng = rng_for(state, "sim")
     resolved = []
     state["autopilot"] = True
@@ -937,6 +1051,8 @@ def _sim_lots(state, stop):
         guard = 0
         while guard < 5000:
             guard += 1
+            if max_lots is not None and len(resolved) >= max_lots:
+                break
             # Step the cursor first (it never opens a lot), so the stop test
             # sees which set the NEXT player belongs to.
             if _advance_cursor(state) is None or stop():
@@ -949,6 +1065,18 @@ def _sim_lots(state, stop):
     finally:
         state["autopilot"] = False
     return resolved
+
+
+def simulate_lot(state):
+    """/skipplayer — decide the player on the block (or the next one) at once.
+
+    Your side bids on the same autopilot as the AI, exactly as in /simset.
+    Returns the resolved lot, or None when nothing was left to sell.
+    """
+    if state["phase"] != PHASE_AUCTION:
+        raise AuctionLeagueError("The auction isn't running.")
+    lots = _sim_lots(state, lambda: False, max_lots=1)
+    return lots[0] if lots else None
 
 
 def simulate_set(state, upto=None):

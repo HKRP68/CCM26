@@ -615,4 +615,37 @@ def install_button_access_defaults() -> None:
             setattr(wrapped, "_ccm_button_access_defaults", True)
             setattr(bot_cls, method_name, wrapped)
 
+    _install_job_owner_reset()
     _INSTALLED = True
+
+
+def _install_job_owner_reset() -> None:
+    """Run every JobQueue job with no button owner.
+
+    The owner is a context variable bound when an update arrives, and a job
+    inherits whatever context armed APScheduler's wake-up timer — which is the
+    update of whichever user last scheduled *any* job. A message a job sends
+    (a lot clock running out, the bot captain's turn, a reminder) was then
+    registered to that unrelated user, and its real owner was told "This
+    button is not for you" in their own chat. A job acts for nobody, so its
+    sends register no owner; handlers still check the presser themselves.
+    """
+    try:
+        from telegram.ext import Job
+    except Exception:  # pragma: no cover - defensive startup guard
+        logger.exception("Could not import telegram.ext.Job for button access defaults")
+        return
+    run = getattr(Job, "_run", None)
+    if run is None or getattr(run, "_ccm_button_access_defaults", False):
+        return
+
+    @functools.wraps(run)
+    async def _run_without_owner(self: Any, *args: Any, **kwargs: Any) -> Any:
+        token = _current_button_owner.set(None)
+        try:
+            return await run(self, *args, **kwargs)
+        finally:
+            _current_button_owner.reset(token)
+
+    setattr(_run_without_owner, "_ccm_button_access_defaults", True)
+    Job._run = _run_without_owner

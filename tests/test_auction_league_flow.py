@@ -65,6 +65,9 @@ def _seed_league():
     from models import ChallengeLeague, ChallengeMode, ChallengePlayer, ChallengeTeam, User
     s = get_session()
     try:
+        existing = s.query(ChallengeLeague).filter(ChallengeLeague.name == "IPL").first()
+        if existing is not None:
+            return existing.id
         mode = ChallengeMode(name="Leagues AL")
         s.add(mode)
         s.flush()
@@ -88,7 +91,8 @@ def _seed_league():
                         "bat_rating": r if role != "Bowler" else r - 25,
                         "bowl_rating": r if role in ("Bowler", "All-rounder") else 30})))
         if not s.query(User).filter(User.telegram_id == TG_ID).first():
-            s.add(User(telegram_id=TG_ID, username="tester", first_name="Tess"))
+            s.add(User(telegram_id=TG_ID, username="tester", first_name="Tess",
+                       total_gems=250))
         s.commit()
         return lg.id
     finally:
@@ -175,6 +179,62 @@ class FlowTest(unittest.TestCase):
         finally:
             s.close()
 
+    def _gems(self):
+        from database import get_session
+        from models import User
+        s = get_session()
+        try:
+            return s.query(User).filter(User.telegram_id == TG_ID).first().total_gems
+        finally:
+            s.close()
+
+    def test_help_anywhere(self):
+        from handlers import auction_league as H
+        # In a group: the guide, not the "open the DM" pointer.
+        group = NS(id=-100123, type="supergroup")
+        upd = self._update()
+        upd.effective_chat = group
+        self.ctx.args = ["help"]
+        asyncio.run(H.auction_league_handler(upd, self.ctx))
+        self.ctx.args = []
+        self.assertIn("Auction League — help", self.log[-1][0])
+        self.assertIn("@lost_in_space14", self.log[-1][0])
+        self.assertLess(len(self.log[-1][0]), 4096)
+        # And from the ❓ button.
+        self._press("al:help")
+        self.assertIn("Auction League — help", self.log[-1][0])
+
+    def test_entry_fee_and_direct_league_start(self):
+        from database import get_session
+        from handlers import auction_league as H
+        from models import User
+        from services import auction_league_service as AL
+        s = get_session()
+        try:
+            row = AL.active_save(s, TG_ID)
+            if row is not None:
+                row.status = AL.PHASE_ABANDONED
+            s.query(User).filter(User.telegram_id == TG_ID).update({"total_gems": 40})
+            s.commit()
+        finally:
+            s.close()
+        # /rcpl IPL goes straight to the franchise picker.
+        self.ctx.args = ["IPL"]
+        asyncio.run(H.auction_league_handler(self._update(), self.ctx))
+        self.ctx.args = []
+        self.assertIn("pick your franchise", self.log[-1][0])
+        self._press("al:tm:1")
+        self._press("al:sgo")
+        # Not enough gems: nothing is charged and no career is created.
+        self.assertEqual(self._gems(), 40)
+        s = get_session()
+        try:
+            self.assertIsNone(AL.active_save(s, TG_ID))
+            s.query(User).filter(User.telegram_id == TG_ID).update({"total_gems": 250})
+            s.commit()
+        finally:
+            s.close()
+
     def test_career_to_first_fixture(self):
         from handlers import auction_league as H
         from services import auction_league_service as AL
@@ -187,6 +247,14 @@ class FlowTest(unittest.TestCase):
         _rid, st = self._state()
         self.assertEqual(st["phase"], AL.PHASE_RETENTION)
         self.assertEqual(st["user_team"], "Team A")
+        self.assertEqual(self._gems(), 250 - H.ENTRY_FEE_GEMS)
+
+        # One career at a time: /rcpl IPL now only offers Continue / Discard.
+        self.ctx.args = ["IPL"]
+        asyncio.run(H.auction_league_handler(self._update(), self.ctx))
+        self.ctx.args = []
+        self.assertIn("already have an Auction League career", self.log[-1][0])
+        self.assertIn(("🗑 Discard career", "al:quit"), self.log[-1][1])
 
         keep = AL.original_squad(st, "Team A")[:2]
         for c in keep:
@@ -206,6 +274,26 @@ class FlowTest(unittest.TestCase):
         self._press(f"al:pass:{lot['seq'] + 50}")
         _rid, st2 = self._state()
         self.assertEqual(st2["lot"]["seq"], lot["seq"])
+
+        # Pause: lot buttons are refused and the clock is off until Resume.
+        self._press(f"al:pause:{lot['seq']}")
+        _rid, st = self._state()
+        self.assertTrue(st.get("paused"))
+        self._press(f"al:pass:{lot['seq']}")
+        _rid, st2 = self._state()
+        self.assertEqual(st2["lot"]["seq"], lot["seq"])
+        self.assertEqual(st2["lot"]["status"], lot["status"])
+        self._press("al:resume")
+        _rid, st = self._state()
+        self.assertFalse(st.get("paused"))
+
+        # Skip player: exactly this lot is decided, and the next one comes up.
+        self._press(f"al:skip:{lot['seq']}")
+        _rid, st = self._state()
+        self.assertEqual(st["last_lot"]["pid"], lot["pid"])
+        self.assertIn(st["last_lot"]["status"], ("sold", "unsold"))
+        lot = st["lot"]
+        self.assertGreater(lot["seq"], st["last_lot"]["seq"])
 
         self._press(f"al:simset:{lot['seq']}")
         _rid, st = self._state()
