@@ -9357,13 +9357,17 @@ function tnSelect(id) {
 async function loadTournament(force = false) {
   const el = document.getElementById('tn-content');
   if (!tnId && tnLive.length) tnId = tnLive[0].id;
+  const requestId = tnId;
   renderTnSwitch();
   if (tnData && !force && tnData.tournament.id === tnId) { renderTournament(); }
   else el.innerHTML = `<div class="empty"><div class="spinner"></div><div style="margin-top:0.6rem;">Loading tournament…</div></div>`;
   if (tnLoading) return;
   tnLoading = true;
-  const { ok, data } = await api('/api/webapp/tournament', tnId ? { tournament_id: tnId } : {});
+  const { ok, data } = await api('/api/webapp/tournament', requestId ? { tournament_id: requestId } : {});
   tnLoading = false;
+  // The chip switcher moved on while this was in flight: drop the stale
+  // answer and load what is selected now.
+  if (requestId !== tnId) { loadTournament(); return; }
   if (!ok) {
     if (!tnData) el.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Could not load the tournament')}</div>`;
     return;

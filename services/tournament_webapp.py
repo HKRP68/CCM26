@@ -91,7 +91,11 @@ def resolve_live(session, tournament_id=None):
     Mini App only ever follows live competitions.
     """
     if tournament_id:
-        tour = session.get(Tournament, int(tournament_id))
+        try:
+            tid = int(tournament_id)
+        except (TypeError, ValueError):
+            return None
+        tour = session.get(Tournament, tid)
         return tour if (tour is not None and tour.is_active) else None
     tours = live_tournaments(session)
     return tours[0] if tours else None
@@ -363,7 +367,10 @@ def fixture_scorecard(session, tour, fixture_id, user_id=None):
     grouped into two innings (team1 bats first, as ``inn1_*`` always is) with no
     dismissal text.
     """
-    fx = session.get(TournamentMatch, int(fixture_id or 0))
+    try:
+        fx = session.get(TournamentMatch, int(fixture_id or 0))
+    except (TypeError, ValueError):
+        fx = None
     if fx is None or fx.tournament_id != tour.id:
         return {"ok": False, "message": "Match not found."}
     teams = {tt.id: tt for tt in session.query(TournamentTeam)
