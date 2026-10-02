@@ -1,5 +1,5 @@
 python-telegram-bot[job-queue]>=21.3
-sqlalchemy>=2.0.40
+sqlalchemy>=2.0.40,<2.1
 python-dotenv>=1.0.1
 Pillow>=10.4.0
 psycopg2-binary>=2.9.9
