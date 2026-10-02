@@ -140,14 +140,14 @@ function renderApproachControls({ promptText, promptSubtitle, waitingBlock }) {
       selecting_over_bowler: bowling ? ['⏳ SETTING UP', 'Getting the next over ready…']
         : [`${opp.toUpperCase()} IS PICKING A BOWLER`, `${opp} is choosing who bowls the next ${unitWord()}…`],
       bowling_approach: bowling ? ['⏳ SETTING UP', 'Getting the next over ready…']
-        : [`${opp.toUpperCase()} IS PLANNING`, `${opp} is choosing its bowling plan — hidden until the ${unitWord()} is bowled.`],
+        : [`${opp.toUpperCase()} IS PLANNING`, `${opp} is choosing its bowling plan…`],
       batting_approach: bowling ? [`${opp.toUpperCase()} IS PLANNING`, `${opp} is choosing how to bat this ${unitWord()}…`]
         : ['⏳ SETTING UP', 'Getting the next over ready…'],
       selecting_wicket_batsman: ['⚠️ NEW BATSMAN INCOMING', 'The next batsman is walking out…'],
     };
     const [h, m] = waits[matchState.turnState] || ['⏳ PLEASE WAIT', 'The match is moving on…'];
     if (matchState.myRole === 'spectator' && a.playMode === 'chat') {
-      showWaiting('💬 PLAYED IN THE CHAT', 'Picks are made with the chat buttons — this board follows along live. A captain can type /playapp in the chat to play here, with private plans.');
+      showWaiting('💬 PLAYED IN THE CHAT', 'Picks are made with the chat buttons — this board follows along live. A captain can type /playapp in the chat to play here.');
       return;
     }
     showWaiting(matchState.myRole === 'spectator' ? '👁️ SPECTATOR MODE' : h, m);
@@ -494,34 +494,11 @@ function renderOverSummary(lo) {
   const box = document.getElementById('over-playback');
   if (!box || !lo) return;
   box.classList.remove('hidden');
-  const bat = lo.battingApproach || {};
-  const bowl = lo.bowlingApproach || {};
-  const a = approachData();
-  let batWho;
-  let bowlWho;
-  if (a.isBotMatch) {
-    batWho = lo.botBatted ? '🤖 Bot' : (matchState.myRole === 'batting' ? 'You' : 'Batting');
-    bowlWho = lo.botBatted ? (matchState.myRole === 'spectator' ? 'Bowling' : 'You') : '🤖 Bot';
-  } else {
-    // viewerSide is the viewer's side during THAT over (the innings may have turned).
-    batWho = lo.viewerSide === 'bat' ? 'You' : (lo.viewerSide === 'bowl' ? 'Opponent' : 'Batting');
-    bowlWho = lo.viewerSide === 'bowl' ? 'You' : (lo.viewerSide === 'bat' ? 'Opponent' : 'Bowling');
-  }
-  const hiddenNote = lo.hiddenNote
-    || ((bat.hidden || bowl.hidden) ? '🔒 The bot keeps its plan secret — it is only revealed on 🟢 Easy.' : '');
   box.innerHTML = `
     <div class="op-head">
       <span class="op-title">End of ${unitWord()} ${escHtml(lo.overNo)}</span>
       <span class="op-score">${escHtml(lo.runs)} run${lo.runs === 1 ? '' : 's'}${lo.wickets ? ` · ${escHtml(lo.wickets)} wkt${lo.wickets === 1 ? '' : 's'}` : ''}</span>
     </div>
     ${overStripHtml(lo.timeline)}
-    <div class="op-duel">
-      <span class="op-side"><small>${escHtml(batWho)}</small>${escHtml(bat.label || '')}</span>
-      <span class="op-vs">vs</span>
-      <span class="op-side"><small>${escHtml(bowlWho)}</small>${escHtml(bowl.label || '')}</span>
-    </div>
-    ${lo.combo ? `<div class="op-combo">✨ ${escHtml(lo.combo)}</div>` : ''}
-    ${lo.flavour ? `<div class="op-comm">${escHtml(lo.flavour)}</div>` : ''}
-    ${lo.bowler ? `<div class="op-fig">🎳 ${escHtml(lo.bowler)}${lo.bowlerFigures ? ` · ${escHtml(lo.bowlerFigures)}` : ''}</div>` : ''}
-    ${(bat.hidden || bowl.hidden) && hiddenNote ? `<div class="op-hidden-note">${escHtml(hiddenNote)}</div>` : ''}`;
+    ${lo.bowler ? `<div class="op-fig">🎳 ${escHtml(lo.bowler)}${lo.bowlerFigures ? ` · ${escHtml(lo.bowlerFigures)}` : ''}</div>` : ''}`;
 }

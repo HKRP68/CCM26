@@ -3039,47 +3039,6 @@ body {
   min-height: 18px;
 }
 
-.op-duel {
-  display: flex;
-  align-items: stretch;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.op-side {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 10px;
-  border-radius: var(--border-radius-sm);
-  background: var(--inset-bg);
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.op-side small {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  color: var(--text-muted);
-}
-
-.op-vs {
-  align-self: center;
-  font-size: 11px;
-  font-weight: 800;
-  color: var(--text-muted);
-}
-
-.op-combo {
-  margin-top: 10px;
-  font-size: 12px;
-  font-weight: 800;
-  color: var(--gold-accent);
-}
-
 .op-fig {
   margin-top: 6px;
   font-size: 12px;
@@ -3117,12 +3076,6 @@ body {
 .impact-slot.selected {
   border-color: var(--primary-accent);
   background: rgba(var(--accent-rgb), 0.14);
-}
-
-.op-hidden-note {
-  margin-top: 8px;
-  font-size: 11px;
-  color: var(--text-muted);
 }
 
 /* While the Impact picker is open, its own entry banner is redundant. */

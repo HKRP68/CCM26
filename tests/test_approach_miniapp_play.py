@@ -471,7 +471,7 @@ class MiniAppAccessTests(unittest.TestCase):
         self.assertIsNone(p["lastOver"])
         self.assertTrue(p["isBotMatch"])
 
-        # An over bowled → the playback payload reveals both plans.
+        # An over bowled → the playback payload carries the balls, no plans.
         s = _ready_to_bowl(_state(difficulty="easy"))
         s["bowling_approach"] = "variation"
         with _Script(["1", "4", "0", "6", "1", "1"]):
@@ -480,7 +480,7 @@ class MiniAppAccessTests(unittest.TestCase):
         self.assertEqual(lo["timeline"], ["1", "4", "0", "6", "1", "1"])
         self.assertEqual(len(lo["balls"]), 6)
         self.assertEqual(lo["runs"], 13)
-        self.assertEqual(lo["bowlingApproach"]["key"], "variation")
+        self.assertNotIn("bowlingApproach", lo)
         self.assertEqual(lo["key"], "1-1")
         self.assertFalse(lo["botBatted"])
 
@@ -617,6 +617,10 @@ class PlayModeChoiceTests(unittest.TestCase):
         self.assertEqual(cp.mark_bot_match({}, 99, play_mode="zzz")["play_mode"], "chat")
 
 
+PLAN_KEYS = ("battingApproach", "bowlingApproach", "combo", "flavour",
+             "hiddenNote", "privatePlans", "botPlanRevealed")
+
+
 class BotPlanSecrecyTests(unittest.TestCase):
     def _over(self, difficulty, human_bats=True):
         from services.crickidex_arena import _approach_payload
@@ -629,25 +633,13 @@ class BotPlanSecrecyTests(unittest.TestCase):
         role = "batting" if human_bats else "bowling"
         return _approach_payload(s, A_PICK_BAT_APPROACH, role)["lastOver"]
 
-    def test_hidden_on_normal_and_hard(self):
-        for level in ("normal", "hard"):
-            lo = self._over(level)
-            self.assertTrue(lo["bowlingApproach"].get("hidden"))
-            self.assertIsNone(lo["bowlingApproach"]["key"])
-            self.assertEqual(lo["battingApproach"]["key"], "ultra")   # your own
-            self.assertIsNone(lo["combo"])
-            self.assertIsNone(lo["flavour"])
-            self.assertFalse(lo["botPlanRevealed"])
-
-    def test_hidden_when_the_bot_bats_too(self):
-        lo = self._over("hard", human_bats=False)
-        self.assertTrue(lo["battingApproach"].get("hidden"))
-        self.assertEqual(lo["bowlingApproach"]["key"], "variation")
-
-    def test_revealed_on_easy(self):
-        lo = self._over("easy")
-        self.assertEqual(lo["bowlingApproach"]["key"], "variation")
-        self.assertTrue(lo["botPlanRevealed"])
+    def test_no_approach_is_shown_on_any_level(self):
+        for level in ("easy", "normal", "hard"):
+            for human_bats in (True, False):
+                lo = self._over(level, human_bats=human_bats)
+                for key in PLAN_KEYS:
+                    self.assertNotIn(key, lo, (level, human_bats))
+                self.assertNotIn("Hidden", str(lo))
 
 
 class ApproachImpactPayloadTests(unittest.TestCase):
