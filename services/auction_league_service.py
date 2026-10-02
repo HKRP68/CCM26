@@ -684,6 +684,9 @@ def _spendable(state, team, c):
     return max(0, int(state["teams"][team]["purse"]) - reserve)
 
 
+# Per-role counts the AI wants so it can field its XI shape (see XI_SHAPE).
+XI_TARGET = {ROLE_BAT: 4, ROLE_WK: 1, ROLE_AR: 3, ROLE_BOWL: 3}
+
 def ai_value(state, team, c, rng, *, accelerated=False):
     """The most this franchise would pay for ``c``, or 0 for "not interested".
 
@@ -724,9 +727,13 @@ def ai_value(state, team, c, rng, *, accelerated=False):
         if star < 0.6 or rng.random() > 0.35:
             return 0
         weight *= 0.5
+    shape_want = XI_TARGET[c["category"]]
     if role_owed:
         weight *= 1.2
-    elif counts[c["category"]] >= ROLE_MIN[c["category"]] + 2 and star < 0.6:
+    elif counts[c["category"]] < shape_want:
+        # Not compulsory, but the XI the AI fields (4/1/3/3) needs him.
+        weight *= 1.15
+    elif counts[c["category"]] >= max(ROLE_MIN[c["category"]], shape_want) + 2 and star < 0.6:
         # A fourth or fifth of a role it already has is depth, not a priority.
         weight *= 0.55
     if pers is PERSONALITIES["moneyball"] and 0.3 <= star < 0.65:
@@ -1160,8 +1167,10 @@ def finish_auction(state):
         raise AuctionLeagueError("A player is still on the block.")
     filled = autofill(state)
     state["phase"] = PHASE_SEASON
+    assign_grounds(state)
     state["fixtures"] = build_league_fixtures(state)
     state["table"] = {n: _empty_row() for n in state["team_order"]}
+    open_trade_window(state)
     return filled
 
 
@@ -1169,17 +1178,71 @@ def finish_auction(state):
 # Report card
 # ════════════════════════════════════════════════════════════════════
 
+# The AI's Playing XI: 4 batsmen, a keeper, 3 all-rounders and 3 bowlers —
+# six bowling options, as an IPL side would field.
+XI_SHAPE = ((ROLE_BAT, 4), (ROLE_WK, 1), (ROLE_AR, 3), (ROLE_BOWL, 3))
+XI_BOWLING_OPTIONS = 5     # services.xi_rules.validate_challenge_xi's minimum
+
+
+def _batting_order(xi):
+    """Highest batting rating first — the openers are the best batters."""
+    return sorted(xi, key=lambda c: (-(c.get("bat_rating") or 0), -c["rating"], c["name"]))
+
+
+def ai_playing_xi(cards, overseas_max=11):
+    """The AI's XI from ``cards`` (pool card dicts), in batting order.
+
+    Fills the 4 BAT / 1 WK / 3 AR / 3 BOWL shape best-OVR-first within the
+    overseas limit. A squad short of a role still fields a legal XI: the gap is
+    filled with the best players left, a bowling option first while the side
+    has fewer than five, and a keeper is always included when the squad has one.
+    """
+    pool = sorted(cards, key=lambda c: (-c["rating"], c["name"]))
+    if len(pool) <= 11:
+        return _batting_order(pool)
+    xi = []
+    overseas = 0
+
+    def fits(c):
+        return not c.get("is_overseas") or overseas < overseas_max
+
+    def take(c):
+        nonlocal overseas
+        xi.append(c)
+        pool.remove(c)
+        if c.get("is_overseas"):
+            overseas += 1
+
+    for role, count in XI_SHAPE:
+        for c in [c for c in pool if c["category"] == role]:
+            if sum(1 for x in xi if x["category"] == role) >= count:
+                break
+            if fits(c):
+                take(c)
+    if not any(x["category"] == ROLE_WK for x in xi):
+        keeper = next((c for c in pool if c["category"] == ROLE_WK), None)
+        if keeper is not None:
+            take(keeper)
+    while len(xi) < 11 and pool:
+        bowling = sum(1 for x in xi if x["category"] in (ROLE_AR, ROLE_BOWL))
+        want_bowler = bowling < XI_BOWLING_OPTIONS
+        pick = next((c for c in pool if fits(c) and (
+            not want_bowler or c["category"] in (ROLE_AR, ROLE_BOWL))), None)
+        if pick is None:
+            pick = next((c for c in pool if fits(c)), None) or pool[0]
+        take(pick)
+    return _batting_order(xi)
+
+
+def _xi_overseas_max(state):
+    if not state.get("overseas_cap"):
+        return 11
+    return int(state["league"].get("overseas_max", 11))
+
+
 def best_xi_cards(state, team):
-    """The franchise's strongest legal XI, as pool cards (batting order)."""
-    from services.bot_xi_builder import build_challenge_bot_xi
-    league = state["league"]
-    shims = [LeagueCard(c) for c in squad_card_dicts(state, team)]
-    if len(shims) < 11:
-        return [card(state, s.id) for s in shims]
-    lo = int(league.get("overseas_min") or 0) if state.get("overseas_cap") else 0
-    hi = int(league.get("overseas_max", 11)) if state.get("overseas_cap") else 11
-    xi = build_challenge_bot_xi(shims, lo, hi)
-    return [card(state, s.id) for s in xi]
+    """The franchise's Playing XI, as pool cards in batting order."""
+    return ai_playing_xi(squad_card_dicts(state, team), _xi_overseas_max(state))
 
 
 def team_strength(state, team):
@@ -1223,6 +1286,239 @@ def biggest_buys(state, limit=5):
 
 
 # ════════════════════════════════════════════════════════════════════
+# Trade window — after the auction, before your first match
+# ════════════════════════════════════════════════════════════════════
+#
+# Like the IPL's pre-season window. Three things happen in it, and all of them
+# are one-for-one player swaps (no cash) that leave both squads legal:
+#
+#   1. The AI sides trade among themselves to even the league out — the
+#      strongest XI swaps a player with the weakest in the same role, so both
+#      move towards the league's average. These arrive as trade news, at most
+#      AI_BALANCE_TRADES of them.
+#   2. Now and then an AI side approaches you (at most AI_OFFERS_MAX offers):
+#      it needs a role you have spare and offers a player of similar rating.
+#   3. You may propose swaps of your own; the AI says yes only to fair ones.
+#
+# At most TRADE_MAX swaps of yours go through, so trades stay rare.
+
+TRADE_MAX = 2
+AI_OFFERS_MAX = 2
+AI_OFFER_CHANCE = 0.07
+AI_BALANCE_TRADES = 3
+BALANCE_TARGET = 2.0        # stop balancing once AI XIs are this close (OVR)
+
+
+def _swap(state, team_a, pid_a, team_b, pid_b):
+    """Move ``pid_a`` to ``team_b`` and ``pid_b`` to ``team_a`` (prices travel)."""
+    ta, tb = state["teams"][team_a], state["teams"][team_b]
+    ea = next(e for e in ta["squad"] if e["pid"] == int(pid_a))
+    eb = next(e for e in tb["squad"] if e["pid"] == int(pid_b))
+    ta["squad"].remove(ea)
+    tb["squad"].remove(eb)
+    ta["squad"].append(dict(eb, how=eb.get("how")))
+    tb["squad"].append(dict(ea, how=ea.get("how")))
+
+
+def trade_legal(state, team_a, pid_a, team_b, pid_b):
+    """Whether the swap leaves both squads legal (roles, overseas, domestic)."""
+    if team_a == team_b:
+        return False
+    owns = lambda t, p: any(e["pid"] == int(p) for e in state["teams"][t]["squad"])
+    if not (owns(team_a, pid_a) and owns(team_b, pid_b)):
+        return False
+    _swap(state, team_a, pid_a, team_b, pid_b)
+    try:
+        return squad_is_legal(state, team_a) and squad_is_legal(state, team_b)
+    finally:
+        _swap(state, team_a, pid_b, team_b, pid_a)
+
+
+def _ai_names(state):
+    return [n for n in state["team_order"] if n != state["user_team"]]
+
+
+def xi_strength(state, team):
+    """The mean OVR of the XI ``team`` fields (what parity is measured on)."""
+    xi = best_xi_cards(state, team)
+    return sum(c["rating"] for c in xi) / max(1, len(xi))
+
+
+def ai_spread(state):
+    vals = [xi_strength(state, n) for n in _ai_names(state)]
+    return (max(vals) - min(vals)) if vals else 0.0
+
+
+def balance_squads(state, max_trades=AI_BALANCE_TRADES, target=BALANCE_TARGET):
+    """AI-to-AI trades that pull the strongest and weakest XIs together.
+
+    Each round tries same-role swaps between the three strongest and three
+    weakest AI sides and makes the one that narrows the league's spread the
+    most. Returns the trades made as news entries.
+    """
+    news = []
+    for _ in range(max_trades):
+        strength = {n: xi_strength(state, n) for n in _ai_names(state)}
+        spread = max(strength.values()) - min(strength.values())
+        if spread <= target:
+            break
+        ranked = sorted(strength, key=strength.get)
+        weak, strong = ranked[:3], ranked[-3:]
+        best = None
+        for s_team in strong:
+            for w_team in weak:
+                if strength[s_team] - strength[w_team] < 1.0:
+                    continue
+                for es in state["teams"][s_team]["squad"]:
+                    a = card(state, es["pid"])
+                    for ew in state["teams"][w_team]["squad"]:
+                        b = card(state, ew["pid"])
+                        if a["category"] != b["category"] or a["rating"] <= b["rating"]:
+                            continue
+                        if not trade_legal(state, s_team, a["id"], w_team, b["id"]):
+                            continue
+                        _swap(state, s_team, a["id"], w_team, b["id"])
+                        new = ai_spread(state)
+                        _swap(state, s_team, b["id"], w_team, a["id"])
+                        score = (new, a["rating"] - b["rating"])
+                        if new < spread - 0.25 and (best is None or score < best[0]):
+                            best = (score, s_team, a["id"], w_team, b["id"])
+        if best is None:
+            break
+        _, s_team, pa, w_team, pb = best
+        _swap(state, s_team, pa, w_team, pb)
+        news.append({"a": s_team, "pa": pa, "b": w_team, "pb": pb})
+    return news
+
+
+def _user_surplus_roles(state):
+    counts = role_counts(state, state["user_team"])
+    return [r for r in ROLES if counts[r] > max(ROLE_MIN[r], XI_TARGET[r])]
+
+
+def make_ai_offers(state, rng):
+    """At most AI_OFFERS_MAX approaches to you — only when a side has a real
+    need you can meet. Each offer is fair (within 2 OVR) and legal both ways."""
+    me = state["user_team"]
+    surplus = _user_surplus_roles(state)
+    offers = []
+    if not surplus:
+        return offers
+    my_xi = {c["id"] for c in best_xi_cards(state, me)}
+    teams = _ai_names(state)
+    rng.shuffle(teams)
+    for team in teams:
+        if len(offers) >= AI_OFFERS_MAX:
+            break
+        if rng.random() > AI_OFFER_CHANCE:
+            continue
+        before = xi_strength(state, team)
+        mine = sorted((c for c in squad_card_dicts(state, me)
+                       if c["category"] in surplus and c["id"] not in my_xi),
+                      key=lambda c: -c["rating"])
+        made = None
+        for want in mine:
+            gives = sorted((c for c in squad_card_dicts(state, team)
+                            if abs(c["rating"] - want["rating"]) <= 2),
+                           key=lambda c: -c["rating"])
+            for give in gives:
+                if not trade_legal(state, team, give["id"], me, want["id"]):
+                    continue
+                _swap(state, team, give["id"], me, want["id"])
+                after = xi_strength(state, team)
+                _swap(state, team, want["id"], me, give["id"])
+                if after > before:
+                    made = (give, want)
+                    break
+            if made:
+                break
+        if made:
+            offers.append({"id": len(offers) + 1, "team": team, "give": made[0]["id"],
+                           "want": made[1]["id"], "status": "open"})
+    return offers
+
+
+def open_trade_window(state, rng=None):
+    rng = rng or rng_for(state, "trade")
+    news = balance_squads(state)
+    state["trade"] = {"open": True, "done": 0, "max": TRADE_MAX, "asked": [],
+                      "news": news, "offers": make_ai_offers(state, rng)}
+    return state["trade"]
+
+
+def trade_window(state):
+    t = state.get("trade") or {}
+    return t if t.get("open") else None
+
+
+def close_trade_window(state):
+    if state.get("trade"):
+        state["trade"]["open"] = False
+
+
+def _trade_slots_left(state):
+    t = trade_window(state)
+    return 0 if t is None else max(0, int(t["max"]) - int(t["done"]))
+
+
+def answer_offer(state, offer_id, accept):
+    """Accept or reject an AI side's approach. Returns the offer."""
+    t = trade_window(state)
+    if t is None:
+        raise AuctionLeagueError("The trade window is closed.")
+    offer = next((o for o in t["offers"] if o["id"] == int(offer_id)), None)
+    if offer is None or offer["status"] != "open":
+        raise AuctionLeagueError("That offer is no longer on the table.")
+    if not accept:
+        offer["status"] = "rejected"
+        return offer
+    if _trade_slots_left(state) <= 0:
+        raise AuctionLeagueError(f"You've made your {t['max']} trades for this window.")
+    if not trade_legal(state, offer["team"], offer["give"], state["user_team"], offer["want"]):
+        offer["status"] = "void"
+        raise AuctionLeagueError("That trade would leave a squad illegal now.")
+    _swap(state, offer["team"], offer["give"], state["user_team"], offer["want"])
+    offer["status"] = "accepted"
+    t["done"] += 1
+    return offer
+
+
+def propose_trade(state, my_pid, team, their_pid):
+    """Your proposal: ``my_pid`` for ``team``'s ``their_pid``.
+
+    Returns ``(accepted, reason)``. The AI says yes only to a fair swap: the
+    player it receives is within 1 OVR of the one it gives (or better), and its
+    XI does not get weaker. A pair it has turned down can't be asked again.
+    """
+    t = trade_window(state)
+    if t is None:
+        raise AuctionLeagueError("The trade window is closed.")
+    if _trade_slots_left(state) <= 0:
+        raise AuctionLeagueError(f"You've made your {t['max']} trades for this window.")
+    me = state["user_team"]
+    key = [team, int(my_pid), int(their_pid)]
+    if key in t["asked"]:
+        raise AuctionLeagueError("They've already turned that one down.")
+    if team not in state["teams"] or team == me:
+        raise AuctionLeagueError("Pick one of the AI franchises.")
+    if not trade_legal(state, me, my_pid, team, their_pid):
+        t["asked"].append(key)
+        return False, "That swap would leave one of the squads breaking the rules."
+    give, get = card(state, my_pid), card(state, their_pid)
+    before = xi_strength(state, team)
+    _swap(state, me, my_pid, team, their_pid)
+    after = xi_strength(state, team)
+    if give["rating"] < get["rating"] - 1 or after < before - 0.05:
+        _swap(state, me, their_pid, team, my_pid)
+        t["asked"].append(key)
+        why = ("he's a better player than the one you're offering"
+               if give["rating"] < get["rating"] - 1 else "it would weaken their XI")
+        return False, f"{team} said no — {why}."
+    t["done"] += 1
+    return True, f"{team} accepted!"
+
+
+# ════════════════════════════════════════════════════════════════════
 # Season: fixtures, table, playoffs
 # ════════════════════════════════════════════════════════════════════
 
@@ -1231,8 +1527,66 @@ def _empty_row():
             "rf": 0, "bf": 0, "ra": 0, "ba": 0}
 
 
+# The IPL's own grounds, for a league based in India; any other league gets
+# the bot's stadiums in its home country (data/stadiums.json).
+IPL_GROUNDS = (
+    "Wankhede Stadium, Mumbai", "M.A. Chidambaram Stadium, Chennai",
+    "M.Chinnaswamy Stadium, Bengaluru", "Eden Gardens, Kolkata",
+    "Arun Jaitley Stadium, Delhi", "Narendra Modi Stadium, Ahmedabad",
+    "Rajiv Gandhi Intl. Stadium, Hyderabad", "Sawai Mansingh Stadium, Jaipur",
+    "Ekana Cricket Stadium, Lucknow", "PCA New Stadium, Mullanpur",
+)
+
+
+def _ground_list(state):
+    home = (state["league"].get("home_country") or "").strip().lower()
+    if home in ("", "india"):
+        return list(IPL_GROUNDS)
+    try:
+        import json as _json
+        import os as _os
+        path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)),
+                             "data", "stadiums.json")
+        with open(path, encoding="utf-8") as fh:
+            rows = _json.load(fh).get("stadiums") or []
+        local = [r["name"] for r in rows if str(r.get("country", "")).lower() == home]
+        return local or [r["name"] for r in rows] or list(IPL_GROUNDS)
+    except Exception:
+        return list(IPL_GROUNDS)
+
+
+def assign_grounds(state):
+    """Give every franchise a home ground (kept once given)."""
+    rng = rng_for(state, "grounds")
+    grounds = _ground_list(state)
+    rng.shuffle(grounds)
+    for i, name in enumerate(state["team_order"]):
+        t = state["teams"][name]
+        if not t.get("ground"):
+            t["ground"] = grounds[i % len(grounds)]
+
+
+def _fixture_conditions(state, rng, home):
+    """A fixture's venue (the hosts' ground; neutral for a playoff) and a random pitch."""
+    if home is None:
+        venue = rng.choice(_ground_list(state))
+    else:
+        venue = state["teams"][home].get("ground") or rng.choice(_ground_list(state))
+    return venue, rng.choice(_pitches())
+
+
+def fixture_pitch(state, fx):
+    """The pitch the fixture is played on — set when it was scheduled."""
+    if not fx.get("pitch"):
+        fx["pitch"] = rng_for(state, f"pitch{fx['no']}").choice(_pitches())
+    return fx["pitch"]
+
+
 def build_league_fixtures(state):
-    """A single round robin, rounds in a shuffled order, home sides alternating."""
+    """A single round robin, rounds in a shuffled order, home sides alternating.
+
+    Every fixture is played at the hosts' ground on a pitch drawn at random.
+    """
     from services.league_schedule_service import round_robin_rounds
     rng = rng_for(state, "fixtures")
     rounds = round_robin_rounds(list(state["team_order"]))
@@ -1244,15 +1598,18 @@ def build_league_fixtures(state):
             if home_count[a] > home_count[b]:
                 a, b = b, a
             home_count[a] += 1
+            venue, pitch = _fixture_conditions(state, rng, a)
             fixtures.append({"no": len(fixtures) + 1, "stage": STAGE_LEAGUE,
                              "home": a, "away": b, "status": "pending",
-                             "result": None})
+                             "result": None, "venue": venue, "pitch": pitch})
     return fixtures
 
 
 def _add_fixture(state, stage, home, away):
+    venue, pitch = _fixture_conditions(state, rng_for(state, f"po{stage}"), None)
     fx = {"no": len(state["fixtures"]) + 1, "stage": stage, "home": home,
-          "away": away, "status": "pending", "result": None}
+          "away": away, "status": "pending", "result": None,
+          "venue": venue, "pitch": pitch}
     state["fixtures"].append(fx)
     return fx
 
@@ -1311,6 +1668,97 @@ def _schedule_playoffs(state):
         state["phase"] = PHASE_COMPLETED
 
 
+def recent_form(state, team, n=5):
+    """The last ``n`` league results, oldest first: ``["W", "L", "T", …]``."""
+    out = []
+    for fx in state["fixtures"]:
+        if fx["stage"] != STAGE_LEAGUE or fx["status"] != "done":
+            continue
+        if team not in (fx["home"], fx["away"]):
+            continue
+        w = (fx["result"] or {}).get("winner")
+        out.append("T" if not w else ("W" if w == team else "L"))
+    return out[-n:]
+
+
+PLAYOFF_SPOTS = 4
+
+
+def qualification(state):
+    """``{team: "Q" | "E" | None}`` — through to the playoffs, or out.
+
+    During the league: Q once fewer than four other sides can still reach a
+    team's points; E once four sides are already beyond its best possible
+    total. Net run-rate is ignored, so a mark is only shown when it is certain.
+    After the league stage the top four are Q and the rest E.
+    """
+    table = state.get("table") or {}
+    league = [f for f in state["fixtures"] if f["stage"] == STAGE_LEAGUE]
+    if league and all(f["status"] == "done" for f in league):
+        top = standings(state)[:PLAYOFF_SPOTS]
+        return {n: ("Q" if n in top else "E") for n in state["team_order"]}
+    left = {n: 0 for n in state["team_order"]}
+    for f in league:
+        if f["status"] == "pending":
+            left[f["home"]] += 1
+            left[f["away"]] += 1
+    pts = {n: table.get(n, {}).get("pts", 0) for n in state["team_order"]}
+    best = {n: pts[n] + 2 * left[n] for n in state["team_order"]}
+    marks = {}
+    for n in state["team_order"]:
+        others = [m for m in state["team_order"] if m != n]
+        if sum(1 for m in others if pts[m] > best[n]) >= PLAYOFF_SPOTS:
+            marks[n] = "E"
+        elif sum(1 for m in others if best[m] >= pts[n]) < PLAYOFF_SPOTS:
+            marks[n] = "Q"
+        else:
+            marks[n] = None
+    return marks
+
+
+def team_of_the_tournament(state):
+    """The season's XI by MVP points, in the AI's 4/1/3/3 shape, batting order."""
+    scored = []
+    for pid in set(state["stats"]["bat"]) | set(state["stats"]["bowl"]):
+        c = state["pool"].get(str(pid))
+        if c:
+            scored.append(dict(c, rating=mvp_points(state, pid)))
+    xi = ai_playing_xi(scored, 11)
+    return [state["pool"][str(c["id"])] for c in xi]
+
+
+def season_awards(state):
+    """The end-of-season awards: ``{name: (pid, headline)}`` plus the XI."""
+    awards = {}
+    orange = stat_board(state, "orange", 1)
+    if orange:
+        pid, r = orange[0]
+        awards["orange"] = (pid, f"{r['runs']} runs")
+    purple = stat_board(state, "purple", 1)
+    if purple:
+        pid, r = purple[0]
+        awards["purple"] = (pid, f"{r['wkts']} wickets")
+    mvp = stat_board(state, "mvp", 1)
+    if mvp:
+        pid, r = mvp[0]
+        awards["mvp"] = (pid, f"{r['points']} points")
+    sixes = stat_board(state, "sixes", 1)
+    if sixes:
+        pid, r = sixes[0]
+        awards["sixes"] = (pid, f"{r['sixes']} sixes")
+    young = [(p, r) for p, r in stat_board(state, "mvp", 500)
+             if state["pool"].get(str(p), {}).get("rating", 99) < EMERGING_MAX_RATING]
+    if young:
+        pid, r = young[0]
+        awards["emerging"] = (pid, f"{r['points']} points")
+    awards["xi"] = team_of_the_tournament(state)
+    return awards
+
+
+# The Emerging Player is the best performer among the lesser-known names.
+EMERGING_MAX_RATING = 80
+
+
 def pending_fixtures(state):
     return [f for f in state["fixtures"] if f["status"] == "pending"]
 
@@ -1343,6 +1791,9 @@ def record_result(state, fx, *, inn1_team, inn1_runs, inn1_wkts, inn1_balls,
         "text": text,
         "conceded": bool(conceded),
     }
+    if not conceded:
+        _add_total(state, inn1_team, inn1_runs, inn1_wkts, inn1_balls, inn2_team, fx["no"])
+        _add_total(state, inn2_team, inn2_runs, inn2_wkts, inn2_balls, inn1_team, fx["no"])
     if fx["stage"] == STAGE_LEAGUE:
         table = state["table"]
         for n in (fx["home"], fx["away"]):
@@ -1371,27 +1822,137 @@ def record_result(state, fx, *, inn1_team, inn1_runs, inn1_wkts, inn1_balls,
     return True
 
 
-def _add_bat(state, pid, runs, balls, out=False):
+RECORDS_KEPT = 10
+
+
+def _records(state):
+    return state.setdefault("records", {"innings": [], "figures": [], "totals": []})
+
+
+def _keep(rows, row, key, limit=RECORDS_KEPT):
+    rows.append(row)
+    rows.sort(key=key)
+    del rows[limit:]
+
+
+def _add_bat(state, pid, bs, *, opp=None, fx_no=None):
+    """Add one batting innings (``bs``: runs, balls, fours, sixes, out)."""
     c = state["pool"].get(str(pid))
     if not c:
         return
-    row = state["stats"]["bat"].setdefault(str(pid), {"runs": 0, "balls": 0, "inns": 0,
-                                                      "hs": 0, "outs": 0})
-    row["runs"] += int(runs)
-    row["balls"] += int(balls)
+    runs, balls = int(bs.get("runs", 0)), int(bs.get("balls", 0))
+    out = bool(bs.get("out"))
+    row = state["stats"]["bat"].setdefault(str(pid), {})
+    for k in ("runs", "balls", "inns", "outs", "hs", "fours", "sixes", "fifties", "hundreds"):
+        row.setdefault(k, 0)
+    row["runs"] += runs
+    row["balls"] += balls
     row["inns"] += 1
     row["outs"] += 1 if out else 0
-    row["hs"] = max(row["hs"], int(runs))
+    row["fours"] += int(bs.get("fours", 0) or 0)
+    row["sixes"] += int(bs.get("sixes", 0) or 0)
+    if runs >= 100:
+        row["hundreds"] += 1
+    elif runs >= 50:
+        row["fifties"] += 1
+    if runs > row["hs"] or (runs == row["hs"] and not out):
+        row["hs"] = runs
+        row["hs_not_out"] = not out
+    if runs >= 30:
+        _keep(_records(state)["innings"],
+              {"pid": int(pid), "runs": runs, "balls": balls, "not_out": not out,
+               "opp": opp, "fx": fx_no},
+              key=lambda r: (-r["runs"], r["balls"]))
 
 
-def _add_bowl(state, pid, wkts, runs, balls):
+def _add_bowl(state, pid, bw, *, opp=None, fx_no=None):
+    """Add one bowling spell (``bw``: wickets, runs, balls, maidens)."""
     c = state["pool"].get(str(pid))
+    balls = int(bw.get("balls", 0) or 0)
     if not c or not balls:
         return
-    row = state["stats"]["bowl"].setdefault(str(pid), {"wkts": 0, "runs": 0, "balls": 0})
-    row["wkts"] += int(wkts)
-    row["runs"] += int(runs)
-    row["balls"] += int(balls)
+    wkts, runs = int(bw.get("wickets", 0) or 0), int(bw.get("runs", 0) or 0)
+    row = state["stats"]["bowl"].setdefault(str(pid), {})
+    for k in ("wkts", "runs", "balls", "maidens", "inns", "three_fors"):
+        row.setdefault(k, 0)
+    row["wkts"] += wkts
+    row["runs"] += runs
+    row["balls"] += balls
+    row["maidens"] += int(bw.get("maidens", 0) or 0)
+    row["inns"] += 1
+    if wkts >= 3:
+        row["three_fors"] += 1
+    best = row.get("best") or [0, 999]
+    if wkts > best[0] or (wkts == best[0] and runs < best[1]):
+        row["best"] = [wkts, runs]
+    if wkts >= 2:
+        _keep(_records(state)["figures"],
+              {"pid": int(pid), "wkts": wkts, "runs": runs, "balls": balls,
+               "opp": opp, "fx": fx_no},
+              key=lambda r: (-r["wkts"], r["runs"]))
+
+
+def _add_total(state, team, runs, wkts, balls, opp, fx_no):
+    totals = _records(state)["totals"]
+    totals.append({"team": team, "runs": int(runs), "wkts": int(wkts),
+                   "balls": int(balls), "opp": opp, "fx": fx_no})
+
+
+MVP_POINTS = {"run": 1, "four": 1, "six": 2, "wicket": 25, "maiden": 8}
+
+
+def mvp_points(state, pid):
+    b = state["stats"]["bat"].get(str(pid)) or {}
+    w = state["stats"]["bowl"].get(str(pid)) or {}
+    return (b.get("runs", 0) * MVP_POINTS["run"] + b.get("fours", 0) * MVP_POINTS["four"]
+            + b.get("sixes", 0) * MVP_POINTS["six"] + w.get("wkts", 0) * MVP_POINTS["wicket"]
+            + w.get("maidens", 0) * MVP_POINTS["maiden"])
+
+
+STAT_BOARDS = ("orange", "purple", "mvp", "sixes", "sr", "econ",
+               "innings", "figures", "totals", "mine")
+MIN_SR_BALLS = 30
+MIN_ECON_BALLS = 36
+
+
+def stat_board(state, board, limit=10):
+    """Leaderboard rows for one of ``STAT_BOARDS`` (plain dicts, best first)."""
+    bat, bowl = state["stats"]["bat"], state["stats"]["bowl"]
+    if board == "orange":
+        rows = sorted(bat.items(), key=lambda kv: (-kv[1]["runs"], kv[1]["balls"]))
+    elif board == "purple":
+        rows = sorted(bowl.items(), key=lambda kv: (
+            -kv[1]["wkts"], kv[1]["runs"] / max(1, kv[1]["balls"])))
+    elif board == "sixes":
+        rows = sorted(((k, v) for k, v in bat.items() if v.get("sixes")),
+                      key=lambda kv: (-kv[1].get("sixes", 0), -kv[1]["runs"]))
+    elif board == "sr":
+        rows = sorted(((k, v) for k, v in bat.items() if v["balls"] >= MIN_SR_BALLS),
+                      key=lambda kv: -kv[1]["runs"] / kv[1]["balls"])
+    elif board == "econ":
+        rows = sorted(((k, v) for k, v in bowl.items() if v["balls"] >= MIN_ECON_BALLS),
+                      key=lambda kv: kv[1]["runs"] / kv[1]["balls"])
+    elif board == "mvp":
+        pids = set(bat) | set(bowl)
+        rows = sorted(((p, {"points": mvp_points(state, p)}) for p in pids),
+                      key=lambda kv: -kv[1]["points"])
+    elif board == "innings":
+        return list(_records(state)["innings"][:limit])
+    elif board == "figures":
+        return list(_records(state)["figures"][:limit])
+    elif board == "totals":
+        totals = _records(state)["totals"]
+        high = sorted(totals, key=lambda r: (-r["runs"], r["wkts"]))[:5]
+        low = sorted((r for r in totals if r["wkts"] >= 10 or r["balls"] >= OVERS * 6),
+                     key=lambda r: (r["runs"], -r["wkts"]))[:5]
+        return {"high": high, "low": low}
+    elif board == "mine":
+        me = state["user_team"]
+        pids = [e["pid"] for e in state["teams"][me]["squad"]]
+        return [(str(p), bat.get(str(p)) or {}, bowl.get(str(p)) or {}) for p in pids]
+    else:
+        raise AuctionLeagueError("Unknown stats board.")
+    return rows[:limit]
 
 
 def owner_of(state, pid):
@@ -1403,11 +1964,7 @@ def owner_of(state, pid):
 
 def cap_tables(state, limit=5):
     """``(orange, purple)`` — top run-scorers and wicket-takers."""
-    bat = sorted(state["stats"]["bat"].items(),
-                 key=lambda kv: (-kv[1]["runs"], kv[1]["balls"]))[:limit]
-    bowl = sorted(state["stats"]["bowl"].items(),
-                  key=lambda kv: (-kv[1]["wkts"], kv[1]["runs"]))[:limit]
-    return bat, bowl
+    return stat_board(state, "orange", limit), stat_board(state, "purple", limit)
 
 
 # ── AI-vs-AI matches ─────────────────────────────────────────────────
@@ -1431,7 +1988,8 @@ def simulate_fixture(state, fx, rng=None):
     rng = rng or rng_for(state, f"fx{fx['no']}")
     home_xi = _engine_xi(state, fx["home"])
     away_xi = _engine_xi(state, fx["away"])
-    pitch = rng.choice(_pitches())
+    rng.choice(_pitches())   # keeps a save's random sequence where it was
+    pitch = fixture_pitch(state, fx)
     # sim_match draws from the global generator; seed it so a save replays,
     # and put the process-wide state back afterwards so no other feature in
     # the bot inherits this career's sequence.
@@ -1445,19 +2003,19 @@ def simulate_fixture(state, fx, rng=None):
         random.setstate(saved)
     i1, i2 = m["innings1"], m["innings2"]
     for inn in (i1, i2):
+        bat_team = inn["batting_team"]
+        bowl_team = fx["away"] if bat_team == fx["home"] else fx["home"]
         for p in inn["order"]:
             bs = inn["bat_stats"].get(id(p)) or {}
             if bs.get("balls") or bs.get("out"):
-                _add_bat(state, p.get("roster_id"), bs.get("runs", 0),
-                         bs.get("balls", 0), bs.get("out"))
+                _add_bat(state, p.get("roster_id"), bs, opp=bowl_team, fx_no=fx["no"])
         seen = set()
         for bp in inn["bowl_plan"]:
             if id(bp) in seen:
                 continue
             seen.add(id(bp))
             bw = inn["bowl_stats"].get(id(bp)) or {}
-            _add_bowl(state, bp.get("roster_id"), bw.get("wickets", 0),
-                      bw.get("runs", 0), bw.get("balls", 0))
+            _add_bowl(state, bp.get("roster_id"), bw, opp=bat_team, fx_no=fx["no"])
     res = m["result"]
     record_result(state, fx,
                   inn1_team=i1["batting_team"], inn1_runs=i1["runs"],
@@ -1524,13 +2082,13 @@ def record_user_match(state, fixture_no, match_state, winner_team, match_id=None
         inn2_balls = int(cipl_match.balls_bowled(s))
     except Exception:
         inn2_balls = int(s.get("balls") or 0)
-    for key in ("inn1_bat_stats", "bat_stats"):
+    for key, opp in (("inn1_bat_stats", inn2_team), ("bat_stats", inn1_team)):
         for rid, bs in (s.get(key) or {}).items():
             if bs.get("balls") or bs.get("out"):
-                _add_bat(state, rid, bs.get("runs", 0), bs.get("balls", 0), bs.get("out"))
-    for key in ("inn1_bowl_stats", "bowl_stats"):
+                _add_bat(state, rid, bs, opp=opp, fx_no=fx["no"])
+    for key, opp in (("inn1_bowl_stats", inn1_team), ("bowl_stats", inn2_team)):
         for rid, bw in (s.get(key) or {}).items():
-            _add_bowl(state, rid, bw.get("wickets", 0), bw.get("runs", 0), bw.get("balls", 0))
+            _add_bowl(state, rid, bw, opp=opp, fx_no=fx["no"])
     if winner_team not in (fx["home"], fx["away"]):
         winner_team = None
     text = (f"{winner_team} won" if winner_team else "Match tied")

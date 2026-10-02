@@ -1885,7 +1885,7 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
             match_type=TYPE_CIPL,
             overs=overs, toss_winner_id=winner.id, toss_decision=decision,
             batting_first_id=bat_user.id, bowling_first_id=bowl_user.id,
-            stadium=settings["stadium"], pitch_type=chosen_pitch,
+            stadium=draft.get("stadium") or settings["stadium"], pitch_type=chosen_pitch,
             weather=conditions.get("weather") or settings["weather"],
             temperature=conditions.get("temperature") or settings["temperature"],
             umpire1=settings["umpire1"], umpire2=settings["umpire2"],
