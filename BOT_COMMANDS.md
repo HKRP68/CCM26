@@ -396,6 +396,7 @@ most one paid season every 48 hours, and not if you conceded a match.
 | Command | Aliases | What it does |
 |---------|---------|--------------|
 | `/rcpl [league]` 💬 | `/auctionleague` `/al` | The hub — start a career (`/rcpl IPL` goes straight to that league's teams), continue it, or see how the last one ended |
+| `/rcpl help` | `/alhelp` `/rcplhelp` | The full Auction League guide — rules, buttons, rewards and commands. Works in groups too, and from the ❓ Help button |
 | `/skipplayer` 💬 | — | Decide the player on the block at once — your side bids on autopilot, and you see who bought him |
 | `/alpause` 💬 | — | Pause the auction: no clock, nothing moves |
 | `/alresume` 💬 | — | Carry on a paused auction |
@@ -619,6 +620,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | Usage | Example |
 |-------|---------|
 | `/rcpl [league]` | `/rcpl` · `/rcpl IPL` · `/rcpl BBL` |
+| `/rcpl help` | `/rcpl help` · `/alhelp` |
 | `/skipplayer` | `/skipplayer` |
 | `/simset [n]` | `/simset` · `/simset 6` |
 | `/simtolast` | `/simtolast` |

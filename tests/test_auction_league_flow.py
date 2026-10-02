@@ -188,6 +188,22 @@ class FlowTest(unittest.TestCase):
         finally:
             s.close()
 
+    def test_help_anywhere(self):
+        from handlers import auction_league as H
+        # In a group: the guide, not the "open the DM" pointer.
+        group = NS(id=-100123, type="supergroup")
+        upd = self._update()
+        upd.effective_chat = group
+        self.ctx.args = ["help"]
+        asyncio.run(H.auction_league_handler(upd, self.ctx))
+        self.ctx.args = []
+        self.assertIn("Auction League — help", self.log[-1][0])
+        self.assertIn("@lost_in_space14", self.log[-1][0])
+        self.assertLess(len(self.log[-1][0]), 4096)
+        # And from the ❓ button.
+        self._press("al:help")
+        self.assertIn("Auction League — help", self.log[-1][0])
+
     def test_entry_fee_and_direct_league_start(self):
         from database import get_session
         from handlers import auction_league as H

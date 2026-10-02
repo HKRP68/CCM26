@@ -8,6 +8,7 @@ and the IPL playoffs — against them. The rules and the AI live in
 Commands (all DM-only):
   /auctionleague /al /rcpl   the hub — start, continue or review a career;
                              /rcpl IPL goes straight to that league's teams
+  /rcpl help  /alhelp        the full guide (works in groups too)
   /simset [n]                simulate the rest of this set (or up to set n)
   /simtolast /alsim          simulate the rest of the auction
   /alsets  /alsquad  /alpurse  /altable  /alfixtures  /alstats
@@ -251,7 +252,7 @@ def _lot_rows(state, lot):
     return [first,
             [("⏭ Skip player", f"al:skip:{seq}"), ("⏩ Sim set", f"al:simset:{seq}"),
              ("⏭⏭ Sim to end", f"al:simall:{seq}")],
-            [(fast, f"al:fast:{seq}"), ("⏸ Pause", f"al:pause:{seq}")],
+            [(fast, f"al:fast:{seq}"), ("⏸ Pause", f"al:pause:{seq}"), ("❓ Help", "al:help")],
             [("📋 My squad", "al:squad"), ("💰 Purses", "al:purse"), ("📦 Sets", "al:sets")]]
 
 
@@ -368,7 +369,8 @@ def _hub(state, row):
     phase = state["phase"]
     if phase == AL.PHASE_RETENTION:
         return head + f"\n\n🔒 Retention window is open.\n\n{HELP_LINE}", [
-            [("🔒 Retentions", "al:rtview")], [("🗑 Discard career", "al:quit")]]
+            [("🔒 Retentions", "al:rtview")],
+            [("❓ Help", "al:help"), ("🗑 Discard career", "al:quit")]]
     if phase == AL.PHASE_AUCTION:
         status = "⏸ The auction is <b>paused</b>" if state.get("paused") \
             else "🔨 The auction is live"
@@ -376,7 +378,7 @@ def _hub(state, row):
                 f"/{len(state['sets'])}.\n{_purse_line(state)}\n\n{HELP_LINE}"), [
             [("▶️ Resume auction", "al:resume")],
             [("📦 Sets", "al:sets"), ("📋 My squad", "al:squad"), ("💰 Purses", "al:purse")],
-            [("🗑 Discard career", "al:quit")]]
+            [("❓ Help", "al:help"), ("🗑 Discard career", "al:quit")]]
     if phase == AL.PHASE_SEASON:
         fx = AL.next_user_fixture(state)
         nxt = (f"Next: {_fixture_line(state, fx)}" if fx else "You're out — the rest is simulated.")
@@ -386,8 +388,8 @@ def _hub(state, row):
         return (head + f"\n\n📅 Season under way{where}\n{nxt}\n\n{HELP_LINE}"), [
             [("▶️ Next fixture", f"al:play:{row.id}")],
             [("📊 Table", f"al:table:{row.id}"), ("📅 Fixtures", "al:fix"), ("🟠 Caps", "al:caps")],
-            [("📋 My squad", "al:squad"), ("🗑 Discard", "al:quit")]]
-    return _season_end_text(state), [[("🆕 New career", "al:new")],
+            [("📋 My squad", "al:squad"), ("❓ Help", "al:help"), ("🗑 Discard", "al:quit")]]
+    return _season_end_text(state), [[("🆕 New career", "al:new"), ("❓ Help", "al:help")],
                                      [("📊 Final table", f"al:table:{row.id}"),
                                       ("🟠 Caps", "al:caps")]]
 
@@ -540,8 +542,106 @@ async def _lot_timeout(context):
 # Commands
 # ════════════════════════════════════════════════════════════════════
 
+HELP_WORDS = ("help", "guide", "rules", "?")
+
+
+def help_text():
+    """The full Auction League guide for /rcpl help."""
+    retain = " / ".join(money(p) for p in AL.RETENTION_PRICES)
+    champ, runner, playoffs = AL.REWARD_CHAMPION, AL.REWARD_RUNNER_UP, AL.REWARD_PLAYOFFS
+    return (
+        "🏏 <b>Auction League — help</b>\n"
+        "Your solo IPL-style career: run one franchise, the AI runs the rest. "
+        "Played in a private chat with me.\n\n"
+        "🚀 <b>Getting started</b>\n"
+        "<blockquote expandable>"
+        "• <code>/rcpl</code> — pick a league, or <code>/rcpl IPL</code> to jump "
+        "straight to its teams\n"
+        "• Pick your franchise, then set AI retentions (on/off) and AI difficulty\n"
+        f"• Entry fee: <b>{ENTRY_FEE_GEMS} 💎</b>, paid when you tap ✅ Start career\n"
+        "• One career at a time — finish it or discard it before a new one"
+        "</blockquote>\n"
+        "🔒 <b>Retention</b>\n"
+        "<blockquote expandable>"
+        f"• Keep up to {AL.MAX_RETAIN} of your own players: {retain}\n"
+        "• With AI retentions on, each AI side keeps up to 3 of its stars "
+        "(the league's top 20%)\n"
+        "• Keep 2 or fewer and you get one 🔁 Right To Match card: when a former "
+        "player of yours is sold, you may match the price and keep him"
+        "</blockquote>\n"
+        "🔨 <b>The auction</b>\n"
+        "<blockquote expandable>"
+        f"• Every purse starts at <b>{money(AL.PURSE_LAKH)}</b>\n"
+        "• Sets run ⭐ Marquee → rating bands by role (Batsmen 90–87, "
+        "All-rounders 90–87…) → 🌱 Emerging → ⚡ Accelerated (the unsold)\n"
+        f"• Bid by bid: after every AI raise it's your call — {LOT_SECONDS}s per turn, "
+        "no answer counts as a pass\n"
+        "• 🔨 <b>Bid</b> — the next step · 🚀 <b>Jump</b> — ₹50 L higher "
+        "(₹1 Cr from ₹5 Cr) · 🙅 <b>Pass</b> — drop out\n"
+        "• ⚡ <b>Fast</b> — let the AI sides settle among themselves before you're asked\n"
+        "• ⏭ <b>Skip player</b> — decide this player now (your side bids on autopilot)\n"
+        "• ⏩ <b>Sim set</b> / ⏭⏭ <b>Sim to end</b> — simulate the rest of the set "
+        "or the whole auction, and get who went where\n"
+        "• ⏸ <b>Pause</b> — stop the clock; ▶️ <b>Resume</b> when you're back\n"
+        f"• AI franchises bid like real ones and spend their purses down — "
+        f"stars can reach {money(AL.RECORD_PRICE)}"
+        "</blockquote>\n"
+        "👥 <b>Squad rules</b>\n"
+        "<blockquote expandable>"
+        f"• At least {AL.ROLE_MIN[AL.ROLE_BAT]} BAT, {AL.ROLE_MIN[AL.ROLE_BOWL]} BOWL, "
+        f"{AL.ROLE_MIN[AL.ROLE_WK]} WK, {AL.ROLE_MIN[AL.ROLE_AR]} AR · at most "
+        f"{AL.SQUAD_MAX} players and {AL.OVERSEAS_SQUAD_CAP} overseas\n"
+        "• You can never bid more than leaves enough to finish a legal squad\n"
+        "• Still short at the end? You're topped up from the unsold players at "
+        "base price"
+        "</blockquote>\n"
+        "📅 <b>The season</b>\n"
+        "<blockquote expandable>"
+        "• Everyone plays everyone once, then the playoffs: Qualifier 1 (1 v 2), "
+        "Eliminator (3 v 4), Qualifier 2, Final\n"
+        f"• Your matches: {AL.OVERS} overs, ball by ball — pitch (at home), Playing XI, "
+        "toss, Impact Player. Other matches are simulated instantly\n"
+        "• Points table with NRR, plus Orange and Purple Cap races\n"
+        "• 🏳️ Concede a match if you must — it counts as a loss and forfeits the "
+        "season reward"
+        "</blockquote>\n"
+        "🏆 <b>Rewards</b>\n"
+        "<blockquote expandable>"
+        f"• Champions {champ[0]:,} coins + {champ[1]} 💎 · runners-up "
+        f"{runner[0]:,} + {runner[1]} 💎 · playoffs {playoffs[0]:,} coins\n"
+        f"• One paid season every {AL.REWARD_COOLDOWN_HOURS} hours; matches "
+        "themselves are unranked practice"
+        "</blockquote>\n"
+        "⌨️ <b>Commands</b>\n"
+        "<blockquote expandable>"
+        "/rcpl [league] — start or open your career · /rcpl help — this guide\n"
+        "/simset [n] — sim the live set (or up to set n) · /simtolast — sim the auction\n"
+        "/skipplayer — decide the player on the block\n"
+        "/alpause · /alresume — pause / resume the auction\n"
+        "/alsets · /alsquad · /alpurse — sets, your squad, every purse\n"
+        "/alplay — your next match · /altable · /alfixtures · /alstats\n"
+        "/alquit — discard your career"
+        "</blockquote>\n\n"
+        f"{HELP_LINE}"
+    )
+
+
+async def _send_help(context, chat_id):
+    await _send(context, chat_id, help_text())
+
+
+async def alhelp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/alhelp — the Auction League guide (works anywhere)."""
+    await _send_help(context, update.effective_chat.id)
+
+
 async def auction_league_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/auctionleague — the hub."""
+    """/auctionleague — the hub; ``/rcpl help`` for the guide."""
+    args = [a for a in (context.args or []) if a]
+    if args and args[0].lower() in HELP_WORDS:
+        # The guide works anywhere — it only explains. The mode itself is DM-only.
+        await _send_help(context, update.effective_chat.id)
+        return
     if not await _require_dm(update, context):
         return
     tg = update.effective_user
@@ -628,7 +728,8 @@ INTRO = (
     "🏆 Champions earn 25,000 coins + 15 💎 (runners-up 10,000 + 5 💎, "
     "playoffs 4,000). Matches themselves are unranked practice.\n"
     f"🎟 Entry fee: <b>{ENTRY_FEE_GEMS} 💎</b>, paid when you start the career.\n\n"
-    "💡 Tip: <code>/rcpl IPL</code> jumps straight to a league's teams.\n"
+    "💡 Tip: <code>/rcpl IPL</code> jumps straight to a league's teams · "
+    "<code>/rcpl help</code> for the full guide.\n"
     f"{HELP_LINE}\n\n"
     "Choose your league:"
 )
@@ -645,6 +746,7 @@ async def _start_new(chat_id, context):
             await _send(context, chat_id, "❌ No leagues are set up yet.")
             return
         rows = [[(f"🏆 {lg.name}", f"al:lg:{lg.id}")] for lg in leagues[:12]]
+        rows.append([("❓ How it works", "al:help")])
         await _send(context, chat_id, INTRO, rows)
     finally:
         session.close()
@@ -1281,7 +1383,11 @@ async def auction_league_callback(update: Update, context: ContextTypes.DEFAULT_
     tg_id = q.from_user.id
     chat_id = q.message.chat_id if q.message else tg_id
 
-    # Setup steps need no save.
+    # Setup steps (and the guide) need no save.
+    if action == "help":
+        await q.answer()
+        await _send_help(context, chat_id)
+        return
     if action == "new":
         car = _open(tg_id)
         try:
@@ -1463,5 +1569,6 @@ def register(app):
     app.add_handler(CommandHandler(["alquit", "aldiscard"], alquit_handler))
     app.add_handler(CommandHandler("skipplayer", skipplayer_handler))
     app.add_handler(CommandHandler("alpause", alpause_handler))
+    app.add_handler(CommandHandler(["alhelp", "rcplhelp"], alhelp_handler))
     app.add_handler(CommandHandler("alresume", alresume_handler))
     app.add_handler(CallbackQueryHandler(auction_league_callback, pattern=r"^al:"))
