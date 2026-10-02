@@ -2061,6 +2061,11 @@ def main():
         app.add_handler(CallbackQueryHandler(cdraft_join_callback, pattern=r"^cdj_"))
         app.add_handler(CallbackQueryHandler(cdraft_cancel_callback, pattern=r"^cdc_"))
         app.add_handler(CallbackQueryHandler(cdraft_pick_callback, pattern=r"^cdp_"))
+        # /auctionleague — the solo Auction League career (DM only): retain,
+        # bid against nine AI franchises, then a season with playoffs. Its
+        # fixtures run through the same cl_* / cipl_* match flow as /ciplbot.
+        from handlers.auction_league import register as _register_auction_league
+        _register_auction_league(app)
         # /change <out> <in> — swap a Playing XI player. Runs in group 0 (before
         # the group-1 league command regex, which safely ignores it). The router
         # serves both the Challenge League (/cm, /cipl) and /letsplay drafts.

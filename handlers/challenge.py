@@ -116,6 +116,8 @@ def _league_battle_title(league_name, mode=None):
     """
     if mode == "cdraft":
         return league_name or "Challenge Draft"
+    if mode == "auction_league":
+        return league_name or "Auction League"
     return f"League Battles · {league_name}" if league_name else "League Battles"
 
 
@@ -670,7 +672,7 @@ def _challenge_created_blocks(draft, session=None):
     host_team = draft.get("host_team") or "Host XI"
     target_team = draft.get("target_team") or "Guest XI"
     title = (draft.get("league_name") or "IPL").upper()
-    if draft.get("mode") != "cdraft":
+    if draft.get("mode") not in INLINE_SQUAD_MODES:
         title = f"{title} — CHALLENGE"
     series = None
     if draft.get("cl_tour_id"):
@@ -970,7 +972,7 @@ def _challenge_created_text(draft, session=None):
     # A league is "IPL — CHALLENGE"; a mode that is not a league already says
     # what it is, so appending "— CHALLENGE" would only repeat itself.
     title = (draft.get("league_name") or "IPL").upper()
-    if draft.get("mode") != "cdraft":
+    if draft.get("mode") not in INLINE_SQUAD_MODES:
         title = f"{title} — CHALLENGE"
     lines = [f"🏏 <b>{title}</b>"]
     # CL Tour matches show their series position right under the title.
@@ -1004,6 +1006,11 @@ def _resolve_team_id(session, draft, side):
     """
     team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
     if not team_name:
+        return None
+    # An Auction League squad shares its franchise's NAME with the league team
+    # but not its players: remembering its XI against that team would
+    # overwrite the captain's saved /cipl XI with eleven strangers.
+    if draft.get("mode") in INLINE_SQUAD_MODES:
         return None
     try:
         league = _resolve_draft_league(session, draft)
@@ -1051,6 +1058,45 @@ def _valid_saved_subset(saved_ids, players):
     return [int(pid) for pid in saved_ids if int(pid) in current]
 
 
+# Modes whose squads live on the draft itself rather than in a league team's
+# ChallengePlayer rows: /cdraft (drafted pick by pick) and the Auction League
+# (bought at auction, see services.auction_league_service).
+INLINE_SQUAD_MODES = ("cdraft", "auction_league")
+
+
+def inline_squad_cards(draft, side):
+    """``side``'s squad when it lives on the draft, else ``None``.
+
+    The cards present a ``ChallengePlayer``'s surface, so the XI picker, the
+    rulebook and the engine conversion never need to know where they came from.
+    """
+    mode = draft.get("mode")
+    if mode == "cdraft":
+        from services import cdraft_service
+        return cdraft_service.squad_cards(draft.get("cdraft") or {}, side)
+    if mode == "auction_league":
+        from services import auction_league_service
+        return auction_league_service.squad_cards(draft, side)
+    return None
+
+
+def _inline_saved_order(draft, side, players):
+    """The one-tap XI for an inline squad: the draft order, or the best XI."""
+    if draft.get("mode") == "cdraft":
+        from services import cdraft_service
+        return _valid_saved_subset(
+            cdraft_service.squad_in_batting_order(draft.get("cdraft") or {}, side),
+            players)
+    try:
+        from services.bot_xi_builder import build_challenge_bot_xi
+        lo, hi, rules = _challenge_xi_limits(draft)
+        xi = build_challenge_bot_xi(list(players), lo, hi, rules)
+        return [int(p.id) for p in xi]
+    except Exception:
+        logger.exception("auction league: could not build the best XI")
+        return []
+
+
 def _query_team_players(session, draft, side):
     """Load a team's players for ``side``. Returns a (possibly empty) list when the
     team genuinely has no roster, but lets DB errors propagate so the caller can tell
@@ -1060,9 +1106,9 @@ def _query_team_players(session, draft, side):
     # ChallengePlayer's surface (see services.cdraft_service.DraftCard), so
     # everything above this function — the XI picker, the rulebook, the engine
     # conversion — is unchanged by where the eleven came from.
-    if draft.get("mode") == "cdraft":
-        from services import cdraft_service
-        return cdraft_service.squad_cards(draft.get("cdraft") or {}, side)
+    inline = inline_squad_cards(draft, side)
+    if inline is not None:
+        return inline
 
     team_name = draft.get("host_team") if side == "host" else draft.get("target_team")
     if not team_name:
@@ -1953,6 +1999,118 @@ async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
         logger.exception("Failed to schedule CL tour draft expiry")
 
     await _arm_selection_timer(context, draft, [host.telegram_id], "pitch")
+    return True, None
+
+
+async def launch_auction_league_match(context, *, chat_id, host, bot_user,
+                                     league_record, league_key, league_name,
+                                     host_team, target_team, host_squad,
+                                     target_squad, tag, home_team=None,
+                                     team_codes=None, session=None):
+    """Open an Auction League fixture against the AI.
+
+    Both squads were bought at auction, so they ride on the draft
+    (``inline_squads``, mode ``auction_league``) exactly as a /cdraft squad
+    does, and the rest is the ordinary /ciplbot flow: pitch → the bot's XI →
+    your XI → toss → ball by ball. At home you choose the surface; away, the
+    hosts already have, and the match goes straight to the Playing XI.
+    ``tag`` (save id, fixture number, your user id, the opponent's name) rides
+    through to the match state so the result is written back into the season.
+
+    Returns ``(ok, error_message)``.
+    """
+    if _active_draft_in_chat(context.bot_data, chat_id) or _waiting_cm_lobby_in_chat(context.bot_data, chat_id):
+        return False, ("⚠️ A match setup is already in progress in this chat. "
+                       "Finish or cancel it first.")
+    if session is not None:
+        busy = _active_match_in_chat(session, chat_id) or _active_cric_match_in_chat(session, chat_id)
+        if busy:
+            return False, _chat_busy_message(busy)
+        if _active_match_for_user(session, host.id) or _active_cric_match_for_user(session, host.id):
+            return False, "⚠️ You already have an active match — finish it first."
+    if _cric_lobby_for_user(context.bot_data, host.id) or _cm_user_lobby(context.bot_data, host.id):
+        return False, "⚠️ You already have a waiting match lobby — finish it first."
+
+    draft_id = random.randint(100000, 999999)
+    while context.bot_data.get(_challenge_team_draft_key(draft_id)):
+        draft_id = random.randint(100000, 999999)
+    draft = {
+        "draft_id": draft_id,
+        "chat_id": chat_id,
+        "mode": "auction_league",
+        "host_user_id": host.id,
+        "host_tg_id": host.telegram_id,
+        "target_user_id": bot_user.id,
+        "target_tg_id": bot_user.telegram_id,
+        "league_key": league_key,
+        "league_name": league_name,
+        "is_tournament": False,
+        "tournament_id": None,
+        "owner_locked": False,
+        "host_allowed_teams": None,
+        "target_allowed_teams": None,
+        "vs_bot": True,
+        "overs": None,
+        "teams": [host_team, target_team],
+        "team_codes": dict(team_codes or {}),
+        "turn": "complete",
+        "host_team": host_team,
+        "target_team": target_team,
+        "host": {"user_id": host.id, "tg_id": host.telegram_id,
+                 "name": _user_label(host)},
+        "target": {"user_id": bot_user.id, "tg_id": bot_user.telegram_id,
+                   "name": "🤖 Bot"},
+        "inline_squads": {"host": list(host_squad), "target": list(target_squad)},
+        "auction_league": dict(tag),
+        "overseas_min": 0,
+        "overseas_max": 11,
+        "ball_format": "T20",
+        "created_at": datetime.utcnow().isoformat(),
+    }
+    if league_record is not None:
+        draft["league_id"] = league_record.id
+        draft["ball_format"] = getattr(league_record, "match_format", "T20") or "T20"
+        min_raw = getattr(league_record, "min_overseas", None)
+        max_raw = getattr(league_record, "max_overseas", None)
+        draft["overseas_min"] = int(min_raw) if min_raw is not None else 0
+        draft["overseas_max"] = int(max_raw) if max_raw is not None else 11
+    context.bot_data[_challenge_team_draft_key(draft_id)] = draft
+    context.bot_data[_challenge_draft_chat_key(chat_id)] = draft_id
+
+    away = bool(home_team) and home_team != host_team
+    try:
+        if away:
+            draft["pitch_locked"] = True
+            draft["home_team"] = home_team
+            confirm = _apply_pitch(draft, random.choice(PITCH_TYPES))
+            blocks = draft.pop("_pitch_card_blocks", None)
+            sent = await R.send_rich_message(context.bot, chat_id, blocks, confirm)
+        else:
+            sent = await R.send_rich_message(
+                context.bot, chat_id, _pitch_prompt_blocks(draft),
+                _pitch_prompt(draft),
+                reply_markup=_pitch_keyboard(draft_id, allow_deny=False))
+    except Exception:
+        logger.exception("auction league: could not open the fixture; releasing the lock")
+        _release_draft_chat_lock(context.bot_data, draft)
+        context.bot_data.pop(_challenge_team_draft_key(draft_id), None)
+        return False, "⚠️ Could not start the match. Try again."
+    _track_setup_msg(draft, sent)
+
+    try:
+        if context.job_queue:
+            context.job_queue.run_once(
+                _expire_challenge_draft, CHALLENGE_DRAFT_EXPIRE,
+                name=f"cl_draft_{draft_id}",
+                data={"draft_id": draft_id, "chat_id": chat_id,
+                      "message_id": sent.message_id})
+    except Exception:
+        logger.exception("auction league: could not schedule the setup expiry")
+
+    if away:
+        await _after_pitch_selected(context, draft, draft_id, sent)
+    else:
+        await _arm_selection_timer(context, draft, [host.telegram_id], "pitch")
     return True, None
 
 
@@ -3106,11 +3264,8 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
     # just drafted — so the one-tap option offers the draft's own batting order
     # instead. It is a legal XI by construction, so the button selects AND
     # confirms in a single press.
-    if draft.get("mode") == "cdraft":
-        from services import cdraft_service
-        saved_subset = _valid_saved_subset(
-            cdraft_service.squad_in_batting_order(draft.get("cdraft") or {}, side),
-            players)
+    if draft.get("mode") in INLINE_SQUAD_MODES:
+        saved_subset = _inline_saved_order(draft, side, players)
     else:
         saved_subset = _valid_saved_subset(load_last_xi(query.from_user.id, team_id), players) if team_id else []
     draft.setdefault("saved_xi", {})[side] = saved_subset
@@ -3127,8 +3282,9 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
             reply_markup=_challenge_xi_player_keyboard(
                 draft_id, side, players, selected_ids,
                 saved_available=bool(saved_subset), team_code=team_code,
-                saved_label=("✅ Use draft order"
-                             if draft.get("mode") == "cdraft" else None)),
+                saved_label=({"cdraft": "✅ Use draft order",
+                              "auction_league": "✅ Use best XI"}
+                             .get(draft.get("mode")))),
         )
         _store_xi_message_ref(selection, sent)
     except Exception:
@@ -3178,12 +3334,8 @@ async def challenge_xi_useprev_callback(update: Update, context: ContextTypes.DE
     # the draft was rebuilt in between.
     saved_subset = (draft.get("saved_xi") or {}).get(side)
     if saved_subset is None:
-        if draft.get("mode") == "cdraft":
-            from services import cdraft_service
-            saved_subset = _valid_saved_subset(
-                cdraft_service.squad_in_batting_order(
-                    draft.get("cdraft") or {}, side),
-                players)
+        if draft.get("mode") in INLINE_SQUAD_MODES:
+            saved_subset = _inline_saved_order(draft, side, players)
         else:
             saved_subset = _valid_saved_subset(load_last_xi(query.from_user.id, team_id), players) if team_id else []
     if not saved_subset:

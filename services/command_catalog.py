@@ -51,6 +51,7 @@ COMMAND_CATEGORIES = (
         '/wpmbot [overs] - Play a bot opponent in the Mini App (up to 20 overs)',
         '/lpbot /lpb - Practice Lets Play vs the bot, your roster, 20 overs (unranked)',
         '/ciplbot /ciplb [league] - Practice a league match vs the bot (unranked)',
+        '/auctionleague /al - Auction League: retain, bid vs 9 AI teams, then a full season (DM)',
         '/endmatch /em - End match (fine applies)',
         '/clearmatches - Players in the match (or a bot admin) clear stuck matches here (no winner)',
         '/removematch @user - Admin: remove a player stuck in a match',

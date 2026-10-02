@@ -4893,3 +4893,41 @@ class SimEngineSetting(Base):
     note = Column(String(300), nullable=True)
     created_by = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# AUCTION LEAGUE — a solo, RCPL-style career: retain, auction, season
+# ══════════════════════════════════════════════════════════════════════
+
+class AuctionLeagueSave(Base):
+    """One player's Auction League career (``/auctionleague``).
+
+    The whole career — the player pool, ten purses and squads, the auction
+    sets and the lot on the block, the fixture list, the points table and the
+    cap races — lives in ``state_json`` and is read and written by
+    ``services.auction_league_service``. It is one player's game against nine
+    AI franchises, so nothing in it is shared and nothing else ever needs to
+    query inside it; a column per fact would only be a schema to migrate.
+
+    ``status`` mirrors the state's phase so the hub can find the active save
+    without parsing JSON. ``version`` is bumped on every save: a button press
+    that read version N refuses to write over N+1 (two fast taps on Bid).
+    """
+    __tablename__ = "auction_league_saves"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_tg_id = Column(BigInteger, nullable=False, index=True)
+    league_id = Column(Integer, nullable=True)
+    league_name = Column(String(120), nullable=True)
+    user_team_name = Column(String(120), nullable=True)
+    # retention | auction | season | completed | abandoned
+    status = Column(String(20), default="retention", nullable=False, index=True)
+    state_json = Column(Text, nullable=False)
+    version = Column(Integer, default=1, nullable=False)
+    reward_paid = Column(Boolean, default=False, nullable=False)
+    # When the season reward was actually credited. NULL for a season that
+    # paid nothing (no trophy, a concession, or refused by the cooldown) —
+    # the 48-hour cooldown counts only rows with this set.
+    reward_paid_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
