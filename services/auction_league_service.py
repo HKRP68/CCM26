@@ -1304,11 +1304,17 @@ def simulate_fixture(state, fx, rng=None):
     home_xi = _engine_xi(state, fx["home"])
     away_xi = _engine_xi(state, fx["away"])
     pitch = rng.choice(_pitches())
-    # sim_match draws from the global generator; seed it so a save replays.
+    # sim_match draws from the global generator; seed it so a save replays,
+    # and put the process-wide state back afterwards so no other feature in
+    # the bot inherits this career's sequence.
+    saved = random.getstate()
     random.seed(rng.random())
     toss = rng.choice([fx["home"], fx["away"]])
-    m = simulate_match(home_xi, away_xi, OVERS, pitch, fx["home"], fx["away"],
-                       toss_winner=toss, toss_decision=None, scenario=False)
+    try:
+        m = simulate_match(home_xi, away_xi, OVERS, pitch, fx["home"], fx["away"],
+                           toss_winner=toss, toss_decision=None, scenario=False)
+    finally:
+        random.setstate(saved)
     i1, i2 = m["innings1"], m["innings2"]
     for inn in (i1, i2):
         for p in inn["order"]:
@@ -1588,16 +1594,20 @@ def pay_season_reward(session, row, state, user):
         if int(state.get("user_conceded") or 0):
             return 0, 0, "a conceded match forfeits the season reward"
         return 0, 0, ""
-    since = datetime.utcnow() - timedelta(hours=REWARD_COOLDOWN_HOURS)
-    recent = (session.query(AuctionLeagueSave)
+    now = datetime.utcnow()
+    since = now - timedelta(hours=REWARD_COOLDOWN_HOURS)
+    # Only a season that actually paid out starts the cooldown — and it runs
+    # from the moment it paid, not from the save's last update.
+    recent = (session.query(AuctionLeagueSave.id)
               .filter(AuctionLeagueSave.user_tg_id == row.user_tg_id,
-                      AuctionLeagueSave.reward_paid.is_(True),
                       AuctionLeagueSave.id != row.id,
-                      AuctionLeagueSave.updated_at >= since)
+                      AuctionLeagueSave.reward_paid_at.isnot(None),
+                      AuctionLeagueSave.reward_paid_at >= since)
               .first())
     row.reward_paid = True
-    if recent is not None and season_reward(load(recent)) != (0, 0):
+    if recent is not None:
         return 0, 0, (f"one paid season every {REWARD_COOLDOWN_HOURS} hours")
+    row.reward_paid_at = now
     user.total_coins = (user.total_coins or 0) + coins
     user.total_gems = (user.total_gems or 0) + gems
     try:

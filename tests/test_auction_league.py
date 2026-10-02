@@ -271,6 +271,15 @@ class Season(unittest.TestCase):
         # The all-out chase is charged the full 20 overs.
         self.assertEqual(st["table"][opp]["bf"], 120)
 
+    def test_sim_restores_global_rng(self):
+        st = self._season()
+        AL.sim_until_user(st)  # the AI games before yours
+        fx = AL.pending_fixtures(st)[0]
+        random.seed(1234)
+        expected = random.Random(1234).random()
+        AL.simulate_fixture(st, fx)
+        self.assertEqual(random.random(), expected)
+
     def test_reward_needs_no_concede(self):
         st = self._season()
         st["phase"] = AL.PHASE_COMPLETED

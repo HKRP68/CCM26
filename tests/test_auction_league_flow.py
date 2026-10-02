@@ -261,5 +261,57 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(st["table"][me]["pts"], 2)
 
 
+class RewardCooldownTest(unittest.TestCase):
+    """Only a season that actually paid starts the 48-hour cooldown."""
+
+    def _row(self, s, finish):
+        from services import auction_league_service as AL
+        from test_auction_league import make_league
+        league, teams = make_league(seed=5)
+        st = AL.new_state(league, teams, "Team A", seed=5)
+        st["phase"] = AL.PHASE_COMPLETED
+        st["champion"] = "Team A" if finish == "champion" else "Team B"
+        st["runner_up"] = "Team C"
+        from models import AuctionLeagueSave
+        row = AuctionLeagueSave(user_tg_id=777, league_id=1, league_name="IPL",
+                                user_team_name="Team A", status="completed",
+                                state_json="{}", version=0)
+        AL.store(row, st)
+        s.add(row)
+        s.flush()
+        return row, st
+
+    def test_cooldown_counts_only_paid_seasons(self):
+        from database import get_session
+        from models import User
+        from services import auction_league_service as AL
+        s = get_session()
+        try:
+            user = User(telegram_id=777, username="cool", first_name="Cool",
+                        total_coins=0, total_gems=0)
+            s.add(user)
+            s.flush()
+            row1, st1 = self._row(s, "champion")
+            self.assertEqual(AL.pay_season_reward(s, row1, st1, user)[:2], AL.REWARD_CHAMPION)
+            row2, st2 = self._row(s, "league")      # paid nothing
+            self.assertEqual(AL.pay_season_reward(s, row2, st2, user)[:2], (0, 0))
+            self.assertIsNone(row2.reward_paid_at)
+            row3, st3 = self._row(s, "champion")    # inside 48h of row1
+            coins, gems, note = AL.pay_season_reward(s, row3, st3, user)
+            self.assertEqual((coins, gems), (0, 0))
+            self.assertIn("48", note)
+            self.assertIsNone(row3.reward_paid_at)
+            # Once row1's window has passed, the refused row3 does not extend it.
+            from datetime import datetime, timedelta
+            row1.reward_paid_at = datetime.utcnow() - timedelta(hours=49)
+            s.flush()
+            row4, st4 = self._row(s, "champion")
+            self.assertEqual(AL.pay_season_reward(s, row4, st4, user)[:2], AL.REWARD_CHAMPION)
+            self.assertEqual(user.total_coins, 2 * AL.REWARD_CHAMPION[0])
+        finally:
+            s.rollback()
+            s.close()
+
+
 if __name__ == "__main__":
     unittest.main()

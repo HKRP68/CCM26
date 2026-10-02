@@ -4925,5 +4925,9 @@ class AuctionLeagueSave(Base):
     state_json = Column(Text, nullable=False)
     version = Column(Integer, default=1, nullable=False)
     reward_paid = Column(Boolean, default=False, nullable=False)
+    # When the season reward was actually credited. NULL for a season that
+    # paid nothing (no trophy, a concession, or refused by the cooldown) —
+    # the 48-hour cooldown counts only rows with this set.
+    reward_paid_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
