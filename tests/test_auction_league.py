@@ -759,3 +759,101 @@ class PitchAndForm(unittest.TestCase):
         self.assertTrue(st["form"])
         for name in st["teams"]:
             self.assertTrue(AL._can_field_xi(AL.match_cards(st, name)))
+
+
+class NewsTicker(unittest.TestCase):
+    def _lot(self, st, rating=90):
+        if st["phase"] != AL.PHASE_AUCTION:
+            AL.apply_retentions(st, [])
+        lot = AL.open_next_lot(st)
+        while st.get("lot") is None:
+            lot = AL.open_next_lot(st)
+        AL.card(st, lot["pid"])["rating"] = rating
+        return lot
+
+    def test_record_war_steal_and_unsold(self):
+        st = new_state(seed=2)
+        lot = self._lot(st)
+        lot.update(leader="Team B", price=2000, bids=20, values={},
+                   trail=[(f"Team {x}", 100) for x in "BCDEFG"])
+        AL._sell(st, "Team B", 2000, AL.HOW_AUCTION)
+        texts = AL.headlines(st)
+        self.assertTrue(any(t.startswith("💰") for t in texts))
+        self.assertTrue(any(t.startswith("🔥") for t in texts))
+        mark = AL.news_mark(st)
+        lot = self._lot(st, rating=91)
+        AL._sell(st, "Team C", lot["base"], AL.HOW_AUCTION)
+        self.assertTrue(AL.headlines(st, since=mark)[0].startswith("💎"))
+        mark = AL.news_mark(st)
+        lot = self._lot(st, rating=92)
+        lot["leader"] = None
+        AL._hammer(st, random.Random(0))
+        self.assertIn("unsold", AL.headlines(st, since=mark)[0])
+
+    def test_full_auction_news_is_bounded_and_ranked(self):
+        st = new_state(seed=3)
+        AL.apply_retentions(st, [])
+        AL.simulate_to_last(st)
+        self.assertLessEqual(len(st["news"]), AL.NEWS_KEPT)
+        self.assertTrue(any("done" in t for t in AL.headlines(st)))     # set wrap-ups
+        best = AL.headlines(st, limit=3, best=True)
+        self.assertEqual(len(best), 3)
+        self.assertFalse(any("done —" in t for t in best))
+
+
+def play_season(st):
+    guard = 0
+    while st["phase"] == AL.PHASE_SEASON and guard < 100:
+        guard += 1
+        AL.sim_until_user(st)
+        fx = AL.next_user_fixture(st)
+        if fx is not None:
+            AL.simulate_fixture(st, fx)
+
+
+class MultiSeason(unittest.TestCase):
+    def _finished(self, seed=3):
+        st = new_state(seed=seed)
+        AL.apply_retentions(st, [])
+        AL.simulate_to_last(st)
+        AL.finish_auction(st)
+        play_season(st)
+        self.assertEqual(st["phase"], AL.PHASE_COMPLETED)
+        return st
+
+    def test_next_season_carries_squads_and_history(self):
+        prev = self._finished()
+        with self.assertRaises(AL.AuctionLeagueError):
+            AL.next_season_state(new_state())
+        nxt = AL.next_season_state(prev, seed=11)
+        self.assertEqual(nxt["phase"], AL.PHASE_RETENTION)
+        self.assertEqual(AL.season_no(nxt), 2)
+        self.assertEqual(len(nxt["career"]), 1)
+        self.assertEqual(nxt["career"][0]["season"], 1)
+        self.assertEqual(nxt["career"][0]["champion"], prev["champion"])
+        # Last season's squads are now each side's own players (retention, RTM).
+        for name, t in prev["teams"].items():
+            own = {c["id"] for c in AL.original_squad(nxt, name)}
+            self.assertEqual(own, {e["pid"] for e in t["squad"]})
+            self.assertEqual(nxt["teams"][name]["personality"], t["personality"])
+        self.assertEqual(set(nxt["pool"]), set(prev["pool"]))
+        # Ratings moved by at most two, and only for those who played.
+        nudges = AL.rating_nudges(prev)
+        self.assertTrue(any(d > 0 for d in nudges.values()))
+        self.assertTrue(any(d < 0 for d in nudges.values()))
+        for pid, c in nxt["pool"].items():
+            old = prev["pool"][pid]["rating"]
+            self.assertLessEqual(abs(c["rating"] - old), AL.NUDGE_MAX)
+            if int(pid) not in nudges:
+                self.assertEqual(c["rating"], old)
+        # Retain your best three from last season's squad and run season 2.
+        mine = [c["id"] for c in AL.original_squad(nxt, nxt["user_team"])[:3]]
+        AL.apply_retentions(nxt, mine)
+        AL.simulate_to_last(nxt)
+        AL.finish_auction(nxt)
+        assert_all_legal(self, nxt)
+        play_season(nxt)
+        rec = AL.career_record(nxt)
+        self.assertEqual(rec["seasons"], 2)
+        self.assertEqual([r["season"] for r in AL.career_history(nxt)], [1, 2])
+        self.assertEqual(rec["p"], sum(r["p"] for r in AL.career_history(nxt)))

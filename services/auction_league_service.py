@@ -789,6 +789,11 @@ def ai_value(state, team, c, rng, *, accelerated=False):
     owed = owed_roles(state, team)
     role_owed = owed.get(c["category"], 0) > 0
     counts = role_counts(state, team)
+    # The last places are kept for the XI it fields (4/1/3/3): with only as
+    # many places left as roles still missing, it bids on nobody else.
+    shape_gap = sum(max(0, XI_TARGET[r] - counts[r]) for r in ROLES)
+    if counts[c["category"]] >= XI_TARGET[c["category"]] and SQUAD_MAX - size <= shape_gap:
+        return 0
 
     if size >= target:
         # Squad planned out — only a real upgrade tempts it.
@@ -820,7 +825,9 @@ def ai_value(state, team, c, rng, *, accelerated=False):
     # blows everything on three stars ends up with twelve players.
     still_to_buy = max(0, target - size - 1)
     plan_reserve = still_to_buy * fair_price(state, PLAN_SLOT_RATING)
-    affordable = max(0, int(t["purse"]) - plan_reserve)
+    # …and at least base-price money for the roles its XI still lacks.
+    shape_reserve = MIN_BASE * max(0, shape_gap - (1 if shape_short else 0))
+    affordable = max(0, int(t["purse"]) - max(plan_reserve, shape_reserve))
     value = min(int(value), RECORD_PRICE, ceiling, affordable)
     if (role_owed or shape_short or size < SQUAD_MIN) and ceiling >= base:
         # A side that still needs bodies — or this role for its XI — never
@@ -1246,10 +1253,96 @@ def _sell(state, team, price, how):
 
 
 def _close_lot(state):
-    state["last_lot"] = state["lot"]
+    lot = state["lot"]
+    state["last_lot"] = lot
     state["lot"] = None
     state["lot_idx"] += 1
+    _note_headlines(state, lot)
     return "done"
+
+
+# ════════════════════════════════════════════════════════════════════
+# Auction news ticker
+# ════════════════════════════════════════════════════════════════════
+
+NEWS_KEPT = 60
+NEWS_RECORD_MIN = 1200      # a "record" headline only from ₹12 Cr
+NEWS_WAR_BIDS = 12
+NEWS_WAR_TEAMS = 5         # five sides in it…
+NEWS_WAR_PRICE = 800       # …for a ₹8 Cr+ player, at 4× his base or more
+NEWS_STEAL_RATING = 88
+NEWS_DRY_PURSE = 500
+NEWS_DRY_SIZE = 15        # …while still short of a 15-man squad
+
+
+def _headline(state, lot, text, weight):
+    state["news_no"] = int(state.get("news_no") or 0) + 1
+    news = state.setdefault("news", [])
+    news.append({"no": state["news_no"], "seq": int(lot.get("seq") or 0),
+                 "text": text, "w": weight})
+    del news[:-NEWS_KEPT]
+
+
+def _note_headlines(state, lot):
+    """Write the headlines this lot makes: records, wars, steals, RTM, dry
+    purses, unsold stars — and a wrap-up when it closes its set."""
+    c = card(state, lot["pid"])
+    name = f"<b>{_esc(c['name'])}</b>"
+    flags = state.setdefault("news_flags", {})
+    if lot["status"] == "sold":
+        team, price = lot["winner"], int(lot["price"])
+        short = _esc(state["teams"][team]["short"])
+        spend = state.setdefault("set_spend", {})
+        spend[team] = int(spend.get(team, 0)) + price
+        if price > int(state.get("record_price") or 0):
+            state["record_price"] = price
+            if price >= NEWS_RECORD_MIN:
+                _headline(state, lot, f"💰 <b>Record!</b> {short} pay {money(price)} for "
+                                      f"{name} — the costliest buy so far", 5)
+        bidders = {n for n, _p in lot.get("trail") or []}
+        if (int(lot.get("bids") or 0) >= NEWS_WAR_BIDS and len(bidders) >= NEWS_WAR_TEAMS
+                and price >= NEWS_WAR_PRICE and price >= 4 * int(lot["base"])):
+            _headline(state, lot, f"🔥 <b>Bidding war:</b> {len(bidders)} teams fought over "
+                                  f"{name} — {short} win at {money(price)}", 4)
+        if c["rating"] >= NEWS_STEAL_RATING and price <= int(lot["base"]) * 3 // 2:
+            _headline(state, lot, f"💎 <b>Steal of the auction?</b> {short} land "
+                                  f"{name} ({c['rating']}) for just {money(price)}", 4)
+        if lot.get("how") == HOW_RTM:
+            _headline(state, lot, f"🔁 {short} use their Right To Match to keep {name} "
+                                  f"at {money(price)}", 3)
+        t = state["teams"][team]
+        if (int(t["purse"]) <= NEWS_DRY_PURSE and len(t["squad"]) < NEWS_DRY_SIZE
+                and not flags.get(f"dry:{team}")):
+            flags[f"dry:{team}"] = True
+            _headline(state, lot, f"🏦 {short} are running dry — {money(t['purse'])} left "
+                                  f"with {NEWS_DRY_SIZE - len(t['squad'])} places to fill", 3)
+    elif c["rating"] >= NEWS_STEAL_RATING:
+        _headline(state, lot, f"😮 {name} ({c['rating']}) goes <b>unsold</b>!", 3)
+    s = state["sets"][state["set_idx"]] if state["set_idx"] < len(state["sets"]) else None
+    if s is not None and state["lot_idx"] >= len(s["pids"]):
+        spend = state.pop("set_spend", {}) or {}
+        if spend:
+            top = max(spend, key=lambda n: (spend[n], n))
+            _headline(state, lot, f"📦 <b>{_esc(s['name'])}</b> done — "
+                                  f"{_esc(state['teams'][top]['short'])} spent the most "
+                                  f"({money(spend[top])})", 1)
+
+
+def headlines(state, since=0, limit=None, best=False):
+    """Headlines numbered above ``since``; ``best`` picks the biggest stories
+    (in auction order), else the latest."""
+    rows = [n for n in state.get("news") or [] if n["no"] > int(since or 0)]
+    if limit is not None and len(rows) > limit:
+        if best:
+            keep = sorted(rows, key=lambda n: (-n["w"], -n["no"]))[:limit]
+            rows = sorted(keep, key=lambda n: n["no"])
+        else:
+            rows = rows[-limit:]
+    return [n["text"] for n in rows]
+
+
+def news_mark(state):
+    return int(state.get("news_no") or 0)
 
 
 def lot_result_line(state, lot):
@@ -1515,12 +1608,27 @@ def ai_playing_xi(cards, overseas_max=11, pitch=None):
         if c.get("is_overseas"):
             overseas += 1
 
+    # The best of each role first; then, over the overseas limit, swap out
+    # the overseas pick whose best domestic stand-in costs the least.
     for role, count in XI_SHAPE:
-        for c in [c for c in pool if c["category"] == role]:
-            if sum(1 for x in xi if x["category"] == role) >= count:
-                break
-            if fits(c):
-                take(c)
+        for c in [c for c in pool if c["category"] == role][:count]:
+            take(c)
+
+    def score(c):
+        return _selection_score(c, pitch)
+    while overseas > overseas_max:
+        swaps = []
+        for x in (x for x in xi if x.get("is_overseas")):
+            sub = next((c for c in pool if c["category"] == x["category"]
+                        and not c.get("is_overseas")), None)
+            swaps.append((score(x) - (score(sub) if sub else -1000), x["name"], x, sub))
+        _loss, _n, out, sub = min(swaps, key=lambda s: (s[0], s[1]))
+        xi.remove(out)
+        overseas -= 1
+        if sub is not None:
+            take(sub)
+        pool.append(out)
+    pool.sort(key=lambda c: (-score(c), -c["rating"], c["name"]))
     if not any(x["category"] == ROLE_WK for x in xi):
         keeper = next((c for c in pool if c["category"] == ROLE_WK), None)
         if keeper is not None:
@@ -1629,9 +1737,19 @@ def trade_legal(state, team_a, pid_a, team_b, pid_b):
     owns = lambda t, p: any(e["pid"] == int(p) for e in state["teams"][t]["squad"])
     if not (owns(team_a, pid_a) and owns(team_b, pid_b)):
         return False
+    before = {t: role_counts(state, t) for t in (team_a, team_b)}
     _swap(state, team_a, pid_a, team_b, pid_b)
     try:
-        return squad_is_legal(state, team_a) and squad_is_legal(state, team_b)
+        if not (squad_is_legal(state, team_a) and squad_is_legal(state, team_b)):
+            return False
+        # An AI side never trades away the shape of the XI it fields (4/1/3/3).
+        for t in (team_a, team_b):
+            if t == state["user_team"]:
+                continue
+            after = role_counts(state, t)
+            if any(before[t][r] >= XI_TARGET[r] > after[r] for r in ROLES):
+                return False
+        return True
     finally:
         _swap(state, team_a, pid_b, team_b, pid_a)
 
@@ -2593,6 +2711,146 @@ def season_reward(state):
         return 0, 0
     return {"champion": REWARD_CHAMPION, "runner_up": REWARD_RUNNER_UP,
             "playoffs": REWARD_PLAYOFFS}.get(season_finish(state), (0, 0))
+
+
+# ════════════════════════════════════════════════════════════════════
+# Multi-season career
+# ════════════════════════════════════════════════════════════════════
+
+NUDGE_TOP = 0.10       # the best 10% of each role (by MVP points) gain 2 OVR
+NUDGE_GOOD = 0.25      # the next 15% gain 1
+NUDGE_FLOP = 0.80      # the bottom 20% of those who played lose 1
+NUDGE_MAX = 2
+
+
+def season_no(state):
+    return int(state.get("season_no") or 1)
+
+
+def rating_nudges(state):
+    """``{pid: ±n}`` from this season's performance, role by role, within ±2.
+
+    Only players who took the field move; ranking is by MVP points.
+    """
+    played = set(state["stats"]["bat"]) | set(state["stats"]["bowl"])
+    by_role = {}
+    for pid in played:
+        c = state["pool"].get(pid)
+        if c:
+            by_role.setdefault(c["category"], []).append(pid)
+    out = {}
+    for pids in by_role.values():
+        pids.sort(key=lambda p: (-mvp_points(state, p), int(p)))
+        n = len(pids)
+        for i, pid in enumerate(pids):
+            rank = (i + 1) / n
+            delta = 2 if rank <= NUDGE_TOP else 1 if rank <= NUDGE_GOOD else (
+                -1 if rank > NUDGE_FLOP else 0)
+            if delta:
+                out[int(pid)] = max(-NUDGE_MAX, min(NUDGE_MAX, delta))
+    return out
+
+
+def _award_line(state, awards, key):
+    if key not in awards:
+        return None
+    pid, head = awards[key]
+    c = state["pool"].get(str(pid)) or {}
+    owner = owner_of(state, pid)
+    return {"pid": int(pid), "name": c.get("name", "?"), "team": owner, "what": head}
+
+
+def season_summary(state):
+    """One line of career history for a finished season."""
+    me = state["user_team"]
+    row = state["table"].get(me) or _empty_row()
+    awards = season_awards(state)
+    buys = [e for e in state["teams"][me]["squad"] if e.get("how") != HOW_RETAINED]
+    top = max(buys, key=lambda e: e["price"], default=None)
+    pos = next((i + 1 for i, n in enumerate(standings(state)) if n == me), None)
+    return {
+        "season": season_no(state),
+        "team": me,
+        "finish": season_finish(state),
+        "position": pos,
+        "w": int(row.get("w", 0)), "l": int(row.get("l", 0)), "p": int(row.get("p", 0)),
+        "champion": state.get("champion"),
+        "runner_up": state.get("runner_up"),
+        "orange": _award_line(state, awards, "orange"),
+        "purple": _award_line(state, awards, "purple"),
+        "mvp": _award_line(state, awards, "mvp"),
+        "top_buy": ({"name": card(state, top["pid"])["name"], "price": int(top["price"])}
+                    if top else None),
+        "conceded": bool(state.get("user_conceded")),
+    }
+
+
+def career_history(state):
+    """Every season so far — the finished ones, plus this one once it ends."""
+    rows = list(state.get("career") or [])
+    if state["phase"] == PHASE_COMPLETED and not any(
+            r.get("season") == season_no(state) for r in rows):
+        rows.append(season_summary(state))
+    return rows
+
+
+def career_record(state):
+    rows = career_history(state)
+    return {
+        "seasons": len(rows),
+        "titles": sum(1 for r in rows if r["finish"] == "champion"),
+        "finals": sum(1 for r in rows if r["finish"] in ("champion", "runner_up")),
+        "playoffs": sum(1 for r in rows if r["finish"] != "league"),
+        "w": sum(r["w"] for r in rows), "p": sum(r["p"] for r in rows),
+    }
+
+
+def next_season_state(prev, seed=None):
+    """Season N+1 of a finished career.
+
+    Every franchise's squad from last season becomes its "own" team for
+    retentions and Right To Match; the players nobody signed go back into the
+    pool as free agents; ratings move by last season's performance (±2); the
+    career history carries on. Starts in the retention phase.
+    """
+    if prev.get("phase") != PHASE_COMPLETED:
+        raise AuctionLeagueError("Finish this season before starting the next.")
+    nudges = rating_nudges(prev)
+
+    def moved(c, team):
+        c = dict(c)
+        d = nudges.get(int(c["id"]), 0)
+        if d:
+            for key in ("rating", "bat_rating", "bowl_rating"):
+                if c.get(key):
+                    c[key] = max(30, min(99, int(c[key]) + d))
+        c["team"] = team
+        c.pop("last_delta", None)
+        if d:
+            c["last_delta"] = d
+        return c
+
+    teams = []
+    signed = set()
+    for name in prev["team_order"]:
+        t = prev["teams"][name]
+        players = [moved(prev["pool"][str(e["pid"])], name) for e in t["squad"]
+                   if str(e["pid"]) in prev["pool"]]
+        signed.update(int(c["id"]) for c in players)
+        teams.append({"name": name, "short": t["short"], "players": players})
+    state = new_state(prev["league"], teams, prev["user_team"],
+                      ai_retain=prev.get("ai_retain", True),
+                      difficulty=prev.get("difficulty", "normal"), seed=seed)
+    for c in prev["pool"].values():
+        if int(c["id"]) not in signed:
+            state["pool"][str(c["id"])] = moved(c, None)
+    for name, t in state["teams"].items():
+        t["personality"] = prev["teams"][name].get("personality", t["personality"])
+    state["season_no"] = season_no(prev) + 1
+    state["career"] = career_history(prev)
+    if prev.get("nominations_by_hand") is not None:
+        state["nominations_by_hand"] = prev["nominations_by_hand"]
+    return state
 
 
 # ════════════════════════════════════════════════════════════════════

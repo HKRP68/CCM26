@@ -334,9 +334,18 @@ class FlowTest(unittest.TestCase):
         bot_ids = _challenge_xi_selection(draft, "target")["player_ids"]
         self.assertEqual(len(bot_ids), 11)
         bot_xi = [AL.card(st, i) for i in bot_ids]
+        opp = draft["auction_league"]["opp_team"]
+        picked = AL.ai_playing_xi(AL.match_cards(st, opp), 4, draft["pitch_type"])
+        self.assertEqual(sorted(bot_ids), sorted(c["id"] for c in picked))
         counts = {r: sum(1 for c in bot_xi if c["category"] == r) for r in AL.ROLES}
-        self.assertEqual(counts, {"Batsman": 4, "Wicket Keeper": 1,
-                                  "All-rounder": 3, "Bowler": 3})
+        squad = AL.match_cards(st, opp)
+        dom = {r: sum(1 for c in squad if c["category"] == r and not c["is_overseas"])
+               for r in AL.ROLES}
+        if all(dom[r] >= n for r, n in AL.XI_TARGET.items()):
+            self.assertEqual(counts, {"Batsman": 4, "Wicket Keeper": 1,
+                                      "All-rounder": 3, "Bowler": 3})
+        self.assertGreaterEqual(counts["All-rounder"] + counts["Bowler"],
+                                AL.XI_BOWLING_OPTIONS)
         bats = [c["bat_rating"] for c in bot_xi]
         self.assertEqual(bats, sorted(bats, reverse=True))
         self.assertEqual(draft["host_team"], me)
@@ -372,6 +381,62 @@ class FlowTest(unittest.TestCase):
             s.close()
         _rid, st = self._state()
         self.assertEqual(st["table"][me]["pts"], 2)
+
+
+class NextSeasonFlowTest(FlowTest):
+    """Season N+1 from a finished career (FlowTest's helpers, its own test)."""
+
+    def test_help_anywhere(self):
+        pass
+
+    def test_entry_fee_and_direct_league_start(self):
+        pass
+
+    def test_career_to_first_fixture(self):
+        pass
+
+    def test_start_next_season_charges_once(self):
+        from database import get_session
+        from models import AuctionLeagueSave, User
+        from services import auction_league_service as AL
+        from test_auction_league import new_state, play_season
+        st = new_state(seed=4)
+        AL.apply_retentions(st, [])
+        AL.simulate_to_last(st)
+        AL.finish_auction(st)
+        play_season(st)
+        s = get_session()
+        try:
+            for row in s.query(AuctionLeagueSave).filter(
+                    AuctionLeagueSave.user_tg_id == TG_ID).all():
+                row.status = AL.PHASE_ABANDONED
+            row = AuctionLeagueSave(user_tg_id=TG_ID, league_id=1, league_name="IPL",
+                                    user_team_name="Team A", status="completed",
+                                    state_json="{}", version=0, reward_paid=True)
+            AL.store(row, st)
+            s.add(row)
+            s.query(User).filter(User.telegram_id == TG_ID).update({"total_gems": 250})
+            s.commit()
+            old_id = row.id
+        finally:
+            s.close()
+        self._press("al:hub")
+        self.assertIn("al:nexts", [d for _t, d in self.log[-1][1]])
+        self._press("al:nexts")
+        self.assertEqual(self._gems(), 150)
+        rid, nxt = self._state()
+        self.assertNotEqual(rid, old_id)
+        self.assertEqual(nxt["phase"], AL.PHASE_RETENTION)
+        self.assertEqual(AL.season_no(nxt), 2)
+        self.assertIn("Retention", self.log[-1][0])
+        # A second tap never charges again.
+        self._press("al:nexts")
+        self.assertEqual(self._gems(), 150)
+        s = get_session()
+        try:
+            self.assertTrue(AL.load(s.get(AuctionLeagueSave, old_id))["next_season_started"])
+        finally:
+            s.close()
 
 
 class RewardCooldownTest(unittest.TestCase):

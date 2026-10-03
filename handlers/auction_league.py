@@ -277,7 +277,24 @@ def _lot_rows(state, lot):
             [("⏭ Skip player", f"al:skip:{seq}"), ("⏩ Sim set", f"al:simset:{seq}"),
              ("⏭⏭ Sim to end", f"al:simall:{seq}")],
             [(fast, f"al:fast:{seq}"), ("⏸ Pause", f"al:pause:{seq}"), ("❓ Help", "al:help")],
-            [("📋 My squad", "al:squad"), ("💰 Purses", "al:purse"), ("📦 Sets", "al:sets")]]
+            [("📋 My squad", "al:squad"), ("💰 Purses", "al:purse"), ("📦 Sets", "al:sets")],
+            [("📰 Headlines", "al:news")]]
+
+
+def _news_block(state, title="📰 <b>Auction headlines</b>", limit=4, best=True):
+    """The headlines since you last saw them (marks them seen), or ''."""
+    ui = state.setdefault("ui", {})
+    fresh = AL.headlines(state, since=ui.get("news_seen", 0), limit=limit, best=best)
+    ui["news_seen"] = AL.news_mark(state)
+    return "\n".join([title] + fresh) if fresh else ""
+
+
+def _news_text(state):
+    rows = AL.headlines(state, limit=12)
+    state.setdefault("ui", {})["news_seen"] = AL.news_mark(state)
+    if not rows:
+        return "📰 <b>Auction headlines</b>\n\nNo big stories yet — the auction is just warming up."
+    return "\n".join(["📰 <b>Auction headlines</b> (latest)", ""] + rows)
 
 
 def _sim_summary_blocks(state, lots, by_team=False):
@@ -525,7 +542,9 @@ def _awards_text(state):
 def _hub(state, row):
     me = state["user_team"]
     lg = state["league"]["name"]
-    head = (f"🏏 <b>{_esc(lg)} Auction League</b>\n"
+    season = AL.season_no(state)
+    head = (f"🏏 <b>{_esc(lg)} Auction League</b>"
+            f"{f' · Season {season}' if season > 1 else ''}\n"
             f"Your franchise: <b>{_esc(me)}</b> · AI: {DIFF_LABEL.get(state.get('difficulty'), '')}")
     phase = state["phase"]
     if phase == AL.PHASE_RETENTION:
@@ -553,9 +572,37 @@ def _hub(state, row):
                   ("📈 Stats", "al:st:orange")],
                  [("📋 My squad", "al:squad"), ("❓ Help", "al:help"), ("🗑 Discard", "al:quit")]]
         return (head + f"\n\n📅 Season under way{where}\n{nxt}\n\n{HELP_LINE}"), rows
-    return _season_end_text(state), [[("🆕 New career", "al:new"), ("❓ Help", "al:help")],
-                                     [("📊 Final table", f"al:table:{row.id}"),
-                                      ("📈 Stats", "al:st:orange"), ("🏆 Awards", "al:awards")]]
+    return _season_end_text(state), [
+        *_next_season_rows(state),
+        [("🆕 New career", "al:new"), ("❓ Help", "al:help")],
+        [("📊 Final table", f"al:table:{row.id}"),
+         ("📈 Stats", "al:st:orange"), ("🏆 Awards", "al:awards")]]
+
+
+def _next_season_rows(state):
+    if state.get("next_season_started"):
+        return []
+    return [[(f"▶️ Start Season {AL.season_no(state) + 1} ({ENTRY_FEE_GEMS} 💎)", "al:nexts")]]
+
+
+FINISH_LABEL = {"champion": "🏆 Champions", "runner_up": "🥈 Runners-up",
+                "playoffs": "🎯 Playoffs", "league": "League stage"}
+
+
+def _career_text(state):
+    """Your career record and season-by-season history (two seasons or more)."""
+    rows = AL.career_history(state)
+    if len(rows) < 2:
+        return ""
+    rec = AL.career_record(state)
+    lines = [f"📜 <b>Career</b> — {rec['seasons']} seasons · 🏆 {rec['titles']} · "
+             f"finals {rec['finals']} · playoffs {rec['playoffs']} · "
+             f"won {rec['w']}/{rec['p']}"]
+    for r in rows[-6:]:
+        pos = f" (#{r['position']})" if r.get("position") else ""
+        lines.append(f"S{r['season']}: {FINISH_LABEL.get(r['finish'], r['finish'])}{pos} · "
+                     f"{r['w']}-{r['l']} · champs {_esc(r.get('champion') or '?')}")
+    return "\n".join(lines)
 
 
 def _purse_line(state):
@@ -571,10 +618,20 @@ def _season_end_text(state):
                "runner_up": "🥈 Runners-up — so close.",
                "playoffs": "🎯 You made the playoffs.",
                "league": "📉 Knocked out in the league stage."}[finish]
-    return (f"🏁 <b>{_esc(state['league']['name'])} Auction League — season over</b>\n\n"
+    season = AL.season_no(state)
+    text = (f"🏁 <b>{_esc(state['league']['name'])} Auction League — "
+            f"{f'Season {season}' if season > 1 else 'season'} over</b>\n\n"
             f"🏆 Champions: <b>{_esc(state.get('champion'))}</b>\n"
             f"🥈 Runners-up: {_esc(state.get('runner_up'))}\n\n"
             f"{_esc(me)}: {verdict}")
+    career = _career_text(state)
+    if career:
+        text += "\n\n" + career
+    if not state.get("next_season_started"):
+        text += (f"\n\n▶️ <b>Season {season + 1}</b>: every side keeps last season's squad "
+                 f"as its own for retentions and RTM, ratings move with form "
+                 f"(±2), and the career record carries on.")
+    return text
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -696,6 +753,9 @@ async def _advance(context, car, chat_id, tg_id, note=""):
         # Decided without you (you couldn't afford or fit him).
         batch.append(AL.lot_result_line(state, lot))
         ui["reported"] = lot["seq"]
+    news = _news_block(state)
+    if news:
+        batch.append(news)
     if state.get("lot") is None:
         car.save()
         if batch:
@@ -1203,6 +1263,68 @@ async def _cb_setup_go(q, context):
         session.close()
 
 
+async def _cb_next_season(q, context):
+    """▶️ Start Season N+1 — a new save carried on from the finished one."""
+    tg_id = q.from_user.id
+    session = get_session()
+    try:
+        if AL.active_save(session, tg_id) is not None:
+            await q.answer("Finish or discard your current career first.", show_alert=True)
+            return
+        row = AL.latest_save(session, tg_id)
+        if row is None or row.status != AL.PHASE_COMPLETED:
+            await q.answer("No finished season to carry on from.", show_alert=True)
+            return
+        prev = AL.load(row)
+        if prev.get("next_season_started"):
+            await q.answer("The next season has already started.", show_alert=True)
+            return
+        from models import User
+        user = session.query(User).filter(User.telegram_id == tg_id).first()
+        if user is None:
+            await q.answer("Use /debut first.", show_alert=True)
+            return
+        gems = int(user.total_gems or 0)
+        if gems < ENTRY_FEE_GEMS:
+            await q.answer(f"🎟 Entry fee is {ENTRY_FEE_GEMS} 💎 — you have {gems}.",
+                           show_alert=True)
+            return
+        state = AL.next_season_state(prev)
+        state["pending_retain"] = []
+        state["entry_fee_gems"] = ENTRY_FEE_GEMS
+        # Fee, new save and the "carried on" mark commit together.
+        user.total_gems = gems - ENTRY_FEE_GEMS
+        try:
+            from services.activity_service import log_activity
+            log_activity(session, user.id, "auction_league_entry",
+                         f"Auction League season {AL.season_no(state)} entry fee: "
+                         f"-{ENTRY_FEE_GEMS} gems", gems_change=-ENTRY_FEE_GEMS)
+        except Exception:
+            logger.exception("auction league: could not log the entry fee")
+        prev["next_season_started"] = True
+        AL.store(row, prev)
+        AL.create_save(session, tg_id, state)
+        session.commit()
+        await q.answer(f"Season {AL.season_no(state)} — −{ENTRY_FEE_GEMS} 💎")
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        moved = sorted(((c, c["last_delta"]) for c in state["pool"].values()
+                        if c.get("last_delta") and c.get("team") == state["user_team"]),
+                       key=lambda x: -x[1])
+        if moved:
+            lines = [f"📈 <b>Season {AL.season_no(state)} ratings</b> — your players"]
+            lines += [f"{'▲' if d > 0 else '▼'}{abs(d)} {_esc(c['name'])} → {c['rating']}"
+                      for c, d in moved[:12]]
+            await _send(context, q.message.chat_id, "\n".join(lines))
+        await _send_retention(context, q.message.chat_id, state)
+    except AuctionLeagueError as exc:
+        await q.answer(str(exc), show_alert=True)
+    finally:
+        session.close()
+
+
 # ── Retention ────────────────────────────────────────────────────────
 
 def _retention_text(state):
@@ -1376,12 +1498,16 @@ async def _do_sim(context, car, chat_id, tg_id, *, upto=None, all_=False):
     lot = state.get("lot")
     if lot:
         await _close_card(context, state, chat_id, "⏩ <i>Simulated…</i>")
+    _news_block(state)     # what came before is old news
     if all_:
         lots = AL.simulate_to_last(state)
         state.setdefault("ui", {})["reported"] = state["last_lot"]["seq"] if state.get("last_lot") else 0
         car.save()
         await _send_long(context, chat_id, _sim_summary_blocks(state, lots, by_team=True),
                          header="⏭ <b>Auction simulated to the end</b> — who went where")
+        news = _news_block(state, title="📰 <b>Top stories</b>", limit=6)
+        if news:
+            await _send(context, chat_id, news)
         await _finish_auction(context, car, chat_id)
         return
     lots = AL.simulate_set(state, upto=upto)
@@ -1390,6 +1516,9 @@ async def _do_sim(context, car, chat_id, tg_id, *, upto=None, all_=False):
     car.save()
     await _send_long(context, chat_id, _sim_summary_blocks(state, lots),
                      header="⏩ <b>Set simulated</b>")
+    news = _news_block(state, title="📰 <b>Top stories</b>", limit=5)
+    if news:
+        await _send(context, chat_id, news)
     await _advance(context, car, chat_id, tg_id)
 
 
@@ -1552,7 +1681,8 @@ async def _season_over(context, car, chat_id):
         text += f"\n\n<i>No reward: {_esc(note)}.</i>"
     await _send(context, chat_id, _awards_text(state))
     await _send(context, chat_id, text,
-                [[("📊 Final table", f"al:table:{car.row.id}"), ("📈 Stats", "al:st:orange")],
+                [*_next_season_rows(state),
+                 [("📊 Final table", f"al:table:{car.row.id}"), ("📈 Stats", "al:st:orange")],
                  [("🆕 New career", "al:new")]])
 
 
@@ -1844,6 +1974,10 @@ async def auction_league_callback(update: Update, context: ContextTypes.DEFAULT_
         async with _lock(context, tg_id):
             await _cb_setup_go(q, context)
         return
+    if action == "nexts":
+        async with _lock(context, tg_id):
+            await _cb_next_season(q, context)
+        return
 
     async with _lock(context, tg_id):
         car = _open(tg_id, include_completed=action in (
@@ -1951,6 +2085,11 @@ async def auction_league_callback(update: Update, context: ContextTypes.DEFAULT_
             elif action == "sets":
                 await q.answer()
                 await _send(context, chat_id, _sets_text(state))
+            elif action == "news":
+                await q.answer()
+                text = _news_text(state)
+                car.save()
+                await _send(context, chat_id, text)
             elif action == "table":
                 await q.answer()
                 if not state.get("table"):
