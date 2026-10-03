@@ -1943,6 +1943,8 @@ body {
 
 .comm-over-complete { border-left-color: #9ca3af; background: rgba(156, 163, 175, 0.06); }
 .comm-over-complete .comm-text { color: #b6bcc6; font-weight: 600; }
+.comm-sledge { border-left-color: #f59e0b; background: rgba(245, 158, 11, 0.10); }
+.comm-sledge .comm-text { color: #fbbf24; font-style: italic; }
 
 /* ── Recent-ball doodle timeline ──────────────────────────────────────── */
 .ball-timeline {

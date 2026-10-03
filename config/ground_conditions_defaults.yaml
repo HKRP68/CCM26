@@ -110,7 +110,7 @@ pitch_profiles:
       - {max: 99999, pct: 10}
 
   Hard:
-    description: "Hard, true surface with good carry — pace is rewarded, 220 is a contest (par ~219)"
+    description: "Hard, true surface with good carry — pace is rewarded, 215 is a contest (par ~212)"
     scoring_matrix:
       Dot: 0.3227
       Single: 0.3485
@@ -130,19 +130,19 @@ pitch_profiles:
       Leg spin: 0.94
       Wrist spin: 0.92
       default: 0.92
-    scoring_dynamics: {floor: 185, par_low: 212, par_high: 226, ceiling: 260, anomaly: 300}
+    scoring_dynamics: {floor: 180, par_low: 205, par_high: 220, ceiling: 250, anomaly: 272}
     chase_win_pct:
-      - {max: 150, pct: 93}
-      - {max: 170, pct: 88}
-      - {max: 190, pct: 80}
-      - {max: 210, pct: 67}
-      - {max: 230, pct: 52}
-      - {max: 250, pct: 37}
-      - {max: 270, pct: 23}
-      - {max: 99999, pct: 10}
+      - {max: 150, pct: 92}
+      - {max: 170, pct: 86}
+      - {max: 190, pct: 77}
+      - {max: 210, pct: 63}
+      - {max: 230, pct: 48}
+      - {max: 250, pct: 33}
+      - {max: 270, pct: 20}
+      - {max: 99999, pct: 9}
 
   Flat:
-    description: "Road with even bounce and no lateral movement — batting paradise (par ~238)"
+    description: "Road with even bounce and no lateral movement — batting paradise (par ~228; 270+ is a freak)"
     scoring_matrix:
       Dot: 0.3128
       Single: 0.344
@@ -162,19 +162,19 @@ pitch_profiles:
       Leg spin: 0.92
       Wrist spin: 0.94
       default: 0.88
-    scoring_dynamics: {floor: 195, par_low: 230, par_high: 246, ceiling: 285, anomaly: 320}
+    scoring_dynamics: {floor: 190, par_low: 220, par_high: 236, ceiling: 258, anomaly: 280}
     chase_win_pct:
-      - {max: 150, pct: 91}
-      - {max: 170, pct: 86}
-      - {max: 190, pct: 79}
-      - {max: 210, pct: 70}
-      - {max: 230, pct: 58}
-      - {max: 250, pct: 46}
-      - {max: 270, pct: 34}
-      - {max: 99999, pct: 24}
+      - {max: 150, pct: 89}
+      - {max: 170, pct: 83}
+      - {max: 190, pct: 75}
+      - {max: 210, pct: 65}
+      - {max: 230, pct: 53}
+      - {max: 250, pct: 41}
+      - {max: 270, pct: 30}
+      - {max: 99999, pct: 22}
 
   Dead:
-    description: "Lifeless shirtfront — nothing off the pitch for anyone, a batting festival (par ~250)"
+    description: "Lifeless shirtfront — nothing off the pitch for anyone, a batting festival (par ~236)"
     scoring_matrix:
       Dot: 0.2563
       Single: 0.3283
@@ -194,16 +194,16 @@ pitch_profiles:
       Leg spin: 0.70
       Wrist spin: 0.72
       default: 0.62
-    scoring_dynamics: {floor: 205, par_low: 242, par_high: 258, ceiling: 300, anomaly: 340}
+    scoring_dynamics: {floor: 200, par_low: 228, par_high: 244, ceiling: 265, anomaly: 290}
     chase_win_pct:
-      - {max: 150, pct: 96}
-      - {max: 170, pct: 93}
-      - {max: 190, pct: 89}
-      - {max: 210, pct: 84}
-      - {max: 230, pct: 75}
-      - {max: 250, pct: 64}
-      - {max: 270, pct: 52}
-      - {max: 99999, pct: 33}
+      - {max: 150, pct: 94}
+      - {max: 170, pct: 91}
+      - {max: 190, pct: 86}
+      - {max: 210, pct: 79}
+      - {max: 230, pct: 69}
+      - {max: 250, pct: 57}
+      - {max: 270, pct: 45}
+      - {max: 99999, pct: 30}
 
   Dusty:
     description: "Raging turner — every spinner is a threat and the middle overs strangle (par ~167)"

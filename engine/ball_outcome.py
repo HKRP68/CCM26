@@ -1195,6 +1195,9 @@ def calculate_outcome(
     bowling_approach: str = None,
     approach_context: dict = None,
     weight_hook=None,
+    drop_mult: float = 1.0,
+    misfield_mult: float = 1.0,
+    extras_split=None,
 ) -> dict:
     """
     Determines the outcome of a single delivery.
@@ -1205,6 +1208,12 @@ def calculate_outcome(
       - "wicket_type": if a wicket, one of ["Caught","Bowled","LBW","Run Out"], else None
       - "is_extra"   ∈ {True, False}
       - "batter_out" ∈ {True, False}
+
+    ``drop_mult`` / ``misfield_mult`` scale the fielding-error chances (only
+    when ``fielding_quality`` is given) and ``extras_split`` overrides the
+    ``[Wide, No Ball, Leg Bye, Byes]`` weights of an Extras outcome. Their
+    defaults leave the delivery exactly as it always was; /cipl and /letsplay
+    raise them for a fielding side under pressure.
 
     In the final 4 overs (over_number >= 16), boundary (4/6) and wicket probabilities
     are boosted based on pitch type:
@@ -1689,6 +1698,8 @@ def calculate_outcome(
         # fielding=90 → ~3% drop  |  fielding=60 → ~10% drop  |  fielding=30 → ~19% drop
         if wicket_choice in ("Caught", "Stumped") and fielding_quality is not None:
             drop_prob = max(0.02, 0.22 - (fielding_quality / 100.0) * 0.19)
+            if drop_mult != 1.0:
+                drop_prob = min(0.35, drop_prob * max(0.0, drop_mult))
             if random.random() < drop_prob:
                 # Dropped! Convert wicket into runs
                 result["batter_out"] = False
@@ -1745,6 +1756,8 @@ def calculate_outcome(
         else:
             extra_types   = ["Wide", "No Ball", "Leg Bye", "Byes"]
             extra_weights = [0.40,   0.25,      0.20,      0.15]
+        if extras_split:
+            extra_weights = list(extras_split)
         extra_choice  = random.choices(extra_types, weights=extra_weights)[0]
 
         # A4: Variable runs per extra type
@@ -1784,6 +1797,8 @@ def calculate_outcome(
         # fielding=90 → ~1.5%  |  fielding=60 → ~5%  |  fielding=30 → ~10%
         if result["runs"] in (0, 1) and fielding_quality is not None:
             misfield_prob = max(0.01, 0.115 - (fielding_quality / 100.0) * 0.105)
+            if misfield_mult != 1.0:
+                misfield_prob = min(0.25, misfield_prob * max(0.0, misfield_mult))
             if random.random() < misfield_prob:
                 result["runs"] += 1
                 result["misfield"] = True

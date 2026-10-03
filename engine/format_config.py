@@ -176,9 +176,9 @@ _T20_PITCH_PAR_FACTORS: Dict[str, float] = {
     "Dry":    0.95,
     "Bouncy": 0.98,
     "Even":   1.00,
-    "Hard":   1.12,
-    "Flat":   1.21,
-    "Dead":   1.28,
+    "Hard":   1.08,
+    "Flat":   1.16,
+    "Dead":   1.20,
 }
 
 _T20 = FormatConfig(
@@ -213,9 +213,9 @@ _T20 = FormatConfig(
         "Dry":    187,
         "Bouncy": 192,
         "Even":   196,
-        "Hard":   219,
-        "Flat":   238,
-        "Dead":   250,
+        "Hard":   212,
+        "Flat":   228,
+        "Dead":   236,
     },
     # Toss calls come from engine.pitch_registry so the Pitch Report card, the
     # bot captains and this table cannot disagree — they used to, on Flat.
@@ -235,9 +235,9 @@ _T20 = FormatConfig(
         "Dry":    9.4,
         "Bouncy": 9.6,
         "Even":   9.8,
-        "Hard":  11.0,
-        "Flat":  11.9,
-        "Dead":  12.5,
+        "Hard":  10.6,
+        "Flat":  11.4,
+        "Dead":  11.8,
     },
 )
 

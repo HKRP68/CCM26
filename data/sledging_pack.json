@@ -1,0 +1,52 @@
+{
+  "opener": {
+    "dots": [
+      "{bowler}: \"Going to score today, mate, or just keep me company?\"",
+      "{fielder} from slip: \"No clue which way this one is going.\"",
+      "{bowler}: \"Bat's for hitting, not for holding.\"",
+      "{fielder}: \"Easy now — this one's just here for the sightseeing.\""
+    ],
+    "boundaries": [
+      "{bowler} stares down {batter}: \"Enjoy that one. It's the last.\"",
+      "{fielder}: \"Lucky. Do that again.\"",
+      "{bowler} has a word: \"Edges count the same, eh?\""
+    ],
+    "beaten_then_hit": [
+      "{bowler}: \"Couldn't lay a bat on the last one, could you?\"",
+      "{fielder}: \"One good shot in an over — frame it.\""
+    ],
+    "drop": [
+      "{batter} to {fielder}: \"Thanks for that! Need a bigger pair of hands?\"",
+      "{batter} grins at {fielder}: \"Keep the gloves on next time.\""
+    ],
+    "chase": [
+      "{fielder}: \"Plenty of runs needed, not many balls. Feeling it yet?\"",
+      "{bowler}: \"Scoreboard's getting heavy, isn't it?\""
+    ]
+  },
+  "reply": [
+    "{batter}: \"Keep talking. I'll keep scoring.\"",
+    "{batter} just points at the scoreboard.",
+    "{batter}: \"Bowl better and you won't have to talk.\"",
+    "{batter} smiles, taps the bat, and takes guard again.",
+    "{batter}: \"Heard worse from my own dressing room.\""
+  ],
+  "escalation": [
+    "Words are exchanged — {bowler} and {batter} are nose to nose! The umpire steps in.",
+    "Things are heating up! The umpire has a stern word with both {bowler} and {batter}.",
+    "Captains called over — {bowler} and {batter} need separating!"
+  ],
+  "sendoff": [
+    "{bowler} gives {batter} a send-off — pointing to the pavilion!",
+    "A few choice words from {bowler} as {batter} walks off.",
+    "{bowler} roars in {batter}'s face. That one meant something."
+  ],
+  "outcome_fired": [
+    "🔥 {batter} is fired up — looking to take {bowler} down!",
+    "🔥 That's woken {batter} up. Here comes the counter-attack."
+  ],
+  "outcome_rattled": [
+    "😬 {batter} looks rattled — the chirp has got under the skin.",
+    "😬 {batter} is distracted. That's exactly what {bowler} wanted."
+  ]
+}

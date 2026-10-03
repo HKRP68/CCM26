@@ -45,6 +45,9 @@ EVENT_KEYS = [
     ("partnership_100","🤝 100 Partnership","A stand reaches 100"),
     ("match_won",      "🏆 Match Won",     "A side wins the match"),
     ("impact_player",  "🔄 Impact Player", "A team uses its Impact Player"),
+    # Over-by-over engine drama (services/match_drama.py). Without a row the
+    # bot posts its own built-in announcement.
+    ("dropped_catch",  "🫳 Dropped Catch", "A fielder puts down a catch"),
 ]
 # Cooldown in seconds — same (chat, event) can't fire twice within this window
 COOLDOWN_SECONDS = 8
@@ -77,7 +80,8 @@ def _pick_random(items, weight_fn):
 # This mirrors services.commentary_service._render for the same reason.
 CAPTION_FIELDS = (
     "player", "team", "opponent", "runs", "balls", "score", "overs",
-    "bowler", "figures", "wickets", "partnership", "margin",
+    "bowler", "figures", "wickets", "partnership", "margin", "fielder",
+    "dropped_on",
 )
 
 
@@ -129,7 +133,9 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
     ``cooldown=False`` is for milestones, which are rare and must not be
     swallowed by the anti-spam window meant for 6-6-6 overs.
 
-    Silent on any error — never break the match flow.
+    Silent on any error — never break the match flow. Returns True when
+    something was sent, so a caller with its own built-in message can fall
+    back to it when no admin row is configured.
     """
     if not event_key:
         return
@@ -169,6 +175,7 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
             try:
                 await context.bot.send_message(chat_id=chat_id, text=caption,
                                                parse_mode="HTML")
+                return True
             except Exception:
                 logger.exception(f"caption-only send failed for event {event_key}")
         return
@@ -189,6 +196,7 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
             # 'url'      -> Telegram fetches it directly
             # 'telegram' -> source IS a file_id from our storage channel
             await send(**{arg: source}, **kwargs)
+            return True
         elif source_type == "file":
             # Local file path — open and send. Note: on Render free tier, the
             # disk wipes on every deploy, so this is unreliable. Admins should
@@ -201,6 +209,7 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
                 return
             with open(full_path, "rb") as f:
                 await send(**{arg: f}, **kwargs)
+            return True
     except Exception:
         logger.exception(f"send_{kind} failed for event {event_key}")
 
