@@ -361,20 +361,30 @@ is run by the AI.
    slot 2 ₹14 Cr, slot 3 ₹10 Cr. With AI retentions on, each AI side keeps up
    to 3 of its stars (players in the league's top 20% by rating). A side that
    keeps 2 or fewer gets one 🔁 **Right To Match** card for its former players.
+   RTM works as at IPL 2025: when the former side calls it, the buyer gets
+   **one final raise**, then the former side matches that price or lets him go
+   (with buttons whichever side of it you are on).
 3. **Auction** — every purse starts at **₹120 Cr**. The players come in
    automatic sets: ⭐ Marquee (91+), then rating bands by role (Batsmen 90–87,
    All-rounders 90–87, Wicket-keepers 90–87, Bowlers 90–87, then 86–83, …),
-   then 🌱 Emerging, then one ⚡ Accelerated round for the unsold. Bidding goes
+   then 🌱 Emerging, then one ⚡ Accelerated round — as at the IPL, only the
+   unsold players the franchises **nominate** come back (the AI nominates by
+   need; you tick up to 8 from a list). Bidding goes
    **bid by bid**: after every AI raise it is your call — **Bid** (the next
    step), **🚀 Jump** (₹50 L higher, ₹1 Cr from ₹5 Cr up) or **Pass**, 20
    seconds each. Tap **⚡ Fast** to let the AI sides settle among themselves
    first, **⏭ Skip player** to have the player decided at once, or **⏸ Pause**
-   to stop the clock until you resume.
-   The AI bids like a real IPL franchise: it plans its purse (money left ÷
-   slots left, weighted by how good the player is), so marquee stars go for
-   ₹10–27 Cr, good regulars for ₹5–8 Cr and squad players near their base —
-   and it gets more urgent as the pool thins, so AI purses usually end the
-   auction with ₹4 Cr or less. Each franchise has a personality (Aggressive,
+   to stop the clock until you resume. The card calls 🔔 "Going once…" and
+   "Going twice…" as your clock runs down.
+   **Prices follow rating**: every player has a fair price that rises with
+   each OVR point (shown on the card as 💡 fair value), scaled so the league's
+   money is spent — base prices climb the same ladder (₹30 L up to ₹2 Cr). An
+   AI side pays that fair price moved only a little by its needs, personality
+   and purse, so a better player goes for more: typically ₹20 Cr+ for 96+,
+   ₹13 Cr for 90–92, ₹6 Cr for 84–86, under ₹3 Cr below 80. AI purses usually
+   end the auction with ₹4 Cr or less. 📰 **Headlines** report records,
+   bidding wars, steals, RTM calls, purses running dry and set wrap-ups (in the
+   "Meanwhile…" updates, after a sim, and from the 📰 button). Each franchise has a personality (Aggressive,
    Balanced, Thrifty, Moneyball), chases the roles it still needs, always
    keeps enough to finish a legal squad, and never leaves another side short
    of a role it still has to fill. Nobody pays more than the IPL record, ₹27 Cr.
@@ -398,7 +408,21 @@ is run by the AI.
    **4 BAT · 1 WK · 3 AR · 3 BOWL**, batting order by batting rating. Points
    table with NRR, last-five form and ✅Q / ❌E marks; full tournament stats;
    a season awards ceremony (Orange Cap, Purple Cap, MVP, Most Sixes, Emerging
-   Player, Team of the Tournament).
+   Player, Team of the Tournament) and a 🖼 **season summary card** (image).
+   The AI reads the pitch: on Dusty/Dry tracks its spinners get the bowling
+   places, on Green/Bouncy ones its quicks (the fixture card gives a one-line
+   pitch tip). **Form**: a player's last three matches against his role's
+   average move him up to ±2 OVR (▲▲ ▲ ▼ ▼▼ in `/alsquad`). **Injuries**: now
+   and then a player who took the field is out for one or two matches (team
+   news on the fixture card); a side that can't field a legal XI signs an
+   unsold replacement at base price.
+7. **Career** — at season's end, **▶️ Start Season N+1** (100 💎 again). Every
+   franchise's squad from last season becomes its own team for retentions and
+   RTM, unsigned players return to the pool, ratings move by last season's
+   performance (top MVPs +1/+2, flops −1, never more than ±2), and your career
+   record (titles, finals, playoffs, wins) carries on. Finished seasons go into
+   the 🏛 **Hall of Fame** (`/alhof`): most titles, most finals, best win %
+   (3+ seasons) and biggest buys.
 
 Matches are unranked practice. The **season** pays: champions 25,000 coins
 + 15 💎, runners-up 10,000 + 5 💎, playoffs 4,000 coins — once per career, at
@@ -423,6 +447,8 @@ most one paid season every 48 hours, and not if you conceded a match.
 | `/alfixtures` 💬 | — | Your fixtures and results, and the playoffs |
 | `/alstats` 💬 | — | Tournament stats: Orange & Purple Cap, MVP, most 6s, best strike rate, economy, top scores, best figures, team totals, your squad |
 | `/altrade` 💬 | — | The pre-season trade window: AI offers to answer, and your own swap proposals |
+| `/alcard` 💬 | — | Your last finished season's summary card (image) |
+| `/alhof` | `/rcplhof` | The Auction League Hall of Fame — titles, finals, win %, biggest buys. Works in groups too |
 | `/alquit` 💬 | `/aldiscard` | Discard your career (the entry fee is not refunded) — needed before starting a new one |
 
 ## 14. Fantasy league

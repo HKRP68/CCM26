@@ -1076,6 +1076,16 @@ def _migrate_add_columns():
     # auction that has always allowed jump bids must keep allowing them.
     _try_add("auction_seasons", "direct_bids", "INTEGER DEFAULT 1")
 
+    # ── Auction League: Hall of Fame ──
+    # Filled when a season finishes, so /alhof ranks careers without reading
+    # every save's JSON. NULL on seasons still running (and on older rows).
+    _try_add("auction_league_saves", "reward_paid_at", "TIMESTAMP")
+    for col, coltype in (("season_no", "INTEGER"), ("finish", "VARCHAR(20)"),
+                         ("champion_team", "VARCHAR(120)"), ("completed_at", "TIMESTAMP"),
+                         ("wins", "INTEGER"), ("played", "INTEGER"),
+                         ("top_buy_name", "VARCHAR(120)"), ("top_buy_lakh", "INTEGER")):
+        _try_add("auction_league_saves", col, coltype)
+
     # Backfill/normalize for Postgres + SQLite: ensure non-null and true by
     # default. All of these share one connection (savepoint per statement) so
     # they stay independently fault-tolerant without a round trip each.

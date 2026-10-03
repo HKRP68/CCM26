@@ -4929,5 +4929,15 @@ class AuctionLeagueSave(Base):
     # paid nothing (no trophy, a concession, or refused by the cooldown) —
     # the 48-hour cooldown counts only rows with this set.
     reward_paid_at = Column(DateTime, nullable=True)
+    # The Hall of Fame (/alhof): the season's outcome, copied out of the state
+    # when it finishes. NULL while it runs.
+    season_no = Column(Integer, nullable=True)
+    finish = Column(String(20), nullable=True)       # champion | runner_up | playoffs | league
+    champion_team = Column(String(120), nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    wins = Column(Integer, nullable=True)
+    played = Column(Integer, nullable=True)
+    top_buy_name = Column(String(120), nullable=True)
+    top_buy_lakh = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

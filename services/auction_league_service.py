@@ -1328,10 +1328,12 @@ def _note_headlines(state, lot):
                                   f"({money(spend[top])})", 1)
 
 
-def headlines(state, since=0, limit=None, best=False):
+def headlines(state, since=0, limit=None, best=False, min_weight=0):
     """Headlines numbered above ``since``; ``best`` picks the biggest stories
-    (in auction order), else the latest."""
-    rows = [n for n in state.get("news") or [] if n["no"] > int(since or 0)]
+    (in auction order), else the latest. ``min_weight`` drops the small ones
+    (set wrap-ups are 1, the big stories 3–5)."""
+    rows = [n for n in state.get("news") or []
+            if n["no"] > int(since or 0) and n["w"] >= min_weight]
     if limit is not None and len(rows) > limit:
         if best:
             keep = sorted(rows, key=lambda n: (-n["w"], -n["no"]))[:limit]
@@ -2043,8 +2045,9 @@ def nrr(row):
 def standings(state):
     """Team names in table order: points, then net run-rate, then wins."""
     table = state.get("table") or {}
+    row = lambda n: table.get(n) or _empty_row()
     return sorted(state["team_order"],
-                  key=lambda n: (-table[n]["pts"], -nrr(table[n]), -table[n]["w"], n))
+                  key=lambda n: (-row(n)["pts"], -nrr(row(n)), -row(n)["w"], n))
 
 
 def _stage_done(state, stage):
@@ -2942,6 +2945,15 @@ def latest_save(session, tg_id):
         .order_by(AuctionLeagueSave.id.desc()).first())
 
 
+def latest_completed(session, tg_id):
+    """The most recently finished season (for its card), or None."""
+    from models import AuctionLeagueSave
+    return (session.query(AuctionLeagueSave)
+            .filter(AuctionLeagueSave.user_tg_id == int(tg_id),
+                    AuctionLeagueSave.status == PHASE_COMPLETED)
+            .order_by(AuctionLeagueSave.id.desc()).first())
+
+
 def load(row):
     return json.loads(row.state_json)
 
@@ -2950,6 +2962,67 @@ def store(row, state):
     row.state_json = json.dumps(state, separators=(",", ":"))
     row.status = state["phase"]
     row.version = int(row.version or 0) + 1
+    if state["phase"] == PHASE_COMPLETED and getattr(row, "finish", None) is None:
+        _stamp_hall_of_fame(row, state)
+
+
+def _stamp_hall_of_fame(row, state):
+    """Copy the finished season's outcome onto the row's Hall of Fame columns."""
+    from datetime import datetime
+    summ = season_summary(state)
+    row.season_no = summ["season"]
+    row.finish = summ["finish"]
+    row.champion_team = summ["champion"]
+    row.completed_at = datetime.utcnow()
+    row.wins = summ["w"]
+    row.played = summ["p"]
+    if summ["top_buy"]:
+        row.top_buy_name = str(summ["top_buy"]["name"])[:120]
+        row.top_buy_lakh = int(summ["top_buy"]["price"])
+
+
+HOF_MIN_SEASONS = 1
+
+
+def hall_of_fame(session, limit=10):
+    """The /alhof boards from finished seasons: ``{board: [row dict, …]}``.
+
+    ``titles`` (then finals), ``finals``, ``win_pct`` (at least three seasons),
+    ``buys`` (the biggest single buys). Each row carries ``tg_id``.
+    """
+    from models import AuctionLeagueSave
+    rows = (session.query(AuctionLeagueSave)
+            .filter(AuctionLeagueSave.status == PHASE_COMPLETED,
+                    AuctionLeagueSave.finish.isnot(None)).all())
+    per = {}
+    buys = []
+    for r in rows:
+        p = per.setdefault(int(r.user_tg_id), {"tg_id": int(r.user_tg_id), "seasons": 0,
+                                               "titles": 0, "finals": 0, "playoffs": 0,
+                                               "w": 0, "p": 0})
+        p["seasons"] += 1
+        p["titles"] += r.finish == "champion"
+        p["finals"] += r.finish in ("champion", "runner_up")
+        p["playoffs"] += r.finish != "league"
+        p["w"] += int(r.wins or 0)
+        p["p"] += int(r.played or 0)
+        if r.top_buy_lakh:
+            buys.append({"tg_id": int(r.user_tg_id), "name": r.top_buy_name,
+                         "price": int(r.top_buy_lakh), "team": r.user_team_name,
+                         "league": r.league_name, "season": r.season_no})
+    people = [p for p in per.values() if p["seasons"] >= HOF_MIN_SEASONS]
+    for p in people:
+        p["pct"] = round(100.0 * p["w"] / p["p"], 1) if p["p"] else 0.0
+    return {
+        "titles": sorted((p for p in people if p["titles"]),
+                         key=lambda p: (-p["titles"], -p["finals"], -p["pct"], p["tg_id"]))[:limit],
+        "finals": sorted((p for p in people if p["finals"]),
+                         key=lambda p: (-p["finals"], -p["titles"], p["tg_id"]))[:limit],
+        "win_pct": sorted((p for p in people if p["seasons"] >= 3),
+                          key=lambda p: (-p["pct"], -p["p"], p["tg_id"]))[:limit],
+        "buys": sorted(buys, key=lambda b: (-b["price"], b["tg_id"]))[:limit],
+        "people": per,
+    }
 
 
 def create_save(session, tg_id, state):
