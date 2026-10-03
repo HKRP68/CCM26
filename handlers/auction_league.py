@@ -16,6 +16,8 @@ Commands (all DM-only):
   /skipplayer                simulate the player on the block
   /alpause /alresume         pause and resume the auction
   /alquit /aldiscard         discard the career (needed before a new one)
+  /alcard                    your last finished season's summary card
+  /alhof /rcplhof            the Hall of Fame (works in groups too)
 
 Every button carries the lot's sequence number, so a stale Bid button from an
 earlier lot is refused instead of bidding on whoever is on the block now. One
@@ -70,6 +72,22 @@ async def _send(context, chat_id, text, rows=None):
     except Exception:
         logger.exception("auction league: send failed")
         return None
+
+
+async def _send_season_card(context, chat_id, state):
+    """The season summary card (an image); False if it couldn't be made."""
+    from services.auction_league_card import render_season_card
+    try:
+        png = await asyncio.to_thread(render_season_card, state)
+        season = AL.season_no(state)
+        await context.bot.send_photo(
+            chat_id, photo=png, parse_mode="HTML",
+            caption=f"🏏 <b>{_esc(state['league']['name'])} Auction League</b> · "
+                    f"Season {season} — {_esc(state['user_team'])}")
+        return True
+    except Exception:
+        logger.exception("auction league: season card failed")
+        return False
 
 
 async def _send_long(context, chat_id, blocks, header="", rows=None):
@@ -169,7 +187,12 @@ def _squad_text(state, team):
         lines.append(f"\n<b>{AL.ROLE_PLURAL[role]}</b>")
         for c in cards:
             e = by_pid[c["id"]]
-            lines.append("• " + _card_line(c, e["price"], e["how"]))
+            form = AL.FORM_ICON.get(AL.form_level(state, c["id"]), "")
+            hurt = " 🚑" if AL.injured(state, c["id"]) else ""
+            lines.append("• " + _card_line(c, e["price"], e["how"])
+                         + (f" {form}" if form else "") + hurt)
+    if state.get("form") or state.get("injuries"):
+        lines.append("\n<i>▲ in form · ▼ out of form (±1–2 OVR next match) · 🚑 injured</i>")
     return "\n".join(lines)
 
 
@@ -211,7 +234,8 @@ def _lot_text(state, lot, note=""):
         f"🏏 <b>{_esc(c['name'])}</b>",
         f"{c['category']} · <b>{c['rating']}</b> OVR (Bat {c['bat_rating']} / Bowl {c['bowl_rating']})"
         f"{os_}{ex}",
-        f"Base price: {money(lot['base'])}",
+        f"Base price: {money(lot['base'])} · 💡 fair value ≈ "
+        f"{money(int(AL.fair_price(state, c['rating']) // 5 * 5))}",
     ]
     if lot.get("price") is None:
         lines.append("💰 No bids yet")
@@ -226,9 +250,20 @@ def _lot_text(state, lot, note=""):
         f"👛 Purse {money(t['purse'])} · max bid {money(AL.max_bid(state, me, c))}",
         f"👥 Squad {len(t['squad'])}/{AL.SQUAD_MAX} · needs: {AL.needs_line(state, me)}",
     ]
-    if lot.get("status") == "rtm":
-        lines += ["", f"🔁 <b>Right To Match!</b> {_esc(c['name'])} was yours. "
-                      f"Match {money(lot['price'])} and keep him?"]
+    status = lot.get("status")
+    buyer = state["teams"].get(lot.get("leader") or "", {}).get("short", "?")
+    if status == "rtm_intent":
+        lines += ["", f"🔁 <b>Right To Match!</b> {_esc(c['name'])} was yours — "
+                      f"{_esc(buyer)} bought him for {money(lot['price'])}. Use your RTM card? "
+                      f"They get one final raise, then you match it or let him go."]
+    elif status == "rtm":
+        raise_txt = (f"raised by {money(lot['rtm_raise'])} to {money(lot['price'])}"
+                     if lot.get("rtm_raise") else f"stood at {money(lot['price'])}")
+        lines += ["", f"🔁 {_esc(buyer)} {raise_txt}. <b>Match it</b> and keep him?"]
+    elif status == "rtm_raise":
+        holder = state["teams"].get(lot.get("rtm_team") or "", {}).get("short", "?")
+        lines += ["", f"🔁 <b>{_esc(holder)} used their Right To Match!</b> You get one "
+                      f"final raise — then they match it or he's yours."]
     mode = "⚡ Fast — the AI teams bid among themselves first" if state.get("fast") \
         else "🐢 Bid by bid — you answer every raise"
     lines.append(f"{mode}\n⏱️ {LOT_SECONDS}s to answer")
@@ -237,9 +272,16 @@ def _lot_text(state, lot, note=""):
 
 def _lot_rows(state, lot):
     seq = lot["seq"]
-    if lot.get("status") == "rtm":
-        return [[(f"✅ Use RTM {money(lot['price'])}", f"al:rtm:{seq}:1"),
+    status = lot.get("status")
+    if status == "rtm_intent":
+        return [[("🔁 Use RTM", f"al:rtm:{seq}:1"), ("❌ Let him go", f"al:rtm:{seq}:0")]]
+    if status == "rtm":
+        return [[(f"✅ Match {money(lot['price'])}", f"al:rtm:{seq}:1"),
                  ("❌ Let him go", f"al:rtm:{seq}:0")]]
+    if status == "rtm_raise":
+        row = [(f"⬆️ {money(p)}", f"al:rtr:{seq}:{p}") for p in AL.rtm_raise_options(state)]
+        return [row, [(f"✋ Stand at {money(lot['price'])}", f"al:rtr:{seq}:0")]] if row \
+            else [[(f"✋ Stand at {money(lot['price'])}", f"al:rtr:{seq}:0")]]
     ok, price = AL.user_may_bid(state)
     first = []
     if ok:
@@ -253,7 +295,25 @@ def _lot_rows(state, lot):
             [("⏭ Skip player", f"al:skip:{seq}"), ("⏩ Sim set", f"al:simset:{seq}"),
              ("⏭⏭ Sim to end", f"al:simall:{seq}")],
             [(fast, f"al:fast:{seq}"), ("⏸ Pause", f"al:pause:{seq}"), ("❓ Help", "al:help")],
-            [("📋 My squad", "al:squad"), ("💰 Purses", "al:purse"), ("📦 Sets", "al:sets")]]
+            [("📋 My squad", "al:squad"), ("💰 Purses", "al:purse"), ("📦 Sets", "al:sets")],
+            [("📰 Headlines", "al:news")]]
+
+
+def _news_block(state, title="📰 <b>Auction headlines</b>", limit=4, best=True, min_weight=0):
+    """The headlines since you last saw them (marks them seen), or ''."""
+    ui = state.setdefault("ui", {})
+    fresh = AL.headlines(state, since=ui.get("news_seen", 0), limit=limit, best=best,
+                         min_weight=min_weight)
+    ui["news_seen"] = AL.news_mark(state)
+    return "\n".join([title] + fresh) if fresh else ""
+
+
+def _news_text(state):
+    rows = AL.headlines(state, limit=12)
+    state.setdefault("ui", {})["news_seen"] = AL.news_mark(state)
+    if not rows:
+        return "📰 <b>Auction headlines</b>\n\nNo big stories yet — the auction is just warming up."
+    return "\n".join(["📰 <b>Auction headlines</b> (latest)", ""] + rows)
 
 
 def _sim_summary_blocks(state, lots, by_team=False):
@@ -335,7 +395,25 @@ def _result_digest(state, played):
     blocks = ["📅 <b>Around the league</b>"]
     for fx in played:
         blocks.append(_fixture_line(state, fx))
+    news = _injury_news(state, played)
+    if news:
+        blocks.append("🚑 <b>Team news</b>\n" + "\n".join(news))
     return blocks
+
+
+def _injury_news(state, fixtures):
+    lines = []
+    for fx in fixtures:
+        for n in fx.get("news") or []:
+            who = _who(state, n["pid"])
+            if n["kind"] == "injured":
+                lines.append(f"• {who} injured — out for {n['matches']} "
+                             f"match{'es' if n['matches'] > 1 else ''}")
+            elif n["kind"] == "fit":
+                lines.append(f"• {who} is fit again")
+            elif n["kind"] == "replacement":
+                lines.append(f"• {who} signed as an injury replacement")
+    return lines
 
 
 def _report_blocks(state):
@@ -483,7 +561,9 @@ def _awards_text(state):
 def _hub(state, row):
     me = state["user_team"]
     lg = state["league"]["name"]
-    head = (f"🏏 <b>{_esc(lg)} Auction League</b>\n"
+    season = AL.season_no(state)
+    head = (f"🏏 <b>{_esc(lg)} Auction League</b>"
+            f"{f' · Season {season}' if season > 1 else ''}\n"
             f"Your franchise: <b>{_esc(me)}</b> · AI: {DIFF_LABEL.get(state.get('difficulty'), '')}")
     phase = state["phase"]
     if phase == AL.PHASE_RETENTION:
@@ -511,9 +591,38 @@ def _hub(state, row):
                   ("📈 Stats", "al:st:orange")],
                  [("📋 My squad", "al:squad"), ("❓ Help", "al:help"), ("🗑 Discard", "al:quit")]]
         return (head + f"\n\n📅 Season under way{where}\n{nxt}\n\n{HELP_LINE}"), rows
-    return _season_end_text(state), [[("🆕 New career", "al:new"), ("❓ Help", "al:help")],
-                                     [("📊 Final table", f"al:table:{row.id}"),
-                                      ("📈 Stats", "al:st:orange"), ("🏆 Awards", "al:awards")]]
+    return _season_end_text(state), [
+        *_next_season_rows(state),
+        [("🆕 New career", "al:new"), ("❓ Help", "al:help")],
+        [("📊 Final table", f"al:table:{row.id}"),
+         ("📈 Stats", "al:st:orange"), ("🏆 Awards", "al:awards")],
+        [("🖼 Season card", "al:card"), ("🏛 Hall of Fame", "al:hof")]]
+
+
+def _next_season_rows(state):
+    if state.get("next_season_started"):
+        return []
+    return [[(f"▶️ Start Season {AL.season_no(state) + 1} ({ENTRY_FEE_GEMS} 💎)", "al:nexts")]]
+
+
+FINISH_LABEL = {"champion": "🏆 Champions", "runner_up": "🥈 Runners-up",
+                "playoffs": "🎯 Playoffs", "league": "League stage"}
+
+
+def _career_text(state):
+    """Your career record and season-by-season history (two seasons or more)."""
+    rows = AL.career_history(state)
+    if len(rows) < 2:
+        return ""
+    rec = AL.career_record(state)
+    lines = [f"📜 <b>Career</b> — {rec['seasons']} seasons · 🏆 {rec['titles']} · "
+             f"finals {rec['finals']} · playoffs {rec['playoffs']} · "
+             f"won {rec['w']}/{rec['p']}"]
+    for r in rows[-6:]:
+        pos = f" (#{r['position']})" if r.get("position") else ""
+        lines.append(f"S{r['season']}: {FINISH_LABEL.get(r['finish'], r['finish'])}{pos} · "
+                     f"{r['w']}-{r['l']} · champs {_esc(r.get('champion') or '?')}")
+    return "\n".join(lines)
 
 
 def _purse_line(state):
@@ -529,10 +638,20 @@ def _season_end_text(state):
                "runner_up": "🥈 Runners-up — so close.",
                "playoffs": "🎯 You made the playoffs.",
                "league": "📉 Knocked out in the league stage."}[finish]
-    return (f"🏁 <b>{_esc(state['league']['name'])} Auction League — season over</b>\n\n"
+    season = AL.season_no(state)
+    text = (f"🏁 <b>{_esc(state['league']['name'])} Auction League — "
+            f"{f'Season {season}' if season > 1 else 'season'} over</b>\n\n"
             f"🏆 Champions: <b>{_esc(state.get('champion'))}</b>\n"
             f"🥈 Runners-up: {_esc(state.get('runner_up'))}\n\n"
             f"{_esc(me)}: {verdict}")
+    career = _career_text(state)
+    if career:
+        text += "\n\n" + career
+    if not state.get("next_season_started"):
+        text += (f"\n\n▶️ <b>Season {season + 1}</b>: every side keeps last season's squad "
+                 f"as its own for retentions and RTM, ratings move with form "
+                 f"(±2), and the career record carries on.")
+    return text
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -543,8 +662,9 @@ def _cancel_timer(context, tg_id):
     jq = getattr(context, "job_queue", None)
     if not jq:
         return
-    for job in jq.get_jobs_by_name(f"al_lot_{tg_id}"):
-        job.schedule_removal()
+    for name in (f"al_lot_{tg_id}", f"al_call_{tg_id}"):
+        for job in jq.get_jobs_by_name(name):
+            job.schedule_removal()
 
 
 def _arm_timer(context, tg_id, chat_id, seq):
@@ -554,6 +674,62 @@ def _arm_timer(context, tg_id, chat_id, seq):
         return
     jq.run_once(_lot_timeout, LOT_SECONDS, name=f"al_lot_{tg_id}",
                 data={"tg_id": tg_id, "chat_id": chat_id, "seq": seq})
+    # The auctioneer: "Going once…" and "Going twice…" as the clock runs down.
+    for left, call in ((CALL_ONCE_AT, 1), (CALL_TWICE_AT, 2)):
+        jq.run_once(_auctioneer_call, LOT_SECONDS - left, name=f"al_call_{tg_id}",
+                    data={"tg_id": tg_id, "chat_id": chat_id, "seq": seq, "call": call})
+
+
+CALL_ONCE_AT = 12      # seconds left on the clock
+CALL_TWICE_AT = 6
+CALL_LINES = {1: "🔔 <b>Going once…</b>", 2: "🔔🔔 <b>Going twice…</b>"}
+
+
+async def _auctioneer_call(context):
+    data = context.job.data or {}
+    tg_id = data.get("tg_id")
+    async with _lock(context, tg_id):
+        car = _open(tg_id)
+        try:
+            state = car.state
+            if not state or state["phase"] != AL.PHASE_AUCTION or state.get("paused"):
+                return
+            lot = state.get("lot")
+            mid = (state.get("ui") or {}).get("lot_msg")
+            if not lot or lot["seq"] != data.get("seq") or not mid:
+                return
+            text = _lot_text(state, lot) + "\n" + CALL_LINES[data["call"]]
+            try:
+                await context.bot.edit_message_text(
+                    text, chat_id=data["chat_id"], message_id=mid, parse_mode="HTML",
+                    reply_markup=_kb(_lot_rows(state, lot)))
+            except Exception:
+                pass
+        finally:
+            car.session.close()
+
+
+# ── Accelerated-round nominations ─────────────────────────────────────
+
+def _noms_text(state):
+    picked = state.get("noms_draft") or []
+    lines = ["⚡ <b>Accelerated round — nominations</b>",
+             "Every set is done. As at the IPL, only the unsold players somebody "
+             f"nominates come back. The AI sides pick theirs; tap up to "
+             f"{AL.ACCEL_NOMS_USER} of yours, then ✅ Done.",
+             f"\nPicked: <b>{len(picked)}</b>/{AL.ACCEL_NOMS_USER}"]
+    return "\n".join(lines)
+
+
+def _noms_rows(state):
+    picked = set(state.get("noms_draft") or [])
+    rows = []
+    for c in AL.nomination_choices(state, 24):
+        mark = "✅ " if c["id"] in picked else ""
+        rows.append([(f"{mark}{c['name']} · {c['rating']} {_role(c)} · "
+                      f"{money(AL.base_price(c['rating']))}", f"al:nom:{c['id']}")])
+    rows.append([("✅ Done", "al:nomok")])
+    return rows
 
 
 async def _close_card(context, state, chat_id, line):
@@ -592,16 +768,26 @@ async def _advance(context, car, chat_id, tg_id, note=""):
             lot = AL.open_next_lot(state)
             if lot is None:
                 break
-        if lot["status"] in ("open", "rtm") and state.get("lot") is lot:
+        if lot["status"] in ("open",) + AL.RTM_WAITING and state.get("lot") is lot:
             break
         # Decided without you (you couldn't afford or fit him).
         batch.append(AL.lot_result_line(state, lot))
         ui["reported"] = lot["seq"]
+    # With other news to post anyway, every headline rides along; on its own a
+    # message is worth sending only for a big story (not a set wrap-up).
+    news = _news_block(state, min_weight=0 if batch else 3)
+    if news:
+        batch.append(news)
     if state.get("lot") is None:
-        # Nothing left to sell: close the auction and start the season.
         car.save()
         if batch:
             await _send_long(context, chat_id, batch)
+        if state.get("awaiting_noms"):
+            # The sets are done: nominations for the accelerated round.
+            _cancel_timer(context, tg_id)
+            await _send(context, chat_id, _noms_text(state), _noms_rows(state))
+            return
+        # Nothing left to sell: close the auction and start the season.
         await _finish_auction(context, car, chat_id)
         return
     lot = state["lot"]
@@ -700,8 +886,10 @@ async def _lot_timeout(context):
             lot = state.get("lot")
             if not lot or lot["seq"] != seq:
                 return
-            if lot["status"] == "rtm":
+            if lot["status"] in ("rtm_intent", "rtm"):
                 AL.user_rtm(state, False)
+            elif lot["status"] == "rtm_raise":
+                AL.user_final_raise(state, None)
             else:
                 AL.user_pass(state)
             await _advance(context, car, chat_id, tg_id, note="⏰ Time's up — you passed.")
@@ -724,8 +912,8 @@ def help_text():
     champ, runner, playoffs = AL.REWARD_CHAMPION, AL.REWARD_RUNNER_UP, AL.REWARD_PLAYOFFS
     return (
         "🏏 <b>Auction League — help</b>\n"
-        "Your solo IPL-style career: run one franchise, the AI runs the rest. "
-        "Played in a private chat with me.\n\n"
+        "Your solo IPL-style career against AI franchises, in a private chat "
+        "with me.\n\n"
         "🚀 <b>Getting started</b>\n"
         "<blockquote expandable>"
         "• <code>/rcpl</code> — pick a league, or <code>/rcpl IPL</code> to jump "
@@ -739,25 +927,26 @@ def help_text():
         f"• Keep up to {AL.MAX_RETAIN} of your own players: {retain}\n"
         "• With AI retentions on, each AI side keeps up to 3 of its stars "
         "(the league's top 20%)\n"
-        "• Keep 2 or fewer and you get one 🔁 Right To Match card: when a former "
-        "player of yours is sold, you may match the price and keep him"
+        "• Keep 2 or fewer → one 🔁 Right To Match card: when your former player "
+        "is sold, the buyer gets one final raise, then you match it or let him go"
         "</blockquote>\n"
         "🔨 <b>The auction</b>\n"
         "<blockquote expandable>"
         f"• Every purse starts at <b>{money(AL.PURSE_LAKH)}</b>\n"
         "• Sets run ⭐ Marquee → rating bands by role (Batsmen 90–87, "
-        "All-rounders 90–87…) → 🌱 Emerging → ⚡ Accelerated (the unsold)\n"
+        "All-rounders 90–87…) → 🌱 Emerging → ⚡ Accelerated (unsold players the "
+        "teams nominate)\n"
         f"• Bid by bid: after every AI raise it's your call — {LOT_SECONDS}s per turn, "
         "no answer counts as a pass\n"
         "• 🔨 <b>Bid</b> — the next step · 🚀 <b>Jump</b> — ₹50 L higher "
         "(₹1 Cr from ₹5 Cr) · 🙅 <b>Pass</b> — drop out\n"
         "• ⚡ <b>Fast</b> — let the AI sides settle among themselves before you're asked\n"
         "• ⏭ <b>Skip player</b> — decide this player now (your side bids on autopilot)\n"
-        "• ⏩ <b>Sim set</b> / ⏭⏭ <b>Sim to end</b> — simulate the rest of the set "
-        "or the whole auction, and get who went where\n"
+        "• ⏩ <b>Sim set</b> / ⏭⏭ <b>Sim to end</b> — simulate the set or the "
+        "whole auction\n"
         "• ⏸ <b>Pause</b> — stop the clock; ▶️ <b>Resume</b> when you're back\n"
-        f"• AI franchises bid like real ones and spend their purses down — "
-        f"stars can reach {money(AL.RECORD_PRICE)}"
+        f"• Prices follow rating (💡 fair value on each card); AI purses run low, "
+        f"stars reach {money(AL.RECORD_PRICE)} · 📰 Headlines for the big stories"
         "</blockquote>\n"
         "🔁 <b>Trade window</b>\n"
         "<blockquote expandable>"
@@ -772,7 +961,7 @@ def help_text():
         f"• At least {AL.ROLE_MIN[AL.ROLE_BAT]} BAT, {AL.ROLE_MIN[AL.ROLE_BOWL]} BOWL, "
         f"{AL.ROLE_MIN[AL.ROLE_WK]} WK, {AL.ROLE_MIN[AL.ROLE_AR]} AR · at most "
         f"{AL.SQUAD_MAX} players and {AL.OVERSEAS_SQUAD_CAP} overseas\n"
-        "• You can never bid more than leaves enough to finish a legal squad\n"
+        "• You can't bid away the money a legal squad needs\n"
         "• Still short at the end? You're topped up from the unsold players at "
         "base price"
         "</blockquote>\n"
@@ -780,16 +969,22 @@ def help_text():
         "<blockquote expandable>"
         "• Everyone plays everyone once, then the playoffs: Qualifier 1 (1 v 2), "
         "Eliminator (3 v 4), Qualifier 2, Final\n"
-        "• Every match is at the hosts' ground on a pitch drawn at random\n"
+        "• At the hosts' ground, on a random pitch\n"
         f"• Your matches: {AL.OVERS} overs, ball by ball — Playing XI, toss, Impact "
-        "Player. Other matches are simulated instantly\n"
+        "Player. The others are simulated\n"
         "• AI sides field 4 BAT · 1 WK · 3 AR · 3 BOWL, best batters at the top\n"
         "• Points table with NRR, last-five form and ✅Q / ❌E marks\n"
-        "• /alstats — Orange & Purple Caps, MVP, 6s, strike rate, economy, top "
-        "scores, best figures, team totals, your squad\n"
+        "• Form ▲/▼ moves players ±2 OVR; injuries are rare · the AI picks spin "
+        "on turners, pace on green tops\n"
+        "• /alstats — caps, MVP, records and more\n"
         "• Season awards and a Team of the Tournament at the end\n"
-        "• 🏳️ Concede a match if you must — it counts as a loss and forfeits the "
-        "season reward"
+        "• 🏳️ Conceding = a loss and no season reward"
+        "</blockquote>\n"
+        "📜 <b>Career</b>\n"
+        "<blockquote expandable>"
+        f"• ▶️ Start the next season ({ENTRY_FEE_GEMS} 💎): last season's squads are "
+        "kept for retention and RTM, ratings move ±2 with performance\n"
+        "• 🖼 /alcard season card · 🏛 /alhof Hall of Fame"
         "</blockquote>\n"
         "🏆 <b>Rewards</b>\n"
         "<blockquote expandable>"
@@ -807,6 +1002,7 @@ def help_text():
         "/alsets · /alsquad · /alpurse — sets, your squad, every purse\n"
         "/altrade — the trade window (before your first match)\n"
         "/alplay — your next match · /altable · /alfixtures · /alstats\n"
+        "/alcard · /alhof — season card · Hall of Fame\n"
         "/alquit — discard your career"
         "</blockquote>\n\n"
         f"{HELP_LINE}"
@@ -1097,6 +1293,68 @@ async def _cb_setup_go(q, context):
         session.close()
 
 
+async def _cb_next_season(q, context):
+    """▶️ Start Season N+1 — a new save carried on from the finished one."""
+    tg_id = q.from_user.id
+    session = get_session()
+    try:
+        if AL.active_save(session, tg_id) is not None:
+            await q.answer("Finish or discard your current career first.", show_alert=True)
+            return
+        row = AL.latest_save(session, tg_id)
+        if row is None or row.status != AL.PHASE_COMPLETED:
+            await q.answer("No finished season to carry on from.", show_alert=True)
+            return
+        prev = AL.load(row)
+        if prev.get("next_season_started"):
+            await q.answer("The next season has already started.", show_alert=True)
+            return
+        from models import User
+        user = session.query(User).filter(User.telegram_id == tg_id).first()
+        if user is None:
+            await q.answer("Use /debut first.", show_alert=True)
+            return
+        gems = int(user.total_gems or 0)
+        if gems < ENTRY_FEE_GEMS:
+            await q.answer(f"🎟 Entry fee is {ENTRY_FEE_GEMS} 💎 — you have {gems}.",
+                           show_alert=True)
+            return
+        state = AL.next_season_state(prev)
+        state["pending_retain"] = []
+        state["entry_fee_gems"] = ENTRY_FEE_GEMS
+        # Fee, new save and the "carried on" mark commit together.
+        user.total_gems = gems - ENTRY_FEE_GEMS
+        try:
+            from services.activity_service import log_activity
+            log_activity(session, user.id, "auction_league_entry",
+                         f"Auction League season {AL.season_no(state)} entry fee: "
+                         f"-{ENTRY_FEE_GEMS} gems", gems_change=-ENTRY_FEE_GEMS)
+        except Exception:
+            logger.exception("auction league: could not log the entry fee")
+        prev["next_season_started"] = True
+        AL.store(row, prev)
+        AL.create_save(session, tg_id, state)
+        session.commit()
+        await q.answer(f"Season {AL.season_no(state)} — −{ENTRY_FEE_GEMS} 💎")
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        moved = sorted(((c, c["last_delta"]) for c in state["pool"].values()
+                        if c.get("last_delta") and c.get("team") == state["user_team"]),
+                       key=lambda x: -x[1])
+        if moved:
+            lines = [f"📈 <b>Season {AL.season_no(state)} ratings</b> — your players"]
+            lines += [f"{'▲' if d > 0 else '▼'}{abs(d)} {_esc(c['name'])} → {c['rating']}"
+                      for c, d in moved[:12]]
+            await _send(context, q.message.chat_id, "\n".join(lines))
+        await _send_retention(context, q.message.chat_id, state)
+    except AuctionLeagueError as exc:
+        await q.answer(str(exc), show_alert=True)
+    finally:
+        session.close()
+
+
 # ── Retention ────────────────────────────────────────────────────────
 
 def _retention_text(state):
@@ -1204,7 +1462,10 @@ async def _cb_lot(q, context, car, action, seq, arg=None):
             await q.answer("Passed")
         elif action == "rtm":
             AL.user_rtm(state, arg == "1")
-            await q.answer("RTM used!" if arg == "1" else "Let go")
+            await q.answer("Done" if arg == "1" else "Let go")
+        elif action == "rtr":
+            AL.user_final_raise(state, int(arg) or None)
+            await q.answer("Final raise in" if int(arg) else "You stand")
         else:
             return
     except AuctionLeagueError as exc:
@@ -1267,12 +1528,16 @@ async def _do_sim(context, car, chat_id, tg_id, *, upto=None, all_=False):
     lot = state.get("lot")
     if lot:
         await _close_card(context, state, chat_id, "⏩ <i>Simulated…</i>")
+    _news_block(state)     # what came before is old news
     if all_:
         lots = AL.simulate_to_last(state)
         state.setdefault("ui", {})["reported"] = state["last_lot"]["seq"] if state.get("last_lot") else 0
         car.save()
         await _send_long(context, chat_id, _sim_summary_blocks(state, lots, by_team=True),
                          header="⏭ <b>Auction simulated to the end</b> — who went where")
+        news = _news_block(state, title="📰 <b>Top stories</b>", limit=6)
+        if news:
+            await _send(context, chat_id, news)
         await _finish_auction(context, car, chat_id)
         return
     lots = AL.simulate_set(state, upto=upto)
@@ -1281,6 +1546,9 @@ async def _do_sim(context, car, chat_id, tg_id, *, upto=None, all_=False):
     car.save()
     await _send_long(context, chat_id, _sim_summary_blocks(state, lots),
                      header="⏩ <b>Set simulated</b>")
+    news = _news_block(state, title="📰 <b>Top stories</b>", limit=5)
+    if news:
+        await _send(context, chat_id, news)
     await _advance(context, car, chat_id, tg_id)
 
 
@@ -1404,6 +1672,17 @@ async def _season_step(context, car, chat_id, tg_id):
             f"{where}\n\n"
             f"Opponent strength: {AL.team_strength(state, opp)['ovr']} OVR · "
             f"yours {AL.team_strength(state, me)['ovr']} OVR")
+    mine_news = _injury_news(state, [f for f in state["fixtures"] if f["status"] == "done"
+                                     and me in (f["home"], f["away"])][-1:])
+    if mine_news:
+        text += "\n\n🚑 <b>Team news</b>\n" + "\n".join(mine_news)
+    out_now = [_esc(AL.card(state, p)["name"]) for p in (state.get("injuries") or {})
+               if AL.owner_of(state, p) == me]
+    if out_now:
+        text += f"\n🚑 Unavailable for you: {', '.join(out_now)}"
+    tip = AL.PITCH_TIPS.get(fx.get("pitch") or "")
+    if tip:
+        text += f"\n🌱 {_esc(fx['pitch'])}: {tip}"
     form = "".join(AL.recent_form(state, opp))
     if form:
         text += f"\n{_esc(_short(state, opp))} form: {form}"
@@ -1431,8 +1710,10 @@ async def _season_over(context, car, chat_id):
     elif note:
         text += f"\n\n<i>No reward: {_esc(note)}.</i>"
     await _send(context, chat_id, _awards_text(state))
+    await _send_season_card(context, chat_id, state)
     await _send(context, chat_id, text,
-                [[("📊 Final table", f"al:table:{car.row.id}"), ("📈 Stats", "al:st:orange")],
+                [*_next_season_rows(state),
+                 [("📊 Final table", f"al:table:{car.row.id}"), ("📈 Stats", "al:st:orange")],
                  [("🆕 New career", "al:new")]])
 
 
@@ -1471,8 +1752,8 @@ async def _launch_fixture(q, context, car, no):
         league_record=league, league_key=state["league"].get("key"),
         league_name=f"{state['league']['name']} Auction League · {stage}",
         host_team=me, target_team=opp,
-        host_squad=AL.squad_card_dicts(state, me),
-        target_squad=AL.squad_card_dicts(state, opp),
+        host_squad=AL.match_cards(state, me),
+        target_squad=AL.match_cards(state, opp),
         tag=tag, home_team=fx["home"],
         team_codes={n: state["teams"][n]["short"] for n in (me, opp)},
         session=session, pitch=pitch, venue=fx.get("venue"))
@@ -1517,6 +1798,75 @@ def _fixtures_text(state):
     if po:
         lines += ["", "🏆 <b>Playoffs</b>"] + [_fixture_line(state, f) for f in po]
     return "\n".join(lines)
+
+
+async def alcard_handler(update, context):
+    """/alcard — your last finished season's summary card."""
+    if not await _require_dm(update, context):
+        return
+    session = get_session()
+    try:
+        row = AL.latest_completed(session, update.effective_user.id)
+        state = AL.load(row) if row is not None else None
+    finally:
+        session.close()
+    if state is None:
+        await update.effective_message.reply_text(
+            "No finished Auction League season yet — the card comes at season's end.")
+        return
+    if not await _send_season_card(context, update.effective_chat.id, state):
+        await update.effective_message.reply_text("❌ Couldn't draw the card — try again.")
+
+
+def _hof_text(session, me=None):
+    """The /alhof Hall of Fame (names from ``users``)."""
+    from models import User
+    hof = AL.hall_of_fame(session)
+    ids = {p["tg_id"] for key in ("titles", "finals", "win_pct") for p in hof[key]}
+    ids |= {b["tg_id"] for b in hof["buys"]}
+    if me:
+        ids.add(int(me))
+    names = {}
+    if ids:
+        for u in session.query(User).filter(User.telegram_id.in_(ids)).all():
+            names[int(u.telegram_id)] = u.first_name or (f"@{u.username}" if u.username
+                                                         else "Player")
+    who = lambda tg: _esc(names.get(int(tg), "Player"))
+    medal = lambda i: ("🥇", "🥈", "🥉")[i] if i < 3 else f"{i + 1}."
+    lines = ["🏛 <b>Auction League — Hall of Fame</b>"]
+    if not hof["people"]:
+        return lines[0] + "\n\nNo season has finished yet. Be the first: /rcpl"
+    lines += ["", "🏆 <b>Most titles</b>"]
+    lines += [f"{medal(i)} {who(p['tg_id'])} — {p['titles']} 🏆 · {p['finals']} finals"
+              for i, p in enumerate(hof["titles"])] or ["—"]
+    lines += ["", "🥈 <b>Most finals</b>"]
+    lines += [f"{medal(i)} {who(p['tg_id'])} — {p['finals']}"
+              for i, p in enumerate(hof["finals"][:5])] or ["—"]
+    lines += ["", "📈 <b>Best win %</b> <i>(3+ seasons)</i>"]
+    lines += [f"{medal(i)} {who(p['tg_id'])} — {p['pct']}% ({p['w']}/{p['p']})"
+              for i, p in enumerate(hof["win_pct"][:5])] or ["—"]
+    lines += ["", "💰 <b>Biggest buys</b>"]
+    lines += [f"{medal(i)} {_esc(b['name'])} — {money(b['price'])} · {who(b['tg_id'])} "
+              f"({_esc(b['team'] or '')})" for i, b in enumerate(hof["buys"][:5])] or ["—"]
+    mine = hof["people"].get(int(me)) if me else None
+    if mine:
+        lines += ["", f"👤 <b>You</b>: {mine['seasons']} season"
+                      f"{'s' if mine['seasons'] != 1 else ''} · {mine['titles']} 🏆 · "
+                      f"{mine['finals']} finals · {mine['playoffs']} playoffs · "
+                      f"won {mine['w']}/{mine['p']}"]
+    return "\n".join(lines)
+
+
+async def alhof_handler(update, context):
+    """/alhof — the Hall of Fame (works in groups too)."""
+    chat = update.effective_chat
+    private = getattr(chat, "type", "private") == "private"
+    session = get_session()
+    try:
+        text = _hof_text(session, update.effective_user.id if private else None)
+    finally:
+        session.close()
+    await update.effective_message.reply_text(text, parse_mode="HTML")
 
 
 async def alsets_handler(update, context):
@@ -1724,6 +2074,32 @@ async def auction_league_callback(update: Update, context: ContextTypes.DEFAULT_
         async with _lock(context, tg_id):
             await _cb_setup_go(q, context)
         return
+    if action == "nexts":
+        async with _lock(context, tg_id):
+            await _cb_next_season(q, context)
+        return
+    if action == "hof":
+        await q.answer()
+        session = get_session()
+        try:
+            text = _hof_text(session, tg_id)
+        finally:
+            session.close()
+        await _send(context, chat_id, text)
+        return
+    if action == "card":
+        session = get_session()
+        try:
+            row = AL.latest_completed(session, tg_id)
+            state = AL.load(row) if row is not None else None
+        finally:
+            session.close()
+        if state is None:
+            await q.answer("No finished season yet.", show_alert=True)
+            return
+        await q.answer("Drawing your card…")
+        await _send_season_card(context, chat_id, state)
+        return
 
     async with _lock(context, tg_id):
         car = _open(tg_id, include_completed=action in (
@@ -1761,8 +2137,39 @@ async def auction_league_callback(update: Update, context: ContextTypes.DEFAULT_
                 await _cb_lot(q, context, car, action, args[0])
             elif action == "jump" and len(args) >= 2:
                 await _cb_lot(q, context, car, "jump", args[0], args[1])
-            elif action == "rtm" and len(args) >= 2:
-                await _cb_lot(q, context, car, "rtm", args[0], args[1])
+            elif action in ("rtm", "rtr") and len(args) >= 2:
+                await _cb_lot(q, context, car, action, args[0], args[1])
+            elif action in ("nom", "nomok"):
+                if not state.get("awaiting_noms"):
+                    await q.answer("Nominations are closed.")
+                    return
+                if action == "nom" and args:
+                    picked = list(state.get("noms_draft") or [])
+                    pid = int(args[0])
+                    if pid in picked:
+                        picked.remove(pid)
+                    elif len(picked) >= AL.ACCEL_NOMS_USER:
+                        await q.answer(f"At most {AL.ACCEL_NOMS_USER}.", show_alert=True)
+                        return
+                    else:
+                        picked.append(pid)
+                    state["noms_draft"] = picked
+                    car.save()
+                    await q.answer()
+                    try:
+                        await q.edit_message_text(_noms_text(state), parse_mode="HTML",
+                                                  reply_markup=_kb(_noms_rows(state)))
+                    except Exception:
+                        pass
+                else:
+                    AL.submit_nominations(state, state.pop("noms_draft", []) or [])
+                    await q.answer("Nominations in")
+                    try:
+                        await q.edit_message_reply_markup(reply_markup=None)
+                    except Exception:
+                        pass
+                    await _advance(context, car, chat_id, tg_id,
+                                   note="⚡ <i>The accelerated round begins.</i>")
             elif action in ("skip", "fast", "pause") and args:
                 lot = state.get("lot")
                 if state["phase"] != AL.PHASE_AUCTION or not lot or lot["seq"] != int(args[0]):
@@ -1800,6 +2207,11 @@ async def auction_league_callback(update: Update, context: ContextTypes.DEFAULT_
             elif action == "sets":
                 await q.answer()
                 await _send(context, chat_id, _sets_text(state))
+            elif action == "news":
+                await q.answer()
+                text = _news_text(state)
+                car.save()
+                await _send(context, chat_id, text)
             elif action == "table":
                 await q.answer()
                 if not state.get("table"):
@@ -1905,4 +2317,6 @@ def register(app):
     app.add_handler(CommandHandler("altrade", altrade_handler))
     app.add_handler(CommandHandler(["alhelp", "rcplhelp"], alhelp_handler))
     app.add_handler(CommandHandler("alresume", alresume_handler))
+    app.add_handler(CommandHandler("alcard", alcard_handler))
+    app.add_handler(CommandHandler(["alhof", "rcplhof"], alhof_handler))
     app.add_handler(CallbackQueryHandler(auction_league_callback, pattern=r"^al:"))

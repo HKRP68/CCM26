@@ -69,30 +69,56 @@ AI_RETAIN_CHANCE = 0.85
 
 # The IPL's record fee (₹27 Cr). No AI franchise ever values a player above it.
 RECORD_PRICE = 2_700
-# How hard the AI leans on its purse as the auction runs down. Real
-# franchises are patient in the marquee sets and get urgent once the pool
-# thins out — that late urgency is what runs purses down to a few crore,
-# where an even share per slot leaves the last, uncontested places cheap
-# and the money unspent. Stars stay spread out because the early sets are
-# priced at about an even share.
-SPEND_DRIVE_START = 1.0
-SPEND_DRIVE_END = 3.4
+# ── What a player is worth ───────────────────────────────────────────
+# Price follows rating: every OVR point is worth FAIR_GROWTH more than the
+# one below (≈16%, so a 96 is worth ~60× a 70 — stars at ₹20 Cr+, squad
+# players near their base, as at the IPL). The curve is re-scaled as the
+# auction goes on, so that what the league still means to buy is worth about
+# the money it has left — which runs purses down to a few crore without
+# inflating whoever happens to be on the block late.
+FAIR_GROWTH = 1.12
+FAIR_SPEND_SHARE = 1.0     # of the league's purses the curve is scaled to
+# Everything a franchise weighs on top of the fair price (role need, its XI,
+# personality, a little jitter) moves it only within this band, so two
+# players' prices never cross by more than a rating point or so.
+VALUE_BAND = (0.8, 1.3)
+# What an AI side sets aside for each squad place it still means to fill:
+# the fair price of a player of this rating (a solid squad player).
+PLAN_SLOT_RATING = 70
 
 
-def _auction_progress(state):
-    """0 at the first lot, 1 when every listed player has been decided."""
-    listed = sum(len(s["pids"]) for s in state.get("sets") or []
-                 if not s.get("accelerated"))
-    if not listed:
-        return 0.0
-    decided = sum(1 for e in state.get("sold_log") or [] if e["how"] != HOW_RETAINED)
-    decided += len(state.get("unsold") or [])
-    return max(0.0, min(1.0, decided / listed))
+def _fair_raw(rating):
+    return FAIR_GROWTH ** (int(rating) - 70)
 
 
-def _spend_drive(state):
-    progress = _auction_progress(state)
-    return SPEND_DRIVE_START + (SPEND_DRIVE_END - SPEND_DRIVE_START) * progress ** 1.0
+_SCALE_CACHE = {}
+
+
+def _price_scale(state):
+    """Lakh per unit of ``_fair_raw``: the money the league has left over
+    the fair value of the players it still means to buy. Worked out again
+    after every signing, so prices stay ordered by rating at every point of
+    the auction *and* in line with what the franchises can still afford."""
+    key = (id(state), len(state.get("sold_log") or []), len(state.get("unsold") or []))
+    hit = _SCALE_CACHE.get(key)
+    if hit is not None:
+        return hit
+    taken = taken_pids(state)
+    pool = sorted((c["rating"] for c in state["pool"].values() if c["id"] not in taken),
+                  reverse=True)
+    wanted = sum(max(0, int(_personality(state, n)["target"]) - len(state["teams"][n]["squad"]))
+                 for n in state["team_order"])
+    money = sum(int(t["purse"]) for t in state["teams"].values())
+    value = sum(_fair_raw(r) for r in pool[:max(1, wanted)])
+    scale = (money * FAIR_SPEND_SHARE) / max(1e-9, value)
+    _SCALE_CACHE.clear()
+    _SCALE_CACHE[key] = scale
+    return scale
+
+
+def fair_price(state, rating):
+    """What a player of this OVR is worth in this auction, in lakh."""
+    return min(RECORD_PRICE, _fair_raw(rating) * _price_scale(state))
 
 BID_LIMIT = 500          # a bidding war this long is a bug, not an auction
 
@@ -159,19 +185,18 @@ def money(lakh):
     return f"{sign}₹{whole}.{f'{part:02d}'.rstrip('0')} Cr"
 
 
+# The IPL's base-price ladder, spread across the rating range so a better
+# player always opens at least as high as a worse one.
+BASE_LADDER = ((90, 200), (87, 150), (84, 125), (81, 100), (78, 75),
+               (75, 50), (72, 40))
+
+
 def base_price(rating):
     """Base price for a player of this OVR."""
     r = int(rating or 0)
-    if r >= 90:
-        return 200
-    if r >= 87:
-        return 150
-    if r >= 84:
-        return 100
-    if r >= 80:
-        return 75
-    if r >= 75:
-        return 50
+    for floor, price in BASE_LADDER:
+        if r >= floor:
+            return price
     return 30
 
 
@@ -459,7 +484,31 @@ def can_add(state, team, c):
     # After this signing, the free slots left must still cover what is owed.
     if SQUAD_MAX - (size + 1) < owed_slots(state, team, extra=c):
         return False
+    if cap and c.get("is_overseas") and overseas_count(state, team) + 1 >= cap \
+            and not _owed_roles_fillable_domestically(state, team, c):
+        return False
     return _leaves_enough_for_others(state, team, c)
+
+
+def _owed_roles_fillable_domestically(state, team, c):
+    """Taking the last overseas place: every role still owed afterwards must
+    have a domestic player left in the pool, or the squad could never be
+    completed (the last keepers might all be overseas)."""
+    if state.get("phase") != PHASE_AUCTION:
+        return True
+    owed = owed_roles(state, team, extra=c)
+    if not any(owed.values()):
+        return True
+    taken = taken_pids(state)
+    for role, n in owed.items():
+        if not n:
+            continue
+        domestic = sum(1 for x in state["pool"].values()
+                       if x["id"] not in taken and x["id"] != c["id"]
+                       and x["category"] == role and not x.get("is_overseas"))
+        if domestic < n:
+            return False
+    return True
 
 
 def _domestic_owed(state, team):
@@ -487,6 +536,11 @@ def _leaves_enough_for_others(state, team, c):
     if (state.get("overseas_cap") and not c.get("is_overseas")
             and _domestic_owed(state, team) == 0 and required_domestic(state)):
         checks.append(("domestic", None))
+    cap = state.get("overseas_cap")
+    if cap and not c.get("is_overseas") and overseas_count(state, team) < cap:
+        # A side already at its overseas cap can only fill a role it owes
+        # with a domestic player — keep enough of those for it.
+        checks.append(("domestic_role", role))
     if not checks:
         return True
     taken = taken_pids(state)
@@ -496,6 +550,11 @@ def _leaves_enough_for_others(state, team, c):
         if kind == "role":
             supply = sum(1 for x in spare if x["category"] == value)
             owed = sum(owed_roles(state, n).get(value, 0) for n in others)
+        elif kind == "domestic_role":
+            supply = sum(1 for x in spare if x["category"] == value
+                         and not x.get("is_overseas"))
+            owed = sum(owed_roles(state, n).get(value, 0) for n in others
+                       if overseas_count(state, n) >= cap)
         else:
             supply = sum(1 for x in spare if not x.get("is_overseas"))
             owed = sum(_domestic_owed(state, n) for n in others)
@@ -687,17 +746,34 @@ def _spendable(state, team, c):
 # Per-role counts the AI wants so it can field its XI shape (see XI_SHAPE).
 XI_TARGET = {ROLE_BAT: 4, ROLE_WK: 1, ROLE_AR: 3, ROLE_BOWL: 3}
 
+RICHNESS_RANGE = (0.85, 1.25)
+
+
+def _money_per_slot(state, team):
+    t = state["teams"][team]
+    slots = max(1, int(_personality(state, team)["target"]) - len(t["squad"]))
+    return int(t["purse"]) / slots
+
+
+def _richness(state, team):
+    per = [_money_per_slot(state, n) for n in state["team_order"]]
+    avg = sum(per) / len(per)
+    if avg <= 0:
+        return 1.0
+    ratio = (_money_per_slot(state, team) / avg) ** 0.5
+    return max(RICHNESS_RANGE[0], min(RICHNESS_RANGE[1], ratio))
+
+
 def ai_value(state, team, c, rng, *, accelerated=False):
     """The most this franchise would pay for ``c``, or 0 for "not interested".
 
-    How a real franchise plans an auction: the money it has left, spread over
-    the slots it still wants to fill, weighted by how good the player is. A
-    marquee star is worth several slots' money, a squad filler a fraction of
-    one. Because that per-slot figure is recomputed for every lot, a side that
-    has been outbid on stars carries a fat purse into the later sets and
-    spends it there — so purses run down to a few crore by the end, as they do
-    at the IPL. Role needs, the franchise's personality and a little jitter
-    shape it; the IPL record (``RECORD_PRICE``) caps it.
+    The fair price for his rating (``fair_price``), moved only within
+    ``VALUE_BAND`` by what this franchise weighs: a role it still has to fill,
+    the XI it fields (4/1/3/3), depth it doesn't need, its personality, the
+    last places in its squad, a little jitter. So prices follow rating — a
+    better player goes for more — while the purse it has left, and the
+    reserve it keeps to finish a legal squad, decide whether it can afford
+    him at all. The IPL record (``RECORD_PRICE``) caps it.
     """
     ceiling = max_bid(state, team, c)
     base = base_price(c["rating"])
@@ -713,38 +789,55 @@ def ai_value(state, team, c, rng, *, accelerated=False):
     owed = owed_roles(state, team)
     role_owed = owed.get(c["category"], 0) > 0
     counts = role_counts(state, team)
+    # The last places are kept for the XI it fields (4/1/3/3): with only as
+    # many places left as roles still missing, it bids on nobody else.
+    shape_gap = sum(max(0, XI_TARGET[r] - counts[r]) for r in ROLES)
+    if counts[c["category"]] >= XI_TARGET[c["category"]] and SQUAD_MAX - size <= shape_gap:
+        return 0
 
-    slots = max(1, target - size)
-    per_slot = _spendable(state, team, c) / slots
-    # Quality weight: ~3.5 slots' money for the very best, ~1 for a good
-    # regular, ~0.3 for a filler.
-    weight = 0.3 + 3.2 * (star ** 2) * pers["star_bias"]
-    if slots <= 2:
-        # The last places in the squad: spend what is left on them.
-        weight = max(weight, 1.4)
     if size >= target:
         # Squad planned out — only a real upgrade tempts it.
         if star < 0.6 or rng.random() > 0.35:
             return 0
-        weight *= 0.5
+    mod = pers["mult"]
     shape_want = XI_TARGET[c["category"]]
+    shape_short = counts[c["category"]] < shape_want
     if role_owed:
-        weight *= 1.2
-    elif counts[c["category"]] < shape_want:
-        # Not compulsory, but the XI the AI fields (4/1/3/3) needs him.
-        weight *= 1.15
-    elif counts[c["category"]] >= max(ROLE_MIN[c["category"]], shape_want) + 2 and star < 0.6:
-        # A fourth or fifth of a role it already has is depth, not a priority.
-        weight *= 0.55
+        mod *= 1.1
+    elif shape_short:
+        mod *= 1.1             # the XI it fields (4/1/3/3) needs him
+    elif counts[c["category"]] >= max(ROLE_MIN[c["category"]], shape_want) + 2:
+        mod *= 0.88            # depth in a role it already has
     if pers is PERSONALITIES["moneyball"] and 0.3 <= star < 0.65:
-        weight *= 1.25     # undervalued squad players are its whole plan
+        mod *= 1.08            # undervalued squad players are its whole plan
+    if max(1, target - size) <= 2:
+        # The last places in its squad: no point saving the money.
+        mod *= 1.12
+    # A franchise with more money per place still to fill than the league's
+    # average bids harder, one running dry holds back — so the money is
+    # spent across the league instead of pooling in one or two purses.
+    mod *= _richness(state, team)
+    mod *= rng.uniform(0.92, 1.08)
+    mod = max(VALUE_BAND[0], min(VALUE_BAND[1], mod))
 
-    value = per_slot * weight * _spend_drive(state) * pers["mult"] * rng.uniform(0.85, 1.15)
-    value = min(value, RECORD_PRICE * rng.uniform(0.85, 1.0))
-    value = min(int(value), ceiling)
-    if (role_owed or size < SQUAD_MIN) and ceiling >= base:
-        # A side that still needs bodies never lets one go for nothing.
+    value = fair_price(state, c["rating"]) * mod
+    # Keep money back for the rest of the squad it plans — a franchise that
+    # blows everything on three stars ends up with twelve players.
+    still_to_buy = max(0, target - size - 1)
+    plan_reserve = still_to_buy * fair_price(state, PLAN_SLOT_RATING)
+    # …and at least base-price money for the roles its XI still lacks.
+    shape_reserve = MIN_BASE * max(0, shape_gap - (1 if shape_short else 0))
+    affordable = max(0, int(t["purse"]) - max(plan_reserve, shape_reserve))
+    value = min(int(value), RECORD_PRICE, ceiling, affordable)
+    if (role_owed or shape_short or size < SQUAD_MIN) and ceiling >= base:
+        # A side that still needs bodies — or this role for its XI — never
+        # lets one go for nothing.
         value = max(value, base)
+    elif value < base and size < target and \
+            base <= int(t["purse"]) - MIN_BASE * still_to_buy:
+        # Behind its plan and short of money for anyone dearer: it still
+        # fills out its squad with base-price signings.
+        value = base
     return value if value >= base else 0
 
 
@@ -771,15 +864,14 @@ def _advance_cursor(state):
     while True:
         s = current_set(state)
         if s is None:
-            # Out of sets: one accelerated round for the unsold, then stop.
+            # Out of sets: one accelerated round — of the unsold players the
+            # franchises nominate, as at the IPL — then stop.
             if state.get("unsold") and not state.get("accelerated_done"):
-                pool = sorted(state["unsold"],
-                              key=lambda p: -card(state, p)["rating"])
-                state["unsold"] = []
-                state["accelerated_done"] = True
-                state["sets"].append({"name": "⚡ Accelerated round",
-                                      "pids": pool, "accelerated": True})
-                continue
+                if state.get("autopilot") or not state.get("nominations_by_hand", True):
+                    _build_accelerated_round(state, ai_nominations(state, state["user_team"]))
+                    continue
+                state["awaiting_noms"] = True
+                return None
             return None
         if state["lot_idx"] < len(s["pids"]):
             pid = s["pids"][state["lot_idx"]]
@@ -789,6 +881,57 @@ def _advance_cursor(state):
             return pid
         state["set_idx"] += 1
         state["lot_idx"] = 0
+
+
+ACCEL_NOMS_AI = 4      # unsold players each AI side nominates
+ACCEL_NOMS_USER = 8    # and the most you may
+
+
+def ai_nominations(state, team):
+    """The unsold players ``team`` wants back: roles it needs first, then the best."""
+    owed = owed_roles(state, team)
+    counts = role_counts(state, team)
+    want = [c for c in (card(state, p) for p in state.get("unsold") or [])
+            if can_add(state, team, c)]
+
+    def need(c):
+        r = c["category"]
+        return 0 if owed.get(r) else (1 if counts[r] < XI_TARGET[r] else 2)
+    want.sort(key=lambda c: (need(c), -c["rating"]))
+    if len(state["teams"][team]["squad"]) >= int(_personality(state, team)["target"]):
+        want = [c for c in want if need(c) < 2]
+    return [c["id"] for c in want[:ACCEL_NOMS_AI]]
+
+
+def nomination_choices(state, limit=30):
+    """Unsold players you may nominate for the accelerated round, best first."""
+    return sorted((card(state, p) for p in state.get("unsold") or []),
+                  key=lambda c: (-c["rating"], c["name"]))[:limit]
+
+
+def _build_accelerated_round(state, user_noms):
+    noms = set(int(p) for p in user_noms or [])
+    for name in state["team_order"]:
+        if name != state["user_team"]:
+            noms.update(ai_nominations(state, name))
+    pool = sorted((p for p in state["unsold"] if p in noms),
+                  key=lambda p: -card(state, p)["rating"])
+    state["unsold"] = []
+    state["accelerated_done"] = True
+    state["awaiting_noms"] = False
+    state["sets"].append({"name": "⚡ Accelerated round (nominated)",
+                          "pids": pool, "accelerated": True})
+
+
+def submit_nominations(state, pids):
+    """Your nominations for the accelerated round (up to ACCEL_NOMS_USER)."""
+    if not state.get("awaiting_noms"):
+        raise AuctionLeagueError("Nominations aren't open.")
+    pids = [int(p) for p in pids or []]
+    if len(pids) > ACCEL_NOMS_USER:
+        raise AuctionLeagueError(f"Nominate at most {ACCEL_NOMS_USER} players.")
+    unsold = set(state.get("unsold") or [])
+    _build_accelerated_round(state, [p for p in pids if p in unsold])
 
 
 def open_next_lot(state, rng=None):
@@ -960,8 +1103,52 @@ def user_pass(state, rng=None):
     return settle(state, rng or rng_for(state, "pass"))
 
 
+# Lot states that wait on you for a Right To Match step (IPL 2025 rules):
+#   rtm_intent — your former player was sold: call your RTM card?
+#   rtm        — you called it and the buyer made a final raise: match it?
+#   rtm_raise  — you bought a player his former side called RTM on: one final raise
+RTM_WAITING = ("rtm_intent", "rtm", "rtm_raise")
+
+
+def _rtm_holder(state, lot, c):
+    """The former side if it may call RTM on this sale, else None."""
+    winner = lot.get("leader")
+    holder = c.get("team")
+    if (holder and holder != winner and holder in state["teams"]
+            and state["teams"][holder].get("rtm", 0) > 0
+            and int(lot["price"]) <= max_bid(state, holder, c)):
+        return holder
+    return None
+
+
+def _ai_rtm_value(state, team, c, lot, rng):
+    return lot["values"].get(team) or ai_value(state, team, c, rng)
+
+
+def _ai_calls_rtm(state, holder, c, lot, rng):
+    return (_star(c) >= 0.45
+            and _ai_rtm_value(state, holder, c, lot, rng) * 1.1 >= int(lot["price"]))
+
+
+def _ai_matches(state, holder, c, lot, price, rng):
+    return (price <= max_bid(state, holder, c)
+            and _ai_rtm_value(state, holder, c, lot, rng) * 1.1 >= price)
+
+
+def _ai_final_raise(state, winner, c, lot):
+    """The buyer's one last raise when RTM is called: up to what he values
+    the player at (and can spend), to make matching as hard as possible."""
+    price = int(lot["price"])
+    top = min(lot["values"].get(winner) or 0, max_bid(state, winner, c))
+    return max(price, int(top) // 5 * 5)
+
+
 def _hammer(state, rng):
-    """Decide the lot: sold to the leader, or unsold — then Right To Match."""
+    """Decide the lot: sold to the leader, or unsold — then Right To Match.
+
+    IPL 2025 Right To Match: the former side calls it, the buyer gets one
+    final raise, and the former side matches that price or lets him go.
+    """
     lot = state["lot"]
     c = card(state, lot["pid"])
     winner = lot.get("leader")
@@ -971,33 +1158,86 @@ def _hammer(state, rng):
             state["unsold"].append(lot["pid"])
         return _close_lot(state)
     price = int(lot["price"])
-    holder = c.get("team")
-    if (holder and holder != winner and holder in state["teams"]
-            and state["teams"][holder].get("rtm", 0) > 0
-            and price <= max_bid(state, holder, c)):
-        if holder == state["user_team"] and not state.get("autopilot"):
-            lot["status"] = "rtm"
+    holder = _rtm_holder(state, lot, c)
+    me, auto = state["user_team"], state.get("autopilot")
+    if holder is not None:
+        if holder == me and not auto:
+            lot["status"] = "rtm_intent"
             lot["rtm_team"] = holder
             return "rtm"
-        if holder != state["user_team"] or state.get("autopilot"):
-            value = lot["values"].get(holder) or ai_value(state, holder, c, rng)
-            if value * 1.1 >= price and _star(c) >= 0.45:
-                return _sell(state, holder, price, HOW_RTM)
+        if (holder != me or auto) and _ai_calls_rtm(state, holder, c, lot, rng):
+            lot["rtm_team"] = holder
+            lot["rtm_called"] = True
+            if winner == me and not auto:
+                lot["status"] = "rtm_raise"
+                return "rtm"
+            raised = _ai_final_raise(state, winner, c, lot)
+            lot["rtm_raise"] = raised - price
+            if _ai_matches(state, holder, c, lot, raised, rng):
+                return _sell(state, holder, raised, HOW_RTM)
+            return _sell(state, winner, raised, HOW_AUCTION)
     return _sell(state, winner, price, HOW_AUCTION)
 
 
 def user_rtm(state, use, rng=None):
-    """Answer your Right To Match prompt."""
+    """Answer a Right To Match prompt as the former side.
+
+    ``rtm_intent``: call the card (the buyer then makes a final raise) or not.
+    ``rtm``: match the buyer's final price, or let him go.
+    """
     lot = state.get("lot")
-    if not lot or lot.get("status") != "rtm":
+    if not lot or lot.get("status") not in ("rtm_intent", "rtm"):
         raise AuctionLeagueError("There is no Right To Match decision waiting.")
+    c = card(state, lot["pid"])
+    if lot["status"] == "rtm_intent":
+        if not use:
+            lot["status"] = "open"
+            return _sell(state, lot["leader"], int(lot["price"]), HOW_AUCTION)
+        raised = _ai_final_raise(state, lot["leader"], c, lot)
+        lot["rtm_called"] = True
+        lot["rtm_raise"] = raised - int(lot["price"])
+        lot["price"] = raised
+        lot["status"] = "rtm"
+        return "rtm"
     if use:
-        c = card(state, lot["pid"])
-        if lot["price"] > max_bid(state, state["user_team"], c):
+        if int(lot["price"]) > max_bid(state, state["user_team"], c):
             raise AuctionLeagueError("You can't afford to match that price.")
         return _sell(state, state["user_team"], int(lot["price"]), HOW_RTM)
     lot["status"] = "open"
     return _sell(state, lot["leader"], int(lot["price"]), HOW_AUCTION)
+
+
+def rtm_raise_options(state):
+    """Prices you may offer as your one final raise (empty when none fit)."""
+    lot = state.get("lot")
+    if not lot or lot.get("status") != "rtm_raise":
+        return []
+    c = card(state, lot["pid"])
+    cap = max_bid(state, state["user_team"], c)
+    price = int(lot["price"])
+    step = jump_amount(price)
+    return [p for p in (price + step, price + 2 * step, price + 4 * step) if p <= cap]
+
+
+def user_final_raise(state, to_price=None, rng=None):
+    """Your one final raise after the former side called RTM (None = stand)."""
+    lot = state.get("lot")
+    if not lot or lot.get("status") != "rtm_raise":
+        raise AuctionLeagueError("There is no final raise waiting.")
+    c = card(state, lot["pid"])
+    price = int(lot["price"])
+    if to_price is not None:
+        to_price = int(to_price)
+        if to_price < price or to_price > max_bid(state, state["user_team"], c):
+            raise AuctionLeagueError("You can't raise to that.")
+        lot["rtm_raise"] = to_price - price
+        price = to_price
+    holder = lot["rtm_team"]
+    rng = rng or rng_for(state, "rtmraise")
+    lot["status"] = "open"
+    if _ai_matches(state, holder, c, lot, price, rng):
+        return _sell(state, holder, price, HOW_RTM)
+    return _sell(state, state["user_team"], price, HOW_AUCTION)
 
 
 def _sell(state, team, price, how):
@@ -1013,17 +1253,106 @@ def _sell(state, team, price, how):
 
 
 def _close_lot(state):
-    state["last_lot"] = state["lot"]
+    lot = state["lot"]
+    state["last_lot"] = lot
     state["lot"] = None
     state["lot_idx"] += 1
+    _note_headlines(state, lot)
     return "done"
+
+
+# ════════════════════════════════════════════════════════════════════
+# Auction news ticker
+# ════════════════════════════════════════════════════════════════════
+
+NEWS_KEPT = 60
+NEWS_RECORD_MIN = 1200      # a "record" headline only from ₹12 Cr
+NEWS_WAR_BIDS = 12
+NEWS_WAR_TEAMS = 5         # five sides in it…
+NEWS_WAR_PRICE = 800       # …for a ₹8 Cr+ player, at 4× his base or more
+NEWS_STEAL_RATING = 88
+NEWS_DRY_PURSE = 500
+NEWS_DRY_SIZE = 15        # …while still short of a 15-man squad
+
+
+def _headline(state, lot, text, weight):
+    state["news_no"] = int(state.get("news_no") or 0) + 1
+    news = state.setdefault("news", [])
+    news.append({"no": state["news_no"], "seq": int(lot.get("seq") or 0),
+                 "text": text, "w": weight})
+    del news[:-NEWS_KEPT]
+
+
+def _note_headlines(state, lot):
+    """Write the headlines this lot makes: records, wars, steals, RTM, dry
+    purses, unsold stars — and a wrap-up when it closes its set."""
+    c = card(state, lot["pid"])
+    name = f"<b>{_esc(c['name'])}</b>"
+    flags = state.setdefault("news_flags", {})
+    if lot["status"] == "sold":
+        team, price = lot["winner"], int(lot["price"])
+        short = _esc(state["teams"][team]["short"])
+        spend = state.setdefault("set_spend", {})
+        spend[team] = int(spend.get(team, 0)) + price
+        if price > int(state.get("record_price") or 0):
+            state["record_price"] = price
+            if price >= NEWS_RECORD_MIN:
+                _headline(state, lot, f"💰 <b>Record!</b> {short} pay {money(price)} for "
+                                      f"{name} — the costliest buy so far", 5)
+        bidders = {n for n, _p in lot.get("trail") or []}
+        if (int(lot.get("bids") or 0) >= NEWS_WAR_BIDS and len(bidders) >= NEWS_WAR_TEAMS
+                and price >= NEWS_WAR_PRICE and price >= 4 * int(lot["base"])):
+            _headline(state, lot, f"🔥 <b>Bidding war:</b> {len(bidders)} teams fought over "
+                                  f"{name} — {short} win at {money(price)}", 4)
+        if c["rating"] >= NEWS_STEAL_RATING and price <= int(lot["base"]) * 3 // 2:
+            _headline(state, lot, f"💎 <b>Steal of the auction?</b> {short} land "
+                                  f"{name} ({c['rating']}) for just {money(price)}", 4)
+        if lot.get("how") == HOW_RTM:
+            _headline(state, lot, f"🔁 {short} use their Right To Match to keep {name} "
+                                  f"at {money(price)}", 3)
+        t = state["teams"][team]
+        if (int(t["purse"]) <= NEWS_DRY_PURSE and len(t["squad"]) < NEWS_DRY_SIZE
+                and not flags.get(f"dry:{team}")):
+            flags[f"dry:{team}"] = True
+            _headline(state, lot, f"🏦 {short} are running dry — {money(t['purse'])} left "
+                                  f"with {NEWS_DRY_SIZE - len(t['squad'])} places to fill", 3)
+    elif c["rating"] >= NEWS_STEAL_RATING:
+        _headline(state, lot, f"😮 {name} ({c['rating']}) goes <b>unsold</b>!", 3)
+    s = state["sets"][state["set_idx"]] if state["set_idx"] < len(state["sets"]) else None
+    if s is not None and state["lot_idx"] >= len(s["pids"]):
+        spend = state.pop("set_spend", {}) or {}
+        if spend:
+            top = max(spend, key=lambda n: (spend[n], n))
+            _headline(state, lot, f"📦 <b>{_esc(s['name'])}</b> done — "
+                                  f"{_esc(state['teams'][top]['short'])} spent the most "
+                                  f"({money(spend[top])})", 1)
+
+
+def headlines(state, since=0, limit=None, best=False, min_weight=0):
+    """Headlines numbered above ``since``; ``best`` picks the biggest stories
+    (in auction order), else the latest. ``min_weight`` drops the small ones
+    (set wrap-ups are 1, the big stories 3–5)."""
+    rows = [n for n in state.get("news") or []
+            if n["no"] > int(since or 0) and n["w"] >= min_weight]
+    if limit is not None and len(rows) > limit:
+        if best:
+            keep = sorted(rows, key=lambda n: (-n["w"], -n["no"]))[:limit]
+            rows = sorted(keep, key=lambda n: n["no"])
+        else:
+            rows = rows[-limit:]
+    return [n["text"] for n in rows]
+
+
+def news_mark(state):
+    return int(state.get("news_no") or 0)
 
 
 def lot_result_line(state, lot):
     c = card(state, lot["pid"])
     who = f"<b>{_esc(c['name'])}</b> ({c['rating']} {ROLE_SHORT[c['category']]})"
     if lot["status"] == "sold":
-        tag = " 🔁 RTM" if lot.get("how") == HOW_RTM else ""
+        tag = " 🔁 RTM" if lot.get("how") == HOW_RTM else (
+            " · RTM called, not matched" if lot.get("rtm_called") else "")
         mine = " 🎉" if lot["winner"] == state["user_team"] else ""
         return (f"🔨 {who} → <b>{_esc(state['teams'][lot['winner']]['short'])}</b> "
                 f"for {money(lot['price'])}{tag}{mine}")
@@ -1049,8 +1378,8 @@ def _sim_lots(state, stop, max_lots=None):
     try:
         if state.get("lot"):
             lot = state["lot"]
-            if lot["status"] == "rtm":
-                # Autopilot takes the AI's view of your own RTM card.
+            if lot["status"] in RTM_WAITING:
+                # Autopilot takes the AI's view of the Right To Match step.
                 lot["status"] = "open"
             _user_value(state, rng)
             settle(state, rng)
@@ -1110,8 +1439,12 @@ def simulate_to_last(state):
 
 
 def auction_finished(state):
-    return (state["phase"] == PHASE_AUCTION and not state.get("lot")
-            and _peek_done(state))
+    if state["phase"] != PHASE_AUCTION or state.get("lot"):
+        return False
+    # _peek_done may open the nominations for the accelerated round, so ask
+    # it first and look at the flag afterwards.
+    done = _peek_done(state)
+    return done and not state.get("awaiting_noms")
 
 
 def _peek_done(state):
@@ -1156,6 +1489,35 @@ def autofill(state):
             _sign(state, name, pick["id"], price, HOW_AUTOFILL)
             spare.remove(pick)
             made.append((name, pick["id"], price))
+    # The AI sides also complete the shape of the XI they field (4/1/3/3),
+    # then fill out to the squad size they planned, with base-price signings
+    # from the unsold players while they have room and the money.
+    for name in state["team_order"]:
+        if name == state["user_team"]:
+            continue
+        for role, want in XI_TARGET.items():
+            while role_counts(state, name)[role] < want:
+                purse = int(state["teams"][name]["purse"])
+                pick = next((c for c in spare if c["category"] == role
+                             and can_add(state, name, c)
+                             and base_price(c["rating"]) <= purse), None)
+                if pick is None:
+                    break
+                price = base_price(pick["rating"])
+                _sign(state, name, pick["id"], price, HOW_AUTOFILL)
+                spare.remove(pick)
+                made.append((name, pick["id"], price))
+        target = int(_personality(state, name)["target"])
+        while len(state["teams"][name]["squad"]) < target:
+            purse = int(state["teams"][name]["purse"])
+            pick = next((c for c in spare if can_add(state, name, c)
+                         and base_price(c["rating"]) <= purse), None)
+            if pick is None:
+                break
+            price = base_price(pick["rating"])
+            _sign(state, name, pick["id"], price, HOW_AUTOFILL)
+            spare.remove(pick)
+            made.append((name, pick["id"], price))
     return made
 
 
@@ -1189,15 +1551,50 @@ def _batting_order(xi):
     return sorted(xi, key=lambda c: (-(c.get("bat_rating") or 0), -c["rating"], c["name"]))
 
 
-def ai_playing_xi(cards, overseas_max=11):
+_SPIN_WORDS = ("break", "spin", "orthodox", "googly", "chinaman")
+# Pitches that suit one kind of bowling, and how many OVR points of
+# selection preference that kind gets in the all-rounder and bowler slots.
+PITCH_PREFERENCE = {
+    "Dusty": ("spin", 4), "Dry": ("spin", 3),
+    "Green": ("pace", 4), "Bouncy": ("pace", 3),
+}
+PITCH_TIPS = {
+    "Dusty": "big turn — spinners will rule",
+    "Dry": "grips and turns — spin matters",
+    "Green": "seam and swing — quicks on top",
+    "Bouncy": "pace and carry — fast bowlers love it",
+    "Flat": "a batting paradise — runs galore",
+    "Hard": "true bounce — a fair contest",
+    "Even": "a balanced T20 track",
+}
+
+
+def is_spinner(c):
+    style = str(c.get("bowl_style") or "").lower()
+    return any(w in style for w in _SPIN_WORDS)
+
+
+def _selection_score(c, pitch):
+    """OVR, plus the pitch's preference for this bowler's type."""
+    pref = PITCH_PREFERENCE.get(pitch or "")
+    if not pref or c["category"] not in (ROLE_AR, ROLE_BOWL):
+        return c["rating"]
+    kind, bonus = pref
+    spinner = is_spinner(c)
+    return c["rating"] + (bonus if (kind == "spin") == spinner else 0)
+
+
+def ai_playing_xi(cards, overseas_max=11, pitch=None):
     """The AI's XI from ``cards`` (pool card dicts), in batting order.
 
-    Fills the 4 BAT / 1 WK / 3 AR / 3 BOWL shape best-OVR-first within the
-    overseas limit. A squad short of a role still fields a legal XI: the gap is
-    filled with the best players left, a bowling option first while the side
-    has fewer than five, and a keeper is always included when the squad has one.
+    Fills the 4 BAT / 1 WK / 3 AR / 3 BOWL shape best-first within the
+    overseas limit — "best" reading the pitch: on a turner the spinners get
+    the bowling places, on a green top the quicks (``PITCH_PREFERENCE``). A
+    squad short of a role still fields a legal XI: the gap is filled with the
+    best players left, a bowling option first while the side has fewer than
+    five, and a keeper is always included when the squad has one.
     """
-    pool = sorted(cards, key=lambda c: (-c["rating"], c["name"]))
+    pool = sorted(cards, key=lambda c: (-_selection_score(c, pitch), -c["rating"], c["name"]))
     if len(pool) <= 11:
         return _batting_order(pool)
     xi = []
@@ -1213,12 +1610,27 @@ def ai_playing_xi(cards, overseas_max=11):
         if c.get("is_overseas"):
             overseas += 1
 
+    # The best of each role first; then, over the overseas limit, swap out
+    # the overseas pick whose best domestic stand-in costs the least.
     for role, count in XI_SHAPE:
-        for c in [c for c in pool if c["category"] == role]:
-            if sum(1 for x in xi if x["category"] == role) >= count:
-                break
-            if fits(c):
-                take(c)
+        for c in [c for c in pool if c["category"] == role][:count]:
+            take(c)
+
+    def score(c):
+        return _selection_score(c, pitch)
+    while overseas > overseas_max:
+        swaps = []
+        for x in (x for x in xi if x.get("is_overseas")):
+            sub = next((c for c in pool if c["category"] == x["category"]
+                        and not c.get("is_overseas")), None)
+            swaps.append((score(x) - (score(sub) if sub else -1000), x["name"], x, sub))
+        _loss, _n, out, sub = min(swaps, key=lambda s: (s[0], s[1]))
+        xi.remove(out)
+        overseas -= 1
+        if sub is not None:
+            take(sub)
+        pool.append(out)
+    pool.sort(key=lambda c: (-score(c), -c["rating"], c["name"]))
     if not any(x["category"] == ROLE_WK for x in xi):
         keeper = next((c for c in pool if c["category"] == ROLE_WK), None)
         if keeper is not None:
@@ -1240,9 +1652,9 @@ def _xi_overseas_max(state):
     return int(state["league"].get("overseas_max", 11))
 
 
-def best_xi_cards(state, team):
+def best_xi_cards(state, team, pitch=None):
     """The franchise's Playing XI, as pool cards in batting order."""
-    return ai_playing_xi(squad_card_dicts(state, team), _xi_overseas_max(state))
+    return ai_playing_xi(squad_card_dicts(state, team), _xi_overseas_max(state), pitch)
 
 
 def team_strength(state, team):
@@ -1327,9 +1739,19 @@ def trade_legal(state, team_a, pid_a, team_b, pid_b):
     owns = lambda t, p: any(e["pid"] == int(p) for e in state["teams"][t]["squad"])
     if not (owns(team_a, pid_a) and owns(team_b, pid_b)):
         return False
+    before = {t: role_counts(state, t) for t in (team_a, team_b)}
     _swap(state, team_a, pid_a, team_b, pid_b)
     try:
-        return squad_is_legal(state, team_a) and squad_is_legal(state, team_b)
+        if not (squad_is_legal(state, team_a) and squad_is_legal(state, team_b)):
+            return False
+        # An AI side never trades away the shape of the XI it fields (4/1/3/3).
+        for t in (team_a, team_b):
+            if t == state["user_team"]:
+                continue
+            after = role_counts(state, t)
+            if any(before[t][r] >= XI_TARGET[r] > after[r] for r in ROLES):
+                return False
+        return True
     finally:
         _swap(state, team_a, pid_b, team_b, pid_a)
 
@@ -1623,8 +2045,9 @@ def nrr(row):
 def standings(state):
     """Team names in table order: points, then net run-rate, then wins."""
     table = state.get("table") or {}
+    row = lambda n: table.get(n) or _empty_row()
     return sorted(state["team_order"],
-                  key=lambda n: (-table[n]["pts"], -nrr(table[n]), -table[n]["w"], n))
+                  key=lambda n: (-row(n)["pts"], -nrr(row(n)), -row(n)["w"], n))
 
 
 def _stage_done(state, stage):
@@ -1969,9 +2392,11 @@ def cap_tables(state, limit=5):
 
 # ── AI-vs-AI matches ─────────────────────────────────────────────────
 
-def _engine_xi(state, team):
+def _engine_xi(state, team, pitch=None):
+    """The side's XI for a simulated match: fit players, form applied."""
     from services.cipl_match import cp_to_player_dict
-    return [cp_to_player_dict(LeagueCard(c)) for c in best_xi_cards(state, team)]
+    xi = ai_playing_xi(match_cards(state, team), _xi_overseas_max(state), pitch)
+    return [cp_to_player_dict(LeagueCard(c)) for c in xi]
 
 
 def _pitches():
@@ -1982,14 +2407,152 @@ def _pitches():
         return ["Flat"]
 
 
+# ── Form and injuries ────────────────────────────────────────────────
+# Form: a player's last FORM_WINDOW performances (runs, 25 a wicket and credit
+# for an economical spell — see spell_impact) against
+# what his role usually returns, as a level from ▼▼ (−2) to ▲▲ (+2) that moves
+# his ratings by that many points for the next match.
+FORM_WINDOW = 3
+FORM_KEEP = 5
+# What each role returns in an average match (measured over simulated seasons).
+FORM_BASELINE = {ROLE_BAT: 31, ROLE_WK: 30, ROLE_AR: 36, ROLE_BOWL: 21}
+FORM_ICON = {2: "▲▲", 1: "▲", 0: "", -1: "▼", -2: "▼▼"}
+# Injuries: after every match, each player who took the field may be ruled
+# out of his side's next one or two matches.
+INJURY_CHANCE = 0.015
+HOW_REPLACEMENT = "replacement"
+
+
+def spell_impact(bw):
+    """Form points for a bowling spell: 25 a wicket, plus credit for economy."""
+    balls = int(bw.get("balls", 0) or 0)
+    if not balls:
+        return 0
+    overs = balls / 6.0
+    econ = int(bw.get("runs", 0) or 0) / overs
+    return 25 * int(bw.get("wickets", 0) or 0) + int(round(overs * max(0.0, 9.0 - econ)))
+
+
+def form_level(state, pid):
+    recent = (state.get("form") or {}).get(str(pid)) or []
+    recent = recent[-FORM_WINDOW:]
+    if len(recent) < FORM_WINDOW:
+        return 0
+    c = state["pool"].get(str(pid)) or {}
+    ratio = (sum(recent) / len(recent)) / FORM_BASELINE.get(c.get("category"), 25)
+    if ratio >= 2.0:
+        return 2
+    if ratio >= 1.4:
+        return 1
+    if ratio <= 0.2:
+        return -2
+    if ratio <= 0.45:
+        return -1
+    return 0
+
+
+def injured(state, pid):
+    return str(pid) in (state.get("injuries") or {})
+
+
+def match_cards(state, team):
+    """``team``'s fit players for its next match, ratings moved by form."""
+    out = []
+    for c in squad_card_dicts(state, team):
+        if injured(state, c["id"]):
+            continue
+        lvl = form_level(state, c["id"])
+        if lvl:
+            c = dict(c)
+            for key in ("rating", "bat_rating", "bowl_rating"):
+                if c.get(key):
+                    c[key] = max(1, min(99, int(c[key]) + lvl))
+        out.append(c)
+    return out
+
+
+def _can_field_xi(cards):
+    bowling = sum(1 for c in cards if c["category"] in (ROLE_AR, ROLE_BOWL))
+    keepers = sum(1 for c in cards if c["category"] == ROLE_WK)
+    return len(cards) >= 11 and keepers >= 1 and bowling >= XI_BOWLING_OPTIONS
+
+
+def sign_injury_replacements(state, team):
+    """Sign unsold players until ``team`` can field a legal XI again.
+
+    Base price, or whatever purse is left. Allowed past the 18-man limit, as
+    an injury replacement is. Returns the signings' pids.
+    """
+    made = []
+    taken = taken_pids(state)
+    spare = sorted((c for c in state["pool"].values() if c["id"] not in taken),
+                   key=lambda c: -c["rating"])
+    cap = state.get("overseas_cap")
+    guard = 0
+    while not _can_field_xi(match_cards(state, team)) and spare and guard < 6:
+        guard += 1
+        fit = match_cards(state, team)
+        if not any(c["category"] == ROLE_WK for c in fit):
+            want = (ROLE_WK,)
+        elif sum(1 for c in fit if c["category"] in (ROLE_AR, ROLE_BOWL)) < XI_BOWLING_OPTIONS:
+            want = (ROLE_BOWL, ROLE_AR)
+        else:
+            want = ROLES
+        at_cap = bool(cap) and overseas_count(state, team) >= cap
+        pick = next((c for c in spare if c["category"] in want
+                     and not (at_cap and c.get("is_overseas"))), None)
+        if pick is None:
+            break
+        price = min(base_price(pick["rating"]), max(0, int(state["teams"][team]["purse"])))
+        _sign(state, team, pick["id"], price, HOW_REPLACEMENT)
+        spare.remove(pick)
+        made.append(pick["id"])
+    return made
+
+
+def note_match(state, fx, xi_by_team, impacts, rng):
+    """After a match: update form, heal and roll injuries, sign replacements.
+
+    ``xi_by_team`` — ``{team: [pid, …]}`` who took the field; ``impacts`` —
+    ``{pid: points}`` for everyone who batted or bowled. The news (injuries,
+    recoveries, replacements) is kept on the fixture for the results digest.
+    """
+    form = state.setdefault("form", {})
+    for pid, pts in impacts.items():
+        if str(pid) in state["pool"]:
+            row = form.setdefault(str(pid), [])
+            row.append(int(pts))
+            del row[:-FORM_KEEP]
+    inj = state.setdefault("injuries", {})
+    news = []
+    for pid, info in list(inj.items()):
+        if info["team"] in xi_by_team:
+            info["left"] -= 1
+            if info["left"] <= 0:
+                del inj[pid]
+                news.append({"kind": "fit", "pid": int(pid), "team": info["team"]})
+    for team, pids in xi_by_team.items():
+        for pid in pids:
+            if str(pid) in state["pool"] and rng.random() < INJURY_CHANCE:
+                left = rng.choice((1, 2))
+                inj[str(pid)] = {"team": team, "left": left, "fx": fx["no"]}
+                news.append({"kind": "injured", "pid": int(pid), "team": team,
+                             "matches": left})
+    for team in xi_by_team:
+        for pid in sign_injury_replacements(state, team):
+            news.append({"kind": "replacement", "pid": pid, "team": team})
+    fx["news"] = news
+    return news
+
+
 def simulate_fixture(state, fx, rng=None):
     """Play one fixture instantly on the sim engine and record it."""
     from services.sim_match import simulate_match
     rng = rng or rng_for(state, f"fx{fx['no']}")
-    home_xi = _engine_xi(state, fx["home"])
-    away_xi = _engine_xi(state, fx["away"])
     rng.choice(_pitches())   # keeps a save's random sequence where it was
     pitch = fixture_pitch(state, fx)
+    home_xi = _engine_xi(state, fx["home"], pitch)
+    away_xi = _engine_xi(state, fx["away"], pitch)
     # sim_match draws from the global generator; seed it so a save replays,
     # and put the process-wide state back afterwards so no other feature in
     # the bot inherits this career's sequence.
@@ -2002,6 +2565,18 @@ def simulate_fixture(state, fx, rng=None):
     finally:
         random.setstate(saved)
     i1, i2 = m["innings1"], m["innings2"]
+    impacts = {}       # runs + 25 a wicket, for form
+    for inn in (i1, i2):
+        for p in inn["order"]:
+            bs = inn["bat_stats"].get(id(p)) or {}
+            if bs.get("balls") or bs.get("out"):
+                rid = p.get("roster_id")
+                impacts[rid] = impacts.get(rid, 0) + int(bs.get("runs", 0))
+        for bp in {id(b): b for b in inn["bowl_plan"]}.values():
+            bw = inn["bowl_stats"].get(id(bp)) or {}
+            if bw.get("balls"):
+                rid = bp.get("roster_id")
+                impacts[rid] = impacts.get(rid, 0) + spell_impact(bw)
     for inn in (i1, i2):
         bat_team = inn["batting_team"]
         bowl_team = fx["away"] if bat_team == fx["home"] else fx["home"]
@@ -2016,6 +2591,10 @@ def simulate_fixture(state, fx, rng=None):
             seen.add(id(bp))
             bw = inn["bowl_stats"].get(id(bp)) or {}
             _add_bowl(state, bp.get("roster_id"), bw, opp=bat_team, fx_no=fx["no"])
+    note_match(state, fx,
+               {fx["home"]: [p.get("roster_id") for p in home_xi],
+                fx["away"]: [p.get("roster_id") for p in away_xi]},
+               impacts, rng_for(state, f"inj{fx['no']}"))
     res = m["result"]
     record_result(state, fx,
                   inn1_team=i1["batting_team"], inn1_runs=i1["runs"],
@@ -2089,6 +2668,20 @@ def record_user_match(state, fixture_no, match_state, winner_team, match_id=None
     for key, opp in (("inn1_bowl_stats", inn1_team), ("bowl_stats", inn2_team)):
         for rid, bw in (s.get(key) or {}).items():
             _add_bowl(state, rid, bw, opp=opp, fx_no=fx["no"])
+    impacts = {}
+    for key in ("inn1_bat_stats", "bat_stats"):
+        for rid, bs in (s.get(key) or {}).items():
+            if bs.get("balls") or bs.get("out"):
+                impacts[rid] = impacts.get(rid, 0) + int(bs.get("runs", 0))
+    for key in ("inn1_bowl_stats", "bowl_stats"):
+        for rid, bw in (s.get(key) or {}).items():
+            if bw.get("balls"):
+                impacts[rid] = impacts.get(rid, 0) + spell_impact(bw)
+    xi_by_team = {
+        inn1_team: [p.get("roster_id") for p in (s.get("inn1_bat_xi") or [])],
+        inn2_team: [p.get("roster_id") for p in (s.get("inn1_bowl_xi") or [])],
+    }
+    note_match(state, fx, xi_by_team, impacts, rng_for(state, f"inj{fx['no']}"))
     if winner_team not in (fx["home"], fx["away"]):
         winner_team = None
     text = (f"{winner_team} won" if winner_team else "Match tied")
@@ -2121,6 +2714,146 @@ def season_reward(state):
         return 0, 0
     return {"champion": REWARD_CHAMPION, "runner_up": REWARD_RUNNER_UP,
             "playoffs": REWARD_PLAYOFFS}.get(season_finish(state), (0, 0))
+
+
+# ════════════════════════════════════════════════════════════════════
+# Multi-season career
+# ════════════════════════════════════════════════════════════════════
+
+NUDGE_TOP = 0.10       # the best 10% of each role (by MVP points) gain 2 OVR
+NUDGE_GOOD = 0.25      # the next 15% gain 1
+NUDGE_FLOP = 0.80      # the bottom 20% of those who played lose 1
+NUDGE_MAX = 2
+
+
+def season_no(state):
+    return int(state.get("season_no") or 1)
+
+
+def rating_nudges(state):
+    """``{pid: ±n}`` from this season's performance, role by role, within ±2.
+
+    Only players who took the field move; ranking is by MVP points.
+    """
+    played = set(state["stats"]["bat"]) | set(state["stats"]["bowl"])
+    by_role = {}
+    for pid in played:
+        c = state["pool"].get(pid)
+        if c:
+            by_role.setdefault(c["category"], []).append(pid)
+    out = {}
+    for pids in by_role.values():
+        pids.sort(key=lambda p: (-mvp_points(state, p), int(p)))
+        n = len(pids)
+        for i, pid in enumerate(pids):
+            rank = (i + 1) / n
+            delta = 2 if rank <= NUDGE_TOP else 1 if rank <= NUDGE_GOOD else (
+                -1 if rank > NUDGE_FLOP else 0)
+            if delta:
+                out[int(pid)] = max(-NUDGE_MAX, min(NUDGE_MAX, delta))
+    return out
+
+
+def _award_line(state, awards, key):
+    if key not in awards:
+        return None
+    pid, head = awards[key]
+    c = state["pool"].get(str(pid)) or {}
+    owner = owner_of(state, pid)
+    return {"pid": int(pid), "name": c.get("name", "?"), "team": owner, "what": head}
+
+
+def season_summary(state):
+    """One line of career history for a finished season."""
+    me = state["user_team"]
+    row = state["table"].get(me) or _empty_row()
+    awards = season_awards(state)
+    buys = [e for e in state["teams"][me]["squad"] if e.get("how") != HOW_RETAINED]
+    top = max(buys, key=lambda e: e["price"], default=None)
+    pos = next((i + 1 for i, n in enumerate(standings(state)) if n == me), None)
+    return {
+        "season": season_no(state),
+        "team": me,
+        "finish": season_finish(state),
+        "position": pos,
+        "w": int(row.get("w", 0)), "l": int(row.get("l", 0)), "p": int(row.get("p", 0)),
+        "champion": state.get("champion"),
+        "runner_up": state.get("runner_up"),
+        "orange": _award_line(state, awards, "orange"),
+        "purple": _award_line(state, awards, "purple"),
+        "mvp": _award_line(state, awards, "mvp"),
+        "top_buy": ({"name": card(state, top["pid"])["name"], "price": int(top["price"])}
+                    if top else None),
+        "conceded": bool(state.get("user_conceded")),
+    }
+
+
+def career_history(state):
+    """Every season so far — the finished ones, plus this one once it ends."""
+    rows = list(state.get("career") or [])
+    if state["phase"] == PHASE_COMPLETED and not any(
+            r.get("season") == season_no(state) for r in rows):
+        rows.append(season_summary(state))
+    return rows
+
+
+def career_record(state):
+    rows = career_history(state)
+    return {
+        "seasons": len(rows),
+        "titles": sum(1 for r in rows if r["finish"] == "champion"),
+        "finals": sum(1 for r in rows if r["finish"] in ("champion", "runner_up")),
+        "playoffs": sum(1 for r in rows if r["finish"] != "league"),
+        "w": sum(r["w"] for r in rows), "p": sum(r["p"] for r in rows),
+    }
+
+
+def next_season_state(prev, seed=None):
+    """Season N+1 of a finished career.
+
+    Every franchise's squad from last season becomes its "own" team for
+    retentions and Right To Match; the players nobody signed go back into the
+    pool as free agents; ratings move by last season's performance (±2); the
+    career history carries on. Starts in the retention phase.
+    """
+    if prev.get("phase") != PHASE_COMPLETED:
+        raise AuctionLeagueError("Finish this season before starting the next.")
+    nudges = rating_nudges(prev)
+
+    def moved(c, team):
+        c = dict(c)
+        d = nudges.get(int(c["id"]), 0)
+        if d:
+            for key in ("rating", "bat_rating", "bowl_rating"):
+                if c.get(key):
+                    c[key] = max(30, min(99, int(c[key]) + d))
+        c["team"] = team
+        c.pop("last_delta", None)
+        if d:
+            c["last_delta"] = d
+        return c
+
+    teams = []
+    signed = set()
+    for name in prev["team_order"]:
+        t = prev["teams"][name]
+        players = [moved(prev["pool"][str(e["pid"])], name) for e in t["squad"]
+                   if str(e["pid"]) in prev["pool"]]
+        signed.update(int(c["id"]) for c in players)
+        teams.append({"name": name, "short": t["short"], "players": players})
+    state = new_state(prev["league"], teams, prev["user_team"],
+                      ai_retain=prev.get("ai_retain", True),
+                      difficulty=prev.get("difficulty", "normal"), seed=seed)
+    for c in prev["pool"].values():
+        if int(c["id"]) not in signed:
+            state["pool"][str(c["id"])] = moved(c, None)
+    for name, t in state["teams"].items():
+        t["personality"] = prev["teams"][name].get("personality", t["personality"])
+    state["season_no"] = season_no(prev) + 1
+    state["career"] = career_history(prev)
+    if prev.get("nominations_by_hand") is not None:
+        state["nominations_by_hand"] = prev["nominations_by_hand"]
+    return state
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -2212,6 +2945,15 @@ def latest_save(session, tg_id):
         .order_by(AuctionLeagueSave.id.desc()).first())
 
 
+def latest_completed(session, tg_id):
+    """The most recently finished season (for its card), or None."""
+    from models import AuctionLeagueSave
+    return (session.query(AuctionLeagueSave)
+            .filter(AuctionLeagueSave.user_tg_id == int(tg_id),
+                    AuctionLeagueSave.status == PHASE_COMPLETED)
+            .order_by(AuctionLeagueSave.id.desc()).first())
+
+
 def load(row):
     return json.loads(row.state_json)
 
@@ -2220,6 +2962,67 @@ def store(row, state):
     row.state_json = json.dumps(state, separators=(",", ":"))
     row.status = state["phase"]
     row.version = int(row.version or 0) + 1
+    if state["phase"] == PHASE_COMPLETED and getattr(row, "finish", None) is None:
+        _stamp_hall_of_fame(row, state)
+
+
+def _stamp_hall_of_fame(row, state):
+    """Copy the finished season's outcome onto the row's Hall of Fame columns."""
+    from datetime import datetime
+    summ = season_summary(state)
+    row.season_no = summ["season"]
+    row.finish = summ["finish"]
+    row.champion_team = summ["champion"]
+    row.completed_at = datetime.utcnow()
+    row.wins = summ["w"]
+    row.played = summ["p"]
+    if summ["top_buy"]:
+        row.top_buy_name = str(summ["top_buy"]["name"])[:120]
+        row.top_buy_lakh = int(summ["top_buy"]["price"])
+
+
+HOF_MIN_SEASONS = 1
+
+
+def hall_of_fame(session, limit=10):
+    """The /alhof boards from finished seasons: ``{board: [row dict, …]}``.
+
+    ``titles`` (then finals), ``finals``, ``win_pct`` (at least three seasons),
+    ``buys`` (the biggest single buys). Each row carries ``tg_id``.
+    """
+    from models import AuctionLeagueSave
+    rows = (session.query(AuctionLeagueSave)
+            .filter(AuctionLeagueSave.status == PHASE_COMPLETED,
+                    AuctionLeagueSave.finish.isnot(None)).all())
+    per = {}
+    buys = []
+    for r in rows:
+        p = per.setdefault(int(r.user_tg_id), {"tg_id": int(r.user_tg_id), "seasons": 0,
+                                               "titles": 0, "finals": 0, "playoffs": 0,
+                                               "w": 0, "p": 0})
+        p["seasons"] += 1
+        p["titles"] += r.finish == "champion"
+        p["finals"] += r.finish in ("champion", "runner_up")
+        p["playoffs"] += r.finish != "league"
+        p["w"] += int(r.wins or 0)
+        p["p"] += int(r.played or 0)
+        if r.top_buy_lakh:
+            buys.append({"tg_id": int(r.user_tg_id), "name": r.top_buy_name,
+                         "price": int(r.top_buy_lakh), "team": r.user_team_name,
+                         "league": r.league_name, "season": r.season_no})
+    people = [p for p in per.values() if p["seasons"] >= HOF_MIN_SEASONS]
+    for p in people:
+        p["pct"] = round(100.0 * p["w"] / p["p"], 1) if p["p"] else 0.0
+    return {
+        "titles": sorted((p for p in people if p["titles"]),
+                         key=lambda p: (-p["titles"], -p["finals"], -p["pct"], p["tg_id"]))[:limit],
+        "finals": sorted((p for p in people if p["finals"]),
+                         key=lambda p: (-p["finals"], -p["titles"], p["tg_id"]))[:limit],
+        "win_pct": sorted((p for p in people if p["seasons"] >= 3),
+                          key=lambda p: (-p["pct"], -p["p"], p["tg_id"]))[:limit],
+        "buys": sorted(buys, key=lambda b: (-b["price"], b["tg_id"]))[:limit],
+        "people": per,
+    }
 
 
 def create_save(session, tg_id, state):

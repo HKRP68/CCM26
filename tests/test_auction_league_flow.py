@@ -334,9 +334,18 @@ class FlowTest(unittest.TestCase):
         bot_ids = _challenge_xi_selection(draft, "target")["player_ids"]
         self.assertEqual(len(bot_ids), 11)
         bot_xi = [AL.card(st, i) for i in bot_ids]
+        opp = draft["auction_league"]["opp_team"]
+        picked = AL.ai_playing_xi(AL.match_cards(st, opp), 4, draft["pitch_type"])
+        self.assertEqual(sorted(bot_ids), sorted(c["id"] for c in picked))
         counts = {r: sum(1 for c in bot_xi if c["category"] == r) for r in AL.ROLES}
-        self.assertEqual(counts, {"Batsman": 4, "Wicket Keeper": 1,
-                                  "All-rounder": 3, "Bowler": 3})
+        squad = AL.match_cards(st, opp)
+        dom = {r: sum(1 for c in squad if c["category"] == r and not c["is_overseas"])
+               for r in AL.ROLES}
+        if all(dom[r] >= n for r, n in AL.XI_TARGET.items()):
+            self.assertEqual(counts, {"Batsman": 4, "Wicket Keeper": 1,
+                                      "All-rounder": 3, "Bowler": 3})
+        self.assertGreaterEqual(counts["All-rounder"] + counts["Bowler"],
+                                AL.XI_BOWLING_OPTIONS)
         bats = [c["bat_rating"] for c in bot_xi]
         self.assertEqual(bats, sorted(bats, reverse=True))
         self.assertEqual(draft["host_team"], me)
@@ -372,6 +381,62 @@ class FlowTest(unittest.TestCase):
             s.close()
         _rid, st = self._state()
         self.assertEqual(st["table"][me]["pts"], 2)
+
+
+class NextSeasonFlowTest(FlowTest):
+    """Season N+1 from a finished career (FlowTest's helpers, its own test)."""
+
+    def test_help_anywhere(self):
+        pass
+
+    def test_entry_fee_and_direct_league_start(self):
+        pass
+
+    def test_career_to_first_fixture(self):
+        pass
+
+    def test_start_next_season_charges_once(self):
+        from database import get_session
+        from models import AuctionLeagueSave, User
+        from services import auction_league_service as AL
+        from test_auction_league import new_state, play_season
+        st = new_state(seed=4)
+        AL.apply_retentions(st, [])
+        AL.simulate_to_last(st)
+        AL.finish_auction(st)
+        play_season(st)
+        s = get_session()
+        try:
+            for row in s.query(AuctionLeagueSave).filter(
+                    AuctionLeagueSave.user_tg_id == TG_ID).all():
+                row.status = AL.PHASE_ABANDONED
+            row = AuctionLeagueSave(user_tg_id=TG_ID, league_id=1, league_name="IPL",
+                                    user_team_name="Team A", status="completed",
+                                    state_json="{}", version=0, reward_paid=True)
+            AL.store(row, st)
+            s.add(row)
+            s.query(User).filter(User.telegram_id == TG_ID).update({"total_gems": 250})
+            s.commit()
+            old_id = row.id
+        finally:
+            s.close()
+        self._press("al:hub")
+        self.assertIn("al:nexts", [d for _t, d in self.log[-1][1]])
+        self._press("al:nexts")
+        self.assertEqual(self._gems(), 150)
+        rid, nxt = self._state()
+        self.assertNotEqual(rid, old_id)
+        self.assertEqual(nxt["phase"], AL.PHASE_RETENTION)
+        self.assertEqual(AL.season_no(nxt), 2)
+        self.assertIn("Retention", self.log[-1][0])
+        # A second tap never charges again.
+        self._press("al:nexts")
+        self.assertEqual(self._gems(), 150)
+        s = get_session()
+        try:
+            self.assertTrue(AL.load(s.get(AuctionLeagueSave, old_id))["next_season_started"])
+        finally:
+            s.close()
 
 
 class RewardCooldownTest(unittest.TestCase):
@@ -424,6 +489,71 @@ class RewardCooldownTest(unittest.TestCase):
         finally:
             s.rollback()
             s.close()
+
+
+class HallOfFameAndCardTest(unittest.TestCase):
+    def test_card_png_and_hall_of_fame(self):
+        from database import get_session
+        from models import AuctionLeagueSave, User
+        from services import auction_league_service as AL
+        from services.auction_league_card import render_season_card
+        from test_auction_league import new_state, play_season
+        st = new_state(seed=9)
+        with self.assertRaises(AL.AuctionLeagueError):
+            render_season_card(st)
+        AL.apply_retentions(st, [])
+        AL.simulate_to_last(st)
+        AL.finish_auction(st)
+        play_season(st)
+        png = render_season_card(st)
+        self.assertTrue(png.startswith(b"\x89PNG"))
+        s = get_session()
+        try:
+            s.add(User(telegram_id=888, username="hof", first_name="Hofer"))
+            rows, want = [], []
+            for finish in ("champion", "runner_up", "league"):
+                st["champion"] = "Team A" if finish == "champion" else "Team B"
+                st["runner_up"] = "Team A" if finish == "runner_up" else "Team C"
+                row = AuctionLeagueSave(user_tg_id=888, league_id=1, league_name="IPL",
+                                        user_team_name="Team A", status="retention",
+                                        state_json="{}", version=0)
+                want.append(AL.season_finish(st))
+                AL.store(row, st)
+                s.add(row)
+                rows.append(row)
+            s.flush()
+            self.assertEqual(want[:2], ["champion", "runner_up"])
+            self.assertEqual([r.finish for r in rows], want)
+            self.assertTrue(all(r.completed_at and r.season_no == 1 for r in rows))
+            # Stamped once: a later store does not move it.
+            st["champion"] = "Team Z"
+            AL.store(rows[0], st)
+            self.assertEqual(rows[0].finish, "champion")
+            hof = AL.hall_of_fame(s)
+            me = hof["people"][888]
+            self.assertEqual((me["seasons"], me["titles"], me["finals"]), (3, 1, 2))
+            self.assertEqual(me["playoffs"], 2 + (want[2] != "league"))
+            self.assertEqual(hof["titles"][0]["tg_id"], 888)
+            self.assertEqual(hof["win_pct"][0]["tg_id"], 888)
+            from handlers.auction_league import _hof_text
+            text = _hof_text(s, 888)
+            self.assertIn("Hofer", text)
+            self.assertIn("You", text)
+        finally:
+            s.rollback()
+            s.close()
+
+    def test_migration_adds_hall_of_fame_columns_once(self):
+        import database
+        from sqlalchemy import inspect
+        cols = {c["name"] for c in inspect(database.engine).get_columns("auction_league_saves")}
+        for col in ("season_no", "finish", "champion_team", "completed_at", "top_buy_lakh"):
+            self.assertIn(col, cols)
+        # Running the migration again on an up-to-date schema is a no-op.
+        database._migrate_add_columns()
+        database._migrate_add_columns()
+        cols2 = [c["name"] for c in inspect(database.engine).get_columns("auction_league_saves")]
+        self.assertEqual(len(cols2), len(set(cols2)))
 
 
 if __name__ == "__main__":
