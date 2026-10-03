@@ -3685,6 +3685,81 @@ def _fire_milestones_async(context, chat_id, events):
     return task
 
 
+def _drop_card(state, drop):
+    """The built-in DROPPED! announcement (HTML)."""
+    from services import match_drama
+    fielder = html.escape(str(drop.get("fielder") or "The fielder"))
+    batter = html.escape(str(drop.get("batter") or "the batter"))
+    bowler = html.escape(str(drop.get("bowler") or "the bowler"))
+    head = ("😱 <b>PRESSURE DROP!</b>" if drop.get("pressure")
+            else "🫳 <b>DROPPED!</b>")
+    flavour = match_drama.line("drop", "pressure" if drop.get("pressure")
+                               else "lines") or ""
+    lines = [head,
+             f"{fielder} puts down <b>{batter}</b> on "
+             f"<b>{int(drop.get('batter_runs') or 0)}</b> — off {bowler}.",
+             f"🏏 {html.escape(str(drop.get('team') or ''))} "
+             f"{drop.get('score') or cipl_match.format_score(state)} "
+             f"({drop.get('over') or cipl_match.format_overs(state)})"]
+    if flavour:
+        lines.append(f"💬 <i>{html.escape(flavour)}</i>")
+    return "\n".join(lines)
+
+
+def _paid_for_drop_lines(state, milestone_events):
+    """"Dropped on 23 — and made them pay!" for a fifty/hundred after a life."""
+    out = []
+    for key, fields in milestone_events or []:
+        if key not in ("fifty", "century") or fields.get("dropped_on") is None:
+            continue
+        word = "fifty" if key == "fifty" else "HUNDRED"
+        out.append(f"💸 <b>{html.escape(str(fields.get('player') or ''))}</b> "
+                   f"brings up a {word} — dropped on "
+                   f"{fields['dropped_on']}, and made them pay!")
+    return out
+
+
+def _announce_drama_async(context, state, summary, milestone_events=None):
+    """Post each dropped catch (admin media if configured, else the built-in
+    card) and any 'made them pay' line. Background task; never raises."""
+    drops = list((summary or {}).get("drops") or [])
+    paid = _paid_for_drop_lines(state, milestone_events)
+    if not drops and not paid:
+        return None
+    chat_id = state["chat_id"]
+    cards = [(d, _drop_card(state, d)) for d in drops]
+    score, overs = cipl_match.format_score(state), cipl_match.format_overs(state)
+
+    async def _runner():
+        try:
+            from services.event_media_service import fire_event_media
+            for drop, card in cards:
+                fields = {"player": drop.get("batter", ""),
+                          "fielder": drop.get("fielder", ""),
+                          "bowler": drop.get("bowler", ""),
+                          "runs": drop.get("batter_runs", 0),
+                          "team": drop.get("team", ""),
+                          "opponent": drop.get("fielding_team", ""),
+                          "score": drop.get("score") or score,
+                          "overs": drop.get("over") or overs}
+                sent = await fire_event_media(context, chat_id, "dropped_catch",
+                                              fields=fields, cooldown=False)
+                if not sent:
+                    await context.bot.send_message(chat_id=chat_id, text=card,
+                                                   parse_mode="HTML")
+            if paid:
+                await context.bot.send_message(chat_id=chat_id,
+                                               text="\n".join(paid),
+                                               parse_mode="HTML")
+        except Exception:
+            logger.exception("drop announcement failed (non-fatal)")
+
+    task = asyncio.create_task(_runner(), name=f"cipl_drama_{chat_id}")
+    _MILESTONE_TASKS.add(task)
+    task.add_done_callback(_MILESTONE_TASKS.discard)
+    return task
+
+
 async def _run_over(context, mid, state):
     # Hard stop on the format limit. Once the innings quota is used — 20 overs,
     # or 100 balls (20 sets) in The Hundred — no further over may be simulated,
@@ -3764,11 +3839,17 @@ async def _run_over(context, mid, state):
     except Exception:
         logger.exception("cipl over summary post failed for match %s", mid)
 
+    milestone_events = []
     try:
-        _fire_milestones_async(context, state["chat_id"],
-                               milestones.detect(state, before_milestones, summary))
+        milestone_events = milestones.detect(state, before_milestones, summary)
+        _fire_milestones_async(context, state["chat_id"], milestone_events)
     except Exception:
         logger.exception("cipl milestone dispatch failed for match %s", mid)
+
+    try:
+        _announce_drama_async(context, state, summary, milestone_events)
+    except Exception:
+        logger.exception("cipl drama announcement failed for match %s", mid)
 
     if innings_over:
         await _finish_innings(context, mid, state)
@@ -3809,6 +3890,47 @@ def _predictability_lines(state, summary):
     return out
 
 
+def _costliest_drop_line(state):
+    """The match's most expensive dropped catch, for the result message."""
+    try:
+        best = cipl_match.costliest_drop(state)
+    except Exception:
+        logger.exception("costliest drop failed")
+        return ""
+    if not best:
+        return ""
+    drop, cost = best
+    if cost < 10:
+        return ""
+    return (f"🫳 <b>Costliest drop:</b> {html.escape(str(drop.get('fielder', '')))} "
+            f"put down {html.escape(str(drop.get('batter', '')))} on "
+            f"{drop.get('batter_runs', 0)} — it cost {cost} more runs.")
+
+
+def _drama_summary_lines(summary):
+    """Pressure mistakes and on-field chirp from the over, for its summary."""
+    out = []
+    pm = (summary or {}).get("pressure_moments") or {}
+    labels = (("wides", "wide", "wides"), ("noballs", "no-ball", "no-balls"),
+              ("drops", "drop", "drops"), ("misfields", "misfield", "misfields"),
+              ("mixups", "mix-up", "mix-ups"))
+    parts = [f"{pm[k]} {one if pm[k] == 1 else many}"
+             for k, one, many in labels if pm.get(k)]
+    if parts:
+        out.append("😰 <b>Pressure:</b> " + " · ".join(parts))
+    for d in (summary or {}).get("drops") or []:
+        out.append(f"🫳 Dropped: {html.escape(str(d.get('batter', '')))} on "
+                   f"{d.get('batter_runs', 0)} (by {html.escape(str(d.get('fielder', '')))})")
+    sledges = (summary or {}).get("sledges") or []
+    if sledges:
+        out.append("")
+        out.append("🗣️ <b>Heated words!</b>")
+        for sl in sledges:
+            body = "\n".join(html.escape(str(x)) for x in sl.get("lines") or [])
+            out.append(f"<blockquote>{body}</blockquote>")
+    return out
+
+
 def _render_over_summary(state, summary):
     timeline = " ".join(cipl_match._SYM.get(_sym_key(s), s)
                         for s in summary["over_timeline"]) or "—"
@@ -3838,6 +3960,7 @@ def _render_over_summary(state, summary):
         f"🎳 {summary['bowler']['name']}: {summary['bowler_figures']}",
         f"{arrow} Momentum: {state['bat_team_name']}",
     ]
+    lines += _drama_summary_lines(summary)
     # Approach Interaction System flavour — the name of the special combination
     # the two picks made, or the match-up's one-line character.
     #
@@ -3969,6 +4092,7 @@ _CMT_EMOJI = {
     "dot": "0️⃣", "one": "1️⃣", "two": "2️⃣", "three": "3️⃣",
     "four": "4️⃣", "six": "6️⃣", "wicket": "⭕", "extra": "↔️",
     "new_bowler": "🎳", "returning_bowler": "🎳", "new_batsman": "🏏",
+    "sledge": "🗣️",
 }
 
 # Card-type commentary entries the Mini App renders as rich cards. The chat
@@ -4127,6 +4251,18 @@ def _bowlers_block(state):
             "<blockquote expandable>" + "\n".join(lines) + "</blockquote>")
 
 
+def _partnership(state):
+    """``(runs, balls)`` of the stand at the crease."""
+    return (int(state.get("partnership_runs") or 0),
+            int(state.get("partnership_balls") or 0))
+
+
+def _partnership_line(state):
+    """``🤝 Partnership: 34 (22)`` for the approach card."""
+    runs, balls = _partnership(state)
+    return f"🤝 Partnership: <b>{runs}</b> ({balls})"
+
+
 def _approach_card(state):
     """Full broadcast-style scorecard card used on the approach-select prompts."""
     inn = state.get("innings", 1)
@@ -4150,6 +4286,7 @@ def _approach_card(state):
         "",
         f"🔹 {_compact_bat_line(striker, bs)}",
         f"      {_compact_bat_line(non_striker, bs)}",
+        _partnership_line(state),
         rule,
         _crr_line(state),
     ]
@@ -4268,6 +4405,9 @@ def _build_approach_card_blocks(state, prompt):
         ])
     blocks.append(R.table(bat_rows, bordered=True, compact=True,
                           caption=R.bold(f"{bat_emoji} {bat_code} · Bat")))
+    p_runs, p_balls = _partnership(state)
+    blocks.append(R.paragraph(["🤝 ", R.bold("Partnership"), "  ",
+                               R.bold(str(p_runs)), f" ({p_balls})"]))
 
     # ── The attack ──
     bowl_caption = [R.bold(f"{bowl_emoji} {bowl_code} · Bowl"),
@@ -4772,6 +4912,9 @@ async def _complete_match(context, mid, state):
     # expandable quote so the chat stays tidy.
     body = (f"{_innings_scorecard(state, innings_label='2nd Innings')}\n\n"
             f"{result_line}")
+    costly = _costliest_drop_line(state)
+    if costly:
+        body += f"\n{costly}"
     if prize_info:
         body += (
             f"\n\n💰 <b>Prizes</b>\n"

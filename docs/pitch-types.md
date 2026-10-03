@@ -30,9 +30,9 @@ median from `config/ground_conditions.yaml`, measured with
 | **Dry** | Abu Dhabi / Kandy — slow, low, gripping | 170–182 | Spin | bat |
 | **Bouncy** | Perth / the Wanderers — steep, true bounce | 180–192 | Pace | bowl |
 | **Even** | a neutral international T20 square | 190–202 | Balanced | bat |
-| **Hard** | a modern drop-in with real carry | 212–226 | Batting | bat |
-| **Flat** | Wankhede / Chinnaswamy — a genuine road | 225–240 | Batting | bowl |
-| **Dead** | Sharjah in its shirtfront years | 242–258 | Batting | bowl |
+| **Hard** | a modern drop-in with real carry | 205–220 | Batting | bat |
+| **Flat** | Wankhede / Chinnaswamy — a genuine road | 220–236 | Batting | bowl |
+| **Dead** | Sharjah in its shirtfront years | 228–244 | Batting | bowl |
 
 `Dead` is fully configured but is not offered when a host picks a pitch: a
 guaranteed 250 is a novelty, not a contest.
@@ -296,3 +296,45 @@ Green's wicket cut is the smallest. The bot captain's approach solver
 (`services/bot_tactics`) reads Green's matrix directly, and cutting its base
 wicket rate further leaves Balanced batting and Aggressive bowling with no
 situation where they are the right call (`tests/test_cipl_approach.py`).
+
+## Match drama (/cipl and /letsplay)
+
+`services/match_drama.py` and `services/sledging.py` add bounded weight hooks
+on top of the surface model, composed in `services/cipl_match.simulate_over`.
+They never touch /sim, /playmatch or the bot matches.
+
+* **Pitch character.** Each surface behaves like its name, by phase:
+  - the green top seams in the powerplay and burns off by mid-innings
+  - the dust turns square through the middle overs
+  - the dry deck grips, then cracks at the death
+  - the bouncy track pays express pace
+
+  A line about the surface sometimes follows a dot or a wicket.
+* **270+ brake.** It engages once an innings projects past the top of its
+  pitch's par band, and turns steep past 240 projected (or 215 actually on
+  the board). It pulls the ball back toward a normal T20 delivery rather than
+  scaling weights, because by the last over the engine can be offering ~90%
+  boundaries and no wicket. Measured with `python -m tools.pitch_calibration`
+  (the "270+ Rule" line), it fell from 2.9% to 0.1% of innings with balanced
+  captains, and to 0% with the real captaincy mix. To keep par honest, the
+  Hard, Flat and Dead par bands moved down to 205–220, 220–236 and 228–244.
+* **Contest.** When one side is running away with it, the fielding side
+  tightens up by at most ~10%. This layer stands down inside the chase
+  model's window.
+* **Pressure.** In the death overs and in a close chase:
+  - a fielding side spills more catches, misfields, and sprays wides and
+    no-balls
+  - a batting side freezes, and the odd catch or bowled becomes a run-out
+    mix-up
+
+  The over summary lists them under "😰 Pressure".
+* **Dropped catches.** Each drop is announced on its own. Admin media under
+  the `dropped_catch` event key is used when one is configured; otherwise the
+  bot posts a built-in card naming the fielder, the batter and their score.
+  - A later fifty or hundred says "dropped on N — and made them pay".
+  - The result names the costliest drop.
+* **Sledging.** At most three exchanges an innings, 12 balls apart. About one
+  in five boils over into a verbal fight. The batter comes out of it either
+  fired up (more boundaries, more risk) or rattled (more dots and wickets)
+  for six balls. Which one depends on batter rating against bowler rating,
+  plus luck.

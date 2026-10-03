@@ -1,0 +1,81 @@
+{
+  "pitch_flavour": {
+    "Green": [
+      "Seamed away off the green top — the grass is talking.",
+      "Nibbled off the seam and past the edge. This surface is alive.",
+      "Lateral movement again. You can see the tinge of green from the commentary box.",
+      "The new-ball bowlers are licking their lips on this grassy deck."
+    ],
+    "Dusty": [
+      "That one spat out of the rough — puff of dust and all.",
+      "Turned square! This is a raging turner.",
+      "Ripped across the face of the bat off the dusty surface.",
+      "The footmarks are doing the bowling now."
+    ],
+    "Dry": [
+      "Gripped and stopped on the batter — slow, low, and sticky.",
+      "Kept low through a crack. Variable bounce is creeping in.",
+      "The ball isn't coming on at all. You have to earn every run here.",
+      "That one held in the surface and the shot was through too early."
+    ],
+    "Bouncy": [
+      "Steep bounce! That reared at the throat.",
+      "Hit the deck hard and climbed — real carry on this pitch.",
+      "Up at the badge of the helmet. This is a quick's paradise.",
+      "Extra bounce off a length — the keeper took it above their head."
+    ],
+    "Hard": [
+      "Good carry through to the keeper — the hard surface rewarding the seamer.",
+      "Hit the deck and it carried. Pace gets something here."
+    ],
+    "Even": [
+      "A fair contest on a fair pitch."
+    ],
+    "Flat": [
+      "Only the change of pace beat the batter — that's all a bowler has on this road."
+    ],
+    "Dead": [
+      "Took the pace off it — the only weapon left on this shirtfront."
+    ]
+  },
+  "pressure": {
+    "wide": [
+      "Nerves! {bowler} sprays it wide — the pressure is telling.",
+      "Wide! The fielding side are rattled, {bowler} can't find the line.",
+      "Another wide under the pump — {bowler} is feeling it."
+    ],
+    "noball": [
+      "NO BALL! {bowler} oversteps at the worst possible moment!",
+      "Overstepped! Pressure does strange things — FREE HIT coming.",
+      "{bowler} has overstepped. The captain has their head in their hands."
+    ],
+    "mixup": [
+      "MIX-UP! Yes, no, sorry — {batter} is run out in the panic!",
+      "Chaos between the wickets! {batter} sold down the river under pressure.",
+      "Run out! The pressure got to them — {batter} is stranded mid-pitch."
+    ],
+    "nerves": [
+      "The nervous heave… and {batter} is gone. The pressure got there first.",
+      "That's a pressure shot — {batter} tried to end it in one ball and failed."
+    ],
+    "misfield": [
+      "Fumbled in the field — the pressure is getting to the fielders too."
+    ]
+  },
+  "drop": {
+    "lines": [
+      "That's gone straight in and straight out!",
+      "Put down! The bowler can't believe it.",
+      "A sitter, and it's on the grass. Catches win matches…",
+      "Spilled! That could be a very expensive moment.",
+      "Hands like buckets with holes — what a let-off!"
+    ],
+    "pressure": [
+      "Pressure drop! The nerves have reached the outfield.",
+      "The tension got to the fielder — that's a big, big miss."
+    ],
+    "stumping": [
+      "Missed stumping! The keeper fumbles and the batter scrambles back."
+    ]
+  }
+}

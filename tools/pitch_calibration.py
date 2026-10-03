@@ -10,6 +10,10 @@ real output matches the Pitch Rule Engine spec encoded in
   * Chase Win % by first-innings total band.
   * Fighting Match Rule — chases stay close and deep: tight median defended
     margin, low capitulation rate, most matches reaching the closing overs.
+  * 270+ Rule — an innings of 270 or more is a once-in-a-season freak, not a
+    Flat-pitch habit (measured across every innings, either side).
+  * One-sided matches — a win by a huge run margin, or a chase that strolls
+    home with wickets and overs to spare, stays the exception.
 
 This is the tuning instrument for the constants in ``services/cipl_match.py``
 (variance sigma, floor guard, corridor, BASELINE_STRENGTH) and the YAML targets.
@@ -211,6 +215,9 @@ def collect(pitch, n, mix="balanced"):
                      if decided else 50.0)
     balls = sum(r["inn1_balls"] + r["inn2_balls"] for r in rows)
     wkts = sum(r["inn1_wkts"] + r["inn2_wkts"] for r in rows)
+    high = sum(1 for r in rows for runs in (r["inn1_runs"], r["inn2_runs"])
+               if runs >= HIGH_SCORE_LINE)
+    one_sided = sum(1 for r in rows if is_one_sided(r))
 
     return {
         "n": n, "rows": rows, "inn1_sorted": inn1,
@@ -227,6 +234,9 @@ def collect(pitch, n, mix="balanced"):
         "def_margin_median": (statistics.median(def_margins) if def_margins else 0),
         "capitulation_rate": (capitulations / len(defended) * 100) if defended else 0.0,
         "deep_rate": deep / n * 100,
+        "high_score_rate": high / (2 * n) * 100,
+        "high_score_count": high,
+        "one_sided_rate": one_sided / n * 100,
     }
 
 
@@ -238,6 +248,27 @@ TOL = {"floor_lo": 35, "floor_hi": 35, "par_pad": 10, "ceiling_lo": 35,
        "chase_band": 20, "capitulation_max": 30,
        "anomaly_pad": 35, "deep_min": 45.0, "margin_frac": 0.30,
        "toss_skew": 8.0}
+# 270+ Rule: the share of ALL innings that reach this line, across the sweep.
+HIGH_SCORE_LINE = 270
+HIGH_SCORE_GLOBAL_MAX = 0.3       # % of innings
+# One-sided: a defended win by this many runs or more, or a chase won with at
+# least ONE_SIDED_WKTS wickets AND ONE_SIDED_BALLS balls in hand.
+ONE_SIDED_RUNS = 60
+ONE_SIDED_WKTS = 8
+ONE_SIDED_BALLS = 24
+ONE_SIDED_GLOBAL_MAX = 15.0       # % of matches
+
+
+def is_one_sided(r):
+    """True when *r* (a simulate_one row) was a hammering rather than a contest."""
+    if r["margin_type"] == "runs":
+        return r["margin"] >= ONE_SIDED_RUNS
+    if r["margin_type"] == "wickets":
+        return (r["margin"] >= ONE_SIDED_WKTS
+                and r["innings_balls"] - r["inn2_balls"] >= ONE_SIDED_BALLS)
+    return False
+
+
 # Chase bands with fewer than this many samples are too noisy to judge — they are
 # reported as an explicit "n<min (not judged)" check rather than silently skipped.
 MIN_BAND_N = 12
@@ -330,7 +361,9 @@ def print_report(pitch, m, checks, verbose=False):
           f"defended margin median: {m['def_margin_median']:.0f}    "
           f"capitulation: {m['capitulation_rate']:.0f}%")
     print(f"   bat first wins: {m['bat_first_win']:.0f}%    "
-          f"wickets/over: {m['wkts_per_over']:.3f}")
+          f"wickets/over: {m['wkts_per_over']:.3f}    "
+          f"270+: {m['high_score_count']} ({m['high_score_rate']:.2f}% of inns)    "
+          f"one-sided: {m['one_sided_rate']:.0f}%")
     print("   chase win% by band: " + "  ".join(
         f"≤{mx}:{(st['won']/st['n']*100 if st['n'] else 0):.0f}%/{st['pct_spec']}%(n{st['n']})"
         for mx, st in m["band_stats"].items()))
@@ -360,12 +393,15 @@ def main(argv=None):
     pitches = [args.pitch] if args.pitch else SPEC_PITCHES
     all_pass = True
     sub100 = []
+    high, one_sided = [], []
     for pitch in pitches:
         m = collect(pitch, args.n, mix=args.mix)
         checks = evaluate(pitch, m)
         if not all(ok for _, ok, _ in checks):
             all_pass = False
         sub100.append(m["sub100_rate"])
+        high.append(m["high_score_rate"])
+        one_sided.append(m["one_sided_rate"])
         print_report(pitch, m, checks, verbose=args.verbose)
 
     # v3.0 section 1.1, as the doc actually states it: across the game, not per
@@ -377,6 +413,18 @@ def main(argv=None):
         print(f"\n   [{'ok ' if ok else 'XX '}] Sub-100 Rule (global): "
               f"{rate:.2f}% of innings all-out under 100 "
               f"(max {TOL['sub100_global_max']}%)")
+        rate = statistics.mean(high)
+        ok = rate <= HIGH_SCORE_GLOBAL_MAX
+        all_pass = all_pass and ok
+        print(f"   [{'ok ' if ok else 'XX '}] 270+ Rule (global): "
+              f"{rate:.2f}% of innings reach {HIGH_SCORE_LINE} "
+              f"(max {HIGH_SCORE_GLOBAL_MAX}%)")
+        rate = statistics.mean(one_sided)
+        ok = rate <= ONE_SIDED_GLOBAL_MAX
+        all_pass = all_pass and ok
+        print(f"   [{'ok ' if ok else 'XX '}] Contest Rule (global): "
+              f"{rate:.1f}% of matches one-sided "
+              f"(max {ONE_SIDED_GLOBAL_MAX}%)")
 
     print("\n" + ("✅ ALL PITCHES WITHIN TOLERANCE" if all_pass
                   else "❌ SOME PITCHES OUT OF TOLERANCE — tune constants/YAML"))

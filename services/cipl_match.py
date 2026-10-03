@@ -32,6 +32,8 @@ from engine import approach_modifiers
 from engine import momentum as momentum_engine
 from engine import pitch_state
 from services import impact_player
+from services import match_drama
+from services import sledging
 from services import highlights as highlights_log
 from services import weather_drift
 from engine.approach_modifiers import batting_label, bowling_label
@@ -1278,6 +1280,107 @@ def _trailing_dots(over_timeline):
     return run
 
 
+# ── Match drama bookkeeping (services.match_drama / services.sledging) ──
+# Pressure at or above this is worth calling out by name in the commentary and
+# the over summary ("Nerves! … sprays it wide"). Below it the mistake still
+# happens more often than usual, it just reads as an ordinary one.
+PRESSURE_CALLOUT = 0.35
+
+
+def _new_over_drama():
+    return {"drops": [], "sledges": [],
+            "pressure": {"wides": 0, "noballs": 0, "drops": 0,
+                         "mixups": 0, "misfields": 0}}
+
+
+def _record_drop(state, drama, striker, fielder, bowler, batter_runs, bowl_p):
+    """Log a dropped catch for the announcement, the batter's lives and the
+    end-of-match "costliest drop". Returns the drop record."""
+    rid = str(striker.get("roster_id"))
+    bs = state["bat_stats"].setdefault(rid, _new_bat_stat())
+    bs["lives"] = int(bs.get("lives") or 0) + 1
+    # The first life is the one a later fifty or hundred is measured from.
+    bs.setdefault("dropped_on", batter_runs)
+    pressed = bowl_p >= PRESSURE_CALLOUT
+    drop = {"batter": striker.get("name", ""), "batter_rid": rid,
+            "fielder": fielder, "bowler": bowler.get("name", ""),
+            "batter_runs": int(batter_runs), "innings": state.get("innings", 1),
+            "team": state.get("bat_team_name", ""),
+            "fielding_team": state.get("bowl_team_name", ""),
+            "over": format_overs(state), "score": format_score(state),
+            "pressure": pressed}
+    drama["drops"].append(drop)
+    if pressed:
+        drama["pressure"]["drops"] += 1
+    state.setdefault("drops", []).append(dict(drop))
+    return drop
+
+
+def costliest_drop(state):
+    """The drop that cost the most: ``(drop, runs_after)`` or ``None``.
+
+    Runs after the life are read from the batter's final score in the innings
+    the drop happened in (both innings' cards are kept on the state).
+    """
+    best = None
+    for d in state.get("drops") or []:
+        inn = d.get("innings", 1)
+        cards = (state.get("inn1_bat_stats") if inn == 1 and state.get("innings") == 2
+                 else state.get("bat_stats")) or {}
+        final = int((cards.get(str(d.get("batter_rid"))) or {}).get("runs") or 0)
+        cost = final - int(d.get("batter_runs") or 0)
+        if cost > 0 and (best is None or cost > best[1]):
+            best = (d, cost)
+    return best
+
+
+def _append_to_last_ball_row(state, text):
+    """Add a line to the most recent ball row in the commentary feed."""
+    for entry in reversed(state.get("commentary_log") or []):
+        if isinstance(entry, dict) and "runs" in entry:
+            entry["text"] = f"{entry.get('text', '')} {text}".strip()
+            return
+
+
+def _after_ball_sledge(state, drama, oc, striker, bowler, batter_adapted,
+                       bowl_adapted, over_timeline, bowl_p, innings, is_out):
+    """Per legal ball: wear down any sledge the striker carries, then roll for
+    a new exchange. Never raises — chirp is not worth an over."""
+    try:
+        srid = str(striker.get("roster_id"))
+        sledging.tick(state, srid, dismissed=is_out)
+        runs = int(oc.get("runs") or 0)
+        is_extra = bool(oc.get("is_extra"))
+        prev = state.get("sledge_prev")
+        trigger = sledging.pick_trigger(
+            wicket=is_out, dropped=bool(oc.get("dropped_catch")), runs=runs,
+            is_extra=is_extra, prev_was_dot=(prev == "dot"),
+            trailing_dots=_trailing_dots(over_timeline),
+            prev_was_boundary=(prev == "boundary"),
+            chase_tight=(innings == 2 and bowl_p >= PRESSURE_CALLOUT))
+        state["sledge_prev"] = ("other" if (is_out or is_extra) else
+                                "boundary" if runs in (4, 6) else
+                                "dot" if runs == 0 else "other")
+        if not trigger:
+            return
+        fielder = (drama["drops"][-1]["fielder"]
+                   if trigger == "drop" and drama.get("drops")
+                   else _pick_fielder(state, bowler))
+        event = sledging.maybe_sledge(
+            state, trigger, batter=striker.get("name", ""),
+            bowler=bowler.get("name", ""), fielder=fielder,
+            batter_rid=None if is_out else srid,
+            batter_rating=batter_adapted.get("batting_rating", 50),
+            bowler_rating=bowl_adapted.get("bowling_rating", 50),
+            ball_no=balls_bowled(state))
+        if event:
+            drama["sledges"].append(event)
+            _push_card(state, {"type": "sledge", "name": striker.get("name", ""),
+                               "text": "🗣️ " + " ".join(event["lines"])})
+    except Exception:
+        logger.exception("sledging failed (non-fatal)")
+
+
 def _make_dot_pressure_hook(over_timeline):
     """Weight hook for a batter who has been tied down. See ``DOT_PRESSURE``."""
     dots = min(_trailing_dots(over_timeline), DOT_PRESSURE_MAX)
@@ -1883,6 +1986,10 @@ def simulate_over(state, pause_on_wicket=False):
         # Commentary: announce the bowler taking the new over (into attack /
         # returns).
         _emit_bowler_card(state, bowler)
+        # This over's drama — drops, pressure mistakes and sledges — for the
+        # chat's over summary and the drop announcement. Kept on the state, not
+        # in a local, so an over paused for a new-batsman pick keeps it.
+        state["over_drama"] = _new_over_drama()
     else:
         over_timeline = list(resume.get("over_timeline") or [])
         over_events = list(resume.get("over_events") or [])
@@ -1898,6 +2005,11 @@ def simulate_over(state, pause_on_wicket=False):
         weather_events = list(resume.get("weather_events") or [])
         highlights_before = resume.get("highlights_before") or highlights_log.snapshot(state)
     pause_now = False
+    drama = state.get("over_drama")
+    if not isinstance(drama, dict):
+        drama = state["over_drama"] = _new_over_drama()
+    phase = approach_phase(state)
+    wicket_limit = state.get("wicket_limit", WICKET_LIMIT)
 
     # Defensive: if some other code path shortened the innings, recompute the
     # over-derived inputs so this over's balls-left / required-rate / phase
@@ -1994,6 +2106,18 @@ def simulate_over(state, pause_on_wicket=False):
         # off. The layers that stand down are gated rather than deleted, so
         # CC_CHASE_MODEL=0 degrades to the old behaviour instead of to nothing.
         chase_active = chase_model_active(state)
+
+        # ── Pressure (services.match_drama) ──
+        # How much each side is feeling it on this ball. A fielding side under
+        # the pump drops catches and sprays extras; a batting side freezes and
+        # runs itself out. Both are 0 through most of an innings.
+        bowl_p = match_drama.bowl_pressure(
+            phase, innings, target, state["total_runs"], state["total_wickets"],
+            balls_left, state["total_runs"] - runs_before, wicket_limit)
+        bat_p = match_drama.bat_pressure(
+            phase, innings, target, state["total_runs"], state["total_wickets"],
+            balls_left, _recent_wickets(state), wicket_limit)
+        pitch_strength = 0.0
 
         # ── Scenario engine hook ──
         # Finale phase scripts the delivery outright; free-play/convergence
@@ -2099,6 +2223,22 @@ def simulate_over(state, pause_on_wicket=False):
                     state.get("wicket_limit", WICKET_LIMIT) - state["total_wickets"],
                     balls_left == 1)
                 if (letsplay_finale and not chase_active) else None)
+            # Match drama: the surface playing to its name, the 270+ brake, the
+            # no-runaway contest layer, pressure on either side and any sledge
+            # the striker is still carrying. All bounded, all None when quiet.
+            pitch_hook, pitch_strength = match_drama.make_pitch_character_hook(
+                pitch, phase, innings, bowl_adapted.get("bowling_type"),
+                balls_bowled(state) / float(max(1, innings_balls)))
+            ceiling_hook = (None if chase_active else
+                            match_drama.make_score_ceiling_hook(
+                                pitch, state["total_runs"], balls_bowled(state),
+                                innings_balls, innings, target))
+            contest_hook = match_drama.make_contest_hook(
+                pitch, innings, state["total_runs"], state["total_wickets"],
+                balls_bowled(state), innings_balls, target, chase_active)
+            bat_p_hook = match_drama.make_bat_pressure_hook(bat_p)
+            bowl_p_hook, bowl_p_kwargs = match_drama.bowl_pressure_effects(bowl_p)
+            sledge_hook = sledging.make_hook(state, srid)
             # The calibrated controller, LAST in the chain so it sees the
             # finished natural weights and corrects them onto the target.
             chase_hook = (_make_chase_hook(state, fielding_q, is_free_hit_ball)
@@ -2106,7 +2246,9 @@ def simulate_over(state, pause_on_wicket=False):
             weight_hook = _compose_hooks(trait_hook, env_hook,
                                          wicket_hook, drama_hook,
                                          floor_hook, corridor_hook, variance_hook,
-                                         dps_hook, mpi_hook, dot_hook,
+                                         ceiling_hook, contest_hook,
+                                         dps_hook, mpi_hook, pitch_hook, dot_hook,
+                                         bat_p_hook, bowl_p_hook, sledge_hook,
                                          clutch_hook, chase_hook)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
@@ -2119,7 +2261,10 @@ def simulate_over(state, pause_on_wicket=False):
                 format_config=engine_fmt,
                 batting_approach=bat_app, bowling_approach=bowl_app,
                 approach_context=approach_ctx,
-                weight_hook=weight_hook))
+                weight_hook=weight_hook,
+                **bowl_p_kwargs))
+            # Batting side under the pump: the odd wicket becomes a mix-up.
+            oc = match_drama.maybe_mixup(oc, bat_p, free_hit=is_free_hit_ball)
 
         otype = oc.get("type")
         runs = oc.get("runs", 0)
@@ -2149,11 +2294,18 @@ def simulate_over(state, pause_on_wicket=False):
             state["partnership_runs"] = partnership_before + 1 + runs
             bws["runs"] += 1 + runs
             bws["this_over_runs"] += 1 + runs
+            # Under pressure the extra is a mistake worth calling out.
+            _pressed = bowl_p >= PRESSURE_CALLOUT
+            if _pressed:
+                drama["pressure"]["wides" if extra_type == "Wide" else "noballs"] += 1
             if extra_type == "Wide":
                 over_timeline.append("WD")
                 over_events.append({"sym": "WD", "text": f"Wide ({striker_name})"})
+                _wd_text = (match_drama.line("pressure", "wide", bowler=bowler["name"])
+                            if _pressed else None)
                 _push_commentary(state, "extra", striker_name,
-                                 _ec() or f"Wide. {bowler['name']} strays down leg.",
+                                 _wd_text or _ec()
+                                 or f"Wide. {bowler['name']} strays down leg.",
                                  runs=1 + runs, event_key="wide")
             else:
                 if runs:
@@ -2164,7 +2316,10 @@ def simulate_over(state, pause_on_wicket=False):
                         bs["sixes"] += 1
                 over_timeline.append("NB")
                 over_events.append({"sym": "NB", "text": f"No ball +{runs} — FREE HIT next"})
-                _nb_text = (_ec() or f"No ball! {bowler['name']} oversteps.")
+                _nb_text = ((match_drama.line("pressure", "noball",
+                                              bowler=bowler["name"])
+                             if _pressed else None)
+                            or _ec() or f"No ball! {bowler['name']} oversteps.")
                 _push_commentary(state, "extra", striker_name,
                                  f"{_nb_text} 🆓 FREE HIT next ball — only a run out "
                                  f"can dismiss.",
@@ -2236,6 +2391,14 @@ def simulate_over(state, pause_on_wicket=False):
             # Ball row (paints the W badge in the over column) + the red OUT card.
             # On a free hit this can only be a run out (engine-enforced).
             _wkt_line = fh_prefix + (_ec() or f"OUT! {striker_name} {bs['dismissal']}.")
+            if oc.get("mixup"):
+                drama["pressure"]["mixups"] += 1
+                _wkt_line = fh_prefix + (match_drama.line(
+                    "pressure", "mixup", batter=striker_name) or _wkt_line)
+            elif bat_p >= PRESSURE_CALLOUT and random.random() < 0.30:
+                _nerves = match_drama.line("pressure", "nerves", batter=striker_name)
+                if _nerves:
+                    _wkt_line = f"{_wkt_line} {_nerves}"
             _push_commentary(state, "ball", striker_name, _wkt_line,
                              runs=runs, is_wicket=True, event_key="wicket")
             non_striker = state["batting_order"][state["non_striker_idx"]]
@@ -2300,14 +2463,22 @@ def simulate_over(state, pause_on_wicket=False):
             # A dropped catch converts a wicket into runs in the engine —
             # call it out, it's one of the most dramatic balls in cricket.
             if oc.get("dropped_catch"):
-                _drop_text = (f"DROPPED! {striker_name} gets a life — "
-                              f"the chance goes down and they scamper {runs}."
+                _dropper = _pick_fielder(state, bowler) or "the fielder"
+                _drop = _record_drop(state, drama, striker, _dropper, bowler,
+                                     bs_runs_before, bowl_p)
+                _drop_text = (f"DROPPED! {_dropper} puts down {striker_name} "
+                              f"on {bs_runs_before} — they scamper {runs}."
                               if runs else
-                              f"DROPPED! {striker_name} gets a life — "
-                              f"a costly miss in the field.")
+                              f"DROPPED! {_dropper} puts down {striker_name} "
+                              f"on {bs_runs_before} — a costly miss in the field.")
+                _extra = match_drama.line(
+                    "drop", "pressure" if _drop["pressure"] else "lines")
+                if _extra:
+                    _drop_text = f"{_drop_text} {_extra}"
                 # Replace the generic runs event appended above — don't add a
                 # second event for the same delivery.
-                over_events[-1] = {"sym": str(runs), "text": f"Dropped catch! {striker_name} survives"}
+                over_events[-1] = {"sym": str(runs),
+                                   "text": f"Dropped catch! {_dropper} puts down {striker_name}"}
                 _push_commentary(state, _run_event(runs), striker_name,
                                  fh_prefix + _drop_text,
                                  runs=runs, event_key=_run_key)
@@ -2337,6 +2508,16 @@ def simulate_over(state, pause_on_wicket=False):
                 _swap_strike(state)
 
         note_bowler_ball(bws, bowler_wicket=bws["wickets"] > wkts_before_ball)
+
+        _ball_out = bool(otype == "wicket" or batter_out)
+        if oc.get("misfield") and bowl_p >= PRESSURE_CALLOUT:
+            drama["pressure"]["misfields"] += 1
+        _flavour = match_drama.pitch_flavour(pitch, pitch_strength, oc)
+        if _flavour:
+            _append_to_last_ball_row(state, _flavour)
+        _after_ball_sledge(state, drama, oc, striker, bowler, batter_adapted,
+                           bowl_adapted, over_timeline, bowl_p, innings,
+                           is_out=_ball_out)
 
         state["timeline"].append(over_timeline[-1] if over_timeline else "0")
         state["timeline"] = state["timeline"][-18:]
@@ -2520,7 +2701,13 @@ def simulate_over(state, pause_on_wicket=False):
         # uses it to show the longest run of the innings.
         "bat_repeat": int(state.get("bat_repeat") or 0),
         "bowl_repeat": int(state.get("bowl_repeat") or 0),
+        # Match drama for the chat: catches put down, pressure mistakes and
+        # any on-field chirp this over (see services.match_drama / sledging).
+        "drops": list(drama.get("drops") or []),
+        "sledges": list(drama.get("sledges") or []),
+        "pressure_moments": dict(drama.get("pressure") or {}),
     }
+    state.pop("over_drama", None)
 
     # Advance the over pointer if the over completed and play continues
     if over_completed and not is_innings_over(state):

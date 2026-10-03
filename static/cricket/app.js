@@ -2273,6 +2273,10 @@ function renderCommentaryFeed() {
     } else if (comm.type === 'new_bowler' || comm.type === 'returning_bowler') {
       item.className = "comm-event comm-new-bowler";
       item.innerHTML = `<span class="comm-dot">🔵</span><span class="comm-text">${comm.text || ((comm.name || '') + ' to bowl.')}</span>`;
+    } else if (comm.type === 'sledge') {
+      // On-field chirp (services/sledging.py) — words, not a delivery.
+      item.className = "comm-event comm-sledge";
+      item.innerHTML = `<span class="comm-dot">🗣️</span><span class="comm-text">${(comm.text || '').replace(/^🗣️\s*/, '')}</span>`;
     } else if (comm.type === 'over_complete') {
       item.className = "comm-event comm-over-complete";
       item.innerHTML = `<span class="comm-dot">⚪</span><span class="comm-text">${comm.text || ''}</span>`;

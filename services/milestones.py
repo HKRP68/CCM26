@@ -120,10 +120,15 @@ def detect(state, before, summary=None):
             prev = before["bat"].get(str(rid), 0)
             runs = _int(st.get("runs"))
             for _n, key in _crossed(prev, runs, BAT_MILESTONES):
-                events.append((key, dict(
+                fields = dict(
                     common,
                     player=_name_for(state, rid, "batting_order", "bat_xi"),
-                    runs=runs, balls=_int(st.get("balls")))))
+                    runs=runs, balls=_int(st.get("balls")))
+                # A batter who was put down on the way: the score they were
+                # dropped on, so the celebration can rub it in.
+                if st.get("dropped_on") is not None:
+                    fields["dropped_on"] = _int(st.get("dropped_on"))
+                events.append((key, fields))
 
         # ── Bowling: hat-trick, three-fer, five-fer ──
         for rid, st in (state.get("bowl_stats") or {}).items():
