@@ -171,14 +171,22 @@ class Auction(unittest.TestCase):
                 if st.get("lot") is None:
                     lot = AL.open_next_lot(st)
                     if lot is None:
+                        if st.get("awaiting_noms"):
+                            picks = [c["id"] for c in AL.nomination_choices(st)[:3]]
+                            AL.submit_nominations(st, picks)
+                            continue
                         break
-                    if lot["status"] != "open" and lot["status"] != "rtm":
+                    if lot["status"] not in ("open",) + AL.RTM_WAITING:
                         continue
                 lot = st["lot"]
                 if lot is None:
                     continue
-                if lot["status"] == "rtm":
+                if lot["status"] in ("rtm_intent", "rtm"):
                     AL.user_rtm(st, rng.random() < 0.5)
+                    continue
+                if lot["status"] == "rtm_raise":
+                    opts = AL.rtm_raise_options(st)
+                    AL.user_final_raise(st, opts[0] if opts and rng.random() < 0.5 else None)
                     continue
                 ok, _price = AL.user_may_bid(st)
                 if ok and rng.random() < 0.55:
@@ -561,3 +569,193 @@ class SeasonFeatures(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _rtm_lot(st, holder, winner, value=None):
+    """Put a player whose former side is ``holder`` on the block, sold to
+    ``winner`` at base — ready for ``_hammer``'s Right To Match."""
+    AL.apply_retentions(st, [])
+    lot = AL.open_next_lot(st)
+    while lot is None or st.get("lot") is None:
+        lot = AL.open_next_lot(st)
+    c = AL.card(st, lot["pid"])
+    c["team"] = holder
+    st["teams"][holder]["rtm"] = 1
+    lot["leader"], lot["price"] = winner, lot["base"]
+    lot["values"] = {k: (value if value is not None else lot["base"]) for k in lot["values"]}
+    return lot
+
+
+class RightToMatch(unittest.TestCase):
+    def test_user_holder_calls_and_matches_the_raise(self):
+        st = new_state(seed=5)
+        lot = _rtm_lot(st, "Team A", "Team B", value=0)
+        lot["values"]["Team B"] = lot["base"] * 3
+        self.assertEqual(AL._hammer(st, random.Random(1)), "rtm")
+        self.assertEqual(lot["status"], "rtm_intent")
+        AL.user_rtm(st, True)
+        self.assertEqual(lot["status"], "rtm")
+        self.assertGreater(lot["price"], lot["base"])     # the buyer's final raise
+        raised = lot["price"]
+        AL.user_rtm(st, True)
+        self.assertEqual(st["last_lot"]["winner"], "Team A")
+        self.assertEqual(st["last_lot"]["price"], raised)
+        self.assertEqual(st["teams"]["Team A"]["rtm"], 0)
+
+    def test_user_holder_lets_him_go(self):
+        st = new_state(seed=5)
+        lot = _rtm_lot(st, "Team A", "Team B")
+        AL._hammer(st, random.Random(1))
+        AL.user_rtm(st, False)
+        self.assertEqual(st["last_lot"]["winner"], "Team B")
+        self.assertEqual(st["last_lot"]["price"], lot["base"])
+        self.assertEqual(st["teams"]["Team A"]["rtm"], 1)
+
+    def test_user_buyer_gets_one_final_raise(self):
+        st = new_state(seed=5)
+        lot = _rtm_lot(st, "Team B", "Team A", value=10 ** 6)
+        lot["pid"]  # noqa: B018
+        AL.card(st, lot["pid"])["rating"] = 95       # a star: the AI calls RTM
+        self.assertEqual(AL._hammer(st, random.Random(1)), "rtm")
+        self.assertEqual(lot["status"], "rtm_raise")
+        opts = AL.rtm_raise_options(st)
+        self.assertTrue(opts and all(p > lot["base"] for p in opts))
+        # Raise beyond what Team B values him at: it can't match.
+        lot["values"]["Team B"] = lot["base"]
+        AL.user_final_raise(st, opts[-1])
+        self.assertEqual(st["last_lot"]["winner"], "Team A")
+        self.assertEqual(st["last_lot"]["price"], opts[-1])
+        with self.assertRaises(AL.AuctionLeagueError):
+            AL.user_final_raise(st, None)
+
+    def test_ai_holder_matches_ai_buyer(self):
+        st = new_state(seed=5)
+        lot = _rtm_lot(st, "Team B", "Team C", value=10 ** 6)
+        AL.card(st, lot["pid"])["rating"] = 95
+        lot["values"]["Team C"] = lot["base"] * 2
+        AL._hammer(st, random.Random(1))
+        done = st["last_lot"]
+        self.assertEqual(done["status"], "sold")
+        self.assertEqual(done["winner"], "Team B")
+        self.assertEqual(done["how"], AL.HOW_RTM)
+        self.assertGreaterEqual(done["price"], lot["base"])
+
+
+class AcceleratedRound(unittest.TestCase):
+    def _to_noms(self, seed=4):
+        st = new_state(seed=seed)
+        AL.apply_retentions(st, [])
+        st["nominations_by_hand"] = True
+        for _ in range(5000):
+            if st.get("lot") is None and AL.open_next_lot(st) is None:
+                break
+            if st.get("lot"):
+                lot = st["lot"]
+                if lot["status"] in ("rtm_intent", "rtm"):
+                    AL.user_rtm(st, False)
+                elif lot["status"] == "rtm_raise":
+                    AL.user_final_raise(st, None)
+                else:
+                    AL.user_pass(st)
+        return st
+
+    def test_only_nominated_players_return(self):
+        st = self._to_noms()
+        self.assertTrue(st.get("awaiting_noms"))
+        self.assertFalse(AL.auction_finished(st))
+        unsold = list(st["unsold"])
+        mine = [c["id"] for c in AL.nomination_choices(st)[:2]]
+        ai = set()
+        for name in st["team_order"]:
+            if name != st["user_team"]:
+                ai.update(AL.ai_nominations(st, name))
+        with self.assertRaises(AL.AuctionLeagueError):
+            AL.submit_nominations(st, unsold[:AL.ACCEL_NOMS_USER + 1])
+        AL.submit_nominations(st, mine)
+        listed = st["sets"][-1]["pids"]
+        self.assertTrue(st["sets"][-1]["accelerated"])
+        self.assertEqual(set(listed), (set(mine) | ai) & set(unsold))
+        self.assertFalse(st.get("awaiting_noms"))
+        AL.simulate_to_last(st)
+        self.assertTrue(AL.auction_finished(st))
+        AL.finish_auction(st)
+        assert_all_legal(self, st)
+
+
+class PitchAndForm(unittest.TestCase):
+    def _cards(self):
+        spec = ([("Batsman", 88 - i, 88 - i) for i in range(5)]
+                + [("Wicket Keeper", 84, 80)]
+                + [("All-rounder", 84 - i, 70) for i in range(4)]
+                + [("Bowler", 86 - i, 30) for i in range(6)])
+        cards = card_set(spec)
+        for c in cards:
+            if c["category"] in ("All-rounder", "Bowler"):
+                c["bowl_style"] = "Fast Medium"
+        # Two bowlers a little below the best three quicks spin.
+        for c in [c for c in cards if c["category"] == "Bowler"][3:5]:
+            c["bowl_style"] = "Right Arm Off Break"
+        return cards
+
+    def test_spinners_picked_on_dusty_pace_on_green(self):
+        cards = self._cards()
+        spin_ids = {c["id"] for c in cards if AL.is_spinner(c)}
+        for pitch, want in (("Dusty", 2), ("Green", 0), ("Flat", 0)):
+            xi = AL.ai_playing_xi(cards, pitch=pitch)
+            counts = {r: sum(1 for c in xi if c["category"] == r) for r in AL.ROLES}
+            self.assertEqual(counts, {"Batsman": 4, "Wicket Keeper": 1,
+                                      "All-rounder": 3, "Bowler": 3}, pitch)
+            self.assertEqual(sum(1 for c in xi if c["id"] in spin_ids), want, pitch)
+
+    def test_form_moves_ratings(self):
+        st = new_state(seed=6)
+        AL.apply_retentions(st, [])
+        AL.simulate_to_last(st)
+        AL.finish_auction(st)
+        team = st["team_order"][1]
+        squad = AL.squad_card_dicts(st, team)
+        hot, cold = squad[0], squad[1]
+        st["form"] = {str(hot["id"]): [200] * 3, str(cold["id"]): [0] * 3}
+        self.assertEqual(AL.form_level(st, hot["id"]), 2)
+        self.assertEqual(AL.form_level(st, cold["id"]), -2)
+        st["form"][str(hot["id"])] = [200, 200]      # not enough matches yet
+        self.assertEqual(AL.form_level(st, hot["id"]), 0)
+        st["form"][str(hot["id"])] = [200] * 3
+        by_id = {c["id"]: c for c in AL.match_cards(st, team)}
+        self.assertEqual(by_id[hot["id"]]["rating"], min(99, hot["rating"] + 2))
+        self.assertEqual(by_id[cold["id"]]["rating"], cold["rating"] - 2)
+
+    def test_injuries_heal_and_replacements_keep_xi_legal(self):
+        st = new_state(seed=6)
+        AL.apply_retentions(st, [])
+        AL.simulate_to_last(st)
+        AL.finish_auction(st)
+        team = st["team_order"][2]
+        keepers = [c["id"] for c in AL.squad_card_dicts(st, team)
+                   if c["category"] == "Wicket Keeper"]
+        st["injuries"] = {str(p): {"team": team, "left": 1, "fx": 0} for p in keepers}
+        made = AL.sign_injury_replacements(st, team)
+        self.assertTrue(made)
+        self.assertTrue(AL._can_field_xi(AL.match_cards(st, team)))
+        self.assertTrue(all(p not in [c["id"] for c in AL.match_cards(st, team)]
+                            for p in keepers))
+        fx = {"no": 99}
+        rng = random.Random(0)
+        rng.random = lambda: 1.0        # nobody new gets hurt
+        news = AL.note_match(st, fx, {team: []}, {}, rng)
+        self.assertEqual({n["kind"] for n in news}, {"fit"})
+        self.assertFalse(st["injuries"])
+
+    def test_season_with_form_and_injuries_runs(self):
+        st = new_state(seed=8)
+        AL.apply_retentions(st, [])
+        AL.simulate_to_last(st)
+        AL.finish_auction(st)
+        for _ in range(200):
+            fx = next(iter(AL.pending_fixtures(st)), None)
+            if fx is None:
+                break
+            AL.simulate_fixture(st, fx)
+        self.assertTrue(st["form"])
+        for name in st["teams"]:
+            self.assertTrue(AL._can_field_xi(AL.match_cards(st, name)))

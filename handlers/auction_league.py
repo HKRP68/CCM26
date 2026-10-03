@@ -169,7 +169,12 @@ def _squad_text(state, team):
         lines.append(f"\n<b>{AL.ROLE_PLURAL[role]}</b>")
         for c in cards:
             e = by_pid[c["id"]]
-            lines.append("• " + _card_line(c, e["price"], e["how"]))
+            form = AL.FORM_ICON.get(AL.form_level(state, c["id"]), "")
+            hurt = " 🚑" if AL.injured(state, c["id"]) else ""
+            lines.append("• " + _card_line(c, e["price"], e["how"])
+                         + (f" {form}" if form else "") + hurt)
+    if state.get("form") or state.get("injuries"):
+        lines.append("\n<i>▲ in form · ▼ out of form (±1–2 OVR next match) · 🚑 injured</i>")
     return "\n".join(lines)
 
 
@@ -227,9 +232,20 @@ def _lot_text(state, lot, note=""):
         f"👛 Purse {money(t['purse'])} · max bid {money(AL.max_bid(state, me, c))}",
         f"👥 Squad {len(t['squad'])}/{AL.SQUAD_MAX} · needs: {AL.needs_line(state, me)}",
     ]
-    if lot.get("status") == "rtm":
-        lines += ["", f"🔁 <b>Right To Match!</b> {_esc(c['name'])} was yours. "
-                      f"Match {money(lot['price'])} and keep him?"]
+    status = lot.get("status")
+    buyer = state["teams"].get(lot.get("leader") or "", {}).get("short", "?")
+    if status == "rtm_intent":
+        lines += ["", f"🔁 <b>Right To Match!</b> {_esc(c['name'])} was yours — "
+                      f"{_esc(buyer)} bought him for {money(lot['price'])}. Use your RTM card? "
+                      f"They get one final raise, then you match it or let him go."]
+    elif status == "rtm":
+        raise_txt = (f"raised by {money(lot['rtm_raise'])} to {money(lot['price'])}"
+                     if lot.get("rtm_raise") else f"stood at {money(lot['price'])}")
+        lines += ["", f"🔁 {_esc(buyer)} {raise_txt}. <b>Match it</b> and keep him?"]
+    elif status == "rtm_raise":
+        holder = state["teams"].get(lot.get("rtm_team") or "", {}).get("short", "?")
+        lines += ["", f"🔁 <b>{_esc(holder)} used their Right To Match!</b> You get one "
+                      f"final raise — then they match it or he's yours."]
     mode = "⚡ Fast — the AI teams bid among themselves first" if state.get("fast") \
         else "🐢 Bid by bid — you answer every raise"
     lines.append(f"{mode}\n⏱️ {LOT_SECONDS}s to answer")
@@ -238,9 +254,16 @@ def _lot_text(state, lot, note=""):
 
 def _lot_rows(state, lot):
     seq = lot["seq"]
-    if lot.get("status") == "rtm":
-        return [[(f"✅ Use RTM {money(lot['price'])}", f"al:rtm:{seq}:1"),
+    status = lot.get("status")
+    if status == "rtm_intent":
+        return [[("🔁 Use RTM", f"al:rtm:{seq}:1"), ("❌ Let him go", f"al:rtm:{seq}:0")]]
+    if status == "rtm":
+        return [[(f"✅ Match {money(lot['price'])}", f"al:rtm:{seq}:1"),
                  ("❌ Let him go", f"al:rtm:{seq}:0")]]
+    if status == "rtm_raise":
+        row = [(f"⬆️ {money(p)}", f"al:rtr:{seq}:{p}") for p in AL.rtm_raise_options(state)]
+        return [row, [(f"✋ Stand at {money(lot['price'])}", f"al:rtr:{seq}:0")]] if row \
+            else [[(f"✋ Stand at {money(lot['price'])}", f"al:rtr:{seq}:0")]]
     ok, price = AL.user_may_bid(state)
     first = []
     if ok:
@@ -336,7 +359,25 @@ def _result_digest(state, played):
     blocks = ["📅 <b>Around the league</b>"]
     for fx in played:
         blocks.append(_fixture_line(state, fx))
+    news = _injury_news(state, played)
+    if news:
+        blocks.append("🚑 <b>Team news</b>\n" + "\n".join(news))
     return blocks
+
+
+def _injury_news(state, fixtures):
+    lines = []
+    for fx in fixtures:
+        for n in fx.get("news") or []:
+            who = _who(state, n["pid"])
+            if n["kind"] == "injured":
+                lines.append(f"• {who} injured — out for {n['matches']} "
+                             f"match{'es' if n['matches'] > 1 else ''}")
+            elif n["kind"] == "fit":
+                lines.append(f"• {who} is fit again")
+            elif n["kind"] == "replacement":
+                lines.append(f"• {who} signed as an injury replacement")
+    return lines
 
 
 def _report_blocks(state):
@@ -544,8 +585,9 @@ def _cancel_timer(context, tg_id):
     jq = getattr(context, "job_queue", None)
     if not jq:
         return
-    for job in jq.get_jobs_by_name(f"al_lot_{tg_id}"):
-        job.schedule_removal()
+    for name in (f"al_lot_{tg_id}", f"al_call_{tg_id}"):
+        for job in jq.get_jobs_by_name(name):
+            job.schedule_removal()
 
 
 def _arm_timer(context, tg_id, chat_id, seq):
@@ -555,6 +597,62 @@ def _arm_timer(context, tg_id, chat_id, seq):
         return
     jq.run_once(_lot_timeout, LOT_SECONDS, name=f"al_lot_{tg_id}",
                 data={"tg_id": tg_id, "chat_id": chat_id, "seq": seq})
+    # The auctioneer: "Going once…" and "Going twice…" as the clock runs down.
+    for left, call in ((CALL_ONCE_AT, 1), (CALL_TWICE_AT, 2)):
+        jq.run_once(_auctioneer_call, LOT_SECONDS - left, name=f"al_call_{tg_id}",
+                    data={"tg_id": tg_id, "chat_id": chat_id, "seq": seq, "call": call})
+
+
+CALL_ONCE_AT = 12      # seconds left on the clock
+CALL_TWICE_AT = 6
+CALL_LINES = {1: "🔔 <b>Going once…</b>", 2: "🔔🔔 <b>Going twice…</b>"}
+
+
+async def _auctioneer_call(context):
+    data = context.job.data or {}
+    tg_id = data.get("tg_id")
+    async with _lock(context, tg_id):
+        car = _open(tg_id)
+        try:
+            state = car.state
+            if not state or state["phase"] != AL.PHASE_AUCTION or state.get("paused"):
+                return
+            lot = state.get("lot")
+            mid = (state.get("ui") or {}).get("lot_msg")
+            if not lot or lot["seq"] != data.get("seq") or not mid:
+                return
+            text = _lot_text(state, lot) + "\n" + CALL_LINES[data["call"]]
+            try:
+                await context.bot.edit_message_text(
+                    text, chat_id=data["chat_id"], message_id=mid, parse_mode="HTML",
+                    reply_markup=_kb(_lot_rows(state, lot)))
+            except Exception:
+                pass
+        finally:
+            car.session.close()
+
+
+# ── Accelerated-round nominations ─────────────────────────────────────
+
+def _noms_text(state):
+    picked = state.get("noms_draft") or []
+    lines = ["⚡ <b>Accelerated round — nominations</b>",
+             "Every set is done. As at the IPL, only the unsold players somebody "
+             f"nominates come back. The AI sides pick theirs; tap up to "
+             f"{AL.ACCEL_NOMS_USER} of yours, then ✅ Done.",
+             f"\nPicked: <b>{len(picked)}</b>/{AL.ACCEL_NOMS_USER}"]
+    return "\n".join(lines)
+
+
+def _noms_rows(state):
+    picked = set(state.get("noms_draft") or [])
+    rows = []
+    for c in AL.nomination_choices(state, 24):
+        mark = "✅ " if c["id"] in picked else ""
+        rows.append([(f"{mark}{c['name']} · {c['rating']} {_role(c)} · "
+                      f"{money(AL.base_price(c['rating']))}", f"al:nom:{c['id']}")])
+    rows.append([("✅ Done", "al:nomok")])
+    return rows
 
 
 async def _close_card(context, state, chat_id, line):
@@ -593,16 +691,21 @@ async def _advance(context, car, chat_id, tg_id, note=""):
             lot = AL.open_next_lot(state)
             if lot is None:
                 break
-        if lot["status"] in ("open", "rtm") and state.get("lot") is lot:
+        if lot["status"] in ("open",) + AL.RTM_WAITING and state.get("lot") is lot:
             break
         # Decided without you (you couldn't afford or fit him).
         batch.append(AL.lot_result_line(state, lot))
         ui["reported"] = lot["seq"]
     if state.get("lot") is None:
-        # Nothing left to sell: close the auction and start the season.
         car.save()
         if batch:
             await _send_long(context, chat_id, batch)
+        if state.get("awaiting_noms"):
+            # The sets are done: nominations for the accelerated round.
+            _cancel_timer(context, tg_id)
+            await _send(context, chat_id, _noms_text(state), _noms_rows(state))
+            return
+        # Nothing left to sell: close the auction and start the season.
         await _finish_auction(context, car, chat_id)
         return
     lot = state["lot"]
@@ -701,8 +804,10 @@ async def _lot_timeout(context):
             lot = state.get("lot")
             if not lot or lot["seq"] != seq:
                 return
-            if lot["status"] == "rtm":
+            if lot["status"] in ("rtm_intent", "rtm"):
                 AL.user_rtm(state, False)
+            elif lot["status"] == "rtm_raise":
+                AL.user_final_raise(state, None)
             else:
                 AL.user_pass(state)
             await _advance(context, car, chat_id, tg_id, note="⏰ Time's up — you passed.")
@@ -1205,7 +1310,10 @@ async def _cb_lot(q, context, car, action, seq, arg=None):
             await q.answer("Passed")
         elif action == "rtm":
             AL.user_rtm(state, arg == "1")
-            await q.answer("RTM used!" if arg == "1" else "Let go")
+            await q.answer("Done" if arg == "1" else "Let go")
+        elif action == "rtr":
+            AL.user_final_raise(state, int(arg) or None)
+            await q.answer("Final raise in" if int(arg) else "You stand")
         else:
             return
     except AuctionLeagueError as exc:
@@ -1405,6 +1513,17 @@ async def _season_step(context, car, chat_id, tg_id):
             f"{where}\n\n"
             f"Opponent strength: {AL.team_strength(state, opp)['ovr']} OVR · "
             f"yours {AL.team_strength(state, me)['ovr']} OVR")
+    mine_news = _injury_news(state, [f for f in state["fixtures"] if f["status"] == "done"
+                                     and me in (f["home"], f["away"])][-1:])
+    if mine_news:
+        text += "\n\n🚑 <b>Team news</b>\n" + "\n".join(mine_news)
+    out_now = [_esc(AL.card(state, p)["name"]) for p in (state.get("injuries") or {})
+               if AL.owner_of(state, p) == me]
+    if out_now:
+        text += f"\n🚑 Unavailable for you: {', '.join(out_now)}"
+    tip = AL.PITCH_TIPS.get(fx.get("pitch") or "")
+    if tip:
+        text += f"\n🌱 {_esc(fx['pitch'])}: {tip}"
     form = "".join(AL.recent_form(state, opp))
     if form:
         text += f"\n{_esc(_short(state, opp))} form: {form}"
@@ -1472,8 +1591,8 @@ async def _launch_fixture(q, context, car, no):
         league_record=league, league_key=state["league"].get("key"),
         league_name=f"{state['league']['name']} Auction League · {stage}",
         host_team=me, target_team=opp,
-        host_squad=AL.squad_card_dicts(state, me),
-        target_squad=AL.squad_card_dicts(state, opp),
+        host_squad=AL.match_cards(state, me),
+        target_squad=AL.match_cards(state, opp),
         tag=tag, home_team=fx["home"],
         team_codes={n: state["teams"][n]["short"] for n in (me, opp)},
         session=session, pitch=pitch, venue=fx.get("venue"))
@@ -1762,8 +1881,39 @@ async def auction_league_callback(update: Update, context: ContextTypes.DEFAULT_
                 await _cb_lot(q, context, car, action, args[0])
             elif action == "jump" and len(args) >= 2:
                 await _cb_lot(q, context, car, "jump", args[0], args[1])
-            elif action == "rtm" and len(args) >= 2:
-                await _cb_lot(q, context, car, "rtm", args[0], args[1])
+            elif action in ("rtm", "rtr") and len(args) >= 2:
+                await _cb_lot(q, context, car, action, args[0], args[1])
+            elif action in ("nom", "nomok"):
+                if not state.get("awaiting_noms"):
+                    await q.answer("Nominations are closed.")
+                    return
+                if action == "nom" and args:
+                    picked = list(state.get("noms_draft") or [])
+                    pid = int(args[0])
+                    if pid in picked:
+                        picked.remove(pid)
+                    elif len(picked) >= AL.ACCEL_NOMS_USER:
+                        await q.answer(f"At most {AL.ACCEL_NOMS_USER}.", show_alert=True)
+                        return
+                    else:
+                        picked.append(pid)
+                    state["noms_draft"] = picked
+                    car.save()
+                    await q.answer()
+                    try:
+                        await q.edit_message_text(_noms_text(state), parse_mode="HTML",
+                                                  reply_markup=_kb(_noms_rows(state)))
+                    except Exception:
+                        pass
+                else:
+                    AL.submit_nominations(state, state.pop("noms_draft", []) or [])
+                    await q.answer("Nominations in")
+                    try:
+                        await q.edit_message_reply_markup(reply_markup=None)
+                    except Exception:
+                        pass
+                    await _advance(context, car, chat_id, tg_id,
+                                   note="⚡ <i>The accelerated round begins.</i>")
             elif action in ("skip", "fast", "pause") and args:
                 lot = state.get("lot")
                 if state["phase"] != AL.PHASE_AUCTION or not lot or lot["seq"] != int(args[0]):

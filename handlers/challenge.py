@@ -2526,7 +2526,7 @@ def _autoconfirm_bot_xi(draft):
             from services import auction_league_service as _als
             cards = (draft.get("inline_squads") or {}).get("target") or []
             order = [int(c["id"]) for c in _als.ai_playing_xi(
-                cards, _challenge_xi_limits(draft)[1])]
+                cards, _challenge_xi_limits(draft)[1], draft.get("pitch_type"))]
             by_id = {int(p.id): p for p in players}
             xi = [by_id[i] for i in order if i in by_id]
         else:
