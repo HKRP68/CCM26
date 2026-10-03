@@ -381,11 +381,24 @@ is run by the AI.
 4. **Squad rules** — at least 4 BAT, 4 BOWL, 1 WK and 2 AR; at most 18
    players and 8 overseas. A squad still short when the auction ends is
    topped up from the unsold players at base price.
-5. **Season** — everyone plays everyone once, then the IPL playoffs
-   (Qualifier 1: 1 v 2, Eliminator: 3 v 4, Qualifier 2, Final). Your matches
-   are played ball by ball (20 overs, the /ciplbot flow — pitch, Playing XI,
-   toss, Impact Player); the AI-vs-AI matches are simulated instantly. Points
-   table with NRR, Orange and Purple Caps.
+5. **Trade window** — opens after the auction and closes when your first
+   match starts. The AI sides trade among themselves to even the league out
+   (shown as trade news: the strongest and weakest XIs swap same-role players,
+   at most three trades), and now and then an AI side approaches you with a fair
+   swap — ✅ accept or ❌ reject. You may propose up to 2 one-for-one swaps of
+   your own (`/altrade`); the AI only agrees to fair ones, and both squads must
+   stay legal.
+6. **Season** — everyone plays everyone once, then the IPL playoffs
+   (Qualifier 1: 1 v 2, Eliminator: 3 v 4, Qualifier 2, Final). Every
+   franchise has a home ground (the IPL's own grounds for an India league);
+   each match is played at the hosts' ground on a **pitch drawn at random**
+   when the season is scheduled — nobody picks it. Your matches are played
+   ball by ball (20 overs, the /ciplbot flow — Playing XI, toss, Impact
+   Player); the AI-vs-AI matches are simulated instantly. AI sides field
+   **4 BAT · 1 WK · 3 AR · 3 BOWL**, batting order by batting rating. Points
+   table with NRR, last-five form and ✅Q / ❌E marks; full tournament stats;
+   a season awards ceremony (Orange Cap, Purple Cap, MVP, Most Sixes, Emerging
+   Player, Team of the Tournament).
 
 Matches are unranked practice. The **season** pays: champions 25,000 coins
 + 15 💎, runners-up 10,000 + 5 💎, playoffs 4,000 coins — once per career, at
@@ -408,7 +421,8 @@ most one paid season every 48 hours, and not if you conceded a match.
 | `/alplay` 💬 | — | Simulate the other matches up to your next fixture, then play it (or concede) |
 | `/altable` 💬 | — | Points table with NRR |
 | `/alfixtures` 💬 | — | Your fixtures and results, and the playoffs |
-| `/alstats` 💬 | — | Orange Cap and Purple Cap races |
+| `/alstats` 💬 | — | Tournament stats: Orange & Purple Cap, MVP, most 6s, best strike rate, economy, top scores, best figures, team totals, your squad |
+| `/altrade` 💬 | — | The pre-season trade window: AI offers to answer, and your own swap proposals |
 | `/alquit` 💬 | `/aldiscard` | Discard your career (the entry fee is not refunded) — needed before starting a new one |
 
 ## 14. Fantasy league

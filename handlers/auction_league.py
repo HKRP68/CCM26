@@ -282,17 +282,33 @@ def _sim_summary_blocks(state, lots, by_team=False):
     return blocks or ["Nothing was left to sell."]
 
 
+FORM_ICON = {"W": "W", "L": "L", "T": "T"}
+QE_MARK = {"Q": "✅Q", "E": "❌E"}
+
+
 def _table_text(state):
     table = state.get("table") or {}
-    lines = ["📊 <b>Points table</b>", "<pre>", "#  Team   P  W  L  T Pts    NRR"]
+    marks = AL.qualification(state)
+    lines = ["📊 <b>Points table</b>", "<pre>",
+             "#  Team   P  W  L Pts    NRR  Form"]
     for i, name in enumerate(AL.standings(state), 1):
         r = table[name]
-        me = "◀" if name == state["user_team"] else ""
+        form = "".join(AL.recent_form(state, name)) or "-"
+        mark = QE_MARK.get(marks.get(name), "")
+        me = " ◀" if name == state["user_team"] else ""
         lines.append(f"{i:<2} {_short(state, name):<5} {r['p']:>2} {r['w']:>2} {r['l']:>2} "
-                     f"{r['t']:>2} {r['pts']:>3} {AL.nrr(r):>+6.2f}{me}")
+                     f"{r['pts']:>3} {AL.nrr(r):>+6.2f}  {form:<5} {mark}{me}")
     lines.append("</pre>")
-    lines.append("<i>Top 4 reach the playoffs: Q1 (1v2), Eliminator (3v4), Q2, Final.</i>")
+    lines.append("<i>Form: last five, oldest first · ✅Q through · ❌E out · "
+                 "Top 4 reach the playoffs: Q1 (1v2), Eliminator (3v4), Q2, Final.</i>")
     return "\n".join(lines)
+
+
+def _where(state, fx):
+    venue = fx.get("venue")
+    pitch = fx.get("pitch")
+    bits = [f"🏟️ {_esc(venue)}" if venue else "", f"🌱 {_esc(pitch)}" if pitch else ""]
+    return " · ".join(b for b in bits if b)
 
 
 def _fixture_line(state, fx):
@@ -309,7 +325,8 @@ def _fixture_line(state, fx):
         w = res.get("winner")
         return (f"#{fx['no']} {stage}{h} v {a} — "
                 f"{('🏆 ' + _short(state, w)) if w else 'tie'} ({score})")
-    return f"#{fx['no']} {stage}{h} v {a}"
+    where = _where(state, fx)
+    return f"#{fx['no']} {stage}{h} v {a}" + (f" · {where}" if where else "")
 
 
 def _result_digest(state, played):
@@ -341,23 +358,125 @@ def _report_blocks(state):
     return blocks
 
 
+def _who(state, pid):
+    c = AL.card(state, pid)
+    owner = AL.owner_of(state, pid)
+    return f"{_esc(c['name'])} ({_esc(_short(state, owner) if owner else '?')})"
+
+
+STAT_MENU = (
+    ("🟠 Orange Cap", "orange"), ("🟣 Purple Cap", "purple"), ("⭐ MVP", "mvp"),
+    ("💥 Most 6s", "sixes"), ("⚡ Best SR", "sr"), ("🎯 Economy", "econ"),
+    ("🏏 Top scores", "innings"), ("🔥 Best figures", "figures"),
+    ("📊 Team totals", "totals"), ("👥 My squad", "mine"),
+)
+
+
+def _stats_rows():
+    rows, row = [], []
+    for label, key in STAT_MENU:
+        row.append((label, f"al:st:{key}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return rows
+
+
+def _econ(r):
+    return r["runs"] * 6 / r["balls"] if r.get("balls") else 0.0
+
+
+def _sr(r):
+    return r["runs"] * 100 / r["balls"] if r.get("balls") else 0.0
+
+
+def _stats_text(state, board="orange"):
+    """One stats board. Every board reads ``AL.stat_board``."""
+    title = dict((k, l) for l, k in STAT_MENU).get(board, "Stats")
+    if not state["stats"]["bat"] and not state["stats"]["bowl"]:
+        return f"{title}\n\nNo matches played yet."
+    rows = AL.stat_board(state, board)
+    lines = [f"<b>{title}</b>"]
+    if board == "orange":
+        for i, (pid, r) in enumerate(rows, 1):
+            lines.append(f"{i}. {_who(state, pid)} — <b>{r['runs']}</b> runs · "
+                         f"HS {r['hs']}{'*' if r.get('hs_not_out') else ''} · "
+                         f"SR {_sr(r):.1f} · 50s {r.get('fifties', 0)} · 100s {r.get('hundreds', 0)}")
+    elif board == "purple":
+        for i, (pid, r) in enumerate(rows, 1):
+            best = r.get("best") or [0, 0]
+            lines.append(f"{i}. {_who(state, pid)} — <b>{r['wkts']}</b> wkts · "
+                         f"econ {_econ(r):.2f} · best {best[0]}/{best[1]}")
+    elif board == "mvp":
+        lines.append("<i>Run 1 · four +1 · six +2 · wicket 25 · maiden 8</i>")
+        for i, (pid, r) in enumerate(rows, 1):
+            lines.append(f"{i}. {_who(state, pid)} — <b>{r['points']}</b> pts")
+    elif board == "sixes":
+        for i, (pid, r) in enumerate(rows, 1):
+            lines.append(f"{i}. {_who(state, pid)} — <b>{r.get('sixes', 0)}</b> sixes · "
+                         f"{r.get('fours', 0)} fours")
+    elif board == "sr":
+        lines.append(f"<i>Min {AL.MIN_SR_BALLS} balls faced</i>")
+        for i, (pid, r) in enumerate(rows, 1):
+            lines.append(f"{i}. {_who(state, pid)} — <b>{_sr(r):.1f}</b> · "
+                         f"{r['runs']} off {r['balls']}")
+    elif board == "econ":
+        lines.append(f"<i>Min {AL.MIN_ECON_BALLS // 6} overs</i>")
+        for i, (pid, r) in enumerate(rows, 1):
+            lines.append(f"{i}. {_who(state, pid)} — <b>{_econ(r):.2f}</b> · "
+                         f"{r['wkts']} wkts in {r['balls'] // 6}.{r['balls'] % 6} ov")
+    elif board == "innings":
+        for i, r in enumerate(rows, 1):
+            lines.append(f"{i}. {_who(state, r['pid'])} — <b>{r['runs']}"
+                         f"{'*' if r.get('not_out') else ''}</b> ({r['balls']}) v "
+                         f"{_esc(_short(state, r['opp']) if r.get('opp') in state['teams'] else '?')}"
+                         f" · #{r.get('fx')}")
+    elif board == "figures":
+        for i, r in enumerate(rows, 1):
+            lines.append(f"{i}. {_who(state, r['pid'])} — <b>{r['wkts']}/{r['runs']}</b> v "
+                         f"{_esc(_short(state, r['opp']) if r.get('opp') in state['teams'] else '?')}"
+                         f" · #{r.get('fx')}")
+    elif board == "totals":
+        def _t(r):
+            return (f"{_esc(_short(state, r['team']))} <b>{r['runs']}/{r['wkts']}</b> v "
+                    f"{_esc(_short(state, r['opp']))} · #{r['fx']}")
+        lines.append("⬆️ Highest")
+        lines += [f"• {_t(r)}" for r in rows["high"]] or ["—"]
+        lines.append("⬇️ Lowest (all out or full overs)")
+        lines += [f"• {_t(r)}" for r in rows["low"]] or ["—"]
+    elif board == "mine":
+        lines.append(f"<i>{_esc(state['user_team'])}</i>")
+        for pid, b, w in sorted(rows, key=lambda x: -AL.mvp_points(state, x[0])):
+            c = AL.card(state, pid)
+            bat = f"{b.get('runs', 0)} r ({b.get('balls', 0)}b)" if b else "—"
+            bowl = f"{w.get('wkts', 0)} w, econ {_econ(w):.1f}" if w else "—"
+            lines.append(f"• {_esc(c['name'])}: 🏏 {bat} · 🎯 {bowl}")
+    if len(lines) == 1:
+        lines.append("Nobody qualifies yet.")
+    return "\n".join(lines)
+
+
 def _caps_text(state):
-    orange, purple = AL.cap_tables(state)
-    lines = ["🟠 <b>Orange Cap</b>"]
-    for pid, r in orange:
-        c = AL.card(state, pid)
-        owner = AL.owner_of(state, pid)
-        lines.append(f"• {_esc(c['name'])} ({_esc(_short(state, owner) if owner else '?')}) — "
-                     f"<b>{r['runs']}</b> runs, HS {r['hs']}")
-    lines.append("\n🟣 <b>Purple Cap</b>")
-    for pid, r in purple:
-        c = AL.card(state, pid)
-        owner = AL.owner_of(state, pid)
-        econ = r["runs"] * 6 / r["balls"] if r["balls"] else 0
-        lines.append(f"• {_esc(c['name'])} ({_esc(_short(state, owner) if owner else '?')}) — "
-                     f"<b>{r['wkts']}</b> wkts, econ {econ:.2f}")
-    if len(lines) == 2:
-        return "No matches played yet."
+    """Orange and Purple Cap top fives (the season-end message)."""
+    return _stats_text(state, "orange") + "\n\n" + _stats_text(state, "purple")
+
+
+def _awards_text(state):
+    aw = AL.season_awards(state)
+    lines = ["🏆 <b>Season awards</b>"]
+    labels = (("orange", "🟠 Orange Cap"), ("purple", "🟣 Purple Cap"),
+              ("mvp", "⭐ Most Valuable Player"), ("sixes", "💥 Most Sixes"),
+              ("emerging", "🌱 Emerging Player"))
+    for key, label in labels:
+        if key in aw:
+            pid, head = aw[key]
+            lines.append(f"{label}: <b>{_who(state, pid)}</b> — {head}")
+    if aw.get("xi"):
+        lines.append("\n🌟 <b>Team of the Tournament</b>")
+        for i, c in enumerate(aw["xi"], 1):
+            lines.append(f"{i:>2}. {_who(state, c['id'])} · {AL.ROLE_SHORT[c['category']]}")
     return "\n".join(lines)
 
 
@@ -385,13 +504,16 @@ def _hub(state, row):
         pos = AL.standings(state).index(me) + 1
         played = any(r["p"] for r in (state.get("table") or {}).values())
         where = f" · you're <b>#{pos}</b> in the table" if played else ""
-        return (head + f"\n\n📅 Season under way{where}\n{nxt}\n\n{HELP_LINE}"), [
-            [("▶️ Next fixture", f"al:play:{row.id}")],
-            [("📊 Table", f"al:table:{row.id}"), ("📅 Fixtures", "al:fix"), ("🟠 Caps", "al:caps")],
-            [("📋 My squad", "al:squad"), ("❓ Help", "al:help"), ("🗑 Discard", "al:quit")]]
+        rows = [[("▶️ Next fixture", f"al:play:{row.id}")]]
+        if AL.trade_window(state) is not None:
+            rows.append([("🔁 Trade window", "al:trade")])
+        rows += [[("📊 Table", f"al:table:{row.id}"), ("📅 Fixtures", "al:fix"),
+                  ("📈 Stats", "al:st:orange")],
+                 [("📋 My squad", "al:squad"), ("❓ Help", "al:help"), ("🗑 Discard", "al:quit")]]
+        return (head + f"\n\n📅 Season under way{where}\n{nxt}\n\n{HELP_LINE}"), rows
     return _season_end_text(state), [[("🆕 New career", "al:new"), ("❓ Help", "al:help")],
                                      [("📊 Final table", f"al:table:{row.id}"),
-                                      ("🟠 Caps", "al:caps")]]
+                                      ("📈 Stats", "al:st:orange"), ("🏆 Awards", "al:awards")]]
 
 
 def _purse_line(state):
@@ -510,9 +632,60 @@ async def _finish_auction(context, car, chat_id):
     mine = sum(1 for f in state["fixtures"] if state["user_team"] in (f["home"], f["away"]))
     await _send(context, chat_id,
                 f"📅 <b>The season is set</b> — {len(state['fixtures'])} league matches, "
-                f"{mine} for you, then the playoffs (top 4).",
-                [[("▶️ Play your first fixture", f"al:play:{car.row.id}")],
-                 [("📅 Fixtures", "al:fix"), ("📊 Table", f"al:table:{car.row.id}")]])
+                f"{mine} for you, then the playoffs (top 4). Every match is at the hosts' "
+                f"ground on a pitch drawn at random — /alfixtures shows them all.",
+                [[("📅 Fixtures", "al:fix"), ("📊 Table", f"al:table:{car.row.id}")]])
+    await _send_trade_window(context, chat_id, state, car.row.id)
+
+
+# ── Trade window ──────────────────────────────────────────────────────
+
+def _trade_text(state):
+    t = AL.trade_window(state) or state.get("trade") or {}
+    lines = ["🔁 <b>Trade window</b> — open until your first match"]
+    news = t.get("news") or []
+    if news:
+        lines.append("\n📰 <b>Trade news</b>")
+        for n in news:
+            a, b = AL.card(state, n["pa"]), AL.card(state, n["pb"])
+            lines.append(f"• {_esc(_short(state, n['a']))} send {_esc(a['name'])} "
+                         f"({a['rating']} {_role(a)}) to {_esc(_short(state, n['b']))} for "
+                         f"{_esc(b['name'])} ({b['rating']} {_role(b)})")
+    offers = [o for o in t.get("offers") or [] if o["status"] == "open"]
+    if offers:
+        lines.append("\n📨 <b>Offers for you</b>")
+        for o in offers:
+            give, want = AL.card(state, o["give"]), AL.card(state, o["want"])
+            lines.append(f"{o['id']}. <b>{_esc(o['team'])}</b> offer {_esc(give['name'])} "
+                         f"({give['rating']} {_role(give)}) for your {_esc(want['name'])} "
+                         f"({want['rating']} {_role(want)})")
+    elif not news:
+        lines.append("\nQuiet window — no approaches this time.")
+    left = max(0, int(t.get("max", 0)) - int(t.get("done", 0)))
+    lines.append(f"\nTrades you can still make: <b>{left}</b>. Swaps are one for one; the "
+                 "AI only agrees to fair ones, and both squads must stay legal.")
+    return "\n".join(lines)
+
+
+def _trade_rows(state, save_id):
+    t = AL.trade_window(state)
+    if t is None:
+        return [[("▶️ Next fixture", f"al:play:{save_id}")]]
+    rows = []
+    for o in t.get("offers") or []:
+        if o["status"] == "open":
+            rows.append([(f"✅ Accept {o['id']}", f"al:tro:{o['id']}:1"),
+                         (f"❌ Reject {o['id']}", f"al:tro:{o['id']}:0")])
+    if int(t["done"]) < int(t["max"]):
+        rows.append([("🔁 Propose a trade", "al:trg")])
+    rows.append([("✅ Close window", "al:trx"), ("▶️ Play first match", f"al:play:{save_id}")])
+    return rows
+
+
+async def _send_trade_window(context, chat_id, state, save_id):
+    if AL.trade_window(state) is None:
+        return
+    await _send(context, chat_id, _trade_text(state), _trade_rows(state, save_id))
 
 
 async def _lot_timeout(context):
@@ -586,6 +759,14 @@ def help_text():
         f"• AI franchises bid like real ones and spend their purses down — "
         f"stars can reach {money(AL.RECORD_PRICE)}"
         "</blockquote>\n"
+        "🔁 <b>Trade window</b>\n"
+        "<blockquote expandable>"
+        "• Opens after the auction, closes when your first match starts\n"
+        "• The AI sides trade among themselves to even the league out (trade news)\n"
+        "• Now and then a side approaches you — ✅ accept or ❌ reject\n"
+        f"• Propose your own one-for-one swaps (/altrade) — up to {AL.TRADE_MAX}; "
+        "the AI only agrees to fair ones"
+        "</blockquote>\n"
         "👥 <b>Squad rules</b>\n"
         "<blockquote expandable>"
         f"• At least {AL.ROLE_MIN[AL.ROLE_BAT]} BAT, {AL.ROLE_MIN[AL.ROLE_BOWL]} BOWL, "
@@ -599,9 +780,14 @@ def help_text():
         "<blockquote expandable>"
         "• Everyone plays everyone once, then the playoffs: Qualifier 1 (1 v 2), "
         "Eliminator (3 v 4), Qualifier 2, Final\n"
-        f"• Your matches: {AL.OVERS} overs, ball by ball — pitch (at home), Playing XI, "
-        "toss, Impact Player. Other matches are simulated instantly\n"
-        "• Points table with NRR, plus Orange and Purple Cap races\n"
+        "• Every match is at the hosts' ground on a pitch drawn at random\n"
+        f"• Your matches: {AL.OVERS} overs, ball by ball — Playing XI, toss, Impact "
+        "Player. Other matches are simulated instantly\n"
+        "• AI sides field 4 BAT · 1 WK · 3 AR · 3 BOWL, best batters at the top\n"
+        "• Points table with NRR, last-five form and ✅Q / ❌E marks\n"
+        "• /alstats — Orange & Purple Caps, MVP, 6s, strike rate, economy, top "
+        "scores, best figures, team totals, your squad\n"
+        "• Season awards and a Team of the Tournament at the end\n"
         "• 🏳️ Concede a match if you must — it counts as a loss and forfeits the "
         "season reward"
         "</blockquote>\n"
@@ -619,6 +805,7 @@ def help_text():
         "/skipplayer — decide the player on the block\n"
         "/alpause · /alresume — pause / resume the auction\n"
         "/alsets · /alsquad · /alpurse — sets, your squad, every purse\n"
+        "/altrade — the trade window (before your first match)\n"
         "/alplay — your next match · /altable · /alfixtures · /alstats\n"
         "/alquit — discard your career"
         "</blockquote>\n\n"
@@ -1202,7 +1389,10 @@ async def _season_step(context, car, chat_id, tg_id):
         return
     me = state["user_team"]
     opp = fx["away"] if fx["home"] == me else fx["home"]
-    where = "🏟 Home — you pick the pitch" if fx["home"] == me else "✈️ Away — the hosts set the pitch"
+    AL.fixture_pitch(state, fx)
+    side = "🏠 Home" if fx["home"] == me else ("✈️ Away" if fx["stage"] == AL.STAGE_LEAGUE
+                                              else "⚖️ Neutral venue")
+    where = f"{side} · {_where(state, fx)}"
     pos = AL.standings(state)
     played = any(r["p"] for r in (state.get("table") or {}).values())
 
@@ -1214,6 +1404,11 @@ async def _season_step(context, car, chat_id, tg_id):
             f"{where}\n\n"
             f"Opponent strength: {AL.team_strength(state, opp)['ovr']} OVR · "
             f"yours {AL.team_strength(state, me)['ovr']} OVR")
+    form = "".join(AL.recent_form(state, opp))
+    if form:
+        text += f"\n{_esc(_short(state, opp))} form: {form}"
+    if AL.trade_window(state) is not None:
+        text += "\n\n🔁 The trade window closes when this match starts."
     rows = [[("▶️ Play match", f"al:go:{fx['no']}")]]
     if fx["stage"] == AL.STAGE_LEAGUE:
         rows.append([("🏳️ Concede", f"al:conc:{fx['no']}"), ("📊 Table", f"al:table:{car.row.id}")])
@@ -1235,9 +1430,10 @@ async def _season_over(context, car, chat_id):
         text += f"\n\n💰 Reward: +{coins:,} coins, +{gems} 💎"
     elif note:
         text += f"\n\n<i>No reward: {_esc(note)}.</i>"
-    await _send(context, chat_id, text)
-    await _send(context, chat_id, _caps_text(state),
-                [[("📊 Final table", f"al:table:{car.row.id}"), ("🆕 New career", "al:new")]])
+    await _send(context, chat_id, _awards_text(state))
+    await _send(context, chat_id, text,
+                [[("📊 Final table", f"al:table:{car.row.id}"), ("📈 Stats", "al:st:orange")],
+                 [("🆕 New career", "al:new")]])
 
 
 async def _launch_fixture(q, context, car, no):
@@ -1252,6 +1448,11 @@ async def _launch_fixture(q, context, car, no):
         car.save()
     me = state["user_team"]
     opp = fx["away"] if fx["home"] == me else fx["home"]
+    pitch = AL.fixture_pitch(state, fx)
+    if AL.trade_window(state) is not None:
+        # The window shuts as the first ball of your season approaches.
+        AL.close_trade_window(state)
+    car.save()
     session = car.session
     from handlers.challenge import launch_auction_league_match
     from handlers.vsbot import _get_or_create_bot_user
@@ -1274,7 +1475,7 @@ async def _launch_fixture(q, context, car, no):
         target_squad=AL.squad_card_dicts(state, opp),
         tag=tag, home_team=fx["home"],
         team_codes={n: state["teams"][n]["short"] for n in (me, opp)},
-        session=session)
+        session=session, pitch=pitch, venue=fx.get("venue"))
     if not ok:
         await q.answer(err or "Couldn't start the match.", show_alert=True)
         return
@@ -1341,8 +1542,35 @@ async def alfixtures_handler(update, context):
 
 
 async def alstats_handler(update, context):
-    await _view(update, context, _caps_text,
-                phases=(AL.PHASE_SEASON, AL.PHASE_COMPLETED))
+    """/alstats — the tournament stats hub (Orange Cap first)."""
+    if not await _require_dm(update, context):
+        return
+    car = _open(update.effective_user.id, include_completed=True)
+    try:
+        if car.row is None or car.state["phase"] not in (AL.PHASE_SEASON, AL.PHASE_COMPLETED):
+            await update.effective_message.reply_text(
+                "❌ Stats start once your season does. /auctionleague to see your career.")
+            return
+        await _send(context, update.effective_chat.id,
+                    _stats_text(car.state, "orange"), _stats_rows())
+    finally:
+        car.session.close()
+
+
+async def altrade_handler(update, context):
+    """/altrade — the pre-season trade window."""
+    if not await _require_dm(update, context):
+        return
+    car = _open(update.effective_user.id)
+    try:
+        if car.row is None or AL.trade_window(car.state) is None:
+            await update.effective_message.reply_text(
+                "🔁 The trade window is closed. It opens after the auction and "
+                "closes when your first match starts.")
+            return
+        await _send_trade_window(context, update.effective_chat.id, car.state, car.row.id)
+    finally:
+        car.session.close()
 
 
 async def alplay_handler(update, context):
@@ -1374,6 +1602,89 @@ async def alquit_handler(update, context):
 # ════════════════════════════════════════════════════════════════════
 # The one callback router
 # ════════════════════════════════════════════════════════════════════
+
+async def _cb_trade(q, context, car, action, args):
+    """The trade window: offers, proposals, closing it."""
+    state = car.state
+    chat_id = q.message.chat_id
+    if AL.trade_window(state) is None:
+        await q.answer("The trade window is closed.", show_alert=True)
+        return
+    me = state["user_team"]
+    if action == "trade":
+        await q.answer()
+        await _send_trade_window(context, chat_id, state, car.row.id)
+    elif action == "trx":
+        AL.close_trade_window(state)
+        car.save()
+        await q.answer("Window closed")
+        await _send(context, chat_id, "🔒 Trade window closed — squads are locked for the season.",
+                    [[("▶️ Play first match", f"al:play:{car.row.id}")]])
+    elif action == "tro" and len(args) >= 2:
+        try:
+            offer = AL.answer_offer(state, int(args[0]), args[1] == "1")
+        except AuctionLeagueError as exc:
+            car.save()
+            await q.answer(str(exc), show_alert=True)
+            return
+        car.save()
+        if offer["status"] == "accepted":
+            give, want = AL.card(state, offer["give"]), AL.card(state, offer["want"])
+            await q.answer("Trade done!")
+            await _send(context, chat_id, f"✅ <b>Trade done</b> — {_esc(give['name'])} joins "
+                        f"you from {_esc(offer['team'])}; {_esc(want['name'])} goes the other way.")
+        else:
+            await q.answer("Offer rejected")
+        try:
+            await q.edit_message_text(_trade_text(state), parse_mode="HTML",
+                                      reply_markup=_kb(_trade_rows(state, car.row.id)))
+        except Exception:
+            await _send_trade_window(context, chat_id, state, car.row.id)
+    elif action == "trg" and not args:
+        await q.answer()
+        rows = [[(f"{c['name']} · {c['rating']} {_role(c)}", f"al:trg:{c['id']}")]
+                for c in AL.squad_card_dicts(state, me)]
+        await _send(context, chat_id, "🔁 Which of <b>your</b> players do you offer?", rows)
+    elif action == "trg":
+        await q.answer()
+        pid = int(args[0])
+        rows, row = [], []
+        for i, name in enumerate(state["team_order"]):
+            if name == me:
+                continue
+            row.append((state["teams"][name]["short"], f"al:trt:{pid}:{i}"))
+            if len(row) == 5:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        await _send(context, chat_id, f"🔁 Offer <b>{_esc(AL.card(state, pid)['name'])}</b> to "
+                    "which franchise?", rows)
+    elif action == "trt" and len(args) >= 2:
+        await q.answer()
+        pid, team = int(args[0]), state["team_order"][int(args[1])]
+        rows = [[(f"{c['name']} · {c['rating']} {_role(c)}",
+                  f"al:trp:{pid}:{args[1]}:{c['id']}")]
+                for c in AL.squad_card_dicts(state, team)]
+        await _send(context, chat_id, f"🔁 Which <b>{_esc(team)}</b> player do you want for "
+                    f"{_esc(AL.card(state, pid)['name'])}?", rows)
+    elif action == "trp" and len(args) >= 3:
+        pid, team, theirs = int(args[0]), state["team_order"][int(args[1])], int(args[2])
+        try:
+            ok, reason = AL.propose_trade(state, pid, team, theirs)
+        except AuctionLeagueError as exc:
+            await q.answer(str(exc), show_alert=True)
+            return
+        car.save()
+        await q.answer("Accepted!" if ok else "Rejected")
+        a, b = AL.card(state, pid), AL.card(state, theirs)
+        head = (f"✅ <b>Trade done</b> — {_esc(b['name'])} joins you; {_esc(a['name'])} "
+                f"goes to {_esc(team)}." if ok else f"❌ {_esc(reason)}")
+        await _send(context, chat_id, head + "\n\n" + _trade_text(state),
+                    _trade_rows(state, car.row.id))
+    else:
+        await q.answer()
+
 
 async def auction_league_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -1415,7 +1726,8 @@ async def auction_league_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     async with _lock(context, tg_id):
-        car = _open(tg_id, include_completed=action in ("table", "caps", "fix", "squad", "hub"))
+        car = _open(tg_id, include_completed=action in (
+            "table", "caps", "fix", "squad", "hub", "st", "awards"))
         try:
             if car.row is None:
                 await q.answer("No active career — /auctionleague to start one.", show_alert=True)
@@ -1500,6 +1812,26 @@ async def auction_league_callback(update: Update, context: ContextTypes.DEFAULT_
             elif action == "caps":
                 await q.answer()
                 await _send(context, chat_id, _caps_text(state))
+            elif action == "st":
+                board = args[0] if args and args[0] in AL.STAT_BOARDS else "orange"
+                await q.answer()
+                if state["phase"] not in (AL.PHASE_SEASON, AL.PHASE_COMPLETED):
+                    await _send(context, chat_id, "Stats start once your season does.")
+                    return
+                text = _stats_text(state, board)
+                try:
+                    await q.edit_message_text(text, parse_mode="HTML",
+                                              reply_markup=_kb(_stats_rows()))
+                except Exception:
+                    await _send(context, chat_id, text, _stats_rows())
+            elif action == "awards":
+                await q.answer()
+                if state["phase"] != AL.PHASE_COMPLETED:
+                    await _send(context, chat_id, "The awards come at the end of the season.")
+                    return
+                await _send(context, chat_id, _awards_text(state))
+            elif action in ("trade", "trg", "trt", "trp", "tro", "trx"):
+                await _cb_trade(q, context, car, action, args)
             elif action == "play":
                 if state["phase"] != AL.PHASE_SEASON:
                     await q.answer("Your season isn't running.", show_alert=True)
@@ -1520,6 +1852,7 @@ async def auction_league_callback(update: Update, context: ContextTypes.DEFAULT_
                     await q.answer("That fixture isn't up next.", show_alert=True)
                     return
                 AL.concede_fixture(state, fx)
+                AL.close_trade_window(state)
                 car.save()
                 await q.answer("Conceded")
                 await _season_step(context, car, chat_id, tg_id)
@@ -1569,6 +1902,7 @@ def register(app):
     app.add_handler(CommandHandler(["alquit", "aldiscard"], alquit_handler))
     app.add_handler(CommandHandler("skipplayer", skipplayer_handler))
     app.add_handler(CommandHandler("alpause", alpause_handler))
+    app.add_handler(CommandHandler("altrade", altrade_handler))
     app.add_handler(CommandHandler(["alhelp", "rcplhelp"], alhelp_handler))
     app.add_handler(CommandHandler("alresume", alresume_handler))
     app.add_handler(CallbackQueryHandler(auction_league_callback, pattern=r"^al:"))

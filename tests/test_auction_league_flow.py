@@ -305,8 +305,16 @@ class FlowTest(unittest.TestCase):
         for name in st["team_order"]:
             self.assertTrue(AL.squad_is_legal(st, name), name)
 
+        # The trade window is open after the auction, with its buttons.
+        self.assertIsNotNone(AL.trade_window(st))
+        window = next(m for m in reversed(self.log) if "Trade window" in m[0])
+        self.assertIn(("✅ Close window", "al:trx"), window[1])
+        self._press("al:trade")
+        self.assertIn("Trade window", self.log[-1][0])
+
         self._press(f"al:play:{rid}")
         go = next(d for _t, d in self.log[-1][1] if d.startswith("al:go:"))
+        fx_no = int(go.split(":")[2])
         self._press(go)
         drafts = [v for v in self.ctx.bot_data.values()
                   if isinstance(v, dict) and v.get("mode") == "auction_league"]
@@ -314,6 +322,23 @@ class FlowTest(unittest.TestCase):
         draft = drafts[0]
         _rid, st = self._state()
         me = st["user_team"]
+        fx = AL.fixture_by_no(st, fx_no)
+        # The fixture's own pitch and venue — nobody is asked to pick.
+        self.assertEqual(draft["pitch_type"], fx["pitch"])
+        self.assertEqual(draft["stadium"], fx["venue"])
+        self.assertFalse(any(d.startswith("cl_pitch_") for _t, b in self.log for _l, d in b))
+        # Starting the first match closed the trade window.
+        self.assertIsNone(AL.trade_window(st))
+        # The AI fields its 4 BAT · 1 WK · 3 AR · 3 BOWL, best batters first.
+        from handlers.challenge import _challenge_xi_selection
+        bot_ids = _challenge_xi_selection(draft, "target")["player_ids"]
+        self.assertEqual(len(bot_ids), 11)
+        bot_xi = [AL.card(st, i) for i in bot_ids]
+        counts = {r: sum(1 for c in bot_xi if c["category"] == r) for r in AL.ROLES}
+        self.assertEqual(counts, {"Batsman": 4, "Wicket Keeper": 1,
+                                  "All-rounder": 3, "Bowler": 3})
+        bats = [c["bat_rating"] for c in bot_xi]
+        self.assertEqual(bats, sorted(bats, reverse=True))
         self.assertEqual(draft["host_team"], me)
         self.assertEqual(sorted(c["id"] for c in draft["inline_squads"]["host"]),
                          sorted(e["pid"] for e in st["teams"][me]["squad"]))

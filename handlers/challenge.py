@@ -2006,14 +2006,15 @@ async def launch_auction_league_match(context, *, chat_id, host, bot_user,
                                      league_record, league_key, league_name,
                                      host_team, target_team, host_squad,
                                      target_squad, tag, home_team=None,
-                                     team_codes=None, session=None):
+                                     team_codes=None, session=None,
+                                     pitch=None, venue=None):
     """Open an Auction League fixture against the AI.
 
     Both squads were bought at auction, so they ride on the draft
     (``inline_squads``, mode ``auction_league``) exactly as a /cdraft squad
-    does, and the rest is the ordinary /ciplbot flow: pitch → the bot's XI →
-    your XI → toss → ball by ball. At home you choose the surface; away, the
-    hosts already have, and the match goes straight to the Playing XI.
+    does, and the rest is the ordinary /ciplbot flow: the bot's XI → your XI →
+    toss → ball by ball. The fixture's pitch (drawn at random when the season
+    was scheduled) and venue are fixed, so nobody picks the surface.
     ``tag`` (save id, fixture number, your user id, the opponent's name) rides
     through to the match state so the result is written back into the season.
 
@@ -2077,19 +2078,17 @@ async def launch_auction_league_match(context, *, chat_id, host, bot_user,
     context.bot_data[_challenge_team_draft_key(draft_id)] = draft
     context.bot_data[_challenge_draft_chat_key(chat_id)] = draft_id
 
-    away = bool(home_team) and home_team != host_team
+    if venue:
+        draft["stadium"] = venue
     try:
-        if away:
-            draft["pitch_locked"] = True
-            draft["home_team"] = home_team
-            confirm = _apply_pitch(draft, random.choice(PITCH_TYPES))
-            blocks = draft.pop("_pitch_card_blocks", None)
-            sent = await R.send_rich_message(context.bot, chat_id, blocks, confirm)
-        else:
-            sent = await R.send_rich_message(
-                context.bot, chat_id, _pitch_prompt_blocks(draft),
-                _pitch_prompt(draft),
-                reply_markup=_pitch_keyboard(draft_id, allow_deny=False))
+        draft["pitch_locked"] = True
+        draft["home_team"] = home_team
+        confirm = _apply_pitch(draft, pitch if pitch in PITCH_TYPES else random.choice(PITCH_TYPES))
+        blocks = draft.pop("_pitch_card_blocks", None)
+        if venue:
+            confirm = f"🏟️ <b>{_esc(venue)}</b>\n" + confirm
+            blocks = None    # the rich card has no venue line; the HTML does
+        sent = await R.send_rich_message(context.bot, chat_id, blocks, confirm)
     except Exception:
         logger.exception("auction league: could not open the fixture; releasing the lock")
         _release_draft_chat_lock(context.bot_data, draft)
@@ -2107,10 +2106,7 @@ async def launch_auction_league_match(context, *, chat_id, host, bot_user,
     except Exception:
         logger.exception("auction league: could not schedule the setup expiry")
 
-    if away:
-        await _after_pitch_selected(context, draft, draft_id, sent)
-    else:
-        await _arm_selection_timer(context, draft, [host.telegram_id], "pitch")
+    await _after_pitch_selected(context, draft, draft_id, sent)
     return True, None
 
 
@@ -2524,7 +2520,17 @@ def _autoconfirm_bot_xi(draft):
             from services import tournament_service
             tour = session.get(Tournament, int(draft["tournament_id"]))
             draft["rating_rules"] = tournament_service.rating_rules(tour)
-        xi = build_challenge_bot_xi(players, *_challenge_xi_limits(draft))
+        if draft.get("mode") == "auction_league":
+            # The Auction League AI fields its own shape: 4 BAT · 1 WK · 3 AR
+            # · 3 BOWL, batting order by batting rating.
+            from services import auction_league_service as _als
+            cards = (draft.get("inline_squads") or {}).get("target") or []
+            order = [int(c["id"]) for c in _als.ai_playing_xi(
+                cards, _challenge_xi_limits(draft)[1])]
+            by_id = {int(p.id): p for p in players}
+            xi = [by_id[i] for i in order if i in by_id]
+        else:
+            xi = build_challenge_bot_xi(players, *_challenge_xi_limits(draft))
         if len(xi) != 11:
             logger.error("ciplbot: could not build an XI for %s (%s players)",
                          draft.get("target_team"), len(players))

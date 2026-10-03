@@ -363,5 +363,168 @@ class Season(unittest.TestCase):
         self.assertEqual(AL.season_reward(st), (0, 0))
 
 
+def card_set(spec, start=1, overseas_every=0):
+    """Cards from ``[(role, rating, bat), …]``."""
+    out = []
+    for i, (role, rating, bat) in enumerate(spec):
+        out.append(AL.make_card(start + i, f"C{start + i}", category=role, rating=rating,
+                                bat_rating=bat, bowl_rating=rating if role in
+                                ("Bowler", "All-rounder") else 30,
+                                is_overseas=bool(overseas_every) and i % overseas_every == 0))
+    return out
+
+
+class PlayingXI(unittest.TestCase):
+    def test_shape_and_batting_order(self):
+        cards = card_set([("Batsman", 90 - i, 90 - i) for i in range(6)]
+                         + [("Wicket Keeper", 85, 80), ("Wicket Keeper", 80, 75)]
+                         + [("All-rounder", 88 - i, 70 - i) for i in range(4)]
+                         + [("Bowler", 92 - i, 30 + i) for i in range(5)])
+        xi = AL.ai_playing_xi(cards)
+        counts = {r: sum(1 for c in xi if c["category"] == r) for r in AL.ROLES}
+        self.assertEqual(counts, {"Batsman": 4, "Wicket Keeper": 1,
+                                  "All-rounder": 3, "Bowler": 3})
+        bats = [c["bat_rating"] for c in xi]
+        self.assertEqual(bats, sorted(bats, reverse=True))
+        # The best of each role is picked.
+        self.assertIn(92, [c["rating"] for c in xi if c["category"] == "Bowler"])
+
+    def test_short_role_still_legal(self):
+        from services import xi_rules
+        cards = card_set([("Batsman", 85, 85)] * 7 + [("Wicket Keeper", 80, 80)]
+                         + [("All-rounder", 82, 70)] + [("Bowler", 84, 30)] * 6)
+        xi = AL.ai_playing_xi(cards)
+        self.assertEqual(len(xi), 11)
+        shims = [AL.LeagueCard(c) for c in xi]
+        ok, err = xi_rules.validate_challenge_xi(shims, 0, 11)
+        self.assertTrue(ok, err)
+
+    def test_overseas_limit(self):
+        cards = card_set([("Batsman", 90 - i, 90 - i) for i in range(6)]
+                         + [("Wicket Keeper", 85, 80)]
+                         + [("All-rounder", 88 - i, 70) for i in range(4)]
+                         + [("Bowler", 92 - i, 30) for i in range(5)], overseas_every=2)
+        xi = AL.ai_playing_xi(cards, overseas_max=4)
+        self.assertLessEqual(sum(1 for c in xi if c["is_overseas"]), 4)
+        self.assertEqual(len(xi), 11)
+
+
+class SeasonFeatures(unittest.TestCase):
+    def _season(self, seed=3):
+        st = new_state(seed=seed)
+        AL.apply_retentions(st, [])
+        AL.simulate_to_last(st)
+        AL.finish_auction(st)
+        return st
+
+    def test_every_fixture_has_venue_and_pitch(self):
+        st = self._season()
+        from services.match_constants import PITCH_TYPES
+        self.assertTrue(all(t.get("ground") for t in st["teams"].values()))
+        for fx in st["fixtures"]:
+            self.assertIn(fx["pitch"], PITCH_TYPES)
+            self.assertEqual(fx["venue"], st["teams"][fx["home"]]["ground"])
+        self.assertGreater(len({fx["pitch"] for fx in st["fixtures"]}), 1)
+
+    def test_balancing_trades_narrow_the_league(self):
+        before, after = [], []
+        for seed in range(6):
+            st = new_state(seed=seed)
+            AL.apply_retentions(st, [])
+            AL.simulate_to_last(st)
+            AL.autofill(st)
+            before.append(AL.ai_spread(st))
+            news = AL.balance_squads(st)
+            after.append(AL.ai_spread(st))
+            self.assertLessEqual(len(news), AL.AI_BALANCE_TRADES)
+            self.assertTrue(all(AL.squad_is_legal(st, n) for n in st["team_order"]))
+            self.assertLessEqual(after[-1], before[-1])
+        self.assertLess(sum(after) / len(after), sum(before) / len(before))
+
+    def test_trade_window_rules(self):
+        st = self._season()
+        t = AL.trade_window(st)
+        self.assertIsNotNone(t)
+        self.assertLessEqual(len(t["offers"]), AL.AI_OFFERS_MAX)
+        me = st["user_team"]
+        mine = AL.squad_card_dicts(st, me)
+        # An unfair ask (their best for your worst) is refused and can't be repeated.
+        team = next(n for n in st["team_order"] if n != me)
+        theirs = AL.squad_card_dicts(st, team)
+        worst, best = mine[-1], theirs[0]
+        if best["rating"] > worst["rating"] + 1:
+            ok, _why = AL.propose_trade(st, worst["id"], team, best["id"])
+            self.assertFalse(ok)
+            with self.assertRaises(AL.AuctionLeagueError):
+                AL.propose_trade(st, worst["id"], team, best["id"])
+        # Offers can be rejected; a closed window refuses everything.
+        for o in list(t["offers"]):
+            self.assertEqual(AL.answer_offer(st, o["id"], False)["status"], "rejected")
+        AL.close_trade_window(st)
+        with self.assertRaises(AL.AuctionLeagueError):
+            AL.propose_trade(st, mine[0]["id"], team, theirs[0]["id"])
+
+    def test_fair_trade_accepted_and_capped(self):
+        st = self._season(seed=5)
+        me = st["user_team"]
+        done = 0
+        for team in st["team_order"]:
+            if team == me or done >= AL.TRADE_MAX:
+                continue
+            for mine in AL.squad_card_dicts(st, me):
+                hit = None
+                for theirs in AL.squad_card_dicts(st, team):
+                    if (theirs["category"] == mine["category"]
+                            and theirs["rating"] <= mine["rating"] - 2):
+                        ok, _ = AL.propose_trade(st, mine["id"], team, theirs["id"])
+                        if ok:
+                            hit = theirs
+                            break
+                if hit:
+                    done += 1
+                    self.assertTrue(any(e["pid"] == hit["id"] for e in st["teams"][me]["squad"]))
+                    break
+        self.assertTrue(all(AL.squad_is_legal(st, n) for n in st["team_order"]))
+        if done >= AL.TRADE_MAX:
+            mine = AL.squad_card_dicts(st, me)[0]
+            other = next(n for n in st["team_order"] if n != me)
+            with self.assertRaises(AL.AuctionLeagueError):
+                AL.propose_trade(st, mine["id"], other, AL.squad_card_dicts(st, other)[-1]["id"])
+
+    def test_stats_awards_and_qualification(self):
+        st = self._season()
+        AL.close_trade_window(st)
+        guard = 0
+        while st["phase"] == AL.PHASE_SEASON and guard < 100:
+            guard += 1
+            AL.sim_until_user(st)
+            fx = AL.next_user_fixture(st)
+            if fx is not None:
+                AL.simulate_fixture(st, fx)
+        self.assertEqual(st["phase"], AL.PHASE_COMPLETED)
+        bat = st["stats"]["bat"]
+        self.assertTrue(any(r.get("sixes") for r in bat.values()))
+        self.assertEqual(sum(r["inns"] for r in st["stats"]["bowl"].values()) > 0, True)
+        for board in AL.STAT_BOARDS:
+            AL.stat_board(st, board)
+        totals = AL.stat_board(st, "totals")
+        self.assertEqual(len(st["records"]["totals"]), 2 * len(st["fixtures"]))
+        self.assertGreaterEqual(totals["high"][0]["runs"], totals["high"][-1]["runs"])
+        marks = AL.qualification(st)
+        self.assertEqual(sorted(v for v in marks.values()), ["E"] * 6 + ["Q"] * 4)
+        self.assertEqual(len(AL.recent_form(st, st["user_team"])), 5)
+        aw = AL.season_awards(st)
+        for key in ("orange", "purple", "mvp", "sixes"):
+            self.assertIn(key, aw)
+        self.assertEqual(len(aw["xi"]), 11)
+        top = AL.stat_board(st, "orange", 1)[0]
+        self.assertEqual(aw["orange"][0], top[0])
+
+    def test_qualification_midseason_is_certain_only(self):
+        st = self._season()
+        marks = AL.qualification(st)
+        self.assertTrue(all(v is None for v in marks.values()))
+
+
 if __name__ == "__main__":
     unittest.main()
