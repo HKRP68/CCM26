@@ -259,6 +259,39 @@ class Auction(unittest.TestCase):
         lefts.sort()
         self.assertLessEqual(lefts[len(lefts) // 2], 400, lefts)
 
+    def test_prices_follow_rating(self):
+        bands, pairs, inverted = {}, 0, 0
+        for seed in range(6):
+            st = new_state(seed=seed)
+            AL.apply_retentions(st, [])
+            AL.simulate_to_last(st)
+            AL.finish_auction(st)
+            sold = [(AL.card(st, e["pid"])["rating"], e["price"]) for e in st["sold_log"]
+                    if e["how"] in (AL.HOW_AUCTION, AL.HOW_RTM)]
+            for r, p in sold:
+                bands.setdefault(r // 3 * 3, []).append(p)
+            for a in sold:
+                for b in sold:
+                    if a[0] >= b[0] + 3:
+                        pairs += 1
+                        inverted += a[1] < b[1]
+            for name in st["team_order"]:
+                if name != st["user_team"]:
+                    self.assertGreaterEqual(len(st["teams"][name]["squad"]), 15, name)
+        # A clearly better player almost never goes for less…
+        self.assertLess(inverted / pairs, 0.02)
+        # …and every rating band's median sits above the band below it.
+        medians = [sorted(v)[len(v) // 2] for k, v in sorted(bands.items())
+                   if k >= 75 and len(v) >= 8]
+        self.assertEqual(medians, sorted(medians))
+        self.assertEqual(len(set(medians)), len(medians))
+
+    def test_base_price_ladder_is_monotonic(self):
+        prices = [AL.base_price(r) for r in range(60, 100)]
+        self.assertEqual(prices, sorted(prices))
+        self.assertEqual(AL.base_price(95), 200)
+        self.assertEqual(AL.base_price(65), 30)
+
     def test_jump_bid(self):
         st = new_state()
         AL.apply_retentions(st, [])

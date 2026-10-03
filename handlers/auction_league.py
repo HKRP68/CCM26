@@ -211,7 +211,8 @@ def _lot_text(state, lot, note=""):
         f"🏏 <b>{_esc(c['name'])}</b>",
         f"{c['category']} · <b>{c['rating']}</b> OVR (Bat {c['bat_rating']} / Bowl {c['bowl_rating']})"
         f"{os_}{ex}",
-        f"Base price: {money(lot['base'])}",
+        f"Base price: {money(lot['base'])} · 💡 fair value ≈ "
+        f"{money(int(AL.fair_price(state, c['rating']) // 5 * 5))}",
     ]
     if lot.get("price") is None:
         lines.append("💰 No bids yet")

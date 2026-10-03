@@ -69,30 +69,56 @@ AI_RETAIN_CHANCE = 0.85
 
 # The IPL's record fee (₹27 Cr). No AI franchise ever values a player above it.
 RECORD_PRICE = 2_700
-# How hard the AI leans on its purse as the auction runs down. Real
-# franchises are patient in the marquee sets and get urgent once the pool
-# thins out — that late urgency is what runs purses down to a few crore,
-# where an even share per slot leaves the last, uncontested places cheap
-# and the money unspent. Stars stay spread out because the early sets are
-# priced at about an even share.
-SPEND_DRIVE_START = 1.0
-SPEND_DRIVE_END = 3.4
+# ── What a player is worth ───────────────────────────────────────────
+# Price follows rating: every OVR point is worth FAIR_GROWTH more than the
+# one below (≈16%, so a 96 is worth ~60× a 70 — stars at ₹20 Cr+, squad
+# players near their base, as at the IPL). The curve is re-scaled as the
+# auction goes on, so that what the league still means to buy is worth about
+# the money it has left — which runs purses down to a few crore without
+# inflating whoever happens to be on the block late.
+FAIR_GROWTH = 1.12
+FAIR_SPEND_SHARE = 1.0     # of the league's purses the curve is scaled to
+# Everything a franchise weighs on top of the fair price (role need, its XI,
+# personality, a little jitter) moves it only within this band, so two
+# players' prices never cross by more than a rating point or so.
+VALUE_BAND = (0.8, 1.3)
+# What an AI side sets aside for each squad place it still means to fill:
+# the fair price of a player of this rating (a solid squad player).
+PLAN_SLOT_RATING = 70
 
 
-def _auction_progress(state):
-    """0 at the first lot, 1 when every listed player has been decided."""
-    listed = sum(len(s["pids"]) for s in state.get("sets") or []
-                 if not s.get("accelerated"))
-    if not listed:
-        return 0.0
-    decided = sum(1 for e in state.get("sold_log") or [] if e["how"] != HOW_RETAINED)
-    decided += len(state.get("unsold") or [])
-    return max(0.0, min(1.0, decided / listed))
+def _fair_raw(rating):
+    return FAIR_GROWTH ** (int(rating) - 70)
 
 
-def _spend_drive(state):
-    progress = _auction_progress(state)
-    return SPEND_DRIVE_START + (SPEND_DRIVE_END - SPEND_DRIVE_START) * progress ** 1.0
+_SCALE_CACHE = {}
+
+
+def _price_scale(state):
+    """Lakh per unit of ``_fair_raw``: the money the league has left over
+    the fair value of the players it still means to buy. Worked out again
+    after every signing, so prices stay ordered by rating at every point of
+    the auction *and* in line with what the franchises can still afford."""
+    key = (id(state), len(state.get("sold_log") or []), len(state.get("unsold") or []))
+    hit = _SCALE_CACHE.get(key)
+    if hit is not None:
+        return hit
+    taken = taken_pids(state)
+    pool = sorted((c["rating"] for c in state["pool"].values() if c["id"] not in taken),
+                  reverse=True)
+    wanted = sum(max(0, int(_personality(state, n)["target"]) - len(state["teams"][n]["squad"]))
+                 for n in state["team_order"])
+    money = sum(int(t["purse"]) for t in state["teams"].values())
+    value = sum(_fair_raw(r) for r in pool[:max(1, wanted)])
+    scale = (money * FAIR_SPEND_SHARE) / max(1e-9, value)
+    _SCALE_CACHE.clear()
+    _SCALE_CACHE[key] = scale
+    return scale
+
+
+def fair_price(state, rating):
+    """What a player of this OVR is worth in this auction, in lakh."""
+    return min(RECORD_PRICE, _fair_raw(rating) * _price_scale(state))
 
 BID_LIMIT = 500          # a bidding war this long is a bug, not an auction
 
@@ -159,19 +185,18 @@ def money(lakh):
     return f"{sign}₹{whole}.{f'{part:02d}'.rstrip('0')} Cr"
 
 
+# The IPL's base-price ladder, spread across the rating range so a better
+# player always opens at least as high as a worse one.
+BASE_LADDER = ((90, 200), (87, 150), (84, 125), (81, 100), (78, 75),
+               (75, 50), (72, 40))
+
+
 def base_price(rating):
     """Base price for a player of this OVR."""
     r = int(rating or 0)
-    if r >= 90:
-        return 200
-    if r >= 87:
-        return 150
-    if r >= 84:
-        return 100
-    if r >= 80:
-        return 75
-    if r >= 75:
-        return 50
+    for floor, price in BASE_LADDER:
+        if r >= floor:
+            return price
     return 30
 
 
@@ -459,7 +484,31 @@ def can_add(state, team, c):
     # After this signing, the free slots left must still cover what is owed.
     if SQUAD_MAX - (size + 1) < owed_slots(state, team, extra=c):
         return False
+    if cap and c.get("is_overseas") and overseas_count(state, team) + 1 >= cap \
+            and not _owed_roles_fillable_domestically(state, team, c):
+        return False
     return _leaves_enough_for_others(state, team, c)
+
+
+def _owed_roles_fillable_domestically(state, team, c):
+    """Taking the last overseas place: every role still owed afterwards must
+    have a domestic player left in the pool, or the squad could never be
+    completed (the last keepers might all be overseas)."""
+    if state.get("phase") != PHASE_AUCTION:
+        return True
+    owed = owed_roles(state, team, extra=c)
+    if not any(owed.values()):
+        return True
+    taken = taken_pids(state)
+    for role, n in owed.items():
+        if not n:
+            continue
+        domestic = sum(1 for x in state["pool"].values()
+                       if x["id"] not in taken and x["id"] != c["id"]
+                       and x["category"] == role and not x.get("is_overseas"))
+        if domestic < n:
+            return False
+    return True
 
 
 def _domestic_owed(state, team):
@@ -487,6 +536,11 @@ def _leaves_enough_for_others(state, team, c):
     if (state.get("overseas_cap") and not c.get("is_overseas")
             and _domestic_owed(state, team) == 0 and required_domestic(state)):
         checks.append(("domestic", None))
+    cap = state.get("overseas_cap")
+    if cap and not c.get("is_overseas") and overseas_count(state, team) < cap:
+        # A side already at its overseas cap can only fill a role it owes
+        # with a domestic player — keep enough of those for it.
+        checks.append(("domestic_role", role))
     if not checks:
         return True
     taken = taken_pids(state)
@@ -496,6 +550,11 @@ def _leaves_enough_for_others(state, team, c):
         if kind == "role":
             supply = sum(1 for x in spare if x["category"] == value)
             owed = sum(owed_roles(state, n).get(value, 0) for n in others)
+        elif kind == "domestic_role":
+            supply = sum(1 for x in spare if x["category"] == value
+                         and not x.get("is_overseas"))
+            owed = sum(owed_roles(state, n).get(value, 0) for n in others
+                       if overseas_count(state, n) >= cap)
         else:
             supply = sum(1 for x in spare if not x.get("is_overseas"))
             owed = sum(_domestic_owed(state, n) for n in others)
@@ -687,17 +746,34 @@ def _spendable(state, team, c):
 # Per-role counts the AI wants so it can field its XI shape (see XI_SHAPE).
 XI_TARGET = {ROLE_BAT: 4, ROLE_WK: 1, ROLE_AR: 3, ROLE_BOWL: 3}
 
+RICHNESS_RANGE = (0.85, 1.25)
+
+
+def _money_per_slot(state, team):
+    t = state["teams"][team]
+    slots = max(1, int(_personality(state, team)["target"]) - len(t["squad"]))
+    return int(t["purse"]) / slots
+
+
+def _richness(state, team):
+    per = [_money_per_slot(state, n) for n in state["team_order"]]
+    avg = sum(per) / len(per)
+    if avg <= 0:
+        return 1.0
+    ratio = (_money_per_slot(state, team) / avg) ** 0.5
+    return max(RICHNESS_RANGE[0], min(RICHNESS_RANGE[1], ratio))
+
+
 def ai_value(state, team, c, rng, *, accelerated=False):
     """The most this franchise would pay for ``c``, or 0 for "not interested".
 
-    How a real franchise plans an auction: the money it has left, spread over
-    the slots it still wants to fill, weighted by how good the player is. A
-    marquee star is worth several slots' money, a squad filler a fraction of
-    one. Because that per-slot figure is recomputed for every lot, a side that
-    has been outbid on stars carries a fat purse into the later sets and
-    spends it there — so purses run down to a few crore by the end, as they do
-    at the IPL. Role needs, the franchise's personality and a little jitter
-    shape it; the IPL record (``RECORD_PRICE``) caps it.
+    The fair price for his rating (``fair_price``), moved only within
+    ``VALUE_BAND`` by what this franchise weighs: a role it still has to fill,
+    the XI it fields (4/1/3/3), depth it doesn't need, its personality, the
+    last places in its squad, a little jitter. So prices follow rating — a
+    better player goes for more — while the purse it has left, and the
+    reserve it keeps to finish a legal squad, decide whether it can afford
+    him at all. The IPL record (``RECORD_PRICE``) caps it.
     """
     ceiling = max_bid(state, team, c)
     base = base_price(c["rating"])
@@ -714,37 +790,47 @@ def ai_value(state, team, c, rng, *, accelerated=False):
     role_owed = owed.get(c["category"], 0) > 0
     counts = role_counts(state, team)
 
-    slots = max(1, target - size)
-    per_slot = _spendable(state, team, c) / slots
-    # Quality weight: ~3.5 slots' money for the very best, ~1 for a good
-    # regular, ~0.3 for a filler.
-    weight = 0.3 + 3.2 * (star ** 2) * pers["star_bias"]
-    if slots <= 2:
-        # The last places in the squad: spend what is left on them.
-        weight = max(weight, 1.4)
     if size >= target:
         # Squad planned out — only a real upgrade tempts it.
         if star < 0.6 or rng.random() > 0.35:
             return 0
-        weight *= 0.5
+    mod = pers["mult"]
     shape_want = XI_TARGET[c["category"]]
+    shape_short = counts[c["category"]] < shape_want
     if role_owed:
-        weight *= 1.2
-    elif counts[c["category"]] < shape_want:
-        # Not compulsory, but the XI the AI fields (4/1/3/3) needs him.
-        weight *= 1.15
-    elif counts[c["category"]] >= max(ROLE_MIN[c["category"]], shape_want) + 2 and star < 0.6:
-        # A fourth or fifth of a role it already has is depth, not a priority.
-        weight *= 0.55
+        mod *= 1.1
+    elif shape_short:
+        mod *= 1.1             # the XI it fields (4/1/3/3) needs him
+    elif counts[c["category"]] >= max(ROLE_MIN[c["category"]], shape_want) + 2:
+        mod *= 0.88            # depth in a role it already has
     if pers is PERSONALITIES["moneyball"] and 0.3 <= star < 0.65:
-        weight *= 1.25     # undervalued squad players are its whole plan
+        mod *= 1.08            # undervalued squad players are its whole plan
+    if max(1, target - size) <= 2:
+        # The last places in its squad: no point saving the money.
+        mod *= 1.12
+    # A franchise with more money per place still to fill than the league's
+    # average bids harder, one running dry holds back — so the money is
+    # spent across the league instead of pooling in one or two purses.
+    mod *= _richness(state, team)
+    mod *= rng.uniform(0.92, 1.08)
+    mod = max(VALUE_BAND[0], min(VALUE_BAND[1], mod))
 
-    value = per_slot * weight * _spend_drive(state) * pers["mult"] * rng.uniform(0.85, 1.15)
-    value = min(value, RECORD_PRICE * rng.uniform(0.85, 1.0))
-    value = min(int(value), ceiling)
-    if (role_owed or size < SQUAD_MIN) and ceiling >= base:
-        # A side that still needs bodies never lets one go for nothing.
+    value = fair_price(state, c["rating"]) * mod
+    # Keep money back for the rest of the squad it plans — a franchise that
+    # blows everything on three stars ends up with twelve players.
+    still_to_buy = max(0, target - size - 1)
+    plan_reserve = still_to_buy * fair_price(state, PLAN_SLOT_RATING)
+    affordable = max(0, int(t["purse"]) - plan_reserve)
+    value = min(int(value), RECORD_PRICE, ceiling, affordable)
+    if (role_owed or shape_short or size < SQUAD_MIN) and ceiling >= base:
+        # A side that still needs bodies — or this role for its XI — never
+        # lets one go for nothing.
         value = max(value, base)
+    elif value < base and size < target and \
+            base <= int(t["purse"]) - MIN_BASE * still_to_buy:
+        # Behind its plan and short of money for anyone dearer: it still
+        # fills out its squad with base-price signings.
+        value = base
     return value if value >= base else 0
 
 
@@ -1153,6 +1239,35 @@ def autofill(state):
             if pick is None:
                 break
             price = min(base_price(pick["rating"]), max(0, state["teams"][name]["purse"]))
+            _sign(state, name, pick["id"], price, HOW_AUTOFILL)
+            spare.remove(pick)
+            made.append((name, pick["id"], price))
+    # The AI sides also complete the shape of the XI they field (4/1/3/3),
+    # then fill out to the squad size they planned, with base-price signings
+    # from the unsold players while they have room and the money.
+    for name in state["team_order"]:
+        if name == state["user_team"]:
+            continue
+        for role, want in XI_TARGET.items():
+            while role_counts(state, name)[role] < want:
+                purse = int(state["teams"][name]["purse"])
+                pick = next((c for c in spare if c["category"] == role
+                             and can_add(state, name, c)
+                             and base_price(c["rating"]) <= purse), None)
+                if pick is None:
+                    break
+                price = base_price(pick["rating"])
+                _sign(state, name, pick["id"], price, HOW_AUTOFILL)
+                spare.remove(pick)
+                made.append((name, pick["id"], price))
+        target = int(_personality(state, name)["target"])
+        while len(state["teams"][name]["squad"]) < target:
+            purse = int(state["teams"][name]["purse"])
+            pick = next((c for c in spare if can_add(state, name, c)
+                         and base_price(c["rating"]) <= purse), None)
+            if pick is None:
+                break
+            price = base_price(pick["rating"])
             _sign(state, name, pick["id"], price, HOW_AUTOFILL)
             spare.remove(pick)
             made.append((name, pick["id"], price))
