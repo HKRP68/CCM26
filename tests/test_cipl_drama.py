@@ -338,7 +338,7 @@ class ChatTests(unittest.TestCase):
         self.assertIn("PRESSURE DROP", card)
         self.assertIn("Smith puts down <b>Kohli</b> on <b>23</b>", card)
 
-    def test_over_summary_lists_pressure_and_sledges(self):
+    def test_over_summary_lists_pressure_but_not_sledges(self):
         lines = cp._drama_summary_lines({
             "pressure_moments": {"wides": 2, "noballs": 0, "drops": 1,
                                  "mixups": 1, "misfields": 0},
@@ -347,8 +347,16 @@ class ChatTests(unittest.TestCase):
         })
         text = "\n".join(lines)
         self.assertIn("2 wides · 1 drop · 1 mix-up", text)
-        self.assertIn("Heated words", text)
-        self.assertIn("&lt;smiles&gt;", text)
+        # Sledging goes out as its own message, never in the over card.
+        self.assertNotIn("Heated words", text)
+        self.assertNotIn("smiles", text)
+
+    def test_sledge_card_escapes_and_flags_a_fight(self):
+        card = cp._sledge_card({"lines": ["B: \"Hello\"", "A <smiles>"]})
+        self.assertIn("Heated words", card)
+        self.assertIn("&lt;smiles&gt;", card)
+        fight = cp._sledge_card({"lines": ["x"], "escalated": True})
+        self.assertIn("Verbal fight", fight)
 
     def test_made_them_pay_line(self):
         out = cp._paid_for_drop_lines({}, [

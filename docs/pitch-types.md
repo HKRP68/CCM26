@@ -338,3 +338,6 @@ They never touch /sim, /playmatch or the bot matches.
   fired up (more boundaries, more risk) or rattled (more dots and wickets)
   for six balls. Which one depends on batter rating against bowler rating,
   plus luck.
+  Each exchange goes out as its own chat message ("🗣️ Heated words!", or
+  "⚡ Verbal fight!"), never inside the over summary card. It also shows in
+  the commentary block and the Mini App feed.

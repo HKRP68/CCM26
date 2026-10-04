@@ -3706,6 +3706,14 @@ def _drop_card(state, drop):
     return "\n".join(lines)
 
 
+def _sledge_card(sledge):
+    """One on-field exchange as its own chat message (HTML)."""
+    head = ("⚡ <b>Verbal fight!</b>" if sledge.get("escalated")
+            else "🗣️ <b>Heated words!</b>")
+    body = "\n".join(html.escape(str(x)) for x in sledge.get("lines") or [])
+    return f"{head}\n<blockquote>{body}</blockquote>"
+
+
 def _paid_for_drop_lines(state, milestone_events):
     """"Dropped on 23 — and made them pay!" for a fifty/hundred after a life."""
     out = []
@@ -3721,10 +3729,13 @@ def _paid_for_drop_lines(state, milestone_events):
 
 def _announce_drama_async(context, state, summary, milestone_events=None):
     """Post each dropped catch (admin media if configured, else the built-in
-    card) and any 'made them pay' line. Background task; never raises."""
+    card), each sledging exchange, and any 'made them pay' line. Background
+    task; never raises."""
     drops = list((summary or {}).get("drops") or [])
+    sledges = [_sledge_card(sl) for sl in (summary or {}).get("sledges") or []
+               if sl.get("lines")]
     paid = _paid_for_drop_lines(state, milestone_events)
-    if not drops and not paid:
+    if not drops and not sledges and not paid:
         return None
     chat_id = state["chat_id"]
     cards = [(d, _drop_card(state, d)) for d in drops]
@@ -3747,6 +3758,9 @@ def _announce_drama_async(context, state, summary, milestone_events=None):
                 if not sent:
                     await context.bot.send_message(chat_id=chat_id, text=card,
                                                    parse_mode="HTML")
+            for card in sledges:
+                await context.bot.send_message(chat_id=chat_id, text=card,
+                                               parse_mode="HTML")
             if paid:
                 await context.bot.send_message(chat_id=chat_id,
                                                text="\n".join(paid),
@@ -3921,13 +3935,8 @@ def _drama_summary_lines(summary):
     for d in (summary or {}).get("drops") or []:
         out.append(f"🫳 Dropped: {html.escape(str(d.get('batter', '')))} on "
                    f"{d.get('batter_runs', 0)} (by {html.escape(str(d.get('fielder', '')))})")
-    sledges = (summary or {}).get("sledges") or []
-    if sledges:
-        out.append("")
-        out.append("🗣️ <b>Heated words!</b>")
-        for sl in sledges:
-            body = "\n".join(html.escape(str(x)) for x in sl.get("lines") or [])
-            out.append(f"<blockquote>{body}</blockquote>")
+    # Sledging is deliberately NOT here: each exchange goes out as its own
+    # message (see _announce_drama_async), so the over card stays a scorecard.
     return out
 
 
