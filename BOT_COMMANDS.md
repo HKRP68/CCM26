@@ -285,6 +285,7 @@ CL Tour and The Hundred matches always play their full length.
 
 | Command | Aliases | What it does |
 |---------|---------|--------------|
+| `/tourhelp` | `/thelp` `/tournamenthelp` | **Every tournament command on one card** — play, follow, stats, draft (admins also see the admin commands) 📖 |
 | `/lptour` | `/lptplay` | Play your tournament fixture (counts as the official result) 🏆 |
 | `/lpt` | `/lptournament` | Tournament front page — table, fixtures, teams 🏆 |
 | `/lptable` | `/lptpoints` | Points table (P W L T · Pts · NRR) |
@@ -298,6 +299,7 @@ Admin commands for running one: [Appendix B](#appendix-b--admin--owner-commands)
 
 | Command | Aliases | What it does |
 |---------|---------|--------------|
+| `/tourhelp` | `/thelp` `/tournamenthelp` | Every tournament command on one card 📖 |
 | `/ctour` | `/ctournament` | Tournament front page |
 | `/cttable` | `/ctpoints` | Points table |
 | `/ctfixtures` | `/ctfix` | The schedule, one round at a time — played matches struck through |
@@ -1075,6 +1077,7 @@ admin panel, but the commands are not registered.
 | `/tn` | `/teamname` |
 | `/tours` | `/mytours` |
 | `/tpts` | `/tpoints` 🔒 |
+| `/thelp`, `/tournamenthelp` | `/tourhelp` |
 | `/tsimulate` | `/tsim` 🔒 |
 | `/tptsclear` | `/tpointsclear` 🔒 |
 | `/tr` | `/trade` |

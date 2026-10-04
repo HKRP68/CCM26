@@ -219,7 +219,8 @@ def overview_blocks(session, tour):
         blocks.append(R.pullquote(["🥇 ", R.bold(champion.name or "—")],
                                   caption="Champion"))
     blocks.append(R.footer(["Play a fixture: reply to your opponent with ",
-                            R.code("/lptour")]))
+                            R.code("/lptour"), " · All tournament commands: ",
+                            R.code("/tourhelp")]))
     return blocks
 
 

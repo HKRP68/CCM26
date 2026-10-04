@@ -2256,6 +2256,12 @@ def main():
         app.add_handler(CommandHandler(["tratingrule", "tratingrules"], tratingrule_handler))
         app.add_handler(CommandHandler(["tseasons", "tseason"], tseasons_handler))
         app.add_handler(CommandHandler(["tsim", "tsimulate"], tsim_handler))
+        # /tourhelp — every tournament command on one card (admin sections for
+        # bot admins). Advertised from /commands and the tournament hubs: the
+        # slash menus are at Telegram's 100-command ceiling.
+        from handlers.tournament_help import tourhelp_handler
+        app.add_handler(CommandHandler(["tourhelp", "thelp", "tournamenthelp"],
+                                       tourhelp_handler))
         app.add_handler(CallbackQueryHandler(tsim_callback,
                                              pattern=r"^" + CB_SIM))
 

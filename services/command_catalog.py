@@ -66,6 +66,7 @@ COMMAND_CATEGORIES = (
         '/halloffame /hof - All-time records: top scores, best figures, streaks 🏛️',
     )),
     ('🗓 Tournaments & draft', (
+        '/tourhelp /thelp - Every tournament command on one card 📖',
         '/lptour @user - Play your Lets Play Tournament fixture (official result)',
         '/lpt - Lets Play Tournament hub: table, fixtures, teams',
         '/lptable /lptfixtures /lptteams /lptstats - Tournament table, schedule, field, leaders',

@@ -686,6 +686,7 @@ def render_overview(session, tour):
     if champion:
         out += ["", f"🥇 <b>Champion:</b> {escape(champion.name or '—')}"]
     out.append("━━━━━━━━━━━━━━━━━━━")
+    out.append("All tournament commands: /tourhelp")
     return "\n".join(out)
 
 
