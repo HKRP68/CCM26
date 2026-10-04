@@ -199,12 +199,14 @@ class LockedPitchTests(unittest.TestCase):
 
     def test_the_fixture_surface_is_found_from_the_team_names(self):
         import handlers.challenge as challenge
-        draft = _draft(turn="complete", host_team="Alpha", target_team="Bravo",
+        # Bravo v Charlie is the Round 1 fixture (Alpha has the bye), so it is
+        # the one open while the schedule is released round by round.
+        draft = _draft(turn="complete", host_team="Bravo", target_team="Charlie",
                        tournament_id=self.tour_id)
         pitch, home = challenge._resolve_fixture_venue(draft)
         from services.league_schedule_service import FIXTURE_PITCHES
         self.assertIn(pitch, FIXTURE_PITCHES)
-        self.assertIn(home, ("Alpha", "Bravo"))
+        self.assertIn(home, ("Bravo", "Charlie"))
 
     def test_a_non_tournament_draft_has_nothing_to_look_up(self):
         import handlers.challenge as challenge

@@ -2243,6 +2243,7 @@ def main():
             tpoints_handler, tpointsclear_handler, taddmatch_handler,
             taddmatch_callback, tfixsync_handler, CB_IMPORT,
             tratingrule_handler, tseasons_handler,
+            tsim_handler, tsim_callback, CB_SIM,
         )
         app.add_handler(CommandHandler(["tpoints", "tpts"], tpoints_handler))
         app.add_handler(CommandHandler(["tpointsclear", "tptsclear"],
@@ -2254,6 +2255,15 @@ def main():
         app.add_handler(CommandHandler(["tfixsync", "tfixheal"], tfixsync_handler))
         app.add_handler(CommandHandler(["tratingrule", "tratingrules"], tratingrule_handler))
         app.add_handler(CommandHandler(["tseasons", "tseason"], tseasons_handler))
+        app.add_handler(CommandHandler(["tsim", "tsimulate"], tsim_handler))
+        # /tourhelp — every tournament command on one card (admin sections for
+        # bot admins). Advertised from /commands and the tournament hubs: the
+        # slash menus are at Telegram's 100-command ceiling.
+        from handlers.tournament_help import tourhelp_handler
+        app.add_handler(CommandHandler(["tourhelp", "thelp", "tournamenthelp"],
+                                       tourhelp_handler))
+        app.add_handler(CallbackQueryHandler(tsim_callback,
+                                             pattern=r"^" + CB_SIM))
 
         # ── Tournament Draft ─────────────────────────────────────────
         # Teams pick their squads live in one bound group chat; the finished

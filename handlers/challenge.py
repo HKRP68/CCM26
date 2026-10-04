@@ -2223,23 +2223,35 @@ async def challenge_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session.close()
 
 
-def _fixture_open_for_pair(tournament_id, name1, name2):
-    """True if the two team names still have an open scheduled fixture.
+def _fixture_block_reason(tournament_id, name1, name2):
+    """Why these two team names can't play a fixture now, or None if they can.
 
-    Returns True (unrestricted) when the tournament has no generated schedule, so
-    free-play tournaments behave exactly as before.
+    Returns None (unrestricted) when the tournament has no generated schedule, so
+    free-play tournaments behave exactly as before. A pair whose fixture sits in
+    a league round that hasn't opened yet is told which round is being played.
     """
     if not tournament_id or not name1 or not name2:
-        return True
+        return None
     from services import league_schedule_service
-    from models import Tournament
+    from models import Tournament, TournamentTeam
     session = get_session()
     try:
         tour = session.get(Tournament, int(tournament_id))
         if not tour or not tour.schedule_generated:
-            return True
+            return None
         opts = league_schedule_service.remaining_opponent_names(session, tournament_id, name1)
-        return name2 in opts
+        if name2 in opts:
+            return None
+        ids = {r.name: r.id for r in session.query(TournamentTeam)
+               .filter(TournamentTeam.tournament_id == int(tournament_id),
+                       TournamentTeam.name.in_([name1, name2])).all()}
+        if name1 in ids and name2 in ids:
+            locked = league_schedule_service.round_lock_message(
+                session, tournament_id, ids[name1], ids[name2])
+            if locked:
+                return locked
+        return (f"No scheduled fixture left between {name1} and {name2}. "
+                "Pick a team they're still scheduled to play.")
     finally:
         session.close()
 
@@ -2612,11 +2624,9 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
     # what enforces "a team can't play again once its match is done".
     if turn == "target" and draft.get("is_tournament") and draft.get("tournament_id"):
         host_team = draft.get("host_team")
-        if not _fixture_open_for_pair(draft.get("tournament_id"), host_team, selected_team):
-            await query.answer(
-                f"No scheduled fixture left between {host_team} and {selected_team}. "
-                "Pick a team they're still scheduled to play.",
-                show_alert=True)
+        blocked = _fixture_block_reason(draft.get("tournament_id"), host_team, selected_team)
+        if blocked:
+            await query.answer(blocked[:200], show_alert=True)
             return
 
     if turn == "host" and draft.get("vs_bot"):

@@ -285,10 +285,11 @@ CL Tour and The Hundred matches always play their full length.
 
 | Command | Aliases | What it does |
 |---------|---------|--------------|
+| `/tourhelp` | `/thelp` `/tournamenthelp` | **Every tournament command on one card** — play, follow, stats, draft (admins also see the admin commands) 📖 |
 | `/lptour` | `/lptplay` | Play your tournament fixture (counts as the official result) 🏆 |
 | `/lpt` | `/lptournament` | Tournament front page — table, fixtures, teams 🏆 |
 | `/lptable` | `/lptpoints` | Points table (P W L T · Pts · NRR) |
-| `/lptfixtures` | `/lptfix` | Full fixture list, with *your* next matches pulled out |
+| `/lptfixtures` | `/lptfix` | This round's fixtures and the results so far, with *your* next matches pulled out — later rounds open as each round finishes |
 | `/lptteams` | — | Who is in the tournament |
 | `/lptstats` | — | Leaderboards — runs, wickets, sixes, average, economy (top 25) |
 
@@ -298,9 +299,10 @@ Admin commands for running one: [Appendix B](#appendix-b--admin--owner-commands)
 
 | Command | Aliases | What it does |
 |---------|---------|--------------|
+| `/tourhelp` | `/thelp` `/tournamenthelp` | Every tournament command on one card 📖 |
 | `/ctour` | `/ctournament` | Tournament front page |
 | `/cttable` | `/ctpoints` | Points table |
-| `/ctfixtures` | `/ctfix` | The schedule — played matches struck through |
+| `/ctfixtures` | `/ctfix` | The schedule, one round at a time — played matches struck through |
 | `/ctteams` | — | The participating teams and who owns them |
 | `/ctinjuries` | `/ctinjury` | Who is ruled out injured, and for how many more matches 🚑 |
 | `/clsd` | `/clschedule` `/ctsd` | One team's schedule: standing, form, next matches, results |
@@ -859,7 +861,7 @@ overdraw somebody is refused by name.
 | `/lptrename <telegram_id> \| New Name` | Rename a participant's team |
 | `/lptsync` | Resolve placeholder names from Telegram accounts |
 | `/lptschedule [single\|double]` | Generate the round-robin fixture list |
-| `/lptknockout [top4\|playoffs\|knockout]` | Seed the playoff bracket from the table |
+| `/lptknockout [top4\|playoffs\|knockout]` | Seed the playoff bracket from the table now (it seeds itself when the last league match is done) |
 | `/lptstart` · `/lptpause` · `/lptresume` | Run the tournament |
 | `/lptcomplete` · `/lptcancel` | Finish or cancel it |
 | `/lptreset` | Clear every result, keeping teams and fixtures |
@@ -873,6 +875,7 @@ overdraw somebody is refused by name.
 | `/tpointsclear <TEAM>` | Clear a team's points adjustment |
 | `/taddmatch <match number>` · `/addmatch` *(reply to a scorecard)* | Record a fixture played off the bot |
 | `/tfixsync` | Un-stick fixtures still showing as live |
+| `/tsim` · `/tsim <match no> <1\|2\|random\|team>` · `/tsim round` | Simulate a match nobody will play — team 1 wins, team 2 wins or a random winner, with a believable score line (marked *simulated*). Bare `/tsim` lists the open round with buttons; `/tsim round` settles every unplayed match in it at random. Also the 🎲 Simulate button on the admin Schedule page |
 | `/tseasons` · `/tseasons 2 \| 3` | Season links. Bare lists 🟢 **running** and ✅ **completed** tournaments (📦 = deleted, stats kept), each numbered. `/tseasons 2 \| 3` — running #2's **Total Season Stats** adds completed #3; `2 \| 3 5` several; `2 \| -3` unlink; `2 \| auto` back to every season in the league; `/tseasons 2` shows its links. Also the 🔗 Link seasons card on the admin Tournaments page |
 | `/tratingrule [#id] <max rating> <min players>` | Tournament rating rule — `/tratingrule 83 3`: every Playing XI must field at least 3 players rated 83 or lower (bot XIs too). `/tratingrule off 83`, `/tratingrule clear`; bare lists it. Also on the tournament's admin page |
 | `/remindmatch [team] [vs team] [force]` | Nudge two teams to play their pending fixture |
@@ -1074,6 +1077,8 @@ admin panel, but the commands are not registered.
 | `/tn` | `/teamname` |
 | `/tours` | `/mytours` |
 | `/tpts` | `/tpoints` 🔒 |
+| `/thelp`, `/tournamenthelp` | `/tourhelp` |
+| `/tsimulate` | `/tsim` 🔒 |
 | `/tptsclear` | `/tpointsclear` 🔒 |
 | `/tr` | `/trade` |
 | `/trep` | `/traitreplace` |

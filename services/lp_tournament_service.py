@@ -486,6 +486,10 @@ def check_pair(session, tour, host_tg_id, guest_tg_id):
         fixture = league_schedule_service.find_open_fixture(
             session, tour.id, host_team.id, guest_team.id)
         if fixture is None:
+            locked = league_schedule_service.round_lock_message(
+                session, tour.id, host_team.id, guest_team.id)
+            if locked:
+                raise LPTError(locked + " Check /lptfixtures for this round.")
             raise LPTError(
                 f"There's no fixture left between {host_team.name} and "
                 f"{guest_team.name} in “{tour.name}”. "
@@ -598,6 +602,12 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=None):
         header.append("No schedule has been generated — this tournament is "
                       "free-play: any two entered players can start /lptour.")
         return "\n".join(header)
+    from services import league_schedule_service
+    fixtures, locked, progress = league_schedule_service.split_open_round(
+        session, tour.id, fixtures)
+    banner = league_schedule_service.round_banner(progress, locked)
+    if banner:
+        header.append(f"🔵 <b>{banner}</b>")
 
     def _slot(team_id, label):
         if team_id and team_id in names:
@@ -629,7 +639,8 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=None):
     out = list(header)
     if my_lines:
         out += ["", "<b>Your next matches</b>"] + my_lines[:8]
-    out += ["", f"<b>Full schedule</b> · {len(all_lines)} matches"]
+    title = "This round & results" if progress else "Full schedule"
+    out += ["", f"<b>{title}</b> · {len(all_lines)} matches"]
     out += all_lines[:limit]
     rest = all_lines[limit:]
     if rest:
@@ -683,5 +694,6 @@ def render_overview(session, tour):
     if champion:
         out += ["", f"🥇 <b>Champion:</b> {escape(champion.name or '—')}"]
     out += ["━━━━━━━━━━━━━━━━━━━",
-            "Play a fixture: reply to your opponent with <code>/lptour</code>"]
+            "Play a fixture: reply to your opponent with <code>/lptour</code>",
+            "All tournament commands: /tourhelp"]
     return "\n".join(out)

@@ -48,3 +48,21 @@
   <p style="color:var(--muted);font-size:.76rem;margin:0;">Overs use cricket notation (<code>19.3</code>). Updates points table &amp; NRR; per-player stats come from bot-played matches.</p>
 </form>
 {% endmacro %}
+
+{# Quick "simulate" for a scheduled fixture nobody will play: pick the winner (or
+   random) and a believable score line is generated. Needs `t` and `tt_map`. #}
+{% macro simulate_form(fx) %}
+<form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="inline-form"
+      onsubmit="return confirm('Simulate this fixture? It is recorded as a result (marked simulated) and the table updates.');">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  {% if return_to %}<input type="hidden" name="return_to" value="{{ return_to }}">{% endif %}
+  <input type="hidden" name="action" value="simulate_result">
+  <input type="hidden" name="fixture_id" value="{{ fx.id }}">
+  <select name="outcome">
+    <option value="1">{{ tt_map[fx.team1_id].name if tt_map.get(fx.team1_id) else 'Team 1' }} wins</option>
+    <option value="2">{{ tt_map[fx.team2_id].name if tt_map.get(fx.team2_id) else 'Team 2' }} wins</option>
+    <option value="random" selected>🎲 Random winner</option>
+  </select>
+  <button class="action-btn" type="submit" style="width:auto;">🎲 Simulate</button>
+</form>
+{% endmacro %}
