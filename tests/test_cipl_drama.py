@@ -378,6 +378,32 @@ class ChatTests(unittest.TestCase):
         s["last_over_drama"] = {}
         self.assertNotIn("Pressure", cp._commentary_block(s))
 
+    def test_sledge_card_escapes_and_flags_a_fight(self):
+        card = cp._sledge_card({"lines": ['B: "Hello"', "A <smiles>"]})
+        self.assertIn("Heated words", card)
+        self.assertIn("&lt;smiles&gt;", card)
+        fight = cp._sledge_card({"lines": ["x"], "escalated": True})
+        self.assertIn("Verbal fight", fight)
+
+    def test_sledging_is_sent_as_its_own_message(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+        context = MagicMock()
+        context.bot.send_message = AsyncMock()
+        summary = {"drops": [], "sledges": [{"lines": ["A <smiles>"]}]}
+        state = dict(self._state(), chat_id=5)
+
+        async def _go():
+            with patch("services.event_media_service.fire_event_media",
+                       AsyncMock(return_value=False)):
+                await cp._announce_drama_async(context, state, summary)
+
+        asyncio.run(_go())
+        context.bot.send_message.assert_awaited_once()
+        sent = context.bot.send_message.await_args.kwargs["text"]
+        self.assertIn("Heated words", sent)
+        self.assertIn("&lt;smiles&gt;", sent)
+
     def test_made_them_pay_line(self):
         out = cp._paid_for_drop_lines({}, [
             ("fifty", {"player": "A", "dropped_on": 12}),

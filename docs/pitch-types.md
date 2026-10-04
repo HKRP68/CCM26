@@ -339,6 +339,7 @@ They never touch /sim, /playmatch or the bot matches.
   fired up (more boundaries, more risk) or rattled (more dots and wickets)
   for six balls. Which one depends on batter rating against bowler rating,
   plus luck.
-  Exchanges show in the Approach card's commentary section (marked "⚡ Verbal
-  fight!" when it boils over) and in the Mini App feed, never in the over
-  summary card.
+  Each exchange is posted as its own chat message ("🗣️ Heated words!", or
+  "⚡ Verbal fight!" when it boils over). It is also listed in the Approach
+  card's commentary section and the Mini App feed, never in the over summary
+  card.
