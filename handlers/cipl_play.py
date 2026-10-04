@@ -3706,14 +3706,6 @@ def _drop_card(state, drop):
     return "\n".join(lines)
 
 
-def _sledge_card(sledge):
-    """One on-field exchange as its own chat message (HTML)."""
-    head = ("⚡ <b>Verbal fight!</b>" if sledge.get("escalated")
-            else "🗣️ <b>Heated words!</b>")
-    body = "\n".join(html.escape(str(x)) for x in sledge.get("lines") or [])
-    return f"{head}\n<blockquote>{body}</blockquote>"
-
-
 def _paid_for_drop_lines(state, milestone_events):
     """"Dropped on 23 — and made them pay!" for a fifty/hundred after a life."""
     out = []
@@ -3729,13 +3721,11 @@ def _paid_for_drop_lines(state, milestone_events):
 
 def _announce_drama_async(context, state, summary, milestone_events=None):
     """Post each dropped catch (admin media if configured, else the built-in
-    card), each sledging exchange, and any 'made them pay' line. Background
-    task; never raises."""
+    card) and any 'made them pay' line. Background task; never raises.
+    Sledging and pressure live in the approach card's commentary section."""
     drops = list((summary or {}).get("drops") or [])
-    sledges = [_sledge_card(sl) for sl in (summary or {}).get("sledges") or []
-               if sl.get("lines")]
     paid = _paid_for_drop_lines(state, milestone_events)
-    if not drops and not sledges and not paid:
+    if not drops and not paid:
         return None
     chat_id = state["chat_id"]
     cards = [(d, _drop_card(state, d)) for d in drops]
@@ -3758,9 +3748,6 @@ def _announce_drama_async(context, state, summary, milestone_events=None):
                 if not sent:
                     await context.bot.send_message(chat_id=chat_id, text=card,
                                                    parse_mode="HTML")
-            for card in sledges:
-                await context.bot.send_message(chat_id=chat_id, text=card,
-                                               parse_mode="HTML")
             if paid:
                 await context.bot.send_message(chat_id=chat_id,
                                                text="\n".join(paid),
@@ -3921,22 +3908,35 @@ def _costliest_drop_line(state):
             f"{drop.get('batter_runs', 0)} — it cost {cost} more runs.")
 
 
-def _drama_summary_lines(summary):
-    """Pressure mistakes and on-field chirp from the over, for its summary."""
+_PRESSURE_LABELS = (("wides", "wide", "wides"), ("noballs", "no-ball", "no-balls"),
+                    ("drops", "drop", "drops"), ("misfields", "misfield", "misfields"),
+                    ("mixups", "mix-up", "mix-ups"))
+
+
+def _pressure_text(pm):
+    """``2 wides · 1 drop`` from an over's pressure counts, or ''."""
+    pm = pm or {}
+    return " · ".join(f"{pm[k]} {one if pm[k] == 1 else many}"
+                      for k, one, many in _PRESSURE_LABELS if pm.get(k))
+
+
+def _drama_rows(state):
+    """The last over's pressure mistakes, dropped catches and sledging, as
+    plain-text lines for the approach card's commentary section."""
+    drama = state.get("last_over_drama") or {}
     out = []
-    pm = (summary or {}).get("pressure_moments") or {}
-    labels = (("wides", "wide", "wides"), ("noballs", "no-ball", "no-balls"),
-              ("drops", "drop", "drops"), ("misfields", "misfield", "misfields"),
-              ("mixups", "mix-up", "mix-ups"))
-    parts = [f"{pm[k]} {one if pm[k] == 1 else many}"
-             for k, one, many in labels if pm.get(k)]
-    if parts:
-        out.append("😰 <b>Pressure:</b> " + " · ".join(parts))
-    for d in (summary or {}).get("drops") or []:
-        out.append(f"🫳 Dropped: {html.escape(str(d.get('batter', '')))} on "
-                   f"{d.get('batter_runs', 0)} (by {html.escape(str(d.get('fielder', '')))})")
-    # Sledging is deliberately NOT here: each exchange goes out as its own
-    # message (see _announce_drama_async), so the over card stays a scorecard.
+    pressure = _pressure_text(drama.get("pressure"))
+    if pressure:
+        out.append(f"😰 Pressure: {pressure}")
+    for d in drama.get("drops") or []:
+        out.append(f"🫳 Dropped: {d.get('batter', '')} on {d.get('batter_runs', 0)}"
+                   f" (by {d.get('fielder', '')})")
+    for sl in drama.get("sledges") or []:
+        lines = [str(x) for x in sl.get("lines") or []]
+        if not lines:
+            continue
+        head = "⚡ Verbal fight! " if sl.get("escalated") else "🗣️ "
+        out.append(head + " / ".join(lines))
     return out
 
 
@@ -3969,7 +3969,6 @@ def _render_over_summary(state, summary):
         f"🎳 {summary['bowler']['name']}: {summary['bowler_figures']}",
         f"{arrow} Momentum: {state['bat_team_name']}",
     ]
-    lines += _drama_summary_lines(summary)
     # Approach Interaction System flavour — the name of the special combination
     # the two picks made, or the match-up's one-line character.
     #
@@ -4107,7 +4106,9 @@ _CMT_EMOJI = {
 # Card-type commentary entries the Mini App renders as rich cards. The chat
 # already posts its own end-of-over summary message, so these are skipped in the
 # expandable per-over commentary block to avoid duplicate / empty lines.
-_CMT_SKIP_IN_BLOCK = {"wicket", "end_of_over", "over_complete"}
+_CMT_SKIP_IN_BLOCK = {"wicket", "end_of_over", "over_complete",
+                      # Sledges are listed once, in the drama lines on top.
+                      "sledge"}
 
 
 def _compact_bat_line(player, bat_stats):
@@ -4156,10 +4157,12 @@ def _commentary_rows(state):
 def _commentary_block(state):
     """Last over's ball-by-ball as an expandable Telegram quote (newest first)."""
     rows = _commentary_rows(state)
-    if not rows:
+    drama = _drama_rows(state)
+    if not rows and not drama:
         return ""
-    body = "\n".join(f"{html.escape(over)} {html.escape(text)} {emoji}".rstrip()
-                     for over, text, emoji in rows)
+    body = "\n".join([html.escape(line) for line in drama]
+                     + [f"{html.escape(over)} {html.escape(text)} {emoji}".rstrip()
+                        for over, text, emoji in rows])
     return f'\n🟩 <b>COMMENTARY</b>\n<blockquote expandable>"{body}"</blockquote>'
 
 
@@ -4492,12 +4495,14 @@ def _build_approach_card_blocks(state, prompt):
 
     # ── Last over, ball by ball ──
     cmt = _commentary_rows(state)
-    if cmt:
+    drama = _drama_rows(state)
+    if cmt or drama:
         blocks.append(R.details(
             R.bold(f"🎙 Commentary — last {unit.lower()}"),
-            [R.blockquote([R.paragraph([R.bold(over), "  ", text,
-                                        f"  {emoji}" if emoji else ""])
-                           for over, text, emoji in cmt])]))
+            [R.blockquote([R.paragraph([line]) for line in drama]
+                          + [R.paragraph([R.bold(over), "  ", text,
+                                          f"  {emoji}" if emoji else ""])
+                             for over, text, emoji in cmt])]))
 
     if prompt:
         blocks.append(R.divider())
