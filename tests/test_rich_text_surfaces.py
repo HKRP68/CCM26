@@ -291,9 +291,12 @@ class ChallengeLeagueViewBlockTests(unittest.TestCase, BlockTreeAssertions):
             filter_by=lambda **_kw: SimpleNamespace(
                 order_by=lambda *_a: SimpleNamespace(
                     all=lambda: fixtures))))
+        from services import league_schedule_service
         with patch.object(ctr.V, "teams", return_value=self.teams), \
              patch.object(ctr.tournament_service, "is_team_member",
-                          side_effect=lambda tt, tg: tt.id == 1):
+                          side_effect=lambda tt, tg: tt.id == 1), \
+             patch.object(league_schedule_service, "split_open_round",
+                          side_effect=lambda _s, _t, fxs: (fxs, 0, None)):
             return ctr.fixtures_blocks(session, self.tour, viewer_tg_id=viewer)
 
     def test_played_fixtures_are_struck_through_and_carry_the_result(self):

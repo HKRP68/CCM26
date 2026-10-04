@@ -39,7 +39,8 @@ they operate on the same rows.
 | `/lptrename <telegram_id> \| New Name` | Rename their team |
 | `/lptsync` | Fill in real names for players who have since run `/debut` |
 | `/lptschedule [single\|double]` | Generate the round-robin fixture list |
-| `/lptknockout [top4\|playoffs\|knockout]` | Seed the playoff bracket from the final table |
+| `/lptknockout [top4\|playoffs\|knockout]` | Seed the playoff bracket from the final table now. It also seeds itself once the last league match is done |
+| `/tsim [match no] [1\|2\|random]` · `/tsim round` | Simulate a match nobody will play. See [tournament-table-admin.md §4](tournament-table-admin.md) |
 | `/lptstart` `/lptpause` `/lptresume` `/lptcomplete` `/lptcancel` | Lifecycle |
 | `/lptreset` | Wipe every result, keeping the field and the schedule |
 | `/lptlist` `/lptuse <id>` `/lptdelete <id>` | Switch between tournaments |
@@ -86,7 +87,9 @@ chat, while two players are picking a pitch):
 1. **A tournament must be running.** A draft, paused, completed or cancelled
    tournament starts nothing, and says which it is.
 2. **Both players must be entered.** The refusal names whichever side is missing.
-3. **The pairing must have a fixture left** — but only once a schedule exists.
+3. **The pairing must have a fixture left in the open round.** The schedule opens
+   one round at a time, so a Round 2 fixture waits until every Round 1 match
+   is played or simulated with `/tsim`. This applies only once a schedule exists.
    Leave the schedule ungenerated for a *free-play* tournament, where any two
    entrants may meet any number of times and every result still counts.
 4. **Both sides need a legal Playing XI**, inherited from `/letsplay`, checked

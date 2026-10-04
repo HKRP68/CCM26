@@ -17175,6 +17175,26 @@ def admin_tournament_detail(tournament_id):
                         log_admin(db, "tournament_manual_result", "tournament", t.id,
                                   f"fixture {fx.id}")
                         flash("✅ Result recorded — points table updated.", "success")
+                        if getattr(fx, "_playoffs_created", 0):
+                            flash("🏆 League stage complete — the playoff bracket "
+                                  "was generated.", "success")
+                    except ValueError as ve:
+                        db.rollback()
+                        flash(f"⚠️ {ve}", "error")
+                elif action == "simulate_result":
+                    try:
+                        fx = db.get(TournamentMatch, _int_form("fixture_id"))
+                        if not fx or fx.tournament_id != t.id:
+                            raise ValueError("Fixture not found in this tournament.")
+                        tournament_service.simulate_fixture(
+                            db, fx.id, request.form.get("outcome") or "random")
+                        _tournament_recompute_at.pop(t.id, None)
+                        log_admin(db, "tournament_simulate_result", "tournament", t.id,
+                                  f"fixture {fx.id}: {fx.result_text}")
+                        flash(f"🎲 Simulated — {fx.result_text}", "success")
+                        if getattr(fx, "_playoffs_created", 0):
+                            flash("🏆 League stage complete — the playoff bracket "
+                                  "was generated.", "success")
                     except ValueError as ve:
                         db.rollback()
                         flash(f"⚠️ {ve}", "error")
@@ -17543,7 +17563,9 @@ def admin_tournament_schedule(tournament_id):
         # League-stage-only progress (exclude knockout rows so the count is honest).
         league_total = sum(len(fxs) for _, fxs in rounds)
         league_played = sum(1 for _, fxs in rounds for fx in fxs if fx.status == "completed")
+        open_round = league_schedule_service.current_round(db, t.id)
         return render_template("admin_tournament_schedule.html", t=t, teams=teams,
+                               open_round=open_round,
                                tt_map=tt_map, groups=groups, g_map=g_map,
                                rounds=rounds, fixtures=fixtures, knockout=knockout,
                                pitch_types=league_schedule_service.FIXTURE_PITCHES,

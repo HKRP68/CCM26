@@ -259,6 +259,58 @@ ones it can rescue.
 
 ---
 
+## 4. Round-by-round schedules, simulated matches, playoffs that seed themselves
+
+**One round at a time.** A generated league (CIPL or Lets Play) opens one round
+at a time. `league_schedule_service.current_round` is the lowest league/group
+`round_no` that still has an unfinished fixture. Until every fixture in that
+round is completed, by being played, recorded by hand, imported or simulated,
+the next round's fixtures are:
+
+- **not playable.** `find_open_fixture`, `reserve_fixture` and
+  `remaining_opponents` skip them, so `/lptour` and the CIPL team picker refuse
+  with "That fixture is in Round 3 — Round 2 is still being played."
+- **not shown.** `/ctfixtures`, `/lptfixtures`, `/clsd` and the Mini App list the
+  open round and the results so far, under a "Round 2 of 7 · 3/4 played · 🔒 12
+  matches in later rounds" line. The admin Schedule page still shows every round
+  so it can be edited, and marks them 🔵 open now / 🔒 upcoming.
+
+Fixtures with `round_no` 0 (added by hand) and knockout fixtures are never
+locked. The bracket already gates itself, because a later round's slots read
+TBD. Recording a result looks its fixture up without the lock, so a match that
+was reserved before an admin settled the rest of its round still records.
+
+**Simulating a fixture nobody will play.** Use `/tsim` (bot admins), or the 🎲
+Simulate button on the admin Schedule page:
+
+| Usage | What it does |
+| --- | --- |
+| `/tsim` | The open round's unplayed fixtures, each with ✅ Team 1 · ✅ Team 2 · 🎲 buttons |
+| `/tsim 12 1` · `/tsim 12 2` | Match 12, won by team 1 / team 2 |
+| `/tsim 12 random` | Match 12, either side at random |
+| `/tsim 12 Mumbai` | Match 12, won by the team named |
+| `/tsim round` | Every unplayed fixture in the open round, at random |
+
+`tournament_service.simulate_fixture` builds a believable score line inside the
+tournament's overs. Innings 1 bats its full quota. The chase either gets home
+with wickets and balls in hand or falls short, depending on the winner chosen.
+The result goes through `record_manual_result`, so the table, NRR and bracket
+advancement behave exactly as for a hand-entered result. It is marked
+"(simulated)" on the fixture, and no player stats are written. Only a
+`scheduled` fixture in the open round can be simulated.
+
+**Playoffs seed themselves.** After every recorded result,
+`tournament_service.maybe_auto_knockout` checks four things: the tournament has
+a `knockout_type` (other than a Pure Knockout), its league schedule was
+generated, no bracket exists yet, and every league fixture is complete. If all
+four hold, it generates the bracket from the final table. The result card (or
+the `/tsim` reply) says "🏆 League stage complete — the Playoffs are set!". The
+last match of any other round says "🔓 Round N complete — Round N+1 is now
+open". `/lptknockout` and the website's Generate bracket still work for seeding
+early.
+
+---
+
 ## Where the code is
 
 | what | where |
@@ -268,6 +320,8 @@ ones it can rescue.
 | `bind_fixture_match`, `heal_live_fixtures`, `release_fixture` | `services/league_schedule_service.py` |
 | `adjust_points`, `points_adjust_footnote`, reserved-fixture recording | `services/tournament_service.py` |
 | the scorecard grammar and the import | `services/scorecard_import.py` |
-| the chat commands | `handlers/tournament_admin.py` |
+| the chat commands (incl. `/tsim`) | `handlers/tournament_admin.py` |
+| round lock: `current_round`, `split_open_round`, `round_lock_message` | `services/league_schedule_service.py` |
+| `simulate_fixture`, `maybe_auto_knockout`, `schedule_news` | `services/tournament_service.py` |
 | the dashboard form and route | `templates/admin_tournament_dashboard.html`, `admin.py` |
-| tests | `tests/test_scorecard_import.py`, `tests/test_tournament_table_admin.py`, `tests/test_super_over.py` |
+| tests | `tests/test_scorecard_import.py`, `tests/test_tournament_table_admin.py`, `tests/test_super_over.py`, `tests/test_tournament_rounds_and_sim.py` |

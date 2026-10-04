@@ -4789,6 +4789,12 @@ async def _complete_match(context, mid, state):
                         from services import injury_service
                         injury_news = injury_service.render_report(
                             session, state["tournament_id"], report)
+                    # A finished round opens the next; a finished league seeds
+                    # the playoffs. Say so on the result card.
+                    news = tournament_service.schedule_news(session, tm)
+                    if news:
+                        injury_news = (f"{injury_news}\n\n{news}"
+                                       if injury_news else news)
             except Exception:
                 logger.exception("tournament match recording failed for %s", mid)
 

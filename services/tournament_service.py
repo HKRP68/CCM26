@@ -1240,7 +1240,177 @@ def record_manual_result(session, fixture_id, *,
     if tm.stage == "final" and win_id:
         _champion_news(session, tour, tm)
 
+    tm._playoffs_created = maybe_auto_knockout(session, tm.tournament_id)
+
     logger.info("Manually recorded tournament fixture %s (winner_team=%s)", tm.id, win_id)
+    return tm
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Playoffs that seed themselves, and simulated fixtures
+# ──────────────────────────────────────────────────────────────────────
+
+def maybe_auto_knockout(session, tournament_id):
+    """Seed the playoff bracket once the league stage is finished.
+
+    Runs after every recorded result. Does nothing unless the tournament has a
+    ``knockout_type`` (other than a Pure Knockout, whose bracket *is* the
+    tournament), a generated league schedule, no bracket yet, and every league
+    or group fixture completed. Returns the number of knockout matches created
+    (0 when nothing happened). Never raises: a bracket that can't be built (too
+    few teams, say) is logged, and the result that triggered it still stands.
+    Caller commits.
+    """
+    try:
+        tour = session.get(Tournament, int(tournament_id))
+        if tour is None:
+            return 0
+        ktype = (tour.knockout_type or "").strip()
+        if not ktype or ktype == "pure_knockout":
+            return 0
+        if not tour.schedule_generated or tour.knockout_generated:
+            return 0
+        if not league_stage_complete(session, tour.id):
+            return 0
+        from services import knockout_service
+        with session.begin_nested():
+            created = knockout_service.generate_knockout(session, tour.id)
+        logger.info("League stage of tournament %s complete — auto-seeded %s "
+                    "playoff matches", tour.id, created)
+        return created
+    except ValueError as exc:
+        logger.warning("Could not auto-seed playoffs for tournament %s: %s",
+                       tournament_id, exc)
+    except Exception:
+        logger.exception("Auto playoff seeding failed for tournament %s",
+                         tournament_id)
+    return 0
+
+
+def schedule_news(session, tm):
+    """HTML lines announcing what a just-recorded result unlocked, or "".
+
+    "🏆 Playoffs are set" when it seeded the bracket, otherwise "🔓 Round N
+    complete — Round N+1 is open" when it was the last match of its round.
+    """
+    if tm is None:
+        return ""
+    try:
+        tour = session.get(Tournament, int(tm.tournament_id))
+        fixtures_cmd = ("/lptfixtures" if tournament_kind(tour) == KIND_LETSPLAY
+                        else "/ctfixtures")
+        if getattr(tm, "_playoffs_created", 0):
+            return ("🏆 <b>League stage complete — the Playoffs are set!</b>\n"
+                    f"See {fixtures_cmd} for the bracket.")
+        if (tm.stage or "") not in ("league", "group") or not tm.round_no:
+            return ""
+        from services import league_schedule_service
+        rnd = league_schedule_service.current_round(session, tm.tournament_id)
+        if rnd is not None and rnd > int(tm.round_no):
+            same_round_left = (session.query(TournamentMatch)
+                               .filter(TournamentMatch.tournament_id == tm.tournament_id,
+                                       TournamentMatch.stage.in_(("league", "group")),
+                                       TournamentMatch.round_no == tm.round_no,
+                                       TournamentMatch.status != "completed")
+                               .count())
+            if not same_round_left:
+                return (f"🔓 <b>Round {tm.round_no} complete — Round {rnd} is "
+                        f"now open.</b> See {fixtures_cmd}.")
+        if rnd is None and league_stage_complete(session, tm.tournament_id):
+            return "🏁 <b>League stage complete.</b>"
+    except Exception:
+        logger.exception("schedule_news failed for fixture %s",
+                         getattr(tm, "id", None))
+    return ""
+
+
+SIM_OUTCOMES = ("1", "2", "random")
+
+
+def simulated_scoreline(overs, chaser_wins, rng=None):
+    """A believable ``((r1, w1, b1), (r2, w2, b2))`` for a simulated fixture.
+
+    Innings 1 bats its full quota; the chase either gets there with wickets and
+    balls in hand (``chaser_wins``) or falls short. Scores scale with the overs
+    so a 5-over or 50-over tournament gets sensible totals.
+    """
+    import random as _random
+    rng = rng or _random
+    overs = max(1, int(overs or 20))
+    max_balls = overs * 6
+    per_over = rng.uniform(6.5, 9.5) if overs <= 20 else rng.uniform(5.0, 6.5)
+    r1 = max(overs * 4, int(round(overs * per_over)))
+    w1 = rng.randint(3, 9)
+    b1 = max_balls
+    if chaser_wins:
+        r2 = r1 + rng.randint(1, 6)
+        w2 = rng.randint(1, 8)
+        spare = rng.randint(1, max(1, min(max_balls // 4, 24)))
+        b2 = max(1, max_balls - spare)
+    else:
+        r2 = max(0, r1 - rng.randint(1, max(2, min(40, r1 // 4))))
+        w2 = rng.randint(4, 10)
+        b2 = max_balls if w2 < 10 else rng.randint(max(1, max_balls * 3 // 4), max_balls)
+    return (r1, w1, b1), (r2, w2, b2)
+
+
+def simulate_fixture(session, fixture_id, outcome="random", rng=None):
+    """Settle an unplayed fixture without a match being played. Caller commits.
+
+    ``outcome`` is ``"1"`` (team 1 wins), ``"2"`` (team 2 wins) or ``"random"``.
+    A plausible score line is generated so NRR still moves, the result goes
+    through :func:`record_manual_result` (table, NRR, bracket advancement,
+    champion news) and is marked "(simulated)". Only a scheduled fixture in the
+    open round can be simulated. Returns the fixture; its ``_playoffs_created``
+    says whether this result seeded the playoffs.
+    """
+    import random as _random
+    from services import league_schedule_service
+    rng = rng or _random
+    tm = session.get(TournamentMatch, int(fixture_id))
+    if tm is None:
+        raise ValueError("Fixture not found.")
+    if tm.status == "completed":
+        raise ValueError("That fixture is already completed.")
+    if tm.status != "scheduled":
+        raise ValueError(f"That fixture is '{tm.status}' — only a fixture that "
+                         "hasn't started can be simulated.")
+    if not tm.team1_id or not tm.team2_id:
+        raise ValueError("Both teams must be known before it can be simulated.")
+    rnd = league_schedule_service.current_round(session, tm.tournament_id)
+    if league_schedule_service.is_round_locked(tm, rnd):
+        raise ValueError(f"That fixture is in Round {tm.round_no} — Round {rnd} "
+                         "has to be finished first.")
+
+    choice = str(outcome or "random").strip().lower()
+    if choice not in SIM_OUTCOMES:
+        raise ValueError("Outcome must be 1, 2 or random.")
+    if choice == "random":
+        choice = rng.choice(("1", "2"))
+
+    tour = session.get(Tournament, tm.tournament_id)
+    overs = (tour.overs if tour else None) or 20
+    # Team 1 bats first, so "team 2 wins" is a successful chase.
+    (r1, w1, b1), (r2, w2, b2) = simulated_scoreline(
+        overs, chaser_wins=(choice == "2"), rng=rng)
+
+    def _ov(balls):
+        return f"{balls // 6}.{balls % 6}"
+
+    record_manual_result(
+        session, tm.id,
+        inn1_runs=r1, inn1_wickets=w1, inn1_overs=_ov(b1),
+        inn2_runs=r2, inn2_wickets=w2, inn2_overs=_ov(b2),
+        winner_slot=choice)
+    winner = session.get(TournamentTeam, tm.winner_team_id) if tm.winner_team_id else None
+    if winner is not None:
+        if choice == "2":
+            margin = f"by {10 - w2} wicket{'s' if 10 - w2 != 1 else ''}"
+        else:
+            margin = f"by {r1 - r2} run{'s' if r1 - r2 != 1 else ''}"
+        tm.result_text = f"{winner.name or 'Team'} won {margin} (simulated)"[:300]
+        session.flush()
+    logger.info("Simulated tournament fixture %s → team %s", tm.id, choice)
     return tm
 
 
@@ -1411,6 +1581,9 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     # savepoint, so a news failure cannot cost the match its result.
     if tm.stage == "final" and tm.winner_team_id:
         _champion_news(session, tour, tm)
+
+    # The last league result seeds the playoffs on its own.
+    tm._playoffs_created = maybe_auto_knockout(session, tid)
 
     logger.info("Recorded tournament match for tournament %s (match_id=%s)", tid, match_id)
     return tm

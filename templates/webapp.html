@@ -9431,6 +9431,7 @@ function renderTournament() {
       <div class="tn-meta">${escapeHtml(t.kind_label)} · ${t.teams} teams · ${t.overs} overs${t.format ? ' · ' + escapeHtml(t.format) : ''}</div>
       <div class="tn-progress"><div style="width:${pct}%"></div></div>
       <div class="tn-meta">Match ${t.matches_played} of ${t.matches_total} played${t.league_total && t.league_total !== t.matches_total && t.league_played < t.league_total ? ` · League ${t.league_played}/${t.league_total}` : ''}</div>
+      ${t.round_banner ? `<div class="tn-meta">🔵 ${escapeHtml(t.round_banner)}</div>` : ''}
       ${t.champion ? `<div class="tn-champ">🏆 Champions: ${escapeHtml(t.champion.name)}</div>` : ''}
     </div>`;
   const tabs = `<div class="filters tn-subtabs">${subs.map(([k, label]) =>

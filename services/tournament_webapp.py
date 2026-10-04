@@ -229,6 +229,12 @@ def tournament_payload(session, tour, tg_id=None):
     fixtures = (session.query(TournamentMatch).filter_by(tournament_id=tid)
                 .order_by(TournamentMatch.match_no, TournamentMatch.round_no,
                           TournamentMatch.id).all())
+    # The schedule is released one league round at a time: later rounds are
+    # held back (and counted) until the open round is finished.
+    from services import league_schedule_service
+    all_fixtures = fixtures
+    fixtures, locked, progress = league_schedule_service.split_open_round(
+        session, tid, all_fixtures)
     next_id = next((f.id for f in fixtures
                     if f.status == "scheduled" and f.team1_id and f.team2_id), None)
 
@@ -266,8 +272,14 @@ def tournament_payload(session, tour, tg_id=None):
             "points_no_result": tour.points_no_result,
             "teams": len(teams),
             "league_played": played, "league_total": total,
-            "matches_played": sum(1 for f in fixtures if f.status == "completed"),
-            "matches_total": len(fixtures),
+            "matches_played": sum(1 for f in all_fixtures if f.status == "completed"),
+            "matches_total": len(all_fixtures),
+            "current_round": progress["round"] if progress else None,
+            "rounds_total": progress["rounds"] if progress else None,
+            "round_played": progress["played"] if progress else None,
+            "round_total": progress["total"] if progress else None,
+            "locked_fixtures": locked,
+            "round_banner": league_schedule_service.round_banner(progress, locked),
             "champion": _team_brief(champ),
         },
         "table": table_rows,

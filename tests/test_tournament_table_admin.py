@@ -226,6 +226,11 @@ class StaleFixtureTests(TournamentCase):
         super().setUp()
         from models import User
         self.lss.generate_schedule(self.session, self.tour.id)
+        # These tests reserve pairs from every round; round-by-round release
+        # is covered in test_league_schedule, so unlock the rounds here.
+        from models import TournamentMatch
+        (self.session.query(TournamentMatch)
+         .filter_by(tournament_id=self.tour.id).update({"round_no": 0}))
         self.users = []
         for _ in range(2):
             user = User(telegram_id=next(_TG), username=f"u{next(_TG)}")

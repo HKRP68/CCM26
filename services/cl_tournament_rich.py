@@ -184,6 +184,12 @@ def fixtures_blocks(session, tour, viewer_tg_id=None, limit=None):
             "No schedule has been generated yet — this tournament is "
             "free-play: any two participating teams can start a match."))
         return blocks
+    from services import league_schedule_service
+    fixtures, locked, progress = league_schedule_service.split_open_round(
+        session, tour.id, fixtures)
+    banner = league_schedule_service.round_banner(progress, locked)
+    if banner:
+        blocks.append(R.paragraph(["🔵 ", R.bold(banner)]))
 
     rows = V.teams(session, tour.id)
     names = {tt.id: (tt.name or "—") for tt in rows}
@@ -205,8 +211,9 @@ def fixtures_blocks(session, tour, viewer_tg_id=None, limit=None):
     all_rows = [_fixture_row(fx, names, mine) for fx in fixtures]
     blocks.append(R.table([header] + all_rows[:limit], bordered=True,
                           striped=True, compact=True,
-                          caption=R.bold(f"Full schedule · {len(all_rows)} "
-                                         f"matches")))
+                          caption=R.bold(
+                              f"{'This round & results' if progress else 'Full schedule'}"
+                              f" · {len(all_rows)} matches")))
     rest = all_rows[limit:]
     if rest:
         blocks.append(R.details(
@@ -320,8 +327,14 @@ def team_schedule_blocks(session, tour, team, viewer_tg_id=None, limit=40):
     header = [R.cell(R.bold("#"), header=True, align="center"),
               R.cell(R.bold("OPPONENT"), header=True),
               R.cell(R.bold("STATE"), header=True)]
+    fixtures, locked, _progress = league_schedule_service.split_open_round(
+        session, tour.id, fixtures)
     upcoming = [fx for fx in fixtures if fx.status != "completed"]
     played = [fx for fx in fixtures if fx.status == "completed"]
+    if locked:
+        blocks.append(R.paragraph(R.italic(
+            f"🔒 {locked} more league match{'es' if locked != 1 else ''} in "
+            "later rounds — each round opens once the one before it is done.")))
 
     if upcoming:
         open_rows = [row(fx) for fx in upcoming[:limit]]
@@ -333,6 +346,10 @@ def team_schedule_blocks(session, tour, team, viewer_tg_id=None, limit=40):
             blocks.append(R.details(
                 R.bold(f"👇 {len(rest)} more to play"),
                 [R.table([header] + rest, bordered=True, compact=True)]))
+    elif locked:
+        blocks.append(R.paragraph(R.italic(
+            "Nothing to play this round — the next round opens once every "
+            "match in it is finished.")))
     else:
         blocks.append(R.paragraph(
             R.italic("Nothing left to play — every fixture is done.")))

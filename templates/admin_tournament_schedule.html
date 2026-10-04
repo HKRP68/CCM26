@@ -7,7 +7,7 @@
    tournament is not in the Challenge League list. #}
 {% set list_ep = 'admin_lp_tournaments_list' if t.kind == 'letsplay' else 'admin_tournaments_list' %}
 {% set list_label = 'Lets Play Tournaments' if t.kind == 'letsplay' else 'Tournaments' %}
-{% from "_tournament_macros.html" import team_badge, result_form with context %}
+{% from "_tournament_macros.html" import team_badge, result_form, simulate_form with context %}
 
 {# Per-fixture venue: which side is at home, and the surface the match must be
    played on. The pitch selector only appears when the tournament actually fixes
@@ -123,7 +123,7 @@
     <div class="section-header"><div><h2 class="section-title"><i class="fas fa-list-ol"></i> League Fixtures</h2></div></div>
     <div class="fixtures-grid">
       {% for rno, fxs in rounds %}
-      <div class="round-head">Round {{ rno }}</div>
+      <div class="round-head">Round {{ rno }}{% if open_round and rno == open_round %} · 🔵 open now{% elif open_round and rno > open_round %} · 🔒 upcoming{% endif %}</div>
       {% for fx in fxs %}
       {% set t1 = tt_map.get(fx.team1_id) %}
       {% set t2 = tt_map.get(fx.team2_id) %}
@@ -173,6 +173,7 @@
             {{ venue_controls(fx) }}
             {% if fx.team1_id and fx.team2_id %}
             <details class="rr-toggle"><summary>✍️ Record result</summary>{{ result_form(fx) }}</details>
+            {% if not (open_round and fx.stage in ('league', 'group') and fx.round_no and fx.round_no > open_round) %}{{ simulate_form(fx) }}{% endif %}
             {% endif %}
             <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="inline-form" onsubmit="return confirm('Delete this fixture?');">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule"><input type="hidden" name="action" value="delete_fixture">
@@ -216,6 +217,7 @@
           {{ venue_controls(fx) }}
           {% if fx.team1_id and fx.team2_id %}
           <details class="rr-toggle"><summary>✍️ Record result</summary>{{ result_form(fx) }}</details>
+          {% if not (open_round and fx.stage in ('league', 'group') and fx.round_no and fx.round_no > open_round) %}{{ simulate_form(fx) }}{% endif %}
           {% endif %}
           <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="inline-form" onsubmit="return confirm('Delete this knockout match?');">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule"><input type="hidden" name="action" value="delete_fixture">

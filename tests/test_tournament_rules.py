@@ -467,12 +467,13 @@ class FixtureVenueTests(TournamentCase):
         self.session.commit()
         self.lss.generate_schedule(self.session, self.tour.id)
         self.session.commit()
-        fx = self.lss.fixture_for_pair(self.session, self.tour.id, "Alpha", "Bravo")
+        # Alpha v Delta is a Round 1 fixture, so it is open straight away.
+        fx = self.lss.fixture_for_pair(self.session, self.tour.id, "Alpha", "Delta")
         self.assertIsNotNone(fx)
         pitch, home = self.lss.locked_pitch_for_pair(
-            self.session, self.tour, "Alpha", "Bravo")
+            self.session, self.tour, "Alpha", "Delta")
         self.assertEqual(pitch, fx.pitch_type)
-        self.assertIn(home, ("Alpha", "Bravo"))
+        self.assertIn(home, ("Alpha", "Delta"))
 
     def test_host_mode_reports_no_locked_pitch(self):
         self.lss.generate_schedule(self.session, self.tour.id)

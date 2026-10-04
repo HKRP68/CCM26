@@ -761,3 +761,225 @@ async def _reply_long(update, text):
     # chunk_blocks drops empty blocks; a lone space keeps the blank lines.
     for part in chunk_blocks([line or " " for line in text.split("\n")]):
         await _reply(update, part)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /tsim — settle a fixture that won't be played
+# ──────────────────────────────────────────────────────────────────────
+#
+# Some sides never get round to their match, and a round-by-round schedule
+# can't move on while one fixture sits unplayed. /tsim settles it: team 1 wins,
+# team 2 wins, or a coin toss — with a believable score line so net run rate
+# still moves — and the result is marked "(simulated)" on the fixture list.
+
+CB_SIM = "tsim_"
+
+_SIM_USAGE = (
+    "🎲 <b>Simulate a fixture</b>\n\n"
+    "<code>/tsim</code> — the matches open right now, with buttons\n"
+    "<code>/tsim &lt;match no&gt; 1</code> — team 1 wins\n"
+    "<code>/tsim &lt;match no&gt; 2</code> — team 2 wins\n"
+    "<code>/tsim &lt;match no&gt; random</code> — either side, at random\n"
+    "<code>/tsim &lt;match no&gt; &lt;team name&gt;</code> — that team wins\n"
+    "<code>/tsim round</code> — every unplayed match this round, at random\n\n"
+    "Only a fixture that hasn't started can be simulated. When both a CIPL and a "
+    "Lets Play tournament are running, put the id first: "
+    "<code>/tsim #7 12 2</code>."
+)
+
+# How many fixtures get buttons in one /tsim listing (Telegram keyboards get
+# unwieldy past this; the rest are still simulable by number).
+_SIM_BUTTONS = 12
+
+
+def _open_fixtures(session, tour):
+    """Scheduled fixtures, both sides known, in the round that's open now."""
+    from services import league_schedule_service
+    rows = (session.query(TournamentMatch)
+            .filter_by(tournament_id=tour.id, status="scheduled")
+            .filter(TournamentMatch.team1_id.isnot(None),
+                    TournamentMatch.team2_id.isnot(None))
+            .order_by(TournamentMatch.match_no, TournamentMatch.id).all())
+    rnd = league_schedule_service.current_round(session, tour.id)
+    return [fx for fx in rows
+            if not league_schedule_service.is_round_locked(fx, rnd)]
+
+
+def _sim_tag(fx):
+    return f"M{fx.match_no}" if fx.match_no else f"#{fx.id}"
+
+
+def _sim_line(fx, names):
+    sc1 = f"{fx.inn1_runs}/{fx.inn1_wickets}" if fx.inn1_runs is not None else "—"
+    sc2 = f"{fx.inn2_runs}/{fx.inn2_wickets}" if fx.inn2_runs is not None else "—"
+    return (f"<code>{_sim_tag(fx)}</code> "
+            f"{html.escape(names.get(fx.team1_id, 'TBD'))} {sc1} · "
+            f"{html.escape(names.get(fx.team2_id, 'TBD'))} {sc2}\n"
+            f"   ✅ {html.escape(fx.result_text or 'done')}")
+
+
+def _sim_listing(session, tour):
+    """``(text, keyboard)`` for the fixtures that can be simulated now."""
+    from services import league_schedule_service
+    names = {tt.id: tt.name or "—" for tt in
+             session.query(TournamentTeam).filter_by(tournament_id=tour.id).all()}
+    open_fx = _open_fixtures(session, tour)
+    head = f"🎲 <b>{html.escape(tour.name)}</b> — simulate a fixture"
+    progress = league_schedule_service.round_progress(session, tour.id)
+    banner = league_schedule_service.round_banner(progress, 0)
+    if banner:
+        head += f"\n🔵 {banner}"
+    if not open_fx:
+        return (f"{head}\n\nNothing to simulate — no unplayed fixture with both "
+                "teams set is open right now.", None)
+    lines = [head, ""]
+    buttons = []
+    for fx in open_fx:
+        a, b = names.get(fx.team1_id, "TBD"), names.get(fx.team2_id, "TBD")
+        lines.append(f"<code>{_sim_tag(fx)}</code> {html.escape(a)} vs "
+                     f"{html.escape(b)}")
+        if len(buttons) < _SIM_BUTTONS:
+            buttons.append([
+                InlineKeyboardButton(f"✅ {a[:14]}",
+                                     callback_data=f"{CB_SIM}{fx.id}_1"),
+                InlineKeyboardButton(f"✅ {b[:14]}",
+                                     callback_data=f"{CB_SIM}{fx.id}_2"),
+                InlineKeyboardButton(f"🎲 {_sim_tag(fx)}",
+                                     callback_data=f"{CB_SIM}{fx.id}_random"),
+            ])
+    if len(open_fx) > 1:
+        buttons.append([InlineKeyboardButton(
+            f"🎲 Simulate all {len(open_fx)} at random",
+            callback_data=f"{CB_SIM}round{tour.id}_random")])
+    lines += ["", "Pick the winner for a match, or 🎲 for either side. "
+                  "Or type <code>/tsim &lt;match no&gt; 1|2|random</code>."]
+    return "\n".join(lines), InlineKeyboardMarkup(buttons)
+
+
+def _simulate(session, tour, fixtures, outcome):
+    """Simulate ``fixtures`` in turn; returns the reply text. Caller commits."""
+    names = {tt.id: tt.name or "—" for tt in
+             session.query(TournamentTeam).filter_by(tournament_id=tour.id).all()}
+    done, news = [], []
+    for fx in fixtures:
+        tm = tournament_service.simulate_fixture(session, fx.id, outcome)
+        done.append(_sim_line(tm, names))
+        line = tournament_service.schedule_news(session, tm)
+        if line and line not in news:
+            news.append(line)
+    out = [f"🎲 <b>{html.escape(tour.name)}</b> — "
+           f"{len(done)} fixture{'s' if len(done) != 1 else ''} simulated", ""]
+    out += done
+    if news:
+        out += [""] + news
+    return "\n".join(out)
+
+
+def _sim_outcome(session, tour, fx, token):
+    """``"1"``/``"2"``/``"random"`` from what the admin typed."""
+    t = (token or "").strip().lower()
+    if t in ("1", "2", "random"):
+        return t
+    if t in ("r", "rand", "either", "any", "toss"):
+        return "random"
+    team = _find_team(session, tour, token)
+    if team.id == fx.team1_id:
+        return "1"
+    if team.id == fx.team2_id:
+        return "2"
+    raise ValueError(f"{team.name} isn't playing {_sim_tag(fx)}.")
+
+
+async def tsim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tsim — simulate an unplayed fixture (team 1, team 2 or random)."""
+    if not await _require_admin(update):
+        return
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+            if args and args[0].lower() in ("help", "?"):
+                await _reply(update, _SIM_USAGE)
+                return
+            if not args:
+                text, kb = _sim_listing(session, tour)
+                await _reply(update, text, reply_markup=kb)
+                return
+            if args[0].lower() == "round":
+                fixtures = _open_fixtures(session, tour)
+                if not fixtures:
+                    raise ValueError("Nothing to simulate — no unplayed fixture "
+                                     "is open right now.")
+                outcome = "random"
+            else:
+                tag = args[0].lstrip("mM#")
+                if not tag.isdigit():
+                    raise ValueError(_SIM_USAGE)
+                fx = (session.query(TournamentMatch)
+                      .filter_by(tournament_id=tour.id, match_no=int(tag)).first())
+                if fx is None:
+                    raise ValueError(f"No match number {tag} in {tour.name}.")
+                outcome = _sim_outcome(session, tour, fx,
+                                       " ".join(args[1:]) or "random")
+                fixtures = [fx]
+            text = _simulate(session, tour, fixtures, outcome)
+            session.commit()
+        except ValueError as exc:
+            session.rollback()
+            msg = str(exc)
+            await _reply(update, msg if msg == _SIM_USAGE
+                         else f"⚠️ {html.escape(msg)}")
+            return
+        await _reply(update, text)
+    except Exception:
+        session.rollback()
+        logger.exception("tsim failed")
+        await _reply(update, "⚠️ Couldn't simulate that — check the logs.")
+    finally:
+        session.close()
+
+
+async def tsim_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """A /tsim button: ``tsim_<fixture>_<1|2|random>`` or ``tsim_round<tour>_random``."""
+    query = update.callback_query
+    if query is None:
+        return
+    if not is_admin(query.from_user.id if query.from_user else 0):
+        await query.answer(NOT_ADMIN, show_alert=True)
+        return
+    target, _, outcome = (query.data or "")[len(CB_SIM):].partition("_")
+    session = get_session()
+    try:
+        try:
+            if target.startswith("round"):
+                tour = session.get(Tournament, int(target[len("round"):]))
+                if tour is None:
+                    raise ValueError("That tournament is gone.")
+                fixtures = _open_fixtures(session, tour)
+                if not fixtures:
+                    raise ValueError("Nothing left to simulate this round.")
+            else:
+                fx = session.get(TournamentMatch, int(target))
+                if fx is None:
+                    raise ValueError("That fixture is gone.")
+                tour = session.get(Tournament, fx.tournament_id)
+                fixtures = [fx]
+            text = _simulate(session, tour, fixtures, outcome or "random")
+            session.commit()
+        except ValueError as exc:
+            session.rollback()
+            await query.answer(str(exc)[:200], show_alert=True)
+            return
+    except Exception:
+        session.rollback()
+        logger.exception("tsim callback failed")
+        await query.answer("Couldn't simulate it — check the logs.", show_alert=True)
+        return
+    finally:
+        session.close()
+    await query.answer("Simulated.")
+    msg = query.message
+    if msg is not None:
+        await msg.reply_text(text, parse_mode="HTML",
+                             disable_web_page_preview=True)

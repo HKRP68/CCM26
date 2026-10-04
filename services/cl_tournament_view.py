@@ -139,6 +139,12 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=None):
                    "No schedule has been generated yet — this tournament is "
                    "free-play: any two participating teams can start a match."]
         return "\n".join(header)
+    from services import league_schedule_service
+    fixtures, locked, progress = league_schedule_service.split_open_round(
+        session, tour.id, fixtures)
+    banner = league_schedule_service.round_banner(progress, locked)
+    if banner:
+        header.append(f"🔵 <b>{banner}</b>")
 
     # "Yours" means owner *or* co-owner: a franchise can be run by more than
     # one person, and they all need to see the matches they have to play.
@@ -175,7 +181,8 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=None):
     out = list(header)
     if my_lines:
         out += ["", "<b>Your next matches</b>"] + my_lines[:8]
-    out += ["", f"<b>Full schedule</b> · {len(all_lines)} matches"]
+    title = "This round & results" if progress else "Full schedule"
+    out += ["", f"<b>{title}</b> · {len(all_lines)} matches"]
     out += all_lines[:limit]
     rest = all_lines[limit:]
     if rest:
@@ -360,6 +367,8 @@ def render_team_schedule(session, tour, team, viewer_tg_id=None, limit=40):
                 body += f" · 🌱 {escape(pitch)}"
         return f"<code>{tag}</code> {body}"
 
+    fixtures, locked, _progress = league_schedule_service.split_open_round(
+        session, tour.id, fixtures)
     upcoming = [fx for fx in fixtures if fx.status != "completed"]
     played = [fx for fx in fixtures if fx.status == "completed"]
 
@@ -376,9 +385,15 @@ def render_team_schedule(session, tour, team, viewer_tg_id=None, limit=40):
     if upcoming:
         out += [""] + _section(f"<b>Next up</b> ({len(upcoming)} to play)",
                                upcoming)
+    elif locked:
+        out += ["", "<b>Next up</b>", "<i>Nothing to play this round — the "
+                "next round opens once every match in it is finished.</i>"]
     else:
         out += ["", "<b>Next up</b>", "<i>Nothing left to play — "
                 "every fixture is done.</i>"]
+    if locked:
+        out.append(f"<i>🔒 {locked} more league match"
+                   f"{'es' if locked != 1 else ''} in later rounds.</i>")
     if played:
         # Newest first, so the ones a tap away are the oldest — which is the
         # right way round for a results list, and never drops one.

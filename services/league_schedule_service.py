@@ -769,22 +769,157 @@ def list_fixtures(session, tournament_id):
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Round-by-round play
+# ──────────────────────────────────────────────────────────────────────
+#
+# A generated league is released one round at a time: Round 2 only opens once
+# every Round 1 fixture is completed (played, recorded by hand or simulated).
+# Only the league/group stages are round-locked — a knockout bracket already
+# locks itself, because a later round's slots read TBD until the earlier round
+# is decided. Fixtures with ``round_no`` 0 (added by hand, or rows that predate
+# rounds) are never locked.
+
+LEAGUE_STAGES = ("league", "group")
+
+
+def current_round(session, tournament_id):
+    """The lowest league/group ``round_no`` with an unfinished fixture, or None.
+
+    None means the league stage is over (or there never was one), so nothing is
+    round-locked.
+    """
+    from sqlalchemy import func
+    from models import TournamentMatch
+    return (session.query(func.min(TournamentMatch.round_no))
+            .filter(TournamentMatch.tournament_id == int(tournament_id),
+                    TournamentMatch.stage.in_(LEAGUE_STAGES),
+                    TournamentMatch.status != "completed",
+                    TournamentMatch.round_no > 0)
+            .scalar())
+
+
+def round_progress(session, tournament_id):
+    """``{"round", "rounds", "played", "total"}`` for the open round, or None.
+
+    ``played``/``total`` count the open round's fixtures; ``rounds`` is the
+    highest league round, so a header can say "Round 2 of 7 · 3/4 played".
+    """
+    from sqlalchemy import func
+    from models import TournamentMatch
+    tid = int(tournament_id)
+    rnd = current_round(session, tid)
+    if rnd is None:
+        return None
+    base = (session.query(TournamentMatch)
+            .filter(TournamentMatch.tournament_id == tid,
+                    TournamentMatch.stage.in_(LEAGUE_STAGES)))
+    rows = base.filter(TournamentMatch.round_no == rnd).all()
+    rounds = (session.query(func.max(TournamentMatch.round_no))
+              .filter(TournamentMatch.tournament_id == tid,
+                      TournamentMatch.stage.in_(LEAGUE_STAGES)).scalar()) or rnd
+    return {"round": int(rnd), "rounds": int(rounds),
+            "played": sum(1 for r in rows if r.status == "completed"),
+            "total": len(rows)}
+
+
+def is_round_locked(fx, open_round):
+    """True when ``fx`` belongs to a league round that hasn't opened yet."""
+    if fx is None or open_round is None:
+        return False
+    if (fx.stage or "") not in LEAGUE_STAGES:
+        return False
+    rno = int(fx.round_no or 0)
+    return rno > 0 and rno > int(open_round)
+
+
+def fixture_in_open_round(session, fx):
+    """True when ``fx`` may be played (or simulated) right now."""
+    return not is_round_locked(fx, current_round(session, fx.tournament_id))
+
+
+def _open_round_filter(session, tid):
+    """SQL clause keeping knockout rows, round-0 rows and the open league round."""
+    from sqlalchemy import or_
+    from models import TournamentMatch
+    rnd = current_round(session, tid)
+    if rnd is None:
+        return None
+    return or_(TournamentMatch.stage.notin_(LEAGUE_STAGES),
+               TournamentMatch.round_no <= rnd)
+
+
+def split_open_round(session, tournament_id, fixtures):
+    """``(visible, locked_count, progress)`` for a fixture list about to be shown.
+
+    ``visible`` drops the fixtures of league rounds that haven't opened yet —
+    the schedule is released one round at a time — and ``locked_count`` says how
+    many were held back. ``progress`` is :func:`round_progress` (or None).
+    """
+    progress = round_progress(session, tournament_id)
+    rnd = progress["round"] if progress else None
+    visible = [fx for fx in fixtures if not is_round_locked(fx, rnd)]
+    return visible, len(fixtures) - len(visible), progress
+
+
+def round_banner(progress, locked_count):
+    """One plain-text line describing the open round, or "" when there is none."""
+    if not progress:
+        return ""
+    text = (f"Round {progress['round']} of {progress['rounds']} · "
+            f"{progress['played']}/{progress['total']} played")
+    if locked_count:
+        text += (f" · 🔒 {locked_count} match{'es' if locked_count != 1 else ''}"
+                 f" in later rounds unlock as each round finishes")
+    return text
+
+
+def locked_fixture_for_pair(session, tournament_id, team1_id, team2_id):
+    """The earliest open fixture for a pair, ignoring the round lock, or None.
+
+    Used to explain a refusal: "that fixture is in Round 3 — Round 2 is still
+    being played."
+    """
+    return find_open_fixture(session, tournament_id, team1_id, team2_id,
+                             include_locked=True)
+
+
+def round_lock_message(session, tournament_id, team1_id, team2_id):
+    """A player-facing reason this pair can't play yet, or None."""
+    fx = locked_fixture_for_pair(session, tournament_id, team1_id, team2_id)
+    rnd = current_round(session, tournament_id)
+    if fx is None or not is_round_locked(fx, rnd):
+        return None
+    return (f"That fixture is in Round {fx.round_no} — Round {rnd} is still "
+            "being played. It opens once every Round "
+            f"{rnd} match is finished.")
+
+
+# ──────────────────────────────────────────────────────────────────────
 # Gating helpers (used by the bot)
 # ──────────────────────────────────────────────────────────────────────
 
-def find_open_fixture(session, tournament_id, team1_id, team2_id):
-    """The earliest uncompleted scheduled fixture for an (unordered) pair, or None."""
+def find_open_fixture(session, tournament_id, team1_id, team2_id,
+                      include_locked=False):
+    """The earliest uncompleted scheduled fixture for an (unordered) pair, or None.
+
+    League fixtures in a round that hasn't opened yet are skipped unless
+    ``include_locked``.
+    """
     from sqlalchemy import or_, and_
     from models import TournamentMatch
     tid = int(tournament_id)
     a, b = int(team1_id), int(team2_id)
-    return (session.query(TournamentMatch)
-            .filter_by(tournament_id=tid)
-            .filter(TournamentMatch.status != "completed")
-            .filter(or_(
-                and_(TournamentMatch.team1_id == a, TournamentMatch.team2_id == b),
-                and_(TournamentMatch.team1_id == b, TournamentMatch.team2_id == a)))
-            .order_by(TournamentMatch.round_no, TournamentMatch.match_no).first())
+    q = (session.query(TournamentMatch)
+         .filter_by(tournament_id=tid)
+         .filter(TournamentMatch.status != "completed")
+         .filter(or_(
+             and_(TournamentMatch.team1_id == a, TournamentMatch.team2_id == b),
+             and_(TournamentMatch.team1_id == b, TournamentMatch.team2_id == a))))
+    if not include_locked:
+        clause = _open_round_filter(session, tid)
+        if clause is not None:
+            q = q.filter(clause)
+    return q.order_by(TournamentMatch.round_no, TournamentMatch.match_no).first()
 
 
 def _team_id_by_name(session, tid, name):
@@ -807,12 +942,15 @@ def reserve_fixture(session, tournament_id, team1_id, team2_id):
     from models import TournamentMatch
     tid = int(tournament_id)
     a, b = int(team1_id), int(team2_id)
-    fx = (session.query(TournamentMatch)
-          .filter_by(tournament_id=tid, status="scheduled")
-          .filter(or_(
-              and_(TournamentMatch.team1_id == a, TournamentMatch.team2_id == b),
-              and_(TournamentMatch.team1_id == b, TournamentMatch.team2_id == a)))
-          .order_by(TournamentMatch.round_no, TournamentMatch.match_no).first())
+    q = (session.query(TournamentMatch)
+         .filter_by(tournament_id=tid, status="scheduled")
+         .filter(or_(
+             and_(TournamentMatch.team1_id == a, TournamentMatch.team2_id == b),
+             and_(TournamentMatch.team1_id == b, TournamentMatch.team2_id == a))))
+    clause = _open_round_filter(session, tid)
+    if clause is not None:
+        q = q.filter(clause)
+    fx = q.order_by(TournamentMatch.round_no, TournamentMatch.match_no).first()
     if not fx:
         return None
     claimed = (session.query(TournamentMatch)
@@ -946,16 +1084,20 @@ def release_fixture(session, fixture_id):
 
 
 def remaining_opponents(session, tournament_id, tournament_team_id):
-    """Set of TournamentTeam ids that still have an open fixture vs this team."""
+    """Set of TournamentTeam ids with an open fixture vs this team this round."""
     from sqlalchemy import or_
     from models import TournamentMatch
     tid = int(tournament_id)
     ttid = int(tournament_team_id)
-    rows = (session.query(TournamentMatch)
-            .filter_by(tournament_id=tid)
-            .filter(TournamentMatch.status != "completed")
-            .filter(or_(TournamentMatch.team1_id == ttid,
-                        TournamentMatch.team2_id == ttid)).all())
+    q = (session.query(TournamentMatch)
+         .filter_by(tournament_id=tid)
+         .filter(TournamentMatch.status != "completed")
+         .filter(or_(TournamentMatch.team1_id == ttid,
+                     TournamentMatch.team2_id == ttid)))
+    clause = _open_round_filter(session, tid)
+    if clause is not None:
+        q = q.filter(clause)
+    rows = q.all()
     opp = set()
     for m in rows:
         if m.team1_id == ttid and m.team2_id:

@@ -91,6 +91,12 @@ def fixtures_blocks(session, tour, viewer_tg_id=None, limit=None):
             "No schedule has been generated — this tournament is free-play: "
             "any two entered players can start /lptour."))
         return blocks
+    from services import league_schedule_service
+    fixtures, locked, progress = league_schedule_service.split_open_round(
+        session, tour.id, fixtures)
+    banner = league_schedule_service.round_banner(progress, locked)
+    if banner:
+        blocks.append(R.paragraph(["🔵 ", R.bold(banner)]))
 
     names = {tt.id: (tt.name or "—") for tt in L.participants(session, tour.id)}
     mine = None
@@ -125,8 +131,9 @@ def fixtures_blocks(session, tour, viewer_tg_id=None, limit=None):
     all_rows = [row(fx) for fx in fixtures]
     blocks.append(R.table([header] + all_rows[:limit],
                           bordered=True, striped=True, compact=True,
-                          caption=R.bold(f"Full schedule · {len(all_rows)} "
-                                         f"matches")))
+                          caption=R.bold(
+                              f"{'This round & results' if progress else 'Full schedule'}"
+                              f" · {len(all_rows)} matches")))
     rest = all_rows[limit:]
     if rest:
         blocks.append(R.details(

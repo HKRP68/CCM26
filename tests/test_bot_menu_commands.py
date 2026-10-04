@@ -151,6 +151,9 @@ UNPUBLISHED_ON_PURPOSE = {
     # rarely, documented in BOT_COMMANDS.md, and the admin bucket is at the
     # ceiling already.
     "approvers",
+    # Simulating a tournament fixture — on the /lptadmin card and in
+    # BOT_COMMANDS.md; the admin bucket is over the ceiling already.
+    "tsim",
     # Franchise Auction — /auction card, the board's footer, and the RTM
     # prompt itself, which names the owner and carries buttons.
     "bid", "artm", "aboard", "apurse",

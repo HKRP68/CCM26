@@ -1830,6 +1830,10 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
                     from services import injury_service
                     injury_news = injury_service.render_report(
                         session, main_state["tournament_id"], report)
+                news = tournament_service.schedule_news(session, tm)
+                if news:
+                    injury_news = (f"{injury_news}\n\n{news}"
+                                   if injury_news else news)
         except Exception:
             logger.exception("tournament Super Over recording failed (%s)", mid)
         # Record the CL Tour series result — a Super Over decides a tied tour

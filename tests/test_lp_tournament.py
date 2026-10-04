@@ -663,7 +663,20 @@ class CheckPairTests(LPTCase):
         self.lpt.generate_schedule(self.session, self.tour.id)
         self.go_live()
         self.record(self.users[0], self.users[1])
-        # Home and away: the pair still owe each other one.
+        # Home and away: the pair still owe each other one — it is held back
+        # until its round opens, and then it is playable.
+        from models import TournamentMatch
+        from services import league_schedule_service as lss
+        a = self.lpt.team_for_tg(self.session, self.tour.id, self.users[0].telegram_id)
+        b = self.lpt.team_for_tg(self.session, self.tour.id, self.users[1].telegram_id)
+        ret = lss.locked_fixture_for_pair(self.session, self.tour.id, a.id, b.id)
+        self.assertIsNotNone(ret)
+        from services import tournament_service as ts
+        for fx in (self.session.query(TournamentMatch)
+                   .filter_by(tournament_id=self.tour.id, status="scheduled")
+                   .filter(TournamentMatch.round_no < ret.round_no)
+                   .order_by(TournamentMatch.round_no).all()):
+            ts.simulate_fixture(self.session, fx.id, "1")
         self.lpt.check_pair(self.session, self.tour, self.users[0].telegram_id,
                             self.users[1].telegram_id)
 
@@ -674,10 +687,24 @@ class FixtureReservationTests(LPTCase):
         self.enter_all()
         self.lpt.generate_schedule(self.session, self.tour.id)
         self.go_live()
+        from models import TournamentMatch, TournamentTeam
         self.a = self.lpt.team_for_tg(self.session, self.tour.id,
                                       self.users[0].telegram_id)
-        self.b = self.lpt.team_for_tg(self.session, self.tour.id,
-                                      self.users[1].telegram_id)
+        # The schedule opens one round at a time, so reserve a's Round 1 match.
+        first = (self.session.query(TournamentMatch)
+                 .filter_by(tournament_id=self.tour.id, round_no=1)
+                 .filter((TournamentMatch.team1_id == self.a.id)
+                         | (TournamentMatch.team2_id == self.a.id)).one())
+        other = first.team2_id if first.team1_id == self.a.id else first.team1_id
+        self.b = self.session.get(TournamentTeam, other)
+
+    def test_a_later_round_cannot_be_reserved_yet(self):
+        from models import TournamentMatch
+        later = (self.session.query(TournamentMatch)
+                 .filter_by(tournament_id=self.tour.id, round_no=2).first())
+        with self.assertRaises(self.lpt.LPTError):
+            self.lpt.reserve_pair_fixture(self.session, self.tour,
+                                          later.team1_id, later.team2_id)
 
     def test_reserving_marks_the_fixture_live(self):
         from models import TournamentMatch
