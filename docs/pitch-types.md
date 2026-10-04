@@ -327,14 +327,19 @@ They never touch /sim, /playmatch or the bot matches.
   - a batting side freezes, and the odd catch or bowled becomes a run-out
     mix-up
 
-  The over summary lists them under "😰 Pressure".
+  The Approach card's commentary section lists them on a "😰 Pressure" line.
 * **Dropped catches.** Each drop is announced on its own. Admin media under
   the `dropped_catch` event key is used when one is configured; otherwise the
   bot posts a built-in card naming the fielder, the batter and their score.
   - A later fifty or hundred says "dropped on N — and made them pay".
   - The result names the costliest drop.
+  - The Approach card's commentary section also lists the over's drops.
 * **Sledging.** At most three exchanges an innings, 12 balls apart. About one
   in five boils over into a verbal fight. The batter comes out of it either
   fired up (more boundaries, more risk) or rattled (more dots and wickets)
   for six balls. Which one depends on batter rating against bowler rating,
   plus luck.
+  Each exchange is posted as its own chat message ("🗣️ Heated words!", or
+  "⚡ Verbal fight!" when it boils over). It is also listed in the Approach
+  card's commentary section and the Mini App feed, never in the over summary
+  card.

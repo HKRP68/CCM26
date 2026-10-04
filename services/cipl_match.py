@@ -2558,6 +2558,12 @@ def simulate_over(state, pause_on_wicket=False):
     # Snapshot this over for the approach-prompt scorecard card.
     state["last_over_timeline"] = list(over_timeline)
     state["last_over_commentary"] = list(state.get("commentary_log", [])[cmt_start:])
+    # The over's drama for the approach card's commentary section.
+    state["last_over_drama"] = {
+        "drops": list(drama.get("drops") or []),
+        "sledges": list(drama.get("sledges") or []),
+        "pressure": dict(drama.get("pressure") or {}),
+    }
     state["free_hit"] = free_hit
     state["ball_history"] = ball_history
     state["batter_streaks"] = streaks
@@ -3170,6 +3176,7 @@ def end_first_innings(state):
     # Drop the 1st-innings over snapshot so innings 2 starts with a clean card.
     state["last_over_timeline"] = []
     state["last_over_commentary"] = []
+    state["last_over_drama"] = {}
 
     # Fresh scoring mood for the chase (Variance Rule).
     state["innings_variance"] = _draw_variance()

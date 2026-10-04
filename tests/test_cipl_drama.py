@@ -338,17 +338,71 @@ class ChatTests(unittest.TestCase):
         self.assertIn("PRESSURE DROP", card)
         self.assertIn("Smith puts down <b>Kohli</b> on <b>23</b>", card)
 
-    def test_over_summary_lists_pressure_and_sledges(self):
-        lines = cp._drama_summary_lines({
-            "pressure_moments": {"wides": 2, "noballs": 0, "drops": 1,
-                                 "mixups": 1, "misfields": 0},
-            "drops": [{"batter": "A", "batter_runs": 12, "fielder": "F"}],
-            "sledges": [{"lines": ["B: \"Hello\"", "A <smiles>"]}],
-        })
-        text = "\n".join(lines)
-        self.assertIn("2 wides · 1 drop · 1 mix-up", text)
-        self.assertIn("Heated words", text)
-        self.assertIn("&lt;smiles&gt;", text)
+    _DRAMA = {
+        "pressure": {"wides": 2, "noballs": 0, "drops": 1, "mixups": 1,
+                     "misfields": 0},
+        "drops": [{"batter": "Kohli", "batter_runs": 12, "fielder": "Smith"}],
+        "sledges": [{"lines": ['Starc: "Hello"', "Kohli <smiles>"],
+                     "escalated": True}],
+    }
+
+    def test_over_summary_has_no_drama(self):
+        s = self._state()
+        summary = _play_over(s)
+        summary.update(pressure_moments=self._DRAMA["pressure"],
+                       drops=self._DRAMA["drops"], sledges=self._DRAMA["sledges"])
+        text = cp._render_over_summary(s, summary)
+        for word in ("Pressure:", "Dropped:", "Verbal fight", "smiles"):
+            self.assertNotIn(word, text)
+
+    def test_commentary_block_shows_drama(self):
+        from tests.test_rich_text_surfaces import flatten
+        s = self._state()
+        s["last_over_drama"] = self._DRAMA
+        # The sledge is also in the over's feed; it must be listed only once.
+        s["last_over_commentary"] = list(s.get("last_over_commentary") or []) + [
+            {"type": "sledge", "text": "🗣️ Kohli <smiles>"}]
+        block = cp._commentary_block(s)
+        self.assertIn("😰 Pressure: 2 wides · 1 drop · 1 mix-up", block)
+        self.assertIn("🫳 Dropped: Kohli on 12 (by Smith)", block)
+        self.assertIn("⚡ Verbal fight!", block)
+        self.assertIn("&lt;smiles&gt;", block)
+        self.assertEqual(block.count("smiles"), 1)
+        rich = flatten(cp._approach_card_blocks(s))
+        for word in ("Pressure: 2 wides", "Dropped: Kohli on 12", "Verbal fight",
+                     "Kohli <smiles>"):
+            self.assertIn(word, rich)
+
+    def test_commentary_block_without_drama_is_unchanged(self):
+        s = self._state()
+        s["last_over_drama"] = {}
+        self.assertNotIn("Pressure", cp._commentary_block(s))
+
+    def test_sledge_card_escapes_and_flags_a_fight(self):
+        card = cp._sledge_card({"lines": ['B: "Hello"', "A <smiles>"]})
+        self.assertIn("Heated words", card)
+        self.assertIn("&lt;smiles&gt;", card)
+        fight = cp._sledge_card({"lines": ["x"], "escalated": True})
+        self.assertIn("Verbal fight", fight)
+
+    def test_sledging_is_sent_as_its_own_message(self):
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock, patch
+        context = MagicMock()
+        context.bot.send_message = AsyncMock()
+        summary = {"drops": [], "sledges": [{"lines": ["A <smiles>"]}]}
+        state = dict(self._state(), chat_id=5)
+
+        async def _go():
+            with patch("services.event_media_service.fire_event_media",
+                       AsyncMock(return_value=False)):
+                await cp._announce_drama_async(context, state, summary)
+
+        asyncio.run(_go())
+        context.bot.send_message.assert_awaited_once()
+        sent = context.bot.send_message.await_args.kwargs["text"]
+        self.assertIn("Heated words", sent)
+        self.assertIn("&lt;smiles&gt;", sent)
 
     def test_made_them_pay_line(self):
         out = cp._paid_for_drop_lines({}, [
