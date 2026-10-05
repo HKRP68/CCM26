@@ -1385,3 +1385,34 @@ async def tprize_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _reply(update, "✅ " + _prize_summary(tour))
     finally:
         session.close()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /tteam — Team of the Tournament (anyone)
+# ──────────────────────────────────────────────────────────────────────
+
+async def tteam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tteam — the best XI of the running tournament, as cards."""
+    import asyncio
+    import io
+    from services import team_of_tournament as TOT
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+        except ValueError as exc:
+            await _reply(update, str(exc))
+            return
+        xi = TOT.pick_xi(session, tour.id)
+        text = TOT.render_text(tour, xi)
+        photo = await asyncio.to_thread(TOT.render_image, tour, xi) if xi else None
+    finally:
+        session.close()
+    msg = update.effective_message
+    if photo and msg is not None:
+        await msg.reply_photo(io.BytesIO(photo), caption=text[:1024], parse_mode="HTML")
+        if len(text) > 1024:
+            await _reply(update, text)
+    else:
+        await _reply(update, text)
