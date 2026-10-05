@@ -16869,6 +16869,8 @@ def admin_tournament_detail(tournament_id):
                     t.injury_max_matches = max(1, min(5, _int_form(
                         "injury_max_matches", t.injury_max_matches
                         if t.injury_max_matches is not None else 3)))
+                    if request.form.get("tiebreak") in ("nrr", "h2h"):
+                        t.tiebreak = request.form.get("tiebreak")
                     if "round_hours" in request.form:
                         from services import tournament_watch as _tw
                         rh = _int_form("round_hours", 0) or 0

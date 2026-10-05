@@ -282,6 +282,25 @@ def _completed_round(session, tour, rnd):
     return int(top or 0)
 
 
+def _recap_posts(session, tour, now, first_look):
+    """A recap for each league round finished since the last one posted."""
+    from services import league_schedule_service as lss
+    from services.tournament_recap import render_round_recap
+    if first_look:
+        return []
+    done = _completed_round(session, tour, lss.current_round(session, tour.id))
+    last = int(tour.recap_round or 0)
+    if done <= last:
+        return []
+    tour.recap_round = done
+    if not tour.announce_chat_id:
+        return []
+    # Never more than the latest two at once (a burst of /tsim round calls).
+    return [Post(chat_id=tour.announce_chat_id, kind="recap",
+                 text=render_round_recap(session, tour, r, now=now))
+            for r in range(max(last + 1, done - 1), done + 1)]
+
+
 def _extra_posts(session, tour, now, first_look):
     """Recaps, bracket and ceremony — filled in by their own modules."""
     posts = []

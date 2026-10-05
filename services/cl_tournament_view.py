@@ -90,15 +90,24 @@ def render_table(session, tour):
            status_label(tour)
            + (f" · {played}/{total} league matches played" if total else ""),
            "",
-           "<code>#  TEAM            P  W  L  T Pts   NRR</code>"]
+           "<code>#   TEAM            P  W  L  T Pts   NRR</code>"]
+    from services import qualification
+    marks, spots = qualification.table_marks(session, tour)
     for i, tt in enumerate(rows, 1):
         name = tournament_service.table_name_cell(tt)
+        mark = (getattr(marks.get(tt.id), "mark", None) or " ")
         out.append(
-            f"<code>{str(i).rjust(2)} {escape(name)} "
+            f"<code>{str(i).rjust(2)}{mark} {escape(name)} "
             f"{str(tt.played or 0).rjust(2)} {str(tt.won or 0).rjust(2)} "
             f"{str(tt.lost or 0).rjust(2)} {str(tt.tied or 0).rjust(2)} "
             f"{str(tt.points or 0).rjust(3)} {_nrr_text(tt._nrr).rjust(6)}</code>")
     out += tournament_service.points_adjust_footnote(rows)
+    if marks:
+        out += ["", qualification.legend(spots)]
+        race = qualification.race_lines(rows, marks, spots)
+        if race:
+            out += [f"🎯 <b>Race for the top {spots}</b>"]
+            out += [f"• {escape(line)}" for line in race]
     champion = tournament_service.tournament_champion(session, tour.id)
     if champion:
         out += ["", f"🥇 <b>Champion:</b> {escape(champion.name or '—')}"]

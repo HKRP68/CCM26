@@ -1612,23 +1612,30 @@ def points_table(session, tournament_id, group_id=None):
     if group_id is not None:
         q = q.filter(TournamentTeam.group_id == int(group_id))
     rows = q.all()
+    from services import standings
+    tour = session.get(Tournament, int(tournament_id))
+    tiebreak = (getattr(tour, "tiebreak", None) or "nrr") if tour else "nrr"
+    matches = []
+    if tiebreak == "h2h":
+        matches = completed_league_matches(session, tournament_id)
+    # Tie-break after points: wins then net run-rate, or head-to-head then net
+    # run-rate (``Tournament.tiebreak``). NRR is compared unrounded so near-equal
+    # teams aren't mis-seeded; ``_nrr`` is the rounded display value.
+    return standings.order(
+        rows, tiebreak, matches,
+        points_win=(tour.points_win if tour else 2) or 0,
+        points_tie=(tour.points_tie if tour else 1) or 0)
 
-    def nrr(tt):
-        of = (tt.balls_for or 0) / 6.0
-        oa = (tt.balls_against or 0) / 6.0
-        rf = (tt.runs_for or 0) / of if of else 0.0
-        ra = (tt.runs_against or 0) / oa if oa else 0.0
-        return rf - ra
 
-    out = []
-    for tt in rows:
-        tt._nrr_sort = nrr(tt)          # full precision for ordering
-        tt._nrr = round(tt._nrr_sort, 3)  # rounded for display
-        out.append(tt)
-    # Tie-break: points, then wins, then net run-rate (standard cricket order).
-    # Sort on the unrounded NRR so near-equal teams aren't mis-seeded.
-    out.sort(key=lambda t: (t.points or 0, t.won or 0, t._nrr_sort), reverse=True)
-    return out
+def completed_league_matches(session, tournament_id, exclude_round=None):
+    """Completed league/group fixtures — what the points table is built from."""
+    q = (session.query(TournamentMatch)
+         .filter_by(tournament_id=int(tournament_id))
+         .filter(TournamentMatch.status == "completed")
+         .filter(TournamentMatch.stage.in_(("league", "group"))))
+    if exclude_round is not None:
+        q = q.filter(TournamentMatch.round_no != int(exclude_round))
+    return q.all()
 
 
 def league_progress(session, tournament_id):

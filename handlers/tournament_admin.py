@@ -1158,3 +1158,43 @@ async def tdeadline_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer("Extended.")
     if query.message is not None:
         await query.message.reply_text(text, parse_mode="HTML")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /ttiebreak — how teams level on points are separated
+# ──────────────────────────────────────────────────────────────────────
+
+async def ttiebreak_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/ttiebreak [h2h | nrr] — head-to-head or wins/NRR after points."""
+    if not await _require_admin(update):
+        return
+    from services import standings
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+        except ValueError as exc:
+            await _reply(update, str(exc))
+            return
+        if not args:
+            cur = tour.tiebreak or "nrr"
+            await _reply(update,
+                         f"⚖️ <b>{html.escape(tour.name)}</b> — tiebreak: "
+                         f"<b>{standings.TIEBREAK_LABEL[cur]}</b>\n\n"
+                         "<code>/ttiebreak h2h</code> — head-to-head first\n"
+                         "<code>/ttiebreak nrr</code> — wins, then net run rate")
+            return
+        choice = args[0].lower().replace("-", "")
+        choice = {"headtohead": "h2h", "h2h": "h2h", "nrr": "nrr",
+                  "netrunrate": "nrr", "wins": "nrr"}.get(choice)
+        if choice is None:
+            await _reply(update, "⚠️ Use <code>h2h</code> or <code>nrr</code>.")
+            return
+        tour.tiebreak = choice
+        session.commit()
+        await _reply(update, f"⚖️ <b>{html.escape(tour.name)}</b> — tiebreak is now "
+                             f"<b>{standings.TIEBREAK_LABEL[choice]}</b>. The table "
+                             "and playoff seeding follow it.")
+    finally:
+        session.close()

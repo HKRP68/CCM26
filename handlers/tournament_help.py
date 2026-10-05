@@ -100,6 +100,8 @@ ADMIN_SECTIONS = (
         ("/tdeadline", "/tdeadlines",
          "Round deadlines: /tdeadline 48h · /tdeadline +12h · /tdeadline off "
          "(alerts only — nothing is auto-simulated)"),
+        ("/ttiebreak", "/ttb",
+         "Teams level on points: /ttiebreak h2h (head-to-head) or nrr"),
         ("/tsetchat", "/tchat",
          "Post recaps, deadline alerts and the ceremony in this group"),
         ("/tpoints", "/tpts", "Dock or award points: /tpoints MI | -2 | reason"),
