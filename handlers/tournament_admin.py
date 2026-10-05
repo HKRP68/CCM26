@@ -1198,3 +1198,131 @@ async def ttiebreak_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                              "and playoff seeding follow it.")
     finally:
         session.close()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /tstadiums and /thome — where the tournament is played
+# ──────────────────────────────────────────────────────────────────────
+
+_STADIUMS_USAGE = (
+    "🏟️ <b>Tournament stadiums</b> — picked from <b>Stadium Data</b> (admin site → "
+    "Conditions → Stadium; add new grounds there)\n\n"
+    "<code>/tstadiums</code> — this tournament's grounds\n"
+    "<code>/tstadiums all</code> — every stadium in Stadium Data\n"
+    "<code>/tstadiums add Wankhede Stadium</code>\n"
+    "<code>/tstadiums remove Wankhede Stadium</code>\n"
+    "<code>/tstadiums clear</code>\n\n"
+    "Home grounds: <code>/thome &lt;team&gt; | &lt;stadium&gt;</code>. A league match "
+    "is played at the home team's ground; otherwise at one of the tournament's "
+    "grounds (knockouts always at a neutral one from the list)."
+)
+
+
+def _stadium_list_text(session, tour):
+    from services import tournament_stadiums as TS
+    names = TS.tour_stadiums(tour)
+    homes = [(t.name, t.home_stadium) for t in
+             session.query(TournamentTeam).filter_by(tournament_id=tour.id)
+             .order_by(TournamentTeam.sort_order, TournamentTeam.id).all()]
+    lines = [f"🏟️ <b>{html.escape(tour.name)}</b> — stadiums", ""]
+    if names:
+        lines += [f"• {html.escape(TS.describe(n))}" for n in names]
+    else:
+        lines.append("<i>No list — matches without a home ground get a random venue.</i>")
+    lines += ["", "<b>Home grounds</b>"]
+    lines += [f"• {html.escape(name or '—')}: "
+              + (html.escape(home) if home else "<i>none</i>") for name, home in homes]
+    return "\n".join(lines)
+
+
+async def tstadiums_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tstadiums [all | add <name> | remove <name> | clear]."""
+    if not await _require_admin(update):
+        return
+    from services import tournament_stadiums as TS
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+            sub = (args[0].lower() if args else "")
+            rest = " ".join(args[1:]).strip()
+            if sub in ("", "list"):
+                await _reply(update, _stadium_list_text(session, tour) + "\n\n"
+                             + _STADIUMS_USAGE)
+                return
+            if sub in ("all", "data"):
+                rows = TS.all_rows()
+                lines = [f"🏟️ <b>Stadium Data</b> — {len(rows)} grounds", ""]
+                lines += [f"• {html.escape(r.get('name'))}"
+                          + (f" <i>({html.escape(r.get('city'))})</i>" if r.get("city") else "")
+                          for r in rows]
+                lines += ["", "Add more on the admin site → Conditions → Stadium."]
+                await _reply_long(update, "\n".join(lines))
+                return
+            if sub == "add":
+                if not rest:
+                    raise ValueError("Name the stadium: /tstadiums add Eden Gardens")
+                canon = TS.add_tour_stadium(tour, rest)
+                note = f"➕ Added <b>{html.escape(canon)}</b>."
+            elif sub in ("remove", "rm", "del"):
+                canon = TS.remove_tour_stadium(tour, rest)
+                note = f"➖ Removed <b>{html.escape(canon)}</b>."
+            elif sub == "clear":
+                TS.set_tour_stadiums(tour, [])
+                note = "🧹 Cleared the stadium list."
+            else:
+                raise ValueError("Use add, remove, clear, all — or nothing to list.")
+            session.flush()
+            n = TS.assign_venues(session, tour.id, overwrite=(sub != "add"))
+            session.commit()
+        except ValueError as exc:
+            session.rollback()
+            await _reply(update, f"⚠️ {html.escape(str(exc))}")
+            return
+        await _reply(update, f"{note} {n} unplayed fixture venue(s) updated.\n\n"
+                     + _stadium_list_text(session, tour))
+    finally:
+        session.close()
+
+
+async def thome_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/thome <team> | <stadium> — a team's home ground (admin, or its owner)."""
+    from services import tournament_stadiums as TS
+    user = update.effective_user
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+            text = " ".join(args)
+            if "|" not in text:
+                await _reply(update, "🏠 <b>Home ground</b>\n\n"
+                             "<code>/thome &lt;team&gt; | &lt;stadium&gt;</code> — e.g. "
+                             "<code>/thome Mumbai | Wankhede Stadium</code>\n"
+                             "<code>/thome Mumbai | none</code> — clear it\n\n"
+                             "Stadiums come from Stadium Data — <code>/tstadiums all</code> "
+                             "lists them.")
+                return
+            team_q, stadium_q = (p.strip() for p in text.split("|", 1))
+            team = _find_team(session, tour, team_q)
+            uid = user.id if user else None
+            if not (is_admin(uid) or tournament_service.is_team_member(team, uid)):
+                raise ValueError(f"Only an admin or {team.name}'s owner can set its "
+                                 "home ground.")
+            clear = stadium_q.lower() in ("", "none", "clear", "-")
+            canon = TS.set_home_stadium(session, team, None if clear else stadium_q)
+            session.commit()
+        except ValueError as exc:
+            session.rollback()
+            await _reply(update, f"⚠️ {html.escape(str(exc))}")
+            return
+        if canon:
+            await _reply(update, f"🏠 <b>{html.escape(team.name)}</b> now play their "
+                                 f"home matches at <b>{html.escape(TS.describe(canon))}</b>. "
+                                 "Unplayed home fixtures were moved there.")
+        else:
+            await _reply(update, f"🏠 <b>{html.escape(team.name)}</b> has no home "
+                                 "ground now.")
+    finally:
+        session.close()

@@ -2245,7 +2245,7 @@ def main():
             tratingrule_handler, tseasons_handler,
             tsim_handler, tsim_callback, CB_SIM,
             tsetchat_handler, tdeadline_handler, tdeadline_callback,
-            ttiebreak_handler,
+            ttiebreak_handler, tstadiums_handler, thome_handler,
         )
         app.add_handler(CommandHandler(["tpoints", "tpts"], tpoints_handler))
         app.add_handler(CommandHandler(["tpointsclear", "tptsclear"],
@@ -2270,6 +2270,8 @@ def main():
         app.add_handler(CommandHandler(["tdeadline", "tdeadlines"], tdeadline_handler))
         app.add_handler(CallbackQueryHandler(tdeadline_callback, pattern=r"^tdl_"))
         app.add_handler(CommandHandler(["ttiebreak", "ttb"], ttiebreak_handler))
+        app.add_handler(CommandHandler(["tstadiums", "tstadium"], tstadiums_handler))
+        app.add_handler(CommandHandler(["thome", "homeground"], thome_handler))
 
         # ── Tournament Draft ─────────────────────────────────────────
         # Teams pick their squads live in one bound group chat; the finished

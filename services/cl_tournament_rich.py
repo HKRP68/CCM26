@@ -163,7 +163,10 @@ def _fixture_row(fx, names, mine_ids):
         state = ["🔴 ", R.bold("in progress")]
     else:
         pitch = (fx.pitch_type or "").strip()
-        state = ["⚪ ", "🌱 " + pitch if pitch else "—"]
+        ground = (getattr(fx, "venue", None) or "").strip()
+        state = ["⚪ ", "🌱 " + pitch if pitch else ("" if ground else "—")]
+        if ground:
+            state.append(f"  🏟️ {ground}")
     row = [R.cell(R.code(_fixture_tag(fx)), align="center"),
            R.cell(versus), R.cell(state)]
     if mine_ids and mine_ids & {fx.team1_id, fx.team2_id}:
@@ -331,7 +334,10 @@ def team_schedule_blocks(session, tour, team, viewer_tg_id=None, limit=40):
             state = ["🔴 ", R.bold("in progress")]
         else:
             pitch = (fx.pitch_type or "").strip()
-            state = ["⚪ ", "🌱 " + pitch if pitch else "—"]
+            ground = (getattr(fx, "venue", None) or "").strip()
+            state = ["⚪ ", "🌱 " + pitch if pitch else ("" if ground else "—")]
+            if ground:
+                state.append(f"  🏟️ {ground}")
         return [R.cell(R.code(_fixture_tag(fx)), align="center"),
                 R.cell(f"{venue}  {other}"),
                 R.cell(state)]

@@ -158,7 +158,7 @@ UNPUBLISHED_ON_PURPOSE = {
     # both player menus and the admin bucket are at the ceiling.
     "tourhelp",
     # Tournament watch settings — on /tourhelp; admin bucket is full.
-    "tsetchat", "tdeadline", "ttiebreak",
+    "tsetchat", "tdeadline", "ttiebreak", "tstadiums", "thome",
     # Franchise Auction — /auction card, the board's footer, and the RTM
     # prompt itself, which names the owner and carries buttons.
     "bid", "artm", "aboard", "apurse",

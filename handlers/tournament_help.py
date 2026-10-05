@@ -30,6 +30,8 @@ PLAYER_SECTIONS = (
          "Move the live match to the Mini App — each captain picks privately"),
         ("/continue", "/unpause",
          "Carry on a saved tournament match from the ball it stopped on"),
+        ("/thome", "/homeground",
+         "Team owners: set your home ground — /thome Mumbai | Wankhede Stadium"),
         ("/clearmatches", "/clearmatch",
          "Clear a stuck match in this chat — a tournament match is saved first"),
     )),
@@ -100,6 +102,8 @@ ADMIN_SECTIONS = (
         ("/tdeadline", "/tdeadlines",
          "Round deadlines: /tdeadline 48h · /tdeadline +12h · /tdeadline off "
          "(alerts only — nothing is auto-simulated)"),
+        ("/tstadiums", "/tstadium",
+         "Grounds from Stadium Data: /tstadiums add|remove|all"),
         ("/ttiebreak", "/ttb",
          "Teams level on points: /ttiebreak h2h (head-to-head) or nrr"),
         ("/tsetchat", "/tchat",

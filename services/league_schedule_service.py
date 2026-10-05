@@ -406,6 +406,12 @@ def assign_fixture_venues(session, tournament_id, *, overwrite=False):
              .order_by(TournamentMatch.round_no, TournamentMatch.match_no,
                        TournamentMatch.id).all()),
             overwrite)
+    # The ground each fixture is played at (home stadium / tournament list).
+    try:
+        from services import tournament_stadiums
+        changed += tournament_stadiums.assign_venues(session, tid, overwrite=overwrite)
+    except Exception:
+        logger.exception("Could not assign fixture stadiums for %s", tid)
     if changed:
         session.flush()
     return changed

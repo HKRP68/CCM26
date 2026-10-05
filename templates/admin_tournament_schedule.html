@@ -130,7 +130,7 @@
       <div class="fixture-card {{ fx.status }}">
         <div class="fixture-header">
           <span class="round-badge">{% if fx.group_id and g_map.get(fx.group_id) %}{{ g_map[fx.group_id].name }}{% else %}Match {{ fx.match_no }}{% endif %}</span>
-          <span class="status-badge {{ fx.status }}">{{ fx.status }}{% if fx.pitch_type %} · 🌱 {{ fx.pitch_type }}{% endif %}</span>
+          <span class="status-badge {{ fx.status }}">{{ fx.status }}{% if fx.pitch_type %} · 🌱 {{ fx.pitch_type }}{% endif %}{% if fx.venue %} · 🏟️ {{ fx.venue }}{% endif %}</span>
         </div>
         {% if fx.status != 'scheduled' %}
           <div class="teams-versus">

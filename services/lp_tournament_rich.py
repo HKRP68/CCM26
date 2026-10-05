@@ -127,6 +127,8 @@ def fixtures_blocks(session, tour, viewer_tg_id=None, limit=None):
             state = ["🔴 ", R.bold("in progress")]
         else:
             state = ["⚪ ", R.italic("to play")]
+            if (getattr(fx, "venue", None) or "").strip():
+                state.append(f"  🏟️ {fx.venue}")
         return [R.cell(R.code(_tag(fx)), align="center"),
                 R.cell(versus), R.cell(state)]
 

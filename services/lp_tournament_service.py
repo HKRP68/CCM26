@@ -640,6 +640,8 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=None):
             body = f"🔴 {a} vs {b} — <i>in progress</i>"
         else:
             body = f"⚪ {a} vs {b}"
+            if (getattr(fx, "venue", None) or "").strip():
+                body += f" · 🏟️ {escape(fx.venue)}"
         line = f"<code>{tag}</code> {body}"
         all_lines.append(line)
         if mine and fx.status != "completed" and mine in (fx.team1_id, fx.team2_id):

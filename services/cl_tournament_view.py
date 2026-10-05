@@ -182,6 +182,8 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=None):
             body = f"⚪ {a} vs {b}"
             if pitch:
                 body += f" · 🌱 {escape(pitch)}"
+            if (fx.venue or "").strip():
+                body += f" · 🏟️ {escape(fx.venue)}"
         line = f"<code>{tag}</code> {body}"
         all_lines.append(line)
         if mine and fx.status != "completed" and mine & {fx.team1_id, fx.team2_id}:
@@ -374,6 +376,8 @@ def render_team_schedule(session, tour, team, viewer_tg_id=None, limit=40):
             pitch = (fx.pitch_type or "").strip()
             if pitch:
                 body += f" · 🌱 {escape(pitch)}"
+            if (fx.venue or "").strip():
+                body += f" · 🏟️ {escape(fx.venue)}"
         return f"<code>{tag}</code> {body}"
 
     fixtures, locked, _progress = league_schedule_service.split_open_round(

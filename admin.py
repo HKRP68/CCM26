@@ -16869,6 +16869,18 @@ def admin_tournament_detail(tournament_id):
                     t.injury_max_matches = max(1, min(5, _int_form(
                         "injury_max_matches", t.injury_max_matches
                         if t.injury_max_matches is not None else 3)))
+                    if request.form.get("stadiums_present"):
+                        from services import tournament_stadiums as _tstad
+                        before = _tstad.tour_stadiums(t)
+                        try:
+                            after = _tstad.set_tour_stadiums(
+                                t, request.form.getlist("stadiums"))
+                        except ValueError as e:
+                            flash(f"⚠️ {e}", "error")
+                            after = before
+                        if after != before:
+                            db.flush()
+                            _tstad.assign_venues(db, t.id, overwrite=True)
                     if request.form.get("tiebreak") in ("nrr", "h2h"):
                         t.tiebreak = request.form.get("tiebreak")
                     if "round_hours" in request.form:
@@ -17105,6 +17117,20 @@ def admin_tournament_detail(tournament_id):
                         tt.home_pitch = pitch if pitch in FIXTURE_PITCHES else None
                         flash(f"✅ {tt.name} home pitch: {tt.home_pitch or 'none'}.",
                               "success")
+                elif action == "set_team_home_stadium":
+                    from services import tournament_stadiums as _tstad
+                    tt = db.get(TournamentTeam, _int_form("team_id"))
+                    if not tt or tt.tournament_id != t.id:
+                        flash("Team not found in this tournament.", "error")
+                    else:
+                        try:
+                            canon = _tstad.set_home_stadium(
+                                db, tt, request.form.get("home_stadium"))
+                            flash(f"✅ {tt.name} home ground: {canon or 'none'}.",
+                                  "success")
+                        except ValueError as e:
+                            db.rollback()
+                            flash(f"⚠️ {e}", "error")
                 elif action == "set_team_preferred_pitches":
                     from services import league_schedule_service as _lss
                     tt = db.get(TournamentTeam, _int_form("team_id"))
@@ -17430,7 +17456,11 @@ def admin_tournament_detail(tournament_id):
                           for tt in teams}
         from services import tournament_service as _ts_rr
         from services import season_archive as _sa
+        from services import tournament_stadiums as _tstad
         return render_template("admin_tournament_detail.html", t=t, teams=teams,
+                               stadium_choices=[(r.get("name"), r.get("city") or "")
+                                                for r in _tstad.all_rows()],
+                               tour_stadiums=_tstad.tour_stadiums(t),
                                rating_rules=_ts_rr.rating_rules(t),
                                season_choices=_sa.season_choices(db, t),
                                season_links_auto=not _sa.linked_refs(t),

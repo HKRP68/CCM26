@@ -2172,6 +2172,18 @@ async def _launch_match(context, draft, decision, winner_side):
             draft["lpt_team_ids"] = {host.id: host_team.id, guest.id: guest_team.id}
 
         settings = random_match_settings()
+        if draft.get("lpt_reserved_fixture_id"):
+            # A tournament fixture is played at its own ground (home stadium /
+            # the tournament's list) — the Conditions Engine plays it too.
+            try:
+                from models import TournamentMatch as _TM
+                from services.tournament_stadiums import kickoff_stadium
+                _ground = kickoff_stadium(
+                    session, session.get(_TM, int(draft["lpt_reserved_fixture_id"])))
+                if _ground:
+                    settings["stadium"] = _ground
+            except Exception:
+                logger.exception("Could not read the fixture's stadium")
         pitch_type = draft.get("pitch_type") or settings["pitch_type"]
         match = Match(
             user1_id=host.id, user2_id=guest.id, status="active",
