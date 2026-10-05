@@ -525,6 +525,13 @@ def _openpack_list_text(inventory, user):
         lines.append(
             f"\n<b>{idx}.</b> {pack.emoji} <b>{pack.name}</b>{age}"
         )
+    from config import MAX_ROSTER, PACK_OPEN_MIN_FREE_SLOTS
+    held = getattr(user, "roster_count", 0) or 0
+    if MAX_ROSTER - held < PACK_OPEN_MIN_FREE_SLOTS:
+        lines.append(
+            f"\n⚠️ <b>Roster {held}/{MAX_ROSTER}</b> — you need at least "
+            f"{PACK_OPEN_MIN_FREE_SLOTS} free slots to open a pack. "
+            f"Release some players first.")
     lines.append("\nTap a pack to open it. 🎴")
     return "\n".join(lines)
 

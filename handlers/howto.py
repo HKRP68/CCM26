@@ -85,7 +85,7 @@ SECTIONS = {
             "<b>/playermarket</b> (or <b>/market</b>) — 5 random 87+ rated players, refreshed every 24h (Platinum 5% / Diamond 10% off)\n"
             "<b>/buypl &lt;name&gt;</b> (or <b>/buy</b>) — buy any player at full price\n"
             "<b>/buypack</b> (or <b>/packs</b>) — buy player packs (Bronze, Silver, Star, Legend, Ultimate)\n"
-            "<b>/openpack</b> (or <b>/open</b>) — open packs from your inventory with reveal animation\n\n"
+            "<b>/openpack</b> (or <b>/open</b>) — open packs from your inventory with reveal animation (needs 3 free roster slots)\n\n"
             "<b>🔍 Finding players</b>\n"
             "<b>/searchpl &lt;name&gt;</b> (or <b>/search</b>) — search by name (15 per page)\n"
             "<b>/searchovr &lt;rating&gt;</b> (or <b>/so</b>) — search by rating\n"

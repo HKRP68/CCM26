@@ -159,7 +159,7 @@ welcome messages for that chat, `/dwm` turns them off (group admins only).
 | `/cmushop` | — | Browse the CMU shop 🛍️ |
 | `/playermarket` | `/pmarket` `/market` | Browse the player market |
 | `/buypack` | `/packs` `/shop` | Browse and buy card packs |
-| `/openpack` | `/open` | Open a pack from your inventory |
+| `/openpack` | `/open` | Open a pack from your inventory (needs at least 3 free roster slots) |
 
 ## 6. Traits
 

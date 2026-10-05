@@ -284,7 +284,8 @@ def cipl_available_to(state, user_id):
 NO_LEGAL_SWAP_MESSAGE = (
     "No Impact swap keeps your Playing XI legal — every substitute would break "
     "a Playing XI rule (Wicket Keeper, 5 bowling options, overseas limit or "
-    "rating rule)."
+    "rating rule). An overseas Impact Player needs your XI to be under its "
+    "overseas cap."
 )
 
 
@@ -301,8 +302,8 @@ def cipl_swap_error(state, side, out_roster_id, incoming):
     if not isinstance(rules, dict) or not isinstance(incoming, dict):
         return ""
     from services.xi_rules import validate_challenge_xi_dicts
-    after = [p for p in active_players(state.get(f"{side}_xi") or [])
-             if p.get("roster_id") != out_roster_id]
+    before = active_players(state.get(f"{side}_xi") or [])
+    after = [p for p in before if p.get("roster_id") != out_roster_id]
     after.append(incoming)
     try:
         lo = int(rules.get("min_overseas") or 0)
@@ -312,9 +313,35 @@ def cipl_swap_error(state, side, out_roster_id, incoming):
         hi = int(rules.get("max_overseas", 11))
     except (TypeError, ValueError):
         hi = 11
+    error = overseas_swap_error(before, after, incoming, lo, hi)
+    if error:
+        return error
+    # Overseas is settled above; the keeper / bowling / rating rules are not.
     ok, error = validate_challenge_xi_dicts(
-        after, lo, hi, rules.get("rating_rules") or None)
+        after, 0, 11, rules.get("rating_rules") or None)
     return "" if ok else error
+
+
+def overseas_swap_error(before, after, incoming, min_overseas, max_overseas):
+    """The IPL overseas rule for an Impact swap: ``""`` when it holds.
+
+    An overseas Impact Player may come on only while the XI fielding right now
+    has FEWER overseas than the cap — with a cap of 4 and four overseas already
+    on, no overseas substitute, not even for an overseas player going off.
+    Under the cap he may replace anyone. A domestic substitute is held only to
+    the minimum, which an overseas player going off could break.
+    """
+    have = sum(1 for p in before if p.get("is_overseas"))
+    if incoming.get("is_overseas"):
+        if have >= max_overseas:
+            return (f"Overseas Impact Player allowed only when your XI has "
+                    f"fewer than {max_overseas} overseas ✈️ (you have {have})")
+        return ""
+    left = sum(1 for p in after if p.get("is_overseas"))
+    if left < min_overseas:
+        return (f"Min {min_overseas} overseas ✈️ required in XI "
+                f"(you would have {left})")
+    return ""
 
 
 def cipl_incoming_for(state, side, out_roster_id, bench):

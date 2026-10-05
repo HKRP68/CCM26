@@ -498,6 +498,15 @@ def open_unopened_pack(session, user, inventory_id):
                    UnopenedPack.user_id == user.id).first())
     if not inv:
         return {"success": False, "message": "❌ Pack not found in your inventory."}
+    from config import MAX_ROSTER, PACK_OPEN_MIN_FREE_SLOTS
+    free_slots = MAX_ROSTER - (user.roster_count or 0)
+    if free_slots < PACK_OPEN_MIN_FREE_SLOTS:
+        return {"success": False, "error": "roster_full",
+                "message": (f"❌ You need at least {PACK_OPEN_MIN_FREE_SLOTS} "
+                            f"free roster slots to open a pack (roster "
+                            f"{user.roster_count or 0}/{MAX_ROSTER}). Release "
+                            f"some players first — your pack stays in your "
+                            f"inventory.")}
     pack = session.get(Pack, inv.pack_id)
     if not pack:
         session.delete(inv); session.flush()
@@ -565,7 +574,6 @@ def open_unopened_pack(session, user, inventory_id):
         return {"success": False,
                 "message": "❌ Couldn't roll any players. Contact admin — your pack is still in inventory."}
 
-    from config import MAX_ROSTER
     added = []; to_claim = []
     for player, slot_type in rolled:
         if user.roster_count < MAX_ROSTER:
