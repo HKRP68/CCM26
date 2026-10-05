@@ -42,11 +42,15 @@ def table_blocks(session, tour):
     header += [R.cell(R.bold(label), header=True, align="right")
                for label in ("P", "W", "L", "T", "PTS", "NRR")]
     cells = [header]
+    from services import qualification
+    marks, spots = qualification.table_marks(session, tour)
     for position, tt in enumerate(rows, 1):
         adjusted = int(getattr(tt, "points_adjust", 0) or 0)
+        mark = getattr(marks.get(tt.id), "mark", None)
         cells.append([
             R.cell(str(position), align="center"),
-            R.cell((tt.name or "—") + ("*" if adjusted else "")),
+            R.cell((tt.name or "—") + ("*" if adjusted else "")
+                   + (f"  ({mark})" if mark else "")),
             R.cell(str(tt.played or 0), align="right"),
             R.cell(str(tt.won or 0), align="right"),
             R.cell(str(tt.lost or 0), align="right"),
@@ -55,6 +59,13 @@ def table_blocks(session, tour):
             R.cell(L._nrr_text(tt._nrr), align="right"),
         ])
     blocks.append(R.table(cells, bordered=True, striped=True, compact=True))
+    if marks:
+        race = qualification.race_lines(rows, marks, spots)
+        blocks.append(R.paragraph(R.italic(
+            f"Q = through to the playoffs · E = can no longer finish in the top {spots}")))
+        if race:
+            blocks.append(R.details(R.bold(f"🎯 Race for the top {spots}"),
+                                    [R.list_block([[line] for line in race])]))
 
     adjustments = [tt for tt in rows if int(getattr(tt, "points_adjust", 0) or 0)]
     if adjustments:
@@ -94,7 +105,7 @@ def fixtures_blocks(session, tour, viewer_tg_id=None, limit=None):
     from services import league_schedule_service
     fixtures, locked, progress = league_schedule_service.split_open_round(
         session, tour.id, fixtures)
-    banner = league_schedule_service.round_banner(progress, locked)
+    banner = league_schedule_service.round_banner(progress, locked, tour)
     if banner:
         blocks.append(R.paragraph(["🔵 ", R.bold(banner)]))
 
@@ -116,6 +127,8 @@ def fixtures_blocks(session, tour, viewer_tg_id=None, limit=None):
             state = ["🔴 ", R.bold("in progress")]
         else:
             state = ["⚪ ", R.italic("to play")]
+            if (getattr(fx, "venue", None) or "").strip():
+                state.append(f"  🏟️ {fx.venue}")
         return [R.cell(R.code(_tag(fx)), align="center"),
                 R.cell(versus), R.cell(state)]
 

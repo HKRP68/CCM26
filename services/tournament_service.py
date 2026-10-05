@@ -1239,6 +1239,7 @@ def record_manual_result(session, fixture_id, *,
 
     if tm.stage == "final" and win_id:
         _champion_news(session, tour, tm)
+        _finalize_awards(session, tour)
 
     tm._playoffs_created = maybe_auto_knockout(session, tm.tournament_id)
 
@@ -1441,6 +1442,15 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     tour = session.get(Tournament, tid)
     if not tour:
         return None
+    # The first group a tournament match is played in becomes where the
+    # tournament's news is posted (recaps, deadlines, ceremony) — /tsetchat
+    # overrides it.
+    try:
+        chat = int(state.get("chat_id") or 0)
+        if chat < 0 and not getattr(tour, "announce_chat_id", None):
+            tour.announce_chat_id = chat
+    except (TypeError, ValueError):
+        pass
 
     team_by_user = {int(k): v for k, v in (state.get("tournament_team_by_user") or {}).items() if v}
     # Lets Play matches carry the participating row directly ({db user id →
@@ -1581,6 +1591,7 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     # savepoint, so a news failure cannot cost the match its result.
     if tm.stage == "final" and tm.winner_team_id:
         _champion_news(session, tour, tm)
+        _finalize_awards(session, tour)
 
     # The last league result seeds the playoffs on its own.
     tm._playoffs_created = maybe_auto_knockout(session, tid)
@@ -1603,23 +1614,30 @@ def points_table(session, tournament_id, group_id=None):
     if group_id is not None:
         q = q.filter(TournamentTeam.group_id == int(group_id))
     rows = q.all()
+    from services import standings
+    tour = session.get(Tournament, int(tournament_id))
+    tiebreak = (getattr(tour, "tiebreak", None) or "nrr") if tour else "nrr"
+    matches = []
+    if tiebreak == "h2h":
+        matches = completed_league_matches(session, tournament_id)
+    # Tie-break after points: wins then net run-rate, or head-to-head then net
+    # run-rate (``Tournament.tiebreak``). NRR is compared unrounded so near-equal
+    # teams aren't mis-seeded; ``_nrr`` is the rounded display value.
+    return standings.order(
+        rows, tiebreak, matches,
+        points_win=(tour.points_win if tour else 2) or 0,
+        points_tie=(tour.points_tie if tour else 1) or 0)
 
-    def nrr(tt):
-        of = (tt.balls_for or 0) / 6.0
-        oa = (tt.balls_against or 0) / 6.0
-        rf = (tt.runs_for or 0) / of if of else 0.0
-        ra = (tt.runs_against or 0) / oa if oa else 0.0
-        return rf - ra
 
-    out = []
-    for tt in rows:
-        tt._nrr_sort = nrr(tt)          # full precision for ordering
-        tt._nrr = round(tt._nrr_sort, 3)  # rounded for display
-        out.append(tt)
-    # Tie-break: points, then wins, then net run-rate (standard cricket order).
-    # Sort on the unrounded NRR so near-equal teams aren't mis-seeded.
-    out.sort(key=lambda t: (t.points or 0, t.won or 0, t._nrr_sort), reverse=True)
-    return out
+def completed_league_matches(session, tournament_id, exclude_round=None):
+    """Completed league/group fixtures — what the points table is built from."""
+    q = (session.query(TournamentMatch)
+         .filter_by(tournament_id=int(tournament_id))
+         .filter(TournamentMatch.status == "completed")
+         .filter(TournamentMatch.stage.in_(("league", "group"))))
+    if exclude_round is not None:
+        q = q.filter(TournamentMatch.round_no != int(exclude_round))
+    return q.all()
 
 
 def league_progress(session, tournament_id):
@@ -1641,6 +1659,17 @@ def league_stage_complete(session, tournament_id):
     """
     played, total = league_progress(session, tournament_id)
     return total > 0 and played >= total
+
+
+def _finalize_awards(session, tour):
+    """Honours and prizes for a decided final — once, and never fatal."""
+    try:
+        from services import tournament_awards
+        with session.begin_nested():
+            tournament_awards.finalize(session, tour)
+    except Exception:
+        logger.exception("Tournament awards failed for %s",
+                         getattr(tour, "id", None))
 
 
 def _champion_news(session, tour, final):

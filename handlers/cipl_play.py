@@ -1814,6 +1814,15 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
                         "pick a scheduled opponent.")
                     return
                 draft["reserved_fixture_id"] = _fx.id
+                # The fixture's ground (home stadium / tournament list) is where
+                # this match is played — and what the Conditions Engine plays.
+                try:
+                    from services.tournament_stadiums import kickoff_stadium
+                    _ground = kickoff_stadium(session, _fx)
+                    if _ground:
+                        draft["stadium"] = _ground
+                except Exception:
+                    logger.exception("Could not read the fixture's stadium")
                 # The fixture is the authority on its surface. Setup already
                 # announced this pitch, but re-read it from the row we actually
                 # reserved so the match can never be played on a pitch the

@@ -43,6 +43,28 @@ def _keyboard(current):
 def render_section(session, key, chat_id=None, limit=5):
     label, cats = hof.SECTIONS.get(key, hof.SECTIONS["bat"])
     lines = [f"🏛️ <b>HALL OF FAME</b> — {html.escape(label)}", "━━━━━━━━━━━━━━━"]
+    if key == "tour":
+        from services import tournament_awards as TA
+        rows = TA.recent_honours(session, limit=limit)
+        if not rows:
+            lines.append("<i>No tournament has crowned a champion yet.</i>")
+            return "\n".join(lines)
+        by_tour = {}
+        for h in rows:
+            by_tour.setdefault((h.tournament_id, h.tournament_name), []).append(h)
+        order = {a: i for i, a in enumerate(TA.AWARDS)}
+        for (_tid, name), hs in list(by_tour.items())[:limit]:
+            when = max(h.awarded_at for h in hs)
+            lines.append(f"\n🏆 <b>{html.escape(name)}</b>"
+                         + (f" <i>· {when.strftime('%b %Y')}</i>" if when else ""))
+            for h in sorted(hs, key=lambda x: order.get(x.award, 99)):
+                who = h.player_name or h.team_name or "—"
+                tail = (f" <i>({html.escape(h.team_name)})</i>"
+                        if h.player_name and h.team_name else "")
+                val = f" — {html.escape(h.value)}" if h.value else ""
+                lines.append(f"{TA.AWARD_LABEL.get(h.award, h.award)}: "
+                             f"{html.escape(who)}{tail}{val}")
+        return "\n".join(lines)
     if key == "career":
         for title, emoji, rows in hof.career_boards(session, limit=limit):
             lines.append(f"\n{emoji} <b>{html.escape(title)}</b>")
@@ -76,7 +98,7 @@ def render_section(session, key, chat_id=None, limit=5):
 
 
 async def halloffame_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/halloffame [bat|bowl|team|career]"""
+    """/halloffame [bat|bowl|team|career|tour]"""
     key = (context.args[0].lower() if context.args else "bat")
     if key not in hof.SECTIONS:
         key = "bat"

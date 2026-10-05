@@ -550,15 +550,24 @@ def render_table(session, tour):
            f"{status_label(tour)}"
            + (f" · {played}/{total} league matches played" if total else ""),
            "",
-           "<code>#  TEAM            P  W  L  T Pts   NRR</code>"]
+           "<code>#   TEAM            P  W  L  T Pts   NRR</code>"]
+    from services import qualification
+    marks, spots = qualification.table_marks(session, tour)
     for i, tt in enumerate(rows, 1):
         name = tournament_service.table_name_cell(tt)
+        mark = (getattr(marks.get(tt.id), "mark", None) or " ")
         out.append(
-            f"<code>{str(i).rjust(2)} {escape(name)} "
+            f"<code>{str(i).rjust(2)}{mark} {escape(name)} "
             f"{str(tt.played or 0).rjust(2)} {str(tt.won or 0).rjust(2)} "
             f"{str(tt.lost or 0).rjust(2)} {str(tt.tied or 0).rjust(2)} "
             f"{str(tt.points or 0).rjust(3)} {_nrr_text(tt._nrr).rjust(6)}</code>")
     out += tournament_service.points_adjust_footnote(rows)
+    if marks:
+        out += ["", qualification.legend(spots)]
+        race = qualification.race_lines(rows, marks, spots)
+        if race:
+            out += [f"🎯 <b>Race for the top {spots}</b>"]
+            out += [f"• {escape(line)}" for line in race]
     champion = tournament_service.tournament_champion(session, tour.id)
     if champion:
         out += ["", f"🥇 <b>Champion:</b> {escape(champion.name or '—')}"]
@@ -605,7 +614,7 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=None):
     from services import league_schedule_service
     fixtures, locked, progress = league_schedule_service.split_open_round(
         session, tour.id, fixtures)
-    banner = league_schedule_service.round_banner(progress, locked)
+    banner = league_schedule_service.round_banner(progress, locked, tour)
     if banner:
         header.append(f"🔵 <b>{banner}</b>")
 
@@ -631,6 +640,8 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=None):
             body = f"🔴 {a} vs {b} — <i>in progress</i>"
         else:
             body = f"⚪ {a} vs {b}"
+            if (getattr(fx, "venue", None) or "").strip():
+                body += f" · 🏟️ {escape(fx.venue)}"
         line = f"<code>{tag}</code> {body}"
         all_lines.append(line)
         if mine and fx.status != "completed" and mine in (fx.team1_id, fx.team2_id):
@@ -647,6 +658,8 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=None):
         out.append(f"<b>👇 Matches {limit + 1}–{len(all_lines)}</b> "
                    f"<i>(tap to expand)</i>")
         out += expandable_quotes(rest)
+    if tour.knockout_generated:
+        out += ["", "🏆 Playoff bracket as a picture: /tbracket"]
     return "\n".join(out)
 
 

@@ -174,6 +174,44 @@
         <div><label>Max matches out</label>
           <input type="number" name="injury_max_matches" min="1" max="5"
                  value="{{ t.injury_max_matches if t.injury_max_matches is not none else 3 }}"></div>
+        <div style="grid-column:1 / -1;"><label>🏟️ Tournament stadiums</label>
+          <input type="hidden" name="stadiums_present" value="1">
+          <details>
+            <summary class="btn">Choose from Stadium Data{% if tour_stadiums %} ({{ tour_stadiums|length }} picked){% endif %}</summary>
+            <span style="display:flex; gap:.8rem; flex-wrap:wrap; font-size:.9rem; margin-top:.4rem;">
+              {% for name, city in stadium_choices %}
+              <label style="text-transform:none; letter-spacing:0; font-size:.9rem; color:var(--text); margin:0;">
+                <input type="checkbox" name="stadiums" value="{{ name }}" style="width:auto;"
+                       {{ 'checked' if name in tour_stadiums else '' }}> {{ name }}{% if city %} <span style="color:var(--muted);">({{ city }})</span>{% endif %}
+              </label>
+              {% endfor %}
+            </span>
+          </details>
+          <small style="color:var(--muted);">League matches are played at the home team's ground when it has one, otherwise at one of these; knockouts at a neutral one from this list.
+            The list is the bot's Stadium Data — <a href="{{ url_for('admin_conditions_stadium') }}">add a new stadium there</a>.</small></div>
+        <div style="grid-column:1 / -1;"><label>💰 Prizes (paid when the final is decided)</label>
+          <input type="hidden" name="prizes_present" value="1">
+          <span style="display:flex; gap:1rem; flex-wrap:wrap;">
+            {% for key, label in prize_awards %}
+            <span style="display:flex; gap:.3rem; align-items:center; font-size:.85rem;">{{ label }}
+              <input type="number" name="prize_{{ key }}_coins" min="0" style="width:6.5rem;" placeholder="coins"
+                     value="{{ prize_table.get(key, {}).get('coins') or '' }}">
+              <input type="number" name="prize_{{ key }}_gems" min="0" style="width:5rem;" placeholder="gems"
+                     value="{{ prize_table.get(key, {}).get('gems') or '' }}">
+            </span>
+            {% endfor %}
+          </span>
+          {% if t.awards_given_at %}<small style="color:var(--muted);">Already awarded on {{ t.awards_given_at.strftime('%d %b %Y') }}.</small>{% endif %}</div>
+        <div><label>⚖️ Tiebreak after points</label>
+          <select name="tiebreak">
+            <option value="nrr" {{ 'selected' if (t.tiebreak or 'nrr') == 'nrr' else '' }}>Wins → net run rate</option>
+            <option value="h2h" {{ 'selected' if t.tiebreak == 'h2h' else '' }}>Head-to-head → net run rate</option>
+          </select></div>
+        <div><label>⏳ Round length (hours)</label>
+          <input type="number" name="round_hours" min="0" max="1440"
+                 value="{{ t.round_hours or '' }}" placeholder="blank = no deadline">
+          <small style="color:var(--muted);">Reminders 24h &amp; 2h before; admins are alerted when time runs out — nothing is simulated automatically.
+            {% if t.round_deadline_at %}Current round ends {{ t.round_deadline_at.strftime('%d %b %H:%M') }} UTC.{% endif %}</small></div>
       </div>
       <div style="margin-top:.6rem;">
         <label>⭐ Rating rule — every XI must include at least N players rated X or lower</label>
@@ -271,6 +309,18 @@
                    placeholder="co-owner ids" style="max-width:170px;"
                    title="Comma-separated Telegram ids. A co-owner may play this team just like the owner. Blank clears them.">
             <button class="btn" type="submit">Set co-owners</button>
+          </form>
+          <form method="POST" style="display:flex; gap:.3rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="set_team_home_stadium">
+            <input type="hidden" name="team_id" value="{{ tt.id }}">
+            <select name="home_stadium" style="max-width:190px;" title="Home ground (from Stadium Data)">
+              <option value="">🏟️ No home ground</option>
+              {% for name, city in stadium_choices %}
+              <option value="{{ name }}" {{ 'selected' if tt.home_stadium == name else '' }}>{{ name }}</option>
+              {% endfor %}
+            </select>
+            <button class="btn" type="submit">Set home</button>
           </form>
           <form method="POST" style="display:flex; gap:.3rem;">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

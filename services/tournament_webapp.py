@@ -167,6 +167,8 @@ def my_team_ids(session, tour, tg_id):
 
 def _table_rows(session, tour, group_id, mine):
     from services.cl_tournament_view import team_form
+    from services import qualification
+    marks, spots = qualification.table_marks(session, tour)
     rows = []
     for pos, tt in enumerate(tournament_service.points_table(session, tour.id,
                                                                group_id=group_id), 1):
@@ -181,6 +183,9 @@ def _table_rows(session, tour, group_id, mine):
             "points_adjust_note": tt.points_adjust_note,
             "form": list(reversed(team_form(session, tour.id, tt.id, limit=5))),
             "is_mine": tt.id in mine,
+            "qual": getattr(marks.get(tt.id), "mark", None),
+            "qual_note": (qualification.need_line(tt.name or "—", marks.get(tt.id), spots)
+                          if tt.id in marks else None),
         })
     return rows
 
@@ -279,7 +284,7 @@ def tournament_payload(session, tour, tg_id=None):
             "round_played": progress["played"] if progress else None,
             "round_total": progress["total"] if progress else None,
             "locked_fixtures": locked,
-            "round_banner": league_schedule_service.round_banner(progress, locked),
+            "round_banner": league_schedule_service.round_banner(progress, locked, tour),
             "champion": _team_brief(champ),
         },
         "table": table_rows,

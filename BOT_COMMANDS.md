@@ -308,6 +308,9 @@ Admin commands for running one: [Appendix B](#appendix-b--admin--owner-commands)
 | `/clsd` | `/clschedule` `/ctsd` | One team's schedule: standing, form, next matches, results |
 | `/teamtourstats` | `/teamstour` `/myteamstats` `/tts` | A team's tournament by the numbers |
 | `/mvp` | `/tourmvp` `/ctmvp` | Most Valuable Player — batting + bowling + wins + POTM |
+| `/tteam` | `/tott` `/teamoftournament` | Team of the Tournament — the best XI so far, as cards 🌟 |
+| `/tbracket` | `/bracket` | The playoff bracket as a picture 🏆 |
+| `/thome <team> \| <stadium>` | `/homeground` | Team owners: set your home ground (from Stadium Data) 🏟️ |
 
 ## 12. Tournament Draft
 
@@ -875,6 +878,12 @@ overdraw somebody is refused by name.
 | `/tpointsclear <TEAM>` | Clear a team's points adjustment |
 | `/taddmatch <match number>` · `/addmatch` *(reply to a scorecard)* | Record a fixture played off the bot |
 | `/tfixsync` | Un-stick fixtures still showing as live |
+| `/tdeadline 48h` · `/tdeadline +12h` · `/tdeadline off` | Round deadlines. Owners are reminded 24h and 2h before; when time runs out the admins are alerted (group + DM, with /tsim and +24h buttons). **Nothing is simulated automatically** |
+| `/tsetchat` | Post the tournament's recaps, deadline alerts, bracket and ceremony in this group (default: the first group a tournament match is played in) |
+| `/ttiebreak h2h\|nrr` | Teams level on points: head-to-head first, or wins then NRR |
+| `/tstadiums` · `/tstadiums add\|remove <name>` · `/tstadiums all` | The tournament's grounds, picked from Stadium Data (admin site → Conditions → Stadium) |
+| `/thome <team> \| <stadium>` | A team's home ground (admins, or the team's owner) |
+| `/tprize <award> <coins> [gems]` | Prizes paid when the final is decided: champion, runnerup, orange, purple, mvp |
 | `/tsim` · `/tsim <match no> <1\|2\|random\|team>` · `/tsim round` | Simulate a match nobody will play — team 1 wins, team 2 wins or a random winner, with a believable score line (marked *simulated*). Bare `/tsim` lists the open round with buttons; `/tsim round` settles every unplayed match in it at random. Also the 🎲 Simulate button on the admin Schedule page |
 | `/tseasons` · `/tseasons 2 \| 3` | Season links. Bare lists 🟢 **running** and ✅ **completed** tournaments (📦 = deleted, stats kept), each numbered. `/tseasons 2 \| 3` — running #2's **Total Season Stats** adds completed #3; `2 \| 3 5` several; `2 \| -3` unlink; `2 \| auto` back to every season in the league; `/tseasons 2` shows its links. Also the 🔗 Link seasons card on the admin Tournaments page |
 | `/tratingrule [#id] <max rating> <min players>` | Tournament rating rule — `/tratingrule 83 3`: every Playing XI must field at least 3 players rated 83 or lower (bot XIs too). `/tratingrule off 83`, `/tratingrule clear`; bare lists it. Also on the tournament's admin page |
@@ -1079,6 +1088,14 @@ admin panel, but the commands are not registered.
 | `/tpts` | `/tpoints` 🔒 |
 | `/thelp`, `/tournamenthelp` | `/tourhelp` |
 | `/tsimulate` | `/tsim` 🔒 |
+| `/tchat` | `/tsetchat` 🔒 |
+| `/tdeadlines` | `/tdeadline` 🔒 |
+| `/ttb` | `/ttiebreak` 🔒 |
+| `/tstadium` | `/tstadiums` 🔒 |
+| `/homeground` | `/thome` |
+| `/tprizes` | `/tprize` 🔒 |
+| `/tott`, `/teamoftournament` | `/tteam` |
+| `/bracket` | `/tbracket` |
 | `/tptsclear` | `/tpointsclear` 🔒 |
 | `/tr` | `/trade` |
 | `/trep` | `/traitreplace` |

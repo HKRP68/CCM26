@@ -83,7 +83,7 @@ def _gradient_bg(width, height):
 
 
 def build_xi_image(xi_pairs, *, team_name, captain_roster_id=None,
-                   columns_layout=_DEFAULT_LAYOUT):
+                   columns_layout=_DEFAULT_LAYOUT, title="PLAYING XI"):
     """Render the Playing XI as a single PNG.
 
     Args:
@@ -91,6 +91,7 @@ def build_xi_image(xi_pairs, *, team_name, captain_roster_id=None,
       team_name: header subtitle (handle / team name / first name).
       captain_roster_id: User.captain_roster_id — the captain's UserRoster id.
       columns_layout: cards per row, default (4, 4, 3).
+      title: the header text (e.g. "TEAM OF THE TOURNAMENT").
 
     Returns: PNG bytes, or None on failure.
     """
@@ -160,9 +161,8 @@ def build_xi_image(xi_pairs, *, team_name, captain_roster_id=None,
     draw.rectangle([0, 0, width, header_h], fill=_HEADER_BG)
     draw.line([(0, header_h), (width, header_h)], fill=_ACCENT, width=2)
 
-    title_font = _font(64, display=True)
+    title_font = _font(64 if len(title) <= 12 else 46, display=True)
     sub_font = _font(26)
-    title = "PLAYING XI"
     draw.text((side, 24), title, fill=_WHITE, font=title_font)
     sub = f'"{team_name}"'
     draw.text((side + 4, 92), sub[:48], fill=_ACCENT, font=sub_font)

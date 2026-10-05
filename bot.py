@@ -2244,6 +2244,9 @@ def main():
             taddmatch_callback, tfixsync_handler, CB_IMPORT,
             tratingrule_handler, tseasons_handler,
             tsim_handler, tsim_callback, CB_SIM,
+            tsetchat_handler, tdeadline_handler, tdeadline_callback,
+            ttiebreak_handler, tstadiums_handler, thome_handler,
+            tprize_handler, tteam_handler, tbracket_handler,
         )
         app.add_handler(CommandHandler(["tpoints", "tpts"], tpoints_handler))
         app.add_handler(CommandHandler(["tpointsclear", "tptsclear"],
@@ -2264,6 +2267,16 @@ def main():
                                        tourhelp_handler))
         app.add_handler(CallbackQueryHandler(tsim_callback,
                                              pattern=r"^" + CB_SIM))
+        app.add_handler(CommandHandler(["tsetchat", "tchat"], tsetchat_handler))
+        app.add_handler(CommandHandler(["tdeadline", "tdeadlines"], tdeadline_handler))
+        app.add_handler(CallbackQueryHandler(tdeadline_callback, pattern=r"^tdl_"))
+        app.add_handler(CommandHandler(["ttiebreak", "ttb"], ttiebreak_handler))
+        app.add_handler(CommandHandler(["tstadiums", "tstadium"], tstadiums_handler))
+        app.add_handler(CommandHandler(["thome", "homeground"], thome_handler))
+        app.add_handler(CommandHandler(["tprize", "tprizes"], tprize_handler))
+        app.add_handler(CommandHandler(["tteam", "teamoftournament", "tott"],
+                                       tteam_handler))
+        app.add_handler(CommandHandler(["tbracket", "bracket"], tbracket_handler))
 
         # ── Tournament Draft ─────────────────────────────────────────
         # Teams pick their squads live in one bound group chat; the finished
@@ -2995,6 +3008,18 @@ def main():
                                              name="tour_expiry")
         except Exception:
             logger.exception("Failed to schedule tour expiry")
+
+        # Tournament watch (every 2 minutes): round deadlines and reminders,
+        # round recaps, the playoff bracket, the awards ceremony. The service
+        # decides what is due; this job only sends it. See
+        # services/tournament_watch.py.
+        try:
+            from handlers.tournament_admin import tournament_watch_job
+            if app.job_queue:
+                app.job_queue.run_repeating(tournament_watch_job, interval=120,
+                                             first=90, name="tournament_watch")
+        except Exception:
+            logger.exception("Failed to schedule the tournament watch")
 
         # Schedule periodic stuck-match cleanup (every hour). A match is
         # "stuck" if its status='active' but its MatchState hasn't been

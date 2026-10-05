@@ -9541,7 +9541,7 @@ function tnTableHtml(rows, qualify) {
     <tbody>${rows.map(r => `
       <tr class="${r.is_mine ? 'me' : ''} ${qualify && r.pos <= qualify ? 'q' : ''} ${qualify && r.pos === qualify && rows.length > qualify ? 'cut' : ''}">
         <td class="pos">${r.pos}</td>
-        <td class="team"><div class="tn-team">${tnLogo(r)}<div style="min-width:0;"><div class="nm">${escapeHtml(r.name)}${r.points_adjust ? ' <span style="color:var(--muted);">*</span>' : ''}</div>
+        <td class="team"><div class="tn-team">${tnLogo(r)}<div style="min-width:0;"><div class="nm">${escapeHtml(r.name)}${r.points_adjust ? ' <span style="color:var(--muted);">*</span>' : ''}${r.qual ? ` <span title="${escapeHtml(r.qual_note || '')}" style="font-weight:700;color:${r.qual === 'Q' ? 'var(--green, #22c55e)' : 'var(--muted)'};">(${r.qual})</span>` : ''}</div>
           ${r.form && r.form.length ? `<div class="tn-form">${r.form.map(f => `<span class="${f}">${f}</span>`).join('')}</div>` : ''}</div></div></td>
         <td>${r.played}</td><td>${r.won}</td><td>${r.lost}</td><td>${r.no_result + r.tied}</td>
         <td>${tnNrr(r.nrr)}</td><td class="pts">${r.points}</td>

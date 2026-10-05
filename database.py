@@ -644,6 +644,20 @@ def _migrate_add_columns():
     _try_add("tournaments", "preferred_pitch_limit", "INTEGER DEFAULT 4")
     _try_add("tournament_teams", "preferred_pitches_json", "TEXT")
     _try_add("tournament_matches", "venue", "VARCHAR(120)")
+    # Round watch, tiebreak, stadiums and prizes (services.tournament_watch).
+    _try_add("tournaments", "announce_chat_id", "BIGINT")
+    _try_add("tournaments", "round_hours", "INTEGER")
+    _try_add("tournaments", "round_deadline_at", "TIMESTAMP")
+    _try_add("tournaments", "round_tracked", "INTEGER DEFAULT 0")
+    _try_add("tournaments", "round_reminder_stage", "INTEGER DEFAULT 0")
+    _try_add("tournaments", "recap_round", "INTEGER DEFAULT 0")
+    _try_add("tournaments", "bracket_posted_key", "VARCHAR(80)")
+    _try_add("tournaments", "tiebreak", "VARCHAR(10) DEFAULT 'nrr'")
+    _try_add("tournaments", "stadiums_json", "TEXT")
+    _try_add("tournaments", "prizes_json", "TEXT")
+    _try_add("tournaments", "awards_given_at", "TIMESTAMP")
+    _try_add("tournaments", "awards_announced_at", "TIMESTAMP")
+    _try_add("tournament_teams", "home_stadium", "VARCHAR(120)")
     # Public tournament-info command for a league (/iplfixtures & friends).
     _try_add("challenge_leagues", "fixtures_command", "VARCHAR(60)")
 

@@ -406,6 +406,12 @@ def assign_fixture_venues(session, tournament_id, *, overwrite=False):
              .order_by(TournamentMatch.round_no, TournamentMatch.match_no,
                        TournamentMatch.id).all()),
             overwrite)
+    # The ground each fixture is played at (home stadium / tournament list).
+    try:
+        from services import tournament_stadiums
+        changed += tournament_stadiums.assign_venues(session, tid, overwrite=overwrite)
+    except Exception:
+        logger.exception("Could not assign fixture stadiums for %s", tid)
     if changed:
         session.flush()
     return changed
@@ -861,12 +867,20 @@ def split_open_round(session, tournament_id, fixtures):
     return visible, len(fixtures) - len(visible), progress
 
 
-def round_banner(progress, locked_count):
-    """One plain-text line describing the open round, or "" when there is none."""
+def round_banner(progress, locked_count, tour=None):
+    """One plain-text line describing the open round, or "" when there is none.
+
+    With ``tour``, the round's deadline is included ("⏳ ends in 1d 4h").
+    """
     if not progress:
         return ""
     text = (f"Round {progress['round']} of {progress['rounds']} · "
             f"{progress['played']}/{progress['total']} played")
+    if tour is not None:
+        from services.tournament_watch import deadline_text
+        left = deadline_text(tour)
+        if left:
+            text += f" · {left}"
     if locked_count:
         text += (f" · 🔒 {locked_count} match{'es' if locked_count != 1 else ''}"
                  f" in later rounds unlock as each round finishes")

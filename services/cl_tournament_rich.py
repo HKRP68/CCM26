@@ -96,9 +96,14 @@ def table_blocks(session, tour):
     header += [R.cell(R.bold(label), header=True, align="right")
                for label in ("P", "W", "L", "T", "PTS", "NRR")]
     cells = [header]
+    from services import qualification
+    marks, spots = qualification.table_marks(session, tour)
     for position, tt in enumerate(rows, 1):
         adjusted = int(getattr(tt, "points_adjust", 0) or 0)
         name = (tt.name or "—") + ("*" if adjusted else "")
+        mark = getattr(marks.get(tt.id), "mark", None)
+        if mark:
+            name += f"  ({mark})"
         cells.append([
             R.cell(str(position), align="center"),
             R.cell(name),
@@ -110,6 +115,13 @@ def table_blocks(session, tour):
             R.cell(V._nrr_text(tt._nrr), align="right"),
         ])
     blocks.append(R.table(cells, bordered=True, striped=True, compact=True))
+    if marks:
+        race = qualification.race_lines(rows, marks, spots)
+        blocks.append(R.paragraph(R.italic(
+            f"Q = through to the playoffs · E = can no longer finish in the top {spots}")))
+        if race:
+            blocks.append(R.details(R.bold(f"🎯 Race for the top {spots}"),
+                                    [R.list_block([[line] for line in race])]))
 
     adjustments = [tt for tt in rows
                    if int(getattr(tt, "points_adjust", 0) or 0)]
@@ -151,7 +163,10 @@ def _fixture_row(fx, names, mine_ids):
         state = ["🔴 ", R.bold("in progress")]
     else:
         pitch = (fx.pitch_type or "").strip()
-        state = ["⚪ ", "🌱 " + pitch if pitch else "—"]
+        ground = (getattr(fx, "venue", None) or "").strip()
+        state = ["⚪ ", "🌱 " + pitch if pitch else ("" if ground else "—")]
+        if ground:
+            state.append(f"  🏟️ {ground}")
     row = [R.cell(R.code(_fixture_tag(fx)), align="center"),
            R.cell(versus), R.cell(state)]
     if mine_ids and mine_ids & {fx.team1_id, fx.team2_id}:
@@ -187,7 +202,7 @@ def fixtures_blocks(session, tour, viewer_tg_id=None, limit=None):
     from services import league_schedule_service
     fixtures, locked, progress = league_schedule_service.split_open_round(
         session, tour.id, fixtures)
-    banner = league_schedule_service.round_banner(progress, locked)
+    banner = league_schedule_service.round_banner(progress, locked, tour)
     if banner:
         blocks.append(R.paragraph(["🔵 ", R.bold(banner)]))
 
@@ -319,7 +334,10 @@ def team_schedule_blocks(session, tour, team, viewer_tg_id=None, limit=40):
             state = ["🔴 ", R.bold("in progress")]
         else:
             pitch = (fx.pitch_type or "").strip()
-            state = ["⚪ ", "🌱 " + pitch if pitch else "—"]
+            ground = (getattr(fx, "venue", None) or "").strip()
+            state = ["⚪ ", "🌱 " + pitch if pitch else ("" if ground else "—")]
+            if ground:
+                state.append(f"  🏟️ {ground}")
         return [R.cell(R.code(_fixture_tag(fx)), align="center"),
                 R.cell(f"{venue}  {other}"),
                 R.cell(state)]

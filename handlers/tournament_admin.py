@@ -826,7 +826,7 @@ def _sim_listing(session, tour):
     open_fx = _open_fixtures(session, tour)
     head = f"🎲 <b>{html.escape(tour.name)}</b> — simulate a fixture"
     progress = league_schedule_service.round_progress(session, tour.id)
-    banner = league_schedule_service.round_banner(progress, 0)
+    banner = league_schedule_service.round_banner(progress, 0, tour)
     if banner:
         head += f"\n🔵 {banner}"
     if not open_fx:
@@ -983,3 +983,468 @@ async def tsim_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if msg is not None:
         await msg.reply_text(text, parse_mode="HTML",
                              disable_web_page_preview=True)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The tournament watch job, /tsetchat and /tdeadline
+# ──────────────────────────────────────────────────────────────────────
+
+def _markup(rows):
+    if not rows:
+        return None
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=data)
+                                  for label, data in row] for row in rows])
+
+
+async def _send_post(bot, chat_id, post, with_buttons=True):
+    markup = _markup(post.buttons) if with_buttons else None
+    if post.photo:
+        import io
+        caption = post.text if len(post.text) <= 1024 else None
+        await bot.send_photo(chat_id, io.BytesIO(post.photo), caption=caption,
+                             parse_mode="HTML", reply_markup=markup)
+        if caption is None and post.text:
+            await bot.send_message(chat_id, post.text, parse_mode="HTML",
+                                   disable_web_page_preview=True)
+        return
+    from utils.message_chunks import chunk_blocks
+    parts = chunk_blocks([post.text])
+    for i, part in enumerate(parts):
+        await bot.send_message(chat_id, part, parse_mode="HTML",
+                               disable_web_page_preview=True,
+                               reply_markup=markup if i == len(parts) - 1 else None)
+
+
+async def tournament_watch_job(context):
+    """Every couple of minutes: send whatever the tournament watch says is due."""
+    from services import tournament_watch
+    session = get_session()
+    try:
+        due = tournament_watch.tick_all(session)
+        # Commit first: the bookkeeping is what stops a post going out twice,
+        # and a lost post is better than one repeated every two minutes.
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("tournament watch tick failed")
+        return
+    finally:
+        session.close()
+    bot = context.bot
+    for _tid, post in due:
+        if post.chat_id:
+            try:
+                await _send_post(bot, post.chat_id, post)
+            except Exception:
+                logger.warning("tournament watch: group post to %s failed",
+                               post.chat_id, exc_info=True)
+        for tg_id, text in post.dms:
+            try:
+                dm = type(post)(text=text, photo=post.photo,
+                                buttons=post.buttons if post.dm_buttons else [])
+                await _send_post(bot, tg_id, dm)
+            except Exception:
+                logger.info("tournament watch: DM to %s failed", tg_id)
+
+
+async def tsetchat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tsetchat — post this tournament's news (recaps, deadlines…) in this group."""
+    if not await _require_admin(update):
+        return
+    chat = update.effective_chat
+    if chat is None or chat.id > 0:
+        await _reply(update, "Run <code>/tsetchat</code> inside the group the "
+                             "tournament news should go to.")
+        return
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+        except ValueError as exc:
+            await _reply(update, str(exc))
+            return
+        tour.announce_chat_id = chat.id
+        session.commit()
+        await _reply(update, f"📣 <b>{html.escape(tour.name)}</b> — round recaps, "
+                             "deadline alerts, the bracket and the awards "
+                             "ceremony will be posted here.")
+    finally:
+        session.close()
+
+
+_DEADLINE_USAGE = (
+    "⏳ <b>Round deadlines</b>\n\n"
+    "<code>/tdeadline 48h</code> — every round gets 48 hours (or <code>2d</code>)\n"
+    "<code>/tdeadline +12h</code> — give the current round 12 more hours\n"
+    "<code>/tdeadline off</code> — no deadlines\n\n"
+    "Reminders go out 24h and 2h before the end. When a round's time runs out "
+    "the admins are alerted — <b>nothing is simulated automatically</b>; settle "
+    "a match with <code>/tsim</code> or extend the round."
+)
+
+
+def _deadline_summary(tour):
+    from services import tournament_watch as tw
+    if not tour.round_hours:
+        return f"⏳ <b>{html.escape(tour.name)}</b> — no round deadlines."
+    line = (f"⏳ <b>{html.escape(tour.name)}</b> — each round gets "
+            f"<b>{tour.round_hours}h</b>.")
+    left = tw.deadline_text(tour)
+    if left:
+        line += f"\nCurrent round (Round {tour.round_tracked}): {left}."
+    return line
+
+
+async def tdeadline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tdeadline [48h | +12h | off] — round deadlines (alert only)."""
+    if not await _require_admin(update):
+        return
+    from services import tournament_watch as tw
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+            if not args:
+                await _reply(update, _deadline_summary(tour) + "\n\n" + _DEADLINE_USAGE)
+                return
+            token = args[0].lower()
+            if token in ("off", "none", "clear", "0"):
+                tw.set_round_hours(session, tour, None)
+            else:
+                hours, relative = tw.parse_hours(token)
+                if relative:
+                    tw.extend_deadline(session, tour, hours)
+                else:
+                    tw.set_round_hours(session, tour, hours)
+            session.commit()
+        except ValueError as exc:
+            session.rollback()
+            await _reply(update, f"⚠️ {html.escape(str(exc))}")
+            return
+        await _reply(update, "✅ " + _deadline_summary(tour))
+    finally:
+        session.close()
+
+
+async def tdeadline_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """The "⏳ +24h" button on a deadline alert."""
+    from services import tournament_watch as tw
+    query = update.callback_query
+    if query is None:
+        return
+    if not is_admin(query.from_user.id if query.from_user else 0):
+        await query.answer(NOT_ADMIN, show_alert=True)
+        return
+    tid, _, hours = (query.data or "")[len(tw.CB_EXTEND):].partition("_")
+    session = get_session()
+    try:
+        tour = session.get(Tournament, int(tid))
+        if tour is None:
+            await query.answer("That tournament is gone.", show_alert=True)
+            return
+        try:
+            tw.extend_deadline(session, tour, int(hours or 24))
+            session.commit()
+        except ValueError as exc:
+            session.rollback()
+            await query.answer(str(exc)[:200], show_alert=True)
+            return
+        text = (f"⏳ <b>{html.escape(tour.name)}</b> — Round {tour.round_tracked} "
+                f"extended by {int(hours or 24)}h: {tw.deadline_text(tour)}.")
+    finally:
+        session.close()
+    await query.answer("Extended.")
+    if query.message is not None:
+        await query.message.reply_text(text, parse_mode="HTML")
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /ttiebreak — how teams level on points are separated
+# ──────────────────────────────────────────────────────────────────────
+
+async def ttiebreak_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/ttiebreak [h2h | nrr] — head-to-head or wins/NRR after points."""
+    if not await _require_admin(update):
+        return
+    from services import standings
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+        except ValueError as exc:
+            await _reply(update, str(exc))
+            return
+        if not args:
+            cur = tour.tiebreak or "nrr"
+            await _reply(update,
+                         f"⚖️ <b>{html.escape(tour.name)}</b> — tiebreak: "
+                         f"<b>{standings.TIEBREAK_LABEL[cur]}</b>\n\n"
+                         "<code>/ttiebreak h2h</code> — head-to-head first\n"
+                         "<code>/ttiebreak nrr</code> — wins, then net run rate")
+            return
+        choice = args[0].lower().replace("-", "")
+        choice = {"headtohead": "h2h", "h2h": "h2h", "nrr": "nrr",
+                  "netrunrate": "nrr", "wins": "nrr"}.get(choice)
+        if choice is None:
+            await _reply(update, "⚠️ Use <code>h2h</code> or <code>nrr</code>.")
+            return
+        tour.tiebreak = choice
+        session.commit()
+        await _reply(update, f"⚖️ <b>{html.escape(tour.name)}</b> — tiebreak is now "
+                             f"<b>{standings.TIEBREAK_LABEL[choice]}</b>. The table "
+                             "and playoff seeding follow it.")
+    finally:
+        session.close()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /tstadiums and /thome — where the tournament is played
+# ──────────────────────────────────────────────────────────────────────
+
+_STADIUMS_USAGE = (
+    "🏟️ <b>Tournament stadiums</b> — picked from <b>Stadium Data</b> (admin site → "
+    "Conditions → Stadium; add new grounds there)\n\n"
+    "<code>/tstadiums</code> — this tournament's grounds\n"
+    "<code>/tstadiums all</code> — every stadium in Stadium Data\n"
+    "<code>/tstadiums add Wankhede Stadium</code>\n"
+    "<code>/tstadiums remove Wankhede Stadium</code>\n"
+    "<code>/tstadiums clear</code>\n\n"
+    "Home grounds: <code>/thome &lt;team&gt; | &lt;stadium&gt;</code>. A league match "
+    "is played at the home team's ground; otherwise at one of the tournament's "
+    "grounds (knockouts always at a neutral one from the list)."
+)
+
+
+def _stadium_list_text(session, tour):
+    from services import tournament_stadiums as TS
+    names = TS.tour_stadiums(tour)
+    homes = [(t.name, t.home_stadium) for t in
+             session.query(TournamentTeam).filter_by(tournament_id=tour.id)
+             .order_by(TournamentTeam.sort_order, TournamentTeam.id).all()]
+    lines = [f"🏟️ <b>{html.escape(tour.name)}</b> — stadiums", ""]
+    if names:
+        lines += [f"• {html.escape(TS.describe(n))}" for n in names]
+    else:
+        lines.append("<i>No list — matches without a home ground get a random venue.</i>")
+    lines += ["", "<b>Home grounds</b>"]
+    lines += [f"• {html.escape(name or '—')}: "
+              + (html.escape(home) if home else "<i>none</i>") for name, home in homes]
+    return "\n".join(lines)
+
+
+async def tstadiums_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tstadiums [all | add <name> | remove <name> | clear]."""
+    if not await _require_admin(update):
+        return
+    from services import tournament_stadiums as TS
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+            sub = (args[0].lower() if args else "")
+            rest = " ".join(args[1:]).strip()
+            if sub in ("", "list"):
+                await _reply(update, _stadium_list_text(session, tour) + "\n\n"
+                             + _STADIUMS_USAGE)
+                return
+            if sub in ("all", "data"):
+                rows = TS.all_rows()
+                lines = [f"🏟️ <b>Stadium Data</b> — {len(rows)} grounds", ""]
+                lines += [f"• {html.escape(r.get('name'))}"
+                          + (f" <i>({html.escape(r.get('city'))})</i>" if r.get("city") else "")
+                          for r in rows]
+                lines += ["", "Add more on the admin site → Conditions → Stadium."]
+                await _reply_long(update, "\n".join(lines))
+                return
+            if sub == "add":
+                if not rest:
+                    raise ValueError("Name the stadium: /tstadiums add Eden Gardens")
+                canon = TS.add_tour_stadium(tour, rest)
+                note = f"➕ Added <b>{html.escape(canon)}</b>."
+            elif sub in ("remove", "rm", "del"):
+                canon = TS.remove_tour_stadium(tour, rest)
+                note = f"➖ Removed <b>{html.escape(canon)}</b>."
+            elif sub == "clear":
+                TS.set_tour_stadiums(tour, [])
+                note = "🧹 Cleared the stadium list."
+            else:
+                raise ValueError("Use add, remove, clear, all — or nothing to list.")
+            session.flush()
+            n = TS.assign_venues(session, tour.id, overwrite=(sub != "add"))
+            session.commit()
+        except ValueError as exc:
+            session.rollback()
+            await _reply(update, f"⚠️ {html.escape(str(exc))}")
+            return
+        await _reply(update, f"{note} {n} unplayed fixture venue(s) updated.\n\n"
+                     + _stadium_list_text(session, tour))
+    finally:
+        session.close()
+
+
+async def thome_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/thome <team> | <stadium> — a team's home ground (admin, or its owner)."""
+    from services import tournament_stadiums as TS
+    user = update.effective_user
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+            text = " ".join(args)
+            if "|" not in text:
+                await _reply(update, "🏠 <b>Home ground</b>\n\n"
+                             "<code>/thome &lt;team&gt; | &lt;stadium&gt;</code> — e.g. "
+                             "<code>/thome Mumbai | Wankhede Stadium</code>\n"
+                             "<code>/thome Mumbai | none</code> — clear it\n\n"
+                             "Stadiums come from Stadium Data — <code>/tstadiums all</code> "
+                             "lists them.")
+                return
+            team_q, stadium_q = (p.strip() for p in text.split("|", 1))
+            team = _find_team(session, tour, team_q)
+            uid = user.id if user else None
+            if not (is_admin(uid) or tournament_service.is_team_member(team, uid)):
+                raise ValueError(f"Only an admin or {team.name}'s owner can set its "
+                                 "home ground.")
+            clear = stadium_q.lower() in ("", "none", "clear", "-")
+            canon = TS.set_home_stadium(session, team, None if clear else stadium_q)
+            session.commit()
+        except ValueError as exc:
+            session.rollback()
+            await _reply(update, f"⚠️ {html.escape(str(exc))}")
+            return
+        if canon:
+            await _reply(update, f"🏠 <b>{html.escape(team.name)}</b> now play their "
+                                 f"home matches at <b>{html.escape(TS.describe(canon))}</b>. "
+                                 "Unplayed home fixtures were moved there.")
+        else:
+            await _reply(update, f"🏠 <b>{html.escape(team.name)}</b> has no home "
+                                 "ground now.")
+    finally:
+        session.close()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /tprize — prizes paid when the final is decided
+# ──────────────────────────────────────────────────────────────────────
+
+_PRIZE_USAGE = (
+    "💰 <b>Tournament prizes</b> — paid automatically when the final is decided\n\n"
+    "<code>/tprize champion 5000 50</code> — coins, then gems\n"
+    "<code>/tprize runnerup 2500 20</code>\n"
+    "<code>/tprize orange 1000</code> · <code>/tprize purple 1000</code> · "
+    "<code>/tprize mvp 1500 10</code>\n"
+    "<code>/tprize champion 0</code> — remove a prize\n\n"
+    "Team awards go to the team's owner; caps and MVP to the player's owner. "
+    "Winners are listed in /halloffame → 🏆 Tournaments."
+)
+
+
+def _prize_summary(tour):
+    from services import tournament_awards as TA
+    table = TA.prizes(tour)
+    lines = [f"💰 <b>{html.escape(tour.name)}</b> — prizes"]
+    for award in TA.AWARDS:
+        lines.append(f"{TA.AWARD_LABEL[award]}: "
+                     + (TA.prize_text(table.get(award)) or "<i>none</i>"))
+    if tour.awards_given_at:
+        lines.append("\n<i>Already awarded — changes no longer pay out.</i>")
+    return "\n".join(lines)
+
+
+async def tprize_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tprize <award> <coins> [gems] — set a prize; bare lists them."""
+    if not await _require_admin(update):
+        return
+    from services import tournament_awards as TA
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+            if not args:
+                await _reply(update, _prize_summary(tour) + "\n\n" + _PRIZE_USAGE)
+                return
+            if len(args) < 2:
+                raise ValueError("Give an award and an amount: /tprize champion 5000 50")
+            try:
+                coins = int(args[1].replace(",", ""))
+                gems = int(args[2].replace(",", "")) if len(args) > 2 else 0
+            except ValueError:
+                raise ValueError("Amounts must be whole numbers: /tprize mvp 1500 10")
+            TA.set_prize(tour, args[0], coins, gems)
+            session.commit()
+        except ValueError as exc:
+            session.rollback()
+            await _reply(update, f"⚠️ {html.escape(str(exc))}")
+            return
+        await _reply(update, "✅ " + _prize_summary(tour))
+    finally:
+        session.close()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /tteam — Team of the Tournament (anyone)
+# ──────────────────────────────────────────────────────────────────────
+
+async def tteam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tteam — the best XI of the running tournament, as cards."""
+    import asyncio
+    import io
+    from services import team_of_tournament as TOT
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+        except ValueError as exc:
+            await _reply(update, str(exc))
+            return
+        xi = TOT.pick_xi(session, tour.id)
+        text = TOT.render_text(tour, xi)
+        photo = await asyncio.to_thread(TOT.render_image, tour, xi) if xi else None
+    finally:
+        session.close()
+    msg = update.effective_message
+    if photo and msg is not None:
+        await msg.reply_photo(io.BytesIO(photo), caption=text[:1024], parse_mode="HTML")
+        if len(text) > 1024:
+            await _reply(update, text)
+    else:
+        await _reply(update, text)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /tbracket — the playoff bracket as a picture (anyone)
+# ──────────────────────────────────────────────────────────────────────
+
+async def tbracket_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tbracket — the running tournament's playoff bracket image."""
+    import asyncio
+    import io
+    from services import bracket_image
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+        except ValueError as exc:
+            await _reply(update, str(exc))
+            return
+        name = tour.name
+        png = await asyncio.to_thread(bracket_image.render, session, tour)
+    finally:
+        session.close()
+    msg = update.effective_message
+    if not png:
+        await _reply(update, f"🏆 <b>{html.escape(name)}</b> — no playoff bracket "
+                             "yet. It appears once the league stage is over.")
+        return
+    if msg is not None:
+        await msg.reply_photo(io.BytesIO(png),
+                              caption=f"🏆 <b>{html.escape(name)}</b> — playoffs",
+                              parse_mode="HTML")

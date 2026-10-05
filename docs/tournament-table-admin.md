@@ -311,6 +311,76 @@ early.
 
 ---
 
+## 5. The tournament watch: deadlines, recaps, bracket, ceremony
+
+A job runs every 2 minutes (`tournament_watch_job`). For each running
+tournament, `services/tournament_watch.py::tick` compares what it sees with
+what it last announced, using the bookkeeping columns on `Tournament`. It
+returns the posts that are due. It works the same however a result arrived:
+a played match, `/tsim`, the admin site or `/taddmatch`. The first time it
+sees an existing tournament it only takes a snapshot, so an old season doesn't
+get a flood of recaps.
+
+The posts go to the **announce chat**. By default that's the first group a
+tournament match is played in; `/tsetchat` overrides it.
+
+| What | When |
+| --- | --- |
+| ⏳ Reminder (group roundup + DM card to each owner) | 24h and 2h before the round's deadline |
+| ⏰ Deadline passed (group + DM to every bot admin, with `/tsim` and ⏳ +24h/+48h buttons) | when the round's time runs out. **Nothing is simulated automatically.** |
+| 📋 Round recap: results, table movers, player of the round, top of the table, next round with owner mentions | when a league round finishes |
+| 🏆 Bracket picture | when the playoffs are seeded and after each knockout result |
+| 🎉 Awards ceremony + 🌟 Team of the Tournament | when the final is decided |
+
+Deadlines are set with `/tdeadline 48h` or on the admin site ("Round length").
+Each new round gets a fresh clock. `/tdeadline +12h` and the alert's buttons
+extend the current round.
+
+## 6. Qualification tracker and tiebreak
+
+Points tables mark a team **Q** once no remaining results can push it out of
+the qualifying places, and **E** once none can lift it in. A tie on points
+counts as a threat, so a mark never has to be taken back. Teams still in the
+race are listed with the wins they need to be sure. The logic is in
+`services/qualification.py`. The number of qualifying places comes from the
+knockout type: top 4, or top 2/4 per group.
+
+`/ttiebreak h2h` separates teams level on points by their head-to-head
+mini-table, then NRR. `nrr` (the default) uses wins, then NRR. The table,
+playoff seeding, recap and tracker all share `services/standings.py`.
+
+## 7. Stadiums and home grounds
+
+Tournament grounds come from **Stadium Data**: the admin site's Conditions →
+Stadium page, the same list the Conditions Engine plays. A stadium added there
+can be used at once. `/tstadiums add|remove|all` and the admin site's pickers
+choose the tournament's grounds. `/thome <team> | <stadium>` sets a team's home
+ground; an admin or that team's owner can run it.
+
+- A league match is played at the home team's ground, otherwise at one of the
+  tournament's grounds. Knockouts are played at a neutral ground from the list.
+- With neither set, matches keep their random venue.
+- The venue is applied at kickoff for CIPL and Lets Play.
+- A ground later deleted from Stadium Data falls back to another listed ground.
+
+The logic is in `services/tournament_stadiums.py`.
+
+## 8. Prizes, honours, Team of the Tournament
+
+`/tprize champion 5000 50` (and runnerup / orange / purple / mvp), or the admin
+site, sets prizes. When the final is decided,
+`services/tournament_awards.py::finalize` runs once. It writes Champion,
+Runner-up, Orange Cap, Purple Cap and MVP to `tournament_honours` and pays the
+prizes. Team awards go to the team's owner and player awards to the player's
+owner. Past winners appear in `/halloffame` → 🏆 Tournaments.
+
+`/tteam` shows the Team of the Tournament: 1 keeper, 4 batters, 2 all-rounders
+and 4 bowlers by MVP impact points, captained by the MVP. It is drawn as an XI
+card image (`services/team_of_tournament.py`). `/tbracket` draws the playoff
+bracket (`services/bracket_image.py`).
+
+---
+
 ## Where the code is
 
 | what | where |

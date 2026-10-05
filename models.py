@@ -2794,6 +2794,37 @@ class Tournament(Base):
     # built around.
     injury_max_matches = Column(Integer, default=3, nullable=False)
 
+    # ── Round watch: announcements, deadlines, recaps, ceremony ───────────
+    # The group the bot posts tournament news into (round recaps, deadline
+    # alerts, the bracket, the awards ceremony). Set from the first recorded
+    # match's chat, or by an admin with /tsetchat. See services.tournament_watch.
+    announce_chat_id = Column(BigInteger, nullable=True)
+    # Hours each league round gets (NULL = no deadline), and when the open
+    # round's time runs out. A passed deadline only alerts admins — nothing is
+    # ever simulated automatically.
+    round_hours = Column(Integer, nullable=True)
+    round_deadline_at = Column(DateTime, nullable=True)
+    # Bookkeeping so the watch posts each thing exactly once: the open round it
+    # last saw, how far through that round's reminders it is (0 none, 1 = 24h
+    # sent, 2 = 2h sent, 3 = expiry alert sent), the last round recapped, and a
+    # key for the last bracket state posted.
+    round_tracked = Column(Integer, default=0, nullable=False)
+    round_reminder_stage = Column(Integer, default=0, nullable=False)
+    recap_round = Column(Integer, default=0, nullable=False)
+    bracket_posted_key = Column(String(80), nullable=True)
+    # Tiebreak after points: "nrr" (wins, then net run rate) or "h2h" (the
+    # head-to-head mini-table among the tied teams, then net run rate).
+    tiebreak = Column(String(10), default="nrr", server_default="nrr",
+                      nullable=False)
+    # The stadiums this tournament is played in — canonical names from the
+    # Stadium Data list (engine.sim.stadium). NULL = not restricted.
+    stadiums_json = Column(Text, nullable=True)
+    # {"champion": {"coins": 5000, "gems": 50}, "runner_up": …, "orange_cap": …,
+    #  "purple_cap": …, "mvp": …}. Paid once when the final is decided.
+    prizes_json = Column(Text, nullable=True)
+    awards_given_at = Column(DateTime, nullable=True)
+    awards_announced_at = Column(DateTime, nullable=True)
+
     activated_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -2887,6 +2918,9 @@ class TournamentTeam(Base):
     # tournament's ``pitch_mode`` is "home": every fixture the team hosts is
     # played on it. NULL falls back to a random surface.
     home_pitch = Column(String(20), nullable=True)
+    # This team's home ground — a canonical name from Stadium Data. Fixtures
+    # it hosts are played there (and the Conditions Engine plays that ground).
+    home_stadium = Column(String(120), nullable=True)
 
     # This team's preferred surfaces (JSON array, at most the tournament's
     # ``preferred_pitch_limit``). Used when ``pitch_mode`` is "team_preferred";
@@ -3161,6 +3195,29 @@ class TournamentInjury(Base):
         Index("ix_tournament_injury_team_active", "tournament_team_id",
               "matches_remaining"),
     )
+
+
+class TournamentHonour(Base):
+    """One award from a finished tournament — champion, runner-up, caps, MVP.
+
+    Written once by ``services.tournament_awards.finalize`` when the final is
+    decided, and read by the Hall of Fame. Names are copied in so the honour
+    survives the tournament (and its teams) being deleted.
+    """
+    __tablename__ = "tournament_honours"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tournament_id = Column(Integer, ForeignKey("tournaments.id", ondelete="SET NULL"),
+                           nullable=True, index=True)
+    tournament_name = Column(String(120), nullable=False)
+    award = Column(String(20), nullable=False, index=True)
+    team_name = Column(String(120), nullable=True)
+    player_name = Column(String(150), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    value = Column(String(60), nullable=True)      # "512 runs", "21 wkts"
+    prize_coins = Column(Integer, default=0, nullable=False)
+    prize_gems = Column(Integer, default=0, nullable=False)
+    awarded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class TournamentMatchReminder(Base):
