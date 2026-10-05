@@ -174,6 +174,11 @@
         <div><label>Max matches out</label>
           <input type="number" name="injury_max_matches" min="1" max="5"
                  value="{{ t.injury_max_matches if t.injury_max_matches is not none else 3 }}"></div>
+        <div><label>⏳ Round length (hours)</label>
+          <input type="number" name="round_hours" min="0" max="1440"
+                 value="{{ t.round_hours or '' }}" placeholder="blank = no deadline">
+          <small style="color:var(--muted);">Reminders 24h &amp; 2h before; admins are alerted when time runs out — nothing is simulated automatically.
+            {% if t.round_deadline_at %}Current round ends {{ t.round_deadline_at.strftime('%d %b %H:%M') }} UTC.{% endif %}</small></div>
       </div>
       <div style="margin-top:.6rem;">
         <label>⭐ Rating rule — every XI must include at least N players rated X or lower</label>

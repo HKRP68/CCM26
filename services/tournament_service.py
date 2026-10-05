@@ -1441,6 +1441,15 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     tour = session.get(Tournament, tid)
     if not tour:
         return None
+    # The first group a tournament match is played in becomes where the
+    # tournament's news is posted (recaps, deadlines, ceremony) — /tsetchat
+    # overrides it.
+    try:
+        chat = int(state.get("chat_id") or 0)
+        if chat < 0 and not getattr(tour, "announce_chat_id", None):
+            tour.announce_chat_id = chat
+    except (TypeError, ValueError):
+        pass
 
     team_by_user = {int(k): v for k, v in (state.get("tournament_team_by_user") or {}).items() if v}
     # Lets Play matches carry the participating row directly ({db user id →

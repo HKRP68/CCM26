@@ -97,6 +97,11 @@ ADMIN_SECTIONS = (
         ("/tsim", "/tsimulate",
          "Simulate an unplayed match: /tsim 7 1 · /tsim 7 2 · /tsim 7 random · "
          "/tsim round"),
+        ("/tdeadline", "/tdeadlines",
+         "Round deadlines: /tdeadline 48h · /tdeadline +12h · /tdeadline off "
+         "(alerts only — nothing is auto-simulated)"),
+        ("/tsetchat", "/tchat",
+         "Post recaps, deadline alerts and the ceremony in this group"),
         ("/tpoints", "/tpts", "Dock or award points: /tpoints MI | -2 | reason"),
         ("/tpointsclear", "/tptsclear", "Clear a team's points adjustment"),
         ("/taddmatch", "/addmatch",

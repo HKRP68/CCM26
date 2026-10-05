@@ -94,7 +94,7 @@ def fixtures_blocks(session, tour, viewer_tg_id=None, limit=None):
     from services import league_schedule_service
     fixtures, locked, progress = league_schedule_service.split_open_round(
         session, tour.id, fixtures)
-    banner = league_schedule_service.round_banner(progress, locked)
+    banner = league_schedule_service.round_banner(progress, locked, tour)
     if banner:
         blocks.append(R.paragraph(["🔵 ", R.bold(banner)]))
 

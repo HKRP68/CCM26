@@ -826,7 +826,7 @@ def _sim_listing(session, tour):
     open_fx = _open_fixtures(session, tour)
     head = f"🎲 <b>{html.escape(tour.name)}</b> — simulate a fixture"
     progress = league_schedule_service.round_progress(session, tour.id)
-    banner = league_schedule_service.round_banner(progress, 0)
+    banner = league_schedule_service.round_banner(progress, 0, tour)
     if banner:
         head += f"\n🔵 {banner}"
     if not open_fx:
@@ -983,3 +983,178 @@ async def tsim_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if msg is not None:
         await msg.reply_text(text, parse_mode="HTML",
                              disable_web_page_preview=True)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The tournament watch job, /tsetchat and /tdeadline
+# ──────────────────────────────────────────────────────────────────────
+
+def _markup(rows):
+    if not rows:
+        return None
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=data)
+                                  for label, data in row] for row in rows])
+
+
+async def _send_post(bot, chat_id, post, with_buttons=True):
+    markup = _markup(post.buttons) if with_buttons else None
+    if post.photo:
+        import io
+        caption = post.text if len(post.text) <= 1024 else None
+        await bot.send_photo(chat_id, io.BytesIO(post.photo), caption=caption,
+                             parse_mode="HTML", reply_markup=markup)
+        if caption is None and post.text:
+            await bot.send_message(chat_id, post.text, parse_mode="HTML",
+                                   disable_web_page_preview=True)
+        return
+    from utils.message_chunks import chunk_blocks
+    parts = chunk_blocks([post.text])
+    for i, part in enumerate(parts):
+        await bot.send_message(chat_id, part, parse_mode="HTML",
+                               disable_web_page_preview=True,
+                               reply_markup=markup if i == len(parts) - 1 else None)
+
+
+async def tournament_watch_job(context):
+    """Every couple of minutes: send whatever the tournament watch says is due."""
+    from services import tournament_watch
+    session = get_session()
+    try:
+        due = tournament_watch.tick_all(session)
+        # Commit first: the bookkeeping is what stops a post going out twice,
+        # and a lost post is better than one repeated every two minutes.
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("tournament watch tick failed")
+        return
+    finally:
+        session.close()
+    bot = context.bot
+    for _tid, post in due:
+        if post.chat_id:
+            try:
+                await _send_post(bot, post.chat_id, post)
+            except Exception:
+                logger.warning("tournament watch: group post to %s failed",
+                               post.chat_id, exc_info=True)
+        for tg_id, text in post.dms:
+            try:
+                dm = type(post)(text=text, photo=post.photo,
+                                buttons=post.buttons if post.dm_buttons else [])
+                await _send_post(bot, tg_id, dm)
+            except Exception:
+                logger.info("tournament watch: DM to %s failed", tg_id)
+
+
+async def tsetchat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tsetchat — post this tournament's news (recaps, deadlines…) in this group."""
+    if not await _require_admin(update):
+        return
+    chat = update.effective_chat
+    if chat is None or chat.id > 0:
+        await _reply(update, "Run <code>/tsetchat</code> inside the group the "
+                             "tournament news should go to.")
+        return
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+        except ValueError as exc:
+            await _reply(update, str(exc))
+            return
+        tour.announce_chat_id = chat.id
+        session.commit()
+        await _reply(update, f"📣 <b>{html.escape(tour.name)}</b> — round recaps, "
+                             "deadline alerts, the bracket and the awards "
+                             "ceremony will be posted here.")
+    finally:
+        session.close()
+
+
+_DEADLINE_USAGE = (
+    "⏳ <b>Round deadlines</b>\n\n"
+    "<code>/tdeadline 48h</code> — every round gets 48 hours (or <code>2d</code>)\n"
+    "<code>/tdeadline +12h</code> — give the current round 12 more hours\n"
+    "<code>/tdeadline off</code> — no deadlines\n\n"
+    "Reminders go out 24h and 2h before the end. When a round's time runs out "
+    "the admins are alerted — <b>nothing is simulated automatically</b>; settle "
+    "a match with <code>/tsim</code> or extend the round."
+)
+
+
+def _deadline_summary(tour):
+    from services import tournament_watch as tw
+    if not tour.round_hours:
+        return f"⏳ <b>{html.escape(tour.name)}</b> — no round deadlines."
+    line = (f"⏳ <b>{html.escape(tour.name)}</b> — each round gets "
+            f"<b>{tour.round_hours}h</b>.")
+    left = tw.deadline_text(tour)
+    if left:
+        line += f"\nCurrent round (Round {tour.round_tracked}): {left}."
+    return line
+
+
+async def tdeadline_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tdeadline [48h | +12h | off] — round deadlines (alert only)."""
+    if not await _require_admin(update):
+        return
+    from services import tournament_watch as tw
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+            if not args:
+                await _reply(update, _deadline_summary(tour) + "\n\n" + _DEADLINE_USAGE)
+                return
+            token = args[0].lower()
+            if token in ("off", "none", "clear", "0"):
+                tw.set_round_hours(session, tour, None)
+            else:
+                hours, relative = tw.parse_hours(token)
+                if relative:
+                    tw.extend_deadline(session, tour, hours)
+                else:
+                    tw.set_round_hours(session, tour, hours)
+            session.commit()
+        except ValueError as exc:
+            session.rollback()
+            await _reply(update, f"⚠️ {html.escape(str(exc))}")
+            return
+        await _reply(update, "✅ " + _deadline_summary(tour))
+    finally:
+        session.close()
+
+
+async def tdeadline_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """The "⏳ +24h" button on a deadline alert."""
+    from services import tournament_watch as tw
+    query = update.callback_query
+    if query is None:
+        return
+    if not is_admin(query.from_user.id if query.from_user else 0):
+        await query.answer(NOT_ADMIN, show_alert=True)
+        return
+    tid, _, hours = (query.data or "")[len(tw.CB_EXTEND):].partition("_")
+    session = get_session()
+    try:
+        tour = session.get(Tournament, int(tid))
+        if tour is None:
+            await query.answer("That tournament is gone.", show_alert=True)
+            return
+        try:
+            tw.extend_deadline(session, tour, int(hours or 24))
+            session.commit()
+        except ValueError as exc:
+            session.rollback()
+            await query.answer(str(exc)[:200], show_alert=True)
+            return
+        text = (f"⏳ <b>{html.escape(tour.name)}</b> — Round {tour.round_tracked} "
+                f"extended by {int(hours or 24)}h: {tw.deadline_text(tour)}.")
+    finally:
+        session.close()
+    await query.answer("Extended.")
+    if query.message is not None:
+        await query.message.reply_text(text, parse_mode="HTML")

@@ -279,7 +279,7 @@ def tournament_payload(session, tour, tg_id=None):
             "round_played": progress["played"] if progress else None,
             "round_total": progress["total"] if progress else None,
             "locked_fixtures": locked,
-            "round_banner": league_schedule_service.round_banner(progress, locked),
+            "round_banner": league_schedule_service.round_banner(progress, locked, tour),
             "champion": _team_brief(champ),
         },
         "table": table_rows,

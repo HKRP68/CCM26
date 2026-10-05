@@ -16869,6 +16869,12 @@ def admin_tournament_detail(tournament_id):
                     t.injury_max_matches = max(1, min(5, _int_form(
                         "injury_max_matches", t.injury_max_matches
                         if t.injury_max_matches is not None else 3)))
+                    if "round_hours" in request.form:
+                        from services import tournament_watch as _tw
+                        rh = _int_form("round_hours", 0) or 0
+                        rh = max(0, min(_tw.MAX_ROUND_HOURS, rh))
+                        if (rh or None) != t.round_hours:
+                            _tw.set_round_hours(db, t, rh or None)
                     from services import league_schedule_service as _lss
                     old_mode = t.pitch_mode or "host"
                     old_pref = (_lss.tour_preferred_pitches(t),
