@@ -189,6 +189,19 @@
           </details>
           <small style="color:var(--muted);">League matches are played at the home team's ground when it has one, otherwise at one of these; knockouts at a neutral one from this list.
             The list is the bot's Stadium Data — <a href="{{ url_for('admin_conditions_stadium') }}">add a new stadium there</a>.</small></div>
+        <div style="grid-column:1 / -1;"><label>💰 Prizes (paid when the final is decided)</label>
+          <input type="hidden" name="prizes_present" value="1">
+          <span style="display:flex; gap:1rem; flex-wrap:wrap;">
+            {% for key, label in prize_awards %}
+            <span style="display:flex; gap:.3rem; align-items:center; font-size:.85rem;">{{ label }}
+              <input type="number" name="prize_{{ key }}_coins" min="0" style="width:6.5rem;" placeholder="coins"
+                     value="{{ prize_table.get(key, {}).get('coins') or '' }}">
+              <input type="number" name="prize_{{ key }}_gems" min="0" style="width:5rem;" placeholder="gems"
+                     value="{{ prize_table.get(key, {}).get('gems') or '' }}">
+            </span>
+            {% endfor %}
+          </span>
+          {% if t.awards_given_at %}<small style="color:var(--muted);">Already awarded on {{ t.awards_given_at.strftime('%d %b %Y') }}.</small>{% endif %}</div>
         <div><label>⚖️ Tiebreak after points</label>
           <select name="tiebreak">
             <option value="nrr" {{ 'selected' if (t.tiebreak or 'nrr') == 'nrr' else '' }}>Wins → net run rate</option>

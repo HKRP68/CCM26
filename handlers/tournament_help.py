@@ -102,6 +102,8 @@ ADMIN_SECTIONS = (
         ("/tdeadline", "/tdeadlines",
          "Round deadlines: /tdeadline 48h · /tdeadline +12h · /tdeadline off "
          "(alerts only — nothing is auto-simulated)"),
+        ("/tprize", "/tprizes",
+         "Prizes paid when the final is decided: /tprize champion 5000 50"),
         ("/tstadiums", "/tstadium",
          "Grounds from Stadium Data: /tstadiums add|remove|all"),
         ("/ttiebreak", "/ttb",

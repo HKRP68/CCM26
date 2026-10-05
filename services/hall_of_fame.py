@@ -47,6 +47,9 @@ SECTIONS = {
     "bowl": ("🎳 Bowling", ("bowl_figures",)),
     "team": ("🏟️ Team", ("team_total", "win_runs")),
     "career": ("👤 Careers", ()),
+    # Champions, runners-up, caps and MVPs of finished tournaments
+    # (``tournament_honours``, written by services.tournament_awards).
+    "tour": ("🏆 Tournaments", ()),
 }
 
 

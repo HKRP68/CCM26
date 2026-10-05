@@ -16881,6 +16881,15 @@ def admin_tournament_detail(tournament_id):
                         if after != before:
                             db.flush()
                             _tstad.assign_venues(db, t.id, overwrite=True)
+                    if request.form.get("prizes_present"):
+                        from services import tournament_awards as _ta
+                        for _award in _ta.AWARDS:
+                            try:
+                                _ta.set_prize(t, _award,
+                                              _int_form(f"prize_{_award}_coins", 0) or 0,
+                                              _int_form(f"prize_{_award}_gems", 0) or 0)
+                            except ValueError as e:
+                                flash(f"⚠️ {e}", "error")
                     if request.form.get("tiebreak") in ("nrr", "h2h"):
                         t.tiebreak = request.form.get("tiebreak")
                     if "round_hours" in request.form:
@@ -17457,10 +17466,14 @@ def admin_tournament_detail(tournament_id):
         from services import tournament_service as _ts_rr
         from services import season_archive as _sa
         from services import tournament_stadiums as _tstad
+        from services import tournament_awards as _tawards
         return render_template("admin_tournament_detail.html", t=t, teams=teams,
                                stadium_choices=[(r.get("name"), r.get("city") or "")
                                                 for r in _tstad.all_rows()],
                                tour_stadiums=_tstad.tour_stadiums(t),
+                               prize_awards=[(a, _tawards.AWARD_LABEL[a])
+                                             for a in _tawards.AWARDS],
+                               prize_table=_tawards.prizes(t),
                                rating_rules=_ts_rr.rating_rules(t),
                                season_choices=_sa.season_choices(db, t),
                                season_links_auto=not _sa.linked_refs(t),

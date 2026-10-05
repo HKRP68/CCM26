@@ -1326,3 +1326,62 @@ async def thome_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                  "ground now.")
     finally:
         session.close()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /tprize — prizes paid when the final is decided
+# ──────────────────────────────────────────────────────────────────────
+
+_PRIZE_USAGE = (
+    "💰 <b>Tournament prizes</b> — paid automatically when the final is decided\n\n"
+    "<code>/tprize champion 5000 50</code> — coins, then gems\n"
+    "<code>/tprize runnerup 2500 20</code>\n"
+    "<code>/tprize orange 1000</code> · <code>/tprize purple 1000</code> · "
+    "<code>/tprize mvp 1500 10</code>\n"
+    "<code>/tprize champion 0</code> — remove a prize\n\n"
+    "Team awards go to the team's owner; caps and MVP to the player's owner. "
+    "Winners are listed in /halloffame → 🏆 Tournaments."
+)
+
+
+def _prize_summary(tour):
+    from services import tournament_awards as TA
+    table = TA.prizes(tour)
+    lines = [f"💰 <b>{html.escape(tour.name)}</b> — prizes"]
+    for award in TA.AWARDS:
+        lines.append(f"{TA.AWARD_LABEL[award]}: "
+                     + (TA.prize_text(table.get(award)) or "<i>none</i>"))
+    if tour.awards_given_at:
+        lines.append("\n<i>Already awarded — changes no longer pay out.</i>")
+    return "\n".join(lines)
+
+
+async def tprize_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tprize <award> <coins> [gems] — set a prize; bare lists them."""
+    if not await _require_admin(update):
+        return
+    from services import tournament_awards as TA
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+            if not args:
+                await _reply(update, _prize_summary(tour) + "\n\n" + _PRIZE_USAGE)
+                return
+            if len(args) < 2:
+                raise ValueError("Give an award and an amount: /tprize champion 5000 50")
+            try:
+                coins = int(args[1].replace(",", ""))
+                gems = int(args[2].replace(",", "")) if len(args) > 2 else 0
+            except ValueError:
+                raise ValueError("Amounts must be whole numbers: /tprize mvp 1500 10")
+            TA.set_prize(tour, args[0], coins, gems)
+            session.commit()
+        except ValueError as exc:
+            session.rollback()
+            await _reply(update, f"⚠️ {html.escape(str(exc))}")
+            return
+        await _reply(update, "✅ " + _prize_summary(tour))
+    finally:
+        session.close()

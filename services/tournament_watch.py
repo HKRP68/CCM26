@@ -301,6 +301,28 @@ def _recap_posts(session, tour, now, first_look):
             for r in range(max(last + 1, done - 1), done + 1)]
 
 
+def _ceremony_posts(session, tour, now, first_look):
+    """The awards ceremony, once the final's honours are written."""
+    if not getattr(tour, "awards_given_at", None) or tour.awards_announced_at:
+        return []
+    tour.awards_announced_at = now
+    if first_look or not tour.announce_chat_id:
+        return []
+    from services.tournament_awards import render_ceremony
+    posts = [Post(chat_id=tour.announce_chat_id, kind="ceremony",
+                  text=render_ceremony(session, tour))]
+    try:
+        from services import team_of_tournament
+        post = team_of_tournament.post_for(session, tour)
+        if post is not None:
+            posts.append(post)
+    except ImportError:
+        pass
+    except Exception:
+        logger.exception("Team of the Tournament failed for %s", tour.id)
+    return posts
+
+
 def _extra_posts(session, tour, now, first_look):
     """Recaps, bracket and ceremony — filled in by their own modules."""
     posts = []
@@ -321,6 +343,12 @@ def tick(session, tour, now=None):
     from services import league_schedule_service as lss
     now = now or datetime.utcnow()
     if (tour.status or "").lower() != "active":
+        # A tournament completed straight after its final still gets its
+        # ceremony; nothing else runs once it's no longer live.
+        if (tour.status or "").lower() == "completed":
+            posts = _ceremony_posts(session, tour, now, False)
+            session.flush()
+            return posts
         return []
     rnd = lss.current_round(session, tour.id)
     # The first time a tournament is seen, take a silent snapshot: an existing
@@ -346,9 +374,13 @@ def tick(session, tour, now=None):
 
 
 def running_tournaments(session):
+    from sqlalchemy import and_, or_
     from models import Tournament
     return (session.query(Tournament)
-            .filter(Tournament.status == "active").all())
+            .filter(or_(Tournament.status == "active",
+                        and_(Tournament.status == "completed",
+                             Tournament.awards_given_at.isnot(None),
+                             Tournament.awards_announced_at.is_(None)))).all())
 
 
 def tick_all(session, now=None):

@@ -1239,6 +1239,7 @@ def record_manual_result(session, fixture_id, *,
 
     if tm.stage == "final" and win_id:
         _champion_news(session, tour, tm)
+        _finalize_awards(session, tour)
 
     tm._playoffs_created = maybe_auto_knockout(session, tm.tournament_id)
 
@@ -1590,6 +1591,7 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     # savepoint, so a news failure cannot cost the match its result.
     if tm.stage == "final" and tm.winner_team_id:
         _champion_news(session, tour, tm)
+        _finalize_awards(session, tour)
 
     # The last league result seeds the playoffs on its own.
     tm._playoffs_created = maybe_auto_knockout(session, tid)
@@ -1657,6 +1659,17 @@ def league_stage_complete(session, tournament_id):
     """
     played, total = league_progress(session, tournament_id)
     return total > 0 and played >= total
+
+
+def _finalize_awards(session, tour):
+    """Honours and prizes for a decided final — once, and never fatal."""
+    try:
+        from services import tournament_awards
+        with session.begin_nested():
+            tournament_awards.finalize(session, tour)
+    except Exception:
+        logger.exception("Tournament awards failed for %s",
+                         getattr(tour, "id", None))
 
 
 def _champion_news(session, tour, final):
