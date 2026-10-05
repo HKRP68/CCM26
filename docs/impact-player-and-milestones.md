@@ -54,6 +54,22 @@ the break *is* the bowler pick before the first over of the chase.
   chosen to bowl straight away, which sidesteps re-checking quota and the
   no-back-to-back rule mid-over.
 
+### Playing XI rules and overseas players
+
+In a Challenge League, tournament or Auction League match, a swap must keep the
+XI legal (`impact_player.cipl_swap_error`): a Wicket Keeper, 5 bowling options
+and any tournament rating rule. Overseas follows the **IPL rule**
+(`impact_player.overseas_swap_error`):
+
+* an **overseas** Impact Player may come on only while the XI on the field has
+  **fewer overseas than the cap**. With a cap of 4 and 3 overseas in the XI, he
+  may replace anyone, domestic or overseas. With 4 of 4, no overseas substitute
+  at all, not even for an overseas player going off;
+* a **domestic** substitute is held only to the overseas minimum, which an
+  overseas player going off could break.
+
+The picker only offers swaps that pass, and the AI captain uses the same check.
+
 ### The batting-position rule
 
 `batting_order` is a list; `striker_idx`, `non_striker_idx` and

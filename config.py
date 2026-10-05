@@ -256,6 +256,9 @@ DEBUT_GEMS = 30
 # acquisition path checks this, and a squad already over it is brought back
 # down by ``migrate_squad_and_trait_limits.py``.
 MAX_ROSTER = 19
+# Free roster slots a captain needs before opening a pack from the inventory
+# (/openpack and the Mini App). The pack stays unopened until there is room.
+PACK_OPEN_MIN_FREE_SLOTS = 3
 
 # ── Coins → Gems conversion (/coins2gems) ───────────────────────────
 # How many coins buy one gem. The conversion is one-way and irreversible;

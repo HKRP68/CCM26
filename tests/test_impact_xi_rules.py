@@ -102,6 +102,39 @@ class ImpactSwapTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("overseas", msg)
 
+    def test_overseas_sub_at_the_cap_is_refused_even_for_overseas(self):
+        # IPL rule: 2/2 overseas already on, so no overseas Impact Player —
+        # not even like-for-like for an overseas player going off.
+        s = _state([_p(50, "SubOS", "Batsman", 92, overseas=True)])
+        ok, msg, _ = _use(s, 50, 2)
+        self.assertFalse(ok)
+        self.assertIn("fewer than 2 overseas", msg)
+
+    def test_overseas_sub_under_the_cap_may_replace_a_domestic(self):
+        # Max 4, three overseas in the XI: an overseas sub for a domestic one.
+        s = _state([_p(50, "SubOS", "Batsman", 92, overseas=True)],
+                   max_overseas=4)
+        s["bowl_xi"][4]["is_overseas"] = True          # Bat4 → 3 overseas
+        ok, msg, _ = _use(s, 50, 3)
+        self.assertTrue(ok, msg)
+
+    def test_overseas_sub_under_the_cap_may_replace_an_overseas(self):
+        s = _state([_p(50, "SubOS", "Batsman", 92, overseas=True)],
+                   max_overseas=4)
+        s["bowl_xi"][4]["is_overseas"] = True
+        ok, msg, _ = _use(s, 50, 2)
+        self.assertTrue(ok, msg)
+
+    def test_overseas_sub_with_four_of_four_is_refused(self):
+        s = _state([_p(50, "SubOS", "Batsman", 92, overseas=True)],
+                   max_overseas=4)
+        s["bowl_xi"][3]["is_overseas"] = True
+        s["bowl_xi"][4]["is_overseas"] = True          # 4 overseas
+        for out_rid in (2, 3):                         # overseas, domestic
+            ok, msg, _ = _use(s, 50, out_rid)
+            self.assertFalse(ok)
+            self.assertIn("fewer than 4 overseas", msg)
+
     def test_cannot_fall_under_the_overseas_minimum(self):
         s = _state([_p(50, "SubBat", "Batsman", 80)], min_overseas=2)
         ok, msg, _ = _use(s, 50, 2)
@@ -132,12 +165,20 @@ class ImpactSwapTests(unittest.TestCase):
 
 class OptionsFilterTests(unittest.TestCase):
     def test_options_only_offer_legal_swaps(self):
-        s = _state([_p(50, "SubOS", "Batsman", 92, overseas=True)])
+        # 2 overseas against a cap of 3: an overseas sub may replace anyone
+        # whose departure keeps the keeper / bowling / rating rules.
+        s = _state([_p(50, "SubOS", "Batsman", 92, overseas=True)],
+                   max_overseas=3)
         opts = impact_player.cipl_options(s, 2, A_PICK_CIPL_BOWLER)
         out_ids = {p["roster_id"] for p in opts["replaceable_players"]}
-        # Only an overseas batter can make way for an overseas batter.
-        self.assertEqual(out_ids, {2})
+        self.assertEqual(out_ids, {2, 3, 5, 6})
         self.assertTrue(opts["can_use"])
+
+    def test_options_hide_an_overseas_sub_at_the_cap(self):
+        s = _state([_p(50, "SubOS", "Batsman", 92, overseas=True)])
+        opts = impact_player.cipl_options(s, 2, A_PICK_CIPL_BOWLER)
+        self.assertFalse(opts["can_use"])
+        self.assertEqual(opts["message"], impact_player.NO_LEGAL_SWAP_MESSAGE)
 
     def test_no_legal_swap_disables_impact(self):
         # Every possible outgoing player is either rated ≤88 (rating rule),
