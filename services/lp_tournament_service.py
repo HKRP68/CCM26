@@ -658,6 +658,8 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=None):
         out.append(f"<b>👇 Matches {limit + 1}–{len(all_lines)}</b> "
                    f"<i>(tap to expand)</i>")
         out += expandable_quotes(rest)
+    if tour.knockout_generated:
+        out += ["", "🏆 Playoff bracket as a picture: /tbracket"]
     return "\n".join(out)
 
 

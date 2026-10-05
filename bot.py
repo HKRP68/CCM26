@@ -2246,7 +2246,7 @@ def main():
             tsim_handler, tsim_callback, CB_SIM,
             tsetchat_handler, tdeadline_handler, tdeadline_callback,
             ttiebreak_handler, tstadiums_handler, thome_handler,
-            tprize_handler, tteam_handler,
+            tprize_handler, tteam_handler, tbracket_handler,
         )
         app.add_handler(CommandHandler(["tpoints", "tpts"], tpoints_handler))
         app.add_handler(CommandHandler(["tpointsclear", "tptsclear"],
@@ -2276,6 +2276,7 @@ def main():
         app.add_handler(CommandHandler(["tprize", "tprizes"], tprize_handler))
         app.add_handler(CommandHandler(["tteam", "teamoftournament", "tott"],
                                        tteam_handler))
+        app.add_handler(CommandHandler(["tbracket", "bracket"], tbracket_handler))
 
         # ── Tournament Draft ─────────────────────────────────────────
         # Teams pick their squads live in one bound group chat; the finished

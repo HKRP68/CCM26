@@ -1416,3 +1416,35 @@ async def tteam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _reply(update, text)
     else:
         await _reply(update, text)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /tbracket — the playoff bracket as a picture (anyone)
+# ──────────────────────────────────────────────────────────────────────
+
+async def tbracket_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tbracket — the running tournament's playoff bracket image."""
+    import asyncio
+    import io
+    from services import bracket_image
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+        except ValueError as exc:
+            await _reply(update, str(exc))
+            return
+        name = tour.name
+        png = await asyncio.to_thread(bracket_image.render, session, tour)
+    finally:
+        session.close()
+    msg = update.effective_message
+    if not png:
+        await _reply(update, f"🏆 <b>{html.escape(name)}</b> — no playoff bracket "
+                             "yet. It appears once the league stage is over.")
+        return
+    if msg is not None:
+        await msg.reply_photo(io.BytesIO(png),
+                              caption=f"🏆 <b>{html.escape(name)}</b> — playoffs",
+                              parse_mode="HTML")

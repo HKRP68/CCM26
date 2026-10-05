@@ -59,6 +59,7 @@ PLAYER_SECTIONS = (
     )),
     ("📊 Stats", (
         ("/tournamentstats", "", "Tournament stat leaderboards"),
+        ("/tbracket", "/bracket", "The playoff bracket as a picture"),
         ("/tteam", "/tott",
          "Team of the Tournament — the best XI so far, as cards"),
         ("/statstour", "",

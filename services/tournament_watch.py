@@ -301,6 +301,25 @@ def _recap_posts(session, tour, now, first_look):
             for r in range(max(last + 1, done - 1), done + 1)]
 
 
+def _bracket_posts(session, tour, now, first_look):
+    """The bracket picture when the playoffs are seeded and after each result."""
+    if not tour.knockout_generated:
+        return []
+    from services import bracket_image
+    key = bracket_image.state_key(session, tour.id)
+    if not key or key == tour.bracket_posted_key:
+        return []
+    tour.bracket_posted_key = key
+    if first_look or not tour.announce_chat_id:
+        return []
+    png = bracket_image.render(session, tour)
+    if not png:
+        return []
+    return [Post(chat_id=tour.announce_chat_id, kind="bracket", photo=png,
+                 text=f"🏆 <b>{escape(tour.name or 'Tournament')}</b> — the playoff "
+                      f"bracket. Fixtures: {_fixtures_cmd(tour)}")]
+
+
 def _ceremony_posts(session, tour, now, first_look):
     """The awards ceremony, once the final's honours are written."""
     if not getattr(tour, "awards_given_at", None) or tour.awards_announced_at:
