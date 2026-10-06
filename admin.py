@@ -24611,6 +24611,19 @@ def _auction_sets_action(db, season, action, *, quiet):
               + (f", {skipped} already in the auction." if skipped else "."),
               "success")
 
+    elif action == "auto_sets":
+        from services import auction_auto_sets
+        result = auction_auto_sets.auto_build_sets(
+            db, season,
+            marquee=(request.form.get("marquee") or "").strip(),
+            set_size=(request.form.get("set_size") or "").strip(),
+            min_rating=(request.form.get("min_rating") or "").strip(),
+            pool_size=(request.form.get("pool_size") or "").strip(),
+            editions=bool(request.form.get("editions")),
+            replace=bool(request.form.get("replace")))
+        flash("⚡ Auto sets — " + auction_auto_sets.summary_text(result),
+              "success")
+
     else:
         return None
     return done

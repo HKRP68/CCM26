@@ -3282,6 +3282,40 @@ async def apool_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _with_auction(update, work, admin=True, context=context)
 
 
+async def aautosets_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/aautosets [set size] [marquee] [min rating] [replace] [all]</code>
+
+    The whole pool as IPL-style sets in one go: the best <i>marquee</i> cards
+    first, then role sets of <i>set size</i> rotating Batsmen → Bowlers →
+    All-rounders → Wicket-keepers. Numbers are positional; <code>replace</code>
+    drops queued players the builder did not pick, <code>all</code> includes
+    special editions.
+    """
+    from services import auction_auto_sets as AUTO
+    words = _arg_text(context).lower().replace(",", " ").split()
+    numbers = [w for w in words if w.isdigit()]
+    unknown = [w for w in words if not w.isdigit()
+               and w not in ("replace", "all", "editions")]
+
+    def work(session, season):
+        if unknown or len(numbers) > 3:
+            raise AuctionError("Usage: /aautosets [set size] [marquee] "
+                               "[min rating] [replace] [all] — e.g. "
+                               "/aautosets 8 12 75 replace")
+        options = dict(zip(("set_size", "marquee", "min_rating"), numbers))
+        result = AUTO.auto_build_sets(
+            session, season, replace="replace" in words,
+            editions="all" in words or "editions" in words, **options)
+        order = [f"#{e['set_no']} {html.escape(e['name'])}"
+                 for e in A.queued_sets(session, season)]
+        return ("⚡ <b>Auto sets built</b>\n"
+                + html.escape(AUTO.SIO.summary_text(result))
+                + "\n\n🗂 Queue: " + (", ".join(order[:15]) or "empty")
+                + (" …" if len(order) > 15 else ""))
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
 async def asetorder_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """<code>/asetorder Marquee, 85-90 OVR, Bowlers</code> — order the queue."""
     raw = _arg_text(context)

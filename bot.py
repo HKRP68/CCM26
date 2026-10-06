@@ -2392,6 +2392,7 @@ def main():
             arules_handler, sets_callback,
             anextset_handler, anextplayer_handler, asquad_handler,
             asoldlist_handler, aunsoldlist_handler, apool_handler,
+            aautosets_handler,
             asetorder_handler, aaccelmode_handler, acall_handler,
             aremoveteam_handler, aadminadd_handler, aadminremove_handler,
             aadmins_handler, me_callback, aleaderboard_handler,
@@ -2552,6 +2553,8 @@ def main():
         app.add_handler(CommandHandler("apickundo", apickundo_handler))
         # Sets: the pool by rating range, and the order the sets run in.
         app.add_handler(CommandHandler("apool", apool_handler))
+        app.add_handler(CommandHandler(["aautosets", "aautoset"],
+                                       aautosets_handler))
         app.add_handler(CommandHandler("asetorder", asetorder_handler))
         app.add_handler(CommandHandler("aaccelmode", aaccelmode_handler))
         # The teams: call them all, or take one out of the auction.
