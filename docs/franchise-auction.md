@@ -851,6 +851,32 @@ for `/asets`, `/ainfo`, the 🗂 Sets card and the lot card, which names the set
 player came from. `/apool` takes base cards only unless told `| all`: two editions
 of one cricketer in a pool is a squad with the same man twice.
 
+### Auto-building sets (IPL-style)
+
+```text
+/aautosets                    Marquee of 10, then role sets of 10
+/aautosets 8 12 75 replace    sets of 8, Marquee of 12, rated 75+, drop the rest of the queue
+/aautosets 10 10 all          include special editions
+```
+
+…or **⚡ Auto-build sets** on the pool card (Marquee size, players per set, min
+rating, pool size, editions, replace). `services/auction_auto_sets.py` lays the
+whole pool out the way the IPL auction runs:
+
+- **Marquee** — the best *N* cards, whatever their role.
+- **Role sets** — everyone else split by role, best first, in tiers of the set
+  size, rotating `Batsmen 1 → Bowlers 1 → All-rounders 1 → Wicket-keepers 1 →
+  Batsmen 2 …` so every role comes round before the second tier opens. Roles are
+  read loosely ("All Rounder", "All-rounder", "WK"); anything unrecognised is
+  filed with the batsmen rather than dropped.
+
+`plan_auto_sets` writes nothing; `auto_build_sets` hands the plan to
+`auction_sets_io.import_sets`, so it follows the import's rules exactly: setup or
+paused only, queued players are re-filed, anyone sold, retained or drafted is
+left alone (and never takes a Marquee place), `replace` drops queued players the
+builder did not pick, and the queue is renumbered in the planned order. Running
+it twice with the same numbers gives the same pool.
+
 ### The pool, as a file
 
 `/asetsexport [json|csv]` (or **⬇️ Download sets** on the pool card) produces

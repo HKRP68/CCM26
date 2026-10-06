@@ -90,7 +90,8 @@ AUCTION_COMMANDS = frozenset({
     "aclone", "anextseason",
     "apick", "apicks", "apickboard", "apickset", "apickrules",
     "apickskip", "apickpass", "apickundo",
-    "apool", "asetorder", "aaccelmode", "acall", "acallteams",
+    "apool", "aautosets", "aautoset",
+    "asetorder", "aaccelmode", "acall", "acallteams",
     "aremoveteam", "aadminadd", "aadminremove", "aadmins",
 })
 

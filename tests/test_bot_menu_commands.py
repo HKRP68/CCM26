@@ -162,6 +162,9 @@ UNPUBLISHED_ON_PURPOSE = {
     # Franchise Auction — /auction card, the board's footer, and the RTM
     # prompt itself, which names the owner and carries buttons.
     "bid", "artm", "aboard", "apurse",
+    # Auto-building IPL-style sets — on the /adminhelp card's Pool & sets
+    # section and the website's pool card; the admin bucket is full.
+    "aautosets",
     # The full command catalogue. /start's card links it on every render
     # (footer + "📋 All commands" button), so it needs no menu slot of its own.
     "commands",

@@ -182,6 +182,43 @@
     queue.
   </p>
 
+  {# One click for the whole pool, laid out the way the IPL auction runs:
+     Marquee first, then role sets in tiers that rotate BAT → BOWL → AR → WK. #}
+  <details style="margin-top:.9rem;">
+    <summary class="btn btn-ghost btn-sm">⚡ Auto-build sets (IPL-style)</summary>
+    <form method="POST" class="au-grid" style="margin-top:.6rem;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="auto_sets">
+      <input type="hidden" name="back_query" value="#sets">
+      <input type="hidden" name="sets_card" value="1">
+      <div><label>Marquee size</label>
+        <input type="number" name="marquee" min="0" max="50" value="10"></div>
+      <div><label>Players per set</label>
+        <input type="number" name="set_size" min="2" max="50" value="10"></div>
+      <div><label>Min rating</label>
+        <input type="number" name="min_rating" min="1" placeholder="all"></div>
+      <div><label>Pool size</label>
+        <input type="number" name="pool_size" min="1" placeholder="all"></div>
+      <div>
+        <label style="text-transform:none;letter-spacing:0;">
+          <input type="checkbox" name="editions" value="1"> Include special editions
+        </label>
+        <label style="text-transform:none;letter-spacing:0;">
+          <input type="checkbox" name="replace" value="1"> Replace the current queue
+        </label>
+      </div>
+      <div><button class="btn btn-primary" type="submit">⚡ Build sets</button></div>
+    </form>
+    <p class="au-note" style="margin:.4rem 0 0;">
+      The best <b>Marquee size</b> cards go first as <b>Marquee</b>. Everyone
+      else is split by role, best first, into sets of <b>Players per set</b>:
+      Batsmen 1 → Bowlers 1 → All-rounders 1 → Wicket-keepers 1 → Batsmen 2 …
+      Players already queued are re-filed; anyone already sold, retained or
+      drafted is left alone. <b>Replace</b> also drops queued players the
+      builder did not pick. Same as <code>/aautosets</code> in the group.
+    </p>
+  </details>
+
   {% if sets %}
   {# Emptying the whole pool at once, for the case a set-by-set delete is the
      wrong shape of tool: a filter that pulled in the wrong four hundred cards.

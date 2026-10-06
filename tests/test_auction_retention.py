@@ -42,7 +42,8 @@ _MODULE_NAMES = ("database", "models", "config",
                  # suites run in one process, which is exactly when it matters.
                  "services.player_service", "services.player_query",
                  "services.auction_service", "services.retention_negotiation",
-                 "services.auction_sets_io", "services.auction_scheduler",
+                 "services.auction_sets_io", "services.auction_auto_sets",
+                 "services.auction_scheduler",
                  "handlers.auction")
 
 _PID = itertools.count(1)
