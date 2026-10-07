@@ -16160,6 +16160,7 @@ def admin_challenge_data():
                             sort_order=_int_form("league_sort_order"),
                             is_active=_checked("league_is_active", True),
                             same_team_allowed=_checked("same_team_allowed", True),
+                            multi_enabled=_checked("multi_enabled", True),
                         )
                         _apply_overseas_league_form(league)
                         image_url = _save_challenge_league_image(request.files.get("league_image"))
@@ -16233,6 +16234,7 @@ def admin_challenge_league_detail(league_id):
                     league.sort_order = _int_form("league_sort_order")
                     league.is_active = _checked("league_is_active")
                     league.same_team_allowed = _checked("same_team_allowed")
+                    league.multi_enabled = _checked("multi_enabled")
                     _apply_overseas_league_form(league)
                     if request.form.get("remove_image") == "on":
                         league.image_url = None

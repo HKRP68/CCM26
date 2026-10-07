@@ -280,6 +280,7 @@ CL Tour and The Hundred matches always play their full length.
 | `/cbbl` · `/challengeBBL` | Start a BBL challenge |
 | `/cint` · `/challengeINT` | Start an international challenge |
 | `/c<league>` | Any extra league an admin has added on the website answers the same way |
+| `/cipl multi [overs\|100B]` | **Multi League** — the host picks a league, then a team from it; the guest does the same (e.g. MI vs Sydney Sixers). `/cipl multi 10` plays 10 overs, `/cipl multi 100B` plays The Hundred. Admins choose which leagues appear with the **Include in Multi** tick on the website |
 
 ## 10. Lets Play Tournament
 
@@ -616,6 +617,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/pbo @username` | `/pbo @rahul` |
 | `/cipl` *(reply to a user)* | `/cipl` |
 | `/cipl <overs>` *(reply to a user)* — a shorter friendly, 1–20 overs | `/cipl 6` |
+| `/cipl multi [overs\|100B]` *(reply to a user)* — each side picks its own league, then a team | `/cipl multi 100B` |
 | `/matchinfo` | `/matchinfo` |
 | `/resume` · `/rcl` | `/rcl` · `/rcl 1234` |
 | `/pause` · `/continue <MatchId>` · `/saved` | `/pause` · `/continue 1234` |

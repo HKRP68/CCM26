@@ -87,6 +87,7 @@
       </select></div>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="league_is_active" checked style="width:auto;"> Active</label>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="same_team_allowed" checked style="width:auto;"> Same-team allowed</label>
+      <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="multi_enabled" checked style="width:auto;"> Include in Multi</label>
       <button class="btn btn-primary" type="submit">+ Add League</button>
     </form>
   </section>
@@ -101,6 +102,7 @@
           <span>{{ league.short_code or 'No short code' }}</span>
           <span>·</span><span>Sort {{ league.sort_order }}</span>
           <span>·</span><span>{{ 'Same-team allowed' if league.same_team_allowed else 'Same-team blocked' }}</span>
+          {% if league.multi_enabled %}<span>·</span><span>🔀 In Multi</span>{% endif %}
           <span>·</span><span>🏏 {{ 'The Hundred' if league.match_format == 'The100' else '20 Over' }}</span>
           {% if league.min_overseas or league.max_overseas < 11 %}<span>·</span><span>✈️ Overseas {{ league.min_overseas }}–{{ league.max_overseas }}</span>{% endif %}
           {% if league.home_country %}<span>·</span><span>🏠 {{ league.home_country }}</span>{% endif %}
@@ -155,6 +157,7 @@
       </select></div>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="league_is_active" {{ 'checked' if league.is_active else '' }} style="width:auto;"> Active</label>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="same_team_allowed" {{ 'checked' if league.same_team_allowed else '' }} style="width:auto;"> Same-team challenge allowed</label>
+      <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="multi_enabled" {{ 'checked' if league.multi_enabled else '' }} style="width:auto;"> Include in Multi (/cipl multi)</label>
       {% if league.image_url %}<label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="remove_image" style="width:auto;"> Remove current image</label>{% endif %}
     </div>
   </form>
