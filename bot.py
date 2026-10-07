@@ -135,7 +135,7 @@ from handlers.match import (
 from handlers.h2h import h2h_handler
 
 # Auto-simulated match handler (/sim)
-from handlers.sim import sim_handler
+from handlers.sim import sim_handler, rsim_handler
 
 # Trait handlers
 from handlers.traits import (
@@ -1877,6 +1877,7 @@ def main():
         app.add_handler(CommandHandler(["playmatch", "pm", "match"], playmatch_handler))
         app.add_handler(CommandHandler("wpm", wpm_handler))
         app.add_handler(CommandHandler(["sim", "simmatch"], sim_handler))
+        app.add_handler(CommandHandler(["rsim", "resetsim"], rsim_handler))
         app.add_handler(CommandHandler("testwpm", testwpm_handler))
         app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
         app.add_handler(CommandHandler(["clearmatches", "clearmatch"], clearmatches_handler))

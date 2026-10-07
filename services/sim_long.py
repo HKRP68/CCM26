@@ -242,57 +242,213 @@ def _potm_line(res):
     return ", ".join(bits)
 
 
-def summary_image_kwargs(res):
-    """ODI result → the keyword arguments of ``generate_match_summary``.
+def _plain(text):
+    """Text the card's fonts can draw: no emoji (a "🤖 Sim XI" draws as tofu)."""
+    return " ".join("".join(ch for ch in str(text or "") if ord(ch) <= 0xFFFF
+                            and not 0x2600 <= ord(ch) <= 0x27BF).split())
 
-    A Test has up to four innings and the card is drawn around two, so only
-    ODIs get the image (None for anything else).
-    """
+
+def _top(inn):
+    """The poster's top-four batters and bowlers of one innings."""
+    bats = sorted((b for b in inn["batting"] if b["balls"] or b["out"]),
+                  key=lambda b: (b["runs"], -b["balls"]), reverse=True)[:4]
+    bowls = sorted(inn["bowling"], key=lambda w: (w["wkts"], -w["runs"]),
+                   reverse=True)[:4]
+    return {
+        "team": _plain(inn["team"]),
+        "batters": [{"name": b["name"], "runs": b["runs"], "balls": b["balls"],
+                     "fours": b["fours"], "sixes": b["sixes"], "out": bool(b["out"])}
+                    for b in bats],
+        "bowlers": [{"name": w["name"], "wickets": w["wkts"], "runs": w["runs"],
+                     "overs": w["overs"]} for w in bowls],
+    }
+
+
+def conditions_chips(res):
+    """``[(kind, label, value), ...]`` for the card's conditions strip."""
+    st = res.get("stadium") or {}
+    t = res.get("time") or {}
+    w = res.get("final_weather") or {}
+    toss = res.get("toss") or {}
+    venue = st.get("name") or "Neutral Venue"
+    if st.get("city"):
+        venue = f"{venue}, {st['city']}"
+    sky = w.get("cloudCover")
+    sky_word = ("Clear" if sky is not None and sky < 25 else
+                "Overcast" if sky is not None and sky > 70 else "Partly cloudy")
+    weather = (f"{sky_word} · {w['temperatureC']:.0f}°C"
+               if w.get("temperatureC") is not None else sky_word)
+    ball = f"{t.get('ball', 'White')} · {'Day/Night' if t.get('day_night') else 'Day'}"
+    chips = [
+        ("venue", "Venue", venue),
+        ("pitch", "Pitch", res.get("pitch") or ""),
+        ("weather", "Weather", weather),
+        ("ball", "Ball", ball),
+    ]
+    if toss.get("winner"):
+        chips.append(("toss", "Toss", f"{_plain(toss['winner'])} · {toss.get('decision', 'bat')}"))
+    return chips
+
+
+def _potm_totals(res):
+    """Match totals for the POTM showcase: runs, balls, 4s, 6s, wkts, conceded, overs."""
+    name = res.get("potm")
+    t = {"runs": 0, "balls": 0, "fours": 0, "sixes": 0, "wkts": 0, "conceded": 0,
+         "bowl_balls": 0, "batted": False, "bowled": False, "not_out": False}
+    for inn in res["innings"]:
+        for b in inn["batting"]:
+            if b["name"] == name and (b["balls"] or b["out"]):
+                t["batted"] = True
+                for k in ("runs", "balls", "fours", "sixes"):
+                    t[k] += b[k]
+                t["not_out"] = not b["out"]
+        for w in inn["bowling"]:
+            if w["name"] == name:
+                t["bowled"] = True
+                t["wkts"] += w["wkts"]
+                t["conceded"] += w["runs"]
+                t["bowl_balls"] += w["balls"]
+    return t
+
+
+def _potm_kwargs(res):
+    t = _potm_totals(res)
+    overs = f"{t['bowl_balls'] // 6}.{t['bowl_balls'] % 6}" if t["bowled"] else None
+    return {
+        "potm_name": res.get("potm"),
+        "potm_team": _plain(res.get("potm_team") or ""),
+        "potm_stats": (_potm_line(res) or "Impact performance") + ("*" if t["not_out"] else ""),
+        "potm_runs": t["runs"] if t["batted"] else None,
+        "potm_balls": t["balls"] if t["batted"] else None,
+        "potm_fours": t["fours"] if t["batted"] else None,
+        "potm_sixes": t["sixes"] if t["batted"] else None,
+        "potm_wickets": t["wkts"] if t["bowled"] else None,
+        "potm_conceded": t["conceded"] if t["bowled"] else None,
+        "potm_overs": overs,
+    }
+
+
+def summary_image_kwargs(res):
+    """ODI result → the keyword arguments of ``generate_match_summary``
+    (None for anything that is not a two-innings ODI)."""
     if res.get("format") != "ODI" or len(res.get("innings") or []) != 2:
         return None
     i1, i2 = res["innings"]
-
-    def top(inn):
-        bats = sorted((b for b in inn["batting"] if b["balls"] or b["out"]),
-                      key=lambda b: (b["runs"], -b["balls"]), reverse=True)[:4]
-        bowls = sorted(inn["bowling"], key=lambda w: (w["wkts"], -w["runs"]),
-                       reverse=True)[:4]
-        return {
-            "team": inn["team"],
-            "batters": [{"name": b["name"], "runs": b["runs"], "balls": b["balls"],
-                         "fours": b["fours"], "sixes": b["sixes"], "out": bool(b["out"])}
-                        for b in bats],
-            "bowlers": [{"name": w["name"], "wickets": w["wkts"], "runs": w["runs"],
-                         "overs": w["overs"]} for w in bowls],
-        }
-
     result = res["result"]
-    return {
-        "inn1_team": i1["team"], "inn1_runs": i1["runs"], "inn1_wickets": i1["wickets"],
-        "inn1_overs": i1["overs"],
-        "inn2_team": i2["team"], "inn2_runs": i2["runs"], "inn2_wickets": i2["wickets"],
-        "inn2_overs": i2["overs"],
-        "winner_name": result.get("winner") or "Tied",
-        "win_margin_text": result.get("text") or "Match tied",
+    kw = {
+        "inn1_team": _plain(i1["team"]), "inn1_runs": i1["runs"],
+        "inn1_wickets": i1["wickets"], "inn1_overs": i1["overs"],
+        "inn2_team": _plain(i2["team"]), "inn2_runs": i2["runs"],
+        "inn2_wickets": i2["wickets"], "inn2_overs": i2["overs"],
+        "winner_name": _plain(result.get("winner") or "Tied"),
+        "win_margin_text": _margin_text(result),
         "overs_total": 50,
-        "potm_name": res.get("potm"),
-        "potm_stats": _potm_line(res) or "Impact performance",
-        "top_per_team": {"inn1": top(i1), "inn2": top(i2)},
+        "top_per_team": {"inn1": _top(i1), "inn2": _top(i2)},
+        "conditions": conditions_chips(res),
+        "tagline": "FIFTY OVERS|ONE DAY|INTERNATIONAL",
+        "header_left": "ODI",
+        "inn1_score_text": _test_score_text(i1),
+        "inn2_score_text": _test_score_text(i2),
     }
+    kw.update(_potm_kwargs(res))
+    kw["dynamic_flourish"] = True
+    return kw
+
+
+def _margin_text(result):
+    """'by 8 wickets' / 'by an innings and 45 runs' from the result text."""
+    text = result.get("text") or ""
+    winner = result.get("winner")
+    if winner and " won " in text:
+        return text.split(" won ", 1)[1]
+    return text or "Match tied"
+
+
+def _test_score_text(inn):
+    if inn.get("declared"):
+        return f"{inn['runs']}-{inn['wickets']} d"
+    if inn.get("all_out") or inn["wickets"] >= 10:
+        return f"{inn['runs']}"
+    return f"{inn['runs']}-{inn['wickets']}"
+
+
+def test_days(res):
+    """Timeline nodes: one per close of play, then the result day."""
+    rain_days = {r.get("day") for r in res.get("rain") or [] if r.get("overs_lost")}
+    days = []
+    for st in res.get("stumps") or []:
+        days.append({"label": f"Day {st['day']}",
+                     "line": f"{_plain(st.get('team', ''))} {st.get('runs', '')}/{st.get('wickets', '')}",
+                     "rain": st["day"] in rain_days, "final": False})
+    final_day = res.get("days_played") or (len(days) + 1)
+    final_day = max(final_day, (days and int(days[-1]["label"].split()[-1]) + 1) or 1)
+    final_day = min(final_day, 5)
+    result = res.get("result") or {}
+    if result.get("winner"):
+        verdict = f"{_plain(result['winner'])} win"
+    elif result.get("margin") == "tie":
+        verdict = "Tied"
+    else:
+        verdict = "Drawn"
+    if days and int(days[-1]["label"].split()[-1]) >= final_day:
+        days[-1]["final"] = True
+        days[-1]["line"] = verdict
+    else:
+        days.append({"label": f"Day {final_day}", "line": verdict,
+                     "rain": final_day in rain_days, "final": True})
+    return days
+
+
+def test_image_kwargs(res):
+    """Test result → the keyword arguments of ``generate_test_summary``."""
+    if res.get("format") != "Test" or not res.get("innings"):
+        return None
+    innings = []
+    for inn in res["innings"][:4]:
+        top = _top(inn)
+        innings.append({
+            "team": _plain(inn["team"]), "runs": inn["runs"], "wickets": inn["wickets"],
+            "overs": inn["overs"], "score_text": _test_score_text(inn),
+            "meta_text": f"{innings_label(res, inn)} · {inn['overs']} overs",
+            "batters": top["batters"], "bowlers": top["bowlers"],
+        })
+    result = res["result"]
+    winner = result.get("winner")
+    if winner:
+        headline, margin = None, _margin_text(result)
+    else:
+        headline = "MATCH TIED" if result.get("margin") == "tie" else "MATCH DRAWN"
+        margin = ""
+    kw = {
+        "innings": innings,
+        "side_a": innings[0]["team"],
+        "winner_name": _plain(winner or ""),
+        "win_margin_text": margin,
+        "result_headline": headline,
+        "days": test_days(res),
+        "conditions": conditions_chips(res),
+    }
+    kw.update(_potm_kwargs(res))
+    return kw
 
 
 def render_long_summary_image(res, *, text_settings=None, stadium=None,
                               inn1_user_id=None, inn2_user_id=None,
                               potm_player_id=None):
-    """ODI summary PNG bytes (None for a Test, or if rendering fails).
+    """Summary PNG bytes for an ODI or a Test (None if rendering fails).
 
-    Same branding lookup as ``services.sim_match.render_match_summary_image``.
+    ``inn1_user_id`` / ``inn2_user_id`` are the sides that batted first and
+    second; the branding lookup is the same as
+    ``services.sim_match.render_match_summary_image``.
     """
-    kwargs = summary_image_kwargs(res)
+    fmt = res.get("format")
+    kwargs = summary_image_kwargs(res) if fmt == "ODI" else test_image_kwargs(res)
     if kwargs is None:
         return None
     from datetime import datetime
-    from services.match_summary_card import generate_match_summary
+    first = _plain(res["innings"][0]["team"])
+    second = next((_plain(i["team"]) for i in res["innings"] if _plain(i["team"]) != first),
+                  _plain(res["innings"][0]["bowling_team"]))
     visuals = {}
     try:
         from services import card_identity, scorecard_delivery
@@ -300,7 +456,7 @@ def render_long_summary_image(res, *, text_settings=None, stadium=None,
         try:
             visuals = card_identity.summary_visuals(
                 session,
-                inn1_team=kwargs["inn1_team"], inn2_team=kwargs["inn2_team"],
+                inn1_team=first, inn2_team=second,
                 inn1_user_id=inn1_user_id, inn2_user_id=inn2_user_id,
                 potm_player_id=potm_player_id, potm_name=res.get("potm"),
                 potm_card=scorecard_delivery.potm_card_inline(),
@@ -309,11 +465,17 @@ def render_long_summary_image(res, *, text_settings=None, stadium=None,
             session.close()
     except Exception:
         logger.exception("sim_long summary branding lookup failed — drawing plain")
+    venue = stadium or (res.get("stadium") or {}).get("name") or res.get("pitch")
     try:
-        return generate_match_summary(
-            **visuals, **kwargs,
-            stadium=stadium or (res.get("stadium") or {}).get("name") or res.get("pitch"),
-            match_date=datetime.utcnow(), text_settings=text_settings)
+        if fmt == "ODI":
+            from services.match_summary_card import generate_match_summary
+            return generate_match_summary(
+                **visuals, **kwargs, stadium=venue, match_date=datetime.utcnow(),
+                text_settings=text_settings)
+        from services.test_summary_card import generate_test_summary
+        return generate_test_summary(
+            **visuals, **kwargs, stadium=venue, match_date=datetime.utcnow(),
+            text_settings=text_settings)
     except Exception:
         logger.exception("sim_long summary image failed")
         return None

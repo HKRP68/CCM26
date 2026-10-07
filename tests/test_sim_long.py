@@ -115,14 +115,16 @@ def test_rendering_escapes_names_and_uses_one_quote(fmt):
     assert all(inn["commentary"] for inn in payload["innings"])
 
 
-def test_summary_image_only_for_odi():
+def test_each_format_gets_its_own_card():
     odi = sim_long.simulate_long_match(_xi("A", 82), _xi("B", 80), "A", "B", "ODI",
                                        pitch="Even", seed=5)
     test = sim_long.simulate_long_match(_xi("A", 82), _xi("B", 80), "A", "B", "Test",
                                         pitch="Even", seed=5)
     kw = sim_long.summary_image_kwargs(odi)
     assert kw["overs_total"] == 50 and kw["inn1_team"] == odi["innings"][0]["team"]
-    assert sim_long.summary_image_kwargs(test) is None
+    assert sim_long.summary_image_kwargs(test) is None   # the poster is two innings
+    assert sim_long.test_image_kwargs(odi) is None
+    assert sim_long.test_image_kwargs(test)["innings"]
 
 
 def test_player_of_the_match_prefers_the_winning_side():
@@ -188,7 +190,9 @@ def handler_env(monkeypatch):
     monkeypatch.setattr(sim_mod, "get_pitch_meta", lambda p: {"description": "true"})
     monkeypatch.setattr(sim_mod, "get_config", lambda: {})
     monkeypatch.setattr(sim_long, "_pick_stadium", lambda: None)
-    monkeypatch.setattr(sim_long, "render_long_summary_image", lambda res, **k: None)
+    image_calls = []
+    monkeypatch.setattr(sim_long, "render_long_summary_image",
+                        lambda res, **k: image_calls.append(res["format"]))
     short_calls = []
     monkeypatch.setattr(sim_mod, "simulate_match", lambda *a, **k: short_calls.append(1))
 
@@ -209,7 +213,8 @@ def handler_env(monkeypatch):
         return sent, message.docs
 
     stats = lambda: db.query(UserStats).filter(UserStats.user_id == user.id).first()
-    return SimpleNamespace(run=run, stats=stats, short_calls=short_calls)
+    return SimpleNamespace(run=run, stats=stats, short_calls=short_calls,
+                           image_calls=image_calls)
 
 
 @pytest.mark.parametrize("fmt,banner", [("ODI", "ODI (50 ov)"), ("Test", "Test match (5 days)")])
@@ -221,6 +226,7 @@ def test_handler_plays_a_long_format(handler_env, fmt, banner):
     assert "MATCH RESULT" in joined and "Next /sim in" in joined
     assert docs == ["📜 Ball-by-ball commentary (JSON)"]
     assert handler_env.stats().last_sim is not None
+    assert handler_env.image_calls == [fmt], "both long formats get a scorecard image"
     if fmt == "Test":
         assert "CLOSE OF PLAY" in joined
 
@@ -229,3 +235,74 @@ def test_long_format_shares_the_sim_cooldown(handler_env):
     handler_env.run(["ODI"])
     sent, _ = handler_env.run(["Test"])
     assert "cooling down" in "\n".join(sent)
+
+
+# ── graphics ────────────────────────────────────────────────────────────
+
+def _png_size(png):
+    from PIL import Image
+    import io
+    return Image.open(io.BytesIO(png)).size
+
+
+def test_summary_card_keeps_its_size_without_conditions():
+    from services.match_summary_card import generate_match_summary, CANVAS_W, CANVAS_H
+    base = dict(inn1_team="A", inn1_runs=180, inn1_wickets=5, inn1_overs="20.0",
+                inn2_team="B", inn2_runs=150, inn2_wickets=9, inn2_overs="20.0",
+                winner_name="A", win_margin_text="by 30 runs", overs_total=20)
+    assert _png_size(generate_match_summary(**base)) == (CANVAS_W, CANVAS_H)
+    tall = generate_match_summary(**base, conditions=[("pitch", "Pitch", "Flat")])
+    assert _png_size(tall)[1] > CANVAS_H
+
+
+@pytest.mark.parametrize("seed", [4, 7])
+def test_test_card_renders_every_innings(seed):
+    from services.test_summary_card import generate_test_summary
+    res = sim_long.simulate_long_match(_xi("A", 82), _xi("B", 80), "🤖 Alpha", "Bravo",
+                                       "Test", pitch="Even", seed=seed)
+    kw = sim_long.test_image_kwargs(res)
+    assert len(kw["innings"]) == len(res["innings"])
+    assert kw["side_a"] == res["innings"][0]["team"].replace("🤖 ", "")
+    assert "🤖" not in repr(kw["innings"])           # fonts carry no emoji
+    days = kw["days"]
+    assert days[-1]["final"] and sum(d["final"] for d in days) == 1
+    assert [d["label"] for d in days] == sorted(d["label"] for d in days)
+    png = generate_test_summary(**kw)
+    assert png and png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_test_card_height_follows_the_innings():
+    from services.test_summary_card import generate_test_summary
+    inn = {"team": "A", "runs": 300, "wickets": 10, "overs": "90.0",
+           "batters": [], "bowlers": []}
+    sizes = [_png_size(generate_test_summary(innings=[dict(inn)] * n, winner_name="A",
+                                             win_margin_text="by 10 runs",
+                                             days=[{"label": "Day 1", "line": "A 300",
+                                                    "final": True}]))[1]
+             for n in (2, 3, 4)]
+    assert sizes[0] < sizes[1] < sizes[2]
+
+
+def test_drawn_test_headlines_the_draw():
+    res = {"format": "Test", "innings": [], "result": {"winner": None, "margin": "draw",
+                                                      "text": "Match drawn"}}
+    assert sim_long.test_image_kwargs(res) is None      # nothing to draw yet
+    res = sim_long.simulate_long_match(_xi("A", 82), _xi("B", 82), "Alpha", "Bravo",
+                                       "Test", pitch="Flat", seed=7)
+    kw = sim_long.test_image_kwargs(res)
+    if res["result"]["winner"] is None:
+        assert kw["result_headline"] == "MATCH DRAWN"
+        assert kw["days"][-1]["line"] == "Drawn"
+    else:
+        assert kw["result_headline"] is None
+
+
+def test_odi_card_shows_conditions_and_all_out():
+    res = sim_long.simulate_long_match(_xi("A", 82), _xi("B", 80), "Alpha", "Bravo", "ODI",
+                                       pitch="Even", seed=7)
+    kw = sim_long.summary_image_kwargs(res)
+    kinds = [c[0] for c in kw["conditions"]]
+    assert kinds[:4] == ["venue", "pitch", "weather", "ball"]
+    for i, inn in enumerate(res["innings"], 1):
+        if inn["all_out"] or inn["wickets"] >= 10:
+            assert kw[f"inn{i}_score_text"] == str(inn["runs"])

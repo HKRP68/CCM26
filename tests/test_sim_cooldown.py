@@ -327,3 +327,56 @@ class SimClaimRaceTests(SimCooldownTests):
         self.assertIn("Next /sim: you in", out)
         self.assertIn("4h", out)          # caller, free tier
         self.assertIn("3h", out)          # rival, Diamond
+
+
+class RsimTests(SimCooldownTests):
+    """/rsim — a bot admin hands one player their /sim back."""
+
+    ADMIN_TG = 9009
+
+    def setUp(self):
+        super().setUp()
+        import services.admin_ids as admin_ids
+        self._patch(admin_ids, "is_admin", lambda uid, *a, **k: uid == self.ADMIN_TG)
+
+    def _rsim(self, args, sender=ADMIN_TG, reply_to=None):
+        sent = []
+        reply = None
+        if reply_to is not None:
+            reply = _Msg(sent)
+            reply.from_user = SimpleNamespace(id=reply_to.telegram_id, is_bot=False)
+        message = _Msg(sent, reply_to=reply)
+        update = SimpleNamespace(message=message, effective_message=message,
+                                 effective_user=SimpleNamespace(id=sender, is_bot=False))
+        asyncio.run(sim_mod.rsim_handler(update, SimpleNamespace(args=args)))
+        return "\n".join(sent)
+
+    def test_an_admin_reset_lets_the_player_sim_again(self):
+        self._run(self.caller)
+        self.assertIsNotNone(self._last_sim(self.caller))
+        out = self._rsim([str(self.caller.telegram_id)])
+        self.assertIn("cooldown reset", out)
+        self.assertIsNone(self._last_sim(self.caller))
+        self._run(self.caller)
+        self.assertEqual(len(self.simulated), 2)
+
+    def test_reset_by_replying_to_the_player(self):
+        self._run(self.caller)
+        out = self._rsim([], reply_to=self.caller)
+        self.assertIn("cooldown reset", out)
+        self.assertIsNone(self._last_sim(self.caller))
+
+    def test_a_non_admin_is_ignored(self):
+        self._run(self.caller)
+        out = self._rsim([str(self.caller.telegram_id)], sender=self.rival.telegram_id)
+        self.assertEqual(out, "")
+        self.assertIsNotNone(self._last_sim(self.caller))
+
+    def test_unknown_and_bad_ids(self):
+        self.assertIn("No user with Telegram ID", self._rsim(["424242"]))
+        self.assertIn("numeric Telegram ID", self._rsim(["abc"]))
+        self.assertIn("/rsim &lt;telegram_id&gt;", self._rsim([]))
+
+    def test_a_player_already_off_cooldown_is_reported(self):
+        out = self._rsim([str(self.caller.telegram_id)])
+        self.assertIn("already off /sim cooldown", out)
