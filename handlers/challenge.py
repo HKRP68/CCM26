@@ -461,14 +461,32 @@ def _get_challenge_league_record(session, league_key):
     return None
 
 
-def _resolve_draft_league(session, draft):
-    """Resolve the ChallengeLeague for a draft.
+def _side_league_key(draft, side=None):
+    """The league key ``side``'s team belongs to.
+
+    A /cipl multi draft has no single league: each side picks its own, stored as
+    ``host_league_key`` / ``target_league_key``. Every other draft falls back to
+    the draft-wide ``league_key``.
+    """
+    draft = draft or {}
+    if side in ("host", "target") and draft.get(f"{side}_league_key"):
+        return draft[f"{side}_league_key"]
+    return draft.get("league_key")
+
+
+def _resolve_draft_league(session, draft, side=None):
+    """Resolve the ChallengeLeague for a draft (or for one ``side`` of it).
 
     Prefer the draft's pinned ``league_id`` (set for CL Tour matches) so the
     league is found by id even if it has been deactivated mid-tour; fall back to
     the active-only key lookup for normal /cipl drafts that carry no league_id.
+    A /cipl multi draft pins one league per side (``host_league_id`` /
+    ``target_league_id``), which wins when ``side`` is given.
     """
-    league_id = (draft or {}).get("league_id")
+    league_id = None
+    if side in ("host", "target"):
+        league_id = (draft or {}).get(f"{side}_league_id")
+    league_id = league_id or (draft or {}).get("league_id")
     if league_id:
         try:
             league = session.get(ChallengeLeague, int(league_id))
@@ -476,7 +494,97 @@ def _resolve_draft_league(session, draft):
                 return league
         except Exception:
             logger.exception("Failed to load draft league by id %s", league_id)
-    return _get_challenge_league_record(session, (draft or {}).get("league_key"))
+    return _get_challenge_league_record(session, _side_league_key(draft, side))
+
+
+# ── /cipl multi — each side picks a league, then a team from it ─────────
+MULTI_LEAGUE_KEY = "multi"
+MULTI_LEAGUE_NAME = "Multi League"
+MULTI_ARG = "multi"
+# "100B" (any case), "100balls", "the100", "hundred" → The Hundred format.
+_HUNDRED_TOKENS = {"100b", "100ball", "100balls", "the100", "hundred"}
+
+
+def parse_multi_args(words):
+    """Split ``/cipl multi …`` arguments into ``(is_multi, overs, ball_format, error)``.
+
+    ``is_multi`` is False when the first word isn't ``multi`` (the caller then
+    treats the command as an ordinary league challenge). Otherwise the rest may
+    hold an over count (``10``, ``10ov``, ``T10``) or a Hundred token
+    (``100B``) — not both. Pure, for tests.
+    """
+    words = list(words or [])
+    if not words or str(words[0]).strip().lower() != MULTI_ARG:
+        return False, None, None, None
+    from services.match_formats import extract_overs_arg
+    rest = words[1:]
+    hundred = [w for w in rest if str(w).strip().lower() in _HUNDRED_TOKENS]
+    rest = [w for w in rest if str(w).strip().lower() not in _HUNDRED_TOKENS]
+    overs, _rest, error = extract_overs_arg(rest)
+    if error:
+        return True, None, None, error
+    if hundred and overs:
+        return True, None, None, (
+            "The Hundred is always 100 balls — drop the over count.")
+    return True, overs, ("The100" if hundred else "T20"), None
+
+
+def _multi_leagues(session):
+    """Leagues offered by /cipl multi: active, admin-enabled, with teams.
+
+    Returns ``[{"key", "name", "id", "short"}]`` in the admin's sort order.
+    """
+    out, seen = [], set()
+    try:
+        leagues = (session.query(ChallengeLeague)
+                   .filter(ChallengeLeague.is_active == True)
+                   .order_by(ChallengeLeague.sort_order, ChallengeLeague.name)
+                   .all())
+    except Exception:
+        logger.exception("Failed to load leagues for /cipl multi")
+        return out
+    for league in leagues:
+        if not getattr(league, "multi_enabled", True):
+            continue
+        key = normalize_challenge_league(league.short_code or league.name)
+        if not key or key in seen:
+            continue
+        # Same resolution every other path uses, so a duplicate league sharing
+        # this key resolves to the one with a roster.
+        record = _get_challenge_league_record(session, key) or league
+        if not getattr(record, "multi_enabled", True):
+            continue
+        if not _league_teams(session, key, record):
+            continue
+        seen.add(key)
+        out.append({
+            "key": key,
+            "name": (record.name or key.upper()).strip(),
+            "id": record.id,
+            "short": (record.short_code or "").strip().upper() or None,
+        })
+    return out
+
+
+def _multi_side_needs_league(draft, side):
+    return bool(draft.get("multi")) and not draft.get(f"{side}_league_key")
+
+
+def _multi_league_keyboard(draft_id, leagues):
+    rows, row = [], []
+    for idx, league in enumerate(leagues or []):
+        label = league.get("short") or league.get("name") or "League"
+        row.append(InlineKeyboardButton(label, callback_data=f"cl_mlg_{draft_id}_{idx}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([
+        InlineKeyboardButton("❌ Cancel", callback_data=f"cl_cancel_{draft_id}"),
+        InlineKeyboardButton("🚫 Deny Match", callback_data=f"cl_denymatch_{draft_id}"),
+    ])
+    return InlineKeyboardMarkup(rows)
 
 
 def _league_image_url(league_record):
@@ -499,7 +607,8 @@ def _league_teams(session, league_key, league_record=None):
     return teams
 
 
-def _team_keyboard(draft_id, teams, unavailable_teams=None, team_codes=None):
+def _team_keyboard(draft_id, teams, unavailable_teams=None, team_codes=None,
+                   back_to_leagues=False):
     """Build the team-selection keyboard.
 
     Buttons show the team's short code (e.g. ``MI``, ``CSK``) rather than the
@@ -522,6 +631,9 @@ def _team_keyboard(draft_id, teams, unavailable_teams=None, team_codes=None):
             row = []
     if row:
         rows.append(row)
+    if back_to_leagues:
+        rows.append([InlineKeyboardButton(
+            "◀ Leagues", callback_data=f"cl_mlg_{draft_id}_back")])
     # Cancel aborts the whole setup (either player); Deny Match lets the guest
     # refuse the challenge right here in Team Selection (validated in the handler).
     rows.append([
@@ -556,33 +668,48 @@ def _team_keyboard_for(draft, draft_id):
     teams = draft.get("teams") or []
     turn = draft.get("turn") or "host"
     side = "host" if turn == "host" else "target"
+    multi = bool(draft.get("multi"))
+    if multi and turn != "complete" and _multi_side_needs_league(draft, side):
+        return _multi_league_keyboard(draft_id, draft.get("multi_leagues"))
     unavailable = set()
-    if turn != "host" and not _same_team_allowed_for_draft(draft):
+    # In /cipl multi the guest's team can only clash with the host's when both
+    # picked the same league — a same-named team elsewhere is a different side.
+    same_league = (not multi or draft.get("host_league_key")
+                   == draft.get("target_league_key"))
+    if turn != "host" and same_league and not _same_team_allowed_for_draft(draft):
         host_team = draft.get("host_team")
         if host_team:
             unavailable.add(host_team)
     allowed = _allowed_teams_for(draft, side)
     if allowed is not None:
         unavailable |= {t for t in teams if t not in allowed}
-    return _team_keyboard(draft_id, teams, sorted(unavailable),
-                          team_codes=draft.get("team_codes"))
+    codes = (draft.get(f"{side}_team_codes") if multi else None) \
+        or draft.get("team_codes")
+    return _team_keyboard(draft_id, teams, sorted(unavailable), team_codes=codes,
+                          back_to_leagues=multi and turn != "complete")
 
 
 def _team_selection_status(draft):
     lines = []
     host_team = draft.get("host_team")
     target_team = draft.get("target_team")
+
+    def _from(side):
+        # /cipl multi: name the league too — the two teams come from different ones.
+        name = draft.get(f"{side}_league_name") if draft.get("multi") else None
+        return f" ({_esc(name)})" if name else ""
+
     if host_team:
         host = draft.get("host") or {}
         lines.append(
             f"✅ {_mention(host.get('tg_id'), host.get('name') or 'User 1')} "
-            f"selected <b>{host_team}</b>."
+            f"selected <b>{host_team}</b>{_from('host')}."
         )
     if target_team:
         target = draft.get("target") or {}
         lines.append(
             f"✅ {_mention(target.get('tg_id'), target.get('name') or 'User 2')} "
-            f"selected <b>{target_team}</b>."
+            f"selected <b>{target_team}</b>{_from('target')}."
         )
     return lines
 
@@ -688,8 +815,8 @@ def _challenge_created_blocks(draft, session=None):
         title=title, host=draft.get("host") or {},
         target=draft.get("target") or {},
         host_team=host_team, target_team=target_team,
-        host_code=_team_short_code(host_team, draft.get("league_key"), session),
-        target_code=_team_short_code(target_team, draft.get("league_key"),
+        host_code=_team_short_code(host_team, _side_league_key(draft, "host"), session),
+        target_code=_team_short_code(target_team, _side_league_key(draft, "target"),
                                      session),
         host_emoji=_team_emoji(host_team), target_emoji=_team_emoji(target_team),
         series=series, bot_xi=bot_xi)
@@ -965,8 +1092,8 @@ def _challenge_created_text(draft, session=None):
     target = draft.get("target") or {}
     host_team = draft.get("host_team") or "Host XI"
     target_team = draft.get("target_team") or "Guest XI"
-    host_code = _team_short_code(host_team, draft.get("league_key"), session)
-    target_code = _team_short_code(target_team, draft.get("league_key"), session)
+    host_code = _team_short_code(host_team, _side_league_key(draft, "host"), session)
+    target_code = _team_short_code(target_team, _side_league_key(draft, "target"), session)
     host_team_line = f"{_team_emoji(host_team)} <b>{host_team}</b> ({host_code})" if host_code else f"{_team_emoji(host_team)} <b>{host_team}</b>"
     target_team_line = f"{_team_emoji(target_team)} <b>{target_team}</b> ({target_code})" if target_code else f"{_team_emoji(target_team)} <b>{target_team}</b>"
     # A league is "IPL — CHALLENGE"; a mode that is not a league already says
@@ -1013,7 +1140,7 @@ def _resolve_team_id(session, draft, side):
     if draft.get("mode") in INLINE_SQUAD_MODES:
         return None
     try:
-        league = _resolve_draft_league(session, draft)
+        league = _resolve_draft_league(session, draft, side)
         if league is None:
             # No resolvable league means we can't pin the team to one league;
             # disable XI memory rather than risk a same-named team in another
@@ -1089,7 +1216,7 @@ def _inline_saved_order(draft, side, players):
             players)
     try:
         from services.bot_xi_builder import build_challenge_bot_xi
-        lo, hi, rules = _challenge_xi_limits(draft)
+        lo, hi, rules = _challenge_xi_limits(draft, side)
         xi = build_challenge_bot_xi(list(players), lo, hi, rules)
         return [int(p.id) for p in xi]
     except Exception:
@@ -1114,7 +1241,7 @@ def _query_team_players(session, draft, side):
     if not team_name:
         return []
     query = session.query(ChallengeTeam).filter(ChallengeTeam.name == team_name)
-    league = _resolve_draft_league(session, draft)
+    league = _resolve_draft_league(session, draft, side)
     if league is not None:
         query = query.filter(ChallengeTeam.league_id == league.id)
     team = query.first()
@@ -1165,7 +1292,7 @@ def _load_team_players_with_retry(draft, side, attempts=2):
         try:
             players = _query_team_players(session, draft, side)
             team_id = _resolve_team_id(session, draft, side)
-            league = _resolve_draft_league(session, draft)
+            league = _resolve_draft_league(session, draft, side)
             league_cfg = None
             if league is not None:
                 # Read scalars now, before the session closes — defaults apply only to
@@ -1244,8 +1371,8 @@ def _challenge_match_ready_text(draft):
     league_name = draft.get("league_name") or "IPL"
     host_team = draft.get("host_team") or "Host XI"
     target_team = draft.get("target_team") or "Guest XI"
-    host_code = _team_short_code(host_team, draft.get("league_key")) or host_team
-    target_code = _team_short_code(target_team, draft.get("league_key")) or target_team
+    host_code = _team_short_code(host_team, _side_league_key(draft, "host")) or host_team
+    target_code = _team_short_code(target_team, _side_league_key(draft, "target")) or target_team
     game_mode = draft.get("game_mode") or "Classic Challenge"
     pitch_profile = draft.get("pitch_profile") or draft.get("pitch_type") or "Balanced Pitch"
     if pitch_profile and not str(pitch_profile).lower().endswith("pitch"):
@@ -1303,8 +1430,15 @@ _challenge_is_overseas = xi_rules.challenge_is_overseas
 _challenge_xi_validation = xi_rules.validate_challenge_xi
 
 
-def _challenge_overseas_limits(draft):
-    """Return ``(min_overseas, max_overseas)`` for the draft, defaulting to 0/11."""
+def _challenge_overseas_limits(draft, side=None):
+    """Return ``(min_overseas, max_overseas)`` for the draft, defaulting to 0/11.
+
+    A /cipl multi draft keeps each side's own league limits under
+    ``side_overseas`` — an IPL side still plays to IPL's overseas cap.
+    """
+    per_side = (draft.get("side_overseas") or {}).get(side) if side else None
+    if per_side:
+        return int(per_side[0]), int(per_side[1])
     try:
         lo = int(draft.get("overseas_min") or 0)
     except (TypeError, ValueError):
@@ -1316,10 +1450,10 @@ def _challenge_overseas_limits(draft):
     return lo, hi
 
 
-def _challenge_xi_limits(draft):
+def _challenge_xi_limits(draft, side=None):
     """``(min_overseas, max_overseas, rating_rules)`` — every XI rule the
     draft carries beyond the fixed keeper / bowling ones."""
-    lo, hi = _challenge_overseas_limits(draft)
+    lo, hi = _challenge_overseas_limits(draft, side)
     return lo, hi, list(draft.get("rating_rules") or [])
 
 
@@ -1403,7 +1537,7 @@ def _challenge_xi_text(draft, side, team_name, players, selected_ids):
     selected_players.sort(key=lambda player: selected_ids.index(int(getattr(player, "id"))))
     keeper_count = sum(1 for player in selected_players if _challenge_is_wicket_keeper(player))
     bowling_options = sum(1 for player in selected_players if _challenge_is_bowling_option(player))
-    min_overseas, max_overseas = _challenge_overseas_limits(draft)
+    min_overseas, max_overseas = _challenge_overseas_limits(draft, side)
     overseas_count = sum(1 for player in selected_players if _challenge_is_overseas(player))
     lines = [
         f"🏏 <b>{team_name} Playing XI Selection</b>",
@@ -1523,7 +1657,7 @@ def _challenge_xi_picker_tree(draft, side, team_name, players, selected_ids):
     picked.sort(key=lambda p: selected_ids.index(int(getattr(p, "id"))))
     keepers = sum(1 for p in picked if _challenge_is_wicket_keeper(p))
     bowling = sum(1 for p in picked if _challenge_is_bowling_option(p))
-    lo, hi = _challenge_overseas_limits(draft)
+    lo, hi = _challenge_overseas_limits(draft, side)
     overseas = sum(1 for p in picked if _challenge_is_overseas(p))
 
     label, tg_id = _mention_parts(owner.get("tg_id"),
@@ -1575,8 +1709,8 @@ def _challenge_match_ready_blocks(draft):
         target = draft.get("target") or {}
         host_team = draft.get("host_team") or "Host XI"
         target_team = draft.get("target_team") or "Guest XI"
-        host_code = _team_short_code(host_team, draft.get("league_key")) or host_team
-        target_code = _team_short_code(target_team, draft.get("league_key")) or target_team
+        host_code = _team_short_code(host_team, _side_league_key(draft, "host")) or host_team
+        target_code = _team_short_code(target_team, _side_league_key(draft, "target")) or target_team
         pitch_profile = (draft.get("pitch_profile") or draft.get("pitch_type")
                          or "Balanced Pitch")
         if pitch_profile and not str(pitch_profile).lower().endswith("pitch"):
@@ -1682,7 +1816,7 @@ def _same_team_challenge_enabled(session=None, league_key=None):
 def _same_team_allowed_for_draft(draft):
     session = get_session()
     try:
-        return _same_team_challenge_enabled(session, draft.get("league_key"))
+        return _same_team_challenge_enabled(session, _side_league_key(draft, "target"))
     finally:
         session.close()
 
@@ -1698,8 +1832,17 @@ def _team_picker_blocks(draft, player_key):
     return chr_.team_picker_blocks(
         title=_league_battle_title(draft.get("league_name")),
         player=draft.get(player_key) or {},
-        league_name=draft.get("league_name"),
-        status_lines=_team_selection_status(draft))
+        league_name=_picker_league_name(draft, player_key),
+        status_lines=_team_selection_status(draft),
+        action=(", pick a league." if _multi_side_needs_league(draft, player_key)
+                else None))
+
+
+def _picker_league_name(draft, player_key):
+    """The league ``player_key`` is picking a team from."""
+    if draft.get("multi"):
+        return draft.get(f"{player_key}_league_name") or draft.get("league_name")
+    return draft.get("league_name")
 
 
 def _team_picker_prompt(draft, player_key):
@@ -1713,7 +1856,14 @@ def _team_picker_prompt(draft, player_key):
     lines.extend(_team_selection_status(draft))
     if len(lines) > 2:
         lines.append("")
-    lines.append(f"{mention}, please select your {league_name} team.")
+    if _multi_side_needs_league(draft, player_key):
+        fmt = ("The Hundred (100 balls)" if draft.get("ball_format") == "The100"
+               else f"{draft.get('overs') or 20} overs")
+        lines.append(f"🔀 <i>Multi League · {fmt}</i>")
+        lines.append(f"{mention}, please pick a league.")
+    else:
+        lines.append(f"{mention}, please select your "
+                     f"{_esc(str(_picker_league_name(draft, player_key) or ''))} team.")
     return "\n".join(lines)
 
 
@@ -1727,7 +1877,7 @@ def _local_static_path(image_url):
     return None
 
 
-async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None, tournament_name=None, is_tournament=False, vs_bot=False, owner_locked=False, host_teams=None, guest_teams=None, overs=None):
+async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None, tournament_name=None, is_tournament=False, vs_bot=False, owner_locked=False, host_teams=None, guest_teams=None, overs=None, multi_leagues=None, ball_format=None):
     # ``effective_message`` rather than ``update.message`` so this also works when
     # the picker is opened from a button (the /ciplbot Rematch), where
     # ``update.message`` is None.
@@ -1802,6 +1952,9 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
         "overs": (int(overs) if overs and not is_tournament else None),
         "teams": teams,
         "team_codes": team_codes,
+        # /cipl multi: each side picks a league (from this list), then a team.
+        "multi": bool(multi_leagues),
+        "multi_leagues": list(multi_leagues or []),
         "turn": "host",
         "host": {
             "user_id": challenger.id,
@@ -1827,6 +1980,11 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
     # has no matching team — yielding a spurious "No players are configured" alert.
     if league_record is not None:
         draft["league_id"] = league_record.id
+    if ball_format:
+        # Chosen on the command (/cipl multi 100B) — the leagues' own formats
+        # must not override it at XI selection.
+        draft["ball_format"] = ball_format
+        draft["ball_format_locked"] = True
     caption = _team_picker_prompt(draft, "host")
     markup = _team_keyboard_for(draft, draft_id)
     image_url = _league_image_url(league_record)
@@ -2371,6 +2529,50 @@ async def _handle_tournament_command(update, context, session, league):
         guest_teams=sorted(guest_owned) if guest_owned is not None else None)
 
 
+async def _resolve_challenge_pair(update, session):
+    """The ``(challenger, target)`` for a reply challenge, or ``(None, None)``
+    after telling the user what is wrong."""
+    target_tg = _reply_target_telegram_user(update)
+    if not target_tg:
+        await update.message.reply_text(CHALLENGE_REPLY_REQUIRED_MESSAGE)
+        return None, None
+    if getattr(target_tg, "is_bot", False):
+        await update.message.reply_text("❌ Bot accounts cannot be challenged.")
+        return None, None
+    if update.effective_user and target_tg.id == update.effective_user.id:
+        await update.message.reply_text("❌ You cannot challenge yourself.")
+        return None, None
+    target = sync_telegram_user(session, target_tg)
+    if not target:
+        await update.message.reply_text("❌ User not found. They need to use /debut first.")
+        return None, None
+    challenger = sync_telegram_user(session, update.effective_user)
+    if not challenger:
+        await update.message.reply_text("❌ Use /debut first.")
+        return None, None
+    return challenger, target
+
+
+async def _start_multi_challenge(update, context, session, overs, ball_format):
+    """/cipl multi — open the league picker for a cross-league friendly."""
+    challenger, target = await _resolve_challenge_pair(update, session)
+    if not challenger:
+        return
+    leagues = _multi_leagues(session)
+    if not leagues:
+        await update.message.reply_text(
+            "❌ No leagues are enabled for Multi yet. An admin can tick "
+            "“Include in Multi” on a league in the admin panel.")
+        return
+    await _send_league_team_picker(
+        update, context, challenger=challenger, target=target,
+        league_key=MULTI_LEAGUE_KEY, league_name=MULTI_LEAGUE_NAME,
+        league_record=None, teams=[], session=session,
+        overs=(overs if ball_format != "The100" else None),
+        multi_leagues=leagues, ball_format=ball_format,
+    )
+
+
 async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start built-in or admin-created league challenge commands from replies."""
     command_name = _challenge_command_name(update)
@@ -2415,6 +2617,19 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
         _msg = update.effective_message
         _words = ((getattr(_msg, "text", None) or "").split()[1:]
                   if getattr(context, "args", None) is None else context.args)
+        # /cipl multi [overs | 100B]: each side picks a league, then a team.
+        is_multi, multi_overs, multi_format, multi_error = parse_multi_args(_words)
+        if is_multi:
+            if multi_error:
+                await update.message.reply_text(
+                    f"❌ {multi_error}\nExample: reply to someone with "
+                    f"<code>/{_esc(command_name)} multi 10</code> or "
+                    f"<code>/{_esc(command_name)} multi 100B</code>",
+                    parse_mode="HTML")
+                return
+            await _start_multi_challenge(update, context, session,
+                                         multi_overs, multi_format)
+            return
         custom_overs, _rest, overs_error = extract_overs_arg(_words)
         if overs_error:
             await update.message.reply_text(
@@ -2538,11 +2753,11 @@ def _autoconfirm_bot_xi(draft):
             from services import auction_league_service as _als
             cards = (draft.get("inline_squads") or {}).get("target") or []
             order = [int(c["id"]) for c in _als.ai_playing_xi(
-                cards, _challenge_xi_limits(draft)[1], draft.get("pitch_type"))]
+                cards, _challenge_xi_limits(draft, "target")[1], draft.get("pitch_type"))]
             by_id = {int(p.id): p for p in players}
             xi = [by_id[i] for i in order if i in by_id]
         else:
-            xi = build_challenge_bot_xi(players, *_challenge_xi_limits(draft))
+            xi = build_challenge_bot_xi(players, *_challenge_xi_limits(draft, "target"))
         if len(xi) != 11:
             logger.error("ciplbot: could not build an XI for %s (%s players)",
                          draft.get("target_team"), len(players))
@@ -2603,8 +2818,14 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.answer("This button is not for you. Please use your own command.", show_alert=True)
         return
 
+    if _multi_side_needs_league(draft, player_key):
+        await query.answer("Pick a league first.", show_alert=True)
+        return
+
     selected_team = teams[team_idx]
     same_team_allowed = _same_team_allowed_for_draft(draft)
+    if draft.get("multi") and draft.get("host_league_key") != draft.get("target_league_key"):
+        same_team_allowed = True
     if turn == "target" and selected_team == draft.get("host_team") and not same_team_allowed:
         await query.answer("This team is already selected. Please choose another team.", show_alert=True)
         return
@@ -2729,6 +2950,77 @@ async def challenge_team_callback(update: Update, context: ContextTypes.DEFAULT_
     elif draft.get("turn") == "complete":
         # The guest's team is set; the host now picks the pitch.
         await _arm_selection_timer(context, draft, [draft.get("host_tg_id")], "pitch")
+
+
+async def challenge_multi_league_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/cipl multi: the side whose turn it is picks a league (or goes back)."""
+    query = update.callback_query
+    try:
+        _, _, draft_id, choice = query.data.split("_")
+        draft_id = int(draft_id)
+    except Exception:
+        await query.answer("Invalid league selection.", show_alert=True)
+        return
+    draft = context.bot_data.get(_challenge_team_draft_key(draft_id))
+    if not draft or not draft.get("multi"):
+        await query.answer("This team selection is no longer active.", show_alert=True)
+        return
+    turn = draft.get("turn") or "host"
+    if turn == "complete":
+        await query.answer("Team selection is already complete.", show_alert=True)
+        return
+    side = "host" if turn == "host" else "target"
+    expected_tg_id = (draft.get(side) or {}).get("tg_id")
+    if query.from_user.id != expected_tg_id:
+        await query.answer("This button is not for you. Please use your own command.", show_alert=True)
+        return
+
+    if choice == "back":
+        for suffix in ("league_key", "league_id", "league_name", "team_codes"):
+            draft.pop(f"{side}_{suffix}", None)
+        (draft.get("side_overseas") or {}).pop(side, None)
+        draft["teams"] = []
+        await query.answer("Pick a league.")
+    else:
+        leagues = draft.get("multi_leagues") or []
+        try:
+            league = leagues[int(choice)]
+        except (ValueError, IndexError):
+            await query.answer("Invalid league selection.", show_alert=True)
+            return
+        session = get_session()
+        try:
+            record = session.get(ChallengeLeague, int(league["id"]))
+            teams = _league_teams(session, league["key"], record) if record else []
+            codes = {t: (_team_short_code(t, league["key"], session) or t) for t in teams}
+            min_raw = getattr(record, "min_overseas", None)
+            max_raw = getattr(record, "max_overseas", None)
+            overseas = [int(min_raw) if min_raw is not None else 0,
+                        int(max_raw) if max_raw is not None else 11]
+        finally:
+            session.close()
+        if not teams:
+            await query.answer(f"{league['name']} has no teams right now.", show_alert=True)
+            return
+        draft[f"{side}_league_key"] = league["key"]
+        draft[f"{side}_league_id"] = league["id"]
+        draft[f"{side}_league_name"] = league["name"]
+        draft[f"{side}_team_codes"] = codes
+        # Each side plays to its own league's overseas rule.
+        draft.setdefault("side_overseas", {})[side] = overseas
+        draft["teams"] = teams
+        await query.answer(f"Selected {league['name']}")
+
+    message = _team_picker_prompt(draft, side)
+    markup = _team_keyboard_for(draft, draft_id)
+    try:
+        await query.edit_message_caption(caption=message, parse_mode="HTML", reply_markup=markup)
+    except Exception:
+        try:
+            await query.edit_message_text(message, parse_mode="HTML", reply_markup=markup)
+        except Exception:
+            logger.exception("Failed to update multi league picker message")
+    await _touch_selection_timer(context, draft)
 
 
 async def challenge_team_cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3251,10 +3543,18 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
         # picker render and confirm callbacks enforce them without re-hitting the
         # DB. ``.get`` throughout: a league that failed to resolve still returns a
         # dict carrying the injury list, and must not clobber earlier values.
+        multi = bool(draft.get("multi"))
         for key in ("overseas_min", "overseas_max", "ball_format",
                     "rating_rules"):
+            if key == "ball_format" and draft.get("ball_format_locked"):
+                continue  # set on the command (/cipl multi 100B)
+            if multi and key in ("overseas_min", "overseas_max"):
+                continue  # per side, below
             if key in league_cfg:
                 draft[key] = league_cfg[key]
+        if multi and "overseas_min" in league_cfg:
+            draft.setdefault("side_overseas", {})[side] = [
+                league_cfg["overseas_min"], league_cfg["overseas_max"]]
         # Who this side is missing, for the note on the picker.
         draft.setdefault("injured_out", {})[side] = league_cfg.get("injured_out") or []
     if not players:
@@ -3285,7 +3585,7 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         saved_subset = _valid_saved_subset(load_last_xi(query.from_user.id, team_id), players) if team_id else []
     draft.setdefault("saved_xi", {})[side] = saved_subset
-    team_code = _team_short_code(team_name, draft.get("league_key"))
+    team_code = _team_short_code(team_name, _side_league_key(draft, side))
     draft.setdefault("xi_started", {})[side] = True
     await _touch_selection_timer(context, draft)
     await query.answer(f"Select your {team_name} Playing XI.")
@@ -3365,7 +3665,7 @@ async def challenge_xi_useprev_callback(update: Update, context: ContextTypes.DE
     # Fully valid saved XI → one-tap select + confirm.
     if len(saved_subset) == 11:
         selected_players = [player_map[pid] for pid in saved_subset if pid in player_map]
-        valid, _error = _challenge_xi_validation(selected_players, *_challenge_xi_limits(draft))
+        valid, _error = _challenge_xi_validation(selected_players, *_challenge_xi_limits(draft, side))
         if valid:
             await query.answer("Loaded & confirmed your last XI!")
             await _finalize_xi_confirm(context, query, draft, draft_id, side,
@@ -3440,7 +3740,7 @@ async def challenge_xi_pick_callback(update: Update, context: ContextTypes.DEFAU
         proposed_ids = selected_ids + [player_id]
         proposed_players = [player_map[pid] for pid in proposed_ids if pid in player_map]
         if len(proposed_ids) == 11:
-            valid, error = _challenge_xi_validation(proposed_players, *_challenge_xi_limits(draft))
+            valid, error = _challenge_xi_validation(proposed_players, *_challenge_xi_limits(draft, side))
             if not valid:
                 await query.answer(error, show_alert=True)
                 return
@@ -3497,7 +3797,7 @@ async def challenge_xi_confirm_callback(update: Update, context: ContextTypes.DE
         return
 
     selected_players = [player_map[pid] for pid in selected_ids if pid in player_map]
-    valid, error = _challenge_xi_validation(selected_players, *_challenge_xi_limits(draft))
+    valid, error = _challenge_xi_validation(selected_players, *_challenge_xi_limits(draft, side))
     if not valid:
         await query.answer(error, show_alert=True)
         return
@@ -3719,7 +4019,7 @@ async def challenge_xi_quickselect(update: Update, context: ContextTypes.DEFAULT
     # A full XI must satisfy the rules; a partial pick (<11) is accepted as-is
     # and simply won't surface the Confirm XI button until it reaches 11.
     if len(numbers) == 11:
-        valid, error = _challenge_xi_validation(selected_players, *_challenge_xi_limits(draft))
+        valid, error = _challenge_xi_validation(selected_players, *_challenge_xi_limits(draft, side))
         if not valid:
             await message.reply_text(f"❌ {error}")
             return
@@ -3814,7 +4114,7 @@ async def challenge_change_handler(update: Update, context: ContextTypes.DEFAULT
         return
 
     new_players = [pid_map[pid] for pid in new_ids if pid in pid_map]
-    valid, error = _challenge_xi_validation(new_players, *_challenge_xi_limits(draft))
+    valid, error = _challenge_xi_validation(new_players, *_challenge_xi_limits(draft, side))
     if not valid:
         await message.reply_text(f"❌ {error}\nNo change made.")
         return

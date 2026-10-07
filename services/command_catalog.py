@@ -42,6 +42,7 @@ COMMAND_CATEGORIES = (
         '/cdraft - Challenge Draft: someone joins, then you both build an XI pick by pick from the full player pool (11 slots, two same-role cards a slot — you take one, your opponent gets the other), and play it out',
         '/letsplay /lp [overs] @user - Reply or tag to play with your own roster (20 overs, or 1-20: /lp 5 @user)',
         '/challengeIPL /cipl [overs] - Reply to a user to start an IPL challenge (20 overs, or 1-20: /cipl 6)',
+        '/cipl multi [overs|100B] - Multi League: each side picks a league, then a team (/cipl multi 100B = The Hundred)',
         '/challengeBBL /cbbl - Reply to a user to start a BBL challenge',
         '/challengeINT /cint - Reply to a user to start an international challenge',
         '/unscramble - Create an Unscramble Player lobby',

@@ -302,6 +302,10 @@ def cipl_swap_error(state, side, out_roster_id, incoming):
     if not isinstance(rules, dict) or not isinstance(incoming, dict):
         return ""
     from services.xi_rules import validate_challenge_xi_dicts
+    # /cipl multi carries each captain's own league limits.
+    own = (rules.get("by_user") or {}).get(str(state.get(f"{side}_user_tg")))
+    if isinstance(own, dict):
+        rules = {**rules, **own}
     before = active_players(state.get(f"{side}_xi") or [])
     after = [p for p in before if p.get("roster_id") != out_roster_id]
     after.append(incoming)

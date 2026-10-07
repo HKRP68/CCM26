@@ -68,7 +68,7 @@ def _who(info, fallback="Player"):
 # ══════════════════════════════════════════════════════════════════════
 
 @_guarded("team picker")
-def team_picker_blocks(*, title, player, league_name, status_lines=()):
+def team_picker_blocks(*, title, player, league_name, status_lines=(), action=None):
     """"Pick your team" — the prompt above the team buttons.
 
     ``status_lines`` are the already-rendered "✅ X selected Y" ticks; they read
@@ -81,7 +81,7 @@ def team_picker_blocks(*, title, player, league_name, status_lines=()):
     if ticks:
         blocks.append(R.list_block(ticks))
     blocks.append(R.paragraph(
-        [_who(player), f", pick your {league_name or 'league'} team."]))
+        [_who(player), action or f", pick your {league_name or 'league'} team."]))
     return blocks
 
 

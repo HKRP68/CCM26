@@ -2566,6 +2566,9 @@ class ChallengeLeague(Base):
     sort_order = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     same_team_allowed = Column(Boolean, default=True, nullable=False)
+    # Offered in the /cipl multi league picker (each side picks a league, then
+    # a team from it). Admin-toggled on the Challenge Data page.
+    multi_enabled = Column(Boolean, default=True, nullable=False)
     # Overseas-player rules. ``home_country`` (when set) auto-flags any player
     # whose country differs from it as overseas when added to a team. The XI
     # picker then enforces ``min_overseas``/``max_overseas`` (11 = no cap).

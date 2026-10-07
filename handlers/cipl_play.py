@@ -761,8 +761,9 @@ def build_bench_from_draft(session, draft, side):
         team_id = None
         if rows is None:
             team_name = draft.get("host_team" if side == "host" else "target_team")
+            from handlers.challenge import _side_league_key
             team_id = _resolve_challenge_team_id(
-                team_name, draft.get("league_key"), session)
+                team_name, _side_league_key(draft, side), session)
             if team_id is None:
                 return []
             from models import ChallengePlayer
@@ -1767,12 +1768,16 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         # while a mode that invents its team names — /cdraft's "Shanka Draft XI"
         # — can supply a code a person recognises instead of the initials the
         # resolver would derive from it.
+        # /cipl multi: the two teams come from different leagues, so each is
+        # resolved against its own side's league.
+        from handlers.challenge import _side_league_key
         league_key = draft.get("league_key")
+        bat_side, bowl_side = ("host", "target") if bat_is_host else ("target", "host")
         draft_codes = draft.get("team_codes") or {}
         bat_team_code, bat_team_emoji = _resolve_team_identity(
-            bat_team_name, league_key, session)
+            bat_team_name, _side_league_key(draft, bat_side), session)
         bowl_team_code, bowl_team_emoji = _resolve_team_identity(
-            bowl_team_name, league_key, session)
+            bowl_team_name, _side_league_key(draft, bowl_side), session)
         bat_team_code = draft_codes.get(bat_team_name) or bat_team_code
         bowl_team_code = draft_codes.get(bowl_team_name) or bowl_team_code
 
@@ -2098,6 +2103,16 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
             lo, hi, rules = _challenge_xi_limits(draft)
             state["xi_rules"] = {"min_overseas": lo, "max_overseas": hi,
                                  "rating_rules": rules}
+            # /cipl multi: each captain's own league overseas rule, keyed by
+            # Telegram id because bat/bowl swap between innings.
+            if draft.get("side_overseas"):
+                by_user = {}
+                for _side in ("host", "target"):
+                    _lo, _hi, _r = _challenge_xi_limits(draft, _side)
+                    _tg = (draft.get(_side) or {}).get("tg_id")
+                    if _tg is not None:
+                        by_user[str(_tg)] = {"min_overseas": _lo, "max_overseas": _hi}
+                state["xi_rules"]["by_user"] = by_user
         except Exception:
             logger.exception("cipl: could not carry the XI rules onto match %s",
                              match.id)
