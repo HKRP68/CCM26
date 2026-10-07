@@ -857,10 +857,14 @@ of one cricketer in a pool is a squad with the same man twice.
 /aautosets                    Marquee of 10, then role sets of 10
 /aautosets 8 12 75 replace    sets of 8, Marquee of 12, rated 75+, drop the rest of the queue
 /aautosets 10 10 all          include special editions
+/aautosets 10 10 | Base, Icon build from exactly these card versions
 ```
 
 …or **⚡ Auto-build sets** on the pool card (Marquee size, players per set, min
-rating, pool size, editions, replace). `services/auction_auto_sets.py` lays the
+rating, pool size, editions or a pick of versions, replace). Picked versions
+override the editions switch. Whenever more than base cards are allowed, only
+each cricketer's best card (grouped by `parent_player_id`) goes in, so the pool
+never holds the same man twice. `services/auction_auto_sets.py` lays the
 whole pool out the way the IPL auction runs:
 
 - **Marquee** — the best *N* cards, whatever their role.

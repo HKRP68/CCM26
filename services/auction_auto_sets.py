@@ -63,11 +63,14 @@ def _bounded(value, default, low, high, label):
 
 def plan_auto_sets(session, season, *, marquee=DEFAULT_MARQUEE,
                    set_size=DEFAULT_SET_SIZE, min_rating=None, pool_size=None,
-                   editions=False):
+                   editions=False, versions=None):
     """``[(set name, [Player])]`` in running order. Writes nothing.
 
     ``min_rating`` leaves out every card below it; ``pool_size`` keeps only the
-    best N overall. Players this season has already finished with (sold,
+    best N overall. Editions: base cards only by default, every edition with
+    ``editions``, or exactly the card ``versions`` named ("Base", "Icon" …).
+    Whenever more than base cards are allowed, only each cricketer's best card
+    is kept, so the pool never holds the same man twice. Players this season has already finished with (sold,
     retained, drafted, passed on) are left out so they cannot take a Marquee
     place; players already queued are included and get re-filed.
     """
@@ -76,13 +79,28 @@ def plan_auto_sets(session, season, *, marquee=DEFAULT_MARQUEE,
     min_rating = _bounded(min_rating, None, 1, 999, "Minimum rating")
     pool_size = _bounded(pool_size, None, 1, 100_000, "Pool size")
 
+    if isinstance(versions, str):
+        versions = versions.split(",")
+    versions = [str(v).strip() for v in versions or [] if str(v).strip()]
+
     filters = {}
     if min_rating is not None:
         filters["rating_min"] = min_rating
-    if not editions:
+    if versions:
+        filters["versions"] = versions
+    elif not editions:
         filters["version_mode"] = "base"
     players = player_query.ordered(
         player_query.master_player_query(session, filters)).all()
+    if versions or editions:
+        # Best first already, so the first card seen is the one kept.
+        seen, best = set(), []
+        for player in players:
+            root = player.parent_player_id or player.id
+            if root not in seen:
+                seen.add(root)
+                best.append(player)
+        players = best
 
     finished = {row[0] for row in session.query(AuctionLot.player_id)
                 .filter(AuctionLot.season_id == season.id,
@@ -92,7 +110,10 @@ def plan_auto_sets(session, season, *, marquee=DEFAULT_MARQUEE,
     if pool_size is not None:
         players = players[:pool_size]
     if not players:
-        raise AuctionError("No card matches — nobody to put in the pool.")
+        raise AuctionError(
+            "No card matches"
+            + (f" the version(s) {', '.join(versions)}" if versions else "")
+            + " — nobody to put in the pool.")
 
     plan = []
     if marquee:

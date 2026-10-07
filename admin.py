@@ -24619,7 +24619,8 @@ def _auction_sets_action(db, season, action, *, quiet):
             set_size=(request.form.get("set_size") or "").strip(),
             min_rating=(request.form.get("min_rating") or "").strip(),
             pool_size=(request.form.get("pool_size") or "").strip(),
-            editions=bool(request.form.get("editions")),
+            editions=request.form.get("version_mode") == "any",
+            versions=request.form.getlist("versions"),
             replace=bool(request.form.get("replace")))
         flash("⚡ Auto sets — " + auction_auto_sets.summary_text(result),
               "success")
