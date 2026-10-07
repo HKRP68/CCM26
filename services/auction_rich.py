@@ -1911,7 +1911,7 @@ ADMIN_SECTIONS = (
     )),
     ("🗂 Pool & sets", (
         ("/apool <min>-<max> [| set] [| all]", "Add every card in a rating range as a set"),
-        ("/aautosets [size] [marquee] [min] [replace]",
+        ("/aautosets [size] [marquee] [min] [replace] [| versions]",
          "Build the whole pool as IPL-style sets"),
         ("/anextset <set | 80-85>", "Make a set or rating range come next"),
         ("/asetorder A, B, C", "Order the whole queue by set"),

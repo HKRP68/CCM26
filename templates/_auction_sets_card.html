@@ -199,10 +199,19 @@
         <input type="number" name="min_rating" min="1" placeholder="all"></div>
       <div><label>Pool size</label>
         <input type="number" name="pool_size" min="1" placeholder="all"></div>
+      <div><label>Editions</label>
+        <select name="version_mode">
+          <option value="base" selected>Base cards only</option>
+          <option value="any">Any edition</option>
+        </select></div>
+      {% set auto_versions = options.versions if options is defined and options else [] %}
+      {% if auto_versions %}
+      <div style="grid-column:span 2;"><label>Or pick versions</label>
+        <select name="versions" multiple size="4">
+          {% for v in auto_versions %}<option value="{{ v }}">{{ v }}</option>{% endfor %}
+        </select></div>
+      {% endif %}
       <div>
-        <label style="text-transform:none;letter-spacing:0;">
-          <input type="checkbox" name="editions" value="1"> Include special editions
-        </label>
         <label style="text-transform:none;letter-spacing:0;">
           <input type="checkbox" name="replace" value="1"> Replace the current queue
         </label>
@@ -213,6 +222,9 @@
       The best <b>Marquee size</b> cards go first as <b>Marquee</b>. Everyone
       else is split by role, best first, into sets of <b>Players per set</b>:
       Batsmen 1 → Bowlers 1 → All-rounders 1 → Wicket-keepers 1 → Batsmen 2 …
+      Pick one or more <b>versions</b> (Ctrl/⌘-click) to build from exactly
+      those cards — they override <b>Editions</b>. With more than base cards
+      allowed, only each cricketer's best card goes in, never two of one man.
       Players already queued are re-filed; anyone already sold, retained or
       drafted is left alone. <b>Replace</b> also drops queued players the
       builder did not pick. Same as <code>/aautosets</code> in the group.

@@ -3283,16 +3283,19 @@ async def apool_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def aautosets_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """<code>/aautosets [set size] [marquee] [min rating] [replace] [all]</code>
+    """<code>/aautosets [set size] [marquee] [min rating] [replace] [all] [| versions]</code>
 
     The whole pool as IPL-style sets in one go: the best <i>marquee</i> cards
     first, then role sets of <i>set size</i> rotating Batsmen → Bowlers →
     All-rounders → Wicket-keepers. Numbers are positional; <code>replace</code>
     drops queued players the builder did not pick, <code>all</code> includes
-    special editions.
+    special editions, and anything after a <code>|</code> names the card
+    versions to build from: <code>/aautosets 10 10 | Base, Icon</code>.
     """
     from services import auction_auto_sets as AUTO
-    words = _arg_text(context).lower().replace(",", " ").split()
+    head, _, tail = _arg_text(context).partition("|")
+    versions = [v.strip() for v in tail.split(",") if v.strip()]
+    words = head.lower().replace(",", " ").split()
     numbers = [w for w in words if w.isdigit()]
     unknown = [w for w in words if not w.isdigit()
                and w not in ("replace", "all", "editions")]
@@ -3300,12 +3303,13 @@ async def aautosets_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     def work(session, season):
         if unknown or len(numbers) > 3:
             raise AuctionError("Usage: /aautosets [set size] [marquee] "
-                               "[min rating] [replace] [all] — e.g. "
-                               "/aautosets 8 12 75 replace")
+                               "[min rating] [replace] [all] [| versions] — "
+                               "e.g. /aautosets 8 12 75 replace | Base, Icon")
         options = dict(zip(("set_size", "marquee", "min_rating"), numbers))
         result = AUTO.auto_build_sets(
             session, season, replace="replace" in words,
-            editions="all" in words or "editions" in words, **options)
+            editions="all" in words or "editions" in words,
+            versions=versions, **options)
         order = [f"#{e['set_no']} {html.escape(e['name'])}"
                  for e in A.queued_sets(session, season)]
         return ("⚡ <b>Auto sets built</b>\n"

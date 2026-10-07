@@ -75,6 +75,36 @@ class PlanTests(AutoSetsCase):
         with self.assertRaises(self.A.AuctionError):
             self.AUTO.plan_auto_sets(self.session, self.season, min_rating=999)
 
+    def icon_of_virat(self):
+        base = next(p for p in self.players
+                    if p.name == "Virat Kohli" and p.version == "Base")
+        icon = next(p for p in self.players if p.version == "Icon")
+        icon.parent_player_id = base.id
+        self.session.commit()
+        return icon
+
+    def test_one_version_only(self):
+        icon = self.icon_of_virat()
+        plan = self.AUTO.plan_auto_sets(self.session, self.season,
+                                        versions=["Icon"])
+        self.assertEqual([("Marquee", [icon])],
+                         [(n, rows) for n, rows in plan])
+
+    def test_several_versions_keep_one_card_per_cricketer(self):
+        icon = self.icon_of_virat()
+        plan = self.AUTO.plan_auto_sets(self.session, self.season, marquee=1,
+                                        versions="Base, Icon")
+        cards = [p for _, rows in plan for p in rows]
+        self.assertEqual(icon, cards[0])
+        self.assertEqual(1, sum(p.name == "Virat Kohli" for p in cards))
+        self.assertEqual(8, len(cards))
+
+    def test_unknown_version_is_refused_by_name(self):
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.AUTO.plan_auto_sets(self.session, self.season,
+                                     versions=["Nope"])
+        self.assertIn("Nope", str(caught.exception))
+
     def test_role_spellings(self):
         key = self.AUTO.role_key
         self.assertEqual("ar", key("All Rounder"))
