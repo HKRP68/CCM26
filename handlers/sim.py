@@ -33,7 +33,7 @@ from telegram.ext import ContextTypes
 
 from config import SIM_COOLDOWN
 from database import get_session
-from models import Player, UserStats
+from models import Player, User, UserStats
 from handlers.lineup import _get_ordered_roster, validate_xi
 from services.cooldown_service import check_cooldown, format_remaining
 from services.telegram_user_service import sync_telegram_user
@@ -435,17 +435,17 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             potm_id = next(
                 (p.get("id") for p in list(user_xi) + list(opponent_xi)
                  if isinstance(p, dict) and p.get("name") == potm_name), None)
-            summary_bytes = None
-            if long_res["format"] == "ODI":
-                # Map the innings back to the owning user by name, as below.
-                bats_first_is_user = long_res["innings"][0]["team"] == team_name
-                opponent_id = getattr(opponent, "id", None)
-                summary_bytes = sim_long.render_long_summary_image(
-                    long_res,
-                    text_settings=get_config().get("scorecard_text_settings"),
-                    inn1_user_id=user.id if bats_first_is_user else opponent_id,
-                    inn2_user_id=opponent_id if bats_first_is_user else user.id,
-                    potm_player_id=potm_id)
+            # Map the innings back to the owning user by name, as below. ODIs
+            # get the poster with a conditions strip; Tests the tall card with
+            # all four innings and the day-by-day timeline.
+            bats_first_is_user = long_res["innings"][0]["team"] == team_name
+            opponent_id = getattr(opponent, "id", None)
+            summary_bytes = sim_long.render_long_summary_image(
+                long_res,
+                text_settings=get_config().get("scorecard_text_settings"),
+                inn1_user_id=user.id if bats_first_is_user else opponent_id,
+                inn2_user_id=opponent_id if bats_first_is_user else user.id,
+                potm_player_id=potm_id)
             long_messages = (
                 [sim_long.render_long_innings_card(long_res, inn)
                  for inn in long_res["innings"]]
@@ -635,3 +635,81 @@ async def _deliver_long(update, context, progress, setup_text, messages,
             caption="📜 Ball-by-ball commentary (JSON)")
     except Exception:
         logger.exception("sim_handler long-format delivery failed")
+
+
+# ── /rsim — bot admins give a player their /sim back ─────────────────────
+
+def reset_sim_cooldown(session, user_id):
+    """Clear ``user_id``'s /sim clock. True if a cooldown was actually running.
+
+    Only ``last_sim`` is touched — the website's reset button clears every
+    cooldown at once; this is the scalpel. Does not commit.
+    """
+    from services.command_config_service import get_user_cooldown
+    stats = (session.query(UserStats)
+             .filter(UserStats.user_id == user_id).first())
+    if stats is None or stats.last_sim is None:
+        return False
+    user = session.get(User, user_id)
+    cooldown = get_user_cooldown(session, user, "sim", SIM_COOLDOWN) if user else SIM_COOLDOWN
+    ready, _ = check_cooldown(stats, "last_sim", cooldown)
+    stats.last_sim = None
+    return not ready
+
+
+_RSIM_USAGE = ("🛡️ <b>/rsim</b> — reset a player's /sim cooldown (bot admins)\n\n"
+               "<code>/rsim &lt;telegram_id&gt;</code>\n"
+               "or reply to the player's message with <code>/rsim</code>")
+
+
+async def rsim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from services.admin_ids import is_admin
+    if not is_admin(getattr(update.effective_user, "id", None)):
+        return  # Silent for non-admins, like /grant.
+
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        if args:
+            try:
+                tg_id = int(str(args[0]).strip())
+            except ValueError:
+                await update.message.reply_text(
+                    "⚠️ The argument must be a numeric Telegram ID.\n\n" + _RSIM_USAGE,
+                    parse_mode="HTML")
+                return
+            target = session.query(User).filter(User.telegram_id == tg_id).first()
+            if target is None:
+                await update.message.reply_text(
+                    f"⚠️ No user with Telegram ID <code>{tg_id}</code> "
+                    "(they must /debut first).", parse_mode="HTML")
+                return
+        else:
+            target = _reply_target_user(session, update)
+            if target is None:
+                await update.message.reply_text(_RSIM_USAGE, parse_mode="HTML")
+                return
+
+        name = html.escape(_team_display_name(target, f"#{target.id}"))
+        tg = target.telegram_id
+        if not reset_sim_cooldown(session, target.id):
+            session.commit()
+            await update.message.reply_text(
+                f"ℹ️ {name} (<code>{tg}</code>) is already off /sim cooldown.",
+                parse_mode="HTML")
+            return
+        try:
+            from services.activity_service import log_activity
+            log_activity(session, target.id, "admin_reset", "Admin reset /sim cooldown")
+        except Exception:
+            logger.exception("rsim: activity log failed")
+        session.commit()
+        await update.message.reply_text(
+            f"✅ /sim cooldown reset for {name} (<code>{tg}</code>) — they can sim now.",
+            parse_mode="HTML")
+    except Exception:
+        session.rollback()
+        logger.exception("rsim_handler failed")
+        await update.message.reply_text("⚠️ Couldn't reset the cooldown. Try again.")
+    finally:
+        session.close()

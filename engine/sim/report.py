@@ -74,6 +74,7 @@ def build_result(m, result):
         "dls_target": m.dls_target,
         "rain": m.rain_events,
         "stumps": list(getattr(m, "stumps", [])),
+        "days_played": m.days_played() if m.fmt == "Test" else None,
         "drama": m.drama_events,
         "turning_points": turning,
         "influences": influences,

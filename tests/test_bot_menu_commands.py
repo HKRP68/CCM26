@@ -151,6 +151,9 @@ UNPUBLISHED_ON_PURPOSE = {
     # rarely, documented in BOT_COMMANDS.md, and the admin bucket is at the
     # ceiling already.
     "approvers",
+    # Resetting one player's /sim cooldown — bot-admin only, documented in
+    # BOT_COMMANDS.md beside /grant, and the admin bucket is over the ceiling.
+    "rsim", "resetsim",
     # Simulating a tournament fixture — on the /lptadmin card and in
     # BOT_COMMANDS.md; the admin bucket is over the ceiling already.
     "tsim",

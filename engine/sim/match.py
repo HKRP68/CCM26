@@ -174,6 +174,11 @@ class _Match:
         into = self.test_overs_used - idx * per
         return sess["start"] + into * self.cfg["timeOfDay"]["minutesPerOver"]["Test"] / 60.0
 
+    def days_played(self):
+        """The day a Test finished on (1-5)."""
+        f = self.cfg["formats"]["Test"]
+        return min(f["days"], self._test_session_info()[1])
+
     def test_over(self):
         f = self.cfg["formats"]["Test"]
         return self.test_overs_used >= f["days"] * f["oversPerDay"]
@@ -206,7 +211,10 @@ class _Match:
         """
         f = self.cfg["formats"]["Test"]
         if self.innings and not self.test_over():
-            self.stumps.append({"day": day, "text": self._stumps_text(day)})
+            inn = self.innings[-1]
+            self.stumps.append({"day": day, "text": self._stumps_text(day),
+                                "team": inn.bat_team.name, "runs": inn.runs,
+                                "wickets": inn.wkts, "innings": inn.number})
         lo, hi = (f.get("overShortfallPerDay") or [0, 0])[:2]
         if hi > 0 and day < f["days"]:
             self.test_overs_used += self.rng.derive("shortfall", day).randint(int(lo), int(hi))
@@ -582,6 +590,7 @@ class _Match:
         lost = weather_mod.overs_lost(rrng, self.fmt, self.cfg)
         if self.fmt == "Test":
             self.rain_events.append({"innings": inn.number, "over": over_idx + 1, "overs_lost": lost,
+                                     "day": self._test_session_info()[1],
                                      "text": f"Rain! {lost} overs lost to the weather"})
             self._tick_test_clock(float(lost))
             self.events.append({"innings": inn.number, "over": over_idx + 1, "score": 30,

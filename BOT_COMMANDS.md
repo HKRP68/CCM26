@@ -715,6 +715,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/setcardid <player name> \| <file_id>` | Pin a Telegram photo as a player's card |
 | `/setmilestone` | Set in-match milestone messages and media |
 | `/grant <tier> <telegram_id>` | Grant a subscription tier (e.g. `/grant Upgrade Diamond 12345`) |
+| `/rsim <telegram_id>` (or reply with `/rsim`) | Bot admins: reset one player's /sim cooldown so they can sim again now — alias `/resetsim` |
 | `/clearmatches` | Clear every stuck match in this chat |
 | `/removematch @user` | Pull one user out of their active match |
 | `/testwpm [match_id]` | Mini App match diagnostic |

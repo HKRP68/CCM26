@@ -773,7 +773,14 @@ def _draw_rows(draw, ts, rows, *, x_name, cx1, cx2, top, potm_name,
 
 
 def _draw_innings(img, draw, ts, y, *, team, runs, wickets, overs, overs_total,
-                  is_hundred, batters, bowlers, color, crest_png, potm_name):
+                  is_hundred, batters, bowlers, color, crest_png, potm_name,
+                  score_text=None, meta_text=None):
+    """One innings block at ``y``.
+
+    ``score_text`` / ``meta_text`` replace the "180-5" score and the "20 OVERS"
+    label — a Test innings reads "498" or "190-2 D" and "1ST INNINGS · 157.1
+    OVERS". Left as None, the block draws exactly as it always has.
+    """
     bar_y1 = y + BAR_H
     block_y1 = y + INN_H
     dark = _shade(color, 0.62)
@@ -810,7 +817,9 @@ def _draw_innings(img, draw, ts, y, *, team, runs, wickets, overs, overs_total,
                    tracking=2, anchor="mm")
 
     # Colour bar across the top, with a darker score panel on the right.
-    bar = Image.new("RGBA", (s(CANVAS_W), s(CANVAS_H)), (0, 0, 0, 0))
+    # Sized to the canvas actually in use: a taller card (a Test, or one with
+    # a conditions strip) puts blocks below the poster's own 986px.
+    bar = Image.new("RGBA", img.size, (0, 0, 0, 0))
     bd = ImageDraw.Draw(bar, "RGBA")
     bd.rounded_rectangle(sbox(TABLE_X, y, CONTENT_R, bar_y1), radius=s(14),
                          fill=(*color, 255))
@@ -834,13 +843,21 @@ def _draw_innings(img, draw, ts, y, *, team, runs, wickets, overs, overs_total,
     _draw_text(draw, (tx, ty), name, f_team, on_bar, tracking=1.4, anchor="lm")
 
     f_overs = _font_for(ts, "innings_meta", 20, family="display")
-    meta = _txt(ts, "innings_meta",
-                f"{overs}/{overs_total} BALLS" if is_hundred else f"{overs} OVERS").upper()
+    meta = (meta_text if meta_text is not None else _txt(
+        ts, "innings_meta",
+        f"{overs}/{overs_total} BALLS" if is_hundred else f"{overs} OVERS")).upper()
+    if meta_text is not None and _tw(draw, meta, f_overs) > OVERS_R - BAR_NAME_X - 420:
+        f_overs = _fitted_font(draw, meta, "display", 20, OVERS_R - BAR_NAME_X - 420,
+                               min_size=14)
     mx, my = _xy(ts, "innings_meta", OVERS_R, y + BAR_H / 2 + 1)
     _draw_text(draw, (mx, my), meta, f_overs, on_bar, tracking=1.6, anchor="rm")
 
     f_score = _font_for(ts, "innings_score", 53, family="headline")
-    score = _txt(ts, "innings_score", f"{runs}-{wickets}").upper()
+    score = (score_text if score_text is not None
+             else _txt(ts, "innings_score", f"{runs}-{wickets}")).upper()
+    if score_text is not None:
+        f_score = _fitted_font(draw, score, "headline", 53,
+                               CONTENT_R - SCORE_X - 100, min_size=28)
     px, py = _xy(ts, "innings_score", (SCORE_X + 26 + CONTENT_R) / 2,
                  y + BAR_H / 2 + 2)
     _draw_italic_text(img, (px, py), score, f_score, (*_readable_on(dark), 255),
@@ -879,11 +896,99 @@ def _draw_innings(img, draw, ts, y, *, team, runs, wickets, overs, overs_total,
 
 
 # ══════════════════════════════════════════════════════════════════════
+# Conditions strip
+# ══════════════════════════════════════════════════════════════════════
+
+STRIP_H = 50          # chip row height, reference px
+STRIP_GAP = 8         # breathing room below the header and above the first block
+
+
+def _draw_glyph(draw, kind, cx, cy, r=11, color=GOLD):
+    """Small drawn icons for the conditions chips.
+
+    The bundled faces carry no emoji (a stadium or a cloud renders as tofu), so
+    each glyph is built from primitives the way the trophy is.
+    """
+    c = (*color, 255)
+    if kind == "venue":           # a stadium bowl: two stacked arcs and a pitch
+        draw.arc([s(cx - r), s(cy - r * 0.7), s(cx + r), s(cy + r * 0.9)],
+                 start=180, end=360, fill=c, width=s(2.4))
+        draw.arc([s(cx - r * 0.62), s(cy - r * 0.28), s(cx + r * 0.62), s(cy + r * 0.62)],
+                 start=180, end=360, fill=c, width=s(2))
+        draw.rectangle(sbox(cx - r, cy + r * 0.32, cx + r, cy + r * 0.5), fill=c)
+    elif kind == "pitch":         # the strip with stumps at both ends
+        draw.rounded_rectangle(sbox(cx - r * 0.42, cy - r, cx + r * 0.42, cy + r),
+                               radius=s(2), outline=c, width=s(2))
+        for yy in (cy - r * 0.72, cy + r * 0.72):
+            draw.line([(s(cx - r * 0.24), s(yy)), (s(cx + r * 0.24), s(yy))],
+                      fill=c, width=s(2))
+    elif kind == "weather":       # a sun peeking behind a cloud
+        draw.ellipse(sbox(cx - r * 0.25, cy - r, cx + r * 0.85, cy + r * 0.1), fill=c)
+        cloud = (*WHITE, 255)
+        for bx, by, br in ((-0.45, 0.25, 0.48), (0.05, 0.05, 0.6), (0.55, 0.32, 0.42)):
+            draw.ellipse(sbox(cx + (bx - br) * r, cy + (by - br) * r,
+                              cx + (bx + br) * r, cy + (by + br) * r), fill=cloud)
+        draw.rectangle(sbox(cx - r * 0.9, cy + r * 0.3, cx + r * 0.95, cy + r * 0.72),
+                       fill=cloud)
+    elif kind == "ball":          # a ball with its seam
+        draw.ellipse(sbox(cx - r, cy - r, cx + r, cy + r), fill=c)
+        draw.arc([s(cx - r * 1.5), s(cy - r * 1.1), s(cx + r * 0.3), s(cy + r * 1.1)],
+                 start=-40, end=40, fill=(*WHITE, 230), width=s(1.6))
+    elif kind == "toss":          # a coin
+        draw.ellipse(sbox(cx - r, cy - r, cx + r, cy + r), fill=c)
+        draw.ellipse(sbox(cx - r * 0.66, cy - r * 0.66, cx + r * 0.66, cy + r * 0.66),
+                     outline=(*WHITE, 200), width=s(1.6))
+    else:                         # a plain gold dot
+        draw.ellipse(sbox(cx - r * 0.5, cy - r * 0.5, cx + r * 0.5, cy + r * 0.5), fill=c)
+
+
+def _draw_conditions_strip(img, draw, ts, y, chips):
+    """A row of navy chips — venue, pitch, weather, ball, toss — at ``y``.
+
+    ``chips`` is ``[(kind, label, value), ...]`` (kind picks the glyph). Widths
+    follow the text, then shrink together if the row would overflow.
+    """
+    chips = [c for c in (chips or []) if c and c[2]][:6]
+    if not chips:
+        return
+    f_label = _font(13, family="display")
+    f_value = _font(19, family="display")
+    gap = 12
+    avail = CONTENT_R - PAD_L
+    widths = []
+    for _kind, label, value in chips:
+        w = 52 + max(_tracked_w(draw, str(label).upper(), f_label, 1.6),
+                     _tracked_w(draw, str(value).upper(), f_value, 1.2)) + 18
+        widths.append(w)
+    total = sum(widths) + gap * (len(chips) - 1)
+    if total > avail:
+        k = (avail - gap * (len(chips) - 1)) / sum(widths)
+        widths = [w * k for w in widths]
+        total = avail
+    x = PAD_L + (avail - total) / 2
+    y0, y1 = y, y + STRIP_H
+    for (kind, label, value), w in zip(chips, widths):
+        draw.rounded_rectangle(sbox(x, y0, x + w, y1), radius=s(12), fill=(*INK, 255))
+        draw.rounded_rectangle(sbox(x, y0, x + 6, y1), radius=s(3), fill=(*GOLD, 255))
+        _draw_glyph(draw, kind, x + 30, (y0 + y1) / 2)
+        tx = x + 52
+        text_w = w - 52 - 12
+        _draw_text(draw, (tx, y0 + 16), _fit(draw, str(label).upper(), f_label, text_w, 3),
+                   f_label, GOLD_PALE, tracking=1.6, anchor="lm")
+        _draw_text(draw, (tx, y0 + 36), _fit(draw, str(value).upper(), f_value, text_w, 4),
+                   f_value, WHITE, tracking=1.2, anchor="lm")
+        x += w + gap
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Result bar
 # ══════════════════════════════════════════════════════════════════════
 
-def _draw_result(img, draw, ts, winner_name, win_margin_text, accent):
-    y0, y1 = RESULT_Y, RESULT_Y + RESULT_H
+def _draw_result(img, draw, ts, winner_name, win_margin_text, accent, y=RESULT_Y,
+                 headline=None):
+    """The navy result bar at ``y``. ``headline`` replaces "<WINNER> WON" —
+    a drawn Test has no winner to name."""
+    y0, y1 = y, y + RESULT_H
     # The poster runs a gold diagonal off each edge, level with the result bar.
     for x_edge, sign in ((0, 1), (CANVAS_W, -1)):
         draw.polygon([(s(x_edge), s(y0 + 25)), (s(x_edge + sign * 92), s(y1 + 48)),
@@ -900,7 +1005,7 @@ def _draw_result(img, draw, ts, winner_name, win_margin_text, accent):
                   (s(RESULT_X1), s(y1)), (s(RESULT_X1 - 14), s(y1))],
                  fill=(*GOLD, 255))
 
-    head = f"{(winner_name or '—').upper()} WON"
+    head = headline.upper() if headline else f"{(winner_name or '—').upper()} WON"
     tail = str(win_margin_text or "").upper().strip()
     if tail.startswith("BY "):
         head, tail = head + " BY", tail[3:]
@@ -968,8 +1073,8 @@ def _draw_trophy(draw, cx, cy, h=52):
 
 
 def _draw_potm(img, draw, ts, *, name, team, photo_png, metrics, flourish,
-               card_png=None):
-    y0, y1 = POTM_Y, POTM_Y + POTM_H
+               card_png=None, y=POTM_Y):
+    y0, y1 = y, y + POTM_H
     band = Image.new("RGBA", (s(CANVAS_W), s(y1 - y0)), (0, 0, 0, 0))
     bd = ImageDraw.Draw(band, "RGBA")
     for i in range(s(CANVAS_W)):
@@ -1246,11 +1351,21 @@ def generate_match_summary(*,
     potm_sr=None,
     tagline=None,
     dynamic_flourish=False,
+    conditions=None,
+    inn1_score_text=None,
+    inn2_score_text=None,
 ) -> bytes | None:
-    """Render the match summary card. Returns PNG bytes or ``None`` on failure."""
+    """Render the match summary card. Returns PNG bytes or ``None`` on failure.
+
+    ``conditions`` — ``[(kind, label, value), ...]`` chips (venue, pitch,
+    weather, ball, toss) drawn in a strip under the header. The card grows by
+    the strip's height; without chips it is the classic 1675×986 poster.
+    """
     try:
         ts = text_settings
-        img = Image.new("RGBA", (s(CANVAS_W), s(CANVAS_H)), (255, 255, 255, 255))
+        dy = (STRIP_H + STRIP_GAP * 2) if conditions else 0
+        canvas_h = CANVAS_H + dy
+        img = Image.new("RGBA", (s(CANVAS_W), s(canvas_h)), (255, 255, 255, 255))
         _draw_paper(img)
         draw = ImageDraw.Draw(img, "RGBA")
 
@@ -1262,30 +1377,33 @@ def generate_match_summary(*,
         _draw_header(img, draw, ts, match_no=match_no, stadium=venue,
                      header_left=header_left, header_right=header_right,
                      tagline=tagline)
+        if conditions:
+            _draw_conditions_strip(img, draw, ts, HEADER_H + STRIP_GAP, conditions)
 
         top_per_team = top_per_team or {}
         inn1 = top_per_team.get("inn1", {})
         inn2 = top_per_team.get("inn2", {})
-        _draw_innings(img, draw, ts, INN1_Y,
+        _draw_innings(img, draw, ts, INN1_Y + dy,
                       team=inn1.get("team") or inn1_team,
                       runs=inn1_runs, wickets=inn1_wickets, overs=inn1_overs,
                       overs_total=overs_total, is_hundred=is_hundred,
                       batters=inn1.get("batters", []),
                       bowlers=inn1.get("bowlers", []),
                       color=colour_a, crest_png=inn1_logo_png,
-                      potm_name=potm_name)
-        _draw_innings(img, draw, ts, INN2_Y,
+                      potm_name=potm_name, score_text=inn1_score_text)
+        _draw_innings(img, draw, ts, INN2_Y + dy,
                       team=inn2.get("team") or inn2_team,
                       runs=inn2_runs, wickets=inn2_wickets, overs=inn2_overs,
                       overs_total=overs_total, is_hundred=is_hundred,
                       batters=inn2.get("batters", []),
                       bowlers=inn2.get("bowlers", []),
                       color=colour_b, crest_png=inn2_logo_png,
-                      potm_name=potm_name)
+                      potm_name=potm_name, score_text=inn2_score_text)
 
         # The winner's own colour would vanish against the navy bar, so the
         # margin keeps the reference's fixed cyan.
-        _draw_result(img, draw, ts, winner_name, win_margin_text, RESULT_ACCENT)
+        _draw_result(img, draw, ts, winner_name, win_margin_text, RESULT_ACCENT,
+                     y=RESULT_Y + dy)
 
         metrics = _potm_metrics(potm_stats, potm_runs, potm_balls, potm_fours,
                                 potm_sixes, potm_sr, wickets=potm_wickets,
@@ -1295,11 +1413,12 @@ def generate_match_summary(*,
                    photo_png=potm_photo_png, card_png=potm_card_png,
                    metrics=metrics,
                    flourish=(_flourish(potm_stats, potm_runs, potm_wickets)
-                             if dynamic_flourish else "Game Changer!"))
+                             if dynamic_flourish else "Game Changer!"),
+                   y=POTM_Y + dy)
 
         out = Image.new("RGB", img.size, (255, 255, 255))
         out.paste(img, mask=img.split()[-1])
-        out = out.resize((CANVAS_W, CANVAS_H), Image.LANCZOS)
+        out = out.resize((CANVAS_W, canvas_h), Image.LANCZOS)
         buf = io.BytesIO()
         out.save(buf, format="PNG", optimize=True)
         return buf.getvalue()
