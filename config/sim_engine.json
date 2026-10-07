@@ -81,7 +81,10 @@
       "basePerOverProb": 0.00015,
       "cloudyBoost": 1.5,
       "maxInterruptionsPerMatch": 1,
-      "oversLost": {"T20": [2, 6], "The100": [2, 5], "ODI": [5, 18], "Test": [10, 45]},
+      "_testReadme": "Five days outdoors: a Test can be interrupted more than once (testMaxInterruptions) and rain is testProbMultiplier times likelier per over than in white-ball cricket, so lost sessions — the main source of draws — interrupt about one Test in six and, with the daily over-rate shortfall, leave roughly one in ten drawn.",
+      "testMaxInterruptions": 3,
+      "testProbMultiplier": 4,
+      "oversLost": {"T20": [2, 6], "The100": [2, 5], "ODI": [5, 18], "Test": [15, 75]},
       "minOversPerSide": {"T20": 5, "The100": 5, "ODI": 20},
       "outfieldAfterRain": -20,
       "swingAfterRain": 1.1
@@ -118,6 +121,7 @@
     "newBatter": {"balls": 5, "shotQuality": 0.8},
     "tail": {"positionAbove": 8, "shotQuality": 0.5},
     "choke": {"targetBelow": 50, "wicketsInHand": 5, "shotQuality": 0.9, "accuracy": 1.15},
+    "saveMatch": {"_readme": "Test 4th innings: when the target needs more than requiredRateAbove an over on the remaining clock, the side bats for the draw.", "requiredRateAbove": 4.5, "minOversLeft": 15, "aggression": 22, "wicket": 0.7},
     "death": {"overs": {"T20": [16, 20], "The100": [14, 17], "ODI": [45, 50]}, "specialist": 1.3, "yorkerAccuracy": 0.2, "aggression": 100},
     "fatigue": {"staminaPerOver": {"pace": 4.0, "spin": 2.0}, "recoverPerOver": 3.0, "lowStaminaBelow": 40, "lowStaminaAccuracy": 0.9}
   },
@@ -156,7 +160,7 @@
     "T20":  {"overs": 20, "maxBowlerOvers": 4, "ballColor": "White", "powerplayOvers": 6},
     "The100": {"overs": 17, "maxBowlerOvers": 4, "ballColor": "White", "powerplayOvers": 5},
     "ODI":  {"overs": 50, "maxBowlerOvers": 10, "ballColor": "White", "powerplayOvers": 10, "dlsG50": 245},
-    "Test": {"days": 5, "sessionsPerDay": 3, "oversPerDay": 90, "followOn": 200, "followOnOptional": true, "followOnEnforceChance": 0.75, "declareAbove": 550, "declareLeadInnings3": 380, "maxSpellOvers": {"pace": 7, "spin": 14}}
+    "Test": {"days": 5, "sessionsPerDay": 3, "oversPerDay": 90, "followOn": 200, "followOnOptional": true, "followOnEnforceChance": 0.75, "declareAbove": 550, "declareLeadInnings3": 380, "overShortfallPerDay": [4, 12], "maxSpellOvers": {"pace": 7, "spin": 14}}
   },
 
   "playerDerivation": {

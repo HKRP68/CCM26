@@ -208,7 +208,7 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/playmatch` | `/pm` `/match` | Challenge another user to a match |
 | `/cm` | — | Two-wicket challenge match |
 | `/cdraft` 👥 | `/challengedraft` | Challenge Draft — both captains build an XI pick by pick, then play |
-| `/sim` | `/simmatch` | Simulate a full match instantly |
+| `/sim` | `/simmatch` | Simulate a full match instantly — T10, T20, ODI or a 5-day Test |
 | `/wpm` | — | Match lobby up to 20 overs (Mini App) — tag/reply to invite |
 | `/vsbot` | `/vsb` | Play a bot opponent in chat |
 | `/wpmbot` | `/wpmb` | Play a bot opponent in the Mini App |
@@ -608,7 +608,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/playmatch @username` | `/playmatch @rahul` |
 | `/cm @username` | `/cm @rahul` |
 | `/cdraft` | `/cdraft` |
-| `/sim [T10\|T20\|<overs 1-20>]` | `/sim T10` |
+| `/sim [T10\|T20\|ODI\|Test\|<overs 1-20>]` | `/sim T10` · `/sim ODI` · `/sim Test` |
 | `/wpm <overs 1-20> [@user]` | `/wpm 10 @rahul` |
 | `/vsbot <overs 1-20>` *(default 5)* | `/vsbot 10` |
 | `/wpmbot <overs 1-20>` | `/wpmbot 20` |
@@ -1123,7 +1123,7 @@ admin panel, but the commands are not registered.
 | `/daily` | Every 24h, grows with your streak |
 | `/gspin` | Every 8h |
 | `/cmuweekly` | Every 7 days (Platinum / Diamond) |
-| `/sim`, `/wpm`, `/wpmbot`, `/vsbot`, `/letsplay` | Up to 20 overs |
+| `/sim`, `/wpm`, `/wpmbot`, `/vsbot`, `/letsplay` | Up to 20 overs (`/sim ODI` plays 50, `/sim Test` five days) |
 | `/vsbot` default | 5 overs |
 | Coins → gems | 1000 coins = 1 gem |
 | Challenge League setup timeout | 5 minutes per turn, with a reminder at 4:30 (`CL_SELECT_WINDOW_SECONDS`) |

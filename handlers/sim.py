@@ -1,5 +1,10 @@
 """/sim — instant auto-simulated match (your XI vs an auto-generated Sim XI).
 
+Formats: T10, T20 (default), a custom 1-20 overs, ``/sim ODI`` (50 overs) and
+``/sim Test`` (five days). The long formats run on the Conditions Engine via
+services.sim_long — real grounds, weather, new balls, sessions, follow-ons,
+declarations and draws — while the short ones keep services.sim_match.
+
 Unlike /wpm and /cm (interactive, ball-by-ball via the Mini App), /sim resolves a
 whole match server-side and posts the scorecard, a winner announcement, and the
 ball-by-ball commentary as a JSON file. Team setup is automatic:
@@ -41,6 +46,7 @@ from services.match_formats import resolve_format, get_format, custom_format
 from engine import pitch_registry
 from services.ground_conditions import list_pitches, get_pitch_meta
 from services.sim_team import append_distinct_base_players, distinct_base_players
+from services import sim_long
 
 logger = logging.getLogger(__name__)
 
@@ -209,8 +215,8 @@ def _xi_from_roster(session, user_id, roster):
 def _parse_format(args):
     """Resolve the /sim argument into a format config.
 
-    Accepts a format name (T10 / T20 / ODI) or a custom over count, defaulting
-    to T20. Returns (fmt_dict, error).
+    Accepts a format name (T10 / T20 / ODI / Test) or a custom over count,
+    defaulting to T20. Returns (fmt_dict, error).
     """
     if not args:
         return get_format("T20"), None
@@ -221,7 +227,7 @@ def _parse_format(args):
     try:
         n = int(token)
     except (ValueError, TypeError):
-        return None, "Use a format (T10, T20, ODI) or a number of overs."
+        return None, "Use a format (T10, T20, ODI, Test) or a number of overs."
     if n < 1 or n > MAX_OVERS:
         return None, f"Overs must be between 1 and {MAX_OVERS}."
     return custom_format(n), None
@@ -232,16 +238,19 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     fmt, err = _parse_format(context.args)
     if err:
         await update.message.reply_text(
-            f"❌ {err}\nUsage: <code>/sim [T10|T20 | overs 1-{MAX_OVERS}]</code>",
+            f"❌ {err}\nUsage: <code>/sim [T10|T20|ODI|Test | overs 1-{MAX_OVERS}]</code>",
             parse_mode="HTML")
         return
     overs = fmt["overs"]
+    long_format = bool(fmt.get("long_format"))
+    fmt_banner = ("Test (5 days)" if fmt["label"] == "Test"
+                  else f"{fmt['label']} ({overs} ov)")
 
     # Acknowledge the command before the heavier DB reads, match simulation, and
     # image rendering so users get an immediate bot reply in busy chats.
     try:
         progress = await update.message.reply_text(
-            f"🏏 <b>SIM MATCH</b> — {fmt['label']} ({overs} ov)\n"
+            f"🏏 <b>SIM MATCH</b> — {fmt_banner}\n"
             "⚡ <i>Setting up teams…</i>",
             parse_mode="HTML")
     except Exception:
@@ -404,11 +413,6 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             claimed.append((opponent.id, prev_opp))
         session.commit()
 
-        match = simulate_match(user_xi, opponent_xi, overs, pitch,
-                               team_name, opponent_name, toss_winner=toss_winner,
-                               toss_decision=toss_decision, commentary=commentary,
-                               fmt=fmt)
-
         if opponent_stats is None:
             cooldown_note = f"⏳ Next /sim in <b>{format_remaining(cooldown)}</b>"
         elif opp_cooldown == cooldown:
@@ -422,74 +426,108 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"{html.escape(opponent_name)} in "
                 f"<b>{format_remaining(opp_cooldown)}</b>")
 
-        # Pre-render everything while the session is alive.
-        card1 = render_innings_card(match["innings1"])
-        card2 = render_innings_card(match["innings2"])
-        result_text = render_result(match)
-        cfg = get_config()
-        # Who batted first depends on the toss, so map the innings back to the
-        # owning user by name rather than assuming an order — branding the two
-        # sides the wrong way round is worse than not branding them.
-        bats_first_is_user = (match["innings1"]["batting_team"] == team_name)
-        opponent_id = getattr(opponent, "id", None)
-        # A portrait is a flourish; the match is not. Anything unexpected in an
-        # XI entry costs the photo, never the card.
-        potm_id = next(
-            (p.get("id") for p in list(user_xi) + list(opponent_xi)
-             if isinstance(p, dict) and p.get("name") == match.get("potm")), None)
-        potm_team = next(
-            (side for xi, side in ((user_xi, team_name),
-                                   (opponent_xi, opponent_name))
-             if any(isinstance(p, dict) and p.get("name") == match.get("potm")
-                    for p in xi or [])), None)
-        summary_bytes = render_match_summary_image(
-            match,
-            text_settings=cfg.get("scorecard_text_settings"),
-            stadium=f"SIM • {pitch} pitch",
-            inn1_user_id=user.id if bats_first_is_user else opponent_id,
-            inn2_user_id=opponent_id if bats_first_is_user else user.id,
-            potm_player_id=potm_id,
-        )
-        match_intro = [match["toss"]["text"]] + match["innings1"].get("innings_intro", [])
-        feed_payload = {
-            "format": match["format"],
-            "overs": overs,
-            "pitch": pitch,
-            "pitch_description": pitch_meta.get("description", ""),
-            "toss": match["toss"],
-            "match_intro": match_intro,
-            "teams": {"home": team_name, "away": opponent_name},
-            "result": match["result"]["text"],
-            "player_of_the_match": match["potm"],
-            "innings": [
-                {
-                    "innings": match["innings1"]["innings"],
-                    "batting_team": match["innings1"]["batting_team"],
-                    "bowling_team": match["innings1"]["bowling_team"],
-                    "openers": match["innings1"].get("openers", []),
-                    "opening_striker": match["innings1"].get("opening_striker", ""),
-                    "opening_bowler": match["innings1"].get("opening_bowler", ""),
-                    "innings_intro": match["innings1"].get("innings_intro", []),
-                    "score": f"{match['innings1']['runs']}/{match['innings1']['wickets']}",
-                    "overs": match["innings1"]["overs"],
-                    "over_summaries": match["innings1"].get("over_summaries", []),
-                },
-                {
-                    "innings": match["innings2"]["innings"],
-                    "batting_team": match["innings2"]["batting_team"],
-                    "bowling_team": match["innings2"]["bowling_team"],
-                    "openers": match["innings2"].get("openers", []),
-                    "opening_striker": match["innings2"].get("opening_striker", ""),
-                    "opening_bowler": match["innings2"].get("opening_bowler", ""),
-                    "innings_intro": match["innings2"].get("innings_intro", []),
-                    "score": f"{match['innings2']['runs']}/{match['innings2']['wickets']}",
-                    "overs": match["innings2"]["overs"],
-                    "over_summaries": match["innings2"].get("over_summaries", []),
-                },
-            ],
-            "commentary": match["commentary_feed"],
-            "note": "/sim is a friendly simulation and does not update player batting or bowling stats.",
-        }
+        if long_format:
+            long_res = sim_long.simulate_long_match(
+                user_xi, opponent_xi, team_name, opponent_name, fmt["label"], pitch=pitch)
+            pitch_desc = pitch_meta.get("description", "")
+            potm_name = long_res.get("potm")
+            potm_team = long_res.get("potm_team")
+            potm_id = next(
+                (p.get("id") for p in list(user_xi) + list(opponent_xi)
+                 if isinstance(p, dict) and p.get("name") == potm_name), None)
+            summary_bytes = None
+            if long_res["format"] == "ODI":
+                # Map the innings back to the owning user by name, as below.
+                bats_first_is_user = long_res["innings"][0]["team"] == team_name
+                opponent_id = getattr(opponent, "id", None)
+                summary_bytes = sim_long.render_long_summary_image(
+                    long_res,
+                    text_settings=get_config().get("scorecard_text_settings"),
+                    inn1_user_id=user.id if bats_first_is_user else opponent_id,
+                    inn2_user_id=opponent_id if bats_first_is_user else user.id,
+                    potm_player_id=potm_id)
+            long_messages = (
+                [sim_long.render_long_innings_card(long_res, inn)
+                 for inn in long_res["innings"]]
+                + [t for t in (sim_long.render_stumps(long_res),) if t]
+                + [f"{sim_long.render_long_result(long_res)}\n\n{cooldown_note}"])
+            long_setup = sim_long.render_match_setup(long_res, pitch_desc)
+            feed_payload = sim_long.long_feed_payload(
+                long_res, team_name, opponent_name, pitch_desc)
+        else:
+            match = simulate_match(user_xi, opponent_xi, overs, pitch,
+                                   team_name, opponent_name, toss_winner=toss_winner,
+                                   toss_decision=toss_decision, commentary=commentary,
+                                   fmt=fmt)
+
+            # Pre-render everything while the session is alive.
+            card1 = render_innings_card(match["innings1"])
+            card2 = render_innings_card(match["innings2"])
+            result_text = render_result(match)
+            cfg = get_config()
+            # Who batted first depends on the toss, so map the innings back to the
+            # owning user by name rather than assuming an order — branding the two
+            # sides the wrong way round is worse than not branding them.
+            bats_first_is_user = (match["innings1"]["batting_team"] == team_name)
+            opponent_id = getattr(opponent, "id", None)
+            # A portrait is a flourish; the match is not. Anything unexpected in an
+            # XI entry costs the photo, never the card.
+            potm_id = next(
+                (p.get("id") for p in list(user_xi) + list(opponent_xi)
+                 if isinstance(p, dict) and p.get("name") == match.get("potm")), None)
+            potm_team = next(
+                (side for xi, side in ((user_xi, team_name),
+                                       (opponent_xi, opponent_name))
+                 if any(isinstance(p, dict) and p.get("name") == match.get("potm")
+                        for p in xi or [])), None)
+            summary_bytes = render_match_summary_image(
+                match,
+                text_settings=cfg.get("scorecard_text_settings"),
+                stadium=f"SIM • {pitch} pitch",
+                inn1_user_id=user.id if bats_first_is_user else opponent_id,
+                inn2_user_id=opponent_id if bats_first_is_user else user.id,
+                potm_player_id=potm_id,
+            )
+            match_intro = [match["toss"]["text"]] + match["innings1"].get("innings_intro", [])
+            feed_payload = {
+                "format": match["format"],
+                "overs": overs,
+                "pitch": pitch,
+                "pitch_description": pitch_meta.get("description", ""),
+                "toss": match["toss"],
+                "match_intro": match_intro,
+                "teams": {"home": team_name, "away": opponent_name},
+                "result": match["result"]["text"],
+                "player_of_the_match": match["potm"],
+                "innings": [
+                    {
+                        "innings": match["innings1"]["innings"],
+                        "batting_team": match["innings1"]["batting_team"],
+                        "bowling_team": match["innings1"]["bowling_team"],
+                        "openers": match["innings1"].get("openers", []),
+                        "opening_striker": match["innings1"].get("opening_striker", ""),
+                        "opening_bowler": match["innings1"].get("opening_bowler", ""),
+                        "innings_intro": match["innings1"].get("innings_intro", []),
+                        "score": f"{match['innings1']['runs']}/{match['innings1']['wickets']}",
+                        "overs": match["innings1"]["overs"],
+                        "over_summaries": match["innings1"].get("over_summaries", []),
+                    },
+                    {
+                        "innings": match["innings2"]["innings"],
+                        "batting_team": match["innings2"]["batting_team"],
+                        "bowling_team": match["innings2"]["bowling_team"],
+                        "openers": match["innings2"].get("openers", []),
+                        "opening_striker": match["innings2"].get("opening_striker", ""),
+                        "opening_bowler": match["innings2"].get("opening_bowler", ""),
+                        "innings_intro": match["innings2"].get("innings_intro", []),
+                        "score": f"{match['innings2']['runs']}/{match['innings2']['wickets']}",
+                        "overs": match["innings2"]["overs"],
+                        "over_summaries": match["innings2"].get("over_summaries", []),
+                    },
+                ],
+                "commentary": match["commentary_feed"],
+                "note": "/sim is a friendly simulation and does not update player batting or bowling stats.",
+            }
     except Exception:
         logger.exception("sim_handler preparation failed")
         # The slots were taken but no match reached the player — hand them back
@@ -505,6 +543,11 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     finally:
         session.close()
+
+    if long_format:
+        await _deliver_long(update, context, progress, long_setup, long_messages,
+                            summary_bytes, potm_id, potm_name, potm_team, feed_payload)
+        return
 
     # ---- Suspense + delivery (no DB connection held) ----
     try:
@@ -552,3 +595,43 @@ async def sim_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption="📜 Ball-by-ball commentary (JSON)")
     except Exception:
         logger.exception("sim_handler delivery failed")
+
+
+async def _deliver_long(update, context, progress, setup_text, messages,
+                        summary_bytes, potm_id, potm_name, potm_team, feed_payload):
+    """Send an ODI / Test: setup, innings cards, close of play, result, extras."""
+    try:
+        header = setup_text + "\n\n🏁 <b>Match Ended!</b>"
+        sent = False
+        if progress:
+            try:
+                await progress.edit_text(header, parse_mode="HTML")
+                sent = True
+            except Exception:
+                pass
+        if not sent:
+            await update.message.reply_text(header, parse_mode="HTML")
+
+        for text in messages:
+            await update.message.reply_text(text, parse_mode="HTML")
+
+        if summary_bytes:
+            photo = io.BytesIO(summary_bytes)
+            photo.name = f"sim_summary_{update.effective_user.id}.png"
+            photo.seek(0)
+            await update.message.reply_photo(
+                photo=InputFile(photo, filename=photo.name),
+                caption="🖼️ Match Summary")
+        if potm_name:
+            from services import scorecard_delivery as _sd
+            await _sd.send_potm_card(
+                context.bot, update.effective_chat.id,
+                player_id=potm_id, name=potm_name, team=potm_team)
+
+        buf = io.BytesIO(json.dumps(feed_payload, indent=2, ensure_ascii=False).encode("utf-8"))
+        buf.seek(0)
+        await update.message.reply_document(
+            InputFile(buf, filename=f"sim_commentary_{update.effective_user.id}.json"),
+            caption="📜 Ball-by-ball commentary (JSON)")
+    except Exception:
+        logger.exception("sim_handler long-format delivery failed")

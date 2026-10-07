@@ -73,6 +73,7 @@ def build_result(m, result):
         "result": result,
         "dls_target": m.dls_target,
         "rain": m.rain_events,
+        "stumps": list(getattr(m, "stumps", [])),
         "drama": m.drama_events,
         "turning_points": turning,
         "influences": influences,

@@ -97,12 +97,16 @@ def rain_prob_per_over(w, cfg):
     return max(0.0, p)
 
 
-def rain_starts(w, rng, cfg, interruptions_so_far=0):
+def rain_starts(w, rng, cfg, interruptions_so_far=0, fmt=None):
     """Does rain stop play this over?"""
     r = cfg["weather"]["rain"]
-    if interruptions_so_far >= r["maxInterruptionsPerMatch"]:
+    cap, mult = r["maxInterruptionsPerMatch"], 1.0
+    if fmt == "Test":
+        cap = r.get("testMaxInterruptions", cap)
+        mult = r.get("testProbMultiplier", 1.0)
+    if interruptions_so_far >= cap:
         return False
-    return rng.chance(rain_prob_per_over(w, cfg))
+    return rng.chance(min(1.0, rain_prob_per_over(w, cfg) * mult))
 
 
 def overs_lost(rng, fmt, cfg):
