@@ -130,6 +130,7 @@ class _Match:
         self.test_hot_sessions = 0
         self.test_afternoon_sessions = 0
         self._last_session_idx = 0
+        self.stumps = []             # end-of-day reports (Test)
 
     # ── clock ───────────────────────────────────────────────────────────
     def _default_time(self):
@@ -181,8 +182,8 @@ class _Match:
         before, _, _, _ = self._test_session_info()
         self.test_overs_used += overs
         after, _, _, _ = self._test_session_info()
+        f = self.cfg["formats"]["Test"]
         for idx in range(before, after):
-            f = self.cfg["formats"]["Test"]
             s = idx % f["sessionsPerDay"]
             key = "TestDN" if self.time.is_day_night else "Test"
             name = self.cfg["timeOfDay"]["sessionHours"][key][s]["name"]
@@ -191,9 +192,63 @@ class _Match:
             if weather_mod.is_hot(self.weather, self.cfg):
                 self.test_hot_sessions += 1
             if s == f["sessionsPerDay"] - 1:
+                self._close_day(idx // f["sessionsPerDay"] + 1)
                 # overnight: the weather resets toward the ground's climate
                 self.weather = weather_mod.from_climate(
                     dict(self.stadium.climate) or {}, self.rng.derive("night", idx))
+
+    def _close_day(self, day):
+        """Stumps: report the day, then lose the overs a real day never gets in.
+
+        Slow over rates and bad light mean a Test day rarely reaches its full
+        90; ``overShortfallPerDay`` burns that gap off the clock, which is
+        what leaves time for a draw.
+        """
+        f = self.cfg["formats"]["Test"]
+        if self.innings and not self.test_over():
+            self.stumps.append({"day": day, "text": self._stumps_text(day)})
+        lo, hi = (f.get("overShortfallPerDay") or [0, 0])[:2]
+        if hi > 0 and day < f["days"]:
+            self.test_overs_used += self.rng.derive("shortfall", day).randint(int(lo), int(hi))
+
+    def _stumps_text(self, day):
+        inn = self.innings[-1]
+        state = f"{inn.runs}/{inn.wkts}"
+        if inn.declared:
+            state += " dec"
+        elif inn.all_out:
+            state = f"{inn.runs} all out"
+        totals = {}
+        for i in self.innings:
+            totals[i.bat_team.name] = totals.get(i.bat_team.name, 0) + i.runs
+        bat, bowl = inn.bat_team.name, inn.bowl_team.name
+        if inn.target is not None:
+            need = inn.target - inn.runs
+            tail = (f"need {need} more with {10 - inn.wkts} wickets in hand"
+                    if need > 0 else "target reached")
+        elif len(self.innings) == 1:
+            tail = f"{inn.overs_str} overs"
+        else:
+            diff = totals.get(bat, 0) - totals.get(bowl, 0)
+            tail = (f"lead by {diff}" if diff > 0 else f"trail by {-diff}" if diff < 0
+                    else "scores level")
+        return f"Stumps, Day {day}: {bat} {state} ({tail})"
+
+    def _saving_match(self, inn):
+        """True when a Test 4th-innings chase is out of reach on the clock left."""
+        if self.fmt != "Test" or inn.number != 4 or inn.target is None:
+            return False
+        sv = self.cfg["situation"].get("saveMatch")
+        if not sv:
+            return False
+        f = self.cfg["formats"]["Test"]
+        overs_left = f["days"] * f["oversPerDay"] - self.test_overs_used
+        if overs_left <= 0:
+            return True
+        need = inn.target - inn.runs
+        if overs_left < sv.get("minOversLeft", 15):
+            return need > overs_left * 3.0
+        return need / overs_left > sv["requiredRateAbove"]
 
     # ── conditions ──────────────────────────────────────────────────────
     def conditions(self, inn, over_idx, end):
@@ -295,6 +350,7 @@ class _Match:
                 break
             batter = inn.batters[inn.striker]
             bstat = inn.bat[batter.id]
+            saving = self._saving_match(inn)
             cond = self.conditions(inn, over_idx, end)
             fs = factors.compose(cond, ball, cfg, bowler=bowler)
             runs_needed = (inn.target - inn.runs) if inn.target else None
@@ -304,7 +360,8 @@ class _Match:
                 runs_needed=runs_needed, balls_left=balls_left, wickets_down=inn.wkts,
                 batter_balls=bstat["balls"], batting_position=bstat["position"],
                 last_event=inn.last_event, bowler_death_specialist=bowler.is_death_specialist,
-                is_chase=bool(inn.target) and self.fmt != "Test"), cfg)
+                is_chase=bool(inn.target) and self.fmt != "Test",
+                save_match=saving), cfg)
             fat = cfg["situation"]["fatigue"]
             fatigue_acc = fat["lowStaminaAccuracy"] if inn.stamina[bowler.id] < fat["lowStaminaBelow"] else 1.0
             mults = outcome.bucket_multipliers(batter, bowler, fs, cfg, sit, fatigue_acc, self.fmt)
@@ -518,7 +575,7 @@ class _Match:
     # ── rain ────────────────────────────────────────────────────────────
     def _rain_check(self, inn, over_idx):
         rrng = self.rng.derive("rain", inn.number, over_idx)
-        if not weather_mod.rain_starts(self.weather, rrng, self.cfg, self.rain_count):
+        if not weather_mod.rain_starts(self.weather, rrng, self.cfg, self.rain_count, self.fmt):
             return
         self.rain_count += 1
         self.rained = True

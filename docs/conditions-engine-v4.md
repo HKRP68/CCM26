@@ -182,8 +182,18 @@ All three runs fail one to three chase-band rows per sweep, and different rows
 each time — the harness's documented Monte-Carlo noise at n=250, not the hook.
 Sub-100 all-outs stay at 0.3%.
 
-Known gaps: Tests finish inside five days more often than real ones do (draws
-are rare), and the CLI's country XIs are picked by rating from
+Test draws: Tests used to finish inside five days almost every time (0%
+draws). Three knobs bring back the time lost in real Tests. `formats.Test.overShortfallPerDay`
+(4–12) is the overs a day loses to slow over rates and bad light.
+`weather.rain.testMaxInterruptions` / `testProbMultiplier` allow more than one
+interruption and make rain likelier over five days. `situation.saveMatch`
+makes a 4th-innings side whose target is out of reach bat for the draw. A
+30-Test sweep per pitch now shows about 11% draws (Dusty lowest, flat tracks
+highest) with first-innings averages unchanged. Close-of-play reports land in
+the result's `stumps` list. `/sim ODI` and `/sim Test` play on this engine
+(`services/sim_long.py`).
+
+Known gaps: the CLI's country XIs are picked by rating from
 `data/players.json`, which mixes men's and women's cards — pass a team file for
 a specific XI.
 

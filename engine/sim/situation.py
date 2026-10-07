@@ -22,6 +22,7 @@ class Situation:
     last_event: Optional[str] = None # "bat" (boundary) | "bowl" (wicket) | None
     bowler_death_specialist: bool = False
     is_chase: bool = False
+    save_match: bool = False         # Test 4th innings: the target is gone, bat out time
 
 
 @dataclass
@@ -82,6 +83,14 @@ def evaluate(s, cfg):
         m.shot_quality *= ch["shotQuality"]
         m.accuracy *= ch["accuracy"]
         m.tags.append("choke")
+
+    sv = c.get("saveMatch")
+    if s.save_match and sv:
+        # Blocking for the draw: shots shelved, the bat comes down straight, and
+        # the bowlers have to earn every wicket.
+        m.aggression_set = float(sv["aggression"])
+        m.wicket *= sv["wicket"]
+        m.tags.append("saving")
 
     d = c["death"]
     if is_death_over(s.fmt, s.over, cfg):

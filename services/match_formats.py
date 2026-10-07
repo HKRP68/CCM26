@@ -1,7 +1,7 @@
 """Match formats (adapted from SimCricketX engine/format_config.py).
 
-Provides per-format settings the auto-sim uses: innings overs, the per-bowler
-over quota, the powerplay/death over windows and the expected run rate per phase
+Provides per-format settings the auto-sim uses (T10, T20, ODI, Test): innings
+overs, the per-bowler over quota, the powerplay/death over windows and the expected run rate per phase
 (used to shape batting aggression). Pure data — no external dependencies.
 """
 
@@ -24,14 +24,27 @@ FORMATS = {
         "powerplay_end": 6, "death_start": 16,
         "expected_rr": {"Powerplay": 8.9, "Middle": 9.8, "Death": 11.2},
     },
-    # NOTE: longer formats (ODI/Test) need the ball-outcome model retuned for
-    # 50-over wicket rates — the current model is T20-tuned and collapses sides
-    # too quickly over 50 overs. Left as future work.
+    # Long formats run on the Conditions Engine (engine.sim.match), which is
+    # tuned for 50-over and multi-day cricket — see services.sim_long. The
+    # phase fields here are only descriptive; that engine reads its own
+    # config/sim_engine.json.
+    "ODI": {
+        "label": "ODI", "overs": 50, "max_bowler_overs": 10,
+        "powerplay_end": 10, "death_start": 41,
+        "expected_rr": {"Powerplay": 5.6, "Middle": 5.2, "Death": 8.5},
+        "long_format": True,
+    },
+    "Test": {
+        "label": "Test", "overs": None, "max_bowler_overs": None,
+        "days": 5, "long_format": True,
+    },
 }
 
 _ALIASES = {
     "T10": "T10", "10": "T10",
     "T20": "T20", "20": "T20",
+    "ODI": "ODI", "50": "ODI", "ONEDAY": "ODI", "OD": "ODI", "50OV": "ODI",
+    "TEST": "Test", "TESTMATCH": "Test", "5DAY": "Test", "5DAYS": "Test",
 }
 
 
@@ -39,7 +52,7 @@ def resolve_format(token):
     """Map a user token (e.g. 'T20', 'odi', '50') to a format key, or None."""
     if not token:
         return None
-    return _ALIASES.get(str(token).strip().upper())
+    return _ALIASES.get(str(token).strip().upper().replace("-", "").replace(" ", ""))
 
 
 def get_format(key):
