@@ -873,6 +873,8 @@ def _migrate_add_columns():
     _try_add("challenge_leagues", "same_team_allowed", "BOOLEAN DEFAULT TRUE")
     # /cipl multi — which leagues the Multi League picker offers.
     _try_add("challenge_leagues", "multi_enabled", "BOOLEAN DEFAULT TRUE")
+    # /rcpl (Auction League) — which leagues its league picker offers.
+    _try_add("challenge_leagues", "auction_enabled", "BOOLEAN DEFAULT TRUE")
     _try_add("challenge_teams", "logo_url", "VARCHAR(500)")
     _try_add("challenge_teams", "primary_color", "VARCHAR(9)")
     _try_add("challenge_teams", "secondary_color", "VARCHAR(9)")

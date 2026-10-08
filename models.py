@@ -2569,6 +2569,9 @@ class ChallengeLeague(Base):
     # Offered in the /cipl multi league picker (each side picks a league, then
     # a team from it). Admin-toggled on the Challenge Data page.
     multi_enabled = Column(Boolean, default=True, nullable=False)
+    # Offered in the Auction League (/rcpl) league picker. Admin-toggled on
+    # the Challenge Data page, the same way as ``multi_enabled``.
+    auction_enabled = Column(Boolean, default=True, nullable=False)
     # Overseas-player rules. ``home_country`` (when set) auto-flags any player
     # whose country differs from it as overseas when added to a team. The XI
     # picker then enforces ``min_overseas``/``max_overseas`` (11 = no cap).
