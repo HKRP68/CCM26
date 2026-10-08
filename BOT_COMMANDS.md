@@ -313,6 +313,29 @@ Admin commands for running one: [Appendix B](#appendix-b--admin--owner-commands)
 | `/tbracket` | `/bracket` | The playoff bracket as a picture 🏆 |
 | `/thome <team> \| <stadium>` | `/homeground` | Team owners: set your home ground (from Stadium Data) 🏟️ |
 
+### Parallel tournaments — each has its own commands
+
+Each league can run one tournament at the same time as other leagues' tournaments.
+Each one is played with its league's **tournament command** (set on the Challenge
+Data page, e.g. `/tipl`). It also gets its own read-only commands, made from that
+command plus a suffix, so nothing extra needs setting up:
+
+| Command (league command `/tipl`) | What it does |
+|---------|--------------|
+| `/tipl` | Reply to your opponent to play your fixture |
+| `/tiplinfo` | That tournament's front page |
+| `/tipltable` | Points table |
+| `/tiplfixtures` | Fixtures |
+| `/tiplteams` | Teams and owners |
+| `/tiplinjuries` | Injuries |
+| `/tiplstats` | Stat leaderboards |
+| `/tiplmvp` | MVP table |
+| `/tiplplayer <name>` | One player's tournament stats |
+
+The general commands (`/ctour`, `/cttable`, `/ctfixtures`, `/ctteams`, `/ctinjuries`,
+`/tournamentstats`, `/statstour`, `/mvp`) open the tournament directly when only one is
+running. When several are running, they list each tournament's own commands.
+
 ## 12. Tournament Draft
 
 A draft is a group event; these run in the chat the draft is bound to.

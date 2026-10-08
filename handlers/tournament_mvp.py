@@ -140,22 +140,44 @@ def render(session, tour, board="overall", limit=BOARD_LIMIT):
     return "\n".join(out)
 
 
-def _keyboard(active, opener_tg):
-    """The board tabs, marking the active one and bound to whoever opened it."""
+def _keyboard(active, opener_tg, tournament_id):
+    """The board tabs, marking the active one and bound to whoever opened it.
+
+    The tournament id rides along so the tabs keep showing *this* tournament
+    when several are running."""
     return InlineKeyboardMarkup([[
         InlineKeyboardButton(("● " if key == active else "") + label,
-                             callback_data=f"{CB_PREFIX}{key}_{opener_tg}")
+                             callback_data=f"{CB_PREFIX}{key}_{opener_tg}_{tournament_id}")
         for key, label in BOARDS]])
 
 
-async def mvp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/mvp — the tournament's Most Valuable Player table."""
+async def mvp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                      league_id=None):
+    """/mvp — the tournament's Most Valuable Player table.
+
+    ``league_id`` (from a derived command such as ``/tiplmvp``) picks that
+    league's tournament. Plain /mvp with several Challenge League tournaments
+    running lists each one's own commands instead of guessing.
+    """
+    from services import tournament_service
     message = update.effective_message
     if message is None:
         return
     session = get_session()
     try:
-        tour = _live_tournament(session)
+        if league_id is not None:
+            tour = tournament_service.get_active_tournament(session, league_id=league_id)
+            if not tour:
+                await message.reply_text("❌ This league has no tournament running right now.")
+                return
+        else:
+            running = tournament_service.get_active_tournaments(session)
+            if len(running) > 1:
+                await message.reply_text(
+                    tournament_service.running_commands_text(session, running),
+                    parse_mode="HTML")
+                return
+            tour = _live_tournament(session)
         if not tour:
             await message.reply_text(NO_ACTIVE)
             return
@@ -163,7 +185,7 @@ async def mvp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text(
             render(session, tour, "overall"), parse_mode="HTML",
             disable_web_page_preview=True,
-            reply_markup=_keyboard("overall", opener))
+            reply_markup=_keyboard("overall", opener, tour.id))
     except Exception:
         logger.exception("/mvp failed")
         await message.reply_text("⚠️ Could not load the MVP table right now.")
@@ -172,11 +194,13 @@ async def mvp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def mvp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """``mvp_<board>_<opener>`` — switch board, for the user who opened the card."""
+    """``mvp_<board>_<opener>[_<tournament id>]`` — switch board, for the user
+    who opened the card. Older buttons carry no tournament id."""
     q = update.callback_query
     try:
-        board, opener = (q.data or "")[len(CB_PREFIX):].rsplit("_", 1)
-        opener = int(opener)
+        parts = (q.data or "")[len(CB_PREFIX):].split("_")
+        board, opener = parts[0], int(parts[1])
+        tid = int(parts[2]) if len(parts) > 2 else None
     except Exception:
         await q.answer("Invalid selection.", show_alert=True)
         return
@@ -190,14 +214,20 @@ async def mvp_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     session = get_session()
     try:
-        tour = _live_tournament(session)
+        if tid is not None:
+            from models import Tournament
+            tour = session.get(Tournament, tid)
+            if tour is not None and not tour.is_active:
+                tour = None
+        else:
+            tour = _live_tournament(session)
         if not tour:
             await q.edit_message_text(NO_ACTIVE)
             return
         await q.edit_message_text(
             render(session, tour, board), parse_mode="HTML",
             disable_web_page_preview=True,
-            reply_markup=_keyboard(board, opener))
+            reply_markup=_keyboard(board, opener, tour.id))
     except Exception:
         logger.exception("/mvp callback failed")
     finally:

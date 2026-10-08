@@ -142,20 +142,22 @@ def all_commands(include_admin=True):
 
 
 def _active_cipl_command():
-    """The running CIPL tournament's own start command (e.g. ``/tipl``), or ""."""
+    """Every running CIPL tournament's own start command (``["tipl", "tpsl"]``).
+
+    Several may run at once, one per league; an empty list when none is."""
     try:
         from database import get_session
-        from handlers.challenge import _active_tournament_command
         from services import tournament_service
         session = get_session()
         try:
-            tour = tournament_service.get_active_tournament(session)
-            return (_active_tournament_command(session, tour) or "") if tour else ""
+            cmds = [tournament_service.start_command(session, t)
+                    for t in tournament_service.get_active_tournaments(session)]
+            return [c for c in cmds if c]
         finally:
             session.close()
     except Exception:
         logger.exception("Could not read the active tournament command")
-        return ""
+        return []
 
 
 def _line(cmd, aliases, what):
@@ -167,18 +169,28 @@ def render_help(admin=False, cipl_command=""):
     """The card as a list of HTML blocks, ready for ``chunk_blocks``."""
     from utils.message_chunks import expandable_quotes
 
-    cipl = (cipl_command or "").strip()
-    if cipl and not cipl.startswith("/"):
-        cipl = "/" + cipl
+    # One command or several (one per running league tournament).
+    raw = [cipl_command] if isinstance(cipl_command, str) else list(cipl_command or ())
+    cipls = []
+    for c in raw:
+        c = (c or "").strip()
+        if c:
+            cipls.append(c if c.startswith("/") else "/" + c)
     blocks = ["📖 <b>Tournament Help</b> — every tournament command\n"
               "<i>Tap a section to expand it.</i>"]
     sections = PLAYER_SECTIONS + (ADMIN_SECTIONS if admin else ())
     for i, (title, rows) in enumerate(sections):
         lines = []
         if i == 0:
-            if cipl:
+            for cipl in cipls:
                 lines.append(f"<code>{html.escape(cipl)}</code> — CIPL: reply to "
                              "your opponent to play your tournament fixture")
+            if cipls:
+                ex = html.escape(cipls[0])
+                lines.append(f"Each tournament also has its own views: <code>{ex}table</code>, "
+                             f"<code>{ex}fixtures</code>, <code>{ex}teams</code>, "
+                             f"<code>{ex}stats</code>, <code>{ex}mvp</code>, "
+                             f"<code>{ex}player &lt;name&gt;</code>, <code>{ex}info</code>")
             else:
                 lines.append("<b>CIPL:</b> your league's tournament command — "
                              "reply to your opponent to play your fixture "

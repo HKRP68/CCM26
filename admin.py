@@ -16885,7 +16885,8 @@ def admin_tournaments_list():
                     elif action == "activate":
                         tournament_service.activate_tournament(db, t.id)
                         log_admin(db, "tournament_activate", "tournament", t.id, t.name)
-                        flash(f"✅ {t.name} is now the active tournament.", "success")
+                        flash(f"✅ {t.name} is now active"
+                              + (f" for {t.league_name}" if t.league_name else "") + ".", "success")
                     elif action == "deactivate":
                         tournament_service.deactivate_tournament(db, t.id)
                         log_admin(db, "tournament_deactivate", "tournament", t.id, t.name)
@@ -17505,7 +17506,8 @@ def admin_tournament_detail(tournament_id):
                 elif action == "activate":
                     tournament_service.activate_tournament(db, t.id)
                     log_admin(db, "tournament_activate", "tournament", t.id, t.name)
-                    flash(f"✅ {t.name} is now the active tournament.", "success")
+                    flash(f"✅ {t.name} is now active"
+                              + (f" for {t.league_name}" if t.league_name else "") + ".", "success")
                 elif action == "deactivate":
                     tournament_service.deactivate_tournament(db, t.id)
                     log_admin(db, "tournament_deactivate", "tournament", t.id, t.name)
