@@ -15987,11 +15987,167 @@ def _resync_challenge_players(db, player):
     return updated
 
 
+def _known_player_version(db, text):
+    """The stored ``Player.version`` spelling matching ``text``, else None."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    row = (db.query(Player.version)
+             .filter(func.lower(Player.version) == text.lower())
+             .first())
+    return row[0] if row else None
+
+
+def _resolve_challenge_source(db, text, version=None):
+    """Find the master card for a bulk-add line. Returns ``(Player|None, reason)``.
+
+    ``text`` is a Player ID or a name. ``"Virat Kohli - Base"`` pins the card
+    version — the part after the last " - " counts as a version only when some
+    card really has that version, so a hyphenated name still resolves as a
+    name. Matching is ID, then exact name, then partial name. With no version
+    the Base card wins among same-name cards, then the highest rating.
+    """
+    name = (text or "").strip()
+    version = (version or "").strip() or None
+    if version is None and " - " in name:
+        head, tail = name.rsplit(" - ", 1)
+        found = _known_player_version(db, tail)
+        if found and head.strip():
+            name, version = head.strip(), found
+    if not name:
+        return None, "blank"
+
+    def _pick(query):
+        if version:
+            query = query.filter(func.lower(Player.version) == version.lower())
+        rows = query.all()
+        if not rows:
+            return None
+        rows.sort(key=lambda p: (
+            (p.version or "Base").strip().lower() != "base",
+            -(p.rating or 0),
+            p.id,
+        ))
+        return rows[0]
+
+    source = None
+    if name.isdigit():
+        source = db.get(Player, int(name))
+        if source and version and (source.version or "").lower() != version.lower():
+            source = None
+    if not source:
+        source = _pick(db.query(Player).filter(Player.name.ilike(name)))
+    if not source:
+        source = _pick(db.query(Player).filter(Player.name.ilike(f"%{name}%")))
+    if not source:
+        return None, (f"no {version} card" if version else "not found")
+    return source, ""
+
+
+def _add_challenge_player_row(db, team, league, source, sort_order):
+    overseas = _is_overseas_for_league(source, league)
+    db.add(ChallengePlayer(
+        team_id=team.id,
+        source_player_id=source.id,
+        name=source.name[:150],
+        details_json=_challenge_player_details_from_source(source, overseas),
+        is_overseas=overseas,
+        sort_order=sort_order,
+    ))
+
+
+def _split_import_row(row):
+    """A sheet row as ``[team, player, version]``; ``a | b | c`` in one cell works too."""
+    cells = [str(c or "").strip() for c in (row or [])]
+    filled = [c for c in cells if c]
+    if len(filled) == 1 and "|" in filled[0]:
+        cells = [part.strip() for part in filled[0].split("|")]
+    while len(cells) < 3:
+        cells.append("")
+    return cells[:3]
+
+
+def _import_challenge_teams(db, league, rows):
+    """Create teams + squads from ``TEAM NAME | PLAYER NAME | VERSION`` rows.
+
+    Missing teams are created; existing teams (same name, any case) are added
+    to. Version is optional. Returns ``(teams_created, players_added, errors)``.
+    """
+    parsed = [_split_import_row(r) for r in (rows or [])]
+    parsed = [r for r in parsed if any(r)]
+    if not parsed:
+        raise ValueError("That file had no rows in it.")
+    start = 1
+    first = [c.lower() for c in parsed[0]]
+    if "team" in first[0] and "player" in first[1]:
+        parsed = parsed[1:]
+        start = 2
+
+    teams = {(t.name or "").strip().lower(): t
+             for t in db.query(ChallengeTeam).filter(ChallengeTeam.league_id == league.id).all()}
+    team_sort = (db.query(func.max(ChallengeTeam.sort_order))
+                   .filter(ChallengeTeam.league_id == league.id).scalar() or 0)
+    existing = {}  # team id -> set of source ids
+    player_sort = {}
+    teams_created = players_added = 0
+    errors = []
+
+    for offset, (team_name, player_text, version) in enumerate(parsed, start=start):
+        if not team_name or not player_text:
+            errors.append(f"Row {offset}: needs a team name and a player name")
+            continue
+        team = teams.get(team_name.lower())
+        if team is None:
+            team_sort += 1
+            letters = "".join(ch for ch in team_name if ch.isalnum())
+            team = ChallengeTeam(
+                league_id=league.id,
+                name=team_name[:120],
+                short_name=(letters[:3].upper() or None),
+                sort_order=team_sort,
+                is_active=True,
+            )
+            db.add(team)
+            db.flush()
+            teams[team_name.lower()] = team
+            teams_created += 1
+        if team.id not in existing:
+            # One card per player per team (unique team_id + name), so a
+            # second version of someone already there counts as a duplicate.
+            existing[team.id] = {
+                (row[0] or "").strip().lower() for row in
+                db.query(ChallengePlayer.name).filter(ChallengePlayer.team_id == team.id).all()
+            }
+            player_sort[team.id] = (db.query(func.max(ChallengePlayer.sort_order))
+                                      .filter(ChallengePlayer.team_id == team.id)
+                                      .scalar() or 0)
+        source, reason = _resolve_challenge_source(db, player_text, version)
+        label = f"{player_text}" + (f" - {version}" if version else "")
+        if not source:
+            errors.append(f"Row {offset}: {label} ({reason})")
+            continue
+        if not source.is_active:
+            errors.append(f"Row {offset}: {label} (inactive)")
+            continue
+        key = (source.name or "")[:150].strip().lower()
+        if key in existing[team.id]:
+            errors.append(f"Row {offset}: {label} (already in {team.name})")
+            continue
+        existing[team.id].add(key)
+        player_sort[team.id] += 1
+        _add_challenge_player_row(db, team, league, source, player_sort[team.id])
+        players_added += 1
+
+    db.flush()
+    return teams_created, players_added, errors
+
+
 def _bulk_add_challenge_players(db, team_id, player_names_or_ids):
     """Bulk-add challenge players by master player id/name, one entry per line.
 
     Matching mirrors the Bot Team bulk add: try a numeric Player ID, then an
     exact case-insensitive name match, then a partial case-insensitive match.
+    ``Name - Version`` (e.g. ``Virat Kohli - Base``) adds that exact card.
     Returns (added_count, skipped_list).
     """
     team = db.get(ChallengeTeam, team_id)
@@ -16001,13 +16157,12 @@ def _bulk_add_challenge_players(db, team_id, player_names_or_ids):
 
     added = 0
     skipped = []
-    existing_ids = {
-        row[0]
-        for row in db.query(ChallengePlayer.source_player_id)
-        .filter(
-            ChallengePlayer.team_id == team_id,
-            ChallengePlayer.source_player_id.isnot(None),
-        )
+    # One card per player per team (unique team_id + name): a second version
+    # of a player already in the squad is a duplicate too.
+    existing_names = {
+        (row[0] or "").strip().lower()
+        for row in db.query(ChallengePlayer.name)
+        .filter(ChallengePlayer.team_id == team_id)
         .all()
     }
     max_sort = (
@@ -16022,34 +16177,21 @@ def _bulk_add_challenge_players(db, team_id, player_names_or_ids):
         if not name:
             continue
 
-        source = None
-        if name.isdigit():
-            source = db.get(Player, int(name))
+        source, reason = _resolve_challenge_source(db, name)
         if not source:
-            source = db.query(Player).filter(Player.name.ilike(name)).first()
-        if not source:
-            source = db.query(Player).filter(Player.name.ilike(f"%{name}%")).first()
-        if not source:
-            skipped.append(f"{name} (not found)")
+            skipped.append(f"{name} ({reason})")
             continue
         if not source.is_active:
             skipped.append(f"{name} (inactive)")
             continue
-        if source.id in existing_ids:
+        key = (source.name or "")[:150].strip().lower()
+        if key in existing_names:
             skipped.append(f"{name} (duplicate)")
             continue
 
         max_sort += 1
-        existing_ids.add(source.id)
-        overseas = _is_overseas_for_league(source, league)
-        db.add(ChallengePlayer(
-            team_id=team_id,
-            source_player_id=source.id,
-            name=source.name[:150],
-            details_json=_challenge_player_details_from_source(source, overseas),
-            is_overseas=overseas,
-            sort_order=max_sort,
-        ))
+        existing_names.add(key)
+        _add_challenge_player_row(db, team, league, source, max_sort)
         added += 1
 
     db.flush()
@@ -16161,6 +16303,7 @@ def admin_challenge_data():
                             is_active=_checked("league_is_active", True),
                             same_team_allowed=_checked("same_team_allowed", True),
                             multi_enabled=_checked("multi_enabled", True),
+                            auction_enabled=_checked("auction_enabled", True),
                         )
                         _apply_overseas_league_form(league)
                         image_url = _save_challenge_league_image(request.files.get("league_image"))
@@ -16235,6 +16378,7 @@ def admin_challenge_league_detail(league_id):
                     league.is_active = _checked("league_is_active")
                     league.same_team_allowed = _checked("same_team_allowed")
                     league.multi_enabled = _checked("multi_enabled")
+                    league.auction_enabled = _checked("auction_enabled")
                     _apply_overseas_league_form(league)
                     if request.form.get("remove_image") == "on":
                         league.image_url = None
@@ -16264,6 +16408,22 @@ def admin_challenge_league_detail(league_id):
                         db.flush()
                         log_admin(db, "challenge_team_add", "challenge_team", team.id, team.name)
                         flash(f"✅ Added team {team.name}.", "success")
+                elif action == "import_teams":
+                    # One sheet → every team and its squad:
+                    # TEAM NAME | PLAYER NAME | VERSION (version optional).
+                    rows = _read_sheet(request.files.get("teams_file"),
+                                       request.form.get("teams_text"))
+                    made, added, errors = _import_challenge_teams(db, league, rows)
+                    log_admin(db, "challenge_team_import", "challenge_league", league.id,
+                              league.name, f"teams+{made} players+{added} !{len(errors)}")
+                    if made or added:
+                        flash(f"✅ Imported {added} player(s); created {made} new team(s).", "success")
+                    if errors:
+                        shown = "; ".join(errors[:8])
+                        more = f" …and {len(errors) - 8} more." if len(errors) > 8 else ""
+                        flash(f"⚠️ {len(errors)} row(s) skipped — {shown}{more}", "error")
+                    elif not made and not added:
+                        flash("Nothing changed — every row was already there.", "info")
                 elif action == "copy_teams":
                     # "Add Current Teams" — duplicate teams (with all their players)
                     # from another league into this one. Existing team names are

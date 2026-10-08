@@ -88,6 +88,7 @@
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="league_is_active" checked style="width:auto;"> Active</label>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="same_team_allowed" checked style="width:auto;"> Same-team allowed</label>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="multi_enabled" checked style="width:auto;"> Include in Multi</label>
+      <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="auction_enabled" checked style="width:auto;"> Include in Auction League (/rcpl)</label>
       <button class="btn btn-primary" type="submit">+ Add League</button>
     </form>
   </section>
@@ -103,6 +104,7 @@
           <span>·</span><span>Sort {{ league.sort_order }}</span>
           <span>·</span><span>{{ 'Same-team allowed' if league.same_team_allowed else 'Same-team blocked' }}</span>
           {% if league.multi_enabled %}<span>·</span><span>🔀 In Multi</span>{% endif %}
+          {% if league.auction_enabled is not sameas false %}<span>·</span><span>🏷 In RCPL</span>{% endif %}
           <span>·</span><span>🏏 {{ 'The Hundred' if league.match_format == 'The100' else '20 Over' }}</span>
           {% if league.min_overseas or league.max_overseas < 11 %}<span>·</span><span>✈️ Overseas {{ league.min_overseas }}–{{ league.max_overseas }}</span>{% endif %}
           {% if league.home_country %}<span>·</span><span>🏠 {{ league.home_country }}</span>{% endif %}
@@ -158,6 +160,7 @@
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="league_is_active" {{ 'checked' if league.is_active else '' }} style="width:auto;"> Active</label>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="same_team_allowed" {{ 'checked' if league.same_team_allowed else '' }} style="width:auto;"> Same-team challenge allowed</label>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="multi_enabled" {{ 'checked' if league.multi_enabled else '' }} style="width:auto;"> Include in Multi (/cipl multi)</label>
+      <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="auction_enabled" {{ '' if league.auction_enabled is sameas false else 'checked' }} style="width:auto;"> Include in Auction League (/rcpl)</label>
       {% if league.image_url %}<label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="remove_image" style="width:auto;"> Remove current image</label>{% endif %}
     </div>
   </form>
@@ -175,6 +178,18 @@
       <div><label>Sort</label><input type="number" name="team_sort_order" value="0"></div>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="team_is_active" checked style="width:auto;"> Active</label>
       <button class="btn btn-primary" type="submit">+ Add Team</button>
+    </form>
+  </section>
+
+  <section class="cm-card">
+    <h3 style="margin-top:0;">📄 Import Teams from File</h3>
+    <p style="color:var(--muted);margin-top:-.4rem;">Upload an .xlsx or .csv with columns <code>TEAM NAME | PLAYER NAME | VERSION</code> (header row optional, version optional — blank picks the Base card). Missing teams are created in <strong>{{ league.name }}</strong>; existing teams get the players added. Duplicates are skipped.</p>
+    <form method="POST" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="import_teams">
+      <input type="file" name="teams_file" accept=".xlsx,.xlsm,.csv,.txt">
+      <textarea name="teams_text" rows="5" placeholder="…or paste rows, e.g.:&#10;Team Name | Player Name | Version&#10;Mumbai Indians | Rohit Sharma | Base&#10;Royal Challengers | Virat Kohli | Gold" style="width:100%;margin-top:.6rem;padding:.7rem;background:var(--input-bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:monospace;resize:vertical;"></textarea>
+      <button class="btn btn-primary" type="submit" style="margin-top:.6rem;">Import Teams</button>
     </form>
   </section>
 
@@ -284,11 +299,11 @@
 
   <section class="cm-card">
     <h3 style="margin-top:0;">📥 Bulk Add Players</h3>
-    <p style="color:var(--muted);margin-top:-.4rem;">Write one player name or Player ID per line, just like Bot Teams. Exact and partial name matches are supported; duplicates are skipped.</p>
+    <p style="color:var(--muted);margin-top:-.4rem;">Write one player name or Player ID per line, just like Bot Teams. Add <code> - Version</code> to pick an exact card (e.g. <code>Virat Kohli - Base</code>). Exact and partial name matches are supported; duplicates are skipped.</p>
     <form method="POST">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="bulk_add_players">
-      <textarea name="bulk_text" rows="8" placeholder="One player name per line, e.g.:&#10;Virat Kohli&#10;Rohit Sharma&#10;Jasprit Bumrah" style="width:100%;padding:.7rem;background:var(--input-bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:monospace;resize:vertical;"></textarea>
+      <textarea name="bulk_text" rows="8" placeholder="One player name per line, e.g.:&#10;Virat Kohli - Base&#10;Rohit Sharma - Gold&#10;Jasprit Bumrah" style="width:100%;padding:.7rem;background:var(--input-bg);border:1px solid var(--border);border-radius:10px;color:var(--text);font-family:monospace;resize:vertical;"></textarea>
       <button class="btn btn-primary" type="submit" style="margin-top:.6rem;">Add All</button>
       <small style="color:var(--muted);display:block;margin-top:.45rem;">Tip: Use the current search/filter picker below when you prefer selecting from the full player table.</small>
     </form>

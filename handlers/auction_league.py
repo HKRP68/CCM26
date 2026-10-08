@@ -1073,6 +1073,11 @@ async def _send_one_career_notice(context, chat_id, state):
                 [[("▶️ Continue", "al:hub"), ("🗑 Discard career", "al:quit")]])
 
 
+def _auction_enabled(league):
+    """Whether the admin offers ``league`` in /rcpl (Challenge Data toggle)."""
+    return getattr(league, "auction_enabled", True) is not False
+
+
 def _find_league_id(wanted):
     """The active league matching ``wanted`` by name, short code or command."""
     from handlers.challenge import normalize_challenge_league
@@ -1080,8 +1085,9 @@ def _find_league_id(wanted):
     key = normalize_challenge_league(wanted)
     session = get_session()
     try:
-        leagues = (session.query(ChallengeLeague)
-                   .filter(ChallengeLeague.is_active.is_(True)).all())
+        leagues = [lg for lg in (session.query(ChallengeLeague)
+                                 .filter(ChallengeLeague.is_active.is_(True)).all())
+                   if _auction_enabled(lg)]
         for lg in leagues:
             names = {normalize_challenge_league(lg.name),
                      normalize_challenge_league(lg.short_code or ""),
@@ -1122,9 +1128,11 @@ async def _start_new(chat_id, context):
     session = get_session()
     try:
         from models import ChallengeLeague
-        leagues = (session.query(ChallengeLeague)
-                   .filter(ChallengeLeague.is_active.is_(True))
-                   .order_by(ChallengeLeague.sort_order, ChallengeLeague.name).all())
+        leagues = [lg for lg in (session.query(ChallengeLeague)
+                                 .filter(ChallengeLeague.is_active.is_(True))
+                                 .order_by(ChallengeLeague.sort_order,
+                                           ChallengeLeague.name).all())
+                   if _auction_enabled(lg)]
         if not leagues:
             await _send(context, chat_id, "❌ No leagues are set up yet.")
             return
@@ -1154,6 +1162,10 @@ async def _send_team_picker(context, chat_id, league_id):
         league = session.get(ChallengeLeague, int(league_id))
         if league is None:
             return "That league no longer exists."
+        if not league.is_active or not _auction_enabled(league):
+            await _send(context, chat_id,
+                        "❌ That league isn't available for Auction League.")
+            return "That league isn't available for Auction League."
         teams = AL.league_teams(session, league)
         playable = [t for t in teams if len(t["players"]) >= 11]
         if len(teams) < 4:
