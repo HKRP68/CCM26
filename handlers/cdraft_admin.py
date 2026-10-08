@@ -18,8 +18,8 @@ without opening the panel.
 /cdraftset reset                  back to the defaults
 ```
 
-Admin-only, gated by ``services.admin_ids.is_admin`` exactly as
-``handlers.tournament_access`` is, and reading/writing through the same
+Admin-only, gated by ``services.admin_ids.is_admin`` like the other admin
+commands, and reading/writing through the same
 ``GameConfig`` row so the website and the bot can never disagree.
 """
 

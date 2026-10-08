@@ -212,8 +212,8 @@ co-owning a side in the fixture buys nothing here: what this command does is
 make the bot tag people and slide into their DMs, and a league where anyone can
 nudge anyone is a league where the nudges get ignored.
 
-The check is `services.admin_ids.is_admin` — the same one behind `/tourallow`
-and the rest of the admin commands — and it runs three times:
+The check is `services.admin_ids.is_admin` — the same one behind the rest of
+the admin commands — and it runs three times:
 
 | Where | Why it is not redundant |
 | --- | --- |
