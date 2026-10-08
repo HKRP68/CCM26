@@ -123,9 +123,6 @@ ADMIN_SECTIONS = (
         ("/tseasons", "/tseason", "Link past seasons into Total Season Stats"),
         ("/remindmatch", "/nudge",
          "Nudge two teams to play their pending fixture"),
-        ("/tourallow", "", "Allow a user to use the tournament command"),
-        ("/tourblock", "", "Block a user from the tournament command"),
-        ("/tourallowlist", "", "Show the tournament-command allowlist"),
     )),
     ("🔒 Admin · Tournament Draft", (
         ("/dadmin", "", "Every draft admin command"),

@@ -720,9 +720,6 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/removematch @user` | Pull one user out of their active match |
 | `/testwpm [match_id]` | Mini App match diagnostic |
 | `/cdraftset` | Read or change the `/cdraft` rating band and allowed editions |
-| `/tourallow <telegram_id>` | Allow a user to create tours |
-| `/tourblock <telegram_id>` | Block a user from creating tours |
-| `/tourallowlist` | Show the tournament-command allowlist |
 
 ## B2 · Broadcast
 

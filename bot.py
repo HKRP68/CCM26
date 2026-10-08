@@ -314,9 +314,6 @@ from handlers.forward_broadcast import (
     frwd_handler, frwd_grp_handler, frwd_prvt_handler, remember_album_message,
     track_album_message,
 )
-from handlers.tournament_access import (
-    tourallow_handler, tourblock_handler, tourallowlist_handler,
-)
 from handlers.setcardid import setcardid_handler
 
 # Fantasy League handlers
@@ -427,9 +424,6 @@ ADMIN_MENU_COMMANDS = (
     ("removematch", "Admin: remove one stuck match by id"),
     ("frwd_grp", "Admin: forward a replied message to all groups"),
     ("frwd_prvt", "Admin: forward a replied message to all users"),
-    ("tourallow", "Admin: allow a user to create tours"),
-    ("tourblock", "Admin: block a user from creating tours"),
-    ("tourallowlist", "Admin: list users allowed to create tours"),
     ("cdraftset", "Admin: set the /cdraft rating range and allowed editions"),
     ("testwpm", "Admin: Mini App match diagnostic"),
     # Tournament Draft. A dozen commands is a lot for a player menu that is
@@ -1995,11 +1989,6 @@ def main():
             & _album_filters.ChatType.PRIVATE,
             track_album_message,
         ), group=7)
-
-        # ── Admin: Challenge League Tournament command allowlist ─────
-        app.add_handler(CommandHandler("tourallow", tourallow_handler))
-        app.add_handler(CommandHandler("tourblock", tourblock_handler))
-        app.add_handler(CommandHandler("tourallowlist", tourallowlist_handler))
 
         # ── Admin: the Challenge Draft player pool ───────────────────
         from handlers.cdraft_admin import cdraftset_handler
