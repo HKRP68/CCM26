@@ -317,10 +317,12 @@ Admin commands for running one: [Appendix B](#appendix-b--admin--owner-commands)
 
 Each league can run one tournament at the same time as other leagues' tournaments.
 Each one is played with its league's **tournament command** (set on the Challenge
-Data page, e.g. `/tipl`). It also gets its own read-only commands, made from that
-command plus a suffix, so nothing extra needs setting up:
+Data page, e.g. `/tipl`). It also gets its own read-only commands. You can name each
+one in the league's **Tournament commands** fields on the Challenge Data page, when you
+add the league or later when you edit it. Any field left blank uses an automatic name
+made from the tournament command plus a suffix:
 
-| Command (league command `/tipl`) | What it does |
+| Automatic name (league command `/tipl`) | What it does |
 |---------|--------------|
 | `/tipl` | Reply to your opponent to play your fixture |
 | `/tiplinfo` | That tournament's front page |

@@ -134,9 +134,11 @@ def activate_tournament(session, tournament_id):
 # Per-tournament commands
 # ──────────────────────────────────────────────────────────────────────
 
-# Read-only commands every running Challenge League tournament gets for free:
-# its league's tournament command plus one of these suffixes (``/tipl`` →
-# ``/tipltable``). Deriving them keeps them unique without any admin setup.
+# Read-only commands every running Challenge League tournament gets. An admin
+# may name each one per league on the Challenge Data page
+# (``ChallengeLeague.tournament_view_commands_json``); any left blank use the
+# league's tournament command plus the suffix (``/tipl`` → ``/tipltable``),
+# which keeps them unique without any setup.
 VIEW_SUFFIXES = (
     ("info", "info", "Overview"),
     ("table", "table", "Points table"),
@@ -147,11 +149,59 @@ VIEW_SUFFIXES = (
     ("mvp", "mvp", "MVP table"),
     ("player", "player", "A player's stats (add a name)"),
 )
+VIEW_NAMES = tuple(v for v, _s, _l in VIEW_SUFFIXES)
 
 
 def normalize_command(raw):
     """``"/TIPL@Bot"`` → ``"tipl"``; empty string when there is nothing."""
     return (raw or "").strip().lower().lstrip("/").split("@", 1)[0].strip()
+
+
+def custom_view_commands(league):
+    """The admin-set view commands of a league as ``{view: "ipltable"}`` (bare,
+    no slash). A missing or broken JSON value reads as "none set"."""
+    raw = getattr(league, "tournament_view_commands_json", None)
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for view in VIEW_NAMES:
+        cmd = normalize_command(data.get(view) if isinstance(data.get(view), str) else "")
+        if cmd:
+            out[view] = cmd
+    return out
+
+
+def default_view_commands(base):
+    """``{view: "tipltable"}`` built from a bare tournament command."""
+    base = normalize_command(base)
+    if not base:
+        return {}
+    return {view: f"{base}{suffix}" for view, suffix, _l in VIEW_SUFFIXES}
+
+
+def league_view_commands(league, base=None):
+    """``[(view, "/cmd", label, is_custom), …]`` for a league.
+
+    A custom name wins; otherwise the automatic name from the league's
+    tournament command (or ``base``) is used. A view with neither is left out.
+    """
+    if base is None:
+        base = getattr(league, "tournament_command", None) if league is not None else None
+    defaults = default_view_commands(base)
+    custom = custom_view_commands(league) if league is not None else {}
+    out = []
+    for view, _suffix, label in VIEW_SUFFIXES:
+        if view in custom:
+            out.append((view, f"/{custom[view]}", label, True))
+        elif view in defaults:
+            out.append((view, f"/{defaults[view]}", label, False))
+    return out
 
 
 def start_command(session, tour):
@@ -165,12 +215,12 @@ def start_command(session, tour):
 
 
 def view_commands(session, tour):
-    """``[(view, "/tipltable", label), …]`` for a tournament; empty if it has no
-    start command to derive them from."""
+    """``[(view, "/tipltable", label), …]`` for a tournament — the league's
+    custom names where set, the automatic ones otherwise."""
+    league = session.get(ChallengeLeague, tour.league_id) if getattr(tour, "league_id", None) else None
     base = start_command(session, tour)
-    if not base:
-        return []
-    return [(view, f"/{base}{suffix}", label) for view, suffix, label in VIEW_SUFFIXES]
+    return [(view, cmd, label)
+            for view, cmd, label, _custom in league_view_commands(league, base=base)]
 
 
 def running_commands_text(session, tours=None):
@@ -187,13 +237,16 @@ def running_commands_text(session, tours=None):
         out.append("")
         out.append(f"<b>{escape(t.name or '')}</b>"
                    + (f" · {escape(t.league_name)}" if getattr(t, "league_name", None) else ""))
-        if not base:
+        if base:
+            out.append(f"   ▶️ Play: /{base}")
+        cmds = view_commands(session, t)
+        if not base and not cmds:
             out.append("   (no tournament command set for its league)")
             continue
-        out.append(f"   ▶️ Play: /{base}")
-        out.append("   " + " · ".join(f"/{base}{s}" for v, s, _ in VIEW_SUFFIXES
-                                       if v != "player")
-                   + f" · /{base}player &lt;name&gt;")
+        if cmds:
+            out.append("   " + " · ".join(
+                escape(cmd) + (" &lt;name&gt;" if view == "player" else "")
+                for view, cmd, _label in cmds))
     return "\n".join(out)
 
 

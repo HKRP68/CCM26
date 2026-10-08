@@ -225,13 +225,19 @@ def _tournament_command_map(session):
 
 
 def _tournament_view_command_map(session):
-    """Return ``{command: (ChallengeLeague, view)}`` for every league's derived
-    read-only tournament commands (``tipl`` → ``tipltable``, ``tiplstats`` …)."""
-    from services.tournament_service import VIEW_SUFFIXES
+    """Return ``{command: (ChallengeLeague, view)}`` for every league's
+    tournament view commands — the names an admin set on the league, or the
+    automatic ones (``tipl`` → ``tipltable``, ``tiplstats`` …)."""
+    from services.tournament_service import league_view_commands
     out = {}
-    for cmd, league in _tournament_command_map(session).items():
-        for view, suffix, _label in VIEW_SUFFIXES:
-            out[f"{cmd}{suffix}"] = (league, view)
+    try:
+        for league in (session.query(ChallengeLeague)
+                       .filter(ChallengeLeague.is_active == True)  # noqa: E712
+                       .all()):
+            for view, cmd, _label, _custom in league_view_commands(league):
+                out.setdefault(cmd.lstrip("/"), (league, view))
+    except Exception:
+        logger.exception("Failed to load tournament view command map")
     return out
 
 

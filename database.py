@@ -598,6 +598,7 @@ def _migrate_add_columns():
     # Challenge League Tournaments: per-league tournament command + match tagging.
     # (The tournament_* tables themselves are created by create_all above.)
     _try_add("challenge_leagues", "tournament_command", "VARCHAR(60)")
+    _try_add("challenge_leagues", "tournament_view_commands_json", "TEXT")
     _try_add("matches", "tournament_id", "INTEGER")
 
     # League Tournament Structure: league formats, groups, schedule + knockouts.

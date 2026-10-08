@@ -160,6 +160,22 @@ def _active_cipl_command():
         return []
 
 
+def _running_commands_block():
+    """Each running CIPL tournament with its own commands, or "" if none."""
+    try:
+        from database import get_session
+        from services import tournament_service
+        session = get_session()
+        try:
+            tours = tournament_service.get_active_tournaments(session)
+            return tournament_service.running_commands_text(session, tours) if tours else ""
+        finally:
+            session.close()
+    except Exception:
+        logger.exception("Could not list the running tournaments' commands")
+        return ""
+
+
 def _line(cmd, aliases, what):
     alias = f" <i>({html.escape(aliases, quote=False)})</i>" if aliases else ""
     return f"<code>{html.escape(cmd, quote=False)}</code>{alias} — {html.escape(what, quote=False)}"
@@ -186,11 +202,8 @@ def render_help(admin=False, cipl_command=""):
                 lines.append(f"<code>{html.escape(cipl)}</code> — CIPL: reply to "
                              "your opponent to play your tournament fixture")
             if cipls:
-                ex = html.escape(cipls[0])
-                lines.append(f"Each tournament also has its own views: <code>{ex}table</code>, "
-                             f"<code>{ex}fixtures</code>, <code>{ex}teams</code>, "
-                             f"<code>{ex}stats</code>, <code>{ex}mvp</code>, "
-                             f"<code>{ex}player &lt;name&gt;</code>, <code>{ex}info</code>")
+                lines.append("Each running tournament also has its own table, fixtures, "
+                             "teams, stats and MVP commands — listed at the end of this card")
             else:
                 lines.append("<b>CIPL:</b> your league's tournament command — "
                              "reply to your opponent to play your fixture "
@@ -220,6 +233,9 @@ async def tourhelp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     admin = bool(user and is_admin(user.id))
     blocks = render_help(admin=admin, cipl_command=_active_cipl_command())
+    running = _running_commands_block()
+    if running:
+        blocks.append(running)
     for part in chunk_blocks(blocks):
         await msg.reply_text(part, parse_mode="HTML",
                              disable_web_page_preview=True)

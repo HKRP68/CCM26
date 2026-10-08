@@ -143,6 +143,35 @@ class ParallelTournamentTests(unittest.TestCase):
         # The start command itself is not a view command.
         self.assertIsNone(challenge.is_tournament_view_command(f"tz{n}", self.session))
 
+    def test_custom_names_override_and_route(self):
+        import json
+        from handlers import challenge
+        from services import tournament_service as ts
+        n = next(_N)
+        lg = self._league(f"/tq{n}")
+        lg.tournament_view_commands_json = json.dumps(
+            {"table": f"/myq{n}table", "mvp": f"MYQ{n}MVP"})
+        t = self._tournament(lg)
+        self.session.commit()
+        cmds = {view: cmd for view, cmd, _label in ts.view_commands(self.session, t)}
+        self.assertEqual(cmds["table"], f"/myq{n}table")
+        self.assertEqual(cmds["mvp"], f"/myq{n}mvp")
+        self.assertEqual(cmds["stats"], f"/tq{n}stats")   # blank → automatic
+        self.assertEqual(challenge.is_tournament_view_command(
+            f"myq{n}table", self.session)[1], "table")
+        # The automatic name of an overridden view no longer routes.
+        self.assertIsNone(challenge.is_tournament_view_command(
+            f"tq{n}table", self.session))
+        self.assertIn(f"/myq{n}table", ts.running_commands_text(self.session, [t]))
+
+    def test_broken_json_falls_back_to_automatic_names(self):
+        from services import tournament_service as ts
+        n = next(_N)
+        lg = self._league(f"/tr{n}")
+        lg.tournament_view_commands_json = "{not json"
+        cmds = {v: c for v, c, _l, _custom in ts.league_view_commands(lg)}
+        self.assertEqual(cmds["table"], f"/tr{n}table")
+
 
 if __name__ == "__main__":
     unittest.main()

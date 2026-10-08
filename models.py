@@ -2562,6 +2562,11 @@ class ChallengeLeague(Base):
     # hub card (overview / points table / fixtures / teams). Kept separate from
     # ``tournament_command`` because that one *starts* a match and is gated.
     fixtures_command = Column(String(60), nullable=True, index=True)
+    # Admin-chosen names for this league's tournament view commands, as JSON
+    # ({"table": "/ipltable", ...}). A view left out uses the automatic name
+    # built from ``tournament_command`` — see
+    # ``tournament_service.league_view_commands``.
+    tournament_view_commands_json = Column(Text, nullable=True)
     image_url = Column(String(500), nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
