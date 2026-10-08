@@ -33,9 +33,6 @@ SEND_DELAY_SECONDS = 0.05
 # Post the "ending soon" reminder this long before a giveaway closes.
 REMINDER_BEFORE = timedelta(hours=6)
 
-# Telegram member statuses that count as "in the group".
-_MEMBER_STATUSES = {"creator", "administrator", "member", "restricted"}
-
 
 async def _giveaway_tick(context):
     """One sweep: end expired giveaways, top up the automatic rotation, start
@@ -271,6 +268,9 @@ async def _finalize(context, session, giveaway):
         draw_winners, recent_auto_winner_ids, winners_text)
 
     official_group_id = _official_group_id(session)
+    from models import GameConfig
+    from services.giveaway_service import is_official_member
+    cfg = session.query(GameConfig).first()
 
     # Re-verify live Official GC membership for each entrant (anti-cheat: dropping
     # anyone who left the GC after entering). Fail closed: if the Official GC is
@@ -281,7 +281,8 @@ async def _finalize(context, session, giveaway):
         entries = (session.query(GiveawayEntry)
                    .filter(GiveawayEntry.giveaway_id == giveaway.id).all())
         for e in entries:
-            if await _is_group_member(context, official_group_id, e.telegram_id):
+            if await is_official_member(context.bot, official_group_id,
+                                        e.telegram_id, cfg):
                 eligible_user_ids.add(e.user_id)
     else:
         logger.warning("Giveaway #%s finalized with no Official GC configured — "
@@ -343,22 +344,6 @@ def _official_group_id(session):
     except Exception:
         logger.exception("official group config read failed")
         return None
-
-
-async def _is_group_member(context, group_id, user_id) -> bool:
-    try:
-        member = await context.bot.get_chat_member(group_id, user_id)
-    except (BadRequest, Forbidden):
-        return False
-    except TelegramError:
-        # Transient Telegram error — be lenient rather than disqualify unfairly.
-        return True
-    status = getattr(member, "status", None)
-    if status not in _MEMBER_STATUSES:
-        return False
-    if status == "restricted":
-        return bool(getattr(member, "is_member", False))
-    return True
 
 
 async def _mark_chat_inactive(chat_id):

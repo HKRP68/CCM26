@@ -16,7 +16,7 @@ import logging
 from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.error import BadRequest, Forbidden, TelegramError
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from database import get_session
@@ -24,10 +24,6 @@ from models import User, Giveaway, GameConfig
 from services import giveaway_service
 
 logger = logging.getLogger(__name__)
-
-# Telegram member statuses that count as "in the group".
-_MEMBER_STATUSES = {"creator", "administrator", "member", "restricted"}
-
 
 async def giveaway_join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -83,7 +79,8 @@ async def giveaway_join_callback(update: Update, context: ContextTypes.DEFAULT_T
             await query.answer("This giveaway isn't available right now.",
                                show_alert=True)
             return
-        is_member = await _is_group_member(context, official_group_id, tg_user.id)
+        is_member = await giveaway_service.is_official_member(
+            context.bot, official_group_id, tg_user.id, cfg)
         if not is_member:
             await _answer_join_gc(query, cfg)
             return
@@ -117,22 +114,6 @@ async def giveaway_join_callback(update: Update, context: ContextTypes.DEFAULT_T
             pass
     finally:
         session.close()
-
-
-async def _is_group_member(context, group_id, user_id) -> bool:
-    try:
-        member = await context.bot.get_chat_member(group_id, user_id)
-    except (BadRequest, Forbidden):
-        return False
-    except TelegramError:
-        # Transient Telegram error — be lenient rather than block unfairly.
-        return True
-    status = getattr(member, "status", None)
-    if status not in _MEMBER_STATUSES:
-        return False
-    if status == "restricted":
-        return bool(getattr(member, "is_member", False))
-    return True
 
 
 async def _answer_join_gc(query, cfg):
