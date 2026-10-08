@@ -76,6 +76,75 @@ def group_handle(cfg) -> str | None:
     return None
 
 
+_MEMBER_STATUSES = {"creator", "administrator", "member", "restricted"}
+
+
+def _chat_candidates(group_id, cfg):
+    """Every way we can address the Official GC, most specific first.
+
+    The configured numeric id is tried as-is; a supergroup id typed without its
+    ``-100`` prefix (a common slip) is tried in its full form; and the public
+    @handle is the last resort, so a stale or mistyped id doesn't lock out
+    every real member."""
+    out = []
+    if group_id:
+        try:
+            gid = int(group_id)
+        except (TypeError, ValueError):
+            gid = None
+        if gid is not None:
+            out.append(gid)
+            digits = str(abs(gid))
+            if not digits.startswith("100"):
+                out.append(int("-100" + digits))
+    handle = group_handle(cfg)
+    if handle:
+        out.append(handle)
+    seen, uniq = set(), []
+    for c in out:
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    return uniq
+
+
+async def is_official_member(bot, group_id, user_id, cfg=None) -> bool:
+    """True if ``user_id`` is in the Official GC.
+
+    Only an answer Telegram actually gives about *the user* can say "no": a
+    member status of left/kicked, or "user not found". Errors about the *chat*
+    ("chat not found", the bot not being able to see the group, a migrated
+    group…) mean our config is wrong, not that the user isn't in the group, so
+    we try the other ways of addressing the group and, if none works, let the
+    user through with a loud log rather than blocking every real member."""
+    last_exc = None
+    for i, chat in enumerate(_chat_candidates(group_id, cfg)):
+        try:
+            member = await bot.get_chat_member(chat, user_id)
+        except Exception as exc:
+            text = str(exc).lower()
+            if "user not found" in text or "participant_id_invalid" in text \
+                    or "user_not_participant" in text:
+                return False
+            last_exc = exc
+            continue
+        if i:
+            logger.warning(
+                "Official GC lookup by id %r failed; %r worked — fix the "
+                "Official Group chat ID in admin settings", group_id, chat)
+        status = getattr(member, "status", None)
+        if status not in _MEMBER_STATUSES:
+            return False
+        if status == "restricted":
+            return bool(getattr(member, "is_member", False))
+        return True
+    logger.error(
+        "Official GC membership lookup failed for group %r (%s) — is the chat "
+        "ID right and the bot in the group? Letting user %s through.",
+        group_id, last_exc, user_id)
+    return True
+
+
 def group_join_url(cfg) -> str | None:
     """Return a clickable URL to join the Official Group, or None."""
     if not cfg:
