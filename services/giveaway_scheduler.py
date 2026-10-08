@@ -10,11 +10,15 @@ every tick:
   * ``running`` giveaways whose ``end_time`` has passed → winners drawn (with a
     live Official-GC membership re-check), prizes granted, results posted in the
     Official GC + DMed to winners, then flipped to ``ended``.
+  * ``running`` giveaways within ``REMINDER_BEFORE`` of their end → one
+    "ending soon" nudge in the Official GC.
+  * With the automatic rotation on, a fresh automatic giveaway is created as
+    soon as none is live (services/giveaway_auto.py).
 """
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import Forbidden, BadRequest, RetryAfter, TelegramError
@@ -26,21 +30,89 @@ SWEEP_INTERVAL = 30  # seconds
 GROUP_CHAT_TYPES = ("group", "supergroup")
 # Small gap between broadcast sends to stay under Telegram's flood limits.
 SEND_DELAY_SECONDS = 0.05
+# Post the "ending soon" reminder this long before a giveaway closes.
+REMINDER_BEFORE = timedelta(hours=6)
 
 # Telegram member statuses that count as "in the group".
 _MEMBER_STATUSES = {"creator", "administrator", "member", "restricted"}
 
 
 async def _giveaway_tick(context):
-    """One sweep: start due giveaways, end expired ones."""
+    """One sweep: end expired giveaways, top up the automatic rotation, start
+    due giveaways, and post ending-soon reminders."""
+    try:
+        await _end_due(context)
+    except Exception:
+        logger.exception("giveaway _end_due failed")
+    try:
+        _auto_tick()
+    except Exception:
+        logger.exception("giveaway _auto_tick failed")
     try:
         await _start_due(context)
     except Exception:
         logger.exception("giveaway _start_due failed")
     try:
-        await _end_due(context)
+        await _remind_due(context)
     except Exception:
-        logger.exception("giveaway _end_due failed")
+        logger.exception("giveaway _remind_due failed")
+
+
+def _auto_tick():
+    from database import get_session
+    from services.giveaway_auto import ensure_auto_giveaway
+
+    session = get_session()
+    try:
+        ensure_auto_giveaway(session)
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+# ── Ending-soon reminder ─────────────────────────────────────────────
+
+async def _remind_due(context):
+    from database import get_session
+    from models import Giveaway
+    from services.giveaway_service import entry_count, reminder_text
+
+    session = get_session()
+    try:
+        now = datetime.utcnow()
+        due = (session.query(Giveaway)
+               .filter(Giveaway.status == "running",
+                       Giveaway.reminder_sent_at.is_(None),
+                       Giveaway.end_time > now,
+                       Giveaway.end_time <= now + REMINDER_BEFORE)
+               .all())
+        if not due:
+            return
+        group_id = _official_group_id(session)
+        for g in due:
+            # A short giveaway would be nudged the moment it opened, right on
+            # top of its own announcement — skip the reminder for those.
+            if g.start_time and now - g.start_time < REMINDER_BEFORE:
+                g.reminder_sent_at = now
+                session.commit()
+                continue
+            g.reminder_sent_at = now
+            session.commit()
+            if not group_id:
+                continue
+            markup = InlineKeyboardMarkup([[InlineKeyboardButton(
+                "🎉 Participate", callback_data=f"gwjoin_{g.id}")]])
+            try:
+                await context.bot.send_message(
+                    chat_id=group_id, text=reminder_text(g, entry_count(session, g.id)),
+                    parse_mode="HTML", reply_markup=markup,
+                    disable_web_page_preview=True)
+            except TelegramError as exc:
+                logger.info("Giveaway #%s reminder failed: %s", g.id, exc)
+    finally:
+        session.close()
 
 
 # ── Start (announce) ─────────────────────────────────────────────────
@@ -195,7 +267,8 @@ async def _end_due(context):
 
 async def _finalize(context, session, giveaway):
     from models import GiveawayEntry
-    from services.giveaway_service import draw_winners, winners_text
+    from services.giveaway_service import (
+        draw_winners, recent_auto_winner_ids, winners_text)
 
     official_group_id = _official_group_id(session)
 
@@ -214,7 +287,20 @@ async def _finalize(context, session, giveaway):
         logger.warning("Giveaway #%s finalized with no Official GC configured — "
                        "voiding (no verifiable participants)", giveaway.id)
 
-    winners = draw_winners(session, giveaway, eligible_user_ids=eligible_user_ids)
+    # Automatic giveaways pass over the last two automatic winners (if the
+    # rotation is set to), so the same few people don't take every prize.
+    exclude = None
+    if getattr(giveaway, "is_auto", False):
+        try:
+            from services.giveaway_auto import get_config
+            if get_config(session).exclude_recent_winners:
+                exclude = recent_auto_winner_ids(
+                    session, 2, exclude_giveaway_id=giveaway.id)
+        except Exception:
+            logger.exception("Giveaway #%s recent-winner lookup failed", giveaway.id)
+
+    winners = draw_winners(session, giveaway, eligible_user_ids=eligible_user_ids,
+                           exclude_user_ids=exclude)
     session.commit()
 
     # Post results in the Official GC (fallback: skip if unconfigured).

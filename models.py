@@ -2318,8 +2318,44 @@ class Giveaway(Base):
     created_by = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     notes = Column(Text, nullable=True)
+    # Created by the automatic rotation (services/giveaway_auto.py), not an admin.
+    is_auto = Column(Boolean, default=False, nullable=False)
+    # When True the winner count comes from the number of eligible entries at
+    # the draw (services.giveaway_service.tiered_winner_count) and
+    # ``num_winners`` is only the ceiling shown in announcements.
+    auto_winners = Column(Boolean, default=False, nullable=False)
+    # The "ends soon" reminder is posted once; this is its guard.
+    reminder_sent_at = Column(DateTime, nullable=True)
 
     prize_player = relationship("Player")
+
+
+class GiveawayAutoConfig(Base):
+    """Settings for the automatic giveaway rotation — a single row.
+
+    While ``enabled``, the giveaway sweeper keeps exactly one automatic
+    giveaway live: when the current one ends the next is created at once,
+    running ``duration_hours``. Prizes rotate through ``prize_cycle``
+    (``player,coins,gems``); a player prize takes the next rating from
+    ``rating_ladder`` — a slow climb from 83 that keeps revisiting 85-86 so a
+    91 comes round only once a full lap. Both lists are admin-editable and the
+    ``*_index`` pointers say where the rotation is.
+    """
+    __tablename__ = "giveaway_auto_config"
+
+    id = Column(Integer, primary_key=True)
+    enabled = Column(Boolean, default=False, nullable=False)
+    duration_hours = Column(Integer, default=72, nullable=False)
+    rating_ladder = Column(String(500), nullable=True)
+    ladder_index = Column(Integer, default=0, nullable=False)
+    prize_cycle = Column(String(100), nullable=True)
+    cycle_index = Column(Integer, default=0, nullable=False)
+    coins_amount = Column(Integer, default=50000, nullable=False)
+    gems_amount = Column(Integer, default=50, nullable=False)
+    # Winners of the last two automatic giveaways may still enter, but are
+    # passed over at the draw so the same people don't sweep every prize.
+    exclude_recent_winners = Column(Boolean, default=True, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=True)
 
 
 class GiveawayEntry(Base):

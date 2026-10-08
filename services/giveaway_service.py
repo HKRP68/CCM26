@@ -28,6 +28,32 @@ logger = logging.getLogger(__name__)
 # Currency prize types → the User column each credits.
 _CURRENCY_TYPES = ("coins", "gems", "quest_points")
 
+# Entry-count winner tiers for ``auto_winners`` giveaways: (min entries, winners).
+# Checked top-down, so 31+ entries → 5 winners, 21-30 → 4, 10-20 → 3, else 1.
+WINNER_TIERS = ((31, 5), (21, 4), (10, 3), (0, 1))
+MAX_TIERED_WINNERS = WINNER_TIERS[0][1]
+
+
+def tiered_winner_count(entries: int) -> int:
+    """How many winners a tiered giveaway draws for ``entries`` eligible entries."""
+    entries = int(entries or 0)
+    for floor, winners in WINNER_TIERS:
+        if entries >= floor:
+            return winners
+    return 1
+
+
+def tier_table_text() -> str:
+    """One-line description of the winner tiers for announcements."""
+    return "1–9 entries → 1 winner · 10–20 → 3 · 21–30 → 4 · 31+ → 5"
+
+
+def winner_slots(giveaway, eligible_count: int) -> int:
+    """Winner slots for this giveaway given ``eligible_count`` eligible entries."""
+    if getattr(giveaway, "auto_winners", False):
+        return tiered_winner_count(eligible_count)
+    return int(giveaway.num_winners or 1)
+
 
 # ── Official-group presentation helpers ──────────────────────────────
 
@@ -147,6 +173,11 @@ def _grant_player(session, giveaway, user) -> str:
         logger.warning("Giveaway %s prize player %s not found",
                       giveaway.id, giveaway.prize_player_id)
         return "(player unavailable)"
+    if getattr(player, "is_career", False):
+        # A career card belongs to exactly one user — never hand it out.
+        logger.warning("Giveaway %s prize player %s is a career card — not granted",
+                       giveaway.id, player.id)
+        return "(player unavailable)"
 
     label = f"{player.name} ({player.rating})"
 
@@ -222,7 +253,8 @@ def _seat_winners(eligible, slots, giveaway_id=None):
     return chosen
 
 
-def draw_winners(session, giveaway, eligible_user_ids=None) -> list[dict]:
+def draw_winners(session, giveaway, eligible_user_ids=None,
+                 exclude_user_ids=None) -> list[dict]:
     """Draw winners, grant prizes, and mark the giveaway ended.
 
     Idempotent: if ``winners_drawn_at`` is already set, returns [] and does
@@ -242,6 +274,12 @@ def draw_winners(session, giveaway, eligible_user_ids=None) -> list[dict]:
       a bypass of the ban / GC checks, and it cannot conjure a prize for someone
       who left the group. If more entries are marked than there are slots, the
       earliest-marked ones win and the rest are logged as overflow.
+
+    ``exclude_user_ids`` (recent automatic-giveaway winners) are passed over at
+    random selection but still keep a seat an admin reserved for them.
+
+    Tiered giveaways (``auto_winners``) size the draw from the number of
+    eligible entries — see :func:`tiered_winner_count`.
 
     ``random.sample`` over the surviving DISTINCT entries guarantees no user
     wins two slots. If there are fewer eligible entries than ``num_winners``,
@@ -281,7 +319,12 @@ def draw_winners(session, giveaway, eligible_user_ids=None) -> list[dict]:
 
     winners: list[dict] = []
     if eligible:
-        n = min(int(giveaway.num_winners or 1), len(eligible))
+        slots = winner_slots(giveaway, len(eligible))
+        if exclude_user_ids:
+            eligible = [pair for pair in eligible
+                        if getattr(pair[0], "is_priority", False)
+                        or pair[1].id not in exclude_user_ids]
+        n = min(slots, len(eligible))
         chosen = _seat_winners(eligible, n, giveaway.id)
         now = datetime.utcnow()
         for entry, user in chosen:
@@ -322,9 +365,16 @@ def prize_label(giveaway) -> str:
     return "a prize"
 
 
+def winners_line(giveaway) -> str:
+    """'👥 3 winners', or the tier table for a tiered giveaway."""
+    if getattr(giveaway, "auto_winners", False):
+        return f"👥 More entries = more winners!\n<i>{tier_table_text()}</i>"
+    winners_word = "winner" if (giveaway.num_winners or 1) == 1 else "winners"
+    return f"👥 {giveaway.num_winners} {winners_word}"
+
+
 def announcement_text(giveaway) -> str:
     """The message posted to every chat when the giveaway starts."""
-    winners_word = "winner" if (giveaway.num_winners or 1) == 1 else "winners"
     end_ist = _to_ist(giveaway.end_time)
     lines = [
         "🎉 <b>GIVEAWAY IS LIVE!</b> 🎉",
@@ -332,7 +382,7 @@ def announcement_text(giveaway) -> str:
         f"<b>{_esc(giveaway.title)}</b>",
         "",
         f"🏆 Prize: <b>{prize_label(giveaway)}</b>",
-        f"👥 {giveaway.num_winners} {winners_word}",
+        winners_line(giveaway),
         f"⏰ Ends: <b>{end_ist:%d %b %Y, %I:%M %p} IST</b>",
         "",
         "Tap the button below to enter.",
@@ -361,6 +411,60 @@ def winners_text(giveaway, winners: list[dict]) -> str:
     lines.append("")
     lines.append("Prizes have been credited. 🎁")
     return "\n".join(lines)
+
+
+def recent_auto_winner_ids(session, n=2, exclude_giveaway_id=None) -> set:
+    """User ids that won any of the last ``n`` finished automatic giveaways."""
+    from models import Giveaway, GiveawayEntry
+    q = (session.query(Giveaway.id)
+         .filter(Giveaway.is_auto.is_(True), Giveaway.winners_drawn_at.isnot(None)))
+    if exclude_giveaway_id is not None:
+        q = q.filter(Giveaway.id != exclude_giveaway_id)
+    ids = [gid for (gid,) in q.order_by(Giveaway.winners_drawn_at.desc()).limit(n).all()]
+    if not ids:
+        return set()
+    return {uid for (uid,) in (session.query(GiveawayEntry.user_id)
+                               .filter(GiveawayEntry.giveaway_id.in_(ids),
+                                       GiveawayEntry.is_winner.is_(True)).all())}
+
+
+def status_line(giveaway, entries: int) -> str:
+    """'14 entries → 3 winners' style progress line."""
+    entries = int(entries or 0)
+    word = "entry" if entries == 1 else "entries"
+    if getattr(giveaway, "auto_winners", False):
+        w = tiered_winner_count(entries)
+        return f"{entries} {word} → {w} {'winner' if w == 1 else 'winners'}"
+    return f"{entries} {word}"
+
+
+def time_left_text(end_time, now=None) -> str:
+    """Compact '2d 5h' / '3h 12m' / '9m' countdown."""
+    secs = int(((end_time or datetime.utcnow()) - (now or datetime.utcnow())).total_seconds())
+    if secs <= 0:
+        return "ending now"
+    d, rem = divmod(secs, 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    if d:
+        return f"{d}d {h}h"
+    if h:
+        return f"{h}h {m}m"
+    return f"{max(m, 1)}m"
+
+
+def reminder_text(giveaway, entries: int) -> str:
+    """The 'ending soon' nudge posted in the Official GC."""
+    return "\n".join([
+        "⏰ <b>GIVEAWAY ENDING SOON!</b>",
+        "",
+        f"<b>{_esc(giveaway.title)}</b>",
+        f"🏆 Prize: <b>{prize_label(giveaway)}</b>",
+        f"⌛ Ends in <b>{time_left_text(giveaway.end_time)}</b>",
+        f"📊 {status_line(giveaway, entries)} so far",
+        "",
+        "Not in yet? Tap below to enter.",
+    ])
 
 
 # ── Small helpers ────────────────────────────────────────────────────

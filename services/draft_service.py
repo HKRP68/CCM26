@@ -39,7 +39,7 @@ import random
 from datetime import datetime, timedelta
 from html import escape
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 from models import (
     ChallengeLeague, ChallengeMode, ChallengePlayer, ChallengeTeam,
@@ -842,8 +842,11 @@ def _catalogue_by_name(session):
     whichever "World Cup 2023" edition happens to sort first.
     """
     out = {}
+    # A career card can share a real player's name; it must never be the card
+    # a draft pick resolves to (same rule as player_service.not_career).
     query = (session.query(Player.id, Player.name, Player.parent_player_id)
-             .filter(Player.is_active.is_(True)))
+             .filter(Player.is_active.is_(True),
+                     or_(Player.is_career.is_(False), Player.is_career.is_(None))))
     for pid, name, parent in query.all():
         key = (name or "").strip().lower()
         if not key:

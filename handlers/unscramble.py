@@ -12,6 +12,7 @@ from telegram.ext import ContextTypes
 
 from database import get_session
 from models import Player
+from services.player_service import not_career
 
 ROUND_SECONDS = 15
 ROUNDS_PER_LEVEL = 4
@@ -58,7 +59,7 @@ def _active(lobby): return [m for m in lobby.members.values() if not m.out]
 def _load_players(min_rating, max_rating):
     session = get_session()
     try:
-        return [p.name for p in session.query(Player).filter(Player.rating >= min_rating, Player.rating <= max_rating, Player.is_active.is_(True)).all()]
+        return [p.name for p in not_career(session.query(Player)).filter(Player.rating >= min_rating, Player.rating <= max_rating, Player.is_active.is_(True)).all()]
     finally: session.close()
 
 async def _refresh_lobby(context, lobby):

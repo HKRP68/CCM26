@@ -115,6 +115,7 @@ welcome messages for that chat, `/dwm` turns them off (group admins only).
 | `/cmuchest` | — | Open your recurring coin chests (Platinum/Diamond) 🪙 |
 | `/membership` | `/member` `/mysub` `/subscription` `/plans` | Your membership, its perks, and the price list 💳 |
 | `/redeem` | `/code` | Redeem a reward code |
+| `/giveaway` | `/giveaways` `/gw` | Live giveaways: prize, entries, time left, and a Participate button 🎉 |
 | `/notifications` | `/notify` `/notif` | Turn reminder notifications on or off |
 | `/cmuundo` | — | Undo your latest eligible action |
 
@@ -740,6 +741,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/setcardid <player name> \| <file_id>` | Pin a Telegram photo as a player's card |
 | `/setmilestone` | Set in-match milestone messages and media |
 | `/grant <tier> <telegram_id>` | Grant a subscription tier (e.g. `/grant Upgrade Diamond 12345`) |
+| `/givepack <pack_slot\|pack_id> <telegram_id> [qty]` | Owner: drop 1–20 unopened packs into a user's inventory (they open with `/openpack`) |
 | `/rsim <telegram_id>` (or reply with `/rsim`) | Bot admins: reset one player's /sim cooldown so they can sim again now — alias `/resetsim` |
 | `/clearmatches` | Clear every stuck match in this chat |
 | `/removematch @user` | Pull one user out of their active match |

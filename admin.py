@@ -17,7 +17,7 @@ logger = logging.getLogger("admin")
 from functools import wraps
 from flask import (Flask, render_template, request, redirect, url_for, flash,
                    session, Response, send_file, jsonify)
-from sqlalchemy import func, or_, desc, asc, case, cast, String
+from sqlalchemy import func, and_, or_, desc, asc, case, cast, String
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -2909,7 +2909,16 @@ def user_detail(user_id):
             )
         ]
 
+        from models import Pack, UnopenedPack
+        packs = db.query(Pack).order_by(Pack.slot_number.asc()).all()
+        unopened_rows = (db.query(Pack.name, func.count(UnopenedPack.id))
+                         .join(UnopenedPack, UnopenedPack.pack_id == Pack.id)
+                         .filter(UnopenedPack.user_id == user.id)
+                         .group_by(Pack.name).all())
+        unopened_packs = [{"name": name, "count": n} for name, n in unopened_rows]
+
         return render_template("user_detail.html", user=user, stats=stats,
+                               packs=packs, unopened_packs=unopened_packs,
                                roster=roster, activities=activities,
                                activity_actions=activity_actions,
                                activity_action_filter=action_filter,
@@ -2924,6 +2933,62 @@ def user_detail(user_id):
                                rating_options=range(50, 101))
     finally:
         db.close()
+
+
+# ─── Grant packs to a user ───────────────────────────────────────────
+@app.route("/users/<int:user_id>/grant-pack", methods=["POST"])
+@login_required
+def user_grant_pack(user_id):
+    """Drop 1-20 unopened packs into one user's inventory (no payment)."""
+    db = get_session()
+    try:
+        from models import Pack
+        from services.pack_service import grant_pack
+        from services.activity_service import log_activity
+        user = db.get(User, user_id)
+        if not user:
+            flash("User not found", "error")
+            return redirect(url_for("users_list"))
+        try:
+            pack_id = int(request.form.get("pack_id") or 0)
+            qty = int(request.form.get("qty") or 1)
+        except (TypeError, ValueError):
+            flash("Pick a pack and a whole-number quantity.", "error")
+            return redirect(url_for("user_detail", user_id=user_id))
+        pack = db.get(Pack, pack_id) if pack_id else None
+        if not pack:
+            flash("Pick a pack to give.", "error")
+            return redirect(url_for("user_detail", user_id=user_id))
+        if not 1 <= qty <= 20:
+            flash("Quantity must be between 1 and 20.", "error")
+            return redirect(url_for("user_detail", user_id=user_id))
+
+        for _ in range(qty):
+            grant_pack(db, user.id, pack.id, source="admin")
+        log_activity(db, user.id, "admin_grant_pack",
+                     f"Admin granted {qty}× {pack.name}")
+        log_admin(db, "grant_pack", target_type="user", target_id=user.id,
+                  target_name=user.username or user.first_name or str(user.id),
+                  detail=f"{qty}x {pack.name} (pack #{pack.id})")
+        db.commit()
+
+        try:
+            from bot import _send_bot_dm_blocking
+            _send_bot_dm_blocking(
+                user.telegram_id,
+                f"🎁 You received <b>{qty}× {html_lib.escape(pack.name)}</b>!\n"
+                "Open it with /openpack.")
+        except Exception:
+            logger.exception("grant-pack DM failed for user %s", user.id)
+
+        flash(f"📦 Gave {qty}× {pack.name} to this user.", "success")
+    except Exception as e:
+        db.rollback()
+        logger.exception("Grant pack failed")
+        flash(f"Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("user_detail", user_id=user_id))
 
 
 # ─── Edit user QP ────────────────────────────────────────────────────
@@ -3412,10 +3477,24 @@ def users_bulk_action():
 
     Caps absurd amounts and excludes banned users. Up to 5,000 users per call.
     """
+    filter_args = {
+        k: request.form.get(k, "") for k in (
+            "q", "coins_min", "coins_max", "gems_min", "gems_max",
+            "roster_min", "roster_max", "wins_min", "wins_max",
+            "played_min", "joined_after", "joined_before", "activity")
+        if request.form.get(k, "").strip()
+    }
     action = (request.form.get("action") or "").strip()
     if action not in ("grant_coins", "grant_gems", "grant_quest_points"):
         flash("Unknown bulk action.", "error")
-        return redirect(url_for("users_list"))
+        return redirect(url_for("users_list", **filter_args))
+
+    # A bulk grant touches every filtered user and can't be undone, so the
+    # admin must type CONFIRM — checked here too, so a bare POST can't skip it.
+    if (request.form.get("confirm_text") or "").strip() != "CONFIRM":
+        flash("Type CONFIRM (in capitals) to apply a bulk grant. Nothing was changed.",
+              "error")
+        return redirect(url_for("users_list", **filter_args))
 
     try:
         amount = int(request.form.get("amount", "0"))
@@ -3515,13 +3594,7 @@ def users_bulk_action():
     finally:
         db.close()
     # Preserve filter state on redirect
-    return redirect(url_for("users_list", **{
-        k: request.form.get(k, "") for k in (
-            "q", "coins_min", "coins_max", "gems_min", "gems_max",
-            "roster_min", "roster_max", "wins_min", "wins_max",
-            "played_min", "joined_after", "joined_before", "activity")
-        if request.form.get(k, "").strip()
-    }))
+    return redirect(url_for("users_list", **filter_args))
 
 
 @app.route("/users/<int:user_id>/reset-cooldowns", methods=["POST"])
@@ -12312,7 +12385,7 @@ def admin_bot_team_edit(team_id):
             return redirect(url_for("admin_bot_team_edit", team_id=team_id))
 
         summary = team_summary(db, team_id)
-        all_players = (db.query(Player)
+        all_players = (not_career(db.query(Player))
                        .filter(Player.is_active == True)
                        .order_by(Player.name).all())
         return render_template("admin_bot_team_form.html",
@@ -16043,6 +16116,10 @@ def _known_player_version(db, text):
     return row[0] if row else None
 
 
+# Career cards (one user's personal card) never join a challenge squad.
+_NOT_CAREER = or_(Player.is_career.is_(False), Player.is_career.is_(None))
+
+
 def _resolve_challenge_source(db, text, version=None):
     """Find the master card for a bulk-add line. Returns ``(Player|None, reason)``.
 
@@ -16063,6 +16140,9 @@ def _resolve_challenge_source(db, text, version=None):
         return None, "blank"
 
     def _pick(query):
+        # Inline rather than not_career(): keeps the filter on this module's
+        # own Player class (see _NOT_CAREER below).
+        query = query.filter(_NOT_CAREER)
         if version:
             query = query.filter(func.lower(Player.version) == version.lower())
         rows = query.all()
@@ -16078,6 +16158,8 @@ def _resolve_challenge_source(db, text, version=None):
     source = None
     if name.isdigit():
         source = db.get(Player, int(name))
+        if source and getattr(source, "is_career", False):
+            source = None
         if source and version and (source.version or "").lower() != version.lower():
             source = None
     if not source:
@@ -16636,7 +16718,7 @@ def admin_challenge_team_detail(league_id, team_id):
                     existing_ids = {row[0] for row in db.query(ChallengePlayer.source_player_id).filter(ChallengePlayer.team_id == team.id, ChallengePlayer.source_player_id.isnot(None)).all()}
                     added = 0
                     max_sort = db.query(func.max(ChallengePlayer.sort_order)).filter(ChallengePlayer.team_id == team.id).scalar() or 0
-                    for source in db.query(Player).filter(Player.id.in_(selected_ids)).all():
+                    for source in db.query(Player).filter(Player.id.in_(selected_ids), _NOT_CAREER).all():
                         if source.id in existing_ids:
                             continue
                         max_sort += 1
@@ -16747,7 +16829,7 @@ def admin_challenge_team_detail(league_id, team_id):
         filter_options = _challenge_filter_options(db)
         added_source_ids = {p.source_player_id for p in players if p.source_player_id}
         # Full active roster (unfiltered) for the bot-team-style quick-add dropdown.
-        all_master_players = (db.query(Player)
+        all_master_players = (not_career(db.query(Player))
                                 .filter(Player.is_active == True)
                                 .order_by(Player.rating.desc(), Player.name.asc())
                                 .all())
@@ -19668,7 +19750,7 @@ def admin_markets_overview():
             })
 
         # Build dropdown options: every active player with version label visible
-        all_players = (db.query(Player)
+        all_players = (not_career(db.query(Player))
                        .filter(Player.is_active == True)
                        .order_by(Player.rating.desc(), Player.name).all())
         dropdown_options = []
@@ -20575,6 +20657,11 @@ def admin_giveaways():
                 if num_winners < 1:
                     flash("Number of winners must be at least 1.", "error")
                     return redirect(url_for("admin_giveaways"))
+                if request.form.get("auto_winners"):
+                    # Tiered: the draw sizes itself from the entries; store the
+                    # ceiling so listings and the priority guard read correctly.
+                    from services.giveaway_service import MAX_TIERED_WINNERS
+                    num_winners = MAX_TIERED_WINNERS
 
                 prize_amount = 0
                 prize_player_id = None
@@ -20586,7 +20673,7 @@ def admin_giveaways():
                     if not prize_player_id:
                         flash("Pick a player card for a player prize.", "error")
                         return redirect(url_for("admin_giveaways"))
-                    chosen = (db.query(Player)
+                    chosen = (not_career(db.query(Player))
                               .filter(Player.id == prize_player_id,
                                       Player.is_active == True).first())
                     if not chosen:
@@ -20626,6 +20713,7 @@ def admin_giveaways():
                     image_file_id=image_file_id,
                     announce_target=(request.form.get("announce_target") or "groups"),
                     require_min_activity=bool(request.form.get("require_min_activity")),
+                    auto_winners=bool(request.form.get("auto_winners")),
                     notes=(request.form.get("notes") or "").strip()[:500] or None,
                     created_by=session.get("admin_user", "admin"),
                 )
@@ -20654,7 +20742,7 @@ def admin_giveaways():
         # Version-aware player picker for the "player card" prize type. Each
         # option's value is the exact Player.id, so a specific version (with its
         # own rating) can be chosen — not just a collapsed base card.
-        all_players = (db.query(Player)
+        all_players = (not_career(db.query(Player))
                        .filter(Player.is_active == True)
                        .order_by(Player.rating.desc(), Player.name).all())
         dropdown_options = []
@@ -20674,11 +20762,89 @@ def admin_giveaways():
                 "rating": p.rating,
                 "is_variant": bool(p.parent_player_id),
             })
+        from services import giveaway_auto
+        from services.giveaway_service import tier_table_text
+        auto_cfg = giveaway_auto.get_config(db)
+        db.commit()
         return render_template("admin_giveaways.html",
                                giveaways=giveaways, counts=counts,
-                               dropdown_options=dropdown_options)
+                               dropdown_options=dropdown_options,
+                               auto_cfg=auto_cfg,
+                               auto_next=giveaway_auto.next_prize_preview(auto_cfg),
+                               default_ladder=giveaway_auto.DEFAULT_LADDER,
+                               default_cycle=giveaway_auto.DEFAULT_CYCLE,
+                               tier_table=tier_table_text())
     finally:
         db.close()
+
+
+@app.route("/giveaways/auto-settings", methods=["POST"])
+@login_required
+def admin_giveaway_auto_settings():
+    """Save the automatic giveaway rotation settings."""
+    from services import giveaway_auto
+    form = request.form
+    try:
+        ladder = giveaway_auto.parse_ladder(form.get("rating_ladder"))
+        cycle = giveaway_auto.parse_cycle(form.get("prize_cycle"))
+        duration = int(form.get("duration_hours") or 72)
+        coins = int(form.get("coins_amount") or 0)
+        gems = int(form.get("gems_amount") or 0)
+    except (TypeError, ValueError) as exc:
+        flash(f"⚠️ {exc}", "error")
+        return redirect(url_for("admin_giveaways"))
+    if not 1 <= duration <= 720:
+        flash("Duration must be between 1 and 720 hours.", "error")
+        return redirect(url_for("admin_giveaways"))
+    if "coins" in cycle and not 1 <= coins <= 5_000_000:
+        flash("Coins prize must be between 1 and 5,000,000.", "error")
+        return redirect(url_for("admin_giveaways"))
+    if "gems" in cycle and not 1 <= gems <= 5_000:
+        flash("Gems prize must be between 1 and 5,000.", "error")
+        return redirect(url_for("admin_giveaways"))
+
+    db = get_session()
+    try:
+        if form.get("enabled"):
+            from models import GameConfig as _GC
+            _cfg = db.query(_GC).first()
+            if not (_cfg and _cfg.official_group_id):
+                flash("⚠️ Set the Official GC (numeric group id) under Branding "
+                      "before turning on automatic giveaways.", "error")
+                return redirect(url_for("admin_giveaways"))
+
+        cfg = giveaway_auto.get_config(db, for_update=True)
+        ladder_text = ",".join(str(r) for r in ladder)
+        cycle_text = ",".join(cycle)
+        if form.get("reset_rotation"):
+            cfg.ladder_index = 0
+            cfg.cycle_index = 0
+        else:
+            # Keep the pointers inside a list that may have got shorter.
+            cfg.ladder_index = (cfg.ladder_index or 0) % len(ladder)
+            cfg.cycle_index = (cfg.cycle_index or 0) % len(cycle)
+        cfg.enabled = bool(form.get("enabled"))
+        cfg.duration_hours = duration
+        cfg.rating_ladder = ladder_text
+        cfg.prize_cycle = cycle_text
+        cfg.coins_amount = max(1, coins)
+        cfg.gems_amount = max(1, gems)
+        cfg.exclude_recent_winners = bool(form.get("exclude_recent_winners"))
+        cfg.updated_at = datetime.utcnow()
+        log_admin(db, "giveaway_auto_settings", "giveaway", None, "auto",
+                  f"enabled={cfg.enabled} {duration}h cycle={cycle_text} "
+                  f"ladder={ladder_text}")
+        db.commit()
+        flash("🤖 Automatic giveaways "
+              + ("ON — the next one starts within a minute." if cfg.enabled else "saved (OFF)."),
+              "success")
+    except Exception as e:
+        db.rollback()
+        logger.exception("Giveaway auto settings failed")
+        flash(f"❌ Error: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("admin_giveaways"))
 
 
 @app.route("/giveaways/<int:gid>")
@@ -20699,9 +20865,11 @@ def admin_giveaway_detail(gid):
                              GiveawayEntry.joined_at.asc())
                    .all())
         priority_count = sum(1 for e, _ in entries if e.is_priority)
+        from services.giveaway_service import tiered_winner_count
         return render_template("admin_giveaway_detail.html",
                                g=g, entries=entries,
                                entry_count=len(entries),
+                               tiered_now=tiered_winner_count(len(entries)),
                                priority_count=priority_count)
     finally:
         db.close()
@@ -23202,7 +23370,7 @@ def admin_fantasy_detail(league_id):
         country_rules = fantasy_service.get_country_rules(db, league_id)
         role_rules = fantasy_service.get_role_rules(db, league_id)
         role_rule_options = fantasy_service.ROLE_RULES
-        players = (db.query(Player).filter(Player.is_active == True)
+        players = (not_career(db.query(Player)).filter(Player.is_active == True)
                    .order_by(Player.country, Player.rating.desc(), Player.name).all())
         countries = [c for (c,) in (db.query(Player.country)
                      .filter(Player.is_active == True)
@@ -23555,7 +23723,9 @@ def admin_fantasy_entry_edit(league_id, entry_id):
                  .join(Player, FantasyPick.player_id == Player.id)
                  .filter(FantasyPick.entry_id == entry_id).all())
         picked_player_ids = [player.id for _, player in picks]
-        player_filter = Player.is_active == True
+        player_filter = and_(Player.is_active == True,
+                             or_(Player.is_career.is_(False),
+                                 Player.is_career.is_(None)))
         if picked_player_ids:
             player_filter = or_(player_filter, Player.id.in_(picked_player_ids))
         all_players = db.query(Player).filter(player_filter).order_by(Player.name).all()
@@ -23591,7 +23761,7 @@ def api_fantasy_players():
         page = max(1, int(request.args.get("page", 1) or 1))
         per_page = 30
 
-        q = db.query(Player).filter(Player.is_active == True)
+        q = not_career(db.query(Player)).filter(Player.is_active == True)
         if league_id:
             eligible_ids = fantasy_service.get_selected_player_ids(db, league_id)
             if eligible_ids:

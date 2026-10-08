@@ -594,6 +594,10 @@ def _migrate_add_columns():
     # Giveaways: admin-marked guaranteed winners, set from the Participants tab.
     _try_add("giveaway_entries", "is_priority", "BOOLEAN DEFAULT FALSE")
     _try_add("giveaway_entries", "priority_set_at", "TIMESTAMP")
+    # Automatic giveaways (the giveaway_auto_config table comes from create_all).
+    _try_add("giveaways", "is_auto", "BOOLEAN DEFAULT FALSE")
+    _try_add("giveaways", "auto_winners", "BOOLEAN DEFAULT FALSE")
+    _try_add("giveaways", "reminder_sent_at", "TIMESTAMP")
 
     # Challenge League Tournaments: per-league tournament command + match tagging.
     # (The tournament_* tables themselves are created by create_all above.)

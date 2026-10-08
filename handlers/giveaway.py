@@ -1,4 +1,5 @@
-"""Giveaway participation — the "🎉 Participate" button callback.
+"""Giveaway participation — the "🎉 Participate" button callback, plus the
+/giveaway command that lists what's live.
 
 Every eligibility rule is enforced here, server-side, from the authoritative
 ``update.effective_user.id`` (Telegram signs callback_data to the message, so a
@@ -14,7 +15,7 @@ user can't forge another identity or an arbitrary giveaway id):
 import logging
 from datetime import datetime
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import BadRequest, Forbidden, TelegramError
 from telegram.ext import ContextTypes
 
@@ -91,8 +92,10 @@ async def giveaway_join_callback(update: Update, context: ContextTypes.DEFAULT_T
         status = giveaway_service.record_entry(session, giveaway, user, tg_user.id)
         if status == "already":
             count = giveaway_service.entry_count(session, giveaway.id)
-            await query.answer(f"✅ You already joined! ({count} in so far)",
-                               show_alert=False)
+            await query.answer(
+                f"✅ You already joined! "
+                f"({giveaway_service.status_line(giveaway, count)})",
+                show_alert=False)
             return
         if status == "error":
             await query.answer("⚠️ Something went wrong. Try again.",
@@ -101,8 +104,9 @@ async def giveaway_join_callback(update: Update, context: ContextTypes.DEFAULT_T
 
         session.commit()
         count = giveaway_service.entry_count(session, giveaway.id)
-        await query.answer(f"🎉 You're in! ({count} participants)",
-                           show_alert=False)
+        await query.answer(
+            f"🎉 You're in! ({giveaway_service.status_line(giveaway, count)})",
+            show_alert=False)
     except Exception:
         session.rollback()
         logger.exception("giveaway_join_callback failed")
@@ -141,3 +145,58 @@ async def _answer_join_gc(query, cfg):
     else:
         msg = ("🔒 Join our Official Group to participate in this giveaway! 🎁")
     await query.answer(msg, show_alert=True)
+
+
+async def giveaway_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/giveaway — every live giveaway with its prize, entries, time left, and
+    whether the caller is already in, each with a Participate button."""
+    from models import GiveawayEntry
+
+    msg = update.effective_message
+    if not msg:
+        return
+    tg_user = update.effective_user
+    session = get_session()
+    try:
+        live = (session.query(Giveaway)
+                .filter(Giveaway.status == "running")
+                .order_by(Giveaway.end_time.asc()).all())
+        if not live:
+            await msg.reply_text("🎁 No giveaway is live right now — check back soon!")
+            return
+
+        user = (session.query(User).filter(User.telegram_id == tg_user.id).first()
+                if tg_user else None)
+        joined = set()
+        if user:
+            joined = {gid for (gid,) in (session.query(GiveawayEntry.giveaway_id)
+                      .filter(GiveawayEntry.user_id == user.id,
+                              GiveawayEntry.giveaway_id.in_([g.id for g in live]))
+                      .all())}
+
+        lines = ["🎉 <b>LIVE GIVEAWAYS</b>", ""]
+        buttons = []
+        for g in live:
+            count = giveaway_service.entry_count(session, g.id)
+            lines.append(f"<b>{giveaway_service._esc(g.title)}</b>")
+            lines.append(f"🏆 {giveaway_service.prize_label(g)}")
+            lines.append(f"📊 {giveaway_service.status_line(g, count)}")
+            lines.append(f"⌛ Ends in {giveaway_service.time_left_text(g.end_time)}")
+            if g.id in joined:
+                lines.append("✅ You're in!")
+            else:
+                buttons.append([InlineKeyboardButton(
+                    f"🎉 Participate — {g.title[:40]}", callback_data=f"gwjoin_{g.id}")])
+            lines.append("")
+        if any(getattr(g, "auto_winners", False) for g in live):
+            lines.append(f"<i>{giveaway_service.tier_table_text()}</i>")
+        lines.append("⚠️ You must be in the Official GC to enter.")
+        await msg.reply_text(
+            "\n".join(lines), parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+            disable_web_page_preview=True)
+    except Exception:
+        logger.exception("/giveaway failed")
+        await msg.reply_text("⚠️ Couldn't load giveaways. Try again.")
+    finally:
+        session.close()

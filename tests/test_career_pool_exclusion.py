@@ -19,7 +19,9 @@ _SAVED_MODULES = {}
 _TMP = None
 _ENGINE = None
 _MODULE_NAMES = ("database", "models", "config", "services.career_service",
-                 "services.player_service", "services.player_cache")
+                 "services.player_service", "services.player_cache",
+                 "handlers.unscramble", "handlers.sim", "services.draft_service",
+                 "services.giveaway_service", "services.giveaway_auto")
 
 
 def setUpModule():
@@ -217,6 +219,42 @@ class PoolExclusionTests(unittest.TestCase):
         added, message = add_player_to_team(self.session, team.id, self.career.id)
         self.assertIsNone(added)
         self.assertIn("Career", message)
+
+    def test_unscramble_never_uses_its_name(self):
+        from handlers.unscramble import _load_players
+        names = _load_players(94, 10_000)
+        self.assertNotIn("Excluded Everywhere", names)
+        self.assertTrue(_load_players(50, 10_000), "ordinary names must remain")
+
+    def test_the_sim_bot_xi_never_fields_it(self):
+        from handlers.sim import _build_bot_xi
+        for _ in range(20):
+            xi = _build_bot_xi(self.session, 95)
+            self.assertTrue(xi)
+            self.assertNotIn(self.career.id, [p["id"] for p in xi])
+
+    def test_a_draft_pick_never_resolves_to_it(self):
+        from services.draft_service import _catalogue_by_name
+        self.assertNotIn("excluded everywhere", _catalogue_by_name(self.session))
+
+    def test_an_auto_giveaway_never_offers_it(self):
+        from services.giveaway_auto import pick_prize_player
+        for _ in range(30):
+            pick = pick_prize_player(self.session, 99)
+            self.assertIsNotNone(pick)
+            self.assertNotEqual(pick.id, self.career.id)
+            self.assertFalse(pick.is_career)
+
+    def test_a_giveaway_never_grants_it(self):
+        from types import SimpleNamespace
+        from models import UserRoster
+        from services.giveaway_service import _grant_player
+        winner = SimpleNamespace(id=self.user.id, roster_count=0)
+        giveaway = SimpleNamespace(id=1, title="t", prize_player_id=self.career.id)
+        before = self.session.query(UserRoster).count()
+        self.assertEqual(_grant_player(self.session, giveaway, winner),
+                         "(player unavailable)")
+        self.assertEqual(self.session.query(UserRoster).count(), before)
 
 
 if __name__ == "__main__":

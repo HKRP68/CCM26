@@ -7,6 +7,65 @@
   <a href="{{ url_for('dashboard') }}" class="btn btn-ghost btn-sm">← Back</a>
 </div>
 
+<details style="background:var(--card);border:1px solid var(--accent);border-radius:10px;padding:1rem 1.2rem;margin-bottom:1rem;" {% if auto_cfg.enabled %}open{% endif %}>
+  <summary style="cursor:pointer;font-weight:700;">
+    🤖 Automatic giveaways —
+    {% if auto_cfg.enabled %}<span style="color:var(--green);">ON</span>{% else %}<span style="color:var(--muted);">OFF</span>{% endif %}
+    <span style="font-weight:400;font-size:.82rem;color:var(--muted);">
+      · next prize:
+      {% if auto_next.type == 'player' %}🃏 random {{ auto_next.rating }} OVR card
+      {% elif auto_next.type == 'coins' %}🪙 {{ "{:,}".format(auto_next.amount) }} coins
+      {% else %}💎 {{ "{:,}".format(auto_next.amount) }} gems{% endif %}
+    </span>
+  </summary>
+  <form method="POST" action="{{ url_for('admin_giveaway_auto_settings') }}" style="margin-top:1rem;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label style="display:flex;align-items:center;gap:.5rem;font-size:.9rem;margin-bottom:1rem;">
+      <input type="checkbox" name="enabled" value="1" {% if auto_cfg.enabled %}checked{% endif %}>
+      <strong>Run automatic giveaways</strong> — one is always live; when it ends the next starts straight away
+    </label>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;">
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Duration (hours)</label>
+        <input type="number" name="duration_hours" min="1" max="720" value="{{ auto_cfg.duration_hours }}" required style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Coins prize (per winner)</label>
+        <input type="number" name="coins_amount" min="1" value="{{ auto_cfg.coins_amount }}" required style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+      <div>
+        <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Gems prize (per winner)</label>
+        <input type="number" name="gems_amount" min="1" value="{{ auto_cfg.gems_amount }}" required style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      </div>
+    </div>
+    <div style="margin-top:1rem;">
+      <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Prize rotation (player, coins, gems — in order)</label>
+      <input type="text" name="prize_cycle" value="{{ auto_cfg.prize_cycle or default_cycle }}" required style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+    </div>
+    <div style="margin-top:1rem;">
+      <label style="display:block;font-size:.8rem;color:var(--muted);margin-bottom:.2rem;">Player rating ladder (one rating per player giveaway, loops at the end)</label>
+      <input type="text" name="rating_ladder" value="{{ auto_cfg.rating_ladder or default_ladder }}" required style="width:100%;padding:.55rem;background:var(--input-bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+      <div style="font-size:.72rem;color:var(--muted);margin-top:.25rem;">
+        Next player giveaway uses position {{ (auto_cfg.ladder_index or 0) + 1 }} of the ladder.
+        The default climbs slowly from 83 and keeps returning to 85-86, so a 91 comes round once a lap.
+        Career cards are never picked.
+      </div>
+    </div>
+    <label style="display:flex;align-items:center;gap:.5rem;margin-top:1rem;font-size:.85rem;color:var(--muted);">
+      <input type="checkbox" name="exclude_recent_winners" value="1" {% if auto_cfg.exclude_recent_winners %}checked{% endif %}>
+      Pass over winners of the last 2 automatic giveaways at the draw (they can still enter)
+    </label>
+    <label style="display:flex;align-items:center;gap:.5rem;margin-top:.5rem;font-size:.85rem;color:var(--muted);">
+      <input type="checkbox" name="reset_rotation" value="1">
+      Restart the rotation from the beginning (first prize type, first ladder rating)
+    </label>
+    <div style="background:rgba(212,168,42,.06);border:1px solid var(--accent);border-radius:8px;padding:.6rem .8rem;margin-top:1rem;font-size:.78rem;color:var(--muted);">
+      🏆 Winners grow with entries: {{ tier_table }}. A reminder is posted in the Official GC ~6h before the end.
+    </div>
+    <button type="submit" class="btn btn-primary" style="margin-top:1rem;">Save automatic settings</button>
+  </form>
+</details>
+
 <details style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:1rem 1.2rem;margin-bottom:1.5rem;" {% if not giveaways %}open{% endif %}>
   <summary style="cursor:pointer;font-weight:700;">➕ Create new giveaway</summary>
 
@@ -85,6 +144,11 @@
     </div>
 
     <label style="display:flex;align-items:center;gap:.5rem;margin-top:1rem;font-size:.85rem;color:var(--muted);">
+      <input type="checkbox" name="auto_winners" value="1">
+      Auto winner count — winners grow with entries ({{ tier_table }}); "Number of winners" is then ignored
+    </label>
+
+    <label style="display:flex;align-items:center;gap:.5rem;margin-top:.5rem;font-size:.85rem;color:var(--muted);">
       <input type="checkbox" name="require_min_activity" value="1">
       Require prior activity (played ≥ 1 match) to enter — extra anti-alt gate
     </label>
@@ -120,7 +184,7 @@
   <tbody>
   {% for g in giveaways %}
   <tr>
-    <td><strong>{{ g.title }}</strong></td>
+    <td><strong>{{ g.title }}</strong>{% if g.is_auto %} <span style="font-size:.7rem;background:var(--accent);color:#000;border-radius:4px;padding:0 .3rem;">AUTO</span>{% endif %}</td>
     <td style="font-size:.82rem;">
       {% if g.prize_type == 'coins' %}🪙 {{ "{:,}".format(g.prize_amount) }}
       {% elif g.prize_type == 'gems' %}💎 {{ "{:,}".format(g.prize_amount) }}
@@ -128,7 +192,7 @@
       {% elif g.prize_type == 'player' %}🃏 {{ g.prize_player.name if g.prize_player else '—' }}
       {% endif %}
     </td>
-    <td>{{ g.num_winners }}</td>
+    <td>{% if g.auto_winners %}1–{{ g.num_winners }} <span style="font-size:.7rem;color:var(--muted);">(tiered)</span>{% else %}{{ g.num_winners }}{% endif %}</td>
     <td>
       {% if g.status == 'running' %}<span style="color:var(--green);font-weight:700;">● RUNNING</span>
       {% elif g.status == 'scheduled' %}<span style="color:var(--accent);">Scheduled</span>

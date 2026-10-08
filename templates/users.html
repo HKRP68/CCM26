@@ -210,7 +210,7 @@
     ⚡ Bulk Actions — apply to all {{ total }} filtered users
   </summary>
   <form method="POST" action="{{ url_for('users_bulk_action') }}"
-        onsubmit="return confirm('Apply this bulk action to all {{ total }} filtered (non-banned) users? Cannot be undone.');"
+        onsubmit="return confirmBulkGrant(this);"
         style="margin-top:.75rem;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     {# Pass filter params so the server applies to the same set #}
@@ -229,13 +229,29 @@
       </select>
       <input type="number" name="amount" placeholder="amount (can be negative)" required
              style="background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;font-size:.85rem;width:200px;">
+      <input type="text" name="confirm_text" placeholder="Type CONFIRM" required autocomplete="off"
+             title="Type CONFIRM in capitals to apply the grant"
+             style="background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;font-size:.85rem;width:150px;">
       <button type="submit" class="btn btn-blue">Apply to {{ total }} users</button>
     </div>
     <div style="color:var(--muted);font-size:.75rem;margin-top:.5rem;">
       Caps: max ±5,000,000 coins / ±5,000 gems / ±50,000 quest points per user per call. Banned users are skipped.
+      Type <b>CONFIRM</b> to apply — it can't be undone.
     </div>
   </form>
 </details>
+<script>
+function confirmBulkGrant(form) {
+  if ((form.confirm_text.value || '').trim() !== 'CONFIRM') {
+    alert('Type CONFIRM (in capitals) to apply this bulk grant.');
+    form.confirm_text.focus();
+    return false;
+  }
+  var sel = form.elements['action'];
+  var label = sel.options[sel.selectedIndex].text;
+  return window.confirm('Apply ' + label + ' (' + form.elements['amount'].value + ') to all {{ total }} filtered (non-banned) users? Cannot be undone.');
+}
+</script>
 
 {% macro sortcol(label, sort_key) %}
   {% set asc_sort = sort_key + '_asc' %}

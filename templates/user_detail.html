@@ -340,6 +340,33 @@
 </div>
 {% endif %}
 
+<!-- ── Packs ──────────────────────────────────────────────────── -->
+<div class="card" style="margin-bottom:1rem;">
+  <h3 style="font-size:.9rem;color:var(--muted);text-transform:uppercase;margin-bottom:.5rem;">📦 Packs</h3>
+  <div style="font-size:.85rem;margin-bottom:.5rem;">
+    Unopened:
+    {% if unopened_packs %}
+      {% for p in unopened_packs %}<span class="badge" style="margin-right:.35rem;">{{ p.count }}× {{ p.name }}</span>{% endfor %}
+    {% else %}<span style="color:var(--muted);">none</span>{% endif %}
+  </div>
+  {% if packs %}
+  <form method="POST" action="{{ url_for('user_grant_pack', user_id=user.id) }}"
+        onsubmit="return confirm('Give ' + this.qty.value + '× ' + this.pack_id.options[this.pack_id.selectedIndex].text + ' to this user?');"
+        style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <select name="pack_id" required style="background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;font-size:.85rem;">
+      {% for p in packs %}<option value="{{ p.id }}">{{ p.emoji or '📦' }} {{ p.name }}{% if not p.is_active %} (inactive){% endif %}</option>{% endfor %}
+    </select>
+    <input type="number" name="qty" value="1" min="1" max="20" required
+           style="background:var(--bg);border:1px solid var(--border);color:#fff;padding:.4rem .6rem;border-radius:6px;font-size:.85rem;width:80px;">
+    <button type="submit" class="btn btn-green btn-sm">🎁 Give pack</button>
+  </form>
+  <div style="color:var(--muted);font-size:.75rem;margin-top:.35rem;">Lands unopened in their inventory — they open it with /openpack. They get a DM.</div>
+  {% else %}
+  <div style="color:var(--muted);font-size:.8rem;">No packs set up yet — create one under Packs.</div>
+  {% endif %}
+</div>
+
 <!-- ── Roster ─────────────────────────────────────────────────── -->
 <div class="user-roster-header">
   <h3 style="font-size:.9rem;color:var(--muted);text-transform:uppercase;">Roster ({{ roster|length }})</h3>
