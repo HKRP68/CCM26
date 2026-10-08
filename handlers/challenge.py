@@ -224,6 +224,31 @@ def _tournament_command_map(session):
     return out
 
 
+def _tournament_view_command_map(session):
+    """Return ``{command: (ChallengeLeague, view)}`` for every league's
+    tournament view commands — the names an admin set on the league, or the
+    automatic ones (``tipl`` → ``tipltable``, ``tiplstats`` …)."""
+    from services.tournament_service import league_view_commands
+    out = {}
+    try:
+        for league in (session.query(ChallengeLeague)
+                       .filter(ChallengeLeague.is_active == True)  # noqa: E712
+                       .all()):
+            for view, cmd, _label, _custom in league_view_commands(league):
+                out.setdefault(cmd.lstrip("/"), (league, view))
+    except Exception:
+        logger.exception("Failed to load tournament view command map")
+    return out
+
+
+def is_tournament_view_command(command_name, session):
+    """Return ``(ChallengeLeague, view)`` for a derived tournament view command, or None."""
+    command = (command_name or "").lower().lstrip("/").split("@", 1)[0]
+    if not command:
+        return None
+    return _tournament_view_command_map(session).get(command)
+
+
 def is_tournament_command(command_name, session):
     """Return the ``ChallengeLeague`` whose tournament command matches, or None."""
     command = (command_name or "").lower().lstrip("/").split("@", 1)[0]
@@ -2423,18 +2448,19 @@ async def _handle_tournament_command(update, context, session, league):
     """
     from services import tournament_service
 
-    active = tournament_service.get_active_tournament(session)
+    # One tournament may run per league, so this league's command always means
+    # this league's tournament — others run in parallel under their own commands.
+    active = tournament_service.get_active_tournament(session, league_id=league.id)
     if not active:
+        others = tournament_service.get_active_tournaments(session)
+        if not others:
+            await update.message.reply_text(
+                "❌ No Challenge League Tournament is currently active.")
+            return
         await update.message.reply_text(
-            "❌ No Challenge League Tournament is currently active.")
-        return
-
-    if active.league_id != league.id:
-        await update.message.reply_text(
-            "❌ This Tournament Command is currently unavailable.\n\n"
-            f"Active Tournament: {active.name}\n"
-            f"League: {active.league_name or ''}\n"
-            f"Tournament Command: {_active_tournament_command(session, active)}")
+            f"❌ No tournament is active for {_esc(league.name or 'this league')}.\n\n"
+            + tournament_service.running_commands_text(session, others),
+            parse_mode="HTML")
         return
 
     if active.status == "completed":
@@ -2589,12 +2615,25 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
             await _handle_tournament_command(update, context, session, tournament_league)
             return
 
-        # A league's public fixtures/info alias: read-only, open to everyone.
-        if is_fixtures_command(command_name, session) is not None:
+        # A running tournament's own read-only commands (/tipltable, /tiplstats …).
+        view_hit = is_tournament_view_command(command_name, session)
+        if view_hit is not None:
+            view_league, view = view_hit
+            league_id = view_league.id
             session.close()
             session = None
-            from handlers.cl_tournament import ctour_handler
-            await ctour_handler(update, context)
+            from handlers.cl_tournament import show_tournament_view
+            await show_tournament_view(update, context, league_id, view)
+            return
+
+        # A league's public fixtures/info alias: read-only, open to everyone.
+        fixtures_league = is_fixtures_command(command_name, session)
+        if fixtures_league is not None:
+            league_id = fixtures_league.id
+            session.close()
+            session = None
+            from handlers.cl_tournament import show_tournament_view
+            await show_tournament_view(update, context, league_id, "info")
             return
 
         league_key, league_name = is_challenge_league_command(command_name, session)

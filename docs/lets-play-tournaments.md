@@ -142,12 +142,14 @@ On top of that:
 Rows written before the column existed read as `"challenge"` — every tournament
 that predates this feature was a Challenge League one.
 
-The single-active rule is **per kind**, so one Challenge League tournament and
-one Lets Play tournament can be live at the same time and neither activation
-takes the other off the air:
+The single-active rule is **per kind**, and for Challenge League also **per
+league**. So one Lets Play tournament and one Challenge League tournament per
+league can all be live at the same time, and no activation takes another kind's
+(or another league's) tournament off the air:
 
 ```python
-tournament_service.get_active_tournament(session)                       # CIPL
+tournament_service.get_active_tournaments(session)                      # every CIPL one
+tournament_service.get_active_tournament(session, league_id=lg.id)      # that league's
 tournament_service.get_active_tournament(session, kind=KIND_LETSPLAY)   # Lets Play
 ```
 

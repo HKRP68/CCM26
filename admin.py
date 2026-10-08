@@ -15829,6 +15829,51 @@ def _normalize_admin_command(value):
     return command[:60]
 
 
+def _apply_tournament_view_commands(db, league):
+    """Save the league's tournament view command names from the ``tv_<view>``
+    form fields. Blank fields use the automatic name. A name that repeats
+    another field, or clashes with any league's command, is skipped with a
+    warning — the rest still save."""
+    import json as _json
+    from services import tournament_service as _ts
+    norm = _ts.normalize_command
+    taken = {}
+    for other in db.query(ChallengeLeague).filter(ChallengeLeague.id != league.id).all():
+        for raw in (other.command, other.tournament_command, other.fixtures_command):
+            if norm(raw):
+                taken.setdefault(norm(raw), other.name)
+        for _v, cmd, _l, _c in _ts.league_view_commands(other):
+            taken.setdefault(norm(cmd), other.name)
+    for raw in (league.command, league.tournament_command, league.fixtures_command):
+        if norm(raw):
+            taken.setdefault(norm(raw), f"{league.name} (its own command)")
+    chosen, skipped = {}, []
+    for view in _ts.VIEW_NAMES:
+        cmd = norm(_normalize_admin_command(request.form.get(f"tv_{view}")))
+        if not cmd:
+            continue
+        clash = taken.get(cmd) or ("another field here" if f"/{cmd}" in chosen.values() else None)
+        if clash:
+            skipped.append(f"/{cmd} (used by {clash})")
+            continue
+        chosen[view] = "/" + cmd
+    league.tournament_view_commands_json = _json.dumps(chosen) if chosen else None
+    if skipped:
+        flash("⚠️ Some tournament commands were not saved because they are already "
+              "in use: " + ", ".join(skipped), "error")
+
+
+def _tournament_view_form_rows(league=None):
+    """``[(view, label, saved value, automatic name)]`` for the league form."""
+    from services import tournament_service as _ts
+    custom = _ts.custom_view_commands(league) if league is not None else {}
+    defaults = _ts.default_view_commands(league.tournament_command if league is not None else None)
+    return [(view, label,
+             f"/{custom[view]}" if view in custom else "",
+             f"/{defaults[view]}" if view in defaults else f"automatic (tournament command + {suffix})")
+            for view, suffix, label in _ts.VIEW_SUFFIXES]
+
+
 def _checked(name, default=False):
     if name in request.form:
         return request.form.get(name) == "on"
@@ -16311,6 +16356,7 @@ def admin_challenge_data():
                             league.image_url = image_url
                         db.add(league)
                         db.flush()
+                        _apply_tournament_view_commands(db, league)
                         log_admin(db, "challenge_league_add", "challenge_league", league.id, league.name)
                         flash(f"✅ Added league {league.name}.", "success")
                 elif action in {"toggle_league", "delete_league", "remove_league_image"}:
@@ -16352,6 +16398,7 @@ def admin_challenge_data():
             total_leagues=len(leagues),
             total_teams=sum(league._team_count for league in leagues),
             total_players=sum(league._player_count for league in leagues),
+            tv_rows=_tournament_view_form_rows(),
         )
     finally:
         db.close()
@@ -16374,6 +16421,7 @@ def admin_challenge_league_detail(league_id):
                     league.command = _normalize_admin_command(request.form.get("command")) or None
                     league.tournament_command = _normalize_admin_command(request.form.get("tournament_command")) or None
                     league.fixtures_command = _normalize_admin_command(request.form.get("fixtures_command")) or None
+                    _apply_tournament_view_commands(db, league)
                     league.sort_order = _int_form("league_sort_order")
                     league.is_active = _checked("league_is_active")
                     league.same_team_allowed = _checked("same_team_allowed")
@@ -16546,6 +16594,7 @@ def admin_challenge_league_detail(league_id):
             "admin_challenge_data.html",
             page="league",
             league=league,
+            tv_rows=_tournament_view_form_rows(league),
             teams=teams,
             other_teams=other_teams,
             total_leagues=1,
@@ -16885,7 +16934,8 @@ def admin_tournaments_list():
                     elif action == "activate":
                         tournament_service.activate_tournament(db, t.id)
                         log_admin(db, "tournament_activate", "tournament", t.id, t.name)
-                        flash(f"✅ {t.name} is now the active tournament.", "success")
+                        flash(f"✅ {t.name} is now active"
+                              + (f" for {t.league_name}" if t.league_name else "") + ".", "success")
                     elif action == "deactivate":
                         tournament_service.deactivate_tournament(db, t.id)
                         log_admin(db, "tournament_deactivate", "tournament", t.id, t.name)
@@ -17505,7 +17555,8 @@ def admin_tournament_detail(tournament_id):
                 elif action == "activate":
                     tournament_service.activate_tournament(db, t.id)
                     log_admin(db, "tournament_activate", "tournament", t.id, t.name)
-                    flash(f"✅ {t.name} is now the active tournament.", "success")
+                    flash(f"✅ {t.name} is now active"
+                              + (f" for {t.league_name}" if t.league_name else "") + ".", "success")
                 elif action == "deactivate":
                     tournament_service.deactivate_tournament(db, t.id)
                     log_admin(db, "tournament_deactivate", "tournament", t.id, t.name)

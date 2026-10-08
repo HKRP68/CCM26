@@ -113,18 +113,17 @@ def _resolve_tournament(session, args):
             raise ValueError(f"No tournament with id {tournament_id}.")
         return tour
 
-    running = [t for t in (
-        tournament_service.get_active_tournament(
-            session, kind=tournament_service.KIND_CHALLENGE),
-        tournament_service.get_active_tournament(
-            session, kind=tournament_service.KIND_LETSPLAY)) if t]
+    running = (tournament_service.get_active_tournaments(
+        session, kind=tournament_service.KIND_CHALLENGE)
+        + tournament_service.get_active_tournaments(
+            session, kind=tournament_service.KIND_LETSPLAY))
     if not running:
         raise ValueError(NO_ACTIVE)
     if len(running) > 1:
         listed = "\n".join(f"   <code>#{t.id}</code> — {html.escape(t.name)}"
                            for t in running)
         raise ValueError(
-            "Two tournaments are running. Say which one by putting its id "
+            "Several tournaments are running. Say which one by putting its id "
             f"first:\n{listed}")
     return running[0]
 

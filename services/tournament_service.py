@@ -11,8 +11,12 @@ and ``letsplay`` for a Lets Play tournament (teams *are* Telegram users, played
 with /lptour — see ``services.lp_tournament_service``). Everything in this module
 except the lookup helpers is family-agnostic: it works off ``TournamentTeam.id``.
 
-One Tournament **per kind** may be ``is_active`` at a time, so the two families
-run independently; activating one deactivates the others of its own kind only.
+Lets Play allows one ``is_active`` tournament at a time. Challenge League allows
+one active tournament **per league**, so several leagues' tournaments run in
+parallel — each started with its own league's tournament command (``/tipl``) and
+viewed with commands derived from it (``/tipltable``, ``/tiplstats`` … — see
+``VIEW_SUFFIXES``). Activating a tournament only deactivates others of the same
+kind (and, for Challenge League, the same league).
 Completed / inactive tournaments retain all their rows untouched.
 """
 
@@ -32,9 +36,9 @@ logger = logging.getLogger(__name__)
 PLAYABLE_STATUS = "active"
 TERMINAL_STATUSES = ("completed", "cancelled")
 
-# Competition families (``Tournament.kind``). One tournament of each kind may be
-# active at a time, so a Challenge League tournament and a Lets Play tournament
-# can run side by side. Rows written before the column existed are NULL and read
+# Competition families (``Tournament.kind``). Lets Play allows one active
+# tournament; Challenge League allows one per league. Both families run side by
+# side. Rows written before the column existed are NULL and read
 # as ``KIND_CHALLENGE``.
 KIND_CHALLENGE = "challenge"
 KIND_LETSPLAY = "letsplay"
@@ -65,40 +69,185 @@ def tournament_kind(tour):
 # Lifecycle
 # ──────────────────────────────────────────────────────────────────────
 
-def get_active_tournament(session, kind=KIND_CHALLENGE):
+def _league_filter(league_id):
+    """Predicate for tournaments of ``league_id`` (``None`` → league-less rows)."""
+    if league_id is None:
+        return Tournament.league_id.is_(None)
+    return Tournament.league_id == int(league_id)
+
+
+def _active_query(session, kind):
+    return (session.query(Tournament)
+            .filter(Tournament.is_active == True)  # noqa: E712
+            .filter(kind_filter(kind))
+            .order_by(Tournament.activated_at.desc(), Tournament.id.desc()))
+
+
+def get_active_tournament(session, kind=KIND_CHALLENGE, league_id=None):
     """Return the currently-active tournament of ``kind``, or None.
 
     ``kind`` defaults to ``KIND_CHALLENGE`` so every existing caller (the
     Challenge League tournament command, the bot's stats commands) keeps seeing
     exactly the tournament it did before Lets Play tournaments existed.
+
+    Several Challenge League tournaments may be active at once (one per league):
+    pass ``league_id`` for that league's one; without it the most recently
+    activated is returned. Use ``get_active_tournaments`` to see them all.
     """
-    return (session.query(Tournament)
-            .filter(Tournament.is_active == True)  # noqa: E712
-            .filter(kind_filter(kind))
-            .order_by(Tournament.activated_at.desc(), Tournament.id.desc())
-            .first())
+    q = _active_query(session, kind)
+    if league_id is not None:
+        q = q.filter(_league_filter(league_id))
+    return q.first()
+
+
+def get_active_tournaments(session, kind=KIND_CHALLENGE):
+    """Every active tournament of ``kind``, most recently activated first."""
+    return _active_query(session, kind).all()
 
 
 def activate_tournament(session, tournament_id):
-    """Make ``tournament_id`` the active tournament of its kind.
+    """Make ``tournament_id`` the active tournament of its kind (and league).
 
-    Only tournaments of the *same* kind are deactivated: the single-active rule
-    is per competition family, so activating a Lets Play tournament never takes
-    a running Challenge League tournament off the air (or vice versa).
+    Only tournaments of the *same* kind are deactivated, so activating a Lets
+    Play tournament never takes a Challenge League one off the air (or vice
+    versa). For Challenge League the rule is one active tournament per league,
+    so tournaments of other leagues keep running in parallel.
     """
     tour = session.get(Tournament, int(tournament_id))
     if not tour:
         return None
-    # Deactivate the other tournaments of this kind — the single-active rule.
-    session.query(Tournament).filter(
+    kind = tournament_kind(tour)
+    q = session.query(Tournament).filter(
         Tournament.id != tour.id, Tournament.is_active == True,  # noqa: E712
-        kind_filter(tournament_kind(tour)),
-    ).update({Tournament.is_active: False}, synchronize_session=False)
+        kind_filter(kind))
+    if kind == KIND_CHALLENGE:
+        q = q.filter(_league_filter(tour.league_id))
+    q.update({Tournament.is_active: False}, synchronize_session=False)
     tour.is_active = True
     if tour.status in ("draft", "scheduled"):
         tour.status = "active"
     tour.activated_at = datetime.utcnow()
     return tour
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Per-tournament commands
+# ──────────────────────────────────────────────────────────────────────
+
+# Read-only commands every running Challenge League tournament gets. An admin
+# may name each one per league on the Challenge Data page
+# (``ChallengeLeague.tournament_view_commands_json``); any left blank use the
+# league's tournament command plus the suffix (``/tipl`` → ``/tipltable``),
+# which keeps them unique without any setup.
+VIEW_SUFFIXES = (
+    ("info", "info", "Overview"),
+    ("table", "table", "Points table"),
+    ("fixtures", "fixtures", "Fixtures"),
+    ("teams", "teams", "Teams & owners"),
+    ("injuries", "injuries", "Injuries"),
+    ("stats", "stats", "Top-10 leaderboards"),
+    ("mvp", "mvp", "MVP table"),
+    ("player", "player", "A player's stats (add a name)"),
+)
+VIEW_NAMES = tuple(v for v, _s, _l in VIEW_SUFFIXES)
+
+
+def normalize_command(raw):
+    """``"/TIPL@Bot"`` → ``"tipl"``; empty string when there is nothing."""
+    return (raw or "").strip().lower().lstrip("/").split("@", 1)[0].strip()
+
+
+def custom_view_commands(league):
+    """The admin-set view commands of a league as ``{view: "ipltable"}`` (bare,
+    no slash). A missing or broken JSON value reads as "none set"."""
+    raw = getattr(league, "tournament_view_commands_json", None)
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for view in VIEW_NAMES:
+        cmd = normalize_command(data.get(view) if isinstance(data.get(view), str) else "")
+        if cmd:
+            out[view] = cmd
+    return out
+
+
+def default_view_commands(base):
+    """``{view: "tipltable"}`` built from a bare tournament command."""
+    base = normalize_command(base)
+    if not base:
+        return {}
+    return {view: f"{base}{suffix}" for view, suffix, _l in VIEW_SUFFIXES}
+
+
+def league_view_commands(league, base=None):
+    """``[(view, "/cmd", label, is_custom), …]`` for a league.
+
+    A custom name wins; otherwise the automatic name from the league's
+    tournament command (or ``base``) is used. A view with neither is left out.
+    """
+    if base is None:
+        base = getattr(league, "tournament_command", None) if league is not None else None
+    defaults = default_view_commands(base)
+    custom = custom_view_commands(league) if league is not None else {}
+    out = []
+    for view, _suffix, label in VIEW_SUFFIXES:
+        if view in custom:
+            out.append((view, f"/{custom[view]}", label, True))
+        elif view in defaults:
+            out.append((view, f"/{defaults[view]}", label, False))
+    return out
+
+
+def start_command(session, tour):
+    """The bare start command (no slash) for a Challenge League tournament."""
+    if getattr(tour, "league_id", None):
+        lg = session.get(ChallengeLeague, tour.league_id)
+        cmd = normalize_command(lg.tournament_command if lg else None)
+        if cmd:
+            return cmd
+    return normalize_command(getattr(tour, "command_snapshot", None))
+
+
+def view_commands(session, tour):
+    """``[(view, "/tipltable", label), …]`` for a tournament — the league's
+    custom names where set, the automatic ones otherwise."""
+    league = session.get(ChallengeLeague, tour.league_id) if getattr(tour, "league_id", None) else None
+    base = start_command(session, tour)
+    return [(view, cmd, label)
+            for view, cmd, label, _custom in league_view_commands(league, base=base)]
+
+
+def running_commands_text(session, tours=None):
+    """A short HTML list of each running Challenge League tournament and its
+    commands — the answer a generic command gives when 2+ are running."""
+    from html import escape
+    if tours is None:
+        tours = get_active_tournaments(session)
+    if not tours:
+        return "❌ No Challenge League Tournament is currently active."
+    out = ["🏆 <b>Running tournaments</b> — each has its own commands:"]
+    for t in tours:
+        base = start_command(session, t)
+        out.append("")
+        out.append(f"<b>{escape(t.name or '')}</b>"
+                   + (f" · {escape(t.league_name)}" if getattr(t, "league_name", None) else ""))
+        if base:
+            out.append(f"   ▶️ Play: /{base}")
+        cmds = view_commands(session, t)
+        if not base and not cmds:
+            out.append("   (no tournament command set for its league)")
+            continue
+        if cmds:
+            out.append("   " + " · ".join(
+                escape(cmd) + (" &lt;name&gt;" if view == "player" else "")
+                for view, cmd, _label in cmds))
+    return "\n".join(out)
 
 
 def deactivate_tournament(session, tournament_id):

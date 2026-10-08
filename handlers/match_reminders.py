@@ -81,9 +81,8 @@ SEND_GAP_SECONDS = 0.06
 def _live_tournaments(session):
     """Every live tournament a reminder could be about, best bet first."""
     out = []
-    challenge = ctv.active_tournament(session)
-    if challenge:
-        out.append(challenge)
+    # Several Challenge League tournaments may run at once (one per league).
+    out.extend(ctv.active_tournaments(session))
     try:
         from services import lp_tournament_service
         letsplay = lp_tournament_service.active_tournament(session)

@@ -62,13 +62,12 @@ BOARDS = (
 def live_tournaments(session):
     """Every active tournament, Challenge League first: ``[Tournament, …]``.
 
-    One tournament per kind can be active, so this is at most two rows.
+    Challenge League allows one active tournament per league and Lets Play one,
+    so this can be several rows.
     """
     out = []
     for kind in (KIND_CHALLENGE, KIND_LETSPLAY):
-        tour = tournament_service.get_active_tournament(session, kind=kind)
-        if tour is not None:
-            out.append(tour)
+        out.extend(tournament_service.get_active_tournaments(session, kind=kind))
     return out
 
 

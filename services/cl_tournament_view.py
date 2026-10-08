@@ -68,6 +68,12 @@ def active_tournament(session):
         session, kind=tournament_service.KIND_CHALLENGE)
 
 
+def active_tournaments(session):
+    """Every live Challenge League tournament (one per league), newest first."""
+    return tournament_service.get_active_tournaments(
+        session, kind=tournament_service.KIND_CHALLENGE)
+
+
 def teams(session, tournament_id):
     """Participating teams in display order."""
     return (session.query(TournamentTeam)

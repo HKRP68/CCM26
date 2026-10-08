@@ -26,6 +26,12 @@ Every one of them is read-only and open to anyone; starting a match is still the
 league's own (gated) tournament command. A league may also publish its own alias
 for the hub — ``ChallengeLeague.fixtures_command`` — which routes here from
 ``handlers.challenge``.
+
+Several Challenge League tournaments may run at once (one per league). Each gets
+its own read-only commands derived from its league's tournament command
+(``/tipltable``, ``/tiplstats`` …, see ``tournament_service.VIEW_SUFFIXES``),
+routed to ``show_tournament_view``. The generic commands above answer directly
+when one tournament is running and list each one's commands when several are.
 """
 
 import logging
@@ -71,8 +77,10 @@ def _keyboard(tour, active="overview"):
     from services import cl_tournament_view as _ctv
     views = [v for v in ("table", "fixtures", "teams", "injuries", "overview")
              if v in _ctv.views_for(tour)]
+    # The tournament id rides in the button so tabs keep showing *this*
+    # tournament when several are running.
     buttons = [InlineKeyboardButton(("● " if v == active else "") + _LABELS[v],
-                                    callback_data=CB_PREFIX + v)
+                                    callback_data=f"{CB_PREFIX}{v}_{tour.id}")
                for v in views]
     return InlineKeyboardMarkup([buttons[i:i + 2]
                                  for i in range(0, len(buttons), 2)])
@@ -91,14 +99,29 @@ async def _reply(update, text, reply_markup=None, blocks=None):
     await R.reply_rich(msg, blocks, text, reply_markup=reply_markup)
 
 
-async def _show(update, view):
-    """Render one view of the active tournament, with the tab row attached."""
+async def _show(update, view, league_id=None):
+    """Render one view of a running tournament, with the tab row attached.
+
+    ``league_id`` picks that league's tournament (its own derived commands).
+    Without it the single running tournament is shown; when several are running
+    the reply lists each one's own commands instead of guessing.
+    """
     session = get_session()
     try:
-        tour = ctv.active_tournament(session)
-        if not tour:
-            await _reply(update, NO_ACTIVE)
-            return
+        if league_id is not None:
+            tour = tournament_service.get_active_tournament(session, league_id=league_id)
+            if not tour:
+                await _reply(update, "❌ This league has no tournament running right now.")
+                return
+        else:
+            running = ctv.active_tournaments(session)
+            if not running:
+                await _reply(update, NO_ACTIVE)
+                return
+            if len(running) > 1:
+                await _reply(update, tournament_service.running_commands_text(session, running))
+                return
+            tour = running[0]
         viewer = update.effective_user.id if update.effective_user else None
         text = ctv.render(session, tour, view, viewer_tg_id=viewer)
         blocks = ctr.render_blocks(session, tour, view, viewer_tg_id=viewer)
@@ -114,6 +137,24 @@ async def _show(update, view):
 async def ctour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/ctour — the active Challenge League Tournament's front page."""
     await _show(update, "overview")
+
+
+async def show_tournament_view(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                               league_id, view):
+    """Route a derived per-tournament command (``/tipltable`` …) to its view."""
+    if view == "info":
+        await _show(update, "overview", league_id=league_id)
+    elif view in ctv.VIEWS:
+        await _show(update, view, league_id=league_id)
+    elif view == "stats":
+        from handlers.tournament import tournamentstats_handler
+        await tournamentstats_handler(update, context, league_id=league_id)
+    elif view == "player":
+        from handlers.tournament import statstour_handler
+        await statstour_handler(update, context, league_id=league_id)
+    elif view == "mvp":
+        from handlers.tournament_mvp import mvp_handler
+        await mvp_handler(update, context, league_id=league_id)
 
 
 async def cttable_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -164,9 +205,7 @@ SD_PREFIX = "ctsd_"
 def _live_tournaments(session):
     """Every live tournament a /clsd lookup should search, best bet first."""
     out = []
-    challenge = ctv.active_tournament(session)
-    if challenge:
-        out.append(challenge)
+    out.extend(ctv.active_tournaments(session))
     try:
         from services import lp_tournament_service
         letsplay = lp_tournament_service.active_tournament(session)
@@ -471,12 +510,22 @@ async def ct_view_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     competition, and the fixtures view is personalised to whoever tapped it.
     """
     q = update.callback_query
-    view = (q.data or "").split("_", 1)[-1]
+    # ``ctv_<view>_<tournament id>``; buttons sent before parallel tournaments
+    # carry only ``ctv_<view>`` and fall back to the latest running one.
+    parts = (q.data or "").split("_")
+    view = parts[1] if len(parts) > 1 else ""
+    tid = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
     if view not in ctv.VIEWS:
         view = "overview"
     session = get_session()
     try:
-        tour = ctv.active_tournament(session)
+        if tid is not None:
+            from models import Tournament
+            tour = session.get(Tournament, tid)
+            if tour is not None and not tour.is_active:
+                tour = None
+        else:
+            tour = ctv.active_tournament(session)
         if not tour:
             await q.answer("No tournament is running.", show_alert=True)
             return

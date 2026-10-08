@@ -38,6 +38,31 @@ logger = logging.getLogger(__name__)
 
 NO_ACTIVE = "❌ No Challenge League Tournament is currently active."
 
+
+async def _pick_tournament(update, session, league_id=None):
+    """The tournament a stats command is about, or None after replying.
+
+    ``league_id`` (a derived per-tournament command such as ``/tiplstats``)
+    picks that league's tournament. Without it the single running one is used;
+    with several running, the reply lists each one's own commands.
+    """
+    if league_id is not None:
+        tour = tournament_service.get_active_tournament(session, league_id=league_id)
+        if not tour:
+            await update.message.reply_text(
+                "❌ This league has no tournament running right now.")
+        return tour
+    running = tournament_service.get_active_tournaments(session)
+    if not running:
+        await update.message.reply_text(NO_ACTIVE)
+        return None
+    if len(running) > 1:
+        await update.message.reply_text(
+            tournament_service.running_commands_text(session, running),
+            parse_mode="HTML")
+        return None
+    return running[0]
+
 # How deep each board is ranked, and how much of it is shown without a tap.
 #
 # A Top 10 answers "who is winning" and nothing else. The player reading it is
@@ -501,13 +526,16 @@ def _bowling_rows(r):
     ]
 
 
-def _keyboard(active, opener_tg):
-    """Build the category inline keyboard, marking the active one and binding the opener."""
+def _keyboard(active, opener_tg, tournament_id):
+    """Build the category inline keyboard, marking the active one and binding the opener.
+
+    The tournament id rides along so the buttons keep showing *this*
+    tournament when several are running."""
     rows, row = [], []
     for key, label in _CATEGORIES:
         mark = "● " if key == active else ""
         row.append(InlineKeyboardButton(f"{mark}{label}",
-                                        callback_data=f"tstat_{key}_{opener_tg}"))
+                                        callback_data=f"tstat_{key}_{opener_tg}_{tournament_id}"))
         if len(row) == 2:
             rows.append(row)
             row = []
@@ -516,20 +544,20 @@ def _keyboard(active, opener_tg):
     return InlineKeyboardMarkup(rows)
 
 
-async def tournamentstats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def tournamentstats_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                                  league_id=None):
     """/tournamentstats — Top-10 tournament leaderboards with category buttons."""
     session = get_session()
     try:
-        tour = tournament_service.get_active_tournament(session)
+        tour = await _pick_tournament(update, session, league_id)
         if not tour:
-            await update.message.reply_text(NO_ACTIVE)
             return
         opener = update.effective_user.id
         rows = _leaders_for(session, tour, "runs")
         await R.reply_rich(
             update.message, _leaderboard_blocks(tour, "runs", rows),
             _render(tour, "runs", rows),
-            reply_markup=_keyboard("runs", opener))
+            reply_markup=_keyboard("runs", opener, tour.id))
     except Exception:
         logger.exception("/tournamentstats failed")
         await update.message.reply_text("⚠️ Could not load tournament stats.")
@@ -541,8 +569,10 @@ async def tournamentstats_callback(update: Update, context: ContextTypes.DEFAULT
     """Switch the /tournamentstats view — restricted to the user who opened it."""
     q = update.callback_query
     try:
-        _, cat, opener = q.data.split("_", 2)
-        opener = int(opener)
+        # ``tstat_<cat>_<opener>[_<tournament id>]`` — older buttons lack the id.
+        parts = q.data.split("_")
+        cat, opener = parts[1], int(parts[2])
+        tid = int(parts[3]) if len(parts) > 3 else None
     except Exception:
         await q.answer("Invalid selection.", show_alert=True)
         return
@@ -556,32 +586,43 @@ async def tournamentstats_callback(update: Update, context: ContextTypes.DEFAULT
     await q.answer()
     session = get_session()
     try:
-        tour = tournament_service.get_active_tournament(session)
+        if tid is not None:
+            from models import Tournament
+            tour = session.get(Tournament, tid)
+            if tour is not None and not tour.is_active:
+                tour = None
+        else:
+            tour = tournament_service.get_active_tournament(session)
         if not tour:
             await q.edit_message_text(NO_ACTIVE)
             return
         rows = _leaders_for(session, tour, cat)
         await R.edit_rich(q, _leaderboard_blocks(tour, cat, rows),
                           _render(tour, cat, rows),
-                          reply_markup=_keyboard(cat, opener))
+                          reply_markup=_keyboard(cat, opener, tour.id))
     except Exception:
         logger.exception("/tournamentstats callback failed")
     finally:
         session.close()
 
 
-async def statstour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def statstour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
+                            league_id=None):
     """/statstour <player name> — a player's stats in the active tournament."""
-    if not context.args:
+    args = context.args
+    if args is None:
+        # Reached from a derived command (``/tiplplayer``) through the league
+        # MessageHandler, which leaves ``context.args`` unset.
+        args = ((getattr(update.effective_message, "text", None) or "").split()[1:])
+    if not args:
         await update.message.reply_text(
             "Usage: /statstour <player name>\nExample: /statstour Virat Kohli")
         return
-    search = " ".join(context.args).strip()
+    search = " ".join(args).strip()
     session = get_session()
     try:
-        tour = tournament_service.get_active_tournament(session)
+        tour = await _pick_tournament(update, session, league_id)
         if not tour:
-            await update.message.reply_text(NO_ACTIVE)
             return
         rows = (session.query(TournamentPlayerStats)
                 .filter(TournamentPlayerStats.tournament_id == tour.id,
