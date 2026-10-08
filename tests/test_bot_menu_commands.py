@@ -147,6 +147,10 @@ def test_no_scope_has_duplicates():
 # This is an allowlist, not an amnesty: a command added without a menu entry
 # and without a line here still fails the test below.
 UNPUBLISHED_ON_PURPOSE = {
+    # Live giveaways — every announcement and the ending-soon reminder carry
+    # the Participate button, and it is in BOT_COMMANDS.md; the player menus
+    # are at Telegram's 100-command ceiling.
+    "giveaway",
     # Owner-level reviewer management (list/add/remove in one command). Run
     # rarely, documented in BOT_COMMANDS.md, and the admin bucket is at the
     # ceiling already.

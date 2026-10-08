@@ -373,6 +373,83 @@ class PriorityWinnerTest(unittest.TestCase):
         self.assertEqual(len({w["user_id"] for w in winners}), 2)
 
 
+class TieredWinnersTest(unittest.TestCase):
+    """Automatic giveaways size the draw from the number of eligible entries."""
+
+    def setUp(self):
+        self.svc, self.models, self.IntegrityError = _load_service(self)
+        random.seed(11)
+
+    def _entries(self, uids, priority=()):
+        out = []
+        for i, u in enumerate(uids, start=1):
+            e = self.models.GiveawayEntry(giveaway_id=1, user_id=u,
+                                          telegram_id=1000 + u)
+            e.id = i
+            e.is_priority = u in priority
+            e.priority_set_at = datetime(2026, 1, 1) if e.is_priority else None
+            out.append(e)
+        return out
+
+    def test_tier_boundaries(self):
+        expect = {0: 1, 1: 1, 9: 1, 10: 3, 20: 3, 21: 4, 30: 4, 31: 5, 500: 5}
+        for entries, winners in expect.items():
+            with self.subTest(entries=entries):
+                self.assertEqual(self.svc.tiered_winner_count(entries), winners)
+
+    def _draw(self, n_entries, **kw):
+        users = {u: _user(u) for u in range(1, n_entries + 1)}
+        entries = self._entries(range(1, n_entries + 1), kw.pop("priority", ()))
+        g = _giveaway(winners=5)
+        g.auto_winners = True
+        session = _FakeSession(entries, users, g)
+        return self.svc.draw_winners(session, g, **kw)
+
+    def test_a_tiered_draw_seats_the_tier_count(self):
+        self.assertEqual(len(self._draw(5)), 1)
+        self.assertEqual(len(self._draw(15)), 3)
+        self.assertEqual(len(self._draw(25)), 4)
+        self.assertEqual(len(self._draw(40)), 5)
+
+    def test_tiers_count_only_eligible_entries(self):
+        # 12 entries but two left the GC → 10 eligible → still 3 winners;
+        # 11 entries with two gone → 9 eligible → 1 winner.
+        self.assertEqual(len(self._draw(12, eligible_user_ids=set(range(1, 11)))), 3)
+        self.assertEqual(len(self._draw(11, eligible_user_ids=set(range(1, 10)))), 1)
+
+    def test_a_fixed_giveaway_ignores_the_tiers(self):
+        users = {u: _user(u) for u in range(1, 41)}
+        g = _giveaway(winners=2)
+        session = _FakeSession(self._entries(range(1, 41)), users, g)
+        self.assertEqual(len(self.svc.draw_winners(session, g)), 2)
+
+    def test_recent_winners_are_passed_over(self):
+        for _ in range(20):
+            winners = self._draw(15, exclude_user_ids={1, 2, 3, 4, 5})
+            ids = {w["user_id"] for w in winners}
+            self.assertEqual(len(ids), 3)
+            self.assertFalse(ids & {1, 2, 3, 4, 5})
+
+    def test_a_reserved_seat_survives_the_recent_winner_rule(self):
+        winners = self._draw(5, exclude_user_ids={2}, priority=(2,))
+        self.assertEqual([w["user_id"] for w in winners], [2])
+
+    def test_the_join_status_line_shows_the_tier(self):
+        g = _giveaway()
+        g.auto_winners = True
+        self.assertEqual(self.svc.status_line(g, 14), "14 entries → 3 winners")
+        self.assertEqual(self.svc.status_line(g, 1), "1 entry → 1 winner")
+        g.auto_winners = False
+        self.assertEqual(self.svc.status_line(g, 14), "14 entries")
+
+    def test_the_announcement_shows_the_tier_table(self):
+        g = _giveaway()
+        g.auto_winners = True
+        g.prize_player = None
+        text = self.svc.announcement_text(g)
+        self.assertIn("31+ → 5", text)
+
+
 class RecordEntryTest(unittest.TestCase):
     def setUp(self):
         self.svc, self.models, self.IntegrityError = _load_service(self)

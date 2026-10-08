@@ -108,7 +108,8 @@ from handlers.unscramble import unscramble_handler, join_handler as unscramble_j
 from handlers.report import report_handler
 from handlers.coins2gems import coins2gems_handler, coins2gems_callback
 from handlers.grant import grant_handler
-from handlers.giveaway import giveaway_join_callback
+from handlers.givepack import givepack_handler
+from handlers.giveaway import giveaway_join_callback, giveaway_command
 from handlers.cmushop import cmushop_handler, cmushop_callback
 from handlers.cmucareer import cmucareer_handler, cmucareer_callback
 from handlers.undo import cmuundo_handler
@@ -418,6 +419,7 @@ ADMIN_MENU_COMMANDS = (
     ("logounhold", "Admin: let a held user send a team logo again"),
     ("previewsummary", "Admin: render a sample match summary card"),
     ("grant", "Owner: grant a subscription tier to a user"),
+    ("givepack", "Owner: give packs to a user"),
     ("setcardid", "Admin: pin a Telegram photo as a player's card"),
     ("setmilestone", "Admin: set in-match milestone messages and media"),
     ("clearmatches", "Admin: clear stuck matches in this chat"),
@@ -1763,6 +1765,7 @@ def main():
         app.add_handler(CallbackQueryHandler(search_cancel_callback, pattern=r"^searchcancel_"))
         app.add_handler(CallbackQueryHandler(noop_callback, pattern=r"^noop$"))
         app.add_handler(CallbackQueryHandler(giveaway_join_callback, pattern=r"^gwjoin_"))
+        app.add_handler(CommandHandler(["giveaway", "giveaways", "gw"], giveaway_command))
         app.add_handler(CommandHandler(["buypl", "buy", "b"], buypl_handler))
         app.add_handler(CommandHandler(["teamname", "tn"], teamname_handler))
         # Both spellings, because half the world types "color".
@@ -1910,6 +1913,7 @@ def main():
 
         # ── Owner-only subscription grant (hidden from menu) ─────────
         app.add_handler(CommandHandler("grant", grant_handler))
+        app.add_handler(CommandHandler("givepack", givepack_handler))
 
         # ── CMU Shop image gallery ───────────────────────────────────
         # PTB requires lowercase command names and lowercases incoming ones

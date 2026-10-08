@@ -88,5 +88,34 @@ class GiveawayPriorityGuardTest(unittest.TestCase):
         self.assertIn("draw_open", self.template)
 
 
+class BulkGrantConfirmationTest(unittest.TestCase):
+    """Bulk coins / gems / quest points hit every filtered user at once, so the
+    admin has to type CONFIRM — in the browser and again on the server."""
+
+    def setUp(self):
+        self.admin = _read("admin.py")
+        self.route = (self.admin.split("def users_bulk_action():")[1]
+                      .split("\n@app.route")[0])
+        self.template = _read("templates/users.html")
+
+    def test_the_server_requires_confirm(self):
+        self.assertIn('request.form.get("confirm_text")', self.route)
+        self.assertIn('!= "CONFIRM"', self.route)
+
+    def test_the_server_checks_before_granting(self):
+        check = self.route.index("confirm_text")
+        self.assertLess(check, self.route.index("affected = query.all()"))
+        self.assertLess(check, self.route.index("u.total_coins ="))
+        guard = self.route.split('!= "CONFIRM":')[1].split("\n\n")[0]
+        self.assertIn("return redirect", guard)
+
+    def test_the_form_asks_for_confirm(self):
+        self.assertIn('name="confirm_text"', self.template)
+        self.assertIn("confirmBulkGrant", self.template)
+        js = self.template.split("function confirmBulkGrant(form)")[1][:400]
+        self.assertIn("'CONFIRM'", js)
+        self.assertIn("return false", js)
+
+
 if __name__ == "__main__":
     unittest.main()

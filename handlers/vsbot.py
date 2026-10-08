@@ -26,6 +26,7 @@ from models import (
     User, Player, UserRoster, Match, BotTeam, BotTeamPlayer, UserStats,
 )
 from services.bot_ai import BOT_TG_ID
+from services.player_service import not_career
 from services.match_outcome import TYPE_VSBOT
 from services.button_timeout import schedule_button_timeout
 
@@ -842,7 +843,7 @@ def build_adaptive_bot_xi(session, user_id):
         for band in (True, False):
             if need <= 0:
                 break
-            q = session.query(Player).filter(
+            q = not_career(session.query(Player)).filter(
                 Player.category == category, Player.is_active == True)
             if band:
                 q = q.filter(Player.rating.between(lo, hi))
@@ -861,12 +862,12 @@ def build_adaptive_bot_xi(session, user_id):
         fill_category(category, n)
 
     if len(rows) < 11:
-        near_pool = (session.query(Player)
+        near_pool = (not_career(session.query(Player))
                      .filter(Player.is_active == True, Player.rating.between(lo, hi))
                      .order_by(func.random()).limit(64).all())
         append_distinct_base_players(rows, near_pool)
     if len(rows) < 11:
-        full_pool = (session.query(Player)
+        full_pool = (not_career(session.query(Player))
                      .filter(Player.is_active == True)
                      .order_by(func.random()).limit(128).all())
         append_distinct_base_players(rows, full_pool)

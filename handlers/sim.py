@@ -47,6 +47,7 @@ from engine import pitch_registry
 from services.ground_conditions import list_pitches, get_pitch_meta
 from services.sim_team import append_distinct_base_players, distinct_base_players
 from services import sim_long
+from services.player_service import not_career
 
 logger = logging.getLogger(__name__)
 
@@ -74,12 +75,12 @@ def _build_bot_xi(session, avg_rating):
     lo, hi = max(40, avg_rating - 8), min(100, avg_rating + 8)
 
     def pick(category, n):
-        q = (session.query(Player)
+        q = (not_career(session.query(Player))
              .filter(Player.category == category, Player.is_active == True,
                      Player.rating.between(lo, hi))
              .order_by(func.random()).limit(n).all())
         if len(q) < n:  # widen the band if the pool is thin
-            q = (session.query(Player)
+            q = (not_career(session.query(Player))
                  .filter(Player.category == category, Player.is_active == True)
                  .order_by(func.random()).limit(n).all())
         return q
@@ -90,13 +91,13 @@ def _build_bot_xi(session, avg_rating):
     )
 
     if len(rows) < 11:
-        near_pool = (session.query(Player)
+        near_pool = (not_career(session.query(Player))
                      .filter(Player.is_active == True, Player.rating.between(lo, hi))
                      .order_by(func.random()).limit(64).all())
         append_distinct_base_players(rows, near_pool)
 
     if len(rows) < 11:
-        full_pool = (session.query(Player)
+        full_pool = (not_career(session.query(Player))
                      .filter(Player.is_active == True)
                      .order_by(func.random()).limit(128).all())
         append_distinct_base_players(rows, full_pool)
