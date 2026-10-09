@@ -166,6 +166,7 @@ UNPUBLISHED_ON_PURPOSE = {
     "tourhelp",
     # Tournament watch settings — on /tourhelp; admin bucket is full.
     "tsetchat", "tdeadline", "ttiebreak", "tstadiums", "thome", "tprize", "tteam", "tbracket",
+    "tfixturemode",
     # Franchise Auction — /auction card, the board's footer, and the RTM
     # prompt itself, which names the owner and carries buttons.
     "bid", "artm", "aboard", "apurse",
@@ -209,7 +210,7 @@ UNPUBLISHED_ON_PURPOSE = {
     # Challenge League tournament views — /help, the hub's buttons, and
     # whatever alias a league sets as its fixtures_command.
     "ctour", "cttable", "ctfixtures", "ctteams", "ctinjuries",
-    "clsd", "teamtourstats", "mvp",
+    "clsd", "teamtourstats", "mvp", "teamowner",
     # In-match, offered by the match's own keyboard at the moment it applies.
     "impact", "pitchstats",
     # Saved matches and the Mini App switch — named on the match-start card,
