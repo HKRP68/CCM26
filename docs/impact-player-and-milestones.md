@@ -70,6 +70,23 @@ and any tournament rating rule. Overseas follows the **IPL rule**
 
 The picker only offers swaps that pass, and the AI captain uses the same check.
 
+**Making the rule visible.** A filtered-out sub just vanishes, so the picker
+says why:
+
+* every overseas name carries ✈️ (`cipl_play._impact_label`, `isOverseas` in the
+  Mini App payload);
+* both picker steps show `✈️ Overseas in XI: 3/4 — an overseas Impact Player may
+  come on` or `… 4/4 — overseas Impact Player not allowed (IPL rule)`
+  (`impact_player.overseas_status_line`); a match with no cap shows nothing;
+* step 2 adds `🚫 N overseas subs hidden` when the cap held them back.
+
+**Where the cap comes from.** `begin_cipl_match` re-reads it at launch with
+`challenge.fresh_overseas_limits`: the league's `min/max_overseas`, then
+`tournament_service.overseas_limits` for a tournament. This doesn't rely on the
+values Select XI caches on the draft (a CL Tour draft only cached the league's
+numbers, not the tournament override). `/cipl multi` (per-side caps) and
+`/cdraft` (no league) and Auction League keep what the draft carries.
+
 ### The batting-position rule
 
 `batting_order` is a list; `striker_idx`, `non_striker_idx` and

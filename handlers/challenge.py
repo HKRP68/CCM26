@@ -1475,6 +1475,41 @@ def _challenge_overseas_limits(draft, side=None):
     return lo, hi
 
 
+def fresh_overseas_limits(draft):
+    """``(min_overseas, max_overseas)`` read from the league (and a tournament's
+    override) right now, or ``None`` when the draft has no league to read.
+
+    The limits on the draft are cached when Select XI opens; this is the same
+    lookup, so a match that reached the toss another way still plays to the
+    real cap. /cipl multi (per-side limits), /cdraft (no league) and Auction
+    League (limits set from its own league when the draft is built) keep what
+    the draft carries.
+    """
+    if (not draft or draft.get("multi")
+            or draft.get("mode") in ("cdraft", "auction_league")):
+        return None
+    session = get_session()
+    try:
+        league = _resolve_draft_league(session, draft)
+        if league is None:
+            return None
+        if draft.get("is_tournament") and draft.get("tournament_id"):
+            from models import Tournament
+            from services import tournament_service
+            tour = session.get(Tournament, int(draft["tournament_id"]))
+            if tour is not None:
+                return tournament_service.overseas_limits(session, tour, league)
+        lo = getattr(league, "min_overseas", None)
+        hi = getattr(league, "max_overseas", None)
+        return (int(lo) if lo is not None else 0,
+                int(hi) if hi is not None else 11)
+    except Exception:
+        logger.exception("challenge: could not resolve overseas limits")
+        return None
+    finally:
+        session.close()
+
+
 def _challenge_xi_limits(draft, side=None):
     """``(min_overseas, max_overseas, rating_rules)`` — every XI rule the
     draft carries beyond the fixed keeper / bowling ones."""

@@ -120,6 +120,7 @@ def _p(pd):
         "active": pd.get("active", True) is not False,
         "impact_replaced": bool(pd.get("impact_replaced")),
         "impact_replacement": bool(pd.get("impact_replacement")),
+        "isOverseas": bool(pd.get("is_overseas")),
     }
 
 
@@ -904,8 +905,21 @@ def _approach_impact_payload(state, viewer_uid, next_action):
         "side": side,
         "incomingOptions": [_p(p) for p in opts.get("incoming_options", [])],
         "replaceablePlayers": replaceable,
+        # The IPL overseas rule, so the picker can say why an overseas sub is
+        # missing. None when the match has no overseas cap.
+        "overseas": _approach_overseas(state, side),
         "summary": summary,
     }
+
+
+def _approach_overseas(state, side):
+    from services import impact_player as ip
+    status = ip.overseas_status(state, side) if side else None
+    if status is None:
+        return None
+    have, hi = status
+    return {"have": have, "max": hi, "allowed": have < hi,
+            "text": ip.overseas_status_line(state, side)}
 
 
 def _approach_options(options, blurbs):

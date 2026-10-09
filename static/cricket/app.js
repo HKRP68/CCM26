@@ -1551,15 +1551,21 @@ function renderImpactPlayerPicker() {
   picker.classList.remove('hidden');
 
   const rating = (p) => p.ovr || p.rating || 0;
-  if (stepText) stepText.innerText = impactSelection.incoming
-    ? 'Step 2 — pick the player to replace:'
-    : 'Step 1 — pick the substitute coming in:';
+  if (stepText) {
+    stepText.innerText = impactSelection.incoming
+      ? 'Step 2 — pick the player to replace:'
+      : 'Step 1 — pick the substitute coming in:';
+    // IPL overseas rule: an overseas sub only while the XI is under the cap.
+    if (impact.overseas && impact.overseas.text) {
+      stepText.innerText = impact.overseas.text + '\n' + stepText.innerText;
+    }
+  }
 
   const buildPlayerRow = (p, onClick, selected) => {
     const div = document.createElement('div');
     div.className = `selection-item ${selected ? 'selected' : ''} ${p.disabled ? 'disabled' : ''}`;
     div.innerHTML = `
-      <span class="selection-item-name">${p.name}</span>
+      <span class="selection-item-name">${p.name}${p.isOverseas ? ' ✈️' : ''}</span>
       <span class="selection-item-meta">${rating(p)} OVR · ${p.role || p.category || 'Player'}${p.disabledReason ? ' · ' + p.disabledReason : ''}</span>
     `;
     if (!p.disabled) div.onclick = onClick;

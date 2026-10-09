@@ -218,7 +218,7 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/botvsbot` | `/bvb` | Configure a bot-versus-bot match |
 | `/botmatch` | `/spectate` | Spectate a bot-versus-bot match |
 | `/pbo` | `/bowlout` | Start a standalone player bowl-out |
-| `/impact` | `/ip` | Open the Impact Player picker mid-match |
+| `/impact` | `/ip` | Open the Impact Player picker mid-match (IPL rule: an overseas ✈️ sub only while your XI is under the overseas cap) |
 | `/resume` | `/r` | Resume your active match if the buttons disappear — works exactly like `/rcl` (incl. `/resume <MatchId>`) |
 | `/rcl` | `/resumecl` | Resume a stuck Challenge League / Lets Play match. `/rcl <MatchId>` resumes by id; one resume per match every 5 seconds |
 | `/pause` | `/pausematch` | Pause a live Challenge League / Lets Play match (tournament fixtures too) and save it exactly where it is — the chat is free and nobody is on the clock ⏸️ |
