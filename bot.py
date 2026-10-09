@@ -2247,6 +2247,7 @@ def main():
             tratingrule_handler, tseasons_handler,
             tsim_handler, tsim_callback, CB_SIM,
             tsetchat_handler, tdeadline_handler, tdeadline_callback,
+            tfixturemode_handler,
             ttiebreak_handler, tstadiums_handler, thome_handler,
             tprize_handler, tteam_handler, tbracket_handler,
         )
@@ -2272,6 +2273,9 @@ def main():
         app.add_handler(CommandHandler(["tsetchat", "tchat"], tsetchat_handler))
         app.add_handler(CommandHandler(["tdeadline", "tdeadlines"], tdeadline_handler))
         app.add_handler(CallbackQueryHandler(tdeadline_callback, pattern=r"^tdl_"))
+        # Round-by-round release (the default) vs every fixture at once.
+        app.add_handler(CommandHandler(["tfixturemode", "tfixmode"],
+                                       tfixturemode_handler))
         app.add_handler(CommandHandler(["ttiebreak", "ttb"], ttiebreak_handler))
         app.add_handler(CommandHandler(["tstadiums", "tstadium"], tstadiums_handler))
         app.add_handler(CommandHandler(["thome", "homeground"], thome_handler))

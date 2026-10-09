@@ -1367,7 +1367,9 @@ def schedule_news(session, tm):
             return ""
         from services import league_schedule_service
         rnd = league_schedule_service.current_round(session, tm.tournament_id)
-        if rnd is not None and rnd > int(tm.round_no):
+        # With every fixture released at once there is no round to "open".
+        if (rnd is not None and rnd > int(tm.round_no)
+                and not getattr(tour, "fixtures_all_at_once", False)):
             same_round_left = (session.query(TournamentMatch)
                                .filter(TournamentMatch.tournament_id == tm.tournament_id,
                                        TournamentMatch.stage.in_(("league", "group")),
@@ -1438,7 +1440,7 @@ def simulate_fixture(session, fixture_id, outcome="random", rng=None):
                          "hasn't started can be simulated.")
     if not tm.team1_id or not tm.team2_id:
         raise ValueError("Both teams must be known before it can be simulated.")
-    rnd = league_schedule_service.current_round(session, tm.tournament_id)
+    rnd = league_schedule_service.open_round(session, tm.tournament_id)
     if league_schedule_service.is_round_locked(tm, rnd):
         raise ValueError(f"That fixture is in Round {tm.round_no} — Round {rnd} "
                          "has to be finished first.")

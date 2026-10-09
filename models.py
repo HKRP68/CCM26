@@ -2807,6 +2807,13 @@ class Tournament(Base):
     # one person. Teams left without an owner stay open to anyone.
     enforce_team_owner = Column(Boolean, default=False, nullable=False)
 
+    # How the league schedule is released. False (the default) is round by
+    # round: only the open round's fixtures are shown and playable, and the
+    # next round unlocks once every match in it is done. True releases every
+    # fixture at once — all shown, any played in any order. Admins switch it
+    # with /tfixturemode or on the tournament's Manage page.
+    fixtures_all_at_once = Column(Boolean, default=False, nullable=False)
+
     # How the surface for a tournament match is decided:
     #   "host"    – the host picks it during setup (the original behaviour)
     #   "fixture" – each fixture carries its own ``pitch_type``, assigned when

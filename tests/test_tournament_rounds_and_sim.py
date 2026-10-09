@@ -179,6 +179,49 @@ class RoundLockTests(RoundCase):
             self.session, self.tour.id, fx.team1_id, fx.team2_id).id, fx.id)
 
 
+class AllAtOnceTests(RoundCase):
+    """``fixtures_all_at_once``: every fixture shown and playable, no lock."""
+
+    def setUp(self):
+        super().setUp()
+        self.tour.fixtures_all_at_once = True
+        self.session.commit()
+
+    def test_a_later_round_can_be_found_and_reserved(self):
+        later = self.fixtures(3)[0]
+        a, b = later.team1_id, later.team2_id
+        self.assertIsNotNone(self.lss.find_open_fixture(
+            self.session, self.tour.id, a, b))
+        self.assertIn(b, self.lss.remaining_opponents(self.session, self.tour.id, a))
+        self.assertIsNone(self.lss.round_lock_message(
+            self.session, self.tour.id, a, b))
+        self.assertTrue(self.lss.fixture_in_open_round(self.session, later))
+        self.assertIsNotNone(self.lss.reserve_fixture(
+            self.session, self.tour.id, a, b))
+
+    def test_a_later_round_can_be_simulated(self):
+        self.ts.simulate_fixture(self.session, self.fixtures(3)[0].id, "1")
+
+    def test_the_fixture_list_shows_every_fixture(self):
+        from services import cl_tournament_view as ctv
+        text = ctv.render_fixtures(self.session, self.tour)
+        self.assertEqual(text.count("⚪"), 6)
+        self.assertNotIn("🔒", text)
+        self.assertNotIn("Round 1 of 3", text)
+        self.assertIn("Full schedule", text)
+
+    def test_no_round_opened_news(self):
+        last = self.finish_round(1)
+        self.assertNotIn("now open", self.ts.schedule_news(self.session, last))
+
+    def test_switching_back_restores_the_round_lock(self):
+        self.tour.fixtures_all_at_once = False
+        self.session.commit()
+        later = self.fixtures(2)[0]
+        self.assertIsNone(self.lss.find_open_fixture(
+            self.session, self.tour.id, later.team1_id, later.team2_id))
+
+
 class SimulateTests(RoundCase):
     def test_each_outcome_picks_the_right_winner(self):
         a, b = self.fixtures(1)

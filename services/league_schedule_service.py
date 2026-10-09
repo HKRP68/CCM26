@@ -804,6 +804,27 @@ def current_round(session, tournament_id):
             .scalar())
 
 
+def all_at_once(session, tournament_id):
+    """True when this tournament releases every fixture at once (no round lock)."""
+    from models import Tournament
+    tour = session.get(Tournament, int(tournament_id))
+    return bool(getattr(tour, "fixtures_all_at_once", False))
+
+
+def open_round(session, tournament_id):
+    """The round fixtures are locked behind, or None when nothing is locked.
+
+    This is :func:`current_round` for a round-by-round tournament, and None for
+    one that releases every fixture at once — the value to hand
+    :func:`is_round_locked` whenever the question is "may this be played/shown?".
+    ``current_round`` itself still says which round the league is on, for the
+    recaps and deadlines that follow it either way.
+    """
+    if all_at_once(session, tournament_id):
+        return None
+    return current_round(session, tournament_id)
+
+
 def round_progress(session, tournament_id):
     """``{"round", "rounds", "played", "total"}`` for the open round, or None.
 
@@ -840,14 +861,14 @@ def is_round_locked(fx, open_round):
 
 def fixture_in_open_round(session, fx):
     """True when ``fx`` may be played (or simulated) right now."""
-    return not is_round_locked(fx, current_round(session, fx.tournament_id))
+    return not is_round_locked(fx, open_round(session, fx.tournament_id))
 
 
 def _open_round_filter(session, tid):
     """SQL clause keeping knockout rows, round-0 rows and the open league round."""
     from sqlalchemy import or_
     from models import TournamentMatch
-    rnd = current_round(session, tid)
+    rnd = open_round(session, tid)
     if rnd is None:
         return None
     return or_(TournamentMatch.stage.notin_(LEAGUE_STAGES),
@@ -860,7 +881,12 @@ def split_open_round(session, tournament_id, fixtures):
     ``visible`` drops the fixtures of league rounds that haven't opened yet —
     the schedule is released one round at a time — and ``locked_count`` says how
     many were held back. ``progress`` is :func:`round_progress` (or None).
+
+    A tournament that releases every fixture at once shows them all, with no
+    round banner: ``(fixtures, 0, None)``.
     """
+    if all_at_once(session, tournament_id):
+        return list(fixtures), 0, None
     progress = round_progress(session, tournament_id)
     rnd = progress["round"] if progress else None
     visible = [fx for fx in fixtures if not is_round_locked(fx, rnd)]
@@ -900,7 +926,7 @@ def locked_fixture_for_pair(session, tournament_id, team1_id, team2_id):
 def round_lock_message(session, tournament_id, team1_id, team2_id):
     """A player-facing reason this pair can't play yet, or None."""
     fx = locked_fixture_for_pair(session, tournament_id, team1_id, team2_id)
-    rnd = current_round(session, tournament_id)
+    rnd = open_round(session, tournament_id)
     if fx is None or not is_round_locked(fx, rnd):
         return None
     return (f"That fixture is in Round {fx.round_no} — Round {rnd} is still "
