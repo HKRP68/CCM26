@@ -107,6 +107,9 @@ ADMIN_SECTIONS = (
         ("/tdeadline", "/tdeadlines",
          "Round deadlines: /tdeadline 48h · /tdeadline +12h · /tdeadline off "
          "(alerts only — nothing is auto-simulated)"),
+        ("/tfixturemode", "/tfixmode",
+         "Fixtures round by round or all at once: /tfixturemode round · "
+         "/tfixturemode all"),
         ("/tprize", "/tprizes",
          "Prizes paid when the final is decided: /tprize champion 5000 50"),
         ("/tstadiums", "/tstadium",

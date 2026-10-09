@@ -908,6 +908,7 @@ overdraw somebody is refused by name.
 | `/taddmatch <match number>` · `/addmatch` *(reply to a scorecard)* | Record a fixture played off the bot |
 | `/tfixsync` | Un-stick fixtures still showing as live |
 | `/tdeadline 48h` · `/tdeadline +12h` · `/tdeadline off` | Round deadlines. Owners are reminded 24h and 2h before; when time runs out the admins are alerted (group + DM, with /tsim and +24h buttons). **Nothing is simulated automatically** |
+| `/tfixturemode round` · `/tfixturemode all` | How the league schedule is released: **round** (default) shows and opens one round at a time, the next unlocking when it's finished; **all** shows every fixture and lets any be played in any order |
 | `/tsetchat` | Post the tournament's recaps, deadline alerts, bracket and ceremony in this group (default: the first group a tournament match is played in) |
 | `/ttiebreak h2h\|nrr` | Teams level on points: head-to-head first, or wins then NRR |
 | `/tstadiums` · `/tstadiums add\|remove <name>` · `/tstadiums all` | The tournament's grounds, picked from Stadium Data (admin site → Conditions → Stadium) |
@@ -1119,6 +1120,7 @@ admin panel, but the commands are not registered.
 | `/tsimulate` | `/tsim` 🔒 |
 | `/tchat` | `/tsetchat` 🔒 |
 | `/tdeadlines` | `/tdeadline` 🔒 |
+| `/tfixmode` | `/tfixturemode` 🔒 |
 | `/ttb` | `/ttiebreak` 🔒 |
 | `/tstadium` | `/tstadiums` 🔒 |
 | `/homeground` | `/thome` |

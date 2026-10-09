@@ -16924,6 +16924,7 @@ def admin_tournaments_list():
                             min_overseas=_overseas_form("min_overseas"),
                             max_overseas=_overseas_form("max_overseas"),
                             enforce_team_owner=_checked("enforce_team_owner"),
+                            fixtures_all_at_once=_checked("fixtures_all_at_once"),
                             injuries_enabled=_checked("injuries_enabled"),
                             injury_chance=max(0, min(100, _int_form("injury_chance", 12))),
                             injury_max_matches=max(1, min(5, _int_form("injury_max_matches", 3))),
@@ -17156,6 +17157,7 @@ def admin_tournament_detail(tournament_id):
                                                     "min_players": _parse_int(need)})
                         _ts_rr.set_rating_rules(db, t, rating_rows)
                     t.enforce_team_owner = _checked("enforce_team_owner")
+                    t.fixtures_all_at_once = _checked("fixtures_all_at_once")
                     t.injuries_enabled = _checked("injuries_enabled")
                     t.injury_chance = max(0, min(100, _int_form(
                         "injury_chance", t.injury_chance if t.injury_chance

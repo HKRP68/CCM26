@@ -162,6 +162,12 @@
             Only a team's owner may play with it
           </label>
         </div>
+        <div><label>🗓️ Fixture release</label>
+          <label style="text-transform:none; letter-spacing:0; font-size:.9rem; color:var(--text);">
+            <input type="checkbox" name="fixtures_all_at_once" {{ 'checked' if t.fixtures_all_at_once else '' }}>
+            All fixtures at once (unticked = round by round)
+          </label>
+        </div>
         <div><label>🚑 Injuries</label>
           <label style="text-transform:none; letter-spacing:0; font-size:.9rem; color:var(--text);">
             <input type="checkbox" name="injuries_enabled" {{ 'checked' if t.injuries_enabled else '' }}>

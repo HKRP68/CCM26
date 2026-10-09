@@ -631,6 +631,7 @@ def _migrate_add_columns():
     _try_add("tournaments", "min_overseas", "INTEGER")
     _try_add("tournaments", "max_overseas", "INTEGER")
     _try_add("tournaments", "enforce_team_owner", "BOOLEAN DEFAULT FALSE")
+    _try_add("tournaments", "fixtures_all_at_once", "BOOLEAN DEFAULT FALSE")
     _try_add("tournaments", "pitch_mode", "VARCHAR(20) DEFAULT 'host'")
     _try_add("tournament_teams", "owner_tg_id", "BIGINT")
     _try_add("tournament_teams", "owner_name", "VARCHAR(120)")

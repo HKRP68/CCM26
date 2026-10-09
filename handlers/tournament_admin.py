@@ -799,7 +799,7 @@ def _open_fixtures(session, tour):
             .filter(TournamentMatch.team1_id.isnot(None),
                     TournamentMatch.team2_id.isnot(None))
             .order_by(TournamentMatch.match_no, TournamentMatch.id).all())
-    rnd = league_schedule_service.current_round(session, tour.id)
+    rnd = league_schedule_service.open_round(session, tour.id)
     return [fx for fx in rows
             if not league_schedule_service.is_round_locked(fx, rnd)]
 
@@ -824,7 +824,8 @@ def _sim_listing(session, tour):
              session.query(TournamentTeam).filter_by(tournament_id=tour.id).all()}
     open_fx = _open_fixtures(session, tour)
     head = f"🎲 <b>{html.escape(tour.name)}</b> — simulate a fixture"
-    progress = league_schedule_service.round_progress(session, tour.id)
+    progress = (None if league_schedule_service.all_at_once(session, tour.id)
+                else league_schedule_service.round_progress(session, tour.id))
     banner = league_schedule_service.round_banner(progress, 0, tour)
     if banner:
         head += f"\n🔵 {banner}"
@@ -1081,6 +1082,57 @@ _DEADLINE_USAGE = (
     "the admins are alerted — <b>nothing is simulated automatically</b>; settle "
     "a match with <code>/tsim</code> or extend the round."
 )
+
+
+# ── /tfixturemode — round by round, or every fixture at once ─────────
+
+_FIXTURE_MODE_USAGE = (
+    "Usage: <code>/tfixturemode round</code> — release the schedule one round "
+    "at a time (the next round opens when this one is finished)\n"
+    "<code>/tfixturemode all</code> — release every fixture at once: all shown, "
+    "any of them playable in any order\n"
+    "Add <code>#id</code> first to pick a tournament when several are running."
+)
+_FIXTURE_MODE_WORDS = {
+    "round": False, "rounds": False, "roundbyround": False, "locked": False,
+    "all": True, "allatonce": True, "full": True, "open": True,
+}
+
+
+def _fixture_mode_summary(tour):
+    if getattr(tour, "fixtures_all_at_once", False):
+        mode = "📋 <b>All at once</b> — every fixture is shown and playable"
+    else:
+        mode = ("🔵 <b>Round by round</b> — only the open round is shown and "
+                "playable; the next unlocks when it's finished")
+    return f"🗓️ <b>{html.escape(tour.name)}</b> fixtures: {mode}."
+
+
+async def tfixturemode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tfixturemode [round | all] — switch how the league schedule is released."""
+    if not await _require_admin(update):
+        return
+    args = list(context.args or [])
+    session = get_session()
+    try:
+        try:
+            tour = _resolve_tournament(session, args)
+        except ValueError as exc:
+            await _reply(update, f"⚠️ {exc}")
+            return
+        if not args:
+            await _reply(update, _fixture_mode_summary(tour) + "\n\n"
+                         + _FIXTURE_MODE_USAGE)
+            return
+        word = "".join(args).lower().replace("-", "").replace("_", "")
+        if word not in _FIXTURE_MODE_WORDS:
+            await _reply(update, _FIXTURE_MODE_USAGE)
+            return
+        tour.fixtures_all_at_once = _FIXTURE_MODE_WORDS[word]
+        session.commit()
+        await _reply(update, "✅ " + _fixture_mode_summary(tour))
+    finally:
+        session.close()
 
 
 def _deadline_summary(tour):
