@@ -254,11 +254,27 @@ def _standing_paragraph(session, tour, team):
         f"  ·  NRR {V._nrr_text(standing._nrr)}"])
 
 
-def _team_heading(session, tour, team, viewer_tg_id, emoji):
-    """The shared head of both team cards: who they are and where they stand."""
+def _owners_run(session, team):
+    """``(👤 ana · 🤝 bob, cy)`` as plain text — handles never become mentions."""
+    owner, co = V.team_owner_names(session, team)
+    if not owner and not co:
+        return []
+    text = f"👤 {owner}" if owner else "👤 no owner"
+    if co:
+        text += " · 🤝 " + ", ".join(co)
+    return [f" ({text})"]
+
+
+def _team_heading(session, tour, team, viewer_tg_id, emoji, owners=False):
+    """The shared head of both team cards: who they are and where they stand.
+
+    ``owners`` puts the owner and co-owners beside the name — the /clsd card.
+    """
     mine = (viewer_tg_id is not None
             and tournament_service.is_team_member(team, viewer_tg_id))
     title = [f"{emoji} ", R.bold(team.name or "—")]
+    if owners:
+        title += _owners_run(session, team)
     if mine:
         title += ["  ", R.italic("👈 your team")]
     blocks = [R.heading(title, size=2),
@@ -286,15 +302,7 @@ def team_schedule_blocks(session, tour, team, viewer_tg_id=None, limit=40):
     and a longer list continues in a second, collapsed one.
     """
     from models import TournamentMatch
-    blocks = _team_heading(session, tour, team, viewer_tg_id, "🗓️")
-
-    owner = (team.owner_name or "").strip()
-    extras = len(tournament_service.co_owner_ids(team))
-    if owner or extras:
-        line = ["👤 ", owner] if owner else ["👤 ", R.italic("no owner")]
-        if extras:
-            line.append(f"  🤝 +{extras}")
-        blocks.append(R.paragraph(line))
+    blocks = _team_heading(session, tour, team, viewer_tg_id, "🗓️", owners=True)
     from services import league_schedule_service
     pitch_label = league_schedule_service.team_pitch_label(tour, team)
     if pitch_label:

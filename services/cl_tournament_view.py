@@ -302,6 +302,91 @@ def _standing_of(session, tour, team_id):
     return None, None
 
 
+# ── Who runs a team, by name — never as a mention ────────────────────
+#
+# /clsd and /teamowner name a team's owner and co-owners. Printing them as
+# ``@handle`` would ping every one of them each time anybody looked a team up,
+# so the handle is shown as plain text (``ana_07``, not ``@ana_07``) — the same
+# rule ``services.display_name`` sets for every other read-only listing.
+
+def _plain_handle(user):
+    """A user's handle (no ``@``), else first name, else team name, else ''."""
+    if user is None:
+        return ""
+    for value in (getattr(user, "username", None),
+                  getattr(user, "first_name", None),
+                  getattr(user, "team_name", None)):
+        text = (value or "").strip().lstrip("@").strip()
+        if text:
+            return text
+    return ""
+
+
+def team_owner_names(session, team):
+    """``(owner, [co_owners])`` as plain, *unescaped* text — never a mention.
+
+    The owner is the user's Telegram handle when the bot knows them, else the
+    name the admin typed when assigning the team, else the bare id. A Lets Play
+    team has no owner of record — the person playing it is its owner. ``owner``
+    is ``""`` when nobody owns the team.
+    """
+    from models import User
+    owner_id = (getattr(team, "owner_tg_id", None)
+                or getattr(team, "user_tg_id", None))
+    co_ids = [i for i in tournament_service.co_owner_ids(team)
+              if not owner_id or i != int(owner_id)]
+    ids = ([int(owner_id)] if owner_id else []) + co_ids
+    users = {}
+    if ids:
+        users = {u.telegram_id: u for u in
+                 session.query(User).filter(User.telegram_id.in_(ids)).all()}
+
+    owner = ""
+    if owner_id:
+        owner = (_plain_handle(users.get(int(owner_id)))
+                 or (team.owner_name or "").strip().lstrip("@").strip()
+                 or str(owner_id))
+    elif (team.owner_name or "").strip():
+        owner = team.owner_name.strip().lstrip("@").strip()
+    co = [_plain_handle(users.get(i)) or str(i) for i in co_ids]
+    return owner, co
+
+
+def owners_html(session, team):
+    """``👤 ana · 🤝 bob, cy`` as escaped HTML, or ``""`` for an unowned team."""
+    owner, co = team_owner_names(session, team)
+    if not owner and not co:
+        return ""
+    text = f"👤 {escape(owner)}" if owner else "👤 <i>no owner</i>"
+    if co:
+        text += " · 🤝 " + ", ".join(escape(c) for c in co)
+    return text
+
+
+def render_team_owners(session, tours, only=None):
+    """The ``/teamowner`` card: every team in each live tournament, with the
+    owner and co-owners named — as plain text, so nobody listed is pinged.
+
+    ``only`` narrows the card to one ``TournamentTeam``.
+    """
+    out = ["👑 <b>Team owners</b>"]
+    for tour in tours:
+        rows = teams(session, tour.id)
+        if only is not None:
+            rows = [tt for tt in rows if tt.id == only.id]
+        if not rows:
+            continue
+        out += ["", f"🏆 <b>{escape(tour.name or '—')}</b>"]
+        for i, tt in enumerate(rows, 1):
+            who = owners_html(session, tt) or "<i>unowned</i>"
+            out.append(f"{i}. <b>{escape(tt.name or '—')}</b> — {who}")
+    if len(out) == 1:
+        out += ["", "No teams have been entered yet."]
+    else:
+        out += ["", "<i>👤 owner · 🤝 co-owners</i>"]
+    return "\n".join(out)
+
+
 def render_team_schedule(session, tour, team, viewer_tg_id=None, limit=40):
     """One team's whole tournament on a single card — the ``/clsd`` answer.
 
@@ -328,7 +413,9 @@ def render_team_schedule(session, tour, team, viewer_tg_id=None, limit=40):
     # which one they are looking at.
     mine = (viewer_tg_id is not None
             and tournament_service.is_team_member(team, viewer_tg_id))
-    out = [f"🗓️ <b>{name}</b>{' 👈 <b>your team</b>' if mine else ''}"
+    who = owners_html(session, team)
+    out = [f"🗓️ <b>{name}</b>{f' ({who})' if who else ''}"
+           f"{' 👈 <b>your team</b>' if mine else ''}"
            f" — {escape(tour.name)}"]
 
     # ── Where they stand ──
@@ -343,11 +430,6 @@ def render_team_schedule(session, tour, team, viewer_tg_id=None, limit=40):
         out.append("📈 <b>Form:</b> "
                    + " ".join(_FORM_EMOJI.get(f, "⚪") for f in reversed(form))
                    + "  <i>(oldest → latest)</i>")
-    owner = (team.owner_name or "").strip()
-    extras = len(tournament_service.co_owner_ids(team))
-    if owner or extras:
-        who = f"👤 {escape(owner)}" if owner else "👤 <i>no owner</i>"
-        out.append(who + (f" 🤝 +{extras}" if extras else ""))
     from services import league_schedule_service
     pitch_label = league_schedule_service.team_pitch_label(tour, team)
     if pitch_label:

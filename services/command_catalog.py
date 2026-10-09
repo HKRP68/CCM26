@@ -78,6 +78,7 @@ COMMAND_CATEGORIES = (
         '/cttable /ctfixtures /ctteams - Tournament table, schedule (done matches struck through), field',
         '/ctinjuries - Who is ruled out injured, and for how many more matches 🚑',
         "/clsd <team> - One team's schedule: standing, form, next matches, results",
+        "/teamowner [team] - Who owns and co-owns each tournament team (names shown, nobody tagged)",
         "/teamtourstats [team] - Your team's tournament by the numbers: standing, what you score and concede, best and worst totals, and your top run-scorers and wicket-takers",
         '/mvp - Tournament Most Valuable Player: batting + bowling + wins + POTM awards in one impact-point total',
         "/remindmatch [team] [vs team] - Admin: nudge two teams to play what they still owe — posts here and DMs both sides' owners and co-owners",

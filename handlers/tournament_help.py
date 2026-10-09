@@ -44,6 +44,8 @@ PLAYER_SECTIONS = (
         ("/ctinjuries", "/ctinjury", "Who is injured, and for how many matches"),
         ("/clsd", "/clschedule /ctsd",
          "One team's schedule: standing, form, next matches, results"),
+        ("/teamowner", "/teamowners /towner",
+         "Who owns and co-owns each team — names shown, nobody tagged"),
         ("/teamtourstats", "/tts /myteamstats",
          "A team's tournament by the numbers"),
         ("/mvp", "/tourmvp /ctmvp",

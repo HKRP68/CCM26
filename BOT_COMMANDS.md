@@ -308,6 +308,7 @@ Admin commands for running one: [Appendix B](#appendix-b--admin--owner-commands)
 | `/ctteams` | — | The participating teams and who owns them |
 | `/ctinjuries` | `/ctinjury` | Who is ruled out injured, and for how many more matches 🚑 |
 | `/clsd` | `/clschedule` `/ctsd` | One team's schedule: standing, form, next matches, results |
+| `/teamowner` | `/teamowners` `/towner` | Who owns and co-owns each team (all teams, or one by name) — names shown, nobody tagged |
 | `/teamtourstats` | `/teamstour` `/myteamstats` `/tts` | A team's tournament by the numbers |
 | `/mvp` | `/tourmvp` `/ctmvp` | Most Valuable Player — batting + bowling + wins + POTM |
 | `/tteam` | `/tott` `/teamoftournament` | Team of the Tournament — the best XI so far, as cards 🌟 |
