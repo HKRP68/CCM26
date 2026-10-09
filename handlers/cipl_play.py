@@ -2099,8 +2099,15 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         # overseas min/max, a tournament's rating rules), so an Impact Player
         # swap can be held to the same rules. See impact_player.cipl_swap_error.
         try:
-            from handlers.challenge import _challenge_xi_limits
+            from handlers.challenge import (_challenge_xi_limits,
+                                            fresh_overseas_limits)
             lo, hi, rules = _challenge_xi_limits(draft)
+            # The draft's limits are cached when Select XI opens; read the
+            # league / tournament again so the cap holds whatever path led
+            # here (a CL Tour draft only ever cached the league's numbers).
+            fresh = fresh_overseas_limits(draft)
+            if fresh is not None:
+                lo, hi = fresh
             state["xi_rules"] = {"min_overseas": lo, "max_overseas": hi,
                                  "rating_rules": rules}
             # /cipl multi: each captain's own league overseas rule, keyed by
@@ -3334,6 +3341,34 @@ def _impact_unavailable_text(opts, next_action):
             "/impact again, once the next bowler prompt appears.")
 
 
+def _impact_label(p):
+    """A picker button: name, card rating, and ✈️ for an overseas player."""
+    plane = " ✈️" if p.get("is_overseas") else ""
+    return f"{p['name']}{plane} ({cipl_match.display_rating(p)})"
+
+
+def _impact_overseas_block(state, side, offered=None, bench=None):
+    """The IPL overseas rule as the picker shows it, or ``""`` with no cap.
+
+    Overseas substitutes the rule filters out simply vanish from the buttons,
+    so step 2 also says how many were held back and why.
+    """
+    line = impact_player.overseas_status_line(state, side)
+    if not line:
+        return ""
+    out = [html.escape(line)]
+    if offered is not None and bench:
+        status = impact_player.overseas_status(state, side)
+        offered_ids = {p.get("roster_id") for p in offered}
+        hidden = sum(1 for p in bench if p.get("is_overseas")
+                     and p.get("roster_id") not in offered_ids)
+        if hidden and status and status[0] >= status[1]:
+            subs = "sub" if hidden == 1 else "subs"
+            out.append(f"🚫 {hidden} overseas {subs} hidden — XI already has "
+                       f"{status[0]}/{status[1]} overseas")
+    return "\n".join(out) + "\n\n"
+
+
 async def _send_impact_step1(context, state, mid, owner_tg, opts):
     """Post step 1 of the picker — who comes off.
 
@@ -3344,7 +3379,7 @@ async def _send_impact_step1(context, state, mid, owner_tg, opts):
     rows, row = [], []
     for p in opts["replaceable_players"]:
         row.append(InlineKeyboardButton(
-            f"{p['name']} ({cipl_match.display_rating(p)})",
+            _impact_label(p),
             callback_data=_imp_cb("cipl_impo_", owner_tg, mid,
                                   p["roster_id"])))
         if len(row) == 2:
@@ -3355,6 +3390,7 @@ async def _send_impact_step1(context, state, mid, owner_tg, opts):
     await _post_tracked(
         context, state,
         f"🔄 <b>Impact Player</b> — {html.escape(str(opts['legal_break']))}\n\n"
+        f"{_impact_overseas_block(state, opts['side'])}"
         f"Step 1 of 3: who comes <b>off</b>?", keyboard=rows)
     try:
         await _ss(context, mid, state)
@@ -3407,7 +3443,7 @@ async def cipl_impact_out_callback(update: Update, context: ContextTypes.DEFAULT
         rows, row = [], []
         for p in legal_in:
             row.append(InlineKeyboardButton(
-                f"{p['name']} ({cipl_match.display_rating(p)})",
+                _impact_label(p),
                 callback_data=_imp_cb("cipl_impi_", owner_tg, mid, out_rid,
                                       p["roster_id"])))
             if len(row) == 2:
@@ -3419,6 +3455,7 @@ async def cipl_impact_out_callback(update: Update, context: ContextTypes.DEFAULT
             q,
             f"🔄 <b>Impact Player</b>\n\n"
             f"Off: <b>{html.escape(str(outgoing['name']))}</b>\n"
+            f"{_impact_overseas_block(state, opts['side'], legal_in, opts.get('bench_all'))}"
             f"Step 2 of 3: who comes <b>on</b>?", rows)
 
 

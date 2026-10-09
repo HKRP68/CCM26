@@ -289,6 +289,51 @@ NO_LEGAL_SWAP_MESSAGE = (
 )
 
 
+def _rules_for(state, side):
+    """``(rules, min_overseas, max_overseas)`` for ``side``, or ``None`` when
+    the match carries no Playing XI rules."""
+    rules = state.get("xi_rules")
+    if not isinstance(rules, dict):
+        return None
+    # /cipl multi carries each captain's own league limits.
+    own = (rules.get("by_user") or {}).get(str(state.get(f"{side}_user_tg")))
+    if isinstance(own, dict):
+        rules = {**rules, **own}
+    try:
+        lo = int(rules.get("min_overseas") or 0)
+    except (TypeError, ValueError):
+        lo = 0
+    try:
+        hi = int(rules.get("max_overseas", 11))
+    except (TypeError, ValueError):
+        hi = 11
+    return rules, lo, hi
+
+
+def overseas_status(state, side):
+    """``(have, max_overseas)`` for ``side``'s XI on the field, or ``None``
+    when there is no overseas cap to show (no XI rules, or a cap of 11)."""
+    resolved = _rules_for(state, side)
+    if resolved is None or resolved[2] >= 11:
+        return None
+    have = sum(1 for p in active_players(state.get(f"{side}_xi") or [])
+               if p.get("is_overseas"))
+    return have, resolved[2]
+
+
+def overseas_status_line(state, side):
+    """The picker's ✈️ line, or ``""`` when there is no cap."""
+    status = overseas_status(state, side)
+    if status is None:
+        return ""
+    have, hi = status
+    if have < hi:
+        return (f"✈️ Overseas in XI: {have}/{hi} — an overseas Impact Player "
+                f"may come on")
+    return (f"✈️ Overseas in XI: {have}/{hi} — overseas Impact Player not "
+            f"allowed (IPL rule)")
+
+
 def cipl_swap_error(state, side, out_roster_id, incoming):
     """``""`` when swapping ``incoming`` for ``out_roster_id`` keeps ``side``'s
     XI within the Playing XI rules, else the rule it breaks.
@@ -298,25 +343,14 @@ def cipl_swap_error(state, side, out_roster_id, incoming):
     only). A state without them — /letsplay, or a match started before the
     rules were carried — is not checked, exactly as before.
     """
-    rules = state.get("xi_rules")
-    if not isinstance(rules, dict) or not isinstance(incoming, dict):
+    resolved = _rules_for(state, side)
+    if resolved is None or not isinstance(incoming, dict):
         return ""
+    rules, lo, hi = resolved
     from services.xi_rules import validate_challenge_xi_dicts
-    # /cipl multi carries each captain's own league limits.
-    own = (rules.get("by_user") or {}).get(str(state.get(f"{side}_user_tg")))
-    if isinstance(own, dict):
-        rules = {**rules, **own}
     before = active_players(state.get(f"{side}_xi") or [])
     after = [p for p in before if p.get("roster_id") != out_roster_id]
     after.append(incoming)
-    try:
-        lo = int(rules.get("min_overseas") or 0)
-    except (TypeError, ValueError):
-        lo = 0
-    try:
-        hi = int(rules.get("max_overseas", 11))
-    except (TypeError, ValueError):
-        hi = 11
     error = overseas_swap_error(before, after, incoming, lo, hi)
     if error:
         return error
