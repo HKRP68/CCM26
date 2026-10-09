@@ -11,6 +11,8 @@ for a player to see the schedule. These commands close that gap:
     /ctinjuries   the treatment room, when the tournament has injuries on
     /clsd <team>  one team's whole tournament: where they stand, their form,
                   what they play next and every result so far
+    /teamowner [team]  who owns and co-owns each team (names only, nobody is
+                  pinged)
     /teamtourstats [team]  the same team by the numbers — standing, what it
                   scores and concedes, its best and worst days, and which of
                   its own players are carrying it
@@ -356,6 +358,57 @@ async def clsd_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await R.edit_rich(q, blocks, text)
     except Exception:
         logger.exception("/clsd pick callback failed")
+    finally:
+        session.close()
+
+
+# ══════════════════════════════════════════════════════════════════════
+# /teamowner [TEAM NAME] — who runs which team
+# ══════════════════════════════════════════════════════════════════════
+#
+# Every team in the live tournament(s) with its owner and co-owners named. The
+# names are plain text — handles without the ``@`` — so checking who owns what
+# never pings the people listed. A team name narrows it to that one team.
+
+_TO_HEADER = "👑 <b>Team owners</b>"
+_TO_USAGE = ("Usage: <code>/teamowner</code> for every team, or "
+             "<code>/teamowner &lt;team name&gt;</code> for one.")
+
+
+async def teamowner_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/teamowner [TEAM NAME] — each team's owner and co-owners, untagged."""
+    session = get_session()
+    try:
+        tours = _live_tournaments(session)
+        if not tours:
+            await _reply(update, NO_ACTIVE_ANY)
+            return
+        query = " ".join(context.args or []).strip()
+        if not query:
+            await _reply(update, ctv.render_team_owners(session, tours))
+            return
+        tour, team, candidates = _resolve(session, query)
+        if team is not None:
+            await _reply(update,
+                         ctv.render_team_owners(session, [tour], only=team))
+            return
+        if candidates:
+            # Cheaper to answer for every team it could mean than to ask.
+            lines = [f"🤔 <b>{escape(query)}</b> could be "
+                     f"{len(candidates)} teams:", ""]
+            lines += [f"• <b>{escape(tt.name or '—')}</b> — "
+                      f"{ctv.owners_html(session, tt) or '<i>unowned</i>'}"
+                      for tt in candidates]
+            await _reply(update, "\n".join(lines))
+            return
+        await _reply(
+            update,
+            f"❌ No team called <b>{escape(query)}</b> is in the tournament.\n\n"
+            + _team_list_text(session, tours,
+                              header=_TO_HEADER, usage=_TO_USAGE))
+    except Exception:
+        logger.exception("/teamowner failed")
+        await _reply(update, "⚠️ Could not load the team owners right now.")
     finally:
         session.close()
 

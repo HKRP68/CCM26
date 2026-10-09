@@ -301,8 +301,38 @@ class TeamScheduleCardTests(ScheduleCase):
         self.session.commit()
         text = self.render()
         self.assertIn("Ana", text)
-        self.assertIn("🤝 +1", text)
+        self.assertIn("🤝 222", text)
         self.assertIn("pts", text)
+
+    def test_owner_and_co_owners_sit_beside_the_name_untagged(self):
+        from models import User
+        ana, bob, cy = next(_TG), next(_TG), next(_TG)
+        self.session.add_all([
+            User(telegram_id=ana, username="ana_07", first_name="Ana"),
+            User(telegram_id=bob, username="bob_x"),
+            User(telegram_id=cy, first_name="Cy")])
+        self.ts.set_team_owner(self.session, self.mi.id, ana, "Ana")
+        self.ts.set_co_owners(self.session, self.mi.id, [bob, cy])
+        self.session.commit()
+        head = self.render().splitlines()[0]
+        self.assertIn("<b>Mumbai Indians</b> (👤 ana_07 · 🤝 bob_x, Cy)", head)
+        self.assertNotIn("@", self.render(), "a name on the card must not ping")
+        self.assertNotIn("tg://", self.render())
+
+    def test_teamowner_lists_every_team_untagged(self):
+        from models import User
+        dee, stranger = next(_TG), next(_TG)
+        self.session.add(User(telegram_id=dee, username="dee"))
+        self.ts.set_team_owner(self.session, self.mi.id, dee, "@dee")
+        self.ts.set_co_owners(self.session, self.mi.id, [stranger])
+        self.session.commit()
+        text = self.ctv.render_team_owners(self.session, [self.tour])
+        self.assertIn(f"<b>Mumbai Indians</b> — 👤 dee · 🤝 {stranger}", text)
+        self.assertIn("<b>Delhi Capitals</b> — <i>unowned</i>", text)
+        self.assertNotIn("@", text)
+        one = self.ctv.render_team_owners(self.session, [self.tour], only=self.mi)
+        self.assertIn("Mumbai Indians", one)
+        self.assertNotIn("Delhi Capitals", one)
 
     def test_a_co_owner_is_told_it_is_their_team(self):
         self.ts.set_team_owner(self.session, self.mi.id, 111, "Ana")
