@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ t.name }} — Delete fixture?{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_tournament.css') }}">{% endblock %}
+
+{% block content %}
+{# Asked by the server, not only by a confirm() popup: Telegram's in-app browser
+   can skip the popup, and a played fixture takes the table and stats with it. #}
+<section class="section-card" style="max-width:640px;margin:1.5rem auto;">
+  <div class="section-header"><div>
+    <h2 class="section-title"><i class="fas fa-triangle-exclamation"></i>
+      Delete {{ 'match' if fx.match_no else 'fixture' }} {{ fx.match_no or ('#' ~ fx.id) }}?</h2>
+    <div class="section-subtitle">{{ t.name }} · {{ (fx.stage or 'league')|replace('_', ' ') }}{% if fx.round_no %} · Round {{ fx.round_no }}{% endif %} · <b>{{ fx.status }}</b></div>
+  </div></div>
+
+  <div class="teams-versus" style="margin:1rem 0;">
+    <div class="team-block"><div class="team-name-display">{{ team1 }}</div>
+      {% if fx.inn1_runs is not none %}<div class="score-display">{{ fx.inn1_runs }}/{{ fx.inn1_wickets }}</div>{% endif %}</div>
+    <div class="vs-divider">VS</div>
+    <div class="team-block"><div class="team-name-display">{{ team2 }}</div>
+      {% if fx.inn2_runs is not none %}<div class="score-display">{{ fx.inn2_runs }}/{{ fx.inn2_wickets }}</div>{% endif %}</div>
+  </div>
+  {% if fx.result_text %}<div class="result-banner"><i class="fas fa-trophy"></i> {{ fx.result_text }}</div>{% endif %}
+
+  <p style="margin:1rem 0;">
+    {% if fx.status == 'completed' %}
+      Its result is removed and the <b>points table, net run rate and player stats are rebuilt without it</b>.
+      {% if fx.feeds_winner_to_id or fx.feeds_loser_to_id %}Any knockout place it decided is undone.{% endif %}
+    {% elif fx.status == 'live' %}
+      A match is being played for it right now — that match will no longer count for this fixture.
+    {% endif %}
+    {% if via == 'match' and fx.match_no %}The fixture stays on the schedule as unplayed, so it can be played again.{% elif via != 'match' %}The fixture leaves the schedule.{% endif %}
+  </p>
+
+  <div style="display:flex;gap:.6rem;flex-wrap:wrap;">
+    {% if via == 'match' %}
+    <form method="POST" action="{{ url_for('admin_tournament_match_delete', tournament_id=t.id, match_row_id=fx.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="confirmed" value="1">
+      <button class="action-btn danger-btn" type="submit"><i class="fas fa-trash"></i> Yes, delete it</button>
+    </form>
+    {% else %}
+    <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="delete_fixture">
+      <input type="hidden" name="fixture_id" value="{{ fx.id }}">
+      <input type="hidden" name="force" value="1">
+      <input type="hidden" name="confirmed" value="1">
+      <input type="hidden" name="return_to" value="{{ return_to }}">
+      <button class="action-btn danger-btn" type="submit"><i class="fas fa-trash"></i> Yes, delete it</button>
+    </form>
+    {% endif %}
+    <a class="action-btn" href="{{ cancel_url }}"><i class="fas fa-xmark"></i> Cancel — keep it</a>
+  </div>
+</section>
+{% endblock %}

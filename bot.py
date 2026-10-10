@@ -526,7 +526,7 @@ ADMIN_MENU_COMMANDS = (
     # Running tournament: the points table, and matches played off the bot.
     ("tpoints", "Admin: dock or award points on the tournament table"),
     ("tpointsclear", "Admin: clear a team's points adjustment"),
-    ("taddmatch", "Admin: record a fixture from a replied scorecard file"),
+    ("taddmatch", "Admin: record a fixture from a bot match id or a replied scorecard"),
     ("tfixsync", "Admin: un-stick fixtures still showing as live"),
     ("remindmatch", "Admin: nudge two teams to play their pending fixture"),
 )

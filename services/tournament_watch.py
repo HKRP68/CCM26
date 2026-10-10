@@ -229,7 +229,9 @@ def _expired_post(session, tour, rnd, pending):
                     ("⏳ +48h", f"{CB_EXTEND}{tour.id}_48")])
     lines += ["", "Nothing is simulated automatically. A tournament admin can "
                   "settle a match (buttons or <code>/tsim</code>) or give the "
-                  "round more time (<code>/tdeadline +24h</code>)."]
+                  "round more time (<code>/tdeadline +24h</code>).",
+              "A simulated match can still be played by its two teams — the "
+              "real result then replaces the simulated one."]
     text = "\n".join(lines)
     dms = [(tg, text) for tg in _admin_ids()]
     return Post(chat_id=tour.announce_chat_id, text=text, buttons=buttons,

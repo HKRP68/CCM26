@@ -100,6 +100,10 @@ _BOWL_HEADINGS = ("bowling", "bowlers", "bowler", "bowl")
 # These introduce *lists* — "1-25 (3.2)", a run of names — that carry nothing
 # this importer has a column for, and that no player grammar will accept.
 _SKIP_HEADINGS = ("fall of wickets", "fow", "did not bat", "dnb", "partnerships")
+# "--- PLAYING XI ---" and "--- Mumbai Indians Playing XI ---": the squad list
+# the classic /play engine appends to its MatchNo<id>.txt. Names with a role in
+# brackets, nothing to record — and nothing a player grammar accepts either.
+_PLAYING_XI_RE = re.compile(r"^[\W_]*(?:.*\s)?playing\s*(?:xi|11)\b[\W_]*$", re.I)
 # Single lines with nothing to record on them.
 _IGNORED_PREFIXES = ("extras", "toss", "venue", "pitch", "stadium", "umpire",
                      "match", "player of the match", "potm", "overs",
@@ -541,7 +545,7 @@ def parse_scorecard(text):
         if _is_heading(line, _BOWL_HEADINGS):
             section = "bowling"
             continue
-        if _is_heading(line, _SKIP_HEADINGS):
+        if _is_heading(line, _SKIP_HEADINGS) or _PLAYING_XI_RE.match(line):
             # A list of fall-of-wickets entries or names follows. None of it has
             # a column here, and none of it parses as a player, so everything up
             # to the next section or innings is skipped rather than refused.
@@ -748,11 +752,14 @@ def plan_import(session, fixture, parsed):
     from models import Tournament, TournamentTeam
     from services.tournament_service import _overs_to_balls
 
-    if fixture.status == "completed":
+    from services import league_schedule_service
+    replaces_simulated = (fixture.status == "completed" and
+                          league_schedule_service._replay_allowed(session, fixture))
+    if fixture.status == "completed" and not replaces_simulated:
         raise ScorecardError(
             "That fixture is already completed — remove its result from the "
             "tournament dashboard first, then import the card again.")
-    if fixture.status != "scheduled":
+    if fixture.status not in ("scheduled", "completed"):
         raise ScorecardError(
             f"That fixture is '{fixture.status}', not scheduled. A match still "
             "being played has to finish (or be cleared) before a written "
@@ -780,6 +787,10 @@ def plan_import(session, fixture, parsed):
     tour = session.get(Tournament, fixture.tournament_id)
     max_overs = int(tour.overs) if tour and tour.overs else None
     warnings = []
+    if replaces_simulated:
+        warnings.append("This fixture has a simulated result ("
+                        f"{fixture.result_text or 'simulated'}). Recording this "
+                        "card replaces it with the real one.")
     innings_out = []
     for block, team in zip(blocks, resolved):
         balls = _overs_to_balls(block["overs"])
@@ -940,7 +951,10 @@ def record_import(session, plan):
     if plan["swap_sides"]:
         fixture.team1_id, fixture.team2_id = first["team"].id, second["team"].id
 
+    if fixture.status == "completed" and fixture.is_simulated:
+        tournament_service._retract_simulated(session, fixture)
     fixture.status = "completed"
+    fixture.is_simulated = False
     fixture.match_id = None            # not a bot-played match
     fixture.winner_team_id = plan["winner_team_id"]
     fixture.result_text = plan["result_text"]
@@ -973,6 +987,121 @@ def record_import(session, plan):
                 "%s player lines)", fixture.id, plan["winner_team_id"],
                 len(plan["lines"]))
     return fixture
+
+
+# ──────────────────────────────────────────────────────────────────────
+# The card for a match the bot itself played
+# ──────────────────────────────────────────────────────────────────────
+#
+# The archived MatchNo<id>.txt lives in a private storage channel, where nobody
+# can reply to it from the group. Everything in that file came out of the
+# database in the first place, so it is rebuilt from there instead — through the
+# one writer the grammar above is tested against, whichever engine played it.
+
+_MATCH_ID_RE = re.compile(r"^(?:matchno|match|#)?\s*(\d+)(?:\.txt)?$", re.I)
+
+
+def parse_match_id(token):
+    """``"576"``, ``"#576"``, ``"MatchNo576"``, ``"MatchNo576.txt"`` → ``576``."""
+    hit = _MATCH_ID_RE.match(str(token or "").strip())
+    return int(hit.group(1)) if hit else None
+
+
+def _innings_from_cards(rows):
+    """Innings dicts (the archive writer's shape) from the classic engine's
+    stored scorecard-image payloads, plus the result line when there is one."""
+    import json
+
+    by_innings, result_text = {}, None
+    for row in rows:
+        try:
+            payload = json.loads(row.payload_json or "{}")
+        except (TypeError, ValueError):
+            continue
+        if row.card_type == "summary":
+            winner = payload.get("winner_name")
+            margin = payload.get("win_margin_text")
+            # The margin already reads "by 7 runs" or "(Super Over)".
+            if winner:
+                result_text = f"{winner} won {margin or ''}".strip()
+            elif payload.get("inn1_runs") is not None:
+                result_text = "Match Tied"
+            continue
+        if row.card_type not in ("batting", "bowling") or row.innings not in (1, 2):
+            continue
+        inn = by_innings.setdefault(row.innings, {
+            "number": row.innings, "bat_team": None, "runs": 0, "wickets": 0,
+            "overs": "0", "batting": [], "bowling": []})
+        if row.card_type == "batting":
+            inn["bat_team"] = payload.get("team_name") or inn["bat_team"]
+            inn["runs"] = payload.get("total_runs", 0) or 0
+            inn["wickets"] = payload.get("total_wickets", 0) or 0
+            inn["overs"] = str(payload.get("overs_str") or "0")
+            for r in payload.get("batsmen_rows") or []:
+                if r.get("status") == "dnb":
+                    continue
+                out = r.get("status") == "out"
+                inn["batting"].append({
+                    "name": r.get("name") or "?",
+                    "how_out": (r.get("dismissal") or "out") if out else "not out",
+                    "out": out, "runs": r.get("runs", 0) or 0,
+                    "balls": r.get("balls", 0) or 0,
+                    "fours": r.get("fours", 0) or 0,
+                    "sixes": r.get("sixes", 0) or 0,
+                    "sr": r.get("strike_rate", 0) or 0})
+        else:
+            if not inn["bat_team"]:
+                inn["bat_team"] = payload.get("opponent_name")
+            for b in payload.get("bowlers_rows") or []:
+                inn["bowling"].append({
+                    "name": b.get("name") or "?", "overs": str(b.get("overs") or "0"),
+                    "maidens": b.get("maidens", 0) or 0,
+                    "runs": b.get("runs_conceded", 0) or 0,
+                    "wickets": b.get("wickets", 0) or 0,
+                    "econ": b.get("economy", 0) or 0})
+    return [by_innings[n] for n in sorted(by_innings)], result_text
+
+
+def card_text_for_match(session, match_id):
+    """The MatchNo<id>.txt text for a match the bot played, rebuilt from the
+    database. Raises :class:`ScorecardError` when the bot kept no record of it.
+
+    The Mini-App engines (/cm, /cipl, Super Over) snapshot a ``MatchScorecard``
+    row; the classic /play engine stores the values behind every scorecard
+    image. Either is enough to rebuild the whole card.
+    """
+    from models import MatchScorecardImage
+    from services.match_webapp_service import (_build_text_scorecard,
+                                               load_final_scorecard)
+
+    mid = int(match_id)
+    innings, result_text, super_over = [], None, None
+    final = load_final_scorecard(session, mid)
+    if final and final.get("innings"):
+        innings = list(final["innings"])
+        result_text = final.get("result_text")
+        super_over = final.get("super_over")
+        if isinstance(super_over, dict):
+            # {"winner", "marginText", "innings"} — one line is all the file holds.
+            super_over = " ".join(str(v) for v in (super_over.get("winner"),
+                                                    super_over.get("marginText")) if v)
+    else:
+        rows = (session.query(MatchScorecardImage)
+                .filter(MatchScorecardImage.match_id == mid)
+                .order_by(MatchScorecardImage.sort_order,
+                          MatchScorecardImage.id).all())
+        innings, result_text = _innings_from_cards(rows)
+
+    if not innings:
+        raise ScorecardError(
+            f"The bot has no saved scorecard for match {mid}. Check the number "
+            f"on MatchNo{mid}.txt, or forward that file here and reply to it.")
+    if len(innings) < INNINGS_PER_MATCH:
+        raise ScorecardError(
+            f"Match {mid} only has {len(innings)} innings on record — it was "
+            "abandoned before the chase, so there is no result to import.")
+    return _build_text_scorecard(mid, innings, result_text=result_text,
+                                 super_over=super_over)
 
 
 # What the bot's own archived scorecard looks like, and the shortest thing

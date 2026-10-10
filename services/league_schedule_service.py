@@ -959,7 +959,68 @@ def find_open_fixture(session, tournament_id, team1_id, team2_id,
         clause = _open_round_filter(session, tid)
         if clause is not None:
             q = q.filter(clause)
-    return q.order_by(TournamentMatch.round_no, TournamentMatch.match_no).first()
+    fx = q.order_by(TournamentMatch.round_no, TournamentMatch.match_no).first()
+    if fx is None and not include_locked:
+        # Nothing unplayed — but a fixture settled by /tsim can still be played
+        # for real, and the real result then replaces the simulated one.
+        fx = replayable_fixture(session, tid, a, b)
+    return fx
+
+
+def _replay_allowed(session, fx, tour=None):
+    """True when the simulated result on ``fx`` may still be overwritten.
+
+    Not once something has been built on top of it: a knockout fixture whose
+    next round has started, or a league fixture once the playoffs were drawn
+    from the standings it helped decide.
+    """
+    from models import Tournament, TournamentMatch
+    if fx is None or fx.status != "completed" or not fx.is_simulated:
+        return False
+    if (fx.stage or "") in LEAGUE_STAGES:
+        tour = tour or session.get(Tournament, fx.tournament_id)
+        return not (tour and tour.knockout_generated)
+    if fx.stage == "final":
+        # Prizes already paid to the simulated champion can't be clawed back.
+        tour = tour or session.get(Tournament, fx.tournament_id)
+        if tour is not None and tour.awards_given_at:
+            return False
+    for nid in (fx.feeds_winner_to_id, fx.feeds_loser_to_id):
+        nxt = session.get(TournamentMatch, nid) if nid else None
+        if nxt is not None and nxt.status != "scheduled":
+            return False
+    return True
+
+
+def _replayable_query(session, tid):
+    """Simulated, completed fixtures of a tournament in the rounds open now."""
+    from models import TournamentMatch
+    q = (session.query(TournamentMatch)
+         .filter_by(tournament_id=int(tid), status="completed")
+         .filter(TournamentMatch.is_simulated.is_(True)))
+    clause = _open_round_filter(session, tid)
+    if clause is not None:
+        q = q.filter(clause)
+    return q.order_by(TournamentMatch.round_no, TournamentMatch.match_no)
+
+
+def replayable_fixture(session, tournament_id, team1_id, team2_id):
+    """A fixture for this pair that was settled by /tsim and can still be played.
+
+    The simulated result stays on the table while the replay is played; the
+    real result overwrites it when the match is recorded
+    (``tournament_service.record_tournament_match``). An abandoned replay
+    leaves it exactly as it was. None when there is no such fixture.
+    """
+    from sqlalchemy import or_, and_
+    from models import TournamentMatch
+    a, b = int(team1_id), int(team2_id)
+    rows = (_replayable_query(session, tournament_id)
+            .filter(or_(
+                and_(TournamentMatch.team1_id == a, TournamentMatch.team2_id == b),
+                and_(TournamentMatch.team1_id == b, TournamentMatch.team2_id == a)))
+            .all())
+    return next((fx for fx in rows if _replay_allowed(session, fx)), None)
 
 
 def _team_id_by_name(session, tid, name):
@@ -992,7 +1053,9 @@ def reserve_fixture(session, tournament_id, team1_id, team2_id):
         q = q.filter(clause)
     fx = q.order_by(TournamentMatch.round_no, TournamentMatch.match_no).first()
     if not fx:
-        return None
+        # A simulated fixture is replayed in place: it keeps its status (and so
+        # its result on the table) until the real match is recorded over it.
+        return replayable_fixture(session, tid, a, b)
     claimed = (session.query(TournamentMatch)
                .filter(TournamentMatch.id == fx.id,
                        TournamentMatch.status == "scheduled")
@@ -1124,7 +1187,10 @@ def release_fixture(session, fixture_id):
 
 
 def remaining_opponents(session, tournament_id, tournament_team_id):
-    """Set of TournamentTeam ids with an open fixture vs this team this round."""
+    """Set of TournamentTeam ids with an open fixture vs this team this round.
+
+    A fixture settled by /tsim that can still be replayed counts as open.
+    """
     from sqlalchemy import or_
     from models import TournamentMatch
     tid = int(tournament_id)
@@ -1138,6 +1204,10 @@ def remaining_opponents(session, tournament_id, tournament_team_id):
     if clause is not None:
         q = q.filter(clause)
     rows = q.all()
+    rows += [m for m in (_replayable_query(session, tid)
+                         .filter(or_(TournamentMatch.team1_id == ttid,
+                                     TournamentMatch.team2_id == ttid)).all())
+             if _replay_allowed(session, m)]
     opp = set()
     for m in rows:
         if m.team1_id == ttid and m.team2_id:

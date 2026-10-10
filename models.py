@@ -3072,6 +3072,11 @@ class TournamentMatch(Base):
     slot1_label = Column(String(60), nullable=True)
     slot2_label = Column(String(60), nullable=True)
 
+    # True while the result is a /tsim (deadline) simulation rather than a match
+    # anyone played. The two teams can still play it: the real result then
+    # replaces this one (services.league_schedule_service.replayable_fixture).
+    is_simulated = Column(Boolean, default=False, nullable=False,
+                          server_default=text("false"))
     inn1_runs = Column(Integer, nullable=True)
     inn1_wickets = Column(Integer, nullable=True)
     inn1_balls = Column(Integer, nullable=True)

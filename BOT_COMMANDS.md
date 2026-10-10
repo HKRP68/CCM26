@@ -907,8 +907,9 @@ overdraw somebody is refused by name.
 | `/tpoints <TEAM> \| <±N> \| <reason>` | Dock or award points — `/tpoints MI \| +2 \| walkover` |
 | `/tpointsclear <TEAM>` | Clear a team's points adjustment |
 | `/taddmatch <match number>` · `/addmatch` *(reply to a scorecard)* | Record a fixture played off the bot |
+| `/taddmatch <match number> <bot match id>` | Record a fixture from a match the bot played (the id in `MatchNo<id>.txt`) — no file or reply needed |
 | `/tfixsync` | Un-stick fixtures still showing as live |
-| `/tdeadline 48h` · `/tdeadline +12h` · `/tdeadline off` | Round deadlines. Owners are reminded 24h and 2h before; when time runs out the admins are alerted (group + DM, with /tsim and +24h buttons). **Nothing is simulated automatically** |
+| `/tdeadline 48h` · `/tdeadline +12h` · `/tdeadline off` | Round deadlines. Owners are reminded 24h and 2h before; when time runs out the admins are alerted (group + DM, with /tsim and +24h buttons). **Nothing is simulated automatically**; a simulated match can still be played by its two teams, and the real result replaces it |
 | `/tfixturemode round` · `/tfixturemode all` | How the league schedule is released: **round** (default) shows and opens one round at a time, the next unlocking when it's finished; **all** shows every fixture and lets any be played in any order |
 | `/tsetchat` | Post the tournament's recaps, deadline alerts, bracket and ceremony in this group (default: the first group a tournament match is played in) |
 | `/ttiebreak h2h\|nrr` | Teams level on points: head-to-head first, or wins then NRR |

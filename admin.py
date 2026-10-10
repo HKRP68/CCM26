@@ -17337,6 +17337,15 @@ def admin_tournament_detail(tournament_id):
                         fx = db.get(TournamentMatch, _int_form("fixture_id"))
                         if not fx or fx.tournament_id != t.id:
                             raise ValueError("Fixture not found in this tournament.")
+                        if fx.status != "scheduled" and not request.form.get("confirmed"):
+                            # A played fixture takes its result, the table and
+                            # the stats with it. The page's confirm() popup is
+                            # not enough on its own — Telegram's in-app browser
+                            # skips it — so the server asks as well.
+                            return redirect(url_for(
+                                "admin_tournament_fixture_confirm_delete",
+                                tournament_id=t.id, fixture_id=fx.id,
+                                return_to=request.form.get("return_to") or ""))
                         was = fx.status
                         label = f"match {fx.match_no or fx.id} ({fx.stage}, {was})"
                         league_schedule_service.delete_fixture(
@@ -17982,6 +17991,39 @@ def admin_tournament_points(tournament_id):
                             tournament_id=tournament_id) + "#points-table")
 
 
+@app.route("/tournaments/<int:tournament_id>/fixtures/<int:fixture_id>/confirm-delete")
+@login_required
+def admin_tournament_fixture_confirm_delete(tournament_id, fixture_id):
+    """Ask before a played fixture is deleted — its result, the table and the
+    player stats go with it. ``via=match`` answers the dashboard's
+    recorded-match delete; otherwise the schedule's fixture delete."""
+    db = get_session()
+    try:
+        t = _get_tournament_or_404(db, tournament_id)
+        if not t:
+            return redirect(url_for("admin_tournaments_list"))
+        fx = db.get(TournamentMatch, fixture_id)
+        if not fx or fx.tournament_id != t.id:
+            flash("Fixture not found in this tournament.", "error")
+            return redirect(url_for("admin_tournament_schedule", tournament_id=t.id))
+        names = {tt.id: tt.name for tt in
+                 db.query(TournamentTeam).filter_by(tournament_id=t.id).all()}
+        via = "match" if request.args.get("via") == "match" else "fixture"
+        return_to = request.args.get("return_to") or ""
+        if return_to not in ("schedule", "dashboard"):
+            return_to = "dashboard" if via == "match" else "schedule"
+        back = ("admin_tournament_dashboard" if return_to == "dashboard"
+                else "admin_tournament_schedule")
+        return render_template(
+            "admin_tournament_fixture_confirm_delete.html", t=t, fx=fx, via=via,
+            team1=names.get(fx.team1_id) or fx.slot1_label or "TBD",
+            team2=names.get(fx.team2_id) or fx.slot2_label or "TBD",
+            return_to=return_to,
+            cancel_url=url_for(back, tournament_id=t.id))
+    finally:
+        db.close()
+
+
 @app.route("/tournaments/<int:tournament_id>/matches/<int:match_row_id>/delete", methods=["POST"])
 @login_required
 def admin_tournament_match_delete(tournament_id, match_row_id):
@@ -17992,6 +18034,12 @@ def admin_tournament_match_delete(tournament_id, match_row_id):
         tm = db.get(TournamentMatch, match_row_id)
         if not tm or tm.tournament_id != tournament_id:
             flash("Match not found.", "error")
+        elif not request.form.get("confirmed"):
+            # Asked on the server, not only by a confirm() popup the in-app
+            # browser may never show.
+            return redirect(url_for("admin_tournament_fixture_confirm_delete",
+                                    tournament_id=tournament_id,
+                                    fixture_id=tm.id, via="match"))
         else:
             tournament_service.delete_tournament_match(db, tm.id)
             log_admin(db, "tournament_match_delete", "tournament", tournament_id,

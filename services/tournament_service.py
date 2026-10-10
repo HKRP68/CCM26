@@ -741,13 +741,18 @@ def _find_open_fixture(session, tournament_id, team1_id, team2_id):
     """
     from sqlalchemy import or_, and_
     tid, a, b = int(tournament_id), int(team1_id), int(team2_id)
-    return (session.query(TournamentMatch)
-            .filter_by(tournament_id=tid)
-            .filter(TournamentMatch.status != "completed")
-            .filter(or_(
-                and_(TournamentMatch.team1_id == a, TournamentMatch.team2_id == b),
-                and_(TournamentMatch.team1_id == b, TournamentMatch.team2_id == a)))
-            .order_by(TournamentMatch.round_no, TournamentMatch.match_no).first())
+    fx = (session.query(TournamentMatch)
+          .filter_by(tournament_id=tid)
+          .filter(TournamentMatch.status != "completed")
+          .filter(or_(
+              and_(TournamentMatch.team1_id == a, TournamentMatch.team2_id == b),
+              and_(TournamentMatch.team1_id == b, TournamentMatch.team2_id == a)))
+          .order_by(TournamentMatch.round_no, TournamentMatch.match_no).first())
+    if fx is None:
+        # A /tsim result the pair has just played for real.
+        from services import league_schedule_service
+        fx = league_schedule_service.replayable_fixture(session, tid, a, b)
+    return fx
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -768,7 +773,11 @@ def _reserved_fixture(session, tournament_id, fixture_id, team1_id, team2_id):
     if tm is None or tm.tournament_id != int(tournament_id):
         return None
     if tm.status == "completed":
-        return None
+        # Only a simulated result may be played over, and only while nothing
+        # downstream has been built on it.
+        from services import league_schedule_service
+        if not league_schedule_service._replay_allowed(session, tm):
+            return None
     if {tm.team1_id, tm.team2_id} != {int(team1_id), int(team2_id)}:
         return None
     return tm
@@ -1166,6 +1175,21 @@ def adjusted_teams(session, tournament_id):
             .order_by(TournamentTeam.name).all())
 
 
+def _retract_simulated(session, tm):
+    """Undo the knock-on effects of a simulated result about to be replaced:
+    the knockout advancement it caused and, for a final, its champion story."""
+    if tm.stage == "final":
+        from services.news_service import retract_auto_story
+        retract_auto_story(session, f"tourney:{tm.tournament_id}")
+    try:
+        from services import knockout_service
+        knockout_service.retract_bracket(session, tm)
+    except Exception:
+        logger.exception("retract_bracket failed for replayed fixture %s", tm.id)
+    logger.info("Replacing simulated result on fixture %s with a played match",
+                tm.id)
+
+
 def delete_tournament_match(session, tournament_match_id):
     """Delete one recorded match and rebuild standings + player stats without it.
 
@@ -1191,6 +1215,7 @@ def delete_tournament_match(session, tournament_match_id):
         # A real scheduled/knockout fixture — revert it to a pending fixture so the
         # pair can replay it, rather than dropping it from the schedule entirely.
         tm.status = "scheduled"
+        tm.is_simulated = False
         tm.match_id = None
         tm.winner_team_id = None
         tm.result_text = None
@@ -1279,6 +1304,7 @@ def record_manual_result(session, fixture_id, *,
     result_text = "Match Tied" if win_id is None else f"{_name(win_id)} won"
 
     tm.status = "completed"
+    tm.is_simulated = False  # simulate_fixture marks its own result afterwards
     tm.winner_team_id = win_id
     tm.result_text = result_text[:300]
     tm.inn1_runs, tm.inn1_wickets, tm.inn1_balls = i1r, i1w, i1b
@@ -1472,7 +1498,9 @@ def simulate_fixture(session, fixture_id, outcome="random", rng=None):
         else:
             margin = f"by {r1 - r2} run{'s' if r1 - r2 != 1 else ''}"
         tm.result_text = f"{winner.name or 'Team'} won {margin} (simulated)"[:300]
-        session.flush()
+    # The two teams can still play it; the real result then replaces this one.
+    tm.is_simulated = True
+    session.flush()
     logger.info("Simulated tournament fixture %s → team %s", tm.id, choice)
     return tm
 
@@ -1593,6 +1621,11 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
         return None
 
     if tm is not None:
+        if tm.status == "completed" and tm.is_simulated:
+            # A replay of a /tsim fixture: take back what the simulated result
+            # set in motion before the real one is written over it.
+            _retract_simulated(session, tm)
+        tm.is_simulated = False
         tm.match_id = match_id
         tm.team1_id = t_inn1.id if t_inn1 else None
         tm.team2_id = t_inn2.id if t_inn2 else None

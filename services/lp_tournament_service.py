@@ -636,6 +636,8 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=None):
         tag = f"M{fx.match_no}" if fx.match_no else stage
         if fx.status == "completed":
             body = f"✅ <s>{a} vs {b}</s> — {escape(fx.result_text or 'done')}"
+            if league_schedule_service._replay_allowed(session, fx, tour):
+                body += " · <i>🔁 can still be played</i>"
         elif fx.status == "live":
             body = f"🔴 {a} vs {b} — <i>in progress</i>"
         else:

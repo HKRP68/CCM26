@@ -644,6 +644,8 @@ def _migrate_add_columns():
     _try_add("tournament_teams", "home_pitch", "VARCHAR(20)")
     _try_add("tournament_matches", "pitch_type", "VARCHAR(20)")
     _try_add("tournament_matches", "home_team_id", "INTEGER")
+    # A /tsim (deadline) result the two teams may still replay for real.
+    _try_add("tournament_matches", "is_simulated", "BOOLEAN DEFAULT FALSE")
     # Preferred pitches (tournament-wide list or one list per team).
     _try_add("tournaments", "preferred_pitches_json", "TEXT")
     _try_add("tournaments", "preferred_pitch_pct", "INTEGER DEFAULT 80")
@@ -1146,6 +1148,13 @@ def _migrate_add_columns():
         # earlier build may still hold NULLs — normalise them so the "is this a
         # career card?" checks never see NULL.
         "UPDATE players SET is_career = FALSE WHERE is_career IS NULL",
+        # Fixtures settled by /tsim before is_simulated existed carry the mark
+        # only in their result text. A replayed one has lost that text, so this
+        # never re-flags a real result.
+        "UPDATE tournament_matches SET is_simulated = FALSE WHERE is_simulated IS NULL",
+        "UPDATE tournament_matches SET is_simulated = TRUE WHERE status = 'completed' "
+        "AND match_id IS NULL AND result_text LIKE '%(simulated)' "
+        "AND is_simulated = FALSE",
         "UPDATE players SET non_tradable = FALSE WHERE non_tradable IS NULL",
         # ``is_active`` is nullable in the model with a default of True, so a row
         # inserted around the ORM holds NULL — and ``is_active == True`` does not
