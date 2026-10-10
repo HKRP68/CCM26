@@ -9,6 +9,9 @@ What is pinned here:
   • **/aforce puts one player next.** Live with an empty block, he opens at
     once; otherwise he is first in the queue and nothing on the block moves.
     A withdrawn player is brought back on the way.
+  • **/arecall undoes a sale and runs the player again, next.** The buyer is
+    refunded through the ledger, every bid is voided, and he is first in the
+    queue; nothing on the block moves.
   • **/aunsold 67, 88 only touches players nobody has bought or bid on**, and
     names every one it skipped rather than refusing the batch.
   • **The bid ladder can be set by command and website**, is parsed once, and
@@ -111,6 +114,78 @@ class ForceNextTests(AuctionCase):
         standing = self.start()
         with self.assertRaises(self.A.AuctionError):
             self.A.force_next(self.session, self.season, standing)
+
+
+class RecallTests(AuctionCase):
+
+    def setUp(self):
+        super().setUp()
+        self.build_pool()
+
+    def sell_first(self):
+        lot = self.start()
+        self.A.place_bid(self.session, self.season, lot, self.mumbai,
+                         lot.base_price_lakh, now=NOW, by_tg_id=ALICE)
+        lot = self.A.sell_lot(self.session, self.season, lot, now=NOW)
+        self.session.commit()
+        return lot
+
+    def test_the_buyer_is_refunded_and_the_player_opens_afresh(self):
+        before = int(self.mumbai.purse_remaining_lakh)
+        sold = self.sell_first()
+        self.assertLess(int(self.mumbai.purse_remaining_lakh), before)
+        lot, opened = self.A.recall_sale(self.session, self.season, sold,
+                                         now=NOW)
+        self.session.commit()
+        mumbai = self.A.franchises(self.session, self.season.id)[0]
+        self.assertEqual(before, int(mumbai.purse_remaining_lakh))
+        self.assertEqual(0, int(mumbai.squad_size))
+        self.assertEqual([], self.A.squad(self.session, mumbai.id))
+        self.assert_ledger_agrees("after a recall")
+        # Live with an empty block: straight back under the hammer, no bid.
+        self.assertTrue(opened)
+        self.assertEqual(self.A.LOT_ON_BLOCK, lot.status)
+        self.assertEqual(sold.id, self.season.current_lot_id)
+        self.assertIsNone(lot.current_bidder_id)
+        self.assertIsNone(lot.current_bid_lakh)
+        self.assertIsNone(lot.sold_to_id)
+
+    def test_recalled_while_a_lot_is_up_waits_for_it(self):
+        sold = self.sell_first()
+        standing = self.A.open_next_lot(self.session, self.season, now=NOW)
+        self.session.commit()
+        lot, opened = self.A.recall_sale(self.session, self.season, sold,
+                                         now=NOW)
+        self.session.commit()
+        self.assertFalse(opened)
+        self.assertEqual(self.A.LOT_QUEUED, lot.status)
+        self.assertEqual(standing.id,
+                         self.A.current_lot(self.session, self.season).id)
+        self.assertEqual(sold.id,
+                         self.A.next_queued(self.session, self.season.id).id)
+
+    def test_a_finished_auction_comes_back_paused_with_him_first(self):
+        sold = self.sell_first()
+        self.season.status = self.A.STATUS_COMPLETED
+        self.session.commit()
+        lot, opened = self.A.recall_sale(self.session, self.season, sold,
+                                         now=NOW)
+        self.session.commit()
+        self.assertFalse(opened)
+        self.assertEqual(self.A.STATUS_PAUSED, self.season.status)
+        self.assertEqual(sold.id,
+                         self.A.next_queued(self.session, self.season.id).id)
+
+    def test_unsold_and_published_are_refused(self):
+        queued = self.A.queued_lots(self.session, self.season)[1]
+        with self.assertRaises(self.A.AuctionError):
+            self.A.recall_sale(self.session, self.season, queued)
+        sold = self.sell_first()
+        self.season.published_at = NOW
+        self.session.commit()
+        with self.assertRaises(self.A.AuctionError) as caught:
+            self.A.recall_sale(self.session, self.season, sold)
+        self.assertIn("published", str(caught.exception).lower())
 
 
 class BulkUnsoldTests(AuctionCase):

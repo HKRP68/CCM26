@@ -4653,6 +4653,104 @@ def undo_sale(session, season, lot, *, now=None, by_tg_id=None):
     return lot
 
 
+def recall_sale(session, season, lot, *, now=None, by_tg_id=None):
+    """``/arecall`` — take a sold player back, refund the buyer, and make him
+    the very next lot, auctioned afresh.
+
+    Where ``undo_sale`` reopens the lot on the spot with the bid under the
+    winning one still standing, this is "run him again": every bid is voided,
+    he goes to the front of the queue at his base price, and whatever is on
+    the block now is left alone. Returns ``(lot, opened)`` as ``force_next``
+    does — ``opened`` when the auction was live with an empty block and he
+    went straight under the hammer.
+
+    The same lots are refused as ``undo_sale`` refuses, for the same reasons:
+    a retained, matched, drafted or autofilled player was never bought, and a
+    published auction is the league's now.
+    """
+    now = now or datetime.utcnow()
+    if lot is None or lot.status != LOT_SOLD:
+        raise AuctionError(f"{lot.name if lot else 'That lot'} is not sold.")
+    if season.status == STATUS_CANCELLED:
+        raise AuctionError("This auction was cancelled.")
+    if lot.acquisition == ACQ_RTM:
+        raise AuctionError(f"{lot.name} was kept with a Right To Match, not "
+                           f"bought. Undo the match instead (/artmundo).")
+    if lot.acquisition == ACQ_DRAFTED:
+        raise AuctionError(f"{lot.name} was an expansion pick, not bought. "
+                           f"Undo the pick instead (/apickundo).")
+    if lot.acquisition == ACQ_AUTOFILL:
+        raise AuctionError(f"{lot.name} was handed to a short squad at the "
+                           f"end, not bought — there is no sale to recall.")
+    if (lot.acquisition or ACQ_AUCTION) != ACQ_AUCTION:
+        raise AuctionError(f"{lot.name} was retained, not bought. Release the "
+                           f"retention instead (/aunretain).")
+    if season.published_at is not None:
+        raise AuctionError("This auction has been published. Correct the "
+                           "squad in the league itself.")
+
+    price = int(lot.sold_price_lakh or 0)
+    buyer = (session.query(AuctionFranchise)
+             .filter(AuctionFranchise.id == lot.sold_to_id).first())
+    if buyer is not None:
+        (session.query(AuctionFranchise)
+         .filter(AuctionFranchise.id == buyer.id)
+         .update({"purse_remaining_lakh":
+                  AuctionFranchise.purse_remaining_lakh + price,
+                  "squad_size": case((AuctionFranchise.squad_size > 0,
+                                      AuctionFranchise.squad_size - 1),
+                                     else_=0)},
+                 synchronize_session=False))
+        session.flush()
+        session.expire_all()
+        buyer = (session.query(AuctionFranchise)
+                 .filter(AuctionFranchise.id == buyer.id).first())
+        lot = session.query(AuctionLot).filter(AuctionLot.id == lot.id).first()
+        _ledger(session, buyer, LEDGER_REFUND, price, lot=lot,
+                note=f"Sale recalled: {lot.name}", by_tg_id=by_tg_id)
+
+    # A fresh auction: no bid from last time stands.
+    for bid in (session.query(AuctionBid)
+                .filter(AuctionBid.lot_id == lot.id,
+                        AuctionBid.is_void.is_(False)).all()):
+        bid.is_void = True
+        bid.voided_by_tg_id = by_tg_id
+    session.flush()      # see undo_last_bid — autoflush is off
+
+    lot.status = LOT_QUEUED
+    lot.sold_to_id = None
+    lot.sold_price_lakh = None
+    lot.sold_at = None
+    lot.current_bid_lakh = None
+    lot.current_bidder_id = None
+    lot.deadline_at = None
+    lot.going_stage = 0
+    lot.extensions_used = 0
+    lot.bid_count = 0
+    lot.last_bid_at = None
+    lot.rtm_stage = None
+    lot.rtm_base_bid_lakh = None
+    # A finished auction comes back paused, as ``reinstate_lot`` does it: a
+    # clock starting in an empty room sells to whoever is still looking.
+    reopened = season.status == STATUS_COMPLETED
+    if reopened:
+        season.status = STATUS_PAUSED
+        season.current_lot_id = None
+    session.flush()
+
+    note = (" The auction is open again, paused — /astart when the room is "
+            "ready." if reopened else "")
+    log_event(session, season, "sale_recalled",
+              f"↩️ The sale of {_e(lot.name)} to "
+              f"{_e(buyer.name) if buyer else 'a franchise'} for "
+              f"{render_money(price, season.currency_label)} was recalled — "
+              f"the money is back in the purse and {_e(lot.name)} is up "
+              f"next.{note}",
+              lot=lot, franchise=buyer, by_tg_id=by_tg_id, by_admin=True,
+              detail={"price_lakh": price})
+    return force_next(session, season, lot, now=now, by_tg_id=by_tg_id)
+
+
 def resolve_expired(session, season, lot, *, now=None):
     """What the clock does when a lot's time runs out. Returns the outcome.
 

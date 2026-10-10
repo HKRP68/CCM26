@@ -1935,6 +1935,8 @@ ADMIN_SECTIONS = (
                                 "no squad and with no standing bid"),
         ("/aforce <player | lot no>", "That player next — now, if nothing "
                                       "is on the block"),
+        ("/arecall <player | lot no>", "Take a sold player back — the buyer "
+                                       "is refunded and he is the next lot"),
         ("/aundobid", "Void the standing bid and fall back"),
         ("/aaccel [go]", "Re-list everything unsold now"),
         ("/afinish [go | go quick]", "End the auction now — the rest is "

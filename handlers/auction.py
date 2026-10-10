@@ -1042,6 +1042,27 @@ async def aforce_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _with_auction(update, work, admin=True, context=context)
 
 
+async def arecall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/arecall &lt;player | lot no&gt;</code> — take a sold player back.
+
+    The buyer gets the price back in their purse, the player leaves their
+    squad, and he is the next lot — auctioned afresh from his base price.
+    """
+    user = update.effective_user
+    raw = _arg_text(context)
+
+    def work(session, season):
+        if not raw:
+            raise AuctionError("Usage: /arecall <player name or lot no>, e.g. "
+                               "/arecall Tilak Varma")
+        lot = A.find_one_lot(session, season, raw)
+        A.recall_sale(session, season, lot,
+                      by_tg_id=user.id if user else None)
+        return None      # the sweeper announces it, within a tick
+
+    await _with_auction(update, work, admin=True, context=context)
+
+
 async def aincrement_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """<code>/aincrement 2:10L, 5:20L, 10:25L, 50L</code> — the bid ladder.
 

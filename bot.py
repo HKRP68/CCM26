@@ -2379,7 +2379,8 @@ def main():
             aadmin_handler, anew_handler, abind_handler, astart_handler,
             apause_handler, anext_handler, aextend_handler, asold_handler,
             aunsold_handler, aundobid_handler, awithdraw_handler,
-            areinstate_handler, aforce_handler, aincrement_handler,
+            areinstate_handler, aforce_handler, arecall_handler,
+            aincrement_handler,
             atimer_handler, acountdown_handler, arestart_handler,
             abidgap_handler,
             asnipe_handler, afocus_handler, adirect_handler,
@@ -2473,6 +2474,8 @@ def main():
         app.add_handler(CommandHandler(["areinstate", "aunwithdraw"],
                                        areinstate_handler))
         app.add_handler(CommandHandler(["aforce", "aforcenext"], aforce_handler))
+        # A sold player back: the buyer refunded, the player the next lot.
+        app.add_handler(CommandHandler(["arecall", "aresell"], arecall_handler))
         app.add_handler(CommandHandler(["aincrement", "aincrements"],
                                        aincrement_handler))
         app.add_handler(CommandHandler("atimer", atimer_handler))
