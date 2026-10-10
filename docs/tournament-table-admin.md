@@ -318,7 +318,11 @@ advancement behave exactly as for a hand-entered result. It is marked
 `find_open_fixture`, `reserve_fixture` and `remaining_opponents`). The simulated
 result stays on the table while they play; when the real match is recorded it
 replaces the simulated one, undoing any knockout advancement the simulation made
-first. An abandoned replay leaves the simulated result as it was. `/taddmatch`
+first. An abandoned replay leaves the simulated result as it was. Only one
+replay of a fixture runs at a time: reserving one sets `replay_claimed_at` with a
+compare-and-set update, so a second draft for the same pair is refused. Releasing
+the replay clears the claim, and a claim older than three hours
+(`REPLAY_CLAIM_MINUTES`) counts as abandoned. `/taddmatch`
 can also record a real card over a simulated result. Fixture lists mark these
 "🔁 can still be played". A replay is no longer offered once something has been
 built on the result: a league fixture once the playoffs are drawn, a knockout

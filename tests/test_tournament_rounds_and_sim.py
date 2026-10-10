@@ -439,6 +439,54 @@ class ReplayTests(RoundCase):
         self.assertEqual(fx.status, "completed")
         self.assertTrue(fx.is_simulated)
 
+    def test_two_drafts_cannot_both_claim_the_replay(self):
+        fx = self.fixtures(1)[0]
+        self.ts.simulate_fixture(self.session, fx.id, "1")
+        self.session.commit()
+        a, b = fx.team1_id, fx.team2_id
+        first = self.lss.reserve_fixture(self.session, self.tour.id, a, b)
+        self.session.commit()
+        self.assertEqual(first.id, fx.id)
+        self.assertIsNotNone(first.replay_claimed_at)
+        self.assertIsNone(self.lss.reserve_fixture(self.session, self.tour.id, a, b))
+        # The pre-launch checks don't offer it either while it is being replayed.
+        self.assertIsNone(self.lss.find_open_fixture(self.session, self.tour.id, a, b))
+        self.assertNotIn(b, self.lss.remaining_opponents(self.session, self.tour.id, a))
+
+    def test_the_claimed_replay_still_records_by_pair(self):
+        fx = self.fixtures(1)[0]
+        self.ts.simulate_fixture(self.session, fx.id, "1")
+        self.lss.reserve_fixture(self.session, self.tour.id, fx.team1_id, fx.team2_id)
+        self.session.commit()
+        recorded = self.play(fx, reserved=False)
+        self.assertEqual(recorded.id, fx.id)
+        self.session.refresh(fx)
+        self.assertIsNone(fx.replay_claimed_at)
+        self.assertFalse(fx.is_simulated)
+
+    def test_releasing_a_replay_frees_the_claim(self):
+        fx = self.fixtures(1)[0]
+        self.ts.simulate_fixture(self.session, fx.id, "1")
+        a, b = fx.team1_id, fx.team2_id
+        self.lss.reserve_fixture(self.session, self.tour.id, a, b)
+        self.lss.release_fixture(self.session, fx.id)
+        self.session.commit()
+        self.assertEqual(self.lss.reserve_fixture(self.session, self.tour.id, a, b).id,
+                         fx.id)
+
+    def test_an_abandoned_claim_lapses(self):
+        from datetime import datetime, timedelta
+        fx = self.fixtures(1)[0]
+        self.ts.simulate_fixture(self.session, fx.id, "1")
+        a, b = fx.team1_id, fx.team2_id
+        self.lss.reserve_fixture(self.session, self.tour.id, a, b)
+        self.session.commit()
+        fx.replay_claimed_at = datetime.utcnow() - timedelta(
+            minutes=self.lss.REPLAY_CLAIM_MINUTES + 1)
+        self.session.commit()
+        self.assertEqual(self.lss.reserve_fixture(self.session, self.tour.id, a, b).id,
+                         fx.id)
+
     def test_a_real_result_is_never_replayable(self):
         fx = self.fixtures(1)[0]
         self.play(fx, reserved=False)

@@ -955,6 +955,7 @@ def record_import(session, plan):
         tournament_service._retract_simulated(session, fixture)
     fixture.status = "completed"
     fixture.is_simulated = False
+    fixture.replay_claimed_at = None
     fixture.match_id = None            # not a bot-played match
     fixture.winner_team_id = plan["winner_team_id"]
     fixture.result_text = plan["result_text"]

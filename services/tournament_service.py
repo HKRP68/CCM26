@@ -751,7 +751,9 @@ def _find_open_fixture(session, tournament_id, team1_id, team2_id):
     if fx is None:
         # A /tsim result the pair has just played for real.
         from services import league_schedule_service
-        fx = league_schedule_service.replayable_fixture(session, tid, a, b)
+        # The replay holds the claim on it, so a claimed one is the one wanted.
+        fx = league_schedule_service.replayable_fixture(session, tid, a, b,
+                                                        include_claimed=True)
     return fx
 
 
@@ -1216,6 +1218,7 @@ def delete_tournament_match(session, tournament_match_id):
         # pair can replay it, rather than dropping it from the schedule entirely.
         tm.status = "scheduled"
         tm.is_simulated = False
+        tm.replay_claimed_at = None
         tm.match_id = None
         tm.winner_team_id = None
         tm.result_text = None
@@ -1500,6 +1503,7 @@ def simulate_fixture(session, fixture_id, outcome="random", rng=None):
         tm.result_text = f"{winner.name or 'Team'} won {margin} (simulated)"[:300]
     # The two teams can still play it; the real result then replaces this one.
     tm.is_simulated = True
+    tm.replay_claimed_at = None
     session.flush()
     logger.info("Simulated tournament fixture %s → team %s", tm.id, choice)
     return tm
@@ -1626,6 +1630,7 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
             # set in motion before the real one is written over it.
             _retract_simulated(session, tm)
         tm.is_simulated = False
+        tm.replay_claimed_at = None
         tm.match_id = match_id
         tm.team1_id = t_inn1.id if t_inn1 else None
         tm.team2_id = t_inn2.id if t_inn2 else None

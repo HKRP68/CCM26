@@ -646,6 +646,7 @@ def _migrate_add_columns():
     _try_add("tournament_matches", "home_team_id", "INTEGER")
     # A /tsim (deadline) result the two teams may still replay for real.
     _try_add("tournament_matches", "is_simulated", "BOOLEAN DEFAULT FALSE")
+    _try_add("tournament_matches", "replay_claimed_at", "TIMESTAMP")
     # Preferred pitches (tournament-wide list or one list per team).
     _try_add("tournaments", "preferred_pitches_json", "TEXT")
     _try_add("tournaments", "preferred_pitch_pct", "INTEGER DEFAULT 80")
