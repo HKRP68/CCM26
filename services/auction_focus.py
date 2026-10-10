@@ -75,7 +75,7 @@ AUCTION_COMMANDS = frozenset({
     "anew", "abind", "astart", "apause", "aresume", "aunpause", "anext",
     "aextend", "asold", "aunsold", "aundobid", "awithdraw", "atimer",
     "acountdown", "arestart", "abidgap",
-    "areinstate", "aunwithdraw", "aforce", "aforcenext",
+    "areinstate", "aunwithdraw", "aforce", "aforcenext", "arecall", "aresell",
     "aincrement", "aincrements",
     "asnipe", "afocus", "afocusmode", "adirect", "adirectbids",
     "agrant", "aco", "apublish", "acancel",

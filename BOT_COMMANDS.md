@@ -791,6 +791,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/asold` · `/aunsold` | Sell at the standing bid, or pass the lot |
 | `/aunsold <lot no \| player>, …` | Send those players unsold — `/aunsold 67, 88, 89, 53`. Only players on no squad and with no standing bid go; the rest are named with the reason |
 | `/aforce <player \| lot no>` (`/aforcenext`) | That player next — `/aforce Tilak Varma`. Opens at once if the auction is live and nothing is on the block, otherwise straight after the current lot. A withdrawn or unsold player is brought back on the way |
+| `/arecall <player \| lot no>` (`/aresell`) | Take a sold player back — `/arecall Tilak Varma`. The buying team is refunded the price (added back to its purse) and loses the player, and he becomes the next lot, auctioned afresh from his base price. Opens at once if the auction is live and nothing is on the block. A finished auction comes back paused. Refused for retained / RTM / drafted players and once the auction is published |
 | `/aundobid` | Void the standing bid |
 | `/awithdraw <player name>` | Pull a player out of the auction |
 | `/areinstate <player \| lot no>, …` (`/aunwithdraw`) | `/awithdraw`'s opposite — a withdrawn (or unsold) player goes back to the end of the queue |
