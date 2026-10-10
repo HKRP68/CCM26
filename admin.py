@@ -3697,10 +3697,23 @@ def user_remove_player(user_id, roster_id):
             # rows would otherwise block the delete on the FK).
             from services.trait_service import return_traits_to_inventory
             return_traits_to_inventory(db, entry.id)
+            # A traded card's roster row is still pointed at by its Trade rows
+            # (completed ones too), and that FK is NO ACTION — leave them and
+            # the delete fails. Pending trades on the card can't go through
+            # any more, so cancel those; history keeps the trade, minus the row.
+            for t in (db.query(Trade)
+                        .filter((Trade.initiator_roster_id == entry.id) |
+                                (Trade.receiver_roster_id == entry.id)).all()):
+                if t.status == "pending":
+                    t.status = "cancelled"
+                if t.initiator_roster_id == entry.id:
+                    t.initiator_roster_id = None
+                if t.receiver_roster_id == entry.id:
+                    t.receiver_roster_id = None
             user = db.get(User, user_id)
             if user and user.captain_roster_id == entry.id:
                 user.captain_roster_id = None
-                db.flush()
+            db.flush()
             db.delete(entry)
             if user:
                 user.roster_count = max(0, user.roster_count - 1)
