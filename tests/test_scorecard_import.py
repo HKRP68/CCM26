@@ -208,7 +208,8 @@ _TMP = None
 _ENGINE = None
 _MODULE_NAMES = ("database", "models", "config",
                  "services.tournament_service", "services.scorecard_import",
-                 "services.league_schedule_service", "services.knockout_service")
+                 "services.league_schedule_service", "services.knockout_service",
+                 "services.match_webapp_service", "handlers.tournament_admin")
 
 
 def setUpModule():
@@ -733,6 +734,256 @@ class BotFileImportTests(ImportCase):
                          "Chennai Super Kings")
         self.assertEqual(self._stat("Rohit Sharma").team_name, "Mumbai Indians")
         self.assertEqual(self._stat("Ishan Kishan").bat_outs, 0)  # "not out"
+
+
+# The classic /play engine's file: extras, a run-rate total, Did Not Bat, and a
+# Playing XI block after the last innings — here with no Fall of Wickets in the
+# chase, which is what used to leave the XI names being read as players.
+CLASSIC_FILE = """Match Summary: Mumbai Indians vs Chennai Super Kings
+Match Number: #880
+Pitch: Flat
+Result: Chennai Super Kings won by 10 wickets
+Player of the Match: Ruturaj Gaikwad (151 (110))
+
+MUMBAI INDIANS INNINGS
+-----------------------------------------------------------------------------------------------
+Batsman               Status                                  R    B   4s   6s      SR
+-----------------------------------------------------------------------------------------------
+Rohit Sharma          c Dhoni b Chahar                       80   50    8    3  160.00
+Ishan Kishan          not out                                70   70    5    1  100.00
+
+Extras: 0 (wd 0, nb 0, b 0, lb 0)
+Total: 150/1 (20.0 Overs, RR: 7.5)
+
+Did Not Bat: Suryakumar Yadav, Jasprit Bumrah
+
+--------------------------------------------------------------------
+Bowler                        O     M     R     W    Econ
+--------------------------------------------------------------------
+Deepak Chahar                20     0   150     1    7.50
+
+--------------------------------------------------------------------
+Fall of Wickets
+--------------------------------------------------------------------
+1-100  (12.1)
+=======================================================
+
+CHENNAI SUPER KINGS INNINGS
+-----------------------------------------------------------------------------------------------
+Batsman               Status                                  R    B   4s   6s      SR
+-----------------------------------------------------------------------------------------------
+Ruturaj Gaikwad       not out                               151  110   14    6  137.27
+
+Extras: 0 (wd 0, nb 0, b 0, lb 0)
+Total: 151/0 (18.2 Overs, RR: 8.24)
+
+--------------------------------------------------------------------
+Bowler                        O     M     R     W    Econ
+--------------------------------------------------------------------
+Jasprit Bumrah             18.2     0   151     0    8.24
+=======================================================
+
+--- PLAYING XI ---
+
+--- Mumbai Indians Playing XI ---
+Rohit Sharma (Batsman)
+Jasprit Bumrah (Bowler)
+
+--- Chennai Super Kings Playing XI ---
+Ruturaj Gaikwad (Batsman)
+Deepak Chahar (Bowler)
+"""
+
+
+class ClassicFileTests(unittest.TestCase):
+    def test_the_playing_xi_block_is_read_past(self):
+        parsed = parse_scorecard(CLASSIC_FILE)
+        first, second = parsed["innings"]
+        self.assertEqual((first["runs"], first["wickets"]), (150, 1))
+        self.assertEqual((second["runs"], second["wickets"], second["overs"]),
+                         (151, 0, "18.2"))
+        self.assertEqual([b["name"] for b in second["batting"]], ["Ruturaj Gaikwad"])
+        self.assertEqual([b["name"] for b in second["bowling"]], ["Jasprit Bumrah"])
+        self.assertEqual(parsed["extra_innings"], [])
+
+
+class MatchIdTests(unittest.TestCase):
+    def test_every_way_of_writing_the_id(self):
+        from services.scorecard_import import parse_match_id
+        for token in ("576", "#576", "MatchNo576", "matchno576.txt", "MatchNo576.txt"):
+            self.assertEqual(parse_match_id(token), 576, token)
+        for token in ("abc", "", "57x6", None):
+            self.assertIsNone(parse_match_id(token), token)
+
+
+# Two innings as the Mini-App engines save them in a MatchScorecard row.
+def _webapp_innings():
+    return [
+        {"number": 1, "bat_team": "Mumbai Indians", "runs": 147, "wickets": 5,
+         "overs": "20.0",
+         "batting": [{"name": "Rohit Sharma", "how_out": "Caught", "out": True,
+                      "runs": 62, "balls": 41, "fours": 6, "sixes": 2, "sr": 151.2},
+                     {"name": "Ishan Kishan", "how_out": "not out", "out": False,
+                      "runs": 45, "balls": 30, "fours": 4, "sixes": 1, "sr": 150.0}],
+         "bowling": [{"name": "Deepak Chahar", "overs": "4", "maidens": 0,
+                      "runs": 31, "wickets": 1, "econ": 7.75}]},
+        {"number": 2, "bat_team": "Chennai Super Kings", "runs": 140, "wickets": 7,
+         "overs": "20.0",
+         "batting": [{"name": "MS Dhoni", "how_out": "Bowled", "out": True,
+                      "runs": 30, "balls": 12, "fours": 1, "sixes": 3, "sr": 250.0}],
+         "bowling": [{"name": "Jasprit Bumrah", "overs": "4", "maidens": 0,
+                      "runs": 24, "wickets": 3, "econ": 6.0}]},
+    ]
+
+
+class CardFromBotRecordsTests(ImportCase):
+    """/taddmatch <no> <bot match id>: the card rebuilt from the database, so the
+    file in the storage channel never has to be forwarded."""
+
+    def test_a_mini_app_match_is_rebuilt_from_its_saved_scorecard(self):
+        import json
+        from models import MatchScorecard
+        mid = 900_000 + next(_TG)
+        self.session.add(MatchScorecard(
+            match_id=mid, result_text="Mumbai Indians won by 7 runs",
+            scorecard_json=json.dumps({"innings": _webapp_innings()})))
+        self.session.commit()
+        text = self.si.card_text_for_match(self.session, mid)
+        self.assertIn(f"Match Number: #{mid}", text)
+        self._import(text)
+        fx = self._fixture()
+        self.assertEqual((fx.inn1_runs, fx.inn2_runs), (147, 140))
+        self.assertEqual(fx.winner_team_id, self.tteams["Mumbai Indians"].id)
+        self.assertEqual(self._stat("Rohit Sharma").bat_runs, 62)
+        self.assertEqual(self._stat("Jasprit Bumrah").bowl_wickets, 3)
+
+    def test_a_classic_match_is_rebuilt_from_its_card_values(self):
+        import json
+        from models import MatchScorecardImage
+        mid = 900_000 + next(_TG)
+
+        def card(card_type, innings, payload, order):
+            self.session.add(MatchScorecardImage(
+                match_id=mid, innings=innings, card_type=card_type,
+                sort_order=order, payload_json=json.dumps(payload)))
+
+        card("batting", 1, {"team_name": "Mumbai Indians",
+                            "opponent_name": "Chennai Super Kings",
+                            "total_runs": 160, "total_wickets": 3, "overs_str": "20.0",
+                            "batsmen_rows": [
+                                {"name": "Rohit Sharma", "dismissal": "c Dhoni b Chahar",
+                                 "runs": 90, "balls": 55, "fours": 9, "sixes": 4,
+                                 "strike_rate": 163.6, "status": "out"},
+                                {"name": "Jasprit Bumrah", "dismissal": "did not bat",
+                                 "runs": 0, "balls": 0, "status": "dnb"}]}, 0)
+        card("bowling", 1, {"team_name": "Chennai Super Kings",
+                            "opponent_name": "Mumbai Indians",
+                            "bowlers_rows": [{"name": "Deepak Chahar", "overs": "4",
+                                              "maidens": 1, "runs_conceded": 20,
+                                              "wickets": 2, "economy": 5.0}]}, 1)
+        card("batting", 2, {"team_name": "Chennai Super Kings",
+                            "opponent_name": "Mumbai Indians",
+                            "total_runs": 150, "total_wickets": 9, "overs_str": "20",
+                            "batsmen_rows": [
+                                {"name": "MS Dhoni", "dismissal": "not out", "runs": 70,
+                                 "balls": 40, "fours": 5, "sixes": 5,
+                                 "strike_rate": 175.0, "status": "not_out"}]}, 2)
+        card("bowling", 2, {"team_name": "Mumbai Indians",
+                            "opponent_name": "Chennai Super Kings",
+                            "bowlers_rows": [{"name": "Jasprit Bumrah", "overs": "4",
+                                              "maidens": 0, "runs_conceded": 22,
+                                              "wickets": 4, "economy": 5.5}]}, 3)
+        card("summary", 0, {"inn1_runs": 160, "winner_name": "Mumbai Indians",
+                            "win_margin_text": "by 10 runs"}, 4)
+        self.session.commit()
+
+        text = self.si.card_text_for_match(self.session, mid)
+        self.assertIn("Result: Mumbai Indians won by 10 runs", text)
+        self.assertNotIn("Jasprit Bumrah          ", text.split("Bowler")[0])  # DNB row left out
+        self._import(text)
+        fx = self._fixture()
+        self.assertEqual((fx.inn1_runs, fx.inn1_wickets, fx.inn2_runs), (160, 3, 150))
+        self.assertEqual(self._stat("Rohit Sharma").bat_runs, 90)
+        self.assertEqual(self._stat("MS Dhoni").bat_outs, 0)
+        self.assertEqual(self._stat("Jasprit Bumrah").bowl_wickets, 4)
+
+    def test_no_record_says_what_to_do_instead(self):
+        with self.assertRaises(ScorecardError) as ctx:
+            self.si.card_text_for_match(self.session, 999_999_999)
+        self.assertIn("MatchNo999999999.txt", str(ctx.exception))
+
+    def test_a_one_innings_match_is_refused(self):
+        import json
+        from models import MatchScorecard
+        mid = 900_000 + next(_TG)
+        self.session.add(MatchScorecard(
+            match_id=mid, scorecard_json=json.dumps(
+                {"innings": _webapp_innings()[:1]})))
+        self.session.commit()
+        with self.assertRaises(ScorecardError) as ctx:
+            self.si.card_text_for_match(self.session, mid)
+        self.assertIn("1 innings", str(ctx.exception))
+
+    def test_a_card_replaces_a_simulated_result(self):
+        self.ts.simulate_fixture(self.session, self.fixture.id, "2")
+        self.session.commit()
+        plan = self.si.plan_import(self.session, self.fixture,
+                                   parse_scorecard(_bot_file(
+                                       result_text="Mumbai Indians won by 7 runs")))
+        self.assertTrue(any("simulated result" in w for w in plan["warnings"]))
+        self.si.record_import(self.session, plan)
+        self.session.commit()
+        fx = self._fixture()
+        self.assertFalse(fx.is_simulated)
+        self.assertEqual((fx.inn1_runs, fx.inn2_runs), (147, 147))
+
+    def test_a_real_result_still_cannot_be_overwritten(self):
+        self._import()
+        with self.assertRaises(ScorecardError):
+            self.si.plan_import(self.session, self._fixture(), parse_scorecard(CARD))
+
+
+class TaddmatchByIdHandlerTests(ImportCase):
+    """The command itself: /taddmatch <no> <bot match id>, no reply needed."""
+
+    def _run(self, args):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest import mock
+        from handlers import tournament_admin as ta
+
+        sent = []
+
+        async def reply_text(text, **kwargs):
+            sent.append((text, kwargs))
+
+        message = SimpleNamespace(reply_to_message=None, reply_text=reply_text)
+        update = SimpleNamespace(effective_message=message,
+                                 effective_user=SimpleNamespace(id=1))
+        context = SimpleNamespace(args=list(args), bot_data={}, bot=None)
+        with mock.patch.object(ta, "is_admin", return_value=True):
+            asyncio.run(ta.taddmatch_handler(update, context))
+        return sent, context
+
+    def test_the_bot_match_id_previews_without_a_reply(self):
+        import json
+        from models import MatchScorecard
+        mid = 900_000 + next(_TG)
+        self.session.add(MatchScorecard(
+            match_id=mid, result_text="Mumbai Indians won by 7 runs",
+            scorecard_json=json.dumps({"innings": _webapp_innings()})))
+        self.session.commit()
+        sent, context = self._run([f"#{self.tour.id}", str(self.fixture.match_no),
+                                   f"MatchNo{mid}.txt"])
+        text, kwargs = sent[-1]
+        self.assertIn("Record it", str(kwargs.get("reply_markup")))
+        self.assertIn("147/5", text)
+        pending = list(context.bot_data["tour_import"].values())
+        self.assertEqual(pending[0]["fixture_id"], self.fixture.id)
+
+    def test_an_unknown_match_id_says_so(self):
+        sent, _ = self._run([f"#{self.tour.id}", str(self.fixture.match_no), "424242"])
+        self.assertIn("no saved scorecard for match 424242", sent[-1][0])
 
 
 class DidNotBatTests(unittest.TestCase):

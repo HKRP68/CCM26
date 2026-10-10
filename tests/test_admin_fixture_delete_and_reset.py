@@ -165,9 +165,53 @@ class AdminFixtureAndResetTests(unittest.TestCase):
         self.assertIsNotNone(self.session.get(TournamentMatch, fid))
         self.client.post(f"/tournaments/{self.tour.id}",
                          data={"action": "delete_fixture", "fixture_id": str(fid),
-                               "force": "1"})
+                               "force": "1", "confirmed": "1"})
         self.session.expire_all()
         self.assertIsNone(self.session.get(TournamentMatch, fid))
+
+    def test_a_completed_fixture_is_confirmed_on_the_server(self):
+        # Telegram's in-app browser can skip the page's confirm() popup, so a
+        # forced delete without the server's own confirmation must not go through.
+        from models import TournamentMatch
+        fid = self.fixture(status="completed").id
+        response = self.client.post(
+            f"/tournaments/{self.tour.id}",
+            data={"action": "delete_fixture", "fixture_id": str(fid),
+                  "force": "1", "return_to": "schedule"})
+        self.assertEqual(302, response.status_code)
+        confirm_url = f"/tournaments/{self.tour.id}/fixtures/{fid}/confirm-delete"
+        self.assertIn(confirm_url, response.headers["Location"])
+        self.session.expire_all()
+        self.assertIsNotNone(self.session.get(TournamentMatch, fid))
+
+        page = self.client.get(response.headers["Location"]).get_data(as_text=True)
+        self.assertIn("Yes, delete it", page)
+        self.assertIn('name="confirmed" value="1"', page)
+        self.assertIn('name="return_to" value="schedule"', page)
+        self.assertIn(self.schedule_url(), page)   # the Cancel link
+
+    def test_a_scheduled_fixture_needs_no_confirmation_page(self):
+        from models import TournamentMatch
+        fid = self.fixture().id
+        self.client.post(f"/tournaments/{self.tour.id}",
+                         data={"action": "delete_fixture", "fixture_id": str(fid)})
+        self.session.expire_all()
+        self.assertIsNone(self.session.get(TournamentMatch, fid))
+
+    def test_the_dashboard_match_delete_is_confirmed_too(self):
+        from models import TournamentMatch
+        fid = self.fixture(status="completed").id
+        url = f"/tournaments/{self.tour.id}/matches/{fid}/delete"
+        response = self.client.post(url)
+        self.assertIn(f"/fixtures/{fid}/confirm-delete", response.headers["Location"])
+        self.session.expire_all()
+        self.assertEqual("completed", self.session.get(TournamentMatch, fid).status)
+        page = self.client.get(response.headers["Location"]).get_data(as_text=True)
+        self.assertIn(f'action="{url}"', page)
+        self.client.post(url, data={"confirmed": "1"})
+        self.session.expire_all()
+        # A numbered fixture goes back to unplayed rather than leaving the schedule.
+        self.assertEqual("scheduled", self.session.get(TournamentMatch, fid).status)
 
     def test_reset_user_flags_the_account_for_debut(self):
         from models import User, UserStats

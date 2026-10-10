@@ -7,7 +7,8 @@ follow-along views cover, and that until now meant opening the admin site:
                     forfeit, a walkover) — and list what is currently applied
     /tpointsclear   drop a team's adjustment
     /taddmatch      record a fixture from a written scorecard, player stats
-                    included, by replying to a text file with the card in it
+                    included, by replying to a text file with the card in it —
+                    or, for a match the bot played, by naming its match id
     /tfixsync       un-stick fixtures left showing as "live" after their match
                     ended without recording a result
 
@@ -328,15 +329,21 @@ async def tfixsync_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 _ADDMATCH_USAGE = (
     "📄 <b>Record a match from a scorecard</b>\n\n"
-    "Send the scorecard as a <b>.txt file</b> (or as a plain message), then "
-    "<b>reply to it</b> with:\n"
+    "<b>A match the bot played</b> — no file needed:\n"
+    "   <code>/taddmatch &lt;match number&gt; &lt;bot match id&gt;</code>\n"
+    "e.g. <code>/taddmatch 12 576</code>. The bot match id is the number in "
+    "<code>MatchNo576.txt</code> and on its storage-channel caption "
+    "(“📄 Scorecard · Match 576”). The bot rebuilds the full card — both "
+    "innings, every batter and bowler — from its own records.\n\n"
+    "<b>Any other scorecard</b> — send it as a <b>.txt file</b> (or as a plain "
+    "message), then <b>reply to it</b> with:\n"
     "   <code>/taddmatch &lt;match number&gt;</code>\n\n"
     "The match number is the one on the fixture list "
     "(<code>/ctfixtures</code>, <code>/lptfixtures</code>).\n\n"
     "✅ <b>The bot's own <code>MatchNo&lt;id&gt;.txt</code> works as it is</b> — "
-    "the scorecard file archived for every match it plays. Reply to that file "
-    "and nothing needs editing. A Super Over in the file is read and kept out "
-    "of the scoreline and the stats, the same way the bot records one itself.\n\n"
+    "forward it here and reply to it; nothing needs editing. A Super Over in "
+    "the file is read and kept out of the scoreline and the stats, the same "
+    "way the bot records one itself.\n\n"
     "<b>Or write your own</b>\n<pre>{template}</pre>\n"
     "Batting lines are <code>Name runs (balls)</code> — add <code>6x4</code> / "
     "<code>2x6</code> for boundaries, <code>not out</code> or <code>*</code> for "
@@ -482,12 +489,24 @@ async def taddmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _reply(update, _usage_text())
             return
 
+        bot_match_id = (scorecard_import.parse_match_id(args[1])
+                        if len(args) > 1 else None)
+        if len(args) > 1 and bot_match_id is None:
+            await _reply(update, _usage_text())
+            return
+
         try:
+            # A replied-to card always wins; the match id is for the file that
+            # sits in the storage channel, where nobody can reply to it.
             text = await _read_card_text(update, context)
+            if not text and bot_match_id is not None:
+                text = scorecard_import.card_text_for_match(session, bot_match_id)
             if not text:
                 await _reply(update,
-                             "📄 Reply to the message or text file holding the "
-                             "scorecard.\n\n" + _usage_text())
+                             "📄 Give the bot match id (<code>/taddmatch "
+                             f"{html.escape(number)} 576</code>) or reply to the "
+                             "message or text file holding the scorecard.\n\n"
+                             + _usage_text())
                 return
 
             # A fixture whose match died without recording is still marked live,
@@ -872,6 +891,8 @@ def _simulate(session, tour, fixtures, outcome):
     out += done
     if news:
         out += [""] + news
+    out += ["", "<i>🔁 The teams can still play a simulated match — the real "
+                "result then replaces the simulated one.</i>"]
     return "\n".join(out)
 
 

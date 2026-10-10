@@ -121,7 +121,7 @@ ADMIN_SECTIONS = (
         ("/tpoints", "/tpts", "Dock or award points: /tpoints MI | -2 | reason"),
         ("/tpointsclear", "/tptsclear", "Clear a team's points adjustment"),
         ("/taddmatch", "/addmatch",
-         "Record a fixture from a replied scorecard file"),
+         "Record a fixture: /taddmatch 12 576 (bot match id) or reply to a scorecard"),
         ("/tfixsync", "/tfixheal", "Un-stick fixtures still showing as live"),
         ("/tratingrule", "/tratingrules",
          "Every XI must field N players rated X or lower"),

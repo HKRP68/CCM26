@@ -356,5 +356,185 @@ class NoPlayoffTests(RoundCase):
         self.assertEqual(self.ts.maybe_auto_knockout(self.session, self.tour.id), 0)
 
 
+
+class ReplayTests(RoundCase):
+    """A fixture settled by /tsim can still be played by its two teams: the
+    simulated result stays until the real one is recorded over it."""
+
+    def name_of(self, team_id):
+        return next(n for n, t in self.teams.items() if t.id == team_id)
+
+    def play(self, fx, *, first_wins=False, reserved=True):
+        """Record a bot-played match between ``fx``'s teams (team 2 bats first)."""
+        t1, t2 = self.teams[self.name_of(fx.team2_id)], self.teams[self.name_of(fx.team1_id)]
+        state = {
+            "tournament_id": self.tour.id, "match_id": None,
+            "reserved_fixture_id": fx.id if reserved else None,
+            "tournament_team_by_user": {101: t1.challenge_team_id,
+                                        202: t2.challenge_team_id},
+            "inn1_bat_team_id": 101, "inn1_bowl_team_id": 202,
+            "bat_team_id": 202, "bowl_team_id": 101,
+            "inn1_runs": 180, "inn1_wickets": 5,
+            "total_runs": 150 if first_wins else 181, "total_wickets": 8,
+        }
+        recorded = self.ts.record_tournament_match(self.session, state)
+        self.session.commit()
+        return recorded
+
+    def test_a_simulated_fixture_is_flagged(self):
+        fx = self.fixtures(1)[0]
+        self.ts.simulate_fixture(self.session, fx.id, "1")
+        self.assertTrue(fx.is_simulated)
+
+    def test_it_can_be_found_and_reserved_without_losing_its_result(self):
+        fx = self.fixtures(1)[0]
+        self.ts.simulate_fixture(self.session, fx.id, "1")
+        self.session.commit()
+        a, b = fx.team1_id, fx.team2_id
+        self.assertEqual(self.lss.find_open_fixture(self.session, self.tour.id, a, b).id, fx.id)
+        self.assertIn(b, self.lss.remaining_opponents(self.session, self.tour.id, a))
+        reserved = self.lss.reserve_fixture(self.session, self.tour.id, a, b)
+        self.assertEqual(reserved.id, fx.id)
+        self.session.refresh(fx)
+        self.assertEqual(fx.status, "completed")       # still on the table
+        self.assertIn("(simulated)", fx.result_text)
+
+    def test_the_played_result_replaces_the_simulated_one(self):
+        fx = self.fixtures(1)[0]
+        self.ts.simulate_fixture(self.session, fx.id, "1")   # team 1 "won"
+        self.session.commit()
+        recorded = self.play(fx, first_wins=True)             # team 2 really won
+        self.assertEqual(recorded.id, fx.id)
+        self.session.refresh(fx)
+        self.assertFalse(fx.is_simulated)
+        self.assertNotIn("(simulated)", fx.result_text or "")
+        self.assertEqual((fx.inn1_runs, fx.inn2_runs), (180, 150))
+        winner = self.teams[self.name_of(fx.winner_team_id)]
+        loser_id = fx.team1_id if fx.winner_team_id == fx.team2_id else fx.team2_id
+        loser = self.teams[self.name_of(loser_id)]
+        self.session.refresh(winner)
+        self.session.refresh(loser)
+        # Counted once — the simulated result is gone, not added to.
+        self.assertEqual((winner.played, winner.won), (1, 1))
+        self.assertEqual((loser.played, loser.won), (1, 0))
+        # Played for real now: no second replay.
+        self.assertIsNone(self.lss.replayable_fixture(
+            self.session, self.tour.id, fx.team1_id, fx.team2_id))
+
+    def test_a_pair_search_finds_it_without_a_reservation(self):
+        fx = self.fixtures(1)[0]
+        self.ts.simulate_fixture(self.session, fx.id, "1")
+        self.session.commit()
+        self.assertEqual(self.play(fx, reserved=False).id, fx.id)
+
+    def test_an_abandoned_replay_keeps_the_simulated_result(self):
+        fx = self.fixtures(1)[0]
+        self.ts.simulate_fixture(self.session, fx.id, "1")
+        self.session.commit()
+        self.lss.reserve_fixture(self.session, self.tour.id, fx.team1_id, fx.team2_id)
+        self.lss.release_fixture(self.session, fx.id)
+        self.lss.heal_live_fixtures(self.session, self.tour.id)
+        self.session.commit()
+        self.session.refresh(fx)
+        self.assertEqual(fx.status, "completed")
+        self.assertTrue(fx.is_simulated)
+
+    def test_two_drafts_cannot_both_claim_the_replay(self):
+        fx = self.fixtures(1)[0]
+        self.ts.simulate_fixture(self.session, fx.id, "1")
+        self.session.commit()
+        a, b = fx.team1_id, fx.team2_id
+        first = self.lss.reserve_fixture(self.session, self.tour.id, a, b)
+        self.session.commit()
+        self.assertEqual(first.id, fx.id)
+        self.assertIsNotNone(first.replay_claimed_at)
+        self.assertIsNone(self.lss.reserve_fixture(self.session, self.tour.id, a, b))
+        # The pre-launch checks don't offer it either while it is being replayed.
+        self.assertIsNone(self.lss.find_open_fixture(self.session, self.tour.id, a, b))
+        self.assertNotIn(b, self.lss.remaining_opponents(self.session, self.tour.id, a))
+
+    def test_the_claimed_replay_still_records_by_pair(self):
+        fx = self.fixtures(1)[0]
+        self.ts.simulate_fixture(self.session, fx.id, "1")
+        self.lss.reserve_fixture(self.session, self.tour.id, fx.team1_id, fx.team2_id)
+        self.session.commit()
+        recorded = self.play(fx, reserved=False)
+        self.assertEqual(recorded.id, fx.id)
+        self.session.refresh(fx)
+        self.assertIsNone(fx.replay_claimed_at)
+        self.assertFalse(fx.is_simulated)
+
+    def test_releasing_a_replay_frees_the_claim(self):
+        fx = self.fixtures(1)[0]
+        self.ts.simulate_fixture(self.session, fx.id, "1")
+        a, b = fx.team1_id, fx.team2_id
+        self.lss.reserve_fixture(self.session, self.tour.id, a, b)
+        self.lss.release_fixture(self.session, fx.id)
+        self.session.commit()
+        self.assertEqual(self.lss.reserve_fixture(self.session, self.tour.id, a, b).id,
+                         fx.id)
+
+    def test_an_abandoned_claim_lapses(self):
+        from datetime import datetime, timedelta
+        fx = self.fixtures(1)[0]
+        self.ts.simulate_fixture(self.session, fx.id, "1")
+        a, b = fx.team1_id, fx.team2_id
+        self.lss.reserve_fixture(self.session, self.tour.id, a, b)
+        self.session.commit()
+        fx.replay_claimed_at = datetime.utcnow() - timedelta(
+            minutes=self.lss.REPLAY_CLAIM_MINUTES + 1)
+        self.session.commit()
+        self.assertEqual(self.lss.reserve_fixture(self.session, self.tour.id, a, b).id,
+                         fx.id)
+
+    def test_a_real_result_is_never_replayable(self):
+        fx = self.fixtures(1)[0]
+        self.play(fx, reserved=False)
+        self.session.refresh(fx)
+        self.assertFalse(fx.is_simulated)
+        self.assertIsNone(self.lss.find_open_fixture(
+            self.session, self.tour.id, fx.team1_id, fx.team2_id))
+
+    def test_league_replays_stop_once_the_playoffs_are_drawn(self):
+        for rnd in (1, 2, 3):
+            self.finish_round(rnd)
+        self.session.refresh(self.tour)
+        self.assertTrue(self.tour.knockout_generated)
+        fx = self.fixtures(1)[0]
+        self.assertIsNone(self.lss.replayable_fixture(
+            self.session, self.tour.id, fx.team1_id, fx.team2_id))
+
+    def test_a_knockout_replay_stops_once_the_next_round_is_played(self):
+        for rnd in (1, 2, 3):
+            self.finish_round(rnd)
+        semis = self.fixtures(stage="semifinal")
+        for semi in semis:
+            self.ts.simulate_fixture(self.session, semi.id, "1")
+        self.session.commit()
+        semi = semis[0]
+        self.assertIsNotNone(self.lss.replayable_fixture(
+            self.session, self.tour.id, semi.team1_id, semi.team2_id))
+        final = self.fixtures(stage="final")[0]
+        self.ts.simulate_fixture(self.session, final.id, "1")
+        self.session.commit()
+        self.assertIsNone(self.lss.replayable_fixture(
+            self.session, self.tour.id, semi.team1_id, semi.team2_id))
+
+    def test_a_knockout_replay_moves_the_real_winner_on(self):
+        for rnd in (1, 2, 3):
+            self.finish_round(rnd)
+        semi = self.fixtures(stage="semifinal")[0]
+        self.ts.simulate_fixture(self.session, semi.id, "1")
+        self.session.commit()
+        final = self.fixtures(stage="final")[0]
+        self.assertIn(semi.team1_id, (final.team1_id, final.team2_id))
+        sim_winner, real_winner = semi.team1_id, semi.team2_id
+        self.play(semi, first_wins=True)      # team 2 bats first and wins
+        self.session.refresh(final)
+        self.session.refresh(semi)
+        self.assertEqual(semi.winner_team_id, real_winner)
+        self.assertIn(real_winner, (final.team1_id, final.team2_id))
+        self.assertNotIn(sim_winner, (final.team1_id, final.team2_id))
+
 if __name__ == "__main__":
     unittest.main()

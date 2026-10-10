@@ -123,6 +123,19 @@ message) holding the scorecard. The match number is the one on `/ctfixtures` or
 `/lptfixtures`; put the tournament's id first (`/taddmatch #8 42`) when two
 tournaments are running.
 
+### A match the bot played: give its id, no file needed
+
+`/taddmatch <match number> <bot match id>` — e.g. `/taddmatch 12 576`. The bot
+match id is the number in `MatchNo576.txt` and on its storage-channel caption
+("📄 Scorecard · Match 576"); `#576`, `MatchNo576` and `MatchNo576.txt` work too.
+The file sits in the private storage channel, where nobody can reply to it from
+the group, so the bot rebuilds the same card from its own records instead
+(`scorecard_import.card_text_for_match`): the `MatchScorecard` row the Mini-App
+engines (`/cm`, `/cipl`, Super Over) save, or else the values behind the classic
+engine's scorecard images. Both innings, every batter and bowler, and the result
+come through; the usual preview and ✅ follow. A match abandoned before the chase
+has one innings on record and is refused with that reason.
+
 ### The bot's own file needs no editing
 
 The quickest path is the file that already exists: **`MatchNo<id>.txt`**, the
@@ -299,6 +312,22 @@ advancement behave exactly as for a hand-entered result. It is marked
 "(simulated)" on the fixture, and no player stats are written. Only a
 `scheduled` fixture in the open round can be simulated.
 
+**A simulated match can still be played.** A simulated fixture carries
+`is_simulated`. Its two teams can start it like any other fixture
+(`league_schedule_service.replayable_fixture` is the fallback in
+`find_open_fixture`, `reserve_fixture` and `remaining_opponents`). The simulated
+result stays on the table while they play; when the real match is recorded it
+replaces the simulated one, undoing any knockout advancement the simulation made
+first. An abandoned replay leaves the simulated result as it was. Only one
+replay of a fixture runs at a time: reserving one sets `replay_claimed_at` with a
+compare-and-set update, so a second draft for the same pair is refused. Releasing
+the replay clears the claim, and a claim older than three hours
+(`REPLAY_CLAIM_MINUTES`) counts as abandoned. `/taddmatch`
+can also record a real card over a simulated result. Fixture lists mark these
+"🔁 can still be played". A replay is no longer offered once something has been
+built on the result: a league fixture once the playoffs are drawn, a knockout
+fixture once its next round has started, or a final whose prizes were paid.
+
 **Playoffs seed themselves.** After every recorded result,
 `tournament_service.maybe_auto_knockout` checks four things: the tournament has
 a `knockout_type` (other than a Pure Knockout), its league schedule was
@@ -327,7 +356,7 @@ tournament match is played in; `/tsetchat` overrides it.
 | What | When |
 | --- | --- |
 | ⏳ Reminder (group roundup + DM card to each owner) | 24h and 2h before the round's deadline |
-| ⏰ Deadline passed (group + DM to every bot admin, with `/tsim` and ⏳ +24h/+48h buttons) | when the round's time runs out. **Nothing is simulated automatically.** |
+| ⏰ Deadline passed (group + DM to every bot admin, with `/tsim` and ⏳ +24h/+48h buttons) | when the round's time runs out. **Nothing is simulated automatically**, and a simulated match can still be played by its teams. |
 | 📋 Round recap: results, table movers, player of the round, top of the table, next round with owner mentions | when a league round finishes |
 | 🏆 Bracket picture | when the playoffs are seeded and after each knockout result |
 | 🎉 Awards ceremony + 🌟 Team of the Tournament | when the final is decided |
@@ -395,3 +424,15 @@ bracket (`services/bracket_image.py`).
 | `simulate_fixture`, `maybe_auto_knockout`, `schedule_news` | `services/tournament_service.py` |
 | the dashboard form and route | `templates/admin_tournament_dashboard.html`, `admin.py` |
 | tests | `tests/test_scorecard_import.py`, `tests/test_tournament_table_admin.py`, `tests/test_super_over.py`, `tests/test_tournament_rounds_and_sim.py` |
+
+---
+
+## Deleting a played fixture asks first, on the server
+
+Deleting a **completed or live** fixture from the admin site (the Schedule
+page's delete button, or the Dashboard's "remove match") goes through a
+confirmation page, `/tournaments/<id>/fixtures/<fixture>/confirm-delete`. It
+shows the match, its score and what deleting it rebuilds, with **Yes, delete
+it** and **Cancel — keep it**. The browser `confirm()` popup is still there,
+but Telegram's in-app browser can skip it, so the server never deletes a played
+fixture without the confirmed form. Deleting an unplayed fixture is unchanged.

@@ -3072,6 +3072,16 @@ class TournamentMatch(Base):
     slot1_label = Column(String(60), nullable=True)
     slot2_label = Column(String(60), nullable=True)
 
+    # True while the result is a /tsim (deadline) simulation rather than a match
+    # anyone played. The two teams can still play it: the real result then
+    # replaces this one (services.league_schedule_service.replayable_fixture).
+    is_simulated = Column(Boolean, default=False, nullable=False,
+                          server_default=text("false"))
+    # When a draft claimed this simulated fixture for a replay — the atomic
+    # marker that stops two replays of it running at once. Cleared when the
+    # replay is recorded or released; one older than
+    # league_schedule_service.REPLAY_CLAIM_MINUTES counts as abandoned.
+    replay_claimed_at = Column(DateTime, nullable=True)
     inn1_runs = Column(Integer, nullable=True)
     inn1_wickets = Column(Integer, nullable=True)
     inn1_balls = Column(Integer, nullable=True)
