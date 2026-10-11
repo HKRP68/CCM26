@@ -228,7 +228,8 @@ def render_help(admin=False, cipl_command=""):
         blocks.append("<i>Admin website: Tournament Panel → Schedule has the "
                       "same tools (record result, 🎲 simulate).</i>")
     else:
-        blocks.append("<i>Every other command: /commands</i>")
+        blocks.append("<i>Every other command: /commands · the full match &amp; "
+                      "tournament guide as a file: /matchguide</i>")
     return blocks
 
 

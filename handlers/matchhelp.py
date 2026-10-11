@@ -180,7 +180,9 @@ PAGES = [
         "taps ✅ Ready). <b>/saved</b> lists yours. A cleared match, and a "
         "tournament match's first time-out, are saved the same way.\n"
         "📱 <b>/playapp</b> moves the match to the Mini App: each captain picks "
-        "privately and neither plan is ever shown. <b>/playchat</b> moves it back."
+        "privately and neither plan is ever shown. <b>/playchat</b> moves it back.\n\n"
+        "📘 Every other match type and tournament: <b>/matchguide</b> "
+        "(the full guide as a file, or <b>/matchguide sim</b> for one topic)."
     )),
     ("over", "🔁", "How an over works", lambda: (
         "Every over is a <b>simultaneous guess</b>. Neither captain sees the "

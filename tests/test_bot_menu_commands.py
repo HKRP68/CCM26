@@ -167,6 +167,9 @@ UNPUBLISHED_ON_PURPOSE = {
     # Tournament Help — advertised from /commands, /lpt, /ctour and /lptadmin;
     # both player menus and the admin bucket are at the ceiling.
     "tourhelp",
+    # The full match & tournament guide (a file) — named on /matchhelp,
+    # /tourhelp, /howto and in the /commands catalogue; menus are at the ceiling.
+    "matchguide",
     # Tournament watch settings — on /tourhelp; admin bucket is full.
     "tsetchat", "tdeadline", "ttiebreak", "tstadiums", "thome", "tprize", "tteam", "tbracket",
     "tfixturemode",

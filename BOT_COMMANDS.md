@@ -4,6 +4,11 @@ The complete command reference for the Telegram bot in this repository.
 Every command below is registered in [`bot.py`](bot.py); the short aliases are
 the exact ones the bot answers to.
 
+> **Want the step-by-step guide to every match type and tournament?** See
+> [`docs/Match-Types-Guide.md`](docs/Match-Types-Guide.md) (also as a
+> [PDF](docs/Match-Types-Guide.pdf)), or send `/matchguide` and the bot replies
+> with the file.
+
 > **New here?** Read [Start the bot](#-start-the-bot) first — you need to join
 > the official **channel** and **group** before the bot is much use to you.
 
@@ -538,6 +543,7 @@ most one paid season every 48 hours, and not if you conceded a match.
 |---------|---------|--------------|
 | `/howto` | `/help` `/guide` | The interactive help guide |
 | `/matchhelp` | `/mhelp` `/howtoplay` | How to play Lets Play & CIPL — the Approach game |
+| `/matchguide` | `/mguide` `/fullguide` `/matchtypes` | 📘 The complete match & tournament guide as a file — `/matchguide` sends Markdown, `/matchguide pdf` the PDF, `/matchguide <topic>` (e.g. `letsplay`, `sim`, `lptour`) shows one part in chat, `/matchguide topics` lists them all |
 | `/chemhelp` | `/chemguide` | How Team Chemistry works |
 | `/fantasyguide` | `/fguide` | How fantasy works |
 | `/pitchstats` | `/pstats` `/ps` | What each pitch does to the numbers |
@@ -731,6 +737,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 |-------|---------|
 | `/howto` | `/howto` |
 | `/matchhelp [topic]` | `/matchhelp approach` |
+| `/matchguide [pdf\|md\|topics\|<topic>]` | `/matchguide` · `/matchguide pdf` · `/matchguide cipl` · `/mguide 12` |
 | `/report <your message>` | `/report scorecard image missing` |
 | `/feedback <your message>` | `/feedback please add T10 tours` |
 
@@ -976,7 +983,8 @@ player menus sit at Telegram's 100-command ceiling: `/pitchstats`, `/dtrade`,
 `/dtrades`, `/bid`, `/aboard`, `/apurse`, and the auction views `/ainfo`,
 `/asets`, `/anextset`, `/anextplayer`, `/asquad`, `/asoldlist`,
 `/aunsoldlist` (all behind `/ainfo`'s buttons), and `/rank`, `/ranked`,
-`/rivalry` and `/halloffame` (all in `/help`).
+`/rivalry` and `/halloffame` (all in `/help`), and `/matchguide` (named on
+`/howto`, `/matchhelp`, `/tourhelp` and `/commands`).
 
 ### Disabled
 
@@ -1059,6 +1067,7 @@ admin panel, but the commands are not registered.
 | `/fl` | `/fantasy` |
 | `/flb` | `/fantasyleaderboard` |
 | `/fstats` | `/fantasystats` |
+| `/fullguide`, `/matchtypes`, `/mguide` | `/matchguide` |
 | `/globalstats` | `/gstats` |
 | `/gs` | `/gspin` |
 | `/guide`, `/help` | `/howto` |

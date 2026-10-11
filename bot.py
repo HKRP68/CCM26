@@ -2783,6 +2783,13 @@ def main():
         app.add_handler(CallbackQueryHandler(matchhelp_close_callback,
                                              pattern=r"^mhelp_close_"))
 
+        # ── /matchguide — every match type & tournament, as a file ───
+        from handlers.match_guide import matchguide_handler, matchguide_callback
+        app.add_handler(CommandHandler(["matchguide", "mguide", "fullguide",
+                                        "matchtypes"], matchguide_handler))
+        app.add_handler(CallbackQueryHandler(matchguide_callback,
+                                             pattern=r"^mguide_"))
+
         # ── /pitchstats — the surfaces' real record ──────────────────
         app.add_handler(CommandHandler(["pitchstats", "pstats", "ps"],
                                        pitchstats_handler))
