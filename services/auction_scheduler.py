@@ -62,7 +62,8 @@ SWEEP_INTERVAL = 2  # seconds
 # every season state — the event drain only runs while an auction is live, so
 # leaving them to it would announce a mid-auction trade twice and a
 # post-auction one never.
-SILENT_KINDS = {"trade", "trade_reversed"}
+SILENT_KINDS = {"trade", "trade_reversed", "trade_ms_open", "trade_ms_closed",
+                "trade_dl_24h", "trade_dl_1h", "trade_dl_match"}
 # Bids ARE announced, but never one message each: every bid that lands inside
 # one sweep is folded into a single short line (see ``drain_events``), so a
 # bidding war costs at most one message per tick rather than forty.
@@ -791,6 +792,37 @@ async def _auction_tick(context):
 
 # ── Trades ───────────────────────────────────────────────────────────
 
+# The window notices read the tournament tables, which is more than a
+# two-second tick should do for a deadline measured in hours.
+TRADE_NOTICE_INTERVAL = 60.0  # seconds
+_last_trade_notice = [0.0]
+
+
+async def _trade_notices(context, session, now, *, force=False):
+    """🔓 / ⏰ / 🔒 — the mid-season window, said in each published season."""
+    if not force and time.monotonic() - _last_trade_notice[0] < TRADE_NOTICE_INTERVAL:
+        return
+    _last_trade_notice[0] = time.monotonic()
+    from models import AuctionSeason
+    from services import auction_service as A
+    from services import auction_trade_service as T
+
+    seasons = (session.query(AuctionSeason)
+               .filter(AuctionSeason.status == A.STATUS_COMPLETED,
+                       AuctionSeason.published_at.isnot(None),
+                       AuctionSeason.chat_id.isnot(None)).all())
+    for season in seasons:
+        try:
+            for kind, key, text in T.due_notices(session, season, now):
+                # Logged before it is sent: a notice the room missed is
+                # better than one it is told every minute.
+                T.record_notice(session, season, kind, key, text)
+                session.commit()
+                await _send(context.bot, season.chat_id, text)
+        except Exception:
+            session.rollback()
+            logger.exception("auction #%s trade notices failed", season.id)
+
 async def _trade_tick(context, session, now):
     """Say every finished trade once, and hand pending ones to the bot admins.
 
@@ -803,6 +835,8 @@ async def _trade_tick(context, session, now):
     from models import AuctionSeason, AuctionTrade
     from services import auction_service as A
     from services import auction_trade_service as T
+
+    await _trade_notices(context, session, now)
 
     stale = (session.query(AuctionTrade)
              .filter(AuctionTrade.status.in_((T.STATUS_BUILDING, T.STATUS_OFFERED)),

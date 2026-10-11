@@ -95,6 +95,48 @@
   </div>
 </div>
 
+{# Trades: what needs the bot admin NOW sits on the console, because a
+   mid-auction trade is agreed while the admin is watching this page. Buttons
+   only — this fragment is re-fetched every couple of seconds, which would wipe
+   anything half-typed; a veto with a reason is on the setup page. #}
+<div class="au-card" style="margin-top:1rem;" id="trades">
+  <h3 style="margin-top:0;">🔁 Trades{% if trade_pending %} <span class="pill">⏳ {{ trade_pending|length }} to approve</span>{% endif %}</h3>
+  <p class="au-note" style="margin:0 0 .5rem;">{{ trade_line|safe }}</p>
+  {% if trade_pending %}
+  <table class="au-table">
+    {% for t in trade_pending %}
+    <tr>
+      <td>#{{ t.id }}</td>
+      <td><b>{{ t.a }}</b> 📤 {{ t.a_names|join(", ") or "—" }} · 📥 {{ t.b_names|join(", ") or "—" }}
+          {% if t.cash %}<br><span class="dim">💵 {{ t.cash }}</span>{% endif %}
+          <div class="dim">{{ t.verdict }}</div></td>
+      <td style="white-space:nowrap;">
+        <form method="POST" action="{{ url_for('admin_auction_trades', season_id=season.id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="trade_approve">
+          <input type="hidden" name="trade_id" value="{{ t.id }}">
+          <input type="hidden" name="back" value="console">
+          <button class="btn btn-primary btn-sm" type="submit">✅ Approve</button>
+        </form>
+        <form method="POST" action="{{ url_for('admin_auction_trades', season_id=season.id) }}" style="display:inline;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="trade_veto">
+          <input type="hidden" name="trade_id" value="{{ t.id }}">
+          <input type="hidden" name="back" value="console">
+          <button class="btn btn-sm" type="submit">🚫 Veto</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% elif trade_open %}
+  <p class="au-note" style="margin:0;">{{ trade_open|length }} offer{{ '' if trade_open|length == 1 else 's' }} open between owners — nothing to approve yet.</p>
+  {% else %}
+  <p class="au-note" style="margin:0;">Nothing waiting for approval.</p>
+  {% endif %}
+  <p class="au-note" style="margin:.5rem 0 0;"><a href="{{ url_for('admin_auction_detail', season_id=season.id) }}#trades">All trades, rules and the log →</a></p>
+</div>
+
 <div class="au-card" style="margin-top:1rem;">
   <h3 style="margin-top:0;">Recent events</h3>
   <div class="au-log">

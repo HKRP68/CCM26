@@ -670,8 +670,9 @@ def squad_view(session, season, franchise):
               R.cell(R.bold("OVR"), header=True, align="right"),
               R.cell(R.bold("Price"), header=True, align="right")]
     table = [header]
+    traded = A.traded_ids(session, season.id)
     for i, lot in enumerate(rows, start=1):
-        icon = A.acquisition_icon(lot)
+        icon = (A.acquisition_icon(lot) + A.trade_mark(lot, traded)).strip()
         table.append([
             R.cell(str(i), align="center"),
             R.cell(f"{_flag(lot)} {lot.name}" + (f" {icon}" if icon else "")),
@@ -697,7 +698,7 @@ def squad_view(session, season, franchise):
     else:
         blocks.append(R.paragraph(R.italic("Nobody signed yet.")))
     blocks.append(R.footer("🔒 retained · 🪪 Right To Match · 🆕 expansion pick "
-                           "· 🎁 auto-filled"))
+                           "· 🎁 auto-filled · 🔁 traded"))
     html_text = (A.render_squad(session, season, franchise)
                  + f"\n\n✈️ {overseas}/{season.max_overseas} overseas · "
                    f"🎯 max bid <b>{_money(season, max(0, A.max_bid_now(season, franchise)))}</b>")
@@ -1623,13 +1624,15 @@ def _lot_table(season, rows, *, sold=False, session=None):
         header += [R.cell(R.bold("Role"), header=True),
                    R.cell(R.bold("Base"), header=True, align="right")]
     table = [header]
+    traded = (A.traded_ids(session, season.id)
+              if sold and session is not None else set())
     for lot in rows:
         row = [R.cell(str(lot.lot_no), align="center"),
                R.cell(f"{_flag(lot)} {lot.name}"),
                R.cell(str(lot.rating), align="right")]
         if sold:
             buyer = _franchise(session, lot.sold_to_id)
-            icon = A.acquisition_icon(lot)
+            icon = (A.acquisition_icon(lot) + A.trade_mark(lot, traded)).strip()
             row += [R.cell((buyer.name if buyer else "?") + (f" {icon}" if icon else "")),
                     R.cell(_money(season, lot.sold_price_lakh), align="right")]
         else:
@@ -1706,6 +1709,7 @@ def sold_view(session, season):
         lines.append("<i>Nobody has been sold yet.</i>")
         return blocks, "\n".join(lines)
     groups = _grouped(rows)
+    traded = A.traded_ids(session, season.id)
     for index, (name, group) in enumerate(groups.items()):
         blocks.append(R.details(R.bold(f"🗂 {name} ({len(group)})"),
                                 [_lot_table(season, group, sold=True,
@@ -1717,7 +1721,7 @@ def sold_view(session, season):
             body.append(f"{_flag(lot)} {_e(lot.name)} → "
                         f"<b>{_e(buyer.name if buyer else '?')}</b> "
                         f"{_money(season, lot.sold_price_lakh)}"
-                        f"{A.acquisition_mark(lot)}")
+                        f"{A.acquisition_mark(lot)}{A.trade_mark(lot, traded)}")
         for start in range(0, len(body), QUOTE_ROWS):
             more = " (cont.)" if start else ""
             lines.append(f"\n🗂 <b>{_e(name)}</b> ({len(group)}){more}")

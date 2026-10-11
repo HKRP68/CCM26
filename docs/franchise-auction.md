@@ -1901,6 +1901,32 @@ teams are cleared. `publish_to_league` marks a traded player
 `"acquisition": "trade"`, and drops a row left on the wrong team by name **and
 card** (two editions of one player can share a name).
 
+### What the room is told
+
+* **Sending an offer tags the other side.** An edited message notifies
+  nobody, so ✅ Send posts the offer as a *new* message in the auction group
+  tagging the receiving franchise's owner and co-owners, with the answer
+  buttons on it; the builder turns into a pointer to it. A rejection tags the
+  side that offered.
+* **The mid-season window speaks for itself.** The sweeper (once a minute)
+  says 🔓 when it opens, ⏰ a day and an hour before a dated deadline and one
+  league match before a match-count one, and 🔒 when it closes on its own —
+  with any agreed trade still waiting for the bot admin. Each is said once
+  (an `AuctionEvent` keyed by the league and the deadline, so moving the
+  deadline makes a fresh window with its own notices). Nothing is said when
+  an admin switched mid-season trading off.
+* **An agreed trade outlives the window.** Closing the window (or passing
+  the deadline) cancels offers still being made, but a trade both owners
+  already accepted stays with the bot admin, who can still approve it. Only
+  the season moving on — the playoffs, the end of the league — refuses it.
+* **🔁 on squads.** `/asquad`, `/apurse <team>` and the sold list mark a
+  player who moved by trade, and the squad card adds the net purse movement
+  from trades. Read from the trade log, never stamped on the lot, because
+  `acquisition` (retained, bought, matched) is what retention and RTM read.
+* **The live console** has a 🔁 Trades card with ✅ Approve / 🚫 Veto for
+  every trade waiting on the bot admin — a mid-auction trade is agreed while
+  the admin is watching that page.
+
 ### The trade block and the fairness line
 
 Every card shows each franchise's **📤 Trade out** (players leaving) and

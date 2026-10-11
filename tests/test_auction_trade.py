@@ -396,6 +396,37 @@ class PostAuctionMoney(TradeCase):
         self.T.accept(self.session, trade, by_tg_id=BOB)
         self.assertEqual(trade.status, self.T.STATUS_COMPLETED)
 
+    def test_an_agreed_trade_survives_the_window_closing(self):
+        T = self.T
+        trade = self.offer(self.mi, self.csk, [self.lot_named("Virat")], [])
+        T.accept(self.session, trade, by_tg_id=BOB)
+        T.set_window(self.session, self.season, False)
+        self.session.commit()
+        self.assertEqual(trade.status, T.STATUS_PENDING)   # kept, not cancelled
+        T.approve(self.session, trade, by_tg_id=BOSS)
+        self.assertEqual(trade.status, T.STATUS_COMPLETED)
+        # A NEW offer still cannot be made while the window is shut.
+        with self.assertRaises(self.A.AuctionError):
+            self.offer(self.csk, self.mi, [self.lot_named("Jasprit")], [])
+
+    def test_squad_views_mark_traded_players(self):
+        from services import auction_rich as AR
+        kohli = self.lot_named("Virat")
+        self.complete(self.offer(self.mi, self.csk, [kohli], [], cash=100))
+        squad = self.A.render_squad(self.session, self.season, self.csk)
+        line = [l for l in squad.splitlines() if "Virat" in l][0]
+        self.assertTrue(line.endswith("🔁"))
+        self.assertIn("🔁 Trades:", squad)
+        self.assertIn("net to the purse", squad)
+        _blocks, sold = AR.sold_view(self.session, self.season)
+        self.assertIn("🔁", [l for l in sold.splitlines() if "Virat" in l][0])
+        # Undone, the mark goes.
+        trade = self.T.completed_trades(self.session, self.season)[0]
+        self.T.reverse(self.session, trade, by_tg_id=BOSS)
+        squad = self.A.render_squad(self.session, self.season, self.mi)
+        self.assertFalse([l for l in squad.splitlines() if "Virat" in l][0]
+                         .endswith("🔁"))
+
     def test_veto_and_undo(self):
         T = self.T
         kohli = self.lot_named("Virat")
@@ -538,6 +569,8 @@ class Sweeper(TradeCase):
             return SimpleNamespace(message_id=len(self.sent))
 
         bot = SimpleNamespace(send_message=send_message)
+        import time
+        S._last_trade_notice[0] = time.monotonic()   # notices: own tests
         with mock.patch("services.admin_ids.configured_admin_ids",
                         return_value={BOSS}):
             asyncio.run(S._trade_tick(SimpleNamespace(bot=bot), self.session,
@@ -651,6 +684,78 @@ class MidSeason(TradeCase):
         self.assertIsNone(phase)
         self.assertIn("playoffs", why)
 
+    def test_window_notices_open_remind_and_close_once_each(self):
+        from models import TournamentMatch
+        T = self.T
+        now = datetime.utcnow()
+        kinds = lambda: [k for k, _key, _t in T.due_notices(self.session, self.season, now)]
+        say = lambda: [T.record_notice(self.session, self.season, k, key, t)
+                       for k, key, t in T.due_notices(self.session, self.season, now)]
+
+        self.assertEqual(kinds(), [T.NOTICE_OPEN])
+        say()
+        self.assertEqual(kinds(), [])
+
+        # A dated deadline is a new window: open again, then the reminders.
+        self.season.trade_deadline_at = now + timedelta(hours=20)
+        self.assertEqual(kinds(), [T.NOTICE_OPEN, T.NOTICE_DL_DAY])
+        say()
+        self.assertEqual(kinds(), [])
+        self.season.trade_deadline_at = now + timedelta(minutes=30)
+        say()   # (the new key opens and reminds within the hour)
+        self.assertEqual(kinds(), [])
+
+        # One match left before a match-count deadline.
+        self.season.trade_deadline_at = None
+        self.season.trade_deadline_matches = 2
+        self.assertIn(T.NOTICE_DL_MATCH, kinds())
+        say()
+
+        # An agreed trade, then the playoffs: closed, with the wait noted.
+        trade = self.offer(self.mi, self.csk, [self.lot_named("Virat")], [])
+        T.accept(self.session, trade, by_tg_id=BOB)
+        self.session.add(TournamentMatch(tournament_id=self.tour.id,
+                                         team1_id=self.tt["Mumbai"].id,
+                                         team2_id=self.tt["Chennai"].id,
+                                         status="completed", stage="qualifier"))
+        self.session.flush()
+        notices = T.due_notices(self.session, self.season, now)
+        self.assertEqual([k for k, _key, _t in notices], [T.NOTICE_CLOSED])
+        self.assertIn("still with the bot admin", notices[0][2])
+        say()
+        self.assertEqual(kinds(), [])
+        # The playoffs close it even for an agreed trade.
+        with self.assertRaises(self.A.AuctionError):
+            T.approve(self.session, trade, by_tg_id=BOSS)
+
+    def test_a_trade_agreed_before_the_deadline_can_be_approved_after(self):
+        T = self.T
+        trade = self.offer(self.mi, self.csk, [self.lot_named("Virat")], [])
+        T.accept(self.session, trade, by_tg_id=BOB)
+        self.season.trade_deadline_at = datetime.utcnow() - timedelta(minutes=5)
+        self.session.commit()
+        T.approve(self.session, trade, by_tg_id=BOSS)
+        self.assertEqual(trade.status, T.STATUS_COMPLETED)
+
+    def test_the_sweeper_says_the_notices(self):
+        import asyncio
+        from types import SimpleNamespace
+        from services import auction_scheduler as S
+        sent = []
+
+        async def send_message(chat_id=None, text="", **kwargs):
+            sent.append((chat_id, text))
+            return SimpleNamespace(message_id=1)
+        context = SimpleNamespace(bot=SimpleNamespace(send_message=send_message))
+        asyncio.run(S._trade_notices(context, self.session, datetime.utcnow(),
+                                     force=True))
+        mine = [t for chat, t in sent if chat == self.season.chat_id]
+        self.assertTrue(any("mid-season trade window is open" in t for t in mine))
+        sent.clear()
+        asyncio.run(S._trade_notices(context, self.session, datetime.utcnow(),
+                                     force=True))
+        self.assertEqual([t for chat, t in sent if chat == self.season.chat_id], [])
+
     def test_mid_season_can_be_switched_off(self):
         self.T.set_trade_rules(self.session, self.season, {"midseason": "off"})
         with self.assertRaises(self.A.AuctionError):
@@ -758,7 +863,7 @@ class Commands(TradeCase):
         super().setUp()
         self.build_pool()
         self.run_auction([self.mi, self.csk])
-        self.replies, self.alerts, self.edits = [], [], []
+        self.replies, self.alerts, self.edits, self.sent = [], [], [], []
 
     def _update(self, user_id, args=()):
         from types import SimpleNamespace
@@ -798,8 +903,14 @@ class Commands(TradeCase):
             message=SimpleNamespace(chat=SimpleNamespace(id=self.season.chat_id)),
             answer=answer, edit_message_text=edit_message_text)
         update = SimpleNamespace(callback_query=query)
+
+        async def send_message(chat_id, text, **kwargs):
+            self.sent.append((chat_id, text, kwargs.get("reply_markup")))
+            return SimpleNamespace(message_id=len(self.sent))
+
         from handlers import auction_trade as H
-        asyncio.run(H.trade_callback(update, SimpleNamespace(bot=SimpleNamespace())))
+        asyncio.run(H.trade_callback(update, SimpleNamespace(
+            bot=SimpleNamespace(send_message=send_message))))
         return self.alerts[-1]
 
     def _buttons(self, markup):
@@ -823,7 +934,14 @@ class Commands(TradeCase):
         self.press(f"au_tr_t_{trade.id}_{bumrah.id}_b_0", ALICE)
         self.press(f"au_tr_c_{trade.id}_100_a_0", ALICE)
         self.press(f"au_tr_s_{trade.id}", ALICE)
-        self.assertIn(f"au_tr_y_{trade.id}", self._buttons(self.edits[-1][1]))
+        # The offer goes out as a NEW message that tags Chennai's owner, with
+        # the answer buttons; the builder becomes a pointer with none.
+        chat, ping, buttons = self.sent[-1]
+        self.assertEqual(chat, self.season.chat_id)
+        self.assertIn("sent you a trade offer", ping)
+        self.assertIn("Chennai", ping.split("—")[0])
+        self.assertIn(f"au_tr_y_{trade.id}", self._buttons(buttons))
+        self.assertIsNone(self.edits[-1][1])
 
         # Mumbai cannot accept its own offer; Chennai can.
         self.assertTrue(self.press(f"au_tr_y_{trade.id}", ALICE)[1])
@@ -867,6 +985,17 @@ class Commands(TradeCase):
         self.assertIn("TRADE GUIDE", text)
         self.assertIn("7. Commands", text)
         self.assertIsNotNone(self.replies[-1][1])   # ❌ Close on the last part
+
+    def test_a_rejection_tags_the_side_that_offered(self):
+        from handlers import auction_trade as H
+        T = self.T
+        self.command(H.atrade_handler, ALICE, "Chennai")
+        trade = T.live_trade_for(self.session, self.season, self.mi.id)
+        self.press(f"au_tr_t_{trade.id}_{self.lot_named('Virat').id}_a_0", ALICE)
+        self.press(f"au_tr_s_{trade.id}", ALICE)
+        self.press(f"au_tr_n_{trade.id}", BOB)
+        self.assertIn("rejected trade", self.sent[-1][1])
+        self.assertIn("Mumbai", self.sent[-1][1])
 
     def test_counter_offer_through_the_button(self):
         from handlers import auction_trade as H

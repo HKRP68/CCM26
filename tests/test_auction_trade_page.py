@@ -230,5 +230,25 @@ class TradePageTests(unittest.TestCase):
                          T.STATUS_COMPLETED)
 
 
+    def test_console_shows_and_approves_a_pending_trade(self):
+        T = self.T
+        trade = T.open_trade(self.session, self.season, self.mi, self.csk)
+        T.toggle_lot(self.session, trade, self.lots[f"Trade {self.tag} 0"].id)
+        T.send_offer(self.session, trade)
+        T.accept(self.session, trade, by_tg_id=22)
+        self.session.commit()
+        panel = self.client.get(f"/auctions/{self.season.id}/console/panel")
+        body = panel.get_data(as_text=True)
+        self.assertIn("1 to approve", body)
+        self.assertIn(f"#{trade.id}", body)
+        response = self.client.post(f"/auctions/{self.season.id}/trades",
+                                    data={"action": "trade_approve",
+                                          "trade_id": trade.id, "back": "console"})
+        self.assertIn("/console", response.headers["Location"])
+        self.session.expire_all()
+        self.assertEqual(T.get_trade(self.session, trade.id).status,
+                         T.STATUS_COMPLETED)
+
+
 if __name__ == "__main__":
     unittest.main()
