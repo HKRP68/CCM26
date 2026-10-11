@@ -392,6 +392,7 @@ async def howto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📖 <b>HOW TO PLAY</b>\n\n"
         "Pick a section to learn about that area.\n"
+        "📘 Every match type &amp; tournament, step by step: /matchguide\n"
         "━━━━━━━━━━━━━━━━━━━\n\n"
         + _section_body(section)
     )

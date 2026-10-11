@@ -37,6 +37,7 @@ COMMAND_CATEGORIES = (
         '/trade /tr @user - Trade players',
     )),
     ('🏏 Play matches', (
+        '/matchguide /mguide [topic|pdf] - 📘 The complete guide to every match type & tournament, as a file (or one topic in chat)',
         '/catch [bet] [height] - Risk purse coins in the catching game',
         '/cm @user - Two-wicket challenge mode',
         '/cdraft - Challenge Draft: someone joins, then you both build an XI pick by pick from the full player pool (11 slots, two same-role cards a slot — you take one, your opponent gets the other), and play it out',
