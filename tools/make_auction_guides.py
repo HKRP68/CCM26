@@ -684,9 +684,36 @@ def user_guide():
              "Dot shortcuts, in the auction group."],
             ["/aretlock", "anyone", "Who kept whom; the retention window."],
             ["/apicks", "anyone", "The expansion pick order, and whose turn."],
+            ["/atrade <team>", "owner + co-owners",
+             "Trade players, cash or both with another franchise (IPL rules)."],
+            ["/atrades · /atradeblock", "anyone",
+             "The trade log; the players franchises will listen to offers for."],
+            ["/atradecash · /atradecancel", "owner + co-owners",
+             "Set the cash on your offer; call it off."],
+            ["/atradehelp", "anyone",
+             "The full trade guide and every trade command."],
         ], widths=[38 * mm, 30 * mm, None]),
         p("If you forget all of it: " + C("/ainfo") + " puts every one of those "
           "behind a button.", "callout"),
+
+        h1("11a. Trades"),
+        bullets([
+            C("/atrade Chennai") + " opens a trade card. Tick your "
+            + B("📤 Trade out") + " and their " + B("📥 Trade in") + ", add "
+            "cash with the ± buttons, then ✅ Send. "
+            "The other franchise taps ✅ Accept, ❌ Reject or 🔁 Counter.",
+            B("The money is the IPL's:") + " the side taking a player pays his "
+            "auction price, the side letting him go gets it back, and any cash "
+            "moves on top. All-cash deals and player + cash deals are allowed.",
+            B("Four windows:") + " before the auction, mid-auction (between "
+            "lots, never while you hold the standing bid), after it, and "
+            "mid-season until the deadline — the playoffs always close it.",
+            "Every squad rule still holds: the squad limit, the overseas cap, "
+            "role and rating rules, and the purse you must keep to finish your "
+            "squad. A player moves once per window.",
+            B("The bot admin approves.") + " Once both sides agree, the trade "
+            "waits for the bot owner's ✅ Approve or 🚫 Veto.",
+        ]),
 
         h1("12. Quick answers"),
         table([
@@ -1146,6 +1173,28 @@ def admin_guide():
             "but only after the unsold players have had their accelerated round.",
         ]),
 
+        h1("13a. Trades"),
+        code(["/atradewindow on|off      every trade window at once",
+              "/atraderules mid off      pre · mid · post · season · approval ·",
+              "                          cash · players 3 · trades 2 · maxcash 10",
+              "/atradedeadline 12        mid-season: after 12 league matches",
+              "/atradeapprove 7          bot admin: sign trade #7 off",
+              "/atradeveto 7 lopsided    bot admin: stop it",
+              "/atradeundo 7             bot admin: reverse it exactly"]),
+        bullets([
+            B("Only the bot owner / a bot admin approves.") + " With approval on "
+            "(the default) an agreed trade waits; the bot DMs every bot admin "
+            "the card with ✅ Approve / 🚫 Veto, and the setup page's 🔁 Trades "
+            "fold lists it too.",
+            "A mid-auction trade is refused while either side holds the standing "
+            "bid or is answering a Right To Match, and the board's purses and "
+            "max bids update the moment it goes through.",
+            "A mid-season trade moves the player's league row, so his tournament "
+            "stats go with him, and is refused while either team is mid-match.",
+            "The 🔁 Trades fold can also put a trade through directly — every "
+            "squad rule still applies, the window does not.",
+        ]),
+
         h1("14. Troubleshooting"),
         table([
             ["“/astart says the pool is empty.”",
@@ -1215,8 +1264,11 @@ def admin_guide():
             ["Right To Match", "/artmset · /artmcards · /artmforce · /artmundo"],
             ["Expansion picks", "/apick · /apickset · /apickskip · /apickundo"],
             ["Teams", "/acall · /aremoveteam"],
+            ["Trades", "/atradewindow · /atraderules · /atradedeadline · "
+                       "/atradehelp"],
             ["The end", "/apublish · /aclone · /acancel"],
-            ["Bot admins only", "/aadminadd · /aadminremove · /aadmins"],
+            ["Bot admins only", "/aadminadd · /aadminremove · /aadmins · "
+                                "/atradeapprove · /atradeveto · /atradeundo"],
             ["The card itself", "/auction · /adminhelp"],
         ], widths=[35 * mm, None], mono_first=False),
         Spacer(1, 8),

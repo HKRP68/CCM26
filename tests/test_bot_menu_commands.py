@@ -207,6 +207,12 @@ UNPUBLISHED_ON_PURPOSE = {
     "tseasons",
     # Player Draft trades — the precedent the auction followed.
     "dtrade", "dtrades", "dtradecancel",
+    # Franchise Auction trades — same call as /dtrade: both player scopes and
+    # the admin bucket are at the ceiling. Named on the /auction admin card,
+    # /ainfo, /help and the board's own footer.
+    "atrade", "atrades", "atradecash", "atradecancel", "atradeblock",
+    "atraderules", "atradewindow", "atradedeadline", "atradeapprove",
+    "atradeveto", "atradeundo", "atradehelp",
     # Challenge League tournament views — /help, the hub's buttons, and
     # whatever alias a league sets as its fixtures_command.
     "ctour", "cttable", "ctfixtures", "ctteams", "ctinjuries",

@@ -24277,7 +24277,149 @@ def admin_auction_detail(season_id):
                             for slot in retention_rn.slots(season)},
             ret_open_slots=lambda f: retention_rn.open_slots(db, season, f),
             ret_budget_left=lambda f: retention_rn.budget_left(db, season, f),
+            # ── Trades ──
+            trades=_auction_trade_view(db, season),
         )
+    finally:
+        db.close()
+
+
+def _auction_trade_view(db, season):
+    """Everything the 🔁 Trades fold shows, read through the trade service."""
+    from services import auction_trade_service as trade_svc
+    import json as _json
+
+    def names(trade, side):
+        return [lot.name for lot in trade_svc.lots_for(db, trade, side)]
+
+    def row(trade):
+        snap = {}
+        try:
+            snap = _json.loads(trade.snapshot_json or "{}")
+        except (TypeError, ValueError):
+            snap = {}
+        a = trade_svc.team_on(db, trade, "a")
+        b = trade_svc.team_on(db, trade, "b")
+        a_names = ([r["name"] for r in snap.get("a", [])] if snap
+                   else names(trade, "a"))
+        b_names = ([r["name"] for r in snap.get("b", [])] if snap
+                   else names(trade, "b"))
+        cash = int(trade.cash_lakh or 0)
+        return {
+            "id": trade.id, "status": trade.status,
+            "status_label": trade_svc.STATUS_LABEL.get(trade.status, trade.status),
+            "phase": trade_svc.PHASE_LABEL.get(trade.phase, trade.phase or ""),
+            "a": a.name if a else "?", "b": b.name if b else "?",
+            "a_names": a_names, "b_names": b_names,
+            "cash": (("" if not cash else
+                      f"{(a.name if cash > 0 else b.name) if a and b else ''} pays "
+                      f"{auction_svc.render_money(abs(cash))}")),
+            "verdict": (snap.get("verdict") if snap else
+                        trade_svc.fairness(db, trade)["verdict"]),
+            "when": trade.completed_at or trade.updated_at,
+            "by_admin": bool(trade.by_admin), "reason": trade.reason,
+        }
+
+    live = trade_svc.live_trades(db, season)
+    phase, closed_reason = trade_svc.trade_phase(db, season)
+    return {
+        "rules": trade_svc.trade_rules(season),
+        "open": trade_svc.trades_switched_on(season),
+        "phase": trade_svc.PHASE_LABEL.get(phase) if phase else None,
+        "closed_reason": closed_reason,
+        "window_line": trade_svc.window_line(db, season),
+        "pending": [row(t) for t in live if t.status == trade_svc.STATUS_PENDING],
+        "live": [row(t) for t in live if t.status != trade_svc.STATUS_PENDING],
+        "done": [row(t) for t in trade_svc.completed_trades(db, season, limit=30)],
+        "block": [(lot, team, entry.asking_note) for entry, lot, team
+                  in trade_svc.block_list(db, season)],
+        "deadline_at": season.trade_deadline_at,
+        "deadline_matches": season.trade_deadline_matches,
+    }
+
+
+@app.route("/auctions/<int:season_id>/trades", methods=["POST"])
+@login_required
+def admin_auction_trades(season_id):
+    """The 🔁 Trades fold's forms. The website login is the bot owner's, so
+    approving, vetoing and undoing here are the bot admin's own acts."""
+    from services import auction_trade_service as trade_svc
+    db = get_session()
+    try:
+        season = _auction_or_404(db, season_id)
+        action = (request.form.get("action") or "").strip()
+        try:
+            if action == "trade_rules":
+                changes = {key: bool(request.form.get(key))
+                           for key in trade_svc.BOOL_RULES}
+                for key in ("max_trades_per_team", "max_players_per_side"):
+                    raw = (request.form.get(key) or "").strip()
+                    if raw:
+                        changes[key] = raw
+                changes["max_cash_lakh"] = _money_form("max_cash_cr", 0) or 0
+                trade_svc.set_trade_rules(db, season, changes)
+                trade_svc.set_window(db, season, bool(request.form.get("trades_open")))
+                raw_matches = (request.form.get("deadline_matches") or "").strip()
+                raw_at = (request.form.get("deadline_at") or "").strip()
+                at = None
+                if raw_at:
+                    try:
+                        at = datetime.strptime(raw_at, "%Y-%m-%dT%H:%M")
+                    except ValueError:
+                        raise auction_svc.AuctionError(
+                            "The deadline needs a date and a time.")
+                trade_svc.set_deadline(
+                    db, season, at=at,
+                    matches=int(raw_matches) if raw_matches.isdigit() else None)
+                flash("🔁 Trade rules saved.", "success")
+            elif action in ("trade_approve", "trade_veto", "trade_undo",
+                            "trade_cancel"):
+                trade = trade_svc.get_trade(db, request.form.get("trade_id"))
+                if trade is None or trade.season_id != season.id:
+                    abort(404)
+                if action == "trade_approve":
+                    trade_svc.approve(db, trade, by_web=True)
+                    flash(f"✅ Trade #{trade.id} approved.", "success")
+                elif action == "trade_veto":
+                    trade_svc.veto(db, trade, by_web=True,
+                                   reason=request.form.get("reason"))
+                    flash(f"🚫 Trade #{trade.id} vetoed.", "success")
+                elif action == "trade_cancel":
+                    trade_svc.cancel(db, trade)
+                    flash(f"✖️ Trade #{trade.id} called off.", "success")
+                else:
+                    trade_svc.reverse(db, trade, by_web=True)
+                    flash(f"↩️ Trade #{trade.id} undone.", "success")
+            elif action == "trade_force":
+                field = {f.id: f for f in auction_svc.franchises(db, season.id)}
+                team_a = field.get(request.form.get("team_a", type=int))
+                team_b = field.get(request.form.get("team_b", type=int))
+
+                def picked(name):
+                    text = (request.form.get(name) or "").strip()
+                    if not text:
+                        return []
+                    found, misses = auction_svc.find_lots(db, season, text)
+                    if misses:
+                        token, why = misses[0]
+                        raise auction_svc.AuctionError(f"“{token}” {why}.")
+                    return found
+                cash = _money_form("cash_cr", 0) or 0
+                if (request.form.get("cash_dir") or "a") == "b":
+                    cash = -cash
+                trade = trade_svc.admin_trade(
+                    db, season, team_a, team_b, picked("lots_a"), picked("lots_b"),
+                    cash, by_web=True, note=request.form.get("note"))
+                flash(f"🔁 Trade #{trade.id} done — the group is being told.",
+                      "success")
+            else:
+                abort(400)
+            db.commit()
+        except auction_svc.AuctionError as ve:
+            db.rollback()
+            flash(f"⚠️ {ve}", "error")
+        return redirect(url_for("admin_auction_detail", season_id=season.id)
+                        + "#trades")
     finally:
         db.close()
 

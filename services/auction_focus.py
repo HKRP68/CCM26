@@ -93,6 +93,11 @@ AUCTION_COMMANDS = frozenset({
     "apool", "aautosets", "aautoset",
     "asetorder", "aaccelmode", "acall", "acallteams",
     "aremoveteam", "aadminadd", "aadminremove", "aadmins",
+    # Trades (handlers/auction_trade.py).
+    "atrade", "atrades", "atradelog", "atradecash", "atradecancel",
+    "atradeblock", "atblock", "atraderules", "atradewindow",
+    "atradedeadline", "atradeapprove", "atradeveto", "atradeundo",
+    "atradehelp", "tradehelp",
 })
 
 # Commands that work in the auction group whatever the auction is doing. The

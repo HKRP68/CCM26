@@ -209,6 +209,7 @@ def init_db():
         PlayerDraft, DraftTeam, DraftPlayer, DraftPick,
         AuctionSeason, AuctionFranchise, AuctionLot, AuctionBid,
         AuctionLedgerEntry, AuctionEvent, AuctionRetentionOffer, AuctionAdmin,
+        AuctionTrade, AuctionTradeBlock,
     )
     import logging
     import time as _time
@@ -1102,6 +1103,16 @@ def _migrate_add_columns():
     # minimum and the board's buttons. Defaulted to 1 for the reason above: an
     # auction that has always allowed jump bids must keep allowing them.
     _try_add("auction_seasons", "direct_bids", "INTEGER DEFAULT 1")
+
+    # ── Franchise Auction: trades ──
+    # ``auction_trades`` and ``auction_trade_block`` are new tables built by
+    # ``create_all``. The window is OPEN by default (1, for the NULL-reads-
+    # falsy reason above); every rule beyond it lives in the JSON column and
+    # is defaulted on read.
+    _try_add("auction_seasons", "trades_open", "INTEGER DEFAULT 1")
+    _try_add("auction_seasons", "trade_rules_json", "TEXT")
+    _try_add("auction_seasons", "trade_deadline_at", "TIMESTAMP")
+    _try_add("auction_seasons", "trade_deadline_matches", "INTEGER")
 
     # ── Auction League: Hall of Fame ──
     # Filled when a season finishes, so /alhof ranks careers without reading

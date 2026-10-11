@@ -78,6 +78,11 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # on every press: an admin's picker needs an auction admin, an owner's
     # /retain list needs that franchise's owner or a co-owner.
     "au_rpk_",
+    # The /atrade card: built by one franchise, answered by the other, and
+    # approved by a bot admin — three different people on one message.
+    # handlers/auction_trade.py checks the presser's side (or bot-admin
+    # status) on every press.
+    "au_tr_",
     "cric_join",
     "cric_join_",
     "cric_join:",

@@ -2574,6 +2574,33 @@ def main():
         app.add_handler(CommandHandler("aadminadd", aadminadd_handler))
         app.add_handler(CommandHandler("aadminremove", aadminremove_handler))
         app.add_handler(CommandHandler("aadmins", aadmins_handler))
+        # IPL-style trades between franchises — pre-auction, mid-auction,
+        # post-auction and mid-season. The au_tr_ buttons are shared like
+        # au_bid_ (both franchises drive the same card) and authorised per
+        # press in handlers/auction_trade.py; approving is bot-admin-only.
+        from handlers.auction_trade import (
+            atrade_handler, atrades_handler, atradecash_handler,
+            atradecancel_handler, atradeblock_handler, atraderules_handler,
+            atradewindow_handler, atradedeadline_handler,
+            atradeapprove_handler, atradeveto_handler, atradeundo_handler,
+            atradehelp_handler, trade_callback as auction_trade_callback,
+        )
+        app.add_handler(CommandHandler("atrade", atrade_handler))
+        app.add_handler(CommandHandler(["atrades", "atradelog"], atrades_handler))
+        app.add_handler(CommandHandler(["atradehelp", "tradehelp"],
+                                       atradehelp_handler))
+        app.add_handler(CommandHandler("atradecash", atradecash_handler))
+        app.add_handler(CommandHandler("atradecancel", atradecancel_handler))
+        app.add_handler(CommandHandler(["atradeblock", "atblock"],
+                                       atradeblock_handler))
+        app.add_handler(CommandHandler("atraderules", atraderules_handler))
+        app.add_handler(CommandHandler("atradewindow", atradewindow_handler))
+        app.add_handler(CommandHandler("atradedeadline", atradedeadline_handler))
+        app.add_handler(CommandHandler("atradeapprove", atradeapprove_handler))
+        app.add_handler(CommandHandler("atradeveto", atradeveto_handler))
+        app.add_handler(CommandHandler("atradeundo", atradeundo_handler))
+        app.add_handler(CallbackQueryHandler(auction_trade_callback,
+                                             pattern=r"^au_tr_"))
 
         app.add_handler(CommandHandler(["unscramble", "u"], unscramble_handler))
         app.add_handler(CommandHandler("ju", unscramble_join_handler))

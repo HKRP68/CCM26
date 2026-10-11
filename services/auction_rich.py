@@ -1841,8 +1841,17 @@ def info_menu(session, season, franchise=None):
                 "run by.")
         blocks.append(R.paragraph(R.italic(note)))
         lines.append(f"<i>{note}</i>")
+    try:
+        import re
+        from services import auction_trade_service as T
+        trade_line = T.window_line(session, season)
+        blocks.append(R.paragraph(re.sub(r"<[^>]+>", "", trade_line)
+                                  + " · /atrade <team>"))
+        lines.append(trade_line + " · <code>/atrade &lt;team&gt;</code>")
+    except Exception:
+        logger.exception("ainfo: trade window line failed (non-fatal)")
     commands = ("/arules · /asets · /anextset · /anextplayer · /asquad · "
-                "/apurse · /asoldlist · /aunsoldlist")
+                "/apurse · /asoldlist · /aunsoldlist · /atrades · /atradehelp")
     blocks.append(R.footer(["Or type: ", R.code(commands)]))
     lines.append(f"\n<i>Or type:</i> <code>{commands}</code>")
     return blocks, "\n".join(lines)
@@ -1993,6 +2002,14 @@ ADMIN_SECTIONS = (
         ("/acall [message]", "Tag every owner and co-owner"),
         ("/aremoveteam <team>", "Remove a team — players back in the pool, purse shared"),
     )),
+    ("🔁 Trades", (
+        ("/atradewindow on|off", "Open or shut every trade window"),
+        ("/atraderules [rule value]", "Pre/mid-auction, post, mid-season, "
+                                      "cash, players per side, limits"),
+        ("/atradedeadline <12 | 48h | date | off>", "The mid-season deadline "
+                                                    "(the playoffs always close it)"),
+        ("/atradehelp", "The full trade guide and every trade command"),
+    )),
     ("🏁 The end", (
         ("/apublish", "Publish squads as a Challenge League"),
         ("/aclone <name>", "Start next season from this one"),
@@ -2004,6 +2021,9 @@ BOT_ADMIN_SECTION = ("👮 Auction admins — bot admins only", (
     ("/aadminadd <id | @user | reply>", "Let someone run auctions"),
     ("/aadminremove <id | @user | reply>", "Take it away again"),
     ("/aadmins", "Everyone who may run auctions"),
+    ("/atradeapprove · /atradeveto <id>", "Sign off (or stop) an agreed trade "
+                                         "— bot admins only"),
+    ("/atradeundo <id>", "Reverse a completed trade exactly"),
 ))
 
 PLAYER_SECTION = ("👥 For owners & everyone", (
@@ -2023,6 +2043,9 @@ PLAYER_SECTION = ("👥 For owners & everyone", (
     ("/asoldlist · /aunsoldlist", "Everyone sold, everyone unsold"),
     ("/aleaderboard · /amybids", "Who has spent most; your own bid history"),
     ("/aboard", "The live board with quick-bid buttons"),
+    ("/atrade <team>", "🔁 Trade — players, cash or both, IPL rules"),
+    ("/atrades · /atradeblock", "The trade log; who is up for offers"),
+    ("/atradehelp", "📖 How trades work, and every trade command"),
 ))
 
 

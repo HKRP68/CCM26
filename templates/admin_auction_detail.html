@@ -1404,6 +1404,160 @@
     </p>
   </div></details>
 
+  <!-- ── Trades ────────────────────────────────────────────────── -->
+  {% set tr = trades %}
+  {{ fold("trades", "🔁 Trades",
+          ((tr.phase ~ " window open") if tr.open and tr.phase else "closed")
+          ~ " · " ~ tr.done|length ~ " done"
+          ~ ((" · ⏳ " ~ tr.pending|length ~ " to approve") if tr.pending else "")) }}
+    <p class="au-note" style="margin:.2rem 0 .8rem;">
+      IPL-style trades between franchises, in four windows: <b>pre-auction</b>
+      (retained and picked players), <b>mid-auction</b> (between lots — never
+      under a live bid), <b>post-auction</b>, and <b>mid-season</b> up to the
+      deadline (the playoffs always close it). The team that takes a player
+      pays his auction price, the team that lets him go is paid it back, and
+      any cash moves on top. Owners trade with <code>/atrade &lt;team&gt;</code>
+      in the group. {{ tr.window_line|safe }}
+      {% if tr.closed_reason %}<br>{{ tr.closed_reason }}{% endif %}
+    </p>
+
+    {% if tr.pending %}
+    <h4 style="margin:.6rem 0 .3rem;">⏳ Waiting for your approval</h4>
+    <table class="au-table">
+      <thead><tr><th>#</th><th>Trade</th><th>Cash</th><th>Verdict</th><th style="width:15rem;"></th></tr></thead>
+      <tbody>
+      {% for t in tr.pending %}
+        <tr>
+          <td>{{ t.id }}</td>
+          <td><b>{{ t.a }}</b> 📤 {{ t.a_names|join(", ") or "—" }} · 📥 {{ t.b_names|join(", ") or "—" }}<br>
+              <b>{{ t.b }}</b> 📤 {{ t.b_names|join(", ") or "—" }} · 📥 {{ t.a_names|join(", ") or "—" }}</td>
+          <td>{{ t.cash or "—" }}</td>
+          <td class="dim">{{ t.verdict }}</td>
+          <td>
+            <form method="POST" action="{{ url_for('admin_auction_trades', season_id=season.id) }}" style="display:inline;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="trade_approve">
+              <input type="hidden" name="trade_id" value="{{ t.id }}">
+              <button class="btn btn-primary btn-sm" type="submit">✅ Approve</button>
+            </form>
+            <form method="POST" action="{{ url_for('admin_auction_trades', season_id=season.id) }}" style="display:inline;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="trade_veto">
+              <input type="hidden" name="trade_id" value="{{ t.id }}">
+              <input type="text" name="reason" placeholder="reason (optional)" style="width:7rem;">
+              <button class="btn btn-sm" type="submit">🚫 Veto</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if tr.live %}
+    <h4 style="margin:.8rem 0 .3rem;">📨 Open offers</h4>
+    <table class="au-table">
+      <thead><tr><th>#</th><th>Trade</th><th>Status</th><th></th></tr></thead>
+      <tbody>
+      {% for t in tr.live %}
+        <tr>
+          <td>{{ t.id }}</td>
+          <td><b>{{ t.a }}</b> → <b>{{ t.b }}</b>: {{ t.a }} 📤 {{ t.a_names|join(", ") or "—" }} · 📥 {{ t.b_names|join(", ") or "—" }}{% if t.cash %} · {{ t.cash }}{% endif %}</td>
+          <td>{{ t.status_label }}</td>
+          <td>
+            <form method="POST" action="{{ url_for('admin_auction_trades', season_id=season.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="trade_cancel">
+              <input type="hidden" name="trade_id" value="{{ t.id }}">
+              <button class="btn btn-ghost btn-sm" type="submit">✖️ Call off</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    <h4 style="margin:.8rem 0 .3rem;">⚙️ Rules</h4>
+    <form method="POST" action="{{ url_for('admin_auction_trades', season_id=season.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="trade_rules">
+      <div style="display:flex;gap:.4rem 1.2rem;flex-wrap:wrap;">
+        <label><input type="checkbox" name="trades_open" value="1" {{ 'checked' if tr.open }}> <b>Trade window open</b></label>
+        <label><input type="checkbox" name="pre_auction" value="1" {{ 'checked' if tr.rules.pre_auction }}> Pre-auction</label>
+        <label><input type="checkbox" name="mid_auction" value="1" {{ 'checked' if tr.rules.mid_auction }}> Mid-auction</label>
+        <label><input type="checkbox" name="post_auction" value="1" {{ 'checked' if tr.rules.post_auction }}> Post-auction</label>
+        <label><input type="checkbox" name="mid_season" value="1" {{ 'checked' if tr.rules.mid_season }}> Mid-season</label>
+        <label><input type="checkbox" name="require_approval" value="1" {{ 'checked' if tr.rules.require_approval }}> Bot admin approves every trade</label>
+        <label><input type="checkbox" name="allow_cash" value="1" {{ 'checked' if tr.rules.allow_cash }}> Cash allowed</label>
+      </div>
+      <div style="display:flex;gap:.6rem 1.2rem;flex-wrap:wrap;margin-top:.6rem;">
+        <label>Players per side <input type="number" min="1" max="6" name="max_players_per_side" value="{{ tr.rules.max_players_per_side }}" style="width:4rem;"></label>
+        <label>Trades per franchise per window (0 = no limit) <input type="number" min="0" name="max_trades_per_team" value="{{ tr.rules.max_trades_per_team }}" style="width:4rem;"></label>
+        <label>Max cash (Cr, blank = no limit) <input type="text" name="max_cash_cr" value="{{ (tr.rules.max_cash_lakh / 100)|round(2) if tr.rules.max_cash_lakh else '' }}" style="width:5rem;"></label>
+      </div>
+      <div style="display:flex;gap:.6rem 1.2rem;flex-wrap:wrap;margin-top:.6rem;">
+        <label>Mid-season deadline (UTC) <input type="datetime-local" name="deadline_at" value="{{ tr.deadline_at.strftime('%Y-%m-%dT%H:%M') if tr.deadline_at else '' }}"></label>
+        <label>…or after league match no. <input type="number" min="0" name="deadline_matches" value="{{ tr.deadline_matches or '' }}" style="width:5rem;"></label>
+      </div>
+      <button class="btn btn-primary" type="submit" style="margin-top:.6rem;">Save trade rules</button>
+    </form>
+
+    <h4 style="margin:1rem 0 .3rem;">🛠 Put a trade through (bot admin)</h4>
+    <p class="au-note" style="margin:.1rem 0 .4rem;">Every squad rule still applies; the window does not. Players by name or lot number, comma-separated. The group is told.</p>
+    <form method="POST" action="{{ url_for('admin_auction_trades', season_id=season.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="trade_force">
+      <div style="display:flex;gap:.6rem 1rem;flex-wrap:wrap;align-items:end;">
+        <label>Team A <select name="team_a">{% for f in field %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}</select></label>
+        <label>📤 A trades out <input type="text" name="lots_a" placeholder="Kohli, 67" style="width:11rem;"></label>
+        <label>Team B <select name="team_b">{% for f in field %}<option value="{{ f.id }}" {{ 'selected' if loop.index == 2 }}>{{ f.name }}</option>{% endfor %}</select></label>
+        <label>📤 B trades out <input type="text" name="lots_b" placeholder="Bumrah" style="width:11rem;"></label>
+        <label>Cash (Cr) <input type="text" name="cash_cr" style="width:5rem;"></label>
+        <label><select name="cash_dir"><option value="a">A pays B</option><option value="b">B pays A</option></select></label>
+        <label>Note <input type="text" name="note" style="width:10rem;"></label>
+        <button class="btn" type="submit">🔁 Do trade</button>
+      </div>
+    </form>
+
+    <h4 style="margin:1rem 0 .3rem;">📜 Completed trades</h4>
+    {% if tr.done %}
+    <table class="au-table">
+      <thead><tr><th>#</th><th>When</th><th>Window</th><th>Trade</th><th>Cash</th><th></th></tr></thead>
+      <tbody>
+      {% for t in tr.done %}
+        <tr>
+          <td>{{ t.id }}</td>
+          <td class="dim">{{ t.when.strftime('%d %b %H:%M') if t.when else '' }}</td>
+          <td>{{ t.phase }}{% if t.by_admin %} · admin{% endif %}</td>
+          <td><b>{{ t.a }}</b> 📤 {{ t.a_names|join(", ") or "—" }} · 📥 {{ t.b_names|join(", ") or "—" }}
+              <div class="dim">{{ t.verdict }}</div></td>
+          <td>{{ t.cash or "—" }}</td>
+          <td>{% if t.status == 'completed' %}
+            <form method="POST" action="{{ url_for('admin_auction_trades', season_id=season.id) }}"
+                  onsubmit="return confirm('Undo trade #{{ t.id }}? Players and money go back.');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="action" value="trade_undo">
+              <input type="hidden" name="trade_id" value="{{ t.id }}">
+              <button class="btn btn-ghost btn-sm" type="submit">↩️ Undo</button>
+            </form>
+            {% else %}{{ t.status_label }}{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="au-note">No trades yet.</p>
+    {% endif %}
+
+    {% if tr.block %}
+    <h4 style="margin:1rem 0 .3rem;">🏷 Trade block</h4>
+    <ul class="au-note">{% for lot, team, note in tr.block %}
+      <li><b>{{ team.name }}</b>: {{ lot.name }} ({{ lot.rating }}, {{ money(lot.sold_price_lakh) }}){% if note %} — {{ note }}{% endif %}</li>
+    {% endfor %}</ul>
+    {% endif %}
+  </div></details>
+
   <!-- ── Publish ───────────────────────────────────────────────── -->
   {{ fold("publish", "📤 Publish",
           ("published " ~ season.published_at.strftime('%Y-%m-%d %H:%M') ~ " UTC"
