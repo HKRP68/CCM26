@@ -2413,7 +2413,9 @@ def main():
             aretslot_handler, aretrule_handler, aretdemand_handler,
             asetsexport_handler, asetsimport_handler,
             retention_pick_callback, aprevious_handler, aprevteam_handler,
-            release_callback,
+            # Aliased: a bare name would shadow the /claim 🔴 Release
+            # callback imported at the top, registered further down.
+            release_callback as auction_release_callback,
         )
         # Not "/b": that is already /buy, registered above, and PTB runs the
         # first handler that matches — the alias would be dead.
@@ -2530,7 +2532,7 @@ def main():
         app.add_handler(CallbackQueryHandler(retention_pick_callback,
                                              pattern=r"^au_rpk_"))
         # A franchise's owner releasing its own kept player (/arelease bare).
-        app.add_handler(CallbackQueryHandler(release_callback,
+        app.add_handler(CallbackQueryHandler(auction_release_callback,
                                              pattern=r"^au_rel_"))
         app.add_handler(CommandHandler(["aprevious", "alastseason"],
                                        aprevious_handler))
