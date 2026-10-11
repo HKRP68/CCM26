@@ -70,6 +70,26 @@ def draft_overs(draft):
     except (TypeError, ValueError):
         return LETSPLAY_OVERS
 
+def _fixed_guest(draft):
+    """True when the guest side fields an XI held on the draft, not a roster.
+
+    That is the /lpbot opponent (an auto-built XI) and the /lpmulti league team
+    (a Challenge League squad's best XI). Both are unranked practice: nothing
+    of the guest's own roster takes the field, so nothing can count.
+    """
+    draft = draft or {}
+    return bool(draft.get("vs_bot") or draft.get("lpmulti"))
+
+
+def _guest_team_label(draft):
+    """``"Mumbai Indians (IPL)"`` for a /lpmulti guest, else None."""
+    team = (draft or {}).get("guest_team")
+    if not team:
+        return None
+    league = (draft or {}).get("guest_league_name")
+    return f"{team} ({league})" if league else str(team)
+
+
 # Shared with the block renderer so the two live cards can't disagree about
 # what a pitch looks like.
 _PITCH_EMOJI = lpr.PITCH_EMOJI
@@ -185,7 +205,8 @@ def _active_letsplay_in_chat(context, chat_id, session=None):
         if not isinstance(k, str) or not isinstance(v, dict):
             continue
         if k.startswith("lp_") and v.get("chat_id") == chat_id \
-                and v.get("status") in ("pending", "pitch", "showxi", "toss"):
+                and v.get("status") in ("pending", "lpm_pick", "pitch",
+                                        "showxi", "toss"):
             if _draft_is_stale(v):
                 _reap_draft(context, v.get("invite_id", k[3:]))
                 continue
@@ -474,7 +495,7 @@ def _xi_preview(pairs):
 # ════════════════════════════════════════════════════════════════════
 
 async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
-                           tour_ctx=None):
+                           tour_ctx=None, multi=False):
     """/letsplay — invite another player to a 20-over match with your own roster.
 
     ``tour_ctx`` is set only when /lptour re-enters here to play an official Lets
@@ -482,6 +503,11 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
     and the two participating ``TournamentTeam`` ids (already validated by
     ``services.lp_tournament_service.check_pair``), plus the resolved guest so
     the target isn't looked up twice. Everything else about the flow is the same.
+
+    ``multi`` is set by /lpmulti (handlers/lpmulti.py): the host still plays
+    their own roster, but the guest captains a Challenge League team they pick
+    after accepting (League → Team). The guest's own roster is never used, so
+    it isn't checked, and the match is unranked practice.
     """
     msg = update.effective_message
     tg = update.effective_user
@@ -540,6 +566,10 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         else:
             guest_user, reason = resolve_command_target(
                 session, update, context, "letsplay")
+        if not guest_user and multi:
+            from handlers.lpmulti import USAGE_HTML
+            await msg.reply_text(USAGE_HTML, parse_mode="HTML")
+            return
         if not guest_user:
             await msg.reply_text(
                 "🏏 <b>Lets Play</b> — challenge another player with your own roster.\n\n"
@@ -576,7 +606,9 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
             return
 
         host_pairs = _get_ordered_roster(session, host.id)
-        guest_pairs = _get_ordered_roster(session, guest_user.id)
+        # /lpmulti: the guest plays a league team, so their roster is not used.
+        guest_pairs = (None if multi
+                       else _get_ordered_roster(session, guest_user.id))
         session.commit()
         if len(host_pairs) < 11:
             await msg.reply_text(
@@ -584,7 +616,7 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 f"<b>{len(host_pairs)}</b>. Use /claim, /gspin or /buypack.",
                 parse_mode="HTML")
             return
-        if len(guest_pairs) < 11:
+        if guest_pairs is not None and len(guest_pairs) < 11:
             gname = f"@{guest_user.username}" if guest_user.username else (guest_user.first_name or "They")
             await msg.reply_text(
                 f"❌ {html.escape(gname)} needs at least 11 players to play "
@@ -602,7 +634,8 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
                 + "\n\nFix it with /autobuild or /swap, then try /letsplay again.",
                 parse_mode="HTML")
             return
-        ok_guest, guest_errs = validate_xi(guest_pairs)
+        ok_guest, guest_errs = (validate_xi(guest_pairs) if guest_pairs is not None
+                                else (True, []))
         if not ok_guest:
             gname = f"@{guest_user.username}" if guest_user.username else (guest_user.first_name or "They")
             await msg.reply_text(
@@ -639,12 +672,16 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         # Official Lets Play Tournament fixture, or None for a friendly.
         "lpt": dict(tour_ctx) if tour_ctx else None,
         "overs": overs,
+        # /lpmulti: the guest picks a league team after accepting.
+        "lpmulti": bool(multi) and not tour_ctx,
     }
     context.bot_data[_dkey(invite_id)] = draft
 
     lpt = draft["lpt"]
+    lpm = draft["lpmulti"]
     heading = ("🏆 <b>LETS PLAY TOURNAMENT — Fixture Invitation</b>"
-               if lpt else "🏏 <b>LETS PLAY — Match Invitation</b>")
+               if lpt else "🌐 <b>LETS PLAY MULTI — Match Invitation</b>"
+               if lpm else "🏏 <b>LETS PLAY — Match Invitation</b>")
     text = (
         f"{heading}\n"
         "━━━━━━━━━━━━━━━━━━━\n"
@@ -656,9 +693,11 @@ async def letsplay_handler(update: Update, context: ContextTypes.DEFAULT_TYPE,
         f"🎯 <b>Guest:</b> {_m(guest_info)}\n"
         "━━━━━━━━━━━━━━━━━━━\n"
         + ("🎮 <b>Match type:</b> Tournament (official)\n" if lpt
+           else "🎮 <b>Match type:</b> Lets Play Multi (unranked)\n" if lpm
            else "🎮 <b>Match type:</b> Lets Play\n")
         + f"⏱️ <b>Format:</b> {overs} Over{'s' if overs != 1 else ''}\n"
-        "📋 <b>Roster:</b> Own Roster\n"
+        + ("📋 <b>Host:</b> Own Roster • <b>Guest:</b> a league team "
+           "(you pick League → Team)\n" if lpm else "📋 <b>Roster:</b> Own Roster\n")
         + (f"📊 <b>Host XI:</b> {host_preview['ovr']} OVR "
            f"(avg {host_preview['avg']:.1f})\n"
            f"⭐ {host_preview['stars']}\n" if host_preview else "")
@@ -729,7 +768,7 @@ async def _on_invite_timeout(context: ContextTypes.DEFAULT_TYPE):
 # Setup timer — covers the pitch / XI / toss stages after acceptance
 # ════════════════════════════════════════════════════════════════════
 
-_SETUP_STATUSES = ("traitvote", "pitch", "showxi", "toss")
+_SETUP_STATUSES = ("traitvote", "lpm_pick", "pitch", "showxi", "toss")
 
 
 def _rearm_setup_timeout(context, invite_id):
@@ -802,6 +841,18 @@ async def letsplay_invite_callback(update: Update, context: ContextTypes.DEFAULT
         _drop_draft(context, invite_id)
         return
 
+    if draft.get("lpmulti"):
+        # /lpmulti: the guest captains a league team — League → Team first,
+        # then the usual pitch → Playing XI → toss (handlers/lpmulti.py).
+        draft["status"] = "lpm_pick"
+        _rearm_setup_timeout(context, invite_id)
+        await q.edit_message_text(
+            f"✅ {_m(draft['guest'])} accepted the challenge!",
+            parse_mode="HTML")
+        from handlers.lpmulti import prompt_league_picker
+        await prompt_league_picker(context, draft)
+        return
+
     # Accepted → both captains say whether traits play, then the host picks the
     # pitch. Start the rolling setup timer that guards every stage from here on.
     draft["status"] = "traitvote"
@@ -843,7 +894,7 @@ def _draft_side_xi(session, draft, side):
     the two sides and to decide whether the question is worth asking, so a side
     that cannot be read at all counts as an XI with nothing to declare.
     """
-    if side == "guest" and draft.get("vs_bot"):
+    if side == "guest" and _fixed_guest(draft):
         return list(draft.get("bot_xi") or [])
     try:
         pairs = _get_ordered_roster(session, draft[side]["user_id"])[:11]
@@ -873,7 +924,7 @@ async def _prompt_trait_vote(context, draft):
     # the two captains in front of this fixture would be playing under different
     # ones from the pair who played the last, and the standings would compare
     # results from two different games. Tournament fixtures keep traits on.
-    if not tvs.is_enabled() or draft.get("vs_bot") or draft.get("lpt"):
+    if not tvs.is_enabled() or _fixed_guest(draft) or draft.get("lpt"):
         return False
     session = get_session()
     try:
@@ -1173,9 +1224,15 @@ def _bot_or_user_xi(session, draft, side):
     of the whole player pool, so it has no bench and no "Bench: none" line
     belongs on its half of the card.
     """
-    if not (draft.get("vs_bot") and side == "guest"):
+    if not (_fixed_guest(draft) and side == "guest"):
         return _xi_bench_for_side(session, draft[side]["user_id"],
                                   draft.get(f"{side}_xi_roster_ids"))
+    if draft.get("lpmulti"):
+        # /lpmulti: the league team's XI was built when its captain picked it.
+        xi = draft.get("bot_xi") or []
+        if len(xi) < 11:
+            return None, None, ["The league team couldn't field an XI"]
+        return list(xi), list(draft.get("guest_bench") or []), []
     xi = draft.get("bot_xi")
     if not xi:
         from services.bot_xi_builder import build_letsplay_bot_xi
@@ -1199,11 +1256,19 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
     """
     pitch = draft.get("pitch_type", "Hard")
     vs_bot = bool(draft.get("vs_bot"))
+    team_label = _guest_team_label(draft)
     title = "🤖 <b>LETS PLAY vs BOT — Playing XI</b>" if vs_bot \
         else "🧾 <b>LETS PLAY — Playing XI</b>"
-    guest_header = (f"🤖 <b>{html.escape(draft['guest']['name'])}</b> "
-                    f"(Bot — auto-picked)" if vs_bot
-                    else f"🎯 <b>{html.escape(draft['guest']['name'])}</b> (Guest)")
+    if team_label:
+        title = "🌐 <b>LETS PLAY MULTI — Playing XI</b>"
+        guest_header = (f"🏟️ <b>{html.escape(team_label)}</b> "
+                        + ("(AI — auto-picked XI)" if vs_bot else
+                           f"— {_m(draft['guest'])} (auto-picked XI)"))
+    elif vs_bot:
+        guest_header = (f"🤖 <b>{html.escape(draft['guest']['name'])}</b> "
+                        f"(Bot — auto-picked)")
+    else:
+        guest_header = f"🎯 <b>{html.escape(draft['guest']['name'])}</b> (Guest)"
     start_line = (f"🔒 When ready, {_m(draft['host'])} taps <b>Start Toss</b> "
                   f"to flip the coin!" if vs_bot
                   else f"🔒 When ready, {_m(draft['guest'])} taps <b>Start Toss</b> "
@@ -1234,8 +1299,9 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
                               trait_map=guest_traits),
         "",
         "━━━━━━━━━━━━━━━━━━━",
-        _stats_fairness_note(host_pairs, guest_pairs, vs_bot=vs_bot,
-                             host_traits=host_traits, guest_traits=guest_traits),
+        _stats_fairness_note(host_pairs, guest_pairs, vs_bot=_fixed_guest(draft),
+                             host_traits=host_traits, guest_traits=guest_traits,
+                             labels=_fairness_labels(draft)),
         "✏️ Reorder your batting with <code>/change &lt;a&gt; &lt;b&gt;</code> "
         "(both 1–11, e.g. <code>/change 3 1</code>), or swap in a bench player "
         "(e.g. <code>/change 2 13</code>).",
@@ -1289,23 +1355,33 @@ def _show_xi_blocks(draft, host_pairs, guest_pairs,
             from services.trait_vote_service import status_line
             trait_status = _strip_html(status_line(traits_on))
 
-        facts = _fairness_facts(host_pairs, guest_pairs, vs_bot=vs_bot,
+        practice = _fixed_guest(draft)
+        facts = _fairness_facts(host_pairs, guest_pairs, vs_bot=practice,
                                 host_traits=host_traits,
-                                guest_traits=guest_traits)
+                                guest_traits=guest_traits,
+                                labels=_fairness_labels(draft))
         fairness = lpr.fairness_blocks(
             host_label=facts["host_label"], guest_label=facts["guest_label"],
             host_ovr=facts["host_ovr"], guest_ovr=facts["guest_ovr"],
-            gap_limit=facts["gap_limit"], vs_bot=vs_bot,
+            gap_limit=facts["gap_limit"], vs_bot=practice,
             boost=_strip_html(facts["boost"]), boost_note=facts["boost_note"])
 
-        guest_label = (f"{draft['guest']['name']} (Bot — auto-picked)" if vs_bot
-                       else f"{draft['guest']['name']} (Guest)")
+        team_label = _guest_team_label(draft)
+        if team_label:
+            guest_label = (f"{team_label} (AI — auto-picked XI)" if vs_bot
+                           else f"{team_label} — {draft['guest']['name']} "
+                                f"(auto-picked XI)")
+        elif vs_bot:
+            guest_label = f"{draft['guest']['name']} (Bot — auto-picked)"
+        else:
+            guest_label = f"{draft['guest']['name']} (Guest)"
         starter = draft["host"] if vs_bot else draft["guest"]
         start_prompt = ["🔒 When ready, ", lpr.mention(starter),
                         " taps ", R.bold("Start Toss"), " to flip the coin!"]
 
         return lpr.playing_xi_blocks(
             vs_bot=vs_bot, pitch=draft.get("pitch_type", "Hard"),
+            title=("🌐 Lets Play Multi — Playing XI" if team_label else None),
             overs=draft_overs(draft),
             host_label=draft["host"]["name"], guest_label=guest_label,
             host_xi=_xi_rows(host_pairs, host_traits),
@@ -1336,8 +1412,16 @@ def _strip_html(text):
     return html.unescape(re.sub(r"<[^>]+>", "", str(text))).strip() or None
 
 
+def _fairness_labels(draft):
+    """``(host, guest)`` names for the Team Overall line, or None for default."""
+    if (draft or {}).get("lpmulti"):
+        team = (draft or {}).get("guest_team") or "League XI"
+        return ("You", team) if draft.get("vs_bot") else ("Host", team)
+    return None
+
+
 def _fairness_facts(host_pairs, guest_pairs, vs_bot=False,
-                    host_traits=None, guest_traits=None):
+                    host_traits=None, guest_traits=None, labels=None):
     """The Team Overall numbers behind the fairness verdict, computed once.
 
     Both renderings of the Playing-XI card print this verdict, and it is the one
@@ -1359,7 +1443,7 @@ def _fairness_facts(host_pairs, guest_pairs, vs_bot=False,
     guest_card = _side_rating_card(guest_pairs, guest_traits)
     host_ovr = team_overall([{"rating": _row_fields(r)[1]} for r in host_pairs[:11]])
     guest_ovr = team_overall([{"rating": _row_fields(r)[1]} for r in guest_pairs[:11]])
-    labels = ("You", "Bot") if vs_bot else ("Host", "Guest")
+    labels = labels or (("You", "Bot") if vs_bot else ("Host", "Guest"))
     boost = format_team_line(labels[0], host_card, labels[1], guest_card)
     # The footnote only earns its line when there is a boost to explain AND the
     # boost is outside the gap — otherwise it is answering a question nobody
@@ -1376,17 +1460,19 @@ def _fairness_facts(host_pairs, guest_pairs, vs_bot=False,
 
 
 def _stats_fairness_note(host_pairs, guest_pairs, vs_bot=False,
-                         host_traits=None, guest_traits=None):
+                         host_traits=None, guest_traits=None, labels=None):
     """The fairness verdict as HTML — see :func:`_fairness_facts`."""
     f = _fairness_facts(host_pairs, guest_pairs, vs_bot=vs_bot,
-                        host_traits=host_traits, guest_traits=guest_traits)
+                        host_traits=host_traits, guest_traits=guest_traits,
+                        labels=labels)
     boost = f["boost"]
     note = f"<i>{f['boost_note']}</i>" if f["boost_note"] else None
     if vs_bot:
         # Nothing is at stake in a practice match, so the anti stat-farming gap
         # warning is irrelevant — say plainly that this one doesn't count.
         return "\n".join(p for p in (
-            f"📊 <b>Team Overall:</b> You <b>{f['host_ovr']}</b> vs Bot "
+            f"📊 <b>Team Overall:</b> {html.escape(f['host_label'])} "
+            f"<b>{f['host_ovr']}</b> vs {html.escape(f['guest_label'])} "
             f"<b>{f['guest_ovr']}</b>",
             boost,
             "🎯 <b>Practice match — unranked.</b> No career stats, no coins or "
@@ -1433,7 +1519,7 @@ async def _prompt_show_xi(context, draft):
             # reading player.rating/name afterwards would raise
             # DetachedInstanceError and leave the draft stuck until timeout.
             host_ids = [int(e.id) for e, _p in host_pairs]
-            guest_ids = (None if draft.get("vs_bot")
+            guest_ids = (None if _fixed_guest(draft)
                          else [int(e.id) for e, _p in guest_pairs])
             text = _show_xi_text(draft, host_pairs, guest_pairs,
                                  host_bench=host_bench, guest_bench=guest_bench,
@@ -1608,6 +1694,12 @@ async def letsplay_change_handler(update: Update, context: ContextTypes.DEFAULT_
         await msg.reply_text(
             "❌ You can only change your XI once both Playing XIs are shown and "
             "before the toss starts.")
+        return True
+
+    if side == "guest" and _fixed_guest(draft):
+        await msg.reply_text(
+            "❌ Your league team's XI is auto-picked (best available) — it "
+            "can't be changed. Only the host's roster XI can use /change.")
         return True
 
     xi_key = "host_xi_roster_ids" if side == "host" else "guest_xi_roster_ids"
@@ -2077,6 +2169,8 @@ async def _launch_match(context, draft, decision, winner_side):
         # at confirm time), not whatever the live roster order is now. Fall back
         # to the current order only if a snapshot is somehow missing.
         vs_bot = bool(draft.get("vs_bot"))
+        lpmulti = bool(draft.get("lpmulti"))
+        fixed_guest = _fixed_guest(draft)
         host_ids = draft.get("host_xi_roster_ids")
         host_pairs = (_pairs_from_roster_ids(session, host.id, host_ids)
                       if host_ids else _get_ordered_roster(session, host.id))
@@ -2086,7 +2180,7 @@ async def _launch_match(context, draft, decision, winner_side):
         # and nothing that can have changed underneath it.
         to_check = [(host_pairs, host_info)]
         guest_pairs = None
-        if not vs_bot:
+        if not fixed_guest:
             guest_ids = draft.get("guest_xi_roster_ids")
             guest_pairs = (_pairs_from_roster_ids(session, guest.id, guest_ids)
                            if guest_ids else _get_ordered_roster(session, guest.id))
@@ -2113,18 +2207,22 @@ async def _launch_match(context, draft, decision, winner_side):
         host_bench = _xi_to_engine(
             session, _bench_pairs_for_launch(session, host.id, host_xi_pairs),
             with_traits=traits_on)
-        if vs_bot:
+        if fixed_guest:
             guest_xi = list(draft.get("bot_xi") or [])
             if len(guest_xi) < 11:
                 await _abandon_launch(
                     context, draft,
-                    "⚠️ The bot couldn't field an XI — match cancelled.")
+                    ("⚠️ The league team couldn't field an XI — match cancelled."
+                     if lpmulti else
+                     "⚠️ The bot couldn't field an XI — match cancelled."))
                 return
             if not traits_on:
                 # The /lpbot XI is built in memory with its traits inline, so it
                 # is stripped rather than re-queried.
                 guest_xi = tvs.strip_traits(guest_xi)
-            guest_bench = []
+            # A /lpmulti league team brings the rest of its squad as the Impact
+            # Player bench; the /lpbot XI is exactly eleven.
+            guest_bench = list(draft.get("guest_bench") or []) if lpmulti else []
         else:
             guest_xi_pairs = guest_pairs[:11]
             guest_xi = _xi_to_engine(session, guest_xi_pairs,
@@ -2142,6 +2240,12 @@ async def _launch_match(context, draft, decision, winner_side):
         bowl_bench = guest_bench if bat_is_host else host_bench
         bat_team_name = bat_info["name"]
         bowl_team_name = bowl_info["name"]
+        if lpmulti and draft.get("guest_team"):
+            # The guest side takes the field as its league franchise.
+            if bat_is_host:
+                bowl_team_name = draft["guest_team"]
+            else:
+                bat_team_name = draft["guest_team"]
 
         # ── Lets Play Tournament fixture ──
         # Re-check eligibility at launch (the tournament may have been paused, or
@@ -2150,7 +2254,7 @@ async def _launch_match(context, draft, decision, winner_side):
         # Match row, so the reservation and the match can never diverge.
         lpt = draft.get("lpt") or None
         tournament_id = None
-        if lpt and not vs_bot:
+        if lpt and not fixed_guest:
             from services import lp_tournament_service as _lpt
             tour = _lpt.get_tournament(session, lpt["tournament_id"])
             try:
@@ -2258,7 +2362,7 @@ async def _launch_match(context, draft, decision, winner_side):
     # ``tournament_tteam_by_user`` maps each side's DB user id straight to its
     # participating row, because a Lets Play team *is* a user — there is no
     # ChallengeTeam to resolve it through.
-    if lpt and not draft.get("vs_bot"):
+    if lpt and not _fixed_guest(draft):
         state["tournament_id"] = tournament_id
         state["tournament_tteam_by_user"] = {
             int(k): int(v) for k, v in (draft.get("lpt_team_ids") or {}).items()}
@@ -2279,6 +2383,25 @@ async def _launch_match(context, draft, decision, winner_side):
         state["bat_team_ovr"] + state["bat_team_trait_boost"], 1)
     state["bowl_team_ovr_eff"] = round(
         state["bowl_team_ovr"] + state["bowl_team_trait_boost"], 1)
+    if draft.get("lpmulti"):
+        # /lpmulti — your roster vs a league team. Unranked in both modes (a
+        # franchise squad isn't anyone's collection), so no career stats,
+        # POTM credit, coins, gems or Win/Loss; the completion path in
+        # handlers/cipl_play.py already gates all of those on stats_disabled.
+        state["lpmulti"] = True
+        state["stats_disabled"] = True
+        state["unranked"] = True
+        state["lpmulti_overs"] = draft_overs(draft)
+        # Impact Player swaps on the league side keep the rules its XI was
+        # picked under (keeper, five bowling options, the league's overseas
+        # cap). ``by_user_only`` leaves the host's roster side unchecked, as in
+        # every other /letsplay match. See impact_player._rules_for.
+        lo, hi = draft.get("guest_overseas") or (0, 11)
+        state["xi_rules"] = {
+            "min_overseas": 0, "max_overseas": 11, "by_user_only": True,
+            "by_user": {str(guest_info["tg_id"]): {
+                "min_overseas": int(lo), "max_overseas": int(hi)}},
+        }
     if draft.get("vs_bot"):
         # /lpbot: unranked practice, and the AI captain plays the bot's turns.
         # Nothing is at stake, so the anti stat-farming gap check is moot.
@@ -2323,7 +2446,9 @@ async def _announce(context, state, pitch_type):
     stadium = html.escape(str(state.get("stadium") or "Neutral Venue"))
     pitch = html.escape(str(pitch_type or "Hard"))
     rule = "━" * 15
-    if state.get("is_bot_match"):
+    if state.get("lpmulti"):
+        title = "🌐 <b>LETS PLAY MULTI</b> 🏏"
+    elif state.get("is_bot_match"):
         title = "🤖 <b>LETS PLAY vs BOT</b> 🏏"
     elif state.get("tournament_id"):
         title = "🏆 <b>LETS PLAY TOURNAMENT</b> 🏏"
@@ -2386,7 +2511,7 @@ async def _announce(context, state, pitch_type):
         + chem_line
         + bot_line
         + ("🎯 <i>Unranked practice — no stats, coins or gems</i>\n"
-           if state.get("is_bot_match") else "")
+           if state.get("is_bot_match") or state.get("unranked") else "")
         + f"{rule}\n"
         f"📺 Live scorecard, commentary &amp; XI inside\n"
         f"👇 Tap <b>View Match</b> to follow live")

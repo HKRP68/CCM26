@@ -696,7 +696,10 @@ def _rematch_row(state):
                                       callback_data=f"al:play:{save_id}"),
                  InlineKeyboardButton("📊 Table",
                                       callback_data=f"al:table:{save_id}")]]
-    if state.get("is_letsplay"):
+    if state.get("lpmulti"):
+        overs = str(state.get("lpmulti_overs") or "")
+        data = f"botmatch_again_lpm_{overs}" if overs else "botmatch_again_lpm"
+    elif state.get("is_letsplay"):
         data = "botmatch_again_lp"
     else:
         league = str(state.get("league_key") or "")[:16]
@@ -5031,6 +5034,9 @@ async def _complete_match(context, mid, state):
         if _is_bot_match(state):
             text += f"\n\n{UNRANKED_NOTE}"
             miniapp_row += _rematch_row(state)
+        elif state.get("unranked"):
+            # /lpmulti vs a user — unranked, but no bot to rematch.
+            text += f"\n\n{UNRANKED_NOTE}"
     except Exception:
         logger.exception("cipl end-of-match keyboard build failed for match %s", mid)
         miniapp_row = []

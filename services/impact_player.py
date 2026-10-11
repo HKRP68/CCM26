@@ -297,6 +297,10 @@ def _rules_for(state, side):
         return None
     # /cipl multi carries each captain's own league limits.
     own = (rules.get("by_user") or {}).get(str(state.get(f"{side}_user_tg")))
+    if rules.get("by_user_only") and not isinstance(own, dict):
+        # /lpmulti: only the league side plays under XI rules; the other side
+        # is a personal roster, which Impact swaps never checked.
+        return None
     if isinstance(own, dict):
         rules = {**rules, **own}
     try:

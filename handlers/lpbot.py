@@ -183,7 +183,12 @@ async def botmatch_again_callback(update: Update, context: ContextTypes.DEFAULT_
         await q.edit_message_reply_markup(reply_markup=None)
     except Exception:
         logger.debug("rematch: clearing the button failed", exc_info=True)
-    if mode == "cipl":
+    if mode == "lpm":
+        # /lpmulti AI rematch — back to the League → Team picker.
+        from handlers.lpmulti import lpmulti_handler
+        context.args = ["ai"] + ([league] if league else [])
+        await lpmulti_handler(update, context)
+    elif mode == "cipl":
         from handlers.ciplbot import ciplbot_handler
         # Reopen the same league the finished match was played in.
         context.args = [league] if league else []

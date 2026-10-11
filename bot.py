@@ -2190,6 +2190,12 @@ def main():
                                        ciplbot_handler))
         app.add_handler(CallbackQueryHandler(botmatch_again_callback,
                                              pattern=r"^botmatch_again_"))
+        # /lpmulti — your roster vs a Challenge League team (AI or a user).
+        # Its pickers use the ``lpm_`` prefix (clear of /letsplay's ``lp_``).
+        from handlers.lpmulti import lpmulti_handler, lpmulti_callback
+        app.add_handler(CommandHandler(["lpmulti", "lpm", "letsplaymulti"],
+                                       lpmulti_handler))
+        app.add_handler(CallbackQueryHandler(lpmulti_callback, pattern=r"^lpm_"))
         from handlers.botlevel import difficulty_callback, play_mode_callback
         app.add_handler(CallbackQueryHandler(difficulty_callback,
                                              pattern=r"^botdiff_"))

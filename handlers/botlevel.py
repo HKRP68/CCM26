@@ -252,7 +252,12 @@ async def difficulty_callback(update, context):
     except Exception:
         logger.debug("bot difficulty: clearing the prompt failed", exc_info=True)
 
-    if mode == "cipl":
+    if mode == "lpm":
+        # /lpmulti AI — ``league`` carries the custom over count, if any.
+        from handlers.lpmulti import lpmulti_handler
+        context.args = ["ai"] + ([league] if league else [])
+        await lpmulti_handler(update, context)
+    elif mode == "cipl":
         from handlers.ciplbot import ciplbot_handler
         context.args = [league] if league else []
         await ciplbot_handler(update, context)
