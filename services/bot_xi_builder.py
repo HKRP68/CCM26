@@ -490,6 +490,13 @@ def league_player_dict(cp):
     return out
 
 
+def league_overseas_limits(league):
+    """``(min_overseas, max_overseas)`` for a ChallengeLeague (or None)."""
+    lo = getattr(league, "min_overseas", None)
+    hi = getattr(league, "max_overseas", None)
+    return (int(lo) if lo is not None else 0, int(hi) if hi is not None else 11)
+
+
 def build_league_team_xi(session, league_id, team_name):
     """``(xi, bench, error)`` for a league team fielded in /lpmulti.
 
@@ -501,6 +508,8 @@ def build_league_team_xi(session, league_id, team_name):
     from models import ChallengeLeague, ChallengePlayer, ChallengeTeam
 
     league = session.get(ChallengeLeague, int(league_id)) if league_id else None
+    if league_id and league is None:
+        return [], [], "That league no longer exists — pick again."
     query = session.query(ChallengeTeam).filter(ChallengeTeam.name == team_name)
     if league is not None:
         query = query.filter(ChallengeTeam.league_id == league.id)
@@ -514,12 +523,12 @@ def build_league_team_xi(session, league_id, team_name):
     if len(players) < 11:
         return [], [], (f"{team_name} has only {len(players)} players — "
                         "it can't field an XI.")
-    min_os = getattr(league, "min_overseas", None)
-    max_os = getattr(league, "max_overseas", None)
-    xi = build_challenge_bot_xi(players,
-                                int(min_os) if min_os is not None else 0,
-                                int(max_os) if max_os is not None else 11)
-    if len(xi) != 11:
+    min_os, max_os = league_overseas_limits(league)
+    xi = build_challenge_bot_xi(players, min_os, max_os)
+    # build_challenge_bot_xi falls back to the top 11 when the squad can't
+    # meet the rules; /lpmulti promises a legal XI, so refuse that instead.
+    ok, _error = xi_rules.validate_challenge_xi(xi, min_os, max_os)
+    if len(xi) != 11 or not ok:
         return [], [], f"{team_name} couldn't field a legal XI."
     xi_ids = {int(p.id) for p in xi}
     bench = [p for p in players if int(p.id) not in xi_ids]

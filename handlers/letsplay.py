@@ -2392,6 +2392,16 @@ async def _launch_match(context, draft, decision, winner_side):
         state["stats_disabled"] = True
         state["unranked"] = True
         state["lpmulti_overs"] = draft_overs(draft)
+        # Impact Player swaps on the league side keep the rules its XI was
+        # picked under (keeper, five bowling options, the league's overseas
+        # cap). ``by_user_only`` leaves the host's roster side unchecked, as in
+        # every other /letsplay match. See impact_player._rules_for.
+        lo, hi = draft.get("guest_overseas") or (0, 11)
+        state["xi_rules"] = {
+            "min_overseas": 0, "max_overseas": 11, "by_user_only": True,
+            "by_user": {str(guest_info["tg_id"]): {
+                "min_overseas": int(lo), "max_overseas": int(hi)}},
+        }
     if draft.get("vs_bot"):
         # /lpbot: unranked practice, and the AI captain plays the bot's turns.
         # Nothing is at stake, so the anti stat-farming gap check is moot.
@@ -2436,7 +2446,9 @@ async def _announce(context, state, pitch_type):
     stadium = html.escape(str(state.get("stadium") or "Neutral Venue"))
     pitch = html.escape(str(pitch_type or "Hard"))
     rule = "━" * 15
-    if state.get("is_bot_match"):
+    if state.get("lpmulti"):
+        title = "🌐 <b>LETS PLAY MULTI</b> 🏏"
+    elif state.get("is_bot_match"):
         title = "🤖 <b>LETS PLAY vs BOT</b> 🏏"
     elif state.get("tournament_id"):
         title = "🏆 <b>LETS PLAY TOURNAMENT</b> 🏏"
@@ -2499,7 +2511,7 @@ async def _announce(context, state, pitch_type):
         + chem_line
         + bot_line
         + ("🎯 <i>Unranked practice — no stats, coins or gems</i>\n"
-           if state.get("is_bot_match") else "")
+           if state.get("is_bot_match") or state.get("unranked") else "")
         + f"{rule}\n"
         f"📺 Live scorecard, commentary &amp; XI inside\n"
         f"👇 Tap <b>View Match</b> to follow live")

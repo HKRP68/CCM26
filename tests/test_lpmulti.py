@@ -104,6 +104,8 @@ def _seed():
 
         team("Titans", _SHAPE)
         team("Minnows", _SHAPE[:9])
+        # Twelve players and no keeper: enough bodies, never a legal XI.
+        team("Gloveless", ["Batsman"] * 6 + ["Bowler"] * 6)
         s.commit()
     finally:
         s.close()
@@ -173,6 +175,67 @@ class LeagueTeamXiTests(unittest.TestCase):
         self.assertIn("Minnows", error)
 
 
+    def test_a_squad_with_no_legal_xi_is_refused(self):
+        from database import get_session
+        from services.bot_xi_builder import build_league_team_xi
+        s = get_session()
+        try:
+            xi, _bench, error = build_league_team_xi(s, IDS["league"], "Gloveless")
+        finally:
+            s.close()
+        self.assertEqual(xi, [])
+        self.assertIn("legal XI", error)
+
+    def test_a_deleted_league_does_not_match_another_leagues_team(self):
+        from database import get_session
+        from services.bot_xi_builder import build_league_team_xi
+        s = get_session()
+        try:
+            xi, _bench, error = build_league_team_xi(s, 987654, "Titans")
+        finally:
+            s.close()
+        self.assertEqual(xi, [])
+        self.assertIn("no longer exists", error)
+
+
+class ImpactRulesTests(unittest.TestCase):
+    """Only the league side is held to XI rules on an Impact swap."""
+
+    def _state(self):
+        xi = [{"roster_id": -(300000 + i), "name": f"L{i}",
+               "category": "Bowler" if i >= 6 else "Batsman",
+               "is_overseas": i < 4} for i in range(11)]
+        xi[0]["category"] = "Wicket Keeper"
+        host = [{"roster_id": 10 + i, "name": f"H{i}", "category": "Batsman"}
+                for i in range(11)]
+        return {"bat_user_tg": GUEST_TG, "bowl_user_tg": HOST_TG,
+                "bat_xi": xi, "bowl_xi": host,
+                "xi_rules": {"min_overseas": 0, "max_overseas": 11,
+                             "by_user_only": True,
+                             "by_user": {str(GUEST_TG): {
+                                 "min_overseas": 0, "max_overseas": 4}}}}
+
+    def test_league_side_cannot_exceed_its_overseas_cap(self):
+        from services.impact_player import cipl_swap_error
+        state = self._state()
+        sub = {"roster_id": -300050, "name": "OS", "category": "Bowler",
+               "is_overseas": True}
+        self.assertIn("Overseas", cipl_swap_error(state, "bat", -300010, sub))
+
+    def test_league_side_cannot_drop_its_only_keeper(self):
+        from services.impact_player import cipl_swap_error
+        state = self._state()
+        sub = {"roster_id": -300051, "name": "Bat", "category": "Batsman",
+               "is_overseas": False}
+        self.assertTrue(cipl_swap_error(state, "bat", -300000, sub))
+
+    def test_host_roster_side_is_not_checked(self):
+        from services.impact_player import cipl_swap_error
+        state = self._state()
+        sub = {"roster_id": 99, "name": "Sub", "category": "Batsman"}
+        self.assertEqual(cipl_swap_error(state, "bowl", 10, sub), "")
+
+
 class PickerFlowTests(unittest.TestCase):
     def _draft(self, vs_bot):
         from handlers import letsplay as lp
@@ -211,6 +274,7 @@ class PickerFlowTests(unittest.TestCase):
         self.assertEqual(draft["guest_team"], "Titans")
         self.assertEqual(len(draft["bot_xi"]), 11)
         self.assertEqual(len(draft["guest_bench"]), 3)
+        self.assertEqual(draft["guest_overseas"], [0, 4])
         pitch.assert_awaited_once()
 
     def test_vs_user_only_the_guest_picks(self):

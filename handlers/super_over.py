@@ -1866,9 +1866,12 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
         try:
             from handlers.cipl_play import _cipl_potm_select, _record_cipl_potm
             main_state = so.get("main_state") or {}
-            best = _cipl_potm_select(main_state, win["name"])
-            if best and best.get("player_id"):
-                _record_cipl_potm(session, main_state, best)
+            # An unranked match (a /letsplay mismatch, /lpmulti) earns no POTM
+            # credit — same gate as the normal completion path.
+            if not main_state.get("stats_disabled"):
+                best = _cipl_potm_select(main_state, win["name"])
+                if best and best.get("player_id"):
+                    _record_cipl_potm(session, main_state, best)
         except Exception:
             logger.exception("Super Over POTM career credit failed (%s)", mid)
         # ── Match-end quest tracking ──

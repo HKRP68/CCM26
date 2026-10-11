@@ -372,10 +372,15 @@ async def lpmulti_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not league or not team:
             await q.answer("Invalid team.", show_alert=True)
             return
-        from services.bot_xi_builder import build_league_team_xi
+        from models import ChallengeLeague
+        from services.bot_xi_builder import (build_league_team_xi,
+                                             league_overseas_limits)
         session = get_session()
+        limits = (0, 11)
         try:
             xi, bench, error = build_league_team_xi(session, league["id"], team)
+            limits = league_overseas_limits(
+                session.get(ChallengeLeague, int(league["id"])))
         except Exception:
             logger.exception("lpmulti: building %s's XI failed", team)
             xi, bench, error = [], [], "Couldn't load that team. Try another."
@@ -388,6 +393,7 @@ async def lpmulti_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         draft["guest_bench"] = bench
         draft["guest_team"] = team
         draft["guest_league_name"] = league["name"]
+        draft["guest_overseas"] = list(limits)
         draft["status"] = "pitch"
         await q.answer(f"Selected {team}")
         side_word = "The AI captains" if draft.get("vs_bot") else \
