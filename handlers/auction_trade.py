@@ -73,6 +73,21 @@ def _short(name, limit=14):
     return name if len(name) <= limit else name[:limit - 1] + "…"
 
 
+def tag_franchise(session, team):
+    """``<b>Chennai</b> (👤 @owner · @coowner)`` — everyone who can answer."""
+    if team is None:
+        return "<b>?</b>"
+    people = []
+    if int(team.owner_tg_id or 0) > 0:
+        people.append(A.person_tag(session, int(team.owner_tg_id),
+                                   team.owner_name or team.name))
+    for tg_id in A.co_owner_ids(team):
+        if tg_id and tg_id != int(team.owner_tg_id or 0):
+            people.append(A.person_tag(session, tg_id, "co-owner"))
+    label = f"<b>{html.escape(team.name)}</b>"
+    return f"{label} (👤 {' · '.join(people)})" if people else label
+
+
 def builder_keyboard(session, season, trade, side="a", page=0):
     """The tick list for one squad, the cash row, and Send / Cancel."""
     team = T.team_on(session, trade, side)
@@ -524,7 +539,9 @@ async def trade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     session = get_session()
     text = markup = None
     toast = None
-    post_to_group = None
+    # A message that must NOTIFY somebody: an edit never pings anyone, so
+    # the people who have to answer get a fresh message that tags them.
+    ping = None          # (chat_id, text, markup)
     try:
         trade = T.get_trade(session, trade_id)
         if trade is None:
@@ -557,9 +574,11 @@ async def trade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif action == "s":
                 T.send_offer(session, trade, by_tg_id=uid)
                 toast = "Offer sent"
-                if (season.chat_id and query.message is not None
-                        and query.message.chat.id != season.chat_id):
-                    post_to_group = season.chat_id
+                here = query.message.chat.id if query.message is not None else None
+                target = season.chat_id or here
+                if target:
+                    trade.chat_id = target
+                    ping = (target, "SEND", None)
         elif action == "x":
             if side != "a" and not T.is_bot_admin(uid):
                 await query.answer(NOT_IN_TRADE, show_alert=True)
@@ -578,6 +597,13 @@ async def trade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             elif action == "n":
                 T.reject(session, trade, by_tg_id=uid)
                 toast = "Rejected"
+                target = season.chat_id or (
+                    query.message.chat.id if query.message is not None else None)
+                if target:
+                    ping = (target,
+                            f"❌ {tag_franchise(session, T.team_on(session, trade, 'a'))}"
+                            f" — {html.escape(T.team_on(session, trade, 'b').name)} "
+                            f"rejected trade #{trade.id}.", None)
             else:
                 trade = T.counter(session, trade, by_tg_id=uid)
                 toast = "Your counter-offer — tick, then send"
@@ -603,12 +629,26 @@ async def trade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 and season.chat_id and query.message.chat.id == season.chat_id
                 and trade.status != T.STATUS_PENDING):
             trade.announced_at = datetime.utcnow()
-        if post_to_group:
-            trade.chat_id = post_to_group
+        if ping is not None and ping[1] == "SEND":
+            # The offer itself goes out as a NEW message that tags the side
+            # that has to answer, buttons and all; the builder this press
+            # came from becomes a pointer to it, so there is one live card.
+            team_a = T.team_on(session, trade, "a")
+            team_b = T.team_on(session, trade, "b")
+            ping = (ping[0],
+                    f"📨 {tag_franchise(session, team_b)} — "
+                    f"<b>{html.escape(team_a.name)}</b> sent you a trade offer.\n\n"
+                    + T.render_offer(session, season, trade),
+                    offer_keyboard(trade))
+            same_chat = (query.message is not None
+                         and query.message.chat.id == ping[0])
+            text = (f"📨 Trade offer #{trade.id} sent to "
+                    f"<b>{html.escape(team_b.name)}</b> — they answer on the "
+                    f"card below." if same_chat else
+                    T.render_offer(session, season, trade)
+                    + "\n\n📨 <i>Sent to the auction group.</i>")
+            markup = None
         session.commit()
-        group_text = (T.render_offer(session, season, trade)
-                      if post_to_group else None)
-        group_markup = offer_keyboard(trade) if post_to_group else None
     except AuctionError as exc:
         session.rollback()
         await query.answer(str(exc)[:190], show_alert=True)
@@ -623,12 +663,12 @@ async def trade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer(toast[:190] if toast else None)
     await _edit(query, text, markup)
-    if post_to_group:
+    if ping is not None:
+        chat_id, ping_text, ping_markup = ping
         try:
-            await context.bot.send_message(post_to_group, group_text,
+            await context.bot.send_message(chat_id, ping_text,
                                            parse_mode="HTML",
-                                           reply_markup=group_markup,
+                                           reply_markup=ping_markup,
                                            disable_web_page_preview=True)
         except Exception:
-            logger.warning("could not post the trade offer to the group",
-                           exc_info=True)
+            logger.warning("could not post the trade message", exc_info=True)

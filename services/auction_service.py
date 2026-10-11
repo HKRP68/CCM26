@@ -6006,6 +6006,26 @@ def acquisition_mark(lot):
     return f" {mark}" if mark else ""
 
 
+def traded_ids(session, season_id):
+    """Every lot that has moved in a completed trade this season.
+
+    Read from the trade log rather than stamped on the lot: ``acquisition``
+    says how a player was first signed — retained, bought, matched — and the
+    retention and RTM rules read it, so a trade must not overwrite it.
+    """
+    try:
+        from services.auction_trade_service import traded_lot_ids
+        return traded_lot_ids(session, season_id)
+    except Exception:
+        logger.exception("traded_ids failed (non-fatal)")
+        return set()
+
+
+def trade_mark(lot, traded):
+    """`` 🔁`` after a player who arrived (or left and came back) by trade."""
+    return " 🔁" if traded and lot.id in traded else ""
+
+
 def acquisition_icon(lot):
     return {ACQ_RETAINED: "🔒", ACQ_RTM: "🪪", ACQ_DRAFTED: "🆕",
             ACQ_AUTOFILL: "🎁"}.get(lot.acquisition or ACQ_AUCTION, "")
@@ -6677,6 +6697,15 @@ def render_squad(session, season, franchise):
     if matched:
         lines.append(f"🪪 {render_money(matched, symbol)} of that was matched "
                      f"back at auction prices.")
+    traded = traded_ids(session, season.id)
+    try:
+        from services.auction_trade_service import trade_money
+        moved = trade_money(session, franchise.id)
+    except Exception:
+        moved = 0
+    if moved or any(lot.id in traded for lot in rows):
+        lines.append(f"🔁 Trades: {'+' if moved > 0 else ''}"
+                     f"{render_money(moved, symbol)} net to the purse")
     if not rows:
         lines.append("\n<i>Nobody signed yet.</i>")
     for lot in rows:
@@ -6686,7 +6715,7 @@ def render_squad(session, season, franchise):
         # and a card was spent to keep him — and an expansion pick is neither:
         # nobody kept him and nobody bid. Squashing any of them together loses
         # the story of how the squad was built.
-        how = acquisition_mark(lot)
+        how = acquisition_mark(lot) + trade_mark(lot, traded)
         lines.append(f"{mark} {_e(lot.name)} · {lot.rating} · "
                      f"{_e(lot.category)} — "
                      f"{render_money(lot.sold_price_lakh, symbol)}{how}")

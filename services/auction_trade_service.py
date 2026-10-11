@@ -264,12 +264,19 @@ def trades_switched_on(season):
 
 def set_window(session, season, is_open, *, by_tg_id=None):
     season.trades_open = 1 if is_open else 0
+    tail = ""
     if not is_open:
+        # Offers still being made close with the window. A trade both sides
+        # already agreed stays with the bot admin, who can still approve it.
         cancel_live(session, season, reason=STATUS_CANCELLED,
                     keep_pending=True)
+        waiting = len(pending_trades(session, season))
+        if waiting:
+            tail = (f" {waiting} agreed trade{'s' if waiting != 1 else ''} "
+                    f"still wait{'' if waiting != 1 else 's'} for the bot admin.")
     A.log_event(session, season, "trade_window",
                 "🔁 The trade window is now <b>"
-                + ("OPEN" if is_open else "CLOSED") + "</b>.",
+                + ("OPEN" if is_open else "CLOSED") + "</b>." + tail,
                 by_tg_id=by_tg_id, by_admin=True)
     session.flush()
     return season
@@ -333,11 +340,16 @@ def season_progress(session, season):
     return out
 
 
-def trade_phase(session, season, now=None):
+def trade_phase(session, season, now=None, *, ignore_deadline=False):
     """``(phase, closed_reason)`` — which window the season is in, if any.
 
     ``phase`` is ``None`` when no window is open, with ``closed_reason`` saying
     why in a sentence a person can act on.
+
+    ``ignore_deadline`` reads the mid-season window without its date / match
+    deadline — for a trade both sides agreed before it passed. The playoffs
+    and the end of the league still close it: those are not a line somebody
+    drew, they are the season moving on.
     """
     now = now or datetime.utcnow()
     status = season.status
@@ -361,6 +373,8 @@ def trade_phase(session, season, now=None):
     if progress.get("league_over"):
         return None, ("Every league match has been played — the mid-season "
                       "window is closed.")
+    if ignore_deadline:
+        return PHASE_MID_SEASON, None
     if season.trade_deadline_at and now >= season.trade_deadline_at:
         return None, ("The mid-season trade deadline has passed ("
                       f"{season.trade_deadline_at:%d %b %H:%M} UTC).")
@@ -581,6 +595,16 @@ def team_trade_count(session, season, franchise_id, phase=None):
     return query.count()
 
 
+def trade_money(session, franchise_id):
+    """Net purse movement from trades for one franchise (signed lakh)."""
+    from sqlalchemy import func
+    total = (session.query(func.coalesce(func.sum(AuctionLedgerEntry.amount_lakh), 0))
+             .filter(AuctionLedgerEntry.franchise_id == franchise_id,
+                     AuctionLedgerEntry.kind.in_((LEDGER_TRADE, LEDGER_TRADE_CASH)))
+             .scalar())
+    return int(total or 0)
+
+
 def traded_lot_ids(session, season_id, phase=None):
     """Every lot that has moved in a completed trade (optionally, in one window)."""
     query = (session.query(AuctionTrade)
@@ -741,14 +765,24 @@ def _mid_season_guard(session, season, trade):
                                f"Trade once it is over.")
 
 
-def validate(session, trade, *, now=None, check_window=True):
+def validate(session, trade, *, now=None, check_window=True, agreed=False):
     """Raise unless this trade is legal for both squads, right now.
 
-    Returns the phase it would execute in.
+    Returns the phase it would execute in. ``agreed`` is the bot admin
+    approving a trade both owners already accepted: the window switches and
+    the mid-season deadline were for *making* deals, and this one was made
+    in time — so only the season itself (a cancelled auction, the playoffs)
+    can still stop it. Every squad rule applies as ever.
     """
     season = trade.season
-    phase = (require_window(session, season, now) if check_window
-             else (trade_phase(session, season, now)[0] or trade.phase))
+    if agreed:
+        phase, reason = trade_phase(session, season, now, ignore_deadline=True)
+        if phase is None:
+            raise AuctionError(reason or "No trade window is open.")
+    elif check_window:
+        phase = require_window(session, season, now)
+    else:
+        phase = trade_phase(session, season, now)[0] or trade.phase
     rules = trade_rules(season)
     a_lots = lots_for(session, trade, "a")
     b_lots = lots_for(session, trade, "b")
@@ -1109,11 +1143,12 @@ def _apply(session, season, trade, team_a, team_b, a_lots, b_lots, cash, *,
 
 
 def execute(session, trade, *, by_tg_id=None, now=None, by_admin=False,
-            check_window=True):
+            check_window=True, agreed=False):
     """Do the trade. Returns it, completed."""
     now = now or datetime.utcnow()
     season = trade.season
-    phase = validate(session, trade, now=now, check_window=check_window)
+    phase = validate(session, trade, now=now, check_window=check_window,
+                     agreed=agreed)
     team_a = team_on(session, trade, "a")
     team_b = team_on(session, trade, "b")
     a_lots = lots_for(session, trade, "a")
@@ -1162,7 +1197,7 @@ def approve(session, trade, *, by_tg_id=None, by_web=False, now=None):
         raise AuctionError(f"Trade #{trade.id} is not waiting for approval — it "
                            f"is {STATUS_LABEL.get(trade.status, trade.status)}.")
     trade.approved_by_tg_id = by_tg_id
-    return execute(session, trade, by_tg_id=by_tg_id, now=now)
+    return execute(session, trade, by_tg_id=by_tg_id, now=now, agreed=True)
 
 
 def veto(session, trade, *, by_tg_id=None, by_web=False, reason=None):
@@ -1727,6 +1762,109 @@ def render_rules(session, season):
 
 
 # ──────────────────────────────────────────────────────────────────────
+# Window notices — said once each, by the sweeper
+# ──────────────────────────────────────────────────────────────────────
+
+NOTICE_OPEN = "trade_ms_open"
+NOTICE_CLOSED = "trade_ms_closed"
+NOTICE_DL_DAY = "trade_dl_24h"
+NOTICE_DL_HOUR = "trade_dl_1h"
+NOTICE_DL_MATCH = "trade_dl_match"
+NOTICE_KINDS = (NOTICE_OPEN, NOTICE_CLOSED, NOTICE_DL_DAY, NOTICE_DL_HOUR,
+                NOTICE_DL_MATCH)
+
+
+def _window_key(season):
+    """What one mid-season window IS: the league plus its deadline.
+
+    Moving the deadline makes a new window, so an extended deadline gets its
+    own "open" and its own reminders rather than being silenced by the old.
+    """
+    at = season.trade_deadline_at.isoformat() if season.trade_deadline_at else "-"
+    return f"{season.league_id}:{at}:{season.trade_deadline_matches or '-'}"
+
+
+def _noticed(session, season, kind, key):
+    from models import AuctionEvent
+    for (raw,) in (session.query(AuctionEvent.detail_json)
+                   .filter(AuctionEvent.season_id == season.id,
+                           AuctionEvent.kind == kind).all()):
+        try:
+            if (json.loads(raw or "{}") or {}).get("key") == key:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def due_notices(session, season, now=None):
+    """``[(kind, key, html)]`` — what the room should be told about the
+    mid-season window and has not been yet.
+
+    * 🔓 the window opening (the first league match has been played);
+    * ⏰ a day and an hour before a dated deadline, and one league match
+      before a match-count deadline;
+    * 🔒 the window closing on its own — the deadline, the playoffs, the end
+      of the league — with any agreed trade still waiting for the bot admin.
+
+    Nothing when an admin has switched mid-season trading off: they closed
+    it, they know, and the command that did it already answered them.
+    """
+    now = now or datetime.utcnow()
+    if (season.status != A.STATUS_COMPLETED or not season.published_at
+            or not season.chat_id or not trades_switched_on(season)
+            or not trade_rules(season).get(PHASE_MID_SEASON, True)):
+        return []
+    key = _window_key(season)
+    phase, reason = trade_phase(session, season, now)
+    opened = _noticed(session, season, NOTICE_OPEN, key)
+    out = []
+    if phase == PHASE_MID_SEASON:
+        if not opened:
+            out.append((NOTICE_OPEN, key,
+                        "🔓 <b>The mid-season trade window is open!</b>\n"
+                        + window_line(session, season)
+                        + "\n\nTrade with <code>/atrade &lt;team&gt;</code> · "
+                          "how it works: <code>/atradehelp</code>"))
+        at = season.trade_deadline_at
+        if at:
+            left = (at - now).total_seconds()
+            if 3600 < left <= 86400 and not _noticed(session, season, NOTICE_DL_DAY, key):
+                out.append((NOTICE_DL_DAY, key,
+                            f"⏰ <b>Trade deadline in 24 hours</b> — "
+                            f"{at:%d %b %H:%M} UTC. Get your offers in: "
+                            f"<code>/atrade &lt;team&gt;</code>"))
+            if 0 < left <= 3600 and not _noticed(session, season, NOTICE_DL_HOUR, key):
+                out.append((NOTICE_DL_HOUR, key,
+                            f"⏰ <b>Trade deadline in under an hour</b> — "
+                            f"{at:%H:%M} UTC. Agreed trades still go to the "
+                            f"bot admin after it."))
+        if season.trade_deadline_matches:
+            done = season_progress(session, season)["league_done"]
+            if (int(season.trade_deadline_matches) - done == 1
+                    and not _noticed(session, season, NOTICE_DL_MATCH, key)):
+                out.append((NOTICE_DL_MATCH, key,
+                            "⏰ <b>One league match left before the trade "
+                            "deadline.</b> Get your offers in: "
+                            "<code>/atrade &lt;team&gt;</code>"))
+    elif phase is None and opened and not _noticed(session, season,
+                                                   NOTICE_CLOSED, key):
+        waiting = len(pending_trades(session, season))
+        tail = (f"\n⏳ {waiting} agreed trade{'s' if waiting != 1 else ''} "
+                f"still with the bot admin." if waiting else "")
+        out.append((NOTICE_CLOSED, key,
+                    f"🔒 <b>The mid-season trade window has closed.</b>\n"
+                    f"{_e(reason or '')}{tail}"))
+    return out
+
+
+def record_notice(session, season, kind, key, text):
+    """Log a notice as said, so it is never said twice."""
+    A.log_event(session, season, kind, text[:300], detail={"key": key})
+    session.flush()
+
+
+# ──────────────────────────────────────────────────────────────────────
 # /atradehelp — the full guide and every command
 # ──────────────────────────────────────────────────────────────────────
 
@@ -1862,7 +2000,8 @@ def render_help(session=None, season=None):
         "• <b>Why was my trade refused?</b> The message names the rule — "
         "squad limit, overseas cap, a role, your purse, or the window.\n"
         "• <b>Why is it still waiting?</b> Both sides agreed; it is with the "
-        "bot admin.\n"
+        "bot admin — and an agreed trade can still be approved after the "
+        "deadline (not once the playoffs start).\n"
         "• <b>My offer vanished.</b> It expired — 60 minutes, or 5 during the "
         "auction. Start again with /atrade.\n"
         "• <b>Can I trade the player on the block?</b> No — only signed "

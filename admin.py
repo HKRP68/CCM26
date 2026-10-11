@@ -24284,41 +24284,44 @@ def admin_auction_detail(season_id):
         db.close()
 
 
+def _auction_trade_row(db, trade):
+    """One trade as the website's tables show it."""
+    from services import auction_trade_service as trade_svc
+    import json as _json
+    snap = {}
+    try:
+        snap = _json.loads(trade.snapshot_json or "{}")
+    except (TypeError, ValueError):
+        snap = {}
+    a = trade_svc.team_on(db, trade, "a")
+    b = trade_svc.team_on(db, trade, "b")
+    a_names = ([r["name"] for r in snap.get("a", [])] if snap
+               else [lot.name for lot in trade_svc.lots_for(db, trade, "a")])
+    b_names = ([r["name"] for r in snap.get("b", [])] if snap
+               else [lot.name for lot in trade_svc.lots_for(db, trade, "b")])
+    cash = int(trade.cash_lakh or 0)
+    return {
+        "id": trade.id, "status": trade.status,
+        "status_label": trade_svc.STATUS_LABEL.get(trade.status, trade.status),
+        "phase": trade_svc.PHASE_LABEL.get(trade.phase, trade.phase or ""),
+        "a": a.name if a else "?", "b": b.name if b else "?",
+        "a_names": a_names, "b_names": b_names,
+        "cash": (("" if not cash else
+                  f"{(a.name if cash > 0 else b.name) if a and b else ''} pays "
+                  f"{auction_svc.render_money(abs(cash))}")),
+        "verdict": (snap.get("verdict") if snap else
+                    trade_svc.fairness(db, trade)["verdict"]),
+        "when": trade.completed_at or trade.updated_at,
+        "by_admin": bool(trade.by_admin), "reason": trade.reason,
+    }
+
+
 def _auction_trade_view(db, season):
     """Everything the 🔁 Trades fold shows, read through the trade service."""
     from services import auction_trade_service as trade_svc
-    import json as _json
-
-    def names(trade, side):
-        return [lot.name for lot in trade_svc.lots_for(db, trade, side)]
 
     def row(trade):
-        snap = {}
-        try:
-            snap = _json.loads(trade.snapshot_json or "{}")
-        except (TypeError, ValueError):
-            snap = {}
-        a = trade_svc.team_on(db, trade, "a")
-        b = trade_svc.team_on(db, trade, "b")
-        a_names = ([r["name"] for r in snap.get("a", [])] if snap
-                   else names(trade, "a"))
-        b_names = ([r["name"] for r in snap.get("b", [])] if snap
-                   else names(trade, "b"))
-        cash = int(trade.cash_lakh or 0)
-        return {
-            "id": trade.id, "status": trade.status,
-            "status_label": trade_svc.STATUS_LABEL.get(trade.status, trade.status),
-            "phase": trade_svc.PHASE_LABEL.get(trade.phase, trade.phase or ""),
-            "a": a.name if a else "?", "b": b.name if b else "?",
-            "a_names": a_names, "b_names": b_names,
-            "cash": (("" if not cash else
-                      f"{(a.name if cash > 0 else b.name) if a and b else ''} pays "
-                      f"{auction_svc.render_money(abs(cash))}")),
-            "verdict": (snap.get("verdict") if snap else
-                        trade_svc.fairness(db, trade)["verdict"]),
-            "when": trade.completed_at or trade.updated_at,
-            "by_admin": bool(trade.by_admin), "reason": trade.reason,
-        }
+        return _auction_trade_row(db, trade)
 
     live = trade_svc.live_trades(db, season)
     phase, closed_reason = trade_svc.trade_phase(db, season)
@@ -24418,6 +24421,9 @@ def admin_auction_trades(season_id):
         except auction_svc.AuctionError as ve:
             db.rollback()
             flash(f"⚠️ {ve}", "error")
+        # The console's ⏳ card posts here too, and comes back to the console.
+        if request.form.get("back") == "console":
+            return redirect(url_for("admin_auction_console", season_id=season.id))
         return redirect(url_for("admin_auction_detail", season_id=season.id)
                         + "#trades")
     finally:
@@ -25307,8 +25313,22 @@ def _tg_chat_form(name, default=None):
 # console would look like the auction had vanished.
 
 def _console_context(db, season):
+    from services import auction_trade_service as trade_svc
     lot = auction_svc.current_lot(db, season)
+    try:
+        trade_pending = [_auction_trade_row(db, t)
+                         for t in trade_svc.pending_trades(db, season)]
+        trade_open = [_auction_trade_row(db, t)
+                      for t in trade_svc.live_trades(db, season)
+                      if t.status != trade_svc.STATUS_PENDING]
+        trade_line = trade_svc.window_line(db, season)
+    except Exception:
+        logger.exception("console: trades card failed (non-fatal)")
+        trade_pending, trade_open, trade_line = [], [], ""
     return {
+        "trade_pending": trade_pending,
+        "trade_open": trade_open,
+        "trade_line": trade_line,
         "season": season,
         "label": auction_svc.status_label(season),
         "lot": lot,
