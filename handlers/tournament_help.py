@@ -66,6 +66,9 @@ PLAYER_SECTIONS = (
          "Team of the Tournament — the best XI so far, as cards"),
         ("/statstour", "",
          "A player's This Season and Total Season stats"),
+        ("/seasons", "",
+         "Every season of a competition: champions, awards, all-time stats, "
+         "and /seasons <player> season by season"),
         ("/mytours", "/tours", "Your tournaments"),
     )),
     ("📝 Tournament Draft", (

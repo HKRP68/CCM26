@@ -81,6 +81,7 @@ COMMAND_CATEGORIES = (
         "/teamowner [team] - Who owns and co-owns each tournament team (names shown, nobody tagged)",
         "/teamtourstats [team] - Your team's tournament by the numbers: standing, what you score and concede, best and worst totals, and your top run-scorers and wicket-takers",
         '/mvp - Tournament Most Valuable Player: batting + bowling + wins + POTM awards in one impact-point total',
+        "/seasons [competition] [| player] - 🏟 Every season of a competition: champions, Orange & Purple Caps, all-time leaders, and one player's record season by season",
         "/remindmatch [team] [vs team] - Admin: nudge two teams to play what they still owe — posts here and DMs both sides' owners and co-owners",
     )),
     ('🔨 Franchise Auction', (
@@ -94,6 +95,7 @@ COMMAND_CATEGORIES = (
         '/asquad [team] /asoldlist /aunsoldlist - Squads, sold and unsold players',
         '/aretlock /apicks - Who kept whom, and the expansion picks',
         '/aretained - Every team\'s retained players, tap a team to expand',
+        "/arelease [player] - Owners: release one of your kept players back into the auction (his price returns to your purse) while the retention / release window is open; bare lists them as buttons",
         '/aleaderboard /amybids - Who has spent most; your own bid history',
         '.bid .purse .squad .board .lb - Dot shortcuts in the auction group',
     )),

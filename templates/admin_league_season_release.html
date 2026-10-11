@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Release board · {{ series.name }} {{ title }}{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_tournament.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='css/admin_league_seasons.css') }}">{% endblock %}
+{% block content %}
+<div class="tour-page">
+  <div class="breadcrumbs"><a href="{{ url_for('admin_league_seasons') }}">🏟 League Seasons</a><span>/</span><a href="{{ url_for('admin_league_series', series_id=series.id) }}">{{ series.name }}</a><span>/</span><span>{{ title }} · release board</span></div>
+  <div class="hero-content">
+    <div class="hero-left">
+      <div class="trophy-badge">🔁</div>
+      <div class="hero-text">
+        <h1 class="hero-title" style="font-size:1.5rem;">Release board — {{ title }}</h1>
+        <div class="hero-meta"><span class="meta-detail"><a href="{{ url_for('admin_auction_detail', season_id=auction.id) }}">{{ auction.name }}</a> · purse cap {{ money(auction.opening_purse_lakh) }} · {{ '🟢 window open' if window_open else '🔒 window closed' }}{% if left_text %} ({{ left_text }}){% endif %}</span></div>
+      </div>
+    </div>
+  </div>
+
+  <section class="section-card">
+    <div class="ls-note">Every franchise kept its whole squad at last season's price. Tick the players a franchise lets go: each goes back into the auction pool (set “🔁 Released”) and his price goes back into the purse. Owners and co-owners can do the same in Telegram with <code>/arelease</code> until the window closes.</div>
+    {% if window_open %}
+    <div class="ls-actions" style="margin-top:.8rem;">
+      <form method="POST" class="inline-form" style="width:auto;"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="deadline">
+        <label class="ls-muted">Deadline (UTC) <input type="datetime-local" name="deadline" value="{{ auction.retention_deadline_at.strftime('%Y-%m-%dT%H:%M') if auction.retention_deadline_at else '' }}"></label>
+        <button class="action-btn outline-btn" type="submit">Save deadline</button></form>
+      <form method="POST" class="inline-form" style="width:auto;" onsubmit="return confirm('Close the release window? Nobody can release after this.');"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="close_window"><button class="action-btn accent-btn" type="submit">🔒 Close the window</button></form>
+    </div>
+    {% endif %}
+  </section>
+
+  <form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="release">
+    <div class="ls-release-grid">
+    {% for t in teams %}{% set f = t.franchise %}
+      <section class="section-card">
+        <div class="section-header"><div>
+          <h2 class="section-title">{{ f.name }}</h2>
+          <div class="section-subtitle">👤 {{ f.owner_name or f.owner_tg_id or 'no owner' }} · kept {{ t.kept|length }} ({{ money(t.spent) }}) · purse left <b>{{ money(f.purse_remaining_lakh) }}</b></div>
+        </div></div>
+        {% if t.kept %}
+        <table class="ls-table">
+          <thead><tr><th></th><th>Player</th><th class="num">OVR</th><th class="num">Price</th></tr></thead>
+          <tbody>{% for lot in t.kept %}
+            <tr><td>{% if window_open %}<input type="checkbox" name="lot_ids" value="{{ lot.id }}" style="width:auto;">{% endif %}</td>
+              <td>{{ lot.name }} <span class="ls-muted">{{ lot.category }}{% if lot.is_overseas %} · ✈️{% endif %}</span></td>
+              <td class="num">{{ lot.rating }}</td><td class="num">{{ money(lot.sold_price_lakh) }}</td></tr>
+          {% endfor %}</tbody>
+        </table>
+        {% else %}<div class="ls-muted">Nobody kept.</div>{% endif %}
+        {% if t.released %}<div class="ls-muted" style="margin-top:.6rem;">🔓 Released: {% for lot in t.released %}{{ lot.name }}{{ ', ' if not loop.last }}{% endfor %}</div>{% endif %}
+      </section>
+    {% endfor %}
+    </div>
+    {% if window_open %}<div style="margin-top:1rem;"><button class="action-btn danger-btn" style="width:auto;" type="submit" onclick="return confirm('Release the ticked players into the auction?');">🔓 Release ticked players</button></div>{% endif %}
+  </form>
+</div>
+{% endblock %}

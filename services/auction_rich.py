@@ -1166,6 +1166,12 @@ def retention_view(session, season):
                           for r in A.retention_price_rules(season))
         blocks.append(R.paragraph(f"Ladder: {slabs}"))
         lines.append(f"Ladder: {slabs}")
+    if A.retention_open(season):
+        blocks.append(R.paragraph(["Owners: ", R.code("/arelease"),
+                                   " lets one of your kept players go back "
+                                   "into the auction, price refunded."]))
+        lines.append("Owners: <code>/arelease</code> lets one of your kept "
+                     "players go back into the auction, price refunded.")
 
     header = [R.cell(R.bold("Franchise"), header=True),
               R.cell(R.bold("Kept"), header=True, align="center"),
@@ -2039,6 +2045,9 @@ PLAYER_SECTION = ("👥 For owners & everyone", (
     ("/retain [player] [| price]", "Dynamic retention: bare lists last "
                                    "season's squad; then make offers — he "
                                    "decides"),
+    ("/arelease [player]", "Release one of your kept players back into the "
+                           "auction (price back in your purse) while the "
+                           "window is open; bare lists them as buttons"),
     ("/ainfo", "Buttons for every view below"),
     ("/arules", "Purse, caps, base prices, bid steps, the clock — before a lot opens"),
     ("/asets · /anextset · /anextplayer", "Sets, the next set, the next players"),

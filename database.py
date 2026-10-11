@@ -210,6 +210,7 @@ def init_db():
         AuctionSeason, AuctionFranchise, AuctionLot, AuctionBid,
         AuctionLedgerEntry, AuctionEvent, AuctionRetentionOffer, AuctionAdmin,
         AuctionTrade, AuctionTradeBlock,
+        LeagueSeries, LeagueSeason,
     )
     import logging
     import time as _time

@@ -188,6 +188,7 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/gstats` 💬 | `/globalstats` | Global stats — every owner, every match type 🌍 |
 | `/statscl` 💬 | — | Any Challenge League player's stats |
 | `/statstour` | — | A player's **This Season Stats** and **Total Season Stats** (this season plus the linked past seasons — deleted tournaments' saved stats included), plus a season-by-season list, each tap-to-expand |
+| `/seasons [competition] [\| player]` | — | 🏟 **League Seasons**: every season of a competition — champions, runners-up, Orange & Purple Caps, the running season's stage — with a card per season (its top batters and bowlers), **all-time** boards (runs, wickets, sixes, highest score, best figures, average, titles), and `/seasons <player>` for one player season by season |
 | `/tournamentstats` | — | Tournament stat leaderboards (top 25, ranks 11+ behind a tap) |
 | `/cmuleaderboard` | `/leaderboard` `/lb` `/top` | The global leaderboard |
 | `/h2h` | `/headtohead` | Head-to-head record vs another player |
@@ -692,6 +693,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/aboard` | `/aboard` |
 | `/apurse [franchise]` | `/apurse Mumbai` |
 | `/artm yes\|no` | `/artm yes` |
+| `/arelease [player]` | `/arelease` · `/arelease Gill` |
 | `/asquad [franchise]` | `/asquad` · `/asquad Chennai` |
 | `/amybids [franchise]` | `/amybids` · `/amybids Chennai` |
 | dot shortcuts | `.bid` · `.bid 2cr` · `.purse` · `.squad` · `.board` · `.lb` |
@@ -816,7 +818,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/aretain <franchise> [\| <player> \| price]` | Retain one of that franchise's **last-season** players — `/aretain Kochi \| Gill \| 25`. The name is looked up in its old squad only, so no edition is ever asked for and a surname is enough. `/aretain Kochi` alone lists the squad as buttons |
 | `/aprevious [league name \| id]` (`/alastseason`) | Link last season's league, and see which team each franchise was. A franchise nobody matched (a renamed side) gets buttons to pick its old team |
 | `/aprevteam <franchise> \| <last season's team>` | Tie a renamed side to its old team by id — `/aprevteam Kochi \| Kochi Tuskers`; `\| none` clears it |
-| `/aunretain <player name>` | Release a retained player into the pool |
+| `/aunretain <player name>` (`/arelease`) | Release a retained player into the pool. **Owners** use `/arelease` for their own kept players while the retention / release window is open — by name, or bare for buttons — in the group or a DM |
 | `/aretlock [on]` · `/aretention` | Retention state, and close the window |
 | `/artmset on [seconds] [premium]` · `/artmset off` | Right To Match rules — `/artmset on 45 2`. Cards are **automatic**: RTM = retention spots − players retained, per franchise (a season with retention off uses a flat count, `/artmset 2`) |
 | `/artmcards <franchise> <cards>` | Override one franchise's RTM count — `/artmcards Mumbai 3` (the automatic count stops being re-dealt once the auction opens) |

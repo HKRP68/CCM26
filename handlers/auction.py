@@ -2338,9 +2338,21 @@ def _find_player(session, name):
 
 
 async def aunretain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Release a retained player back into the auction pool."""
+    """Release a retained player back into the auction pool.
+
+    An auction admin releases anybody's (``/aunretain <player>``). A
+    franchise's owner or co-owner releases their OWN kept players — the mini
+    auction's release window — by name, or bare ``/arelease`` for a list of
+    buttons; that path also works in a DM, before the group is even bound. An
+    admin who owns a team gets the owner's list from a bare command too.
+    """
     user = update.effective_user
     name = _arg_text(context)
+    admin = user is not None and _is_auction_admin(user.id)
+    if not admin or not name:
+        handled = await _owner_release(update, name, quiet_if_not_owner=admin)
+        if handled or not admin:
+            return
 
     def work(session, season):
         if not name:
@@ -2358,6 +2370,171 @@ async def aunretain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"<b>{A.render_money(franchise.purse_remaining_lakh, season.currency_label)}</b>.")
 
     await _with_auction(update, work, admin=True, context=context)
+
+
+# ── An owner's own release (the mini auction's release window) ────────
+
+REL_CB = "au_rel_"
+
+
+def _match_kept(kept, name):
+    """The one kept player ``name`` means: exact, then a whole word, then a
+    substring. Several matches are refused with their names."""
+    want = " ".join((name or "").lower().split())
+    exact = [lot for lot in kept if (lot.name or "").lower() == want]
+    if exact:
+        return exact[0]
+    words = [lot for lot in kept if want in (lot.name or "").lower().split()]
+    pool = words or [lot for lot in kept if want in (lot.name or "").lower()]
+    if len(pool) == 1:
+        return pool[0]
+    if not pool:
+        raise AuctionError(f"“{name}” is not one of your kept players.")
+    raise AuctionError("Which one? " + ", ".join(lot.name for lot in pool[:8]))
+
+
+def release_picker(session, season, franchise, note=None):
+    """The franchise's kept players as buttons — tap one to release him."""
+    kept = A.retained(session, franchise.id)
+    symbol = season.currency_label
+    left = A.retention_seconds_left(season)
+    lines = [f"🔁 <b>{html.escape(franchise.name)}</b> — kept players",
+             f"Purse: <b>{A.render_money(franchise.purse_remaining_lakh, symbol)}</b>"]
+    if note:
+        lines.insert(0, note)
+    if not A.retention_open(season):
+        lines.append("🔒 The release window is closed.")
+    elif left is not None:
+        hours = max(0, int(left // 3600))
+        lines.append(f"⏰ Window closes in {hours}h {max(0, int(left % 3600) // 60)}m.")
+    lines.append("Tap a player to release him into the auction — his price "
+                 "comes back to your purse." if kept and A.retention_open(season)
+                 else ("Nobody kept." if not kept else ""))
+    rows = []
+    if A.retention_open(season):
+        for lot in kept[:40]:
+            rows.append([InlineKeyboardButton(
+                f"🔓 {lot.name} · {A.render_money(lot.sold_price_lakh, symbol)}",
+                callback_data=f"{REL_CB}p_{lot.id}")])
+    return "\n".join(line for line in lines if line), (
+        InlineKeyboardMarkup(rows) if rows else None)
+
+
+async def _owner_release(update, name, *, quiet_if_not_owner=False):
+    """``/arelease`` for an owner. Returns True when it answered."""
+    user = update.effective_user
+    if user is None:
+        return False
+    session = get_session()
+    try:
+        try:
+            season = _read_season(session, update)
+        except AuctionError as exc:
+            await _reply(update, f"⚠️ {html.escape(str(exc))}")
+            return True
+        if season is None:
+            if quiet_if_not_owner:
+                return False
+            chat = update.effective_chat
+            await _reply(update, NO_AUCTION if chat is not None
+                         and chat.type in GROUP_CHAT_TYPES else NO_AUCTION_DM)
+            return True
+        franchise = A.franchise_for_actor(session, season.id, user.id)
+        if franchise is None:
+            if quiet_if_not_owner:
+                return False
+            await _reply(update, "⛔ Only a franchise's owner or a co-owner can "
+                                 "release its players (or an auction admin).")
+            return True
+        if not name:
+            text, markup = release_picker(session, season, franchise)
+            await _reply(update, text, reply_markup=markup)
+            return True
+        lot = _match_kept(A.retained(session, franchise.id), name)
+        A.release_by_owner(session, season, lot, user.id)
+        session.commit()
+        session.refresh(franchise)
+        await _reply(update, f"🔓 {html.escape(lot.name)} released — back in "
+                             f"the auction, and {html.escape(franchise.name)} "
+                             f"has <b>{A.render_money(franchise.purse_remaining_lakh, season.currency_label)}</b>.")
+        return True
+    except AuctionError as exc:
+        session.rollback()
+        await _reply(update, f"⚠️ {html.escape(str(exc))}")
+        return True
+    except Exception:
+        session.rollback()
+        logger.exception("/arelease (owner) failed")
+        await _reply(update, "⚠️ Something went wrong. Try again.")
+        return True
+    finally:
+        session.close()
+
+
+async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """``au_rel_p_<lot>`` asks, ``au_rel_y_<lot>`` releases, ``au_rel_n_<lot>``
+    keeps. Authorised on every press: the presser must own or co-own the
+    franchise that kept the player, and the window must still be open."""
+    from models import AuctionFranchise, AuctionLot, AuctionSeason
+    query = update.callback_query
+    if query is None:
+        return
+    user = update.effective_user
+    try:
+        step, lot_id = (query.data or "")[len(REL_CB):].split("_", 1)
+        lot_id = int(lot_id)
+    except (ValueError, AttributeError):
+        await query.answer("That button is from an older list.", show_alert=True)
+        return
+    session = get_session()
+    try:
+        lot = session.query(AuctionLot).filter(AuctionLot.id == lot_id).first()
+        season = (session.query(AuctionSeason)
+                  .filter(AuctionSeason.id == lot.season_id).first()
+                  if lot is not None else None)
+        franchise = (session.query(AuctionFranchise)
+                     .filter(AuctionFranchise.id == lot.sold_to_id).first()
+                     if lot is not None and lot.sold_to_id else None)
+        if lot is None or season is None or franchise is None:
+            await query.answer("That player is no longer kept.", show_alert=True)
+            return
+        if not A.may_bid_for(franchise, user.id if user else None):
+            await query.answer(f"Only {franchise.name}'s owner or a co-owner "
+                               f"can release its players.", show_alert=True)
+            return
+        symbol = season.currency_label
+        if step == "p":
+            await query.answer()
+            markup = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Release", callback_data=f"{REL_CB}y_{lot.id}"),
+                InlineKeyboardButton("✖ Keep", callback_data=f"{REL_CB}n_{lot.id}")]])
+            await query.edit_message_text(
+                f"🔓 Release <b>{html.escape(lot.name)}</b> into the auction? "
+                f"{A.render_money(lot.sold_price_lakh, symbol)} comes back to "
+                f"{html.escape(franchise.name)}'s purse.",
+                parse_mode="HTML", reply_markup=markup)
+            return
+        note = None
+        if step == "y":
+            A.release_by_owner(session, season, lot, user.id)
+            session.commit()
+            session.refresh(franchise)
+            note = f"🔓 {html.escape(lot.name)} released."
+            await query.answer(f"{lot.name} released.")
+        else:
+            await query.answer("Kept.")
+        text, markup = release_picker(session, season, franchise, note=note)
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup,
+                                      disable_web_page_preview=True)
+    except AuctionError as exc:
+        session.rollback()
+        await query.answer(str(exc)[:190], show_alert=True)
+    except Exception:
+        session.rollback()
+        logger.exception("auction release button failed")
+        await query.answer("That did not land — try again.", show_alert=True)
+    finally:
+        session.close()
 
 
 async def aretlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -1,0 +1,235 @@
+{% extends "base.html" %}
+{% block title %}{{ series.name }} · League Seasons{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_tournament.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='css/admin_league_seasons.css') }}">{% endblock %}
+{% block content %}
+{% macro csrf(action) %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="{{ action }}">{% endmacro %}
+{% macro award(h, key, icon) %}{% set a = h.get(key) %}{% if a and (a.team or a.player) %}{{ icon }} {{ a.player or a.team }}{% if a.player and a.team %} <span class="ls-muted">({{ a.team }})</span>{% endif %}{% if a.value and a.player %} <span class="ls-muted">· {{ a.value }}</span>{% endif %}{% else %}<span class="ls-muted">—</span>{% endif %}{% endmacro %}
+<div class="tour-page">
+  <div class="breadcrumbs"><a href="{{ url_for('admin_league_seasons') }}">🏟 League Seasons</a><span>/</span><span>{{ series.name }}</span></div>
+  <div class="hero-content">
+    <div class="hero-left">
+      <div class="trophy-badge">🏆</div>
+      <div class="hero-text">
+        <h1 class="hero-title" style="font-size:1.5rem;">{{ series.name }}</h1>
+        <div class="hero-meta"><span class="meta-detail">{{ rows|length }} season{{ '' if rows|length == 1 else 's' }}{% if titles %} · most titles: {{ titles[0][0] }} ({{ titles[0][1] }}){% endif %}</span></div>
+        {% if series.description %}<div class="ls-muted" style="margin-top:.3rem;">{{ series.description }}</div>{% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# ════════════════ The current season ════════════════ #}
+  {% if current %}{% set st = current.stage %}{% set s = current.season %}
+  <section class="section-card">
+    <div class="section-header"><div>
+      <h2 class="section-title">{{ st.emoji }} {{ current.title }} — now</h2>
+      <div class="section-subtitle">Squads: {{ current.mode }}{% if current.league %} · League: {{ current.league.name }}{% endif %}</div>
+    </div></div>
+    <div class="ls-stepper">
+      <div class="ls-step {{ 'done' if st.step > 1 or st.done else 'now' }}">① Squads<b>{% if current.league %}Ready{% elif current.auction %}{{ current.auction.status|capitalize }}{% else %}—{% endif %}</b></div>
+      <div class="ls-step {{ 'done' if st.step > 2 or st.done else ('now' if st.step == 2 else '') }}">② Tournament<b>{% if current.tournament %}{{ current.tournament.status|capitalize }}{% elif current.saved %}Saved{% else %}—{% endif %}</b></div>
+      <div class="ls-step {{ 'done' if st.done else '' }}">③ Champion<b>{{ (current.honours.get('champion') or {}).get('team') or '—' }}</b></div>
+    </div>
+    <div class="ls-stage">{{ st.label }}{% if st.detail %}<small>{{ st.detail }}</small>{% endif %}</div>
+
+    {% if current.auction and not current.league %}{% set au = current.auction %}
+      <ul class="ls-checklist">{% for ok, text in checklist %}<li>{{ '✅' if ok else '⬜' }} {{ text }}</li>{% endfor %}</ul>
+      <div class="ls-actions" style="margin-top:.9rem;">
+        <a class="action-btn accent-btn" href="{{ url_for('admin_auction_detail', season_id=au.id) }}">🔨 Auction setup</a>
+        <a class="action-btn outline-btn" href="{{ url_for('admin_auction_console', season_id=au.id) }}">🎛 Console</a>
+        <a class="action-btn outline-btn" href="{{ url_for('admin_league_season_release', series_id=series.id, season_id=s.id) }}">🔁 Release board</a>
+        {% if st.key == 'publish' %}
+        <form method="POST" class="inline-form" style="width:auto;">{{ csrf('publish') }}<input type="hidden" name="season_id" value="{{ s.id }}"><button class="action-btn play-btn" type="submit">📤 Publish squads</button></form>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    {% if current.league and not current.tournament and not current.saved %}
+      {% if candidates %}
+      <form method="POST" class="ls-note" style="margin-top:.9rem;">{{ csrf('link_tournament') }}<input type="hidden" name="season_id" value="{{ s.id }}">
+        🔗 These tournaments already play on this league:
+        <select name="tournament_id">{% for t in candidates %}<option value="{{ t.id }}">{{ t.name }} ({{ t.status }})</option>{% endfor %}</select>
+        <button class="action-btn outline-btn" style="width:auto;" type="submit">Use it</button>
+      </form>
+      {% endif %}
+      <form method="POST" style="margin-top:.9rem;">{{ csrf('create_tournament') }}<input type="hidden" name="season_id" value="{{ s.id }}">
+        <div class="form-grid">
+          <div style="grid-column:span 2;"><label>Tournament name</label><input name="tournament_name" placeholder="{{ series.name }} {{ current.title }}"></div>
+          <div><label><input type="checkbox" name="activate" value="on" checked style="width:auto;"> Activate now</label></div>
+          <div><label><input type="checkbox" name="hand_over" value="on" checked style="width:auto;"> Move the league's /commands here</label></div>
+        </div>
+        <p class="ls-muted">Copies last season's tournament rules (format, overs, points, overseas, pitches, injuries, prizes…), enters every team with its owner, and builds the fixtures. Moving the commands deactivates last season's league, so /cipl and friends play this season.</p>
+        <button class="action-btn play-btn" style="width:auto;" type="submit">🏟 Create {{ current.title }} tournament</button>
+      </form>
+    {% endif %}
+
+    {% if current.tournament %}{% set t = current.tournament %}
+      <div class="ls-actions" style="margin-top:.9rem;">
+        <a class="action-btn accent-btn" href="{{ url_for('admin_tournament_dashboard', tournament_id=t.id) }}">📊 {{ t.name }}</a>
+        <a class="action-btn outline-btn" href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">⚙️ Manage</a>
+        {% if t.status not in ('completed', 'cancelled') %}
+        <form method="POST" class="inline-form" style="width:auto;" onsubmit="return confirm('Complete {{ t.name }}? The season ends and the next one can start.');">{{ csrf('complete') }}<input type="hidden" name="season_id" value="{{ s.id }}"><button class="action-btn outline-btn" type="submit">🏁 Complete season</button></form>
+        {% endif %}
+      </div>
+    {% endif %}
+    {% if st.done and current.honours.get('champion') %}
+      <div class="ls-note" style="margin-top:.9rem;">🏆 <b>{{ current.honours.champion.team }}</b> are champions{% if current.honours.get('runner_up') %} · 🥈 {{ current.honours.runner_up.team }}{% endif %}</div>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  {# ════════════════ The next season ════════════════ #}
+  <section class="section-card">
+    <div class="section-header"><div>
+      <h2 class="section-title">🌱 Next season{% if prev %} — Season {{ prev.season_no + 1 }}{% endif %}</h2>
+      <div class="section-subtitle">When a season ends, its squads become the next one three ways.</div>
+    </div></div>
+    {% if blocker %}
+      <div class="ls-note">⏳ {{ blocker }}</div>
+    {% else %}
+    <div class="ls-options">
+      <div class="ls-option">
+        <h3>🔨 Mega auction</h3>
+        <p>Squads dissolve. Each franchise keeps up to a few players (retention + Right To Match together — the IPL 2025 rule), every purse resets, and everyone else goes back into the auction.</p>
+        <form method="POST">{{ csrf('start_mega') }}
+          <div class="form-grid">
+            <div><label>Purse (₹ Cr)</label><input name="purse" value="{{ mega_purse }}" required></div>
+            <div><label>Keep up to</label><input name="keep_max" type="number" min="0" max="25" value="{{ keep_default }}"></div>
+            <div><label>Retention deadline (UTC)</label><input type="datetime-local" name="deadline"></div>
+            <div><label><input type="checkbox" name="rtm" value="on" checked style="width:auto;"> Right To Match</label></div>
+          </div>
+          <input name="auction_name" placeholder="Auction name (optional)">
+          <button class="action-btn accent-btn" type="submit">Start mega auction</button>
+        </form>
+      </div>
+      <div class="ls-option">
+        <h3>🔁 Mini auction</h3>
+        <p>Every franchise keeps its squad at what each player cost last season. Owners (<code>/arelease</code>) and you (the release board) let players go before the deadline. Purse = the cap − what the kept players cost. Only the released and new players are auctioned. No RTM.</p>
+        <form method="POST">{{ csrf('start_mini') }}
+          <div class="form-grid">
+            <div><label>Purse cap (₹ Cr)</label><input name="purse" value="{{ mini_purse }}" required></div>
+            <div><label>Release deadline (UTC)</label><input type="datetime-local" name="deadline"></div>
+          </div>
+          <input name="auction_name" placeholder="Auction name (optional)">
+          <button class="action-btn accent-btn" type="submit">Start mini auction</button>
+        </form>
+      </div>
+      <div class="ls-option">
+        <h3>✍️ Manual teams</h3>
+        <p>Type the squads as Challenge Data text (<code>Team | Player | Version</code>), starting from last season's. They become the new season's league.</p>
+        <form method="GET" action="{{ url_for('admin_league_season_manual', series_id=series.id) }}">
+          <button class="action-btn accent-btn" type="submit">Enter teams</button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+  </section>
+
+  {# ════════════════ History ════════════════ #}
+  <section class="section-card">
+    <div class="section-header"><div>
+      <h2 class="section-title">📜 Seasons</h2>
+      <div class="section-subtitle">Newest first. Unlinking a season never deletes its tournament, league or auction.</div>
+    </div>
+    <form method="POST" class="inline-form" style="width:auto;">{{ csrf('relink_stats') }}<button class="action-btn outline-btn" style="width:auto;" type="submit" title="Make /statstour's Total Season Stats count every season">🔗 Re-link season stats</button></form>
+    </div>
+    {% if rows %}
+    <div class="ls-table-wrap"><table class="ls-table">
+      <thead><tr><th>Season</th><th>Squads</th><th>Status</th><th>🏆 Champion</th><th>🥈 Runner-up</th><th>🟠 Orange</th><th>🟣 Purple</th><th>⭐ MVP</th><th></th></tr></thead>
+      <tbody>
+      {% for r in rows %}{% set h = r.honours %}
+      <tr>
+        <td><b>{{ r.title }}</b><div class="ls-muted">S{{ r.season.season_no }}{% if r.tournament %} · <a href="{{ url_for('admin_tournament_dashboard', tournament_id=r.tournament.id) }}">{{ r.tournament.name }}</a>{% elif r.saved %} · 📦 {{ r.saved.name }}{% endif %}</div></td>
+        <td>{{ r.mode }}{% if r.auction %}<div class="ls-muted"><a href="{{ url_for('admin_auction_detail', season_id=r.auction.id) }}">{{ r.auction.name }}</a></div>{% endif %}</td>
+        <td>{{ r.stage.emoji }} {{ r.stage.label }}</td>
+        <td>{{ (h.get('champion') or {}).get('team') or '—' }}</td>
+        <td>{{ (h.get('runner_up') or {}).get('team') or '—' }}</td>
+        <td>{{ award(h, 'orange_cap', '') }}</td>
+        <td>{{ award(h, 'purple_cap', '') }}</td>
+        <td>{{ award(h, 'mvp', '') }}</td>
+        <td>
+          <details><summary class="ls-muted" style="cursor:pointer;">Edit</summary>
+            <form method="POST" style="margin-top:.4rem;display:grid;gap:.35rem;min-width:220px;">{{ csrf('edit_season') }}<input type="hidden" name="season_id" value="{{ r.season.id }}">
+              <input name="season_name" value="{{ r.season.name or '' }}" placeholder="Season name">
+              {% if not r.tournament %}
+              <input name="champion" value="{{ (h.get('champion') or {}).get('team') or '' }}" placeholder="Champion">
+              <input name="runner_up" value="{{ (h.get('runner_up') or {}).get('team') or '' }}" placeholder="Runner-up">
+              {% endif %}
+              <input name="notes" value="{{ r.season.notes or '' }}" placeholder="Notes">
+              <button class="action-btn outline-btn" type="submit">Save</button>
+            </form>
+            <form method="POST" style="margin-top:.35rem;" onsubmit="return confirm('Remove {{ r.title }} from {{ series.name }}? Nothing else is deleted.');">{{ csrf('detach') }}<input type="hidden" name="season_id" value="{{ r.season.id }}"><button class="action-btn danger-btn" type="submit">Unlink season</button></form>
+          </details>
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    {% else %}
+    <div class="empty-state">No seasons yet. Add the first one below — any finished Challenge League tournament can be Season 1.</div>
+    {% endif %}
+  </section>
+
+  {# ════════════════ All-time ════════════════ #}
+  {% if rows %}
+  <section class="section-card">
+    <div class="section-header"><div>
+      <h2 class="section-title">📊 All-time</h2>
+      <div class="section-subtitle">Every season added up — the same boards players see with <code>/seasons</code>.</div>
+    </div></div>
+    <div class="leaderboards-grid">
+      <div class="leaderboard-widget"><div class="widget-header"><h4>🏏 Most runs</h4></div>
+        {% for p in leaders.runs %}<div class="lb-row"><span class="lb-name">{{ p.name }} <small>{{ p.seasons }} season{{ '' if p.seasons == 1 else 's' }}</small></span><span class="lb-val">{{ p.bat_runs }}</span></div>{% else %}<div class="ls-muted">No stats yet.</div>{% endfor %}
+      </div>
+      <div class="leaderboard-widget"><div class="widget-header"><h4>🎯 Most wickets</h4></div>
+        {% for p in leaders.wkts %}<div class="lb-row"><span class="lb-name">{{ p.name }} <small>{{ p.seasons }} season{{ '' if p.seasons == 1 else 's' }}</small></span><span class="lb-val">{{ p.bowl_wickets }}</span></div>{% else %}<div class="ls-muted">No stats yet.</div>{% endfor %}
+      </div>
+      <div class="leaderboard-widget"><div class="widget-header"><h4>🏆 Titles</h4></div>
+        {% for team, n, which in titles %}<div class="lb-row"><span class="lb-name">{{ team }} <small>{{ which|join(', ') }}</small></span><span class="lb-val">{{ n }}</span></div>{% else %}<div class="ls-muted">No champions yet.</div>{% endfor %}
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  {# ════════════════ Add a season ════════════════ #}
+  <section class="section-card">
+    <div class="section-header"><div>
+      <h2 class="section-title">➕ Add a season</h2>
+      <div class="section-subtitle">An existing tournament, a 📦 saved season (a deleted tournament's stats), or — for a season before the bot — just its result.</div>
+    </div></div>
+    <form method="POST">{{ csrf('attach') }}
+      <div class="form-grid">
+        <div><label>Season number</label><input type="number" name="season_no" min="1" value="{{ next_no }}"></div>
+        <div><label>Name (optional)</label><input name="season_name" placeholder="IPL 2025"></div>
+        <div style="grid-column:span 2;"><label>Tournament</label>
+          <select name="tournament_id"><option value="">—</option>{% for t in attachable %}<option value="{{ t.id }}">{{ t.name }} · {{ t.status }}{% if t.league_name %} · {{ t.league_name }}{% endif %}</option>{% endfor %}</select></div>
+        <div style="grid-column:span 2;"><label>…or a saved season</label>
+          <select name="saved_id"><option value="">—</option>{% for s in saved %}<option value="{{ s.id }}">📦 {{ s.name }}</option>{% endfor %}</select></div>
+        <div><label>…or by hand: champion</label><input name="champion" placeholder="Champion team"></div>
+        <div><label>Runner-up</label><input name="runner_up" placeholder="Runner-up team"></div>
+      </div>
+      <div style="margin-top:.8rem;"><button class="action-btn accent-btn" style="width:auto;" type="submit">Add season</button></div>
+    </form>
+  </section>
+
+  {# ════════════════ Settings ════════════════ #}
+  <section class="section-card">
+    <details><summary class="section-title" style="cursor:pointer;">⚙️ Competition settings</summary>
+      <form method="POST" style="margin-top:.8rem;">{{ csrf('update_series') }}
+        <div class="form-grid">
+          <div><label>Name</label><input name="name" value="{{ series.name }}" required></div>
+          <div><label>Short name</label><input name="short_name" value="{{ series.short_name or '' }}"></div>
+          <div style="grid-column:span 2;"><label>Logo URL</label><input name="logo_url" value="{{ series.logo_url or '' }}"></div>
+          <div style="grid-column:1/-1;"><label>Description</label><input name="description" value="{{ series.description or '' }}"></div>
+          <div><label><input type="checkbox" name="is_active" value="on" {{ 'checked' if series.is_active }} style="width:auto;"> Shown in /seasons</label></div>
+        </div>
+        <div style="margin-top:.8rem;"><button class="action-btn accent-btn" style="width:auto;" type="submit">Save</button></div>
+      </form>
+      <form method="POST" style="margin-top:1.2rem;" class="ls-note">{{ csrf('delete_series') }}
+        🗑 Remove this competition and its season records (tournaments, leagues and auctions stay). Type <b>{{ series.name }}</b> to confirm:
+        <input name="confirm_name" autocomplete="off" style="max-width:240px;">
+        <button class="action-btn danger-btn" style="width:auto;" type="submit">Remove</button>
+      </form>
+    </details>
+  </section>
+</div>
+{% endblock %}

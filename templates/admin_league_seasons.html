@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}League Seasons{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_tournament.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='css/admin_league_seasons.css') }}">{% endblock %}
+{% block content %}
+<div class="tour-page">
+  <div class="hero-content">
+    <div class="hero-left">
+      <div class="trophy-badge">🏟</div>
+      <div class="hero-text">
+        <h1 class="hero-title" style="font-size:1.5rem;">League Seasons</h1>
+        <div class="hero-meta"><span class="meta-detail">Run a competition season after season, IPL-style — history, champions, and the next season by mega auction, mini auction or manual teams.</span></div>
+      </div>
+    </div>
+  </div>
+
+  <section class="section-card">
+    <div class="section-header"><div>
+      <h2 class="section-title">🏆 Competitions</h2>
+      <div class="section-subtitle">Each one keeps its own Season 1, 2, 3…</div>
+    </div></div>
+    {% if tiles %}
+    <div class="tour-card-grid">
+      {% for tile in tiles %}{% set s = tile.series %}
+      <div class="tour-tile">
+        <div class="tour-tile-head">
+          <div class="trophy-badge" style="width:42px;height:42px;font-size:1.15rem;">🏆</div>
+          <div style="min-width:0;flex:1;">
+            <div class="tour-tile-title">{{ s.name }}{% if s.short_name %} <span class="ls-muted">({{ s.short_name }})</span>{% endif %}</div>
+            <div class="tour-tile-meta">
+              <span>{{ tile.count }} season{{ '' if tile.count == 1 else 's' }}</span>
+              {% if tile.champion %}<span>•</span><span>Last champion: {{ tile.champion[1] }} ({{ tile.champion[0] }})</span>{% endif %}
+            </div>
+          </div>
+          {% if not s.is_active %}<span class="status-pill cancelled"><span class="dot">●</span>inactive</span>{% endif %}
+        </div>
+        {% if tile.current %}
+        <div class="ls-stage">{{ tile.current.stage.emoji }} {{ tile.current.title }} · {{ tile.current.stage.label }}{% if tile.current.stage.detail %}<small>{{ tile.current.stage.detail }}</small>{% endif %}</div>
+        {% else %}<div class="ls-muted">No seasons yet — add the first one.</div>{% endif %}
+        <div class="tour-tile-actions">
+          <a class="action-btn accent-btn" href="{{ url_for('admin_league_series', series_id=s.id) }}">Open</a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state">No competitions yet. Create one below — then add its seasons from your existing tournaments.</div>
+    {% endif %}
+  </section>
+
+  <section class="section-card">
+    <div class="section-header"><div>
+      <h2 class="section-title">➕ Create a competition</h2>
+      <div class="section-subtitle">e.g. “IPL” or “CMU Tournament”. Seasons are added on its page.</div>
+    </div></div>
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="create_series">
+      <div class="form-grid">
+        <div><label>Name</label><input name="name" required maxlength="120" placeholder="IPL"></div>
+        <div><label>Short name</label><input name="short_name" maxlength="30" placeholder="IPL"></div>
+        <div style="grid-column:1/-1;"><label>Description</label><input name="description" placeholder="Optional"></div>
+      </div>
+      <div style="margin-top:.8rem;"><button class="action-btn accent-btn" style="width:auto;" type="submit">Create</button></div>
+    </form>
+  </section>
+</div>
+{% endblock %}

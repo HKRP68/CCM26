@@ -5168,3 +5168,81 @@ class AuctionLeagueSave(Base):
     top_buy_lakh = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# LEAGUE SEASONS — a competition ("IPL") and its Season 1, 2, 3…
+# ══════════════════════════════════════════════════════════════════════
+
+
+class LeagueSeries(Base):
+    """A competition that runs season after season — "IPL", "CMU Tournament".
+
+    It owns nothing a season needs to play: the squads stay in a
+    ``ChallengeLeague``, the matches in a ``Tournament`` and the money in an
+    ``AuctionSeason``. This row and its ``LeagueSeason`` children are only the
+    thread through them, which is what ``services/league_season_service.py``
+    and the website's 🏟 League Seasons pages walk.
+    """
+    __tablename__ = "league_series"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(120), nullable=False, unique=True)
+    short_name = Column(String(30), nullable=True)
+    description = Column(Text, nullable=True)
+    logo_url = Column(String(500), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    sort_order = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # The cascade is the ORM's, not the database's: SQLite runs here without
+    # foreign-key enforcement, so ``ondelete`` alone would leave orphans.
+    seasons = relationship("LeagueSeason", back_populates="series",
+                           cascade="all, delete-orphan",
+                           order_by="LeagueSeason.season_no")
+
+
+class LeagueSeason(Base):
+    """One season of a ``LeagueSeries`` — the links, never a copy.
+
+    ``league_id`` is where the squads are, ``auction_season_id`` the auction
+    that made them (mini or mega), ``tournament_id`` the matches. They are
+    plain ids rather than foreign keys, for the reason ``StatsSeason`` gives
+    and one more: SQLite (tests, small installs) neither enforces SET NULL nor
+    promises not to reuse a deleted row's id, so every delete path that could
+    strand one clears it explicitly (``league_season_service.forget_*``) and
+    every reader treats a missing row as unlinked.
+
+    The stage is never stored — ``league_season_service.season_stage`` reads
+    it off the auction and the tournament each time. ``honours_json`` is the
+    one thing copied in, because a deleted tournament takes its final with it.
+    """
+    __tablename__ = "league_seasons"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    series_id = Column(Integer, ForeignKey("league_series.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    season_no = Column(Integer, nullable=False)
+    name = Column(String(120), nullable=True)
+    # mega | mini | manual | existing — how this season's squads were made.
+    squad_mode = Column(String(12), default="existing", nullable=False)
+    league_id = Column(Integer, nullable=True, index=True)
+    auction_season_id = Column(Integer, nullable=True, index=True)
+    tournament_id = Column(Integer, nullable=True, index=True)
+    # The saved season (``StatsSeason``) its tournament became when deleted
+    # with its stats kept.
+    stats_season_id = Column(Integer, nullable=True, index=True)
+    # {"champion": {"team": …}, "runner_up": …, "orange_cap": {"player", "team",
+    #  "value"}, "purple_cap": …, "mvp": …} — see refresh_honours.
+    honours_json = Column(Text, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    series = relationship("LeagueSeries", back_populates="seasons")
+
+    __table_args__ = (
+        Index("ix_league_season_number", "series_id", "season_no", unique=True),
+    )

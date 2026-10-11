@@ -16468,6 +16468,8 @@ def admin_challenge_data():
                         flash(f"Removed image for {league.name}.", "info")
                     else:
                         name = league.name
+                        from services import league_season_service as _ls
+                        _ls.forget_league(db, league.id)
                         db.delete(league)
                         log_admin(db, "challenge_league_delete", "challenge_league", league.id, name)
                         flash(f"Removed league {name}.", "info")
@@ -24048,6 +24050,8 @@ def admin_auctions_list():
                               "error")
                         return redirect(url_for("admin_auctions_list"))
                     name = season.name
+                    from services import league_season_service as _ls
+                    _ls.forget_auction(db, season.id)
                     db.delete(season)
                     log_admin(db, "auction_delete", "auction", season.id, name)
                     db.commit()
@@ -25799,6 +25803,450 @@ def admin_conditions_reset(key):
     _cond_reload()
     flash(f"Reset {key} to the shipped defaults (the old version is in History).", "info")
     return redirect(url_for("admin_conditions"))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 🏟 LEAGUE SEASONS — a competition and its Season 1, 2, 3… (IPL-style)
+# services/league_season_service.py does the work; these pages drive it.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _crore(lakh):
+    """Lakh as a crore figure for a form field — 1050 → "10.5"."""
+    value = (int(lakh or 0)) / 100.0
+    return f"{value:g}"
+
+
+def _league_series_or_redirect(db, series_id):
+    from services import league_season_service as ls
+    series = ls.get_series(db, series_id)
+    if series is None:
+        flash("Competition not found.", "error")
+    return series
+
+
+@app.route("/league-seasons", methods=["GET", "POST"])
+@login_required
+def admin_league_seasons():
+    """Every competition, and making a new one."""
+    from services import league_season_service as ls
+    db = get_session()
+    try:
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            try:
+                if action == "create_series":
+                    series = ls.create_series(
+                        db, request.form.get("name"),
+                        short_name=request.form.get("short_name"),
+                        description=request.form.get("description"))
+                    log_admin(db, "league_series_create", "league_series",
+                              series.id, series.name)
+                    db.commit()
+                    flash(f"🏟 “{series.name}” created. Add its seasons next.",
+                          "success")
+                    return redirect(url_for("admin_league_series",
+                                            series_id=series.id))
+                flash("Unknown action.", "error")
+            except ls.LeagueSeasonError as exc:
+                db.rollback()
+                flash(f"⚠️ {exc}", "error")
+            except Exception as exc:
+                db.rollback()
+                logger.exception("league seasons action failed")
+                flash(f"Error: {exc}", "error")
+            return redirect(url_for("admin_league_seasons"))
+
+        tiles = []
+        changed = False
+        for series in ls.series_list(db):
+            changed = ls.sync_series(db, series) or changed
+            rows = ls.overview(db, series)
+            champion = next(((r["title"], r["honours"]["champion"]["team"])
+                             for r in rows if (r["honours"].get("champion") or {}).get("team")),
+                            None)
+            tiles.append({"series": series, "count": len(rows),
+                          "current": rows[0] if rows else None,
+                          "champion": champion})
+        if changed:
+            db.commit()
+        return render_template("admin_league_seasons.html", tiles=tiles)
+    finally:
+        db.close()
+
+
+def _league_series_post(db, ls, series, action):
+    """One POST on a competition's page. Returns a redirect or None."""
+    season = None
+    if request.form.get("season_id"):
+        season = ls.get_season(db, series, request.form.get("season_id"))
+        if season is None:
+            raise ls.LeagueSeasonError("That season is not part of this competition.")
+
+    if action == "update_series":
+        ls.update_series(db, series, name=request.form.get("name") or "",
+                         short_name=request.form.get("short_name") or "",
+                         description=request.form.get("description") or "",
+                         logo_url=request.form.get("logo_url") or "",
+                         is_active=request.form.get("is_active") == "on")
+        log_admin(db, "league_series_update", "league_series", series.id, series.name)
+        flash("✅ Saved.", "success")
+    elif action == "delete_series":
+        typed = (request.form.get("confirm_name") or "").strip().lower()
+        if typed != (series.name or "").strip().lower():
+            flash("⚠️ Type the competition's name exactly to delete it.", "error")
+            return None
+        name = series.name
+        db.delete(series)
+        log_admin(db, "league_series_delete", "league_series", series.id, name)
+        db.commit()
+        flash(f"🗑 “{name}” removed. Its tournaments, leagues and auctions are "
+              f"untouched.", "success")
+        return redirect(url_for("admin_league_seasons"))
+    elif action == "attach":
+        tour = (db.get(Tournament, _int_form("tournament_id"))
+                if _int_form("tournament_id") else None)
+        saved = None
+        if not tour and _int_form("saved_id"):
+            from models import StatsSeason
+            saved = db.get(StatsSeason, _int_form("saved_id"))
+        added = ls.attach_season(db, series,
+                                 season_no=_int_form("season_no") or None,
+                                 tournament=tour, saved=saved,
+                                 name=request.form.get("season_name"),
+                                 champion=request.form.get("champion"),
+                                 runner_up=request.form.get("runner_up"))
+        log_admin(db, "league_season_attach", "league_series", series.id,
+                  f"{series.name} {ls.season_title(added)}")
+        flash(f"✅ {ls.season_title(added)} added to {series.name}.", "success")
+    elif action == "edit_season" and season is not None:
+        ls.update_season(db, season, name=request.form.get("season_name") or "",
+                         champion=request.form.get("champion"),
+                         runner_up=request.form.get("runner_up"),
+                         notes=request.form.get("notes") or "")
+        flash(f"✅ {ls.season_title(season)} saved.", "success")
+    elif action == "detach" and season is not None:
+        title = ls.season_title(season)
+        ls.detach_season(db, season)
+        log_admin(db, "league_season_detach", "league_series", series.id,
+                  f"{series.name} {title}")
+        flash(f"{title} removed from {series.name} — its tournament, league "
+              f"and auction are untouched.", "info")
+    elif action == "start_mega":
+        new, auction = ls.start_mega_auction(
+            db, series, purse_lakh=_money_form("purse"),
+            keep_max=_int_form("keep_max", ls.DEFAULT_MEGA_KEEPS),
+            rtm=_checked("rtm", True), deadline=_dt_form("deadline"),
+            name=request.form.get("auction_name"),
+            by_tg_id=None)
+        log_admin(db, "league_season_mega", "auction", auction.id, auction.name)
+        db.commit()
+        flash(f"🔨 {ls.season_title(new)}: “{auction.name}” is set up as a mega "
+              f"auction. Owners keep up to {auction.max_retentions} — then build "
+              f"the pool and start it in the group.", "success")
+        return None
+    elif action == "start_mini":
+        new, auction, report = ls.start_mini_auction(
+            db, series, purse_lakh=_money_form("purse"),
+            deadline=_dt_form("deadline"),
+            name=request.form.get("auction_name"), by_tg_id=None)
+        log_admin(db, "league_season_mini", "auction", auction.id, auction.name)
+        db.commit()
+        kept = sum(f["kept"] for f in report["franchises"])
+        flash(f"🔁 {ls.season_title(new)}: every squad carried over — {kept} "
+              f"players kept at last season's price, {report['pooled']} in the "
+              f"pool. Release players on the release board (owners can use "
+              f"/arelease).", "success")
+        refused = [f"{name} ({reason})" for f in report["franchises"]
+                   for name, reason in f["refused"]]
+        if refused:
+            flash("⚠️ Not carried, now in the pool: " + "; ".join(refused[:8])
+                  + (f" …and {len(refused) - 8} more." if len(refused) > 8 else ""),
+                  "error")
+        return redirect(url_for("admin_league_season_release",
+                                series_id=series.id, season_id=new.id))
+    elif action == "publish" and season is not None:
+        league = ls.publish_season_squads(db, season)
+        log_admin(db, "league_season_publish", "challenge_league", league.id,
+                  league.name)
+        flash(f"📤 Squads published to “{league.name}”. Next: create the "
+              f"tournament.", "success")
+    elif action == "create_tournament" and season is not None:
+        tour, message = ls.create_season_tournament(
+            db, season, name=request.form.get("tournament_name"),
+            activate=_checked("activate"), hand_over=_checked("hand_over", True))
+        log_admin(db, "league_season_tournament", "tournament", tour.id, tour.name)
+        db.commit()
+        flash(f"🏟 “{tour.name}” created — {message}", "success")
+        return None
+    elif action == "link_tournament" and season is not None:
+        tour = db.get(Tournament, _int_form("tournament_id"))
+        if tour is None or tour.league_id != season.league_id:
+            raise ls.LeagueSeasonError("Pick one of this season's tournaments.")
+        if ls.season_for_tournament(db, tour.id) is not None:
+            raise ls.LeagueSeasonError(f"{tour.name} is already a season.")
+        season.tournament_id = tour.id
+        db.flush()
+        ls.link_season_stats(db, season)
+        flash(f"🔗 {tour.name} is {ls.season_title(season)}'s tournament.", "success")
+    elif action == "complete" and season is not None:
+        champion = ls.complete_season(db, season)
+        log_admin(db, "league_season_complete", "league_series", series.id,
+                  f"{series.name} {ls.season_title(season)}")
+        if champion:
+            flash(f"🏆 {ls.season_title(season)} completed — "
+                  f"{champion.get('team')} are champions.", "success")
+        else:
+            flash(f"{ls.season_title(season)} completed (no champion recorded "
+                  f"yet).", "info")
+    elif action == "relink_stats":
+        ls.relink_series_stats(db, series)
+        flash("🔗 Total Season Stats now spans every season.", "success")
+    else:
+        flash("Unknown action.", "error")
+    return None
+
+
+@app.route("/league-seasons/<int:series_id>", methods=["GET", "POST"])
+@login_required
+def admin_league_series(series_id):
+    """One competition: its seasons, the current one's next step, and the
+    turn of the season — 🔨 mega, 🔁 mini or ✍️ manual."""
+    from services import league_season_service as ls
+    from models import StatsSeason
+    db = get_session()
+    try:
+        series = _league_series_or_redirect(db, series_id)
+        if series is None:
+            return redirect(url_for("admin_league_seasons"))
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            try:
+                done = _league_series_post(db, ls, series, action)
+                if done is not None:
+                    return done
+                db.commit()
+            except (ls.LeagueSeasonError, auction_svc.AuctionError) as exc:
+                db.rollback()
+                flash(f"⚠️ {exc}", "error")
+            except ValueError as exc:
+                db.rollback()
+                flash(f"⚠️ {exc}", "error")
+            except Exception as exc:
+                db.rollback()
+                logger.exception("league series action failed")
+                flash(f"Error: {exc}", "error")
+            return redirect(url_for("admin_league_series", series_id=series_id))
+
+        if ls.sync_series(db, series):
+            db.commit()
+        rows = ls.overview(db, series)
+        current = rows[0] if rows else None
+        checklist, candidates, money = [], [], {}
+        if current is not None:
+            if current["auction"] is not None and current["league"] is None:
+                checklist = ls.auction_checklist(db, current["auction"])
+                sym = current["auction"].currency_label or "₹"
+                money = {f.id: (auction_svc.render_money(f.purse_remaining_lakh, sym),
+                                f.squad_size)
+                         for f in auction_svc.franchises(db, current["auction"].id)}
+            if current["league"] is not None and current["tournament"] is None:
+                taken = ls.attached_tournament_ids(db)
+                candidates = [t for t in ls.tournaments_on_league(
+                    db, current["league"].id) if t.id not in taken]
+        blocker, prev = ls.next_season_blocker(db, series)
+        taken = ls.attached_tournament_ids(db)
+        from services.tournament_service import KIND_CHALLENGE, kind_filter
+        attachable = (db.query(Tournament)
+                      .filter(kind_filter(KIND_CHALLENGE))
+                      .order_by(Tournament.created_at.desc()).all())
+        attachable = [t for t in attachable if t.id not in taken]
+        used_saved = {s.stats_season_id for s in ls.seasons(db, series)
+                      if s.stats_season_id}
+        from models import LeagueSeason
+        used_saved |= {r[0] for r in db.query(LeagueSeason.stats_season_id)
+                       .filter(LeagueSeason.stats_season_id.isnot(None)).all()}
+        saved = [s for s in db.query(StatsSeason)
+                 .order_by(StatsSeason.archived_at.desc()).all()
+                 if s.id not in used_saved]
+        leaders = {"runs": ls.all_time_leaders(db, series, "runs", limit=5),
+                   "wkts": ls.all_time_leaders(db, series, "wkts", limit=5)}
+        return render_template(
+            "admin_league_series.html", series=series, rows=rows,
+            current=current, checklist=checklist, candidates=candidates,
+            blocker=blocker, prev=prev, attachable=attachable, saved=saved,
+            next_no=ls.next_number(db, series),
+            mega_purse=_crore(ls.default_mega_purse(db, series)),
+            mini_purse=_crore(ls.default_mini_purse(db, series)),
+            keep_default=ls.DEFAULT_MEGA_KEEPS, leaders=leaders,
+            titles=ls.titles(db, series), money=money,
+            render_money=auction_svc.render_money)
+    finally:
+        db.close()
+
+
+@app.route("/league-seasons/<int:series_id>/seasons/<int:season_id>/release",
+           methods=["GET", "POST"])
+@login_required
+def admin_league_season_release(series_id, season_id):
+    """The release board — every franchise's kept squad, with a tick per
+    player to let him go back into the auction (his price back in the purse)."""
+    from services import league_season_service as ls
+    from models import AuctionLot
+    db = get_session()
+    try:
+        series = _league_series_or_redirect(db, series_id)
+        season = ls.get_season(db, series, season_id) if series else None
+        auction = ls.season_auction(db, season) if season else None
+        if auction is None:
+            flash("That season has no auction.", "error")
+            return redirect(url_for("admin_league_series", series_id=series_id)
+                            if series else url_for("admin_league_seasons"))
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            try:
+                if action == "release":
+                    ids = [int(x) for x in request.form.getlist("lot_ids")
+                           if str(x).isdigit()]
+                    released = []
+                    for lot in (db.query(AuctionLot)
+                                .filter(AuctionLot.season_id == auction.id,
+                                        AuctionLot.id.in_(ids or [0])).all()):
+                        franchise = db.get(AuctionFranchise, lot.sold_to_id)
+                        auction_svc.unretain(
+                            db, auction, franchise, lot,
+                            set_name=auction_svc.RELEASED_LAST_SEASON_SET)
+                        released.append(lot.name)
+                    log_admin(db, "league_season_release", "auction", auction.id,
+                              auction.name, ", ".join(released)[:300])
+                    flash(f"🔓 Released {len(released)}: " + ", ".join(released)
+                          if released else "Tick the players to release.",
+                          "success" if released else "info")
+                elif action == "close_window":
+                    auction_svc.lock_retention(db, auction)
+                    log_admin(db, "league_season_window_close", "auction",
+                              auction.id, auction.name)
+                    flash("🔒 The release window is closed. Build the rest of the "
+                          "pool on the auction page, then start it in the group.",
+                          "success")
+                elif action == "deadline":
+                    when = _dt_form("deadline")
+                    if when is not None and when <= datetime.utcnow():
+                        raise ls.LeagueSeasonError("The deadline has to be in the future.")
+                    auction.retention_deadline_at = when
+                    flash("⏰ Deadline saved." if when else "⏰ Deadline cleared.",
+                          "success")
+                else:
+                    flash("Unknown action.", "error")
+                db.commit()
+            except (ls.LeagueSeasonError, auction_svc.AuctionError) as exc:
+                db.rollback()
+                flash(f"⚠️ {exc}", "error")
+            except Exception as exc:
+                db.rollback()
+                logger.exception("release board action failed")
+                flash(f"Error: {exc}", "error")
+            return redirect(url_for("admin_league_season_release",
+                                    series_id=series_id, season_id=season_id))
+
+        sym = auction.currency_label or "₹"
+        teams = []
+        for franchise in auction_svc.franchises(db, auction.id):
+            kept = auction_svc.retained(db, franchise.id)
+            released = (db.query(AuctionLot)
+                        .filter(AuctionLot.season_id == auction.id,
+                                AuctionLot.previous_franchise_id == franchise.id,
+                                AuctionLot.status == auction_svc.LOT_QUEUED)
+                        .order_by(AuctionLot.rating.desc()).all())
+            teams.append({
+                "franchise": franchise, "kept": kept, "released": released,
+                "spent": auction_svc.retention_spent(db, franchise.id)})
+        left = auction_svc.retention_seconds_left(auction)
+        return render_template(
+            "admin_league_season_release.html", series=series, season=season,
+            auction=auction, teams=teams, sym=sym,
+            money=lambda lakh: auction_svc.render_money(lakh, sym),
+            window_open=auction_svc.retention_open(auction),
+            left_text=(ls._left_text(left) if left is not None else ""),
+            title=ls.season_title(season))
+    finally:
+        db.close()
+
+
+@app.route("/league-seasons/<int:series_id>/manual", methods=["GET", "POST"])
+@login_required
+def admin_league_season_manual(series_id):
+    """✍️ Next season by hand: last season's squads as Challenge Data text,
+    edited, then made into the new season's league."""
+    from services import league_season_service as ls
+    db = get_session()
+    try:
+        series = _league_series_or_redirect(db, series_id)
+        if series is None:
+            return redirect(url_for("admin_league_seasons"))
+        blocker, prev = ls.next_season_blocker(db, series)
+        prev_league = ls.season_league(db, prev) if prev is not None else None
+        next_no = (prev.season_no + 1) if prev is not None else 1
+        default_name = f"{series.name} · Season {next_no}"
+        if request.method == "POST":
+            text = request.form.get("teams_text") or ""
+            name = (request.form.get("league_name") or "").strip() or default_name
+            try:
+                if blocker:
+                    raise ls.LeagueSeasonError(blocker)
+                upload = request.files.get("teams_file")
+                if upload is not None and getattr(upload, "filename", ""):
+                    rows = _read_sheet(upload, None)
+                else:
+                    rows = [[line] for line in text.splitlines() if line.strip()]
+                if not rows:
+                    raise ls.LeagueSeasonError("Paste the squads first.")
+                parsed = [_split_import_row(r) for r in rows]
+                parsed = [r for r in parsed if any(r)]
+                start = 1
+                if parsed and "team" in parsed[0][0].lower() and "player" in parsed[0][1].lower():
+                    parsed, start = parsed[1:], 2
+                dupes = ls.duplicate_rows(list(enumerate(parsed, start=start)))
+                if dupes:
+                    raise ls.LeagueSeasonError(
+                        "A player can only be on one team: " + "; ".join(
+                            f"Row {n}: {m}" for n, m in dupes[:8]))
+                league = ls.new_season_league(db, series, prev_league, name)
+                made, added, errors = _import_challenge_teams(db, league, rows)
+                if not added:
+                    raise ls.LeagueSeasonError(
+                        "No player could be added — " + "; ".join(errors[:8]))
+                ls.copy_team_looks(db, prev_league, league)
+                season = ls.start_manual_season(db, series, league)
+                log_admin(db, "league_season_manual", "challenge_league",
+                          league.id, league.name,
+                          f"teams+{made} players+{added} !{len(errors)}")
+                db.commit()
+                flash(f"✍️ {ls.season_title(season)}: “{league.name}” made with "
+                      f"{made} teams and {added} players. Next: create the "
+                      f"tournament.", "success")
+                if errors:
+                    flash(f"⚠️ {len(errors)} row(s) skipped — "
+                          + "; ".join(errors[:8])
+                          + (f" …and {len(errors) - 8} more." if len(errors) > 8 else ""),
+                          "error")
+                return redirect(url_for("admin_league_series", series_id=series_id))
+            except (ls.LeagueSeasonError, ValueError) as exc:
+                db.rollback()
+                flash(f"⚠️ {exc}", "error")
+            except Exception as exc:
+                db.rollback()
+                logger.exception("manual season failed")
+                flash(f"Error: {exc}", "error")
+            return render_template("admin_league_season_manual.html", series=series,
+                                   prev=prev, blocker=blocker, text=text,
+                                   league_name=name, next_no=next_no,
+                                   title_of=ls.season_title)
+        return render_template(
+            "admin_league_season_manual.html", series=series, prev=prev,
+            blocker=blocker, text=ls.previous_squads_text(db, prev_league),
+            league_name=default_name, next_no=next_no, title_of=ls.season_title)
+    finally:
+        db.close()
 
 
 # ── Run ──────────────────────────────────────────────────────────────
