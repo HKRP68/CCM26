@@ -26,6 +26,7 @@ Command surface
 ---------------
   /atrade <franchise>      open a trade with another franchise (owner/co-owner)
   /atrades                 the trade log and the open offers
+  /atradehelp              the full guide and every command
   /atradecash <amount>     set the cash on your open offer (negative = they pay)
   /atradecancel            call off your open offer (or reject one made to you)
   /atradeblock [add|remove <player> [| note]]   the trade block
@@ -81,7 +82,9 @@ def builder_keyboard(session, season, trade, side="a", page=0):
     page = max(0, min(int(page or 0), pages - 1))
     rows, line = [], []
     for lot in squad[page * T.SQUAD_PAGE_SIZE:(page + 1) * T.SQUAD_PAGE_SIZE]:
-        mark = "☑️ " if lot.id in chosen else ""
+        # Seen from the side making the offer: a ticked player on its own
+        # squad is going 📤 out, one on the other squad is coming 📥 in.
+        mark = ("📤 " if side == "a" else "📥 ") if lot.id in chosen else ""
         line.append(InlineKeyboardButton(
             f"{mark}{_short(lot.name)} {lot.rating}",
             callback_data=f"{CB}t_{trade.id}_{lot.id}_{side}_{page}"))
@@ -101,9 +104,11 @@ def builder_keyboard(session, season, trade, side="a", page=0):
     team_a = T.team_on(session, trade, "a")
     team_b = T.team_on(session, trade, "b")
     rows.append([
-        InlineKeyboardButton(("👉 " if side == "a" else "") + f"📤 {_short(team_a.name, 12)} give",
+        InlineKeyboardButton(("👉 " if side == "a" else "")
+                             + f"📤 Trade out · {_short(team_a.name, 10)}",
                              callback_data=f"{CB}v_{trade.id}_a_0"),
-        InlineKeyboardButton(("👉 " if side == "b" else "") + f"📥 {_short(team_b.name, 12)} give",
+        InlineKeyboardButton(("👉 " if side == "b" else "")
+                             + f"📥 Trade in · {_short(team_b.name, 10)}",
                              callback_data=f"{CB}v_{trade.id}_b_0"),
     ])
     rules = T.trade_rules(season)
@@ -122,7 +127,7 @@ def builder_keyboard(session, season, trade, side="a", page=0):
                 callback_data=f"{CB}c_{trade.id}_{step}_{side}_{page}")
                for step in CASH_STEPS[2:]])
     rows.append([
-        InlineKeyboardButton("📤 Send offer", callback_data=f"{CB}s_{trade.id}"),
+        InlineKeyboardButton("✅ Send offer", callback_data=f"{CB}s_{trade.id}"),
         InlineKeyboardButton("✖️ Cancel", callback_data=f"{CB}x_{trade.id}"),
     ])
     return InlineKeyboardMarkup(rows)
@@ -228,7 +233,8 @@ def _usage(session, season, mine):
              "Pick players on <b>both</b> squads, add cash if you like, and "
              "send it. The side taking a player pays his auction price; the "
              "side letting him go gets it back.", "",
-             "Franchises: " + ", ".join(html.escape(f.name) for f in others)]
+             "Franchises: " + ", ".join(html.escape(f.name) for f in others),
+             "", "📖 Full guide and every command: /atradehelp"]
     return "\n".join(lines)
 
 
@@ -252,6 +258,33 @@ async def atrade_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return (T.render_offer(session, season, trade),
                 builder_keyboard(session, season, trade, "a", 0))
     await _run(update, work)
+
+
+async def atradehelp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """<code>/atradehelp</code> — the full trade guide and every command.
+
+    Answers anywhere: with this chat's auction (or, in a DM, yours) it reads
+    out that auction's own window and numbers; without one, the defaults.
+    """
+    from services import auction_rich as AR
+    user = update.effective_user
+    session = get_session()
+    try:
+        try:
+            season = _read_season(session, update)
+        except Exception:
+            season = None
+        parts = T.render_help(session, season)
+    except Exception:
+        logger.exception("atradehelp failed")
+        parts = T.render_help()
+    finally:
+        session.close()
+    for index, part in enumerate(parts):
+        last = index == len(parts) - 1
+        await _reply(update, part,
+                     reply_markup=(AR.with_close(None, user.id if user else None)
+                                   if last else None))
 
 
 async def atrades_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

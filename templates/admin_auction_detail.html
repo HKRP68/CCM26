@@ -1429,8 +1429,8 @@
       {% for t in tr.pending %}
         <tr>
           <td>{{ t.id }}</td>
-          <td><b>{{ t.a }}</b> send {{ t.a_names|join(", ") or "—" }}<br>
-              <b>{{ t.b }}</b> send {{ t.b_names|join(", ") or "—" }}</td>
+          <td><b>{{ t.a }}</b> 📤 {{ t.a_names|join(", ") or "—" }} · 📥 {{ t.b_names|join(", ") or "—" }}<br>
+              <b>{{ t.b }}</b> 📤 {{ t.b_names|join(", ") or "—" }} · 📥 {{ t.a_names|join(", ") or "—" }}</td>
           <td>{{ t.cash or "—" }}</td>
           <td class="dim">{{ t.verdict }}</td>
           <td>
@@ -1462,7 +1462,7 @@
       {% for t in tr.live %}
         <tr>
           <td>{{ t.id }}</td>
-          <td><b>{{ t.a }}</b> → <b>{{ t.b }}</b>: {{ t.a_names|join(", ") or "—" }} ⇄ {{ t.b_names|join(", ") or "—" }}{% if t.cash %} · {{ t.cash }}{% endif %}</td>
+          <td><b>{{ t.a }}</b> → <b>{{ t.b }}</b>: {{ t.a }} 📤 {{ t.a_names|join(", ") or "—" }} · 📥 {{ t.b_names|join(", ") or "—" }}{% if t.cash %} · {{ t.cash }}{% endif %}</td>
           <td>{{ t.status_label }}</td>
           <td>
             <form method="POST" action="{{ url_for('admin_auction_trades', season_id=season.id) }}">
@@ -1510,9 +1510,9 @@
       <input type="hidden" name="action" value="trade_force">
       <div style="display:flex;gap:.6rem 1rem;flex-wrap:wrap;align-items:end;">
         <label>Team A <select name="team_a">{% for f in field %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}</select></label>
-        <label>A sends <input type="text" name="lots_a" placeholder="Kohli, 67" style="width:11rem;"></label>
+        <label>📤 A trades out <input type="text" name="lots_a" placeholder="Kohli, 67" style="width:11rem;"></label>
         <label>Team B <select name="team_b">{% for f in field %}<option value="{{ f.id }}" {{ 'selected' if loop.index == 2 }}>{{ f.name }}</option>{% endfor %}</select></label>
-        <label>B sends <input type="text" name="lots_b" placeholder="Bumrah" style="width:11rem;"></label>
+        <label>📤 B trades out <input type="text" name="lots_b" placeholder="Bumrah" style="width:11rem;"></label>
         <label>Cash (Cr) <input type="text" name="cash_cr" style="width:5rem;"></label>
         <label><select name="cash_dir"><option value="a">A pays B</option><option value="b">B pays A</option></select></label>
         <label>Note <input type="text" name="note" style="width:10rem;"></label>
@@ -1530,7 +1530,7 @@
           <td>{{ t.id }}</td>
           <td class="dim">{{ t.when.strftime('%d %b %H:%M') if t.when else '' }}</td>
           <td>{{ t.phase }}{% if t.by_admin %} · admin{% endif %}</td>
-          <td><b>{{ t.a }}</b> send {{ t.a_names|join(", ") or "—" }} ⇄ <b>{{ t.b }}</b> send {{ t.b_names|join(", ") or "—" }}
+          <td><b>{{ t.a }}</b> 📤 {{ t.a_names|join(", ") or "—" }} · 📥 {{ t.b_names|join(", ") or "—" }}
               <div class="dim">{{ t.verdict }}</div></td>
           <td>{{ t.cash or "—" }}</td>
           <td>{% if t.status == 'completed' %}

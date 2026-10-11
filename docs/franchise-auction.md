@@ -1903,6 +1903,10 @@ card** (two editions of one player can share a name).
 
 ### The trade block and the fairness line
 
+Every card shows each franchise's **📤 Trade out** (players leaving) and
+**📥 Trade in** (players arriving); the builder's two tabs and the ticks on
+its buttons use the same two marks.
+
 `/atradeblock add <player> | note` lists a player as open to offers; a trade
 takes him off it. Every offer card prints both purses before → after and a
 verdict — "⚖️ An even trade on talent" or "📈 Favours Mumbai on talent ·
@@ -1913,8 +1917,9 @@ just never quiet.
 
 | Command | Who | What |
 | --- | --- | --- |
-| `/atrade <team>` (`.trade`) | owner + co-owners | Open a trade card — tick players on both squads, ± cash, 📤 Send |
+| `/atrade <team>` (`.trade`) | owner + co-owners | Open a trade card — tick your 📤 Trade out and their 📥 Trade in, ± cash, ✅ Send |
 | `/atrades` (`/atradelog`) | anyone | The log and the open offers |
+| `/atradehelp` (`/tradehelp`, `.tradehelp`) | anyone | The full guide and every trade command, with this auction's own numbers |
 | `/atradecash <amount>` | owner | Cash on your offer; negative = they pay |
 | `/atradecancel` | owner | Call off your offer, or reject one made to you |
 | `/atradeblock [add\|remove …]` | anyone / owner | The trade block |

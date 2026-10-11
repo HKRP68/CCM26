@@ -97,6 +97,7 @@ AUCTION_COMMANDS = frozenset({
     "atrade", "atrades", "atradelog", "atradecash", "atradecancel",
     "atradeblock", "atblock", "atraderules", "atradewindow",
     "atradedeadline", "atradeapprove", "atradeveto", "atradeundo",
+    "atradehelp", "tradehelp",
 })
 
 # Commands that work in the auction group whatever the auction is doing. The

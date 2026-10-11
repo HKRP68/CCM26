@@ -3071,6 +3071,7 @@ DOT_COMMANDS = {
     "sold": "sold", "unsold": "unsold",
     "next": "nextplayer",
     "trade": "trade", "trades": "trades", "tradeblock": "tradeblock",
+    "tradehelp": "tradehelp",
 }
 
 
@@ -3083,11 +3084,12 @@ def _dot_target(name):
         "unsold": aunsoldlist_handler, "nextplayer": anextplayer_handler,
     }
     key = DOT_COMMANDS.get(name)
-    if key in ("trade", "trades", "tradeblock"):
+    if key in ("trade", "trades", "tradeblock", "tradehelp"):
         # Imported here: handlers.auction_trade builds on this module.
         from handlers import auction_trade as AT
         return {"trade": AT.atrade_handler, "trades": AT.atrades_handler,
-                "tradeblock": AT.atradeblock_handler}[key]
+                "tradeblock": AT.atradeblock_handler,
+                "tradehelp": AT.atradehelp_handler}[key]
     return handlers.get(key)
 
 

@@ -2583,10 +2583,12 @@ def main():
             atradecancel_handler, atradeblock_handler, atraderules_handler,
             atradewindow_handler, atradedeadline_handler,
             atradeapprove_handler, atradeveto_handler, atradeundo_handler,
-            trade_callback as auction_trade_callback,
+            atradehelp_handler, trade_callback as auction_trade_callback,
         )
         app.add_handler(CommandHandler("atrade", atrade_handler))
         app.add_handler(CommandHandler(["atrades", "atradelog"], atrades_handler))
+        app.add_handler(CommandHandler(["atradehelp", "tradehelp"],
+                                       atradehelp_handler))
         app.add_handler(CommandHandler("atradecash", atradecash_handler))
         app.add_handler(CommandHandler("atradecancel", atradecancel_handler))
         app.add_handler(CommandHandler(["atradeblock", "atblock"],

@@ -690,14 +690,17 @@ def user_guide():
              "The trade log; the players franchises will listen to offers for."],
             ["/atradecash · /atradecancel", "owner + co-owners",
              "Set the cash on your offer; call it off."],
+            ["/atradehelp", "anyone",
+             "The full trade guide and every trade command."],
         ], widths=[38 * mm, 30 * mm, None]),
         p("If you forget all of it: " + C("/ainfo") + " puts every one of those "
           "behind a button.", "callout"),
 
         h1("11a. Trades"),
         bullets([
-            C("/atrade Chennai") + " opens a trade card. Tick players on "
-            + B("both") + " squads, add cash with the ± buttons, then 📤 Send. "
+            C("/atrade Chennai") + " opens a trade card. Tick your "
+            + B("📤 Trade out") + " and their " + B("📥 Trade in") + ", add "
+            "cash with the ± buttons, then ✅ Send. "
             "The other franchise taps ✅ Accept, ❌ Reject or 🔁 Counter.",
             B("The money is the IPL's:") + " the side taking a player pays his "
             "auction price, the side letting him go gets it back, and any cash "
@@ -1261,7 +1264,8 @@ def admin_guide():
             ["Right To Match", "/artmset · /artmcards · /artmforce · /artmundo"],
             ["Expansion picks", "/apick · /apickset · /apickskip · /apickundo"],
             ["Teams", "/acall · /aremoveteam"],
-            ["Trades", "/atradewindow · /atraderules · /atradedeadline"],
+            ["Trades", "/atradewindow · /atraderules · /atradedeadline · "
+                       "/atradehelp"],
             ["The end", "/apublish · /aclone · /acancel"],
             ["Bot admins only", "/aadminadd · /aadminremove · /aadmins · "
                                 "/atradeapprove · /atradeveto · /atradeundo"],

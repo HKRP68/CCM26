@@ -1851,7 +1851,7 @@ def info_menu(session, season, franchise=None):
     except Exception:
         logger.exception("ainfo: trade window line failed (non-fatal)")
     commands = ("/arules · /asets · /anextset · /anextplayer · /asquad · "
-                "/apurse · /asoldlist · /aunsoldlist · /atrades")
+                "/apurse · /asoldlist · /aunsoldlist · /atrades · /atradehelp")
     blocks.append(R.footer(["Or type: ", R.code(commands)]))
     lines.append(f"\n<i>Or type:</i> <code>{commands}</code>")
     return blocks, "\n".join(lines)
@@ -2008,6 +2008,7 @@ ADMIN_SECTIONS = (
                                       "cash, players per side, limits"),
         ("/atradedeadline <12 | 48h | date | off>", "The mid-season deadline "
                                                     "(the playoffs always close it)"),
+        ("/atradehelp", "The full trade guide and every trade command"),
     )),
     ("🏁 The end", (
         ("/apublish", "Publish squads as a Challenge League"),
@@ -2044,6 +2045,7 @@ PLAYER_SECTION = ("👥 For owners & everyone", (
     ("/aboard", "The live board with quick-bid buttons"),
     ("/atrade <team>", "🔁 Trade — players, cash or both, IPL rules"),
     ("/atrades · /atradeblock", "The trade log; who is up for offers"),
+    ("/atradehelp", "📖 How trades work, and every trade command"),
 ))
 
 

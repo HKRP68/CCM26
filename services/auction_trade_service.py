@@ -1478,11 +1478,29 @@ def lot_line(season, lot, *, ticked=None):
             f"{_money(season, lot_price(lot))}")
 
 
-def _side_block(season, team, lots):
-    if not lots:
-        return f"<b>{_e(team.name)}</b> send: <i>no players</i>"
-    lines = [f"<b>{_e(team.name)}</b> send:"]
-    lines += [f"  • {lot_line(season, lot)}" for lot in lots]
+def _snap_line(season, row):
+    """``lot_line`` for a snapshot row — a finished trade reads like a live one."""
+    flag = " ✈️" if row.get("overseas") else ""
+    role = ROLE_SHORT.get(row.get("category"), (row.get("category") or "")[:4].upper())
+    return (f"{_e(row.get('name'))} — {role} {int(row.get('rating') or 0)}{flag} · "
+            f"{_money(season, row.get('price'))}")
+
+
+TRADE_OUT = "📤 Trade out"
+TRADE_IN = "📥 Trade in"
+
+
+def _team_block(team, out_lines, in_lines):
+    """One franchise's half of a trade: 📤 what leaves, 📥 what arrives."""
+    lines = [f"🏏 <b>{_e(team.name)}</b>"]
+    for label, rows in ((TRADE_OUT, out_lines), (TRADE_IN, in_lines)):
+        if not rows:
+            lines.append(f"  {label}: —")
+        elif len(rows) == 1:
+            lines.append(f"  {label}: {rows[0]}")
+        else:
+            lines.append(f"  {label}:")
+            lines += [f"     • {row}" for row in rows]
     return "\n".join(lines)
 
 
@@ -1515,8 +1533,10 @@ def render_offer(session, season, trade, *, viewer_side=None):
              f"{PHASE_LABEL.get(trade.phase, 'Trade')} window"]
     if trade.parent_trade_id:
         lines.append(f"<i>A counter-offer to trade #{trade.parent_trade_id}</i>")
-    lines += ["", _side_block(season, team_a, a_lots), "",
-              _side_block(season, team_b, b_lots), "",
+    a_rows = [lot_line(season, lot) for lot in a_lots]
+    b_rows = [lot_line(season, lot) for lot in b_lots]
+    lines += ["", _team_block(team_a, a_rows, b_rows), "",
+              _team_block(team_b, b_rows, a_rows), "",
               _cash_line(season, trade, team_a, team_b)]
     if trade.status in LIVE_STATUSES:
         lines += _purse_lines(session, season, trade, team_a, team_b)
@@ -1527,7 +1547,8 @@ def render_offer(session, season, trade, *, viewer_side=None):
     lines.append("")
     if trade.status == STATUS_BUILDING:
         lines.append(f"✏️ <b>{_e(team_a.name)}</b> is building this offer — tick "
-                     f"players on either squad, set the cash, then 📤 Send.")
+                     f"{TRADE_OUT} on your squad and {TRADE_IN} on theirs, set the "
+                     f"cash, then ✅ Send.")
     elif trade.status == STATUS_OFFERED:
         lines.append(f"⏳ Waiting for <b>{_e(team_b.name)}</b> — ✅ Accept, "
                      f"❌ Reject or 🔁 Counter.")
@@ -1556,9 +1577,10 @@ def trade_headline(session, season, trade):
 
     def names(rows):
         return ", ".join(_e(r["name"]) for r in rows) or "cash"
-    text = (f"🔁 <b>TRADE</b> — {_e(team_a.name)} get "
-            f"{names(snap.get('b', []))}; {_e(team_b.name)} get "
-            f"{names(snap.get('a', []))}.")
+    text = (f"🔁 <b>TRADE</b> — {_e(team_a.name)} 📥 "
+            f"{names(snap.get('b', []))} 📤 {names(snap.get('a', []))}; "
+            f"{_e(team_b.name)} 📥 {names(snap.get('a', []))} 📤 "
+            f"{names(snap.get('b', []))}.")
     return text[:300]
 
 
@@ -1585,22 +1607,13 @@ def render_done(session, season, trade):
         return ("⏳ <b>TRADE AGREED</b> — waiting for the bot admin\n\n"
                 + render_offer(session, season, trade))
 
-    def block(team, rows):
-        if not rows:
-            return f"<b>{_e(team.name)}</b> receive: <i>no players</i>"
-        out = [f"<b>{_e(team.name)}</b> receive:"]
-        for r in rows:
-            role = ROLE_SHORT.get(r.get("category"), (r.get("category") or "")[:4].upper())
-            out.append(f"  ➕ {_e(r['name'])} — {role} {r['rating']}"
-                       f"{' ✈️' if r.get('overseas') else ''} · "
-                       f"{_money(season, r['price'])}")
-        return "\n".join(out)
-
+    a_rows = [_snap_line(season, r) for r in snap.get("a", [])]
+    b_rows = [_snap_line(season, r) for r in snap.get("b", [])]
     lines = [f"🔁 <b>TRADE COMPLETED</b> #{trade.id} · "
              f"{PHASE_LABEL.get(trade.phase, 'Trade')} window"
              + (" · by the bot admin" if trade.by_admin else ""),
-             "", block(team_a, snap.get("b", [])), "",
-             block(team_b, snap.get("a", [])), ""]
+             "", _team_block(team_a, a_rows, b_rows), "",
+             _team_block(team_b, b_rows, a_rows), ""]
     cash = int(snap.get("cash") or 0)
     if cash:
         payer, payee = (team_a, team_b) if cash > 0 else (team_b, team_a)
@@ -1653,8 +1666,8 @@ def _log_line(session, season, trade):
     mark = " ↩️ undone" if trade.status == STATUS_REVERSED else ""
     when = trade.completed_at.strftime("%d %b") if trade.completed_at else ""
     return (f"#{trade.id} {when} · {PHASE_LABEL.get(trade.phase, '')}: "
-            f"<b>{_e(a.name)}</b> send {a_names} ⇄ <b>{_e(b.name)}</b> send "
-            f"{b_names}{tail}{mark}")
+            f"<b>{_e(a.name)}</b> 📤 {a_names} · 📥 {b_names} ⇄ "
+            f"<b>{_e(b.name)}</b> 📤 {b_names} · 📥 {a_names}{tail}{mark}")
 
 
 def render_block(session, season):
@@ -1711,3 +1724,161 @@ def render_rules(session, season):
               "window, and the squad limit, overseas cap, role and rating "
               "rules all still apply."]
     return "\n".join(lines)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# /atradehelp — the full guide and every command
+# ──────────────────────────────────────────────────────────────────────
+
+HELP_LIMIT = 3900   # under Telegram's 4096, with room for a tag
+
+
+def render_help(session=None, season=None):
+    """The whole trade guide as HTML parts, each one message long.
+
+    With an auction in hand it opens with that auction's own window and
+    numbers; without one it explains the defaults.
+    """
+    rules = trade_rules(season) if season is not None else dict(DEFAULT_RULES)
+    per_side = rules["max_players_per_side"]
+    cap = rules["max_trades_per_team"]
+    cash_cap = rules["max_cash_lakh"]
+    sym = (getattr(season, "currency_label", None) or "₹") if season else "₹"
+
+    def money(lakh):
+        return A.render_money(lakh, sym)
+
+    head = ["🔁 <b>TRADE GUIDE</b> — IPL-style trades between franchises"]
+    if season is not None and session is not None:
+        head += [f"<i>{_e(season.name)}</i>", window_line(session, season)]
+    head.append("<i>Commands are at the end — /atradehelp any time.</i>")
+
+    sections = [
+        "\n".join(head),
+
+        "🔁 <b>1. What a trade is</b>\n"
+        "Two franchises swap players, cash, or both. Each side can put in up "
+        f"to <b>{per_side}</b> player{'s' if per_side != 1 else ''}, and one side "
+        "may put in none (an all-cash deal). Every trade card shows each "
+        f"franchise's {TRADE_OUT} (players leaving) and {TRADE_IN} (players "
+        "arriving).",
+
+        "💰 <b>2. The money — the IPL rule</b>\n"
+        "• <b>The price travels with the player.</b> The team that takes a "
+        "player pays his auction price; the team that lets him go gets it "
+        "back.\n"
+        "• <b>Cash moves on top</b>, either way"
+        + ("" if rules["allow_cash"] else " — <i>switched off in this auction</i>")
+        + (f" (at most {money(cash_cap)} a trade)" if cash_cap else "") + ".\n"
+        "<b>Example</b> — Mumbai 📤 Kohli (bought for ₹12 Cr), 📥 Bumrah "
+        "(bought for ₹9 Cr):\n"
+        "  Mumbai: +₹12 Cr − ₹9 Cr = <b>+₹3 Cr</b>\n"
+        "  Chennai: −₹12 Cr + ₹9 Cr = <b>−₹3 Cr</b>\n"
+        "Add ₹1 Cr cash from Mumbai and it is +₹2 Cr / −₹2 Cr.\n"
+        "<b>Three shapes</b>: swap (players both ways) · all-cash (a player for "
+        "his price) · player + cash (a swap with a fee on top).",
+
+        "🪟 <b>3. The four windows</b>\n"
+        f"• <b>Pre-auction</b> — retained and picked players "
+        f"{'✅' if rules['pre_auction'] else '❌'}\n"
+        f"• <b>Mid-auction</b> — between lots {'✅' if rules['mid_auction'] else '❌'}. "
+        "Not while you hold the standing bid or are answering a Right To "
+        "Match, and never the player on the block. Offers last 5 minutes.\n"
+        f"• <b>Post-auction</b> — until the season's first match "
+        f"{'✅' if rules['post_auction'] else '❌'}\n"
+        f"• <b>Mid-season</b> — until the trade deadline "
+        f"{'✅' if rules['mid_season'] else '❌'}. The playoffs always close "
+        "it, and a team in the middle of a match cannot trade. A traded "
+        "player keeps his tournament stats.",
+
+        "📏 <b>4. What a trade must not break</b>\n"
+        "Every rule a signing obeys is checked on the squad the trade would "
+        "make:\n"
+        "• the squad limit (and after the auction, the squad minimum)\n"
+        "• the overseas cap\n"
+        "• role minimums and maximums\n"
+        "• rating rules\n"
+        "• your purse — and, before and during the auction, the money you "
+        "must keep to fill your minimum squad at base price\n"
+        "A squad already outside a rule may still trade; it just may not get "
+        "worse.\n"
+        "• A player moves <b>once per window</b>.\n"
+        "• Trades per franchise per window: "
+        + (f"<b>{cap}</b>" if cap else "no limit") + ".",
+
+        "🧭 <b>5. Step by step</b>\n"
+        "1️⃣ <code>/atrade Chennai</code> — opens your trade card\n"
+        f"2️⃣ Tap <b>{TRADE_OUT}</b> and tick the players you give\n"
+        f"3️⃣ Tap <b>{TRADE_IN}</b> and tick the players you want\n"
+        "4️⃣ Set cash with the −/+ buttons (or <code>/atradecash 2</code>; "
+        "<code>-2</code> means they pay you)\n"
+        "5️⃣ ✅ <b>Send offer</b> — the card checks every rule first\n"
+        "6️⃣ The other side taps ✅ Accept, ❌ Reject or 🔁 Counter (their own "
+        "version, sides swapped)\n"
+        "7️⃣ The bot admin ✅ Approves or 🚫 Vetoes\n"
+        "8️⃣ The group sees 🔁 <b>TRADE COMPLETED</b> — players, cash and both "
+        "purses before → after\n"
+        "Offers expire after 60 minutes (5 mid-auction) if nobody answers.",
+
+        "👮 <b>6. Who approves</b>\n"
+        "Only the <b>bot owner / a bot admin</b> can approve, veto or undo a "
+        "trade — not auction admins, not owners. "
+        + ("Approval is <b>on</b>: an agreed trade waits for them, and the bot "
+           "DMs them the card." if rules["require_approval"] else
+           "Approval is <b>off</b> in this auction: an accepted trade goes "
+           "through at once (a bot admin can still undo it).")
+        + "\nAn undo puts every player and every rupee back, and is refused "
+          "once a player in it has moved again.",
+
+        "📋 <b>7. Commands</b>\n"
+        "<b>Owners & co-owners</b>\n"
+        "<code>/atrade &lt;team&gt;</code> — open a trade card (bare: your open one)\n"
+        "<code>/atradecash &lt;amount&gt;</code> — cash on your offer (−2 = they pay)\n"
+        "<code>/atradecancel</code> — call off your offer / reject one to you\n"
+        "<code>/atradeblock add &lt;player&gt; | note</code> — put him up for offers\n"
+        "<code>/atradeblock remove &lt;player&gt;</code> — take him off\n\n"
+        "<b>Everyone</b>\n"
+        "<code>/atrades</code> — the trade log and open offers\n"
+        "<code>/atradeblock</code> — who is up for offers\n"
+        "<code>/atraderules</code> — this auction's trade rules\n"
+        "<code>/atradehelp</code> — this guide\n"
+        "Shortcuts: <code>.trade</code> <code>.trades</code> "
+        "<code>.tradeblock</code> <code>.tradehelp</code>\n\n"
+        "<b>Auction admins</b>\n"
+        "<code>/atradewindow on|off</code> — every window at once\n"
+        "<code>/atraderules &lt;rule&gt; &lt;value&gt;</code> — "
+        "<code>pre</code> <code>mid</code> <code>post</code> <code>season</code> "
+        "on|off · <code>cash</code> on|off · <code>maxcash 10</code> · "
+        "<code>players 3</code> · <code>trades 2</code>\n"
+        "<code>/atradedeadline 12</code> · <code>48h</code> · "
+        "<code>2026-05-01 18:00</code> · <code>off</code> — mid-season deadline\n\n"
+        "<b>Bot owner / bot admins</b>\n"
+        "<code>/atradeapprove [id]</code> — approve (bare: the waiting list)\n"
+        "<code>/atradeveto &lt;id&gt; [reason]</code> — stop it\n"
+        "<code>/atradeundo &lt;id&gt;</code> — reverse a completed trade\n"
+        "<code>/atraderules approval on|off</code> — whether trades need approval",
+
+        "❓ <b>8. Quick answers</b>\n"
+        "• <b>Why was my trade refused?</b> The message names the rule — "
+        "squad limit, overseas cap, a role, your purse, or the window.\n"
+        "• <b>Why is it still waiting?</b> Both sides agreed; it is with the "
+        "bot admin.\n"
+        "• <b>My offer vanished.</b> It expired — 60 minutes, or 5 during the "
+        "auction. Start again with /atrade.\n"
+        "• <b>Can I trade the player on the block?</b> No — only signed "
+        "players.\n"
+        "• <b>Does the price change?</b> No — a player is traded at the "
+        "price he was bought for; only the cash is negotiable.",
+    ]
+
+    parts, current = [], ""
+    for section in sections:
+        chunk = section if not current else current + "\n\n" + section
+        if len(chunk) > HELP_LIMIT and current:
+            parts.append(current)
+            current = section
+        else:
+            current = chunk
+    if current:
+        parts.append(current)
+    return parts

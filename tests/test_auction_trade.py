@@ -462,6 +462,40 @@ class PostAuctionMoney(TradeCase):
         self.assertIn("#%d" % trade.id, T.render_log(self.session, self.season))
         self.assertIn("Bot admin approval", T.render_rules(self.session, self.season))
 
+    def test_cards_say_trade_out_and_trade_in(self):
+        T = self.T
+        kohli, bumrah = self.lot_named("Virat"), self.lot_named("Jasprit")
+        trade = self.offer(self.mi, self.csk, [kohli], [bumrah])
+        for card in (T.render_offer(self.session, self.season, trade),):
+            mumbai = card[card.index("🏏 <b>Mumbai</b>"):card.index("🏏 <b>Chennai</b>")]
+            self.assertIn("📤 Trade out: Virat", mumbai)
+            self.assertIn("📥 Trade in: Jasprit", mumbai)
+            self.assertNotIn("send:", card)
+        self.complete(trade)
+        done = T.render_done(self.session, self.season, trade)
+        chennai = done[done.index("🏏 <b>Chennai</b>"):]
+        self.assertIn("📤 Trade out: Jasprit", chennai)
+        self.assertIn("📥 Trade in: Virat", chennai)
+        self.assertNotIn("receive:", done)
+        self.assertIn("📤", T.render_log(self.session, self.season))
+
+    def test_the_help_guide(self):
+        parts = self.T.render_help(self.session, self.season)
+        text = "\n".join(parts)
+        self.assertTrue(all(len(p) <= 4096 for p in parts))
+        for heading in ("1. What a trade is", "2. The money", "3. The four windows",
+                        "4. What a trade must not break", "5. Step by step",
+                        "6. Who approves", "7. Commands", "8. Quick answers"):
+            self.assertIn(heading, text)
+        for command in ("/atrade ", "/atrades", "/atradecash", "/atradecancel",
+                        "/atradeblock", "/atraderules", "/atradewindow",
+                        "/atradedeadline", "/atradeapprove", "/atradeveto",
+                        "/atradeundo", "/atradehelp"):
+            self.assertIn(command.replace("<", "&lt;"), text)
+        self.assertIn("Post-auction", parts[0])     # this auction's window
+        generic = "\n".join(self.T.render_help())
+        self.assertIn("7. Commands", generic)
+
     def test_publish_after_a_trade_leaves_no_duplicate(self):
         from models import ChallengePlayer, ChallengeTeam
         self.complete(self.offer(self.mi, self.csk, [self.lot_named("Virat")], []))
@@ -809,6 +843,30 @@ class Commands(TradeCase):
         self.assertEqual(T.get_trade(self.session, trade.id).status,
                          T.STATUS_COMPLETED)
         self.assertEqual(self.lot_named("Virat").sold_to_id, self.csk.id)
+
+    def test_builder_marks_trade_out_and_trade_in(self):
+        from handlers import auction_trade as H
+        T = self.T
+        _text, markup = self.command(H.atrade_handler, ALICE, "Chennai")
+        labels = [b.text for row in markup.inline_keyboard for b in row]
+        self.assertTrue(any("📤 Trade out" in l for l in labels))
+        self.assertTrue(any("📥 Trade in" in l for l in labels))
+        trade = T.live_trade_for(self.session, self.season, self.mi.id)
+        kohli, bumrah = self.lot_named("Virat"), self.lot_named("Jasprit")
+        self.press(f"au_tr_t_{trade.id}_{kohli.id}_a_0", ALICE)
+        mine = [b.text for row in self.edits[-1][1].inline_keyboard for b in row]
+        self.assertTrue(any(l.startswith("📤 Virat") for l in mine))
+        self.press(f"au_tr_t_{trade.id}_{bumrah.id}_b_0", ALICE)
+        theirs = [b.text for row in self.edits[-1][1].inline_keyboard for b in row]
+        self.assertTrue(any(l.startswith("📥 Jasprit") for l in theirs))
+
+    def test_atradehelp_answers_in_the_group(self):
+        from handlers import auction_trade as H
+        self.command(H.atradehelp_handler, CAROL)
+        text = "\n".join(t for t, _m in self.replies)
+        self.assertIn("TRADE GUIDE", text)
+        self.assertIn("7. Commands", text)
+        self.assertIsNotNone(self.replies[-1][1])   # ❌ Close on the last part
 
     def test_counter_offer_through_the_button(self):
         from handlers import auction_trade as H
