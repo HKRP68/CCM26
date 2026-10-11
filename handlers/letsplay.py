@@ -798,11 +798,22 @@ async def _on_setup_timeout(context: ContextTypes.DEFAULT_TYPE):
             or draft.get("status") not in _SETUP_STATUSES:
         return  # launched, cancelled, or already moved on
     draft["status"] = "expired"
+    lpm = bool(draft.get("lpmulti"))
     text = (
-        "🏏 <b>LETS PLAY</b>\n"
-        f"👤 {_m(draft['host'])}  vs  🎯 {_m(draft['guest'])}\n\n"
-        "⌛ Match setup timed out — nobody finished the pitch / toss in "
-        "time. Start again with /letsplay.")
+        ("🌐 <b>LETS PLAY MULTI</b>\n" if lpm else "🏏 <b>LETS PLAY</b>\n")
+        + f"👤 {_m(draft['host'])}  vs  🎯 {_m(draft['guest'])}\n\n"
+        + "⌛ Match setup timed out — nobody finished the setup in time. "
+        + ("Start again with /lpmulti." if lpm else "Start again with /letsplay."))
+    if lpm and draft.get("lpm_msg_id"):
+        # Take the League/Team buttons away, or a late tap meets a draft that
+        # no longer exists.
+        try:
+            await context.bot.edit_message_reply_markup(
+                chat_id=draft["chat_id"], message_id=draft["lpm_msg_id"],
+                reply_markup=None)
+        except Exception:
+            logger.debug("letsplay: clearing the lpmulti picker failed",
+                         exc_info=True)
     try:
         await context.bot.send_message(draft["chat_id"], text, parse_mode="HTML")
     except Exception:
@@ -1128,9 +1139,11 @@ async def letsplay_pitch_callback(update: Update, context: ContextTypes.DEFAULT_
     if pitch not in PITCH_TYPES:
         await q.answer("Unknown pitch.", show_alert=True)
         return
-    await q.answer()
+    # Flip out of "pitch" before the first await, so a double tap can't post
+    # two Playing XI cards (same guard as letsplay_starttoss_callback).
     draft["pitch_type"] = pitch
     draft["status"] = "showxi"
+    await q.answer()
     _rearm_setup_timeout(context, invite_id)
     await R.edit_rich(
         q, lpr.pitch_locked_blocks(pitch),

@@ -297,6 +297,54 @@ class PickerFlowTests(unittest.TestCase):
         self.assertTrue(q.answer.call_args.kwargs.get("show_alert"))
         pitch.assert_not_awaited()
 
+    def _to_team_pick(self):
+        draft = self._draft(vs_bot=True)
+        self._open(draft)
+        idx = [l["name"] for l in draft["lpm_leagues"]].index("Gamma League")
+        self._tap(f"lpm_lg_9001_{idx}", HOST_TG)
+        return draft, f"lpm_tm_9001_{draft['lpm_teams'].index('Titans')}"
+
+    def test_a_second_team_tap_is_not_an_error(self):
+        draft, data = self._to_team_pick()
+        self._tap(data, HOST_TG)
+        q, pitch = self._tap(data, HOST_TG)
+        self.assertFalse(q.answer.call_args.kwargs.get("show_alert"))
+        self.assertIn("already picked", q.answer.call_args.args[0])
+        self.assertEqual(draft["status"], "pitch")
+        self.assertEqual(draft["guest_team"], "Titans")
+        pitch.assert_not_awaited()
+
+    def test_a_tap_while_the_squad_loads_waits(self):
+        draft, data = self._to_team_pick()
+        draft["lpm_busy"] = True
+        q, pitch = self._tap(data, HOST_TG)
+        self.assertIn("Setting up", q.answer.call_args.args[0])
+        self.assertFalse(q.answer.call_args.kwargs.get("show_alert"))
+        self.assertEqual(draft["status"], "lpm_pick")
+        pitch.assert_not_awaited()
+
+    def test_a_tap_on_an_expired_picker_explains_and_clears_it(self):
+        self.ctx = _context({})
+        from handlers import lpmulti
+        q = _query("lpm_tm_4242_0", HOST_TG)
+        q.edit_message_reply_markup = AsyncMock()
+        asyncio.run(lpmulti.lpmulti_callback(MagicMock(callback_query=q), self.ctx))
+        self.assertIn("expired", q.answer.call_args.args[0])
+        self.assertIn("/lpmulti", q.answer.call_args.args[0])
+        q.edit_message_reply_markup.assert_awaited_once()
+
+    def test_setup_timeout_names_lpmulti_and_clears_the_picker(self):
+        from handlers import letsplay as lp
+        draft = self._draft(vs_bot=True)
+        draft["lpm_msg_id"] = 77
+        self.ctx.bot.edit_message_reply_markup = AsyncMock()
+        self.ctx.job = MagicMock(data={"invite_id": 9001})
+        asyncio.run(lp._on_setup_timeout(self.ctx))
+        text = self.ctx.bot.send_message.call_args.args[1]
+        self.assertIn("/lpmulti", text)
+        self.ctx.bot.edit_message_reply_markup.assert_awaited_once()
+        self.assertNotIn(lp._dkey(9001), self.ctx.bot_data)
+
     def test_cancel_drops_the_draft(self):
         from handlers import letsplay as lp
         self._draft(vs_bot=False)
@@ -346,6 +394,31 @@ class FixedGuestSideTests(unittest.TestCase):
         handled = asyncio.run(lp.letsplay_change_handler(update, ctx))
         self.assertTrue(handled)
         self.assertIn("auto-picked", msg.reply_text.call_args.args[0])
+
+
+class PitchDoubleTapTests(unittest.TestCase):
+    def test_a_double_tap_on_the_pitch_shows_one_xi_card(self):
+        from handlers import letsplay as lp
+        draft = {"invite_id": 31, "chat_id": -1, "status": "pitch",
+                 "host": {"user_id": 1, "tg_id": HOST_TG, "name": "Ana"},
+                 "guest": {"user_id": 2, "tg_id": GUEST_TG, "name": "Bo"}}
+        ctx = _context({lp._dkey(31): draft})
+        pitch = lp.PITCH_TYPES[0]
+
+        async def both():
+            async def _yield(*_a, **_k):
+                await asyncio.sleep(0)   # a real answer() goes to Telegram
+
+            q1, q2 = (_query(f"lp_pitch_31_{pitch}", HOST_TG) for _ in range(2))
+            q1.answer.side_effect = q2.answer.side_effect = _yield
+            await asyncio.gather(
+                lp.letsplay_pitch_callback(MagicMock(callback_query=q1), ctx),
+                lp.letsplay_pitch_callback(MagicMock(callback_query=q2), ctx))
+
+        with patch.object(lp, "_prompt_show_xi", new=AsyncMock()) as show, \
+                patch.object(lp.R, "edit_rich", new=AsyncMock()):
+            asyncio.run(both())
+        show.assert_awaited_once()
 
 
 class RoutingTests(unittest.TestCase):
