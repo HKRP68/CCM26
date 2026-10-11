@@ -328,10 +328,21 @@ class PickerFlowTests(unittest.TestCase):
         from handlers import lpmulti
         q = _query("lpm_tm_4242_0", HOST_TG)
         q.edit_message_reply_markup = AsyncMock()
+        q.message.reply_markup.inline_keyboard = [[MagicMock(callback_data="lpm_tm_4242_0")]]
         asyncio.run(lpmulti.lpmulti_callback(MagicMock(callback_query=q), self.ctx))
         self.assertIn("expired", q.answer.call_args.args[0])
         self.assertIn("/lpmulti", q.answer.call_args.args[0])
         q.edit_message_reply_markup.assert_awaited_once()
+
+    def test_a_forged_id_does_not_clear_a_live_picker(self):
+        from handlers import lpmulti
+        self._draft(vs_bot=True)
+        q = _query("lpm_tm_4242_0", HOST_TG)   # no such draft…
+        q.edit_message_reply_markup = AsyncMock()
+        # …sent from the live draft 9001's picker.
+        q.message.reply_markup.inline_keyboard = [[MagicMock(callback_data="lpm_tm_9001_0")]]
+        asyncio.run(lpmulti.lpmulti_callback(MagicMock(callback_query=q), self.ctx))
+        q.edit_message_reply_markup.assert_not_awaited()
 
     def test_setup_timeout_names_lpmulti_and_clears_the_picker(self):
         from handlers import letsplay as lp
@@ -463,3 +474,20 @@ class RoutingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PitchAnswerFailureTests(unittest.TestCase):
+    def test_a_failed_answer_still_shows_the_xi(self):
+        from telegram.error import TelegramError
+        from handlers import letsplay as lp
+        draft = {"invite_id": 32, "chat_id": -1, "status": "pitch",
+                 "host": {"user_id": 1, "tg_id": HOST_TG, "name": "Ana"},
+                 "guest": {"user_id": 2, "tg_id": GUEST_TG, "name": "Bo"}}
+        ctx = _context({lp._dkey(32): draft})
+        q = _query(f"lp_pitch_32_{lp.PITCH_TYPES[0]}", HOST_TG)
+        q.answer.side_effect = TelegramError("query is too old")
+        with patch.object(lp, "_prompt_show_xi", new=AsyncMock()) as show, \
+                patch.object(lp.R, "edit_rich", new=AsyncMock()):
+            asyncio.run(lp.letsplay_pitch_callback(MagicMock(callback_query=q), ctx))
+        show.assert_awaited_once()
+        self.assertEqual(draft["status"], "showxi")

@@ -1143,7 +1143,12 @@ async def letsplay_pitch_callback(update: Update, context: ContextTypes.DEFAULT_
     # two Playing XI cards (same guard as letsplay_starttoss_callback).
     draft["pitch_type"] = pitch
     draft["status"] = "showxi"
-    await q.answer()
+    try:
+        await q.answer()
+    except TelegramError:
+        # The answer only stops the button spinner; a failed one must not
+        # strand the draft in "showxi" with no XI card to move it on.
+        logger.debug("letsplay: pitch callback answer failed", exc_info=True)
     _rearm_setup_timeout(context, invite_id)
     await R.edit_rich(
         q, lpr.pitch_locked_blocks(pitch),

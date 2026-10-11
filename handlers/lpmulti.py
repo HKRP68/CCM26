@@ -294,6 +294,18 @@ async def _edit(q, text, markup=None):
         logger.debug("lpmulti: picker edit failed", exc_info=True)
 
 
+def _picker_belongs_to(message, invite_id):
+    """True when ``message`` carries /lpmulti picker buttons for ``invite_id``."""
+    markup = getattr(message, "reply_markup", None)
+    rows = getattr(markup, "inline_keyboard", None) or ()
+    for row in rows:
+        for button in row:
+            parts = str(getattr(button, "callback_data", "") or "").split("_")
+            if len(parts) >= 3 and parts[0] == "lpm" and parts[2] == str(invite_id):
+                return True
+    return False
+
+
 def _load_league_teams(league):
     """``(teams, {team: short code})`` for a league — runs in a worker thread."""
     from handlers.challenge import _league_teams, _team_short_code
@@ -340,10 +352,15 @@ async def lpmulti_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # memory). Say which, and take the dead buttons away.
         await q.answer("This selection has expired (timed out or the bot "
                        "restarted). Start again with /lpmulti.", show_alert=True)
-        try:
-            await q.edit_message_reply_markup(reply_markup=None)
-        except Exception:
-            logger.debug("lpmulti: clearing a stale picker failed", exc_info=True)
+        # Only strip buttons that really belong to this dead draft: callback
+        # data is client-supplied, so an id that doesn't match the message's
+        # own buttons must not clear a picker that is still live.
+        if _picker_belongs_to(getattr(q, "message", None), invite_id):
+            try:
+                await q.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                logger.debug("lpmulti: clearing a stale picker failed",
+                             exc_info=True)
         return
     if draft.get("status") in ("pitch", "showxi", "toss"):
         # Usually a second tap on a picker that already worked — the first tap
