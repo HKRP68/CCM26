@@ -23,6 +23,7 @@ Leagues offered are the ones admins tick "Include in Multi" for — the same lis
 /cmulti (/cipl multi) shows.
 """
 
+import asyncio
 import html
 import logging
 from datetime import datetime
@@ -293,6 +294,47 @@ async def _edit(q, text, markup=None):
         logger.debug("lpmulti: picker edit failed", exc_info=True)
 
 
+def _picker_belongs_to(message, invite_id):
+    """True when ``message`` carries /lpmulti picker buttons for ``invite_id``."""
+    markup = getattr(message, "reply_markup", None)
+    rows = getattr(markup, "inline_keyboard", None) or ()
+    for row in rows:
+        for button in row:
+            parts = str(getattr(button, "callback_data", "") or "").split("_")
+            if len(parts) >= 3 and parts[0] == "lpm" and parts[2] == str(invite_id):
+                return True
+    return False
+
+
+def _load_league_teams(league):
+    """``(teams, {team: short code})`` for a league — runs in a worker thread."""
+    from handlers.challenge import _league_teams, _team_short_code
+    from models import ChallengeLeague
+    session = get_session()
+    try:
+        record = session.get(ChallengeLeague, int(league["id"]))
+        teams = _league_teams(session, league["key"], record) if record else []
+        codes = {t: (_team_short_code(t, league["key"], session) or t)
+                 for t in teams}
+        return teams, codes
+    finally:
+        session.close()
+
+
+def _load_team_xi(league, team):
+    """``(xi, bench, error, overseas limits)`` — runs in a worker thread."""
+    from models import ChallengeLeague
+    from services.bot_xi_builder import build_league_team_xi, league_overseas_limits
+    session = get_session()
+    try:
+        xi, bench, error = build_league_team_xi(session, league["id"], team)
+        limits = league_overseas_limits(
+            session.get(ChallengeLeague, int(league["id"])))
+        return xi, bench, error, limits
+    finally:
+        session.close()
+
+
 async def lpmulti_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """``lpm_lg_{id}_{idx|back}`` / ``lpm_tm_{id}_{idx}`` / ``lpm_cancel_{id}``."""
     q = update.callback_query
@@ -305,8 +347,29 @@ async def lpmulti_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("Invalid selection.", show_alert=True)
         return
     draft = _get_draft(context, invite_id)
-    if not draft or not draft.get("lpmulti") or draft.get("status") != "lpm_pick":
-        await q.answer("This team selection is no longer active.", show_alert=True)
+    if not draft or not draft.get("lpmulti"):
+        # Timed out, cancelled, or lost to a bot restart (drafts live in
+        # memory). Say which, and take the dead buttons away.
+        await q.answer("This selection has expired (timed out or the bot "
+                       "restarted). Start again with /lpmulti.", show_alert=True)
+        # Only strip buttons that really belong to this dead draft: callback
+        # data is client-supplied, so an id that doesn't match the message's
+        # own buttons must not clear a picker that is still live.
+        if _picker_belongs_to(getattr(q, "message", None), invite_id):
+            try:
+                await q.edit_message_reply_markup(reply_markup=None)
+            except Exception:
+                logger.debug("lpmulti: clearing a stale picker failed",
+                             exc_info=True)
+        return
+    if draft.get("status") in ("pitch", "showxi", "toss"):
+        # Usually a second tap on a picker that already worked — the first tap
+        # moved the draft on to the pitch. Not an error worth an alert.
+        await q.answer("✅ Team already picked — carry on below.")
+        return
+    if draft.get("status") != "lpm_pick":
+        await q.answer("This selection is no longer active. Start again "
+                       "with /lpmulti.", show_alert=True)
         return
 
     players = {draft["host"]["tg_id"], draft["guest"]["tg_id"]}
@@ -318,6 +381,11 @@ async def lpmulti_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _abort(context, draft)
         await _edit(q, f"❌ Lets Play Multi cancelled by "
                        f"{html.escape(q.from_user.first_name or 'a player')}.")
+        return
+
+    if draft.get("lpm_busy"):
+        # The first tap is still loading the squad.
+        await q.answer("⏳ Setting up your team…")
         return
 
     picker = draft[_picker_side(draft)]
@@ -340,16 +408,17 @@ async def lpmulti_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except (ValueError, IndexError):
             await q.answer("Invalid league.", show_alert=True)
             return
-        from handlers.challenge import _league_teams, _team_short_code
-        from models import ChallengeLeague
-        session = get_session()
+        draft["lpm_busy"] = True
         try:
-            record = session.get(ChallengeLeague, int(league["id"]))
-            teams = _league_teams(session, league["key"], record) if record else []
-            codes = {t: (_team_short_code(t, league["key"], session) or t)
-                     for t in teams}
+            teams, codes = await asyncio.to_thread(_load_league_teams, league)
+        except Exception:
+            logger.exception("lpmulti: loading %s's teams failed", league.get("name"))
+            teams, codes = [], {}
         finally:
-            session.close()
+            draft.pop("lpm_busy", None)
+        if draft.get("status") != "lpm_pick":
+            await q.answer("This selection is no longer active.")
+            return
         if not teams:
             await q.answer(f"{league['name']} has no teams right now.",
                            show_alert=True)
@@ -372,20 +441,22 @@ async def lpmulti_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not league or not team:
             await q.answer("Invalid team.", show_alert=True)
             return
-        from models import ChallengeLeague
-        from services.bot_xi_builder import (build_league_team_xi,
-                                             league_overseas_limits)
-        session = get_session()
-        limits = (0, 11)
+        # Loading the squad is real DB work: keep it off the event loop, and
+        # mark the draft busy so a second tap while it runs gets "setting up"
+        # rather than a second build (or an alarming "no longer active").
+        draft["lpm_busy"] = True
         try:
-            xi, bench, error = build_league_team_xi(session, league["id"], team)
-            limits = league_overseas_limits(
-                session.get(ChallengeLeague, int(league["id"])))
+            xi, bench, error, limits = await asyncio.to_thread(
+                _load_team_xi, league, team)
         except Exception:
             logger.exception("lpmulti: building %s's XI failed", team)
-            xi, bench, error = [], [], "Couldn't load that team. Try another."
+            xi, bench, error, limits = [], [], "Couldn't load that team. Try another.", (0, 11)
         finally:
-            session.close()
+            draft.pop("lpm_busy", None)
+        if draft.get("status") != "lpm_pick":
+            # Cancelled or timed out while the squad was loading.
+            await q.answer("This selection is no longer active.")
+            return
         if error:
             await q.answer(error, show_alert=True)
             return
