@@ -526,6 +526,8 @@ def _resolve_draft_league(session, draft, side=None):
 MULTI_LEAGUE_KEY = "multi"
 MULTI_LEAGUE_NAME = "Multi League"
 MULTI_ARG = "multi"
+# /cmulti — the short command for /cipl multi (which still works).
+CMULTI_COMMAND = "cmulti"
 # "100B" (any case), "100balls", "the100", "hundred" → The Hundred format.
 _HUNDRED_TOKENS = {"100b", "100ball", "100balls", "the100", "hundred"}
 
@@ -2631,6 +2633,25 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
     command_name = _challenge_command_name(update)
     session = get_session()
     try:
+        # /cmulti [overs | 100B] — the short form of /cipl multi. Routed here
+        # rather than through its own CommandHandler: this regex handler sees
+        # every command, so a second handler would start the draft twice.
+        if command_name == CMULTI_COMMAND:
+            _msg = update.effective_message
+            _words = ((getattr(_msg, "text", None) or "").split()[1:]
+                      if getattr(context, "args", None) is None else context.args)
+            _is_multi, m_overs, m_format, m_error = parse_multi_args(
+                [MULTI_ARG, *_words])
+            if m_error:
+                await update.message.reply_text(
+                    f"❌ {m_error}\nExample: reply to someone with "
+                    f"<code>/cmulti 10</code> or <code>/cmulti 100B</code>",
+                    parse_mode="HTML")
+                return
+            await _start_multi_challenge(update, context, session,
+                                         m_overs, m_format)
+            return
+
         # A "<league command>bot" alias (e.g. /cbblbot) starts a bot match in
         # that league. This is the only place dynamic league commands can be
         # routed — the regex handler that reaches here owns its handler group,

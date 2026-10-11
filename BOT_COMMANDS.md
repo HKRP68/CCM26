@@ -207,6 +207,7 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | Command | Aliases | What it does |
 |---------|---------|--------------|
 | `/letsplay` | `/lp` | 20-over match with your own roster — reply or tag to invite |
+| `/lpmulti` | `/lpm` `/letsplaymulti` | **Lets Play Multi** — your own roster vs a league team. `/lpmulti AI`: you pick League → Team and the AI captains it. `/lpmulti @user` (or reply): they accept, pick League → Team and captain it. The league team's best XI is auto-picked. Unranked |
 | `/playmatch` | `/pm` `/match` | Challenge another user to a match |
 | `/cm` | — | Two-wicket challenge match |
 | `/cdraft` 👥 | `/challengedraft` | Challenge Draft — both captains build an XI pick by pick, then play |
@@ -282,7 +283,7 @@ CL Tour and The Hundred matches always play their full length.
 | `/cbbl` · `/challengeBBL` | Start a BBL challenge |
 | `/cint` · `/challengeINT` | Start an international challenge |
 | `/c<league>` | Any extra league an admin has added on the website answers the same way |
-| `/cipl multi [overs\|100B]` | **Multi League** — the host picks a league, then a team from it; the guest does the same (e.g. MI vs Sydney Sixers). `/cipl multi 10` plays 10 overs, `/cipl multi 100B` plays The Hundred. Admins choose which leagues appear with the **Include in Multi** tick on the website |
+| `/cmulti [overs\|100B]` | **Multi League** — the host picks a league, then a team from it; the guest does the same (e.g. MI vs Sydney Sixers). `/cmulti 10` plays 10 overs, `/cmulti 100B` plays The Hundred (`/cipl multi` still works). Admins choose which leagues appear with the **Include in Multi** tick on the website |
 
 ## 10. Lets Play Tournament
 
@@ -649,11 +650,13 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/vsbot <overs 1-20>` *(default 5)* | `/vsbot 10` |
 | `/wpmbot <overs 1-20>` | `/wpmbot 20` |
 | `/lpbot [chat\|app]` | `/lpbot app` |
+| `/lpmulti AI [overs] [chat\|app]` | `/lpmulti AI` · `/lpm AI 10` |
+| `/lpmulti [overs] @username` *(or reply)* | `/lpmulti @rahul` |
 | `/ciplbot [league] [chat\|app]` | `/ciplbot ipl app` |
 | `/pbo @username` | `/pbo @rahul` |
 | `/cipl` *(reply to a user)* | `/cipl` |
 | `/cipl <overs>` *(reply to a user)* — a shorter friendly, 1–20 overs | `/cipl 6` |
-| `/cipl multi [overs\|100B]` *(reply to a user)* — each side picks its own league, then a team | `/cipl multi 100B` |
+| `/cmulti [overs\|100B]` *(reply to a user)* — each side picks its own league, then a team (`/cipl multi` also works) | `/cmulti 100B` |
 | `/matchinfo` | `/matchinfo` |
 | `/resume` · `/rcl` | `/rcl` · `/rcl 1234` |
 | `/pause` · `/continue <MatchId>` · `/saved` | `/pause` · `/continue 1234` |
@@ -1071,6 +1074,8 @@ admin panel, but the commands are not registered.
 | `/letsplaybot`, `/lpb` | `/lpbot` |
 | `/lm` | `/lastmatch` |
 | `/lp` | `/letsplay` |
+| `/lpm`, `/letsplaymulti` | `/lpmulti` |
+| `/cipl multi` | `/cmulti` |
 | `/lptfix` | `/lptfixtures` |
 | `/lptplay` | `/lptour` |
 | `/lptpoints` | `/lptable` |

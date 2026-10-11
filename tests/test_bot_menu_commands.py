@@ -147,6 +147,9 @@ def test_no_scope_has_duplicates():
 # This is an allowlist, not an amnesty: a command added without a menu entry
 # and without a line here still fails the test below.
 UNPUBLISHED_ON_PURPOSE = {
+    # Lets Play Multi (your roster vs a league team) — in BOT_COMMANDS.md and the
+    # /help catalog; the player menus are at Telegram's 100-command ceiling.
+    "lpmulti",
     # Live giveaways — every announcement and the ending-soon reminder carry
     # the Participate button, and it is in BOT_COMMANDS.md; the player menus
     # are at Telegram's 100-command ceiling.

@@ -469,3 +469,59 @@ def pick_bot_team(team_names, taken, squad_size_of):
         return None
     playable = [t for t in free if squad_size_of(t) >= 11]
     return random.choice(playable or free)
+
+
+# ── /lpmulti — your own roster vs a Challenge League team ─────────────
+# Roster-id space for league players fielded in a Lets Play match. The other
+# dugout is a real user's roster keyed by positive ``UserRoster.id``s, and the
+# engine keys every stat and button on ``roster_id`` — so a ChallengePlayer id
+# that happened to equal a roster id would merge two players' figures. Negative
+# and clear of the /lpbot (-200000…) and /vsbot spaces.
+LPMULTI_RID_BASE = 300000
+
+
+def league_player_dict(cp):
+    """A ChallengePlayer as an engine dict for a /lpmulti XI."""
+    from services.cipl_match import cp_to_player_dict
+    out = cp_to_player_dict(cp)
+    out["roster_id"] = -(LPMULTI_RID_BASE + int(cp.id))
+    out["is_league_player"] = True
+    out["traits"] = []
+    return out
+
+
+def build_league_team_xi(session, league_id, team_name):
+    """``(xi, bench, error)`` for a league team fielded in /lpmulti.
+
+    The XI is the team's best legal Playing XI under the league's own rules
+    (``build_challenge_bot_xi``), in batting order; the bench is the rest of
+    the squad (the Impact Player pool). Both are engine dicts. ``error`` is a
+    user-facing reason when the team cannot field eleven.
+    """
+    from models import ChallengeLeague, ChallengePlayer, ChallengeTeam
+
+    league = session.get(ChallengeLeague, int(league_id)) if league_id else None
+    query = session.query(ChallengeTeam).filter(ChallengeTeam.name == team_name)
+    if league is not None:
+        query = query.filter(ChallengeTeam.league_id == league.id)
+    team = query.first()
+    if team is None:
+        return [], [], "That team no longer exists."
+    players = (session.query(ChallengePlayer)
+               .filter(ChallengePlayer.team_id == team.id)
+               .order_by(ChallengePlayer.sort_order, ChallengePlayer.name)
+               .all())
+    if len(players) < 11:
+        return [], [], (f"{team_name} has only {len(players)} players — "
+                        "it can't field an XI.")
+    min_os = getattr(league, "min_overseas", None)
+    max_os = getattr(league, "max_overseas", None)
+    xi = build_challenge_bot_xi(players,
+                                int(min_os) if min_os is not None else 0,
+                                int(max_os) if max_os is not None else 11)
+    if len(xi) != 11:
+        return [], [], f"{team_name} couldn't field a legal XI."
+    xi_ids = {int(p.id) for p in xi}
+    bench = [p for p in players if int(p.id) not in xi_ids]
+    return ([league_player_dict(p) for p in xi],
+            [league_player_dict(p) for p in bench], None)

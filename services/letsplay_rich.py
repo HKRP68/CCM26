@@ -80,7 +80,9 @@ def invite_blocks(draft, host_preview=None):
     thing on this card somebody could regret not reading.
     """
     lpt = draft.get("lpt")
+    lpm = draft.get("lpmulti")
     heading = ("🏆 Lets Play Tournament — Fixture Invitation" if lpt
+               else "🌐 Lets Play Multi — Match Invitation" if lpm
                else "🏏 Lets Play — Match Invitation")
     blocks = [R.heading(heading, size=2)]
 
@@ -100,9 +102,12 @@ def invite_blocks(draft, host_preview=None):
 
     facts = [
         [R.cell(R.bold("🎮 Match type")),
-         R.cell("Tournament (official)" if lpt else "Lets Play")],
+         R.cell("Tournament (official)" if lpt
+                else "Lets Play Multi (unranked)" if lpm else "Lets Play")],
         [R.cell(R.bold("⏱️ Format")), R.cell(f"{draft.get('overs') or 20} Overs")],
-        [R.cell(R.bold("📋 Roster")), R.cell("Own Roster")],
+        [R.cell(R.bold("📋 Roster")),
+         R.cell("Host: Own Roster · Guest: a league team (League → Team)"
+                if lpm else "Own Roster")],
     ]
     if host_preview:
         facts.append([R.cell(R.bold("📊 Host XI")),
@@ -196,7 +201,8 @@ def _side_blocks(caption, xi_rows, bench_rows):
 @_guarded("playing XI")
 def playing_xi_blocks(*, vs_bot, pitch, host_label, guest_label, overs=20,
                       host_xi, guest_xi, host_bench=None, guest_bench=None,
-                      trait_status=None, fairness=None, start_prompt=None):
+                      trait_status=None, fairness=None, start_prompt=None,
+                      title=None):
     """The 'both XIs locked' card, as blocks.
 
     Takes already-flattened rows rather than ORM pairs on purpose: the handler
@@ -207,8 +213,8 @@ def playing_xi_blocks(*, vs_bot, pitch, host_label, guest_label, overs=20,
     ``xi``/``bench`` rows are ``(name, rating, role, trait_badge)`` tuples;
     ``fairness`` is the Team Overall block described by :func:`fairness_blocks`.
     """
-    title = ("🤖 Lets Play vs Bot — Playing XI" if vs_bot
-             else "🧾 Lets Play — Playing XI")
+    title = title or ("🤖 Lets Play vs Bot — Playing XI" if vs_bot
+                      else "🧾 Lets Play — Playing XI")
     blocks = [R.heading(title, size=2),
               R.paragraph([R.bold("🌱 Pitch: "), _pitch_label(pitch),
                            f"  ·  {overs} overs"])]
@@ -242,8 +248,8 @@ def fairness_blocks(*, host_label, guest_label, host_ovr, guest_ovr,
     if vs_bot:
         blocks = [R.table([
             [R.cell(R.bold("📊 Team Overall")),
-             R.cell(f"You {host_ovr}"), R.cell(f"Bot {guest_ovr}",
-                                               align="right")]],
+             R.cell(f"{host_label} {host_ovr}"),
+             R.cell(f"{guest_label} {guest_ovr}", align="right")]],
             bordered=True, compact=True)]
         if boost:
             blocks.append(R.paragraph(boost))
