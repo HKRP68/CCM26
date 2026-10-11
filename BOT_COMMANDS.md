@@ -375,6 +375,13 @@ An auction is a group event; these run in the chat the auction is bound to.
 | `/asoldlist` 👥 | — | Every player sold, set by set |
 | `/aunsoldlist` 👥 | — | The ⚡ Unsold / Accelerated set |
 | `/aretained` 👥 | `/allretained` | Every franchise's retained players — one tap-to-expand list per team, with its retention count and RTM cards |
+| `/atrade <team>` 👥 | `.trade` | IPL-style trade — tick players on both squads, add cash, send; the other side accepts, rejects or counters. Works before, during and after the auction, and mid-season |
+| `/atrades` 👥 | `/atradelog` · `.trades` | The trade log and the open offers |
+| `/atradecash <amount>` 👥 | — | Cash on your open offer (`-2` = they pay you ₹2 Cr) |
+| `/atradecancel` 👥 | — | Call off your offer, or turn down one made to you |
+| `/atradeblock` 👥 | `/atblock` · `.tradeblock` | The trade block; `add <player> \| note` / `remove <player>` for your own |
+| `/atraderules` · `/atradewindow` · `/atradedeadline` | — | Admin: the trade rules, the master switch, the mid-season deadline |
+| `/atradeapprove` · `/atradeveto` · `/atradeundo` | — | **Bot owner / bot admin only**: sign off, stop, or reverse a trade |
 
 Every new player is announced with his **player card** and a fresh **pinned
 board**; bids are announced as one short line per burst.

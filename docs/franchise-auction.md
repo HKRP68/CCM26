@@ -1809,6 +1809,127 @@ quietly bidding a number nobody meant.
 
 ---
 
+## Trades
+
+IPL-style trades between franchises, in every window the IPL has — and one it
+does not. `services/auction_trade_service.py` is the rules,
+`handlers/auction_trade.py` the commands and buttons.
+
+### The money rule
+
+**The contract price travels with the player.** The franchise that takes a
+player pays his `sold_price_lakh`; the franchise that lets him go is paid it
+back. In a swap, only the difference moves. On top of that, either side may add
+**cash** (`cash_lakh`, signed: positive means A pays B). So three shapes are
+all ordinary trades:
+
+| Shape | Example |
+| --- | --- |
+| Swap | Mumbai's ₹12 Cr Kohli for Chennai's ₹9 Cr Bumrah — Mumbai's purse +₹3 Cr, Chennai's −₹3 Cr |
+| All-cash | Chennai take Rinku outright — they pay his price, Mumbai bank it |
+| Player + cash | The swap above, with Mumbai adding ₹1 Cr |
+
+Every movement is a ledger row (`trade` for a price, `trade_cash` for the fee),
+written with running `balance_after`, so `reconcile_purses` holds after every
+trade exactly as it does after every sale. The debit is one conditional
+`UPDATE … WHERE purse_remaining_lakh >= :debit`, the same device `sell_lot`
+uses, so a purse can never overdraw.
+
+Packages are **N-for-M**, up to `max_players_per_side` (3) each way; either
+side may be empty, never both.
+
+### The four windows
+
+`trade_phase()` derives the window from the season; nothing stores it.
+
+| Window | When | Extra rule |
+| --- | --- | --- |
+| Pre-auction | `setup` | Retained and picked players |
+| Mid-auction | `live` / `paused` | Refused while either side holds the **standing bid** or is answering a **Right To Match** on the lot on the block; offers expire in 5 minutes; the board's purses and max bids redraw the moment it goes through |
+| Post-auction | `completed`, before the season's first match | — |
+| Mid-season | published, and a tournament on the league has started | Closes at `trade_deadline_at`, or after `trade_deadline_matches` completed league matches, and **always** when the playoffs start (any non-league match played). Refused while either team is mid-match |
+
+`/atradewindow off` shuts every window at once; `/atraderules mid off` (and
+`pre`, `post`, `season`) shuts one.
+
+### What a trade must not break
+
+The list every signing already obeys, re-checked on the squad the trade would
+produce — and, like `/dtrade`, **relative**: a squad already on the wrong side
+of a rule may trade, it may not get worse.
+
+* the squad maximum (and, after the auction, the squad minimum);
+* the overseas cap;
+* both ends of the role rule — before and during the auction a minimum is
+  reachability over the slots still open, afterwards it is a count;
+* the rating rules;
+* the purse, and before and during the auction the **reachability reserve**
+  `max_bid_now` prints: a franchise must still be able to fill its minimum
+  squad at the base-price floor.
+
+And two limits of its own: **a player moves once per window**, and
+`max_trades_per_team` (0 = no limit) per franchise per window.
+
+### Who does what
+
+| Step | Who |
+| --- | --- |
+| Build the offer, send it, withdraw it | team A's owner and co-owners |
+| Accept, reject, 🔁 counter | team B's owner and co-owners |
+| Approve, veto, undo | **the bot owner / a bot admin only** |
+
+**Approval is on by default**, and only a bot admin may turn it off
+(`/atraderules approval off`). Auction admins run the room but do not sign off
+squads: a trade is permanent in a way a bid is not. An agreed trade is
+`pending_admin`; the sweeper posts the card to the group and DMs every bot
+admin with ✅ Approve / 🚫 Veto. The website's 🔁 Trades fold lists it too — the
+website login is the bot owner's, so its buttons are the bot admin's.
+
+A counter-offer is a new `AuctionTrade` with the sides swapped and
+`parent_trade_id` pointing back, so the chain stays readable.
+
+**Undo** (`/atradeundo`, or the fold) reverses a completed trade exactly —
+players back, prices back, cash back — and is refused once any player in it
+has moved again.
+
+### The published league
+
+A trade after publishing **moves** the `ChallengePlayer` row to its new team
+rather than re-creating it there, so `TournamentPlayerStats.roster_id` still
+points at it and a traded batter keeps his runs. Saved "last XI"s for both
+teams are cleared. `publish_to_league` marks a traded player
+`"acquisition": "trade"`, and drops a row left on the wrong team by name **and
+card** (two editions of one player can share a name).
+
+### The trade block and the fairness line
+
+`/atradeblock add <player> | note` lists a player as open to offers; a trade
+takes him off it. Every offer card prints both purses before → after and a
+verdict — "⚖️ An even trade on talent" or "📈 Favours Mumbai on talent ·
+Chennai bank ₹3 Cr" — which refuses nothing. A lopsided trade is allowed; it is
+just never quiet.
+
+### Commands
+
+| Command | Who | What |
+| --- | --- | --- |
+| `/atrade <team>` (`.trade`) | owner + co-owners | Open a trade card — tick players on both squads, ± cash, 📤 Send |
+| `/atrades` (`/atradelog`) | anyone | The log and the open offers |
+| `/atradecash <amount>` | owner | Cash on your offer; negative = they pay |
+| `/atradecancel` | owner | Call off your offer, or reject one made to you |
+| `/atradeblock [add\|remove …]` | anyone / owner | The trade block |
+| `/atraderules [rule value]` | anyone / admin | Read or set the rules |
+| `/atradewindow on\|off` | admin | The master switch |
+| `/atradedeadline <12 \| 48h \| date \| off>` | admin | The mid-season deadline |
+| `/atradeapprove` · `/atradeveto` · `/atradeundo <id>` | bot admin | Sign off, stop, reverse |
+
+None is in the slash menu, for the reason `/bid` and `/dtrade` are not: every
+scope is at Telegram's 100-command ceiling. They are on the `/auction` card,
+`/ainfo` and the guides. All are in `AUCTION_COMMANDS`, so focus mode never
+locks them out.
+
+---
+
 ## Data model
 
 ```text
@@ -1828,6 +1949,9 @@ AuctionLedgerEntry  every movement of a purse, signed, with the balance after
 AuctionEvent        the permanent log, and the queue the group is announced from
 AuctionRetentionOffer  a retention waiting on the franchise's Accept
 AuctionAdmin        someone a bot admin trusted to run auctions
+AuctionTrade        a trade: both sides' lots, the cash, the window, who
+                    agreed and who approved, and a snapshot of what moved
+AuctionTradeBlock   a player his franchise will listen to offers for
 ```
 
 Six new tables, so `create_all` builds them. Everything the first release
@@ -1891,6 +2015,10 @@ Two things were on their way to a third copy each, and both fail silently.
 | `services/retention_negotiation.py` | Dynamic retention: the mode switch, the editable slots and rules, the Demand Meter, the hidden price and personality, and the negotiation itself. Every signing goes through `retain()` |
 | `services/auction_sets_io.py` | The pool as a file: every set out as JSON or CSV, and back in — matched by id then exact name, queued players only |
 | `handlers/auction.py` | `/bid`, `/artm` and every other command, plus the `au_bid_` and `au_rtm_` buttons |
+| `services/auction_trade_service.py` | Trades: the windows, the money rule, every squad check, approval, undo, the league sync, the trade block, the renderers |
+| `handlers/auction_trade.py` | `/atrade` and the trade commands, plus the shared `au_tr_` buttons |
+| `tests/test_auction_trade.py` | The money in every shape, every window and its closing rules, the squad rules, bot-admin-only approval, counter/expiry/veto/undo, the league sync, the sweeper, and the buttons |
+| `tests/test_auction_trade_page.py` | The 🔁 Trades fold over HTTP: rules, approval, a forced trade and its undo |
 | `models.py` | The six tables |
 | `admin.py` | `/auctions`, `/auctions/<id>`, `/auctions/<id>/console` and its polled panel |
 | `templates/admin_auctions.html`, `admin_auction_detail.html`, `admin_auction_console.html`, `_auction_console_panel.html` | The pages. The setup page is folded — every rule-set a closed `<details>` with its numbers in the summary |

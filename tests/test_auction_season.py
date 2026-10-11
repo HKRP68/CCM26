@@ -213,6 +213,9 @@ class RuleCarryTests(SeasonCase):
             # Which season/league this one follows — set by the clone itself,
             # never copied from the source.
             "previous_league_id", "previous_season_id",
+            # The mid-season trade deadline is a date in this season's own
+            # calendar; next season sets its own.
+            "trade_deadline_at", "trade_deadline_matches",
         }
         columns = {c.name for c in AuctionSeason.__table__.columns}
         expected = columns - not_a_rule

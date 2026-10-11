@@ -3070,6 +3070,7 @@ DOT_COMMANDS = {
     "mybids": "mybids", "bids": "mybids",
     "sold": "sold", "unsold": "unsold",
     "next": "nextplayer",
+    "trade": "trade", "trades": "trades", "tradeblock": "tradeblock",
 }
 
 
@@ -3081,7 +3082,13 @@ def _dot_target(name):
         "mybids": amybids_handler, "sold": asoldlist_handler,
         "unsold": aunsoldlist_handler, "nextplayer": anextplayer_handler,
     }
-    return handlers.get(DOT_COMMANDS.get(name))
+    key = DOT_COMMANDS.get(name)
+    if key in ("trade", "trades", "tradeblock"):
+        # Imported here: handlers.auction_trade builds on this module.
+        from handlers import auction_trade as AT
+        return {"trade": AT.atrade_handler, "trades": AT.atrades_handler,
+                "tradeblock": AT.atradeblock_handler}[key]
+    return handlers.get(key)
 
 
 def parse_dot_command(text):

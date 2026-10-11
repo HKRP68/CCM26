@@ -58,7 +58,11 @@ SWEEP_JOB_NAME = "auction_clock"
 SWEEP_INTERVAL = 2  # seconds
 
 # Events that are reflected on the board rather than announced.
-SILENT_KINDS = set()
+# Trades are said by their own sweep (``_trade_tick``), with the full card, in
+# every season state — the event drain only runs while an auction is live, so
+# leaving them to it would announce a mid-auction trade twice and a
+# post-auction one never.
+SILENT_KINDS = {"trade", "trade_reversed"}
 # Bids ARE announced, but never one message each: every bid that lands inside
 # one sweep is folded into a single short line (see ``drain_events``), so a
 # bidding war costs at most one message per tick rather than forty.
@@ -776,8 +780,102 @@ async def _auction_tick(context):
             except Exception:
                 session.rollback()
                 logger.exception("auction #%s playback failed", season.id)
+        try:
+            await _trade_tick(context, session, now)
+        except Exception:
+            session.rollback()
+            logger.exception("auction trade sweep failed")
     finally:
         session.close()
+
+
+# ── Trades ───────────────────────────────────────────────────────────
+
+async def _trade_tick(context, session, now):
+    """Say every finished trade once, and hand pending ones to the bot admins.
+
+    Runs in every season state, which is why trades are not left to the event
+    drain (that only runs while an auction is live): a post-auction or
+    mid-season trade has to reach the room just the same. Offers past their
+    deadline are expired here too, so a forgotten one stops blocking its
+    franchise's next.
+    """
+    from models import AuctionSeason, AuctionTrade
+    from services import auction_service as A
+    from services import auction_trade_service as T
+
+    stale = (session.query(AuctionTrade)
+             .filter(AuctionTrade.status.in_((T.STATUS_BUILDING, T.STATUS_OFFERED)),
+                     AuctionTrade.expires_at.isnot(None),
+                     AuctionTrade.expires_at <= now).all())
+    for trade in stale:
+        trade.status = T.STATUS_EXPIRED
+        trade.updated_at = now
+    if stale:
+        session.commit()
+
+    due = (session.query(AuctionTrade)
+           .filter(AuctionTrade.status.in_(T.ANNOUNCED_STATUSES),
+                   AuctionTrade.announced_at.is_(None))
+           .order_by(AuctionTrade.id.asc()).limit(5).all())
+    pending_dm = (session.query(AuctionTrade)
+                  .filter(AuctionTrade.status == T.STATUS_PENDING,
+                          AuctionTrade.admin_notified_at.is_(None))
+                  .order_by(AuctionTrade.id.asc()).limit(5).all())
+    if not due and not pending_dm:
+        return
+    from handlers.auction_trade import approval_keyboard, card_for
+
+    refresh = set()
+    for trade in due:
+        season = (session.query(AuctionSeason)
+                  .filter(AuctionSeason.id == trade.season_id).first())
+        trade.announced_at = now
+        session.commit()
+        if season is None or not season.chat_id:
+            continue
+        markup = (approval_keyboard(trade)
+                  if trade.status == T.STATUS_PENDING else None)
+        await _send(context.bot, season.chat_id,
+                    card_for(session, season, trade), reply_markup=markup)
+        if (trade.status in (T.STATUS_COMPLETED, T.STATUS_REVERSED)
+                and season.status in (A.STATUS_LIVE, A.STATUS_PAUSED)):
+            refresh.add(season.id)
+
+    if pending_dm:
+        try:
+            from services.admin_ids import configured_admin_ids
+            admins = sorted(configured_admin_ids())
+        except Exception:
+            admins = []
+        for trade in pending_dm:
+            trade.admin_notified_at = now
+            session.commit()
+            season = trade.season
+            text = ("⏳ <b>A trade needs your approval</b> — "
+                    f"{html.escape(season.name or '')}\n\n"
+                    + card_for(session, season, trade))
+            for admin_id in admins:
+                try:
+                    await context.bot.send_message(
+                        admin_id, text, parse_mode="HTML",
+                        reply_markup=approval_keyboard(trade),
+                        disable_web_page_preview=True)
+                except Exception:
+                    # An admin who never started the bot cannot be DMed; the
+                    # card in the group and /atradeapprove still reach them.
+                    logger.info("could not DM admin %s about trade #%s",
+                                admin_id, trade.id)
+
+    # A mid-auction trade moved two purses: the pinned board's max-bid line
+    # has to say so now, not at the next bid.
+    for season_id in refresh:
+        season = (session.query(AuctionSeason)
+                  .filter(AuctionSeason.id == season_id).first())
+        if season is not None:
+            await refresh_board(context.bot, session, season, force=True,
+                                now=now)
+            session.commit()
 
 
 async def _tick_one(context, session, season, now):

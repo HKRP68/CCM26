@@ -718,6 +718,9 @@ SEASON_RULE_FIELDS = (
     "bid_gap_seconds",
     # The staged clock: reset point and the two warnings.
     "reset_seconds", "warn1_seconds", "warn2_seconds",
+    # Trades: the master switch and the rulebook. The mid-season deadline is
+    # NOT here — it is a date in this season's calendar, not a rule.
+    "trades_open", "trade_rules_json",
 )
 
 # What a franchise takes with it into the next season: who it is and who runs
@@ -3326,6 +3329,18 @@ def restart_auction(session, season, *, now=None, by_tg_id=None):
                      f"{'player' if players == 1 else 'players'} back in the "
                      f"pool", by_tg_id=by_tg_id)
 
+    # Mid-auction trades are undone with the auction: the players are back in
+    # the pool already (their prices refunded to whoever held them), and the
+    # cash any trade carried goes back the way it came.
+    try:
+        from services.auction_trade_service import void_for_restart
+        void_for_restart(session, season, by_tg_id=by_tg_id)
+    except AuctionError:
+        raise
+    except Exception:
+        logger.exception("restart: undoing mid-auction trades failed")
+        raise
+
     # ── Every bid on them void ────────────────────────────────────────
     ids = [lot.id for lot in rows]
     (session.query(AuctionBid)
@@ -5400,6 +5415,13 @@ def publish_to_league(session, season, *, league_name=None):
     by_franchise = {}
     for lot in bought:
         by_franchise.setdefault(lot.sold_to_id, []).append(lot)
+    # Players who moved in a trade keep saying so on the published squad.
+    try:
+        from services.auction_trade_service import traded_lot_ids
+        traded = traded_lot_ids(session, season.id)
+    except Exception:
+        logger.exception("auction publish: reading trades failed (non-fatal)")
+        traded = set()
 
     for franchise in franchises(session, season.id):
         team = (session.query(ChallengeTeam)
@@ -5438,7 +5460,34 @@ def publish_to_league(session, season, *, league_name=None):
                        # How this player was got. Ignored by every existing
                        # reader, and it is what lets a published squad still
                        # say who was retained rather than bought.
-                       "acquisition": lot.acquisition or ACQ_AUCTION})
+                       "acquisition": ("trade" if lot.id in traded
+                                       else lot.acquisition or ACQ_AUCTION)})
+        session.flush()
+
+    # A player traded since the last publish must not stay on his old team as
+    # well. ``trade_service.sync_league`` moves the row at the moment of the
+    # trade; this is the safety net for one that reached here without it. Only
+    # names this auction sold are touched — a hand-added league player is not
+    # ours to remove.
+    team_by_name = {(t.name or "").lower(): t for t in
+                    session.query(ChallengeTeam)
+                    .filter(ChallengeTeam.league_id == league.id).all()}
+    owner_team = {}
+    names_by_id = {f.id: (f.name or "")[:120].lower()
+                   for f in franchises(session, season.id)}
+    # Keyed by name AND card: two editions of one player can share a name and
+    # sit on two different squads, and neither is a duplicate of the other.
+    for lot in bought:
+        team = team_by_name.get(names_by_id.get(lot.sold_to_id, ""))
+        if team is not None:
+            owner_team[((lot.name or "").lower(), lot.player_id)] = team.id
+    if owner_team:
+        for cp in (session.query(ChallengePlayer)
+                   .filter(ChallengePlayer.team_id.in_(
+                       [t.id for t in team_by_name.values()])).all()):
+            want = owner_team.get(((cp.name or "").lower(), cp.source_player_id))
+            if want is not None and cp.team_id != want:
+                session.delete(cp)
 
     season.league_id = league.id
     season.published_at = datetime.utcnow()

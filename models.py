@@ -4195,6 +4195,21 @@ class AuctionSeason(Base):
                        nullable=True, index=True)
     published_at = Column(DateTime, nullable=True)
 
+    # ── Trades (services/auction_trade_service.py) ─────────────────────
+    # The master switch over every trade window. 1/0 rather than a boolean
+    # for the NULL-reads-falsy reason ``focus_mode`` gives, and read through
+    # ``int`` so a season written before the column existed reads as OPEN.
+    trades_open = Column(Integer, default=1, nullable=False)
+    # {"pre_auction": true, "mid_auction": true, "post_auction": true,
+    #  "mid_season": true, "require_approval": true, "max_trades_per_team": 0,
+    #  "max_players_per_side": 3, "max_cash_lakh": 0, "allow_cash": true} —
+    # read through auction_trade_service.trade_rules(), which fills defaults.
+    trade_rules_json = Column(Text, nullable=True)
+    # The mid-season trade deadline: a moment, a count of completed league
+    # matches, or both (whichever comes first). The playoffs always close it.
+    trade_deadline_at = Column(DateTime, nullable=True)
+    trade_deadline_matches = Column(Integer, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -4656,6 +4671,97 @@ class AuctionAdmin(Base):
     name = Column(String(120), nullable=True)
     added_by_tg_id = Column(BigInteger, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AuctionTrade(Base):
+    """An IPL-style trade between two auction franchises: the offer, then the record.
+
+    Modelled on ``DraftTrade`` — **the whole offer lives here**, so a half-built
+    trade survives a redeploy and its buttons carry only this row's id — with
+    what an auction adds: money. ``lots_a_json`` / ``lots_b_json`` are JSON
+    lists of ``AuctionLot`` ids, the players ``team_a`` sends and ``team_b``
+    sends. Either may be empty (an all-cash deal), never both.
+
+    ``cash_lakh`` is SIGNED: positive means team A pays team B on top of the
+    contract prices, negative the other way. The contract prices themselves
+    are not stored here until execution — they travel with the players, read
+    from ``AuctionLot.sold_price_lakh`` at the moment the trade goes through,
+    and ``snapshot_json`` records exactly what moved so the log stays true and
+    an admin's undo has something exact to reverse.
+
+    ``announced_at`` / ``admin_notified_at`` are the sweeper's cursors: a trade
+    is said in the group once, and a trade waiting on approval is sent to the
+    bot admins once, whichever surface produced it.
+    """
+    __tablename__ = "auction_trades"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_id = Column(Integer, ForeignKey("auction_seasons.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    team_a_id = Column(Integer, ForeignKey("auction_franchises.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    team_b_id = Column(Integer, ForeignKey("auction_franchises.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    lots_a_json = Column(Text, nullable=True)
+    lots_b_json = Column(Text, nullable=True)
+    cash_lakh = Column(Integer, default=0, nullable=False)
+    # pre_auction | mid_auction | post_auction | mid_season — the window it
+    # was opened in, kept for the log.
+    phase = Column(String(20), nullable=True)
+    # building | offered | pending_admin | completed | rejected | cancelled |
+    # expired | vetoed | reversed | countered
+    status = Column(String(20), default="building", nullable=False, index=True)
+    # A counter-offer points back at the offer it answered.
+    parent_trade_id = Column(Integer, nullable=True)
+    note = Column(String(200), nullable=True)
+    confirmed_a_by = Column(BigInteger, nullable=True)
+    confirmed_b_by = Column(BigInteger, nullable=True)
+    opened_by_tg_id = Column(BigInteger, nullable=True)
+    closed_by_tg_id = Column(BigInteger, nullable=True)
+    approved_by_tg_id = Column(BigInteger, nullable=True)
+    by_admin = Column(Boolean, default=False, nullable=False)
+    reason = Column(String(200), nullable=True)
+    snapshot_json = Column(Text, nullable=True)
+    chat_id = Column(BigInteger, nullable=True)
+    message_id = Column(BigInteger, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    announced_at = Column(DateTime, nullable=True)
+    admin_notified_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    season = relationship("AuctionSeason")
+    team_a = relationship("AuctionFranchise", foreign_keys=[team_a_id])
+    team_b = relationship("AuctionFranchise", foreign_keys=[team_b_id])
+
+    __table_args__ = (
+        Index("ix_auction_trade_live", "season_id", "status"),
+    )
+
+
+class AuctionTradeBlock(Base):
+    """A player his franchise has put on the trade block — "open to offers".
+
+    One row per lot per season: listing twice is a no-op, and the row goes when
+    the player is traded or taken off.
+    """
+    __tablename__ = "auction_trade_block"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_id = Column(Integer, ForeignKey("auction_seasons.id", ondelete="CASCADE"),
+                       nullable=False, index=True)
+    franchise_id = Column(Integer, ForeignKey("auction_franchises.id", ondelete="CASCADE"),
+                          nullable=False, index=True)
+    lot_id = Column(Integer, ForeignKey("auction_lots.id", ondelete="CASCADE"),
+                    nullable=False, index=True)
+    asking_note = Column(String(120), nullable=True)
+    by_tg_id = Column(BigInteger, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_auction_trade_block_unique", "season_id", "lot_id", unique=True),
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════
