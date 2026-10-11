@@ -588,6 +588,15 @@ def user_guide():
           "works only for that franchise's owner and co-owners. Nobody else can "
           "press it, admins included. A retained player is on your squad from "
           "that moment, and counts against every cap."),
+        p(B("Mini auctions: your squad carries over.") + " In a mini auction "
+          "every franchise starts with last season's whole squad, each player "
+          "at what he cost, and the rest of the purse to spend. Until the window "
+          "closes you may " + B("release") + " any of your kept players: "
+          + C("/arelease Gill") + ", or a bare " + C("/arelease") + " for a "
+          "button per player (each asks before it acts). He goes back into the "
+          "auction and his price comes back to your purse. It works in a DM "
+          "too. Only your franchise's owner and co-owners can release its "
+          "players."),
         p(B("Right To Match (RTM)") + " lets last season's franchise take a "
           "player back at the price the room set. It runs as three short "
           "windows on one clock:"),
@@ -663,6 +672,9 @@ def user_guide():
              "Bid. Bare /bid bids the next minimum."],
             ["/artm yes|no|stand", "the holder / top bidder",
              "Answer an open Right To Match."],
+            ["/arelease [player]", "owner + co-owners",
+             "Release one of your kept players back into the auction while "
+             "the window is open."],
             ["/aboard", "anyone", "The live board, with quick-bid buttons."],
             ["/ainfo · /amenu", "anyone",
              "Where the auction stands, and a button per view."],
@@ -1099,6 +1111,7 @@ def admin_guide():
               "/aoffers                             offers still waiting",
               "/aretcancel <player>                 withdraw a waiting offer",
               "/aunretain <player>                  release one into the pool",
+              "/arelease <player>                   (owners) release their own",
               "/aretlock on                         close the window"]),
         p(C("/aretain") + " " + B("offers") + " a retention: the franchise's "
           "owner or a co-owner presses ✅ Accept, and only then is the player "

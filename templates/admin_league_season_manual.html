@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Manual teams · {{ series.name }}{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_tournament.css') }}"><link rel="stylesheet" href="{{ url_for('static', filename='css/admin_league_seasons.css') }}">{% endblock %}
+{% block content %}
+<div class="tour-page">
+  <div class="breadcrumbs"><a href="{{ url_for('admin_league_seasons') }}">🏟 League Seasons</a><span>/</span><a href="{{ url_for('admin_league_series', series_id=series.id) }}">{{ series.name }}</a><span>/</span><span>✍️ Season {{ next_no }} — manual teams</span></div>
+  <section class="section-card">
+    <div class="section-header"><div>
+      <h2 class="section-title">✍️ Season {{ next_no }} — manual teams</h2>
+      <div class="section-subtitle">One line per player: <code>Team | Player | Version</code> — the Challenge Data format. {% if prev %}Pre-filled with {{ title_of(prev) }}'s squads; edit, move or remove players, add new teams.{% endif %}</div>
+    </div></div>
+    {% if blocker %}<div class="ls-note">⏳ {{ blocker }}</div>{% else %}
+    <form method="POST" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid"><div style="grid-column:span 2;"><label>New league name</label><input name="league_name" value="{{ league_name }}" required maxlength="120"></div>
+        <div style="grid-column:span 2;"><label>…or upload a file (.xlsx / .csv)</label><input type="file" name="teams_file" accept=".xlsx,.xlsm,.csv,.txt"></div></div>
+      <textarea class="ls-textarea" name="teams_text" style="margin-top:.8rem;">{{ text }}</textarea>
+      <p class="ls-muted">The version is optional (blank = Base). A player can be on one team only. The league copies last season's settings and badges; its /commands move over when you create the tournament.</p>
+      <button class="action-btn accent-btn" style="width:auto;" type="submit">Create Season {{ next_no }} league</button>
+    </form>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

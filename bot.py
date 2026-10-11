@@ -1798,6 +1798,11 @@ def main():
         app.add_handler(CommandHandler("statstour", statstour_handler))
         app.add_handler(CommandHandler("tournamentstats", tournamentstats_handler))
         app.add_handler(CallbackQueryHandler(tournamentstats_callback, pattern=r"^tstat_"))
+        # 🏟 League Seasons: every season of a competition, its champions and
+        # its players' stats (services/league_season_service.py).
+        from handlers.league_seasons import seasons_handler, seasons_callback
+        app.add_handler(CommandHandler("seasons", seasons_handler))
+        app.add_handler(CallbackQueryHandler(seasons_callback, pattern=r"^ls_"))
 
         # ── Challenge League Tournament: the public follow-along views ──
         # Read-only. Starting a match is still the league's own gated tournament
@@ -2408,6 +2413,7 @@ def main():
             aretslot_handler, aretrule_handler, aretdemand_handler,
             asetsexport_handler, asetsimport_handler,
             retention_pick_callback, aprevious_handler, aprevteam_handler,
+            release_callback,
         )
         # Not "/b": that is already /buy, registered above, and PTB runs the
         # first handler that matches — the alias would be dead.
@@ -2523,6 +2529,9 @@ def main():
         # and which team each franchise was (by id, so a rename is harmless).
         app.add_handler(CallbackQueryHandler(retention_pick_callback,
                                              pattern=r"^au_rpk_"))
+        # A franchise's owner releasing its own kept player (/arelease bare).
+        app.add_handler(CallbackQueryHandler(release_callback,
+                                             pattern=r"^au_rel_"))
         app.add_handler(CommandHandler(["aprevious", "alastseason"],
                                        aprevious_handler))
         app.add_handler(CommandHandler("aprevteam", aprevteam_handler))

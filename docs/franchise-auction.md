@@ -1535,6 +1535,33 @@ follow a league first and build the pool after. Every lot came out unstamped
 and Right To Match found nobody, in silence. `add_players_to_pool` now stamps
 as it creates, so the order cannot matter.
 
+### Mini and mega auctions (🏟 League Seasons)
+
+The website's **🏟 League Seasons** section ([`docs/league-seasons.md`](league-seasons.md))
+starts the next season of a competition as an IPL **mega** or **mini** auction.
+Neither is a mode of its own — each is `clone_season` (or `season_from_league`,
+with owners filled in from last season's tournament) plus a preset of the rule
+columns above:
+
+* **🔨 Mega** — `max_retentions` = the keep count (default 6), classic
+  retention, RTM on (the cards are the spots a franchise did not use), every
+  purse reset with `set_opening_purse`.
+* **🔁 Mini** — `max_retentions` = the squad size, no spend / rating / category
+  caps, RTM off, purse = the cap; then `carry_previous_squads` keeps every
+  franchise's last-season squad at **what each player cost** (the
+  `auction_price_lakh` `publish_to_league` stamps, or the base-price ladder for a
+  hand-made league or a free auto-fill), dearest first, each `retain` in a
+  savepoint, quiet per player with one `squads_carried` line per franchise.
+  Anything a cap refuses goes into the pool under 🔁 Released.
+
+**Owners release their own.** `/arelease` (the same command as `/aunretain`) is
+now owner-aware: an owner or co-owner releases one of their own kept players —
+by name, or bare for buttons that ask before they act — while the retention
+window is open, in the group or in a DM (`release_by_owner`, which checks the
+deadline `unretain` does not). An auction admin's `/aunretain <player>` is
+unchanged. The released player goes back into the pool under 🔁 Released with
+his price back in the purse.
+
 ---
 
 ## How the website talks to the group
@@ -2043,6 +2070,7 @@ Two things were on their way to a third copy each, and both fail silently.
 | `services/player_query.py` | The one master-player filter, and the one `details_json` |
 | `services/button_access.py` | Which auction buttons belong to one person and which to the room: the `au_info_`/`au_sets_`/`au_x_` owner rules, and the `au_bid_`/`au_rtm_`/`au_ret_` prefixes the pinned board keeps shared |
 | `services/auction_focus.py` | Focus mode: which commands and buttons a locked group still answers, the cached "is this chat locked?" lookup, and the two refusals. Pure apart from that one lookup |
+| `services/league_season_service.py` | 🏟 League Seasons: the mini / mega presets and the season around them — see `docs/league-seasons.md` |
 | `services/retention_negotiation.py` | Dynamic retention: the mode switch, the editable slots and rules, the Demand Meter, the hidden price and personality, and the negotiation itself. Every signing goes through `retain()` |
 | `services/auction_sets_io.py` | The pool as a file: every set out as JSON or CSV, and back in — matched by id then exact name, queued players only |
 | `handlers/auction.py` | `/bid`, `/artm` and every other command, plus the `au_bid_` and `au_rtm_` buttons |

@@ -205,6 +205,10 @@ UNPUBLISHED_ON_PURPOSE = {
     # Season links for Total Season Stats — admin-only, and the tournament's
     # 📚 Season history card on the admin site does the same.
     "tseasons",
+    # 🏟 League Seasons — every season of a competition, its champions and its
+    # players. Both player scopes are at the ceiling; it is on /tourhelp's
+    # 📊 Stats section and in the /commands catalogue.
+    "seasons",
     # Player Draft trades — the precedent the auction followed.
     "dtrade", "dtrades", "dtradecancel",
     # Franchise Auction trades — same call as /dtrade: both player scopes and

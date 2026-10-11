@@ -288,6 +288,10 @@ def delete_tournament(session, tour, *, keep_stats=True):
     Returns the ``StatsSeason`` made, or None when nothing was kept.
     """
     season = archive_tournament(session, tour) if keep_stats else None
+    # A League Seasons season pointing at this tournament keeps its honours
+    # and follows it to the saved season — the same move the links above make.
+    from services import league_season_service
+    league_season_service.forget_tournament(session, tour, season)
     if not keep_stats:
         # Links to a tournament that is gone for good are dropped.
         old = tour_ref(tour.id)
@@ -319,6 +323,8 @@ def delete_saved_season(session, season_id):
     if season is None:
         return None
     ref = saved_ref(season.id)
+    from services import league_season_service
+    league_season_service.forget_saved_season(session, season.id)
     for other in (session.query(Tournament)
                   .filter(Tournament.linked_seasons_json.isnot(None)).all()):
         refs = linked_refs(other)

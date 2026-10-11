@@ -483,6 +483,7 @@ hr.pitch-line { border: none; height: 1px; background: linear-gradient(90deg, tr
     <a href="{{ url_for('admin_lp_tournaments_list') }}" class="{{ 'active' if request.endpoint == 'admin_lp_tournaments_list' }}">🏏 Lets Play Tournaments</a>
     <a href="{{ url_for('admin_drafts_list') }}" class="{{ 'active' if request.endpoint in ('admin_drafts_list','admin_draft_detail') }}">🎯 Player Drafts</a>
     <a href="{{ url_for('admin_auctions_list') }}" class="{{ 'active' if request.endpoint in ('admin_auctions_list','admin_auction_detail','admin_auction_console') }}">🔨 Franchise Auctions</a>
+    <a href="{{ url_for('admin_league_seasons') }}" class="{{ 'active' if request.endpoint in ('admin_league_seasons','admin_league_series','admin_league_season_release','admin_league_season_manual') }}">🏟 League Seasons</a>
 
     <div class="section-label">Economy & Rewards</div>
     <a href="{{ url_for('admin_economy') }}" class="{{ 'active' if request.endpoint == 'admin_economy' }}">💰 Economy</a>
@@ -518,7 +519,7 @@ hr.pitch-line { border: none; height: 1px; background: linear-gradient(90deg, tr
     <a href="{{ url_for('admin_events') }}" class="{{ 'active' if 'events' in (request.endpoint or '') }}">🎉 Events</a>
     <a href="{{ url_for('admin_news') }}" class="{{ 'active' if (request.endpoint or '').startswith('admin_news') }}">📰 CMU News{% if pending_news and pending_news > 0 %}<span class="nav-badge">{{ pending_news }}</span>{% endif %}</a>
     <a href="{{ url_for('admin_polls') }}" class="{{ 'active' if (request.endpoint or '').startswith('admin_polls') }}">🗳 Polls</a>
-    <a href="{{ url_for('admin_seasons') }}" class="{{ 'active' if 'season' in (request.endpoint or '') }}">🏆 Seasons</a>
+    <a href="{{ url_for('admin_seasons') }}" class="{{ 'active' if request.endpoint == 'admin_seasons' }}">🏆 Seasons</a>
     <a href="{{ url_for('admin_clubs') }}" class="{{ 'active' if 'clubs' in (request.endpoint or '') }}">🛡️ Clubs</a>
     <a href="{{ url_for('admin_fantasy_list') }}" class="{{ 'active' if 'fantasy' in (request.endpoint or '') }}">🏏 Fantasy</a>
     <a href="{{ url_for('admin_diagnostics') }}" class="{{ 'active' if request.endpoint == 'admin_diagnostics' }}">🔧 Diagnostics</a>

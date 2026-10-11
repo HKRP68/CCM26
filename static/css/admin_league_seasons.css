@@ -1,0 +1,48 @@
+/* 🏟 League Seasons — on top of admin_tournament.css (tour-page, section-card,
+   tour-tile, status-pill, action-btn, form-grid, leaderboard widgets). */
+
+.ls-stepper { display: flex; gap: .5rem; flex-wrap: wrap; margin: .2rem 0 1rem; }
+.ls-step {
+  flex: 1; min-width: 140px; padding: .6rem .8rem; border-radius: 10px;
+  border: 1px solid var(--border); background: var(--bg-soft);
+  font-size: .82rem; color: var(--muted); font-weight: 700;
+}
+.ls-step b { display: block; color: var(--text); font-size: .9rem; margin-top: .15rem; }
+.ls-step.done { border-color: rgba(34,197,94,.45); }
+.ls-step.done b { color: #22c55e; }
+.ls-step.now { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-light); }
+
+.ls-stage { font-size: 1.05rem; font-weight: 800; color: var(--text); }
+.ls-stage small { color: var(--muted); font-weight: 600; margin-left: .35rem; }
+
+.ls-checklist { list-style: none; padding: 0; margin: .6rem 0 0; display: grid; gap: .35rem; }
+.ls-checklist li { font-size: .86rem; color: var(--text); }
+
+.ls-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }
+.ls-option {
+  background: var(--bg-soft); border: 1px solid var(--border); border-radius: 14px;
+  padding: 1.1rem; display: flex; flex-direction: column; gap: .7rem;
+}
+.ls-option h3 { margin: 0; font-size: 1.05rem; }
+.ls-option p { margin: 0; color: var(--muted); font-size: .84rem; line-height: 1.45; }
+.ls-option form { display: flex; flex-direction: column; gap: .6rem; margin-top: auto; }
+
+.ls-table { width: 100%; border-collapse: collapse; font-size: .86rem; }
+.ls-table th {
+  text-align: left; color: var(--muted); font-size: .72rem; text-transform: uppercase;
+  letter-spacing: .05em; padding: .5rem; border-bottom: 1px solid var(--border);
+}
+.ls-table td { padding: .55rem .5rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+.ls-table tr:last-child td { border-bottom: none; }
+.ls-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.ls-table-wrap { overflow-x: auto; }
+.ls-muted { color: var(--muted); font-size: .8rem; }
+.ls-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+.ls-actions .action-btn { width: auto; }
+.ls-note {
+  padding: .7rem .9rem; border-radius: 10px; font-size: .86rem;
+  background: var(--bg-soft); border: 1px dashed var(--border); color: var(--text);
+}
+.ls-release-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 1rem; }
+.ls-release-grid .ls-table td:first-child { width: 1.6rem; }
+.ls-textarea { width: 100%; min-height: 360px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .85rem; }
