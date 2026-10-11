@@ -14,9 +14,9 @@ Flow:
   /lpbot [chat|app]   (where it is played — remembered; bare /lpbot keeps it)
     → your roster is validated as a legal Playing XI (else it won't start)
     → you pick the pitch
-    → your XI (auto batting order, tweakable with /change) and the bot's XI
-      are shown, with a single Start Toss button
     → you call the toss; if the bot wins it elects bat/bowl at random
+    → your XI (auto batting order, tweakable with /change) and the bot's XI
+      are shown, with a single Start Match button
     → over-by-over match in the chat, shared with /letsplay and /cipl
 """
 

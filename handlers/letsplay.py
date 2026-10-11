@@ -2,8 +2,8 @@
 
 This reuses the entire Challenge League over-by-over "Approach" engine
 (services/cipl_match + handlers/cipl_play): the only thing /letsplay adds in
-front of it is a personal invitation → pitch → auto Playing-XI → toss flow.
-Once the toss is decided we build the same ``cipl_approach`` match state (but
+front of it is a personal invitation → pitch → toss → auto Playing-XI flow.
+Once the XIs are settled we build the same ``cipl_approach`` match state (but
 from personal-roster players, with their TRAITS attached) and hand off to the
 shared per-over prompts/callbacks, scorecard, completion and Mini App view.
 
@@ -16,9 +16,11 @@ Flow:
     → both rosters validated as a legal Playing XI (else it won't start)
     → invitation to the guest (Accept / Deny, 30s timer)
     → host picks the pitch
+    → toss (guest calls heads/tails, winner elects bat/bowl) — BEFORE the XIs,
+      so each captain knows whether they bat or bowl first
     → each side's XI batting order is auto-set by batting rating (high → low),
-      both XIs are shown, and a single Start Toss button appears
-    → toss (guest calls heads/tails, winner elects bat/bowl)
+      both XIs are shown (tweak with /change), and a single Start Match
+      button appears
     → over-by-over match in the chat (shared with /cipl), traits active.
 
 The same flow also plays official **Lets Play Tournament** fixtures: /lptour
@@ -843,7 +845,7 @@ async def letsplay_invite_callback(update: Update, context: ContextTypes.DEFAULT
 
     if draft.get("lpmulti"):
         # /lpmulti: the guest captains a league team — League → Team first,
-        # then the usual pitch → Playing XI → toss (handlers/lpmulti.py).
+        # then the usual pitch → toss → Playing XI (handlers/lpmulti.py).
         draft["status"] = "lpm_pick"
         _rearm_setup_timeout(context, invite_id)
         await q.edit_message_text(
@@ -1130,22 +1132,24 @@ async def letsplay_pitch_callback(update: Update, context: ContextTypes.DEFAULT_
         return
     await q.answer()
     draft["pitch_type"] = pitch
-    draft["status"] = "showxi"
+    # The toss comes BEFORE the Playing XIs, so each captain knows whether they
+    # bat or bowl first while they settle their line-up.
+    draft["status"] = "toss"
     _rearm_setup_timeout(context, invite_id)
     await R.edit_rich(
         q, lpr.pitch_locked_blocks(pitch),
         f"🌱 Pitch locked: <b>{_PITCH_EMOJI.get(pitch, '🏏')} {pitch}</b>")
-    await _prompt_show_xi(context, draft)
+    await _start_toss(context, draft)
 
 
 # ════════════════════════════════════════════════════════════════════
-# Auto Playing-XI + Start Toss
+# Auto Playing-XI + Start Match
 #
 # /letsplay no longer asks each side to hand-pick an XI: by the time the
 # invite is sent both rosters have already been validated as a legal Playing
-# XI. After the pitch is locked we simply take each side's confirmed top-11,
+# XI. Once the toss is decided we simply take each side's confirmed top-11,
 # order the batting line-up by batting rating (highest → lowest), show both
-# XIs, and offer a single "Start Toss" button.
+# XIs (with who bats first), and offer a single "Start Match" button.
 # ════════════════════════════════════════════════════════════════════
 
 def _ordered_xi_for_side(session, user_id):
@@ -1243,12 +1247,30 @@ def _bot_or_user_xi(session, draft, side):
     return list(xi), None, []
 
 
+def _toss_summary(draft):
+    """Plain-text 'who won the toss, who bats first' line for the XI card.
+
+    The toss is decided BEFORE the Playing XIs are shown, so the card can tell
+    both captains whether they bat or bowl first while they tweak their XI.
+    Returns "" if no decision has been recorded (never expected in practice).
+    """
+    side = draft.get("toss_winner_side")
+    decision = draft.get("toss_decision")
+    if side not in ("host", "guest") or decision not in ("bat", "bowl"):
+        return ""
+    winner = draft[side]["name"]
+    other = draft["guest" if side == "host" else "host"]["name"]
+    batting = winner if decision == "bat" else other
+    return (f"🪙 {winner} won the toss and elected to "
+            f"{'BAT' if decision == 'bat' else 'BOWL'} — {batting} bats first.")
+
+
 def _show_xi_text(draft, host_pairs, guest_pairs,
                   host_bench=None, guest_bench=None, session=None):
-    """The 'both XIs locked' card shown before the toss.
+    """The 'both XIs locked' card shown after the toss, before the match starts.
 
     Shows each side's Playing XI (batting order) plus its bench, and explains how
-    to swap a bench player into the XI with /change before the toss.
+    to swap a bench player into the XI with /change before the match starts.
 
     ``session`` is optional and only used to load equipped traits, so the card
     can print each side's Trait Boost. Both callers have one open; without it
@@ -1269,10 +1291,9 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
                         f"(Bot — auto-picked)")
     else:
         guest_header = f"🎯 <b>{html.escape(draft['guest']['name'])}</b> (Guest)"
-    start_line = (f"🔒 When ready, {_m(draft['host'])} taps <b>Start Toss</b> "
-                  f"to flip the coin!" if vs_bot
-                  else f"🔒 When ready, {_m(draft['guest'])} taps <b>Start Toss</b> "
-                       f"to flip the coin!")
+    start_line = (f"🔒 When ready, {_m(draft['host'])} taps <b>Start Match</b> "
+                  f"to begin!")
+    toss_line = _toss_summary(draft)
     # A match the captains voted to play without traits shows none of them: no
     # badges on the cards and no ⚡ Trait Boost in the Team Overall line. The
     # card has to agree with the match it is introducing.
@@ -1285,6 +1306,7 @@ def _show_xi_text(draft, host_pairs, guest_pairs,
         "━━━━━━━━━━━━━━━━━━━",
         f"🌱 <b>Pitch:</b> {_PITCH_EMOJI.get(pitch, '🏏')} {pitch} • "
         f"{draft_overs(draft)} overs",
+        (f"<b>{html.escape(toss_line)}</b>" if toss_line else ""),
         # Only when the captains actually answered the question — a match that
         # never held a vote reads exactly as it did before the vote existed.
         (_trait_status(traits_on) if "traits_enabled" in draft else ""),
@@ -1375,9 +1397,8 @@ def _show_xi_blocks(draft, host_pairs, guest_pairs,
             guest_label = f"{draft['guest']['name']} (Bot — auto-picked)"
         else:
             guest_label = f"{draft['guest']['name']} (Guest)"
-        starter = draft["host"] if vs_bot else draft["guest"]
-        start_prompt = ["🔒 When ready, ", lpr.mention(starter),
-                        " taps ", R.bold("Start Toss"), " to flip the coin!"]
+        start_prompt = ["🔒 When ready, ", lpr.mention(draft["host"]),
+                        " taps ", R.bold("Start Match"), " to begin!"]
 
         return lpr.playing_xi_blocks(
             vs_bot=vs_bot, pitch=draft.get("pitch_type", "Hard"),
@@ -1391,10 +1412,10 @@ def _show_xi_blocks(draft, host_pairs, guest_pairs,
             guest_bench=(None if guest_bench is None
                          else _xi_rows(guest_bench, limit=None)),
             trait_status=trait_status, fairness=fairness,
-            start_prompt=start_prompt)
+            start_prompt=start_prompt, toss_line=_toss_summary(draft) or None)
     except Exception:
         # A renderer bug costs the rendering, never the card: None sends the
-        # HTML, and a captain is waiting on this to tap Start Toss.
+        # HTML, and a captain is waiting on this to tap Start Match.
         logger.exception("letsplay: Playing XI blocks failed to build")
         return None
 
@@ -1426,7 +1447,7 @@ def _fairness_facts(host_pairs, guest_pairs, vs_bot=False,
 
     Both renderings of the Playing-XI card print this verdict, and it is the one
     thing on the card a captain acts on — a gap too wide costs both sides their
-    career stats, and the fix is /change before the toss. Two renderers deriving
+    career stats, and the fix is /change before the match starts. Two renderers deriving
     it separately is two cards that can disagree about whether the match counts,
     so they share these numbers and differ only in how they draw them.
 
@@ -1495,8 +1516,15 @@ def _stats_fairness_note(host_pairs, guest_pairs, vs_bot=False,
         "━━━━━━━━━━━━━━━━━━━") if p)
 
 
+def _start_match_kb(invite_id):
+    return InlineKeyboardMarkup([[InlineKeyboardButton(
+        "▶️ Start Match", callback_data=f"lp_startmatch_{invite_id}")]])
+
+
 async def _prompt_show_xi(context, draft):
-    """Auto-order both XIs, snapshot them, and show them with a Start Toss button.
+    """Auto-order both XIs, snapshot them, and show them with a Start Match button.
+
+    Runs AFTER the toss, so the card can say who bats first.
 
     The exact roster ids shown here are snapshotted onto the draft so the match
     launches the SAME XI even if someone /swaps afterwards. If either side has
@@ -1556,8 +1584,7 @@ async def _prompt_show_xi(context, draft):
     draft["host_xi_roster_ids"] = host_ids
     draft["guest_xi_roster_ids"] = guest_ids
 
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton(
-        "🪙 Start Toss", callback_data=f"lp_starttoss_{invite_id}")]])
+    kb = _start_match_kb(invite_id)
     sent = await R.send_rich_message(context.bot, draft["chat_id"], blocks,
                                      text, reply_markup=kb)
     if sent and getattr(sent, "message_id", None):
@@ -1565,15 +1592,15 @@ async def _prompt_show_xi(context, draft):
 
 
 # ════════════════════════════════════════════════════════════════════
-# /change — swap a bench player into the XI before the toss (Lets Play)
+# /change — swap a bench player into the XI before the match starts (Lets Play)
 #
 # Two modes, chosen by the second number:
 #   • Reorder batting  — both numbers are XI slots (1-11): the two batting
 #     positions are swapped, letting a user set their own batting order.
 #   • Bring in a sub    — `out` is an XI slot (1-11), `in` is a bench number
 #     (12+): the bench player takes the dropped slot's place in the order.
-# Only usable while the "Playing XI" card is showing (status == "showxi") and
-# before the toss. The XI starts auto-ordered by batting rating, but once a user
+# Only usable while the "Playing XI" card is showing (status == "showxi"), which
+# is after the toss and before the match starts. The XI starts auto-ordered by batting rating, but once a user
 # reorders it the chosen order is preserved (snapshotted onto the draft) and used
 # when the match launches.
 # ════════════════════════════════════════════════════════════════════
@@ -1636,8 +1663,7 @@ async def _rerender_show_xi(context, draft):
     if not text:
         await _notify_change_applied(context, draft)
         return
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton(
-        "🪙 Start Toss", callback_data=f"lp_starttoss_{draft['invite_id']}")]])
+    kb = _start_match_kb(draft["invite_id"])
     mid = draft.get("showxi_msg_id")
     if mid:
         try:
@@ -1692,8 +1718,8 @@ async def letsplay_change_handler(update: Update, context: ContextTypes.DEFAULT_
         return True
     if draft.get("status") != "showxi":
         await msg.reply_text(
-            "❌ You can only change your XI once both Playing XIs are shown and "
-            "before the toss starts.")
+            "❌ You can only change your XI once the toss is done and both "
+            "Playing XIs are shown, before the match starts.")
         return True
 
     if side == "guest" and _fixed_guest(draft):
@@ -1812,8 +1838,13 @@ async def change_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await challenge_change_handler(update, context)
 
 
-async def letsplay_starttoss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """lp_starttoss_{id} — the GUEST starts the toss (guest calls it, like /cipl)."""
+async def letsplay_startmatch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """lp_startmatch_{id} — the HOST starts the match once the XIs are shown.
+
+    The toss has already been decided (it now comes BEFORE the Playing XIs), so
+    this launches the match with the stored ``toss_decision`` /
+    ``toss_winner_side``.
+    """
     q = update.callback_query
     try:
         _, _, invite_id = q.data.split("_")
@@ -1823,26 +1854,70 @@ async def letsplay_starttoss_callback(update: Update, context: ContextTypes.DEFA
         return
     draft = _get_draft(context, invite_id)
     if not draft or draft.get("status") != "showxi":
-        await q.answer("This match is no longer waiting for the toss.", show_alert=True)
+        await q.answer("This match is no longer waiting to start.", show_alert=True)
         return
-    # The guest starts the toss — vs the bot the guest IS the bot, so the host
-    # (the only human here) starts it.
-    starter_side = "host" if draft.get("vs_bot") else "guest"
-    if q.from_user.id != draft[starter_side]["tg_id"]:
-        await q.answer(
-            "Only you can start this toss." if starter_side == "host"
-            else "Only the guest starts the toss.", show_alert=True)
+    decision = draft.get("toss_decision")
+    winner_side = draft.get("toss_winner_side")
+    if decision not in ("bat", "bowl") or winner_side not in ("host", "guest"):
+        await q.answer("The toss hasn't been decided yet.", show_alert=True)
         return
-    # Flip out of "showxi" synchronously (no await before this) so a racing
-    # double-tap can't start two tosses.
-    draft["status"] = "toss"
-    _rearm_setup_timeout(context, invite_id)
+    if draft.get("match_launched"):
+        await q.answer("Match already started — play on the board below 👇")
+        return
+    if q.from_user.id != draft["host"]["tg_id"]:
+        await q.answer("Only the host starts the match.", show_alert=True)
+        return
+    # Flip synchronously (no await before this) so a racing double-tap can't
+    # launch two matches.
+    draft["match_launched"] = True
+    _cancel_setup_timeout(context, invite_id)
     await q.answer()
     try:
         await q.edit_message_reply_markup(reply_markup=None)
     except Exception:
-        logger.debug("letsplay: clearing start-toss button failed", exc_info=True)
-    await _start_toss(context, draft)
+        logger.debug("letsplay: clearing start-match button failed", exc_info=True)
+    try:
+        await _launch_match(context, draft, decision, winner_side)
+    except Exception:
+        logger.exception("letsplay launch failed for invite %s", invite_id)
+        # The Match row committed, so the match itself is real — only the board
+        # is missing. Re-send the outstanding prompt instead of throwing the
+        # match away.
+        mid = draft.get("match_id")
+        if mid:
+            from handlers.cipl_play import cipl_resume, _cancel_orphan_match_row
+            if await cipl_resume(context, mid):
+                return
+            # cipl_resume returns False exactly when no state was saved — there
+            # is nothing for /rcl to resume, and the committed row would hold the
+            # per-chat and per-player active-match gates shut against every
+            # future /letsplay in this chat. Cancel it (the /cipl path does the
+            # same) so the players can simply start again.
+            await asyncio.to_thread(_cancel_orphan_match_row, mid)
+            # The tournament fixture this launch claimed is now attached to a
+            # cancelled match, so hand it back — otherwise that pairing could
+            # never be played again.
+            await asyncio.to_thread(_release_lpt_fixture, draft)
+            await context.bot.send_message(
+                draft["chat_id"],
+                "⚠️ The match didn't start — nothing was lost. "
+                "Run /letsplay again.")
+            return
+        # Nothing playable came out of this, so hand the Start Match button
+        # back rather than leaving a draft that answers "already started"
+        # forever.
+        draft["match_launched"] = False
+        _rearm_setup_timeout(context, invite_id)
+        try:
+            await context.bot.send_message(
+                draft["chat_id"],
+                f"⚠️ The match didn't start — nothing was lost.\n"
+                f"{_m(draft['host'])}, tap Start Match again:",
+                parse_mode="HTML",
+                reply_markup=_start_match_kb(invite_id))
+        except Exception:
+            logger.exception("letsplay start-match re-prompt after failed launch "
+                             "failed for invite %s", invite_id)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -1935,7 +2010,7 @@ async def letsplay_coin_callback(update: Update, context: ContextTypes.DEFAULT_T
     caller_label = "you" if vs_bot else "guest"
 
     # Vs the bot, a bot toss win is settled right here: it elects bat or bowl at
-    # random and the match launches, so no stale keyboard is left in the chat.
+    # random and the Playing XIs follow, so no stale keyboard is left in the chat.
     if vs_bot and winner_side == "guest":
         from services.bot_captain import elect_toss_decision
         decision = elect_toss_decision()
@@ -1944,32 +2019,14 @@ async def letsplay_coin_callback(update: Update, context: ContextTypes.DEFAULT_T
             f"<b>{call.upper()}</b>.\n\n"
             f"🤖 <b>Bot</b> won the toss and elected to "
             f"<b>{'BAT' if decision == 'bat' else 'BOWL'}</b> first.\n\n"
-            f"The match begins below — play over by over!")
+            f"Playing XIs below 👇")
         revealed = await reveal_toss_result(lambda: _reveal_rich(
             q, (lpr.toss_result_blocks(coin, call, "you", winner) or [])
                + (lpr.toss_elected_blocks(winner, decision, bot_won=True) or []),
             bot_won_html))
         if revealed:
             draft["toss_winner_side"] = winner_side
-            draft["match_launched"] = True
-            _cancel_setup_timeout(context, invite_id)
-            try:
-                await _launch_match(context, draft, decision, winner_side)
-            except Exception:
-                # The setup timer was already cancelled above, so nothing else
-                # will ever clean this draft up — retire it here or it lingers
-                # in bot_data forever. Drop it BEFORE the (fallible) notice: if
-                # that send raises, a draft left on status "toss" would block
-                # every future /lpbot in this chat.
-                logger.exception("lpbot launch failed for invite %s", invite_id)
-                draft["status"] = "failed"
-                _drop_draft(context, invite_id)
-                try:
-                    await context.bot.send_message(
-                        draft["chat_id"],
-                        "⚠️ Failed to start the match. Please try /lpbot again.")
-                except Exception:
-                    logger.exception("lpbot launch-failure notice failed")
+            await _after_toss_decided(context, draft, decision)
             return
     else:
         # The reveal is the critical edit: if it fails the toss is left frozen on
@@ -2004,7 +2061,7 @@ async def letsplay_coin_callback(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def letsplay_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """lp_toss_{bat|bowl}_{id}_{winner_side} — winner elects, match launches."""
+    """lp_toss_{bat|bowl}_{id}_{winner_side} — winner elects, XIs are shown."""
     q = update.callback_query
     try:
         _, _, decision, invite_id, winner_side = q.data.split("_")
@@ -2033,69 +2090,36 @@ async def letsplay_toss_callback(update: Update, context: ContextTypes.DEFAULT_T
         await q.answer("Toss winner only.", show_alert=True)
         return
 
-    draft["match_launched"] = True
-    _cancel_setup_timeout(context, invite_id)
+    if draft.get("toss_decision"):
+        await q.answer("Toss already decided — see the Playing XIs below 👇")
+        return
+
     await q.answer()
     winner = draft[winner_side]
-    # Cosmetic: the toss-result edit must never be able to stop the match from
-    # starting. An unguarded edit here left `match_launched` set on a match that
-    # was never created, so every retry answered "Match already started".
+    # Cosmetic: the toss-result edit must never be able to stop the setup from
+    # moving on to the Playing XIs.
     try:
         await _reveal_rich(
             q, lpr.toss_elected_blocks(winner, decision),
             f"✅ {_m(winner)} elected to "
             f"<b>{'BAT' if decision == 'bat' else 'BOWL'}</b> first.\n\n"
-            f"The match begins below — play over by over!")
+            f"Playing XIs below 👇")
     except Exception:
         logger.warning("letsplay toss result edit failed for invite %s — "
-                       "starting the match anyway", invite_id, exc_info=True)
-    try:
-        await _launch_match(context, draft, decision, winner_side)
-    except Exception:
-        logger.exception("letsplay launch failed for invite %s", invite_id)
-        # The Match row committed, so the match itself is real — only the board
-        # is missing. Re-send the outstanding prompt instead of throwing the
-        # match away.
-        mid = draft.get("match_id")
-        if mid:
-            from handlers.cipl_play import cipl_resume, _cancel_orphan_match_row
-            if await cipl_resume(context, mid):
-                return
-            # cipl_resume returns False exactly when no state was saved — there
-            # is nothing for /rcl to resume, and the committed row would hold the
-            # per-chat and per-player active-match gates shut against every
-            # future /letsplay in this chat. Cancel it (the /cipl path does the
-            # same) so the players can simply start again.
-            await asyncio.to_thread(_cancel_orphan_match_row, mid)
-            # The tournament fixture this launch claimed is now attached to a
-            # cancelled match, so hand it back — otherwise that pairing could
-            # never be played again.
-            await asyncio.to_thread(_release_lpt_fixture, draft)
-            await context.bot.send_message(
-                draft["chat_id"],
-                "⚠️ The match didn't start — nothing was lost. "
-                "Run /letsplay again.")
-            return
-        # Nothing playable came out of this, so put the toss back in the
-        # winner's hands rather than leaving a draft that answers "already
-        # started" forever.
-        draft["match_launched"] = False
-        _rearm_setup_timeout(context, invite_id)
-        try:
-            await context.bot.send_message(
-                draft["chat_id"],
-                f"⚠️ The match didn't start — nothing was lost.\n"
-                f"{_m(winner)}, choose again:",
-                parse_mode="HTML",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🏏 Bat First",
-                                         callback_data=f"lp_toss_bat_{invite_id}_{winner_side}"),
-                    InlineKeyboardButton("🎳 Bowl First",
-                                         callback_data=f"lp_toss_bowl_{invite_id}_{winner_side}"),
-                ]]))
-        except Exception:
-            logger.exception("letsplay toss re-prompt after failed launch failed "
-                             "for invite %s", invite_id)
+                       "showing the XIs anyway", invite_id, exc_info=True)
+    await _after_toss_decided(context, draft, decision)
+
+
+async def _after_toss_decided(context, draft, decision):
+    """Record the toss decision and move on to the Playing XI card.
+
+    The toss now comes BEFORE the XIs, so the match is launched later from the
+    card's Start Match button (:func:`letsplay_startmatch_callback`).
+    """
+    draft["toss_decision"] = decision
+    draft["status"] = "showxi"
+    _rearm_setup_timeout(context, draft["invite_id"])
+    await _prompt_show_xi(context, draft)
 
 
 async def _abandon_launch(context, draft, message):
@@ -2416,7 +2440,7 @@ async def _launch_match(context, draft, decision, winner_side):
     elif not lpt and is_stat_farming_mismatch(bat_xi, bowl_xi):
         # Fair-match stat gate: if the two XIs are too far apart in Team Overall,
         # flag the match so no career stats are recorded (anti stat-farming). The
-        # players were already warned on the Playing-XI card before the toss.
+        # players were already warned on the Playing-XI card before the match started.
         #
         # An official tournament fixture is exempt: an admin decided who plays
         # whom, so a lopsided pairing is just a hard draw, and flagging it would

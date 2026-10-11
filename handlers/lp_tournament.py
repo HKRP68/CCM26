@@ -183,7 +183,7 @@ async def lptour_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/lptour — play your Lets Play Tournament fixture against another player.
 
     Checks the tournament rules here, then hands off to the ordinary /letsplay
-    invitation → pitch → XI → toss → match flow with a tournament context
+    invitation → pitch → toss → XI → match flow with a tournament context
     attached. The fixture itself is only claimed at launch (in
     ``handlers.letsplay._launch_match``), so an invitation that is denied or
     times out leaves the schedule untouched.

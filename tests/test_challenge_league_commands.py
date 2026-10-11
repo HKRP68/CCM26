@@ -586,7 +586,7 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
             # The guest's Deny Match button sits on its own row at the bottom.
             self.assertEqual(pitch_rows[-1][0].callback_data, "cl_denymatch_123456")
 
-            # The host picks the first pitch; only then do the XI buttons appear.
+            # The host picks the first pitch; the TOSS comes next, before XIs.
             pitch_query = SimpleNamespace(
                 data="cl_pitch_123456_0",
                 from_user=SimpleNamespace(id=1),
@@ -598,10 +598,28 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
             await challenge.challenge_pitch_callback(
                 SimpleNamespace(callback_query=pitch_query), context)
 
-        draft = context.bot_data[challenge._challenge_team_draft_key(123456)]
-        self.assertEqual(draft["pitch_type"], challenge.PITCH_TYPES[0])
-        self.assertEqual(message.replies[1][0], "created")
-        keyboard = message.replies[1][1]["reply_markup"].inline_keyboard
+            draft = context.bot_data[challenge._challenge_team_draft_key(123456)]
+            self.assertEqual(draft["pitch_type"], challenge.PITCH_TYPES[0])
+            toss_text, toss_kwargs = message.replies[1]
+            self.assertIn("TOSS", toss_text)
+            coin_callbacks = {b.callback_data for row in
+                              toss_kwargs["reply_markup"].inline_keyboard
+                              for b in row}
+            self.assertEqual(coin_callbacks,
+                             {"cipl_coin_heads_123456", "cipl_coin_tails_123456"})
+            # The guest (the caller) is now on the clock for the toss.
+            self.assertEqual(draft["sel_phase"], "toss")
+            self.assertEqual(len(message.replies), 2)   # no XI buttons yet
+
+            # Once the toss winner elects, the XI selection opens.
+            draft["toss_winner_side"] = "target"
+            await challenge._after_toss_decided(context, draft, 123456,
+                                                message, "bowl")
+
+        self.assertEqual(draft["toss_decision"], "bowl")
+        self.assertEqual(draft["sel_phase"], "xi")
+        self.assertEqual(message.replies[2][0], "created")
+        keyboard = message.replies[2][1]["reply_markup"].inline_keyboard
         self.assertEqual([button.text for button in keyboard[0]], ["Select MI XI", "Select CSK XI"])
         self.assertEqual(keyboard[0][0].callback_data, "cl_xi_123456_host")
         self.assertEqual(keyboard[0][1].callback_data, "cl_xi_123456_target")
@@ -953,6 +971,8 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
                     "host": {"player_ids": list(range(1, 12)), "confirmed": True},
                     "target": {"player_ids": list(range(1, 12)), "confirmed": True},
                 },
+                "toss_winner_side": "target",
+                "toss_decision": "bowl",
             }
         })
         query = SimpleNamespace(
@@ -962,21 +982,62 @@ class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
             edit_message_text=AsyncMock(),
         )
 
-        await challenge.challenge_start_match_callback(SimpleNamespace(callback_query=query), context)
+        launch = AsyncMock()
+        with patch.dict(sys.modules, {"handlers.cipl_play": SimpleNamespace(
+                start_match_launch=launch)}):
+            await challenge.challenge_start_match_callback(
+                SimpleNamespace(callback_query=query), context)
 
-        self.assertTrue(context.bot_data[challenge._challenge_team_draft_key(123456)]["match_started"])
-        query.answer.assert_awaited_once_with("Match started!")
-        # Starting the match now launches the toss "exactly like the current system":
-        # the guest is prompted to call the coin before the over-by-over chat match begins.
-        self.assertIn("🪙 <b>TOSS</b>", query.edit_message_text.await_args.args[0])
-        markup = query.edit_message_text.await_args.kwargs["reply_markup"]
-        coin_callbacks = {btn.callback_data for row in markup.inline_keyboard for btn in row}
-        self.assertEqual(coin_callbacks, {"cipl_coin_heads_123456", "cipl_coin_tails_123456"})
-        # The per-chat lock must STILL be held through the toss window — the live
-        # Match row doesn't exist until cipl_toss, so releasing here would let a
-        # second /cipl open in this chat during the toss.
+        draft = context.bot_data[challenge._challenge_team_draft_key(123456)]
+        self.assertTrue(draft["match_started"])
+        # The toss was already decided BEFORE the XIs, so Start Match launches
+        # the match straight away with the stored decision — no coin prompt.
+        launch.assert_awaited_once()
+        self.assertIs(launch.await_args.args[2], draft)
+        self.assertEqual(launch.await_args.args[3], 123456)
+        query.edit_message_text.assert_not_awaited()
+        # The per-chat lock is still held until the launch creates the Match row.
         self.assertIsNotNone(
             challenge._active_draft_in_chat(context.bot_data, -100))
+
+    async def test_start_match_refuses_before_the_toss_is_decided(self):
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123456): {
+                "chat_id": -100, "turn": "complete",
+                "host": {"tg_id": 1, "name": "User 1"},
+                "target": {"tg_id": 2, "name": "User 2"},
+                "xi_selections": {
+                    "host": {"player_ids": list(range(1, 12)), "confirmed": True},
+                    "target": {"player_ids": list(range(1, 12)), "confirmed": True},
+                },
+            }
+        })
+        query = SimpleNamespace(data="cl_start_123456",
+                                from_user=SimpleNamespace(id=1),
+                                answer=AsyncMock(), edit_message_text=AsyncMock())
+        launch = AsyncMock()
+        with patch.dict(sys.modules, {"handlers.cipl_play": SimpleNamespace(
+                start_match_launch=launch)}):
+            await challenge.challenge_start_match_callback(
+                SimpleNamespace(callback_query=query), context)
+
+        launch.assert_not_awaited()
+        self.assertIn("toss", query.answer.await_args.args[0].lower())
+
+    async def test_quickselect_is_ignored_before_the_toss(self):
+        bot_data = _xi_draft()
+        draft = bot_data[challenge._challenge_team_draft_key(123456)]
+        draft.pop("toss_decision")
+        msg = SimpleNamespace(text="1 2 3 4 5 6 7 8 9 10 11",
+                              reply_text=AsyncMock(), delete=AsyncMock())
+        update = SimpleNamespace(effective_message=msg,
+                                 effective_chat=SimpleNamespace(id=-100),
+                                 effective_user=SimpleNamespace(id=1))
+        await challenge.challenge_xi_quickselect(
+            update, SimpleNamespace(bot_data=bot_data))
+
+        self.assertEqual(draft["xi_selections"]["host"]["player_ids"], [])
+        msg.reply_text.assert_not_awaited()
 
 
 def _squad_15():
@@ -1007,6 +1068,9 @@ def _xi_draft(*, started=True, confirmed=False, player_ids=None):
             "target": {"tg_id": 2, "name": "User 2"},
             "xi_started": {"host": started},
             "xi_selections": {"host": sel},
+            # The toss comes before the XI selection.
+            "toss_winner_side": "host",
+            "toss_decision": "bat",
         },
     }
 

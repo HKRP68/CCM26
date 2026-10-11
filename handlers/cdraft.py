@@ -4,8 +4,8 @@ One command, a second player joins, and the bot deals eleven slots. Each slot
 offers **two cards of the same role within a point of each other on OVR**: the
 captain on the clock takes one and the other goes straight to their opponent.
 Eleven slots later both captains hold eleven players, and from the pitch choice
-onwards this is an ordinary Challenge League match — the same Playing XI
-screen, the same toss, the same over-by-over flow.
+onwards this is an ordinary Challenge League match — the same toss, the same
+Playing XI screen, the same over-by-over flow.
 
 Career cards are never dealt: the pool comes from ``services.player_cache``,
 which already excludes them.
@@ -16,8 +16,8 @@ The object that carries a league match through setup is the *draft dict* in
 ``context.bot_data[_challenge_team_draft_key(draft_id)]``. This module builds
 one of exactly that shape, with two extra keys — ``mode: "cdraft"`` and the
 ``cdraft`` state from :mod:`services.cdraft_service` — so once the picking is
-over, every existing callback (``cl_pitch_``, ``cl_xi_``, ``cl_confirm_``,
-``cl_start_``, ``cipl_coin_``, ``cipl_toss_``) drives it unchanged. Only two
+over, every existing callback (``cl_pitch_``, ``cipl_coin_``, ``cipl_toss_``,
+``cl_xi_``, ``cl_confirm_``, ``cl_start_``) drives it unchanged. Only two
 functions anywhere need to know the squad came from a draft instead of a league
 team: ``handlers.challenge._query_team_players`` and
 ``handlers.cipl_play.build_xi_from_draft``.
@@ -81,7 +81,7 @@ DRAFT_GONE_MESSAGE = (
 )
 
 # Picking is over but the draft itself is alive and in the Challenge League's
-# hands (pitch → Playing XI → toss). A stale slot button must not claim the
+# hands (pitch → toss → Playing XI). A stale slot button must not claim the
 # draft is dead when the match is being set up right now.
 PICKING_OVER_MESSAGE = (
     "The picking is over — this match is already being set up."
