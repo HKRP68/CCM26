@@ -1,5 +1,6 @@
-"""The reported bug: tapping Bat/Bowl answers "Match already started" — but no
-match ever started.
+"""The reported bug: tapping Start Match answers "Match already started" — but
+no match ever started. (The toss now comes BEFORE the XI selection, so the
+launch moved from the Bat/Bowl tap to the MATCH READY card's Start Match tap.)
 
 ``match_launched`` is set the moment the Match row commits, which happens
 BEFORE the toss-result edit, the state write and the first bowler prompt. Any
@@ -18,7 +19,7 @@ These tests pin the two halves of the fix:
 
 import asyncio
 import unittest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import handlers.cipl_play as cp
 from services.match_state_store import A_COMPLETED, A_PICK_CIPL_BOWLER
@@ -49,7 +50,7 @@ class _Patched:
 
 
 class LaunchGuardTests(unittest.TestCase):
-    """cipl_toss_callback: "already started" must be true before it is said."""
+    """start_match_launch: "already started" must be true before it is said."""
 
     DRAFT_ID = 31
     WINNER_TG = 7
@@ -61,6 +62,7 @@ class LaunchGuardTests(unittest.TestCase):
         self.draft = {
             "turn": "complete", "chat_id": -100, "match_launched": True,
             "match_id": 55, "host_tg_id": 1, "target_tg_id": self.WINNER_TG,
+            "toss_decision": "bat", "toss_winner_side": "target",
         }
         self.ctx.bot_data[cp._draft_key(self.DRAFT_ID)] = self.draft
         self.launched = []
@@ -81,8 +83,8 @@ class LaunchGuardTests(unittest.TestCase):
                  _release_launch_reservations=lambda draft: None)
 
     def _tap(self):
-        q = _query(f"cipl_toss_bat_{self.DRAFT_ID}_target", self.WINNER_TG)
-        asyncio.run(cp.cipl_toss_callback(MagicMock(callback_query=q), self.ctx))
+        q = _query(f"cl_start_{self.DRAFT_ID}", 1)
+        asyncio.run(cp.start_match_launch(self.ctx, q, self.draft, self.DRAFT_ID))
         return q
 
     def _install_state(self, state, action=A_PICK_CIPL_BOWLER):
@@ -128,16 +130,13 @@ class LaunchGuardTests(unittest.TestCase):
                             if c.args)
         self.assertIn("already started", answered)
 
-    def test_only_the_toss_winner_rolls_a_dead_launch_back(self):
-        # Rolling back writes to the database, so a bystander tapping the stale
-        # button must not trigger it — they just get told it's starting.
-        self._install_state(None)
-        q = _query(f"cipl_toss_bat_{self.DRAFT_ID}_target", 4242)
-        asyncio.run(cp.cipl_toss_callback(MagicMock(callback_query=q), self.ctx))
+    def test_a_launch_in_progress_is_acknowledged_quietly(self):
+        self.draft["launch_in_progress"] = True
 
-        self.assertEqual(self.cancelled, [])
+        q = self._tap()
+
         self.assertEqual(self.launched, [])
-        self.assertTrue(self.draft["match_launched"])
+        q.answer.assert_awaited_once_with("Starting the match…")
 
     def test_a_live_match_with_no_visible_board_is_put_back_on_screen(self):
         # State survived but the prompt didn't — the player is staring at a dead
@@ -149,6 +148,68 @@ class LaunchGuardTests(unittest.TestCase):
         self.assertEqual(self.resumed, [55])
         self.assertEqual(self.launched, [])
         self.assertTrue(self.draft["match_launched"])
+
+
+class TossBeforeXiTests(unittest.TestCase):
+    """cipl_toss_callback: the toss comes BEFORE the XI selection, so electing
+    bat/bowl records the decision and opens the XIs — it never launches."""
+
+    DRAFT_ID = 41
+    WINNER_TG = 7
+
+    def setUp(self):
+        self.ctx = MagicMock()
+        self.ctx.bot_data = {}
+        self.draft = {
+            "turn": "complete", "chat_id": -100, "host_tg_id": 1,
+            "target_tg_id": self.WINNER_TG, "toss_winner_side": "target",
+            "target": {"tg_id": self.WINNER_TG, "name": "Guest"},
+        }
+        self.ctx.bot_data[cp._draft_key(self.DRAFT_ID)] = self.draft
+        self.launched = []
+
+        async def _launch(*a, **k):
+            self.launched.append(a)
+
+        _Patched(self, _launch_after_toss=_launch)
+
+    def _tap(self, data=None, user=None):
+        q = _query(data or f"cipl_toss_bowl_{self.DRAFT_ID}_target",
+                   user or self.WINNER_TG)
+        with patch("handlers.challenge._after_toss_decided",
+                   new=AsyncMock()) as after:
+            asyncio.run(cp.cipl_toss_callback(MagicMock(callback_query=q),
+                                              self.ctx))
+        return q, after
+
+    def test_electing_opens_the_xi_selection_instead_of_launching(self):
+        q, after = self._tap()
+
+        self.assertEqual(self.launched, [])
+        self.assertEqual(self.draft["toss_decision"], "bowl")
+        after.assert_awaited_once()
+        self.assertEqual(after.await_args.args[2], self.DRAFT_ID)
+        self.assertEqual(after.await_args.args[4], "bowl")
+
+    def test_a_second_tap_does_not_reopen_the_xis(self):
+        self.draft["toss_decision"] = "bat"
+
+        q, after = self._tap()
+
+        after.assert_not_awaited()
+        self.assertEqual(self.draft["toss_decision"], "bat")
+
+    def test_only_the_toss_winner_elects(self):
+        q, after = self._tap(user=4242)
+
+        after.assert_not_awaited()
+        self.assertNotIn("toss_decision", self.draft)
+
+    def test_a_stale_winner_side_is_refused(self):
+        q, after = self._tap(data=f"cipl_toss_bat_{self.DRAFT_ID}_host", user=1)
+
+        after.assert_not_awaited()
+        self.assertNotIn("toss_decision", self.draft)
 
 
 class HandoffRecoveryTests(unittest.TestCase):

@@ -1468,8 +1468,8 @@ async def cipl_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     caller_label = "you" if vs_bot else "guest"
 
     # Vs the bot, a bot toss win is decided right here — it elects bat or bowl
-    # at random and the match launches. No keyboard is posted, so there is
-    # nothing stale for the human to tap.
+    # at random and the Playing XI selection opens. No keyboard is posted, so
+    # there is nothing stale for the human to tap.
     bot_won = vs_bot and winner_side == "target"
     if bot_won:
         from services import bot_captain
@@ -1478,12 +1478,14 @@ async def cipl_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"🪙 The coin lands on <b>{coin.upper()}</b> — you called "
             f"<b>{call.upper()}</b>.\n\n"
             f"🤖 <b>Bot</b> won the toss and elected to "
-            f"<b>{'BAT' if decision == 'bat' else 'BOWL'}</b> first.",
+            f"<b>{'BAT' if decision == 'bat' else 'BOWL'}</b> first.\n\n"
+            f"Now pick your Playing XI below 👇",
             parse_mode="HTML"))
         if revealed:
             draft["toss_winner_side"] = winner_side
-            await _launch_after_toss(context, q, draft, draft_id,
-                                     decision, winner_side)
+            from handlers.challenge import _after_toss_decided
+            await _after_toss_decided(context, draft, draft_id, q.message,
+                                      decision)
             return
     else:
         # The reveal is the critical edit: if it fails the toss is left frozen on
@@ -1522,11 +1524,19 @@ async def cipl_coin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             logger.exception("/cipl toss re-prompt failed for draft %s", draft_id)
         return
     draft["toss_winner_side"] = winner_side
+    # The toss now opens the setup (the XI selection follows it), so the
+    # winner's Bat/Bowl choice is on the same clock as every other setup step.
+    try:
+        from handlers.challenge import _arm_selection_timer
+        await _arm_selection_timer(context, draft, [winner_tg], "toss")
+    except Exception:
+        logger.debug("/cipl toss timer re-arm failed", exc_info=True)
 
 
 async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """cipl_toss_{bat|bowl}_{draft_id}_{winner_side} — winner elects, then the
-    over-by-over match begins in the chat."""
+    """cipl_toss_{bat|bowl}_{draft_id}_{winner_side} — winner elects, then both
+    sides pick their Playing XI (the toss comes BEFORE the XI selection). The
+    match launches later from the MATCH READY card's Start Match button."""
     q = update.callback_query
     try:
         _, _, decision, draft_id, winner_side = q.data.split("_")
@@ -1538,46 +1548,71 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not draft or draft.get("turn") != "complete":
         await q.answer("This toss is no longer active.", show_alert=True)
         return
-    if decision not in ("bat", "bowl"):
+    if decision not in ("bat", "bowl") or winner_side not in ("host", "target"):
         await q.answer("Invalid decision.", show_alert=True)
         return
-    # A duplicate tap (the impatient winner double-tapping while the first tap is
+    # Trust only the toss winner actually recorded after the coin animation.
+    if winner_side != draft.get("toss_winner_side"):
+        await q.answer("That toss result is stale. Use the latest buttons.",
+                       show_alert=True)
+        return
+    # A duplicate tap must not re-open the XI selection — acknowledge quietly.
+    if draft.get("toss_decision"):
+        await q.answer("Toss already decided — pick your Playing XI below 👇")
+        return
+    winner_tg = draft.get(f"{winner_side}_tg_id")
+    if q.from_user.id != winner_tg:
+        await q.answer("Toss winner only.", show_alert=True)
+        return
+    # Set synchronously (before any await) so a racing double-tap is refused.
+    draft["toss_decision"] = decision
+    await q.answer()
+    winner_name = (draft.get(winner_side) or {}).get("name", "Winner")
+    try:
+        await q.edit_message_text(
+            f"✅ {_mention(winner_tg, winner_name)} won the toss and elected to "
+            f"<b>{'BAT' if decision == 'bat' else 'BOWL'}</b> first.\n\n"
+            f"Now pick your Playing XIs below 👇",
+            parse_mode="HTML")
+    except Exception:
+        logger.warning("/cipl toss result edit failed for draft %s — "
+                       "moving on to the XIs anyway", draft_id, exc_info=True)
+    from handlers.challenge import _after_toss_decided
+    await _after_toss_decided(context, draft, draft_id, q.message, decision)
+
+
+async def start_match_launch(context, q, draft, draft_id):
+    """Launch the match from the MATCH READY card's Start Match tap.
+
+    The toss is already decided (``toss_decision`` / ``toss_winner_side`` on the
+    draft) and both XIs are confirmed. Also heals a launch that committed a Match
+    row but never reached the board, so a retry tap on Start Match works.
+    """
+    decision = draft.get("toss_decision")
+    winner_side = draft.get("toss_winner_side")
+    # A duplicate tap (the impatient host double-tapping while the first tap is
     # still finalising, or tapping a stale button after the match began) must NOT
-    # fire an alarming "Match already started" popup — that scary alert is exactly
-    # what this fix is meant to remove. Acknowledge it with a quiet toast instead;
-    # the real match is proceeding on the board below.
+    # fire an alarming "Match already started" popup. Acknowledge it with a quiet
+    # toast instead; the real match is proceeding on the board below.
     if draft.get("launch_in_progress"):
         await q.answer("Starting the match…")
         return
-    winner_tg = draft.get("target_tg_id") if winner_side == "target" else draft.get("host_tg_id")
     if draft.get("match_launched"):
         # `match_launched` only proves a Match row was COMMITTED — not that the
-        # board ever reached the chat. Everything after that commit (the toss
-        # edit, the state write, the first bowler prompt) can still fail, and
-        # when it did the old code answered "Match already started" forever on a
-        # match nobody could play. Check the live state before claiming it
+        # board ever reached the chat. Check the live state before claiming it
         # started, and heal whichever half is broken.
         state = await _live_cipl_state(context, draft)
         if state is not None:
             await q.answer("Match already started — play on the board below 👇")
             # No action message means the prompt never landed (or was deleted):
-            # put the board back in front of them instead of leaving them
-            # tapping a dead toss message.
+            # put the board back in front of them.
             if not state.get("action_msg_id"):
                 await cipl_resume(context, draft["match_id"])
             return
-        # Committed but never playable. Rolling that back writes to the database,
-        # so it is the toss winner's tap that does it — anyone else in the chat
-        # gets the same reassuring toast they'd get mid-launch.
-        if q.from_user.id != winner_tg:
-            await q.answer("Starting the match…")
-            return
-        # Clear the wreckage — the cancelled row also frees the per-chat and
-        # per-player active-match gates — so the launch below can proceed.
+        # Committed but never playable: clear the wreckage — the cancelled row
+        # also frees the per-chat and per-player active-match gates — so the
+        # launch below can proceed.
         await _abandon_failed_launch(context, draft)
-    if q.from_user.id != winner_tg:
-        await q.answer("Toss winner only.", show_alert=True)
-        return
     await _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
 
 

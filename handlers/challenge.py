@@ -861,7 +861,7 @@ async def _send_challenge_xi_prompt(context, draft, message_obj):
     if draft.get("vs_bot"):
         # Show the bot's locked-in XI here — it has no "Select XI" button of its
         # own, so this is the only place the user gets to see what they're up
-        # against before the toss.
+        # against before the match starts.
         created_message += "\n" + _bot_xi_recap(draft)
     if message_obj is None:
         return
@@ -942,8 +942,84 @@ def _resolve_fixture_venue(draft):
         session.close()
 
 
+def _toss_call_keyboard(draft_id):
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("Heads", callback_data=f"cipl_coin_heads_{draft_id}"),
+        InlineKeyboardButton("Tails", callback_data=f"cipl_coin_tails_{draft_id}"),
+    ]])
+
+
+def _toss_caller_side(draft):
+    """The guest calls the toss — vs the bot the guest IS the bot, so the host."""
+    return "host" if draft.get("vs_bot") else "target"
+
+
+async def _send_toss_prompt(context, draft, message_obj):
+    """Post the Heads/Tails toss call for this draft and arm its clock."""
+    draft_id = draft.get("draft_id")
+    caller_side = _toss_caller_side(draft)
+    caller = draft.get(caller_side) or {}
+    caller_tg = caller.get("tg_id") or draft.get(f"{caller_side}_tg_id")
+    text = (f"🪙 <b>TOSS</b>\n"
+            f"{_mention(caller_tg, caller.get('name') or 'Guest')}, "
+            f"call the coin:\n\n"
+            f"<i>The toss comes first — you'll pick your Playing XIs once "
+            f"it's decided.</i>")
+    try:
+        if message_obj is not None:
+            sent = await message_obj.reply_text(
+                text, parse_mode="HTML",
+                reply_markup=_toss_call_keyboard(draft_id))
+        else:
+            sent = await context.bot.send_message(
+                draft.get("chat_id"), text, parse_mode="HTML",
+                reply_markup=_toss_call_keyboard(draft_id))
+        _track_setup_msg(draft, sent)
+    except Exception:
+        logger.exception("Failed to send challenge toss prompt")
+    await _arm_selection_timer(context, draft, [caller_tg], "toss")
+
+
+async def _after_toss_decided(context, draft, draft_id, message_obj, decision):
+    """The toss is settled: record it, then ask both sides for their Playing XI.
+
+    The toss comes BEFORE the XI selection, so each captain knows whether they
+    bat or bowl first while picking. The match itself launches later from the
+    MATCH READY card's Start Match button with the stored decision.
+    """
+    draft["toss_decision"] = decision
+    await _send_challenge_xi_prompt(context, draft, message_obj)
+    # Both players now pick their Playing XI — arm the clock on both sides (only
+    # the human side exists in a bot match).
+    waiting = [draft.get("host_tg_id")]
+    if not draft.get("vs_bot"):
+        waiting.append(draft.get("target_tg_id"))
+    await _arm_selection_timer(context, draft, waiting, "xi")
+
+
+def _toss_summary_html(draft):
+    """'X won the toss and elected to BAT — X bats first.' (or "" if undecided)."""
+    side = draft.get("toss_winner_side")
+    decision = draft.get("toss_decision")
+    if side not in ("host", "target") or decision not in ("bat", "bowl"):
+        return ""
+    other = "host" if side == "target" else "target"
+    winner = draft.get(side) or {}
+    loser = draft.get(other) or {}
+    win_name = winner.get("name") or ("Host" if side == "host" else "Guest")
+    lose_name = loser.get("name") or ("Host" if other == "host" else "Guest")
+    batting = win_name if decision == "bat" else lose_name
+    return (f"🪙 <b>Toss:</b> {_esc(win_name)} won and elected to "
+            f"<b>{'BAT' if decision == 'bat' else 'BOWL'}</b> — "
+            f"{_esc(batting)} bats first.")
+
+
 async def _after_pitch_selected(context, draft, draft_id, message_obj):
-    """Everything that follows the surface being settled: bot XI, then XI prompts."""
+    """Everything that follows the surface being settled: bot XI, then the toss.
+
+    The toss now comes BEFORE the Playing XI selection; the XI prompts follow
+    from :func:`_after_toss_decided` once the winner has elected.
+    """
     # Vs the bot: lock in its Playing XI now so the only thing left is the
     # human's own XI selection, which runs exactly as it does in /cipl.
     if draft.get("vs_bot") and not _autoconfirm_bot_xi(draft):
@@ -959,17 +1035,11 @@ async def _after_pitch_selected(context, draft, draft_id, message_obj):
                 logger.exception("ciplbot: failed to report a missing bot squad")
         return
 
-    await _send_challenge_xi_prompt(context, draft, message_obj)
-    # Both players now pick their Playing XI — arm the clock on both sides (only
-    # the human side exists in a bot match).
-    waiting = [draft.get("host_tg_id")]
-    if not draft.get("vs_bot"):
-        waiting.append(draft.get("target_tg_id"))
-    await _arm_selection_timer(context, draft, waiting, "xi")
+    await _send_toss_prompt(context, draft, message_obj)
 
 
 async def challenge_pitch_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """cl_pitch_{draft_id}_{idx} — host selects the pitch, then XI selection opens."""
+    """cl_pitch_{draft_id}_{idx} — host selects the pitch, then the toss opens."""
     query = update.callback_query
     try:
         _, _, draft_id, pitch_idx = query.data.split("_")
@@ -1412,7 +1482,9 @@ def _challenge_match_ready_text(draft):
         f"{_team_emoji(target_team)} <b>Guest Team:</b> {target_team}\n"
         f"👤 <b>Guest:</b> {_mention(target.get('tg_id'), target.get('name') or 'Guest')}\n\n"
         f"🎮 <b>Game Mode:</b> {game_mode}\n"
-        f"🌱 <b>Pitch Profile:</b> {pitch_profile}\n\n"
+        f"🌱 <b>Pitch Profile:</b> {pitch_profile}\n"
+        + (f"{_toss_summary_html(draft)}\n" if _toss_summary_html(draft) else "")
+        + "\n"
         f"🔥 {host_code} vs {target_code} is ready to begin!\n"
         f"🟢 {_mention(host.get('tg_id'), host.get('name') or 'Host')} Click on Start Match"
     )
@@ -2103,7 +2175,7 @@ async def launch_cl_tour_match(context, *, message_obj, chat_id, host, target,
     The league and both teams are fixed at tour-creation time, so this builds a
     Challenge League draft that is already at the ``turn == "complete"`` state and
     jumps straight to the host's pitch-selection step. From there the regular
-    /cipl flow (pitch → Playing XI → toss → over-by-over) runs unchanged. The
+    /cipl flow (pitch → toss → Playing XI → over-by-over) runs unchanged. The
     ``cl_tour_*`` tags ride the draft → match state so the result is recorded
     back into the series (see handlers/cipl_play.py).
 
@@ -3206,7 +3278,7 @@ async def _expire_challenge_draft(ctx):
 
 def _selection_phase_label(phase):
     return {"team": "team", "pitch": "pitch", "xi": "Playing XI",
-            "draft": "draft pick"}.get(phase, "selection")
+            "toss": "toss", "draft": "draft pick"}.get(phase, "selection")
 
 
 def _mention_for_tg(draft, tg_id):
@@ -4067,6 +4139,9 @@ async def challenge_xi_quickselect(update: Update, context: ContextTypes.DEFAULT
     draft = _active_draft_in_chat(context.bot_data, chat.id)
     if not draft or draft.get("turn") != "complete":
         return
+    # The toss comes before the XI — nothing to pick until it's decided.
+    if not draft.get("toss_decision"):
+        return
     side = _challenge_side_for_user(draft, user.id)
     if side is None:
         return
@@ -4252,7 +4327,11 @@ async def challenge_change_handler(update: Update, context: ContextTypes.DEFAULT
 
 
 async def challenge_start_match_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Allow only the host to start a challenge league match after both XIs are confirmed."""
+    """Allow only the host to start a challenge league match after both XIs are confirmed.
+
+    The toss has already been decided (it comes BEFORE the XI selection), so
+    this launches the match straight away with the stored toss decision.
+    """
     query = update.callback_query
     try:
         _, _, draft_id = query.data.split("_")
@@ -4272,39 +4351,22 @@ async def challenge_start_match_callback(update: Update, context: ContextTypes.D
     if not _challenge_xi_ready(draft):
         await query.answer("Both players must confirm their Playing XI first.", show_alert=True)
         return
-    if draft.get("match_started"):
-        await query.answer("Match already started.", show_alert=True)
+    if (draft.get("toss_decision") not in ("bat", "bowl")
+            or draft.get("toss_winner_side") not in ("host", "target")):
+        await query.answer("The toss hasn't been decided yet.", show_alert=True)
         return
 
-    draft["match_started"] = True
-    await _disarm_selection_timer(context, draft)
-    # Keep the per-chat lock held through the toss: the Match row (which the
-    # active-match checks key on) is only created later in cipl_toss_callback,
-    # so releasing here would briefly let a second /cipl open in this chat. The
-    # lock is released in cipl_toss_callback once that Match row exists.
-    await query.answer("Match started!")
-    # Toss happens exactly like the current system: the guest calls heads/tails,
-    # the winner elects bat/bowl, then the over-by-over match begins in chat.
-    # Vs the bot the guest IS the bot, so the host calls the coin — and if the
-    # bot wins the toss it elects bat/bowl at random (see cipl_coin_callback).
-    caller = (draft.get("host") if draft.get("vs_bot")
-              else draft.get("target")) or {}
-    try:
-        await query.edit_message_text(
-            f"🪙 <b>TOSS</b>\n"
-            f"{_mention(caller.get('tg_id'), caller.get('name') or 'Guest')}, "
-            f"call the coin:",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("Heads", callback_data=f"cipl_coin_heads_{draft_id}"),
-                InlineKeyboardButton("Tails", callback_data=f"cipl_coin_tails_{draft_id}"),
-            ]]),
-        )
-    except Exception:
-        logger.exception("Failed to start challenge toss")
+    if not draft.get("match_started"):
+        draft["match_started"] = True
+        await _disarm_selection_timer(context, draft)
+    # The per-chat lock stays held until the Match row (which the active-match
+    # checks key on) exists — _launch_after_toss releases it once it does, so a
+    # second /cipl can't open in this chat in between. A retry tap after a
+    # failed launch comes back through here; start_match_launch heals it.
+    from handlers.cipl_play import start_match_launch
+    await start_match_launch(context, query, draft, draft_id)
 
 
-# Legacy callback kept for safety if old inline buttons are still delivered.
 async def challenge_pick_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer(
         "This /cm challenge now opens in the Mini App after the toss. Start a fresh /cm if needed.",

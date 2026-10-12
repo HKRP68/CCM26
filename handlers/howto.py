@@ -66,7 +66,7 @@ SECTIONS = {
             "Each player's last 5 matches affect their effective rating (±2.5 OVR). Hot players hit harder; cold players struggle.\n\n"
             "<b>💎 Traits</b>\n"
             "Equipped traits activate during matches under certain conditions (death overs, chasing, vs spin, a 50+ partnership, the tail, a hot streak…). Watch for the 💎 line in scorecards, and see /traitlist for every effect.\n"
-            "They also lift your <b>Team Overall</b> — ⚡ +0.2 at Lv.1 doubling to +3.2 at Lv.5, shown on the Playing XI card before the toss and on the live board. Check your own with /traitboost.\n\n"
+            "They also lift your <b>Team Overall</b> — ⚡ +0.2 at Lv.1 doubling to +3.2 at Lv.5, shown on the Playing XI card before the match starts and on the live board. Check your own with /traitboost.\n\n"
             "<b>🤖 If you go AFK</b>\n"
             "Match heartbeat re-renders buttons after 90s of silence. After 5 min idle, the bot auto-decides defaults to keep the game flowing — no more forfeits.\n\n"
             "<b>/resume</b> or <b>/r</b> — instantly recover any stuck match\n"

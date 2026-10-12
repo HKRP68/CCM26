@@ -202,7 +202,7 @@ def _side_blocks(caption, xi_rows, bench_rows):
 def playing_xi_blocks(*, vs_bot, pitch, host_label, guest_label, overs=20,
                       host_xi, guest_xi, host_bench=None, guest_bench=None,
                       trait_status=None, fairness=None, start_prompt=None,
-                      title=None):
+                      title=None, toss_line=None):
     """The 'both XIs locked' card, as blocks.
 
     Takes already-flattened rows rather than ORM pairs on purpose: the handler
@@ -212,12 +212,16 @@ def playing_xi_blocks(*, vs_bot, pitch, host_label, guest_label, overs=20,
 
     ``xi``/``bench`` rows are ``(name, rating, role, trait_badge)`` tuples;
     ``fairness`` is the Team Overall block described by :func:`fairness_blocks`.
+    ``toss_line`` is the already-decided toss ("X won the toss and bats
+    first"), shown under the pitch so the captains set their XI knowing it.
     """
     title = title or ("🤖 Lets Play vs Bot — Playing XI" if vs_bot
                       else "🧾 Lets Play — Playing XI")
     blocks = [R.heading(title, size=2),
               R.paragraph([R.bold("🌱 Pitch: "), _pitch_label(pitch),
                            f"  ·  {overs} overs"])]
+    if toss_line:
+        blocks.append(R.paragraph(R.bold(toss_line)))
     if trait_status:
         blocks.append(R.paragraph(trait_status))
     blocks.append(R.paragraph(R.italic(
@@ -241,7 +245,7 @@ def fairness_blocks(*, host_label, guest_label, host_ovr, guest_ovr,
 
     Its own builder because it is the one part of the XI card a captain may act
     on: a gap too wide costs both sides their career stats, and the answer is to
-    even the XIs up with ``/change`` before the toss rather than after it. A
+    even the XIs up with ``/change`` before the match starts rather than after it. A
     verdict that has to be hunted for inside a paragraph gets missed, so it is a
     ``pullquote``.
     """
@@ -318,7 +322,7 @@ def toss_elected_blocks(winner, decision, *, bot_won=False):
     who = R.bold("🤖 Bot") if bot_won else mention(winner)
     return [R.paragraph(["✅ ", who, " elected to ", R.bold(choice),
                          " first."]),
-            R.footer(R.italic("The match begins below — play over by over!"))]
+            R.footer(R.italic("Playing XIs below 👇"))]
 
 
 # ══════════════════════════════════════════════════════════════════════

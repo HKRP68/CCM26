@@ -137,11 +137,13 @@ ball-by-ball instead (§9–11).
 1. **Invite** — the guest gets Accept / Deny (30 seconds).
 2. **Pitch** — the host picks one (Flat, Hard, Even, Bouncy, Dry, Green, Dusty…).
    Tournament fixtures have their pitch fixed in advance.
-3. **Playing XI** — shown for both sides. Batting order is set automatically by
-   batting rating; the host can tweak with `/change <out> <in>`.
-4. **Traits vote** (Lets Play only) — both captains say whether traits play.
+3. **Traits vote** (Lets Play only) — both captains say whether traits play.
    Yes + yes = on, no + no = off, a split defers to the lower-rated XI.
-5. **Toss** — the guest calls heads/tails, the winner bats or bowls.
+4. **Toss** — the guest calls heads/tails, the winner bats or bowls. The toss
+   comes *before* the XIs, so both captains know who bats first.
+5. **Playing XI** — shown for both sides with who bats first. Batting order is
+   set automatically by batting rating; tweak it with `/change <out> <in>`,
+   then the host taps **Start Match**.
 
 ### Every over
 
@@ -255,7 +257,8 @@ league an admin adds. No traits: it's pure ratings and captaincy.
 ```
 
 **Flow:** host picks a team → guest picks a team → host picks the pitch → both
-pick a Playing XI (numbered squad list, tap or type numbers) → toss → overs.
+the toss (guest calls, winner bats or bowls) → both pick a Playing XI (numbered
+squad list, tap or type numbers) → host taps Start Match → overs.
 Each setup turn has **5 minutes** (reminder at 4:30); nobody is fined for a
 challenge that times out before the match starts.
 
@@ -451,7 +454,7 @@ are bowled at the stumps, most hits wins; level → sudden death, one ball each.
 
 1. Host picks a league → host picks a team → guest picks a team.
 2. Host picks the length: **3, 5 or 7** matches → guest accepts.
-3. Each match is a normal `/cipl` match (pitch, XIs, toss, overs), always full
+3. Each match is a normal `/cipl` match (pitch, toss, XIs, overs), always full
    length. Only the next unplayed match can be started.
 
 ---
@@ -498,7 +501,7 @@ own roster, feeding a points table with NRR, leaderboards and optional playoffs.
 3. Your pairing must have a fixture in the **open round** — rounds open one at a
    time. (A tournament with no schedule is *free play*: anyone vs anyone.)
 4. Both need a legal Playing XI.
-5. Fixtures are always 20 overs. The fixture is claimed at the toss, so a
+5. Fixtures are always 20 overs. The fixture is claimed when the match starts, so a
    denied invite costs nothing.
 
 Formats: single or double round-robin; playoffs none / top 4 / IPL playoffs /
@@ -707,7 +710,7 @@ stats. Unranked practice modes pay nothing.
 |---------|--------------|
 | `/matchinfo` | Striker, bowler, score, target |
 | `/impact` | Open the Impact Player picker |
-| `/change <out> <in>` | Swap a player in your XI before the toss |
+| `/change <out> <in>` | Swap a player in your XI after the toss, before the match starts |
 | `/pause` | Save a Lets Play / Challenge League match exactly where it is ⏸️ |
 | `/continue <MatchId>` | Carry it on from that ball, in any group (other captain taps ✅ Ready) |
 | `/saved` | Your paused, cleared and timed-out matches |

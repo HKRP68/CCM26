@@ -154,7 +154,7 @@ welcome messages for that chat, `/dwm` turns them off (group admins only).
 | `/setcaptain` | `/captain` `/cap` | Set your team captain |
 | `/cmuchem` | `/cmuchemistry` `/chem` `/chemistry` | Check your XI's Team Chemistry 🧪 |
 | `/chemhelp` | `/chemguide` | How Team Chemistry works 📖 |
-| `/change` | — | Change your XI / batting order during match setup |
+| `/change` | — | Change your XI / batting order during match setup (after the toss, before the match starts) |
 
 ## 5. Market, shop & economy
 

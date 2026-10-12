@@ -2166,7 +2166,7 @@ def main():
         # Reuses the Challenge League over-by-over engine; traits are active.
         from handlers.letsplay import (
             letsplay_handler, letsplay_invite_callback, letsplay_pitch_callback,
-            letsplay_starttoss_callback, letsplay_coin_callback,
+            letsplay_startmatch_callback, letsplay_coin_callback,
             letsplay_toss_callback, letsplay_traits_callback,
         )
         app.add_handler(CommandHandler(["letsplay", "lp"], letsplay_handler))
@@ -2174,7 +2174,7 @@ def main():
         # The pre-toss Trait Vote — both captains answer before the pitch.
         app.add_handler(CallbackQueryHandler(letsplay_traits_callback, pattern=r"^lp_traits_"))
         app.add_handler(CallbackQueryHandler(letsplay_pitch_callback, pattern=r"^lp_pitch_"))
-        app.add_handler(CallbackQueryHandler(letsplay_starttoss_callback, pattern=r"^lp_starttoss_"))
+        app.add_handler(CallbackQueryHandler(letsplay_startmatch_callback, pattern=r"^lp_startmatch_"))
         app.add_handler(CallbackQueryHandler(letsplay_coin_callback, pattern=r"^lp_coin_"))
         app.add_handler(CallbackQueryHandler(letsplay_toss_callback, pattern=r"^lp_toss_"))
 
