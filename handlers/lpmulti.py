@@ -16,6 +16,11 @@ the rest of its squad is the Impact Player bench. From the pitch onward this is
 the ordinary /letsplay flow (handlers/letsplay.py): Playing XI card, /change for
 the host, toss, over-by-over match.
 
+Once the league team is picked the host chooses Traits — Yes or No. Yes plays
+the host's roster with its traits and gives the league team one role-matched
+trait per player (the /wpmbot pattern) at the highest trait level in the host's
+XI. No plays the match with no traits on either side.
+
 Every /lpmulti match is UNRANKED: a franchise squad is nobody's collection, so
 no career stats, POTM credit, coins, gems or Win/Loss for either side.
 
@@ -39,8 +44,8 @@ from handlers.match import (
 from handlers.lineup import _get_ordered_roster, validate_xi
 from handlers.letsplay import (
     LETSPLAY_OVERS, _active_letsplay_in_chat, _cancel_setup_timeout, _dkey,
-    _drop_draft, _get_draft, _m, _next_id, _prompt_pitch, _rearm_setup_timeout,
-    letsplay_handler)
+    _draft_side_xi, _drop_draft, _get_draft, _m, _next_id, _prompt_pitch,
+    _rearm_setup_timeout, letsplay_handler)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +58,8 @@ USAGE_HTML = (
     "they pick League → Team and captain it\n\n"
     "Shorter match? Add the overs (1-20): <code>/lpmulti AI 5</code> or "
     "<code>/lpmulti 5 @username</code>\n"
+    "After the team is picked you choose <b>Traits: Yes / No</b> — Yes gives "
+    "the league team traits at your highest trait level.\n"
     "<i>Unranked — no stats, coins, gems or Win/Loss.</i>")
 
 
@@ -280,6 +287,66 @@ async def prompt_league_picker(context, draft):
         draft["lpm_msg_id"] = sent.message_id
 
 
+# ════════════════════════════════════════════════════════════════════
+# Traits — Yes / No (host only), after the team is picked
+# ════════════════════════════════════════════════════════════════════
+
+def host_max_trait_level(xi):
+    """The highest trait level carried by any player in an engine-dict XI."""
+    best = 0
+    for player in xi or []:
+        for trait in (player or {}).get("traits") or []:
+            if isinstance(trait, dict):
+                try:
+                    best = max(best, int(trait.get("level") or 0))
+                except (TypeError, ValueError):
+                    continue
+    return best
+
+
+def apply_league_traits(players, level):
+    """Copies of ``players`` with one role-matched trait each at ``level``.
+
+    The same pattern /wpmbot's opponent uses (``handlers.vsbot``): one trait
+    per player by category, bowlers rotating through a few keys. Level 0 (the
+    host has no traits) leaves every player untraited. Always overwrites, so
+    calling it again with a new level never stacks traits.
+    """
+    from handlers.vsbot import _ADAPTIVE_TRAIT_BY_CATEGORY
+    from services.bot_xi_builder import trait_dict
+    out, rotation = [], 0
+    for player in players or []:
+        p = dict(player)
+        traits = []
+        if level > 0:
+            keys = _ADAPTIVE_TRAIT_BY_CATEGORY.get(p.get("category"), ["bat_anchor"])
+            effect_key = keys[rotation % len(keys)]
+            if len(keys) > 1:
+                rotation += 1
+            traits = [t for t in (trait_dict(effect_key, level),) if t]
+        p["traits"] = traits
+        out.append(p)
+    return out
+
+
+def _traits_keyboard(draft):
+    iid = draft["invite_id"]
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚡ Yes — with Traits", callback_data=f"lpm_tr_{iid}_yes"),
+         InlineKeyboardButton("🚫 No — without", callback_data=f"lpm_tr_{iid}_no")],
+        [InlineKeyboardButton("❌ Cancel", callback_data=f"lpm_cancel_{iid}")],
+    ])
+
+
+def _traits_prompt(draft):
+    return (f"⚡ <b>Lets Play Multi — Traits</b>\n\n"
+            f"{_m(draft['host'])}, play with traits?\n"
+            "• <b>Yes</b> — your team keeps its traits and "
+            f"<b>{html.escape(draft.get('guest_team') or 'the league team')}</b> "
+            "gets one trait per player at your highest trait level\n"
+            "• <b>No</b> — no traits on either side")
+
+
 def _abort(context, draft):
     draft["status"] = "cancelled"
     _cancel_setup_timeout(context, draft["invite_id"])
@@ -294,7 +361,8 @@ async def _edit(q, text, markup=None):
 
 
 async def lpmulti_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """``lpm_lg_{id}_{idx|back}`` / ``lpm_tm_{id}_{idx}`` / ``lpm_cancel_{id}``."""
+    """``lpm_lg_{id}_{idx|back}`` / ``lpm_tm_{id}_{idx}`` / ``lpm_tr_{id}_{yes|no}``
+    / ``lpm_cancel_{id}``."""
     q = update.callback_query
     parts = (q.data or "").split("_")      # lpm, action, id[, choice]
     try:
@@ -305,7 +373,12 @@ async def lpmulti_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("Invalid selection.", show_alert=True)
         return
     draft = _get_draft(context, invite_id)
-    if not draft or not draft.get("lpmulti") or draft.get("status") != "lpm_pick":
+    status = (draft or {}).get("status")
+    # League/Team buttons belong to the picker stage, Yes/No to the traits
+    # stage; Cancel works in either.
+    expected = {"lg": ("lpm_pick",), "tm": ("lpm_pick",), "tr": ("lpm_traits",)}
+    allowed = expected.get(action, ("lpm_pick", "lpm_traits"))
+    if not draft or not draft.get("lpmulti") or status not in allowed:
         await q.answer("This team selection is no longer active.", show_alert=True)
         return
 
@@ -318,6 +391,10 @@ async def lpmulti_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _abort(context, draft)
         await _edit(q, f"❌ Lets Play Multi cancelled by "
                        f"{html.escape(q.from_user.first_name or 'a player')}.")
+        return
+
+    if action == "tr":
+        await _choose_traits(q, context, draft, choice)
         return
 
     picker = draft[_picker_side(draft)]
@@ -394,14 +471,55 @@ async def lpmulti_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         draft["guest_team"] = team
         draft["guest_league_name"] = league["name"]
         draft["guest_overseas"] = list(limits)
-        draft["status"] = "pitch"
+        draft["status"] = "lpm_traits"
         await q.answer(f"Selected {team}")
         side_word = "The AI captains" if draft.get("vs_bot") else \
             f"{_m(draft['guest'])} captains"
         await _edit(q, f"🏟️ {side_word} <b>{html.escape(team)}</b> "
                        f"({html.escape(league['name'])}) — best XI auto-picked.")
         _rearm_setup_timeout(context, invite_id)
-        await _prompt_pitch(context, draft)
+        sent = await context.bot.send_message(
+            draft["chat_id"], _traits_prompt(draft), parse_mode="HTML",
+            reply_markup=_traits_keyboard(draft))
+        if sent is not None and getattr(sent, "message_id", None):
+            draft["lpm_msg_id"] = sent.message_id
         return
 
     await q.answer("Invalid selection.", show_alert=True)
+
+
+async def _choose_traits(q, context, draft, choice):
+    """``lpm_tr_{id}_{yes|no}`` — the host decides whether traits play."""
+    if q.from_user.id != draft["host"]["tg_id"]:
+        await q.answer("Only " + (draft["host"].get("name") or "the host")
+                       + " chooses traits.", show_alert=True)
+        return
+    if choice not in ("yes", "no"):
+        await q.answer("Invalid choice.", show_alert=True)
+        return
+    team = html.escape(draft.get("guest_team") or "The league team")
+    if choice == "no":
+        draft["traits_enabled"] = False
+        text = "🚫 <b>Traits: No</b> — this match plays without traits."
+    else:
+        draft["traits_enabled"] = True
+        session = get_session()
+        try:
+            level = host_max_trait_level(_draft_side_xi(session, draft, "host"))
+        finally:
+            session.close()
+        draft["lpm_trait_level"] = level
+        draft["bot_xi"] = apply_league_traits(draft.get("bot_xi"), level)
+        draft["guest_bench"] = apply_league_traits(draft.get("guest_bench"), level)
+        if level:
+            text = (f"⚡ <b>Traits: Yes</b> — your traits play, and <b>{team}</b> "
+                    f"gets one trait per player at <b>Lv.{level}</b> "
+                    "(your highest).")
+        else:
+            text = ("⚡ <b>Traits: Yes</b> — but your XI has no traits equipped, "
+                    f"so <b>{team}</b> plays without them too.")
+    await q.answer("Traits: " + ("Yes" if choice == "yes" else "No"))
+    await _edit(q, text)
+    draft["status"] = "pitch"
+    _rearm_setup_timeout(context, draft["invite_id"])
+    await _prompt_pitch(context, draft)

@@ -770,7 +770,7 @@ async def _on_invite_timeout(context: ContextTypes.DEFAULT_TYPE):
 # Setup timer — covers the pitch / XI / toss stages after acceptance
 # ════════════════════════════════════════════════════════════════════
 
-_SETUP_STATUSES = ("traitvote", "lpm_pick", "pitch", "showxi", "toss")
+_SETUP_STATUSES = ("traitvote", "lpm_pick", "lpm_traits", "pitch", "showxi", "toss")
 
 
 def _rearm_setup_timeout(context, invite_id):
@@ -2240,13 +2240,21 @@ async def _launch_match(context, draft, decision, winner_side):
                      if lpmulti else
                      "⚠️ The bot couldn't field an XI — match cancelled."))
                 return
+            # A /lpmulti league team brings the rest of its squad as the Impact
+            # Player bench; the /lpbot XI is exactly eleven.
+            guest_bench = list(draft.get("guest_bench") or []) if lpmulti else []
             if not traits_on:
                 # The /lpbot XI is built in memory with its traits inline, so it
                 # is stripped rather than re-queried.
                 guest_xi = tvs.strip_traits(guest_xi)
-            # A /lpmulti league team brings the rest of its squad as the Impact
-            # Player bench; the /lpbot XI is exactly eleven.
-            guest_bench = list(draft.get("guest_bench") or []) if lpmulti else []
+                guest_bench = tvs.strip_traits(guest_bench)
+            elif lpmulti and "traits_enabled" in draft:
+                # Traits: Yes — the league team's level follows the host's final
+                # XI, which /change may have altered since the choice was made.
+                from handlers.lpmulti import apply_league_traits, host_max_trait_level
+                level = host_max_trait_level(host_xi)
+                guest_xi = apply_league_traits(guest_xi, level)
+                guest_bench = apply_league_traits(guest_bench, level)
         else:
             guest_xi_pairs = guest_pairs[:11]
             guest_xi = _xi_to_engine(session, guest_xi_pairs,
