@@ -168,6 +168,13 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     "lp_startmatch_",
     "lp_coin_",
     "lp_toss_",
+    # /lpmulti: in @user mode the guest picks the league team, so the Traits
+    # Yes/No prompt is sent while handling the GUEST's tap — yet only the HOST
+    # answers it. Cancel sits on every /lpmulti prompt and either captain may
+    # press it. handlers/lpmulti.py checks the clicker on every press.
+    # (lpm_lg_ / lpm_tm_ stay owner-locked: the picker who gets them presses them.)
+    "lpm_tr_",
+    "lpm_cancel_",
     # Challenge League team and Playing XI buttons are shared prompts: the
     # same message is used by both host and guest, and challenge.py validates
     # which side may press each button based on the draft state.
