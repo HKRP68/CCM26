@@ -223,6 +223,15 @@ class ButtonAccessTests(unittest.TestCase):
                 update = DummyUpdate(DummyQuery(222, callback_data))
                 self.assertTrue(button_access.check_callback_owner(update))
 
+    def test_lpmulti_traits_and_cancel_are_shared_but_picker_is_not(self):
+        # The Traits prompt is sent on the guest's team tap but answered by the
+        # host, so the owner registry must not lock it to the guest.
+        self.assertTrue(button_access.is_shared_callback_data("lpm_tr_1_yes"))
+        self.assertTrue(button_access.is_shared_callback_data("lpm_tr_1_no"))
+        self.assertTrue(button_access.is_shared_callback_data("lpm_cancel_1"))
+        self.assertFalse(button_access.is_shared_callback_data("lpm_lg_1_0"))
+        self.assertFalse(button_access.is_shared_callback_data("lpm_tm_1_0"))
+
     def test_unregistered_legacy_buttons_remain_usable(self):
         update = DummyUpdate(DummyQuery(222, "roster_page_2"))
 
