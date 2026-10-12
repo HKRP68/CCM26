@@ -270,12 +270,54 @@ class PickerFlowTests(unittest.TestCase):
         self.assertEqual(draft["lpm_league_name"], "Gamma League")
         team_idx = draft["lpm_teams"].index("Titans")
         _q, pitch = self._tap(f"lpm_tm_9001_{team_idx}", HOST_TG)
-        self.assertEqual(draft["status"], "pitch")
+        self.assertEqual(draft["status"], "lpm_traits")
         self.assertEqual(draft["guest_team"], "Titans")
         self.assertEqual(len(draft["bot_xi"]), 11)
         self.assertEqual(len(draft["guest_bench"]), 3)
         self.assertEqual(draft["guest_overseas"], [0, 4])
+        pitch.assert_not_awaited()
+
+    def _to_traits_stage(self, vs_bot=True):
+        draft = self._draft(vs_bot=vs_bot)
+        self._open(draft)
+        idx = [l["name"] for l in draft["lpm_leagues"]].index("Gamma League")
+        picker = HOST_TG if vs_bot else GUEST_TG
+        self._tap(f"lpm_lg_9001_{idx}", picker)
+        self._tap(f"lpm_tm_9001_{draft['lpm_teams'].index('Titans')}", picker)
+        self.assertEqual(draft["status"], "lpm_traits")
+        return draft
+
+    def _tap_traits(self, answer, from_id, host_level):
+        from handlers import lpmulti
+        host_xi = [{"traits": [{"effect_key": "bat_anchor", "level": host_level}]}]
+        with patch.object(lpmulti, "_draft_side_xi", return_value=host_xi):
+            return self._tap(f"lpm_tr_9001_{answer}", from_id)
+
+    def test_traits_yes_gives_league_team_host_max_level(self):
+        draft = self._to_traits_stage()
+        _q, pitch = self._tap_traits("yes", HOST_TG, host_level=4)
+        self.assertTrue(draft["traits_enabled"])
+        self.assertEqual(draft["status"], "pitch")
+        for p in draft["bot_xi"] + draft["guest_bench"]:
+            self.assertEqual(len(p["traits"]), 1)
+            self.assertEqual(p["traits"][0]["level"], 4)
         pitch.assert_awaited_once()
+
+    def test_traits_no_plays_without(self):
+        draft = self._to_traits_stage()
+        _q, pitch = self._tap_traits("no", HOST_TG, host_level=4)
+        self.assertFalse(draft["traits_enabled"])
+        self.assertTrue(all(not p["traits"] for p in draft["bot_xi"]))
+        pitch.assert_awaited_once()
+
+    def test_only_host_chooses_traits_vs_user(self):
+        draft = self._to_traits_stage(vs_bot=False)
+        q, pitch = self._tap_traits("yes", GUEST_TG, host_level=2)
+        self.assertTrue(q.answer.call_args.kwargs.get("show_alert"))
+        self.assertNotIn("traits_enabled", draft)
+        pitch.assert_not_awaited()
+        self._tap_traits("yes", HOST_TG, host_level=2)
+        self.assertEqual(draft["bot_xi"][0]["traits"][0]["level"], 2)
 
     def test_vs_user_only_the_guest_picks(self):
         draft = self._draft(vs_bot=False)
@@ -390,3 +432,32 @@ class RoutingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeagueTraitHelperTests(unittest.TestCase):
+    def test_host_max_trait_level(self):
+        from handlers.lpmulti import host_max_trait_level
+        xi = [{"traits": [{"level": 2}]}, {"traits": []},
+              {"traits": [{"level": 5}, {"level": 1}]}, {}]
+        self.assertEqual(host_max_trait_level(xi), 5)
+        self.assertEqual(host_max_trait_level([]), 0)
+
+    def test_apply_is_role_matched_and_idempotent(self):
+        from handlers.lpmulti import apply_league_traits
+        xi = [{"name": "A", "category": "Batsman"},
+              {"name": "B", "category": "Bowler"},
+              {"name": "C", "category": "Bowler"},
+              {"name": "D", "category": "All-rounder"}]
+        once = apply_league_traits(xi, 3)
+        keys = [p["traits"][0]["effect_key"] for p in once]
+        self.assertEqual(keys, ["bat_anchor", "bowl_wicket_hunter",
+                                "bowl_dot_specialist", "bat_finisher"])
+        again = apply_league_traits(once, 6)
+        self.assertTrue(all(len(p["traits"]) == 1 and p["traits"][0]["level"] == 6
+                            for p in again))
+        self.assertNotIn("traits", xi[0])  # input untouched
+
+    def test_level_zero_means_no_traits(self):
+        from handlers.lpmulti import apply_league_traits
+        out = apply_league_traits([{"category": "Batsman", "traits": [{"level": 3}]}], 0)
+        self.assertEqual(out[0]["traits"], [])
