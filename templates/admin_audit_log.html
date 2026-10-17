@@ -8,8 +8,35 @@
 </div>
 
 <p style="color:var(--muted);font-size:.85rem;margin-bottom:1rem;">
-  Every administrative action taken through this website. Sorted newest-first.
+  Every administrative action taken through this website. Sorted newest-first. IP addresses are encrypted by default and require the dedicated audit IP password to reveal.
 </p>
+
+<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.75rem;margin-bottom:1rem;display:flex;flex-wrap:wrap;gap:.75rem;align-items:center;justify-content:space-between;">
+  <div style="color:var(--muted);font-size:.85rem;">
+    <strong style="color:var(--text);">IP visibility:</strong>
+    {% if can_view_audit_ip() %}
+      <span style="color:#00C9A7;">Unlocked for this session</span>
+    {% elif audit_ip_password_configured() %}
+      <span>Encrypted / hidden from admins</span>
+    {% else %}
+      <span style="color:#ffb020;">Encrypted / reveal password not configured</span>
+    {% endif %}
+  </div>
+  {% if can_view_audit_ip() %}
+    <form method="POST" action="{{ url_for('admin_audit_log_lock_ip') }}" style="display:flex;gap:.5rem;align-items:center;margin:0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="next" value="{{ request.full_path }}">
+      <button type="submit" class="btn btn-ghost btn-sm">Lock IPs</button>
+    </form>
+  {% else %}
+    <form method="POST" action="{{ url_for('admin_audit_log_unlock_ip') }}" style="display:flex;gap:.5rem;align-items:center;margin:0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="next" value="{{ request.full_path }}">
+      <input type="password" name="password" placeholder="Audit IP password" required autocomplete="current-password" style="min-width:220px;" {% if not audit_ip_password_configured() %}disabled{% endif %}>
+      <button type="submit" class="btn btn-blue btn-sm" {% if not audit_ip_password_configured() %}disabled title="Set AUDIT_LOG_IP_PASSWORD or AUDIT_LOG_IP_PASSWORD_HASH first"{% endif %}>Reveal IPs</button>
+    </form>
+  {% endif %}
+</div>
 
 <form method="GET" style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.75rem;margin-bottom:1rem;display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;">
   <span style="color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.5px;font-weight:600;">Filter:</span>
@@ -77,7 +104,7 @@
       <td style="font-size:.85rem;color:var(--muted);max-width:500px;word-break:break-word;">
         {{ log.detail or '—' }}
       </td>
-      <td style="font-size:.75rem;color:var(--muted);">{{ log.ip_address or '—' }}</td>
+      <td style="font-size:.75rem;color:var(--muted);">{{ mask_audit_ip(log.ip_address) }}</td>
     </tr>
     {% endfor %}
     </tbody>
