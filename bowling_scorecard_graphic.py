@@ -66,17 +66,29 @@ PANEL_BG = (6, 15, 25, 220)
 # -----------------------------
 # FONT HELPERS
 # -----------------------------
-def first_existing(paths: Sequence[str]) -> str | None:
+_ROOT_DIR = Path(__file__).resolve().parent
+_FONT_DIR = _ROOT_DIR / "assets" / "fonts"
+
+_BRICOLAGE_FONT_CANDIDATES = (
+    _FONT_DIR / "BricolageGrotesque-SemiBold.ttf",
+    _FONT_DIR / "BricolageGrotesque-Bold.ttf",
+    _FONT_DIR / "BricolageGrotesque-ExtraBold.ttf",
+    _FONT_DIR / "BricolageGrotesque.ttf",
+)
+
+
+def first_existing(paths: Sequence[str | Path]) -> str | None:
     for p in paths:
         if Path(p).exists():
-            return p
+            return str(p)
     return None
 
 
 def font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    """Load a bold font. Falls back safely if a custom font is unavailable."""
+    """Load a body font. Falls back safely if a custom font is unavailable."""
     candidates = []
     if bold:
+        candidates.extend(_BRICOLAGE_FONT_CANDIDATES)
         candidates.extend(
             [
                 "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf",
@@ -88,6 +100,7 @@ def font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont | ImageFont.Ima
         )
     candidates.extend(
         [
+            *_BRICOLAGE_FONT_CANDIDATES,
             "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed.ttf",
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
             "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",

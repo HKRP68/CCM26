@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Iterable, Optional, Tuple
 
@@ -117,22 +118,39 @@ def rgba(color: tuple[int, int, int, int], alpha: Optional[int] = None):
     return color[:3] + (alpha,)
 
 
+_ROOT_DIR = Path(__file__).resolve().parent
+_FONT_DIR = _ROOT_DIR / "assets" / "fonts"
+
+_BEBAS_FONT_CANDIDATES = (
+    _FONT_DIR / "BebasNeue-Regular.ttf",
+)
+_BRICOLAGE_FONT_CANDIDATES = (
+    _FONT_DIR / "BricolageGrotesque-SemiBold.ttf",
+    _FONT_DIR / "BricolageGrotesque-Bold.ttf",
+    _FONT_DIR / "BricolageGrotesque-ExtraBold.ttf",
+    _FONT_DIR / "BricolageGrotesque.ttf",
+)
+
+
 def font(size: int, condensed: bool = False) -> ImageFont.FreeTypeFont:
-    """Load a bold font available on most systems. Font files are not bundled."""
+    """Load bundled scorecard fonts before falling back to system fonts."""
     candidates = []
     if condensed:
+        candidates.extend(_BEBAS_FONT_CANDIDATES)
         candidates.extend([
             "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf",
             "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
         ])
+    else:
+        candidates.extend(_BRICOLAGE_FONT_CANDIDATES)
     candidates.extend([
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf",
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
     ])
     for path in candidates:
-        if os.path.exists(path):
-            return ImageFont.truetype(path, scaled(size))
+        if Path(path).exists():
+            return ImageFont.truetype(str(path), scaled(size))
     return ImageFont.load_default()
 
 
