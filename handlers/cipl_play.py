@@ -100,6 +100,7 @@ def _env_float(name, default, lo, hi):
 
 
 CIPL_GAP_COMPRESSION = _env_float("CIPL_GAP_COMPRESSION", 0.4, 0.0, 1.0)
+FINAL_OVER_BALL_DELAY = _env_float("FINAL_OVER_BALL_DELAY_SECONDS", 2.5, 0.0, 10.0)
 
 # Dead zone, in rating points of squad-average gap. Below this the two XIs are
 # already an even contest, so compressing them buys no fairness at all — it only
@@ -3877,6 +3878,74 @@ def _announce_drama_async(context, state, summary, milestone_events=None):
     return task
 
 
+def _live_final_over(state):
+    chase = cipl_match.chase(state)
+    return (bool(chase) and chase["runs_required"] > 0
+            and 0 < chase["balls_remaining"] <= cipl_match.balls_per_unit(state)
+            and not cipl_match.is_innings_over(state))
+
+
+async def _clear_final_ball(context, state):
+    previous = state.pop("final_ball_msg_id", None)
+    if previous:
+        try:
+            await context.bot.delete_message(state["chat_id"], previous)
+        except Exception:
+            # Keep it tracked so the usual over-message cleanup can retry.
+            return
+        try:
+            state.get("over_msg_ids", []).remove(previous)
+        except ValueError:
+            pass
+
+
+async def _reveal_final_ball(context, state, summary):
+    events = summary.get("over_events") or []
+    if not events:
+        return
+    chase = cipl_match.chase(state)
+    remaining = chase["balls_remaining"]
+    need = chase["runs_required"]
+    if need == 0:
+        suspense = "🏆 Target reached!"
+    elif cipl_match.is_innings_over(state):
+        suspense = "🏁 The innings is over."
+    else:
+        suspense = f"🔥 Need <b>{need}</b> from <b>{remaining}</b> balls. What comes next?"
+        if state.get("free_hit"):
+            suspense += "\n🆓 FREE HIT next!"
+    text = (f"{_header(state)}\n\n🎬 <b>Final {_unit_word(state)}</b> · "
+            f"{cipl_match.format_overs(state)}\n"
+            f"<b>{html.escape(str(events[-1]['text']))}</b>\n"
+            f"{html.escape(cipl_match.format_score(state))}\n\n{suspense}")
+    # Send first: a Telegram failure must not erase the last visible score.
+    sent = await context.bot.send_message(state["chat_id"], text,
+                                          parse_mode="HTML")
+    if sent and getattr(sent, "message_id", None):
+        await _clear_final_ball(context, state)
+        state["final_ball_msg_id"] = sent.message_id
+        state.setdefault("over_msg_ids", []).append(sent.message_id)
+
+
+async def _simulate_live_final_over(context, mid, state, pause):
+    while True:
+        await asyncio.sleep(FINAL_OVER_BALL_DELAY)
+        summary = await asyncio.to_thread(
+            cipl_match.simulate_over, state, pause_after_delivery=True, **pause)
+        # Persist each delivery BEFORE displaying it. A restart resumes the
+        # parked over; it never re-rolls a ball spectators have already seen.
+        action = (A_PICK_CIPL_NEW_BATSMAN if summary.get("paused")
+                  else A_PICK_BAT_APPROACH)
+        await _ss(context, mid, state, next_action=action)
+        try:
+            await _reveal_final_ball(context, state, summary)
+        except Exception:
+            logger.exception("cipl final-ball reveal failed for match %s", mid)
+        if not summary.get("delivery_paused"):
+            await asyncio.sleep(FINAL_OVER_BALL_DELAY)
+            return summary
+
+
 async def _run_over(context, mid, state):
     # Hard stop on the format limit. Once the innings quota is used — 20 overs,
     # or 100 balls (20 sets) in The Hundred — no further over may be simulated,
@@ -3911,7 +3980,12 @@ async def _run_over(context, mid, state):
     before_milestones = (state.pop("over_milestones_before", None)
                          if resuming else None) or milestones.snapshot(state)
     pause = {"pause_on_wicket": True} if _human_picks_batsman(state) else {}
-    summary = await asyncio.to_thread(cipl_match.simulate_over, state, **pause)
+    if _live_final_over(state):
+        state["over_milestones_before"] = before_milestones
+        summary = await _simulate_live_final_over(context, mid, state, pause)
+        state.pop("over_milestones_before", None)
+    else:
+        summary = await asyncio.to_thread(cipl_match.simulate_over, state, **pause)
 
     if summary.get("paused"):
         # A wicket, and the human batting captain chooses who walks in. The
@@ -3953,6 +4027,7 @@ async def _run_over(context, mid, state):
         await _post_tracked(context, state,
                             _render_over_summary(state, summary),
                             keyboard=_between_overs_row(state, mid))
+        await _clear_final_ball(context, state)
     except Exception:
         logger.exception("cipl over summary post failed for match %s", mid)
 

@@ -116,7 +116,7 @@ def test_extras_dont_move_confidence_and_hooks_react_inside_the_over(monkeypatch
                         {"type": "legbye", "runs": 2}, 4, 0, 0], captured)
     cm.simulate_over(s)
     assert s["bat_stats"][rid]["confidence"] == played([4, 0, 4, 0, 0])["confidence"]
-    assert s["bat_stats"][rid]["balls"] == 6
+    assert s["bat_stats"][rid]["balls"] == 7  # six legal balls + the faced no-ball
     assert len(captured) == 8
     assert s["total_runs"] == 12  # 8 off bat + WD + NB + 2 leg-byes
     assert not s["free_hit"]

@@ -262,6 +262,8 @@ def match_up_edge(state, bowler=None):
     bat = striker(state)
     bowl = bowler if bowler is not None else ((state or {}).get("current_bowler") or {})
     bat_rating = rating(bat, "bat_rating", "rating", default=50.0)
+    bat_rating += batter_confidence.experience_bonus(
+        bat_rating, _striker_stats(state).get("balls", 0))
     bowl_rating = rating(bowl, "bowl_rating", default=60.0) if bowl else 60.0
     raw = (EDGE_BAT_WEIGHT * bat_rating - EDGE_BOWL_WEIGHT * bowl_rating) / 100.0
     return max(-1.4, min(1.4, raw))

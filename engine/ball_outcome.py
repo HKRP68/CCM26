@@ -978,7 +978,8 @@ def compute_weighted_prob(
     and graduated confidence curve.
     """
     # 0) Batter innings phase modifiers
-    effective_batting = batting
+    from engine.batter_confidence import experience_bonus
+    effective_batting = batting + experience_bonus(batting, balls_faced)
 
     _is_lista = (format_name == "ListA")
 

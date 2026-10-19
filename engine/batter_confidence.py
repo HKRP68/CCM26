@@ -5,12 +5,28 @@ momentum is already modelled. This tracks only a batter's recent execution:
 it can fall as well as rise, decays toward neutral, and never changes ratings.
 The maximum weight nudge is 2.4%, with scoring mass conserved independently of
 extras. No random draws, external state, pitch bonus or innings-total target.
+
+``experience_bonus`` separately provides the bounded settling lift for a
+sub-60 batter who stays in for 25+ deliveries.
 """
 
 NEUTRAL = 50.0
 RETENTION = 0.80
 SIGNALS = {0: -0.60, 1: 0.10, 2: 0.30, 3: 0.45, 4: 0.80, 6: 1.0}
 SCORING = ("Dot", "Single", "Double", "Three", "Four", "Six", "Wicket")
+
+
+def experience_bonus(rating, balls):
+    """A limited confidence lift for a sub-60 batter who has survived 25 balls.
+
+    Separate from recent rhythm: time in the middle counts even after dots.
+    Card ratings stay unchanged, and the lift stops growing after 40 balls.
+    """
+    if float(rating) >= 60 or int(balls or 0) < 25:
+        return 0.0
+    # Ease toward 60 without making a 59-rated survivor stronger than an
+    # equally settled 60-rated batter.
+    return min(12.0 if int(balls) >= 40 else 8.0, 60.0 - float(rating))
 
 
 def value(stats):

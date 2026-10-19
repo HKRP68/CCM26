@@ -371,17 +371,38 @@ def bat_pressure(phase, innings, target, runs, wickets, balls_left,
     return _clamp(p)
 
 
-def bowl_pressure_effects(p):
+def final_over_big_ask(innings, runs_needed, balls_left, balls_per_unit=6):
+    """0..1 extra pressure for a big ask in the final over/set of a chase.
+
+    Starts at 12 per six balls and reaches full strength at 24. Recomputed
+    after every delivery, including extras, as the required rate changes.
+    """
+    if innings != 2 or not 0 < balls_left <= balls_per_unit or runs_needed <= 0:
+        return 0.0
+    return _clamp((runs_needed * 6.0 / balls_left - 12.0) / 12.0)
+
+
+def bowl_pressure_effects(p, big_ask=0.0):
     """``(hook, engine_kwargs)`` for a fielding side under pressure *p*."""
-    if p < PRESSURE_FLOOR:
+    big_ask = _clamp(big_ask)
+    if p < PRESSURE_FLOOR and not big_ask:
         return None, {}
+    p = p if p >= PRESSURE_FLOOR else 0.0
+    split = [0.40 + 0.10 * p, 0.25 + 0.10 * p,
+             max(0.05, 0.20 - 0.10 * p), max(0.05, 0.15 - 0.10 * p)]
+    # Transfer only legal-extra mass to wides/oversteps. They earn a run AND
+    # another delivery; byes should not receive this final-over drama bonus.
+    moved = (split[2] + split[3]) * 0.60 * big_ask
+    split[0] += moved * 0.60
+    split[1] += moved * 0.40
+    split[2] *= 1.0 - 0.60 * big_ask
+    split[3] *= 1.0 - 0.60 * big_ask
     kwargs = {
         "drop_mult": 1.0 + 1.2 * p,
         "misfield_mult": 1.0 + 0.8 * p,
-        "extras_split": [0.40 + 0.10 * p, 0.25 + 0.10 * p,
-                         max(0.05, 0.20 - 0.10 * p), max(0.05, 0.15 - 0.10 * p)],
+        "extras_split": split,
     }
-    return _scale({"Extras": 1.0 + 1.3 * p}), kwargs
+    return _scale({"Extras": 1.0 + 1.3 * p + 0.8 * big_ask}), kwargs
 
 
 def make_bat_pressure_hook(p):

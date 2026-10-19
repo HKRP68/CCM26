@@ -677,7 +677,7 @@ def __getattr__(name):
 
 SHIFT_CLAMP = 0.8
 
-SET_BATTER_SHIFT = {10: 0.15, 5: 0.07}
+SET_BATTER_SHIFT = {40: 0.50, 25: 0.30, 10: 0.15, 5: 0.07}
 NEW_BATTER_SHIFT = -0.25
 WICKETS_SHIFT = {3: -0.15, 2: -0.35, 1: -0.70, 0: -1.20}
 
@@ -760,10 +760,8 @@ def situational_shift(wickets_in_hand=5, striker_balls=0, striker_traits=None,
         shift += WICKETS_SHIFT[wih]
 
     bf = int(striker_balls or 0)
-    if bf >= 10:
-        shift += SET_BATTER_SHIFT[10]
-    elif bf >= 5:
-        shift += SET_BATTER_SHIFT[5]
+    if bf >= 5:
+        shift += next(bonus for balls, bonus in SET_BATTER_SHIFT.items() if bf >= balls)
     elif bf == 0:
         shift += NEW_BATTER_SHIFT
 
@@ -818,7 +816,12 @@ def target_probabilities(runs_needed, balls_left, striker_bat=75,
     if runs_needed > max_possible(balls_left):
         return {"win": 0.0, "tie": 0.0, "lose": 100.0}
 
-    edge = effective_batting(striker_bat, non_striker_bat) - float(bowler_rating or 50)
+    from engine.batter_confidence import experience_bonus
+    striker_rating = float(striker_bat or 50)
+    partner_rating = float(non_striker_bat if non_striker_bat is not None else striker_rating)
+    striker_rating += experience_bonus(striker_rating, factors.get("striker_balls", 0))
+    partner_rating += experience_bonus(partner_rating, factors.get("non_striker_balls", 0))
+    edge = effective_batting(striker_rating, partner_rating) - float(bowler_rating or 50)
     par_table, tie_table = tables()
     win = _lookup(par_table, edge, balls_left, runs_needed)
     tie = _lookup(tie_table, edge, balls_left, runs_needed)
@@ -829,6 +832,13 @@ def target_probabilities(runs_needed, balls_left, striker_bat=75,
 
     win = _clamp(win, FLOOR_PCT, 99.9)
     tie = _clamp(tie, 0.0, max(0.0, 99.95 - win))
+    if (balls_left == 1 and runs_needed <= 4
+            and max(int(factors.get("striker_balls", 0) or 0),
+                    int(factors.get("non_striker_balls", 0) or 0)) >= 40):
+        # Same close-finish rule as cipl_match's last weight hook: a surviving
+        # 40-ball batter earns at least a tie, with the win/tie split retained.
+        win = 100.0 * win / max(win + tie, 1e-9)
+        return {"win": win, "tie": 100.0 - win, "lose": 0.0}
     return {"win": win, "tie": tie, "lose": max(0.0, 100.0 - win - tie)}
 
 
@@ -934,11 +944,12 @@ def continuation(inputs):
     return _at
 
 
-def one_ball_outlook(cont, dist, runs_needed, balls_left, wickets_in_hand):
+def one_ball_outlook(cont, dist, runs_needed, balls_left, wickets_in_hand,
+                     extra_free_ball_share=EXTRA_FREE_BALL_SHARE):
     """P(win), P(tie) for this delivery: one ball, then the model takes over."""
     win = tie = 0.0
     extras = dist["Extras"]
-    free = extras * EXTRA_FREE_BALL_SHARE
+    free = extras * extra_free_ball_share
     legal_extra = extras - free
 
     def _add(p, w, t):
@@ -963,7 +974,8 @@ def one_ball_outlook(cont, dist, runs_needed, balls_left, wickets_in_hand):
 
 
 def solve_execution(dist, cont, runs_needed, balls_left, wickets_in_hand,
-                    target_win, free_hit=False):
+                    target_win, free_hit=False,
+                    extra_free_ball_share=EXTRA_FREE_BALL_SHARE):
     """Bisect the execution tilt until this delivery's outlook hits the target.
 
     Monotone in ``execution`` by construction — every batting-good outcome moves
@@ -982,7 +994,7 @@ def solve_execution(dist, cont, runs_needed, balls_left, wickets_in_hand,
 
     def _p(ex):
         return one_ball_outlook(cont, _tilted(ex), runs_needed, balls_left,
-                                wickets_in_hand)[0]
+                                wickets_in_hand, extra_free_ball_share)[0]
 
     # Deadband: when the natural weights already land where the model wants
     # them, leave the ball alone.
@@ -1002,7 +1014,8 @@ def solve_execution(dist, cont, runs_needed, balls_left, wickets_in_hand,
     return (lo_ex + hi_ex) / 2.0, intent
 
 
-def _tie_shape(weights, cont, runs_needed, balls_left, wickets_in_hand, want_tie):
+def _tie_shape(weights, cont, runs_needed, balls_left, wickets_in_hand, want_tie,
+               extra_free_ball_share=EXTRA_FREE_BALL_SHARE):
     """Bounded two-sided nudge on the run value that levels the scores.
 
     A tie is only ever made on the closing balls — the scores end level exactly
@@ -1026,7 +1039,7 @@ def _tie_shape(weights, cont, runs_needed, balls_left, wickets_in_hand, want_tie
     if key is None or weights.get(key, 0.0) <= 0.0:
         return weights
     have = one_ball_outlook(cont, _normalise_capped(weights), runs_needed,
-                            balls_left, wickets_in_hand)[1]
+                            balls_left, wickets_in_hand, extra_free_ball_share)[1]
     if have <= 1e-9 and want_tie <= 1e-9:
         return weights
     bound = TIE_NUDGE_MAX.get(balls_left, 0.0)
@@ -1036,7 +1049,8 @@ def _tie_shape(weights, cont, runs_needed, balls_left, wickets_in_hand, want_tie
     return out
 
 
-def make_chase_hook(inputs, free_hit=False, window=None):
+def make_chase_hook(inputs, free_hit=False, window=None,
+                    extra_free_ball_share=EXTRA_FREE_BALL_SHARE):
     """Build the ``weight_hook`` that steers this delivery onto the target.
 
     ``inputs`` is the keyword set :func:`target_probabilities` takes, plus an
@@ -1069,13 +1083,15 @@ def make_chase_hook(inputs, free_hit=False, window=None):
         # Shape the Super Over rate and widen the spread first, then solve the
         # win rate on the shaped distribution, so the win target is the one
         # that lands exactly and drama costs nothing in accuracy.
-        shaped = _tie_shape(base, cont, runs_needed, balls_left, wickets, tt)
+        shaped = _tie_shape(base, cont, runs_needed, balls_left, wickets, tt,
+                            extra_free_ball_share)
         if drama:
             shaped = {o: shaped[o] * math.exp(INTENT_K[o] * drama)
                       for o in OUTCOMES}
         dist = _normalise_capped(shaped, free_hit=free_hit)
         ex, intent = solve_execution(dist, cont, runs_needed, balls_left,
-                                     wickets, tw, free_hit=free_hit)
+                                     wickets, tw, free_hit=free_hit,
+                                     extra_free_ball_share=extra_free_ball_share)
 
         scale = {o: (shaped[o] / base[o]) if base[o] > 0.0 else 1.0
                  for o in OUTCOMES}

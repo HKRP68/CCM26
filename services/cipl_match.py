@@ -1662,6 +1662,7 @@ def _chase_inputs(state, fielding_quality=None):
     non_striker = order[ns_idx] if ns_idx < len(order) else {}
     bowler = state.get("current_bowler") or {}
     bs = state.get("bat_stats", {}).get(str(striker.get("roster_id")), {})
+    ns_bs = state.get("bat_stats", {}).get(str(non_striker.get("roster_id")), {})
 
     # Who walks in on a wicket — the continuation after a dismissal is priced
     # on them, so a side with a rabbit to come really is worse off at the death.
@@ -1678,6 +1679,7 @@ def _chase_inputs(state, fielding_quality=None):
         "wickets_in_hand": (state.get("wicket_limit", WICKET_LIMIT)
                             - int(state.get("total_wickets", 0))),
         "striker_balls": int(bs.get("balls", 0) or 0),
+        "non_striker_balls": int(ns_bs.get("balls", 0) or 0),
         "striker_traits": striker.get("traits"),
         "bowler_traits": bowler.get("traits"),
         "pitch": state.get("pitch_type"),
@@ -1715,10 +1717,11 @@ def chase_model_display(state):
     return CHASE_MODEL_CONTROL and bool(_live_chase(state))
 
 
-def _make_chase_hook(state, fielding_quality=None, free_hit=False):
+def _make_chase_hook(state, fielding_quality=None, free_hit=False,
+                     extra_free_ball_share=chase_model.EXTRA_FREE_BALL_SHARE):
     """The calibrated last-over controller as a weight hook, or None.
 
-    Composed LAST, so it receives the fully-composed natural weights — ratings,
+    Composed after the natural weights — ratings,
     traits, pitch, conditions, approach, pressure and every bounded nudge above
     are already priced in. What it solves for is the residual between what those
     weights would produce and what real cricket produces, which is why it is a
@@ -1732,7 +1735,8 @@ def _make_chase_hook(state, fielding_quality=None, free_hit=False):
         if not inputs:
             return None
         return chase_model.make_chase_hook(inputs, free_hit=free_hit,
-                                           window=CHASE_MODEL_BALLS)
+                                           window=CHASE_MODEL_BALLS,
+                                           extra_free_ball_share=extra_free_ball_share)
     except Exception:
         logger.exception("last-over controller build failed; ignoring this ball")
         return None
@@ -1874,7 +1878,39 @@ def is_innings_over(state):
 # Over simulation
 # ════════════════════════════════════════════════════════════════════
 
-def simulate_over(state, pause_on_wicket=False):
+def _make_set_finisher_hook(state):
+    """A 40-ball survivor closes out a tiny, reachable final-ball ask.
+
+    With at most four needed, keep only legal scores that tie or win. Extras
+    must be wides/no-balls (the caller sets their split), so a legal bye cannot
+    sneak a narrow defeat back in. Applies to either of the two active batters.
+    Larger asks and already-dismissed batters receive no guarantee.
+    """
+    situation = chase(state)
+    if (not situation or situation["balls_remaining"] != 1
+            or not 0 < situation["runs_required"] <= 4):
+        return None
+    if is_innings_over(state):
+        return None
+    order = state.get("batting_order") or []
+    active = [order[i] for i in (state["striker_idx"], state["non_striker_idx"])]
+    if not any((bs := state["bat_stats"].get(str(p["roster_id"]), {})).get("balls", 0) >= 40
+               and not bs.get("out") for p in active):
+        return None
+    minimum = situation["runs_required"] - 1
+
+    def _hook(weights):
+        out = dict(weights)
+        for key, runs in (("Dot", 0), ("Single", 1), ("Double", 2),
+                          ("Three", 3), ("Four", 4), ("Six", 6), ("Wicket", -1)):
+            if key in out and runs < minimum:
+                out[key] = 0.0
+        return out
+
+    return _hook
+
+
+def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
     """Simulate the current over using the stored approaches. Mutates state and
     returns a summary dict for rendering. Auto-advances batsmen on wickets and
     stops early on all-out / target reached / innings end.
@@ -1886,6 +1922,11 @@ def simulate_over(state, pause_on_wicket=False):
     ``{"paused": True, ...}`` dict is returned instead of the summary. Put the
     new batsman in with :func:`bring_in_batsman`, then call this again — it picks
     the over up at the next ball and returns the summary of the WHOLE over.
+
+    ``pause_after_delivery`` also parks after each non-terminal delivery,
+    including wides/no-balls, returning ``delivery_paused``. This lets the live
+    finale save and reveal a ball before the next one is sampled. Wicket picks
+    take priority and still return ``paused``.
     """
     bat_app = state.get("batting_approach")
     bowl_app = state.get("bowling_approach")
@@ -2007,6 +2048,7 @@ def simulate_over(state, pause_on_wicket=False):
         weather_events = list(resume.get("weather_events") or [])
         highlights_before = resume.get("highlights_before") or highlights_log.snapshot(state)
     pause_now = False
+    delivery_pause = False
     drama = state.get("over_drama")
     if not isinstance(drama, dict):
         drama = state["over_drama"] = _new_over_drama()
@@ -2243,11 +2285,22 @@ def simulate_over(state, pause_on_wicket=False):
                 pitch, innings, state["total_runs"], state["total_wickets"],
                 balls_bowled(state), innings_balls, target, chase_active)
             bat_p_hook = match_drama.make_bat_pressure_hook(bat_p)
-            bowl_p_hook, bowl_p_kwargs = match_drama.bowl_pressure_effects(bowl_p)
+            big_ask = match_drama.final_over_big_ask(innings, runs_needed, balls_left, bpu)
+            bowl_p_hook, bowl_p_kwargs = match_drama.bowl_pressure_effects(bowl_p, big_ask)
+            finisher_hook = _make_set_finisher_hook(state)
+            if finisher_hook is not None:
+                # Keep the normal wide:no-ball ratio, but every extra now
+                # preserves the final legal delivery rather than ending it.
+                split = bowl_p_kwargs.get("extras_split", [0.40, 0.25, 0.20, 0.15])
+                free_share = split[0] + split[1]
+                bowl_p_kwargs["extras_split"] = [
+                    split[0] / free_share, split[1] / free_share, 0.0, 0.0]
             sledge_hook = sledging.make_hook(state, srid)
-            # The calibrated controller, LAST in the chain so it sees the
-            # finished natural weights and corrects them onto the target.
-            chase_hook = (_make_chase_hook(state, fielding_q, is_free_hit_ball)
+            # The controller sees all natural weights. Only the explicit
+            # set-batter close-finish guarantee can constrain it afterwards.
+            split = bowl_p_kwargs.get("extras_split", [0.40, 0.25, 0.20, 0.15])
+            chase_hook = (_make_chase_hook(state, fielding_q, is_free_hit_ball,
+                                           extra_free_ball_share=sum(split[:2]))
                           if chase_active else None)
             weight_hook = _compose_hooks(trait_hook, env_hook,
                                          wicket_hook, drama_hook,
@@ -2256,7 +2309,7 @@ def simulate_over(state, pause_on_wicket=False):
                                          dps_hook, mpi_hook, pitch_hook, dot_hook,
                                          confidence_hook,
                                          bat_p_hook, bowl_p_hook, sledge_hook,
-                                         clutch_hook, chase_hook)
+                                         clutch_hook, chase_hook, finisher_hook)
             oc = _normalize_outcome(calculate_outcome(
                 batter=batter_adapted, bowler=bowl_adapted, pitch=pitch,
                 streak=streak, over_number=eng_over_idx, batter_runs=bs["runs"],
@@ -2345,6 +2398,9 @@ def simulate_over(state, pause_on_wicket=False):
             ball_history.append(make_ball_event(oc))
             if target is not None and state["total_runs"] >= target:
                 chased = True
+            if pause_after_delivery and not chased:
+                delivery_pause = True
+                break
             continue
 
         # --- Legal ball ---
@@ -2552,9 +2608,13 @@ def simulate_over(state, pause_on_wicket=False):
             chased = True
         if pause_now:
             break
+        if (pause_after_delivery and balls_this_over < bpu
+                and not is_innings_over(state)):
+            delivery_pause = True
+            break
 
-    if pause_now:
-        return _park_over(
+    if pause_now or delivery_pause:
+        summary = _park_over(
             state, bowler, scenario_eng, free_hit, ball_history, streaks, {
                 "balls_this_over": balls_this_over,
                 "deliveries": deliveries,
@@ -2571,6 +2631,11 @@ def simulate_over(state, pause_on_wicket=False):
                 "bowl_wkts_before": bowl_wkts_before,
                 "approach_ctx": approach_ctx,
             })
+        if delivery_pause:
+            summary.pop("paused", None)
+            summary.pop("out_batsman", None)
+            summary["delivery_paused"] = True
+        return summary
 
     # ── End of over bookkeeping ──
     over_runs = state["total_runs"] - runs_before
@@ -2768,7 +2833,7 @@ def available_batsmen(state):
 
 
 def awaiting_new_batsman(state):
-    """True while an over is parked on a wicket for the new-batsman pick."""
+    """True while an over is parked (a wicket pick or a live delivery)."""
     return bool(state) and isinstance(state.get("over_in_progress"), dict)
 
 
@@ -2795,7 +2860,7 @@ def _can_pause_for_batsman(state):
 
 def _park_over(state, bowler, scenario_eng, free_hit, ball_history, streaks,
                progress):
-    """Stop the over on a wicket and park what the resume needs."""
+    """Park the over after a delivery with everything a resume needs."""
     state["over_in_progress"] = progress
     state["free_hit"] = free_hit
     state["ball_history"] = ball_history[-BALL_HISTORY_WINDOW:]
