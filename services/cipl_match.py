@@ -31,6 +31,7 @@ from engine.game_state_engine import (
 from engine import approach_modifiers
 from engine import momentum as momentum_engine
 from engine import pitch_state
+from engine import batter_confidence
 from services import impact_player
 from services import match_drama
 from services import sledging
@@ -638,7 +639,8 @@ def _save_scenario_engine(state, eng):
 
 def _new_bat_stat():
     return {"runs": 0, "balls": 0, "fours": 0, "sixes": 0, "dots": 0,
-            "out": False, "how_out": "", "bowled_by": ""}
+            "out": False, "how_out": "", "bowled_by": "",
+            "confidence": batter_confidence.NEUTRAL}
 
 
 def _new_bowl_stat():
@@ -2214,6 +2216,10 @@ def simulate_over(state, pause_on_wicket=False):
             # A batter who has been tied down for three or more balls starts
             # looking for the boundary — the reason maidens are rare in T20.
             dot_hook = _make_dot_pressure_hook(over_timeline)
+            # Per-batter recent rhythm. Rebuilt for each delivery so an over
+            # can respond to its own events, including after a wicket/resume.
+            # Distinct from permanent settling and team-wide momentum/MPI.
+            confidence_hook = lambda weights, stats=bs: batter_confidence.apply(weights, stats)
             # LetsPlay clutch amplifier — layered AFTER traits so trait deltas
             # (Finisher/Clutch/Death/Yorker) land first, then chase intent scales
             # the six-or-bust spread. None for /cipl and non-finale balls.
@@ -2248,6 +2254,7 @@ def simulate_over(state, pause_on_wicket=False):
                                          floor_hook, corridor_hook, variance_hook,
                                          ceiling_hook, contest_hook,
                                          dps_hook, mpi_hook, pitch_hook, dot_hook,
+                                         confidence_hook,
                                          bat_p_hook, bowl_p_hook, sledge_hook,
                                          clutch_hook, chase_hook)
             oc = _normalize_outcome(calculate_outcome(
@@ -2508,6 +2515,9 @@ def simulate_over(state, pause_on_wicket=False):
                 _swap_strike(state)
 
         note_bowler_ball(bws, bowler_wicket=bws["wickets"] > wkts_before_ball)
+
+        if not is_extra and otype != "wicket" and not batter_out:
+            batter_confidence.record(bs, runs)
 
         _ball_out = bool(otype == "wicket" or batter_out)
         if oc.get("misfield") and bowl_p >= PRESSURE_CALLOUT:

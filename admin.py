@@ -9469,9 +9469,13 @@ def match_rest_action():
             if env_type == "delivery":
                 ok, res, _info = set_delivery_action(
                     match.id, user.id, (act.get("delivery") or "").strip(),
-                    act.get("speed"))
+                    act.get("speed"), line=act.get("line"),
+                    spin_length=act.get("spinLength"))
             elif env_type == "shot":
-                ok, res, _info = set_shot_action(match.id, user.id, act.get("shot"))
+                ok, res, _info = set_shot_action(
+                    match.id, user.id, act.get("shot"),
+                    footwork=act.get("footwork"), stroke=act.get("stroke"),
+                    intent=act.get("intent"))
             elif env_type == "wicket_batsman":
                 boi = xi_index_to_batting_order_index(state, act.get("index"))
                 if boi is None:
