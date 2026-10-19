@@ -396,6 +396,39 @@ class PermissionTests(ReminderCase):
         return self.handler.build_plan(self.session, tg_id,
                                        tour_id=self.tour.id, **kwargs)
 
+    def test_round_and_match_filters_survive_preview_and_send(self):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+
+        fixtures = self.mrs.pending_fixtures(self.session, self.tour.id)
+        fixtures[0].round_no = 1
+        fixtures[1].round_no = 2
+        self.session.commit()
+        for scope, number in (("round", 2), ("match", 1)):
+            message = SimpleNamespace(reply_text=AsyncMock())
+            update = SimpleNamespace(effective_message=message,
+                                     effective_user=SimpleNamespace(id=self.admin))
+            context = SimpleNamespace(args=[f"#{self.tour.id}", scope, str(number)])
+            with patch.object(self.handler, 'get_session', return_value=self.session), \
+                 patch.object(self.session, 'close'):
+                asyncio.run(self.handler.remindmatch_handler(update, context))
+            kwargs = message.reply_text.call_args.kwargs
+            data = kwargs['reply_markup'].inline_keyboard[0][0].callback_data
+            expected = fixtures[1] if scope == 'round' else fixtures[0]
+            query = SimpleNamespace(data=data, from_user=SimpleNamespace(id=self.admin),
+                                    answer=AsyncMock(), edit_message_text=AsyncMock())
+            update = SimpleNamespace(callback_query=query, effective_chat=None)
+            with patch.object(self.handler, 'get_session', return_value=self.session), \
+                 patch.object(self.session, 'close'), \
+                 patch.object(self.handler, 'build_plan', wraps=self.handler.build_plan) as build, \
+                 patch.object(self.handler, '_send', new=AsyncMock(return_value=True)):
+                asyncio.run(self.handler.remindmatch_callback(update, SimpleNamespace(bot=None)))
+            plan = self.plan(self.admin, force=True,
+                             **{scope + '_no': number})
+            self.assertEqual([f.id for n in plan.sending for f in n.fixtures], [expected.id])
+            self.assertEqual(build.call_args.kwargs[scope + '_no'], number)
+
     def test_an_admin_chases_the_whole_tournament(self):
         plan = self.plan(self.admin)
         self.assertIsNone(plan.error)
@@ -459,6 +492,20 @@ class PermissionTests(ReminderCase):
         self.assertEqual(self.handler._split_args(["SRH", "force"]),
                          ("SRH", "", True))
         self.assertEqual(self.handler._split_args([]), ("", "", False))
+
+
+
+class ScopedPendingFixtureTests(ReminderCase):
+    def test_round_and_match_scope_exclude_other_pending_and_completed_rows(self):
+        first = self.fixture('SRH', 'RR', round_no=1, match_no=1)
+        second = self.fixture('SRH', 'RR', round_no=2, match_no=2)
+        self.fixture('SRH', 'CSK', status='completed', round_no=2, match_no=3)
+        self.assertEqual([f.id for f in self.mrs.pending_fixtures(
+            self.session, self.tour.id, round_no=2)], [second.id])
+        self.assertEqual([f.id for f in self.mrs.pending_fixtures(
+            self.session, self.tour.id, match_no=1)], [first.id])
+        self.assertEqual(self.mrs.pending_fixtures(
+            self.session, self.tour.id, match_no=3), [])
 
 
 if __name__ == "__main__":

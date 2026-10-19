@@ -1141,7 +1141,7 @@ TOURNAMENT_RULE_FIELDS = (
     "points_win", "points_tie", "points_loss", "points_no_result",
     "min_balls_for_sr", "min_balls_for_econ",
     "min_overseas", "max_overseas", "rating_rules_json",
-    "enforce_team_owner", "fixtures_all_at_once",
+    "enforce_team_owner", "fixtures_all_at_once", "fixture_round_window",
     "pitch_mode", "preferred_pitches_json", "preferred_pitch_pct",
     "preferred_pitch_limit",
     "injuries_enabled", "injury_chance", "injury_max_matches",

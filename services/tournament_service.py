@@ -1406,7 +1406,13 @@ def schedule_news(session, tm):
                                        TournamentMatch.status != "completed")
                                .count())
             if not same_round_left:
-                return (f"🔓 <b>Round {tm.round_no} complete — Round {rnd} is "
+                opened = league_schedule_service.open_round(session, tm.tournament_id)
+                from sqlalchemy import func
+                last = (session.query(func.max(TournamentMatch.round_no))
+                        .filter(TournamentMatch.tournament_id == tm.tournament_id,
+                                TournamentMatch.stage.in_(("league", "group"))).scalar())
+                opened = min(opened, last or opened)
+                return (f"🔓 <b>Round {tm.round_no} complete — Round {opened} is "
                         f"now open.</b> See {fixtures_cmd}.")
         if rnd is None and league_stage_complete(session, tm.tournament_id):
             return "🏁 <b>League stage complete.</b>"

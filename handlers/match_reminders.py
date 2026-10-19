@@ -174,7 +174,7 @@ class _Plan:
 
 
 def build_plan(session, tg_id, team_id=None, opponent_id=None, force=False,
-               tour_id=None):
+               tour_id=None, round_no=None, match_no=None):
     """Resolve a run into the nudges it would send, or an error to show instead.
 
     Kept apart from the command handler so the preview and the Send button both
@@ -213,8 +213,11 @@ def build_plan(session, tg_id, team_id=None, opponent_id=None, force=False,
         scope = (f"{team.name} vs {opponent.name}" if opponent
                  else f"{team.name}")
     else:
-        fixtures = mrs.pending_fixtures(session, tour.id)
-        scope = "every unplayed fixture"
+        fixtures = mrs.pending_fixtures(session, tour.id, round_no=round_no,
+                                        match_no=match_no)
+        scope = (f"Round {round_no}" if round_no is not None else
+                 f"Match M{match_no}" if match_no is not None else
+                 "every unplayed fixture")
 
     nudges = mrs.build_nudges(session, tour, fixtures,
                               command=_tournament_command(session, tour),
@@ -276,7 +279,7 @@ def render_preview(session, plan):
     return "\n".join(out)
 
 
-def _keyboard(opener, team_id, opponent_id, force, tour_id):
+def _keyboard(opener, team_id, opponent_id, force, tour_id, round_no=None, match_no=None):
     """Send / Cancel, bound to the admin who opened the preview.
 
     Everything the Send needs is in the button — the plan is re-resolved from
@@ -284,6 +287,8 @@ def _keyboard(opener, team_id, opponent_id, force, tour_id):
     """
     payload = (f"{opener}_{tour_id}_{team_id or 0}_{opponent_id or 0}_"
                f"{1 if force else 0}")
+    if round_no is not None or match_no is not None:
+        payload += f"_{round_no or 0}_{match_no or 0}"
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("📣 Send reminders",
                              callback_data=f"{CB_PREFIX}go_{payload}"),
@@ -314,7 +319,31 @@ async def remindmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
             await message.reply_text(NO_ACTIVE)
             return
 
-        first, second, force = _split_args(context.args)
+        args = list(context.args or [])
+        tour = tours[0]
+        if args and args[0].startswith("#"):
+            selector = args.pop(0)[1:]
+            tour = next((t for t in tours if str(t.id) == selector), None)
+            if tour is None:
+                await message.reply_text("❌ No active tournament with that ID.")
+                return
+            tours = [tour]
+        first, second, force = _split_args(args)
+        round_no = match_no = None
+        words = first.split()
+        if words and words[0].lower() in ("pending", "round", "match"):
+            kind = words[0].lower()
+            valid = not second and ((kind == "pending" and len(words) == 1) or
+                     (kind != "pending" and len(words) == 2 and
+                      words[1].isascii() and words[1].isdigit() and int(words[1]) > 0))
+            if not valid:
+                await message.reply_text("Usage: /remindmatch [#id] pending | round <number> | match <number> [force]")
+                return
+            if kind == "round":
+                round_no = int(words[1])
+            elif kind == "match":
+                match_no = int(words[1])
+            first = ""
         team_id = opponent_id = None
         tour = tours[0]
         if first:
@@ -337,11 +366,13 @@ async def remindmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 opponent_id = opponent.id
 
         plan = build_plan(session, tg_id, team_id=team_id,
-                          opponent_id=opponent_id, force=force, tour_id=tour.id)
+                          opponent_id=opponent_id, force=force, tour_id=tour.id,
+                          round_no=round_no, match_no=match_no)
         if plan.error:
             await message.reply_text(plan.error, parse_mode="HTML")
             return
-        markup = (_keyboard(tg_id, team_id, opponent_id, plan.force, plan.tour.id)
+        markup = (_keyboard(tg_id, team_id, opponent_id, plan.force, plan.tour.id,
+                            round_no, match_no)
                   if plan.sending else None)
         await message.reply_text(render_preview(session, plan), parse_mode="HTML",
                                  disable_web_page_preview=True,
@@ -421,8 +452,11 @@ async def remindmatch_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         await q.answer("Invalid selection.", show_alert=True)
         return
     try:
-        opener, tour_id, team_id, opponent_id, force = (
-            int(part) for part in data[3:].split("_"))
+        parts = [int(part) for part in data[3:].split("_")]
+        if len(parts) not in (5, 7):
+            raise ValueError("Invalid reminder scope")
+        opener, tour_id, team_id, opponent_id, force = parts[:5]
+        round_no, match_no = parts[5:] if len(parts) == 7 else (0, 0)
     except (TypeError, ValueError):
         await q.answer("Invalid selection.", show_alert=True)
         return
@@ -441,7 +475,8 @@ async def remindmatch_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         # get a reminder to go and play it.
         plan = build_plan(session, opener, team_id=team_id or None,
                           opponent_id=opponent_id or None, force=bool(force),
-                          tour_id=tour_id)
+                          tour_id=tour_id, round_no=round_no or None,
+                          match_no=match_no or None)
         if plan.error or not plan.sending:
             await q.edit_message_text(
                 plan.error or "✅ Nothing left to remind — those matches have "
