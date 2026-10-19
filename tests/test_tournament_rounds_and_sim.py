@@ -536,5 +536,26 @@ class ReplayTests(RoundCase):
         self.assertIn(real_winner, (final.team1_id, final.team2_id))
         self.assertNotIn(sim_winner, (final.team1_id, final.team2_id))
 
+
+class MultipleOpenRoundsTests(RoundCase):
+    def test_window_controls_visibility_playability_and_advances(self):
+        self.tour.fixture_round_window = 2
+        self.session.commit()
+        self.assertEqual(self.lss.open_round(self.session, self.tour.id), 2)
+        round_two = self.fixtures(2)[0]
+        round_three = self.fixtures(3)[0]
+        self.assertTrue(self.lss.fixture_in_open_round(self.session, round_two))
+        self.assertFalse(self.lss.fixture_in_open_round(self.session, round_three))
+        visible, locked, progress = self.lss.split_open_round(
+            self.session, self.tour.id, self.fixtures())
+        self.assertEqual({f.round_no for f in visible}, {1, 2})
+        self.assertEqual(locked, len(self.fixtures(3)))
+        self.assertEqual(progress['open_through'], 2)
+        self.ts.simulate_fixture(self.session, round_two.id, '1')
+        self.finish_round(1)
+        self.assertEqual(self.lss.open_round(self.session, self.tour.id), 3)
+        self.assertTrue(self.lss.fixture_in_open_round(self.session, round_three))
+
+
 if __name__ == "__main__":
     unittest.main()

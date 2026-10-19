@@ -1112,6 +1112,7 @@ _FIXTURE_MODE_USAGE = (
     "at a time (the next round opens when this one is finished)\n"
     "<code>/tfixturemode all</code> — release every fixture at once: all shown, "
     "any of them playable in any order\n"
+    "<code>/tfixturemode 3</code> — keep three rounds open at a time\n"
     "Add <code>#id</code> first to pick a tournament when several are running."
 )
 _FIXTURE_MODE_WORDS = {
@@ -1123,6 +1124,9 @@ _FIXTURE_MODE_WORDS = {
 def _fixture_mode_summary(tour):
     if getattr(tour, "fixtures_all_at_once", False):
         mode = "📋 <b>All at once</b> — every fixture is shown and playable"
+    elif (getattr(tour, "fixture_round_window", 1) or 1) > 1:
+        mode = (f"🔵 <b>{tour.fixture_round_window} rounds at a time</b> — "
+                "the window advances as the earliest round finishes")
     else:
         mode = ("🔵 <b>Round by round</b> — only the open round is shown and "
                 "playable; the next unlocks when it's finished")
@@ -1146,10 +1150,17 @@ async def tfixturemode_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                          + _FIXTURE_MODE_USAGE)
             return
         word = "".join(args).lower().replace("-", "").replace("_", "")
+        if len(args) == 1 and args[0].isascii() and args[0].isdigit() and 0 < int(args[0]) <= 2147483647:
+            tour.fixture_round_window = int(args[0])
+            tour.fixtures_all_at_once = False
+            session.commit()
+            await _reply(update, "✅ " + _fixture_mode_summary(tour))
+            return
         if word not in _FIXTURE_MODE_WORDS:
             await _reply(update, _FIXTURE_MODE_USAGE)
             return
         tour.fixtures_all_at_once = _FIXTURE_MODE_WORDS[word]
+        tour.fixture_round_window = 1
         session.commit()
         await _reply(update, "✅ " + _fixture_mode_summary(tour))
     finally:

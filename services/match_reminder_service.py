@@ -124,7 +124,8 @@ def team_badge(session, team):
 # Finding what still has to be played
 # ══════════════════════════════════════════════════════════════════════
 
-def pending_fixtures(session, tournament_id, team_id=None, opponent_id=None):
+def pending_fixtures(session, tournament_id, team_id=None, opponent_id=None,
+                     round_no=None, match_no=None):
     """Unplayed fixtures, in schedule order.
 
     ``team_id`` narrows to one side's fixtures and ``opponent_id`` to the ones
@@ -136,6 +137,10 @@ def pending_fixtures(session, tournament_id, team_id=None, opponent_id=None):
                  TournamentMatch.status.in_(PENDING_STATUSES),
                  TournamentMatch.team1_id.isnot(None),
                  TournamentMatch.team2_id.isnot(None)))
+    if round_no is not None:
+        q = q.filter(TournamentMatch.round_no == int(round_no))
+    if match_no is not None:
+        q = q.filter(TournamentMatch.match_no == int(match_no))
     if team_id is not None:
         q = q.filter((TournamentMatch.team1_id == int(team_id))
                      | (TournamentMatch.team2_id == int(team_id)))

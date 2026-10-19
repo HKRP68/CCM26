@@ -814,7 +814,7 @@ def all_at_once(session, tournament_id):
 def open_round(session, tournament_id):
     """The round fixtures are locked behind, or None when nothing is locked.
 
-    This is :func:`current_round` for a round-by-round tournament, and None for
+    This is the current round plus the configured window minus one, and None for
     one that releases every fixture at once — the value to hand
     :func:`is_round_locked` whenever the question is "may this be played/shown?".
     ``current_round`` itself still says which round the league is on, for the
@@ -822,7 +822,11 @@ def open_round(session, tournament_id):
     """
     if all_at_once(session, tournament_id):
         return None
-    return current_round(session, tournament_id)
+    from models import Tournament
+    tour = session.get(Tournament, int(tournament_id))
+    rnd = current_round(session, tournament_id)
+    window = max(1, int(getattr(tour, "fixture_round_window", 1) or 1))
+    return rnd + window - 1 if rnd is not None else None
 
 
 def round_progress(session, tournament_id):
@@ -888,7 +892,9 @@ def split_open_round(session, tournament_id, fixtures):
     if all_at_once(session, tournament_id):
         return list(fixtures), 0, None
     progress = round_progress(session, tournament_id)
-    rnd = progress["round"] if progress else None
+    rnd = open_round(session, tournament_id)
+    if progress and rnd > progress["round"]:
+        progress["open_through"] = min(rnd, progress["rounds"])
     visible = [fx for fx in fixtures if not is_round_locked(fx, rnd)]
     return visible, len(fixtures) - len(visible), progress
 
@@ -902,6 +908,8 @@ def round_banner(progress, locked_count, tour=None):
         return ""
     text = (f"Round {progress['round']} of {progress['rounds']} · "
             f"{progress['played']}/{progress['total']} played")
+    if progress.get("open_through", progress["round"]) > progress["round"]:
+        text += f" · Rounds {progress['round']}–{progress['open_through']} open"
     if tour is not None:
         from services.tournament_watch import deadline_text
         left = deadline_text(tour)
@@ -929,9 +937,9 @@ def round_lock_message(session, tournament_id, team1_id, team2_id):
     rnd = open_round(session, tournament_id)
     if fx is None or not is_round_locked(fx, rnd):
         return None
-    return (f"That fixture is in Round {fx.round_no} — Round {rnd} is still "
-            "being played. It opens once every Round "
-            f"{rnd} match is finished.")
+    first = current_round(session, tournament_id)
+    return (f"That fixture is in Round {fx.round_no} — rounds through {rnd} "
+            f"are open. Finish Round {first} to advance the open rounds.")
 
 
 # ──────────────────────────────────────────────────────────────────────

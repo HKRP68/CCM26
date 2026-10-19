@@ -273,3 +273,22 @@ badge has to be.
   cooldown and its override, and the admin gate — including that a team owner is
   refused, that a refusal leaks nothing about the field, and that an admin who
   loses their rights between the preview and the tap cannot send.
+
+### Round and match selection
+
+Admins can preview reminders with:
+
+- `/remindmatch pending` — all pending matches.
+- `/remindmatch round 2` — pending matches in Round 2.
+- `/remindmatch match 14` — pending match M14 (the schedule number).
+
+Prefix a tournament ID when several are active, e.g.
+`/remindmatch #12 round 2 force`. Existing team and pair filters still work.
+The Send button preserves the selected scope and checks pending status again.
+
+### Several open rounds
+
+`/tfixturemode 3` keeps three consecutive league rounds open, starting at the
+earliest unfinished round. As that round finishes, the window advances.
+`/tfixturemode round` restores one round at a time; `/tfixturemode all` opens
+all fixtures. Use `/tfixturemode #12 3` to select a tournament explicitly.

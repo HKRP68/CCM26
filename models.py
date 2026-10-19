@@ -2813,6 +2813,7 @@ class Tournament(Base):
     # fixture at once — all shown, any played in any order. Admins switch it
     # with /tfixturemode or on the tournament's Manage page.
     fixtures_all_at_once = Column(Boolean, default=False, nullable=False)
+    fixture_round_window = Column(Integer, default=1, nullable=False)
 
     # How the surface for a tournament match is decided:
     #   "host"    – the host picks it during setup (the original behaviour)
