@@ -115,7 +115,7 @@ class RecordTests(pages.PageCase):
     def test_settings_page_and_source_access(self):
         response=self.client.get(self.url)
         self.assertEqual(200,response.status_code)
-        for token in (b'Minimum batting balls',b'New-record GIF',b'Holder GIF',b'Alpha'):
+        for token in (b'Minimum batting balls',b'Default record GIF',b'Delivery insights',b'Alpha'):
             self.assertIn(token,response.data)
         response=self.client.post(self.url,data=dict(season=self.season.id,min_bat_balls=99,min_bowl_balls=88,alerts_enabled='on'))
         self.assertEqual(302,response.status_code)
@@ -164,17 +164,17 @@ class RecordTests(pages.PageCase):
     def test_send_uses_record_gif_with_escaped_fields(self):
         from services import event_media_service
         state=self.state();state['bat_xi'][0]['name']='<Alpha>'
-        bot=SimpleNamespace(send_message=AsyncMock())
+        bot=SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=77)))
         context=SimpleNamespace(bot=bot,bot_data={})
-        async def inline_worker(fn):
+        async def inline_worker(fn,*args,**kwargs):
             # Test the send boundary separately from executor scheduling.
-            return fn()
+            return fn(*args,**kwargs)
         with patch.object(event_media_service,'fire_event_media',new_callable=AsyncMock) as media, \
                 patch.object(self.R.asyncio, 'to_thread', side_effect=inline_worker):
             asyncio.run(self.R.announce(context,state))
             self.assertTrue(bot.send_message.called)
             self.assertTrue(media.called)
-            self.assertEqual('new_record',media.call_args_list[0].args[2])
+            self.assertEqual('record_default',media.call_args_list[0].args[2])
             self.assertTrue(any('&lt;Alpha&gt;' in str(c.kwargs) for c in media.call_args_list))
 
     def test_season_delete_cleans_configuration_and_alerts(self):
@@ -205,7 +205,7 @@ class RecordTests(pages.PageCase):
             self.assertIn('Beta',edits[-1])
             query.data=f'ls_h_{self.series.id}_{self.season.id}-sr_123'
             asyncio.run(H.seasons_callback(update,context))
-            self.assertEqual('record_holder',media.call_args.args[2])
+            self.assertEqual('record_default',media.call_args.args[2])
             query.from_user.id=999
             count=media.call_count
             asyncio.run(H.seasons_callback(update,context))
@@ -294,3 +294,197 @@ class RecordTests(pages.PageCase):
         self.assertEqual(18,match.inn2_balls)
         first=next(l for l in json.loads(match.scorecard_json) if l['name']=='First')
         self.assertEqual(20,first['balls_to_100'])
+
+    def test_career_profile_and_shareable_card_routes(self):
+        response=self.client.get(f'/league-seasons/{self.series.id}/player?player=Alpha')
+        self.assertEqual(200,response.status_code)
+        self.assertIn(b'Recent form',response.data)
+        self.assertIn(b'Personal bests',response.data)
+        self.assertEqual(404,self.client.get(f'/league-seasons/{self.series.id}/player?player=Missing').status_code)
+        card=self.client.get(f'/league-seasons/{self.series.id}/record-card/hs.png?season={self.season.id}')
+        self.assertEqual(200,card.status_code)
+        self.assertEqual('image/png',card.mimetype)
+        from PIL import Image
+        from io import BytesIO
+        self.assertEqual((1200,675),Image.open(BytesIO(card.data)).size)
+        self.assertEqual(404,self.client.get(f'/league-seasons/{self.series.id}/record-card/fake.png').status_code)
+
+    def test_honours_and_official_best_xi_survive_archive(self):
+        names=['Alpha','Beta']+[f'Player {i}' for i in range(3,12)]
+        self.game.scorecard_json=json.dumps([self.line(n,30,20) for n in names]);self.session.commit()
+        url=f'/league-seasons/{self.series.id}/honours/{self.season.id}'
+        response=self.client.get(url)
+        self.assertEqual(200,response.status_code)
+        self.assertIn(b'Suggested statistical XI',response.data)
+        self.client.post(url,data=dict(best_xi='\n'.join(names),criteria='Admin selection with keeper, batting and bowling roles'))
+        self.session.expire_all()
+        self.assertEqual(names,self.LS.honours(self.season)['best_xi']['players'])
+        from services import season_archive
+        season_archive.delete_tournament(self.session,self.tour,keep_stats=True);self.session.commit()
+        response=self.client.get(url)
+        self.assertIn(b'Official Best XI',response.data)
+        self.assertIn(b'Player 11',response.data)
+
+    def test_watch_deduplicates_and_can_be_disabled(self):
+        from services import league_record_publications as P
+        self.game.scorecard_json=json.dumps([self.line('Alpha',490,220),self.line('Beta',500,230)])
+        self.session.flush()
+        state=self.state();state['bat_stats']['1'].update(runs=0,balls=0)
+        first=P.queue_watch(self.session,state)
+        self.assertTrue(first)
+        self.assertTrue(any('to 500' in row.text for row in first))
+        self.assertEqual([],P.queue_watch(self.session,state))
+        P.save_options(self.session,self.season,watch=False,recap=True)
+        state['match_id']+=1
+        self.assertEqual([],P.queue_watch(self.session,state))
+
+    def test_richer_alerts_include_previous_holder_opponent_and_link(self):
+        with patch.dict(os.environ,WEBAPP_URL='https://league.example/webapp'):
+            alerts=self.R.collect_alerts(self.session,self.state())
+        hs=next(a for a in alerts if a[2]['record']=='Highest individual score')
+        self.assertIn('by Alpha, Beta',hs[1])
+        self.assertIn('Opponent:',hs[1])
+        self.assertIn('https://league.example/cricket?match_id=',hs[1])
+
+    def test_recap_idempotency_and_scorecard_correction_edits_original(self):
+        from services import league_record_publications as P
+        from services.tournament_service import recompute_tournament,delete_tournament_match
+        state=self.state();state['match_id']=self.game.match_id
+        row=P.queue_recap(self.session,state)
+        self.assertEqual(row.id,P.queue_recap(self.session,state).id)
+        self.session.commit()
+        async def inline(fn,*args,**kw):return fn(*args,**kw)
+        context=SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=432)),edit_message_text=AsyncMock()))
+        with patch.object(P.asyncio,'to_thread',side_effect=inline):
+            asyncio.run(P.dispatch(context))
+        self.session.expire_all();self.assertEqual(432,row.message_id)
+        self.game.scorecard_json=json.dumps([self.line('Alpha',35,30),self.line('Beta',90,40)])
+        recompute_tournament(self.session,self.tour.id);self.session.commit()
+        self.assertEqual('pending',row.status)
+        self.assertIn('CORRECTED MATCH RECAP',row.text)
+        with patch.object(P.asyncio,'to_thread',side_effect=inline):
+            asyncio.run(P.dispatch(context))
+        self.assertEqual(1,context.bot.send_message.call_count)
+        self.assertEqual(432,context.bot.edit_message_text.call_args.kwargs['message_id'])
+        recompute_tournament(self.session,self.tour.id);self.session.commit()
+        self.session.expire_all();self.assertEqual('sent',row.status)
+        delete_tournament_match(self.session,self.game.id);self.session.commit()
+        self.assertIn('RETRACTED',row.text)
+
+    def test_publication_failures_remain_retryable(self):
+        from services import league_record_publications as P
+        state=self.state();state['match_id']=self.game.match_id
+        row=P.queue_recap(self.session,state);self.session.commit()
+        async def inline(fn,*args,**kw):return fn(*args,**kw)
+        context=SimpleNamespace(bot=SimpleNamespace(send_message=AsyncMock(side_effect=RuntimeError('Telegram unavailable'))))
+        with patch.object(P.asyncio,'to_thread',side_effect=inline):asyncio.run(P.dispatch(context))
+        self.session.expire_all();self.assertEqual('pending',row.status)
+        context.bot.send_message=AsyncMock(return_value=SimpleNamespace(message_id=100))
+        with patch.object(P.asyncio,'to_thread',side_effect=inline):asyncio.run(P.dispatch(context))
+        self.session.expire_all();self.assertEqual('sent',row.status)
+
+    def test_deleted_season_cleans_publications_and_options(self):
+        from services import league_record_publications as P
+        from models import LeagueRecordPublication,LeagueRecordOptions
+        sid=self.season.id
+        P.save_options(self.session,self.season)
+        state=self.state();state['match_id']=self.game.match_id
+        P.queue_recap(self.session,state)
+        self.LS.detach_season(self.session,self.season);self.session.commit()
+        self.assertEqual(0,self.session.query(LeagueRecordPublication).filter_by(season_id=sid).count())
+        self.assertIsNone(self.session.get(LeagueRecordOptions,sid))
+
+    def test_shared_default_gif_overrides_legacy_for_every_record_event(self):
+        from services import event_media_service as media
+        context=SimpleNamespace()
+        for event in ('new_record','record_equalled','record_holder'):
+            with patch.object(media,'fire_event_media',new_callable=AsyncMock,return_value=True) as fire:
+                asyncio.run(media.fire_record_media(context,-100,event,dict(player='<Player>')))
+                self.assertEqual(1,fire.call_count)
+                self.assertEqual('record_default',fire.call_args.args[2])
+                self.assertEqual('&lt;Player&gt;',fire.call_args.kwargs['fields']['player'])
+
+    def test_delivery_boards_survive_archive_and_drop_invalid_corrected_data(self):
+        from services import config_service,cipl_match as CM
+        from services.tournament_service import _collect_player_lines
+        from tests.test_cipl_approach import _make_state
+        state=_make_state(20)
+        state.update(bat_team_name=self.a.name,bowl_team_name=self.b.name)
+        with patch.dict(config_service._CACHE,data=dict(config_service.DEFAULTS)),patch.object(CM,'calculate_outcome',return_value=dict(type='run',runs=4,is_extra=False,batter_out=False)):
+            for _ in range(3):
+                state['current_bowler']=CM.eligible_bowlers(state)[0]
+                state['batting_approach']=state['bowling_approach']='balanced'
+                CM.simulate_over(state)
+        lines=_collect_player_lines(state)
+        self.game.scorecard_json=json.dumps(lines)
+        self.game.inn1_runs=72;self.game.inn2_runs=0
+        self.session.commit()
+        self.assertEqual(72,self.board('partnership')['holders'][0]['value'])
+        self.assertEqual(13,self.board('p50')['holders'][0]['value'])
+        self.assertTrue(self.board('powerplay_runs')['holders'])
+        events=self.client.get(f'{self.url}/{self.season.id}/match/{self.game.id}?download=events')
+        self.assertEqual(18,len(events.json))
+        lines[0]['bat_runs']+=5;self.game.scorecard_json=json.dumps(lines);self.session.flush()
+        self.assertEqual([],self.board('partnership')['holders'])
+        lines[0]['bat_runs']-=5;self.game.scorecard_json=json.dumps(lines);self.session.flush()
+        from services import season_archive
+        season_archive.delete_tournament(self.session,self.tour,keep_stats=True);self.session.commit()
+        self.assertEqual(13,self.board('p50')['holders'][0]['value'])
+
+    def test_live_message_retains_earlier_records_when_final_categories_arrive(self):
+        from services import league_record_publications as P
+        from models import LeagueRecordPublication
+        async def inline(fn,*args,**kw):return fn(*args,**kw)
+        bot=SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=60)),edit_message_text=AsyncMock())
+        context=SimpleNamespace(bot=bot,bot_data={})
+        state=self.state()
+        from services import event_media_service as media
+        with patch.object(P.asyncio,'to_thread',side_effect=inline),patch.object(media,'fire_event_media',new_callable=AsyncMock,return_value=True):
+            asyncio.run(self.R.announce(context,state))
+            state['bat_stats']['1'].update(runs=120,balls=40,balls_to_100=39)
+            asyncio.run(self.R.announce(context,state))
+        row=self.session.query(LeagueRecordPublication).filter_by(match_id=state['match_id']).filter(LeagueRecordPublication.kind.like('record:%')).first()
+        self.assertIn('Highest individual score',row.text)
+        self.assertIn('Fastest hundred',row.text)
+        self.assertEqual(1,bot.send_message.call_count)
+        self.assertTrue(bot.edit_message_text.called)
+
+    def test_unfinished_match_is_not_mistaken_for_a_removed_scorecard(self):
+        from services import league_record_publications as P
+        row=P.queue(self.session,self.season,999999,-100,'record:new_record:example','Live provisional')
+        self.session.flush()
+        P.reconcile(self.session,self.tour.id)
+        self.assertIsNone(row.fingerprint)
+        self.assertEqual('Live provisional',row.text)
+
+    def test_qualification_change_queues_amendment_without_scorecard_change(self):
+        from services import league_record_publications as P
+        state=self.state();state['match_id']=self.game.match_id
+        row=P.queue_recap(self.session,state)
+        row.message_id=19;row.status='sent';row.delivered_revision=0
+        self.session.commit()
+        self.R.save_config(self.session,self.season,31,12)
+        self.session.commit()
+        self.assertEqual('pending',row.status)
+        self.assertIn('CORRECTED MATCH RECAP',row.text)
+        self.assertEqual([],self.board('sr')['holders'])
+
+    def test_missing_original_message_posts_an_amendment(self):
+        from services import league_record_publications as P
+        state=self.state();state['match_id']=self.game.match_id
+        row=P.queue_recap(self.session,state)
+        row.message_id=55;row.revision=1;row.text='CORRECTED MATCH RECAP'
+        self.session.commit()
+        bot=SimpleNamespace(edit_message_text=AsyncMock(side_effect=RuntimeError('Message to edit not found')),
+                            send_message=AsyncMock(return_value=SimpleNamespace(message_id=56)))
+        async def inline(fn,*args,**kw):return fn(*args,**kw)
+        with patch.object(P.asyncio,'to_thread',side_effect=inline):asyncio.run(P.dispatch(SimpleNamespace(bot=bot)))
+        self.session.expire_all()
+        self.assertEqual(56,row.message_id)
+        self.assertEqual('sent',row.status)
+
+    def test_team_record_alert_uses_the_other_side_as_opponent(self):
+        state=self.state();state['total_runs']=200
+        alerts=self.R.collect_alerts(self.session,state)
+        record=next(a for a in alerts if a[2]['record']=='Highest team total')
+        self.assertEqual(self.b.name,record[2]['opponent'])

@@ -2377,6 +2377,9 @@ async def _prompt_bowler(context, mid, state=None, first=False):
         state = await _gs(context, mid)
     if not state:
         return
+    if first:
+        from services.league_record_publications import watch
+        await watch(context,state)
     if not first:
         await _delete_prev_over(context, state)
     if _bot_bowls(state):

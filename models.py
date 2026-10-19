@@ -5245,6 +5245,8 @@ class LeagueSeason(Base):
     series = relationship("LeagueSeries", back_populates="seasons")
     record_config = relationship("LeagueRecordConfig", cascade="all, delete-orphan", uselist=False)
     record_alerts = relationship("LeagueRecordAlert", cascade="all, delete-orphan")
+    record_options = relationship("LeagueRecordOptions", cascade="all, delete-orphan", uselist=False)
+    record_publications = relationship("LeagueRecordPublication", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_league_season_number", "series_id", "season_no", unique=True),
@@ -5275,3 +5277,29 @@ class LeagueRecordAlert(Base):
     kind = Column(String(16), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     __table_args__ = (Index("ix_league_record_alert_once", "season_id", "match_id", "scope", "category", "holder", "kind", unique=True),)
+
+
+class LeagueRecordOptions(Base):
+    __tablename__ = 'league_record_options'
+    season_id = Column(Integer, ForeignKey('league_seasons.id', ondelete='CASCADE'), primary_key=True)
+    options_json = Column(Text, nullable=True)
+
+
+class LeagueRecordPublication(Base):
+    """Durable record/recap messages; scorecard corrections edit the original."""
+    __tablename__ = 'league_record_publications'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_id = Column(Integer, ForeignKey('league_seasons.id', ondelete='CASCADE'), nullable=False, index=True)
+    match_id = Column(Integer, nullable=False, index=True)
+    fixture_id = Column(Integer, nullable=True)
+    chat_id = Column(BigInteger, nullable=False)
+    kind = Column(String(80), nullable=False)
+    text = Column(Text, nullable=False)
+    metadata_json = Column(Text, nullable=True)
+    fingerprint = Column(String(64), nullable=True)
+    message_id = Column(BigInteger, nullable=True)
+    revision = Column(Integer, default=0, nullable=False)
+    delivered_revision = Column(Integer, default=-1, nullable=False)
+    status = Column(String(16), default='pending', nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    __table_args__ = (Index('ix_record_publication_once', 'season_id', 'match_id', 'chat_id', 'kind', unique=True),)

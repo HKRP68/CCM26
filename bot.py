@@ -3049,6 +3049,15 @@ def main():
         except Exception:
             logger.exception("Failed to start the auction clock")
 
+        # Durable record recaps and scorecard-correction edits.
+        try:
+            from services.league_record_publications import publication_job
+            if app.job_queue:
+                app.job_queue.run_repeating(publication_job, interval=30, first=30,
+                                             name="league_record_publications")
+        except Exception:
+            logger.exception("Failed to schedule record publications")
+
         # Schedule periodic tour expiry (every hour)
         try:
             async def _tour_expiry_job(ctx):

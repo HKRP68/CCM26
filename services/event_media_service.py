@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 # All event keys we know about. Order matters for admin UI grouping.
 EVENT_KEYS = [
+    ("record_default", "🏆 Default Record GIF", "One shared celebration for every player and record event"),
     ("new_record", "🏆 New Record", "Season or competition record surpassed"),
     ("record_equalled", "🤝 Record Equalled", "A new joint record holder"),
     ("record_holder", "👑 Record Holder", "Requested from the /seasons records board"),
@@ -84,7 +85,7 @@ def _pick_random(items, weight_fn):
 CAPTION_FIELDS = (
     "player", "team", "opponent", "runs", "balls", "score", "overs",
     "bowler", "figures", "wickets", "partnership", "margin", "fielder",
-    "dropped_on", "record", "value", "previous", "season", "scope", "match",
+    "dropped_on", "record", "value", "previous", "season", "scope", "match", "previous_holder", "scorecard",
 )
 
 
@@ -455,3 +456,12 @@ def upload_photo_to_storage_channel(file_bytes, filename, caption=None):
         return {"success": False, "error": result["error"]}
     return {"success": True, "file_id": result["file_id"],
             "message_id": result["message_id"]}
+
+
+async def fire_record_media(context, chat_id, event_key="new_record", fields=None):
+    """A single shared default overrides legacy record-specific GIF choices."""
+    import html
+    safe = {k: html.escape(str(v)) for k,v in (fields or {}).items()}
+    if await fire_event_media(context,chat_id,"record_default",fields=safe,cooldown=event_key=="record_holder"):
+        return True
+    return await fire_event_media(context,chat_id,event_key,fields=safe,cooldown=event_key=="record_holder")

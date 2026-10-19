@@ -228,6 +228,10 @@ def season_card(session, series, season):
     if award_lines:
         lines.append("\n" + "\n".join(_e(a) for a in award_lines))
         blocks.append(R.list_block(award_lines))
+    official_xi=h.get('best_xi') or {}
+    if official_xi.get('players'):
+        blocks.append(R.details(R.bold("Official Best XI"),[R.list_block(official_xi['players'])],is_open=False))
+        lines.append("\n<b>Official Best XI</b>\n<blockquote expandable>"+'\n'.join(_e(n) for n in official_xi['players'])+"</blockquote>")
     top = LS.season_top(session, season)
     bat, bowl = _top_rows(top["batters"], "bat"), _top_rows(top["bowlers"], "bowl")
     if bat:
@@ -299,7 +303,7 @@ def alltime_card(session, series, category):
     return blocks, "\n".join(lines)
 
 
-def player_card(series, result):
+def player_card(series, result, insights=None):
     from handlers.tournament import _season_line, _stat_tables, _stats_html
     name, total = result["name"], result["total"]
     head = f"👤 {name} — {series.name}"
@@ -318,6 +322,14 @@ def player_card(series, result):
         blocks.append(R.details(R.bold("🗂 Season by season"),
                                 [R.list_block([[x] for x in season_lines])],
                                 is_open=True))
+    if insights:
+        recent=[f"Match #{p['source']['match_id'] or p['source']['fixture_id']}: {p['line'].get('bat_runs',0)} ({p['line'].get('bat_balls',0)}) · {p['line'].get('bowl_wickets',0)}/{p['line'].get('bowl_runs',0)}" for p in insights['recent']]
+        records=[f"{r['label']}: {r['display']} {r['unit']}" for r in insights['records'][:6]]
+        awards=[f"{a['season']}: {a['award']}" for a in insights['awards'][:5]]
+        for label,items in [('Recent form',recent),('Current all-time records',records),('Awards',awards)]:
+            if items:
+                blocks.append(R.details(R.bold(label),[R.list_block(items)],is_open=False))
+                lines.append(f"<b>{_e(label)}</b>\n<blockquote expandable>"+'\n'.join(_e(x) for x in items)+"</blockquote>")
     return blocks, "\n".join(lines)
 
 
@@ -381,7 +393,8 @@ async def seasons_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "🔎 Which one? " + ", ".join(result["choices"])
                     + f"\nUse the full name: /seasons {series.name} | <player>")
                 return
-            blocks, text = player_card(series, result)
+            from services.league_record_insights import player_profile
+            blocks, text = player_card(series, result, player_profile(session,series,result['name']))
             await _send(update, blocks, text,
                         _back_keyboard(series, opener))
             return
@@ -438,13 +451,12 @@ async def seasons_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             blocks, text = record_card(series, season, board, data['config'])
             markup = _records_keyboard(series, season, category, opener)
             if view == "h" and board['holders']:
-                from services.event_media_service import fire_event_media
+                from services.event_media_service import fire_record_media
                 fields = dict(player=", ".join(h['name'] for h in board['holders'][:8]),
                               record=board['label'], value=board['holders'][0]['display'],
                               season=LS.season_title(season) if season else "All-time", scope="season" if season else "all-time")
                 await query.answer()
-                await fire_event_media(context, query.message.chat_id, "record_holder",
-                                       fields={k:_e(v) for k,v in fields.items()})
+                await fire_record_media(context, query.message.chat_id, "record_holder", fields=fields)
                 await R.edit_rich(query, blocks, text, reply_markup=markup)
                 return
         elif view == "a":

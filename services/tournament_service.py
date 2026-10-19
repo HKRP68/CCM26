@@ -882,7 +882,14 @@ def _collect_player_lines(state):
                 entry["bowl_balls"] += int(st.get("balls", 0) or 0)
                 if st.get("balls"):
                     entry["bowled"] = True
-    return list(agg.values())
+    lines = list(agg.values())
+    from services.record_telemetry import detail
+    telemetry = detail(state)
+    if lines and telemetry is not None:
+        # Keep the player-row array compatible with existing aggregation. Match
+        # context is embedded once on a real row, never as a fabricated player.
+        lines[0]["record_detail"] = telemetry
+    return lines
 
 
 def _better_figure(new_w, new_r, cur_w, cur_r):
@@ -1079,6 +1086,9 @@ def recompute_tournament(session, tournament_id):
     """Rebuild both standings and player stats from the recorded matches."""
     recompute_standings(session, tournament_id)
     recompute_player_stats(session, tournament_id)
+    session.flush()
+    from services.league_record_publications import reconcile
+    reconcile(session, tournament_id)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1337,6 +1347,8 @@ def record_manual_result(session, fixture_id, *,
 
     tm._playoffs_created = maybe_auto_knockout(session, tm.tournament_id)
 
+    from services.league_record_publications import reconcile
+    reconcile(session, tm.tournament_id)
     logger.info("Manually recorded tournament fixture %s (winner_team=%s)", tm.id, win_id)
     return tm
 

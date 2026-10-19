@@ -216,14 +216,16 @@ All-time rates use the latest season's settings, applied to competition totals.
 
 ### GIFs and Telegram
 
-The page links directly to three entries in **Event GIF Management**:
+The primary control links to **Default Record GIF** (`record_default`), shared
+by all players and record events. Three legacy fallback entries remain in
+**Event GIF Management**:
 
 * **New Record** (`new_record`) — a mark is surpassed or first established.
 * **Record Equalled** (`record_equalled`) — a new joint holder joins a record.
 * **Record Holder** (`record_holder`) — requested with the Holder GIF button.
 
 Use the existing GIF upload, URL, enable/disable, replace and weighted selection
-controls. GIF choices are shared across competitions. Captions can use
+controls. The shared default applies across competitions. Captions can use
 `{player}`, `{record}`, `{value}`, `{previous}`, `{season}`, `{scope}` and
 `{match}`. For a holder request there is no previous value or triggering match;
 leave those placeholders out of that caption.
@@ -241,10 +243,9 @@ automatic celebrations; browsing records and requesting a holder GIF still work.
 Alerts combine season/all-time achievements for the same category and holder,
 then group the same holder's achievements into one message and GIF. Each
 holder/category/scope/break-or-equal combination celebrates at most once per
-match, so an innings extending its own record does not spam the group. Claims
-are persisted before delivery: a failed Telegram send is logged and not retried.
-Scorecard edits rebuild the displayed boards on the next read; already delivered
-messages are not automatically retracted.
+match, so an innings extending its own record does not spam the group. Alert
+claims and publications are durable; see Corrections and delivery guarantees
+below for retries, source revisions and retractions.
 
 ### Evidence and supported records
 
@@ -265,9 +266,9 @@ Older imported aggregate-only seasons retain supported totals and best figures,
 labelled **Season aggregate**. They do not gain fabricated match links, fifties,
 hundreds or hauls. Partial milestone counts are omitted from mixed-history
 all-time boards when an aggregate-only season contributes to that player.
-Fielding, partnerships and phase splits require
-additional event evidence and are explicitly identified as unavailable on the
-page. This implementation does not infer them from final innings totals.
+Fielding, partnerships and phase splits use saved delivery evidence in new
+matches. Imported history remains explicitly unknown where it is absent;
+these figures are never inferred from final innings totals.
 
 `LeagueRecordConfig` and `LeagueRecordAlert` are new tables created by the
 normal `init_db` / `create_all` startup path; no existing columns are altered.
@@ -291,3 +292,101 @@ even though the over-by-over flow announces it after the saved over.
 
 Older innings without these fields remain excluded. Resuming an older live
 innings records future crossings only, without guessing already-passed ones.
+
+## Record centre: watches, profiles, advanced evidence and amendments
+
+### One default GIF for all players
+
+**Records centre → Qualifications & GIFs → Default record GIF for all players**
+opens `/media/record_default`. Upload or replace the shared animation there.
+It is used for new records, joint holders and requested holder celebrations,
+for every player and competition. No player-specific GIF mappings are stored.
+Existing `new_record`, `record_equalled` and `record_holder` clips remain fallback
+choices only when the default sends no media. Captions additionally support
+`{previous_holder}` and `{scorecard}`. Alerts include old holders, scoped old/new
+values, opposition and a scorecard link when `WEBAPP_URL` is configured.
+
+### Record watch and automatic recaps
+
+The season page shows players approaching 500-run / 25-wicket multiples and
+run/wicket lead changes. At match start the participating XI gets one combined
+watch message; live checks add newly relevant watches, once per target/player
+per innings. Fastest 50/100/150 watches require an active batter within ten runs
+and a mathematically reachable existing ball record. The website offers
+separate **Automatic record-watch messages** and **Automatic post-match recaps**
+checkboxes. The live-record checkbox also gates automatic watches.
+
+After a committed official result, one recap includes the result, leading batting
+and bowling performances, exact run milestones, record changes and cap-leader
+changes. Provisional records for one holder are grouped and updated in the same
+message when later categories arrive, retaining earlier achievements. Messages
+show their competition and season; configured Mini App links open the source
+match. Historical comparisons are evaluated as of that match, excluding future
+seasons and matches.
+
+### New delivery evidence
+
+Every new applied delivery records the batter/bowler, batting pair, team runs,
+batter runs/balls, bowler-conceded runs, legality, wicket, phase and explicit
+fielder/keeper attribution. Direct-hit and assisted run-outs are credited only
+when supplied by the scoring outcome; otherwise they are unclassified. Caught
+and bowled credits the bowler; stumpings use the selected keeper. Regulation
+innings remain separate from Super Overs.
+
+The stream is versioned JSON in live state, the final Mini App scorecard, and
+`record_detail` on the first real tournament player line. It is preserved with
+the season archive. The existing array of player lines stays compatible with
+all aggregate rebuilds. There is no fabricated metadata player and no new
+per-delivery database table.
+
+Partnerships include extras, contributions, wicket number, legal-ball counts,
+exact 50/100 crossing balls and the unfinished-stand marker. By-wicket leaders
+are shown separately. Partnership records require an innings captured from its
+start. Phase tables show recorded batting runs/strike rate and bowling
+wickets/economy. Full T20 windows are 1–6, 7–15 and 16–20; The Hundred uses first
+25, middle 55 and last 20 legal balls; shortened games use scaled windows.
+Field catches, keeper catches, stumpings and run-out involvements stay separate.
+Missing history is not reconstructed. Coverage is displayed on the page.
+
+If an aggregate scorecard correction disagrees with a complete delivery stream,
+advanced records are withheld with a diagnostic until the source event evidence
+is corrected. The raw events remain downloadable from the match scorecard.
+
+### Player pages, honours and sharing
+
+Click a player in the records centre for career totals, season splits, last five
+scored performances, personal bests, awards and stored record history. An existing
+catalogue photo is used when present. `/seasons <player>` also shows recent form,
+current all-time records and awards.
+
+**Season honours** preserves champions, caps, official awards, highlights,
+standings, playoff scorecards and record announcements. The suggested statistical
+XI is explicitly labelled, scored as runs + 20 × wickets, with 1 keeper,
+4 batters, 2 all-rounders and 4 bowlers; unfilled roles stay vacant. An admin may
+publish eleven distinct season players with explicit selection criteria as the
+**Official Best XI**. That selection is kept in the honours archive and shown in
+Telegram season cards too. Existing team logos appear in standings when available.
+
+Every populated record card has a **Download record card** PNG action. It uses
+the current board, includes joint holders and can be shared independently. Access
+follows the admin page's login requirement. The cards/compact leaderboard toggle
+is remembered in the browser and works on mobile; wide tables scroll locally.
+
+### Corrections and delivery guarantees
+
+`LeagueRecordPublication` stores text, original Telegram message ID, revision,
+source/policy fingerprint and pending/sending/sent state. Scorecard rebuilds,
+result removals and qualification changes queue revisions inside the same DB
+transaction. After commit, the bot's `league_record_publications` job (every
+30 seconds) edits affected messages rather than publishing a fresh duplicate.
+If Telegram reports that the original can no longer be edited, an amendment is
+posted and its new message ID retained. Removed/ineligible source matches produce
+explicit retractions. First official completion anchors live announcements and
+does not mistake still-running matches for removed scorecards.
+
+Failed sends remain pending; stale sending claims recover after five minutes.
+As with any external API, an ambiguous network failure after Telegram accepted a
+new message can produce a retry duplicate. Known successful sends and amendments
+are deduplicated persistently. Amendments never replay the celebration GIF.
+`LeagueRecordOptions` and `LeagueRecordPublication` are new startup-created
+tables; their rows are removed when their League Season is explicitly unlinked.

@@ -4926,6 +4926,8 @@ async def _process_shot_core(context, mid, si, *, q=None):
 
             # Snapshot pre-ball values for milestone detection (fifty/hundred)
             # and rich commentary narratives (partnership / big-over context).
+            from services import record_telemetry
+            record_before = record_telemetry.snapshot(s, striker, bowler)
             prev_bat_runs = bs.get("runs", 0)
             prev_partnership = s.get("partnership_runs", 0)
             prev_over_runs = bws.get("this_over_runs", 0)
@@ -5018,6 +5020,7 @@ async def _process_shot_core(context, mid, si, *, q=None):
 
             from services.batting_milestones import capture
             capture(bs, prev_bat_runs)
+            record_telemetry.capture(s, record_before, oc)
 
             if legal:
                 s["current_ball"] += 1

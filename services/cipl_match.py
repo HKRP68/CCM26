@@ -2282,6 +2282,8 @@ def simulate_over(state, pause_on_wicket=False):
 
         # Narrative inputs captured BEFORE this ball mutates state, so the engine
         # can detect milestone/partnership/collapse threshold crossings correctly.
+        from services import record_telemetry
+        record_before = record_telemetry.snapshot(state, striker, bowler)
         bs_runs_before = bs["runs"]
         partnership_before = state.get("partnership_runs", 0)
         over_runs_before = state["total_runs"] - runs_before
@@ -2339,6 +2341,7 @@ def simulate_over(state, pause_on_wicket=False):
                     _swap_strike(state)
             from services.batting_milestones import capture
             capture(bs, bs_runs_before)
+            record_telemetry.capture(state, record_before, oc)
             ball_history.append(make_ball_event(oc))
             if target is not None and state["total_runs"] >= target:
                 chased = True
@@ -2392,6 +2395,10 @@ def simulate_over(state, pause_on_wicket=False):
             needs_fielder = wtype.lower() in ("caught", "run out", "stumped")
             fielder = _pick_fielder(state, bowler,
                                     allow_bowler=(wtype.lower() == "run out")) if needs_fielder else ""
+            if wtype.lower() == "stumped":
+                keeper = next((p for p in impact_player.active_players(state.get("bowl_xi") or [])
+                               if str(p.get("category") or "").lower().replace(" ", "") == "wicketkeeper"), None)
+                fielder = keeper.get("name") if keeper else ""
             bs["fielder"] = fielder
             bs["dismissal"] = _dismissal_text(wtype, bowler["name"], fielder)
             if wtype != "Run Out":
@@ -2521,6 +2528,7 @@ def simulate_over(state, pause_on_wicket=False):
 
         from services.batting_milestones import capture
         capture(bs, bs_runs_before)
+        record_telemetry.capture(state, record_before, oc)
         note_bowler_ball(bws, bowler_wicket=bws["wickets"] > wkts_before_ball)
 
         if not is_extra and otype != "wicket" and not batter_out:

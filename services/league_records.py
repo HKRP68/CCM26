@@ -36,8 +36,10 @@ CATEGORIES = (
     ("total", "Highest team total", "runs", True),
     ("chase", "Highest successful chase", "runs", True),
 )
+from services.league_record_insights import ADVANCED_CATEGORIES, safe_image_url
+CATEGORIES += ADVANCED_CATEGORIES
 LABELS = {k: label for k, label, _u, _d in CATEGORIES}
-UNAVAILABLE = "Fastest 50/100/150 use exact saved milestone balls from new deliveries; older innings without them are excluded. Partnerships, fielding and phase records need additional event evidence."
+UNAVAILABLE = "Milestone, partnership, phase and fielding records use saved delivery evidence. Historical or partially observed innings are labelled; unknown run-out types are never guessed. Phase windows scale to match length and format."
 
 
 def config(session, season):
@@ -76,6 +78,9 @@ def save_config(session, season, bat, bowl, alerts=True):
     if tour:
         tour.min_balls_for_sr, tour.min_balls_for_econ = values
     session.flush()
+    if tour is not None:
+        from services.league_record_publications import reconcile
+        reconcile(session,tour.id)
     return row
 
 
@@ -99,7 +104,10 @@ def evidence(session, season):
         except (ValueError, TypeError):
             lines = []
         lines = [x for x in lines if isinstance(x, dict)] if isinstance(lines, list) else []
-        result.append(dict(fixture_id=m.id, match_id=m.match_id, stage=m.stage,
+        from services.record_telemetry import analyse
+        detail = next((line.get('record_detail') for line in lines if line.get('record_detail')), None)
+        analytics = analyse(detail, lines=lines)
+        result.append(dict(analytics=analytics,fixture_id=m.id, match_id=m.match_id, stage=m.stage,
                            season=LS.season_title(season), season_no=season.season_no, season_id=season.id,
                            venue=m.venue, date=m.completed_at.isoformat() if m.completed_at else None,
                            team1=teams.get(m.team1_id), team2=teams.get(m.team2_id),
@@ -112,7 +120,7 @@ def standings_view(session, season):
     from services import league_season_service as LS, tournament_service as TS
     tour = LS.season_tournament(session, season)
     if tour:
-        return [dict(name=t.name, played=t.played, won=t.won, lost=t.lost,
+        return [dict(name=t.name, logo_url=safe_image_url(t.logo_url), played=t.played, won=t.won, lost=t.lost,
                      tied=t.tied, no_result=t.no_result, points=t.points, nrr=t._nrr)
                 for t in TS.points_table(session, tour.id)]
     try:
@@ -152,7 +160,11 @@ def format_value(value):
     return str(value)
 
 
-def boards(session, series, season=None, *, stage=None, team=None, exclude_match=None, live=None):
+def game_order(game):
+    return (game.get('season_no') or 0, game.get('date') or '9999', game.get('fixture_id') or 0)
+
+
+def boards(session, series, season=None, *, stage=None, team=None, exclude_match=None, live=None, through=None):
     """All holders are ranked by exact metric; display order never breaks a tie.
 
     Event-only boards stay empty for imported aggregate-only archives. Live is
@@ -160,10 +172,14 @@ def boards(session, series, season=None, *, stage=None, team=None, exclude_match
     """
     from services import league_season_service as LS
     selected = [season] if season is not None else LS.seasons(session, series)
+    if through is not None:
+        selected = [s for s in selected if s.season_no <= through['season_no']]
     cfg = config(session, season or selected[-1]) if selected else None
     games, players = [], {}
     for s in selected:
         games.extend(evidence(session, s))
+    if through is not None:
+        games = [g for g in games if game_order(g) <= game_order(through)]
     games = [g for g in games if exclude_match is None or g['match_id'] != exclude_match]
     if live:
         games = [g for g in games if g['match_id'] != live['match_id']]
@@ -216,6 +232,8 @@ def boards(session, series, season=None, *, stage=None, team=None, exclude_match
     # Legacy archives may contain aggregates but no match evidence. Use their
     # supported totals only; do not invent milestones or match provenance.
     for s in selected:
+        if through is not None and s.season_no > through['season_no']:
+            continue
         if evidence(session, s) or stage:
             continue
         for r in LS._grouped(LS.season_rows(session, s)).values():
@@ -246,6 +264,9 @@ def boards(session, series, season=None, *, stage=None, team=None, exclude_match
             if p['wkts']:
                 add('bavg',p['name'],Fraction(p['conceded'],p['wkts']),side=p['team'])
                 add('bsr',p['name'],Fraction(p['bowled'],p['wkts']),side=p['team'])
+    from services import league_record_insights as insights
+    advanced = insights.advanced(games, team)
+    insights.append_boards(add, advanced)
     result = []
     for k, label, unit, descending in CATEGORIES:
         entries = sorted(raw[k],key=lambda x: x['name'].lower())
@@ -258,7 +279,7 @@ def boards(session, series, season=None, *, stage=None, team=None, exclude_match
             previous = entry['value']
         result.append(dict(key=k,label=label,unit=unit,descending=descending,entries=entries,
                            holders=[e for e in entries if e['rank']==1]))
-    return dict(boards=result,players=sorted(players.values(),key=lambda p:-p['runs']),
+    return dict(insights=advanced,boards=result,players=sorted(players.values(),key=lambda p:-p['runs']),
                 matches=games,config=cfg,
                 teams=sorted({x for g in games for x in (g['team1'],g['team2']) if x}),
                 summary=dict(matches=len(games),runs=sum(
@@ -269,14 +290,14 @@ def boards(session, series, season=None, *, stage=None, team=None, exclude_match
 
 def _live_game(state, season):
     from services.tournament_service import _collect_player_lines
-    from services import league_season_service as LS
+    from services import league_season_service as LS, record_telemetry
     return dict(fixture_id=state.get('reserved_fixture_id'),match_id=state['match_id'],
                 stage=state.get('tournament_stage') or 'league',season=LS.season_title(season),season_no=season.season_no,season_id=season.id,
                 venue=state.get('venue'),date=None,team1=state.get('inn1_bat_team') or state.get('bat_team_name'),
                 team2=state.get('bat_team_name') if state.get('inn1_bat_team_id') is not None else state.get('bowl_team_name'),
                 winner=None,result=None,runs1=state.get('inn1_runs') if state.get('inn1_bat_team_id') is not None else state.get('total_runs'),
                 runs2=state.get('total_runs') if state.get('inn1_bat_team_id') is not None else None,
-                lines=_collect_player_lines(state))
+                lines=_collect_player_lines(state),analytics=record_telemetry.analyse(record_telemetry.detail(state)))
 
 
 def collect_alerts(session,state,*,final=False):
@@ -321,51 +342,77 @@ def collect_alerts(session,state,*,final=False):
                 except IntegrityError:
                     continue
                 previous=format_value(old_value) if old_value is not None else 'first recorded mark'
-                text=f"{'NEW RECORD' if better else 'RECORD EQUALLED'} | {series.name} | {scope}\n{after['label']}: {holder['name']} — {holder['display']} {after['unit']}\nPrevious: {previous} | {LS.season_title(season)} | Match #{mid}{' | Confirmed scorecard' if final else ' | Live provisional'}"
-                alerts.append((kind,text,dict(player=holder['name'],record=after['label'],value=holder['display'],previous=previous,season=LS.season_title(season),scope=scope,match=mid)))
+                prior_holders=', '.join(dict.fromkeys(h['name'] for h in before['holders'])) or 'none'
+                from services.league_record_publications import scorecard_url
+                link=scorecard_url(mid)
+                holder_team=holder.get('team') or (holder['name'] if after['key'] in ('total','chase') else None)
+                opponent=holder_team
+                if opponent==((live or {}).get('team1') or state.get('inn1_bat_team')):
+                    opponent=(live or {}).get('team2') or state.get('bat_team_name')
+                else:
+                    opponent=state.get('bowl_team_name') if holder_team==state.get('bat_team_name') else state.get('bat_team_name')
+                text=f"{'NEW RECORD' if better else 'RECORD EQUALLED'} | {series.name} | {scope}\n{after['label']}: {holder['name']} — {holder['display']} {after['unit']}\nPrevious: {previous} by {prior_holders} | Opponent: {opponent or 'not supplied'} | {LS.season_title(season)} | Match #{mid}{' | Confirmed scorecard' if final else ' | Live provisional'}"
+                if link:text+=f"\nScorecard: {link}"
+                alerts.append((kind,text,dict(player=holder['name'],record=after['label'],value=holder['display'],previous=previous,season=LS.season_title(season),scope=scope,match=mid,unit=after['unit'],previous_holder=prior_holders,opponent=opponent or '',scorecard=link or '')))
     # Combine season and all-time achievements for the same holder and record.
     merged={}
     for kind,text,fields in alerts:
         key=(kind,fields['record'],fields['player'])
         if key in merged:
-            merged[key][1] += '\nAlso achieved in the all-time record book.'
+            merged[key][1] += '\n\n'+text
+            prior=merged[key][2]
+            prior['previous']=f"{prior['scope']}: {prior['previous']}; {fields['scope']}: {fields['previous']}"
+            prior['previous_holder']=f"{prior['scope']}: {prior['previous_holder']}; {fields['scope']}: {fields['previous_holder']}"
+            prior['scope']+=' + '+fields['scope']
         else:
             merged[key]=[kind,text,fields]
     return list(merged.values())
 
 
 async def announce(context,state,*,final=False):
-    """Called after a persisted over, or the committed final scorecard.
-
-    Claim before sending: replay/restart safe, at-most-once delivery. A Telegram
-    failure is logged; it must never stop the match or replay a celebration.
-    """
+    """Queue durable publications after saved overs / committed match results."""
     if not state.get('tournament_id') or not state.get('chat_id'):
         return
+    from services import league_record_publications as P
     def work():
         from database import get_session
-        s=get_session()
+        from services import league_season_service as LS
+        session=get_session()
         try:
-            result=collect_alerts(s,state,final=final);s.commit();return result
+            season=LS.season_for_tournament(session,state['tournament_id'])
+            if season is None:return []
+            grouped={}
+            for kind,text,fields in collect_alerts(session,state,final=final):
+                grouped.setdefault((kind,fields['player']),[]).append((text,fields))
+            ids=[]
+            import hashlib
+            for (kind,player),achievements in grouped.items():
+                token=hashlib.sha256(player.encode()).hexdigest()[:24]
+                publication_kind=f'record:{kind}:{token}'
+                from models import LeagueRecordPublication
+                prior=session.query(LeagueRecordPublication).filter_by(season_id=season.id,match_id=int(state['match_id']),chat_id=int(state['chat_id']),kind=publication_kind).first()
+                prior_items=json.loads(prior.metadata_json or '{}').get('achievements',[]) if prior else []
+                combined={item['record']:item for item in prior_items}
+                combined.update({f['record']:dict(f) for _t,f in achievements})
+                items=list(combined.values())
+                fields=dict(items[0])
+                fields['record']=', '.join(f['record'] for f in items)
+                fields['value']=', '.join(f['value'] for f in items)
+                text=P.group_text(LS.series_of(session,season),season,state['match_id'],kind,player,items,final=final)
+                row=P.queue(session,season,state['match_id'],state['chat_id'],publication_kind,text,
+                            metadata=dict(event=kind,fields=fields,achievements=items))
+                ids.append(row.id)
+            if final:
+                row=P.queue_recap(session,state)
+                if row:ids.append(row.id)
+            else:
+                ids.extend(row.id for row in P.queue_watch(session,state))
+            session.commit();return ids
         except Exception:
-            s.rollback();raise
-        finally:
-            s.close()
+            session.rollback();raise
+        finally:session.close()
     try:
-        alerts=await asyncio.to_thread(work)
-        from services.event_media_service import fire_event_media
-        grouped = {}
-        for kind, text, fields in alerts:
-            grouped.setdefault((kind, fields['player']), []).append((text, fields))
-        for (kind, player), achievements in grouped.items():
-            text = "\n\n".join(t for t, _f in achievements)
-            # Telegram limits message text to 4096 characters.
-            for start in range(0, len(text), 4000):
-                await context.bot.send_message(chat_id=state['chat_id'], text=text[start:start+4000])
-            fields = dict(achievements[0][1])
-            fields['record'] = ", ".join(f['record'] for _t, f in achievements)
-            fields['value'] = ", ".join(f['value'] for _t, f in achievements)
-            await fire_event_media(context, state['chat_id'], kind,
-                fields={k:html.escape(str(v)) for k,v in fields.items()}, cooldown=False)
+        ids=await asyncio.to_thread(work)
+        if ids:await P.dispatch(context,ids=ids)
     except Exception:
         logger.exception('League record announcement failed for match %s',state.get('match_id'))

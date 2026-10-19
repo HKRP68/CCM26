@@ -26276,6 +26276,8 @@ def admin_league_records(series_id):
             try:
                 records.save_config(db, season, request.form.get("min_bat_balls"),
                                     request.form.get("min_bowl_balls"), request.form.get("alerts_enabled") == "on")
+                from services import league_record_publications as publications
+                publications.save_options(db,season,watch=request.form.get('watch_enabled')=='on',recap=request.form.get('recap_enabled')=='on')
                 log_admin(db, "league_record_settings", "league_season", season.id,
                           f"Batting: {request.form.get('min_bat_balls')}, bowling: {request.form.get('min_bowl_balls')}")
                 db.commit()
@@ -26292,7 +26294,10 @@ def admin_league_records(series_id):
         all_data = records.boards(db, series, season) if team or stage else data
         compare_season = ls.get_season(db, series, request.args.get("compare"))
         comparison = records.boards(db, series, compare_season) if compare_season else None
+        from services import league_record_insights as I, league_record_publications as publications
+        watch=I.watch_list(db,series,season) if season else []
         return render_template("admin_league_records.html", series=series, seasons=seasons,
+            record_options=publications.options(db,season) if season else {},watch=watch,
             selected=season, data=data, standings=records.standings_view(db,season) if season else [], all_teams=all_data['teams'], stage=stage, team=team,
             comparison=comparison, compare_season=compare_season,
             honours=ls.honours(season) if season else {}, unavailable=records.UNAVAILABLE,
@@ -26314,9 +26319,78 @@ def admin_league_record_match(series_id, season_id, fixture_id):
         game = next((g for g in records.evidence(db,season) if g['fixture_id']==fixture_id),None)
         if game is None:
             abort(404)
+        if request.args.get('download')=='events':
+            from flask import Response
+            return Response(json.dumps(game.get('analytics',{}).get('deliveries',[]),ensure_ascii=False),mimetype='application/json',
+                            headers={'Content-Disposition':'attachment; filename="match-delivery-events.json"'})
         return render_template("admin_league_record_match.html", series=series, season=season, game=game)
     finally:
         db.close()
+
+
+@app.route("/league-seasons/<int:series_id>/player")
+@login_required
+def admin_league_player(series_id):
+    from services import league_season_service as LS, league_record_insights as I
+    db=get_session()
+    try:
+        series=LS.get_series(db,series_id)
+        if series is None:abort(404)
+        profile=I.player_profile(db,series,request.args.get('player',''))
+        if profile is None:abort(404)
+        return render_template('admin_league_player.html',series=series,profile=profile)
+    finally:db.close()
+
+
+@app.route("/league-seasons/<int:series_id>/honours/<int:season_id>",methods=['GET','POST'])
+@login_required
+def admin_league_honours(series_id,season_id):
+    from services import league_season_service as LS, league_record_insights as I
+    db=get_session()
+    try:
+        series=LS.get_series(db,series_id)
+        season=LS.get_season(db,series,season_id) if series else None
+        if season is None:abort(404)
+        page=I.honours_page(db,series,season)
+        if request.method=='POST':
+            names=[n.strip() for n in request.form.get('best_xi','').splitlines() if n.strip()]
+            criteria=request.form.get('criteria','').strip()
+            available={LS._key(p['name']):p['name'] for p in page['data']['players']}
+            if len(names)!=11 or len({LS._key(n) for n in names})!=11 or any(LS._key(n) not in available for n in names) or not criteria:
+                flash('Select eleven distinct players from this season and supply the selection criteria.','error')
+            else:
+                honours=LS.honours(season)
+                honours['best_xi']=dict(players=[available[LS._key(n)] for n in names],criteria=criteria[:500],official=True)
+                season.honours_json=LS._dumps(honours)
+                log_admin(db,'league_best_xi','league_season',season.id,'Published official Best XI')
+                db.commit();flash('Official Best XI saved to the season archive.','success')
+            return redirect(url_for('admin_league_honours',series_id=series_id,season_id=season_id))
+        from models import LeagueRecordPublication
+        history=db.query(LeagueRecordPublication).filter_by(season_id=season.id).filter(LeagueRecordPublication.kind.like('record:%')).order_by(LeagueRecordPublication.id.desc()).limit(100).all()
+        return render_template('admin_league_honours.html',series=series,season=season,title=LS.season_title(season),
+            page=page,stage=LS.season_stage(db,season),official_xi=LS.honours(season).get('best_xi'),history=history)
+    finally:db.close()
+
+
+@app.route("/league-seasons/<int:series_id>/record-card/<category>.png")
+@login_required
+def admin_league_record_card(series_id,category):
+    from services import league_season_service as LS, league_records as R
+    from services.league_record_cards import render
+    from flask import send_file
+    db=get_session()
+    try:
+        series=LS.get_series(db,series_id)
+        if series is None or category not in R.LABELS:abort(404)
+        raw=request.args.get('season','all')
+        season=LS.get_season(db,series,raw) if raw!='all' else None
+        if raw!='all' and season is None:abort(404)
+        board=next(b for b in R.boards(db,series,season)['boards'] if b['key']==category)
+        scope=LS.season_title(season) if season else 'All-time'
+        response=send_file(render(series.name,scope,board),mimetype='image/png',as_attachment=True,download_name=f'CMU-{category}.png')
+        response.headers['Cache-Control']='no-store'
+        return response
+    finally:db.close()
 
 
 if __name__ == "__main__":

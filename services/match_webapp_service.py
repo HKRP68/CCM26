@@ -1948,6 +1948,8 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
         "balls": 0, "runs": 0, "wickets": 0, "overs_done": 0,
         "this_over_balls": 0, "maidens": 0, "this_over_runs": 0})
     # Hat-trick streak baseline — compared after the outcome below.
+    from services import record_telemetry
+    record_before = record_telemetry.snapshot(state, striker, bowler)
     runs_before_delivery = int(bs.get("runs") or 0)
     wkts_before_ball = bws.get("wickets", 0)
 
@@ -2036,6 +2038,7 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
 
     from services.batting_milestones import capture
     capture(bs, runs_before_delivery)
+    record_telemetry.capture(state, record_before, oc)
 
     if legal:
         state["current_ball"] += 1
@@ -2546,7 +2549,8 @@ def build_scorecard(match_id, user_id):
             "bowling": _bowling(state.get("bowl_xi", []), state.get("bowl_stats", {})),
         })
 
-    return {"ok": True, "innings": innings, "current_innings": cur_inn,
+    from services.record_telemetry import detail
+    return {"ok": True, "record_detail": detail(state), "innings": innings, "current_innings": cur_inn,
             "target": state.get("target"),
             "ball_format": state.get("ball_format", "T20"),
             "impact_players": _impact_player_summary(state)}
