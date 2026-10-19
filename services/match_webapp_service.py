@@ -985,6 +985,7 @@ def _bat_card(state, idx):
         "rating": p.get("rating"), "bat_rating": p.get("bat_rating"),
         "runs": st.get("runs", 0), "balls": st.get("balls", 0),
         "fours": st.get("fours", 0), "sixes": st.get("sixes", 0),
+        **{f"balls_to_{n}": st[f"balls_to_{n}"] for n in (50,100,150) if f"balls_to_{n}" in st},
         "out": st.get("out", False),
         "sr": (round(st.get("runs", 0) * 100 / st.get("balls", 1), 1)
                if st.get("balls") else 0),
@@ -1947,6 +1948,7 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
         "balls": 0, "runs": 0, "wickets": 0, "overs_done": 0,
         "this_over_balls": 0, "maidens": 0, "this_over_runs": 0})
     # Hat-trick streak baseline — compared after the outcome below.
+    runs_before_delivery = int(bs.get("runs") or 0)
     wkts_before_ball = bws.get("wickets", 0)
 
     legal = True
@@ -2031,6 +2033,9 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
         rtxt = {0: "DOT", 4: "FOUR! 🔥", 6: "SIX! 💥"}.get(runs, f"{runs} run" + ("s" if runs != 1 else ""))
         if runs % 2 == 1:
             state["striker_idx"], state["non_striker_idx"] = state["non_striker_idx"], state["striker_idx"]
+
+    from services.batting_milestones import capture
+    capture(bs, runs_before_delivery)
 
     if legal:
         state["current_ball"] += 1
@@ -2471,6 +2476,7 @@ def build_scorecard(match_id, user_id):
                 "impact": impact_player.is_impact(p),
                 "runs": st.get("runs", 0),
                 "balls": st.get("balls", 0), "fours": st.get("fours", 0),
+                **{f"balls_to_{n}": st[f"balls_to_{n}"] for n in (50,100,150) if f"balls_to_{n}" in st},
                 "sixes": st.get("sixes", 0), "out": st.get("out", False),
                 "how_out": st.get("how_out", "") or ("not out" if not st.get("out") else "out"),
                 "sr": round(st.get("runs", 0) * 100 / st.get("balls", 1), 1) if st.get("balls") else 0,

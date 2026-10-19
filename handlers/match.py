@@ -5016,6 +5016,9 @@ async def _process_shot_core(context, mid, si, *, q=None):
                 if runs % 2 == 1:
                     s["striker_idx"], s["non_striker_idx"] = s["non_striker_idx"], s["striker_idx"]
 
+            from services.batting_milestones import capture
+            capture(bs, prev_bat_runs)
+
             if legal:
                 s["current_ball"] += 1
                 bws["this_over_balls"] += 1

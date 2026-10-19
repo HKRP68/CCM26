@@ -246,3 +246,51 @@ class RecordTests(pages.PageCase):
         tour,_ = self.LS.create_season_tournament(self.session,future,hand_over=False)
         self.assertEqual(77,tour.min_balls_for_sr)
         self.assertEqual(55,tour.min_balls_for_econ)
+
+    def test_fastest_milestones_rank_lower_balls_and_ignore_legacy(self):
+        a=self.line('Alpha',160,70);b=self.line('Beta',170,75)
+        a.update(balls_to_50=14,balls_to_100=29,balls_to_150=50)
+        b.update(balls_to_50=14,balls_to_100=28,balls_to_150=51)
+        self.game.scorecard_json=json.dumps([a,b,self.line('Legacy',190,80)])
+        self.session.flush()
+        self.assertEqual(['Alpha','Beta'],[h['name'] for h in self.board('f50')['holders']])
+        self.assertEqual('Beta',self.board('f100')['holders'][0]['name'])
+        self.assertEqual('Alpha',self.board('f150')['holders'][0]['name'])
+        self.R.save_config(self.session,self.season,1000,1000)
+        self.assertEqual(14,self.board('f50')['holders'][0]['value'])
+        from services import season_archive
+        season_archive.delete_tournament(self.session,self.tour,keep_stats=True)
+        self.session.commit()
+        self.assertEqual(28,self.board('f100')['holders'][0]['value'])
+
+    def test_fastest_live_record_break_tie_and_duplicate(self):
+        a=self.line('Alpha',110,45);a.update(balls_to_50=16,balls_to_100=40)
+        self.game.scorecard_json=json.dumps([a]);self.session.flush()
+        state=self.state();state['bat_xi'][0]['name']='Gamma'
+        state['bat_stats']['1'].update(runs=110,balls=42,balls_to_50=14,balls_to_100=40)
+        alerts=self.R.collect_alerts(self.session,state)
+        self.assertTrue(any(kind=='new_record' and fields['record']=='Fastest fifty' and fields['value']=='14' for kind,text,fields in alerts))
+        self.assertTrue(any(kind=='record_equalled' and fields['record']=='Fastest hundred' for kind,text,fields in alerts))
+        self.session.commit()
+        self.assertFalse(self.R.collect_alerts(self.session,state))
+
+    def test_saved_milestone_balls_do_not_inflate_innings_overs(self):
+        from services.tournament_service import record_tournament_match
+        state=dict(tournament_id=self.tour.id,match_id=98000+self.tag,
+            tournament_tteam_by_user={1:self.a.id,2:self.b.id},
+            inn1_bat_team_id=1,inn1_bowl_team_id=2,bat_team_id=2,bowl_team_id=1,
+            bat_team_name=self.b.name,bowl_team_name=self.a.name,
+            inn1_runs=100,inn1_wickets=0,total_runs=101,total_wickets=0,
+            inn1_bat_xi=[dict(roster_id=1,name='First')],
+            inn1_bowl_xi=[dict(roster_id=2,name='Second')],
+            bat_xi=[dict(roster_id=2,name='Second')],
+            bowl_xi=[dict(roster_id=1,name='First')],
+            inn1_bat_stats={'1':dict(runs=100,balls=20,balls_to_50=10,balls_to_100=20)},
+            inn1_bowl_stats={'2':dict(runs=102,balls=18,wickets=0)},
+            bat_stats={'2':dict(runs=101,balls=19,balls_to_50=9,balls_to_100=19)},
+            bowl_stats={'1':dict(runs=101,balls=18,wickets=0)})
+        match=record_tournament_match(self.session,state)
+        self.assertEqual(18,match.inn1_balls)
+        self.assertEqual(18,match.inn2_balls)
+        first=next(l for l in json.loads(match.scorecard_json) if l['name']=='First')
+        self.assertEqual(20,first['balls_to_100'])

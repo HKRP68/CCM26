@@ -2315,6 +2315,9 @@ def simulate_over(state, pause_on_wicket=False):
                                  or f"Wide. {bowler['name']} strays down leg.",
                                  runs=1 + runs, event_key="wide")
             else:
+                # A faced no-ball counts in the batter's balls, but never in
+                # the over's legal deliveries (consistent with /wpm scoring).
+                bs["balls"] += 1
                 if runs:
                     bs["runs"] += runs
                     if runs == 4:
@@ -2334,6 +2337,8 @@ def simulate_over(state, pause_on_wicket=False):
                 free_hit = True
                 if runs % 2 == 1:
                     _swap_strike(state)
+            from services.batting_milestones import capture
+            capture(bs, bs_runs_before)
             ball_history.append(make_ball_event(oc))
             if target is not None and state["total_runs"] >= target:
                 chased = True
@@ -2514,6 +2519,8 @@ def simulate_over(state, pause_on_wicket=False):
             if runs % 2 == 1:
                 _swap_strike(state)
 
+        from services.batting_milestones import capture
+        capture(bs, bs_runs_before)
         note_bowler_ball(bws, bowler_wicket=bws["wickets"] > wkts_before_ball)
 
         if not is_extra and otype != "wicket" and not batter_out:

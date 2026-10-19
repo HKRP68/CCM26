@@ -265,9 +265,29 @@ Older imported aggregate-only seasons retain supported totals and best figures,
 labelled **Season aggregate**. They do not gain fabricated match links, fifties,
 hundreds or hauls. Partial milestone counts are omitted from mixed-history
 all-time boards when an aggregate-only season contributes to that player.
-Exact fastest milestones, fielding, partnerships and phase splits require
+Fielding, partnerships and phase splits require
 additional event evidence and are explicitly identified as unavailable on the
 page. This implementation does not infer them from final innings totals.
 
 `LeagueRecordConfig` and `LeagueRecordAlert` are new tables created by the
 normal `init_db` / `create_all` startup path; no existing columns are altered.
+
+
+### Exact fastest 50 / 100 / 150 (new matches)
+
+Every scoring delivery captures `balls_to_50`, `balls_to_100` and
+`balls_to_150` the first time a batter crosses the corresponding score. These
+are balls faced, not legal balls bowled. Wides do not count; a faced no-ball
+counts for the batter while remaining an illegal delivery for the bowler.
+The fields are retained in match-state JSON, the tournament scorecard, the
+Mini App scorecard and preserved season evidence. No new database columns or
+ball-by-ball history table are needed.
+
+Fastest fifty, hundred and 150 boards use the lowest recorded ball count;
+equal counts share ranks. Minimum-ball qualifications do not apply to these
+milestones. New records and equal records use the existing live-over alerts
+and configured record GIFs. The count is captured on the actual delivery,
+even though the over-by-over flow announces it after the saved over.
+
+Older innings without these fields remain excluded. Resuming an older live
+innings records future crossings only, without guessing already-passed ones.

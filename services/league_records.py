@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 CATEGORIES = (
     ("runs", "Most runs", "runs", True),
     ("hs", "Highest individual score", "runs", True),
+    ("f50", "Fastest fifty", "balls", False),
+    ("f100", "Fastest hundred", "balls", False),
+    ("f150", "Fastest 150", "balls", False),
     ("sr", "Highest strike rate", "SR", True),
     ("avg", "Highest batting average", "average", True),
     ("fours", "Most fours", "fours", True),
@@ -34,7 +37,7 @@ CATEGORIES = (
     ("chase", "Highest successful chase", "runs", True),
 )
 LABELS = {k: label for k, label, _u, _d in CATEGORIES}
-UNAVAILABLE = "Exact fastest milestones, partnerships, fielding and phase records need delivery/fielding evidence not present in these scorecards."
+UNAVAILABLE = "Fastest 50/100/150 use exact saved milestone balls from new deliveries; older innings without them are excluded. Partnerships, fielding and phase records need additional event evidence."
 
 
 def config(session, season):
@@ -193,6 +196,11 @@ def boards(session, series, season=None, *, stage=None, team=None, exclude_match
                 if p['fifties'] is not None: p['fifties'] += 50 <= r < 100
                 if p['hundreds'] is not None: p['hundreds'] += r >= 100
                 add('hs', p['name'], r, g, p['team'])
+                from services.batting_milestones import THRESHOLDS, saved
+                for threshold in THRESHOLDS:
+                    balls = saved(l, threshold, runs_key='bat_runs', balls_key='bat_balls')
+                    if balls is not None:
+                        add(f'f{threshold}', p['name'], balls, g, p['team'])
             if l.get('bowled'):
                 w, rc = _n(l,'bowl_wickets'), _n(l,'bowl_runs')
                 p['wkts'] += w; p['conceded'] += rc; p['bowled'] += _n(l,'bowl_balls')

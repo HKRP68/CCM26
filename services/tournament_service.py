@@ -868,6 +868,11 @@ def _collect_player_lines(state):
                 entry["bat_balls"] += int(st.get("balls", 0) or 0)
                 entry["bat_fours"] += int(st.get("fours", 0) or 0)
                 entry["bat_sixes"] += int(st.get("sixes", 0) or 0)
+                from services.batting_milestones import THRESHOLDS, saved
+                for threshold in THRESHOLDS:
+                    balls = saved(st, threshold)
+                    if balls is not None:
+                        entry[f"balls_to_{threshold}"] = balls
                 entry["bat_out"] = entry["bat_out"] or bool(st.get("out"))
                 if st.get("balls") or st.get("out"):
                     entry["batted"] = True
@@ -1566,8 +1571,14 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     inn1_wkts = int(state.get("inn1_wickets") or 0)
     inn2_runs = int(state.get("total_runs") or 0)
     inn2_wkts = int(state.get("total_wickets") or 0)
-    inn1_balls = _legal_balls(state.get("inn1_bat_stats"))
-    inn2_balls = _legal_balls(state.get("bat_stats"))
+    # Balls faced include faced no-balls. Innings overs/NRR count only legal
+    # deliveries, so use bowlers' counts when the source state has them.
+    inn1_balls = _legal_balls(state.get("inn1_bowl_stats")
+                              if state.get("inn1_bowl_stats") is not None
+                              else state.get("inn1_bat_stats"))
+    inn2_balls = _legal_balls(state.get("bowl_stats")
+                              if state.get("bowl_stats") is not None
+                              else state.get("bat_stats"))
 
     # Winner
     if winner_user_id is not None:
