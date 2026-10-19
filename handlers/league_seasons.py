@@ -76,7 +76,8 @@ def _btn(label, view, series_id, arg, opener):
 
 
 def _overview_keyboard(series, rows, opener):
-    buttons = [[_btn("📊 All-time", "a", series.id, "runs", opener)]]
+    buttons = [[_btn("📊 All-time", "a", series.id, "runs", opener),
+                _btn("👑 Records", "r", series.id, "0-runs", opener)]]
     line = []
     for row in rows[:12]:
         line.append(_btn(f"S{row['season'].season_no}", "s", series.id,
@@ -108,8 +109,38 @@ def _alltime_keyboard(series, active, opener):
             line = []
     if line:
         rows.append(line)
-    rows.append([_btn("◀ Seasons", "o", series.id, 0, opener)])
+    rows.append([_btn("◀ Seasons", "o", series.id, 0, opener),
+                 _btn("👑 Records", "r", series.id, "0-runs", opener)])
     return InlineKeyboardMarkup(rows)
+
+
+def _records_keyboard(series, season, category, opener):
+    from services import league_records as records
+    sid = season.id if season else 0
+    buttons = [_btn(("● " if key == category else "") + label, "r", series.id,
+                    f"{sid}-{key}", opener) for key, label, *_ in records.CATEGORIES]
+    rows = [buttons[i:i+2] for i in range(0,len(buttons),2)]
+    rows.append([_btn("👑 Holder GIF", "h", series.id, f"{sid}-{category}", opener)])
+    rows.append([_btn("◀ Seasons", "o", series.id, 0, opener),
+                 _btn("All-time records", "r", series.id, f"0-{category}", opener)])
+    return InlineKeyboardMarkup(rows)
+
+
+def record_card(series, season, board, cfg):
+    scope = LS.season_title(season) if season else "All-time"
+    head = f"👑 {series.name} · {scope} · {board['label']}"
+    items = []
+    for row in board['entries'][:15]:
+        source = row['source']
+        evidence = (f" · S{source['season_no']} · Match #{source['match_id'] or source['fixture_id']}"
+                    if source else " · season aggregate")
+        items.append(f"{row['rank']}. {row['name']} — {row['display']} {board['unit']}{evidence}")
+    note = (f"Rate qualification: {cfg.min_bat_balls} batting balls / {cfg.min_bowl_balls} bowling balls. "
+            "Joint ranks are retained. Minimums can be edited in the website's season records centre.") if cfg else "No seasons yet."
+    text = f"<b>{_e(head)}</b>\n" + ("\n".join(_e(x) for x in items) if items else "No qualifying performances yet.")
+    text += f"\n\n<i>{_e(note)}</i>"
+    blocks = [R.heading(head,size=2), R.list_block(items) if items else R.paragraph("No qualifying performances yet."),R.footer(note)]
+    return blocks,text
 
 
 def _picker_keyboard(series_list, opener):
@@ -391,7 +422,31 @@ async def seasons_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.answer("That season is gone.", show_alert=True)
                 return
             blocks, text = season_card(session, series, season)
-            markup = _back_keyboard(series, opener)
+            markup = _back_keyboard(series, opener, extra=[
+                _btn("👑 Season records", "r", series.id, f"{season.id}-runs", opener)])
+        elif view in ("r", "h"):
+            from services import league_records as records
+            sid, category = arg.split("-", 1)
+            season = LS.get_season(session, series, sid) if sid != "0" else None
+            if sid != "0" and season is None:
+                await query.answer("That season is gone.", show_alert=True)
+                return
+            if category not in records.LABELS:
+                category = "runs"
+            data = records.boards(session, series, season)
+            board = next(b for b in data['boards'] if b['key'] == category)
+            blocks, text = record_card(series, season, board, data['config'])
+            markup = _records_keyboard(series, season, category, opener)
+            if view == "h" and board['holders']:
+                from services.event_media_service import fire_event_media
+                fields = dict(player=", ".join(h['name'] for h in board['holders'][:8]),
+                              record=board['label'], value=board['holders'][0]['display'],
+                              season=LS.season_title(season) if season else "All-time", scope="season" if season else "all-time")
+                await query.answer()
+                await fire_event_media(context, query.message.chat_id, "record_holder",
+                                       fields={k:_e(v) for k,v in fields.items()})
+                await R.edit_rich(query, blocks, text, reply_markup=markup)
+                return
         elif view == "a":
             category = arg if arg in CATEGORY_LABELS else "runs"
             blocks, text = alltime_card(session, series, category)

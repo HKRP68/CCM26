@@ -1931,6 +1931,9 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
     finally:
         session.close()
 
+    from services import league_records
+    await league_records.announce(context, so.get("main_state") or {}, final=True)
+
     # Winner announcement.
     mvp_name, mvp_line = _super_over_mvp(so, winner_uid)
     mvp_block = ""

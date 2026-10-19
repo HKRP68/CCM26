@@ -5243,7 +5243,35 @@ class LeagueSeason(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     series = relationship("LeagueSeries", back_populates="seasons")
+    record_config = relationship("LeagueRecordConfig", cascade="all, delete-orphan", uselist=False)
+    record_alerts = relationship("LeagueRecordAlert", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("ix_league_season_number", "series_id", "season_no", unique=True),
     )
+
+
+class LeagueRecordConfig(Base):
+    """Per-season qualification and preserved scorecard evidence."""
+    __tablename__ = "league_record_configs"
+    season_id = Column(Integer, ForeignKey("league_seasons.id", ondelete="CASCADE"), primary_key=True)
+    min_bat_balls = Column(Integer, nullable=False, default=100)
+    min_bowl_balls = Column(Integer, nullable=False, default=60)
+    alerts_enabled = Column(Boolean, nullable=False, default=True)
+    archive_json = Column(Text, nullable=True)
+    standings_json = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class LeagueRecordAlert(Base):
+    """Persistent deduplication: one celebration per holder/record/match/kind."""
+    __tablename__ = "league_record_alerts"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    season_id = Column(Integer, ForeignKey("league_seasons.id", ondelete="CASCADE"), nullable=False, index=True)
+    match_id = Column(Integer, nullable=False)
+    scope = Column(String(16), nullable=False)
+    category = Column(String(30), nullable=False)
+    holder = Column(String(160), nullable=False)
+    kind = Column(String(16), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    __table_args__ = (Index("ix_league_record_alert_once", "season_id", "match_id", "scope", "category", "holder", "kind", unique=True),)

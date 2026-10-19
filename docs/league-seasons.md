@@ -191,3 +191,83 @@ unlinked. Two new tables, so `create_all` builds them; no `_try_add` lines.
 * `/seasons` has no slash-menu slot — giving it one means retiring another entry.
 * A mini auction's released list is announced player by player (the ordinary
   `retention_released` line), not as one list per team.
+
+## Season Records & Stats Centre
+
+Open **League Seasons → a competition → Open records centre**. Select a season
+or **All-time**, then filter by stage or team. The page includes honours,
+scorecard totals, a full-season standings table, player figures, joint record
+holders, match evidence and a comparison with another season. The comparison
+season is unfiltered and shows match counts and team runs per match alongside
+totals. Standings use the existing official table, including simulations and
+points adjustments; performance record boards exclude simulated fixtures.
+
+### Editable minimum balls
+
+Under **Qualifications & GIFs**, edit **Minimum batting balls** and **Minimum
+bowling balls** and save. Values must be whole numbers from 0 to 100,000; zero
+removes the qualification minimum. Undefined rates (zero balls or dismissals)
+remain undefined. Batting minimum applies to average and strike rate; bowling
+minimum applies to economy, average and bowling strike rate. Unqualified players
+remain in the player table and count-based records. Existing tournament minimums
+are the initial values and are updated when saved, so the tournament's own
+qualified boards and next season's inherited rules use the same minimums.
+All-time rates use the latest season's settings, applied to competition totals.
+
+### GIFs and Telegram
+
+The page links directly to three entries in **Event GIF Management**:
+
+* **New Record** (`new_record`) — a mark is surpassed or first established.
+* **Record Equalled** (`record_equalled`) — a new joint holder joins a record.
+* **Record Holder** (`record_holder`) — requested with the Holder GIF button.
+
+Use the existing GIF upload, URL, enable/disable, replace and weighted selection
+controls. GIF choices are shared across competitions. Captions can use
+`{player}`, `{record}`, `{value}`, `{previous}`, `{season}`, `{scope}` and
+`{match}`. For a holder request there is no previous value or triggering match;
+leave those placeholders out of that caption.
+
+In Telegram, **/seasons → a season → Season records**, or **/seasons → Records**
+for all-time. Choose a category, then **Holder GIF** to celebrate its current
+holder(s). Buttons retain the existing opener-only access check.
+
+Official tournament matches in the over-by-over flow check provisional records
+following each saved over. Rate and successful-chase records are evaluated after
+the committed match result, including regulation performances in matches decided
+by a Super Over. Casual matches do not contribute. A per-season checkbox disables
+automatic celebrations; browsing records and requesting a holder GIF still work.
+
+Alerts combine season/all-time achievements for the same category and holder,
+then group the same holder's achievements into one message and GIF. Each
+holder/category/scope/break-or-equal combination celebrates at most once per
+match, so an innings extending its own record does not spam the group. Claims
+are persisted before delivery: a failed Telegram send is logged and not retried.
+Scorecard edits rebuild the displayed boards on the next read; already delivered
+messages are not automatically retracted.
+
+### Evidence and supported records
+
+Supported boards: runs, highest individual score, batting strike rate and
+average, fours, sixes, fifties (50–99), hundreds, wickets, best bowling figures,
+economy, bowling average and strike rate, 3+ and 5+ wicket hauls, highest team
+total and highest successful chase. Rate comparisons use exact fractions for
+ties; formatting to two decimals never creates or breaks a joint rank.
+
+Match-based records link to a read-only scorecard within the records centre.
+When deleting a tournament **with stats kept**, the season preserves completed
+non-simulated scorecards and the standings before the source is removed.
+Deleting its saved season clears this preserved evidence too. Unlinking a
+League Season removes its record settings and alert claims while leaving the
+underlying tournament, league and auction intact.
+
+Older imported aggregate-only seasons retain supported totals and best figures,
+labelled **Season aggregate**. They do not gain fabricated match links, fifties,
+hundreds or hauls. Partial milestone counts are omitted from mixed-history
+all-time boards when an aggregate-only season contributes to that player.
+Exact fastest milestones, fielding, partnerships and phase splits require
+additional event evidence and are explicitly identified as unavailable on the
+page. This implementation does not infer them from final innings totals.
+
+`LeagueRecordConfig` and `LeagueRecordAlert` are new tables created by the
+normal `init_db` / `create_all` startup path; no existing columns are altered.

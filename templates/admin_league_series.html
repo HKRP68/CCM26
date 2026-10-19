@@ -17,6 +17,8 @@
     </div>
   </div>
 
+  <section class="section-card"><h2 class="section-title">🏆 Season Records & Stats</h2><p class="ls-muted">Season and all-time holders, qualified leaderboards, source scorecards and editable minimum balls.</p><a class="action-btn accent-btn" style="width:auto" href="{{ url_for('admin_league_records', series_id=series.id) }}">Open records centre</a></section>
+
   {# ════════════════ The current season ════════════════ #}
   {% if current %}{% set st = current.stage %}{% set s = current.season %}
   <section class="section-card">

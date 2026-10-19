@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger("admin")
 from functools import wraps
-from flask import (Flask, render_template, request, redirect, url_for, flash,
+from flask import (Flask, abort, render_template, request, redirect, url_for, flash,
                    session, Response, send_file, jsonify)
 from sqlalchemy import func, and_, or_, desc, asc, case, cast, String
 from dotenv import load_dotenv
@@ -26253,7 +26253,70 @@ def admin_league_season_manual(series_id):
         db.close()
 
 
-# ── Run ──────────────────────────────────────────────────────────────
+# ── Season records ───────────────────────────────────────────────────
+
+
+@app.route("/league-seasons/<int:series_id>/records", methods=["GET", "POST"])
+@login_required
+def admin_league_records(series_id):
+    from services import league_records as records, league_season_service as ls
+    db = get_session()
+    try:
+        series = ls.get_series(db, series_id)
+        if series is None:
+            abort(404)
+        seasons = ls.seasons(db, series)
+        raw = request.values.get("season", "")
+        season = ls.get_season(db, series, raw) if raw and raw != "all" else (seasons[-1] if seasons and raw != "all" else None)
+        if raw and raw != "all" and season is None:
+            abort(404)
+        if request.method == "POST":
+            if season is None:
+                abort(400)
+            try:
+                records.save_config(db, season, request.form.get("min_bat_balls"),
+                                    request.form.get("min_bowl_balls"), request.form.get("alerts_enabled") == "on")
+                log_admin(db, "league_record_settings", "league_season", season.id,
+                          f"Batting: {request.form.get('min_bat_balls')}, bowling: {request.form.get('min_bowl_balls')}")
+                db.commit()
+                flash("Record qualifications saved. Leaderboards use the new minimums immediately.", "success")
+            except ValueError as exc:
+                db.rollback()
+                flash(str(exc), "error")
+            return redirect(url_for("admin_league_records", series_id=series.id, season=season.id))
+        stage = request.args.get("stage", "")
+        if stage not in ("", "league", "group", "qualifier", "eliminator", "semifinal", "quarterfinal", "qualifier1", "qualifier2", "final", "knockout"):
+            stage = ""
+        team = request.args.get("team", "").strip()
+        data = records.boards(db, series, season, stage=stage or None, team=team or None)
+        all_data = records.boards(db, series, season) if team or stage else data
+        compare_season = ls.get_season(db, series, request.args.get("compare"))
+        comparison = records.boards(db, series, compare_season) if compare_season else None
+        return render_template("admin_league_records.html", series=series, seasons=seasons,
+            selected=season, data=data, standings=records.standings_view(db,season) if season else [], all_teams=all_data['teams'], stage=stage, team=team,
+            comparison=comparison, compare_season=compare_season,
+            honours=ls.honours(season) if season else {}, unavailable=records.UNAVAILABLE,
+            season_title=ls.season_title)
+    finally:
+        db.close()
+
+
+@app.route("/league-seasons/<int:series_id>/records/<int:season_id>/match/<int:fixture_id>")
+@login_required
+def admin_league_record_match(series_id, season_id, fixture_id):
+    from services import league_records as records, league_season_service as ls
+    db = get_session()
+    try:
+        series = ls.get_series(db, series_id)
+        season = ls.get_season(db, series, season_id) if series else None
+        if season is None:
+            abort(404)
+        game = next((g for g in records.evidence(db,season) if g['fixture_id']==fixture_id),None)
+        if game is None:
+            abort(404)
+        return render_template("admin_league_record_match.html", series=series, season=season, game=game)
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":

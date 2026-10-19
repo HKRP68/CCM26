@@ -3953,6 +3953,9 @@ async def _run_over(context, mid, state):
     except Exception:
         logger.exception("cipl over summary post failed for match %s", mid)
 
+    from services import league_records
+    await league_records.announce(context, state)
+
     milestone_events = []
     try:
         milestone_events = milestones.detect(state, before_milestones, summary)
@@ -5026,6 +5029,9 @@ async def _complete_match(context, mid, state):
         result_line = (f"🏆 {win_m} ({result['winner']}) beat "
                        f"{lose_m} ({result['loser']}) "
                        f"by {result['margin']} {result['margin_type']}!")
+
+    from services import league_records
+    await league_records.announce(context, state, final=True)
 
     # The admin-configured win celebration, if one is set up.
     if not result["tie"]:

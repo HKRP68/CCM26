@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 # All event keys we know about. Order matters for admin UI grouping.
 EVENT_KEYS = [
+    ("new_record", "🏆 New Record", "Season or competition record surpassed"),
+    ("record_equalled", "🤝 Record Equalled", "A new joint record holder"),
+    ("record_holder", "👑 Record Holder", "Requested from the /seasons records board"),
     ("dot_ball",   "⚫ Dot Ball",      "When a legal delivery scores no runs"),
     ("four",       "🏏 Four",          "When a 4 is hit"),
     ("six",        "🔥 Six",           "When a 6 is hit"),
@@ -81,7 +84,7 @@ def _pick_random(items, weight_fn):
 CAPTION_FIELDS = (
     "player", "team", "opponent", "runs", "balls", "score", "overs",
     "bowler", "figures", "wickets", "partnership", "margin", "fielder",
-    "dropped_on",
+    "dropped_on", "record", "value", "previous", "season", "scope", "match",
 )
 
 

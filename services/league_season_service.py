@@ -502,6 +502,9 @@ def forget_tournament(session, tour, saved=None):
             refresh_honours(session, season)
         except Exception:
             logger.exception("league seasons: honours snapshot before delete failed")
+        if saved is not None:
+            from services import league_records
+            league_records.preserve(session, season)
         season.tournament_id = None
         if saved is not None:
             season.stats_season_id = saved.id
@@ -521,6 +524,13 @@ def forget_auction(session, auction_id):
 
 
 def forget_saved_season(session, saved_id):
+    from models import LeagueRecordConfig
+    for season in session.query(LeagueSeason).filter_by(stats_season_id=int(saved_id)).all():
+        cfg = session.get(LeagueRecordConfig, season.id)
+        if cfg is not None:
+            cfg.archive_json = None
+            cfg.standings_json = None
+    session.flush()
     (session.query(LeagueSeason)
      .filter(LeagueSeason.stats_season_id == int(saved_id))
      .update({"stats_season_id": None}, synchronize_session=False))
@@ -1238,6 +1248,12 @@ def create_season_tournament(session, season, *, name=None, activate=False,
                       league_name=league.name,
                       command_snapshot=league.tournament_command,
                       kind=TS.KIND_CHALLENGE, status="draft", **settings)
+    # A season may have its qualifications edited before its tournament exists.
+    from models import LeagueRecordConfig
+    record_cfg = session.get(LeagueRecordConfig, season.id)
+    if record_cfg is not None:
+        tour.min_balls_for_sr = record_cfg.min_bat_balls
+        tour.min_balls_for_econ = record_cfg.min_bowl_balls
     tour.max_teams = max(int(settings.get("max_teams") or 8), len(teams))
     if prev_tour is None:
         tour.format = "Round Robin"
