@@ -1495,7 +1495,7 @@ def select_players(match_id, user_id, striker_idx=None, non_striker_idx=None,
 
 from services.bowling_service import (
     get_delivery_options as _get_delivery_options,
-    is_spinner as _is_spinner, AVAILABLE_SHOTS,
+    is_spinner as _is_spinner, WEBAPP_SHOTS as AVAILABLE_SHOTS,
 )
 from services.match_engine import (
     get_striker, get_non_striker, get_bowler, is_innings_over,
@@ -1733,7 +1733,8 @@ def _speed_to_kmh(speed_label, bowler):
     return int(round(base + random.uniform(-2, 2)))
 
 
-def set_delivery_action(match_id, user_id, delivery, speed=None):
+def set_delivery_action(match_id, user_id, delivery, speed=None, *, line=None,
+                        spin_length=None):
     """Unified bowling action (POST /api/match/action, type=delivery).
 
     Accepts a single {delivery, speed} per the spec (e.g. yorker/fast) rather
@@ -1761,6 +1762,15 @@ def set_delivery_action(match_id, user_id, delivery, speed=None):
     if not ok_norm:
         return False, msg_norm, None
 
+    from engine.shot_matchup import validate_choice, LINES, SPIN_LENGTHS
+    try:
+        line = validate_choice(line, LINES, "line")
+        spin_length = validate_choice(spin_length, SPIN_LENGTHS, "spin length")
+    except ValueError as exc:
+        return False, str(exc), None
+    if spin_length and not _is_spinner((state.get("current_bowler") or {}).get("bowl_style")):
+        return False, "Spin length is only available for a spinner.", None
+
     if not _claim_action(match_id):
         return False, "Previous action still processing — hold on.", None
     try:
@@ -1773,6 +1783,10 @@ def set_delivery_action(match_id, user_id, delivery, speed=None):
         state["last_speed"] = kmh          # km/h, surfaced to clients
         state["selected_variation"] = info["variation"]
         state["selected_length"] = info.get("length")
+        # These choices belong only to this delivery. Always replace stale
+        # values when a new delivery is committed, including an auto choice.
+        state["delivery_plan"] = {"line": line, "spin_length": spin_length}
+        state.pop("batting_plan", None)
         _set_processing(state, False)
         mwa.save_state(match_id, state, next_action=A_PICK_SHOT)
     finally:
@@ -1782,13 +1796,13 @@ def set_delivery_action(match_id, user_id, delivery, speed=None):
         "variation": info["variation"],
         "length": info.get("length"),
         "speed": speed or "medium",
-        "kmh": kmh}
+        "kmh": kmh, "line": line, "spin_length": spin_length}
 
 
 def _resolve_shot_index(shot):
     """Map a shot to its AVAILABLE_SHOTS index. Accepts an int index, an exact
     name, or a case-insensitive name ('pull' → 'Pull'). Returns int or None."""
-    from services.bowling_service import AVAILABLE_SHOTS
+    from services.bowling_service import WEBAPP_SHOTS as AVAILABLE_SHOTS
     if shot is None:
         return None
     # numeric index
@@ -1806,7 +1820,8 @@ def _resolve_shot_index(shot):
     return None
 
 
-def set_shot_action(match_id, user_id, shot):
+def set_shot_action(match_id, user_id, shot, *, footwork=None, stroke=None,
+                    intent=None):
     """Batting action (POST /api/match/action, type=shot). Accepts a shot name
     (e.g. 'pull') or index, validates role/phase/processing, and plays the ball.
     Returns (ok, result_or_msg, info)."""
@@ -1825,16 +1840,23 @@ def set_shot_action(match_id, user_id, shot):
 
     idx = _resolve_shot_index(shot)
     if idx is None:
-        from services.bowling_service import AVAILABLE_SHOTS
+        from services.bowling_service import WEBAPP_SHOTS as AVAILABLE_SHOTS
         return False, f"Unknown shot '{shot}'. Options: {', '.join(AVAILABLE_SHOTS)}", None
 
-    from services.bowling_service import AVAILABLE_SHOTS
+    from engine.shot_matchup import validate_choice, FOOTWORK, STROKES, INTENTS
+    try:
+        footwork = validate_choice(footwork, FOOTWORK, "footwork")
+        stroke = validate_choice(stroke, STROKES, "stroke")
+        intent = validate_choice(intent, INTENTS, "intent")
+    except ValueError as exc:
+        return False, str(exc), None
+
+    from services.bowling_service import WEBAPP_SHOTS as AVAILABLE_SHOTS
     from services import batting_order_service as _bos
-    state["current_shot"] = AVAILABLE_SHOTS[idx]
     # Envelope flow: the batting player picks the next batsman after a wicket —
     # unless they saved a batting order with /sbo, in which case the next player
     # down walks in on their own, the way a real line-up works.
-    state["manual_batsman"] = not _bos.is_order_locked(
+    manual_batsman = not _bos.is_order_locked(
         state.get("batting_order") or state.get("bat_xi"))
     # In-process guard instead of persisting a processing flag: skips two DB
     # commits per ball while keeping the same 1.5s double-tap window. The
@@ -1843,6 +1865,10 @@ def set_shot_action(match_id, user_id, shot):
     if not _claim_action(match_id):
         return False, "Previous action still processing — hold on.", None
     try:
+        state["current_shot"] = AVAILABLE_SHOTS[idx]
+        state["batting_plan"] = {"footwork": footwork, "stroke": stroke,
+                                 "intent": intent}
+        state["manual_batsman"] = manual_batsman
         ok, res = play_shot(match_id, user_id, idx, state=state)
     finally:
         _release_action(match_id)
@@ -2067,6 +2093,8 @@ def _apply_outcome(state, oc, shot, delivery, striker, bowler):
 
     state["current_delivery"] = None
     state["selected_variation"] = None
+    state.pop("delivery_plan", None)
+    state.pop("batting_plan", None)
 
     return {"rtxt": rtxt, "type": t, "runs": oc.get("runs", 0),
             "legal": legal, "need_new_bat": need_new_bat, "eoo": eoo,
@@ -2268,6 +2296,7 @@ def play_shot(match_id, user_id, shot_index, state=None):
         "how": res.get("how"),
         "free_hit": bool(res.get("free_hit")),
         "mystery": bool(res.get("mystery")),
+        "shot_matchup": oc.get("shot_matchup"),
     }
     state["last_commentary"] = commentary or res.get("rtxt")
 
@@ -3732,6 +3761,7 @@ def auto_play_bot_turns(session, match_id, max_steps=200):
                 "batsman": striker.get("name") if striker else None,
                 "bowler": bowler.get("name") if bowler else None,
                 "how": res.get("how"),
+                "shot_matchup": oc.get("shot_matchup"),
             }
             state["last_autoplay_shot"] = {
                 "batter": striker.get("name") if striker else None,
@@ -3903,6 +3933,7 @@ def auto_play_user_turns(session, match_id, user_id, max_steps=200, difficulty=N
                 "batsman": striker.get("name") if striker else None,
                 "bowler": bowler.get("name") if bowler else None,
                 "how": res.get("how"),
+                "shot_matchup": oc.get("shot_matchup"),
             }
             state["last_autoplay_shot"] = {
                 "batter": striker.get("name") if striker else None,

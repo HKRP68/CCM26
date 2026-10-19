@@ -34,6 +34,7 @@ from services.match_webapp_service import (
 )
 from services.cipl_match import is_hundred as _is_hundred, balls_per_unit
 from services.perf_log import perf_span
+from services.bowling_service import get_shot_options
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +272,10 @@ def _card(state, player, kind):
             "sixes": bs.get("sixes", 0),
             "isOut": bool(bs.get("out", False)),
         }
+        if state.get("mode") == "cipl_approach":
+            from engine import batter_confidence
+            base["stats"]["confidence"] = round(batter_confidence.value(bs), 1)
+            base["stats"]["confidenceLabel"] = batter_confidence.label(bs)
     return base
 
 
@@ -669,6 +674,7 @@ def _serialize_match_state_impl(session, match, viewer_user):
             "eventKey": last_ball_raw.get("eventKey"),
             "isFreeHit": bool(last_ball_raw.get("free_hit")),
             "isMystery": bool(last_ball_raw.get("mystery")),
+            "shotMatchup": last_ball_raw.get("shot_matchup"),
         }
         commentary = [{
             "type": "ball",
@@ -845,6 +851,9 @@ def _serialize_match_state_impl(session, match, viewer_user):
         "innings2Stats": _merge_stats(state, innings_filter=2),
         "commentary": commentary,
         "currentDelivery": state.get("current_delivery"),
+        "currentLine": (state.get("delivery_plan") or {}).get("line"),
+        "currentSpinLength": (state.get("delivery_plan") or {}).get("spin_length"),
+        "shotOptions": get_shot_options(include_advanced=True),
         # Keep the qualitative speed label and numeric km/h value separate.
         # The batting controls render the label with string operations, while
         # last_speed is the simulation-generated numeric speed.

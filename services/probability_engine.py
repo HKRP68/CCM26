@@ -14,7 +14,7 @@ Design targets:
 Outcome types: dot, 1, 2, 3, 4, 6, W, wide, noball, legbye
 
 Pipeline:
-  base → bowler-type mod → variation/delivery mod → length mod (pacers only)
+  base → bowler-type mod → variation/delivery mod → explicit length mod
   → pitch mod → phase mod → shot mod → rating mod (diff + absolute)
   → batter context → traits → dynamic mods → normalize → roll
 """
@@ -760,10 +760,16 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
                       recent_runs=0, consec_wickets=0, delivery_repeat=0,
                       pressure=0.0, balls_faced=None, batter_runs=None,
                       fielding_quality=None, bat_hand=None, chem_bond=0.0,
-                      extras_mult=1.0):
+                      extras_mult=1.0, line=None, footwork=None,
+                      stroke=None, intent=None):
     """Calculate one ball outcome.
 
     pitch_wear: 0-100 (deterioration). 0 fresh; 100 fully worn.
+
+    Optional precision choices (None leaves the existing model unchanged):
+      line — off/middle/leg; footwork — front/back/advance;
+      stroke — ground/lofted; intent — defensive/balanced/attacking.
+    The result includes shot_matchup feedback when choices are supplied.
 
     Live-match mechanics (UnderCover /cric parity), all default to no-op:
       free_hit        — this is a free-hit ball (no dismissal except run-out)
@@ -808,7 +814,7 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
     clean_var = (variation or "").replace(" (Surprise)", "").strip()
     _apply_mods(probs, VARIATION_MODS.get(clean_var, {}))
 
-    # Layer 3: Length (pacers only)
+    # Layer 3: Length (pacers, plus explicitly chosen spin lengths)
     if length and length not in (None, "N/A", ""):
         _apply_mods(probs, LENGTH_MODS.get(length, {}))
 
@@ -918,6 +924,15 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
         chem_bond=chem_bond, extras_mult=extras_mult,
     )
 
+    # Optional precision choices, after existing layers so ratings, pitch and
+    # settling are counted once. With no choices this is an exact no-op.
+    from engine.shot_matchup import apply as apply_shot_matchup
+    shot_matchup = apply_shot_matchup(
+        probs, shot=shot, length=length,
+        is_spin=bowler_key in ("Off Spinner", "Leg Spinner"),
+        line=line, footwork=footwork, stroke=stroke, intent=intent,
+    )
+
     # Final normalize
     _normalize(probs)
 
@@ -927,6 +942,8 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
 
     def _ret(d):
         d["traits_activated"] = traits_activated
+        if shot_matchup:
+            d["shot_matchup"] = shot_matchup
         if free_hit:
             d["free_hit"] = True
         if mystery:

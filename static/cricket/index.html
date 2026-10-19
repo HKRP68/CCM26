@@ -28,7 +28,7 @@
   <!-- Telegram Web App SDK -->
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <!-- Custom Styling -->
-  <link rel="stylesheet" href="style.css?v=20261009-1">
+  <link rel="stylesheet" href="style.css?v=20261019-over-confidence">
 </head>
 <body>
   <div id="app-container">
@@ -232,6 +232,7 @@
             <div class="crease-player-info">
               <span class="p-name" id="striker-name">E Lewis*</span>
               <span class="p-score" id="striker-stats">0(0)</span>
+              <span class="p-rhythm hidden" id="striker-rhythm"></span>
             </div>
           </div>
           
@@ -250,6 +251,7 @@
             <div class="crease-player-info">
               <span class="p-name" id="non-striker-name">T Wyllie</span>
               <span class="p-score" id="non-striker-stats">0(0)</span>
+              <span class="p-rhythm hidden" id="non-striker-rhythm"></span>
             </div>
             <div class="player-circle-icon"><span class="inner-c">c</span></div>
           </div>
@@ -410,6 +412,35 @@
 
           <!-- BATTING SHOTS GRID -->
           <div id="batting-controls" class="controls-section hidden">
+            <details class="precision-choices">
+              <summary>Batting technique</summary>
+              <div class="precision-fields">
+                <label>Footwork
+                  <select id="shot-footwork" class="delivery-select">
+                    <option value="auto">Auto</option>
+                    <option value="front">Front foot</option>
+                    <option value="back">Back foot</option>
+                    <option value="advance">Advance</option>
+                  </select>
+                </label>
+                <label>Stroke
+                  <select id="shot-stroke" class="delivery-select">
+                    <option value="auto">Auto</option>
+                    <option value="ground">Ground</option>
+                    <option value="lofted">Lofted</option>
+                  </select>
+                </label>
+                <label>Intent
+                  <select id="shot-intent" class="delivery-select">
+                    <option value="auto">Auto</option>
+                    <option value="defensive">Defensive</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="attacking">Attacking</option>
+                  </select>
+                </label>
+              </div>
+              <p class="controls-hint">Match your footwork to the length. Lofted strokes offer more sixes and more risk.</p>
+            </details>
             <div class="button-grid premium-grid">
               <button class="btn btn-action-card" data-shot="Defend">
                 <span class="label">Defend</span>
@@ -436,6 +467,11 @@
                 <span class="label">Slog</span>
               </button>
             </div>
+            <details class="precision-choices">
+              <summary>More shots</summary>
+              <div id="advanced-shot-grid" class="button-grid premium-grid"></div>
+            </details>
+            <p id="shot-matchup-feedback" class="controls-hint" aria-live="polite"></p>
             <div class="controls-hint">
               * Check the pitch type and bowler rating for a higher success rate.
             </div>
@@ -443,6 +479,28 @@
 
           <!-- BOWLING DELIVERY PICKER -->
           <div id="bowling-controls" class="controls-section hidden">
+            <details class="precision-choices">
+              <summary>Bowling line &amp; spin length</summary>
+              <div class="precision-fields">
+                <label>Line
+                  <select id="delivery-line" class="delivery-select">
+                    <option value="auto">Auto</option>
+                    <option value="off">Outside off stump</option>
+                    <option value="middle">Middle stump</option>
+                    <option value="leg">Leg stump</option>
+                  </select>
+                </label>
+                <label id="spin-length-field">Spin length
+                  <select id="spin-length" class="delivery-select">
+                    <option value="auto">Auto</option>
+                    <option value="full">Full</option>
+                    <option value="good">Good</option>
+                    <option value="short">Short</option>
+                  </select>
+                </label>
+              </div>
+              <p class="controls-hint">Wider lines risk more wides. Spin length changes the batting matchup.</p>
+            </details>
             <div class="delivery-selection-area">
               <div id="bowler-delivery-dropdown-section">
                 <label class="section-subtitle delivery-select-label" for="bowler-delivery-select">Select Delivery</label>
@@ -614,7 +672,7 @@
 
   </div>
   
-  <script src="app.js?v=20261009-1"></script>
+  <script src="app.js?v=20261019-over-confidence"></script>
   <script src="approach.js?v=20261001-1"></script>
 </body>
 </html>

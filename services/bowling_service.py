@@ -53,6 +53,13 @@ STYLE_MAP = {
 AVAILABLE_SHOTS = ["Defend", "Drive", "Cut", "Pull",
                    "Flick", "Sweep", "Loft", "Slog"]
 
+# Existing probability profiles, exposed in the Mini App's optional repertoire.
+# Keep the eight core indices stable for chat callbacks and the AI captain.
+ADVANCED_SHOTS = ["On Drive", "Off Drive", "Hook", "Square Cut", "Late Cut",
+                  "Reverse Sweep", "Slog Sweep", "Paddle", "Upper Cut",
+                  "Switch Hit", "Leg Glance"]
+WEBAPP_SHOTS = AVAILABLE_SHOTS + ADVANCED_SHOTS
+
 # Emoji icon per shot for the Mini App batting grid.
 SHOT_ICONS = {
     "Defend": "🛡️", "Drive": "☄️", "Cut": "✂️", "Pull": "🌪️",
@@ -60,10 +67,10 @@ SHOT_ICONS = {
 }
 
 
-def get_shot_options():
+def get_shot_options(include_advanced=False):
     """Return the batting shot list with icons for the Mini App."""
     return [{"shot": s, "label": s, "icon": SHOT_ICONS.get(s, "🏏")}
-            for s in AVAILABLE_SHOTS]
+            for s in (WEBAPP_SHOTS if include_advanced else AVAILABLE_SHOTS)]
 
 
 def get_bowler_profile_key(bowl_style):

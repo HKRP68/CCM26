@@ -1218,6 +1218,14 @@ function renderGameplayScreen() {
     document.getElementById('bowler-name-stats').innerText = '0-0';
   }
 
+  [['striker', striker], ['non-striker', nonStriker]].forEach(([key, player]) => {
+    const rhythm = document.getElementById(`${key}-rhythm`);
+    if (!rhythm) return;
+    const label = player?.stats?.confidenceLabel || '';
+    rhythm.textContent = label;
+    rhythm.classList.toggle('hidden', !label);
+  });
+
   // Partnership
   if (matchState.partnership) {
     document.getElementById('partnership-display').innerText = 
@@ -1417,7 +1425,10 @@ function renderControlsSection() {
       const speedKmh = Number.isFinite(Number(matchState.currentSpeedKmh))
         ? ` • ${Number(matchState.currentSpeedKmh)} KM/H`
         : '';
-      const displayText = `${speedName} ${delName}${speedKmh}`;
+      const lineNames = { off: 'OUTSIDE OFF', middle: 'MIDDLE STUMP', leg: 'LEG STUMP' };
+      const lineText = lineNames[matchState.currentLine] ? ` • ${lineNames[matchState.currentLine]}` : '';
+      const lengthText = matchState.currentSpinLength ? ` • ${String(matchState.currentSpinLength).toUpperCase()} LENGTH` : '';
+      const displayText = `${speedName} ${delName}${lengthText}${lineText}${speedKmh}`;
 
       // Show the incoming delivery once — in its dedicated card only, not also
       // duplicated in the subtitle.
@@ -1660,6 +1671,8 @@ async function submitImpactPlayer() {
 
 // Render a delivery dropdown first, then only the selected variation's lengths.
 function renderBowlerVariations() {
+  const spinLengthField = document.getElementById('spin-length-field');
+  if (spinLengthField) spinLengthField.classList.toggle('hidden', !matchState.deliveryOptions?.is_spinner);
   const deliverySelect = document.getElementById('bowler-delivery-select');
   const dropdownSection = document.getElementById('bowler-delivery-dropdown-section');
   const deliveryGrid = document.getElementById('bowler-delivery-grid');
@@ -1807,7 +1820,12 @@ async function submitShot(shot) {
     const res = await fetch('/api/match/action', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, matchId, type: 'shot', action: { shot } })
+      body: JSON.stringify({ userId, matchId, type: 'shot', action: {
+        shot,
+        footwork: document.getElementById('shot-footwork')?.value || 'auto',
+        stroke: document.getElementById('shot-stroke')?.value || 'auto',
+        intent: document.getElementById('shot-intent')?.value || 'auto'
+      } })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Failed to submit shot");
@@ -1827,9 +1845,7 @@ async function submitShot(shot) {
 // rapid second tap can't register before the sheet collapses / re-renders.
 // The next actionable turn re-renders the grid fresh via renderBattingShots.
 function disableShotButtons() {
-  const grid = document.querySelector('#batting-controls .button-grid');
-  if (!grid) return;
-  grid.querySelectorAll('button').forEach(btn => { btn.disabled = true; });
+  document.querySelectorAll('#batting-controls button').forEach(btn => { btn.disabled = true; });
 }
 
 // Minimize the bottom control sheet and flip its toggle chevron to "expand".
@@ -1853,19 +1869,32 @@ function renderBattingShots({ disabled = false } = {}) {
     shotSection.insertBefore(grid, shotSection.firstChild);
   }
 
+  const options = matchState.shotOptions?.length ? matchState.shotOptions : BATTING_SHOTS;
+  const advancedGrid = document.getElementById('advanced-shot-grid');
   grid.innerHTML = '';
-  BATTING_SHOTS.forEach(s => {
+  if (advancedGrid) advancedGrid.innerHTML = '';
+  shotSection.querySelectorAll('select').forEach(select => { select.disabled = disabled; });
+  const feedback = document.getElementById('shot-matchup-feedback');
+  if (feedback) {
+    const matchup = matchState.lastBall?.shotMatchup;
+    feedback.textContent = matchup
+      ? `Last shot: ${matchup.quality} matchup. ${(matchup.reasons || []).join('. ')}`
+      : '';
+  }
+  options.forEach((s, index) => {
     const btn = document.createElement('button');
     btn.className = 'btn btn-action-card';
     btn.dataset.shot = s.shot;
-    btn.innerHTML = `<span class="shot-icon">${s.icon || '🏏'}</span><span class="label">${s.label}</span>`;
+    btn.innerHTML = '<span class="shot-icon"></span><span class="label"></span>';
+    btn.querySelector('.shot-icon').textContent = s.icon || '🏏';
+    btn.querySelector('.label').textContent = s.label;
     if (disabled) {
       btn.disabled = true;
       btn.classList.add('is-waiting-for-delivery');
     } else {
       btn.addEventListener('click', (e) => submitShot(e.currentTarget.dataset.shot));
     }
-    grid.appendChild(btn);
+    (index >= BATTING_SHOTS.length && advancedGrid ? advancedGrid : grid).appendChild(btn);
   });
 }
 
@@ -1897,7 +1926,10 @@ async function submitDelivery() {
         type: 'delivery',
         action: {
           delivery: selectedDelivery,
-          speed: selectedSpeed
+          speed: selectedSpeed,
+          line: document.getElementById('delivery-line')?.value || 'auto',
+          spinLength: matchState.deliveryOptions?.is_spinner
+            ? (document.getElementById('spin-length')?.value || 'auto') : 'auto'
         }
       })
     });

@@ -5593,12 +5593,18 @@ def _update_commentary_sequence(s, oc):
 
 def _calc(s, striker, bowler, shot, delivery):
     from services.probability_engine import calculate_outcome
+    # Precision choices are delivery-scoped, including illegal deliveries.
+    # Pop them before resolving so chat, AI and autoplay can never inherit a
+    # previous human's footwork or line after a mode/innings change.
+    delivery_plan = s.pop("delivery_plan", None) or {}
+    batting_plan = s.pop("batting_plan", None) or {}
     # Parse delivery into variation + length
     parts = delivery.replace(" (Surprise)", "").strip()
     from services.bowling_service import is_spinner as _is_spin
     if _is_spin(bowler.get("bowl_style", "")):
         variation = parts
-        length = None
+        length = {"full": "Full Length", "good": "Good Length",
+                  "short": "Short of Length"}.get(delivery_plan.get("spin_length"))
     else:
         known_lengths = {"Hard", "Good", "Full", "Yorker", "Bouncer",
                          "Good Length", "Full Length", "Short of Length", "Back of Length",
@@ -5793,6 +5799,10 @@ def _calc(s, striker, bowler, shot, delivery):
         fielding_quality=fielding_quality,
         bat_hand=striker.get("bat_hand"),
         chem_bond=chem_bond,
+        line=delivery_plan.get("line"),
+        footwork=batting_plan.get("footwork"),
+        stroke=batting_plan.get("stroke"),
+        intent=batting_plan.get("intent"),
     )
 
 

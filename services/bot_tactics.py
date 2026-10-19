@@ -52,6 +52,7 @@ from engine.ball_outcome import (DEFAULT_SCORING_MATRIX, PITCH_SCORING_MATRIX,
                                  get_pitch_run_multiplier,
                                  get_pitch_wicket_multiplier)
 from engine import pitch_registry
+from engine import batter_confidence
 from services import cipl_match
 
 logger = logging.getLogger(__name__)
@@ -208,6 +209,12 @@ def striker_form(state):
     return balls, (runs / balls * 100.0) if balls else 0.0
 
 
+def _striker_stats(state):
+    rid = striker(state).get("roster_id")
+    stats = (state or {}).get("bat_stats") or {}
+    return stats.get(str(rid), stats.get(rid, {}))
+
+
 def wickets_lost(state):
     """Wickets the batting side has already lost this innings."""
     try:
@@ -340,6 +347,9 @@ def ball_probabilities(state, bowler=None):
         mult["Six"] *= 1.15
 
     probs = {k: max(0.0, v * mult.get(k, 1.0)) for k, v in base.items()}
+    # Use the same recent-execution signal the live over consumes, so the
+    # captain's projected over does not ignore a batter being tied down.
+    probs = batter_confidence.apply(probs, _striker_stats(state))
     return _normalized(probs)
 
 
@@ -560,6 +570,7 @@ def _fingerprint(state, bowler):
         int((state or {}).get("total_runs") or 0), wickets_lost(state),
         wickets_in_hand(state),
         bat.get("roster_id"), round(rating(bat, "bat_rating", "rating"), 1),
+        round(batter_confidence.value(_striker_stats(state)), 3),
         (bowl or {}).get("roster_id"), round(rating(bowl, "bowl_rating", default=60.0), 1),
         balls_faced, round(sr, 1),
         None if not ch else (ch["runs_required"], ch["balls_remaining"]),
