@@ -17243,6 +17243,25 @@ def admin_tournament_detail(tournament_id):
                                   "fixture(s) re-stamped.", "info")
                     log_admin(db, "tournament_edit", "tournament", t.id, t.name)
                     flash("✅ Saved tournament settings.", "success")
+                elif action == "save_playoff_conditions":
+                    from services.tournament_match_settings import save_playoff_settings
+                    save_playoff_settings(db, t, request.form.getlist("playoff_pitches"), request.form.getlist("playoff_stadiums"))
+                    log_admin(db, "tournament_playoff_conditions", "tournament", t.id, t.name)
+                    flash("Playoff pitches and stadiums saved for unplayed fixtures.", "success")
+                elif action == "set_team_award_photo":
+                    tt = db.get(TournamentTeam, _int_form("team_id"))
+                    if not tt or tt.tournament_id != t.id:
+                        raise ValueError("Team not found in this tournament.")
+                    photo = (request.form.get("award_photo_url") or "").strip()
+                    if photo and (len(photo) > 500 or not photo.startswith("https://")):
+                        raise ValueError("Use an HTTPS photo URL.")
+                    tt.award_photo_url = photo or None
+                    flash("Team ceremony photo saved.", "success")
+                elif action == "set_fixture_super_overs":
+                    from services.tournament_match_settings import set_super_overs
+                    fx = set_super_overs(db, t, _int_form("fixture_id"), _int_form("planned_super_overs", 0))
+                    log_admin(db, "tournament_match_settings", "tournament", t.id, f"Fixture {fx.id}")
+                    flash("Match setting saved.", "success")
                 elif action == "save_knockout":
                     kt = (request.form.get("knockout_type") or "").strip()
                     valid = {"top4_sf", "ipl_playoffs", "groups_top2_sf",
@@ -17792,10 +17811,12 @@ def admin_tournament_detail(tournament_id):
         from services import season_archive as _sa
         from services import tournament_stadiums as _tstad
         from services import tournament_awards as _tawards
+        from services import tournament_match_settings as _match_settings
         return render_template("admin_tournament_detail.html", t=t, teams=teams,
                                stadium_choices=[(r.get("name"), r.get("city") or "")
                                                 for r in _tstad.all_rows()],
                                tour_stadiums=_tstad.tour_stadiums(t),
+                               playoff_conditions=_match_settings.playoff_settings(t),
                                prize_awards=[(a, _tawards.AWARD_LABEL[a])
                                              for a in _tawards.AWARDS],
                                prize_table=_tawards.prizes(t),
@@ -17838,6 +17859,7 @@ def admin_tournament_dashboard(tournament_id):
     so it doesn't rebuild on every page load.
     """
     from services import tournament_service
+    from services.tournament_match_settings import fixture_sections
     import json as _json
     import time
     db = get_session()
@@ -17903,6 +17925,7 @@ def admin_tournament_dashboard(tournament_id):
             t=t, table=table, group_tables=group_tables, leaders=leaders,
             match_cards=match_cards, tt_map=tt_map, players=players,
             fixtures=fixtures, next_fixture_id=next_fixture_id,
+            fixture_sections=fixture_sections(fixtures),
             champion=champion, league_played=played, league_total=total)
     finally:
         db.close()

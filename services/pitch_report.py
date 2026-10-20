@@ -58,7 +58,7 @@ _EFF_LABEL = {0: "Minimal", 1: "Low", 2: "Moderate", 3: "Good",
 
 # ───────────────────────── condition generation ─────────────────────────
 
-def generate_conditions(pitch_type, rng=None):
+def generate_conditions(pitch_type, rng=None, *, day_night=None):
     """Generate a consistent set of match conditions for ``pitch_type``.
 
     Returns a dict with every field shown in the Pitch Report. Pass an
@@ -67,7 +67,7 @@ def generate_conditions(pitch_type, rng=None):
     r = rng or random
     pitch = pitch_registry.normalise(pitch_type)
 
-    day_night = r.choice(["Day", "Day", "Night"])  # day matches a touch likelier
+    day_night = day_night if day_night in ("Day", "Night") else r.choice(["Day", "Day", "Night"])  # day matches a touch likelier
     if day_night == "Night":
         match_time = r.choice(["Evening (5:30 PM)", "Night (7:30 PM)",
                                "Night (8:00 PM)"])
@@ -311,13 +311,13 @@ def format_pitch_report(pitch_type, conditions, eff, decision):
     return "\n".join(lines)
 
 
-def build_pitch_report(pitch_type, rng=None):
+def build_pitch_report(pitch_type, rng=None, *, day_night=None):
     """Generate conditions + effectiveness + toss and return ``(text, conditions)``.
 
     The returned ``conditions`` dict also carries the computed ``best_toss`` so
     downstream code can reuse it without recomputing.
     """
-    conditions = generate_conditions(pitch_type, rng=rng)
+    conditions = generate_conditions(pitch_type, rng=rng, day_night=day_night)
     eff = pitch_effectiveness(pitch_type, conditions)
     decision = best_toss_decision(pitch_type, conditions)
     conditions["best_toss"] = decision[0]

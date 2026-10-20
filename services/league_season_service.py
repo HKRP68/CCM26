@@ -64,7 +64,7 @@ SQUAD_MODES = {
     MODE_EXISTING: ("📥", "Added"),
 }
 
-AWARD_KEYS = ("champion", "runner_up", "orange_cap", "purple_cap", "mvp")
+AWARD_KEYS = ("champion", "runner_up", "orange_cap", "purple_cap", "mvp", "emerging_player")
 
 # IPL 2025's retention slabs, in lakh: ₹18 / 14 / 11 / 18 / 14 Cr.
 IPL_MEGA_LADDER = (1800, 1400, 1100, 1800, 1400)
@@ -1156,6 +1156,7 @@ TOURNAMENT_RULE_FIELDS = (
     "preferred_pitch_limit",
     "injuries_enabled", "injury_chance", "injury_max_matches",
     "announce_chat_id", "round_hours", "tiebreak", "stadiums_json", "prizes_json",
+    "playoff_conditions_json",
 )
 TOURNAMENT_RUN_STATE = (
     "id", "league_id", "league_name", "command_snapshot", "name", "kind",
@@ -1164,10 +1165,10 @@ TOURNAMENT_RUN_STATE = (
     "knockout_config_json", "knockout_generated",
     "linked_seasons_json",
     "round_deadline_at", "round_tracked", "round_reminder_stage", "recap_round",
-    "bracket_posted_key", "awards_given_at", "awards_announced_at",
+    "bracket_posted_key", "awards_given_at", "awards_announced_at", "ceremony_claimed_at",
     "activated_at", "completed_at", "created_at", "updated_at",
 )
-TEAM_CARRY_FIELDS = ("home_pitch", "home_stadium", "preferred_pitches_json")
+TEAM_CARRY_FIELDS = ("home_pitch", "home_stadium", "preferred_pitches_json", "award_photo_url")
 
 
 def _owner_for(session, league, team_name, prev_teams):

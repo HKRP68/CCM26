@@ -223,18 +223,15 @@ def fixtures_blocks(session, tour, viewer_tg_id=None, limit=None):
         blocks.append(R.table([header] + my_rows, bordered=True, compact=True,
                               caption=R.bold("👈 Your next matches")))
 
-    all_rows = [_fixture_row(fx, names, mine) for fx in fixtures]
-    blocks.append(R.table([header] + all_rows[:limit], bordered=True,
-                          striped=True, compact=True,
-                          caption=R.bold(
-                              f"{'This round & results' if progress else 'Full schedule'}"
-                              f" · {len(all_rows)} matches")))
-    rest = all_rows[limit:]
-    if rest:
-        blocks.append(R.details(
-            R.bold(f"👇 Matches {limit + 1}–{len(all_rows)}"),
-            [R.table([header] + rest, bordered=True, striped=True,
-                     compact=True)]))
+    from services.tournament_match_settings import fixture_sections
+    for label, group in fixture_sections(fixtures):
+        all_rows = [_fixture_row(fx, names, mine) for fx in group]
+        blocks.append(R.table([header] + all_rows[:limit], bordered=True,
+                              striped=True, compact=True,
+                              caption=R.bold(f"{label} · {len(all_rows)} matches")))
+        if all_rows[limit:]:
+            blocks.append(R.details(R.bold(f"More {label} matches"),
+                [R.table([header] + all_rows[limit:], bordered=True, striped=True, compact=True)]))
     blocks.append(R.footer(R.italic(_LEGEND)))
     return blocks
 

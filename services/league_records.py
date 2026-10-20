@@ -369,50 +369,27 @@ def collect_alerts(session,state,*,final=False):
     return list(merged.values())
 
 
-async def announce(context,state,*,final=False):
-    """Queue durable publications after saved overs / committed match results."""
-    if not state.get('tournament_id') or not state.get('chat_id'):
+async def announce(context, state, *, final=False):
+    """Publish one verified Markdown record file after the match commits."""
+    if not final or not state.get('tournament_id') or not state.get('chat_id'):
         return
     from services import league_record_publications as P
     def work():
         from database import get_session
-        from services import league_season_service as LS
-        session=get_session()
+        session = get_session()
         try:
-            season=LS.season_for_tournament(session,state['tournament_id'])
-            if season is None:return []
-            grouped={}
-            for kind,text,fields in collect_alerts(session,state,final=final):
-                grouped.setdefault((kind,fields['player']),[]).append((text,fields))
-            ids=[]
-            import hashlib
-            for (kind,player),achievements in grouped.items():
-                token=hashlib.sha256(player.encode()).hexdigest()[:24]
-                publication_kind=f'record:{kind}:{token}'
-                from models import LeagueRecordPublication
-                prior=session.query(LeagueRecordPublication).filter_by(season_id=season.id,match_id=int(state['match_id']),chat_id=int(state['chat_id']),kind=publication_kind).first()
-                prior_items=json.loads(prior.metadata_json or '{}').get('achievements',[]) if prior else []
-                combined={item['record']:item for item in prior_items}
-                combined.update({f['record']:dict(f) for _t,f in achievements})
-                items=list(combined.values())
-                fields=dict(items[0])
-                fields['record']=', '.join(f['record'] for f in items)
-                fields['value']=', '.join(f['value'] for f in items)
-                text=P.group_text(LS.series_of(session,season),season,state['match_id'],kind,player,items,final=final)
-                row=P.queue(session,season,state['match_id'],state['chat_id'],publication_kind,text,
-                            metadata=dict(event=kind,fields=fields,achievements=items))
-                ids.append(row.id)
-            if final:
-                row=P.queue_recap(session,state)
-                if row:ids.append(row.id)
-            else:
-                ids.extend(row.id for row in P.queue_watch(session,state))
-            session.commit();return ids
+            row = P.queue_match_file(session, state)
+            ids = [row.id] if row else []
+            session.commit()
+            return ids
         except Exception:
-            session.rollback();raise
-        finally:session.close()
+            session.rollback()
+            raise
+        finally:
+            session.close()
     try:
-        ids=await asyncio.to_thread(work)
-        if ids:await P.dispatch(context,ids=ids)
+        ids = await asyncio.to_thread(work)
+        if ids:
+            await P.dispatch(context, ids=ids)
     except Exception:
-        logger.exception('League record announcement failed for match %s',state.get('match_id'))
+        logger.exception('League record file failed for match %s', state.get('match_id'))

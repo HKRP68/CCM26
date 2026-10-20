@@ -99,26 +99,21 @@ class AwardsTests(F.FourTeamCase):
         self.session.refresh(star)
         self.assertEqual(star.total_coins, 700)
 
-    def test_the_ceremony_is_posted_once(self):
+    def test_ceremony_waits_for_the_admin_command(self):
         self._play_out()
-        posts = [p for p in self.tw.tick(self.session, self.tour,
-                                         now=self.now + timedelta(hours=1))
-                 if p.kind == "ceremony"]
-        self.assertEqual(len(posts), 1)
-        self.assertIn("Awards Ceremony", posts[0].text)
-        self.assertIn("5,000 coins", posts[0].text)
-        self.assertEqual([p for p in self.tw.tick(self.session, self.tour,
-                                                  now=self.now + timedelta(hours=2))
-                          if p.kind == "ceremony"], [])
+        posts = self.tw.tick(self.session, self.tour, now=self.now + timedelta(hours=1))
+        self.assertFalse(any(p.kind == "ceremony" for p in posts))
+        self.assertIsNone(self.tour.awards_announced_at)
+        self.assertIn("5,000 coins", self.TA.render_ceremony(self.session, self.tour))
 
-    def test_a_tournament_completed_right_after_the_final_still_gets_it(self):
+    def test_completed_tournament_keeps_honours_for_manual_ceremony(self):
         self._play_out()
         self.tour.status = "completed"
         self.session.commit()
-        ids = [t.id for t in self.tw.running_tournaments(self.session)]
-        self.assertIn(self.tour.id, ids)
+        self.assertTrue(self.TA.honours_for(self.session, self.tour.id))
+        self.assertIsNone(self.tour.awards_announced_at)
         posts = self.tw.tick(self.session, self.tour, now=self.now + timedelta(hours=1))
-        self.assertEqual([p.kind for p in posts if p.kind == "ceremony"], ["ceremony"])
+        self.assertFalse(any(p.kind == "ceremony" for p in posts))
 
     def test_the_hall_of_fame_lists_the_honours(self):
         from handlers.halloffame import render_section

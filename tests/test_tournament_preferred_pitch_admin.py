@@ -200,6 +200,34 @@ class PreferredPitchAdminTests(unittest.TestCase):
         self.assertEqual(json.loads(tt.preferred_pitches_json), ["Green", "Hard"])
         self.assertIsNone(tt.home_pitch)
 
+    def test_playoff_conditions_and_private_fixture_setting_from_website(self):
+        from models import TournamentMatch, TournamentTeam
+        from services import league_schedule_service as lss
+        t = self.create()
+        lss.generate_schedule(self.session, t.id)
+        self.session.commit()
+        body = self.detail(t, {'action': 'save_playoff_conditions', 'playoff_pitches': ['Green'],
+                               'playoff_stadiums': ['Wankhede Stadium']})
+        self.assertIn('Playoff pitches and stadiums', body)
+        self.assertEqual(json.loads(t.playoff_conditions_json)['pitches'], ['Green'])
+        fx = lss.list_fixtures(self.session, t.id)[0]
+        self.detail(t, {'action': 'set_fixture_super_overs', 'fixture_id': str(fx.id), 'planned_super_overs': '2'})
+        self.assertEqual(fx.planned_super_overs, 2)
+        schedule = self.client.get(f'/tournaments/{t.id}/schedule')
+        self.assertEqual(schedule.status_code, 200)
+        self.assertIn('Two Super Overs', schedule.get_data(as_text=True))
+        dashboard = self.client.get(f'/tournaments/{t.id}/dashboard')
+        self.assertEqual(dashboard.status_code, 200)
+        self.assertIn('League stage', dashboard.get_data(as_text=True))
+        team = self.session.query(TournamentTeam).filter_by(tournament_id=t.id).first()
+        self.detail(t, {'action': 'set_team_award_photo', 'team_id': str(team.id),
+                        'award_photo_url': 'https://example.com/team.png'})
+        self.assertEqual(team.award_photo_url, 'https://example.com/team.png')
+        fx.status = 'live'
+        self.session.commit()
+        self.detail(t, {'action': 'set_fixture_super_overs', 'fixture_id': str(fx.id), 'planned_super_overs': '1'})
+        self.assertEqual(fx.planned_super_overs, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

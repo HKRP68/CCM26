@@ -190,6 +190,7 @@ def _table_rows(session, tour, group_id, mine):
 
 
 def _fixture(fx, teams, next_id):
+    from services.tournament_match_settings import day_night
     t1 = teams.get(fx.team1_id)
     t2 = teams.get(fx.team2_id)
     return {
@@ -201,6 +202,7 @@ def _fixture(fx, teams, next_id):
         "slot2_label": fx.slot2_label or ("TBD" if t2 is None else None),
         "home_team_id": fx.home_team_id, "venue": fx.venue,
         "pitch_type": fx.pitch_type,
+        "day_night": day_night(fx),
         "score1": _score(fx.inn1_runs, fx.inn1_wickets, fx.inn1_balls),
         "score2": _score(fx.inn2_runs, fx.inn2_wickets, fx.inn2_balls),
         "winner_team_id": fx.winner_team_id,
@@ -236,6 +238,8 @@ def tournament_payload(session, tour, tg_id=None):
     # The schedule is released one league round at a time: later rounds are
     # held back (and counted) until the open round is finished.
     from services import league_schedule_service
+    from services.tournament_match_settings import fixture_sections
+    fixtures = [fx for _label, group in fixture_sections(fixtures) for fx in group]
     all_fixtures = fixtures
     fixtures, locked, progress = league_schedule_service.split_open_round(
         session, tid, all_fixtures)

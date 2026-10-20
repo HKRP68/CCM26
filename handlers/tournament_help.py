@@ -113,6 +113,8 @@ ADMIN_SECTIONS = (
         ("/tfixturemode", "/tfixmode",
          "Open one or several rounds, or all: /tfixturemode 3 · /tfixturemode round · "
          "/tfixturemode all"),
+        ("/awardceremony", "",
+         "Present a finished tournament's awards one by one: /awardceremony #7"),
         ("/tprize", "/tprizes",
          "Prizes paid when the final is decided: /tprize champion 5000 50"),
         ("/tstadiums", "/tstadium",
@@ -120,7 +122,7 @@ ADMIN_SECTIONS = (
         ("/ttiebreak", "/ttb",
          "Teams level on points: /ttiebreak h2h (head-to-head) or nrr"),
         ("/tsetchat", "/tchat",
-         "Post recaps, deadline alerts and the ceremony in this group"),
+         "Post recaps and deadline alerts in this group"),
         ("/tpoints", "/tpts", "Dock or award points: /tpoints MI | -2 | reason"),
         ("/tpointsclear", "/tptsclear", "Clear a team's points adjustment"),
         ("/taddmatch", "/addmatch",

@@ -13,6 +13,7 @@ import os
 import sys
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -131,6 +132,27 @@ class SeasonsCommandTests(HandlerCase):
         for series in self.LS.series_list(self.session):
             series.is_active = series.id == self.series.id
         self.session.commit()
+
+    def test_records_download_and_close_button_are_owned_by_opener(self):
+        from handlers import league_seasons as H
+        self.call(H.seasons_handler, ALICE)
+        close = next(b.callback_data for b in self.buttons() if b.text == '✖ Close')
+        removed = AsyncMock()
+        update = self.update(ALICE, data=close)
+        update.callback_query.message.delete = removed
+        asyncio.run(H.seasons_callback(update, SimpleNamespace()))
+        removed.assert_awaited_once()
+        update = self.update(BOB, data=close)
+        update.callback_query.message.delete = removed
+        asyncio.run(H.seasons_callback(update, SimpleNamespace()))
+        self.assertEqual(removed.await_count, 1)
+        update = self.update(ALICE)
+        document = AsyncMock()
+        update.effective_message.reply_document = document
+        asyncio.run(H.seasons_handler(update, SimpleNamespace(args=['record'])))
+        document.assert_awaited_once()
+        self.assertTrue(document.call_args.kwargs['filename'].endswith('.md'))
+        self.assertIn(b'records', document.call_args.kwargs['document'].getvalue())
 
     def test_several_competitions_get_a_picker(self):
         from handlers import league_seasons as H

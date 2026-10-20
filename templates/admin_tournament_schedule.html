@@ -29,7 +29,7 @@
     </select>
   </form>
   {% endif %}
-  {% if pitch_locked %}
+  {% if pitch_locked or fx.stage not in ('league', 'group') %}
   <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" style="display:flex; gap:.3rem; align-items:center;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule">
     <input type="hidden" name="action" value="set_fixture_pitch">
@@ -41,6 +41,15 @@
     </select>
   </form>
   {% endif %}
+  <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule">
+    <input type="hidden" name="action" value="set_fixture_super_overs"><input type="hidden" name="fixture_id" value="{{ fx.id }}">
+    <label>Match finish <select name="planned_super_overs" onchange="this.form.submit()">
+      <option value="0" {{ 'selected' if not fx.planned_super_overs else '' }}>Normal</option>
+      <option value="1" {{ 'selected' if fx.planned_super_overs == 1 else '' }}>Super Over</option>
+      <option value="2" {{ 'selected' if fx.planned_super_overs == 2 else '' }}>Two Super Overs</option>
+    </select></label>
+  </form>
 </div>
 {% endmacro %}
 {% set is_ko_only = (t.knockout_type == 'pure_knockout') %}

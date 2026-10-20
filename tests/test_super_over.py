@@ -1170,3 +1170,34 @@ def test_a_casual_tied_match_records_no_tournament_result():
     finally:
         ts.record_tournament_match = saved
     assert calls == []
+
+
+def test_website_setting_plays_a_tied_first_super_over_before_the_second(monkeypatch):
+    # Drive the real ball/selection flow; stop once the replay opens, so the
+    # result persistence is covered separately by the existing finalization tests.
+    random.seed(52)
+    monkeypatch.setattr(so_mod, '_persist_main_stats', lambda *a, **k: None)
+    monkeypatch.setattr(so_mod, '_build_super_over_card', lambda *a, **k: None)
+    import handlers.cipl_play as cp
+    monkeypatch.setattr(cp, '_build_cipl_summary_image', lambda *a, **k: None)
+    ctx = FakeContext()
+    state = _tied_state()
+    state['_planned_super_overs'] = 2
+    mid = state['match_id']
+
+    async def play():
+        assert await start_super_over(ctx, mid, state)
+        for _ in range(300):
+            so = _get(ctx, mid)
+            assert so is not None
+            if so['so_number'] == 2:
+                first = so['results'][0]
+                assert first[HOST_UID][0] == first[GUEST_UID][0]
+                return
+            if not (so.get('bat_confirmed') and so.get('bowl_confirmed')):
+                await _do_selection(ctx, mid)
+            else:
+                await _bowl_one_ball(ctx, mid)
+        raise AssertionError('Second Super Over never opened')
+    asyncio.run(play())
+    assert '_planned_super_overs' not in '\n'.join(m.text or '' for m in ctx.bot.messages)

@@ -187,7 +187,10 @@
       </div>
       {% if fixtures %}
       <div class="fixtures-grid">
-        {% for fx in fixtures %}{{ fixture_card(fx) }}{% endfor %}
+        {% for label, group in fixture_sections %}
+          <h3>{{ label }}</h3>
+          {% for fx in group %}{{ fixture_card(fx) }}{% endfor %}
+        {% endfor %}
       </div>
       {% else %}
       <div class="empty-state"><i class="fas fa-calendar-plus"></i>

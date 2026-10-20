@@ -666,10 +666,15 @@ def _migrate_add_columns():
     _try_add("tournaments", "bracket_posted_key", "VARCHAR(80)")
     _try_add("tournaments", "tiebreak", "VARCHAR(10) DEFAULT 'nrr'")
     _try_add("tournaments", "stadiums_json", "TEXT")
+    _try_add("tournaments", "playoff_conditions_json", "TEXT")
+    _try_add("tournaments", "ceremony_claimed_at", "TIMESTAMP")
+    _try_add("tournament_matches", "planned_super_overs", "INTEGER NOT NULL DEFAULT 0")
+    _try_add("tournament_honours", "announced_at", "TIMESTAMP")
     _try_add("tournaments", "prizes_json", "TEXT")
     _try_add("tournaments", "awards_given_at", "TIMESTAMP")
     _try_add("tournaments", "awards_announced_at", "TIMESTAMP")
     _try_add("tournament_teams", "home_stadium", "VARCHAR(120)")
+    _try_add("tournament_teams", "award_photo_url", "VARCHAR(500)")
     # Public tournament-info command for a league (/iplfixtures & friends).
     _try_add("challenge_leagues", "fixtures_command", "VARCHAR(60)")
 

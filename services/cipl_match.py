@@ -2326,6 +2326,14 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             # Batting side under the pump: the odd wicket becomes a mix-up.
             oc = match_drama.maybe_mixup(oc, bat_p, free_hit=is_free_hit_ball)
 
+        if state.get('_planned_super_overs') and innings == 1:
+            from services.tournament_match_settings import cap_first_innings
+            oc = cap_first_innings(oc, state['total_runs'], 6 * total_balls(state))
+        if state.get('_planned_super_overs') and innings == 2:
+            from services.tournament_match_settings import constrain_tie_outcome
+            oc = constrain_tie_outcome(oc, runs=state['total_runs'], par=int(target) - 1,
+                remaining=total_balls(state) - balls_bowled(state),
+                wickets=state['total_wickets'], wicket_limit=state.get('wicket_limit', WICKET_LIMIT))
         otype = oc.get("type")
         runs = oc.get("runs", 0)
         is_extra = oc.get("is_extra", False)

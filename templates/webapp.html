@@ -9466,6 +9466,7 @@ function tnFixtureCard(fx) {
     : fx.is_next ? `<span class="tn-badge">NEXT</span>`
     : isMine ? `<span class="tn-badge">YOUR TEAM</span>` : '';
   const sub = [];
+  if (fx.day_night) sub.push((fx.day_night === 'Night' ? '🌙 ' : '☀️ ') + escapeHtml(fx.day_night));
   if (!done) {
     if (fx.venue) sub.push('📍 ' + escapeHtml(fx.venue));
     if (fx.pitch_type) sub.push('🌱 ' + escapeHtml(fx.pitch_type.replace(/_/g, ' ')) + ' pitch');
@@ -9574,23 +9575,18 @@ function tnMatchesView(d) {
     <button class="${tnSeg === 'results' ? 'active' : ''}" onclick="tnSetSeg('results')">Results (${results.length})</button>
     <button class="${tnSeg === 'upcoming' ? 'active' : ''}" onclick="tnSetSeg('upcoming')">Remaining (${upcoming.length})</button>
   </div>`;
-  if (liveNow.length) html += `<div class="tn-sec">Live now</div>` + liveNow.map(tnFixtureCard).join('');
-  if (tnSeg === 'results') {
-    html += results.length ? results.map(tnFixtureCard).join('')
-      : `<div class="empty"><div class="icon">🏏</div>No results yet — the first match is still to come.</div>`;
-  } else {
-    if (!upcoming.length) {
-      html += `<div class="empty"><div class="icon">✅</div>No matches left to play.</div>`;
-    } else {
-      // Group the remaining fixtures by stage so the knockout reads as its own block.
-      let lastStage = null;
-      upcoming.forEach(f => {
-        const stageKey = (f.stage === 'league' || f.stage === 'group') ? 'League stage' : f.stage_label;
-        if (stageKey !== lastStage) { html += `<div class="tn-sec">${escapeHtml(stageKey)}</div>`; lastStage = stageKey; }
-        html += tnFixtureCard(f);
-      });
-    }
-  }
+  const sections = items => {
+    const groups = new Map();
+    items.forEach(f => {
+      const key = ['league', 'group'].includes(f.stage) ? 'League stage' : `Playoffs — ${f.stage_label}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(f);
+    });
+    return Array.from(groups, ([title, matches]) => `<div class="tn-sec">${escapeHtml(title)}</div>` + matches.map(tnFixtureCard).join('')).join('');
+  };
+  if (liveNow.length) html += `<div class="tn-sec">Live now</div>` + sections(liveNow);
+  const selected = tnSeg === 'results' ? results : upcoming;
+  html += selected.length ? sections(selected) : `<div class="empty">${tnSeg === 'results' ? 'No results yet.' : 'No matches left to play.'}</div>`;
   return html;
 }
 

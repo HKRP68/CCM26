@@ -75,8 +75,13 @@ def _btn(label, view, series_id, arg, opener):
     return InlineKeyboardButton(label, callback_data=f"{CB}{view}_{series_id}_{arg}_{opener}")
 
 
+def _close_markup(rows, opener):
+    return InlineKeyboardMarkup(list(rows) + [[_btn("✖ Close", "c", 0, 0, opener)]])
+
+
 def _overview_keyboard(series, rows, opener):
-    buttons = [[_btn("📊 All-time", "a", series.id, "runs", opener),
+    buttons = [[_btn("📄 Records file", "d", series.id, "latest", opener)],
+               [_btn("📊 All-time", "a", series.id, "runs", opener),
                 _btn("👑 Records", "r", series.id, "0-runs", opener)]]
     line = []
     for row in rows[:12]:
@@ -87,7 +92,7 @@ def _overview_keyboard(series, rows, opener):
             line = []
     if line:
         buttons.append(line)
-    return InlineKeyboardMarkup(buttons)
+    return _close_markup(buttons, opener)
 
 
 def _back_keyboard(series, opener, extra=None):
@@ -96,7 +101,7 @@ def _back_keyboard(series, opener, extra=None):
     rows = [row]
     if extra:
         rows.insert(0, extra)
-    return InlineKeyboardMarkup(rows)
+    return _close_markup(rows, opener)
 
 
 def _alltime_keyboard(series, active, opener):
@@ -111,7 +116,7 @@ def _alltime_keyboard(series, active, opener):
         rows.append(line)
     rows.append([_btn("◀ Seasons", "o", series.id, 0, opener),
                  _btn("👑 Records", "r", series.id, "0-runs", opener)])
-    return InlineKeyboardMarkup(rows)
+    return _close_markup(rows, opener)
 
 
 def _records_keyboard(series, season, category, opener):
@@ -120,10 +125,11 @@ def _records_keyboard(series, season, category, opener):
     buttons = [_btn(("● " if key == category else "") + label, "r", series.id,
                     f"{sid}-{key}", opener) for key, label, *_ in records.CATEGORIES]
     rows = [buttons[i:i+2] for i in range(0,len(buttons),2)]
+    rows.append([_btn("📄 Records file", "d", series.id, sid, opener)])
     rows.append([_btn("👑 Holder GIF", "h", series.id, f"{sid}-{category}", opener)])
     rows.append([_btn("◀ Seasons", "o", series.id, 0, opener),
                  _btn("All-time records", "r", series.id, f"0-{category}", opener)])
-    return InlineKeyboardMarkup(rows)
+    return _close_markup(rows, opener)
 
 
 def record_card(series, season, board, cfg):
@@ -143,9 +149,9 @@ def record_card(series, season, board, cfg):
     return blocks,text
 
 
-def _picker_keyboard(series_list, opener):
-    return InlineKeyboardMarkup([[_btn(f"🏆 {s.name}", "o", s.id, 0, opener)]
-                                 for s in series_list[:20]])
+def _picker_keyboard(series_list, opener, records=False):
+    return _close_markup([[_btn(f"🏆 {s.name}", "d" if records else "o", s.id, "latest" if records else 0, opener)]
+                          for s in series_list[:20]], opener)
 
 
 # ── Cards: (blocks, html) ────────────────────────────────────────────
@@ -221,7 +227,8 @@ def season_card(session, series, season):
                              ("runner_up", "🥈", "Runner-up"),
                              ("orange_cap", "🟠", "Orange Cap"),
                              ("purple_cap", "🟣", "Purple Cap"),
-                             ("mvp", "⭐", "MVP")):
+                             ("mvp", "⭐", "MVP"),
+                             ("emerging_player", "🌟", "Emerging Player")):
         text = _award_text(h, key)
         if text:
             award_lines.append(f"{icon} {label}: {text}")
@@ -347,6 +354,9 @@ async def seasons_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     opener = user.id if user else 0
     raw = " ".join(context.args or []).strip()
+    export_records = raw.lower() in ('record', 'records') or raw.lower().startswith(('record ', 'records '))
+    if export_records:
+        raw = raw.partition(' ')[2].strip()
     session = get_session()
     try:
         active = LS.series_list(session, active_only=True)
@@ -378,10 +388,19 @@ async def seasons_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 series = active[0]
             else:
                 await message.reply_text("🏆 Which competition?",
-                                         reply_markup=_picker_keyboard(active, opener))
+                                         reply_markup=_picker_keyboard(active, opener, export_records))
                 return
         if LS.sync_series(session, series):
             session.commit()
+        if export_records:
+            from services.league_record_publications import holders_markdown
+            import io
+            seasons = LS.overview(session, series)
+            season = seasons[0]['season'] if seasons else None
+            await message.reply_document(document=io.BytesIO(holders_markdown(session, series, season).encode('utf-8')),
+                filename=f"season-{season.id if season else 'all'}-records.md",
+                caption=f"{series.name} — current record holders")
+            return
         if query:
             result = LS.player_history(session, series, query)
             if not result:
@@ -423,11 +442,30 @@ async def seasons_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Only the person who opened this can use these "
                            "buttons — send /seasons for your own.", show_alert=True)
         return
+    if view == "c":
+        await query.answer()
+        await query.message.delete()
+        return
     session = get_session()
     try:
         series = LS.get_series(session, series_id)
         if series is None:
             await query.answer("That competition no longer exists.", show_alert=True)
+            return
+        if view == "d":
+            import io
+            from services.league_record_publications import holders_markdown
+            if arg == "latest":
+                seasons = LS.overview(session, series)
+                season = seasons[0]['season'] if seasons else None
+            else:
+                season = LS.get_season(session, series, arg) if arg != '0' else None
+                if arg != '0' and season is None:
+                    await query.answer("That season is gone.", show_alert=True)
+                    return
+            await query.answer()
+            await query.message.reply_document(document=io.BytesIO(holders_markdown(session, series, season).encode('utf-8')),
+                filename=f"season-{season.id if season else 'all'}-records.md", caption=f"{series.name} — current record holders")
             return
         if view == "s":
             season = LS.get_season(session, series, arg)

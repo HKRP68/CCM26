@@ -1269,6 +1269,13 @@ async def _resolve_ball(context, mid, shot):
         variation=inn["pending"]["delivery"], length=inn["pending"]["length"],
         delivery_repeat=inn["repeat"])
 
+    if int(so.get('main_state', {}).get('_planned_super_overs') or 0) >= 2 and so['so_number'] == 1 and so.get('target') is None:
+        from services.tournament_match_settings import cap_first_innings
+        oc = cap_first_innings(oc, inn['runs'], 36)
+    if int(so.get('main_state', {}).get('_planned_super_overs') or 0) >= 2 and so['so_number'] == 1 and so.get('target') is not None:
+        from services.tournament_match_settings import constrain_tie_outcome
+        oc = constrain_tie_outcome(oc, runs=inn['runs'], par=so['target'] - 1,
+            remaining=6 - inn['legal'], wickets=inn['wickets'], wicket_limit=2)
     deliv = inn["pending"]["delivery"] or "delivery"
     if inn["pending"]["length"]:
         deliv = f"{deliv} {inn['pending']['length']}"
@@ -1607,6 +1614,8 @@ def _decide_super_over(so, first_uid, second_uid, chase_won=False):
         return second_uid, first_uid, "runs"
     if f_runs > s_runs:
         return first_uid, second_uid, "runs"
+    if int(so.get('main_state', {}).get('_planned_super_overs') or 0) >= 2 and so.get('so_number') == 1:
+        return None, None, "tie"
     if f_six != s_six:
         return ((first_uid, second_uid, "sixes") if f_six > s_six
                 else (second_uid, first_uid, "sixes"))
@@ -1679,7 +1688,7 @@ async def _super_over_tied(context, mid):
         "🔥 <b>SUPER OVER TIED!</b>\n\n"
         f"{html.escape(a['name'])}: {sa[0]}/{sa[1]}\n"
         f"{html.escape(b['name'])}: {sb[0]}/{sb[1]}\n\n"
-        "Level on runs, sixes <i>and</i> fours — nothing can separate you.\n\n"
+        "The scores are level — another Super Over will decide it.\n\n"
         f"Starting <b>Super Over {n + 1}</b>…\n"
         f"<b>{html.escape(nf['name'])}</b> will bat first (they batted second "
         "in the previous Super Over).\n\n"

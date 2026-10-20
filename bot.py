@@ -2260,7 +2260,7 @@ def main():
             tsetchat_handler, tdeadline_handler, tdeadline_callback,
             tfixturemode_handler,
             ttiebreak_handler, tstadiums_handler, thome_handler,
-            tprize_handler, tteam_handler, tbracket_handler,
+            tprize_handler, tteam_handler, tbracket_handler, awardceremony_handler,
         )
         app.add_handler(CommandHandler(["tpoints", "tpts"], tpoints_handler))
         app.add_handler(CommandHandler(["tpointsclear", "tptsclear"],
@@ -2291,6 +2291,7 @@ def main():
         app.add_handler(CommandHandler(["tstadiums", "tstadium"], tstadiums_handler))
         app.add_handler(CommandHandler(["thome", "homeground"], thome_handler))
         app.add_handler(CommandHandler(["tprize", "tprizes"], tprize_handler))
+        app.add_handler(CommandHandler("awardceremony", awardceremony_handler))
         app.add_handler(CommandHandler(["tteam", "teamoftournament", "tott"],
                                        tteam_handler))
         app.add_handler(CommandHandler(["tbracket", "bracket"], tbracket_handler))

@@ -628,7 +628,11 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=None):
         my_team = team_for_tg(session, tour.id, viewer_tg_id)
         mine = my_team.id if my_team else None
 
+    from services.tournament_match_settings import fixture_sections
+    sections = fixture_sections(fixtures)
+    fixtures = [fx for _label, group in sections for fx in group]
     my_lines, all_lines = [], []
+    lines_by_id = {}
     for fx in fixtures:
         stage = _STAGE_LABEL.get(fx.stage or "league", (fx.stage or "").title())
         a = _slot(fx.team1_id, fx.slot1_label)
@@ -646,20 +650,21 @@ def render_fixtures(session, tour, viewer_tg_id=None, limit=None):
                 body += f" · 🏟️ {escape(fx.venue)}"
         line = f"<code>{tag}</code> {body}"
         all_lines.append(line)
+        lines_by_id[fx.id] = line
         if mine and fx.status != "completed" and mine in (fx.team1_id, fx.team2_id):
             my_lines.append(line)
 
     out = list(header)
     if my_lines:
         out += ["", "<b>Your next matches</b>"] + my_lines[:8]
-    title = "This round & results" if progress else "Full schedule"
-    out += ["", f"<b>{title}</b> · {len(all_lines)} matches"]
-    out += all_lines[:limit]
-    rest = all_lines[limit:]
-    if rest:
-        out.append(f"<b>👇 Matches {limit + 1}–{len(all_lines)}</b> "
-                   f"<i>(tap to expand)</i>")
-        out += expandable_quotes(rest)
+    out += ["", "<b>This round & results</b>" if progress else "<b>Full schedule</b>"]
+    for label, group in sections:
+        lines = [lines_by_id[fx.id] for fx in group]
+        out += ["", f"<b>{escape(label)}</b> · {len(lines)} matches"]
+        out += lines[:limit]
+        if lines[limit:]:
+            out.append("<i>👇 More matches (tap to expand)</i>")
+            out += expandable_quotes(lines[limit:])
     if tour.knockout_generated:
         out += ["", "🏆 Playoff bracket as a picture: /tbracket"]
     return "\n".join(out)

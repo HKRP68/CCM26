@@ -141,23 +141,55 @@ def queue(session,season,match_id,chat_id,kind,text,*,fixture_id=None,metadata=N
     return row
 
 
-def queue_watch(session,state):
-    from services import league_records as R, league_record_insights as I, league_season_service as LS
-    season=LS.season_for_tournament(session,state.get('tournament_id')) if state.get('tournament_id') else None
-    if not season or not state.get('match_id') or not state.get('chat_id') or not R.config(session,season).alerts_enabled or not options(session,season)['watch']:
-        return []
-    series=LS.series_of(session,season)
-    from models import LeagueRecordPublication
-    prefix=f"watch:{int(state.get('innings') or 1)}:"
-    prior=session.query(LeagueRecordPublication).filter_by(season_id=season.id,match_id=int(state['match_id']),chat_id=int(state['chat_id'])).filter(LeagueRecordPublication.kind.like(prefix+'%')).all()
-    seen={key for row in prior for key in json.loads(row.metadata_json or '{}').get('watch_keys',[])}
-    items=[item for item in I.watch_list(session,series,season,state=state) if item['key'] not in seen]
-    if not items:return []
-    keys=[item['key'] for item in items]
-    token=hashlib.sha256('|'.join(sorted(keys)).encode()).hexdigest()[:24]
-    text=f"RECORD WATCH | {series.name} | Match #{state['match_id']}\n"+'\n'.join(item['text'] for item in items)
-    return [queue(session,season,state['match_id'],state['chat_id'],prefix+token,text,metadata=dict(watch_keys=keys))]
+def queue_watch(session, state):
+    # Record updates are deliberately silent until the result is committed.
+    return []
 
+
+def holders_markdown(session, series, season=None):
+    from services import league_records as R, league_season_service as LS
+    data = R.boards(session, series, season)
+    lines = [f"# {series.name} — {LS.season_title(season) if season else 'All-time'} records", ""]
+    for board in data['boards']:
+        lines += [f"## {board['label']}", ""]
+        for holder in board['holders']:
+            lines.append(f"- {holder['name']} — {holder['display']} {board['unit']}")
+        if not board['holders']:
+            lines.append("No qualifying performance yet.")
+        lines.append("")
+    cfg = data['config']
+    if cfg:
+        lines.append(f"Rate qualification: {cfg.min_bat_balls} batting balls / {cfg.min_bowl_balls} bowling balls. Joint holders retained.")
+    return '\n'.join(lines)
+
+
+def match_markdown(session, series, season, game):
+    lines = [f"# Match #{game['match_id']} — Records", "",
+             recap_text(session, series, season, game), "", "## All record achievements", ""]
+    changes = record_changes(session, series, season, game)
+    for record in changes:
+        lines += [f"### {record['scope']} — {record['label']} ({record['kind']})",
+                  f"{', '.join(record['holders'])}: {record['value']} {record['unit']}",
+                  f"Previous: {record['previous']} — {', '.join(record['previous_holders']) or 'none'}", ""]
+    if not changes:
+        lines.append("No records broken or equalled in this match.")
+    return '\n'.join(lines)
+
+
+def queue_match_file(session, state):
+    from services import league_records as R, league_season_service as LS
+    season = LS.season_for_tournament(session, state['tournament_id'])
+    if season is None or not R.config(session, season).alerts_enabled:
+        return None
+    game = next((g for g in R.evidence(session, season) if g['match_id'] == state['match_id']), None)
+    if game is None:
+        return None
+    series = LS.series_of(session, season)
+    return queue(session, season, state['match_id'], state['chat_id'], 'match_records',
+                 f"Match #{state['match_id']} — records", fixture_id=game['fixture_id'],
+                 metadata={'filename': f"match-{state['match_id']}-records.md",
+                           'markdown': match_markdown(session, series, season, game)},
+                 fingerprint=policy_digest(session, season, game))
 
 
 def queue_recap(session,state):
@@ -181,7 +213,7 @@ def reconcile(session,tournament_id):
     games={g['match_id']:g for g in R.evidence(session,season)}
     count=0
     for row in session.query(LeagueRecordPublication).filter_by(season_id=season.id):
-        if row.kind.startswith('watch:'): continue
+        if row.kind.startswith(('watch:', 'record:')): continue
         game=games.get(row.match_id)
         fingerprint=policy_digest(session,season,game) if game else 'removed'
         if row.fingerprint is None:
@@ -191,12 +223,21 @@ def reconcile(session,tournament_id):
             continue
         if fingerprint==row.fingerprint: continue
         row.fingerprint=fingerprint;row.revision+=1;row.status='pending'
-        if game:
+        if game and row.kind == 'match_records':
+            row.text = f'Match #{row.match_id} — records (corrected)'
+            meta = json.loads(row.metadata_json or '{}')
+            meta['markdown'] = match_markdown(session, series, season, game)
+            row.metadata_json = json.dumps(meta)
+        elif game:
             row.text=recap_text(session,series,season,game,corrected=True)
             if row.kind!='recap':
                 row.text=('SCORECARD CORRECTION — earlier provisional record claims are superseded by this verified summary.\n'+row.text)[:4000]
         else:
             row.text=f'RECORD UPDATE RETRACTED | {series.name}\nMatch #{row.match_id} was removed or is no longer eligible. Its earlier records and milestones no longer count.'
+            if row.kind == 'match_records':
+                metadata = json.loads(row.metadata_json or '{}')
+                metadata['markdown'] = row.text
+                row.metadata_json = json.dumps(metadata)
         count+=1
     session.flush()
     return count
@@ -211,7 +252,7 @@ async def dispatch(context,*,ids=None):
         try:
             stale=datetime.utcnow()-timedelta(minutes=5)
             s.query(LeagueRecordPublication).filter(LeagueRecordPublication.status=='sending',LeagueRecordPublication.updated_at<stale).update({'status':'pending'},synchronize_session=False)
-            q=s.query(LeagueRecordPublication).filter_by(status='pending').order_by(LeagueRecordPublication.id)
+            q=s.query(LeagueRecordPublication).filter_by(status='pending').filter(~LeagueRecordPublication.kind.like('watch:%'), ~LeagueRecordPublication.kind.like('record:%')).order_by(LeagueRecordPublication.id)
             if ids is not None: q=q.filter(LeagueRecordPublication.id.in_(ids))
             result=[]
             for row in q.limit(50):
@@ -234,7 +275,29 @@ async def dispatch(context,*,ids=None):
         finally:s.close()
     for item in await asyncio.to_thread(claim):
         try:
-            if item['message_id']:
+            if item['kind'] == 'match_records':
+                import io
+                from telegram import InputFile, InputMediaDocument
+                metadata = item['metadata']
+                document = InputFile(io.BytesIO(metadata.get('markdown', item['text']).encode('utf-8')),
+                                     filename=metadata.get('filename', 'match-records.md'))
+                if item['message_id']:
+                    try:
+                        await context.bot.edit_message_media(chat_id=item['chat_id'], message_id=item['message_id'],
+                            media=InputMediaDocument(document, caption=item['text']))
+                    except Exception as exc:
+                        error = str(exc).lower()
+                        if any(reason in error for reason in ('message to edit not found', "message can't be edited", 'message can not be edited')):
+                            message = await context.bot.send_document(chat_id=item['chat_id'], document=document, caption=item['text'])
+                            item['message_id'] = message.message_id
+                        elif 'message is not modified' not in error:
+                            raise
+                    message_id = item['message_id']
+                else:
+                    message = await context.bot.send_document(chat_id=item['chat_id'], document=document,
+                                                              caption=item['text'])
+                    message_id = message.message_id
+            elif item['message_id']:
                 try:
                     await context.bot.edit_message_text(chat_id=item['chat_id'],message_id=item['message_id'],text=item['text'])
                 except Exception as exc:

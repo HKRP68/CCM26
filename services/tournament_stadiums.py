@@ -127,6 +127,11 @@ def venue_for(fx, tour, homes, rng=None):
     rng = rng or random
     names = tour_stadiums(tour)
     league = (fx.stage or "league") in ("league", "group")
+    if not league:
+        from services.tournament_match_settings import playoff_settings
+        playoff_names = playoff_settings(tour).get('stadiums', [])
+        if playoff_names:
+            return rng.choice(playoff_names)
     if league and fx.home_team_id and homes.get(fx.home_team_id):
         return homes[fx.home_team_id]
     if names:
@@ -150,7 +155,8 @@ def assign_venues(session, tournament_id, *, overwrite=False, team_id=None, rng=
     homes = {t.id: t.home_stadium for t in
              session.query(TournamentTeam).filter_by(tournament_id=tour.id).all()
              if (t.home_stadium or "").strip()}
-    if not homes and not tour_stadiums(tour) and not overwrite:
+    from services.tournament_match_settings import playoff_settings
+    if not homes and not tour_stadiums(tour) and not playoff_settings(tour).get('stadiums') and not overwrite:
         return 0
     changed = 0
     for fx in (session.query(TournamentMatch)

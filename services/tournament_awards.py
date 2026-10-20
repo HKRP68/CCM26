@@ -13,7 +13,7 @@ team's owner (a Lets Play team *is* its user); player awards to the user who
 owns the player. Prizes are created by the bot; nothing is deducted from
 anyone.
 
-The ceremony card itself is posted by the tournament watch.
+The ceremony is presented on demand by /awardceremony.
 """
 
 import json
@@ -23,10 +23,11 @@ from html import escape
 
 logger = logging.getLogger(__name__)
 
-AWARDS = ("champion", "runner_up", "orange_cap", "purple_cap", "mvp")
+AWARDS = ("champion", "runner_up", "orange_cap", "purple_cap", "mvp", "emerging_player")
 AWARD_LABEL = {
     "champion": "🏆 Champion", "runner_up": "🥈 Runner-up",
     "orange_cap": "🟠 Orange Cap", "purple_cap": "🟣 Purple Cap", "mvp": "⭐ MVP",
+    "emerging_player": "🌟 Emerging Player",
 }
 AWARD_ALIASES = {
     "champion": "champion", "champions": "champion", "winner": "champion",
@@ -34,6 +35,7 @@ AWARD_ALIASES = {
     "orange": "orange_cap", "orangecap": "orange_cap", "orange_cap": "orange_cap",
     "purple": "purple_cap", "purplecap": "purple_cap", "purple_cap": "purple_cap",
     "mvp": "mvp",
+    "emerging": "emerging_player", "emergingplayer": "emerging_player", "emerging_player": "emerging_player",
 }
 MAX_PRIZE_COINS = 10_000_000
 MAX_PRIZE_GEMS = 100_000
@@ -60,7 +62,7 @@ def set_prize(tour, award, coins, gems):
     """Set (0/0 clears) one award's prize. Raises ValueError for bad input."""
     key = AWARD_ALIASES.get(str(award or "").strip().lower().replace("-", "").replace(" ", ""))
     if key is None:
-        raise ValueError("Award must be one of: champion, runnerup, orange, purple, mvp.")
+        raise ValueError("Award must be one of: champion, runnerup, orange, purple, mvp, emerging.")
     coins, gems = int(coins or 0), int(gems or 0)
     if coins < 0 or gems < 0:
         raise ValueError("Prizes can't be negative.")
@@ -147,7 +149,54 @@ def winners(session, tour):
         r = mvp[0]
         out.append(("mvp", r.team_name, r.name, _user_for_player(session, tour.id, r),
                     f"{r.points:g} pts"))
+    emerging = emerging_player(session, tour)
+    if emerging:
+        row, rating = emerging
+        out.append(("emerging_player", row.team_name, row.name,
+                    _user_for_player(session, tour.id, row), f"{row.points:g} pts · rated {rating}"))
     return out
+
+
+def player_for_stats(session, tour, row):
+    """Resolve only within this tournament's roster, never another player's name."""
+    from models import Player, ChallengePlayer, TournamentTeam
+    if row is None:
+        return None
+    if row.player_id:
+        return session.get(Player, row.player_id)
+    team = session.query(TournamentTeam).filter_by(tournament_id=tour.id, name=row.team_name).first()
+    if team and team.challenge_team_id:
+        cp = session.query(ChallengePlayer).filter_by(team_id=team.challenge_team_id, name=row.name).first()
+        if cp and cp.source_player_id:
+            return session.get(Player, cp.source_player_id)
+    return None
+
+
+def emerging_player(session, tour):
+    """Best MVP impact among players rated <=83; lower rating breaks equal impact.
+
+    Require at least half the most appearances (rounded up). Unknown ratings
+    cannot win, and prizes use the same persisted honours as every other award.
+    """
+    from models import ChallengePlayer, TournamentTeam
+    from services.tournament_mvp import mvp_rows
+    rows = mvp_rows(session, tour.id)
+    minimum = max(1, (max((r.matches for r in rows), default=0) + 1) // 2)
+    candidates = []
+    for row in rows:
+        player = player_for_stats(session, tour, row)
+        rating = player.rating if player else None
+        if rating is None:
+            team = session.query(TournamentTeam).filter_by(tournament_id=tour.id, name=row.team_name).first()
+            cp = session.query(ChallengePlayer).filter_by(team_id=team.challenge_team_id, name=row.name).first() if team and team.challenge_team_id else None
+            if cp:
+                try:
+                    rating = int(json.loads(cp.details_json or '{}').get('rating'))
+                except (ValueError, TypeError):
+                    pass
+        if rating is not None and 1 <= int(rating) <= 83 and row.matches >= minimum and row.points > 0:
+            candidates.append((row, int(rating)))
+    return max(candidates, key=lambda pair: (pair[0].points, -pair[1], pair[0].name or '')) if candidates else None
 
 
 # ── Paying out ────────────────────────────────────────────────────────

@@ -884,7 +884,7 @@ def _apply_pitch(draft, pitch):
     draft["pitch_type"] = pitch
     try:
         from services.pitch_report import build_pitch_report
-        report_text, conditions = build_pitch_report(pitch)
+        report_text, conditions = build_pitch_report(pitch, day_night=draft.get("fixture_day_night"))
         draft["conditions"] = conditions
     except Exception:
         logger.exception("Failed to build pitch report")
@@ -933,6 +933,11 @@ def _resolve_fixture_venue(draft):
         from models import Tournament
         from services import league_schedule_service
         tour = session.get(Tournament, int(draft["tournament_id"]))
+        fixture = league_schedule_service.fixture_for_pair(
+            session, tour.id, draft.get("host_team"), draft.get("target_team")) if tour else None
+        if fixture:
+            from services.tournament_match_settings import fixture_period
+            draft["fixture_day_night"] = fixture_period(session, fixture)
         return league_schedule_service.locked_pitch_for_pair(
             session, tour, draft.get("host_team"), draft.get("target_team"))
     except Exception:

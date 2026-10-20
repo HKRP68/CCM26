@@ -299,6 +299,12 @@
         <span style="display:flex; gap:.4rem; flex-wrap:wrap;">
           <form method="POST" style="display:flex; gap:.3rem;">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="set_team_award_photo"><input type="hidden" name="team_id" value="{{ tt.id }}">
+            <input type="url" name="award_photo_url" value="{{ tt.award_photo_url or '' }}" placeholder="https://… team ceremony photo">
+            <button class="btn" type="submit">Save team photo</button>
+          </form>
+          <form method="POST" style="display:flex; gap:.3rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="action" value="set_team_owner">
             <input type="hidden" name="team_id" value="{{ tt.id }}">
             <input name="owner_tg_id" inputmode="numeric" placeholder="Telegram id"
@@ -692,4 +698,19 @@
     </div>
   </section>
 </div>
+<section class="section-card">
+  <h2>Playoff pitches and stadiums</h2>
+  <p>Choose these before the tournament. Playoffs always take place at night. Empty selections use the tournament defaults.</p>
+  <form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="save_playoff_conditions">
+    <fieldset><legend>Pitches</legend>
+    {% for pitch in pitch_types %}<label style="display:inline-block;margin:.5rem;"><input type="checkbox" name="playoff_pitches" value="{{ pitch }}" {{ 'checked' if pitch in playoff_conditions.get('pitches', []) else '' }}> {{ pitch }}</label>{% endfor %}
+    </fieldset>
+    <fieldset><legend>Stadiums</legend>
+    {% for name, city in stadium_choices %}<label style="display:inline-block;margin:.5rem;"><input type="checkbox" name="playoff_stadiums" value="{{ name }}" {{ 'checked' if name in playoff_conditions.get('stadiums', []) else '' }}> {{ name }}</label>{% endfor %}
+    </fieldset>
+    <button class="btn" type="submit">Save playoff conditions</button>
+  </form>
+</section>
 {% endblock %}

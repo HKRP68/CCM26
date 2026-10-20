@@ -1858,6 +1858,8 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
                         "pick a scheduled opponent.")
                     return
                 draft["reserved_fixture_id"] = _fx.id
+                from services.tournament_match_settings import apply_to_draft
+                apply_to_draft(session, _fx, draft)
                 # The fixture's ground (home stadium / tournament list) is where
                 # this match is played — and what the Conditions Engine plays.
                 try:
@@ -1880,7 +1882,7 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
                         # playing one pitch while the weather models another.
                         try:
                             from services.pitch_report import build_pitch_report
-                            _, draft["conditions"] = build_pitch_report(locked)
+                            _, draft["conditions"] = build_pitch_report(locked, day_night=draft.get("fixture_day_night"))
                         except Exception:
                             logger.exception("Could not rebuild conditions for "
                                              "the fixture's locked pitch")
@@ -2122,6 +2124,7 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         state["tournament_id"] = draft.get("tournament_id")
         state["tournament_team_by_user"] = draft.get("tournament_team_by_user") or {}
         state["reserved_fixture_id"] = draft.get("reserved_fixture_id")
+        state["_planned_super_overs"] = draft.get("_planned_super_overs", 0)
         # Carry CL Tour identity so the series score updates when the match ends.
         state["cl_tour_id"] = draft.get("cl_tour_id")
         state["cl_tour_match_id"] = draft.get("cl_tour_match_id")

@@ -2874,11 +2874,13 @@ class Tournament(Base):
     # The stadiums this tournament is played in — canonical names from the
     # Stadium Data list (engine.sim.stadium). NULL = not restricted.
     stadiums_json = Column(Text, nullable=True)
+    playoff_conditions_json = Column(Text, nullable=True)
     # {"champion": {"coins": 5000, "gems": 50}, "runner_up": …, "orange_cap": …,
     #  "purple_cap": …, "mvp": …}. Paid once when the final is decided.
     prizes_json = Column(Text, nullable=True)
     awards_given_at = Column(DateTime, nullable=True)
     awards_announced_at = Column(DateTime, nullable=True)
+    ceremony_claimed_at = Column(DateTime, nullable=True)
 
     activated_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
@@ -2952,6 +2954,7 @@ class TournamentTeam(Base):
     name = Column(String(120), nullable=False)
     short_name = Column(String(30), nullable=True)
     logo_url = Column(String(500), nullable=True)
+    award_photo_url = Column(String(500), nullable=True)
 
     # ── Ownership ─────────────────────────────────────────────────────────
     # The Telegram id of the person who owns this franchise. When the
@@ -3059,6 +3062,7 @@ class TournamentMatch(Base):
     # setup: the host's pitch picker is skipped and this surface is used. NULL
     # means "not fixed" — the host picks, exactly as before.
     pitch_type = Column(String(20), nullable=True)
+    planned_super_overs = Column(Integer, default=0, server_default="0", nullable=False)
     # Which of the two sides is at home. Always one of team1_id / team2_id (the
     # generator defaults it to team1); shown in the fixture list and used to
     # seed the pitch in "home" pitch mode.
@@ -3283,6 +3287,7 @@ class TournamentHonour(Base):
     prize_coins = Column(Integer, default=0, nullable=False)
     prize_gems = Column(Integer, default=0, nullable=False)
     awarded_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    announced_at = Column(DateTime, nullable=True)
 
 
 class TournamentMatchReminder(Base):

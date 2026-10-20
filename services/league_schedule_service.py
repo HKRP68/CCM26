@@ -335,6 +335,9 @@ def _assign_preferred_pitches(session, tour, fixtures, overwrite):
             team_lists[tt.id] = team_preferred_pitches(tt, limit)
     slots, by_id = [], {}
     for fx in fixtures:
+        from services.tournament_match_settings import playoff_settings, is_playoff
+        if is_playoff(fx) and playoff_settings(tour).get('pitches'):
+            continue
         replan = fx.status == "scheduled" and (
             overwrite or not (fx.pitch_type or "").strip())
         decider, pool = _preferred_slot(mode, fx, tour_list, team_lists)
@@ -383,6 +386,13 @@ def assign_fixture_venues(session, tournament_id, *, overwrite=False):
             if new_home != fx.home_team_id:
                 fx.home_team_id = new_home
                 changed += 1
+        from services.tournament_match_settings import playoff_settings, is_playoff
+        playoff_pitches = playoff_settings(tour).get('pitches', [])
+        if is_playoff(fx) and playoff_pitches:
+            if overwrite or not fx.pitch_type:
+                fx.pitch_type = random.choice(playoff_pitches)
+                changed += 1
+            continue
         if mode == PITCH_MODE_HOST:
             # The host picks during setup. Leave existing stamps alone on a
             # normal pass, but an explicit overwrite (an admin switching the
@@ -476,12 +486,15 @@ def locked_pitch_for_pair(session, tour, name1, name2):
     generated schedule, or when the fixture was never given a surface — every one
     of which means "fall back to the host's pitch picker".
     """
-    if not tour or not pitch_locked(tour):
+    if not tour:
         return None, None
     if not (tour.schedule_generated or tour.knockout_generated):
         return None, None
     fx = fixture_for_pair(session, tour.id, name1, name2)
     if fx is None:
+        return None, None
+    from services.tournament_match_settings import is_playoff
+    if not pitch_locked(tour) and not is_playoff(fx):
         return None, None
     pitch = (fx.pitch_type or "").strip() or None
     home = None

@@ -650,6 +650,29 @@ class CiplMatchTests(unittest.TestCase):
         # Either six legal balls, or fewer if all out / innings ended.
         self.assertTrue(len(legal) == 6 or s["total_wickets"] >= s["wicket_limit"])
 
+    def test_website_planned_ties_keep_delivery_and_player_totals_consistent(self):
+        from unittest.mock import patch
+        from services import config_service
+        with patch.object(config_service, 'get_config', return_value=dict(config_service.DEFAULTS)):
+            for seed in range(8):
+                random.seed(seed)
+                state = _make_state(overs=5)
+                state['_planned_super_overs'] = 1
+                for innings in (1, 2):
+                    guard = 0
+                    while not cm.is_innings_over(state) and guard < 50:
+                        state['current_bowler'] = cm.eligible_bowlers(state)[0]
+                        cm.simulate_over(state)
+                        guard += 1
+                    self.assertLess(guard, 50)
+                    if innings == 2:
+                        self.assertEqual(state['total_runs'], sum(s['runs'] for s in state['bat_stats'].values()) + state['extras_total'])
+                    self.assertLessEqual(sum(s['runs'] for s in state['bat_stats'].values()), state['total_runs'])
+                    if innings == 1:
+                        cm.end_first_innings(state)
+                self.assertTrue(cm.compute_result(state)['tie'])
+                self.assertEqual(state['inn1_runs'], state['total_runs'])
+
     def test_full_match_runs_and_produces_result(self):
         random.seed(42)
         s = _make_state(overs=5)

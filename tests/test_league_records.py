@@ -161,21 +161,16 @@ class RecordTests(pages.PageCase):
         self.session.commit()
         self.assertFalse(self.R.collect_alerts(self.session,state,final=True))
 
-    def test_send_uses_record_gif_with_escaped_fields(self):
+    def test_live_records_never_send_messages_or_gifs(self):
         from services import event_media_service
-        state=self.state();state['bat_xi'][0]['name']='<Alpha>'
-        bot=SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=77)))
-        context=SimpleNamespace(bot=bot,bot_data={})
-        async def inline_worker(fn,*args,**kwargs):
-            # Test the send boundary separately from executor scheduling.
-            return fn(*args,**kwargs)
-        with patch.object(event_media_service,'fire_event_media',new_callable=AsyncMock) as media, \
-                patch.object(self.R.asyncio, 'to_thread', side_effect=inline_worker):
-            asyncio.run(self.R.announce(context,state))
-            self.assertTrue(bot.send_message.called)
-            self.assertTrue(media.called)
-            self.assertEqual('record_default',media.call_args_list[0].args[2])
-            self.assertTrue(any('&lt;Alpha&gt;' in str(c.kwargs) for c in media.call_args_list))
+        state = self.state()
+        bot = SimpleNamespace(send_message=AsyncMock(), send_document=AsyncMock())
+        context = SimpleNamespace(bot=bot, bot_data={})
+        with patch.object(event_media_service, 'fire_event_media', new_callable=AsyncMock) as media:
+            asyncio.run(self.R.announce(context, state))
+            bot.send_message.assert_not_awaited()
+            bot.send_document.assert_not_awaited()
+            media.assert_not_awaited()
 
     def test_season_delete_cleans_configuration_and_alerts(self):
         from models import LeagueRecordAlert, LeagueRecordConfig
@@ -325,18 +320,13 @@ class RecordTests(pages.PageCase):
         self.assertIn(b'Official Best XI',response.data)
         self.assertIn(b'Player 11',response.data)
 
-    def test_watch_deduplicates_and_can_be_disabled(self):
+    def test_watch_stays_silent_even_when_enabled(self):
         from services import league_record_publications as P
-        self.game.scorecard_json=json.dumps([self.line('Alpha',490,220),self.line('Beta',500,230)])
+        self.game.scorecard_json = json.dumps([self.line('Alpha',490,220),self.line('Beta',500,230)])
         self.session.flush()
-        state=self.state();state['bat_stats']['1'].update(runs=0,balls=0)
-        first=P.queue_watch(self.session,state)
-        self.assertTrue(first)
-        self.assertTrue(any('to 500' in row.text for row in first))
-        self.assertEqual([],P.queue_watch(self.session,state))
-        P.save_options(self.session,self.season,watch=False,recap=True)
-        state['match_id']+=1
-        self.assertEqual([],P.queue_watch(self.session,state))
+        state = self.state()
+        P.save_options(self.session, self.season, watch=True, recap=True)
+        self.assertEqual([], P.queue_watch(self.session, state))
 
     def test_richer_alerts_include_previous_holder_opponent_and_link(self):
         with patch.dict(os.environ,WEBAPP_URL='https://league.example/webapp'):
@@ -431,23 +421,36 @@ class RecordTests(pages.PageCase):
         season_archive.delete_tournament(self.session,self.tour,keep_stats=True);self.session.commit()
         self.assertEqual(13,self.board('p50')['holders'][0]['value'])
 
-    def test_live_message_retains_earlier_records_when_final_categories_arrive(self):
+    def test_post_match_file_is_single_durable_document_and_correctable(self):
         from services import league_record_publications as P
+        from services.tournament_service import recompute_tournament, delete_tournament_match
         from models import LeagueRecordPublication
-        async def inline(fn,*args,**kw):return fn(*args,**kw)
-        bot=SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=60)),edit_message_text=AsyncMock())
-        context=SimpleNamespace(bot=bot,bot_data={})
-        state=self.state()
-        from services import event_media_service as media
-        with patch.object(P.asyncio,'to_thread',side_effect=inline),patch.object(media,'fire_event_media',new_callable=AsyncMock,return_value=True):
-            asyncio.run(self.R.announce(context,state))
-            state['bat_stats']['1'].update(runs=120,balls=40,balls_to_100=39)
-            asyncio.run(self.R.announce(context,state))
-        row=self.session.query(LeagueRecordPublication).filter_by(match_id=state['match_id']).filter(LeagueRecordPublication.kind.like('record:%')).first()
-        self.assertIn('Highest individual score',row.text)
-        self.assertIn('Fastest hundred',row.text)
-        self.assertEqual(1,bot.send_message.call_count)
-        self.assertTrue(bot.edit_message_text.called)
+        async def inline(fn, *args, **kwargs): return fn(*args, **kwargs)
+        bot = SimpleNamespace(send_document=AsyncMock(return_value=SimpleNamespace(message_id=60)),
+                              edit_message_media=AsyncMock(), send_message=AsyncMock())
+        context = SimpleNamespace(bot=bot, bot_data={})
+        state = self.state()
+        state['match_id'] = self.game.match_id
+        with patch.object(P.asyncio, 'to_thread', side_effect=inline):
+            asyncio.run(self.R.announce(context, state))
+            bot.send_document.assert_not_awaited()
+            asyncio.run(self.R.announce(context, state, final=True))
+            asyncio.run(self.R.announce(context, state, final=True))
+        self.assertEqual(bot.send_document.await_count, 1)
+        bot.send_message.assert_not_awaited()
+        self.assertTrue(bot.send_document.call_args.kwargs['document'].filename.endswith('.md'))
+        row = self.session.query(LeagueRecordPublication).filter_by(match_id=state['match_id'], kind='match_records').one()
+        self.assertIn('All record achievements', json.loads(row.metadata_json)['markdown'])
+        self.game.scorecard_json = json.dumps([self.line('Alpha',100,60)])
+        recompute_tournament(self.session, self.tour.id)
+        self.session.commit()
+        with patch.object(P.asyncio, 'to_thread', side_effect=inline):
+            asyncio.run(P.dispatch(context))
+        self.assertEqual(bot.edit_message_media.call_args.kwargs['message_id'], 60)
+        self.assertEqual(bot.send_document.await_count, 1)
+        delete_tournament_match(self.session, self.game.id)
+        self.session.commit()
+        self.assertIn('RETRACTED', json.loads(row.metadata_json)['markdown'])
 
     def test_unfinished_match_is_not_mistaken_for_a_removed_scorecard(self):
         from services import league_record_publications as P

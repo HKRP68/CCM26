@@ -1531,3 +1531,37 @@ async def tbracket_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_photo(io.BytesIO(png),
                               caption=f"🏆 <b>{html.escape(name)}</b> — playoffs",
                               parse_mode="HTML")
+
+
+async def awardceremony_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/awardceremony [#id] — present a finished tournament's awards in order."""
+    if not await _require_admin(update):
+        return
+    session = get_session()
+    try:
+        args = list(context.args or [])
+        tid = _pop_tournament_id(args)
+        if tid:
+            tour = session.get(Tournament, tid)
+        else:
+            tours = session.query(Tournament).filter(
+                Tournament.awards_given_at.isnot(None),
+                Tournament.awards_announced_at.is_(None)).all()
+            if len(tours) > 1:
+                await _reply(update, 'Choose a tournament: ' + ', '.join(f'<code>/awardceremony #{t.id}</code> — {html.escape(t.name)}' for t in tours))
+                return
+            tour = tours[0] if tours else None
+        if tour is None:
+            await _reply(update, 'No finished tournament is waiting for its ceremony. Use <code>/awardceremony #id</code> to select one.')
+            return
+        tid = tour.id
+    finally:
+        session.close()
+    try:
+        from services.tournament_ceremony import present
+        await present(context, tid, update.effective_chat.id)
+    except ValueError as exc:
+        await _reply(update, html.escape(str(exc)))
+    except Exception:
+        logger.exception('Award ceremony failed for tournament %s', tid)
+        await _reply(update, 'The ceremony paused. Run the command again to continue with the remaining awards.')
