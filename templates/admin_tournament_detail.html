@@ -713,4 +713,24 @@
     <button class="btn" type="submit">Save playoff conditions</button>
   </form>
 </section>
+<section class="section-card">
+  <h2>📣 Match results and ceremony channels</h2>
+  <p>Each result is a scorecard photo with its text as the caption. Super Over scorecards are included in the same media group. Ceremony awards are shared here too.</p>
+  <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="save_tournament_channels">
+    <label>Channel usernames or IDs (one per line)</label>
+    <textarea name="channels" rows="4" placeholder="@mychannel&#10;-1001234567890">{{ tour_channels|join('
+') }}</textarea>
+    <p>Add the bot as an administrator with permission to post in every destination.</p>
+    <button class="btn" type="submit">Save channels</button>
+  </form>
+  {% if channel_posts %}<details><summary>Recent channel deliveries</summary><ul>{% for post in channel_posts %}<li>{{ post.chat_id }} · {{ post.kind }} · {{ post.status }}{% if post.last_error %} — {{ post.last_error }}{% endif %}</li>{% endfor %}</ul></details>
+  <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="retry_channel_posts"><button class="btn" type="submit">Retry pending posts</button></form>{% endif %}
+</section>
+<section class="section-card">
+  <h2>👐 Best Catch award</h2><p>Select the best recorded catch before running /awardceremony. Catch difficulty is judged by the admin.</p>
+  <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="save_best_catch">
+    <select name="best_catch"><option value="">Not selected</option>{% for catch in catch_choices %}<option value="{{ catch.key }}" {{ 'selected' if best_catch and catch.key == best_catch.key else '' }}>{{ catch.name }} · {{ catch.team_name }} · dismissed {{ catch.batter }} · Match {{ catch.match_no }}</option>{% endfor %}</select>
+    <button class="btn" type="submit">Save Best Catch</button>
+  </form>
+</section>
 {% endblock %}

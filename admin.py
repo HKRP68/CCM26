@@ -17243,6 +17243,19 @@ def admin_tournament_detail(tournament_id):
                                   "fixture(s) re-stamped.", "info")
                     log_admin(db, "tournament_edit", "tournament", t.id, t.name)
                     flash("✅ Saved tournament settings.", "success")
+                elif action == "save_tournament_channels":
+                    from services.tournament_channels import set_channels
+                    set_channels(t, request.form.get("channels") or "")
+                    flash("Channel destinations saved. Add the bot as an admin with permission to post.", "success")
+                elif action == "save_best_catch":
+                    from services.tournament_awards import set_best_catch
+                    set_best_catch(db, t, request.form.get("best_catch") or "")
+                    flash("Best Catch selection saved.", "success")
+                elif action == "retry_channel_posts":
+                    from models import TournamentChannelPost
+                    db.query(TournamentChannelPost).filter_by(tournament_id=t.id, status='pending').update(
+                        {'next_attempt_at': None}, synchronize_session=False)
+                    flash("Pending channel posts will retry on the next delivery tick.", "success")
                 elif action == "save_playoff_conditions":
                     from services.tournament_match_settings import save_playoff_settings
                     save_playoff_settings(db, t, request.form.getlist("playoff_pitches"), request.form.getlist("playoff_stadiums"))
@@ -17812,14 +17825,21 @@ def admin_tournament_detail(tournament_id):
         from services import tournament_stadiums as _tstad
         from services import tournament_awards as _tawards
         from services import tournament_match_settings as _match_settings
+        from services import tournament_channels as _channels
+        from models import TournamentChannelPost
+        from sqlalchemy.orm import defer
         return render_template("admin_tournament_detail.html", t=t, teams=teams,
                                stadium_choices=[(r.get("name"), r.get("city") or "")
                                                 for r in _tstad.all_rows()],
                                tour_stadiums=_tstad.tour_stadiums(t),
                                playoff_conditions=_match_settings.playoff_settings(t),
                                prize_awards=[(a, _tawards.AWARD_LABEL[a])
-                                             for a in _tawards.AWARDS],
+                                             for a in _tawards.CEREMONY_AWARDS],
                                prize_table=_tawards.prizes(t),
+                               tour_channels=_channels.channels(t),
+                               catch_choices=_tawards.catch_choices(db, t.id),
+                               best_catch=_tawards.selected_catch(db, t),
+                               channel_posts=db.query(TournamentChannelPost).options(defer(TournamentChannelPost.photo), defer(TournamentChannelPost.extra_photo)).filter_by(tournament_id=t.id).order_by(TournamentChannelPost.id.desc()).limit(30).all(),
                                rating_rules=_ts_rr.rating_rules(t),
                                season_choices=_sa.season_choices(db, t),
                                season_links_auto=not _sa.linked_refs(t),

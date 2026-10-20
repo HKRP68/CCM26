@@ -2881,6 +2881,8 @@ class Tournament(Base):
     awards_given_at = Column(DateTime, nullable=True)
     awards_announced_at = Column(DateTime, nullable=True)
     ceremony_claimed_at = Column(DateTime, nullable=True)
+    channels_json = Column(Text, nullable=True)
+    best_catch_json = Column(Text, nullable=True)
 
     activated_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
@@ -5308,3 +5310,26 @@ class LeagueRecordPublication(Base):
     status = Column(String(16), default='pending', nullable=False, index=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     __table_args__ = (Index('ix_record_publication_once', 'season_id', 'match_id', 'chat_id', 'kind', unique=True),)
+
+
+class TournamentChannelPost(Base):
+    """One durable photo/caption event for one configured destination."""
+    __tablename__ = 'tournament_channel_posts'
+    id = Column(Integer, primary_key=True)
+    tournament_id = Column(Integer, ForeignKey('tournaments.id', ondelete='CASCADE'), nullable=False, index=True)
+    event_key = Column(String(100), nullable=False)
+    chat_id = Column(String(80), nullable=False)
+    kind = Column(String(20), nullable=False)
+    caption = Column(Text, nullable=False)
+    parse_mode = Column(String(10), nullable=True)
+    photo = Column(LargeBinary, nullable=False)
+    extra_photo = Column(LargeBinary, nullable=True)
+    media_ref = Column(String(500), nullable=True)
+    status = Column(String(16), default='pending', nullable=False, index=True)
+    attempts = Column(Integer, default=0, nullable=False)
+    next_attempt_at = Column(DateTime, nullable=True)
+    claimed_at = Column(DateTime, nullable=True)
+    sent_at = Column(DateTime, nullable=True)
+    message_ids_json = Column(Text, nullable=True)
+    last_error = Column(String(500), nullable=True)
+    __table_args__ = (UniqueConstraint('tournament_id', 'event_key', 'chat_id', name='uq_tournament_channel_event'),)

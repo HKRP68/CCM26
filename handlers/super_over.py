@@ -397,7 +397,7 @@ def _build_super_over_card(so):
         except Exception:
             text_settings = None
 
-        a, b = innings[0], innings[1]
+        a, b = innings[-2], innings[-1]
         win_uid = so.get("_winner_uid")
         win_name = so["teams"][win_uid]["name"] if win_uid in so["teams"] else ""
         margin = so.get("_margin_text", "won the Super Over")
@@ -434,7 +434,7 @@ def _build_super_over_card(so):
                 "inn2": {"team": b["team"], "batters": b["batters"], "bowlers": b["bowlers"]},
             },
             match_no=so.get("mid"),
-            header_left="SUPER", header_right="OVER",
+            header_left="SUPER", header_right=(f"OVER {so['so_number']}" if so.get("so_number", 1) > 1 else "OVER"),
             text_settings=text_settings,
         )
     except Exception:
@@ -1942,6 +1942,11 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
 
     from services import league_records
     await league_records.announce(context, so.get("main_state") or {}, final=True)
+
+    from services.tournament_channels import publish_match
+    await publish_match(context, so.get('main_state') or {},
+        {'tie': False, 'winner': win['name'], 'margin': margin, 'margin_type': margin_type,
+         'margin_text': margin_text}, super_over=so)
 
     # Winner announcement.
     mvp_name, mvp_line = _super_over_mvp(so, winner_uid)

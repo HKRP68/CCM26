@@ -1544,9 +1544,13 @@ async def awardceremony_handler(update: Update, context: ContextTypes.DEFAULT_TY
         if tid:
             tour = session.get(Tournament, tid)
         else:
-            tours = session.query(Tournament).filter(
-                Tournament.awards_given_at.isnot(None),
-                Tournament.awards_announced_at.is_(None)).all()
+            from services import tournament_awards as TA
+            finished = session.query(Tournament).filter(Tournament.awards_given_at.isnot(None)).order_by(Tournament.id.desc()).all()
+            tours = []
+            for candidate in finished:
+                awards = TA.ceremony_honours(session, candidate.id)
+                if not candidate.awards_announced_at or len(awards) < len(TA.CEREMONY_AWARDS) or any(h.announced_at is None for h in awards):
+                    tours.append(candidate)
             if len(tours) > 1:
                 await _reply(update, 'Choose a tournament: ' + ', '.join(f'<code>/awardceremony #{t.id}</code> — {html.escape(t.name)}' for t in tours))
                 return
@@ -1566,3 +1570,37 @@ async def awardceremony_handler(update: Update, context: ContextTypes.DEFAULT_TY
         logger.exception('Award ceremony failed for tournament %s', tid)
         await _reply(update, 'The ceremony paused before the next award. Resume with '
                      f'<code>/awardceremony #{tid}</code>. Awards already sent will be skipped.')
+
+
+async def tchannels_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/tchannels [#id] [add|remove|clear] [@channel|-100id …]."""
+    if not await _require_admin(update):
+        return
+    from services import tournament_channels as TC
+    session = get_session()
+    try:
+        args = list(context.args or [])
+        tour = _resolve_tournament(session, args)
+        current = TC.channels(tour)
+        action = args.pop(0).lower() if args else 'list'
+        if action == 'add':
+            if not args: raise ValueError('Give one or more @channel names or -100… channel IDs.')
+            TC.set_channels(tour, current + args)
+        elif action == 'remove':
+            remove = [str(x).lower() for x in args]
+            TC.set_channels(tour, [c for c in current if c.lower() not in remove])
+        elif action == 'clear':
+            TC.set_channels(tour, [])
+        elif action != 'list':
+            raise ValueError('Use /tchannels [#id] add|remove|clear, or bare /tchannels to list.')
+        session.commit()
+        selected = TC.channels(tour)
+        text = f'📣 <b>{html.escape(tour.name)}</b> — result and ceremony channels\n'
+        text += '\n'.join(html.escape(c) for c in selected) if selected else 'No channels configured.'
+        text += '\n\n<code>/tchannels add @channel1 @channel2</code>\nAdd the bot as an administrator with permission to post in every channel.'
+        await _reply(update, text)
+    except ValueError as exc:
+        session.rollback()
+        await _reply(update, html.escape(str(exc)))
+    finally:
+        session.close()

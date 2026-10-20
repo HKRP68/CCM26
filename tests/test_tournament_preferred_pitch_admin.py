@@ -228,6 +228,19 @@ class PreferredPitchAdminTests(unittest.TestCase):
         self.detail(t, {'action': 'set_fixture_super_overs', 'fixture_id': str(fx.id), 'planned_super_overs': '1'})
         self.assertEqual(fx.planned_super_overs, 2)
 
+    def test_channel_configuration_and_best_catch_selector(self):
+        t = self.create()
+        body = self.detail(t, {'action':'save_tournament_channels', 'channels':'@FirstChannel\n-1001234567890\n@firstchannel'})
+        self.assertEqual(json.loads(t.channels_json), ['@firstchannel', '-1001234567890'])
+        self.assertIn('Best Catch award', body)
+        self.assertIn('Most Dot Balls', body)
+        self.assertIn('Winning Captain', body)
+        self.detail(t, {'action':'save_tournament_channels', 'channels':'invalid'})
+        self.assertEqual(json.loads(t.channels_json), ['@firstchannel', '-1001234567890'])
+        self.detail(t, {'action':'save_best_catch', 'best_catch':'9999:1'})
+        self.assertIsNone(t.best_catch_json)
+
+
 
 if __name__ == "__main__":
     unittest.main()

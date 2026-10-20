@@ -64,7 +64,7 @@ SQUAD_MODES = {
     MODE_EXISTING: ("📥", "Added"),
 }
 
-AWARD_KEYS = ("champion", "runner_up", "orange_cap", "purple_cap", "mvp", "emerging_player")
+AWARD_KEYS = ("champion", "runner_up", "orange_cap", "purple_cap", "most_sixes", "most_fours", "mvp", "player_of_final", "emerging_player", "highest_sr", "best_catch", "most_dots", "winning_captain")
 
 # IPL 2025's retention slabs, in lakh: ₹18 / 14 / 11 / 18 / 14 Cr.
 IPL_MEGA_LADDER = (1800, 1400, 1100, 1800, 1400)
@@ -1156,14 +1156,14 @@ TOURNAMENT_RULE_FIELDS = (
     "preferred_pitch_limit",
     "injuries_enabled", "injury_chance", "injury_max_matches",
     "announce_chat_id", "round_hours", "tiebreak", "stadiums_json", "prizes_json",
-    "playoff_conditions_json",
+    "playoff_conditions_json", "channels_json",
 )
 TOURNAMENT_RUN_STATE = (
     "id", "league_id", "league_name", "command_snapshot", "name", "kind",
     "status", "is_active", "schedule_generated",
     # A custom bracket's config names last season's teams.
     "knockout_config_json", "knockout_generated",
-    "linked_seasons_json",
+    "linked_seasons_json", "best_catch_json",
     "round_deadline_at", "round_tracked", "round_reminder_stage", "recap_round",
     "bracket_posted_key", "awards_given_at", "awards_announced_at", "ceremony_claimed_at",
     "activated_at", "completed_at", "created_at", "updated_at",

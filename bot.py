@@ -2260,7 +2260,7 @@ def main():
             tsetchat_handler, tdeadline_handler, tdeadline_callback,
             tfixturemode_handler,
             ttiebreak_handler, tstadiums_handler, thome_handler,
-            tprize_handler, tteam_handler, tbracket_handler, awardceremony_handler,
+            tprize_handler, tteam_handler, tbracket_handler, awardceremony_handler, tchannels_handler,
         )
         app.add_handler(CommandHandler(["tpoints", "tpts"], tpoints_handler))
         app.add_handler(CommandHandler(["tpointsclear", "tptsclear"],
@@ -2292,6 +2292,7 @@ def main():
         app.add_handler(CommandHandler(["thome", "homeground"], thome_handler))
         app.add_handler(CommandHandler(["tprize", "tprizes"], tprize_handler))
         app.add_handler(CommandHandler("awardceremony", awardceremony_handler))
+        app.add_handler(CommandHandler("tchannels", tchannels_handler))
         app.add_handler(CommandHandler(["tteam", "teamoftournament", "tott"],
                                        tteam_handler))
         app.add_handler(CommandHandler(["tbracket", "bracket"], tbracket_handler))
@@ -3058,6 +3059,14 @@ def main():
                                              name="league_record_publications")
         except Exception:
             logger.exception("Failed to schedule record publications")
+
+        try:
+            from services.tournament_channels import publication_job as channel_publication_job
+            if app.job_queue:
+                app.job_queue.run_repeating(channel_publication_job, interval=30, first=30,
+                                            name="tournament_channel_publications")
+        except Exception:
+            logger.exception("Failed to schedule tournament channel publications")
 
         # Schedule periodic tour expiry (every hour)
         try:

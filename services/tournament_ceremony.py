@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 def stat_for_honour(session, honour):
     from models import TournamentPlayerStats
-    if not honour.player_name:
+    if not honour.player_name or honour.award == "winning_captain":
         return None
     return session.query(TournamentPlayerStats).filter_by(
         tournament_id=honour.tournament_id, name=honour.player_name,
@@ -34,12 +34,14 @@ def award_caption(session, tour, honour):
     prize = prize_text({'coins': honour.prize_coins, 'gems': honour.prize_gems}) or 'No prize configured'
     lines = [f'🎉 <b>{escape(tour.name)} — Awards Ceremony</b>',
              f"<b>{AWARD_LABEL.get(honour.award, honour.award)}</b>",
-             f"<b>{escape(honour.player_name or honour.team_name or 'Winner')}</b>"]
+             f"<b>{escape(honour.player_name or honour.team_name or 'Not awarded')}</b>"]
     if honour.player_name:
         lines.append(f'Team: {escape(honour.team_name or "—")}')
     if honour.value:
         lines.append(escape(honour.value))
-    lines += [escape(contribution(session, honour)), f'💰 {prize}']
+    if honour.player_name or honour.team_name:
+        lines.append(escape(contribution(session, honour)))
+    lines.append(f'💰 {prize}')
     return '\n'.join(lines)[:1024]
 
 
@@ -50,7 +52,7 @@ def award_photo(session, tour, honour, *, use_team_photo=True):
     from services.tournament_awards import AWARD_LABEL, player_for_stats
     team = session.query(TournamentTeam).filter_by(tournament_id=tour.id, name=honour.team_name).first()
     source = None
-    if not honour.player_name and team:
+    if (not honour.player_name or honour.award == "winning_captain") and team:
         from urllib.parse import urlsplit
         from services.card_identity import _event_logo_bytes
         for url in (team.award_photo_url, team.logo_url):
@@ -66,7 +68,7 @@ def award_photo(session, tour, honour, *, use_team_photo=True):
                 source = _event_logo_bytes(parsed.path)
                 if source:
                     break
-    if honour.player_name:
+    if honour.player_name and honour.award != "winning_captain":
         stat = stat_for_honour(session, honour)
         player = player_for_stats(session, tour, stat) if stat else None
         if player:
@@ -95,7 +97,7 @@ def award_photo(session, tour, honour, *, use_team_photo=True):
         art.thumbnail((850, 690))
         canvas.paste(art, ((1000-art.width)//2, 170+(690-art.height)//2), art)
     else:
-        line(honour.player_name or honour.team_name or 'Winner', 430, title_font)
+        line(honour.player_name or honour.team_name or 'Not awarded', 430, title_font)
     # Strip emoji from the photo label; the caption keeps the original.
     label = AWARD_LABEL.get(honour.award, honour.award).split(' ', 1)[-1]
     line(label, 885, title_font, '#f6c65a')
@@ -132,11 +134,18 @@ async def present(context, tournament_id, chat_id):
             tour = session.get(Tournament, tournament_id)
             TA.finalize(session, tour)
             session.commit()
-            honours = TA.honours_for(session, tour.id)
+            TA.ensure_ceremony_honours(session, tour)
+            session.commit()
+            honours = TA.ceremony_honours(session, tour.id)
             if not honours:
                 raise ValueError('Finish the tournament final before starting the ceremony.')
             if tour.awards_announced_at:
-                raise ValueError('This tournament’s awards ceremony has already finished.')
+                if all(h.announced_at is not None for h in honours):
+                    raise ValueError('This tournament’s awards ceremony has already finished.')
+                # A previous version presented fewer award categories. Newly
+                # added awards can be presented without reposting the old ones.
+                tour.awards_announced_at = None
+                session.commit()
             ids = [h.id for h in honours if h.announced_at is None]
             if not claim(session, tour):
                 raise ValueError('This tournament’s awards ceremony is already running.')
@@ -160,18 +169,25 @@ async def present(context, tournament_id, chat_id):
             return caption, photo
         finally:
             session.close()
-    def mark(hid=None, done=False):
+    def mark(hid=None, done=False, caption=None, photo=None, media_ref=None):
         session = get_session()
         try:
             tour = session.get(Tournament, tournament_id)
+            ids = []
             if hid:
                 session.get(TournamentHonour, hid).announced_at = datetime.utcnow()
                 tour.ceremony_claimed_at = datetime.utcnow()
+                from services import tournament_channels as TC
+                if TC.channels(tour):
+                    fallback = photo if isinstance(photo, bytes) else TC.fallback_card(__import__('re').sub(r'<[^>]+>', '', caption or 'Award Ceremony'))
+                    ids = [r.id for r in TC.queue(session, tour, f'award:{hid}', 'ceremony', caption or '', fallback,
+                        media_ref=media_ref or (photo if isinstance(photo, str) else None), parse_mode='HTML', skip_chat=chat_id)]
             else:
                 tour.ceremony_claimed_at = None
             if done:
                 tour.awards_announced_at = datetime.utcnow()
             session.commit()
+            return ids
         finally:
             session.close()
     from telegram.error import BadRequest
@@ -180,9 +196,10 @@ async def present(context, tournament_id, chat_id):
         for index, hid in enumerate(ids):
             caption, photo = await asyncio.to_thread(payload, hid)
             delivered = False
+            sent = None
             if photo is not None:
                 try:
-                    await context.bot.send_photo(chat_id=chat_id,
+                    sent = await context.bot.send_photo(chat_id=chat_id,
                         photo=io.BytesIO(photo) if isinstance(photo, bytes) else photo,
                         caption=caption, parse_mode='HTML')
                     delivered = True
@@ -194,14 +211,23 @@ async def present(context, tournament_id, chat_id):
                         _, fallback = await asyncio.to_thread(payload, hid, False)
                         if isinstance(fallback, bytes):
                             try:
-                                await context.bot.send_photo(chat_id=chat_id,
+                                sent = await context.bot.send_photo(chat_id=chat_id,
                                     photo=io.BytesIO(fallback), caption=caption, parse_mode='HTML')
                                 delivered = True
                             except BadRequest:
                                 logger.warning('Telegram rejected fallback image for honour %s', hid, exc_info=True)
             if not delivered:
                 await context.bot.send_message(chat_id=chat_id, text=caption, parse_mode='HTML')
-            await asyncio.to_thread(mark, hid)
+            media_ref = None
+            if sent and getattr(sent, 'photo', None):
+                media_ref = getattr(sent.photo[-1], 'file_id', None)
+            channel_ids = await asyncio.to_thread(mark, hid, caption=caption, photo=photo, media_ref=media_ref)
+            from services.tournament_channels import dispatch
+            try:
+                if channel_ids:
+                    await dispatch(context, ids=channel_ids)
+            except Exception:
+                logger.exception('Ceremony channel delivery queued for retry')
             if index < len(ids) - 1:
                 await asyncio.sleep(2)
         completed = True

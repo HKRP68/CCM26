@@ -113,6 +113,7 @@ ADMIN_SECTIONS = (
         ("/tfixturemode", "/tfixmode",
          "Open one or several rounds, or all: /tfixturemode 3 · /tfixturemode round · "
          "/tfixturemode all"),
+        ("/tchannels", "", "Result and ceremony destinations: /tchannels add @channel1 @channel2"),
         ("/awardceremony", "",
          "Present a finished tournament's awards one by one: /awardceremony #7"),
         ("/tprize", "/tprizes",

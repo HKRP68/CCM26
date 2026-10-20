@@ -5171,11 +5171,13 @@ async def _complete_match(context, mid, state):
                                        if miniapp_row else None)
     except Exception:
         logger.exception("cipl result message failed for match %s", mid)
+    channel_summary_image = None
     try:
         # Pillow rendering is CPU-bound and synchronous — run it off the event
         # loop so finishing one Challenge League match doesn't freeze every
         # other user's buttons (and other live matches) while the card renders.
         img = await asyncio.to_thread(_build_cipl_summary_image, state, result)
+        channel_summary_image = img
         # Archived before the send and retried on the way out, like /playmatch:
         # one timeout or flood-control answer used to lose this card for good,
         # and with nothing stored /lastscorecard had nothing to bring back.
@@ -5201,6 +5203,9 @@ async def _complete_match(context, mid, state):
             logger.warning("cipl match summary image came back empty for match %s", mid)
     except Exception:
         logger.exception("cipl match summary image failed for match %s", mid)
+
+    from services.tournament_channels import publish_match
+    await publish_match(context, state, result, photo=channel_summary_image)
 
     # Ranked / rivalry card, then the highlights reel — both
     # best-effort and read from what the finalize above already stored.

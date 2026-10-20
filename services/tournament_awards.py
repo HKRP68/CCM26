@@ -23,20 +23,30 @@ from html import escape
 
 logger = logging.getLogger(__name__)
 
-AWARDS = ("champion", "runner_up", "orange_cap", "purple_cap", "mvp", "emerging_player")
+CEREMONY_AWARDS = ("orange_cap", "purple_cap", "most_sixes", "most_fours", "mvp",
+                   "player_of_final", "emerging_player", "highest_sr", "best_catch",
+                   "most_dots", "winning_captain")
+# Preserve team honours/prizes in history, while presentations use only the
+# requested eleven categories.
+AWARDS = ("champion", "runner_up") + CEREMONY_AWARDS
 AWARD_LABEL = {
     "champion": "🏆 Champion", "runner_up": "🥈 Runner-up",
-    "orange_cap": "🟠 Orange Cap", "purple_cap": "🟣 Purple Cap", "mvp": "⭐ MVP",
-    "emerging_player": "🌟 Emerging Player",
+    "orange_cap": "🟠 Orange Cap", "purple_cap": "🟣 Purple Cap",
+    "most_sixes": "💥 Most Sixes", "most_fours": "🏏 Most Fours",
+    "mvp": "⭐ Most Valuable Player", "player_of_final": "🏅 Player of the Final",
+    "emerging_player": "🌟 Emerging Player", "highest_sr": "⚡ Highest Strike Rate",
+    "best_catch": "👐 Best Catch", "most_dots": "🎯 Most Dot Balls",
+    "winning_captain": "👑 Winning Captain",
 }
-AWARD_ALIASES = {
-    "champion": "champion", "champions": "champion", "winner": "champion",
-    "runnerup": "runner_up", "runner_up": "runner_up", "runner": "runner_up",
-    "orange": "orange_cap", "orangecap": "orange_cap", "orange_cap": "orange_cap",
-    "purple": "purple_cap", "purplecap": "purple_cap", "purple_cap": "purple_cap",
-    "mvp": "mvp",
-    "emerging": "emerging_player", "emergingplayer": "emerging_player", "emerging_player": "emerging_player",
-}
+AWARD_ALIASES = {key: key for key in AWARDS}
+AWARD_ALIASES.update({"champions": "champion", "winner": "champion",
+    "runnerup": "runner_up", "runner": "runner_up", "orange": "orange_cap",
+    "orangecap": "orange_cap", "purple": "purple_cap", "purplecap": "purple_cap",
+    "sixes": "most_sixes", "mostsixes": "most_sixes", "fours": "most_fours", "mostfours": "most_fours",
+    "playeroffinal": "player_of_final", "final": "player_of_final",
+    "emerging": "emerging_player", "emergingplayer": "emerging_player",
+    "sr": "highest_sr", "higheststrikerate": "highest_sr", "catch": "best_catch", "bestcatch": "best_catch",
+    "dots": "most_dots", "mostdotballs": "most_dots", "captain": "winning_captain", "winningcaptain": "winning_captain"})
 MAX_PRIZE_COINS = 10_000_000
 MAX_PRIZE_GEMS = 100_000
 
@@ -62,7 +72,7 @@ def set_prize(tour, award, coins, gems):
     """Set (0/0 clears) one award's prize. Raises ValueError for bad input."""
     key = AWARD_ALIASES.get(str(award or "").strip().lower().replace("-", "").replace(" ", ""))
     if key is None:
-        raise ValueError("Award must be one of: champion, runnerup, orange, purple, mvp, emerging.")
+        raise ValueError("Choose an award from /tprize; examples: orange, purple, sixes, fours, mvp, final, emerging, sr, catch, dots, captain.")
     coins, gems = int(coins or 0), int(gems or 0)
     if coins < 0 or gems < 0:
         raise ValueError("Prizes can't be negative.")
@@ -154,7 +164,127 @@ def winners(session, tour):
         row, rating = emerging
         out.append(("emerging_player", row.team_name, row.name,
                     _user_for_player(session, tour.id, row), f"{row.points:g} pts · rated {rating}"))
+    for key, board, field, unit in (("most_sixes", "most_sixes", "bat_sixes", "sixes"),
+                                    ("most_fours", "most_fours", "bat_fours", "fours")):
+        rows = lead.get(board) or []
+        if rows and (getattr(rows[0], field, 0) or 0) > 0:
+            row = rows[0]
+            out.append((key, row.team_name, row.name, row.user_id, f"{getattr(row, field)} {unit}"))
+    rates = lead.get('best_strike_rate') or []
+    if rates:
+        row, rate = rates[0]
+        out.append(('highest_sr', row.team_name, row.name, row.user_id, f'SR {rate:.2f} · {row.bat_runs} runs'))
+    lines = next((ls for match, ls in tournament_service.match_scorecards(session, tour.id) if match.id == final.id), [])
+    potm = final_player(session, final, lines)
+    if potm:
+        row = potm
+        out.append(('player_of_final', row.get('team_name'), row.get('name'), row.get('user_id'),
+                    f"{row.get('bat_runs', 0)} runs · {row.get('bowl_wickets', 0)} wkts"))
+    dots = dot_leaders(session, tour.id)
+    if dots:
+        row = dots[0]
+        out.append(('most_dots', row['team_name'], row['name'], row.get('user_id'), f"{row['dots']} dot balls"))
+    selected = selected_catch(session, tour)
+    if selected:
+        out.append(('best_catch', selected['team_name'], selected['name'], selected.get('user_id'),
+                    f"Match #{selected['match_no']} · {selected['batter']}"[:60]))
+    if champ is not None:
+        from models import User
+        captain_id = final.host_user_id if final.winner_team_id == final.team1_id else final.target_user_id
+        captain = session.get(User, captain_id) if captain_id else _user_for_team(session, champ)
+        captain_name = (captain.first_name or captain.username or str(captain.telegram_id)) if captain else champ.owner_name
+        out.append(('winning_captain', champ.name, captain_name or 'Winning captain', captain.id if captain else None, 'Tournament-winning captain'))
+    present = {row[0] for row in out}
+    for key in CEREMONY_AWARDS:
+        if key not in present:
+            value = 'Selection pending' if key == 'best_catch' else 'No qualifying performance recorded'
+            out.append((key, None, None, None, value))
     return out
+
+
+def final_player(session, final, lines):
+    """Use saved match POTM evidence, falling back to the live card's rule."""
+    saved = next((l.get('match_potm') for l in lines if l.get('match_potm')), None)
+    if saved:
+        hit = next((l for l in lines if l.get('name') == saved.get('name') and l.get('team_name') == saved.get('team')), None)
+        if hit:
+            return hit
+    from services import tournament_mvp as M
+    from models import TournamentTeam
+    team = session.get(TournamentTeam, final.winner_team_id) if final.winner_team_id else None
+    ranked = []
+    for line in lines:
+        if not (line.get('batted') or line.get('bowled')):
+            continue
+        points = sum(M.line_impact(line)) + (15 if team and line.get('team_name') == team.name else 0)
+        ranked.append((points, line))
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    if not ranked:
+        return None
+    if team and len(ranked) >= 2 and ranked[0][0] - ranked[1][0] <= 50:
+        winning = [r for r in ranked[:2] if r[1].get('team_name') == team.name]
+        if winning:
+            return winning[0][1]
+    return ranked[0][1]
+
+
+def _verified_cards(session, tid):
+    from services import tournament_service as TS, record_telemetry as T
+    for match, lines in TS.match_scorecards(session, tid):
+        if match.status != 'completed':
+            continue
+        detail = next((l.get('record_detail') for l in lines if l.get('record_detail')), None)
+        evidence = T.analyse(detail, lines=lines) if detail else {}
+        if evidence.get('invalid_reason'):
+            evidence = {}
+        yield match, lines, evidence
+
+
+def dot_leaders(session, tid):
+    totals = {}
+    for match, lines, evidence in _verified_cards(session, tid):
+        for line in lines:
+            if not line.get('bowled'):
+                continue
+            if 'bowl_dots' in line:
+                count = int(line['bowl_dots'] or 0)
+            else:
+                count = sum(1 for e in evidence.get('deliveries', []) if e.get('bowler') == line.get('name')
+                            and e.get('opponent') == line.get('team_name') and e.get('legal') and e.get('team_runs') == 0)
+            key = (line.get('user_id'), line.get('player_id') or line.get('roster_id'), line.get('name'), line.get('team_name'))
+            row = totals.setdefault(key, dict(line, dots=0))
+            row['dots'] += count
+    return sorted((r for r in totals.values() if r['dots'] > 0), key=lambda r: (-r['dots'], r.get('name') or ''))
+
+
+def catch_choices(session, tid):
+    choices = []
+    for match, lines, evidence in _verified_cards(session, tid):
+        for e in evidence.get('deliveries', []):
+            if not e.get('wicket') or not e.get('fielder') or not ('caught' in (e.get('how') or '') or e.get('how') in ('c&b', 'c & b')):
+                continue
+            line = next((l for l in lines if l.get('name') == e['fielder'] and l.get('team_name') == e.get('opponent')), {})
+            choices.append(dict(key=f"{match.id}:{e['seq']}", name=e['fielder'], team_name=e.get('opponent'),
+                user_id=line.get('user_id'), player_id=line.get('player_id'), batter=e.get('batter') or 'Batter',
+                match_no=match.match_no or match.match_id or match.id))
+    return choices
+
+
+def selected_catch(session, tour):
+    try:
+        key = json.loads(tour.best_catch_json or '{}').get('key')
+    except (ValueError, TypeError):
+        return None
+    return next((c for c in catch_choices(session, tour.id) if c['key'] == key), None)
+
+
+def set_best_catch(session, tour, key):
+    if tour.awards_announced_at:
+        raise ValueError('The ceremony has already finished.')
+    if key and not any(c['key'] == key for c in catch_choices(session, tour.id)):
+        raise ValueError('Choose a recorded catch from this tournament.')
+    tour.best_catch_json = json.dumps({'key': key}) if key else None
+    session.flush()
 
 
 def player_for_stats(session, tour, row):
@@ -239,6 +369,37 @@ def finalize(session, tour):
     session.flush()
     logger.info("Tournament %s: %s honours written", tour.id, len(honours))
     return honours
+
+
+def ensure_ceremony_honours(session, tour):
+    """Backfill newly introduced awards once, including already-finished finals."""
+    from models import Tournament, TournamentHonour, User
+    # Serialize upgrades and prize payments with the tournament row on Postgres.
+    session.query(Tournament).filter_by(id=tour.id).with_for_update().one()
+    existing = {h.award: h for h in honours_for(session, tour.id)}
+    for award, team, player, uid, value in winners(session, tour):
+        if award not in CEREMONY_AWARDS:
+            continue
+        h = existing.get(award)
+        if h and (h.player_name or h.team_name or h.announced_at):
+            continue
+        if h is None:
+            h = TournamentHonour(tournament_id=tour.id, tournament_name=tour.name, award=award)
+            session.add(h)
+        h.team_name, h.player_name, h.user_id, h.value = team, player, uid, value
+        if uid and (team or player) and not (h.prize_coins or h.prize_gems):
+            prize = prizes(tour).get(award) or {}
+            user = session.get(User, uid)
+            if user:
+                h.prize_coins, h.prize_gems = prize.get('coins', 0), prize.get('gems', 0)
+                user.total_coins = (user.total_coins or 0) + h.prize_coins
+                user.total_gems = (user.total_gems or 0) + h.prize_gems
+    session.flush()
+
+
+def ceremony_honours(session, tid):
+    rows = {h.award: h for h in honours_for(session, tid)}
+    return [rows[key] for key in CEREMONY_AWARDS if key in rows]
 
 
 def honours_for(session, tid):

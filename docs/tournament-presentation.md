@@ -13,6 +13,18 @@ Prizes continue to pay once when the final is decided. Presentations wait for an
 
 Set team ceremony photos on **Tournament → Manage → participating team → Save team photo** using an HTTPS image URL. Without one, the team's logo/crest is used. Players use their generated player cards with their team and tournament contribution; imported players without master artwork get a named award card.
 
-Awards include Champion, Runner-up, Orange Cap, Purple Cap, MVP and Emerging Player. Configure the new prize on Manage or with `/tprize emerging <coins> [gems]`.
+The ceremony presents only these categories, in order: **Orange Cap, Purple Cap, Most Sixes, Most Fours, Most Valuable Player, Player of the Final, Emerging Player, Highest Strike Rate, Best Catch, Most Dot Balls, Winning Captain**. Champion/runner-up honours remain in historical records rather than being extra ceremony posts.
+
+Highest Strike Rate uses the tournament's minimum batting balls. Most Dot Balls counts recorded bowling dots, falling back to verified delivery evidence for older scorecards. Player of the Final uses the saved match Player of the Match selection. Winning Captain is the actual user who captained the winning side in the final, falling back to the team's owner for manual/simulated fixtures. Best Catch is selected by an admin from recorded catches in **Tournament → Manage → Best Catch award**. An award without evidence is explicitly marked as unawarded; performances are not fabricated.
+
+Prizes for each category are configurable on Manage. Command aliases include `/tprize sixes`, `fours`, `final`, `sr`, `catch`, `dots`, and `captain`, followed by coins and optional gems. Newly added categories are backfilled for finished tournaments when their ceremony is opened, without repaying existing awards.
+
+## Channel results and ceremony posts
+
+Configure multiple destinations in **Tournament → Manage → Match results and ceremony channels**, one `@channelusername` or `-100…` channel ID per line. The admin command `/tchannels [#tournament-id] add @channel1 @channel2` does the same; use `remove`, `clear`, or the bare command to inspect them. The bot must be an administrator with permission to post in every destination.
+
+Every completed match posts its summary scorecard **with the text as its caption**. The caption includes the competition, stage, scores in cricket overs, result, Player of the Match and contributions, and a champions line for a decided final. Super Over matches are one grouped media post containing the main summary and the Super Over scorecard; the caption lists every recorded Super Over's innings and the actual deciding margin, including countback when used. The initial tied main innings is not published as a final result before its Super Over ends. Manual and deadline-simulated results also queue scorecard posts after commit.
+
+Each ceremony photo/caption is mirrored to those channels. Failed destinations retry independently, while successful destinations are skipped. A 30-second delivery worker recovers pending posts, and Manage displays recent delivery errors and a retry button. Adding a channel affects new match and ceremony events; it does not flood the channel with old results. Channels receive image/caption posts, including a generated fallback card if artwork is unavailable. Exceptionally long summaries are included on the image to respect Telegram's caption length limit.
 
 **Emerging Player rule:** highest tournament MVP points among players rated **83 or below**, with at least half the appearances of the most-used player (rounded up). Lower rating breaks equal MVP points. Players with unknown ratings are ineligible. This rewards performance from lower-rated players without imposing IPL age rules on the game's roster.

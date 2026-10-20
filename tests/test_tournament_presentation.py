@@ -155,7 +155,7 @@ class PresentationTests(F.FourTeamCase):
             with self.assertRaises(RuntimeError):
                 asyncio.run(C.present(context, self.tour.id, -10055))
             self.session.expire_all()
-            honours = A.honours_for(self.session, self.tour.id)
+            honours = A.ceremony_honours(self.session, self.tour.id)
             self.assertIsNotNone(honours[0].announced_at)
             self.assertIsNone(honours[1].announced_at)
             bot.send_photo = AsyncMock(return_value=SimpleNamespace(message_id=2))
@@ -218,18 +218,20 @@ class PresentationTests(F.FourTeamCase):
         from telegram.error import BadRequest
         from services import tournament_awards as A, tournament_ceremony as C
         self.finish_tournament()
-        honours = A.honours_for(self.session, self.tour.id)
-        team = self.teams[honours[0].team_name]
+        honours = A.ceremony_honours(self.session, self.tour.id)
+        team = self.teams[honours[-1].team_name]
         team.award_photo_url = 'https://photos.example/expired.png'
         self.session.commit()
-        bot = SimpleNamespace(send_photo=AsyncMock(side_effect=[BadRequest('Wrong type of the web page content'),
-                              SimpleNamespace(message_id=1), SimpleNamespace(message_id=2)]),
-                              send_message=AsyncMock())
+        async def send_photo(**kwargs):
+            if isinstance(kwargs['photo'], str):
+                raise BadRequest('Wrong type of the web page content')
+            return SimpleNamespace(message_id=1)
+        bot = SimpleNamespace(send_photo=AsyncMock(side_effect=send_photo), send_message=AsyncMock())
         with patch.object(C.asyncio, 'sleep', new=AsyncMock()), self.assertLogs(C.logger, level='WARNING'):
             asyncio.run(C.present(SimpleNamespace(bot=bot), self.tour.id, -10055))
         self.assertEqual(bot.send_photo.await_count, len(honours) + 1)
-        self.assertEqual(bot.send_photo.call_args_list[0].kwargs['photo'], team.award_photo_url)
-        self.assertIsInstance(bot.send_photo.call_args_list[1].kwargs['photo'], io.BytesIO)
+        self.assertEqual(bot.send_photo.call_args_list[-2].kwargs['photo'], team.award_photo_url)
+        self.assertIsInstance(bot.send_photo.call_args_list[-1].kwargs['photo'], io.BytesIO)
         bot.send_message.assert_not_awaited()
         self.session.expire_all()
         self.assertIsNotNone(self.tour.awards_announced_at)
@@ -237,17 +239,17 @@ class PresentationTests(F.FourTeamCase):
 
     def test_broken_renderer_still_presents_text_and_does_not_repeat_awards(self):
         from services import tournament_awards as A, tournament_ceremony as C
-        A.set_prize(self.tour, 'champion', 5000, 0)
+        A.set_prize(self.tour, 'captain', 5000, 0)
         self.finish_tournament()
         bot = SimpleNamespace(send_photo=AsyncMock(), send_message=AsyncMock())
         context = SimpleNamespace(bot=bot)
         with patch.object(C, 'award_photo', side_effect=OSError('broken image')), \
                 patch.object(C.asyncio, 'sleep', new=AsyncMock()), self.assertLogs(C.logger, level='ERROR'):
             asyncio.run(C.present(context, self.tour.id, -10055))
-        honours = A.honours_for(self.session, self.tour.id)
+        honours = A.ceremony_honours(self.session, self.tour.id)
         self.assertEqual(bot.send_message.await_count, len(honours))
         bot.send_photo.assert_not_awaited()
-        self.assertIn('5,000 coins', bot.send_message.call_args_list[0].kwargs['text'])
+        self.assertIn('5,000 coins', bot.send_message.call_args_list[-1].kwargs['text'])
         with self.assertRaises(ValueError):
             asyncio.run(C.present(context, self.tour.id, -10055))
         self.session.expire_all()
@@ -263,7 +265,7 @@ class PresentationTests(F.FourTeamCase):
                 patch.object(C.asyncio, 'sleep', new=AsyncMock()), self.assertLogs(C.logger, level='WARNING'):
             asyncio.run(C.present(SimpleNamespace(bot=bot), self.tour.id, -10055))
         self.session.expire_all()
-        self.assertEqual(bot.send_message.await_count, len(A.honours_for(self.session, self.tour.id)))
+        self.assertEqual(bot.send_message.await_count, len(A.ceremony_honours(self.session, self.tour.id)))
         self.assertIsNotNone(self.tour.awards_announced_at)
 
     def test_cancelled_ceremony_releases_lease_and_resumes_remaining_awards(self):
@@ -275,7 +277,7 @@ class PresentationTests(F.FourTeamCase):
             with self.assertRaises(asyncio.CancelledError):
                 asyncio.run(C.present(SimpleNamespace(bot=bot), self.tour.id, -10055))
         self.session.expire_all()
-        honours = A.honours_for(self.session, self.tour.id)
+        honours = A.ceremony_honours(self.session, self.tour.id)
         self.assertIsNone(self.tour.ceremony_claimed_at)
         self.assertIsNotNone(honours[0].announced_at)
         self.assertIsNone(honours[1].announced_at)

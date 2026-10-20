@@ -860,7 +860,7 @@ def _collect_player_lines(state):
                 "team_name": name_by_user.get(uid),
                 "bat_runs": 0, "bat_balls": 0, "bat_fours": 0, "bat_sixes": 0,
                 "bat_out": False, "batted": False,
-                "bowl_wickets": 0, "bowl_runs": 0, "bowl_balls": 0, "bowled": False,
+                "bowl_wickets": 0, "bowl_runs": 0, "bowl_balls": 0, "bowl_dots": 0, "bowled": False,
             })
             st = stats.get(str(rid), {}) or {}
             if kind == "bat":
@@ -880,6 +880,7 @@ def _collect_player_lines(state):
                 entry["bowl_wickets"] += int(st.get("wickets", 0) or 0)
                 entry["bowl_runs"] += int(st.get("runs", 0) or 0)
                 entry["bowl_balls"] += int(st.get("balls", 0) or 0)
+                entry["bowl_dots"] += int(st.get("dots", 0) or 0)
                 if st.get("balls"):
                     entry["bowled"] = True
     lines = list(agg.values())
@@ -1349,6 +1350,8 @@ def record_manual_result(session, fixture_id, *,
 
     from services.league_record_publications import reconcile
     reconcile(session, tm.tournament_id)
+    from services.tournament_channels import queue_fixture_result
+    queue_fixture_result(session, tm)
     logger.info("Manually recorded tournament fixture %s (winner_team=%s)", tm.id, win_id)
     return tm
 
@@ -1619,6 +1622,14 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
 
     # Standings + per-player stats are rebuilt from the recorded matches below.
     lines = _collect_player_lines(state)
+    if lines:
+        try:
+            from handlers.cipl_play import _cipl_potm_select
+            selected = _cipl_potm_select(state, win_team.name if win_team else None)
+            if selected:
+                lines[0]['match_potm'] = {'name': selected['name'], 'team': selected['team']}
+        except Exception:
+            logger.exception('Could not snapshot tournament POTM')
 
     # ── Match row ──
     if not result_text:

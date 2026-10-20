@@ -668,6 +668,8 @@ def _migrate_add_columns():
     _try_add("tournaments", "stadiums_json", "TEXT")
     _try_add("tournaments", "playoff_conditions_json", "TEXT")
     _try_add("tournaments", "ceremony_claimed_at", "TIMESTAMP")
+    _try_add("tournaments", "channels_json", "TEXT")
+    _try_add("tournaments", "best_catch_json", "TEXT")
     _try_add("tournament_matches", "planned_super_overs", "INTEGER NOT NULL DEFAULT 0")
     _try_add("tournament_honours", "announced_at", "TIMESTAMP")
     _try_add("tournaments", "prizes_json", "TEXT")
