@@ -1194,6 +1194,8 @@ def test_website_setting_plays_a_tied_first_super_over_before_the_second(monkeyp
                 first = so['results'][0]
                 assert first[HOST_UID][0] == first[GUEST_UID][0]
                 return
+            if so.get('target', 0) and so['target'] > 1 and so['inn']['legal'] < 6:
+                assert so['inn']['runs'] < so['target'] - 1, 'Super Over reached par before its last ball'
             if not (so.get('bat_confirmed') and so.get('bowl_confirmed')):
                 await _do_selection(ctx, mid)
             else:

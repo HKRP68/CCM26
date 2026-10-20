@@ -1275,7 +1275,7 @@ async def _resolve_ball(context, mid, shot):
     if int(so.get('main_state', {}).get('_planned_super_overs') or 0) >= 2 and so['so_number'] == 1 and so.get('target') is not None:
         from services.tournament_match_settings import constrain_tie_outcome
         oc = constrain_tie_outcome(oc, runs=inn['runs'], par=so['target'] - 1,
-            remaining=6 - inn['legal'], wickets=inn['wickets'], wicket_limit=2)
+            remaining=6 - inn['legal'], wickets=inn['wickets'], wicket_limit=2, innings_balls=6)
     deliv = inn["pending"]["delivery"] or "delivery"
     if inn["pending"]["length"]:
         deliv = f"{deliv} {inn['pending']['length']}"

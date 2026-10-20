@@ -67,22 +67,64 @@ class PresentationTests(F.FourTeamCase):
     def test_chase_control_finishes_level_without_rewriting_scores(self):
         from services.tournament_match_settings import constrain_tie_outcome
         rng = random.Random(8)
-        # Include extras and repeated terminal wickets, and test very low targets.
+        # Include extras, terminal wickets, and both low and extreme targets.
         for par in [0, 1, 10, 36, 95, 240, 360]:
-            score, wickets = 0, 0
-            for remaining in range(60, 0, -1):
+            score, wickets, remaining = 0, 0, 60
+            for _ in range(240):
                 oc = rng.choice([dict(type='wicket', runs=0, batter_out=True),
                                  dict(type='extra', runs=6, is_extra=True, extra_type='No Ball'),
                                  dict(type='runs', runs=6)])
                 oc = constrain_tie_outcome(oc, runs=score, par=par, remaining=remaining,
-                                          wickets=wickets, wicket_limit=10)
-                self.assertFalse(oc.get('is_extra'))
-                score += oc['runs']
+                    wickets=wickets, wicket_limit=10, innings_balls=60, rng=rng)
+                free_ball = oc.get('is_extra') and oc.get('extra_type') in ('Wide', 'No Ball')
+                score += oc['runs'] + int(bool(free_ball))
+                remaining -= int(not free_ball)
                 wickets += int(bool(oc.get('batter_out')))
                 self.assertLessEqual(score, par)
-                if wickets == 10:
+                if remaining == 0 or wickets == 10:
                     break
+                if par:
+                    self.assertLess(score, par)
+            self.assertEqual(remaining, 0)
             self.assertEqual(score, par)
+
+    def test_planned_chase_does_not_reach_par_early_or_require_twelve_dots(self):
+        from services.tournament_match_settings import constrain_tie_outcome
+        # Attacking and defensive natural outcomes must both remain competitive.
+        for par in (120, 160, 200, 240):
+            for natural_runs in (0, 1, 4, 6):
+                for seed in range(12):
+                    score, checkpoints = 0, {}
+                    rng = random.Random(seed)
+                    for remaining in range(120, 0, -1):
+                        if remaining in (18, 12, 6, 1):
+                            checkpoints[remaining] = par + 1 - score
+                        oc = constrain_tie_outcome(dict(type='run', runs=natural_runs),
+                            runs=score, par=par, remaining=remaining, wickets=0,
+                            wicket_limit=10, innings_balls=120, rng=rng)
+                        score += oc['runs']
+                        if remaining > 1:
+                            self.assertLess(score, par)
+                        self.assertIn(oc['runs'], (0, 1, 2, 3, 4, 6))
+                    self.assertEqual(score, par)
+                    self.assertGreaterEqual(checkpoints[12], 6)
+                    self.assertGreaterEqual(checkpoints[6], 3)
+                    self.assertGreaterEqual(checkpoints[1], 2)
+                    self.assertGreater(oc['runs'], 0)
+
+    def test_chase_preserves_feasible_extras_wickets_and_boundaries(self):
+        from services.tournament_match_settings import constrain_tie_outcome
+        outcomes = [dict(type='extra', runs=0, is_extra=True, extra_type='Wide'),
+                    dict(type='extra', runs=4, is_extra=True, extra_type='No Ball'),
+                    dict(type='extra', runs=1, is_extra=True, extra_type='LegByes'),
+                    dict(type='wicket', runs=0, batter_out=True, wicket_type='Bowled'),
+                    dict(type='run', runs=6), dict(type='run', runs=4), dict(type='run', runs=0)]
+        for outcome in outcomes:
+            self.assertIs(constrain_tie_outcome(outcome, runs=35, par=170, remaining=96,
+                wickets=2, wicket_limit=10, innings_balls=120), outcome)
+        terminal = dict(type='wicket', runs=0, batter_out=True)
+        self.assertFalse(constrain_tie_outcome(terminal, runs=35, par=170, remaining=96,
+            wickets=9, wicket_limit=10, innings_balls=120).get('batter_out'))
 
     def test_playoffs_are_separate_in_html_and_rich_views(self):
         from models import TournamentMatch

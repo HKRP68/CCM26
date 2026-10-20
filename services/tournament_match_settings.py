@@ -93,24 +93,80 @@ def apply_to_draft(session, fixture, draft):
     _, draft['conditions'] = build_pitch_report(pitch, day_night=period)
 
 
-def constrain_tie_outcome(outcome, *, runs, par, remaining, wickets, wicket_limit):
-    """Keep a planned tied innings feasible, before scoring any delivery.
+def _tie_run_window(par, remaining, innings_balls):
+    """A broad remaining-run corridor, narrowing toward the final delivery.
 
-    All totals, batter/bowler stats and commentary consume the same outcome.
-    Normal matches never call this function. Scores are never rewritten later.
+    Reserve runs throughout the chase instead of waiting until scores are level.
+    A slightly steeper finish leaves room for acceleration, dots and boundaries.
     """
+    import math
+    if remaining <= 0:
+        return 0, 0
+    if par <= 0:
+        return 0, 0
+    fraction = min(1.0, remaining / max(1, innings_balls))
+    centre = par * fraction ** 0.94
+    rate = par / max(1, innings_balls)
+    spread = max(1.0, rate * min(8.0, math.sqrt(remaining)) * 0.6)
+    return (max(1, math.floor(centre * 0.72 - spread)),
+            min(6 * remaining, math.ceil(centre * 1.28 + spread)))
+
+
+def constrain_tie_outcome(outcome, *, runs, par, remaining, wickets,
+                          wicket_limit, innings_balls, rng=None):
+    """Condition a planned tie on a competitive chase, before scoring a ball.
+
+    Keep natural outcomes within a broad pacing corridor, including extras and
+    nonterminal wickets. Outside it, sample a feasible cricket scoring shot.
+    Scores and player statistics are never changed after the delivery.
+    """
+    import math
+    import random
     if remaining <= 0:
         return outcome
+    rng = rng or random
     need = max(0, int(par) - int(runs))
-    low, high = max(0, need - 6 * (remaining - 1)), min(6, need)
-    # Preserve engine outcomes whenever they keep the tie achievable.
-    extra = outcome.get('is_extra') or outcome.get('type') == 'extra'
-    out = outcome.get('batter_out') or outcome.get('type') == 'wicket'
-    scored = int(outcome.get('runs') or 0)
-    if not extra and low <= scored <= high and not (out and wickets >= wicket_limit - 1 and need != scored):
+    scoring_shots = (0, 1, 2, 3, 4, 6)
+
+    def feasible(scored, left, *, paced=True):
+        future = need - scored
+        if scored < 0 or future < 0 or future > 6 * left:
+            return False
+        # Do not arrive at level scores before the final legal ball. With one
+        # delivery left, leave a normal scoring shot rather than five off it.
+        if left and par > 0 and future == 0:
+            return False
+        if left == 1 and future not in scoring_shots:
+            return False
+        if paced:
+            low, high = _tie_run_window(par, left, innings_balls)
+            return low <= future <= high
+        return True
+
+    extra = bool(outcome.get('is_extra') or outcome.get('type') == 'extra')
+    free_ball = extra and outcome.get('extra_type') in ('Wide', 'No Ball')
+    scored = int(outcome.get('runs') or 0) + int(free_ball)
+    out = bool(outcome.get('batter_out') or outcome.get('type') == 'wicket')
+    left = remaining if free_ball else remaining - 1
+    terminal_wicket = out and wickets >= wicket_limit - 1
+    if feasible(scored, left) and not (terminal_wicket and (left or scored != need)):
         return outcome
-    scored = max(low, min(high, scored))
-    return dict(outcome, type='run', runs=scored,
+
+    choices = [n for n in scoring_shots if feasible(n, remaining - 1)]
+    if not choices:
+        # Extreme totals or a match resumed from the old controller can already
+        # lie outside the pacing corridor. Retain score feasibility first.
+        choices = [n for n in scoring_shots if feasible(n, remaining - 1, paced=False)]
+    if not choices:
+        # An extreme total or resumed match can need an overthrow score.
+        # Never rewrite an earlier score to recover.
+        choices = [max(0, min(6, need))]
+    base = {0: 0.26, 1: 0.34, 2: 0.17, 3: 0.02, 4: 0.14, 6: 0.07}
+    rate = need / max(1, remaining)
+    tilt = max(-1.0, min(1.2, (rate - 1.25) * 0.45))
+    weights = [base.get(n, 0.01) * math.exp(tilt * n) for n in choices]
+    selected = rng.choices(choices, weights=weights, k=1)[0]
+    return dict(outcome, type='run', runs=selected,
                 is_extra=False, extra_type=None, batter_out=False, wicket_type=None)
 
 

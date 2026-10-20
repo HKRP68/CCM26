@@ -2333,7 +2333,8 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
             from services.tournament_match_settings import constrain_tie_outcome
             oc = constrain_tie_outcome(oc, runs=state['total_runs'], par=int(target) - 1,
                 remaining=total_balls(state) - balls_bowled(state),
-                wickets=state['total_wickets'], wicket_limit=state.get('wicket_limit', WICKET_LIMIT))
+                wickets=state['total_wickets'], wicket_limit=state.get('wicket_limit', WICKET_LIMIT),
+                innings_balls=total_balls(state))
         otype = oc.get("type")
         runs = oc.get("runs", 0)
         is_extra = oc.get("is_extra", False)
@@ -2360,7 +2361,7 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
         # --- Wides / No-balls: not a legal ball ---
         if is_extra and extra_type in ("Wide", "No Ball"):
             state["total_runs"] += 1 + runs
-            state["extras_total"] += 1 + runs
+            state["extras_total"] += (1 + runs) if extra_type == "Wide" else 1
             state["partnership_runs"] = partnership_before + 1 + runs
             bws["runs"] += 1 + runs
             bws["this_over_runs"] += 1 + runs

@@ -673,6 +673,20 @@ class CiplMatchTests(unittest.TestCase):
                 self.assertTrue(cm.compute_result(state)['tie'])
                 self.assertEqual(state['inn1_runs'], state['total_runs'])
 
+    def test_planned_chase_credits_no_ball_runs_to_batter_without_extra_double_count(self):
+        from unittest.mock import patch
+        state = _make_state(overs=5)
+        state.update(innings=2, target=61, inn1_runs=60, _planned_super_overs=1)
+        state['current_bowler'] = cm.eligible_bowlers(state)[0]
+        no_ball = dict(type='extra', runs=4, is_extra=True, extra_type='No Ball', batter_out=False)
+        with patch.object(cm, 'calculate_outcome', return_value=no_ball):
+            cm.simulate_over(state, pause_after_delivery=True)
+        self.assertEqual(cm.balls_bowled(state), 0)
+        self.assertEqual(state['total_runs'], 5)
+        self.assertEqual(state['extras_total'], 1)
+        self.assertEqual(sum(p['runs'] for p in state['bat_stats'].values()), 4)
+        self.assertTrue(state['free_hit'])
+
     def test_full_match_runs_and_produces_result(self):
         random.seed(42)
         s = _make_state(overs=5)
