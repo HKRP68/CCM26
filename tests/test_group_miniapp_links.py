@@ -30,10 +30,11 @@ def _install_telegram_stub(monkeypatch):
     telegram.InlineKeyboardButton = InlineKeyboardButton
     telegram.InlineKeyboardMarkup = InlineKeyboardMarkup
     telegram.WebAppInfo = WebAppInfo
+    telegram.Message = type('Message', (), {})
     monkeypatch.setitem(sys.modules, "telegram", telegram)
 
     errors = types.ModuleType("telegram.error")
-    for name in ("BadRequest", "NetworkError", "RetryAfter", "TimedOut"):
+    for name in ("BadRequest", "NetworkError", "RetryAfter", "TimedOut", "InvalidToken", "TelegramError"):
         setattr(errors, name, type(name, (Exception,), {}))
     monkeypatch.setitem(sys.modules, "telegram.error", errors)
 

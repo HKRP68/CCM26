@@ -64,7 +64,7 @@ SQUAD_MODES = {
     MODE_EXISTING: ("📥", "Added"),
 }
 
-AWARD_KEYS = ("champion", "runner_up", "orange_cap", "purple_cap", "most_sixes", "most_fours", "mvp", "player_of_final", "emerging_player", "highest_sr", "best_catch", "most_dots", "winning_captain")
+AWARD_KEYS = ("champion", "runner_up", "orange_cap", "purple_cap", "most_sixes", "most_fours", "mvp", "player_of_final", "emerging_player", "highest_sr", "most_catches", "most_dots", "winning_captain")
 
 # IPL 2025's retention slabs, in lakh: ₹18 / 14 / 11 / 18 / 14 Cr.
 IPL_MEGA_LADDER = (1800, 1400, 1100, 1800, 1400)

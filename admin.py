@@ -17247,10 +17247,6 @@ def admin_tournament_detail(tournament_id):
                     from services.tournament_channels import set_channels
                     set_channels(t, request.form.get("channels") or "")
                     flash("Channel destinations saved. Add the bot as an admin with permission to post.", "success")
-                elif action == "save_best_catch":
-                    from services.tournament_awards import set_best_catch
-                    set_best_catch(db, t, request.form.get("best_catch") or "")
-                    flash("Best Catch selection saved.", "success")
                 elif action == "retry_channel_posts":
                     from models import TournamentChannelPost
                     db.query(TournamentChannelPost).filter_by(tournament_id=t.id, status='pending').update(
@@ -17837,8 +17833,6 @@ def admin_tournament_detail(tournament_id):
                                              for a in _tawards.CEREMONY_AWARDS],
                                prize_table=_tawards.prizes(t),
                                tour_channels=_channels.channels(t),
-                               catch_choices=_tawards.catch_choices(db, t.id),
-                               best_catch=_tawards.selected_catch(db, t),
                                channel_posts=db.query(TournamentChannelPost).options(defer(TournamentChannelPost.photo), defer(TournamentChannelPost.extra_photo)).filter_by(tournament_id=t.id).order_by(TournamentChannelPost.id.desc()).limit(30).all(),
                                rating_rules=_ts_rr.rating_rules(t),
                                season_choices=_sa.season_choices(db, t),

@@ -52,10 +52,13 @@ def _overs(balls):
 
 def match_caption(tour, fixture, state, result, *, super_over=None):
     from handlers.cipl_play import _cipl_potm_select
+    from services.match_broadcast import play_match_url
     a = state.get('inn1_bat_team') or state.get('bowl_team_name') or 'Team 1'
     b = state.get('bat_team_name') or 'Team 2'
     winner = result.get('winner')
     potm = _cipl_potm_select(state, winner)
+    match_id = state.get('match_id') or fixture.match_id
+    match_link = play_match_url(match_id, state.get('chat_id')) if match_id else None
     stage = 'FINAL MATCH 🏆' if fixture.stage == 'final' else f'MATCH {fixture.match_no or fixture.id}'
     def build(limit=70, detail=True):
         name = lambda value: _short(value, limit)
@@ -87,6 +90,8 @@ def match_caption(tour, fixture, state, result, *, super_over=None):
                 lines.append(f"🎯 {bowl['wickets']}/{bowl.get('runs', 0)}")
         if fixture.stage == 'final' and winner:
             lines += ['', f'👑 {name(winner).upper()} — CHAMPIONS' + (' IN A THRILLER! 🏆' if super_over else '! 🏆')]
+        if match_link:
+            lines += ['', '📲 Tap to view full match:', match_link]
         return '\n'.join(lines)
     caption = build()
     for limit in (48, 32, 20):
@@ -137,7 +142,11 @@ def _caption_image(caption, photo):
     combined.paste(a, ((width-a.width)//2, 0)); combined.paste(b, ((width-b.width)//2, a.height))
     combined.thumbnail((1600, 7800))
     out = io.BytesIO(); combined.save(out, format='PNG')
-    return '🏏 Tournament result — full summary on the scorecard.', out.getvalue()
+    short = '🏏 Tournament result — full summary on the scorecard.'
+    _, marker, link = caption.rpartition('\n\n📲 Tap to view full match:\n')
+    if marker:
+        short += marker + link
+    return short, out.getvalue()
 
 
 def queue(session, tour, event_key, kind, caption, photo, *, extra_photo=None, media_ref=None, parse_mode=None, skip_chat=None):
@@ -234,7 +243,8 @@ async def publish_match(context, state, result, *, photo=None, super_over=None):
 
 async def dispatch(context, *, ids=None):
     from database import get_session
-    from models import Tournament, TournamentChannelPost as Post
+    from models import Tournament, TournamentHonour, TournamentChannelPost as Post
+    from services.tournament_awards import CEREMONY_AWARDS
     from sqlalchemy import or_
     from telegram import InputMediaPhoto
     from telegram.error import BadRequest
@@ -249,7 +259,11 @@ async def dispatch(context, *, ids=None):
             items = []
             for row in query.limit(50):
                 tour = session.get(Tournament, row.tournament_id)
-                if not tour or row.chat_id not in channels(tour):
+                obsolete = False
+                if row.kind == 'ceremony' and row.event_key.startswith('award:'):
+                    honour = session.get(TournamentHonour, int(row.event_key.split(':', 1)[1]))
+                    obsolete = honour is None or honour.award not in CEREMONY_AWARDS
+                if not tour or row.chat_id not in channels(tour) or obsolete:
                     row.status = 'cancelled'; row.photo = b''; row.extra_photo = None; row.media_ref = None
                     continue
                 if row.kind == 'ceremony' and session.query(Post.id).filter(Post.tournament_id == row.tournament_id,

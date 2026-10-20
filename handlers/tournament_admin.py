@@ -1597,7 +1597,7 @@ async def tchannels_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         selected = TC.channels(tour)
         text = f'📣 <b>{html.escape(tour.name)}</b> — result and ceremony channels\n'
         text += '\n'.join(html.escape(c) for c in selected) if selected else 'No channels configured.'
-        text += '\n\n<code>/tchannels add @channel1 @channel2</code>\nAdd the bot as an administrator with permission to post in every channel.'
+        text += '\n\n<code>/tchannels add @channel1 -1001234567890</code>\nChannel IDs work for private channels too. Add the bot as an administrator with permission to post in every channel.'
         await _reply(update, text)
     except ValueError as exc:
         session.rollback()

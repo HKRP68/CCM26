@@ -107,6 +107,27 @@ class ChannelTests(F.FourTeamCase):
         asyncio.run(self.C.publish_match(SimpleNamespace(bot=bot), {'tournament_id':self.tour.id,'match_id':90002}, {'tie':True}))
         bot.send_photo.assert_not_awaited(); bot.send_media_group.assert_not_awaited()
 
+    def test_result_caption_links_to_the_actual_match_with_original_chat(self):
+        final = self.finish()
+        final.match_id = 90003
+        state = dict(match_id=90003, chat_id=-10042, inn1_bat_team='Delhi', bat_team_name='Kolkata')
+        result = dict(winner='Delhi', margin=2, margin_type='runs')
+        with patch.dict(os.environ, {'BOT_USERNAME': 'MatchBot', 'MINIAPP_NAME': 'play'}), \
+                patch('handlers.cipl_play._cipl_potm_select', return_value=None):
+            for so in (None, {'so_innings': [dict(team='Delhi', runs=12, wickets=0, overs='1')]}):
+                text = self.C.match_caption(self.tour, final, state, result, super_over=so)
+                self.assertIn('Tap to view full match:', text)
+                self.assertIn('https://t.me/MatchBot/play?startapp=cricket_90003_-10042', text)
+
+    def test_numeric_channel_id_is_sent_as_a_telegram_chat_id(self):
+        self.C.set_channels(self.tour, '-1001234567890')
+        ids = [r.id for r in self.C.queue(self.session, self.tour, 'id-result', 'match', 'Result', self.image)]
+        self.session.commit()
+        bot = self.bot()
+        asyncio.run(self.C.dispatch(SimpleNamespace(bot=bot), ids=ids))
+        self.assertEqual(bot.send_photo.call_args.kwargs['chat_id'], -1001234567890)
+        bot.send_message.assert_not_awaited()
+
     def test_ceremony_mirrors_exactly_eleven_awards_once_to_each_channel(self):
         from services import tournament_awards as A, tournament_ceremony as C
         from models import TournamentChannelPost as Post
@@ -136,13 +157,31 @@ class ChannelTests(F.FourTeamCase):
         self.session.rollback()
         self.assertEqual(self.session.query(Post).filter_by(tournament_id=self.tour.id).count(), 0)
 
+    def test_pending_removed_award_is_cancelled_instead_of_posted(self):
+        from models import TournamentHonour, TournamentChannelPost as Post
+        self.finish()
+        self.C.set_channels(self.tour, '-1001234567890')
+        old = TournamentHonour(tournament_id=self.tour.id, tournament_name=self.tour.name, award='best_catch')
+        self.session.add(old); self.session.flush()
+        row = self.C.queue(self.session, self.tour, f'award:{old.id}', 'ceremony', 'Old manual award', self.image)[0]
+        ident = row.id
+        self.session.commit()
+        bot = self.bot()
+        asyncio.run(self.C.dispatch(SimpleNamespace(bot=bot), ids=[ident]))
+        self.session.expire_all()
+        self.assertEqual(self.session.get(Post, ident).status, 'cancelled')
+        bot.send_photo.assert_not_awaited(); bot.send_message.assert_not_awaited()
+
     def test_overs_and_long_caption_do_not_become_separate_text_messages(self):
         from PIL import Image
         self.C.set_channels(self.tour, '@channel_one')
-        full = 'Super Over histories\n' + ('Very long match summary line.\n' * 100)
+        link = 'https://t.me/MatchBot/play?startapp=cricket_90003_-10042'
+        full = 'Super Over histories\n' + ('Very long match summary line.\n' * 100) + '\n\n📲 Tap to view full match:\n' + link
         row = self.C.queue(self.session, self.tour, 'long', 'match', full, self.image)[0]
         self.session.commit()
         self.assertLessEqual(len(row.caption.encode('utf-16-le'))//2, 1024)
+        self.assertIn('Tap to view full match:', row.caption)
+        self.assertIn(link, row.caption)
         self.assertGreater(Image.open(io.BytesIO(row.photo)).height, Image.open(io.BytesIO(self.image)).height)
         bot = self.bot(); asyncio.run(self.C.dispatch(SimpleNamespace(bot=bot), ids=[row.id]))
         bot.send_photo.assert_awaited_once(); bot.send_message.assert_not_awaited()
@@ -172,11 +211,11 @@ class ChannelTests(F.FourTeamCase):
         from handlers import tournament_admin as H
         from database import get_session
         update = SimpleNamespace()
-        context = SimpleNamespace(args=[f'#{self.tour.id}', 'add', '@first_channel', '@second_channel'])
+        context = SimpleNamespace(args=[f'#{self.tour.id}', 'add', '@first_channel', '-1001234567890'])
         with patch.object(H, '_require_admin', new=AsyncMock(return_value=True)), patch.object(H, 'get_session', get_session), patch.object(H, '_reply', new=AsyncMock()):
             asyncio.run(H.tchannels_handler(update, context))
         self.session.expire_all()
-        self.assertEqual(self.C.channels(self.tour), ['@first_channel', '@second_channel'])
+        self.assertEqual(self.C.channels(self.tour), ['@first_channel', '-1001234567890'])
         with patch.object(H, '_require_admin', new=AsyncMock(return_value=False)), patch.object(H, 'get_session') as access:
             asyncio.run(H.tchannels_handler(update, context))
             access.assert_not_called()
