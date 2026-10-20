@@ -43,17 +43,29 @@ def award_caption(session, tour, honour):
     return '\n'.join(lines)[:1024]
 
 
-def award_photo(session, tour, honour):
+def award_photo(session, tour, honour, *, use_team_photo=True):
     """Use the team's supplied photo, or compose its crest / player's card."""
     from PIL import Image, ImageDraw, ImageFont
     from models import TournamentTeam
     from services.tournament_awards import AWARD_LABEL, player_for_stats
     team = session.query(TournamentTeam).filter_by(tournament_id=tour.id, name=honour.team_name).first()
-    if not honour.player_name and team and team.award_photo_url:
-        return team.award_photo_url
-    if not honour.player_name and team and team.logo_url:
-        return team.logo_url
     source = None
+    if not honour.player_name and team:
+        from urllib.parse import urlsplit
+        from services.card_identity import _event_logo_bytes
+        for url in (team.award_photo_url, team.logo_url):
+            if not url:
+                continue
+            parsed = urlsplit(url)
+            if parsed.scheme in ('http', 'https') and parsed.netloc:
+                if use_team_photo:
+                    return url
+            elif parsed.path.startswith('/static/challenge_leagues/'):
+                # Website uploads are local asset paths, not Telegram file IDs
+                # or public URLs. The shared loader restores missing uploads.
+                source = _event_logo_bytes(parsed.path)
+                if source:
+                    break
     if honour.player_name:
         stat = stat_for_honour(session, honour)
         player = player_for_stats(session, tour, stat) if stat else None
@@ -120,22 +132,32 @@ async def present(context, tournament_id, chat_id):
             tour = session.get(Tournament, tournament_id)
             TA.finalize(session, tour)
             session.commit()
-            if not TA.honours_for(session, tour.id):
+            honours = TA.honours_for(session, tour.id)
+            if not honours:
                 raise ValueError('Finish the tournament final before starting the ceremony.')
             if tour.awards_announced_at:
                 raise ValueError('This tournament’s awards ceremony has already finished.')
+            ids = [h.id for h in honours if h.announced_at is None]
             if not claim(session, tour):
                 raise ValueError('This tournament’s awards ceremony is already running.')
-            return [h.id for h in TA.honours_for(session, tour.id) if h.announced_at is None]
+            return ids
         finally:
             session.close()
     ids = await asyncio.to_thread(prepare)
-    def payload(hid):
+    def payload(hid, use_team_photo=True):
         session = get_session()
         try:
             tour = session.get(Tournament, tournament_id)
             honour = session.get(TournamentHonour, hid)
-            return award_caption(session, tour, honour), award_photo(session, tour, honour)
+            caption = award_caption(session, tour, honour)
+            try:
+                photo = award_photo(session, tour, honour, use_team_photo=use_team_photo)
+            except Exception:
+                # Missing/corrupt art or a renderer failure must not block the
+                # same award on every resume. The complete caption still works.
+                logger.exception('Award image unavailable for honour %s', hid)
+                photo = None
+            return caption, photo
         finally:
             session.close()
     def mark(hid=None, done=False):
@@ -152,16 +174,43 @@ async def present(context, tournament_id, chat_id):
             session.commit()
         finally:
             session.close()
+    from telegram.error import BadRequest
+    completed = False
     try:
         for index, hid in enumerate(ids):
             caption, photo = await asyncio.to_thread(payload, hid)
-            await context.bot.send_photo(chat_id=chat_id,
-                photo=io.BytesIO(photo) if isinstance(photo, bytes) else photo,
-                caption=caption, parse_mode='HTML')
+            delivered = False
+            if photo is not None:
+                try:
+                    await context.bot.send_photo(chat_id=chat_id,
+                        photo=io.BytesIO(photo) if isinstance(photo, bytes) else photo,
+                        caption=caption, parse_mode='HTML')
+                    delivered = True
+                except BadRequest:
+                    logger.warning('Telegram rejected image for honour %s', hid, exc_info=True)
+                    if isinstance(photo, str):
+                        # An expired or inaccessible external photo falls back
+                        # to an uploaded award card, without reusing the URL.
+                        _, fallback = await asyncio.to_thread(payload, hid, False)
+                        if isinstance(fallback, bytes):
+                            try:
+                                await context.bot.send_photo(chat_id=chat_id,
+                                    photo=io.BytesIO(fallback), caption=caption, parse_mode='HTML')
+                                delivered = True
+                            except BadRequest:
+                                logger.warning('Telegram rejected fallback image for honour %s', hid, exc_info=True)
+            if not delivered:
+                await context.bot.send_message(chat_id=chat_id, text=caption, parse_mode='HTML')
             await asyncio.to_thread(mark, hid)
             if index < len(ids) - 1:
                 await asyncio.sleep(2)
-        await asyncio.to_thread(mark, done=True)
-    except Exception:
-        await asyncio.to_thread(mark)
-        raise
+        completed = True
+    finally:
+        # Release on ordinary errors and task cancellation. A failed delivery
+        # remains unannounced, so the command can immediately retry it.
+        try:
+            await asyncio.to_thread(mark, done=completed)
+        except Exception:
+            if completed:
+                raise
+            logger.exception('Could not release ceremony lease for tournament %s', tournament_id)

@@ -9,7 +9,7 @@
 
 ## Awards ceremony
 
-Prizes continue to pay once when the final is decided. Presentations wait for an admin to run `/awardceremony`, or `/awardceremony #<tournament-id>` when choosing a finished tournament. Each award is presented in a separate photo message, two seconds apart, with the winner, team, contribution and actual prize. If Telegram fails, running the command again resumes the remaining awards without paying prizes again.
+Prizes continue to pay once when the final is decided. Presentations wait for an admin to run `/awardceremony`, or `/awardceremony #<tournament-id>` when choosing a finished tournament. Each award is presented in a separate photo message, two seconds apart, with the winner, team, contribution and actual prize. Uploaded team logos are sent as image bytes. If Telegram rejects a photo URL, the ceremony tries an uploaded award card; if artwork cannot be rendered or accepted, it presents the full award text instead. Temporary delivery failures leave the award pending and show the exact `/awardceremony #<tournament-id>` command to resume, skipping awards already sent and never paying prizes again.
 
 Set team ceremony photos on **Tournament → Manage → participating team → Save team photo** using an HTTPS image URL. Without one, the team's logo/crest is used. Players use their generated player cards with their team and tournament contribution; imported players without master artwork get a named award card.
 

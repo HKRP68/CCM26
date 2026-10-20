@@ -151,3 +151,110 @@ class PresentationTests(F.FourTeamCase):
         self.assertIn('5,000 coins + 50 gems', C.award_caption(self.session, self.tour, honour))
         photo = C.award_photo(self.session, self.tour, honour)
         self.assertEqual(Image.open(io.BytesIO(photo)).size, (1000, 1120))
+
+    def test_uploaded_team_logo_is_loaded_as_bytes_instead_of_telegram_file_id(self):
+        import tempfile
+        from pathlib import Path
+        from PIL import Image
+        from services import tournament_awards as A, tournament_ceremony as C, card_identity
+        self.finish_tournament()
+        honour = A.honours_for(self.session, self.tour.id)[0]
+        team = self.teams[honour.team_name]
+        team.logo_url = '/static/challenge_leagues/team.png'
+        self.session.commit()
+        with tempfile.TemporaryDirectory() as folder:
+            logo = Path(folder) / 'static/challenge_leagues/team.png'
+            logo.parent.mkdir(parents=True)
+            Image.new('RGB', (200, 200), '#28a745').save(logo)
+            with patch.object(card_identity, '_ROOT_DIR', folder):
+                photo = C.award_photo(self.session, self.tour, honour)
+        self.assertIsInstance(photo, bytes)
+        # Check the team's actual image is present in the composed award card.
+        self.assertEqual(Image.open(io.BytesIO(photo)).getpixel((500, 500)), (40, 167, 69))
+
+    def test_rejected_external_photo_uses_uploaded_card_and_finishes_ceremony(self):
+        from telegram.error import BadRequest
+        from services import tournament_awards as A, tournament_ceremony as C
+        self.finish_tournament()
+        honours = A.honours_for(self.session, self.tour.id)
+        team = self.teams[honours[0].team_name]
+        team.award_photo_url = 'https://photos.example/expired.png'
+        self.session.commit()
+        bot = SimpleNamespace(send_photo=AsyncMock(side_effect=[BadRequest('Wrong type of the web page content'),
+                              SimpleNamespace(message_id=1), SimpleNamespace(message_id=2)]),
+                              send_message=AsyncMock())
+        with patch.object(C.asyncio, 'sleep', new=AsyncMock()), self.assertLogs(C.logger, level='WARNING'):
+            asyncio.run(C.present(SimpleNamespace(bot=bot), self.tour.id, -10055))
+        self.assertEqual(bot.send_photo.await_count, len(honours) + 1)
+        self.assertEqual(bot.send_photo.call_args_list[0].kwargs['photo'], team.award_photo_url)
+        self.assertIsInstance(bot.send_photo.call_args_list[1].kwargs['photo'], io.BytesIO)
+        bot.send_message.assert_not_awaited()
+        self.session.expire_all()
+        self.assertIsNotNone(self.tour.awards_announced_at)
+        self.assertIsNone(self.tour.ceremony_claimed_at)
+
+    def test_broken_renderer_still_presents_text_and_does_not_repeat_awards(self):
+        from services import tournament_awards as A, tournament_ceremony as C
+        A.set_prize(self.tour, 'champion', 5000, 0)
+        self.finish_tournament()
+        bot = SimpleNamespace(send_photo=AsyncMock(), send_message=AsyncMock())
+        context = SimpleNamespace(bot=bot)
+        with patch.object(C, 'award_photo', side_effect=OSError('broken image')), \
+                patch.object(C.asyncio, 'sleep', new=AsyncMock()), self.assertLogs(C.logger, level='ERROR'):
+            asyncio.run(C.present(context, self.tour.id, -10055))
+        honours = A.honours_for(self.session, self.tour.id)
+        self.assertEqual(bot.send_message.await_count, len(honours))
+        bot.send_photo.assert_not_awaited()
+        self.assertIn('5,000 coins', bot.send_message.call_args_list[0].kwargs['text'])
+        with self.assertRaises(ValueError):
+            asyncio.run(C.present(context, self.tour.id, -10055))
+        self.session.expire_all()
+        self.assertEqual(sum(o.total_coins for o in self.owners.values()), 5000)
+
+    def test_rejected_upload_falls_back_to_text_instead_of_pausing_forever(self):
+        from telegram.error import BadRequest
+        from services import tournament_awards as A, tournament_ceremony as C
+        self.finish_tournament()
+        bot = SimpleNamespace(send_photo=AsyncMock(side_effect=BadRequest('Photo invalid dimensions')),
+                              send_message=AsyncMock())
+        with patch.object(C, 'award_photo', return_value=b'photo'), \
+                patch.object(C.asyncio, 'sleep', new=AsyncMock()), self.assertLogs(C.logger, level='WARNING'):
+            asyncio.run(C.present(SimpleNamespace(bot=bot), self.tour.id, -10055))
+        self.session.expire_all()
+        self.assertEqual(bot.send_message.await_count, len(A.honours_for(self.session, self.tour.id)))
+        self.assertIsNotNone(self.tour.awards_announced_at)
+
+    def test_cancelled_ceremony_releases_lease_and_resumes_remaining_awards(self):
+        from services import tournament_awards as A, tournament_ceremony as C
+        self.finish_tournament()
+        bot = SimpleNamespace(send_photo=AsyncMock(), send_message=AsyncMock())
+        with patch.object(C, 'award_photo', return_value=b'photo'), \
+                patch.object(C.asyncio, 'sleep', new=AsyncMock(side_effect=asyncio.CancelledError)):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(C.present(SimpleNamespace(bot=bot), self.tour.id, -10055))
+        self.session.expire_all()
+        honours = A.honours_for(self.session, self.tour.id)
+        self.assertIsNone(self.tour.ceremony_claimed_at)
+        self.assertIsNotNone(honours[0].announced_at)
+        self.assertIsNone(honours[1].announced_at)
+        bot.send_photo.reset_mock()
+        with patch.object(C, 'award_photo', return_value=b'photo'), patch.object(C.asyncio, 'sleep', new=AsyncMock()):
+            asyncio.run(C.present(SimpleNamespace(bot=bot), self.tour.id, -10055))
+        self.assertEqual(bot.send_photo.await_count, len(honours) - 1)
+
+    def test_pause_message_gives_the_exact_command_to_resume(self):
+        from handlers import tournament_admin as H
+        from services import tournament_ceremony as C
+        from database import get_session
+        from telegram.error import NetworkError
+        self.finish_tournament()
+        update = SimpleNamespace(effective_chat=SimpleNamespace(id=-10055))
+        context = SimpleNamespace(args=[f'#{self.tour.id}'])
+        reply = AsyncMock()
+        with patch.object(H, '_require_admin', new=AsyncMock(return_value=True)), \
+                patch.object(H, 'get_session', get_session), patch.object(H, '_reply', new=reply), \
+                patch.object(C, 'present', new=AsyncMock(side_effect=NetworkError('offline'))), \
+                self.assertLogs(H.logger, level='ERROR'):
+            asyncio.run(H.awardceremony_handler(update, context))
+        self.assertIn(f'/awardceremony #{self.tour.id}', reply.call_args.args[1])
+        self.assertIn('Awards already sent will be skipped', reply.call_args.args[1])

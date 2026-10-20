@@ -1564,4 +1564,5 @@ async def awardceremony_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await _reply(update, html.escape(str(exc)))
     except Exception:
         logger.exception('Award ceremony failed for tournament %s', tid)
-        await _reply(update, 'The ceremony paused. Run the command again to continue with the remaining awards.')
+        await _reply(update, 'The ceremony paused before the next award. Resume with '
+                     f'<code>/awardceremony #{tid}</code>. Awards already sent will be skipped.')
