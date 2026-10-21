@@ -63,6 +63,8 @@
   {% endif %}
 
   <!-- ── Settings ──────────────────────────────────────────────── -->
+  {% include '_auction_preseason.html' %}
+
   {{ fold("settings", "⚙️ Settings",
           season.bid_seconds ~ "s per lot · " ~ money(season.opening_purse_lakh) ~ " purse"
           ~ (" · 🎯 group locked while live" if focus_mode_on else " · 🔓 group open")) }}

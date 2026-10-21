@@ -1,0 +1,73 @@
+<section class="au-tile" id="preseason" style="margin:1rem 0;">
+  <h3>📋 Retention and draft readiness</h3>
+  {% if preseason_error %}<p role="alert">{{ preseason_error }}</p><a href="{{ url_for('admin_auction_detail', season_id=season.id) }}#preseason">Clear filters</a>{% endif %}
+  {% if preseason %}
+  <div id="preseason-live" data-team="{{ preseason.selected_team.id if preseason.selected_team else '' }}" data-endpoint="{{ url_for('admin_auction_readiness', season_id=season.id) }}">
+    <p id="preseason-next">Next draft turn: {{ preseason.readiness.next_team or 'Waiting for retention / no picks remain' }}</p>
+    <p id="preseason-clock"></p><span id="preseason-live-status" class="dim">Updates every 5 seconds.</span>
+    <div class="au-scroll"><table class="au-table">
+      <thead><tr><th>Team</th><th>Status</th><th>Retained</th><th>Retention spent</th><th>Purse</th><th>Range counts</th><th>Picks left</th></tr></thead>
+      <tbody id="preseason-teams">
+        {% for team in preseason.readiness.teams %}<tr>
+          <td>{{ team.name }}</td><td>{{ 'New team' if team.new else ('Final' if team.final else 'Pending') }}</td>
+          <td>{{ team.retained }}</td><td>{{ money(team.spent_lakh, season.currency_label) }}</td><td>{{ money(team.purse_lakh, season.currency_label) }}</td>
+          <td>{% for r in team.ranges %}{{ r.min_rating }}–{{ r.max_rating }}: {{ r.count }} (min {{ r.min_count }}, max {{ r.max_count }}){{ '; ' if not loop.last }}{% endfor %}</td><td>{{ team.picks_left }}</td>
+        </tr>{% endfor %}
+      </tbody>
+    </table></div>
+  </div>
+  {% if season.status == 'setup' %}
+  <details><summary>⏱ Draft clock</summary>
+    <p>The clock starts after retention closes. An empty or ineligible shortlist pauses the clock. Turning the clock off never spends a pick.</p>
+    <form method="POST" class="au-actions">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="draft_clock"><input type="hidden" name="back_query" value="#preseason">
+      <label>Seconds per pick (0 = off)<input type="number" name="pick_seconds" min="0" max="86400" value="{{ season.draft_pick_seconds or 0 }}" required></label>
+      <label>On timeout<select name="timeout_action">{% for action in ['pause','skip','shortlist'] %}<option value="{{ action }}" {{ 'selected' if season.draft_timeout_action == action else '' }}>{{ action }}</option>{% endfor %}</select></label>
+      <button class="btn btn-primary" name="operation" value="save">Save clock</button>
+      <button class="btn btn-ghost" name="operation" value="pause">Pause</button>
+      <button class="btn btn-ghost" name="operation" value="resume">Resume with full time</button>
+      <button class="btn btn-ghost" name="operation" value="off">Turn off</button>
+    </form>
+  </details>
+  {% endif %}
+  <details {% if request.args.get('eligible_team') %}open{% endif %}><summary>🔎 Eligible draft players and team shortlist</summary>
+    <form method="GET" action="{{ url_for('admin_auction_detail', season_id=season.id) }}#preseason" class="au-grid">
+      <label>Drafting team<select name="eligible_team">{% for team in preseason.drafting_teams %}<option value="{{ team.id }}" {{ 'selected' if preseason.selected_team and team.id == preseason.selected_team.id else '' }}>{{ team.name }}</option>{% endfor %}</select></label>
+      <label>Rating range<input name="eligible_rating" value="{{ preseason.filters.rating }}" placeholder="91-96"></label>
+      <label>Role<select name="eligible_role"><option value="">Any role</option>{% for role in squad_roles %}<option value="{{ role }}" {{ 'selected' if preseason.filters.role == role else '' }}>{{ role }}</option>{% endfor %}</select></label>
+      <label>Country<input name="eligible_country" value="{{ preseason.filters.country }}" placeholder="Any country"></label>
+      <label>Maximum cost (Cr)<input name="eligible_cost" value="{{ preseason.filters.cost }}" placeholder="Any cost"></label>
+      <label>Player name<input name="eligible_query" value="{{ preseason.filters.query }}"></label>
+      <label>Page<input name="eligible_page" type="number" min="1" value="{{ preseason.eligible.page }}"></label>
+      <button class="btn btn-primary">Apply filters</button>
+    </form>
+    <p id="preseason-matches">{{ preseason.eligible.total }} matching players · page {{ preseason.eligible.page }}/{{ preseason.eligible.pages }}</p>
+    <div class="au-scroll"><table class="au-table"><thead><tr><th>Player</th><th>Rating</th><th>Role</th><th>Country</th><th>Cost</th></tr></thead>
+      <tbody id="preseason-players">{% for player in preseason.eligible.players %}<tr><td>{{ player.name }}</td><td>{{ player.rating }}</td><td>{{ player.role }}</td><td>{{ player.country }}</td><td>{{ money(player.price_lakh, season.currency_label) }}</td></tr>{% else %}<tr><td colspan="5">No eligible players match.</td></tr>{% endfor %}</tbody>
+    </table></div>
+    {% if preseason.selected_team and season.status == 'setup' %}
+    <h4>{{ preseason.selected_team.name }} — shortlist in priority order</h4>
+    <p>Only the first eligible shortlisted player is chosen when the timeout action is “shortlist”. To move a player to the end, remove and add them again.</p>
+    <ol>{% for item in preseason.shortlist %}<li>{{ item.name }} · {{ money(item.price_lakh, season.currency_label) if item.eligible else 'currently unavailable' }}
+      <form method="POST" style="display:inline"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="draft_shortlist"><input type="hidden" name="franchise_id" value="{{ preseason.selected_team.id }}"><input type="hidden" name="player_id" value="{{ item.player_id }}"><input type="hidden" name="operation" value="remove"><input type="hidden" name="back_query" value="#preseason"><button class="btn btn-ghost btn-sm">Remove</button></form>
+    </li>{% else %}<li>No shortlisted players.</li>{% endfor %}</ol>
+    <form method="POST" class="au-actions"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="draft_shortlist"><input type="hidden" name="franchise_id" value="{{ preseason.selected_team.id }}"><input type="hidden" name="back_query" value="#preseason">
+      <label>Eligible player<select name="player_id">{% for player in preseason.eligible.players %}<option value="{{ player.player_id }}">{{ player.name }} · {{ player.rating }}</option>{% endfor %}</select></label>
+      <button class="btn btn-primary" name="operation" value="add">Add to shortlist</button><button class="btn btn-ghost" name="operation" value="clear">Clear shortlist</button>
+    </form>
+    {% endif %}
+  </details>
+  {% endif %}
+  {% if retention_open %}
+  <details><summary>🔒 Preview and finalize team retention</summary>
+    {% for preview in retention_previews %}
+    <details><summary>{{ preview.name }} · {{ 'Final' if preview.finalized else 'Review retention' }}</summary>
+      <ul>{% for player in preview.players %}<li>{{ player.name }} · {{ player.rating }} · {{ money(player.price_lakh, season.currency_label) }}</li>{% else %}<li>No retained players.</li>{% endfor %}</ul>
+      <p>Retention spend: {{ money(preview.spent_lakh, season.currency_label) }} · Remaining purse: {{ money(preview.purse_lakh, season.currency_label) }}</p>
+      <p>{% for r in preview.ranges %}{{ r.min_rating }}–{{ r.max_rating }}: {{ r.count }} (min {{ r.min_count }}, max {{ r.max_count }}){{ '; ' if not loop.last }}{% endfor %}</p>
+      {% if not preview.finalized %}<form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="team_retention_final"><input type="hidden" name="franchise_id" value="{{ preview.team_id }}"><input type="hidden" name="preview_token" value="{{ preview.token }}"><input type="hidden" name="back_query" value="#preseason"><p>This makes the listed retentions final.</p><button class="btn btn-primary">Make retention final</button></form>{% endif %}
+    </details>{% endfor %}
+  </details>
+  {% endif %}
+</section>
+<script src="{{ url_for('static', filename='js/auction_preseason.js') }}" defer></script>

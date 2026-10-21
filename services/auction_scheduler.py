@@ -454,7 +454,9 @@ async def drain_events(bot, session, season, *, limit=DRAIN_PER_TICK):
                     # later tick, and the cursor stays where it is.
                     break
                 _last_sim_message[season.id] = time.monotonic()
-            if event.kind not in SILENT_KINDS:
+            already_said_in_setup = (event.kind in ('drafted', 'pick_skipped', 'draft_clock_paused')
+                                     and event.id <= int(season.draft_announced_event_id or 0))
+            if event.kind not in SILENT_KINDS and not already_said_in_setup:
                 # Anything else that happens — a sale, a pause, a Right To
                 # Match — changes what the buttons would bid on, so the last
                 # set comes off. The next bid line (or lot card) brings them
@@ -774,6 +776,30 @@ async def _auction_tick(context):
             except Exception:
                 session.rollback()
                 logger.exception("auction #%s tick failed", season.id)
+        from services import auction_preseason as P
+        from models import AuctionEvent
+        setup = (session.query(AuctionSeason)
+                 .filter(AuctionSeason.status == A.STATUS_SETUP,
+                         AuctionSeason.chat_id.isnot(None),
+                         AuctionSeason.draft_pick_seconds > 0).all())
+        for season in setup:
+            try:
+                async with _lock():
+                    P.resolve_timeout(session, season, now=now)
+                    session.commit()
+                notices = (session.query(AuctionEvent)
+                           .filter(AuctionEvent.season_id == season.id,
+                                   AuctionEvent.id > int(season.draft_announced_event_id or 0),
+                                   AuctionEvent.kind.in_(['drafted', 'pick_skipped', 'draft_clock_paused']))
+                           .order_by(AuctionEvent.id).limit(10).all())
+                for event in notices:
+                    if await _send(context.bot, season.chat_id, event.headline) is None:
+                        break
+                    season.draft_announced_event_id = event.id
+                    session.commit()
+            except Exception:
+                session.rollback()
+                logger.exception("auction #%s expansion clock failed", season.id)
         for season in playback_seasons(session):
             try:
                 async with _lock():

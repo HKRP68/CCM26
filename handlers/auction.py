@@ -2620,14 +2620,140 @@ async def aratingrule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     await _with_auction(update, work, admin=True, context=context)
 
 
+def _retention_preview_html(data, season):
+    money = lambda value: A.render_money(value, season.currency_label)
+    lines = [f"🔒 <b>{html.escape(data['name'])} — retention preview</b>"]
+    lines += [f"• {html.escape(p['name'])} ({p['rating']}) — {money(p['price_lakh'])}" for p in data['players']]
+    if not data['players']:
+        lines.append("No retained players.")
+    lines += [f"Range {r['min_rating']}-{r['max_rating']}: {r['count']} kept (min {r['min_count']}, max {r['max_count']})" for r in data['ranges']]
+    lines += [f"Retention spend: <b>{money(data['spent_lakh'])}</b>",
+              f"Remaining purse: <b>{money(data['purse_lakh'])}</b>",
+              "Retention is already final." if data['finalized'] else "Confirm below to make these retentions final."]
+    return "\n".join(lines)
+
+
 async def retainlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from services import auction_preseason as P
     user = update.effective_user
-    def work(session, season):
+    if update.effective_chat is None or update.effective_chat.type not in GROUP_CHAT_TYPES:
+        await _reply(update, GROUP_ONLY)
+        return
+    session = get_session()
+    try:
+        season = _season_for(session, update)
+        if season is None:
+            raise AuctionError(NO_AUCTION)
         franchise = A.franchise_for_actor(session, season.id, user.id) if user else None
         if franchise is None:
-            raise AuctionError("Only a team owner or co-owner can finalize its retention.")
-        A.finalize_retention(session, season, franchise, by_tg_id=user.id)
-        return f"🔒 <b>{html.escape(franchise.name)}</b>: retention is final."
+            raise AuctionError("Only a team owner or co-owner can preview and finalize retention.")
+        data = P.retention_preview(session, season, franchise)
+        markup = None if data['finalized'] else InlineKeyboardMarkup([[InlineKeyboardButton(
+            "Make retention final", callback_data=f"au_rfinal_{season.id}_{franchise.id}_{data['token']}")]])
+        await _reply(update, _retention_preview_html(data, season), reply_markup=markup)
+    except AuctionError as exc:
+        await _reply(update, f"⚠️ {html.escape(str(exc))}")
+    finally:
+        session.close()
+
+
+async def retention_final_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from services import auction_preseason as P
+    from models import AuctionFranchise
+    query = update.callback_query
+    if query is None:
+        return
+    session = get_session()
+    try:
+        _, _, sid, fid, token = query.data.split('_')
+        season = _season_for(session, update)
+        if season is None or season.id != int(sid):
+            raise AuctionError("That preview belongs to a different auction.")
+        franchise = session.query(AuctionFranchise).filter_by(id=int(fid), season_id=season.id).first()
+        user = update.effective_user
+        if franchise is None or user is None or not A.may_bid_for(franchise, user.id):
+            raise AuctionError("Only this team’s owner or co-owner can confirm retention.")
+        P.confirm_retention(session, season, franchise, token, by_tg_id=user.id)
+        message = f"🔒 {html.escape(franchise.name)}: retention is final."
+        session.commit()
+    except (AuctionError, ValueError) as exc:
+        session.rollback()
+        await query.answer(str(exc)[:190], show_alert=True)
+        return
+    finally:
+        session.close()
+    await query.answer("Retention finalized")
+    await query.edit_message_text(message, parse_mode="HTML", reply_markup=None)
+
+
+async def aready_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from services import auction_preseason as P
+    def work(session, season):
+        data = P.readiness(session, season)
+        lines = ["📋 <b>Retention and draft readiness</b>"]
+        for team in data['teams']:
+            state = f"New team · {team['picks_left']} picks left" if team['new'] else ("Final" if team['final'] else "Pending")
+            lines.append(f"<b>{html.escape(team['name'])}</b> — {state} · retained {team['retained']} · spent {A.render_money(team['spent_lakh'], season.currency_label)} · purse {A.render_money(team['purse_lakh'], season.currency_label)}")
+            lines += [f"  {r['min_rating']}-{r['max_rating']}: {r['count']} / max {r['max_count']} (min {r['min_count']})" for r in team['ranges']]
+        lines.append("Next draft turn: " + html.escape(data['next_team'] or 'Waiting for retention / no picks remain'))
+        if data['timer_seconds']:
+            left = 'paused' if data['timer_paused'] else f"{data['seconds_left']}s left" if data['seconds_left'] is not None else 'waiting'
+            lines.append(f"Clock: {left} · timeout: {data['timeout_action']}")
+        return "\n".join(lines)
+    await _with_auction(update, work, context=context)
+
+
+async def apickclock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from services import auction_preseason as P
+    raw = _arg_text(context).strip().lower()
+    def work(session, season):
+        if raw in ('off', 'pause', 'resume'):
+            P.set_clock(session, season, operation=raw)
+        elif raw:
+            parts = [x.strip() for x in raw.split('|')]
+            P.set_clock(session, season, seconds=parts[0], action=parts[1] if len(parts)>1 else 'pause')
+        data = P.readiness(session, season)
+        return f"⏱ Draft clock: {data['timer_seconds']} seconds · timeout {data['timeout_action']} · {'paused' if data['timer_paused'] else 'running / waiting for retention'}.\nUse /apickclock 60 | pause, skip or shortlist; /apickclock pause, resume or off."
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def ashortlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from services import auction_preseason as P
+    user = update.effective_user
+    raw = _arg_text(context).strip()
+    def work(session, season):
+        team = A.franchise_for_actor(session, season.id, user.id) if user else None
+        if team is None:
+            raise AuctionError("Only a team owner or co-owner can manage its shortlist.")
+        if raw:
+            action, _, name = raw.partition(' ')
+            player = _find_player(session, name) if name else None
+            P.edit_shortlist(session, season, team, action.lower(), player)
+        rows = P.shortlist(session, season, team)
+        return f"📝 <b>{html.escape(team.name)} shortlist</b> (priority order)\n" + ("\n".join(
+            f"{i}. {html.escape(r['name'])} — " + (A.render_money(r['price_lakh'], season.currency_label) if r['eligible'] else 'currently unavailable')
+            for i,r in enumerate(rows,1)) or 'Empty.') + "\n/ashortlist add Player · remove Player · clear\nOnly eligible shortlisted players can be picked automatically."
+    await _with_auction(update, work, context=context)
+
+
+async def aeligible_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from services import auction_preseason as P
+    raw = _arg_text(context)
+    user = update.effective_user
+    def work(session, season):
+        parts = [x.strip() for x in raw.split('|')]
+        parts += [''] * (6-len(parts))
+        team = (_find_franchise(session, season, parts[0]) if parts[0] else
+                A.franchise_for_actor(session, season.id, user.id) if user else None)
+        team = team or A.pick_turn(session, season)
+        if team is None:
+            raise AuctionError("Choose a drafting team: /aeligible Team | 91-96 | Bowler | India | 10 | 1")
+        data = P.eligible_players(session, season, team, rating=parts[1], role=parts[2], country=parts[3],
+                                  max_cost_lakh=A.parse_amount(parts[4]) if parts[4] else None,
+                                  page=parts[5] or 1, limit=20)
+        return f"🔎 <b>{html.escape(team.name)} — eligible draft players</b> (page {data['page']}/{data['pages']}, {data['total']} found)\n" + ("\n".join(
+            f"{html.escape(p['name'])} · {p['rating']} · {html.escape(p['role'])} · {html.escape(p['country'])} · {A.render_money(p['price_lakh'], season.currency_label)}"
+            for p in data['players']) or 'No eligible players match.') + "\n/aeligible Team | range | role | country | max cost (Cr) | page"
     await _with_auction(update, work, context=context)
 
 

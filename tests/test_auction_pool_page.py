@@ -992,3 +992,69 @@ class RetentionFromLastSeasonPageTests(PoolPageCase):
 
 if __name__ == "__main__":       # pragma: no cover
     unittest.main()
+
+class PreseasonPageTests(PoolPageCase):
+    def setUp(self):
+        super().setUp()
+        from services import auction_preseason as P
+        self.P = P
+        self.team = self.A.create_franchise(self.session, self.season, 'Draft side', owner_tg_id=111)
+        self.A.set_franchise_picks(self.session, self.season, self.team, 3)
+        self.A.add_players_to_pool(self.session, self.season, self.players)
+        self.session.commit()
+
+    def test_readiness_endpoint_and_combined_eligible_filters(self):
+        response = self.client.get(f'/auctions/{self.season_id}/readiness', query_string={
+            'eligible_team': self.team.id, 'eligible_rating': '90-99', 'eligible_role': 'Batsman',
+            'eligible_country': 'India', 'eligible_cost': '20'})
+        self.assertEqual(200, response.status_code)
+        data = response.get_json()
+        self.assertEqual('Draft side', data['readiness']['next_team'])
+        self.assertTrue(all(90 <= p['rating'] <= 99 for p in data['eligible']['players']))
+        self.assertIn('preseason-live', self.get())
+        self.assertIn('Make retention final', self.get())
+
+    def test_invalid_filter_and_foreign_team_rejected(self):
+        response = self.client.get(f'/auctions/{self.season_id}/readiness?eligible_rating=wrong')
+        self.assertEqual(400, response.status_code)
+        response = self.client.get(f'/auctions/{self.season_id}/readiness?eligible_team=9999999')
+        self.assertEqual(400, response.status_code)
+        self.assertIn('Choose a drafting team', response.get_json()['error'])
+
+    def test_unauthenticated_readiness_is_not_public(self):
+        response = self.admin.app.test_client().get(f'/auctions/{self.season_id}/readiness')
+        self.assertIn(response.status_code, (302, 401, 403))
+
+    def test_clock_and_shortlist_forms_use_services(self):
+        self.post({'action':'draft_clock', 'pick_seconds':'60', 'timeout_action':'shortlist'})
+        self.session.expire_all()
+        self.assertEqual(60, self.season.draft_pick_seconds)
+        self.assertEqual('shortlist', self.season.draft_timeout_action)
+        self.assertIsNotNone(self.season.draft_pick_deadline_at)
+        self.post({'action':'draft_shortlist', 'franchise_id':str(self.team.id),
+                   'player_id':str(self.players[0].id), 'operation':'add'})
+        self.session.expire_all()
+        self.assertEqual([self.players[0].id], self.P.shortlist_ids(self.team))
+        self.post({'action':'draft_clock', 'pick_seconds':'60', 'timeout_action':'shortlist', 'operation':'off'})
+        self.session.expire_all()
+        self.assertIsNone(self.season.draft_pick_deadline_at)
+        self.assertEqual(0, self.team.draft_picks_used)
+
+    def test_preview_token_required_before_finalization(self):
+        self.post({'action':'team_retention_final','franchise_id':str(self.team.id), 'preview_token':'invalid'})
+        self.session.expire_all()
+        self.assertIsNone(self.team.retention_finalized_at)
+        preview = self.P.retention_preview(self.session, self.season, self.team)
+        response = self.post({'action':'team_retention_final','franchise_id':str(self.team.id),
+                              'preview_token':preview['token']})
+        self.session.expire_all()
+        self.assertIsNotNone(self.team.retention_finalized_at)
+        self.assertIn('retention is final', response.get_data(as_text=True))
+
+    def test_board_only_poll_does_not_scan_eligible_players(self):
+        from unittest.mock import patch
+        with patch.object(self.P, 'eligible_players', side_effect=AssertionError('Do not scan a closed panel')):
+            response = self.client.get(f'/auctions/{self.season_id}/readiness?eligible_refresh=0')
+        self.assertEqual(200, response.status_code)
+        self.assertIsNone(response.get_json()['eligible'])
+        self.assertEqual('Draft side', response.get_json()['readiness']['next_team'])

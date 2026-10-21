@@ -478,6 +478,11 @@ ADMIN_MENU_COMMANDS = (
     ("aco", "Admin: add a co-owner who may bid for a franchise"),
     ("apublish", "Admin: publish bought squads as a Challenge League"),
     ("acancel", "Admin: cancel the auction"),
+    ("aready", "Auction: retention readiness and next draft turn"),
+    ("retainlock", "Auction: preview and finalize your retention"),
+    ("aeligible", "Auction: browse eligible draft players"),
+    ("ashortlist", "Auction: manage your draft shortlist"),
+    ("apickclock", "Admin: expansion draft clock and timeout action"),
     ("aretlock", "Admin: retention state, and close the window"),
     ("aretain", "Admin: retain a player for a franchise"),
     ("aunretain", "Admin: release a retained player into the pool"),
@@ -2419,6 +2424,8 @@ def main():
             amybids_handler, dot_command_handler,
             retain_handler, retention_talk_callback, aretmode_handler,
             retainlock_handler, aranges_handler, apickorder_handler,
+            retention_final_callback, aready_handler, apickclock_handler,
+            ashortlist_handler, aeligible_handler,
             aretslot_handler, aretrule_handler, aretdemand_handler,
             asetsexport_handler, asetsimport_handler,
             retention_pick_callback, aprevious_handler, aprevteam_handler,
@@ -2529,6 +2536,11 @@ def main():
         # The admin side edits the slots, the rules and the demand curve.
         app.add_handler(CommandHandler("retain", retain_handler))
         app.add_handler(CommandHandler("retainlock", retainlock_handler))
+        app.add_handler(CallbackQueryHandler(retention_final_callback, pattern=r"^au_rfinal_"))
+        app.add_handler(CommandHandler("aready", aready_handler))
+        app.add_handler(CommandHandler("apickclock", apickclock_handler))
+        app.add_handler(CommandHandler("ashortlist", ashortlist_handler))
+        app.add_handler(CommandHandler("aeligible", aeligible_handler))
         app.add_handler(CommandHandler(["aretranges", "apickranges"], aranges_handler))
         app.add_handler(CommandHandler("apickorder", apickorder_handler))
         app.add_handler(CallbackQueryHandler(retention_talk_callback,

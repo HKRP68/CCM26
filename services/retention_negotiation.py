@@ -821,6 +821,8 @@ def chances_left(season, t):
 def start_talk(session, season, franchise, player, *, by_tg_id=None,
                chat_id=None):
     """Open a negotiation, or return the one already open with this player."""
+    from services import auction_preseason as P
+    P.claim_turn(session, season)
     _require_open_window(season)
     if franchise.retention_finalized_at:
         raise AuctionError(f"{franchise.name} finalized retention — it is final.")

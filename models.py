@@ -4089,6 +4089,14 @@ class AuctionSeason(Base):
     retention_ranges_json = Column(Text, nullable=True)
     draft_ranges_json = Column(Text, nullable=True)
     draft_order_json = Column(Text, nullable=True)
+    # Opt-in expansion clock; deadline/cursor survive restarts.
+    draft_pick_seconds = Column(Integer, default=0, nullable=False)
+    draft_timeout_action = Column(String(12), default="pause", nullable=False)
+    draft_pick_deadline_at = Column(DateTime, nullable=True)
+    draft_clock_turn = Column(String(48), nullable=True)
+    draft_clock_paused = Column(Integer, default=0, nullable=False)
+    draft_clock_revision = Column(Integer, default=0, nullable=False)
+    draft_announced_event_id = Column(Integer, default=0, nullable=False)
     retention_slots_json = Column(Text, nullable=True)
     # Dynamic mode's negotiation knobs (chances, demand curve, personalities,
     # counter and lowball thresholds, jitter). NULL = every default.
@@ -4308,6 +4316,7 @@ class AuctionFranchise(Base):
     # one — a league adding one team and compensating it is as real a case as
     # adding two equal ones. ``draft_picks_used`` counts skips too: a turn
     # burned is a turn spent, or the order never moves on.
+    draft_shortlist_json = Column(Text, nullable=True)
     retention_finalized_at = Column(DateTime, nullable=True)
     draft_picks_total = Column(Integer, default=0, nullable=False)
     draft_picks_used = Column(Integer, default=0, nullable=False)

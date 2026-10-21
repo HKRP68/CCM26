@@ -1205,3 +1205,15 @@ systems — e.g. [`docs/franchise-auction.md`](docs/franchise-auction.md),
 - `/retain Player Name` — owner/co-owner retains a previous-squad player at the range cost.
 - `/retainlock` — owner/co-owner makes team retention final after meeting minimums.
 - `/pick Player Name` — new-team owner/co-owner drafts after retention closes; early attempts name unfinished teams.
+
+### Franchise Auction: readiness and timed expansion draft
+
+- `/aready` — team retention status, range counts, spend, purse and next pick.
+- `/retainlock` — preview retention, then press **Make retention final**; stale previews are refused.
+- `/aeligible Team | 91-96 | Bowler | India | 15 | 1` — eligible player filters: team, range, role, country, maximum cost in Cr, page. Blank fields are optional.
+- `/ashortlist` — owner/co-owner's ordered team shortlist; `add Player`, `remove Player`, or `clear` edits it.
+- `/apickclock 60 | pause` — admin: seconds per pick and timeout action (`pause`, `skip`, or `shortlist`).
+- `/apickclock pause`, `resume`, `off` — admin clock controls. Resume gives a full turn. The clock is off by default and only starts after retention closes.
+
+A shortlist timeout only takes an eligible listed player. Empty/ineligible lists
+and skips that would prevent range minimums pause the clock without spending a pick.

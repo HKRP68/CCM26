@@ -701,6 +701,7 @@ SEASON_RULE_FIELDS = (
     "retention_categories_json", "retention_price_rules_json",
     "retention_mode", "retention_slots_json", "retention_rules_json",
     "retention_ranges_json", "draft_ranges_json",
+    "draft_pick_seconds", "draft_timeout_action",
     # Right To Match
     "rtm_enabled", "rtm_per_team", "rtm_window_seconds", "rtm_extra_lakh",
     # Expansion teams
@@ -1903,6 +1904,8 @@ def pending_retention_teams(session, season):
 
 
 def finalize_retention(session, season, franchise, *, by_tg_id=None):
+    from services import auction_preseason as P
+    P.claim_turn(session, season)
     if franchise.retention_finalized_at:
         return franchise
     if not retention_open(season):
@@ -1957,6 +1960,8 @@ def retention_open(season, now=None):
 
 def lock_retention(session, season, *, now=None, by_tg_id=None, quiet=False):
     """Shut the retention window. Idempotent."""
+    from services import auction_preseason as P
+    P.claim_turn(session, season)
     if retention_locked(season):
         return season
     from services import retention_negotiation as RN
@@ -1964,6 +1969,7 @@ def lock_retention(session, season, *, now=None, by_tg_id=None, quiet=False):
         for franchise in pending_retention_teams(session, season):
             check_range_minimums(session, season, franchise)
     season.retention_locked_at = now or datetime.utcnow()
+    P.sync_clock(session, season, now=now)
     sync_rtm_cards(session, season)
     if not quiet:
         log_event(session, season, "retention_locked",
@@ -2204,35 +2210,13 @@ def _signing_lot(session, season, player, *, verb="retained"):
                        f"cannot be {verb}.")
 
 
-def _sign_before_auction(session, season, franchise, player, price, *,
-                         kind, counter, ledger_kind, verb, note,
-                         event_kind, mark, word, detail=None,
-                         now=None, by_tg_id=None, quiet=False):
-    """Put a player on a squad before the auction opens, for a price.
-
-    The shared body of **retention** and an **expansion pick**, which are the
-    same operation with different eligibility (see the table in
-    ``docs/franchise-auction.md``). Each caller does its own window and quota
-    checks first, then hands the price here; everything from the squad cap
-    down — the lot claim, the overseas cap, the purse, the reachability rule,
-    the conditional debit, the ledger row and the announcement — is identical
-    and lives once.
-
-    ``counter`` is the column on the franchise that the signing spends:
-    ``retained_count`` for a retention, ``draft_picks_used`` for a pick. It is
-    incremented inside the same conditional UPDATE as the debit, so a purse
-    that moved underneath the validation rolls the whole signing back rather
-    than leaving a counter that moved and a player who did not.
-    """
-    now = now or datetime.utcnow()
+def validate_preauction_signing(session, season, franchise, lot, price, *, verb="draft"):
+    """Validate a signing without creating a lot, debiting, or logging."""
     symbol = season.currency_label or "₹"
-
     size = int(franchise.squad_size or 0)
     if size + 1 > _as_int(season.max_squad_size, 0):
         raise AuctionError(f"{franchise.name} already has {size} players, "
                            f"which is the squad limit.")
-
-    lot = _signing_lot(session, season, player, verb=f"{verb}ed")
 
     if lot.is_overseas:
         overseas_cap = max(0, _as_int(season.max_overseas, 0))
@@ -2261,6 +2245,34 @@ def _sign_before_auction(session, season, franchise, player, price, *,
             f"unable to fill its squad: {slots_after} more players need "
             f"{render_money(reserve, symbol)} held back. The most it can "
             f"{verb} this player for is {render_money(max(0, ceiling), symbol)}.")
+
+
+
+def _sign_before_auction(session, season, franchise, player, price, *,
+                         kind, counter, ledger_kind, verb, note,
+                         event_kind, mark, word, detail=None,
+                         now=None, by_tg_id=None, quiet=False):
+    """Put a player on a squad before the auction opens, for a price.
+
+    The shared body of **retention** and an **expansion pick**, which are the
+    same operation with different eligibility (see the table in
+    ``docs/franchise-auction.md``). Each caller does its own window and quota
+    checks first, then hands the price here; everything from the squad cap
+    down — the lot claim, the overseas cap, the purse, the reachability rule,
+    the conditional debit, the ledger row and the announcement — is identical
+    and lives once.
+
+    ``counter`` is the column on the franchise that the signing spends:
+    ``retained_count`` for a retention, ``draft_picks_used`` for a pick. It is
+    incremented inside the same conditional UPDATE as the debit, so a purse
+    that moved underneath the validation rolls the whole signing back rather
+    than leaving a counter that moved and a player who did not.
+    """
+    now = now or datetime.utcnow()
+    symbol = season.currency_label or "₹"
+
+    lot = _signing_lot(session, season, player, verb=f"{verb}ed")
+    validate_preauction_signing(session, season, franchise, lot, price, verb=verb)
 
     # Every write below is one transaction, and the debit is conditional for
     # the same reason a sale's is: if the purse moved under the validation a
@@ -2335,6 +2347,8 @@ def retain(session, season, franchise, player, price_lakh=None, *,
     finally reachability — the same rule, and the same call, that refuses a
     bid which would leave a franchise unable to fill its minimum squad.
     """
+    from services import auction_preseason as P
+    P.claim_turn(session, season)
     now = now or datetime.utcnow()
     symbol = season.currency_label or "₹"
 
@@ -2581,28 +2595,8 @@ def _pick_window(session, season):
                            + ". Teams can finalize with /retainlock; admins can close with /aretlock on.")
 
 
-def draft_pick(session, season, franchise, player, price_lakh=None, *,
-               now=None, by_tg_id=None):
-    """An expansion side signs a player before the auction, at a price.
-
-    The same operation as a retention with a different eligibility rule, so it
-    runs through the same body — see ``_sign_before_auction``. What is its own
-    here is the turn, the allowance, and that the player must not already have
-    been signed by anybody, which ``_signing_lot`` enforces and names.
-    """
-    now = now or datetime.utcnow()
-    _pick_window(session, season)
-
+def draft_price(session, season, franchise, player, price_lakh=None):
     used = int(franchise.draft_picks_used or 0)
-    if picks_left(franchise) <= 0:
-        raise AuctionError(f"{franchise.name} has used all "
-                           f"{int(franchise.draft_picks_total or 0)} of its "
-                           f"picks.")
-
-    turn = pick_turn(session, season)
-    if turn is not None and turn.id != franchise.id:
-        raise AuctionError(f"It is {turn.name}'s pick, not {franchise.name}'s.")
-
     price = (retention_price_for(season, used + 1) if price_lakh is None
              else _as_int(price_lakh, -1))
     if range_rules(season, draft=True):
@@ -2615,7 +2609,36 @@ def draft_pick(session, season, franchise, player, price_lakh=None, *,
     if price < 0:
         raise AuctionError("A pick price cannot be negative.")
 
-    return _sign_before_auction(
+    return price
+
+
+def draft_pick(session, season, franchise, player, price_lakh=None, *,
+               now=None, by_tg_id=None):
+    """An expansion side signs a player before the auction, at a price.
+
+    The same operation as a retention with a different eligibility rule, so it
+    runs through the same body — see ``_sign_before_auction``. What is its own
+    here is the turn, the allowance, and that the player must not already have
+    been signed by anybody, which ``_signing_lot`` enforces and names.
+    """
+    now = now or datetime.utcnow()
+    from services import auction_preseason as P
+    P.claim_turn(session, season)
+    _pick_window(session, season)
+
+    used = int(franchise.draft_picks_used or 0)
+    if picks_left(franchise) <= 0:
+        raise AuctionError(f"{franchise.name} has used all "
+                           f"{int(franchise.draft_picks_total or 0)} of its "
+                           f"picks.")
+
+    turn = pick_turn(session, season)
+    if turn is not None and turn.id != franchise.id:
+        raise AuctionError(f"It is {turn.name}'s pick, not {franchise.name}'s.")
+
+    price = draft_price(session, season, franchise, player, price_lakh)
+
+    lot = _sign_before_auction(
         session, season, franchise, player, price,
         kind=ACQ_DRAFTED, counter="draft_picks_used",
         ledger_kind=LEDGER_DRAFT, verb="draft",
@@ -2623,13 +2646,18 @@ def draft_pick(session, season, franchise, player, price_lakh=None, *,
         event_kind="drafted", mark="🆕", word="draft",
         detail={"pick": used + 1}, now=now, by_tg_id=by_tg_id)
 
+    P.sync_clock(session, season, now=now)
+    return lot
 
-def skip_pick(session, season, franchise, *, by_tg_id=None):
+
+def skip_pick(session, season, franchise, *, by_tg_id=None, now=None):
     """Burn a turn without signing anybody.
 
     The allowance is spent either way, which is the point: a side that does
     not want its pick must not be able to stall the order by never taking it.
     """
+    from services import auction_preseason as P
+    P.claim_turn(session, season)
     _pick_window(session, season)
     if picks_left(franchise) <= 0:
         raise AuctionError(f"{franchise.name} has no picks left to skip.")
@@ -2652,6 +2680,7 @@ def skip_pick(session, season, franchise, *, by_tg_id=None):
               + (f" Over to {_e(following.name)}." if following is not None
                  else " That is every pick used."),
               franchise=franchise, by_tg_id=by_tg_id, by_admin=True)
+    P.sync_clock(session, season, now=now)
     return franchise
 
 
@@ -2669,6 +2698,8 @@ def undo_pick(session, season, lot, *, by_tg_id=None):
         raise AuctionError("Undo a pick before the auction opens — this one "
                            "is " + str(season.status) + ".")
 
+    from services import auction_preseason as P
+    P.claim_turn(session, season)
     franchise = (session.query(AuctionFranchise)
                  .filter(AuctionFranchise.id == lot.sold_to_id).first())
     price = int(lot.sold_price_lakh or 0)
@@ -2708,6 +2739,7 @@ def undo_pick(session, season, lot, *, by_tg_id=None):
               f"{_e(franchise.name) if franchise else 'the'} purse, and the "
               f"pick returned. He is in the pool again.",
               lot=lot, franchise=franchise, by_tg_id=by_tg_id, by_admin=True)
+    P.sync_clock(session, season)
     return lot
 
 
@@ -2735,6 +2767,8 @@ def unretain(session, season, franchise, lot, *, by_tg_id=None, by_admin=True,
     the queue at its base price rather than deleted — the player is available
     again, which is the point.
     """
+    from services import auction_preseason as P
+    P.claim_turn(session, season)
     if lot is None or lot.acquisition != ACQ_RETAINED or lot.status != LOT_SOLD:
         raise AuctionError(f"{lot.name if lot else 'That player'} is not "
                            f"retained.")
@@ -6642,6 +6676,8 @@ def offer_retention(session, season, franchise, player, price_lakh=None, *,
     checked again, for real, by ``retain()`` when the franchise presses
     Accept, because the purse may well have moved in between.
     """
+    from services import auction_preseason as P
+    P.claim_turn(session, season)
     if season.status != STATUS_SETUP:
         raise AuctionError("Retention happens before the auction opens — this "
                            "one is " + str(season.status) + ".")

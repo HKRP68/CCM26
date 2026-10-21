@@ -2155,3 +2155,64 @@ turns, purse and squad restrictions apply. A pick/skip cannot leave too few turn
 to satisfy draft minimums, which must also be met before starting the auction.
 Existing `/apick` admin tools remain available. An active independent Tournament
 Draft retains its own `/pick` behavior.
+
+### Readiness, previews, eligible players and the draft clock
+
+The auction admin page now opens with a readiness board that refreshes every
+five seconds while the tab is visible. It shows each team's retention status,
+range counts, retention spend, remaining purse, picks left and the next draft
+turn. `/aready` shows the same information in the auction group.
+
+`/retainlock` now **previews** the owner's retained players, range counts, total
+spend and remaining purse. Press **Make retention final** to confirm. The button
+checks ownership again and refuses stale previews after a roster, price, purse
+or rule change. Admins have the same preview/confirm flow on the auction page.
+Range minimums and open offers/negotiations still prevent finalization.
+
+Browse **Eligible draft players and team shortlist** on the admin page, or use:
+
+```
+/aeligible Gujarat | 91-96 | Bowler | India | 15 | 1
+```
+
+Fields are team, rating range, role, country, maximum cost in Cr and page.
+Leave a field blank for no filter. Eligible results exclude unavailable players
+and respect the actual fixed price, range quotas, purse, squad/role/rating rules,
+overseas limit and the money needed to fill the minimum squad. Browsing can be
+done before retention closes; eligibility is checked again when a pick is made.
+The live board does not repeatedly scan eligible players while that panel is closed.
+
+The expansion draft clock is **off by default**. Admin controls:
+
+```
+/apickclock 60 | pause
+/apickclock 60 | skip
+/apickclock 60 | shortlist
+/apickclock pause
+/apickclock resume
+/apickclock off
+```
+
+Use 10–86400 seconds per pick, or 0/off to disable. The timer starts once retention
+closes and a draft turn exists. Saving a configuration or resuming gives the current
+team its full configured time. Pausing stops the timer; manual picks remain allowed.
+Turning it off does not consume a turn. Deadlines survive restarts.
+
+On timeout, `pause` pauses for an admin; `skip` spends a turn if range minimums
+remain reachable; `shortlist` takes the first currently eligible player from that
+team's priority list. It never picks a random player as a fallback. A missing or
+ineligible shortlist, or a skip that would prevent a range minimum, pauses the
+clock without spending a turn. Owners/co-owners manage their own list:
+
+```
+/ashortlist
+/ashortlist add Player Name
+/ashortlist remove Player Name
+/ashortlist clear
+```
+
+The admin page also supports shortlist editing. Lists are ordered by addition;
+remove and add a player again to move them to the end. Taken or ineligible players
+stay listed but are skipped during automatic selection. Manual and automatic picks
+claim the same database turn so concurrent workers cannot spend it twice. Clock
+announcements are sent by the existing scheduler after the transaction commits.

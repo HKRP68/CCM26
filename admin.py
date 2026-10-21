@@ -24156,6 +24156,45 @@ def admin_auction_franchises_json(season_id):
         db.close()
 
 
+def _auction_preseason_data(db, season):
+    from services import auction_preseason as P
+    field = auction_svc.pick_order(db, season)
+    selected = request.args.get('eligible_team', '').strip()
+    if selected:
+        team = next((f for f in field if str(f.id) == selected), None)
+        if team is None:
+            raise auction_svc.AuctionError('Choose a drafting team from this auction.')
+    else:
+        team = auction_svc.pick_turn(db, season) or (field[0] if field else None)
+    filters = {name: request.args.get('eligible_' + name, '').strip()
+               for name in ('rating', 'role', 'country', 'cost', 'query', 'page')}
+    eligible = P.eligible_players(db, season, team, rating=filters['rating'], role=filters['role'],
+                                  country=filters['country'], query=filters['query'],
+                                  max_cost_lakh=auction_svc.parse_amount(filters['cost']) if filters['cost'] else None,
+                                  page=filters['page'] or 1)
+    return dict(readiness=P.readiness(db, season), eligible=eligible, filters=filters,
+                selected_team=team, drafting_teams=field,
+                shortlist=P.shortlist(db, season, team) if team else [],
+                currency=season.currency_label or '₹')
+
+
+@app.route('/auctions/<int:season_id>/readiness')
+@login_required
+def admin_auction_readiness(season_id):
+    db = get_session()
+    try:
+        season = _auction_or_404(db, season_id)
+        if request.args.get('eligible_refresh') == '0':
+            from services import auction_preseason as P
+            return dict(readiness=P.readiness(db, season), eligible=None, currency=season.currency_label or '₹')
+        data = _auction_preseason_data(db, season)
+        return dict(readiness=data['readiness'], eligible=data['eligible'], currency=data['currency'])
+    except auction_svc.AuctionError as exc:
+        return dict(error=str(exc)), 400
+    finally:
+        db.close()
+
+
 @app.route("/auctions/<int:season_id>", methods=["GET", "POST"])
 @login_required
 def admin_auction_detail(season_id):
@@ -24205,6 +24244,16 @@ def admin_auction_detail(season_id):
                       .filter(AuctionLot.season_id == season.id).all()}
             preview = [(p, p.id in pooled) for p in preview]
 
+        from services import auction_preseason as P
+        try:
+            preseason = _auction_preseason_data(db, season)
+            preseason_error = None
+        except auction_svc.AuctionError as exc:
+            preseason = None
+            preseason_error = str(exc)
+        new_ids = {f.id for f in auction_svc.expansion_franchises(db, season)}
+        retention_previews = [P.retention_preview(db, season, f)
+                              for f in auction_svc.franchises(db, season.id) if f.id not in new_ids]
         sets = auction_svc.list_sets(db, season)
         return render_template(
             "admin_auction_detail.html",
@@ -24252,6 +24301,7 @@ def admin_auction_detail(season_id):
             max_bid=auction_svc.max_bid_now,
             auction_base_price=auction_svc.base_price_for,
             # ── Retention ──
+            preseason=preseason, preseason_error=preseason_error, retention_previews=retention_previews,
             range_rules_for_ui=lambda draft: auction_svc.range_rules(season, draft=draft),
             pick_order=auction_svc.pick_order(db, season),
             ladder=auction_svc.retention_price_rules(season),
@@ -24898,6 +24948,26 @@ def _auction_detail_action(db, season, action):
         log_admin(db, "auction_unretain", "auction", season.id, franchise.name,
                   detail=lot.name)
         flash(f"🔓 {lot.name} released into the pool.", "success")
+
+    elif action == 'team_retention_final':
+        from services import auction_preseason as P
+        team = _auction_franchise(db, season, request.form.get('franchise_id'))
+        P.confirm_retention(db, season, team, request.form.get('preview_token') or '')
+        flash(f'{team.name}: retention is final.', 'success')
+
+    elif action == 'draft_clock':
+        from services import auction_preseason as P
+        P.set_clock(db, season, seconds=request.form.get('pick_seconds') or 0,
+                    action=request.form.get('timeout_action') or 'pause',
+                    operation=request.form.get('operation') or 'save')
+        flash('Draft clock updated.', 'success')
+
+    elif action == 'draft_shortlist':
+        from services import auction_preseason as P
+        team = _auction_franchise(db, season, request.form.get('franchise_id'))
+        player = db.query(Player).filter_by(id=_parse_int(request.form.get('player_id'))).first()
+        P.edit_shortlist(db, season, team, request.form.get('operation') or '', player)
+        flash('Team shortlist updated.', 'success')
 
     elif action in ("retention_ranges", "draft_ranges"):
         rows = []
