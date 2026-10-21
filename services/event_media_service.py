@@ -99,7 +99,7 @@ def render_caption(text, fields=None):
 
 # Disabled settings rows share the existing milestone storage without becoming
 # selectable media or requiring a database migration.
-MESSAGE_SETTINGS = "message_settings"
+MESSAGE_SETTINGS = "msg_config"  # EventMedia.source_type is VARCHAR(10).
 MILESTONE_MESSAGES = {
     "record_default": ("🏆 RECORD MOMENT!", "Record milestone", "A moment for the record books!"),
     "new_record": ("🏆 NEW RECORD!", "New record", "History has been made!"),

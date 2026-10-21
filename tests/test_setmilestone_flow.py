@@ -246,3 +246,42 @@ class MessageToggleTests(unittest.TestCase):
         self.assertEqual(db.added[0].source, "off")
         self.assertFalse(db.added[0].enabled)
         self.assertNotIn(sm.AWAIT_KEY, context.user_data)
+
+
+class MessagePreferenceStorageTests(unittest.TestCase):
+    def test_toggle_round_trip_respects_database_source_type_limit(self):
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import StaticPool
+        from unittest.mock import AsyncMock
+        from models import EventMedia
+        from services import event_media_service as ems
+
+        # SQLite does not enforce VARCHAR widths; validate the production
+        # column limit explicitly as well as exercising real ORM persistence.
+        self.assertLessEqual(len(ems.MESSAGE_SETTINGS),
+                             EventMedia.__table__.c.source_type.type.length)
+        engine = create_engine("sqlite://", poolclass=StaticPool)
+        self.addCleanup(engine.dispose)
+        EventMedia.__table__.create(engine)
+        sessions = sessionmaker(bind=engine)
+        context = SimpleNamespace(user_data={}, bot_data={},
+                                  bot=SimpleNamespace(send_message=AsyncMock()))
+        with patch.object(sm, "get_session", sessions), \
+             patch("database.get_session", sessions), \
+             patch.object(sm, "_is_admin_update", lambda update: True):
+            for expected_on in (False, True, False, True):
+                query = _Query("msm_toggle_century")
+                _run(sm.milestone_callback(SimpleNamespace(callback_query=query), context))
+                self.assertIn("Messages ON" if expected_on else "Messages OFF", query.answers)
+                db = sessions()
+                try:
+                    rows = db.query(EventMedia).all()
+                    self.assertEqual(len(rows), 1)
+                    self.assertEqual(ems.messages_enabled(rows), expected_on)
+                finally:
+                    db.close()
+                context.bot.send_message.reset_mock()
+                _run(ems.fire_event_media(context, 42, "century",
+                                          fields={"runs": 105, "balls": 58}, cooldown=False))
+                self.assertEqual(context.bot.send_message.call_count, int(expected_on))
