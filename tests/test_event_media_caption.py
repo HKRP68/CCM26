@@ -141,8 +141,10 @@ class FireTests(unittest.TestCase):
         self.assertEqual(name, "send_message")
         self.assertEqual(kwargs["text"], "FIFTY for Rohit!")
 
-    def test_no_configured_media_sends_nothing(self):
-        self.assertEqual(_fire(_Ctx(), []), [])
+    def test_no_configured_media_sends_generated_message(self):
+        calls = _fire(_Ctx(), [])
+        self.assertEqual(calls[0][0], "send_message")
+        self.assertIn("HALF CENTURY", calls[0][1]["text"])
 
     def test_a_send_failure_is_swallowed(self):
         ctx = _Ctx()
@@ -221,3 +223,22 @@ class AutomaticMilestoneTests(unittest.TestCase):
     def test_each_milestone_has_a_relevant_default(self):
         for key in ems.MILESTONE_MESSAGES:
             self.assertIn("Achievement:", ems.default_milestone_message(key, {}))
+
+
+class AllEventMessageTests(unittest.TestCase):
+    def test_every_selectable_event_has_an_automatic_message(self):
+        for key, _, _ in ems.EVENT_KEYS:
+            with self.subTest(key=key):
+                calls = _fire(_Ctx(), [], key=key)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(calls[0][0], "send_message")
+                self.assertIn("Achievement:", calls[0][1]["text"])
+
+    def test_every_selectable_event_can_be_silenced_independently(self):
+        for key, _, _ in ems.EVENT_KEYS:
+            with self.subTest(key=key):
+                preference = _row(event_key=key, source_type=ems.MESSAGE_SETTINGS,
+                                  source="off", enabled=False)
+                self.assertEqual(_fire(_Ctx(), [preference], key=key), [])
+                preference.source = "on"
+                self.assertEqual(_fire(_Ctx(), [preference], key=key)[0][0], "send_message")

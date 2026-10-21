@@ -101,6 +101,18 @@ def render_caption(text, fields=None):
 # selectable media or requiring a database migration.
 MESSAGE_SETTINGS = "message_settings"
 MILESTONE_MESSAGES = {
+    "record_default": ("🏆 RECORD MOMENT!", "Record milestone", "A moment for the record books!"),
+    "new_record": ("🏆 NEW RECORD!", "New record", "History has been made!"),
+    "record_equalled": ("🤝 RECORD EQUALLED!", "Record equalled", "Joining the best in the record books!"),
+    "record_holder": ("👑 RECORD HOLDER!", "Record holder", "Setting the standard!"),
+    "dot_ball": ("⚫ DOT BALL!", "No run scored", "The bowler keeps it tight!"),
+    "four": ("🏏 FOUR!", "Boundary — 4 Runs", "A superb shot to the boundary!"),
+    "six": ("🔥 SIX!", "Boundary — 6 Runs", "Launched over the ropes!"),
+    "wicket": ("🟥 WICKET!", "Wicket taken", "A breakthrough for the bowling side!"),
+    "wide": ("↔️ WIDE!", "Wide delivery", "An extra run for the batting side!"),
+    "no_ball": ("🚫 NO BALL!", "No-ball delivery", "An extra run and another delivery to come!"),
+    "implant": ("💠 PLAYER TRAIT!", "Player trait activated", "A special player-trait moment!"),
+    "dropped_catch": ("🫳 DROPPED CATCH!", "Catch dropped", "A chance goes down — a lifeline for the batter!"),
     "fifty": ("⭐ HALF CENTURY!", "50 Runs", "A brilliant half century!"),
     "century": ("💯 CENTURY!", "100 Runs", "A magnificent century!"),
     "hattrick": ("🎯 HAT-TRICK!", "3 wickets in 3 balls", "Three in a row — incredible bowling!"),
@@ -228,7 +240,7 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
                 from html import escape
                 safe_fields = {k: escape(str(v)) for k, v in (fields or {}).items()}
                 caption = render_caption(getattr(pick, "caption", None), safe_fields)
-                if not caption and fields:
+                if not caption and (fields or not source):
                     caption = default_milestone_message(event_key, fields)
             kind = _send_kind(pick)
         finally:
@@ -236,6 +248,10 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
     except Exception:
         logger.exception(f"fire_event_media({event_key}) DB error")
         return
+
+    # Mark intentional suppression as handled so callers do not post a fallback.
+    if not show_message and not source:
+        return True
 
     # A caption with no media is still worth sending.
     if not source:
