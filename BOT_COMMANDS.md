@@ -873,7 +873,9 @@ Each player fills a slot by rating (🥇 Elite 92–96 from ₹23 Cr, 🥈 Premi
 87–91 from ₹18 Cr, 🥉 Core 83–86 from ₹12 Cr, within a ₹53 Cr budget, all
 editable). The owner types `/retain <player>` to see his Demand Meter, then
 `/retain <player> | <price>` to make an offer (bare `/retain` lists your
-last-season squad as buttons). He ✅ accepts, 💰 counters (take
+last-season squad as buttons). You can also name your team explicitly:
+`/retain <team> | <player>` or `/retain <team> | <player> | <price>`.
+He ✅ accepts, 💰 counters (take
 his ask with the button) or ❌ rejects. After three rejections he walks into the
 auction and can't be approached again. His price and personality stay hidden.
 **Auction admins** may use every command in this table and no other admin
@@ -1202,7 +1204,7 @@ systems — e.g. [`docs/franchise-auction.md`](docs/franchise-auction.md),
 - `/aretmode ranges` — select the new format; classic and dynamic remain available.
 - `/apickranges 91-96 | 1 | 2 | 12` — independent range rules for new-team draft picks.
 - `/apickorder Gujarat | Lucknow` — set draft seats before the first pick (snake rounds).
-- `/retain Player Name` — owner/co-owner retains a previous-squad player at the range cost.
+- `/retain Player Name` or `/retain Team Name | Player Name` — owner/co-owner retains their team's previous-squad player at the range cost.
 - `/retainlock` — owner/co-owner makes team retention final after meeting minimums.
 - `/pick Player Name` — new-team owner/co-owner drafts after retention closes; early attempts name unfinished teams.
 

@@ -263,6 +263,116 @@ class CommandTests(SquadCase):
         self.assertEqual([self.pant.id], [l.player_id for l in
                          self.A.retained(self.session, self.mumbai.id)])
 
+    def test_retain_accepts_explicit_team_and_player(self):
+        from handlers import auction as H
+        self.mumbai.name = "ROYAL BANGLA TRIGER"
+        self.pant.name = "Mitchell Starc"
+        self.session.commit()
+        self.call(H.retain_handler, ALICE,
+                  ("ROYAL", "BANGLA", "TRIGER", "|", "Mitchell", "Starc"))
+        self.session.expire_all()
+        self.assertEqual([self.pant.id], [l.player_id for l in
+                         self.A.retained(self.session, self.mumbai.id)])
+
+    def test_retain_explicit_team_uses_configured_range_price(self):
+        from handlers import auction as H
+        self.A.set_range_rules(self.session, self.season, [dict(
+            min_rating=85, max_rating=96, min_count=0, max_count=2, price_lakh=1700)])
+        self.RN.set_mode(self.session, self.season, self.RN.MODE_RANGES)
+        self.session.commit()
+        self.call(H.retain_handler, ALICE, ("Mumbai", "|", "pant"))
+        self.session.expire_all()
+        kept = self.A.retained(self.session, self.mumbai.id)
+        self.assertEqual([self.pant.id], [lot.player_id for lot in kept])
+        self.assertEqual(1700, kept[0].sold_price_lakh)
+
+    def test_retain_explicit_team_accepts_coowner(self):
+        from handlers import auction as H
+        self.mumbai.co_owner_ids_json = '[501]'
+        self.session.commit()
+        self.call(H.retain_handler, 501, ("Mumbai", "|", "pant"))
+        self.session.expire_all()
+        self.assertEqual([self.pant.id], [l.player_id for l in
+                         self.A.retained(self.session, self.mumbai.id)])
+
+    def test_retain_explicit_team_rejects_other_owner_and_admin(self):
+        from handlers import auction as H
+        for actor in (BOB, CAROL):
+            self.call(H.retain_handler, actor, ("Mumbai", "|", "pant"))
+            self.assertIn("Only Mumbai&#x27;s owner", self.replies[-1])
+        self.session.expire_all()
+        self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
+
+    def test_retain_explicit_team_cannot_take_another_teams_player(self):
+        from handlers import auction as H
+        self.call(H.retain_handler, ALICE, ("Mumbai", "|", "jadeja"))
+        self.assertIn("wasn&#x27;t on Mumbai", self.replies[-1])
+        self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
+
+    def test_retain_short_syntax_still_works(self):
+        from handlers import auction as H
+        self.call(H.retain_handler, ALICE, ("pant",))
+        self.session.expire_all()
+        self.assertEqual([self.pant.id], [l.player_id for l in
+                         self.A.retained(self.session, self.mumbai.id)])
+
+    def test_retain_explicit_team_honors_pending_offer_price(self):
+        from handlers import auction as H
+        offer = self.A.offer_retention(self.session, self.season, self.mumbai,
+                                       self.pant, 1700)
+        self.session.commit()
+        self.call(H.retain_handler, ALICE, ("Mumbai", "|", "pant"))
+        self.session.expire_all()
+        self.assertEqual(self.A.OFFER_ACCEPTED, offer.status)
+        self.assertEqual(1700, self.A.retained(self.session, self.mumbai.id)[0].sold_price_lakh)
+
+    def test_retain_explicit_team_selects_team_when_user_owns_multiple(self):
+        from handlers import auction as H
+        self.chennai.co_owner_ids_json = f'[{ALICE}]'
+        self.session.commit()
+        self.call(H.retain_handler, ALICE, ("Chennai", "|", "jadeja"))
+        self.session.expire_all()
+        self.assertEqual([self.jadeja.id], [l.player_id for l in
+                         self.A.retained(self.session, self.chennai.id)])
+        self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
+
+    def test_retain_team_syntax_also_opens_dynamic_talks(self):
+        from handlers import auction as H
+        self.RN.set_mode(self.session, self.season, self.RN.MODE_DYNAMIC)
+        self.session.commit()
+        self.call(H.retain_handler, ALICE, ("Mumbai", "|", "pant"))
+        talks = self.RN.open_talks(self.session, self.season.id)
+        self.assertEqual([self.pant.id], [t.player_id for t in talks])
+        self.assertIsNone(talks[0].last_offer_lakh)
+
+    def test_retain_team_syntax_supports_dynamic_offer(self):
+        from handlers import auction as H
+        from models import AuctionRetentionTalk
+        self.RN.set_mode(self.session, self.season, self.RN.MODE_DYNAMIC)
+        self.session.commit()
+        self.call(H.retain_handler, ALICE, ("Mumbai", "|", "pant", "|", "20"))
+        talk = self.session.query(AuctionRetentionTalk).filter_by(
+            season_id=self.season.id, player_id=self.pant.id).one()
+        self.assertEqual(2000, talk.last_offer_lakh)
+
+    def test_retain_existing_dynamic_price_syntax_still_works(self):
+        from handlers import auction as H
+        from models import AuctionRetentionTalk
+        self.RN.set_mode(self.session, self.season, self.RN.MODE_DYNAMIC)
+        self.session.commit()
+        self.call(H.retain_handler, ALICE, ("pant", "|", "20"))
+        talk = self.session.query(AuctionRetentionTalk).filter_by(
+            season_id=self.season.id, player_id=self.pant.id).one()
+        self.assertEqual(2000, talk.last_offer_lakh)
+
+    def test_retain_team_syntax_rejects_empty_or_extra_fields(self):
+        from handlers import auction as H
+        for args in (("Mumbai", "|"), ("|", "pant"),
+                     ("Mumbai", "|", "pant", "|", "1")):
+            self.call(H.retain_handler, ALICE, args)
+            self.assertIn("Usage: /retain", self.replies[-1])
+        self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
+
     def test_other_team_owner_and_admin_cannot_force_retention(self):
         from handlers import auction as H
         for actor in (BOB, CAROL):

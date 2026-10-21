@@ -1668,7 +1668,7 @@ RTN_CB = "au_rtn_"
 
 
 async def retain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """<code>/retain Virat Kohli</code> — open talks; <code>| 26</code> offers.
+    """Retain a player with an optional explicit team: /retain Team | Player.
 
     Dynamic retention's owner command. The first call puts the negotiation
     card up — his slot, its starting price, the Demand Meter; each call with a
@@ -1689,8 +1689,32 @@ async def retain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if season is None:
             await _reply(update, NO_AUCTION)
             return
-        franchise = (A.retention_franchise_for_actor(session, season, user.id)
-                     if user else None)
+        parts = [part.strip() for part in raw.split("|")]
+        dynamic = RN.is_dynamic(season)
+        price = None
+        explicit_team = len(parts) > 1
+        if dynamic and len(parts) == 2 and parts[1]:
+            # Keep the existing /retain Player | Price negotiation syntax.
+            try:
+                price = A.parse_amount(parts[1])
+                explicit_team = False
+            except AuctionError:
+                pass
+        if explicit_team:
+            usage = "Usage: /retain <your team> | <player>"
+            if dynamic:
+                usage += " | [offer price]"
+            if len(parts) > (3 if dynamic else 2) or not all(parts[:2]):
+                raise AuctionError(usage)
+            franchise = _find_franchise(session, season, parts[0])
+            A.require_retention_owner(session, season, franchise, user.id if user else None)
+            player_name = parts[1]
+            if dynamic and len(parts) == 3 and parts[2]:
+                price = A.parse_amount(parts[2])
+        else:
+            franchise = (A.retention_franchise_for_actor(session, season, user.id)
+                         if user else None)
+            player_name = parts[0]
         if franchise is None:
             raise AuctionError("Only a franchise's owner or a co-owner can "
                                "negotiate a retention.")
@@ -1703,7 +1727,7 @@ async def retain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                  reply_markup=AR.retention_offer_keyboard(offer))
                 await _send_picker(update, session, season, franchise, 'f')
                 return
-            player = RN.find_retention_player(session, season, franchise, raw)
+            player = RN.find_retention_player(session, season, franchise, player_name)
             pending = next((offer for offer in A.pending_retention_offers(session, season.id)
                             if offer.franchise_id == franchise.id and offer.player_id == player.id), None)
             lot = (A.answer_retention_offer(session, season, pending, user.id, True) if pending else
@@ -1715,10 +1739,7 @@ async def retain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not raw:
             await _send_picker(update, session, season, franchise, 'r')
             return
-        parts = [p.strip() for p in raw.split("|")]
-        player = RN.find_retention_player(session, season, franchise, parts[0])
-        price = (A.parse_amount(parts[1])
-                 if len(parts) > 1 and parts[1] else None)
+        player = RN.find_retention_player(session, season, franchise, player_name)
         talk = RN.start_talk(session, season, franchise, player,
                              by_tg_id=user.id, chat_id=chat.id)
         if price is not None:

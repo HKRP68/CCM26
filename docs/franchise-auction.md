@@ -608,7 +608,9 @@ All of it is seeded from `(season, player)`, so walking away and coming back
 can't reroll the price.
 
 **Negotiation.** The owner or a co-owner types `/retain <player>` to open talks,
-then `/retain <player> | <price>` for each offer. There is one open negotiation
+then `/retain <player> | <price>` for each offer. Both also accept an explicit
+team: `/retain <team> | <player>` and `/retain <team> | <player> | <price>`.
+Only that team's owner or co-owner may act. There is one open negotiation
 per franchise and one per player. The player replies in one of three ways:
 
 - **✅ ACCEPT** if the offer is at or above his price. He is signed through the
@@ -2147,7 +2149,8 @@ Prices in these commands are in Cr. Configure before signings/finalization. Draf
 ranges are independent and deal each new team the sum of their maximum counts.
 The configured seats follow snake order and cannot change after the first pick.
 
-Owners/co-owners use `/retain Player Name` for their previous squad's players,
+Owners/co-owners use `/retain Player Name` or `/retain Team Name | Player Name`
+for their own previous squad's players,
 then `/retainlock` to finalize permanently. Teams retaining players must meet their range minimums. A team may instead
 finalize with zero retentions; pending offers/negotiations must still be resolved. Finalized teams cannot retain or release.
 Retention closes automatically after all existing teams finalize. Admins can also
