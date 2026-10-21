@@ -2627,7 +2627,8 @@ def _retention_preview_html(data, season):
     if not data['players']:
         lines.append("No retained players — enter the auction without retentions. Retention minimums do not apply.")
     lines += [f"Range {r['min_rating']}-{r['max_rating']}: {r['count']} kept (min {r['min_count']}, max {r['max_count']})" for r in data['ranges']]
-    lines += [f"Retention spend: <b>{money(data['spent_lakh'])}</b>",
+    lines += [f"Overall: {len(data['players'])} retained · max {int(season.max_retentions or 0)} · min {int(season.min_retentions or 0)} if retaining players.",
+              f"Retention spend: <b>{money(data['spent_lakh'])}</b>",
               f"Remaining purse: <b>{money(data['purse_lakh'])}</b>",
               "Retention is already final." if data['finalized'] else "Confirm below to make these retentions final."]
     return "\n".join(lines)
@@ -2758,25 +2759,36 @@ async def aeligible_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def aranges_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    command = (getattr(update.effective_message, "text", "") or "").split(" ")[0].split("@")[0]
+    message = (getattr(update.effective_message, "text", "") or "").split(maxsplit=1)
+    command = message[0].split('@')[0].lower() if message else ''
     draft = command == "/apickranges"
+    raw = message[1] if len(message) > 1 else _arg_text(context)
+    def work(session, season):
+        if raw:
+            rows = A.parse_range_text(raw)
+            A.set_range_rules(session, season, rows, draft=draft)
+        rows = A.range_rules(season, draft=draft)
+        heading = "Draft ranges" if draft else f"Retention ranges — overall min {int(season.min_retentions or 0)}, max {A.range_retention_maximum(season)}; zero retentions allowed"
+        return heading + ":\n" + ("\n".join(
+            f"{r['min_rating']}-{r['max_rating']}: min {r['min_count']}, max {r['max_count']}, "
+            + A.render_money(r['price_lakh'], season.currency_label) + " each" for r in rows)
+            or "Use: 94-96, 0, 2, 17; 90-93, 0, 3, 10")
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def aretlimits_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    import re
     raw = _arg_text(context)
     def work(session, season):
         if raw:
-            rows = []
-            for line in raw.split(";"):
-                fields = [x.strip() for x in line.split("|")]
-                if len(fields) != 4:
-                    raise AuctionError("Use: range | min count | max count | cost; more ranges")
-                low, high = _rating_span_arg(fields[0])
-                rows.append(dict(min_rating=low, max_rating=high, min_count=fields[1],
-                                 max_count=fields[2], price_lakh=A.parse_amount(fields[3])))
-            A.set_range_rules(session, season, rows, draft=draft)
-        rows = A.range_rules(season, draft=draft)
-        return ("Draft ranges" if draft else "Retention ranges") + ":\n" + ("\n".join(
-            f"{r['min_rating']}-{r['max_rating']}: min {r['min_count']}, max {r['max_count']}, "
-            + A.render_money(r['price_lakh'], season.currency_label) + " each" for r in rows)
-            or "Use: 91-96 | 1 | 2 | 15; 85-90 | 0 | 3 | 8")
+            fields = [value for value in re.split(r'[\s,|]+', raw.strip()) if value]
+            if len(fields) != 2:
+                raise AuctionError("Usage: /aretlimits <minimum> <maximum>, e.g. /aretlimits 1 5. Use auto for maximum to follow range totals.")
+            A.set_range_retention_limits(session, season, fields[0], fields[1])
+        return (f"Total range retention limits: min <b>{int(season.min_retentions or 0)}</b>, "
+                f"max <b>{A.range_retention_maximum(season)}</b>.\n"
+                "Minimums apply if retaining players. Keeping zero remains allowed.\n"
+                "Use /aretlimits 1 5 or /aretlimits 0 auto.")
     await _with_auction(update, work, admin=True, context=context)
 
 

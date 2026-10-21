@@ -24302,6 +24302,7 @@ def admin_auction_detail(season_id):
             auction_base_price=auction_svc.base_price_for,
             # ── Retention ──
             preseason=preseason, preseason_error=preseason_error, retention_previews=retention_previews,
+            range_text_for_ui=lambda draft: auction_svc.format_range_text(season, draft=draft),
             range_rules_for_ui=lambda draft: auction_svc.range_rules(season, draft=draft),
             pick_order=auction_svc.pick_order(db, season),
             ladder=auction_svc.retention_price_rules(season),
@@ -24871,10 +24872,14 @@ def _auction_detail_action(db, season, action):
               "success")
 
     elif action == "retention_rules":
-        season.max_retentions = _int_form("max_retentions", season.max_retentions)
-        # RTM = retention spots − retained, so new spots mean new cards.
+        maximum = _int_form("max_retentions", season.max_retentions)
+        minimum = _int_form("min_retentions", season.min_retentions)
+        if retention_rn.mode(season) == 'ranges':
+            if maximum != season.max_retentions or minimum != season.min_retentions:
+                auction_svc.set_range_retention_limits(db, season, minimum, maximum)
+        else:
+            season.max_retentions, season.min_retentions = maximum, minimum
         auction_svc.sync_rtm_cards(db, season)
-        season.min_retentions = _int_form("min_retentions", season.min_retentions)
         season.retention_max_spend_lakh = _money_form("retention_max_spend", None)
         season.retention_deadline_at = _dt_form("retention_deadline")
         season.retention_min_rating = _nullable_int_form("retention_min_rating")
@@ -24970,14 +24975,23 @@ def _auction_detail_action(db, season, action):
         flash('Team shortlist updated.', 'success')
 
     elif action in ("retention_ranges", "draft_ranges"):
-        rows = []
-        fields = [request.form.getlist(k) for k in ("range_low", "range_high", "range_min", "range_max", "range_cost")]
-        if len({len(values) for values in fields}) != 1:
-            raise auction_svc.AuctionError("Every range needs ratings, minimum, maximum and cost.")
-        for low, high, minimum, maximum, cost in zip(*fields):
-            rows.append(dict(min_rating=low, max_rating=high, min_count=minimum, max_count=maximum,
-                             price_lakh=auction_svc.parse_amount(cost)))
-        auction_svc.set_range_rules(db, season, rows, draft=action == "draft_ranges")
+        if 'range_text' in request.form:
+            rows = auction_svc.parse_range_text(request.form.get('range_text') or '')
+        else:
+            rows = []
+            fields = [request.form.getlist(k) for k in ("range_low", "range_high", "range_min", "range_max", "range_cost")]
+            if len({len(values) for values in fields}) != 1:
+                raise auction_svc.AuctionError("Every range needs ratings, minimum, maximum and cost.")
+            for low, high, minimum, maximum, cost in zip(*fields):
+                rows.append(dict(min_rating=low, max_rating=high, min_count=minimum, max_count=maximum,
+                                 price_lakh=auction_svc.parse_range_cost(cost)))
+        options = {}
+        if action == 'retention_ranges':
+            if 'range_total_min' in request.form:
+                options['min_total'] = request.form.get('range_total_min')
+            if 'range_total_max' in request.form:
+                options['max_total'] = request.form.get('range_total_max') or 'auto'
+        auction_svc.set_range_rules(db, season, rows, draft=action == "draft_ranges", **options)
         flash("Rating ranges saved.", "success")
 
     elif action == "draft_order":

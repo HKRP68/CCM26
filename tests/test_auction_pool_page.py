@@ -887,6 +887,41 @@ class RetentionAndSetsFileTests(PoolPageCase):
         self.session.expire_all()
         self.assertEqual(1200, self.A.range_rules(self.season, draft=True)[0]["price_lakh"])
 
+    def test_text_range_forms_and_overall_retention_limit(self):
+        self.post({'action':'retention_ranges', 'range_text':'94-96, 0, 2, 17\n80-93, 0, 6, 8',
+                   'range_total_min':'1', 'range_total_max':'5'})
+        self.post({'action':'retention_mode', 'mode':'ranges'})
+        self.session.expire_all()
+        self.assertEqual(5, self.season.max_retentions)
+        self.assertEqual(1, self.season.min_retentions)
+        self.assertEqual(5, self.season.retention_range_max_total)
+        body = self.get()
+        self.assertIn('Overall max across all ranges', body)
+        self.assertIn('Save text ranges', body)
+        self.assertIn('94-96, 0, 2, 17', body)
+        self.post({'action':'draft_ranges', 'range_text':'94-96, 0, 2, 17; 80-93, 0, 3, 9.5'})
+        self.session.expire_all()
+        self.assertEqual(950, self.A.range_rules(self.season, draft=True)[1]['price_lakh'])
+        self.assertEqual(5, self.season.retention_range_max_total)
+        old = self.season.retention_ranges_json
+        response = self.post({'action':'retention_ranges', 'range_text':'94-96, 0, 2',
+                              'range_total_min':'1', 'range_total_max':'4'})
+        self.assertIn('Range row', response.get_data(as_text=True))
+        self.session.expire_all()
+        self.assertEqual(old, self.season.retention_ranges_json)
+        self.assertEqual(5, self.season.retention_range_max_total)
+
+    def test_standard_retention_rules_form_can_edit_overall_range_limits(self):
+        self.post({'action':'retention_ranges', 'range_text':'0-999, 0, 8, 1'})
+        self.post({'action':'retention_mode', 'mode':'ranges'})
+        self.post({'action':'retention_rules', 'min_retentions':'2', 'max_retentions':'5'})
+        self.session.expire_all()
+        self.assertEqual(5, self.season.max_retentions)
+        self.assertEqual(5, self.season.retention_range_max_total)
+        self.post({'action':'retention_ranges', 'range_text':'0-999, 0, 7, 2'})
+        self.session.expire_all()
+        self.assertEqual(5, self.season.max_retentions)
+
     def test_the_mode_toggle_and_the_dynamic_panel(self):
         self.post({"action": "retention_mode", "mode": "dynamic"})
         self.assertTrue(self.rn().is_dynamic(self.season))

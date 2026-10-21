@@ -748,7 +748,7 @@ class CommandTests(ExpansionCase):
             os.environ["BOT_ADMIN_IDS"] = self._prev_admins
         super().tearDown()
 
-    def _run(self, handler, user_id, args=()):
+    def _run(self, handler, user_id, args=(), command_text=None):
         import asyncio
         from types import SimpleNamespace
 
@@ -762,7 +762,7 @@ class CommandTests(ExpansionCase):
             effective_user=SimpleNamespace(id=user_id, username="u",
                                            first_name="U"),
             effective_message=SimpleNamespace(reply_text=reply_text,
-                                              message_id=7))
+                                              message_id=7, text=command_text))
         context = SimpleNamespace(args=list(args), bot=SimpleNamespace())
         self.session.commit()
         self.session.close()
@@ -805,6 +805,30 @@ class CommandTests(ExpansionCase):
         self._run(H.pick_handler, CAROL, (self.unique_name,))
         self.assertIn("Retentions are yet to be done", self.replies[-1])
         self.assertIn("Mumbai", self.replies[-1])
+
+    def test_comma_and_multiline_range_commands_and_total_limits(self):
+        from handlers import auction as H
+        self._bind()
+        self.two.retention_locked_at = None
+        self._run(H.aranges_handler, CAROL, command_text='/aretranges\n94-96, 0, 2, 17\n80-93, 0, 6, 8')
+        self.assertEqual(2, len(self.A.range_rules(self.two)))
+        self.assertEqual(1700, self.A.range_rules(self.two)[0]['price_lakh'])
+        self._run(H.aretmode_handler, CAROL, ('ranges',))
+        self._run(H.aretlimits_handler, CAROL, ('1', '5'))
+        self.assertEqual(5, self.two.max_retentions)
+        self.assertEqual(1, self.two.min_retentions)
+        self._run(H.aranges_handler, CAROL, command_text='/apickranges\n94-96, 0, 2, 17\n80-93, 0, 1, 5')
+        self.assertEqual(2, len(self.A.range_rules(self.two, draft=True)))
+        self.assertEqual(3, self._side('Gujarat').draft_picks_total)
+        self.assertEqual(5, self.two.retention_range_max_total)
+
+    def test_owner_cannot_change_total_retention_limits(self):
+        from handlers import auction as H
+        self._bind()
+        self.two.retention_locked_at = None
+        self._run(H.aretlimits_handler, ALICE, ('0', '5'))
+        self.assertIn('admin', self.replies[-1].lower())
+        self.assertIsNone(self.two.retention_range_max_total)
 
     def test_apicks_shows_the_order_and_whose_turn(self):
         from handlers import auction as H
@@ -1045,3 +1069,92 @@ class RangeRetentionTests(ExpansionCase):
         self.A.lock_retention(self.session, two)
         with self.assertRaisesRegex(self.A.AuctionError, "remaining picks"):
             self.A.skip_pick(self.session, two, self.A.pick_turn(self.session, two))
+
+class RangeTotalAndTextTests(ExpansionCase):
+    def configure(self, *, minimum=2, maximum=5):
+        from services import retention_negotiation as RN
+        rows = self.A.parse_range_text('90-999, 0, 4, 1\n0-89, 0, 4, 1')
+        self.A.set_range_rules(self.session, self.one, rows, min_total=minimum, max_total=maximum)
+        RN.set_mode(self.session, self.one, 'ranges')
+        self.session.commit()
+
+    def test_comma_text_pipe_legacy_and_exact_decimal_cost(self):
+        rows = self.A.parse_range_text('94-96 , 0 ,2,17\n90-93 | 1 | 3 | 8.05; (80-89, 0, 2, 0)')
+        self.assertEqual([1700, 805, 0], [r['price_lakh'] for r in rows])
+        self.A.set_range_rules(self.session, self.one, rows)
+        text = self.A.format_range_text(self.one)
+        self.assertEqual(rows, self.A.parse_range_text(text))
+        self.assertIn('94-96, 0, 2, 17', text)
+
+    def test_max_five_is_across_all_ranges_and_minimum_still_applies(self):
+        self.configure()
+        self.A.retain(self.session, self.one, self.mumbai, self.players[0])
+        with self.assertRaisesRegex(self.A.AuctionError, 'retention minimum'):
+            self.A.finalize_retention(self.session, self.one, self.mumbai)
+        for index in (1, 2, 4, 5):
+            self.A.retain(self.session, self.one, self.mumbai, self.players[index])
+        with self.assertRaisesRegex(self.A.AuctionError, 'maximum'):
+            self.A.retain(self.session, self.one, self.mumbai, self.players[6])
+        self.session.commit()
+        self.assertEqual(5, self.mumbai.retained_count)
+        self.assertEqual(5, self.one.max_retentions)
+        self.assert_ledger_agrees(self.one)
+
+    def test_explicit_cap_survives_range_edits_and_mode_switch(self):
+        from services import retention_negotiation as RN
+        self.configure()
+        self.A.set_range_rules(self.session, self.one, self.A.parse_range_text('0-999, 0, 7, 2'))
+        self.assertEqual(5, self.one.max_retentions)
+        RN.set_mode(self.session, self.one, 'dynamic')
+        RN.set_mode(self.session, self.one, 'ranges')
+        self.assertEqual(5, self.one.max_retentions)
+        self.A.set_range_retention_limits(self.session, self.one, 0, 'auto')
+        self.assertEqual(7, self.one.max_retentions)
+        self.assertIsNone(self.one.retention_range_max_total)
+
+    def test_invalid_text_and_contradictory_totals_are_rejected(self):
+        for text in ('94-96, 0, 2', '94-96, x, 2, 17', 'wrong, 0, 2, 17', ''):
+            with self.subTest(text=text), self.assertRaises(self.A.AuctionError):
+                self.A.parse_range_text(text)
+        for cost in ('NaN', 'Infinity', '-1'):
+            with self.subTest(cost=cost), self.assertRaises(self.A.AuctionError):
+                self.A.parse_range_text(f'94-96, 0, 2, {cost}')
+        rows = self.A.parse_range_text('90-96, 2, 3, 1; 80-89, 2, 3, 1')
+        with self.assertRaisesRegex(self.A.AuctionError, 'add up'):
+            self.A.set_range_rules(self.session, self.one, rows, min_total=0, max_total=3)
+        with self.assertRaisesRegex(self.A.AuctionError, 'minimum'):
+            self.A.set_range_rules(self.session, self.one, rows, min_total=7, max_total=8)
+
+    def test_empty_retention_remains_allowed_with_total_minimum(self):
+        self.configure(minimum=3, maximum=5)
+        purse = self.mumbai.purse_remaining_lakh
+        self.A.finalize_retention(self.session, self.one, self.mumbai)
+        self.session.commit()
+        self.assertEqual(0, self.mumbai.retained_count)
+        self.assertEqual(purse, self.mumbai.purse_remaining_lakh)
+
+    def test_total_cap_reserves_space_for_other_range_minimums(self):
+        from services import retention_negotiation as RN
+        self.A.set_range_rules(self.session, self.one,
+                self.A.parse_range_text('90-999, 0, 5, 1; 0-89, 1, 3, 1'), max_total=2)
+        RN.set_mode(self.session, self.one, 'ranges')
+        self.A.retain(self.session, self.one, self.mumbai, self.players[0])
+        with self.assertRaisesRegex(self.A.AuctionError, 'too few spots'):
+            self.A.retain(self.session, self.one, self.mumbai, self.players[1])
+        self.A.retain(self.session, self.one, self.mumbai, self.players[4])
+        self.A.finalize_retention(self.session, self.one, self.mumbai)
+        self.assertEqual(2, self.mumbai.retained_count)
+
+    def test_draft_text_has_independent_costs_and_allowances(self):
+        two = self.season_two()
+        two.retention_locked_at = None
+        self.session.flush()
+        self.A.set_range_rules(self.session, two, self.A.parse_range_text('0-999, 0, 6, 1'), max_total=5)
+        rows = self.A.parse_range_text('94-96, 0, 2, 17; 0-93, 0, 1, 10; 97-999, 0, 1, 20')
+        self.A.set_range_rules(self.session, two, rows, draft=True)
+        self.A.lock_retention(self.session, two)
+        team = self.A.pick_turn(self.session, two)
+        self.assertEqual(4, team.draft_picks_total)
+        lot = self.A.draft_pick(self.session, two, team, self.players[1])
+        self.assertEqual(1700, lot.sold_price_lakh)
+        self.assertEqual(5, two.retention_range_max_total)

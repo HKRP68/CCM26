@@ -212,7 +212,8 @@ def set_mode(session, season, new_mode, *, by_tg_id=None):
         raise AuctionError("Retention is final for at least one team.")
     season.retention_mode = new_mode
     if new_mode == MODE_RANGES:
-        season.max_retentions = sum(r["max_count"] for r in A.range_rules(season))
+        A._range_total_values(A.range_rules(season), season.min_retentions, season.retention_range_max_total)
+        season.max_retentions = A.range_retention_maximum(season)
     if new_mode == MODE_DYNAMIC:
         season.max_retentions = len(slots(season))
         if season.retention_max_spend_lakh is None:

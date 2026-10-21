@@ -700,7 +700,7 @@ SEASON_RULE_FIELDS = (
     "retention_min_rating", "retention_max_rating",
     "retention_categories_json", "retention_price_rules_json",
     "retention_mode", "retention_slots_json", "retention_rules_json",
-    "retention_ranges_json", "draft_ranges_json",
+    "retention_ranges_json", "retention_range_max_total", "draft_ranges_json",
     "draft_pick_seconds", "draft_timeout_action",
     # Right To Match
     "rtm_enabled", "rtm_per_team", "rtm_window_seconds", "rtm_extra_lakh",
@@ -1836,15 +1836,106 @@ def range_rules(season, *, draft=False):
                           "retention_ranges_json", None), [])
 
 
-def set_range_rules(session, season, rows, *, draft=False):
-    """Inclusive, non-overlapping rating bands, quotas and fixed player costs."""
+def parse_range_cost(raw):
+    """Range signings may be free, unlike bids; all positive amounts share units."""
+    try:
+        value = Decimal(str(raw).strip())
+        if not value.is_finite():
+            raise AuctionError("A range cost must be a finite, non-negative amount.")
+        if value == 0:
+            return 0
+    except (InvalidOperation, ValueError):
+        pass
+    return parse_amount(raw)
+
+
+def parse_range_text(text):
+    """Rows: rating range, minimum, maximum, cost in Cr; pipe rows still work."""
+    import re
+    rows = []
+    for number, line in enumerate(re.split(r'[;\r\n]+', text or ''), 1):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith('(') and line.endswith(')'):
+            line = line[1:-1].strip()
+        fields = [part.strip() for part in re.split(r'[,|]', line)]
+        if len(fields) != 4 or not all(fields):
+            raise AuctionError(f"Range row {number}: use 94-96, 0, 2, 17 (range, min, max, cost in Cr).")
+        span = parse_rating_range(fields[0])
+        if span is None:
+            raise AuctionError(f"Range row {number}: a rating range looks like 94-96.")
+        try:
+            minimum, maximum = int(fields[1]), int(fields[2])
+        except ValueError:
+            raise AuctionError(f"Range row {number}: minimum and maximum must be whole numbers.")
+        rows.append(dict(min_rating=span[0], max_rating=span[1], min_count=minimum,
+                         max_count=maximum, price_lakh=parse_range_cost(fields[3])))
+    if not rows:
+        raise AuctionError("Add at least one range, for example 94-96, 0, 2, 17.")
+    return rows
+
+
+def format_range_text(season, *, draft=False):
+    lines = []
+    for row in range_rules(season, draft=draft):
+        whole, fraction = divmod(row['price_lakh'], 100)
+        cost = f'{whole}.{fraction:02d}'.rstrip('0').rstrip('.') if fraction else str(whole)
+        lines.append(f"{row['min_rating']}-{row['max_rating']}, {row['min_count']}, {row['max_count']}, {cost}")
+    return '\n'.join(lines)
+
+
+def _range_rules_editable(session, season):
+    from services import auction_preseason as P
     from services import retention_negotiation as RN
+    P.claim_turn(session, season)
     if season.status != STATUS_SETUP or retention_locked(season):
         raise AuctionError("Ranges can only change before retention is final.")
     if RN._anything_kept(session, season) or any(
             f.retention_finalized_at or f.draft_picks_used
             for f in franchises(session, season.id)):
         raise AuctionError("Ranges cannot change after signings or team finalization.")
+
+
+def _range_total_values(rows, minimum, maximum):
+    try:
+        minimum = int(minimum)
+        maximum = None if maximum is None or str(maximum).strip().lower() in ('auto', '') else int(maximum)
+    except (ValueError, TypeError):
+        raise AuctionError("Total retention minimum/maximum must be whole numbers; maximum can be auto.")
+    capacity = sum(row['max_count'] for row in rows)
+    cap = capacity if maximum is None else maximum
+    if minimum < 0 or cap < 0 or (maximum is not None and cap > 30) or minimum > cap:
+        raise AuctionError("Total retentions need 0 ≤ minimum ≤ maximum ≤ 30.")
+    if rows and minimum > capacity:
+        raise AuctionError("The total minimum exceeds the players available across the ranges.")
+    if rows and cap > 0 and sum(row['min_count'] for row in rows) > cap:
+        raise AuctionError("Range minimums add up to more than the total retention maximum.")
+    return minimum, maximum, cap
+
+
+def range_retention_maximum(season):
+    override = getattr(season, 'retention_range_max_total', None)
+    return sum(row['max_count'] for row in range_rules(season)) if override is None else int(override)
+
+
+def set_range_retention_limits(session, season, minimum, maximum):
+    """Separate total limits from the per-band limits; zero retention stays optional."""
+    _range_rules_editable(session, season)
+    minimum, maximum, cap = _range_total_values(range_rules(season), minimum, maximum)
+    season.min_retentions = minimum
+    season.retention_range_max_total = maximum
+    if season.retention_mode == 'ranges':
+        season.max_retentions = cap
+        sync_rtm_cards(session, season)
+    session.flush()
+    return season
+
+
+def set_range_rules(session, season, rows, *, draft=False, min_total=None, max_total=None):
+    """Inclusive, non-overlapping rating bands, quotas and fixed player costs."""
+    from services import retention_negotiation as RN
+    _range_rules_editable(session, season)
     clean = []
     for row in rows:
         try:
@@ -1860,11 +1951,18 @@ def set_range_rules(session, season, rows, *, draft=False):
                           max_count=maximum, price_lakh=price))
     if not clean:
         raise AuctionError("Add at least one rating range.")
+    if not draft:
+        minimum = season.min_retentions if min_total is None else min_total
+        maximum = getattr(season, 'retention_range_max_total', None) if max_total is None else max_total
+        minimum, maximum, cap = _range_total_values(clean, minimum, maximum)
+        season.min_retentions = minimum
+        season.retention_range_max_total = maximum
     setattr(season, "draft_ranges_json" if draft else "retention_ranges_json", json.dumps(clean))
     if draft:
         set_expansion_picks(session, season, sum(r["max_count"] for r in clean))
     elif RN.mode(season) == RN.MODE_RANGES:
-        season.max_retentions = sum(r["max_count"] for r in clean)
+        season.max_retentions = cap
+        sync_rtm_cards(session, season)
     session.flush()
     return clean
 
@@ -1882,6 +1980,13 @@ def range_price(session, season, franchise, player, price=None, *, draft=False):
     if range_count(session, franchise, rule, draft=draft) >= rule["max_count"]:
         raise AuctionError(f"{franchise.name} has filled the {rule['min_rating']}-"
                            f"{rule['max_rating']} range (maximum {rule['max_count']}).")
+    if not draft:
+        remaining = int(season.max_retentions or 0) - int(franchise.retained_count or 0) - 1
+        needed = sum(max(0, row['min_count'] - range_count(session, franchise, row)
+                         - int(row['min_rating'] <= int(player.rating or 0) <= row['max_rating']))
+                     for row in range_rules(season))
+        if needed > remaining:
+            raise AuctionError("This retention would leave too few spots to meet range minimums within the overall maximum.")
     if price is not None and _as_int(price, -1) != rule["price_lakh"]:
         raise AuctionError("The price must equal the configured range cost: "
                            + render_money(rule["price_lakh"], season.currency_label))

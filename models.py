@@ -4087,6 +4087,8 @@ class AuctionSeason(Base):
     # Dynamic mode's slots, in order: [{"key", "label", "emoji", "min_rating",
     # "max_rating", "floor_lakh"}, ...]. NULL = the three-slot preset.
     retention_ranges_json = Column(Text, nullable=True)
+    # NULL preserves the automatic sum of range maxima; otherwise an overall cap.
+    retention_range_max_total = Column(Integer, nullable=True)
     draft_ranges_json = Column(Text, nullable=True)
     draft_order_json = Column(Text, nullable=True)
     # Opt-in expansion clock; deadline/cursor survive restarts.

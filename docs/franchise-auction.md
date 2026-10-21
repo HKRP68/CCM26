@@ -2228,3 +2228,39 @@ same choice. The auction can also start with teams holding zero retained players
 
 Retention minimums (overall and per range) apply only to teams retaining one or
 more players. Draft range minimums for new-team picks are unchanged.
+
+### Overall limits and comma-separated range text
+
+Range retention has **overall minimum/maximum counts**, separate from each row's
+limits. For example, an overall maximum of five means five retained players
+across all ranges combined, even if individual row maxima add up to eight.
+The overall minimum applies when retaining players; keeping zero remains allowed.
+New-team draft range minimums and allowances are independent.
+
+Configure the totals in the range editor or with `/aretlimits 1 5`. Use
+`/aretlimits 0 auto` to follow the sum of the range maxima again. An explicitly
+set maximum survives range edits, format switches and season cloning. Contradictory
+minimums/caps are refused, and a retention cannot consume the spots needed for
+other range minimums. Configure before signings or finalization.
+
+Both range editors have a **Paste ranges as text** form. One row is:
+
+```
+94-96, 0, 2, 17
+```
+
+This means rating 94–96 inclusive, minimum zero players, maximum two, **17 Cr each**.
+Add one row per line, or separate rows with semicolons. Saving replaces the table;
+the existing rows are filled in so new lines can be appended before saving.
+Pipe-separated rows remain accepted. Bot examples:
+
+```
+/aretranges 94-96, 0, 2, 17; 90-93, 0, 3, 10; 80-89, 0, 3, 5
+/aretmode ranges
+/aretlimits 1 5
+/apickranges 94-96, 0, 2, 17; 90-93, 0, 3, 10
+```
+
+Telegram messages can also put rows on separate lines. Retention and draft tables
+store their own prices. Whole player counts, non-overlapping ranges, and valid
+non-negative costs are required; decimal costs such as `8.05` Cr are supported.

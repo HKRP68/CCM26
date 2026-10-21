@@ -478,6 +478,7 @@ ADMIN_MENU_COMMANDS = (
     ("aco", "Admin: add a co-owner who may bid for a franchise"),
     ("apublish", "Admin: publish bought squads as a Challenge League"),
     ("acancel", "Admin: cancel the auction"),
+    ("aretlimits", "Admin: total minimum and maximum for range retention"),
     ("aready", "Auction: retention readiness and next draft turn"),
     ("retainlock", "Auction: preview and finalize your retention"),
     ("aeligible", "Auction: browse eligible draft players"),
@@ -2423,7 +2424,7 @@ def main():
             aadmins_handler, me_callback, aleaderboard_handler,
             amybids_handler, dot_command_handler,
             retain_handler, retention_talk_callback, aretmode_handler,
-            retainlock_handler, aranges_handler, apickorder_handler,
+            retainlock_handler, aranges_handler, apickorder_handler, aretlimits_handler,
             retention_final_callback, aready_handler, apickclock_handler,
             ashortlist_handler, aeligible_handler,
             aretslot_handler, aretrule_handler, aretdemand_handler,
@@ -2543,6 +2544,7 @@ def main():
         app.add_handler(CommandHandler("aeligible", aeligible_handler))
         app.add_handler(CommandHandler(["aretranges", "apickranges"], aranges_handler))
         app.add_handler(CommandHandler("apickorder", apickorder_handler))
+        app.add_handler(CommandHandler("aretlimits", aretlimits_handler))
         app.add_handler(CallbackQueryHandler(retention_talk_callback,
                                              pattern=r"^au_rtn_"))
         app.add_handler(CommandHandler("aretmode", aretmode_handler))

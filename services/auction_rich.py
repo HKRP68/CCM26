@@ -2005,6 +2005,8 @@ ADMIN_SECTIONS = (
         ("/artmundo <player>", "Undo a match — money and card back"),
     )),
     ("🆕 Expansion picks", (
+        ("/aretranges · /apickranges 94-96, 0, 2, 17", "Text ranges: rating, min, max, cost in Cr; separate rows with semicolons"),
+        ("/aretlimits <min> <max|auto>", "Overall range retention count, e.g. 1 5; zero remains allowed"),
         ("/apickclock <seconds> | pause|skip|shortlist", "Optional expansion timer; off by default"),
         ("/apickclock pause · resume · off", "Pause, resume with full time, or disable"),
         ("/apick <team> | <player> | [price]", "A new side signs a player"),

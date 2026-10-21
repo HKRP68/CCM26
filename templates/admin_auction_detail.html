@@ -700,7 +700,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="retention_rules">
       <input type="hidden" name="back_query" value="#retention">
-      {% if ret_dynamic or season.retention_mode == "ranges" %}
+      {% if ret_dynamic %}
       <input type="hidden" name="max_retentions" value="{{ season.max_retentions }}">
       <div><label>Max per franchise</label><input type="text" value="{{ season.max_retentions }} — from configured slots/ranges" disabled></div>
       {% else %}
@@ -963,11 +963,19 @@
     {% endif %}
   </div></details>
 
+  {% macro total_retention_inputs() %}
+    <div class="au-actions">
+      <label>Overall min if retaining any<input name="range_total_min" type="number" min="0" max="30" value="{{ season.min_retentions or 0 }}" required></label>
+      <label>Overall max across all ranges<input name="range_total_max" type="number" min="0" max="30" value="{{ season.retention_range_max_total if season.retention_range_max_total is not none else '' }}" placeholder="blank = sum of range maxima"></label>
+    </div>
+    <p class="au-note">Example: maximum 5 means at most five retained players across all rating ranges. Keeping zero players is always allowed.</p>
+  {% endmacro %}
   {% macro range_editor(is_draft) %}
   <h4>{{ 'Draft' if is_draft else 'Retention' }} rating ranges</h4>
   <form method="POST">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="action" value="{{ 'draft_ranges' if is_draft else 'retention_ranges' }}">
+    {% if not is_draft %}{{ total_retention_inputs() }}{% endif %}
     <p>Inclusive ranges. Columns: minimum rating · maximum rating · minimum players · maximum players · cost each (Cr).</p>
     <div class="range-rows">
       {% for r in range_rules_for_ui(is_draft) %}
@@ -984,6 +992,18 @@
     <button type="button" class="btn btn-ghost" onclick="this.form.querySelector('.range-rows').appendChild(document.getElementById('range-row-template').content.cloneNode(true))">Add range</button>
     <button type="submit" class="btn btn-primary">Save ranges</button>
   </form>
+  <details><summary>Paste {{ 'draft' if is_draft else 'retention' }} ranges as text</summary>
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="{{ 'draft_ranges' if is_draft else 'retention_ranges' }}">
+      {% if not is_draft %}{{ total_retention_inputs() }}{% endif %}
+      <label>Rating range, minimum players, maximum players, cost each (Cr)
+        <textarea name="range_text" rows="6" placeholder="94-96, 0, 2, 17&#10;90-93, 0, 3, 10" required>{{ range_text_for_ui(is_draft) }}</textarea>
+      </label>
+      <p class="au-note">One range per line or separated by semicolons. Saving replaces this table. Existing pipe-separated rows also work.</p>
+      <button class="btn btn-primary">Save text ranges</button>
+    </form>
+  </details>
   {% endmacro %}
   <template id="range-row-template"><div class="au-actions">
     <input aria-label="Minimum rating" name="range_low" type="number" placeholder="91" required>

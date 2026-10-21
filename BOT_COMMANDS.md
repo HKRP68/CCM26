@@ -1222,3 +1222,13 @@ Teams may enter with **zero retentions**, even when retention minimums are set.
 Use `/retainlock`, then **Enter auction without retentions**. The team keeps its
 purse and counts as finished. Minimums still apply if it retains any players;
 new-team draft minimums are unchanged.
+
+### Range retention: overall count and text input
+
+- `/aretlimits 1 5` — admin: overall min one (if retaining) and max five across all ranges. Zero retentions remain allowed.
+- `/aretlimits 0 auto` — follow the sum of range maxima instead of an explicit overall cap.
+- `/aretranges 94-96, 0, 2, 17; 90-93, 0, 3, 10` — rating range, minimum players, maximum players, cost each in Cr.
+- `/apickranges 94-96, 0, 2, 17; 90-93, 0, 3, 10` — same text format for draft ranges, with independent prices.
+
+Rows can be on separate lines or separated by semicolons; existing pipe syntax
+still works. Both admin range editors support pasting and editing these rows.
