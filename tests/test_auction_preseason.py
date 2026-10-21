@@ -39,6 +39,23 @@ class PreseasonTests(F.ExpansionCase):
         self.assertFalse(preview['finalized'])
         self.assertFalse(self.session.dirty)
 
+    def test_admin_reopening_one_team_stops_draft_until_it_is_locked_again(self):
+        two, _order = self.draft()
+        team = next(f for f in self.A.franchises(self.session, two.id) if f.name == 'Mumbai')
+        self.assertIsNotNone(two.draft_pick_deadline_at)
+        self.A.set_retention_lock(self.session, two, False, team, now=F.NOW)
+        self.assertIsNone(two.draft_pick_deadline_at)
+        with self.assertRaisesRegex(self.A.AuctionError, 'Mumbai'):
+            self.A._pick_window(self.session, two)
+        self.A.set_retention_lock(self.session, two, True, team, now=F.NOW)
+        self.assertTrue(self.A.retention_locked(two))
+        self.assertIsNotNone(two.draft_pick_deadline_at)
+
+    def test_admin_cannot_unlock_retention_for_an_expansion_team(self):
+        two, order = self.draft()
+        with self.assertRaisesRegex(self.A.AuctionError, 'New teams draft'):
+            self.A.set_retention_lock(self.session, two, False, order[0])
+
     def test_dynamic_retention_can_finalize_empty_despite_minimum(self):
         from services import retention_negotiation as RN
         RN.set_mode(self.session, self.one, 'dynamic')

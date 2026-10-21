@@ -1011,6 +1011,25 @@ class RetentionFromLastSeasonPageTests(PoolPageCase):
         self.session.expire_all()
         self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
 
+    def test_admin_page_reopens_all_or_one_team_after_global_closure(self):
+        old = next(t for t in self.A.league_teams(self.session, self.season.previous_league_id)
+                   if t.name == 'Kochi Tuskers')
+        self.A.set_previous_team(self.session, self.season, self.kochi, str(old.id))
+        self.session.commit()
+        self.post({'action': 'retention_lock', 'lock_state': 'on'})
+        self.session.expire_all()
+        self.assertTrue(self.A.retention_locked(self.season))
+        self.assertIn('Lock / unlock retention', self.get())
+        self.post({'action': 'retention_lock', 'lock_state': 'off',
+                   'franchise_id': self.mumbai.id})
+        self.session.expire_all()
+        self.assertFalse(self.A.retention_locked(self.season))
+        self.assertIsNone(self.mumbai.retention_finalized_at)
+        self.assertIsNotNone(self.kochi.retention_finalized_at)
+        self.post({'action': 'retention_lock', 'lock_state': 'off'})
+        self.session.expire_all()
+        self.assertIsNone(self.kochi.retention_finalized_at)
+
     def test_a_renamed_side_is_tied_on_the_page(self):
         team = self.A.league_teams(self.session,
                                    self.season.previous_league_id)

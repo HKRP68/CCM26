@@ -2562,7 +2562,7 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def aretlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """The state of retention for anyone; ``on`` closes it, for an admin.
+    """Read status, or let an admin lock/unlock all teams or one team.
 
     The readout matters more than the switch, and to more people. The deadline
     is enforced lazily — nothing sweeps while an auction is in setup — so a
@@ -2571,16 +2571,27 @@ async def aretlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     against. So the readout is open, and only the switch takes an admin.
     """
     user = update.effective_user
-    arg = _arg_text(context).strip().lower()
-
-    if arg not in ("on", "close", "lock"):
+    raw = _arg_text(context).strip()
+    if not raw:
         await _view(update, context,
                     lambda s, season: AR.retention_view(s, season))
         return
 
     def work(session, season):
-        A.lock_retention(session, season, by_tg_id=user.id if user else None)
-        return "🔒 Retention is closed."
+        parts = raw.split(None, 1)
+        action = parts[0].lower()
+        if action not in ("on", "close", "lock", "off", "open", "unlock"):
+            raise AuctionError("Usage: /aretlock on|off [all or team name]")
+        target = parts[1].strip().lstrip("|").strip() if len(parts) > 1 else "all"
+        if not target:
+            raise AuctionError("Usage: /aretlock on|off [all or team name]")
+        franchise = None if target.lower() == "all" else _find_franchise(session, season, target)
+        locked = action in ("on", "close", "lock")
+        A.set_retention_lock(session, season, locked, franchise,
+                             by_tg_id=user.id if user else None)
+        if franchise is None:
+            return "🔒 Retention is closed." if locked else "🔓 Retention reopened for all teams."
+        return f"{'🔒' if locked else '🔓'} Retention {'locked' if locked else 'reopened'} for {html.escape(franchise.name)}."
 
     await _with_auction(update, work, admin=True, context=context)
 
@@ -3803,8 +3814,27 @@ async def aaccelmode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # Admin — the teams
 # ════════════════════════════════════════════════════════════════════
 
+async def _send_auction_call(bot, chat_id, parts, media=None, reply_markup=None):
+    """Keep photo captions within Telegram's limit and preserve long text."""
+    remaining = list(parts)
+    if media:
+        kind, file_id = media
+        caption = (remaining.pop(0) if len(remaining[0].encode("utf-16-le")) // 2 <= 1000
+                   else "📣 Auction announcement")
+        kwargs = dict(chat_id=chat_id, caption=caption, parse_mode="HTML",
+                      reply_markup=reply_markup if not remaining else None)
+        if kind == "photo":
+            await bot.send_photo(photo=file_id, **kwargs)
+        else:
+            await bot.send_document(document=file_id, **kwargs)
+    for index, part in enumerate(remaining):
+        await bot.send_message(chat_id=chat_id, text=part, parse_mode="HTML",
+            disable_web_page_preview=True,
+            reply_markup=reply_markup if index == len(remaining) - 1 else None)
+
+
 async def acall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """<code>/acall [message]</code> — tag every owner and co-owner."""
+    """/acall [message]: group tags and DMs, including attached/replied images."""
     chat = update.effective_chat
     if chat is None or chat.type not in GROUP_CHAT_TYPES:
         await _reply(update, GROUP_ONLY)
@@ -3812,25 +3842,53 @@ async def acall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _require_admin(update):
         return
     message = _arg_text(context)
+    command = update.effective_message
+    caption = getattr(command, "caption", None) or ""
+    if caption and caption.split(None, 1)[0].split("@")[0].lower() in ("/acall", "/acallteams"):
+        addressed_to = caption.split(None, 1)[0].partition("@")[2]
+        if addressed_to and addressed_to.casefold() != (getattr(context.bot, "username", None) or "").casefold():
+            return
+        message = caption.split(None, 1)[1] if len(caption.split(None, 1)) > 1 else ""
+    media = None
+    for source in (command, getattr(command, "reply_to_message", None)):
+        photos = getattr(source, "photo", None)
+        document = getattr(source, "document", None)
+        if photos:
+            media = ("photo", photos[-1].file_id)
+        elif document and (getattr(document, "mime_type", None) or "").startswith("image/"):
+            media = ("document", document.file_id)
+        if media:
+            if not message and source is not command:
+                message = getattr(source, "caption", None) or ""
+            break
     session = get_session()
     try:
         season = _season_for(session, update)
         if season is None:
             await _reply(update, NO_AUCTION)
             return
+        teams = A.franchises(session, season.id)
+        for team in teams:
+            A.restore_retention_owners(session, season, team)
+        recipients = sorted({uid for team in teams for uid in A.owner_ids(team)})
         parts = AR.call_html(session, season, message or None)
+        session.commit()
     finally:
         session.close()
     user = update.effective_user
-    for index, part in enumerate(parts):
-        await context.bot.send_message(
-            chat_id=chat.id, text=part, parse_mode="HTML",
-            disable_web_page_preview=True,
-            # The Close rides on the LAST part, which is where a keyboard on a
-            # split message always goes: a button under the middle of a call
-            # would take away half of it.
-            reply_markup=(AR.with_close(None, user.id if user else None)
-                          if index == len(parts) - 1 else None))
+    await _send_auction_call(context.bot, chat.id, parts, media,
+                              AR.with_close(None, user.id if user else None))
+    delivered, failed = 0, 0
+    for recipient in recipients:
+        try:
+            await _send_auction_call(context.bot, recipient, parts, media)
+            delivered += 1
+        except Exception:
+            # A blocked/unstarted DM must not prevent the other teams' calls.
+            failed += 1
+            logger.info("auction call DM unavailable for %s", recipient)
+    await _reply(update, f"📨 Team owner/co-owner DMs: {delivered} delivered, {failed} unavailable."
+                 + (" Unavailable recipients need to start/unblock the bot." if failed else ""))
 
 
 async def aremoveteam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

@@ -484,7 +484,7 @@ ADMIN_MENU_COMMANDS = (
     ("aeligible", "Auction: browse eligible draft players"),
     ("ashortlist", "Auction: manage your draft shortlist"),
     ("apickclock", "Admin: expansion draft clock and timeout action"),
-    ("aretlock", "Admin: retention state, and close the window"),
+    ("aretlock", "Admin: lock/unlock retention for all teams or one team"),
     ("aretain", "Admin: retain a player for a franchise"),
     ("aunretain", "Admin: release a retained player into the pool"),
     ("artmset", "Admin: Right To Match rules, and the card counts"),
@@ -504,7 +504,7 @@ ADMIN_MENU_COMMANDS = (
     # 100-command ceiling it is exempt from only because it has never filled.
     ("adminhelp", "Admin: every Franchise Auction admin command"),
     ("apool", "Admin: add a rating range to the auction pool as a set"),
-    ("acall", "Admin: tag every auction owner and co-owner"),
+    ("acall", "Admin: group tags + owner DMs, with optional image"),
     ("aremoveteam", "Admin: remove a team — players back, purse shared"),
     ("aadminadd", "Admin: let someone run auctions (auction admin)"),
     # Lets Play tournament. Every one of these is bot-admin-only, so they
@@ -2605,6 +2605,10 @@ def main():
         app.add_handler(CommandHandler("aaccelmode", aaccelmode_handler))
         # The teams: call them all, or take one out of the auction.
         app.add_handler(CommandHandler(["acall", "acallteams"], acall_handler))
+        app.add_handler(MessageHandler(
+            (_au_filters.PHOTO | _au_filters.Document.IMAGE)
+            & _au_filters.CaptionRegex(r"(?i)^/acall(?:teams)?(?:@[a-z0-9_]+)?(?:\s|$)"),
+            acall_handler))
         app.add_handler(CommandHandler("aremoveteam", aremoveteam_handler))
         # Auction admins: appointed by bot admins, able to run every auction
         # command and nothing else in the bot.

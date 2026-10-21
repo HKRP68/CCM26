@@ -1875,9 +1875,13 @@ def call_html(session, season, message=None):
     """
     from services.draft_scheduler import mention
     head = f"📣 <b>Calling every franchise — {_e(season.name)}</b>"
-    if message:
-        head += f"\n<blockquote>{_e(message)}</blockquote>"
     lines = []
+    if message:
+        if len(_e(message)) <= 2000:
+            head += f"\n<blockquote>{_e(message)}</blockquote>"
+        else:
+            lines.extend(f"<blockquote>{_e(message[i:i + 500])}</blockquote>"
+                         for i in range(0, len(message), 500))
     for franchise in A.franchises(session, season.id):
         people = [mention(session, tg_id,
                           (franchise.owner_name if tg_id == franchise.owner_tg_id
@@ -1981,7 +1985,7 @@ ADMIN_SECTIONS = (
         ("/aoffers", "Retention offers still waiting"),
         ("/aretcancel <player>", "Withdraw a waiting offer"),
         ("/aunretain <player>", "Release a retained player into the pool"),
-        ("/aretlock on", "Close the window — bare /aretlock is the room's readout"),
+        ("/aretlock on|off [all or team]", "Lock/reopen all teams or one team; bare shows status"),
         ("/aretmode classic|dynamic", "Which retention system — the ladder, "
                                       "or owners negotiating with players"),
         ("/aretslot [add|edit|remove|move|preset]", "Dynamic slots: rating "
@@ -2013,7 +2017,7 @@ ADMIN_SECTIONS = (
         ("/apickset · /apickskip · /apickundo", "Deal picks, skip a turn, undo one"),
     )),
     ("🏛 Teams", (
-        ("/acall [message]", "Tag every owner and co-owner"),
+        ("/acall [message]", "Tag teams in the group and DM owners/co-owners; reply to an image or caption it"),
         ("/aremoveteam <team>", "Remove a team — players back in the pool, purse shared"),
     )),
     ("🔁 Trades", (

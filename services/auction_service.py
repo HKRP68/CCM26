@@ -2106,13 +2106,9 @@ def pending_retention_teams(session, season):
             if f.id not in new_ids and not f.retention_finalized_at]
 
 
-def finalize_retention(session, season, franchise, *, by_tg_id=None):
-    from services import auction_preseason as P
-    P.claim_turn(session, season)
-    if franchise.retention_finalized_at:
-        return franchise
-    if not retention_open(season):
-        raise AuctionError("Retention is closed.")
+def _validate_retention_finalization(session, season, franchise):
+    if franchise.season_id != season.id:
+        raise AuctionError("That team is not in this auction.")
     if franchise.id in {f.id for f in expansion_franchises(session, season)}:
         raise AuctionError("New teams draft after the other teams finalize retention.")
     if 0 < int(franchise.retained_count or 0) < int(season.min_retentions or 0):
@@ -2124,6 +2120,16 @@ def finalize_retention(session, season, franchise, *, by_tg_id=None):
         raise AuctionError("Answer or cancel the pending retention offers first.")
     if RN.open_talk_for(session, season, franchise):
         raise AuctionError("Finish the open retention negotiation first.")
+
+
+def finalize_retention(session, season, franchise, *, by_tg_id=None):
+    from services import auction_preseason as P
+    P.claim_turn(session, season)
+    if franchise.retention_finalized_at:
+        return franchise
+    if not retention_open(season):
+        raise AuctionError("Retention is closed.")
+    _validate_retention_finalization(session, season, franchise)
     franchise.retention_finalized_at = datetime.utcnow()
     session.flush()
     log_event(session, season, "team_retention_final", f"🔒 {_e(franchise.name)} finalized retention"
@@ -2136,6 +2142,55 @@ def finalize_retention(session, season, franchise, *, by_tg_id=None):
 
 def retention_configured(season):
     return _as_int(getattr(season, "max_retentions", 0), 0) > 0
+
+
+def set_retention_lock(session, season, locked, franchise=None, *, by_tg_id=None, now=None):
+    """Admin control: reopen all teams or just one without reopening the others."""
+    from services import auction_preseason as P
+    P.claim_turn(session, season)
+    if season.status != STATUS_SETUP:
+        raise AuctionError("Change retention locks before the auction opens.")
+    if franchise is not None and franchise.season_id != season.id:
+        raise AuctionError("That team is not in this auction.")
+    new_ids = {f.id for f in expansion_franchises(session, season)}
+    teams = [f for f in franchises(session, season.id) if f.id not in new_ids]
+    if franchise is not None and franchise.id in new_ids:
+        raise AuctionError("New teams draft; they do not retain previous players.")
+    now = now or datetime.utcnow()
+    if locked:
+        if franchise is None:
+            return lock_retention(session, season, now=now, by_tg_id=by_tg_id)
+        if franchise.retention_finalized_at:
+            return franchise
+        _validate_retention_finalization(session, season, franchise)
+        franchise.retention_finalized_at = now
+        session.flush()
+        if not pending_retention_teams(session, season):
+            lock_retention(session, season, now=now, by_tg_id=by_tg_id)
+    else:
+        if any(int(f.draft_picks_used or 0) for f in franchises(session, season.id)):
+            raise AuctionError("Cannot reopen retention after expansion draft picks have started.")
+        if franchise is None:
+            for team in teams:
+                team.retention_finalized_at = None
+        else:
+            if retention_locked(season):
+                # Global closure also locked teams that had not pressed Final.
+                for team in teams:
+                    if team.id != franchise.id and not team.retention_finalized_at:
+                        team.retention_finalized_at = now
+            franchise.retention_finalized_at = None
+        season.retention_locked_at = None
+        if season.retention_deadline_at and season.retention_deadline_at <= now:
+            season.retention_deadline_at = None
+        session.flush()
+        P.sync_clock(session, season, now=now)
+    sync_rtm_cards(session, season)
+    target = franchise.name if franchise is not None else "all teams"
+    log_event(session, season, "retention_admin_lock" if locked else "retention_reopened",
+              f"{'🔒' if locked else '🔓'} Retention {'locked' if locked else 'reopened'} for {_e(target)}.",
+              franchise=franchise, by_tg_id=by_tg_id, by_admin=True)
+    return franchise or season
 
 
 def retention_locked(season):

@@ -2151,10 +2151,26 @@ The configured seats follow snake order and cannot change after the first pick.
 
 Owners/co-owners use `/retain Player Name` or `/retain Team Name | Player Name`
 for their own previous squad's players,
-then `/retainlock` to finalize permanently. Teams retaining players must meet their range minimums. A team may instead
+then `/retainlock` to finalize. Teams retaining players must meet their range minimums. A team may instead
 finalize with zero retentions; pending offers/negotiations must still be resolved. Finalized teams cannot retain or release.
 Retention closes automatically after all existing teams finalize. Admins can also
 use `/aretlock on`; range minimums still apply.
+
+Admins can use `/aretlock on all` / `/aretlock off all` to lock or reopen all
+teams, or `/aretlock on Team Name` / `/aretlock off Team Name` for one team.
+The setup page offers the same controls. Reopening one team keeps all other
+teams locked, stops the draft timer and blocks draft picks until retention
+closes again. Reopening is available before expansion picks begin and before
+the auction starts. An expired retention deadline is cleared when reopening;
+a future deadline stays in effect. Existing retained players and purse balances
+are preserved.
+
+`/acall Your message` posts the announcement with team names and owner/co-owner
+tags in the bound group and sends it to each unique owner/co-owner by DM.
+Reply to an image with the command, or send an image with `/acall Your message`
+as its caption, to include the image in the group and DMs. Image documents are
+supported too. Long text is split to fit Telegram's limits. A blocked DM does
+not stop other deliveries; the result reports delivered and unavailable DMs.
 
 New-team owners use `/pick Player Name` from the remaining pool. Early attempts
 name the teams yet to finish retention. Fixed range prices, quota limits, draft

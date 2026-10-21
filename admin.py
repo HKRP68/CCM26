@@ -25103,9 +25103,16 @@ def _auction_detail_action(db, season, action):
               "success" if not result["unmatched"] else "error")
 
     elif action == "retention_lock":
-        auction_svc.lock_retention(db, season)
-        log_admin(db, "auction_retention_lock", "auction", season.id, season.name)
-        flash("🔒 Retention is closed.", "success")
+        state = request.form.get("lock_state", "on")
+        if state not in ("on", "off"):
+            raise auction_svc.AuctionError("Choose lock or unlock.")
+        target = request.form.get("franchise_id")
+        franchise = _auction_franchise(db, season, target) if target else None
+        auction_svc.set_retention_lock(db, season, state == "on", franchise)
+        log_admin(db, "auction_retention_lock", "auction", season.id, season.name,
+                  detail=f"{state}: {franchise.name if franchise else 'all teams'}")
+        flash(f"Retention {'locked' if state == 'on' else 'reopened'} for "
+              f"{franchise.name if franchise else 'all teams'}.", "success")
 
     elif action == "expansion_rules":
         dealt = auction_svc.set_expansion_picks(

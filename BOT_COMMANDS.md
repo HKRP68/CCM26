@@ -829,7 +829,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/aprevious [league name \| id]` (`/alastseason`) | Link last season's league, and see which team each franchise was. A franchise nobody matched (a renamed side) gets buttons to pick its old team |
 | `/aprevteam <franchise> \| <last season's team>` | Tie a renamed side to its old team by id — `/aprevteam Kochi \| Kochi Tuskers`; `\| none` clears it |
 | `/aunretain <player name>` (`/arelease`) | Release a retained player into the pool. **Owners** use `/arelease` for their own kept players while the retention / release window is open — by name, or bare for buttons — in the group or a DM |
-| `/aretlock [on]` · `/aretention` | Retention state, and close the window |
+| `/aretlock [on\|off] [all or team name]` · `/aretention` | View retention; admin locks/unlocks all teams or one team |
 | `/artmset on [seconds] [premium]` · `/artmset off` | Right To Match rules — `/artmset on 45 2`. Cards are **automatic**: RTM = retention spots − players retained, per franchise (a season with retention off uses a flat count, `/artmset 2`) |
 | `/artmcards <franchise> <cards>` | Override one franchise's RTM count — `/artmcards Mumbai 3` (the automatic count stops being re-dealt once the auction opens) |
 | `/aratingrule <max rating> <min players>` | Squad rating rule — `/aratingrule 83 4`: every squad must end with at least 4 players rated 83 or lower. `/aratingrule off 83`, `/aratingrule clear`; bare lists the rules and each team's progress |
@@ -853,7 +853,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/aretdemand 83=13-17 \| 89=20-24 \| 96=28-32` | The Demand Meter's price curve, in crore |
 | `/asetsexport [json\|csv]` | Download every set as a file |
 | `/asetsimport [replace]` | Reply to a sets file to load it — only queued players move; `replace` drops queued players it leaves out |
-| `/acall [message]` | Tag every owner and co-owner |
+| `/acall [message]` | Tag teams in the group and DM every owner/co-owner; reply to an image or use an image caption |
 | `/aremoveteam <franchise> [\| confirm]` | Remove a team: players back in the pool, its purse shared equally |
 | `/aadminadd <id \| @user \| reply>` | Bot admins only: make someone an auction admin |
 | `/aadminremove <id \| @user \| reply>` · `/aadmins` | Remove one, or list them |

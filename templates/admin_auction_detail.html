@@ -841,19 +841,25 @@
     {% endfor %}
     {% endif %}
 
+    {% endif %}
+    {% if season.status == 'setup' %}
     <details class="au-confirm" style="margin-top:1rem;">
-      <summary class="btn btn-ghost btn-sm danger">🔒 Close retention</summary>
+      <summary class="btn btn-ghost btn-sm">🔒 Lock / unlock retention</summary>
       <div class="au-confirm-body">
         <p class="au-note" style="margin:0 0 .4rem;">
-          Squads are then fixed until the auction, and nothing can be retained
-          or released. Starting the auction closes retention too — this is only
-          for closing it early.
+          Apply to all teams or one team. Reopening one team keeps the others
+          locked. Reopening is available before expansion draft picks begin.
         </p>
         <form method="POST">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="action" value="retention_lock">
           <input type="hidden" name="back_query" value="#retention">
-          <button class="btn btn-ghost danger" type="submit">Close it now</button>
+          <select name="lock_state"><option value="on">Lock</option><option value="off">Unlock</option></select>
+          <select name="franchise_id">
+            <option value="">All teams</option>
+            {% for f in field %}<option value="{{ f.id }}">{{ f.name }}</option>{% endfor %}
+          </select>
+          <button class="btn btn-primary" type="submit">Apply retention lock</button>
         </form>
       </div>
     </details>
