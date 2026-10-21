@@ -517,16 +517,28 @@ class RetentionWindowTests(AuctionCase):
         self.session.commit()
         self.assertTrue(self.A.retention_locked(self.season))
 
-    def test_the_minimum_is_enforced_at_start_by_name(self):
-        self.season.min_retentions = 1
+    def test_the_minimum_is_enforced_for_partial_retention_at_start_by_name(self):
+        self.season.min_retentions = 2
         self.build_pool()
-        self.A.retain(self.session, self.season, self.mumbai, self.players[0],
-                      now=NOW)
+        self.A.retain(self.session, self.season, self.mumbai, self.players[0], now=NOW)
+        self.A.retain(self.session, self.season, self.mumbai, self.players[1], now=NOW)
+        self.A.retain(self.session, self.season, self.chennai, self.players[2], now=NOW)
         self.session.commit()
         with self.assertRaises(self.A.AuctionError) as caught:
             self.start()
         self.assertIn("Chennai", str(caught.exception))
-        self.assertIn("minimum of 1", str(caught.exception))
+        self.assertIn("minimum of 2", str(caught.exception))
+
+    def test_zero_retentions_are_allowed_at_start_despite_configured_minimum(self):
+        self.season.min_retentions = 2
+        self.build_pool()
+        self.start()
+        self.session.commit()
+        self.assertEqual(self.A.STATUS_LIVE, self.season.status)
+        for team in (self.mumbai, self.chennai):
+            self.assertEqual(0, team.retained_count)
+            self.assertEqual(self.purse_lakh, team.purse_remaining_lakh)
+        self.assert_ledger_agrees('without any retention')
 
     def test_the_minimum_check_sees_a_retention_with_no_commit_between(self):
         """The website's shape: retain and start in one request.

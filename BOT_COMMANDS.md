@@ -1217,3 +1217,8 @@ systems — e.g. [`docs/franchise-auction.md`](docs/franchise-auction.md),
 
 A shortlist timeout only takes an eligible listed player. Empty/ineligible lists
 and skips that would prevent range minimums pause the clock without spending a pick.
+
+Teams may enter with **zero retentions**, even when retention minimums are set.
+Use `/retainlock`, then **Enter auction without retentions**. The team keeps its
+purse and counts as finished. Minimums still apply if it retains any players;
+new-team draft minimums are unchanged.

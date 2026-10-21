@@ -944,8 +944,6 @@ class RangeRetentionTests(ExpansionCase):
 
     def test_minimums_and_final_team_immutability(self):
         self.configure([self.rule(), self.rule(80, 90, 1, 2, 300)])
-        with self.assertRaisesRegex(self.A.AuctionError, "91-96"):
-            self.A.finalize_retention(self.session, self.one, self.mumbai)
         lot = self.A.retain(self.session, self.one, self.mumbai, self.players[1])
         with self.assertRaisesRegex(self.A.AuctionError, "80-90"):
             self.A.finalize_retention(self.session, self.one, self.mumbai)
@@ -955,6 +953,47 @@ class RangeRetentionTests(ExpansionCase):
             self.A.unretain(self.session, self.one, self.mumbai, lot)
         with self.assertRaisesRegex(self.A.AuctionError, "final"):
             self.A.retain(self.session, self.one, self.mumbai, self.players[2])
+
+    def test_zero_retention_bypasses_minimums_and_keeps_full_purse(self):
+        from services import auction_preseason as P
+        self.configure([self.rule(), self.rule(80, 90, 1, 2, 300)])
+        self.one.min_retentions = 2
+        self.session.flush()
+        for team in (self.mumbai, self.chennai):
+            before = team.purse_remaining_lakh
+            preview = P.retention_preview(self.session, self.one, team)
+            P.confirm_retention(self.session, self.one, team, preview['token'])
+            self.session.commit()
+            self.assertEqual(before, team.purse_remaining_lakh)
+            self.assertEqual(0, team.retained_count)
+            self.assertEqual([], self.A.retained(self.session, team.id))
+            self.assertIsNotNone(team.retention_finalized_at)
+        self.A.add_players_to_pool(self.session, self.one, self.players)
+        self.A.start(self.session, self.one, now=NOW)
+        self.session.commit()
+        self.assertEqual(self.A.STATUS_LIVE, self.one.status)
+        self.assert_ledger_agrees(self.one)
+
+    def test_existing_teams_can_keep_nobody_then_new_teams_draft(self):
+        from services import retention_negotiation as RN
+        two = self.season_two()
+        two.retention_locked_at = None
+        self.session.flush()
+        self.A.set_range_rules(self.session, two, [self.rule()])
+        RN.set_mode(self.session, two, 'ranges')
+        two.min_retentions = 1
+        self.session.flush()
+        teams = self.A.pending_retention_teams(self.session, two)
+        for team in teams:
+            self.A.finalize_retention(self.session, two, team)
+        self.assertTrue(self.A.retention_locked(two))
+        self.assertEqual([], self.A.pending_retention_teams(self.session, two))
+        new = self.A.pick_turn(self.session, two)
+        lot = self.A.draft_pick(self.session, two, new, self.players[0], now=NOW)
+        self.session.commit()
+        self.assertEqual(new.id, lot.sold_to_id)
+        self.assertTrue(all(t.purse_remaining_lakh == t.purse_total_lakh for t in teams))
+        self.assert_ledger_agrees(two)
 
     def test_offer_displays_and_charges_range_cost(self):
         self.configure()

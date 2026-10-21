@@ -39,6 +39,20 @@ class PreseasonTests(F.ExpansionCase):
         self.assertFalse(preview['finalized'])
         self.assertFalse(self.session.dirty)
 
+    def test_dynamic_retention_can_finalize_empty_despite_minimum(self):
+        from services import retention_negotiation as RN
+        RN.set_mode(self.session, self.one, 'dynamic')
+        self.one.min_retentions = 2
+        self.session.flush()
+        purse = self.mumbai.purse_remaining_lakh
+        preview = self.P.retention_preview(self.session, self.one, self.mumbai)
+        self.P.confirm_retention(self.session, self.one, self.mumbai, preview['token'])
+        self.session.commit()
+        self.assertIsNotNone(self.mumbai.retention_finalized_at)
+        self.assertEqual(purse, self.mumbai.purse_remaining_lakh)
+        self.assertEqual(0, self.mumbai.retained_count)
+        self.assert_ledger_agrees(self.one)
+
     def test_changed_roster_rejects_preview_token(self):
         preview = self.P.retention_preview(self.session, self.one, self.mumbai)
         self.A.retain(self.session, self.one, self.mumbai, self.players[1], 700)
@@ -270,6 +284,7 @@ class PreseasonCommandTests(F.ExpansionCase):
             self.assertIn('retention preview', reply.call_args.args[1])
             self.assertIn('Remaining purse', reply.call_args.args[1])
             self.assertTrue(reply.call_args.kwargs['reply_markup'].inline_keyboard[0][0].callback_data.startswith('au_rfinal_'))
+            self.assertEqual('Enter auction without retentions', reply.call_args.kwargs['reply_markup'].inline_keyboard[0][0].text)
         self.session.expire_all()
         self.assertIsNone(self.mumbai.retention_finalized_at)
 

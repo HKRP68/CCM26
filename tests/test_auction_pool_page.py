@@ -1012,7 +1012,7 @@ class PreseasonPageTests(PoolPageCase):
         self.assertEqual('Draft side', data['readiness']['next_team'])
         self.assertTrue(all(90 <= p['rating'] <= 99 for p in data['eligible']['players']))
         self.assertIn('preseason-live', self.get())
-        self.assertIn('Make retention final', self.get())
+        self.assertIn('Enter auction without retentions', self.get())
 
     def test_invalid_filter_and_foreign_team_rejected(self):
         response = self.client.get(f'/auctions/{self.season_id}/readiness?eligible_rating=wrong')

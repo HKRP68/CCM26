@@ -1889,6 +1889,9 @@ def range_price(session, season, franchise, player, price=None, *, draft=False):
 
 
 def check_range_minimums(session, season, franchise, *, draft=False):
+    # Retention is optional; draft quotas still apply to every new team.
+    if not draft and int(franchise.retained_count or 0) == 0:
+        return
     for rule in range_rules(season, draft=draft):
         count = range_count(session, franchise, rule, draft=draft)
         if count < rule["min_count"]:
@@ -1912,7 +1915,7 @@ def finalize_retention(session, season, franchise, *, by_tg_id=None):
         raise AuctionError("Retention is closed.")
     if franchise.id in {f.id for f in expansion_franchises(session, season)}:
         raise AuctionError("New teams draft after the other teams finalize retention.")
-    if int(franchise.retained_count or 0) < int(season.min_retentions or 0):
+    if 0 < int(franchise.retained_count or 0) < int(season.min_retentions or 0):
         raise AuctionError(f"{franchise.name} has not met the retention minimum.")
     from services import retention_negotiation as RN
     if RN.mode(season) == RN.MODE_RANGES:
@@ -1923,7 +1926,8 @@ def finalize_retention(session, season, franchise, *, by_tg_id=None):
         raise AuctionError("Finish the open retention negotiation first.")
     franchise.retention_finalized_at = datetime.utcnow()
     session.flush()
-    log_event(session, season, "team_retention_final", f"🔒 {_e(franchise.name)} finalized retention.",
+    log_event(session, season, "team_retention_final", f"🔒 {_e(franchise.name)} finalized retention"
+              + (" — no players retained." if not franchise.retained_count else "."),
               franchise=franchise, by_tg_id=by_tg_id)
     if not pending_retention_teams(session, season):
         lock_retention(session, season, by_tg_id=by_tg_id)
@@ -3490,7 +3494,7 @@ def start(session, season, *, now=None, by_tg_id=None):
         session.flush()
         minimum = _as_int(season.min_retentions, 0)
         short = [f"{f.name} ({int(f.retained_count or 0)})" for f in field
-                 if int(f.retained_count or 0) < minimum]
+                 if 0 < int(f.retained_count or 0) < minimum]
         if short:
             raise AuctionError(
                 f"These franchises have retained fewer than the minimum of "

@@ -2625,7 +2625,7 @@ def _retention_preview_html(data, season):
     lines = [f"🔒 <b>{html.escape(data['name'])} — retention preview</b>"]
     lines += [f"• {html.escape(p['name'])} ({p['rating']}) — {money(p['price_lakh'])}" for p in data['players']]
     if not data['players']:
-        lines.append("No retained players.")
+        lines.append("No retained players — enter the auction without retentions. Retention minimums do not apply.")
     lines += [f"Range {r['min_rating']}-{r['max_rating']}: {r['count']} kept (min {r['min_count']}, max {r['max_count']})" for r in data['ranges']]
     lines += [f"Retention spend: <b>{money(data['spent_lakh'])}</b>",
               f"Remaining purse: <b>{money(data['purse_lakh'])}</b>",
@@ -2649,7 +2649,7 @@ async def retainlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             raise AuctionError("Only a team owner or co-owner can preview and finalize retention.")
         data = P.retention_preview(session, season, franchise)
         markup = None if data['finalized'] else InlineKeyboardMarkup([[InlineKeyboardButton(
-            "Make retention final", callback_data=f"au_rfinal_{season.id}_{franchise.id}_{data['token']}")]])
+            "Make retention final" if data['players'] else "Enter auction without retentions", callback_data=f"au_rfinal_{season.id}_{franchise.id}_{data['token']}")]])
         await _reply(update, _retention_preview_html(data, season), reply_markup=markup)
     except AuctionError as exc:
         await _reply(update, f"⚠️ {html.escape(str(exc))}")

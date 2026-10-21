@@ -2144,8 +2144,8 @@ ranges are independent and deal each new team the sum of their maximum counts.
 The configured seats follow snake order and cannot change after the first pick.
 
 Owners/co-owners use `/retain Player Name` for their previous squad's players,
-then `/retainlock` to finalize permanently. Every range minimum must be met and
-pending offers/negotiations resolved. Finalized teams cannot retain or release.
+then `/retainlock` to finalize permanently. Teams retaining players must meet their range minimums. A team may instead
+finalize with zero retentions; pending offers/negotiations must still be resolved. Finalized teams cannot retain or release.
 Retention closes automatically after all existing teams finalize. Admins can also
 use `/aretlock on`; range minimums still apply.
 
@@ -2167,7 +2167,8 @@ turn. `/aready` shows the same information in the auction group.
 spend and remaining purse. Press **Make retention final** to confirm. The button
 checks ownership again and refuses stale previews after a roster, price, purse
 or rule change. Admins have the same preview/confirm flow on the auction page.
-Range minimums and open offers/negotiations still prevent finalization.
+Teams retaining players must meet their minimums. Keeping nobody is allowed
+regardless of retention minimums; open offers/negotiations must still be resolved.
 
 Browse **Eligible draft players and team shortlist** on the admin page, or use:
 
@@ -2216,3 +2217,14 @@ remove and add a player again to move them to the end. Taken or ineligible playe
 stay listed but are skipped during automatic selection. Manual and automatic picks
 claim the same database turn so concurrent workers cannot spend it twice. Clock
 announcements are sent by the existing scheduler after the transaction commits.
+
+### Entering the auction without retaining anyone
+
+Retention is optional in every format. A team can use `/retainlock` with an empty
+retained squad and confirm **Enter auction without retentions**. This makes its
+choice final, keeps its purse unchanged, and counts the team as finished so new
+teams can draft once all existing teams have finalized. Admin previews offer the
+same choice. The auction can also start with teams holding zero retained players.
+
+Retention minimums (overall and per range) apply only to teams retaining one or
+more players. Draft range minimums for new-team picks are unchanged.
