@@ -194,3 +194,30 @@ class EventKeyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class AutomaticMilestoneTests(unittest.TestCase):
+    def test_century_without_configuration_sends_generated_message(self):
+        calls = _fire(_Ctx(), [], key="century", fields={
+            "player": "RICHIE RICHARDSON", "runs": 105, "balls": 58,
+            "team": "Kushan XI", "opponent": "@zooba07"})
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "send_message")
+        for text in ("CENTURY!", "105 (58)", "181.03", "100 Runs", "Kushan XI", "@zooba07"):
+            self.assertIn(text, calls[0][1]["text"])
+
+    def test_disabled_messages_preserve_media(self):
+        preference = _row(source_type=ems.MESSAGE_SETTINGS, source="off", enabled=False)
+        calls = _fire(_Ctx(), [preference, _row(caption="Custom message")],
+                      fields={"player": "Batter", "runs": 50, "balls": 30})
+        self.assertEqual(calls[0][0], "send_animation")
+        self.assertNotIn("caption", calls[0][1])
+        self.assertEqual(_fire(_Ctx(), [preference], fields={"runs": 50}), [])
+
+    def test_generated_values_escape_html(self):
+        message = ems.default_milestone_message("century", {"player": "A < B", "balls": 0})
+        self.assertIn("A &lt; B", message)
+        self.assertIn("0.00", message)
+
+    def test_each_milestone_has_a_relevant_default(self):
+        for key in ems.MILESTONE_MESSAGES:
+            self.assertIn("Achievement:", ems.default_milestone_message(key, {}))

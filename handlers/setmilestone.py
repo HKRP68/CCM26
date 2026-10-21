@@ -23,6 +23,7 @@ from models import EventMedia
 from services.admin_ids import is_admin
 from services.event_media_service import (
     EVENT_KEYS, CAPTION_FIELDS, invalidate_miniapp_event_gifs,
+    MESSAGE_SETTINGS, messages_enabled,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,7 +69,9 @@ def _summarise(event_key):
                 .filter(EventMedia.event_key == event_key)
                 .order_by(EventMedia.enabled.desc(), EventMedia.id.desc())
                 .all())
-        enabled = [r for r in rows if r.enabled]
+        show_message = messages_enabled(rows)
+        rows = [r for r in rows if r.source_type != MESSAGE_SETTINGS]
+        enabled = [r for r in rows if r.enabled and r.source]
         captions = [r.caption for r in rows if (r.caption or "").strip()]
         lines = [f"<b>{label}</b>", f"<i>{desc}</i>", ""]
         lines.append(f"🎬 Media: {len(enabled)} enabled / {len(rows)} total")
@@ -86,13 +89,16 @@ def _summarise(event_key):
                 lines.append(f"   <i>…and {len(set(captions)) - 1} other "
                              f"message(s) across this milestone's clips.</i>")
         else:
-            lines.append("💬 Message: <i>none set</i>")
+            lines.append("💬 Message: <i>auto-generated from the milestone</i>")
+        lines.append("💬 Messages: " + ("ON" if show_message else "OFF"))
         lines.append("")
         lines.append("Placeholders: " + ", ".join(
             "{" + f + "}" for f in CAPTION_FIELDS))
     finally:
         db.close()
     kb = [
+        [InlineKeyboardButton("💬 Turn messages " + ("OFF" if show_message else "ON"),
+                              callback_data=f"{CB}_toggle_{event_key}")],
         [InlineKeyboardButton("💬 Set message", callback_data=f"{CB}_msg_{event_key}")],
         [InlineKeyboardButton("🎬 Upload media", callback_data=f"{CB}_up_{event_key}")],
         [InlineKeyboardButton("🗑 Clear message", callback_data=f"{CB}_clr_{event_key}")],
@@ -173,6 +179,34 @@ async def milestone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data.pop(AWAIT_KEY, None)
         text, kb = _summarise(event_key)
         await q.answer()
+        await q.edit_message_text(text, parse_mode="HTML",
+                                  reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    if action == "toggle":
+        context.user_data.pop(AWAIT_KEY, None)
+        db = get_session()
+        try:
+            rows = db.query(EventMedia).filter(EventMedia.event_key == event_key).all()
+            enabled = messages_enabled(rows)
+            settings = [r for r in rows if r.source_type == MESSAGE_SETTINGS]
+            if settings:
+                for row in settings:
+                    row.source = "off" if enabled else "on"
+            else:
+                db.add(EventMedia(event_key=event_key, source_type=MESSAGE_SETTINGS,
+                                  source="off" if enabled else "on", enabled=False,
+                                  weight=1, label="Milestone message preference"))
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("milestone message toggle failed")
+            await q.answer("Could not change message setting.", show_alert=True)
+            return
+        finally:
+            db.close()
+        await q.answer("Messages OFF" if enabled else "Messages ON")
+        text, kb = _summarise(event_key)
         await q.edit_message_text(text, parse_mode="HTML",
                                   reply_markup=InlineKeyboardMarkup(kb))
         return
@@ -288,6 +322,7 @@ def _set_caption(event_key, caption):
     try:
         rows = db.query(EventMedia).filter(
             EventMedia.event_key == event_key).all()
+        rows = [r for r in rows if r.source_type != MESSAGE_SETTINGS]
         if rows:
             for r in rows:
                 r.caption = caption
@@ -340,7 +375,8 @@ def _store_media_from_message(msg, event_key):
         # Carry the existing message across so uploading a clip does not silently
         # wipe a caption the admin set earlier.
         existing = (db.query(EventMedia)
-                    .filter(EventMedia.event_key == event_key)
+                    .filter(EventMedia.event_key == event_key,
+                            EventMedia.source_type != MESSAGE_SETTINGS)
                     .order_by(EventMedia.id.desc()).first())
         db.add(EventMedia(
             event_key=event_key, source_type="telegram", source=file_id,

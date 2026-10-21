@@ -110,7 +110,7 @@ def detect(state, before, summary=None):
     events = []
     team = state.get("bat_team_name") or "Team"
     opponent = state.get("bowl_team_name") or "Opposition"
-    common = {"team": team, "opponent": opponent,
+    common = {"team": team, "manager": team, "opponent": opponent,
               "score": _score(state), "overs": _overs(state)}
 
     try:
@@ -140,12 +140,12 @@ def detect(state, before, summary=None):
                 events.append(("hattrick", dict(
                     common, player=name, bowler=name,
                     wickets=wickets, figures=_figures(st),
-                    team=opponent, opponent=team)))
+                    team=opponent, manager=opponent, opponent=team)))
             for _n, key in _crossed(prev_wkts, wickets, BOWL_MILESTONES):
                 events.append((key, dict(
                     common, player=name, bowler=name,
                     wickets=wickets, figures=_figures(st),
-                    team=opponent, opponent=team)))
+                    team=opponent, manager=opponent, opponent=team)))
 
         # ── Partnership ──
         # Only when the stand survived the over: a wicket resets partnership_runs

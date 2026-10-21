@@ -229,3 +229,20 @@ class UploadedCaptionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class MessageToggleTests(unittest.TestCase):
+    def test_toggle_persists_preference_without_disabling_clip(self):
+        clip = _Row(event_key="century")
+        db = _FakeDb([clip])
+        context = SimpleNamespace(user_data={sm.AWAIT_KEY: {"mode": "caption"}})
+        query = _Query("msm_toggle_century")
+        with patch.object(sm, "get_session", lambda: db), \
+             patch.object(sm, "_is_admin_update", lambda update: True), \
+             patch.object(sm, "_summarise", return_value=("Updated", [])):
+            _run(sm.milestone_callback(SimpleNamespace(callback_query=query), context))
+        self.assertTrue(clip.enabled)
+        self.assertTrue(db.committed)
+        self.assertEqual(db.added[0].source_type, sm.MESSAGE_SETTINGS)
+        self.assertEqual(db.added[0].source, "off")
+        self.assertFalse(db.added[0].enabled)
+        self.assertNotIn(sm.AWAIT_KEY, context.user_data)

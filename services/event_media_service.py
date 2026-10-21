@@ -85,7 +85,7 @@ def _pick_random(items, weight_fn):
 CAPTION_FIELDS = (
     "player", "team", "opponent", "runs", "balls", "score", "overs",
     "bowler", "figures", "wickets", "partnership", "margin", "fielder",
-    "dropped_on", "record", "value", "previous", "season", "scope", "match", "previous_holder", "scorecard",
+    "manager", "strike_rate", "dropped_on", "record", "value", "previous", "season", "scope", "match", "previous_holder", "scorecard",
 )
 
 
@@ -95,6 +95,66 @@ def render_caption(text, fields=None):
     for key, value in (fields or {}).items():
         out = out.replace("{" + str(key) + "}", str(value))
     return out.strip()
+
+
+# Disabled settings rows share the existing milestone storage without becoming
+# selectable media or requiring a database migration.
+MESSAGE_SETTINGS = "message_settings"
+MILESTONE_MESSAGES = {
+    "fifty": ("⭐ HALF CENTURY!", "50 Runs", "A brilliant half century!"),
+    "century": ("💯 CENTURY!", "100 Runs", "A magnificent century!"),
+    "hattrick": ("🎯 HAT-TRICK!", "3 wickets in 3 balls", "Three in a row — incredible bowling!"),
+    "three_fer": ("🎳 THREE-WICKET HAUL!", "3 Wickets", "A superb bowling spell!"),
+    "five_fer": ("🏅 FIVE-WICKET HAUL!", "5 Wickets", "An outstanding five-wicket haul!"),
+    "maiden_over": ("🎯 MAIDEN OVER!", "Maiden Over", "A flawless over of bowling!"),
+    "partnership_50": ("🤝 50 PARTNERSHIP!", "50-run partnership", "A valuable partnership!"),
+    "partnership_100": ("🤝 100 PARTNERSHIP!", "100-run partnership", "A magnificent partnership!"),
+    "team_100": ("💯 TEAM 100!", "100 Team Runs", "The team brings up a hundred!"),
+    "team_150": ("🔢 TEAM 150!", "150 Team Runs", "The runs keep coming!"),
+    "team_200": ("🚀 TEAM 200!", "200 Team Runs", "A tremendous team total!"),
+    "match_won": ("🏆 VICTORY!", "Match Won", "A memorable victory!"),
+    "impact_player": ("🔄 IMPACT PLAYER!", "Impact Player", "Time to make an impact!"),
+}
+
+
+def messages_enabled(rows):
+    settings = [r for r in rows if r.source_type == MESSAGE_SETTINGS]
+    return not settings or settings[-1].source != "off"
+
+
+def default_milestone_message(event_key, fields=None):
+    """Generate a safe HTML announcement using the actual milestone stats."""
+    from html import escape
+    meta = MILESTONE_MESSAGES.get(event_key)
+    if not meta:
+        return ""
+    fields = fields or {}
+    def value(key, fallback=""):
+        return escape(str(fields.get(key) or fallback))
+    title, achievement, closing = meta
+    lines = ["🏏 <b>CMU | MILESTONE ALERT</b>", "━━━━━━━━━━━━━━━━━━",
+             f"<b>{title}</b>", "", f"<b>{value('player', fields.get('team') or 'Team')}</b> 🔥"]
+    if event_key in ("fifty", "century"):
+        runs, balls = fields.get("runs", 0), fields.get("balls", 0)
+        try:
+            rate = f"{float(runs) * 100 / float(balls):.2f}" if float(balls) else "0.00"
+        except (TypeError, ValueError, ZeroDivisionError):
+            rate = "0.00"
+        lines.append(f"{value('runs', '0')} ({value('balls', '0')}) · Strike Rate: {rate}")
+    elif fields.get("figures"):
+        lines.append(f"Bowling: {value('figures')}")
+    elif fields.get("partnership"):
+        lines.append(f"Partnership: {value('partnership')} runs")
+    elif fields.get("score"):
+        lines.append(f"Score: {value('score')}")
+    lines += ["", f"🏆 Achievement: {achievement}",
+              f"👤 Manager: {value('manager', fields.get('team') or 'Team')}"]
+    if fields.get("opponent"):
+        lines.append(f"🛡️ Against Team {value('opponent')}")
+    if fields.get("margin"):
+        lines.append(f"Margin: {value('margin')}")
+    lines += ["", "━━━━━━━━━━━━━━━━━━", f"⭐ {closing}"]
+    return "\n".join(lines)
 
 
 def _send_kind(pick):
@@ -154,18 +214,22 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
         session = get_session()
         try:
             rows = (session.query(EventMedia)
-                    .filter(EventMedia.event_key == event_key,
-                            EventMedia.enabled == True)
+                    .filter(EventMedia.event_key == event_key)
                     .all())
-            if not rows:
-                # No media configured for this event — quietly skip
-                return
-            pick = _pick_random(rows, weight_fn=lambda r: r.weight or 1)
-            if not pick:
-                return
-            source_type = pick.source_type
-            source = pick.source
-            caption = render_caption(getattr(pick, "caption", None), fields)
+            show_message = messages_enabled(rows)
+            choices = [r for r in rows if r.enabled and r.source_type != MESSAGE_SETTINGS]
+            # Prefer a configured clip over legacy text-only entries.
+            media = [r for r in choices if r.source]
+            pick = _pick_random(media or choices, weight_fn=lambda r: r.weight or 1)
+            source_type = pick.source_type if pick else "none"
+            source = pick.source if pick else ""
+            caption = ""
+            if show_message:
+                from html import escape
+                safe_fields = {k: escape(str(v)) for k, v in (fields or {}).items()}
+                caption = render_caption(getattr(pick, "caption", None), safe_fields)
+                if not caption and fields:
+                    caption = default_milestone_message(event_key, fields)
             kind = _send_kind(pick)
         finally:
             session.close()
