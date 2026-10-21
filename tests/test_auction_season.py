@@ -210,6 +210,7 @@ class RuleCarryTests(SeasonCase):
             "announced_event_id", "board_rendered_bid_count",
             "board_lot_id", "accelerated_done", "opening_order_json",
             "retention_locked_at", "retention_deadline_at",
+            "draft_order_json",  # Seats contain this season’s franchise ids.
             # Which season/league this one follows — set by the clone itself,
             # never copied from the source.
             "previous_league_id", "previous_season_id",

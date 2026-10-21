@@ -1195,3 +1195,13 @@ systems — e.g. [`docs/franchise-auction.md`](docs/franchise-auction.md),
 [`docs/player-draft.md`](docs/player-draft.md),
 [`docs/team-chemistry.md`](docs/team-chemistry.md) and
 [`docs/pitch-types.md`](docs/pitch-types.md).
+
+### Franchise Auction: rating ranges
+
+- `/aretranges 91-96 | 1 | 2 | 15; 85-90 | 0 | 3 | 8` — admin: range, minimum, maximum, cost each in Cr.
+- `/aretmode ranges` — select the new format; classic and dynamic remain available.
+- `/apickranges 91-96 | 1 | 2 | 12` — independent range rules for new-team draft picks.
+- `/apickorder Gujarat | Lucknow` — set draft seats before the first pick (snake rounds).
+- `/retain Player Name` — owner/co-owner retains a previous-squad player at the range cost.
+- `/retainlock` — owner/co-owner makes team retention final after meeting minimums.
+- `/pick Player Name` — new-team owner/co-owner drafts after retention closes; early attempts name unfinished teams.

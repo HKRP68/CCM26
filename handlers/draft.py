@@ -201,6 +201,19 @@ async def pick_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user is None:
         return
+    from services import auction_service as auction
+    check_session = get_session()
+    try:
+        auction_season = auction.season_for_chat(check_session, chat.id)
+        existing_draft = _load_for_chat(check_session, update)
+        use_auction = (auction_season is not None and auction_season.status == auction.STATUS_SETUP
+                       and (existing_draft is None or existing_draft.status != ds.STATUS_LIVE))
+    finally:
+        check_session.close()
+    if use_auction:
+        from handlers.auction import auction_pick_handler
+        await auction_pick_handler(update, context)
+        return
     query = _arg_text(context)
 
     session = get_session()

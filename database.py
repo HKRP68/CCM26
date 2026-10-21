@@ -1027,6 +1027,10 @@ def _migrate_add_columns():
     _try_add("auction_seasons", "previous_league_id", "INTEGER")
     # Dynamic retention. All nullable: NULL mode reads as ``classic``, and
     # NULL slots / rules read as the presets, so an old season is unchanged.
+    _try_add("auction_seasons", "retention_ranges_json", "TEXT")
+    _try_add("auction_seasons", "draft_ranges_json", "TEXT")
+    _try_add("auction_seasons", "draft_order_json", "TEXT")
+    _try_add("auction_franchises", "retention_finalized_at", "TIMESTAMP")
     _try_add("auction_seasons", "retention_mode", "VARCHAR(12)")
     _try_add("auction_seasons", "retention_slots_json", "TEXT")
     _try_add("auction_seasons", "retention_rules_json", "TEXT")

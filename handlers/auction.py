@@ -1705,6 +1705,13 @@ async def retain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if franchise is None:
             raise AuctionError("Only a franchise's owner or a co-owner can "
                                "negotiate a retention.")
+        if RN.mode(season) == RN.MODE_RANGES:
+            player = RN.find_retention_player(session, season, franchise, raw)
+            lot = A.retain(session, season, franchise, player, by_tg_id=user.id)
+            session.commit()
+            await _reply(update, f"🔒 {html.escape(franchise.name)} retain {html.escape(lot.name)} for "
+                         + A.render_money(lot.sold_price_lakh, season.currency_label))
+            return
         if not raw:
             if not RN.is_dynamic(season):
                 raise AuctionError("This auction uses classic retention — an "
@@ -2047,7 +2054,7 @@ async def aretmode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if RN.is_dynamic(season):
             return ("🔁 Retention is now <b>dynamic</b>.\n\n"
                     + AR.retention_slots_text(season))
-        return "🔁 Retention is now <b>classic</b> — the slab ladder."
+        return f"🔁 Retention is now <b>{html.escape(RN.mode(season))}</b>."
 
     await _with_auction(update, work, admin=True, context=context)
 
@@ -2613,6 +2620,68 @@ async def aratingrule_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     await _with_auction(update, work, admin=True, context=context)
 
 
+async def retainlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    def work(session, season):
+        franchise = A.franchise_for_actor(session, season.id, user.id) if user else None
+        if franchise is None:
+            raise AuctionError("Only a team owner or co-owner can finalize its retention.")
+        A.finalize_retention(session, season, franchise, by_tg_id=user.id)
+        return f"🔒 <b>{html.escape(franchise.name)}</b>: retention is final."
+    await _with_auction(update, work, context=context)
+
+
+async def aranges_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    command = (getattr(update.effective_message, "text", "") or "").split(" ")[0].split("@")[0]
+    draft = command == "/apickranges"
+    raw = _arg_text(context)
+    def work(session, season):
+        if raw:
+            rows = []
+            for line in raw.split(";"):
+                fields = [x.strip() for x in line.split("|")]
+                if len(fields) != 4:
+                    raise AuctionError("Use: range | min count | max count | cost; more ranges")
+                low, high = _rating_span_arg(fields[0])
+                rows.append(dict(min_rating=low, max_rating=high, min_count=fields[1],
+                                 max_count=fields[2], price_lakh=A.parse_amount(fields[3])))
+            A.set_range_rules(session, season, rows, draft=draft)
+        rows = A.range_rules(season, draft=draft)
+        return ("Draft ranges" if draft else "Retention ranges") + ":\n" + ("\n".join(
+            f"{r['min_rating']}-{r['max_rating']}: min {r['min_count']}, max {r['max_count']}, "
+            + A.render_money(r['price_lakh'], season.currency_label) + " each" for r in rows)
+            or "Use: 91-96 | 1 | 2 | 15; 85-90 | 0 | 3 | 8")
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def apickorder_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    raw = _arg_text(context)
+    def work(session, season):
+        if raw:
+            teams = [_find_franchise(session, season, name.strip()) for name in raw.split("|")]
+            A.set_draft_order(session, season, [f.id for f in teams])
+        return "Draft seats (snake order): " + " → ".join(html.escape(f.name) for f in A.pick_order(session, season))
+    await _with_auction(update, work, admin=True, context=context)
+
+
+async def auction_pick_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    raw = _arg_text(context)
+    def work(session, season):
+        A._pick_window(session, season)
+        franchise = A.franchise_for_actor(session, season.id, user.id) if user else None
+        if franchise is None:
+            raise AuctionError("Only a team owner or co-owner can draft for its team.")
+        if not raw:
+            raise AuctionError("Usage: /pick <player name>")
+        player = _find_player(session, raw)
+        lot = A.draft_pick(session, season, franchise, player, by_tg_id=user.id)
+        following = A.pick_turn(session, season)
+        text = f"🆕 {html.escape(franchise.name)} draft {html.escape(lot.name)} for " + A.render_money(lot.sold_price_lakh, season.currency_label)
+        return text + (f"\nNext: {html.escape(following.name)}" if following else "\nAll draft picks are complete.")
+    await _with_auction(update, work, context=context)
+
+
 async def apick_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """<code>/apick Gujarat | Hardik Pandya | 15</code> — the price is optional.
 
@@ -2624,6 +2693,7 @@ async def apick_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw = _arg_text(context)
 
     def work(session, season):
+        A._pick_window(session, season)
         parts = [p.strip() for p in raw.split("|")]
         if len(parts) < 2 or not parts[0] or not parts[1]:
             turn = A.pick_turn(session, season)

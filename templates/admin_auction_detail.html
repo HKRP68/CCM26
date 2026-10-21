@@ -523,15 +523,15 @@
     </p>
 
     <div class="au-actions" style="align-items:center;margin-bottom:.8rem;">
-      <span>System: <b>{{ '🤝 Dynamic — owners negotiate, players decide' if ret_dynamic else '🪜 Classic — slab ladder' }}</b></span>
+      <span>System: <b>{{ 'Rating ranges' if season.retention_mode == 'ranges' else ('🤝 Dynamic — owners negotiate, players decide' if ret_dynamic else '🪜 Classic — slab ladder') }}</b></span>
       {% if season.status == 'setup' %}
       <form method="POST" style="display:inline;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="action" value="retention_mode">
         <input type="hidden" name="back_query" value="#retention">
-        <input type="hidden" name="mode" value="{{ 'classic' if ret_dynamic else 'dynamic' }}">
+        <select name="mode">{% for mode in ['classic', 'dynamic', 'ranges'] %}<option value="{{ mode }}" {{ 'selected' if season.retention_mode == mode else '' }}>{{ mode }}</option>{% endfor %}</select>
         <button class="btn btn-ghost btn-sm" type="submit">
-          Switch to {{ 'classic' if ret_dynamic else 'dynamic' }}</button>
+          Save retention format</button>
       </form>
       {% endif %}
     </div>
@@ -698,9 +698,9 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="retention_rules">
       <input type="hidden" name="back_query" value="#retention">
-      {% if ret_dynamic %}
+      {% if ret_dynamic or season.retention_mode == "ranges" %}
       <input type="hidden" name="max_retentions" value="{{ season.max_retentions }}">
-      <div><label>Max per franchise</label><input type="text" value="{{ season.max_retentions }} — one per slot" disabled></div>
+      <div><label>Max per franchise</label><input type="text" value="{{ season.max_retentions }} — from configured slots/ranges" disabled></div>
       {% else %}
       <div><label>Max per franchise</label><input type="number" name="max_retentions" min="0" max="20" value="{{ season.max_retentions }}"></div>
       {% endif %}
@@ -743,7 +743,7 @@
       {% for f in field %}
       <tr>
         <td>{{ f.name }}</td>
-        <td>{{ f.retained_count }}/{{ season.max_retentions }}</td>
+        <td>{{ f.retained_count }}/{{ season.max_retentions }} · {{ "Final" if f.retention_finalized_at or retention_locked else "Pending" }}</td>
         <td>{{ money(f.purse_total_lakh) }}</td>
         <td>{{ money(retention_spent(f.id)) }}</td>
         <td><b>{{ money(f.purse_remaining_lakh) }}</b></td>
@@ -760,7 +760,7 @@
           open: {% for slot in ret_open_slots(f) %}{{ slot.emoji }} {{ slot.label }}{{ ', ' if not loop.last }}{% else %}none{% endfor %}
           · budget left {{ money(ret_budget_left(f)) }}
           {% else %}
-          next retention pre-fills at {{ money(next_slab(season, f.retained_count + 1)) }}
+          {% if season.retention_mode == "ranges" %}Fixed cost from the player’s rating range{% else %}next retention pre-fills at {{ money(next_slab(season, f.retained_count + 1)) }}{% endif %}
           {% endif %}
           · ceiling {{ money([0, max_bid(season, f)]|max) }}
         </div>
@@ -769,7 +769,7 @@
           <span>{{ ret_slot_emoji.get(lot.retention_slot, '🔒') }} {{ lot.name }} <span class="dim">· {{ lot.rating }} · {{ lot.category }}{% if lot.retention_slot %} · {{ ret_slot_names.get(lot.retention_slot, lot.retention_slot) }}{% endif %}</span></span>
           <span style="display:flex;gap:.4rem;align-items:center;">
             <b>{{ money(lot.sold_price_lakh) }}</b>
-            {% if retention_open %}
+            {% if retention_open and not f.retention_finalized_at %}
             <form method="POST" onsubmit="return confirm('Release {{ lot.name }} into the auction pool?');">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="action" value="unretain">
@@ -815,14 +815,14 @@
           <td>{{ player.rating }}</td>
           <td>{{ player.category }}</td>
           <td>
-            {% if state == 'free' %}
+            {% if state == 'free' and not f.retention_finalized_at %}
             <form method="POST" style="display:flex;gap:.3rem;align-items:center;">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="action" value="retain">
               <input type="hidden" name="player_id" value="{{ player.id }}">
               <input type="hidden" name="franchise_id" value="{{ f.id }}">
               <input type="hidden" name="back_query" value="#retention">
-              <input type="text" name="price" placeholder="{{ 'Cr — blank = slot start' if ret_dynamic else 'Cr — blank = ladder' }}" style="width:9rem;">
+              <input type="text" name="price" placeholder="{{ 'blank = range cost' if season.retention_mode == 'ranges' else ('Cr — blank = slot start' if ret_dynamic else 'Cr — blank = ladder') }}" style="width:9rem;">
               <button class="btn btn-primary btn-sm" type="submit">Retain</button>
             </form>
             {% else %}
@@ -961,6 +961,40 @@
     {% endif %}
   </div></details>
 
+  {% macro range_editor(is_draft) %}
+  <h4>{{ 'Draft' if is_draft else 'Retention' }} rating ranges</h4>
+  <form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="{{ 'draft_ranges' if is_draft else 'retention_ranges' }}">
+    <p>Inclusive ranges. Columns: minimum rating · maximum rating · minimum players · maximum players · cost each (Cr).</p>
+    <div class="range-rows">
+      {% for r in range_rules_for_ui(is_draft) %}
+      <div class="au-actions">
+        <input aria-label="Minimum rating" name="range_low" type="number" value="{{ r.min_rating }}" required>
+        <input aria-label="Maximum rating" name="range_high" type="number" value="{{ r.max_rating }}" required>
+        <input aria-label="Minimum count" name="range_min" type="number" value="{{ r.min_count }}" required>
+        <input aria-label="Maximum count" name="range_max" type="number" value="{{ r.max_count }}" required>
+        <input aria-label="Cost each in Cr" name="range_cost" value="{{ r.price_lakh / 100 }}" required>
+        <button type="button" class="btn btn-ghost" onclick="this.parentNode.remove()">Remove</button>
+      </div>
+      {% endfor %}
+    </div>
+    <button type="button" class="btn btn-ghost" onclick="this.form.querySelector('.range-rows').appendChild(document.getElementById('range-row-template').content.cloneNode(true))">Add range</button>
+    <button type="submit" class="btn btn-primary">Save ranges</button>
+  </form>
+  {% endmacro %}
+  <template id="range-row-template"><div class="au-actions">
+    <input aria-label="Minimum rating" name="range_low" type="number" placeholder="91" required>
+    <input aria-label="Maximum rating" name="range_high" type="number" placeholder="96" required>
+    <input aria-label="Minimum count" name="range_min" type="number" value="0" required>
+    <input aria-label="Maximum count" name="range_max" type="number" value="1" required>
+    <input aria-label="Cost each in Cr" name="range_cost" placeholder="15" required>
+    <button type="button" class="btn btn-ghost" onclick="this.parentNode.remove()">Remove</button>
+  </div></template>
+  {{ range_editor(false) }}
+  {{ range_editor(true) }}
+  <p>Owners use <code>/retainlock</code> to finalize retention. New teams then use <code>/pick player</code>.</p>
+
   <!-- ── Expansion picks ───────────────────────────────────────── -->
   {{ fold("picks", "🆕 Expansion picks",
           (season.expansion_picks ~ " each · " ~ new_sides|length ~ " new side"
@@ -971,6 +1005,13 @@
       players. Picks let it sign a few first, out of the pool <b>nobody
       retained</b> — the rule the IPL used for Gujarat and Lucknow in 2022.
     </p>
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="draft_order">
+      <label>Draft seat order (team names separated by |; rounds follow snake order)</label>
+      <input name="draft_order" value="{{ pick_order|map(attribute='name')|join(' | ') }}">
+      <button class="btn btn-primary" type="submit">Save draft order</button>
+    </form>
     <form method="POST" class="au-grid">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="expansion_rules">
@@ -1042,9 +1083,10 @@
     </p>
     {% elif pick_turn %}
     <p class="au-note" style="margin:.8rem 0 0;">
-      It is <b>{{ pick_turn.name }}</b>'s pick, at
-      {{ money(next_slab(season, (pick_turn.draft_picks_used or 0) + 1), season.currency_label) }}
-      by default. Find the player in the <b>Retention</b> search above and use
+      It is <b>{{ pick_turn.name }}</b>'s pick.
+      {% if season.draft_ranges_json %}The player’s rating range sets the cost.{% else %}
+      Default cost: {{ money(next_slab(season, (pick_turn.draft_picks_used or 0) + 1), season.currency_label) }}.{% endif %}
+      Find the player in the <b>Retention</b> search above and use
       <b>🆕 Pick for {{ pick_turn.name }}</b> — one search box, so a pick and a
       retention can never disagree about which card they mean.
     </p>

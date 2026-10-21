@@ -700,6 +700,7 @@ SEASON_RULE_FIELDS = (
     "retention_min_rating", "retention_max_rating",
     "retention_categories_json", "retention_price_rules_json",
     "retention_mode", "retention_slots_json", "retention_rules_json",
+    "retention_ranges_json", "draft_ranges_json",
     # Right To Match
     "rtm_enabled", "rtm_per_team", "rtm_window_seconds", "rtm_extra_lakh",
     # Expansion teams
@@ -1829,6 +1830,103 @@ def retention_spent(session, franchise_id):
     return int(total or 0)
 
 
+def range_rules(season, *, draft=False):
+    return _loads(getattr(season, "draft_ranges_json" if draft else
+                          "retention_ranges_json", None), [])
+
+
+def set_range_rules(session, season, rows, *, draft=False):
+    """Inclusive, non-overlapping rating bands, quotas and fixed player costs."""
+    from services import retention_negotiation as RN
+    if season.status != STATUS_SETUP or retention_locked(season):
+        raise AuctionError("Ranges can only change before retention is final.")
+    if RN._anything_kept(session, season) or any(
+            f.retention_finalized_at or f.draft_picks_used
+            for f in franchises(session, season.id)):
+        raise AuctionError("Ranges cannot change after signings or team finalization.")
+    clean = []
+    for row in rows:
+        try:
+            low, high, minimum, maximum, price = [int(row[k]) for k in
+                ("min_rating", "max_rating", "min_count", "max_count", "price_lakh")]
+        except (ValueError, TypeError, KeyError):
+            raise AuctionError("Each range needs integer ratings, minimum, maximum and cost.")
+        if not (0 <= low <= high <= 999 and 0 <= minimum <= maximum <= 30 and price >= 0):
+            raise AuctionError("Invalid range: check ratings, min/max counts and cost.")
+        if any(low <= r["max_rating"] and high >= r["min_rating"] for r in clean):
+            raise AuctionError("Rating ranges must not overlap.")
+        clean.append(dict(min_rating=low, max_rating=high, min_count=minimum,
+                          max_count=maximum, price_lakh=price))
+    if not clean:
+        raise AuctionError("Add at least one rating range.")
+    setattr(season, "draft_ranges_json" if draft else "retention_ranges_json", json.dumps(clean))
+    if draft:
+        set_expansion_picks(session, season, sum(r["max_count"] for r in clean))
+    elif RN.mode(season) == RN.MODE_RANGES:
+        season.max_retentions = sum(r["max_count"] for r in clean)
+    session.flush()
+    return clean
+
+
+def range_count(session, franchise, rule, *, draft=False):
+    held = drafted(session, franchise.id) if draft else retained(session, franchise.id)
+    return sum(rule["min_rating"] <= lot.rating <= rule["max_rating"] for lot in held)
+
+
+def range_price(session, season, franchise, player, price=None, *, draft=False):
+    rule = next((r for r in range_rules(season, draft=draft)
+                 if r["min_rating"] <= int(player.rating or 0) <= r["max_rating"]), None)
+    if rule is None:
+        raise AuctionError(f"{player.name} does not fall in a configured rating range.")
+    if range_count(session, franchise, rule, draft=draft) >= rule["max_count"]:
+        raise AuctionError(f"{franchise.name} has filled the {rule['min_rating']}-"
+                           f"{rule['max_rating']} range (maximum {rule['max_count']}).")
+    if price is not None and _as_int(price, -1) != rule["price_lakh"]:
+        raise AuctionError("The price must equal the configured range cost: "
+                           + render_money(rule["price_lakh"], season.currency_label))
+    return rule["price_lakh"]
+
+
+def check_range_minimums(session, season, franchise, *, draft=False):
+    for rule in range_rules(season, draft=draft):
+        count = range_count(session, franchise, rule, draft=draft)
+        if count < rule["min_count"]:
+            raise AuctionError(f"{franchise.name} needs at least {rule['min_count']} "
+                               f"players in {rule['min_rating']}-{rule['max_rating']} "
+                               f"(currently {count}).")
+
+
+def pending_retention_teams(session, season):
+    new_ids = {f.id for f in expansion_franchises(session, season)}
+    return [f for f in franchises(session, season.id)
+            if f.id not in new_ids and not f.retention_finalized_at]
+
+
+def finalize_retention(session, season, franchise, *, by_tg_id=None):
+    if franchise.retention_finalized_at:
+        return franchise
+    if not retention_open(season):
+        raise AuctionError("Retention is closed.")
+    if franchise.id in {f.id for f in expansion_franchises(session, season)}:
+        raise AuctionError("New teams draft after the other teams finalize retention.")
+    if int(franchise.retained_count or 0) < int(season.min_retentions or 0):
+        raise AuctionError(f"{franchise.name} has not met the retention minimum.")
+    from services import retention_negotiation as RN
+    if RN.mode(season) == RN.MODE_RANGES:
+        check_range_minimums(session, season, franchise)
+    if any(o.franchise_id == franchise.id for o in pending_retention_offers(session, season.id)):
+        raise AuctionError("Answer or cancel the pending retention offers first.")
+    if RN.open_talk_for(session, season, franchise):
+        raise AuctionError("Finish the open retention negotiation first.")
+    franchise.retention_finalized_at = datetime.utcnow()
+    session.flush()
+    log_event(session, season, "team_retention_final", f"🔒 {_e(franchise.name)} finalized retention.",
+              franchise=franchise, by_tg_id=by_tg_id)
+    if not pending_retention_teams(session, season):
+        lock_retention(session, season, by_tg_id=by_tg_id)
+    return franchise
+
+
 def retention_configured(season):
     return _as_int(getattr(season, "max_retentions", 0), 0) > 0
 
@@ -1861,6 +1959,10 @@ def lock_retention(session, season, *, now=None, by_tg_id=None, quiet=False):
     """Shut the retention window. Idempotent."""
     if retention_locked(season):
         return season
+    from services import retention_negotiation as RN
+    if RN.mode(season) == RN.MODE_RANGES:
+        for franchise in pending_retention_teams(session, season):
+            check_range_minimums(session, season, franchise)
     season.retention_locked_at = now or datetime.utcnow()
     sync_rtm_cards(session, season)
     if not quiet:
@@ -2248,6 +2350,8 @@ def retain(session, season, franchise, player, price_lakh=None, *,
         raise AuctionError("This auction allows no retentions — set a maximum "
                            "first.")
 
+    if franchise.retention_finalized_at:
+        raise AuctionError(f"{franchise.name} finalized retention — it is final.")
     count = int(franchise.retained_count or 0)
     if count + 1 > _as_int(season.max_retentions, 0):
         raise AuctionError(f"{franchise.name} has already retained {count}, "
@@ -2259,7 +2363,12 @@ def retain(session, season, franchise, player, price_lakh=None, *,
     # page cannot step round the structure either.
     from services import retention_negotiation as RN
     dynamic = RN.is_dynamic(season)
-    if dynamic:
+    if RN.mode(season) == RN.MODE_RANGES:
+        holder = previous_squad_map(session, season).get(player.id)
+        if season.previous_league_id and (holder is None or holder.id != franchise.id):
+            raise AuctionError("Only players from this team’s previous squad can be retained.")
+        price = range_price(session, season, franchise, player, price_lakh)
+    elif dynamic:
         if price_lakh is None:
             slot = (RN.find_slot(season, slot_key)[1] if slot_key
                     else RN.slot_for(session, season, franchise, player.rating))
@@ -2402,10 +2511,20 @@ def deal_expansion_picks(session, season):
     return new_sides
 
 
+def set_draft_order(session, season, ids):
+    if season.status != STATUS_SETUP or any(f.draft_picks_used for f in pick_order(session, season)):
+        raise AuctionError("Set draft order before the first pick.")
+    if len(ids) != len(set(ids)) or set(ids) != {f.id for f in pick_order(session, season)}:
+        raise AuctionError("Include every drafting team exactly once.")
+    season.draft_order_json = json.dumps(ids)
+    session.flush()
+
+
 def pick_order(session, season):
     """The sides holding picks, in seat order."""
-    return [f for f in franchises(session, season.id)
-            if int(f.draft_picks_total or 0) > 0]
+    field = [f for f in franchises(session, season.id) if int(f.draft_picks_total or 0) > 0]
+    seats = _loads(getattr(season, "draft_order_json", None), [])
+    return sorted(field, key=lambda f: seats.index(f.id) if f.id in seats else len(seats))
 
 
 def pick_schedule(session, season):
@@ -2455,10 +2574,11 @@ def _pick_window(session, season):
     # Picks come out of the pool nobody retained, so retention has to be over
     # first. Reusing retention's own lock rather than inventing a second
     # window with its own deadline: one switch, one thing to explain.
-    if retention_configured(season) and not retention_locked(season):
-        raise AuctionError("Retention is still open. A pick comes out of the "
-                           "players nobody kept, so close retention first "
-                           "with /aretlock on.")
+    if (retention_configured(season) or season.retention_mode == "ranges") and not retention_locked(season):
+        pending = pending_retention_teams(session, season)
+        raise AuctionError("Retention is still open. Retentions are yet to be done: "
+                           + (", ".join(f.name for f in pending) or "close retention with /aretlock on")
+                           + ". Teams can finalize with /retainlock; admins can close with /aretlock on.")
 
 
 def draft_pick(session, season, franchise, player, price_lakh=None, *,
@@ -2485,6 +2605,13 @@ def draft_pick(session, season, franchise, player, price_lakh=None, *,
 
     price = (retention_price_for(season, used + 1) if price_lakh is None
              else _as_int(price_lakh, -1))
+    if range_rules(season, draft=True):
+        price = range_price(session, season, franchise, player, price_lakh, draft=True)
+        needed = sum(max(0, r["min_count"] - range_count(session, franchise, r, draft=True)
+                         - int(r["min_rating"] <= player.rating <= r["max_rating"]))
+                     for r in range_rules(season, draft=True))
+        if picks_left(franchise) - 1 < needed:
+            raise AuctionError("This pick would leave too few turns to meet the range minimums.")
     if price < 0:
         raise AuctionError("A pick price cannot be negative.")
 
@@ -2510,6 +2637,11 @@ def skip_pick(session, season, franchise, *, by_tg_id=None):
     if turn is not None and turn.id != franchise.id:
         raise AuctionError(f"It is {turn.name}'s pick, not {franchise.name}'s.")
 
+    if range_rules(season, draft=True):
+        needed = sum(max(0, r["min_count"] - range_count(session, franchise, r, draft=True))
+                     for r in range_rules(season, draft=True))
+        if picks_left(franchise) - 1 < needed:
+            raise AuctionError("Cannot skip: remaining picks are needed for range minimums.")
     franchise.draft_picks_used = int(franchise.draft_picks_used or 0) + 1
     # Flushed before the announcement reads the turn back: this session is
     # autoflush=False and ``pick_turn`` QUERIES the franchises.
@@ -2606,6 +2738,8 @@ def unretain(session, season, franchise, lot, *, by_tg_id=None, by_admin=True,
     if lot is None or lot.acquisition != ACQ_RETAINED or lot.status != LOT_SOLD:
         raise AuctionError(f"{lot.name if lot else 'That player'} is not "
                            f"retained.")
+    if franchise.retention_finalized_at:
+        raise AuctionError(f"{franchise.name} finalized retention — it is final.")
     if retention_locked(season):
         raise AuctionError("Retention is closed — a retained player cannot be "
                            "released now.")
@@ -3332,6 +3466,8 @@ def start(session, season, *, now=None, by_tg_id=None):
     # ajar. Quietly — the "under way" announcement below already says the
     # squads are what they are.
     if season.status == STATUS_SETUP:
+        for franchise in pick_order(session, season):
+            check_range_minimums(session, season, franchise, draft=True)
         lock_retention(session, season, now=now, by_tg_id=by_tg_id, quiet=True)
         sync_rtm_cards(session, season)
         _snapshot_opening_order(session, season)
@@ -6539,6 +6675,10 @@ def offer_retention(session, season, franchise, player, price_lakh=None, *,
     if clash is not None:
         raise AuctionError(f"{player.name} already has a retention offer "
                            f"waiting. Withdraw it with /aretcancel first.")
+    if franchise.retention_finalized_at:
+        raise AuctionError(f"{franchise.name} finalized retention — it is final.")
+    if RN.mode(season) == RN.MODE_RANGES:
+        price_lakh = range_price(session, season, franchise, player, price_lakh)
     price = None if price_lakh is None else _as_int(price_lakh, -1)
     if price is not None and price < 0:
         raise AuctionError("A retention price cannot be negative.")

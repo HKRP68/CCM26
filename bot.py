@@ -2418,6 +2418,7 @@ def main():
             aadmins_handler, me_callback, aleaderboard_handler,
             amybids_handler, dot_command_handler,
             retain_handler, retention_talk_callback, aretmode_handler,
+            retainlock_handler, aranges_handler, apickorder_handler,
             aretslot_handler, aretrule_handler, aretdemand_handler,
             asetsexport_handler, asetsimport_handler,
             retention_pick_callback, aprevious_handler, aprevteam_handler,
@@ -2527,6 +2528,9 @@ def main():
         # /retain and the player accepts, counters or walks into the auction.
         # The admin side edits the slots, the rules and the demand curve.
         app.add_handler(CommandHandler("retain", retain_handler))
+        app.add_handler(CommandHandler("retainlock", retainlock_handler))
+        app.add_handler(CommandHandler(["aretranges", "apickranges"], aranges_handler))
+        app.add_handler(CommandHandler("apickorder", apickorder_handler))
         app.add_handler(CallbackQueryHandler(retention_talk_callback,
                                              pattern=r"^au_rtn_"))
         app.add_handler(CommandHandler("aretmode", aretmode_handler))

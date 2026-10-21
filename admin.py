@@ -24252,6 +24252,8 @@ def admin_auction_detail(season_id):
             max_bid=auction_svc.max_bid_now,
             auction_base_price=auction_svc.base_price_for,
             # ── Retention ──
+            range_rules_for_ui=lambda draft: auction_svc.range_rules(season, draft=draft),
+            pick_order=auction_svc.pick_order(db, season),
             ladder=auction_svc.retention_price_rules(season),
             next_slab=auction_svc.retention_price_for,
             # Bound to this request's session: the template calls them with a
@@ -24896,6 +24898,28 @@ def _auction_detail_action(db, season, action):
         log_admin(db, "auction_unretain", "auction", season.id, franchise.name,
                   detail=lot.name)
         flash(f"🔓 {lot.name} released into the pool.", "success")
+
+    elif action in ("retention_ranges", "draft_ranges"):
+        rows = []
+        fields = [request.form.getlist(k) for k in ("range_low", "range_high", "range_min", "range_max", "range_cost")]
+        if len({len(values) for values in fields}) != 1:
+            raise auction_svc.AuctionError("Every range needs ratings, minimum, maximum and cost.")
+        for low, high, minimum, maximum, cost in zip(*fields):
+            rows.append(dict(min_rating=low, max_rating=high, min_count=minimum, max_count=maximum,
+                             price_lakh=auction_svc.parse_amount(cost)))
+        auction_svc.set_range_rules(db, season, rows, draft=action == "draft_ranges")
+        flash("Rating ranges saved.", "success")
+
+    elif action == "draft_order":
+        field = auction_svc.pick_order(db, season)
+        ids = []
+        for name in request.form.get("draft_order", "").split("|"):
+            team = next((f for f in field if f.name.casefold() == name.strip().casefold()), None)
+            if team is None:
+                raise auction_svc.AuctionError(f"Unknown drafting team: {name.strip()}")
+            ids.append(team.id)
+        auction_svc.set_draft_order(db, season, ids)
+        flash("Draft order saved.", "success")
 
     elif action == "retention_mode":
         retention_rn.set_mode(db, season, request.form.get("mode"))

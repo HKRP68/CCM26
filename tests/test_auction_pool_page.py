@@ -868,6 +868,25 @@ class RetentionAndSetsFileTests(PoolPageCase):
         self.session.expire_all()
         return RN
 
+    def test_range_controls_save_multiple_rows_and_switch_mode(self):
+        self.post({"action": "retention_ranges",
+                   "range_low": ["91", "85"], "range_high": ["96", "90"],
+                   "range_min": ["1", "0"], "range_max": ["2", "3"],
+                   "range_cost": ["15", "8"]})
+        self.post({"action": "retention_mode", "mode": "ranges"})
+        self.session.expire_all()
+        self.assertEqual("ranges", self.rn().mode(self.season))
+        self.assertEqual(1500, self.A.range_rules(self.season)[0]["price_lakh"])
+        self.assertEqual(5, self.season.max_retentions)
+        body = self.get()
+        self.assertIn("Add range", body)
+        self.assertIn("Save draft order", body)
+        self.assertIn("/retainlock", body)
+        self.post({"action": "draft_ranges", "range_low": ["91"], "range_high": ["96"],
+                   "range_min": ["0"], "range_max": ["2"], "range_cost": ["12"]})
+        self.session.expire_all()
+        self.assertEqual(1200, self.A.range_rules(self.season, draft=True)[0]["price_lakh"])
+
     def test_the_mode_toggle_and_the_dynamic_panel(self):
         self.post({"action": "retention_mode", "mode": "dynamic"})
         self.assertTrue(self.rn().is_dynamic(self.season))

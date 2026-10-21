@@ -2125,3 +2125,33 @@ names, or a mix. Players marked unsold before going under the hammer are part
 of the unsold pile like any other, so the automatic ⚡ Accelerated round
 offers them once more unless `/aaccelmode off`.
 
+
+### Rating-range retention and expansion draft
+
+Classic and dynamic formats remain available. Use `ranges` to configure inclusive,
+non-overlapping rating bands with minimum/maximum counts and a fixed cost per player.
+The auction admin page has **Add range** controls for retention and draft tables.
+
+```
+/aretranges 91-96 | 1 | 2 | 15; 85-90 | 0 | 3 | 8
+/aretmode ranges
+/apickranges 91-96 | 1 | 2 | 12; 85-90 | 0 | 1 | 6
+/apickorder Gujarat | Lucknow
+```
+
+Prices in these commands are in Cr. Configure before signings/finalization. Draft
+ranges are independent and deal each new team the sum of their maximum counts.
+The configured seats follow snake order and cannot change after the first pick.
+
+Owners/co-owners use `/retain Player Name` for their previous squad's players,
+then `/retainlock` to finalize permanently. Every range minimum must be met and
+pending offers/negotiations resolved. Finalized teams cannot retain or release.
+Retention closes automatically after all existing teams finalize. Admins can also
+use `/aretlock on`; range minimums still apply.
+
+New-team owners use `/pick Player Name` from the remaining pool. Early attempts
+name the teams yet to finish retention. Fixed range prices, quota limits, draft
+turns, purse and squad restrictions apply. A pick/skip cannot leave too few turns
+to satisfy draft minimums, which must also be met before starting the auction.
+Existing `/apick` admin tools remain available. An active independent Tournament
+Draft retains its own `/pick` behavior.

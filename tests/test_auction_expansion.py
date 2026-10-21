@@ -40,7 +40,7 @@ _MODULE_NAMES = ("database", "models", "config",
                  "services.player_service", "services.player_query",
                  "services.auction_service", "services.retention_negotiation",
                  "services.auction_scheduler",
-                 "handlers.auction")
+                 "handlers.auction", "handlers.draft", "services.draft_service")
 
 _PID = itertools.count(1)
 
@@ -782,6 +782,30 @@ class CommandTests(ExpansionCase):
         return [f for f in self.A.franchises(self.session, self.two.id)
                 if f.name == name][0]
 
+    def test_owner_pick_before_retention_names_pending_teams(self):
+        from handlers import auction as H
+        self._bind()
+        self.two.retention_locked_at = None
+        self._run(H.auction_pick_handler, CAROL, (self.unique_name,))
+        self.assertIn("Retentions are yet to be done", self.replies[-1])
+        self.assertIn("Mumbai", self.replies[-1])
+        self.assertIn("Chennai", self.replies[-1])
+
+    def test_owner_pick_after_retention_signs_player(self):
+        from handlers import auction as H
+        self._bind()
+        self._run(H.auction_pick_handler, CAROL, (self.unique_name,))
+        self.assertIn("draft", self.replies[-1])
+        self.assertEqual(1, len(self.A.drafted(self.session, self._side("Gujarat").id)))
+
+    def test_pick_routes_to_auction_and_names_pending_teams(self):
+        from handlers import draft as H
+        self._bind()
+        self.two.retention_locked_at = None
+        self._run(H.pick_handler, CAROL, (self.unique_name,))
+        self.assertIn("Retentions are yet to be done", self.replies[-1])
+        self.assertIn("Mumbai", self.replies[-1])
+
     def test_apicks_shows_the_order_and_whose_turn(self):
         from handlers import auction as H
         self._bind()
@@ -890,3 +914,95 @@ class CommandTests(ExpansionCase):
         self.two = self.one          # the chat the command will resolve to
         self._run(H.apicks_handler, CAROL)
         self.assertIn("nobody is new", self.replies[-1])
+
+class RangeRetentionTests(ExpansionCase):
+    def rule(self, low=91, high=96, minimum=1, maximum=2, price=700):
+        return dict(min_rating=low, max_rating=high, min_count=minimum,
+                    max_count=maximum, price_lakh=price)
+
+    def configure(self, rows=None):
+        from services import retention_negotiation as RN
+        self.A.set_range_rules(self.session, self.one, rows or [self.rule()])
+        RN.set_mode(self.session, self.one, "ranges")
+        self.session.commit()
+
+    def test_fixed_cost_and_per_range_maximum(self):
+        self.configure([self.rule(maximum=1), self.rule(80, 90, 0, 1, 300)])
+        lot = self.A.retain(self.session, self.one, self.mumbai, self.players[1])
+        self.assertEqual(700, lot.sold_price_lakh)
+        with self.assertRaisesRegex(self.A.AuctionError, "filled"):
+            self.A.retain(self.session, self.one, self.mumbai, self.players[2])
+        self.session.commit()
+        self.assert_ledger_agrees(self.one)
+
+    def test_outside_range_and_override_are_rejected(self):
+        self.configure()
+        with self.assertRaisesRegex(self.A.AuctionError, "configured rating range"):
+            self.A.retain(self.session, self.one, self.mumbai, self.players[0])
+        with self.assertRaisesRegex(self.A.AuctionError, "configured range cost"):
+            self.A.retain(self.session, self.one, self.mumbai, self.players[1], 1)
+
+    def test_minimums_and_final_team_immutability(self):
+        self.configure([self.rule(), self.rule(80, 90, 1, 2, 300)])
+        with self.assertRaisesRegex(self.A.AuctionError, "91-96"):
+            self.A.finalize_retention(self.session, self.one, self.mumbai)
+        lot = self.A.retain(self.session, self.one, self.mumbai, self.players[1])
+        with self.assertRaisesRegex(self.A.AuctionError, "80-90"):
+            self.A.finalize_retention(self.session, self.one, self.mumbai)
+        self.A.retain(self.session, self.one, self.mumbai, self.players[4])
+        self.A.finalize_retention(self.session, self.one, self.mumbai)
+        with self.assertRaisesRegex(self.A.AuctionError, "final"):
+            self.A.unretain(self.session, self.one, self.mumbai, lot)
+        with self.assertRaisesRegex(self.A.AuctionError, "final"):
+            self.A.retain(self.session, self.one, self.mumbai, self.players[2])
+
+    def test_offer_displays_and_charges_range_cost(self):
+        self.configure()
+        offer = self.A.offer_retention(self.session, self.one, self.mumbai, self.players[1])
+        self.assertEqual(700, self.A.offer_price(self.one, self.mumbai, offer))
+        self.session.commit()
+        lot = self.A.answer_retention_offer(self.session, self.one, offer, ALICE, True)
+        self.assertEqual(700, lot.sold_price_lakh)
+
+    def test_invalid_ranges_refused(self):
+        with self.assertRaisesRegex(self.A.AuctionError, "overlap"):
+            self.A.set_range_rules(self.session, self.one, [self.rule(), self.rule(90, 92)])
+        with self.assertRaisesRegex(self.A.AuctionError, "Invalid"):
+            self.A.set_range_rules(self.session, self.one, [self.rule(minimum=3, maximum=2)])
+
+    def test_all_teams_finalize_before_new_team_draft(self):
+        two = self.season_two()
+        two.retention_locked_at = None
+        self.session.flush()
+        self.A.set_range_rules(self.session, two, [self.rule(0, 999, 0, 1, 200)])
+        self.A.set_range_rules(self.session, two, [self.rule(0, 999, 1, 2, 600)], draft=True)
+        from services import retention_negotiation as RN
+        RN.set_mode(self.session, two, "ranges")
+        new = self.A.pick_order(self.session, two)
+        self.A.set_draft_order(self.session, two, [f.id for f in reversed(new)])
+        self.assertEqual(new[-1].id, self.A.pick_turn(self.session, two).id)
+        with self.assertRaisesRegex(self.A.AuctionError, "Mumbai, Chennai"):
+            self.A.draft_pick(self.session, two, new[-1], self.players[0])
+        mumbai = next(f for f in self.A.franchises(self.session, two.id) if f.name == "Mumbai")
+        self.A.finalize_retention(self.session, two, mumbai)
+        with self.assertRaisesRegex(self.A.AuctionError, "Chennai") as caught:
+            self.A.draft_pick(self.session, two, new[-1], self.players[0])
+        self.assertNotIn("Mumbai", str(caught.exception))
+        chennai = next(f for f in self.A.franchises(self.session, two.id) if f.name == "Chennai")
+        self.A.finalize_retention(self.session, two, chennai)
+        self.assertTrue(self.A.retention_locked(two))
+        lot = self.A.draft_pick(self.session, two, new[-1], self.players[0])
+        self.assertEqual(600, lot.sold_price_lakh)
+        with self.assertRaisesRegex(self.A.AuctionError, "before the first pick"):
+            self.A.set_draft_order(self.session, two, [f.id for f in new])
+        self.session.commit()
+        self.assert_ledger_agrees(two)
+
+    def test_draft_skip_cannot_prevent_minimum(self):
+        two = self.season_two()
+        two.retention_locked_at = None
+        self.session.flush()
+        self.A.set_range_rules(self.session, two, [self.rule(0, 999, 1, 1, 200)], draft=True)
+        self.A.lock_retention(self.session, two)
+        with self.assertRaisesRegex(self.A.AuctionError, "remaining picks"):
+            self.A.skip_pick(self.session, two, self.A.pick_turn(self.session, two))

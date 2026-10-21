@@ -40,7 +40,8 @@ from services.auction_service import AuctionError
 
 MODE_CLASSIC = "classic"
 MODE_DYNAMIC = "dynamic"
-MODES = (MODE_CLASSIC, MODE_DYNAMIC)
+MODE_RANGES = "ranges"
+MODES = (MODE_CLASSIC, MODE_DYNAMIC, MODE_RANGES)
 
 TALK_OPEN = "open"
 TALK_SIGNED = "signed"
@@ -165,7 +166,7 @@ LOWBALL_LINE = "😤 That was insulting — he's digging in."
 
 def mode(season):
     raw = (getattr(season, "retention_mode", None) or "").strip().lower()
-    return MODE_DYNAMIC if raw == MODE_DYNAMIC else MODE_CLASSIC
+    return raw if raw in MODES else MODE_CLASSIC
 
 
 def is_dynamic(season):
@@ -196,7 +197,7 @@ def set_mode(session, season, new_mode, *, by_tg_id=None):
     """
     new_mode = (new_mode or "").strip().lower()
     if new_mode not in MODES:
-        raise AuctionError("Retention mode is “classic” or “dynamic”.")
+        raise AuctionError("Retention mode is “classic”, “dynamic” or “ranges”.")
     if new_mode == mode(season):
         return season
     if season.status != A.STATUS_SETUP:
@@ -207,7 +208,11 @@ def set_mode(session, season, new_mode, *, by_tg_id=None):
                            "negotiation is waiting) under the current system. "
                            "Release them with /aunretain and clear the offers "
                            "first, then switch.")
+    if A.retention_locked(season) or any(f.retention_finalized_at for f in A.franchises(session, season.id)):
+        raise AuctionError("Retention is final for at least one team.")
     season.retention_mode = new_mode
+    if new_mode == MODE_RANGES:
+        season.max_retentions = sum(r["max_count"] for r in A.range_rules(season))
     if new_mode == MODE_DYNAMIC:
         season.max_retentions = len(slots(season))
         if season.retention_max_spend_lakh is None:
@@ -217,7 +222,7 @@ def set_mode(session, season, new_mode, *, by_tg_id=None):
     A.log_event(session, season, "retention_mode",
                 "🔁 Retention is now <b>"
                 + ("dynamic — owners negotiate, players decide"
-                   if new_mode == MODE_DYNAMIC else "classic — the slab ladder")
+                   if new_mode == MODE_DYNAMIC else new_mode)
                 + "</b>.", by_tg_id=by_tg_id, by_admin=True)
     return season
 
@@ -817,6 +822,8 @@ def start_talk(session, season, franchise, player, *, by_tg_id=None,
                chat_id=None):
     """Open a negotiation, or return the one already open with this player."""
     _require_open_window(season)
+    if franchise.retention_finalized_at:
+        raise AuctionError(f"{franchise.name} finalized retention — it is final.")
     existing = open_talk_for(session, season, franchise)
     if existing is not None:
         if existing.player_id == player.id:
