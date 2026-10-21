@@ -240,20 +240,73 @@ class CommandTests(SquadCase):
         pending = self.A.pending_retention_offers(self.session, self.season.id)
         self.assertEqual([self.pant.id], [o.player_id for o in pending])
 
-    def test_a_tap_from_a_non_admin_is_refused(self):
+    def test_a_tap_from_an_admin_without_team_ownership_is_refused(self):
         from handlers import auction as H
         answers = []
-        self.call(H.retention_pick_callback, ALICE, answers=answers,
+        self.call(H.retention_pick_callback, CAROL, answers=answers,
                  data=f"au_rpk_f_{self.mumbai.id}_{self.pant.id}")
         self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
 
     def test_aretainforce_by_surname(self):
         from handlers import auction as H
-        self.call(H.aretainforce_handler, CAROL, ("Mumbai", "|", "pant"))
+        self.call(H.aretainforce_handler, ALICE, ("Mumbai", "|", "pant"))
         self.session.expire_all()
         self.assertEqual([self.pant.id], [l.player_id for l in
                                           self.A.retained(self.session,
                                                           self.mumbai.id)])
+
+    def test_owner_can_use_instant_picker_without_admin_privileges(self):
+        from handlers import auction as H
+        self.call(H.retention_pick_callback, ALICE,
+                  data=f"au_rpk_f_{self.mumbai.id}_{self.pant.id}")
+        self.session.expire_all()
+        self.assertEqual([self.pant.id], [l.player_id for l in
+                         self.A.retained(self.session, self.mumbai.id)])
+
+    def test_other_team_owner_and_admin_cannot_force_retention(self):
+        from handlers import auction as H
+        for actor in (BOB, CAROL):
+            self.call(H.aretainforce_handler, actor, ("Mumbai", "|", "pant"))
+            self.assertIn("owner or a co-owner", self.replies[-1])
+        self.session.expire_all()
+        self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
+
+    def test_service_rejects_another_teams_player_in_every_format(self):
+        for mode in self.RN.MODES:
+            with self.subTest(mode=mode):
+                self.RN.set_mode(self.session, self.season, mode)
+                self.session.commit()
+                for action in (self.A.retain, self.A.offer_retention,
+                               self.RN.start_talk):
+                    with self.assertRaisesRegex(self.A.AuctionError, "wasn't on Mumbai"):
+                        action(self.session, self.season, self.mumbai,
+                               self.jadeja, by_tg_id=ALICE)
+                    self.session.rollback()
+        self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
+
+    def test_owner_cannot_pick_another_teams_card(self):
+        from handlers import auction as H
+        answers = []
+        self.call(H.retention_pick_callback, ALICE, answers=answers,
+                  data=f"au_rpk_f_{self.mumbai.id}_{self.jadeja.id}")
+        self.assertIn("wasn't on Mumbai", answers[-1])
+        self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
+
+    def test_bare_retain_shows_pending_offer_and_picker_honors_its_price(self):
+        from handlers import auction as H
+        offer = self.A.offer_retention(self.session, self.season, self.mumbai,
+                                       self.pant, 1700)
+        self.session.commit()
+        self.call(H.retain_handler, ALICE)
+        buttons = [b.callback_data for markup in self.markups if markup
+                   for row in markup.inline_keyboard for b in row]
+        self.assertIn(f"au_ret_{offer.id}_yes", buttons)
+        self.assertIn(f"au_ret_{offer.id}_no", buttons)
+        self.call(H.retention_pick_callback, ALICE,
+                  data=f"au_rpk_f_{self.mumbai.id}_{self.pant.id}")
+        self.session.expire_all()
+        self.assertEqual(self.A.OFFER_ACCEPTED, offer.status)
+        self.assertEqual(1700, self.A.retained(self.session, self.mumbai.id)[0].sold_price_lakh)
 
     def test_bare_retain_lists_the_owners_own_squad(self):
         from handlers import auction as H

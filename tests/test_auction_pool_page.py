@@ -1020,9 +1020,11 @@ class RetentionFromLastSeasonPageTests(PoolPageCase):
         self.post({"action": "retain", "franchise_id": self.kochi.id,
                    "player_id": self.players[1].id, "price": "5"})
         self.session.expire_all()
-        self.assertEqual([self.players[1].id],
-                         [l.player_id for l in
-                          self.A.retained(self.session, self.kochi.id)])
+        self.assertEqual([], self.A.retained(self.session, self.kochi.id))
+        offers = self.A.pending_retention_offers(self.session, self.season.id)
+        self.assertEqual([self.players[1].id], [o.player_id for o in offers])
+        self.assertEqual(self.kochi.id, offers[0].franchise_id)
+        self.assertEqual(500, offers[0].price_lakh)
 
 
 if __name__ == "__main__":       # pragma: no cover

@@ -825,7 +825,7 @@
               <input type="hidden" name="franchise_id" value="{{ f.id }}">
               <input type="hidden" name="back_query" value="#retention">
               <input type="text" name="price" placeholder="{{ 'blank = range cost' if season.retention_mode == 'ranges' else ('Cr — blank = slot start' if ret_dynamic else 'Cr — blank = ladder') }}" style="width:9rem;">
-              <button class="btn btn-primary btn-sm" type="submit">Retain</button>
+              <button class="btn btn-primary btn-sm" type="submit">Propose retention</button>
             </form>
             {% else %}
             <span class="dim">{{ {'kept': '🔒 kept', 'talks': '🤝 in talks', 'gone': '🔨 in the auction'}.get(state, state) }}{% if note %} — {{ note }}{% endif %}</span>

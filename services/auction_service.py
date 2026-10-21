@@ -938,9 +938,26 @@ def franchises(session, season_id):
                       AuctionFranchise.name.asc()).all())
 
 
+def _telegram_user_id(value):
+    """Normalize stored Telegram ids without accepting booleans or decimals."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, str):
+        value = value.strip()
+        if not value.isascii() or not value.isdigit():
+            return 0
+        try:
+            value = int(value)
+        except ValueError:
+            return 0
+    return value if isinstance(value, int) and value > 0 else 0
+
+
 def co_owner_ids(franchise):
-    return [int(x) for x in _loads(getattr(franchise, "co_owner_ids_json", None), [])
-            if str(x).lstrip("-").isdigit()]
+    raw = _loads(getattr(franchise, "co_owner_ids_json", None), [])
+    if not isinstance(raw, list):
+        return []
+    return list(dict.fromkeys(uid for value in raw if (uid := _telegram_user_id(value))))
 
 
 def may_bid_for(franchise, tg_id):
@@ -954,8 +971,86 @@ def may_bid_for(franchise, tg_id):
     """
     if tg_id is None or franchise is None:
         return False
-    tg_id = int(tg_id)
-    return tg_id == (franchise.owner_tg_id or 0) or tg_id in co_owner_ids(franchise)
+    tg_id = _telegram_user_id(tg_id)
+    return tg_id > 0 and (tg_id == _telegram_user_id(franchise.owner_tg_id) or tg_id in co_owner_ids(franchise))
+
+
+def restore_retention_owners(session, season, franchise):
+    """Fill unconfigured ownership from the exact previous-team link.
+
+    Explicit owners and explicit co-owner lists (including []) win. No name-only
+    match across unrelated leagues, and no inheritance for expansion teams.
+    """
+    if franchise.season_id != season.id or not season.previous_league_id:
+        return
+    if franchise.co_owner_ids_json is not None:
+        return
+    from models import ChallengeTeam, Tournament, TournamentTeam, PlayerDraft, DraftTeam
+    team = (session.query(ChallengeTeam).filter_by(id=franchise.previous_team_id,
+                                                  league_id=season.previous_league_id).first()
+            if franchise.previous_team_id else None)
+    source = None
+    # A clone's direct franchise id remains valid even after a rename.
+    if franchise.carried_from_id and season.previous_season_id:
+        source = (session.query(AuctionFranchise)
+                  .join(AuctionSeason, AuctionSeason.id == AuctionFranchise.season_id)
+                  .filter(AuctionFranchise.id == franchise.carried_from_id,
+                          AuctionFranchise.season_id == season.previous_season_id,
+                          AuctionSeason.league_id == season.previous_league_id).first())
+    if team is not None:
+        played = (session.query(TournamentTeam).join(Tournament, Tournament.id == TournamentTeam.tournament_id)
+                  .filter(Tournament.league_id == season.previous_league_id,
+                          TournamentTeam.challenge_team_id == team.id)
+                  .order_by(Tournament.id.desc()).first())
+        if played is not None and (played.owner_tg_id is not None or
+                                   played.co_owner_ids_json is not None):
+            source = played  # Latest explicit tournament ownership is authoritative.
+        elif source is None:
+            published = (session.query(AuctionSeason).filter_by(league_id=season.previous_league_id)
+                         .order_by(AuctionSeason.id.desc()).first())
+            if published:
+                matches = [f for f in franchises(session, published.id)
+                           if (f.name or '').strip().casefold() == (team.name or '').strip().casefold()]
+                source = matches[0] if len(matches) == 1 else None
+            if source is None:
+                draft = (session.query(PlayerDraft).filter_by(league_id=season.previous_league_id)
+                         .order_by(PlayerDraft.id.desc()).first())
+                if draft:
+                    matches = (session.query(DraftTeam).filter_by(draft_id=draft.id, name=team.name).all())
+                    source = matches[0] if len(matches) == 1 else None
+    if source is None:
+        return
+    owner = _telegram_user_id(source.owner_tg_id)
+    if franchise.owner_tg_id:
+        if _telegram_user_id(franchise.owner_tg_id) != owner:
+            return
+    elif owner > 0 or co_owner_ids(source):
+        franchise.owner_tg_id = owner or None
+        franchise.owner_name = source.owner_name
+    else:
+        return
+    if franchise.co_owner_ids_json is None:
+        franchise.co_owner_ids_json = _dumps(co_owner_ids(source))
+    session.flush()
+
+
+def require_retention_owner(session, season, franchise, tg_id):
+    if franchise is None or franchise.season_id != season.id:
+        raise AuctionError("That team is not in this auction.")
+    restore_retention_owners(session, season, franchise)
+    if not may_bid_for(franchise, tg_id):
+        if not owner_ids(franchise):
+            raise AuctionError(f"{franchise.name} has no owner or co-owner assigned. An admin must set its Telegram owner/co-owner ids first.")
+        raise AuctionError(f"Only {franchise.name}'s owner or a co-owner can retain or answer its offers.")
+    return franchise
+
+
+def retention_franchise_for_actor(session, season, tg_id):
+    for franchise in franchises(session, season.id):
+        restore_retention_owners(session, season, franchise)
+        if may_bid_for(franchise, tg_id):
+            return franchise
+    return None
 
 
 def franchise_for_actor(session, season_id, tg_id):
@@ -2458,6 +2553,11 @@ def retain(session, season, franchise, player, price_lakh=None, *,
     """
     from services import auction_preseason as P
     P.claim_turn(session, season)
+    if by_tg_id is not None:
+        require_retention_owner(session, season, franchise, by_tg_id)
+    from services import retention_negotiation as RN
+    if season.previous_league_id:
+        RN.check_previous_holder(session, season, franchise, player)
     now = now or datetime.utcnow()
     symbol = season.currency_label or "₹"
 
@@ -2487,9 +2587,6 @@ def retain(session, season, franchise, player, price_lakh=None, *,
     from services import retention_negotiation as RN
     dynamic = RN.is_dynamic(season)
     if RN.mode(season) == RN.MODE_RANGES:
-        holder = previous_squad_map(session, season).get(player.id)
-        if season.previous_league_id and (holder is None or holder.id != franchise.id):
-            raise AuctionError("Only players from this team’s previous squad can be retained.")
         price = range_price(session, season, franchise, player, price_lakh)
     elif dynamic:
         if price_lakh is None:
@@ -6787,6 +6884,12 @@ def offer_retention(session, season, franchise, player, price_lakh=None, *,
     """
     from services import auction_preseason as P
     P.claim_turn(session, season)
+    from services import retention_negotiation as RN
+    if franchise.season_id != season.id:
+        raise AuctionError("That team is not in this auction.")
+    restore_retention_owners(session, season, franchise)
+    if season.previous_league_id:
+        RN.check_previous_holder(session, season, franchise, player)
     if season.status != STATUS_SETUP:
         raise AuctionError("Retention happens before the auction opens — this "
                            "one is " + str(season.status) + ".")
@@ -6872,6 +6975,8 @@ def answer_retention_offer(session, season, offer, tg_id, accept, *, now=None):
     this spends the franchise's money, and the whole point of the button is
     that they chose to.
     """
+    from services import auction_preseason as P
+    P.claim_turn(session, season)
     if offer is None or offer.season_id != season.id:
         raise AuctionError("That offer is not from this auction.")
     if offer.status != OFFER_PENDING:
@@ -6880,9 +6985,7 @@ def answer_retention_offer(session, season, offer, tg_id, accept, *, now=None):
                  .filter(AuctionFranchise.id == offer.franchise_id).first())
     if franchise is None:
         raise AuctionError("That franchise is no longer in the auction.")
-    if not may_bid_for(franchise, tg_id):
-        raise AuctionError(f"Only {franchise.name}'s owner or a co-owner can "
-                           f"answer this.")
+    require_retention_owner(session, season, franchise, tg_id)
     lot = None
     if accept:
         from models import Player
@@ -6971,8 +7074,9 @@ def remove_auction_admin(session, tg_id):
 def owner_ids(franchise):
     """The owner and every co-owner — everyone a /acall should reach."""
     ids = []
-    if franchise.owner_tg_id:
-        ids.append(int(franchise.owner_tg_id))
+    owner = _telegram_user_id(franchise.owner_tg_id)
+    if owner:
+        ids.append(owner)
     for tg_id in co_owner_ids(franchise):
         if tg_id not in ids:
             ids.append(tg_id)

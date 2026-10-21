@@ -760,16 +760,16 @@ class PreviousSeasonTests(AuctionCase):
         self.assertEqual(self.mumbai.id, lot.previous_franchise_id,
                          "a retained player was, by definition, theirs")
 
-    def test_retaining_somebody_elses_player_is_allowed(self):
-        """A warning belongs in the UI; the service must not refuse it — an
-        admin untangling a mess has to be able to put a player anywhere."""
+    def test_retaining_somebody_elses_player_is_refused(self):
+        """Previous-squad eligibility also applies to direct service calls."""
         league = self._league({"Chennai": self.players[:1]})
         self.season.previous_league_id = league.id
         self.season.max_retentions = 1
         self.session.commit()
-        lot = self.A.retain(self.session, self.season, self.mumbai,
-                            self.players[0], now=NOW)
-        self.assertEqual(self.mumbai.id, lot.sold_to_id)
+        with self.assertRaisesRegex(self.A.AuctionError, "wasn't on Mumbai"):
+            self.A.retain(self.session, self.season, self.mumbai,
+                          self.players[0], now=NOW)
+        self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
 
 
 class PhaseTwoBStaysOffTests(AuctionCase):
@@ -879,7 +879,7 @@ class RetentionCommandTests(AuctionCase):
 
     def test_aretainforce_takes_the_ladder_when_no_price_is_given(self):
         from handlers import auction as H
-        self._as_admin(H.aretainforce_handler, ("Mumbai", "|", self.unique.name))
+        self._run(H.aretainforce_handler, ALICE, ("Mumbai", "|", self.unique.name))
         self.session.expire_all()
         kept = self.A.retained(self.session, self.mumbai.id)
         self.assertEqual(1, len(kept))
@@ -888,7 +888,7 @@ class RetentionCommandTests(AuctionCase):
 
     def test_aretainforce_takes_an_explicit_price_in_crore(self):
         from handlers import auction as H
-        self._as_admin(H.aretainforce_handler,
+        self._run(H.aretainforce_handler, ALICE,
                        ("Mumbai", "|", self.unique.name, "|", "6"))
         if not self.A.retained(self.session, self.mumbai.id):
             self.fail(f"retain refused: {self.replies[-1]}")
@@ -923,7 +923,7 @@ class RetentionCommandTests(AuctionCase):
 
     def test_aretlock_reads_out_the_window_and_every_keep(self):
         from handlers import auction as H
-        self.A.retain(self.session, self.season, self.mumbai, self.players[0],
+        self.A.retain(self.session, self.season, self.mumbai, self.unique,
                       now=NOW)
         self.session.commit()
         self._as_admin(H.aretlock_handler)

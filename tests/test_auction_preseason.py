@@ -292,7 +292,7 @@ class PreseasonCommandTests(F.ExpansionCase):
         from services import auction_preseason as P
         token = P.retention_preview(self.session, self.one, self.mumbai)['token']
         query = self.callback(F.CAROL, token)
-        self.assertIn('Only this team', query.answer.call_args.args[0])
+        self.assertIn("Only Mumbai's owner or a co-owner", query.answer.call_args.args[0])
         self.assertIsNone(self.mumbai.retention_finalized_at)
         query.edit_message_text.assert_not_awaited()
 

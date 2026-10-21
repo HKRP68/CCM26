@@ -1976,8 +1976,8 @@ ADMIN_SECTIONS = (
         ("/aretain <team> [| <player> | price]", "Offer a retention from last "
                                                  "season's squad — bare team "
                                                  "name lists it as buttons"),
-        ("/aretainforce <team> [| <player> | price]", "Retain at once, no "
-                                                      "acceptance"),
+        ("/aretainforce <team> [| <player> | price]", "Retain your own team's "
+                                                      "player at once — owner/co-owner only"),
         ("/aoffers", "Retention offers still waiting"),
         ("/aretcancel <player>", "Withdraw a waiting offer"),
         ("/aunretain <player>", "Release a retained player into the pool"),

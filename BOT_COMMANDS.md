@@ -845,7 +845,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/anextset <set \| 80-85>` | Make a set, or every queued player in a rating range, come next |
 | `/asetorder A, B, C` | Order the whole queue by set — the numbers `/asets` shows are the order it runs in, and the website's Sets card does the same with ↑ / ↓ |
 | `/aaccelmode on\|off` | The automatic ⚡ Accelerated round for unsold players (default on) |
-| `/aretainforce <franchise> [\| <player> \| price]` | Retain at once, without the franchise's Accept — same last-season squad rule, and the bare team name lists it as buttons |
+| `/aretainforce <franchise> [\| <player> \| price]` | Owner/co-owner only: instantly retain your team's own previous-squad player; the bare team name lists eligible buttons |
 | `/aoffers` · `/aretcancel <player>` | Retention offers (or, in dynamic mode, open talks) waiting, and withdraw / cancel one |
 | `/aretmode classic\|dynamic` | Which retention system runs — the slab ladder, or dynamic: owners negotiate, players decide. Only one at a time |
 | `/aretslot [add\|edit\|remove\|move\|preset]` | Dynamic slots — `/aretslot add Uncapped \| 70-82 \| 4 \| 🧢`, `/aretslot edit Elite \| range 92-99 \| price 25`, `/aretslot preset 2` |

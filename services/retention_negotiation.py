@@ -824,6 +824,10 @@ def start_talk(session, season, franchise, player, *, by_tg_id=None,
     """Open a negotiation, or return the one already open with this player."""
     from services import auction_preseason as P
     P.claim_turn(session, season)
+    if by_tg_id is not None:
+        A.require_retention_owner(session, season, franchise, by_tg_id)
+    if season.previous_league_id:
+        check_previous_holder(session, season, franchise, player)
     _require_open_window(season)
     if franchise.retention_finalized_at:
         raise AuctionError(f"{franchise.name} finalized retention — it is final.")
@@ -921,9 +925,9 @@ def _check_actor(session, t, tg_id, *, admin=False):
                  .filter(AuctionFranchise.id == t.franchise_id).first())
     if franchise is None:
         raise AuctionError("That franchise is no longer in the auction.")
-    if not admin and not A.may_bid_for(franchise, tg_id):
-        raise AuctionError(f"Only {franchise.name}'s owner or a co-owner can "
-                           f"negotiate for it.")
+    if not admin:
+        season = session.query(AuctionSeason).filter_by(id=t.season_id).first()
+        A.require_retention_owner(session, season, franchise, tg_id)
     return franchise
 
 

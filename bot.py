@@ -2526,8 +2526,8 @@ def main():
         app.add_handler(CommandHandler("acancel", acancel_handler))
         # Retention: an auction's setup phase, before any lot opens.
         # /aretain OFFERS a retention; the franchise accepts it with a button
-        # only its owner and co-owners can press. /aretainforce is the old
-        # instant path, for an owner who agreed in person.
+        # only its owner and co-owners can press. /aretainforce is also
+        # restricted to the named team's owner and co-owners.
         app.add_handler(CommandHandler("aretain", aretain_handler))
         app.add_handler(CallbackQueryHandler(retention_offer_callback,
                                              pattern=r"^au_ret_"))

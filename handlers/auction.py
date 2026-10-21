@@ -1458,7 +1458,7 @@ async def aretain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Nothing is signed until the franchise answers: the reply carries Accept /
     Decline buttons only that franchise's owner or a co-owner can press.
     Left off, the price is the retention ladder's next slab *at the moment
-    they accept*. <code>/aretainforce</code> keeps the old instant path.
+    they accept*. <code>/aretainforce</code> is the team's owner-only instant path.
     """
     chat = update.effective_chat
     if chat is None or chat.type not in GROUP_CHAT_TYPES:
@@ -1506,51 +1506,37 @@ async def aretain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def aretainforce_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """<code>/aretainforce Mumbai | Virat Kohli | 18</code> — retain at once.
-
-    The admin override: no offer, no button, exactly what /aretain did before
-    franchises were asked. For the owner who has agreed in person.
-    """
+    """Instant retention is restricted to the target team's owner/co-owners."""
     user = update.effective_user
     raw = _arg_text(context)
-    usage = ("Usage: /aretainforce <franchise> — pick from last season's "
-             "squad, or /aretainforce <franchise> | <player> | [price]")
-    if raw.strip() and "|" not in raw:
+    session = get_session()
+    try:
         chat = update.effective_chat
         if chat is None or chat.type not in GROUP_CHAT_TYPES:
             await _reply(update, GROUP_ONLY)
             return
-        if not await _require_admin(update):
-            return
-        session = get_session()
-        try:
-            season = _season_for(session, update)
-            if season is None:
-                await _reply(update, NO_AUCTION)
-                return
-            franchise = _find_franchise(session, season, raw)
-            await _send_picker(update, session, season, franchise, "f")
-        except AuctionError as exc:
-            await _reply(update, f"⚠️ {html.escape(str(exc))}")
-        finally:
-            session.close()
-        return
-
-    def work(session, season):
-        franchise, player, price = _retention_args(session, season, raw, usage)
+        season = _season_for(session, update)
+        if season is None:
+            raise AuctionError(NO_AUCTION)
+        franchise, player, price = _retention_args(session, season, raw,
+            "Usage: /aretainforce <your team> | <your player> | [price]")
+        A.require_retention_owner(session, season, franchise, user.id if user else None)
         if player is None:
-            raise AuctionError(usage)
-        lot = A.retain(session, season, franchise, player, price,
-                       by_tg_id=user.id if user else None)
-        kept = int(franchise.retained_count or 0)
-        return (f"🔒 <b>{html.escape(franchise.name)}</b> retain "
-                f"{html.escape(lot.name)} for "
-                f"<b>{A.render_money(lot.sold_price_lakh, season.currency_label)}</b> "
-                f"({kept}/{season.max_retentions}).\n"
-                f"💰 {A.render_money(franchise.purse_remaining_lakh, season.currency_label)} "
-                f"left to bid with.")
-
-    await _with_auction(update, work, admin=True, context=context)
+            await _send_picker(update, session, season, franchise, 'f')
+            return
+        lot = A.retain(session, season, franchise, player, price, by_tg_id=user.id)
+        text = f"🔒 <b>{html.escape(franchise.name)}</b> retain {html.escape(lot.name)} for {A.render_money(lot.sold_price_lakh, season.currency_label)}."
+        session.commit()
+        await _reply(update, text)
+    except AuctionError as exc:
+        session.rollback()
+        await _reply(update, f"⚠️ {html.escape(str(exc))}")
+    except Exception:
+        session.rollback()
+        logger.exception("/aretainforce failed")
+        await _reply(update, "⚠️ Something went wrong. Try again.")
+    finally:
+        session.close()
 
 
 async def retention_offer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1558,7 +1544,7 @@ async def retention_offer_callback(update: Update, context: ContextTypes.DEFAULT
     query = update.callback_query
     if query is None:
         return
-    user = update.effective_user
+    user = getattr(query, "from_user", None) or update.effective_user
     try:
         offer_id, answer = (query.data or "")[len(RET_CB):].split("_", 1)
         offer_id = int(offer_id)
@@ -1578,6 +1564,9 @@ async def retention_offer_callback(update: Update, context: ContextTypes.DEFAULT
         if offer is None or season is None:
             await query.answer("That offer no longer exists.", show_alert=True)
             return
+        chat = update.effective_chat
+        if chat is None or chat.id != season.chat_id or answer not in ('yes', 'no'):
+            raise AuctionError("That retention button is not valid for this auction group.")
         accept = answer == "yes"
         lot = A.answer_retention_offer(session, season, offer,
                                        user.id if user else None, accept)
@@ -1700,23 +1689,31 @@ async def retain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if season is None:
             await _reply(update, NO_AUCTION)
             return
-        franchise = (A.franchise_for_actor(session, season.id, user.id)
+        franchise = (A.retention_franchise_for_actor(session, season, user.id)
                      if user else None)
         if franchise is None:
             raise AuctionError("Only a franchise's owner or a co-owner can "
                                "negotiate a retention.")
-        if RN.mode(season) == RN.MODE_RANGES:
+        if not RN.is_dynamic(season):
+            if not raw:
+                pending = [offer for offer in A.pending_retention_offers(session, season.id)
+                           if offer.franchise_id == franchise.id]
+                for offer in pending:
+                    await _reply(update, AR.retention_offer_card(session, season, offer),
+                                 reply_markup=AR.retention_offer_keyboard(offer))
+                await _send_picker(update, session, season, franchise, 'f')
+                return
             player = RN.find_retention_player(session, season, franchise, raw)
-            lot = A.retain(session, season, franchise, player, by_tg_id=user.id)
+            pending = next((offer for offer in A.pending_retention_offers(session, season.id)
+                            if offer.franchise_id == franchise.id and offer.player_id == player.id), None)
+            lot = (A.answer_retention_offer(session, season, pending, user.id, True) if pending else
+                   A.retain(session, season, franchise, player, by_tg_id=user.id))
             session.commit()
             await _reply(update, f"🔒 {html.escape(franchise.name)} retain {html.escape(lot.name)} for "
                          + A.render_money(lot.sold_price_lakh, season.currency_label))
             return
         if not raw:
-            if not RN.is_dynamic(season):
-                raise AuctionError("This auction uses classic retention — an "
-                                   "admin offers it with /aretain.")
-            await _send_picker(update, session, season, franchise, "r")
+            await _send_picker(update, session, season, franchise, 'r')
             return
         parts = [p.strip() for p in raw.split("|")]
         player = RN.find_retention_player(session, season, franchise, parts[0])
@@ -1755,7 +1752,7 @@ async def retention_talk_callback(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     if query is None:
         return
-    user = update.effective_user
+    user = getattr(query, "from_user", None) or update.effective_user
     try:
         talk_id, answer = (query.data or "")[len(RTN_CB):].split("_", 1)
         talk_id = int(talk_id)
@@ -1815,14 +1812,14 @@ async def retention_pick_callback(update: Update, context: ContextTypes.DEFAULT_
     ``au_rpk_tm_<franchise>_<team>`` — "this franchise was that team".
 
     Shared buttons, authorised on every press: an admin's modes need an
-    auction admin, ``r`` needs the franchise's own owner or co-owner.
+    auction admin; ``r`` and ``f`` need the franchise's own owner or co-owner.
     """
     from models import AuctionFranchise, Player
     from services import retention_negotiation as RN
     query = update.callback_query
     if query is None:
         return
-    user = update.effective_user
+    user = getattr(query, "from_user", None) or update.effective_user
     tg_id = user.id if user else None
     parts = (query.data or "")[len(AR.PICK_CB):].split("_")
     if parts == ["noop"]:
@@ -1845,11 +1842,8 @@ async def retention_pick_callback(update: Update, context: ContextTypes.DEFAULT_
             await query.answer("That franchise is no longer in the auction.",
                                show_alert=True)
             return
-        if mode == "r":
-            if not A.may_bid_for(franchise, tg_id):
-                await query.answer(f"Only {franchise.name}'s owner or a "
-                                   f"co-owner can do that.", show_alert=True)
-                return
+        if mode in ('r', 'f'):
+            A.require_retention_owner(session, season, franchise, tg_id)
         elif not _is_auction_admin(tg_id):
             await query.answer(NOT_ADMIN, show_alert=True)
             return
@@ -1891,8 +1885,10 @@ async def retention_pick_callback(update: Update, context: ContextTypes.DEFAULT_
                               tg_id, chat.id)
             await query.answer(f"Offer posted for {player.name}.")
         elif kind == "f":
-            lot = A.retain(session, season, franchise, player, None,
-                           by_tg_id=tg_id)
+            pending = next((offer for offer in A.pending_retention_offers(session, season.id)
+                            if offer.franchise_id == franchise.id and offer.player_id == player.id), None)
+            lot = (A.answer_retention_offer(session, season, pending, tg_id, True) if pending else
+                   A.retain(session, season, franchise, player, None, by_tg_id=tg_id))
             session.commit()
             await query.answer(
                 f"{franchise.name} retain {lot.name} for "
@@ -2645,7 +2641,7 @@ async def retainlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         season = _season_for(session, update)
         if season is None:
             raise AuctionError(NO_AUCTION)
-        franchise = A.franchise_for_actor(session, season.id, user.id) if user else None
+        franchise = A.retention_franchise_for_actor(session, season, user.id) if user else None
         if franchise is None:
             raise AuctionError("Only a team owner or co-owner can preview and finalize retention.")
         data = P.retention_preview(session, season, franchise)
@@ -2672,8 +2668,7 @@ async def retention_final_callback(update: Update, context: ContextTypes.DEFAULT
             raise AuctionError("That preview belongs to a different auction.")
         franchise = session.query(AuctionFranchise).filter_by(id=int(fid), season_id=season.id).first()
         user = update.effective_user
-        if franchise is None or user is None or not A.may_bid_for(franchise, user.id):
-            raise AuctionError("Only this team’s owner or co-owner can confirm retention.")
+        A.require_retention_owner(session, season, franchise, user.id if user else None)
         P.confirm_retention(session, season, franchise, token, by_tg_id=user.id)
         message = f"🔒 {html.escape(franchise.name)}: retention is final."
         session.commit()

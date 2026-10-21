@@ -24938,13 +24938,10 @@ def _auction_detail_action(db, season, action):
         raw = (request.form.get("price") or "").strip()
         # Retention is only ever from the franchise's own last-season squad.
         retention_rn.check_previous_holder(db, season, franchise, player)
-        lot = auction_svc.retain(db, season, franchise, player,
-                                 auction_svc.parse_amount(raw) if raw else None)
-        log_admin(db, "auction_retain", "auction", season.id, franchise.name,
-                  detail=player.name)
-        flash(f"🔒 {franchise.name} retain {lot.name} for "
-              f"{auction_svc.render_money(lot.sold_price_lakh, season.currency_label)}.",
-              "success")
+        offer = auction_svc.offer_retention(db, season, franchise, player,
+                                            auction_svc.parse_amount(raw) if raw else None)
+        log_admin(db, "auction_retention_offer", "auction", season.id, franchise.name, detail=player.name)
+        flash(f"Retention proposed for {player.name}. {franchise.name}'s owner/co-owner must open /retain in the auction group and accept or decline.", "success")
 
     elif action == "unretain":
         lot = _auction_lot(db, season, request.form.get("lot_id"))

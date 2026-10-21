@@ -423,8 +423,12 @@ lists them and `/aretcancel` withdraws one. They live in
 `auction_retention_offers`, and nothing is announced until one is accepted —
 the `retained` event is the announcement.
 
-`/aretainforce` (and the setup page's retention form) is the old instant path,
-kept as the admin's override for an owner who agreed in person.
+`/aretainforce` is an instant path for the named team's owner or co-owner only.
+Admins may propose retentions with `/aretain` or the setup page, but cannot
+accept on a team's behalf. Owners can open their pending offers with `/retain`.
+Every signing checks that the player belonged to that team's previous squad.
+Unconfigured ownership is recovered from its linked previous team; explicit
+current owners and co-owner lists, including removed co-owners, take precedence.
 
 ### A retained player is an ordinary sold lot
 
@@ -625,8 +629,8 @@ Walking away before the first offer is free. Walking away after it is final,
 because otherwise a franchise could probe his price and come back with a clean
 slate. `/aretcancel <player>` and the website's Cancel are an admin's clean undo.
 
-Every signing, including `/aretainforce` and the website's form, still goes
-through `retain()`. The count, budget, purse, squad, overseas, role and
+Every signing, including `/aretainforce` and acceptance of a website proposal,
+still goes through `retain()`. The count, budget, purse, squad, overseas, role and
 reachability rules and the ledger are therefore the same ones classic uses, and
 in dynamic mode `retain()` also enforces the slot. The hidden price and
 personality appear only on the website's 🤝 Talks table unless
