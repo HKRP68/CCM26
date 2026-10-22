@@ -13,6 +13,7 @@ file_id: the host filesystem is wiped on deploy.
 """
 
 import logging
+from io import BytesIO
 from html import escape as _esc
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ForceReply, Update
@@ -46,6 +47,7 @@ def _keys_keyboard():
             rows.append(row); row = []
     if row:
         rows.append(row)
+    rows.append([InlineKeyboardButton("📂 Bulk import messages", callback_data=f"{CB}_bulk")])
     # A way out of the command from every screen — the flow parks state in
     # user_data, so an admin who opened it by accident needs something to press
     # rather than having to remember /cancel.
@@ -154,6 +156,31 @@ async def milestone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "🏆 <b>Milestone Messages</b>\n\nPick a moment:",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(_keys_keyboard()))
+        return
+
+    if action == "bulk":
+        from services.milestone_import import import_template
+        context.user_data[AWAIT_KEY] = {"mode": "bulk", "chat_id": update.effective_chat.id}
+        await q.answer()
+        await q.edit_message_text(
+            "📂 <b>Bulk milestone messages</b>\n\n"
+            "Upload a UTF-8 JSON file, or paste its JSON here.\n"
+            "Each key is a milestone: use message text for a custom message, "
+            "<code>true</code> for automatic text, or <code>false</code> for OFF.\n\n"
+            "⚠️ <b>Every milestone omitted from the file will have messages turned OFF.</b> "
+            "Configured GIFs remain available. Changes are saved together only after validation.\n\n"
+            "Edit the example below. Maximum file size: 64 KB; each custom message: 900 characters.\n\n"
+            "Available keys: " + ", ".join(f"<code>{key}</code>" for key, _, _ in EVENT_KEYS)
+            + "\n\nPlaceholders: " + ", ".join("{" + f + "}" for f in CAPTION_FIELDS),
+            parse_mode="HTML", reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Back", callback_data=f"{CB}_list"),
+                 InlineKeyboardButton("✖️ Cancel", callback_data=f"{CB}_x_")]]))
+        example = BytesIO(import_template().encode("utf-8"))
+        example.name = "milestone_messages.json"
+        await q.message.reply_document(document=example,
+            caption="Example: enables fifty, century and five_fer; all other messages turn OFF. Edit before importing.")
+        await q.message.reply_text("Reply with your edited JSON file or paste the JSON. /cancel to stop.",
+                                  reply_markup=ForceReply(selective=False))
         return
 
     # Close carries no event key, so it has to be answered before the lookup
@@ -292,6 +319,42 @@ async def milestone_reply_handler(update: Update, context: ContextTypes.DEFAULT_
     if text.lower().split("@", 1)[0] in ("/cancel", "cancel"):
         context.user_data.pop(AWAIT_KEY, None)
         await msg.reply_text("Cancelled.")
+        return True
+
+    if pending.get("mode") == "bulk":
+        from services.milestone_import import MAX_IMPORT_BYTES, parse_import, apply_import
+        try:
+            if msg.document:
+                if msg.document.file_size and msg.document.file_size > MAX_IMPORT_BYTES:
+                    raise ValueError("File must be 64 KB or smaller.")
+                telegram_file = await msg.document.get_file()
+                raw = (await telegram_file.download_as_bytearray()).decode("utf-8-sig")
+            elif text:
+                raw = text
+            else:
+                raise ValueError("Upload a JSON file or paste a JSON object.")
+            selections = parse_import(raw)
+        except (ValueError, UnicodeError) as exc:
+            await msg.reply_text("❌ " + str(exc) + "\nNo settings changed. Try again or /cancel.")
+            return True
+        except Exception:
+            logger.exception("milestone import download failed")
+            await msg.reply_text("❌ Could not read the file. No settings changed. Try again or /cancel.")
+            return True
+        db = get_session()
+        try:
+            apply_import(db, selections)
+        except Exception:
+            logger.exception("milestone bulk import failed")
+            await msg.reply_text("❌ Could not save the import. No settings changed. Try again or /cancel.")
+            return True
+        finally:
+            db.close()
+        context.user_data.pop(AWAIT_KEY, None)
+        _invalidate()
+        enabled = ", ".join(selections) or "none"
+        await msg.reply_text(f"✅ Imported! Messages ON: {len(selections)}; OFF: {len(EVENT_KEYS) - len(selections)}."
+                             f"\nEnabled: {enabled}\nAll omitted milestones are OFF. GIF settings are unchanged.")
         return True
 
     event_key = pending.get("event_key")

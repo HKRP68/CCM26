@@ -302,7 +302,8 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
                 from html import escape
                 safe_fields = {k: escape(str(v)) for k, v in caption_values(event_key, fields).items()}
                 caption = render_caption(getattr(pick, "caption", None), safe_fields)
-                if not caption and (fields or not source):
+                if not caption and (fields or not source or any(
+                        r.source_type == MESSAGE_SETTINGS and r.source == "on" for r in rows)):
                     caption = default_milestone_message(event_key, fields)
             kind = _send_kind(pick)
         finally:
