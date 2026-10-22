@@ -44,7 +44,7 @@ import logging
 from datetime import datetime, timedelta
 from html import escape
 
-from sqlalchemy import or_
+from sqlalchemy import or_, case
 
 from models import (
     AuctionFranchise, AuctionLedgerEntry, AuctionLot, AuctionTrade,
@@ -626,7 +626,40 @@ def traded_lot_ids(session, season_id, phase=None):
 def squad_after(session, team, out_lots, in_lots):
     outgoing = {lot.id for lot in out_lots}
     keep = [lot for lot in A.squad(session, team.id) if lot.id not in outgoing]
-    return keep + list(in_lots)
+    return keep + [lot for lot in in_lots if lot.status == A.LOT_SOLD]
+
+
+def trade_squad(session, season, team):
+    """Signed players plus unretained previous-squad rights while retention is open."""
+    if A.retention_open(season) and not team.retention_finalized_at:
+        from models import Player
+        held = A.previous_squad_map(session, season)
+        for player_id, holder in held.items():
+            if holder.id != team.id:
+                continue
+            lot = session.query(AuctionLot).filter_by(season_id=season.id, player_id=player_id).first()
+            if lot is None:
+                player = session.query(Player).filter_by(id=player_id).first()
+                if player is None:
+                    continue
+                lot = A._signing_lot(session, season, player)
+            if lot.status == A.LOT_QUEUED and lot.acquisition in (None, A.ACQ_AUCTION):
+                lot.acquisition = A.ACQ_TRADE_RIGHTS
+                lot.sold_to_id = team.id
+                lot.previous_franchise_id = team.id
+        session.flush()
+    signed = A.squad(session, team.id)
+    if not A.retention_open(season) or team.retention_finalized_at:
+        return signed
+    return signed + session.query(AuctionLot).filter_by(season_id=season.id,
+        sold_to_id=team.id, status=A.LOT_QUEUED, acquisition=A.ACQ_TRADE_RIGHTS).all()
+
+
+def _owned_for_trade(season, lot, team):
+    return (lot.season_id == season.id and lot.sold_to_id == team.id and
+            (lot.status == A.LOT_SOLD or
+             (A.retention_open(season) and not team.retention_finalized_at and
+              lot.status == A.LOT_QUEUED and lot.acquisition == A.ACQ_TRADE_RIGHTS)))
 
 
 def _shape(season, lots, *, building):
@@ -806,9 +839,14 @@ def validate(session, trade, *, now=None, check_window=True, agreed=False):
                            f"{_money(season, rules['max_cash_lakh'])}.")
     for side, lots, team in (("a", a_lots, team_a), ("b", b_lots, team_b)):
         for lot in lots:
-            if lot.status != A.LOT_SOLD or lot.sold_to_id != team.id:
+            if not _owned_for_trade(season, lot, team):
                 raise AuctionError(f"{lot.name} is no longer on {team.name}'s "
                                    f"squad.")
+            if lot.acquisition == A.ACQ_TRADE_RIGHTS:
+                from services import retention_negotiation as RN
+                if (any(o.player_id == lot.player_id for o in A.pending_retention_offers(session, season.id))
+                        or RN.candidate_state(session, season, lot.player_id)[0] in ('talks', 'gone')):
+                    raise AuctionError(f"{lot.name} has a retention offer or negotiation to resolve before trading.")
 
     if phase:
         recent = traded_lot_ids(session, season.id, phase=phase)
@@ -901,7 +939,7 @@ def toggle_lot(session, trade, lot_id):
     """Tick or untick one player, on whichever side owns him."""
     _require_building(trade)
     lot = session.query(AuctionLot).filter(AuctionLot.id == int(lot_id)).first()
-    if lot is None or lot.status != A.LOT_SOLD:
+    if lot is None or lot.season_id != trade.season_id:
         raise AuctionError("That player is not on a squad.")
     if lot.sold_to_id == trade.team_a_id:
         side = "a"
@@ -909,6 +947,8 @@ def toggle_lot(session, trade, lot_id):
         side = "b"
     else:
         raise AuctionError(f"{lot.name} is not on either squad in this trade.")
+    if not _owned_for_trade(trade.season, lot, team_on(session, trade, side)):
+        raise AuctionError(f"{lot.name} is no longer available for this trade.")
     ids = selection(trade, side)
     if lot.id in ids:
         ids.remove(lot.id)
@@ -1037,7 +1077,7 @@ def counter(session, trade, *, by_tg_id=None, now=None):
 def _lot_snapshot(lot):
     return {"id": lot.id, "name": lot.name, "rating": int(lot.rating or 0),
             "category": lot.category, "overseas": bool(lot.is_overseas),
-            "price": lot_price(lot)}
+            "price": lot_price(lot), "acquisition": lot.acquisition}
 
 
 def _move_money(session, season, team, delta, rows, *, trade, by_tg_id):
@@ -1089,7 +1129,9 @@ def _apply(session, season, trade, team_a, team_b, a_lots, b_lots, cash, *,
         moved = (session.query(AuctionLot)
                  .filter(AuctionLot.id.in_([l.id for l in lots]),
                          AuctionLot.sold_to_id == src.id,
-                         AuctionLot.status == A.LOT_SOLD)
+                         or_(AuctionLot.status == A.LOT_SOLD,
+                             (AuctionLot.status == A.LOT_QUEUED) &
+                             (AuctionLot.acquisition == A.ACQ_TRADE_RIGHTS)))
                  .update({"sold_to_id": dst.id}, synchronize_session=False))
         if moved != len(lots):
             raise AuctionError("A player in this trade has just moved — "
@@ -1123,13 +1165,23 @@ def _apply(session, season, trade, team_a, team_b, a_lots, b_lots, cash, *,
         _move_money(session, season, team, delta, rows, trade=trade,
                     by_tg_id=by_tg_id)
 
-    size_a = len(b_lots) - len(a_lots)
+    size_a = sum(l.status == A.LOT_SOLD for l in b_lots) - sum(l.status == A.LOT_SOLD for l in a_lots)
     for team, change in ((team_a, size_a), (team_b, -size_a)):
         if change:
             (session.query(AuctionFranchise)
              .filter(AuctionFranchise.id == team.id)
              .update({"squad_size": AuctionFranchise.squad_size + change},
                      synchronize_session=False))
+    kept_a = sum(l.acquisition == A.ACQ_RETAINED for l in b_lots) - sum(l.acquisition == A.ACQ_RETAINED for l in a_lots)
+    for team, change in ((team_a, kept_a), (team_b, -kept_a)):
+        if change:
+            count = AuctionFranchise.retained_count + change
+            session.query(AuctionFranchise).filter_by(id=team.id).update(
+                {"retained_count": case((count < 0, 0), else_=count)}, synchronize_session=False)
+    for lots, dst in ((a_lots, team_b), (b_lots, team_a)):
+        for lot in lots:
+            if season.status == A.STATUS_SETUP or trade.phase == PHASE_PRE:
+                lot.previous_franchise_id = dst.id
     session.flush()
     for row in (team_a, team_b, *a_lots, *b_lots):
         session.refresh(row)
@@ -1147,6 +1199,9 @@ def execute(session, trade, *, by_tg_id=None, now=None, by_admin=False,
     """Do the trade. Returns it, completed."""
     now = now or datetime.utcnow()
     season = trade.season
+    if season.status == A.STATUS_SETUP:
+        from services import auction_preseason as P
+        P.claim_turn(session, season)
     phase = validate(session, trade, now=now, check_window=check_window,
                      agreed=agreed)
     team_a = team_on(session, trade, "a")
@@ -1227,18 +1282,26 @@ def reverse(session, trade, *, by_tg_id=None, by_web=False, now=None):
         raise AuctionError(f"Trade #{trade.id} is not a completed trade.")
     now = now or datetime.utcnow()
     season = trade.season
+    if season.status == A.STATUS_SETUP:
+        from services import auction_preseason as P
+        P.claim_turn(session, season)
     team_a = team_on(session, trade, "a")
     team_b = team_on(session, trade, "b")
     a_lots = lots_for(session, trade, "a")   # now on team B
     b_lots = lots_for(session, trade, "b")   # now on team A
     for lot in a_lots:
-        if lot.status != A.LOT_SOLD or lot.sold_to_id != team_b.id:
+        if not _owned_for_trade(season, lot, team_b):
             raise AuctionError(f"{lot.name} has moved since this trade — it "
                                f"cannot be undone in one step.")
     for lot in b_lots:
-        if lot.status != A.LOT_SOLD or lot.sold_to_id != team_a.id:
+        if not _owned_for_trade(season, lot, team_a):
             raise AuctionError(f"{lot.name} has moved since this trade — it "
                                f"cannot be undone in one step.")
+    snapshot = json.loads(trade.snapshot_json or "{}")
+    rights_ids = {row['id'] for side in ('a', 'b') for row in snapshot.get(side, [])
+                 if row.get('acquisition') == A.ACQ_TRADE_RIGHTS}
+    if any(lot.id in rights_ids and lot.acquisition != A.ACQ_TRADE_RIGHTS for lot in a_lots + b_lots):
+        raise AuctionError("A traded player's retention rights have been used — this trade cannot be undone.")
     a_delta, b_delta = purse_delta(session, trade)
     for team, delta in ((team_a, a_delta), (team_b, b_delta)):
         if int(team.purse_remaining_lakh or 0) - delta < 0:
@@ -1417,7 +1480,7 @@ def sync_league(session, season, moves):
 # ──────────────────────────────────────────────────────────────────────
 
 def block_add(session, season, team, lot, *, note=None, by_tg_id=None):
-    if lot.status != A.LOT_SOLD or lot.sold_to_id != team.id:
+    if not _owned_for_trade(season, lot, team):
         raise AuctionError(f"{lot.name} is not on {team.name}'s squad.")
     row = (session.query(AuctionTradeBlock)
            .filter(AuctionTradeBlock.season_id == season.id,
@@ -1452,7 +1515,7 @@ def block_list(session, season):
     for row in rows:
         lot = session.query(AuctionLot).filter(AuctionLot.id == row.lot_id).first()
         team = franchise(session, row.franchise_id)
-        if lot is None or team is None or lot.sold_to_id != team.id:
+        if lot is None or team is None or not _owned_for_trade(season, lot, team):
             session.delete(row)
             continue
         out.append((row, lot, team))
@@ -1509,16 +1572,16 @@ def lot_line(season, lot, *, ticked=None):
     mark = "" if ticked is None else ("☑️ " if ticked else "▫️ ")
     flag = " ✈️" if lot.is_overseas else ""
     role = ROLE_SHORT.get(lot.category, (lot.category or "")[:4].upper())
-    return (f"{mark}{_e(lot.name)} — {role} {int(lot.rating or 0)}{flag} · "
-            f"{_money(season, lot_price(lot))}")
+    cost = "retention rights (not retained)" if lot.acquisition == A.ACQ_TRADE_RIGHTS else _money(season, lot_price(lot))
+    return f"{mark}{_e(lot.name)} — {role} {int(lot.rating or 0)}{flag} · {cost}"
 
 
 def _snap_line(season, row):
     """``lot_line`` for a snapshot row — a finished trade reads like a live one."""
     flag = " ✈️" if row.get("overseas") else ""
     role = ROLE_SHORT.get(row.get("category"), (row.get("category") or "")[:4].upper())
-    return (f"{_e(row.get('name'))} — {role} {int(row.get('rating') or 0)}{flag} · "
-            f"{_money(season, row.get('price'))}")
+    cost = "retention rights (not retained)" if row.get('acquisition') == A.ACQ_TRADE_RIGHTS else _money(season, row.get('price'))
+    return f"{_e(row.get('name'))} — {role} {int(row.get('rating') or 0)}{flag} · {cost}"
 
 
 TRADE_OUT = "📤 Trade out"
@@ -1917,8 +1980,9 @@ def render_help(session=None, season=None):
         "his price) · player + cash (a swap with a fee on top).",
 
         "🪟 <b>3. The four windows</b>\n"
-        f"• <b>Pre-auction</b> — retained and picked players "
-        f"{'✅' if rules['pre_auction'] else '❌'}\n"
+        f"• <b>Pre-auction</b> — retained, picked and unretained previous-squad players "
+        f"{'✅' if rules['pre_auction'] else '❌'}. Unretained players transfer retention rights, "
+        "not a signing or contract charge; normal retention limits and prices still apply.\n"
         f"• <b>Mid-auction</b> — between lots {'✅' if rules['mid_auction'] else '❌'}. "
         "Not while you hold the standing bid or are answering a Right To "
         "Match, and never the player on the block. Offers last 5 minutes.\n"

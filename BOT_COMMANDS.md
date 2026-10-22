@@ -391,6 +391,12 @@ An auction is a group event; these run in the chat the auction is bound to.
 | `/atraderules` · `/atradewindow` · `/atradedeadline` | — | Admin: the trade rules, the master switch, the mid-season deadline |
 | `/atradeapprove` · `/atradeveto` · `/atradeundo` | — | **Bot owner / bot admin only**: sign off, stop, or reverse a trade |
 
+Before retention closes, `/atrade` also lists unretained players from the rest
+of each team's previous squad as **retention rights**. The buyer can retain
+them at the configured price and limits; trading rights itself is not a signing.
+Released traded players stay in the open pool and do not return to their old
+team's retention list.
+
 Every new player is announced with his **player card** and a fresh **pinned
 board**; bids are announced as one short line per burst.
 

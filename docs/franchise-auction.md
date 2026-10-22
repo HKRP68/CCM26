@@ -1877,13 +1877,31 @@ side may be empty, never both.
 
 | Window | When | Extra rule |
 | --- | --- | --- |
-| Pre-auction | `setup` | Retained and picked players |
+| Pre-auction | `setup` | Retained/picked players, plus unretained previous-squad rights while retention is open |
 | Mid-auction | `live` / `paused` | Refused while either side holds the **standing bid** or is answering a **Right To Match** on the lot on the block; offers expire in 5 minutes; the board's purses and max bids redraw the moment it goes through |
 | Post-auction | `completed`, before the season's first match | — |
 | Mid-season | published, and a tournament on the league has started | Closes at `trade_deadline_at`, or after `trade_deadline_matches` completed league matches, and **always** when the playoffs start (any non-league match played). Refused while either team is mid-match |
 
 `/atradewindow off` shuts every window at once; `/atraderules mid off` (and
 `pre`, `post`, `season`) shuts one.
+
+The pre-auction picker includes the rest of each team's previous squad, marked
+as **retention rights**. Trading those rights does not sign the player, consume
+a retention slot, or move his old contract price. Any agreed cash fee still
+moves normally. The receiving owner/co-owner can then use `/retain` with the
+normal range price, quota, budget and squad checks, or negotiate in dynamic mode.
+Pending retention offers or negotiations must be resolved before trading rights.
+Unretained rights cannot be traded once retention closes; those players remain
+queued for the draft/auction pool.
+
+Trades update current retention eligibility without rewriting the historical
+league squads. Releasing a traded player surrenders those rights to the open
+pool: neither his former team nor the releasing team gets him back in its
+retention picker. A paid retention refunds the current holder once; releasing
+unretained rights has no retention charge to refund. Reversing unused rights
+restores ownership and cash; rights already retained or released cannot be
+reversed as if they were still unused. Original team/expansion classification
+continues to use the historical squads.
 
 ### What a trade must not break
 

@@ -2419,10 +2419,10 @@ def _match_kept(kept, name):
 
 def release_picker(session, season, franchise, note=None):
     """The franchise's kept players as buttons — tap one to release him."""
-    kept = A.retained(session, franchise.id)
+    kept = A.releasable_squad(session, season, franchise)
     symbol = season.currency_label
     left = A.retention_seconds_left(season)
-    lines = [f"🔁 <b>{html.escape(franchise.name)}</b> — kept players",
+    lines = [f"🔁 <b>{html.escape(franchise.name)}</b> — retained players and squad rights",
              f"Purse: <b>{A.render_money(franchise.purse_remaining_lakh, symbol)}</b>"]
     if note:
         lines.insert(0, note)
@@ -2434,6 +2434,8 @@ def release_picker(session, season, franchise, note=None):
     lines.append("Tap a player to release him into the auction — his price "
                  "comes back to your purse." if kept and A.retention_open(season)
                  else ("Nobody kept." if not kept else ""))
+    if any(lot.acquisition == A.ACQ_TRADE_RIGHTS for lot in kept):
+        lines.append("Unretained squad rights have no retention charge to refund.")
     rows = []
     if A.retention_open(season):
         for lot in kept[:40]:
@@ -2472,9 +2474,10 @@ async def _owner_release(update, name, *, quiet_if_not_owner=False):
             return True
         if not name:
             text, markup = release_picker(session, season, franchise)
+            session.commit()
             await _reply(update, text, reply_markup=markup)
             return True
-        lot = _match_kept(A.retained(session, franchise.id), name)
+        lot = _match_kept(A.releasable_squad(session, season, franchise), name)
         A.release_by_owner(session, season, lot, user.id)
         session.commit()
         session.refresh(franchise)
@@ -2548,6 +2551,7 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.answer("Kept.")
         text, markup = release_picker(session, season, franchise, note=note)
+        session.commit()
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup,
                                       disable_web_page_preview=True)
     except AuctionError as exc:

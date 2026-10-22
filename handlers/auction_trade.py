@@ -92,7 +92,7 @@ def builder_keyboard(session, season, trade, side="a", page=0):
     """The tick list for one squad, the cash row, and Send / Cancel."""
     team = T.team_on(session, trade, side)
     chosen = set(T.selection(trade, side))
-    squad = A.squad(session, team.id) if team else []
+    squad = T.trade_squad(session, season, team) if team else []
     pages = max(1, (len(squad) + T.SQUAD_PAGE_SIZE - 1) // T.SQUAD_PAGE_SIZE)
     page = max(0, min(int(page or 0), pages - 1))
     rows, line = [], []
@@ -101,7 +101,7 @@ def builder_keyboard(session, season, trade, side="a", page=0):
         # squad is going 📤 out, one on the other squad is coming 📥 in.
         mark = ("📤 " if side == "a" else "📥 ") if lot.id in chosen else ""
         line.append(InlineKeyboardButton(
-            f"{mark}{_short(lot.name)} {lot.rating}",
+            f"{mark}{_short(lot.name)} {lot.rating}" + (" · rights" if lot.acquisition == A.ACQ_TRADE_RIGHTS else ""),
             callback_data=f"{CB}t_{trade.id}_{lot.id}_{side}_{page}"))
         if len(line) == 2:
             rows.append(line)
@@ -362,6 +362,7 @@ async def atradeblock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                                "/atradeblock remove <player>.")
         mine = _my_franchise(session, season, uid)
         who, _, note = rest.partition("|")
+        T.trade_squad(session, season, mine)
         lot = A.find_one_lot(session, season, who.strip())
         if verb == "add":
             T.block_add(session, season, mine, lot, note=note, by_tg_id=uid)

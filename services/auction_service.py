@@ -156,6 +156,8 @@ DEFAULT_BASE_PRICE_RULES = [
 # publish_to_league) keeps working untouched — see docs/franchise-auction.md.
 ACQ_AUCTION = "auction"
 ACQ_RETAINED = "retained"
+ACQ_TRADE_RIGHTS = "trade_rights"  # queued: owned retention rights, not a signing
+ACQ_RELEASED_TRADE = "released_trade"  # queued: explicitly surrendered to the open pool
 ACQ_RTM = "rtm"          # phase 2b
 # A pre-auction pick by a side with no previous squad. Its own kind and not a
 # retention, because a retention is a franchise KEEPING somebody — an
@@ -2240,8 +2242,11 @@ def lock_retention(session, season, *, now=None, by_tg_id=None, quiet=False):
 
 # ── Who held whom last season ────────────────────────────────────────
 
-def previous_squad_map(session, season, league_id=None):
+def previous_squad_map(session, season, league_id=None, *, include_trades=True):
     """``{player_id: AuctionFranchise}`` for the league this season follows.
+
+    By default this follows this season's trades and excludes surrendered
+    rights. ``include_trades=False`` reads history for expansion classification.
 
     Matching is by ``source_player_id``, never by name: two cricketers sharing
     a name would be quietly mis-assigned, and that is the one mistake a
@@ -2268,8 +2273,24 @@ def previous_squad_map(session, season, league_id=None):
     rows = (session.query(ChallengePlayer.source_player_id, ChallengePlayer.team_id)
             .filter(ChallengePlayer.team_id.in_(list(by_team)),
                     ChallengePlayer.source_player_id.isnot(None)).all())
-    return {source_id: by_team[team_id] for source_id, team_id in rows
+    held = {source_id: by_team[team_id] for source_id, team_id in rows
             if team_id in by_team}
+    if not include_trades:
+        return held
+    # Last season is history. Trades and releases define this season's rights.
+    from services.auction_trade_service import traded_lot_ids
+    traded = traded_lot_ids(session, season.id)
+    current = {f.id: f for f in franchises(session, season.id)}
+    for lot in session.query(AuctionLot).filter_by(season_id=season.id).all():
+        if lot.acquisition == ACQ_RELEASED_TRADE:
+            held.pop(lot.player_id, None)
+        elif lot.acquisition == ACQ_TRADE_RIGHTS or lot.id in traded:
+            if lot.sold_to_id in current and (lot.status == LOT_SOLD or
+                    (lot.status == LOT_QUEUED and lot.acquisition == ACQ_TRADE_RIGHTS)):
+                held[lot.player_id] = current[lot.sold_to_id]
+            else:
+                held.pop(lot.player_id, None)
+    return held
 
 
 # Words a side's name carries or drops between seasons without becoming a
@@ -2763,7 +2784,7 @@ def expansion_franchises(session, season):
     """
     if not getattr(season, "previous_league_id", None):
         return []
-    held = previous_squad_map(session, season)
+    held = previous_squad_map(session, season, include_trades=False)
     have_squads = {f.id for f in held.values()}
     return [f for f in franchises(session, season.id)
             if f.id not in have_squads]
@@ -3030,9 +3051,13 @@ def unretain(session, season, franchise, lot, *, by_tg_id=None, by_admin=True,
     """
     from services import auction_preseason as P
     P.claim_turn(session, season)
+    if not by_admin:
+        require_retention_owner(session, season, franchise, by_tg_id)
     if lot is None or lot.acquisition != ACQ_RETAINED or lot.status != LOT_SOLD:
         raise AuctionError(f"{lot.name if lot else 'That player'} is not "
                            f"retained.")
+    if lot.season_id != season.id or lot.sold_to_id != franchise.id:
+        raise AuctionError("That retained player is not on this team's squad.")
     if franchise.retention_finalized_at:
         raise AuctionError(f"{franchise.name} finalized retention — it is final.")
     if retention_locked(season):
@@ -3066,6 +3091,10 @@ def unretain(session, season, franchise, lot, *, by_tg_id=None, by_admin=True,
     lot.retention_slot = None
     if set_name:
         lot.set_name = set_name[:40]
+
+    if lot.id in traded_ids(session, season.id):
+        lot.acquisition = ACQ_RELEASED_TRADE
+        lot.previous_franchise_id = None
 
     session.flush()      # see retain() — autoflush is off
 
@@ -3211,6 +3240,12 @@ def carry_previous_squads(session, season, *, now=None, by_tg_id=None):
     return report
 
 
+def releasable_squad(session, season, franchise):
+    from services.auction_trade_service import trade_squad
+    return [lot for lot in trade_squad(session, season, franchise)
+            if lot.acquisition in (ACQ_RETAINED, ACQ_TRADE_RIGHTS)]
+
+
 def release_by_owner(session, season, lot, tg_id, *, now=None):
     """A franchise lets one of its kept players go — the owner's own call.
 
@@ -3222,7 +3257,8 @@ def release_by_owner(session, season, lot, tg_id, *, now=None):
     """
     if lot is None or lot.season_id != season.id:
         raise AuctionError("That player is not in this auction.")
-    if lot.status != LOT_SOLD or lot.acquisition != ACQ_RETAINED:
+    rights = lot.status == LOT_QUEUED and lot.acquisition == ACQ_TRADE_RIGHTS
+    if not rights and (lot.status != LOT_SOLD or lot.acquisition != ACQ_RETAINED):
         raise AuctionError(f"{lot.name} is not a kept player.")
     franchise = (session.query(AuctionFranchise)
                  .filter(AuctionFranchise.id == lot.sold_to_id).first())
@@ -3231,6 +3267,25 @@ def release_by_owner(session, season, lot, tg_id, *, now=None):
                            f"'s owner or a co-owner can release {lot.name}.")
     if not retention_open(season, now):
         raise AuctionError("The release window is closed.")
+    if rights:
+        from services import auction_preseason as P
+        P.claim_turn(session, season)
+        require_retention_owner(session, season, franchise, tg_id)
+        if not retention_open(season, now):
+            raise AuctionError("The release window is closed.")
+        if lot.acquisition != ACQ_TRADE_RIGHTS or lot.sold_to_id != franchise.id:
+            raise AuctionError("That player's ownership changed. Refresh the squad.")
+        if franchise.retention_finalized_at:
+            raise AuctionError(f"{franchise.name} finalized retention — it is final.")
+        lot.acquisition = ACQ_RELEASED_TRADE
+        lot.sold_to_id = None
+        lot.previous_franchise_id = None
+        lot.set_name = RELEASED_LAST_SEASON_SET
+        session.flush()
+        log_event(session, season, "retention_released",
+                  f"🔓 {_e(franchise.name)} release {_e(lot.name)} into the auction pool. No retention charge to refund.",
+                  lot=lot, franchise=franchise, by_tg_id=tg_id)
+        return lot
     return unretain(session, season, franchise, lot, by_tg_id=tg_id,
                     by_admin=False, set_name=RELEASED_LAST_SEASON_SET)
 
