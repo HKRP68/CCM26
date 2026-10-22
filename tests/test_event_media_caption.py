@@ -218,7 +218,7 @@ class AutomaticMilestoneTests(unittest.TestCase):
     def test_generated_values_escape_html(self):
         message = ems.default_milestone_message("century", {"player": "A < B", "balls": 0})
         self.assertIn("A &lt; B", message)
-        self.assertIn("0.00", message)
+        self.assertNotIn("Strike Rate:", message)  # Unknown stats are omitted.
 
     def test_each_milestone_has_a_relevant_default(self):
         for key in ems.MILESTONE_MESSAGES:
@@ -242,3 +242,19 @@ class AllEventMessageTests(unittest.TestCase):
                 self.assertEqual(_fire(_Ctx(), [preference], key=key), [])
                 preference.source = "on"
                 self.assertEqual(_fire(_Ctx(), [preference], key=key)[0][0], "send_message")
+
+
+class ExpandedPlaceholderTests(unittest.TestCase):
+    def test_derived_placeholders_and_unavailable_fields(self):
+        fields = ems.caption_values("fifty", {"runs": 52, "balls": 30, "fours": 4, "sixes": 2})
+        self.assertEqual(fields["strike_rate"], "173.33")
+        self.assertEqual(fields["boundaries"], 6)
+        self.assertEqual(fields["achievement"], "50 Runs")
+        self.assertEqual(ems.render_caption("{venue}|{innings}|{economy}", fields), "||")
+
+    def test_partnership_and_team_cards_do_not_invent_a_player(self):
+        for key in ("partnership_50", "partnership_100", "team_100", "team_150", "team_200"):
+            message = ems.default_milestone_message(key, {"team": "Alpha", "partnership": 108})
+            self.assertIn("Alpha", message)
+            self.assertNotIn("The batter", message)
+            self.assertNotIn("Strike Rate", message)

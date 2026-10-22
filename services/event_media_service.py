@@ -8,7 +8,8 @@ Behavior:
   - Picks one random enabled media entry for the event_key, weighted by `weight`
   - Sends via send_animation (works for GIF + mp4)
   - Has a per-(chat, event) cooldown to avoid spam in 6-6-6 overs
-  - Never raises — silently no-ops on missing/disabled media or send failure
+  - Generates relevant text when no media is configured
+  - Respects each event's message preference; never raises on send failure
 """
 
 import os
@@ -85,6 +86,9 @@ def _pick_random(items, weight_fn):
 CAPTION_FIELDS = (
     "player", "team", "opponent", "runs", "balls", "score", "overs",
     "bowler", "figures", "wickets", "partnership", "margin", "fielder",
+    "event", "milestone", "achievement", "innings", "format", "venue",
+    "team_runs", "team_wickets", "run_rate", "fours", "sixes", "boundaries",
+    "bowling_overs", "runs_conceded", "economy", "maidens", "opponent_manager",
     "manager", "strike_rate", "dropped_on", "record", "value", "previous", "season", "scope", "match", "previous_holder", "scorecard",
 )
 
@@ -134,37 +138,95 @@ def messages_enabled(rows):
     return not settings or settings[-1].source != "off"
 
 
+def caption_values(event_key, fields=None):
+    """Populate advertised placeholders; unavailable match data stays blank."""
+    values = dict.fromkeys(CAPTION_FIELDS, "")
+    values.update(fields or {})
+    meta = MILESTONE_MESSAGES.get(event_key)
+    values.update(event=event_key, milestone=meta[0] if meta else event_key,
+                  achievement=meta[1] if meta else "")
+    def rate(numerator, denominator, multiplier):
+        try:
+            return f"{float(numerator) * multiplier / float(denominator):.2f}" if float(denominator) else ""
+        except (TypeError, ValueError):
+            return ""
+    values["strike_rate"] = values["strike_rate"] or rate(values["runs"], values["balls"], 100)
+    if values["fours"] != "" and values["sixes"] != "":
+        try:
+            values["boundaries"] = int(values["fours"]) + int(values["sixes"])
+        except (TypeError, ValueError):
+            pass
+    return values
+
+
 def default_milestone_message(event_key, fields=None):
-    """Generate a safe HTML announcement using the actual milestone stats."""
+    """Compose an event-specific card, omitting stats we do not actually know."""
     from html import escape
     meta = MILESTONE_MESSAGES.get(event_key)
     if not meta:
         return ""
-    fields = fields or {}
+    f = caption_values(event_key, fields)
     def value(key, fallback=""):
-        return escape(str(fields.get(key) or fallback))
+        v = f.get(key)
+        return escape(str(v if v not in (None, "") else fallback))
     title, achievement, closing = meta
+    player = value("player", f.get("bowler") or "The batter")
+    team = value("team", "The team")
+    descriptions = {
+        "fifty": f"⭐ <b>{player}</b> raises the bat — fifty on the board! A vital innings for {team}.",
+        "century": f"💯 Take a bow, <b>{player}</b>! A hundred to remember for {team}.",
+        "hattrick": f"🎯 <b>{value('bowler', f.get('player') or 'The bowler')}</b> strikes three times in three deliveries! A hat-trick to remember.",
+        "three_fer": f"🎳 Three wickets for <b>{value('bowler', f.get('player') or 'the bowler')}</b> — making the difference with the ball!",
+        "five_fer": f"🏅 Five wickets for <b>{value('bowler', f.get('player') or 'the bowler')}</b>! A place on the honours board, earned one breakthrough at a time.",
+        "maiden_over": f"🔒 <b>{value('bowler', f.get('player') or 'The bowler')}</b> completes a maiden. Six deliveries, no runs conceded in the over!",
+        "partnership_50": f"🤝 Fifty together for <b>{team}</b>! A valuable stand that keeps the scoreboard moving.",
+        "partnership_100": f"🤝 A hundred-run partnership for <b>{team}</b>! Two batters, one outstanding effort.",
+        "team_100": f"💯 <b>{team}</b> brings up the team hundred! The innings reaches its first major landmark.",
+        "team_150": f"🏏 <b>{team}</b> reaches 150! Another landmark on the scoreboard.",
+        "team_200": f"🚀 Two hundred on the board for <b>{team}</b>! A huge collective effort with the bat.",
+        "match_won": f"🏆 <b>{team}</b> wins! The contest is settled and the celebrations begin.",
+        "impact_player": f"🔄 <b>{value('player', 'The impact player')}</b> steps into the action for {team}. A fresh option to influence the game!",
+        "four": f"🏏 <b>{player}</b> finds the boundary! Four more added to the total.",
+        "six": f"🔥 <b>{player}</b> clears the ropes! Six runs in one shot.",
+        "dot_ball": "⚫ No run from that delivery. Pressure builds with every dot ball.",
+        "wicket": f"🟥 A wicket falls! <b>{value('bowler', 'The bowling side')}</b> makes the breakthrough.",
+        "wide": "↔️ Called wide! An extra for the batting side; the delivery must be bowled again.",
+        "no_ball": "🚫 Called no-ball! An extra conceded and the delivery does not count toward the over.",
+        "implant": f"💠 A player trait comes into play for <b>{value('player', 'the player')}</b>!",
+        "dropped_catch": f"🫳 <b>{value('fielder', 'The fielder')}</b> puts down a chance! <b>{value('player', 'The batter')}</b> gets another opportunity.",
+        "record_default": f"🏆 A moment for the record books: <b>{value('record', 'a record milestone')}</b>!",
+        "new_record": f"🏆 <b>{value('player', f.get('team') or 'A new leader')}</b> sets a new mark for <b>{value('record', 'the record')}</b>!",
+        "record_equalled": f"🤝 <b>{value('player', 'A new joint holder')}</b> draws level with the best for <b>{value('record', 'the record')}</b>!",
+        "record_holder": f"👑 <b>{value('player', 'The record holder')}</b> leads the way in <b>{value('record', 'the record books')}</b>.",
+    }
     lines = ["🏏 <b>CMU | MILESTONE ALERT</b>", "━━━━━━━━━━━━━━━━━━",
-             f"<b>{title}</b>", "", f"<b>{value('player', fields.get('team') or 'Team')}</b> 🔥"]
+             f"<b>{title}</b>", "", descriptions[event_key]]
     if event_key in ("fifty", "century"):
-        runs, balls = fields.get("runs", 0), fields.get("balls", 0)
-        try:
-            rate = f"{float(runs) * 100 / float(balls):.2f}" if float(balls) else "0.00"
-        except (TypeError, ValueError, ZeroDivisionError):
-            rate = "0.00"
-        lines.append(f"{value('runs', '0')} ({value('balls', '0')}) · Strike Rate: {rate}")
-    elif fields.get("figures"):
-        lines.append(f"Bowling: {value('figures')}")
-    elif fields.get("partnership"):
-        lines.append(f"Partnership: {value('partnership')} runs")
-    elif fields.get("score"):
-        lines.append(f"Score: {value('score')}")
-    lines += ["", f"🏆 Achievement: {achievement}",
-              f"👤 Manager: {value('manager', fields.get('team') or 'Team')}"]
-    if fields.get("opponent"):
+        if f["runs"] != "" and f["balls"] != "":
+            lines.append(f"\n🏏 <b>{value('runs')} ({value('balls')})</b>" +
+                         (f" · Strike Rate: {value('strike_rate')}" if f["strike_rate"] else ""))
+        if f["fours"] != "" and f["sixes"] != "":
+            lines.append(f"💥 Fours: {value('fours')} · Sixes: {value('sixes')}")
+    elif event_key in ("hattrick", "three_fer", "five_fer", "maiden_over"):
+        if f["figures"]:
+            lines.append(f"\n🎳 Bowling: <b>{value('figures')}</b>")
+        if f["economy"] != "":
+            lines.append(f"Economy: {value('economy')}")
+    elif event_key.startswith("partnership_") and f["partnership"] != "":
+        lines.append(f"\n🤝 Current stand: <b>{value('partnership')} runs</b>")
+    if f["score"]:
+        lines.append(f"📊 Score: {value('score')}" + (f" · Overs: {value('overs')}" if f["overs"] else ""))
+    if f["value"] != "":
+        lines.append(f"Record mark: {value('value')}")
+    if f["previous"] != "":
+        lines.append(f"Previous best: {value('previous')}")
+    lines += ["", f"🏆 Achievement: {achievement}"]
+    if f["manager"] or f["team"]:
+        lines.append(f"👤 Manager: {value('manager', f['team'])}")
+    if f["opponent"]:
         lines.append(f"🛡️ Against Team {value('opponent')}")
-    if fields.get("margin"):
-        lines.append(f"Margin: {value('margin')}")
+    if f["margin"]:
+        lines.append(f"Victory margin: {value('margin')}")
     lines += ["", "━━━━━━━━━━━━━━━━━━", f"⭐ {closing}"]
     return "\n".join(lines)
 
@@ -238,7 +300,7 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
             caption = ""
             if show_message:
                 from html import escape
-                safe_fields = {k: escape(str(v)) for k, v in (fields or {}).items()}
+                safe_fields = {k: escape(str(v)) for k, v in caption_values(event_key, fields).items()}
                 caption = render_caption(getattr(pick, "caption", None), safe_fields)
                 if not caption and (fields or not source):
                     caption = default_milestone_message(event_key, fields)

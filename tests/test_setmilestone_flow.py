@@ -285,3 +285,62 @@ class MessagePreferenceStorageTests(unittest.TestCase):
                 _run(ems.fire_event_media(context, 42, "century",
                                           fields={"runs": 105, "balls": 58}, cooldown=False))
                 self.assertEqual(context.bot.send_message.call_count, int(expected_on))
+
+class TelegramTextEditorTests(unittest.TestCase):
+    def test_group_editor_prompts_for_a_reply(self):
+        from unittest.mock import AsyncMock
+        query = _Query("msm_msg_century")
+        query.message = SimpleNamespace(reply_text=AsyncMock())
+        context = SimpleNamespace(user_data={})
+        with patch.object(sm, "_is_admin_update", return_value=True):
+            _run(sm.milestone_callback(SimpleNamespace(callback_query=query,
+                   effective_chat=SimpleNamespace(id=-100)), context))
+        self.assertEqual(context.user_data[sm.AWAIT_KEY]["chat_id"], -100)
+        markup = query.message.reply_text.call_args.kwargs["reply_markup"]
+        self.assertTrue(markup.force_reply)
+        self.assertFalse(markup.selective)
+
+    def test_failed_save_keeps_editor_open_and_does_not_claim_success(self):
+        msg = _Message()
+        msg.text = "Century for {player}"
+        msg.text_html = msg.text
+        pending = {"mode": "caption", "event_key": "century", "chat_id": -100}
+        context = SimpleNamespace(user_data={sm.AWAIT_KEY: pending})
+        with patch.object(sm, "_is_admin_update", return_value=True), \
+             patch.object(sm, "_set_caption", return_value=False):
+            result = _run(sm.milestone_reply_handler(SimpleNamespace(
+                effective_message=msg, effective_chat=SimpleNamespace(id=-100)), context))
+        self.assertTrue(result)
+        self.assertIn("Could not save", msg.replies[0])
+        self.assertIn(sm.AWAIT_KEY, context.user_data)
+
+    def test_other_chat_cannot_supply_editor_text(self):
+        msg = _Message()
+        msg.text = "unrelated chat"
+        context = SimpleNamespace(user_data={sm.AWAIT_KEY: {
+            "mode": "caption", "event_key": "century", "chat_id": -100}})
+        with patch.object(sm, "_is_admin_update", return_value=True):
+            result = _run(sm.milestone_reply_handler(SimpleNamespace(
+                effective_message=msg, effective_chat=SimpleNamespace(id=1)), context))
+        self.assertFalse(result)
+        self.assertIn(sm.AWAIT_KEY, context.user_data)
+
+    def test_only_disabled_media_still_saves_sendable_text(self):
+        db = _FakeDb([_Row(event_key="century", enabled=False)])
+        with patch.object(sm, "get_session", return_value=db):
+            self.assertTrue(sm._set_caption("century", "Brilliant {player}!"))
+        self.assertTrue(db.added[0].enabled)
+        self.assertEqual(db.added[0].source, "")
+        self.assertEqual(db.added[0].caption, "Brilliant {player}!")
+
+    def test_database_failure_is_reported_to_reply_handler(self):
+        db = _FakeDb()
+        with patch.object(sm, "get_session", return_value=db), \
+             patch.object(db, "commit", side_effect=RuntimeError("unavailable")):
+            self.assertFalse(sm._set_caption("century", "Brilliant {player}!"))
+
+    def test_consumed_reply_stops_other_message_handlers(self):
+        from unittest.mock import AsyncMock
+        with patch.object(sm, "milestone_reply_handler", new=AsyncMock(return_value=True)):
+            with self.assertRaises(sm.ApplicationHandlerStop):
+                _run(sm.milestone_reply_router(None, None))

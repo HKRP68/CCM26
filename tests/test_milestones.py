@@ -161,3 +161,17 @@ class GuardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class MilestoneContextTests(unittest.TestCase):
+    def test_placeholders_use_actual_batting_and_bowling_stats(self):
+        state = _state(bat_user_tg=1, bowl_user_tg=2,
+                       user_names={"1": "Kushan", "2": "Zooba"})
+        before = milestones.snapshot(state)
+        state["bat_stats"]["1"].update(runs=105, balls=58, fours=9, sixes=4)
+        state["bowl_stats"]["9"].update(wickets=5, runs=25, balls=30, maidens=1)
+        events = dict(milestones.detect(state, before))
+        self.assertEqual(events["century"]["manager"], "Kushan")
+        self.assertEqual(events["century"]["fours"], 9)
+        self.assertEqual(events["five_fer"]["manager"], "Zooba")
+        self.assertEqual(events["five_fer"]["economy"], "5.00")
+        self.assertEqual(events["five_fer"]["bowling_overs"], "5.0")

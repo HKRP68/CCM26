@@ -15,8 +15,8 @@ file_id: the host filesystem is wiped on deploy.
 import logging
 from html import escape as _esc
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ForceReply, Update
+from telegram.ext import ContextTypes, ApplicationHandlerStop
 
 from database import get_session
 from models import EventMedia
@@ -212,7 +212,8 @@ async def milestone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     if action == "msg":
-        context.user_data[AWAIT_KEY] = {"mode": "caption", "event_key": event_key}
+        context.user_data[AWAIT_KEY] = {"mode": "caption", "event_key": event_key,
+                                       "chat_id": update.effective_chat.id}
         await q.answer()
         await q.edit_message_text(
             f"💬 Send the message for <b>{_key_meta(event_key)[1]}</b>.\n\n"
@@ -223,6 +224,9 @@ async def milestone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             + ", ".join("{" + f + "}" for f in CAPTION_FIELDS)
             + "\n\nSend /cancel to stop.", parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(_back_keyboard(event_key)))
+        await q.message.reply_text(
+            "Reply to this message with your milestone text. Use /cancel to stop.",
+            reply_markup=ForceReply(selective=False, input_field_placeholder="Your milestone message"))
         return
 
     if action == "up":
@@ -281,8 +285,11 @@ async def milestone_reply_handler(update: Update, context: ContextTypes.DEFAULT_
     msg = update.effective_message
     if not msg:
         return False
+    pending_chat = pending.get("chat_id")
+    if pending_chat is not None and update.effective_chat.id != pending_chat:
+        return False
     text = (msg.text or "").strip()
-    if text.lower() in ("/cancel", "cancel"):
+    if text.lower().split("@", 1)[0] in ("/cancel", "cancel"):
         context.user_data.pop(AWAIT_KEY, None)
         await msg.reply_text("Cancelled.")
         return True
@@ -292,10 +299,12 @@ async def milestone_reply_handler(update: Update, context: ContextTypes.DEFAULT_
         if not text:
             await msg.reply_text("Send the message as text, or /cancel.")
             return True
-        _set_caption(event_key, msg.text_html or text)
+        if not _set_caption(event_key, msg.text_html or text):
+            await msg.reply_text("❌ Could not save the milestone message. Please send it again, or /cancel.")
+            return True
         context.user_data.pop(AWAIT_KEY, None)
         _invalidate()
-        await msg.reply_text("✅ Milestone message saved.")
+        await msg.reply_text("✅ Milestone message saved. If messages are OFF, turn them ON in /setmilestone to send it.")
         return True
 
     if pending.get("mode") == "media":
@@ -323,17 +332,18 @@ def _set_caption(event_key, caption):
         rows = db.query(EventMedia).filter(
             EventMedia.event_key == event_key).all()
         rows = [r for r in rows if r.source_type != MESSAGE_SETTINGS]
-        if rows:
-            for r in rows:
-                r.caption = caption
-        else:
+        for r in rows:
+            r.caption = caption
+        if not any(r.enabled for r in rows):
             db.add(EventMedia(event_key=event_key, source_type="none",
                               source="", caption=caption, weight=1,
                               enabled=True, label="Message only"))
         db.commit()
+        return True
     except Exception:
         db.rollback()
         logger.exception("saving milestone caption failed")
+        return False
     finally:
         db.close()
 
@@ -391,3 +401,9 @@ def _store_media_from_message(msg, event_key):
         return False, False
     finally:
         db.close()
+
+
+async def milestone_reply_router(update, context):
+    """Consume active editor replies before other text handlers in any chat."""
+    if await milestone_reply_handler(update, context):
+        raise ApplicationHandlerStop

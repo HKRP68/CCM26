@@ -4830,7 +4830,34 @@ def _event_media_keys(oc, prev_bat_runs, cur_bat_runs, *, eoo, is_maiden):
     return keys
 
 
-def _fire_event_media_async(ctx, chat_id, keys):
+def _event_media_fields(state, striker, bowler, bat_stats, bowl_stats):
+    """Freeze the scoring delivery's stats before the background task starts."""
+    from services.milestones import _manager, _bowling_fields, _figures
+    team = state.get("bat_team_name") or "Team"
+    opponent = state.get("bowl_team_name") or "Opposition"
+    common = dict(team=team, opponent=opponent,
+                  manager=_manager(state, "bat", team),
+                  opponent_manager=_manager(state, "bowl", opponent),
+                  innings=state.get("innings", ""), format=state.get("ball_format", ""),
+                  venue=state.get("stadium") or "", score=format_score(state),
+                  overs=format_overs(state), run_rate=crr(state),
+                  team_runs=state.get("total_runs", 0), team_wickets=state.get("total_wickets", 0),
+                  partnership=state.get("partnership_runs", 0))
+    batting = dict(common, player=striker.get("name", "Batter"),
+                   bowler=bowler.get("name", "Bowler"),
+                   runs=bat_stats.get("runs", 0), balls=bat_stats.get("balls", 0),
+                   fours=bat_stats.get("fours", 0), sixes=bat_stats.get("sixes", 0))
+    bowling = dict(common, **_bowling_fields(bowl_stats),
+                   player=bowler.get("name", "Bowler"), bowler=bowler.get("name", "Bowler"),
+                   wickets=bowl_stats.get("wickets", 0), figures=_figures(bowl_stats))
+    bowling.update(team=opponent, opponent=team, manager=common["opponent_manager"],
+                   opponent_manager=common["manager"])
+    result = {key: dict(batting) for key in ("four", "six", "fifty", "century")}
+    result.update({key: dict(bowling) for key in ("wicket", "maiden_over")})
+    return result
+
+
+def _fire_event_media_async(ctx, chat_id, keys, fields_by_event=None):
     """Send celebration clips without making the next prompt wait for them."""
     if not keys:
         return None
@@ -4839,7 +4866,10 @@ def _fire_event_media_async(ctx, chat_id, keys):
         try:
             from services.event_media_service import fire_event_media
             for key in keys:
-                await fire_event_media(ctx, chat_id, key)
+                if fields_by_event is None:
+                    await fire_event_media(ctx, chat_id, key)
+                else:
+                    await fire_event_media(ctx, chat_id, key, fields=fields_by_event.get(key))
         except Exception:
             logger.exception("event media hook failed (non-fatal)")
 
@@ -5135,7 +5165,8 @@ async def _process_shot_core(context, mid, si, *, q=None):
             _fire_event_media_async(
                 context, s["chat_id"],
                 _event_media_keys(oc, prev_bat_runs, bs.get("runs", 0),
-                                  eoo=eoo, is_maiden=is_maiden))
+                                  eoo=eoo, is_maiden=is_maiden),
+                fields_by_event=_event_media_fields(s, striker, bowler, bs, bws))
 
         except Exception:
             logger.exception(f"_process_shot_core FATAL for match {mid}")

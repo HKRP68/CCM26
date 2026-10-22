@@ -93,6 +93,18 @@ def _figures(st):
     return f"{_int(st.get('wickets'))}/{_int(st.get('runs'))} ({balls // 6}.{balls % 6})"
 
 
+def _manager(state, side, fallback):
+    return (state.get("user_names") or {}).get(str(state.get(f"{side}_user_tg"))) or fallback
+
+
+def _bowling_fields(st):
+    balls = _int(st.get("balls"))
+    conceded = _int(st.get("runs"))
+    return {"bowling_overs": f"{balls // 6}.{balls % 6}",
+            "runs_conceded": conceded, "maidens": _int(st.get("maidens")),
+            "economy": f"{conceded * 6 / balls:.2f}" if balls else ""}
+
+
 def detect(state, before, summary=None):
     """Milestones crossed by the over just simulated, in the order to announce.
 
@@ -110,8 +122,14 @@ def detect(state, before, summary=None):
     events = []
     team = state.get("bat_team_name") or "Team"
     opponent = state.get("bowl_team_name") or "Opposition"
-    common = {"team": team, "manager": team, "opponent": opponent,
-              "score": _score(state), "overs": _overs(state)}
+    common = {"team": team, "manager": _manager(state, "bat", team),
+              "opponent": opponent, "opponent_manager": _manager(state, "bowl", opponent),
+              "score": _score(state), "overs": _overs(state),
+              "innings": state.get("innings", ""), "format": state.get("ball_format", ""),
+              "venue": state.get("stadium") or "", "team_runs": _int(state.get("total_runs")),
+              "team_wickets": _int(state.get("total_wickets"))}
+    played = _int(state.get("current_over")) * 6 + _int(state.get("current_ball"))
+    common["run_rate"] = f"{common['team_runs'] * 6 / played:.2f}" if played else ""
 
     try:
         # ── Batting: fifty, century ──
@@ -123,7 +141,8 @@ def detect(state, before, summary=None):
                 fields = dict(
                     common,
                     player=_name_for(state, rid, "batting_order", "bat_xi"),
-                    runs=runs, balls=_int(st.get("balls")))
+                    runs=runs, balls=_int(st.get("balls")),
+                    fours=_int(st.get("fours")), sixes=_int(st.get("sixes")))
                 # A batter who was put down on the way: the score they were
                 # dropped on, so the celebration can rub it in.
                 if st.get("dropped_on") is not None:
@@ -138,14 +157,16 @@ def detect(state, before, summary=None):
             name = _name_for(state, rid, "bowl_xi")
             if bool(st.get("hattrick")) and not prev_hat:
                 events.append(("hattrick", dict(
-                    common, player=name, bowler=name,
+                    dict(common, **_bowling_fields(st)), player=name, bowler=name,
                     wickets=wickets, figures=_figures(st),
-                    team=opponent, manager=opponent, opponent=team)))
+                    team=opponent, manager=_manager(state, "bowl", opponent),
+                    opponent=team, opponent_manager=_manager(state, "bat", team))))
             for _n, key in _crossed(prev_wkts, wickets, BOWL_MILESTONES):
                 events.append((key, dict(
-                    common, player=name, bowler=name,
+                    dict(common, **_bowling_fields(st)), player=name, bowler=name,
                     wickets=wickets, figures=_figures(st),
-                    team=opponent, manager=opponent, opponent=team)))
+                    team=opponent, manager=_manager(state, "bowl", opponent),
+                    opponent=team, opponent_manager=_manager(state, "bat", team))))
 
         # ── Partnership ──
         # Only when the stand survived the over: a wicket resets partnership_runs
@@ -169,10 +190,17 @@ def detect(state, before, summary=None):
 
 def match_won_event(state, result_line="", winner_name="", margin=""):
     """The end-of-match event, fired from the completion path."""
+    winning_side = "bat" if winner_name == state.get("bat_team_name") else "bowl"
+    losing_side = "bowl" if winning_side == "bat" else "bat"
+    opponent = state.get(f"{losing_side}_team_name") or ""
     return ("match_won", {
+        "manager": _manager(state, winning_side, winner_name),
+        "opponent_manager": _manager(state, losing_side, opponent),
+        "innings": state.get("innings", ""), "format": state.get("ball_format", ""),
+        "venue": state.get("stadium") or "",
         "team": winner_name or "",
         "player": winner_name or "",
-        "opponent": "",
+        "opponent": opponent,
         "margin": margin or "",
         "score": result_line or "",
         "overs": "",

@@ -3017,18 +3017,18 @@ def main():
         ), group=2)
 
         # /setmilestone — admin-configured in-match milestone messages + media.
-        # A dedicated group so the reply catcher sees the admin's next message
-        # (text OR an uploaded clip) without competing with the social games.
+        # Capture active editor replies in private chats and groups before
+        # gameplay handlers. The router stops processing only consumed replies.
         from handlers.setmilestone import (
-            setmilestone_handler, milestone_callback, milestone_reply_handler,
+            setmilestone_handler, milestone_callback, milestone_reply_router,
         )
         app.add_handler(CommandHandler(["setmilestone", "sms"], setmilestone_handler))
         app.add_handler(CallbackQueryHandler(milestone_callback, pattern=r"^msm_"))
         app.add_handler(MessageHandler(
             (filters.TEXT | filters.ANIMATION | filters.PHOTO | filters.VIDEO
-             | filters.Document.ALL) & filters.ChatType.PRIVATE,
-            milestone_reply_handler,
-        ), group=6)
+             | filters.Document.ALL) & (~filters.COMMAND | filters.Regex(r"(?i)^/cancel(?:@\w+)?$")),
+            milestone_reply_router,
+        ), group=-1)
 
         # ── Text handler for over selection (must be LAST) ───────────
         app.add_handler(MessageHandler(
