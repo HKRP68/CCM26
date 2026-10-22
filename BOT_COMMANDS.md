@@ -847,6 +847,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/apublish` | Publish bought squads as a Challenge League |
 | `/acancel` | Cancel the auction |
 | `/apool <min>-<max> [\| set] [\| all]` | Add every card in a rating range to the pool as one set — `/apool 85-90 \| Marquee` |
+| `/aaddpl Player Name \| Version, Player Name \| Version` | Add exact player editions to matching existing sets; setup or paused auction, admin only |
 | `/aautosets [set size] [marquee] [min rating] [replace] [all] [\| versions]` | Build the whole pool as IPL-style sets: Marquee first, then Batsmen 1 → Bowlers 1 → All-rounders 1 → Wicket-keepers 1 → Batsmen 2 … — `/aautosets 8 12 75 replace`, or only some card versions: `/aautosets 10 10 \| Base, Icon` |
 | `/anextset <set \| 80-85>` | Make a set, or every queued player in a rating range, come next |
 | `/asetorder A, B, C` | Order the whole queue by set — the numbers `/asets` shows are the order it runs in, and the website's Sets card does the same with ↑ / ↓ |

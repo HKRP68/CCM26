@@ -2305,3 +2305,24 @@ Pipe-separated rows remain accepted. Bot examples:
 Telegram messages can also put rows on separate lines. Retention and draft tables
 store their own prices. Whole player counts, non-overlapping ranges, and valid
 non-negative costs are required; decimal costs such as `8.05` Cr are supported.
+
+### Add individual player editions to existing sets
+
+Auction admins can use `/aaddpl Mitchell Starc | Base, KL Rahul | Icon,` in the
+bound group during setup or while the auction is paused. Each entry requires
+the exact catalogue name and version; matching ignores case. A trailing comma
+is allowed. Only active, non-career master cards are eligible.
+
+The command reuses existing rating-range sets, choosing the narrower range
+when ranges overlap. It also recognizes the Marquee and role tiers generated
+by `/aautosets`; a player's rating selects the matching existing role tier.
+Custom names can match their existing players' observed rating band and role
+when there is one clear destination. Missing or equally suitable sets are
+reported for correction before the batch is added. Create the sets first with
+`/apool` or `/aautosets`.
+
+All names, versions and destinations are checked before adding any player.
+Existing cards are skipped, including sold, retained and drafted cards. New
+cards join their set in the waiting queue, preserving the existing set order
+and every live or resolved lot. The reply lists the set name and Set No for
+each player. No players are bought and no purses change.

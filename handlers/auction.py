@@ -253,7 +253,8 @@ async def _with_auction(update, work, *, admin=False, allow_dm=False,
     finally:
         session.close()
     if text:
-        await _reply_card(update, text)
+        for part in (text if isinstance(text, list) else [text]):
+            await _reply_card(update, part)
 
 
 def bid_keyboard(season, lot):
@@ -3691,6 +3692,25 @@ async def sets_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ════════════════════════════════════════════════════════════════════
 # Admin — the pool by rating range, and the order sets run in
 # ════════════════════════════════════════════════════════════════════
+
+async def aaddpl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/aaddpl Player | Version, Player | Version — into existing matching sets."""
+    from services.auction_pool_add import add_named_players
+
+    def work(session, season):
+        results = add_named_players(session, season, _arg_text(context))
+        added = sum(row['added'] for row in results)
+        head = f"🗂 {added} added · {len(results) - added} already in this auction"
+        lines = []
+        for row in results:
+            player = row['player']
+            lines.append(f"{'✅' if row['added'] else '↪️'} {html.escape(player.name)} | "
+                         f"{html.escape(player.version or 'Base')} → set #{row['set_no']} "
+                         f"<b>{html.escape(row['set'])}</b>")
+        return AR.split_html(head, lines, limit=3400)
+
+    await _with_auction(update, work, admin=True, context=context)
+
 
 async def apool_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """<code>/apool 85-90 | Marquee</code> — a rating range into the pool as a set.
