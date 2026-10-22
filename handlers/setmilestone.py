@@ -169,7 +169,7 @@ async def milestone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "<code>true</code> for automatic text, or <code>false</code> for OFF.\n\n"
             "⚠️ <b>Every milestone omitted from the file will have messages turned OFF.</b> "
             "Configured GIFs remain available. Changes are saved together only after validation.\n\n"
-            "Edit the example below. Maximum file size: 64 KB; each custom message: 900 characters.\n\n"
+            "Edit the example below. Maximum file size: 4 MB; each custom message: 32,000 characters. Long messages are split automatically.\n\n"
             "Available keys: " + ", ".join(f"<code>{key}</code>" for key, _, _ in EVENT_KEYS)
             + "\n\nPlaceholders: " + ", ".join("{" + f + "}" for f in CAPTION_FIELDS),
             parse_mode="HTML", reply_markup=InlineKeyboardMarkup([
@@ -326,7 +326,7 @@ async def milestone_reply_handler(update: Update, context: ContextTypes.DEFAULT_
         try:
             if msg.document:
                 if msg.document.file_size and msg.document.file_size > MAX_IMPORT_BYTES:
-                    raise ValueError("File must be 64 KB or smaller.")
+                    raise ValueError("File must be 4 MB or smaller.")
                 telegram_file = await msg.document.get_file()
                 raw = (await telegram_file.download_as_bytearray()).decode("utf-8-sig")
             elif text:

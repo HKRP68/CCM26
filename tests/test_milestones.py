@@ -175,3 +175,29 @@ class MilestoneContextTests(unittest.TestCase):
         self.assertEqual(events["five_fer"]["manager"], "Zooba")
         self.assertEqual(events["five_fer"]["economy"], "5.00")
         self.assertEqual(events["five_fer"]["bowling_overs"], "5.0")
+
+class FixturePartnershipTests(unittest.TestCase):
+    def test_partnership_names_both_batters_and_their_lives(self):
+        state = _state(match_id=42, bat_user_tg=1, bowl_user_tg=2,
+                       user_names={'1': 'Kushan', '2': 'Zooba'},
+                       striker_idx=0, non_striker_idx=1)
+        before = milestones.snapshot(state)
+        state['partnership_runs'] = 53
+        state['bat_stats']['1'].update(runs=52, balls=33, dropped_on=0)
+        state['bat_stats']['2'].update(runs=44, balls=30, dropped_on=19)
+        fields = dict(milestones.detect(state, before))['partnership_50']
+        self.assertEqual(fields['match_number'], 42)
+        self.assertEqual(fields['batter1'], 'Kohli')
+        self.assertEqual(fields['batter2'], 'Rohit')
+        self.assertEqual(fields['batter1_dropped_on'], 0)
+        from services.event_media_service import default_milestone_message
+        card = default_milestone_message('partnership_50', fields)
+        for expected in ('Match #42', 'Alpha (Kushan) vs Beta (Zooba)', 'Kohli', 'Rohit',
+                         'dropped on 0', 'dropped on 19', '52 (33)', '44 (30)'):
+            self.assertIn(expected, card)
+
+    def test_drop_score_appears_in_batting_and_drop_alerts(self):
+        from services.event_media_service import default_milestone_message
+        for key in ('fifty', 'century', 'dropped_catch'):
+            card = default_milestone_message(key, {'player': 'Batter', 'dropped_on': 18})
+            self.assertIn('Batter was dropped on 18 runs', card)

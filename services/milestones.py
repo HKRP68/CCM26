@@ -105,6 +105,48 @@ def _bowling_fields(st):
             "economy": f"{conceded * 6 / balls:.2f}" if balls else ""}
 
 
+def match_context(state):
+    """Stable match identity and team owners for every type of alert."""
+    team = state.get("bat_team_name") or "Team"
+    opponent = state.get("bowl_team_name") or "Opposition"
+    return {"match_number": state.get("match_number") or state.get("match_id") or "",
+            "match_id": state.get("match_id") or "",
+            "team": team, "opponent": opponent,
+            "manager": _manager(state, "bat", team),
+            "opponent_manager": _manager(state, "bowl", opponent),
+            "innings": state.get("innings", ""), "format": state.get("ball_format", ""),
+            "venue": state.get("stadium") or ""}
+
+
+def impact_fields(state, record):
+    fields = match_context(state)
+    if record.get("team_name") == fields["opponent"]:
+        fields.update(team=fields["opponent"], opponent=fields["team"],
+                      manager=fields["opponent_manager"], opponent_manager=fields["manager"])
+    fields.update(player=record.get("in_player") or "", outgoing_player=record.get("out_player") or "",
+                  score=_score(state), overs=_overs(state))
+    return fields
+
+
+def _partnership_fields(state):
+    order = state.get("batting_order") or state.get("bat_xi") or []
+    stats = state.get("bat_stats") or {}
+    fields = {}
+    for n, key, default in ((1, "striker_idx", 0), (2, "non_striker_idx", 1)):
+        idx = _int(state.get(key, default), default)
+        if not 0 <= idx < len(order):
+            continue
+        player = order[idx] or {}
+        rid = player.get("roster_id")
+        st = stats.get(str(rid), stats.get(rid, {})) or {}
+        fields[f"batter{n}"] = player.get("name") or "Batter"
+        fields[f"batter{n}_runs"] = _int(st.get("runs"))
+        fields[f"batter{n}_balls"] = _int(st.get("balls"))
+        if st.get("dropped_on") is not None:
+            fields[f"batter{n}_dropped_on"] = _int(st.get("dropped_on"))
+    return fields
+
+
 def detect(state, before, summary=None):
     """Milestones crossed by the over just simulated, in the order to announce.
 
@@ -122,7 +164,7 @@ def detect(state, before, summary=None):
     events = []
     team = state.get("bat_team_name") or "Team"
     opponent = state.get("bowl_team_name") or "Opposition"
-    common = {"team": team, "manager": _manager(state, "bat", team),
+    common = {**match_context(state), "team": team, "manager": _manager(state, "bat", team),
               "opponent": opponent, "opponent_manager": _manager(state, "bowl", opponent),
               "score": _score(state), "overs": _overs(state),
               "innings": state.get("innings", ""), "format": state.get("ball_format", ""),
@@ -174,7 +216,7 @@ def detect(state, before, summary=None):
         stand = _int(state.get("partnership_runs"))
         for _n, key in _crossed(before["partnership"], stand,
                                 PARTNERSHIP_MILESTONES):
-            events.append((key, dict(common, partnership=stand, runs=stand)))
+            events.append((key, dict(common, **_partnership_fields(state), partnership=stand, runs=stand)))
 
         # ── Team total ──
         total = _int(state.get("total_runs"))
@@ -194,6 +236,7 @@ def match_won_event(state, result_line="", winner_name="", margin=""):
     losing_side = "bowl" if winning_side == "bat" else "bat"
     opponent = state.get(f"{losing_side}_team_name") or ""
     return ("match_won", {
+        **match_context(state),
         "manager": _manager(state, winning_side, winner_name),
         "opponent_manager": _manager(state, losing_side, opponent),
         "innings": state.get("innings", ""), "format": state.get("ball_format", ""),

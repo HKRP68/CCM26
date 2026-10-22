@@ -19,6 +19,7 @@ import time
 from sqlalchemy import and_
 
 from services.perf_log import perf_timed
+from services.telegram_text import send_html, utf16_length
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,9 @@ def _pick_random(items, weight_fn):
 CAPTION_FIELDS = (
     "player", "team", "opponent", "runs", "balls", "score", "overs",
     "bowler", "figures", "wickets", "partnership", "margin", "fielder",
+    "match_number", "match_id", "fixture", "outgoing_player",
+    "batter1", "batter2", "batter1_runs", "batter1_balls", "batter2_runs", "batter2_balls",
+    "batter1_dropped_on", "batter2_dropped_on",
     "event", "milestone", "achievement", "innings", "format", "venue",
     "team_runs", "team_wickets", "run_rate", "fours", "sixes", "boundaries",
     "bowling_overs", "runs_conceded", "economy", "maidens", "opponent_manager",
@@ -156,6 +160,10 @@ def caption_values(event_key, fields=None):
             values["boundaries"] = int(values["fours"]) + int(values["sixes"])
         except (TypeError, ValueError):
             pass
+    if not values["fixture"] and values["team"] and values["opponent"]:
+        left = str(values["team"]) + (f" ({values['manager']})" if values["manager"] else "")
+        right = str(values["opponent"]) + (f" ({values['opponent_manager']})" if values["opponent_manager"] else "")
+        values["fixture"] = left + " vs " + right
     return values
 
 
@@ -201,6 +209,17 @@ def default_milestone_message(event_key, fields=None):
     }
     lines = ["🏏 <b>CMU | MILESTONE ALERT</b>", "━━━━━━━━━━━━━━━━━━",
              f"<b>{title}</b>", "", descriptions[event_key]]
+    identity = []
+    if f["match_number"] or f["match_id"]:
+        identity.append(f"🏟️ Match #{value('match_number', f['match_id'])}")
+    if f["fixture"]:
+        identity.append(f"⚔️ {value('fixture')}")
+    if f["innings"]:
+        identity.append(f"Innings {value('innings')}" + (f" · {value('format')}" if f["format"] else ""))
+    if f["venue"]:
+        identity.append(f"📍 {value('venue')}")
+    if identity:
+        lines[3:3] = identity + [""]
     if event_key in ("fifty", "century"):
         if f["runs"] != "" and f["balls"] != "":
             lines.append(f"\n🏏 <b>{value('runs')} ({value('balls')})</b>" +
@@ -214,8 +233,20 @@ def default_milestone_message(event_key, fields=None):
             lines.append(f"Economy: {value('economy')}")
     elif event_key.startswith("partnership_") and f["partnership"] != "":
         lines.append(f"\n🤝 Current stand: <b>{value('partnership')} runs</b>")
+    if event_key.startswith("partnership_"):
+        for n in (1, 2):
+            if f[f"batter{n}"]:
+                lines.append(f"🏏 <b>{value(f'batter{n}')}</b> — {value(f'batter{n}_runs')} ({value(f'batter{n}_balls')})")
+                if f[f"batter{n}_dropped_on"] not in ("", None):
+                    lines.append(f"🫳 {value(f'batter{n}')} was dropped on {value(f'batter{n}_dropped_on')} runs.")
+    if f["dropped_on"] not in ("", None):
+        lines.append(f"🫳 {value('player', 'The batter')} was dropped on {value('dropped_on')} runs.")
+    elif event_key == "dropped_catch" and f["runs"] not in ("", None):
+        lines.append(f"🫳 {value('player', 'The batter')} was dropped on {value('runs')} runs.")
     if f["score"]:
         lines.append(f"📊 Score: {value('score')}" + (f" · Overs: {value('overs')}" if f["overs"] else ""))
+    if event_key == "impact_player" and f["outgoing_player"]:
+        lines.append(f"🔄 Replaces: {value('outgoing_player')}")
     if f["value"] != "":
         lines.append(f"Record mark: {value('value')}")
     if f["previous"] != "":
@@ -320,8 +351,7 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
     if not source:
         if caption:
             try:
-                await context.bot.send_message(chat_id=chat_id, text=caption,
-                                               parse_mode="HTML")
+                await send_html(context.bot, chat_id, caption)
                 return True
             except Exception:
                 logger.exception(f"caption-only send failed for event {event_key}")
@@ -334,7 +364,8 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
     }[kind]
     arg = {"photo": "photo", "video": "video", "animation": "animation"}[kind]
     kwargs = {"chat_id": chat_id}
-    if caption:
+    long_caption = caption if utf16_length(caption) > 1024 else ""
+    if caption and not long_caption:
         kwargs["caption"] = caption
         kwargs["parse_mode"] = "HTML"
 
@@ -343,6 +374,8 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
             # 'url'      -> Telegram fetches it directly
             # 'telegram' -> source IS a file_id from our storage channel
             await send(**{arg: source}, **kwargs)
+            if long_caption:
+                await send_html(context.bot, chat_id, long_caption)
             return True
         elif source_type == "file":
             # Local file path — open and send. Note: on Render free tier, the
@@ -356,6 +389,8 @@ async def fire_event_media(context, chat_id, event_key, fields=None,
                 return
             with open(full_path, "rb") as f:
                 await send(**{arg: f}, **kwargs)
+            if long_caption:
+                await send_html(context.bot, chat_id, long_caption)
             return True
     except Exception:
         logger.exception(f"send_{kind} failed for event {event_key}")

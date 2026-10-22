@@ -4,13 +4,14 @@ import json
 from models import EventMedia
 from services.event_media_service import EVENT_KEYS, MESSAGE_SETTINGS
 
-MAX_IMPORT_BYTES = 64 * 1024
+MAX_IMPORT_BYTES = 4 * 1024 * 1024
+MAX_MESSAGE_CHARACTERS = 32000
 
 
 def parse_import(raw):
     """Map event keys to custom text or True (automatic); omitted keys are OFF."""
     if len(raw.encode('utf-8')) > MAX_IMPORT_BYTES:
-        raise ValueError('File must be 64 KB or smaller.')
+        raise ValueError('File must be 4 MB or smaller.')
 
     def unique_pairs(pairs):
         result = {}
@@ -38,8 +39,8 @@ def parse_import(raw):
             continue
         elif isinstance(value, str):
             if value.strip():
-                if len(value) > 900:
-                    raise ValueError(f'{key}: message must be 900 characters or fewer.')
+                if len(value) > MAX_MESSAGE_CHARACTERS:
+                    raise ValueError(f'{key}: message must be 32,000 characters or fewer.')
                 result[key] = value.strip()
         else:
             raise ValueError(f'{key}: use message text, true for automatic, or false for OFF.')

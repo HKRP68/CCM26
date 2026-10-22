@@ -19,7 +19,7 @@ class ImportValidationTests(unittest.TestCase):
     def test_rejects_invalid_unknown_duplicate_and_oversized_inputs(self):
         for raw in ('{', '[]', '{}', '{"centur": "text"}',
                     '{"fifty": true, "fifty": false}', '{"fifty": 12}',
-                    json.dumps({'fifty': 'x' * 901}), ' ' * 65537):
+                    json.dumps({'fifty': 'x' * 32001}), ' ' * (4 * 1024 * 1024 + 1)):
             with self.subTest(raw=raw[:50]), self.assertRaises(ValueError):
                 parse_import(raw)
 
@@ -102,3 +102,9 @@ class TelegramImportTests(unittest.TestCase):
         get_session.assert_not_called()
         self.assertIn(sm.AWAIT_KEY, context.user_data)
         self.assertIn('No settings changed', msg.reply_text.call_args.args[0])
+
+
+class ExtendedImportSizeTests(unittest.TestCase):
+    def test_accepts_full_length_unicode_message(self):
+        text = '🏏' * 32000
+        self.assertEqual(parse_import(json.dumps({'century': text}))['century'], text)

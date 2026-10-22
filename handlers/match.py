@@ -4832,10 +4832,10 @@ def _event_media_keys(oc, prev_bat_runs, cur_bat_runs, *, eoo, is_maiden):
 
 def _event_media_fields(state, striker, bowler, bat_stats, bowl_stats):
     """Freeze the scoring delivery's stats before the background task starts."""
-    from services.milestones import _manager, _bowling_fields, _figures
+    from services.milestones import _manager, _bowling_fields, _figures, match_context
     team = state.get("bat_team_name") or "Team"
     opponent = state.get("bowl_team_name") or "Opposition"
-    common = dict(team=team, opponent=opponent,
+    common = dict(match_context(state), team=team, opponent=opponent,
                   manager=_manager(state, "bat", team),
                   opponent_manager=_manager(state, "bowl", opponent),
                   innings=state.get("innings", ""), format=state.get("ball_format", ""),
@@ -4847,6 +4847,8 @@ def _event_media_fields(state, striker, bowler, bat_stats, bowl_stats):
                    bowler=bowler.get("name", "Bowler"),
                    runs=bat_stats.get("runs", 0), balls=bat_stats.get("balls", 0),
                    fours=bat_stats.get("fours", 0), sixes=bat_stats.get("sixes", 0))
+    if bat_stats.get("dropped_on") is not None:
+        batting["dropped_on"] = bat_stats["dropped_on"]
     bowling = dict(common, **_bowling_fields(bowl_stats),
                    player=bowler.get("name", "Bowler"), bowler=bowler.get("name", "Bowler"),
                    wickets=bowl_stats.get("wickets", 0), figures=_figures(bowl_stats))
@@ -4967,6 +4969,8 @@ async def _process_shot_core(context, mid, si, *, q=None):
             pre_ball = s.get("current_ball", 0)
 
             oc = _calc(s, striker, bowler, shot, dl)
+            if oc.get("dropped_catch"):
+                bs.setdefault("dropped_on", prev_bat_runs)
             legal = True
             need_new_bat = False
 

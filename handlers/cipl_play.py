@@ -3604,13 +3604,7 @@ async def cipl_impact_pos_callback(update: Update, context: ContextTypes.DEFAULT
             return
         await q.answer("Impact Player confirmed.")
         try:
-            _fire_milestones_async(context, state["chat_id"], [("impact_player", {
-                "team": rec.get("team_name") or "",
-                "player": rec.get("in_player") or "",
-                "opponent": rec.get("out_player") or "",
-                "score": _score_or_blank(state),
-                "overs": "", "runs": "",
-            })])
+            _fire_milestones_async(context, state["chat_id"], [("impact_player", milestones.impact_fields(state, rec))])
         except Exception:
             logger.exception("impact player media failed for match %s", mid)
         try:
@@ -3664,13 +3658,7 @@ async def submit_impact(context, mid, actor_tg, in_rid, out_rid, bat_position=No
             except Exception:
                 logger.debug("impact acknowledgement failed", exc_info=True)
         try:
-            _fire_milestones_async(context, state["chat_id"], [("impact_player", {
-                "team": rec.get("team_name") or "",
-                "player": rec.get("in_player") or "",
-                "opponent": rec.get("out_player") or "",
-                "score": _score_or_blank(state),
-                "overs": "", "runs": "",
-            })])
+            _fire_milestones_async(context, state["chat_id"], [("impact_player", milestones.impact_fields(state, rec))])
         except Exception:
             logger.exception("impact player media failed for match %s", mid)
         try:
@@ -3845,6 +3833,8 @@ def _announce_drama_async(context, state, summary, milestone_events=None):
     if not drops and not sledges and not paid:
         return None
     chat_id = state["chat_id"]
+    from services.milestones import match_context
+    alert_context = match_context(state)
     cards = [(d, _drop_card(state, d)) for d in drops]
     score, overs = cipl_match.format_score(state), cipl_match.format_overs(state)
 
@@ -3852,7 +3842,8 @@ def _announce_drama_async(context, state, summary, milestone_events=None):
         try:
             from services.event_media_service import fire_event_media
             for drop, card in cards:
-                fields = {"player": drop.get("batter", ""),
+                fields = {**alert_context, "player": drop.get("batter", ""),
+                          "dropped_on": drop.get("batter_runs", 0),
                           "fielder": drop.get("fielder", ""),
                           "bowler": drop.get("bowler", ""),
                           "runs": drop.get("batter_runs", 0),
