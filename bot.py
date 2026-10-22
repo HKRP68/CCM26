@@ -2416,7 +2416,7 @@ def main():
             close_callback,
             aretcancel_handler, ainfo_handler, info_callback, asets_handler,
             arules_handler, sets_callback,
-            anextset_handler, anextplayer_handler, asquad_handler,
+            anextset_handler, anextplayer_handler, asquad_handler, ateamsummary_handler,
             asoldlist_handler, aunsoldlist_handler, apool_handler, aaddpl_handler,
             aautosets_handler,
             asetorder_handler, aaccelmode_handler, acall_handler,
@@ -2472,6 +2472,7 @@ def main():
         app.add_handler(CommandHandler(["anextplayer", "anextplayers"],
                                        anextplayer_handler))
         app.add_handler(CommandHandler(["asquad", "amysquad"], asquad_handler))
+        app.add_handler(CommandHandler(["ateamsummary", "asummary"], ateamsummary_handler))
         app.add_handler(CommandHandler("asoldlist", asoldlist_handler))
         app.add_handler(CommandHandler("aunsoldlist", aunsoldlist_handler))
         app.add_handler(CommandHandler(["aleaderboard", "alb"],

@@ -3459,8 +3459,18 @@ async def anextplayer_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def asquad_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """<code>/asquad [franchise]</code> — your squad, or any franchise's."""
     name = _arg_text(context)
+    if name.lower() == 'all':
+        await _view(update, context, lambda s, season: AR.teams_summary_view(s, season))
+        return
     await _view(update, context, lambda s, season: AR.squad_view(
         s, season, _own_or_named_franchise(s, season, update, name)))
+
+
+async def ateamsummary_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/ateamsummary [team]: every team's full squad, finances and limits."""
+    name = _arg_text(context)
+    await _view(update, context, lambda s, season: AR.teams_summary_view(
+        s, season, _find_franchise(s, season, name) if name and name.lower() != 'all' else None))
 
 
 async def asoldlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):

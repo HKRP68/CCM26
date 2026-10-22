@@ -7346,42 +7346,5 @@ def render_purses(session, season):
 
 
 def render_squad(session, season, franchise):
-    symbol = season.currency_label or "₹"
-    rows = squad(session, franchise.id)
-    spent = sum(int(lot.sold_price_lakh or 0) for lot in rows)
-    kept = retention_spent(session, franchise.id)
-    matched = sum(int(lot.sold_price_lakh or 0) for lot in rows
-                  if lot.acquisition == ACQ_RTM)
-    lines = [f"👥 <b>{_e(franchise.name)}</b> — {len(rows)}"
-             f"/{season.max_squad_size} players",
-             f"💰 {render_money(franchise.purse_remaining_lakh, symbol)} left "
-             f"of {render_money(franchise.purse_total_lakh, symbol)} · "
-             f"spent {render_money(spent, symbol)}"
-             + (f" (🔒 {render_money(kept, symbol)} retained · 🔨 "
-                f"{render_money(spent - kept, symbol)} at auction)" if kept else "")]
-    if matched:
-        lines.append(f"🪪 {render_money(matched, symbol)} of that was matched "
-                     f"back at auction prices.")
-    traded = traded_ids(session, season.id)
-    try:
-        from services.auction_trade_service import trade_money
-        moved = trade_money(session, franchise.id)
-    except Exception:
-        moved = 0
-    if moved or any(lot.id in traded for lot in rows):
-        lines.append(f"🔁 Trades: {'+' if moved > 0 else ''}"
-                     f"{render_money(moved, symbol)} net to the purse")
-    if not rows:
-        lines.append("\n<i>Nobody signed yet.</i>")
-    for lot in rows:
-        mark = "✈️" if lot.is_overseas else "🏠"
-        # Four different ways onto a squad, four marks. A matched player is
-        # not a retained one — he went to the block, the room set his price,
-        # and a card was spent to keep him — and an expansion pick is neither:
-        # nobody kept him and nobody bid. Squashing any of them together loses
-        # the story of how the squad was built.
-        how = acquisition_mark(lot) + trade_mark(lot, traded)
-        lines.append(f"{mark} {_e(lot.name)} · {lot.rating} · "
-                     f"{_e(lot.category)} — "
-                     f"{render_money(lot.sold_price_lakh, symbol)}{how}")
-    return "\n".join(lines)
+    from services.auction_squad_report import team_data, render_team
+    return render_team(season, team_data(session, season, franchise))

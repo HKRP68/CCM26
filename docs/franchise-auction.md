@@ -2326,3 +2326,29 @@ Existing cards are skipped, including sold, retained and drafted cards. New
 cards join their set in the waiting queue, preserving the existing set order
 and every live or resolved lot. The reply lists the set name and Set No for
 each player. No players are bought and no purses change.
+
+### Full squads and all-team summaries
+
+`/asquad` shows the owner's full signed squad; `/asquad Team Name` shows any
+team. Players are grouped as batsmen, wicket-keepers, all-rounders and bowlers,
+with other configured categories preserved. Every player includes edition,
+overall (OVR), batting (BAT), bowling (BOWL), price and acquisition/trade marks.
+Both rich cards and plain Telegram replies carry the same complete roster;
+long replies are split across messages without dropping players.
+
+`/ateamsummary` (alias `/asummary`, also `/asquad all`) begins with an overview
+of every team's player count, net purse used, purse left and maximum bid, then
+shows each full squad. `/ateamsummary Team Name` narrows it to one team. These
+read-only reports are public in the auction group and work in an owner's DM
+for their auction.
+
+Additional information includes minimum/maximum squad size, players still
+needed, free slots, overseas count/cap, category limits and shortages, average
+OVR/BAT/BOWL ratings, retention status, draft picks, RTM cards and rating rules.
+Net purse used is total purse minus remaining purse, including cash trades and
+adjustments. Current signed contract value is shown separately so those figures
+remain understandable after trades.
+
+While retention is open, unretained previous-squad rights appear in a separate
+section. Those players are not counted as signed or charged to the purse, and
+viewing a report does not materialize auction lots or change ownership.

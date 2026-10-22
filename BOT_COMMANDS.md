@@ -378,7 +378,8 @@ An auction is a group event; these run in the chat the auction is bound to.
 | `/asets [page]` 👥 | — | Every set in running order, numbered — tap one for its first few players, or press its number for the whole set |
 | `/anextset` 👥 | — | The next set's players |
 | `/anextplayer` 👥 | `/anextplayers` | Who comes to the block next |
-| `/asquad` 👥 | `/amysquad` | Your squad (or name a franchise), with purse and max bid |
+| `/asquad [team]` 👥 | `/amysquad` | Full squad by category, with overall/batting/bowling ratings, edition, price and purse |
+| `/ateamsummary [team]` 👥 | `/asummary` · `/asquad all` | All-team purse overview and full categorized squads, limits, shortages and max bids |
 | `/asoldlist` 👥 | — | Every player sold, set by set |
 | `/aunsoldlist` 👥 | — | The ⚡ Unsold / Accelerated set |
 | `/aretained` 👥 | `/allretained` | Every franchise's retained players — one tap-to-expand list per team, with its retention count and RTM cards |

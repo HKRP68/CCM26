@@ -659,52 +659,78 @@ def warning_html(session, season, lot, stage, left):
 
 # ── Team views ───────────────────────────────────────────────────────
 
-def squad_view(session, season, franchise):
-    """One franchise's squad: a table, and the money above it."""
-    rows = A.squad(session, franchise.id)
-    spent = sum(int(lot.sold_price_lakh or 0) for lot in rows)
-    overseas = A.overseas_count(session, franchise.id)
-    header = [R.cell(R.bold("#"), header=True, align="center"),
-              R.cell(R.bold("Player"), header=True),
-              R.cell(R.bold("Role"), header=True),
-              R.cell(R.bold("OVR"), header=True, align="right"),
-              R.cell(R.bold("Price"), header=True, align="right")]
-    table = [header]
-    traded = A.traded_ids(session, season.id)
-    for i, lot in enumerate(rows, start=1):
-        icon = (A.acquisition_icon(lot) + A.trade_mark(lot, traded)).strip()
-        table.append([
-            R.cell(str(i), align="center"),
-            R.cell(f"{_flag(lot)} {lot.name}" + (f" {icon}" if icon else "")),
-            R.cell(lot.category),
-            R.cell(str(lot.rating), align="right"),
-            R.cell(_money(season, lot.sold_price_lakh), align="right"),
-        ])
-    blocks = [
-        R.heading(f"👥 {franchise.name}", size=2),
-        R.paragraph([R.bold(f"{len(rows)}/{season.max_squad_size}"),
-                     f" players (min {season.min_squad_size}) · ✈️ "
-                     f"{overseas}/{season.max_overseas} overseas"]),
-        R.paragraph(["💰 ", R.bold(_money(season, franchise.purse_remaining_lakh)),
-                     " left of ", _money(season, franchise.purse_total_lakh),
-                     " · spent ", _money(season, spent), " · 🎯 max bid ",
-                     R.bold(_money(season, max(0, A.max_bid_now(season, franchise))))]),
-    ]
-    rating = A.rating_progress_line(session, season, franchise)
-    if rating:
-        blocks.append(R.paragraph(["⭐ Rating rule: ", R.bold(rating)]))
-    if rows:
-        blocks.append(R.table(table, bordered=True, striped=True, compact=True))
-    else:
+def _squad_blocks(season, data):
+    from html import unescape
+    import re
+    from services import auction_squad_report as REPORT
+    blocks = [R.heading(f"👥 {data['team'].name}", size=2)]
+    for line in REPORT.summary_lines(season, data)[1:]:
+        blocks.append(R.paragraph(unescape(re.sub(r'</?(?:b|i)>', '', line))))
+    if not data['players']:
         blocks.append(R.paragraph(R.italic("Nobody signed yet.")))
-    blocks.append(R.footer("🔒 retained · 🪪 Right To Match · 🆕 expansion pick "
-                           "· 🎁 auto-filled · 🔁 traded"))
-    html_text = (A.render_squad(session, season, franchise)
-                 + f"\n\n✈️ {overseas}/{season.max_overseas} overseas · "
-                   f"🎯 max bid <b>{_money(season, max(0, A.max_bid_now(season, franchise)))}</b>")
-    if rating:
-        html_text += f"\n⭐ Rating rule: <b>{_e(rating)}</b>"
-    return blocks, html_text
+    for category, players in data['groups']:
+        blocks.append(R.heading(f"{category} ({len(players)})", size=3))
+        table = [[R.cell(R.bold(label), header=True) for label in
+                  ('Player / version', 'OVR', 'BAT', 'BOWL', 'Price')]]
+        for player in players:
+            icon = (A.acquisition_icon(player) + A.trade_mark(player, data['traded'])).strip()
+            table.append([R.cell(f"{_flag(player)} {player.name} [{player.version or 'Base'}] {icon}"),
+                          *[R.cell(REPORT.rating(player, attr), align='right')
+                            for attr in ('rating', 'bat_rating', 'bowl_rating')],
+                          R.cell(_money(season, player.sold_price_lakh), align='right')])
+        blocks.append(R.table(table, bordered=True, striped=True, compact=True))
+    if data['rights']:
+        blocks.append(R.heading('Unretained squad rights — not signed', size=3))
+        for category, players in data['rights']:
+            blocks.append(R.paragraph(R.bold(f"{category} ({len(players)})")))
+            table = [[R.cell(R.bold(label), header=True) for label in
+                      ('Player / version', 'OVR', 'BAT', 'BOWL')]]
+            for player in players:
+                table.append([R.cell(f"{player.name} [{player.version or 'Base'}]"),
+                              *[R.cell(REPORT.rating(player, attr), align='right')
+                                for attr in ('rating', 'bat_rating', 'bowl_rating')]])
+            blocks.append(R.table(table, bordered=True, compact=True))
+        blocks.append(R.paragraph(R.italic('Rights are excluded from signed squad counts and contract totals.')))
+    return blocks
+
+
+def squad_view(session, season, franchise):
+    """The full squad by category, with all three ratings and current finances."""
+    from services import auction_squad_report as REPORT
+    data = REPORT.team_data(session, season, franchise)
+    blocks = _squad_blocks(season, data)
+    blocks.append(R.footer('🔒 retained · 🪪 RTM · 🆕 draft · 🎁 auto-filled · 🔁 traded'))
+    return blocks, REPORT.render_team(season, data)
+
+
+def teams_summary_view(session, season, franchise=None):
+    from services import auction_squad_report as REPORT
+    teams = [franchise] if franchise is not None else A.franchises(session, season.id)
+    data = [REPORT.team_data(session, season, team) for team in teams]
+    heading = f"📋 {season.name} — team summaries"
+    blocks = [R.heading(heading, size=2)]
+    table = [[R.cell(R.bold(label), header=True) for label in
+              ('Team', 'Players', 'Used (net)', 'Left', 'Max bid')]]
+    lines = [f'<b>{_e(heading)}</b>']
+    for entry in data:
+        team = entry['team']
+        table.append([R.cell(team.name), R.cell(f"{entry['count']}/{season.max_squad_size}"),
+                      R.cell(_money(season, entry['used'])), R.cell(_money(season, entry['left'])),
+                      R.cell(_money(season, entry['max_bid']))])
+        lines.append(f"{_e(team.name)} · {entry['count']}/{season.max_squad_size} players · "
+                     f"used {_money(season, entry['used'])} · left {_money(season, entry['left'])}")
+    blocks.append(R.table(table, bordered=True, striped=True, compact=True))
+    if not data:
+        lines.append('No teams configured yet.')
+        blocks.append(R.paragraph('No teams configured yet.'))
+    for entry in data:
+        blocks.extend(_squad_blocks(season, entry))
+        lines.append('\n' + REPORT.render_team(season, entry))
+    note = 'Net purse use includes trade cash and purse adjustments; current contract value is shown separately.'
+    blocks.append(R.footer(note))
+    lines.append('\n<i>' + note + '</i>')
+    return blocks, '\n'.join(lines)
+
 
 
 def purses_view(session, season):
@@ -2061,6 +2087,7 @@ PLAYER_SECTION = ("👥 For owners & everyone", (
     ("/arules", "Purse, caps, base prices, bid steps, the clock — before a lot opens"),
     ("/asets · /anextset · /anextplayer", "Sets, the next set, the next players"),
     ("/asquad [team] · /apurse [team]", "Your squad, every purse"),
+    ("/ateamsummary [team] · /asummary", "Every team's categorized full squad, all ratings, purse use and limits"),
     ("/aretlock · /apicks", "Who kept whom, and the expansion pick order"),
     ("/aready", "Retention progress, range counts, purses and the next draft turn"),
     ("/retainlock", "Preview your retentions, then confirm to make them final"),
