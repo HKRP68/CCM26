@@ -845,6 +845,9 @@ def render_chemistry_card(players):
     Lives here rather than in the handler so it can be rendered — and tested —
     without importing Telegram, and reused by the Mini App.
     """
+    from html import escape
+
+    players = list(players)
     report = calculate_role_report(players)
 
     lines = ["🧪 <b>TEAM CHEMISTRY</b>", "━━━━━━━━━━━━━━━━━━━"]
@@ -891,6 +894,18 @@ def render_chemistry_card(players):
         "• 🤝 Countrymen batting together run better "
         "<i>(an Icon partners with anyone)</i>",
     ]
+
+    lines += ["", "✨ <b>Your special cards — Playing XI</b>"]
+    special_cards = [p for p in players if special_type(_field(p, "version"))]
+    if special_cards:
+        for player in special_cards:
+            kind = special_type(_field(player, "version"))
+            label = (kind.upper() if kind in {"toty", "ipl", "wpl", "bbl", "psl", "sa20", "cpl"}
+                     else kind.title())
+            lines.append(f"• {escape(str(_field(player, 'name') or 'Player'))} — "
+                         f"{escape(str(_field(player, 'version')))} ({label})")
+    else:
+        lines.append("No special cards in your Playing XI yet.")
 
     tips = improvement_tips(players)
     if tips:

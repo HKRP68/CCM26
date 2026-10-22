@@ -1,6 +1,16 @@
 {% extends "base.html" %}
 {% block title %}{% if page == 'league' %}{{ league.name }} League Settings{% elif page == 'team' %}{{ team.name }} Team Settings{% else %}Challenge Mode Leagues{% endif %}{% endblock %}
 
+{% macro colour_field(name, label, value) %}
+<div data-team-colour>
+  <label for="{{ name }}">{{ label }}</label>
+  <div style="display:flex;gap:.5rem;align-items:center;">
+    <input type="color" data-colour-picker aria-label="{{ label }} picker" value="{{ value }}" style="width:3rem;flex-shrink:0;">
+    <input type="text" id="{{ name }}" name="{{ name }}" data-colour-hex value="{{ value }}" placeholder="#1d4ed8" pattern="#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})" maxlength="7" title="Enter a hex colour such as #1d4ed8 or #abc" spellcheck="false" autocomplete="off">
+  </div>
+</div>
+{% endmacro %}
+
 {% block content %}
 <style>
 .challenge-shell { display:flex; flex-direction:column; gap:1rem; }
@@ -193,8 +203,8 @@
       <div><label>Team name</label><input name="team_name" placeholder="Mumbai Indians" required></div>
       <div><label>Short name</label><input name="short_name" placeholder="MI"></div>
       <div><label>Logo/image</label><input type="file" name="team_logo" accept="image/*"></div>
-      <div><label>Primary color</label><input type="color" name="primary_color" value="#1d4ed8"></div>
-      <div><label>Secondary color</label><input type="color" name="secondary_color" value="#facc15"></div>
+      {{ colour_field('primary_color', 'Primary color', '#1d4ed8') }}
+      {{ colour_field('secondary_color', 'Secondary color', '#facc15') }}
       <div><label>Sort</label><input type="number" name="team_sort_order" value="0"></div>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="team_is_active" checked style="width:auto;"> Active</label>
       <button class="btn btn-primary" type="submit">+ Add Team</button>
@@ -270,8 +280,8 @@
       <div><label>Team name</label><input name="team_name" value="{{ team.name }}" required></div>
       <div><label>Short name</label><input name="short_name" value="{{ team.short_name or '' }}"></div>
       <div><label>Logo/image</label><input type="file" name="team_logo" accept="image/*"></div>
-      <div><label>Primary color</label><input type="color" name="primary_color" value="{{ team.primary_color or '#1d4ed8' }}"></div>
-      <div><label>Secondary color</label><input type="color" name="secondary_color" value="{{ team.secondary_color or '#facc15' }}"></div>
+      {{ colour_field('primary_color', 'Primary color', team.primary_color or '#1d4ed8') }}
+      {{ colour_field('secondary_color', 'Secondary color', team.secondary_color or '#facc15') }}
       <div><label>Sort</label><input type="number" name="team_sort_order" value="{{ team.sort_order }}"></div>
       <label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="team_is_active" {{ 'checked' if team.is_active else '' }} style="width:auto;"> Active</label>
       {% if team.logo_url %}<label style="display:flex;gap:.45rem;align-items:center;margin-top:1.25rem;"><input type="checkbox" name="remove_logo" style="width:auto;"> Remove current logo</label>{% endif %}
@@ -369,4 +379,23 @@
   </section>
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+  document.querySelectorAll('[data-team-colour]').forEach(field => {
+    const picker = field.querySelector('[data-colour-picker]');
+    const hex = field.querySelector('[data-colour-hex]');
+    picker.addEventListener('input', () => { hex.value = picker.value; });
+    hex.addEventListener('input', () => {
+      let value = hex.value.trim().replace(/^#/, '');
+      if (/^[0-9a-f]{3}$/i.test(value)) value = [...value].map(c => c + c).join('');
+      if (/^[0-9a-f]{6}$/i.test(value)) picker.value = '#' + value;
+    });
+    hex.addEventListener('change', () => {
+      if (hex.validity.valid && hex.value.trim()) hex.value = picker.value;
+    });
+  });
+</script>
 {% endblock %}

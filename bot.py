@@ -312,8 +312,8 @@ from handlers.cartel import (
 from handlers.feedback import feedback_handler
 from handlers.notifications import notifications_handler, notifications_toggle_callback
 from handlers.forward_broadcast import (
-    frwd_handler, frwd_grp_handler, frwd_prvt_handler, remember_album_message,
-    track_album_message,
+    frwd_handler, frwd_grp_handler, frwd_prvt_handler, frwd_chnl_handler,
+    forward_only_guard, track_album_message,
 )
 from handlers.setcardid import setcardid_handler
 
@@ -539,11 +539,12 @@ ADMIN_MENU_COMMANDS = (
 
 FORWARD_ONLY_MENU_COMMANDS = (
     ("frwd", "Admin: copy a replied message to every active chat"),
+    ("frwd_chnl", "Admin: copy a replied message to all channels"),
 )
 
 
 def is_forward_only_mode() -> bool:
-    """Whether the bot should accept only an admin's private ``/frwd`` command.
+    """Whether the bot should accept only an admin's private broadcast commands.
 
     Set ``FORWARD_ONLY_MODE=true`` when gameplay and all automatic notices need
     to be paused, while retaining a single, admin-only broadcast doorway.
@@ -1265,35 +1266,13 @@ def main():
                .build())
 
         if forward_only_mode:
-            from services.admin_ids import is_admin
-
-            async def _forward_only_guard(update, context):
-                """Silently discard every update except an admin's DM /frwd.
-
-                Admin album parts are remembered before stopping so forwarding
-                a multi-photo post keeps its original album grouping.
-                """
-                message = update.effective_message
-                user = update.effective_user
-                chat = update.effective_chat
-                is_private_admin = bool(
-                    message and user and chat and chat.type == "private"
-                    and is_admin(user.id))
-                text = (getattr(message, "text", "") or "").split(maxsplit=1)[0]
-                command = text.split("@", 1)[0].lower()
-                if is_private_admin and command == "/frwd":
-                    return
-                if is_private_admin and getattr(message, "media_group_id", None):
-                    remember_album_message(
-                        message.chat_id, message.media_group_id, message.message_id)
-                raise ApplicationHandlerStop
-
-            app.add_handler(TypeHandler(_TGUpdate, _forward_only_guard), group=-100)
+            app.add_handler(TypeHandler(_TGUpdate, forward_only_guard), group=-100)
             app.add_handler(CommandHandler("frwd", frwd_handler))
-            logger.info("Forward-only bot is running; only private admin /frwd is enabled.")
+            app.add_handler(CommandHandler("frwd_chnl", frwd_chnl_handler))
+            logger.info("Forward-only bot is running; private admin /frwd and /frwd_chnl are enabled.")
             app.run_polling(
                 drop_pending_updates=True,
-                allowed_updates=["message"],
+                allowed_updates=["message", "channel_post", "my_chat_member"],
             )
             return
 
@@ -1997,6 +1976,8 @@ def main():
         app.add_handler(CommandHandler("approvers", approvers_handler))
 
         # ── Admin reply-forward broadcasts ───────────────────────────
+        app.add_handler(CommandHandler("frwd", frwd_handler))
+        app.add_handler(CommandHandler("frwd_chnl", frwd_chnl_handler))
         app.add_handler(CommandHandler("frwd_grp", frwd_grp_handler))
         app.add_handler(CommandHandler("frwd_prvt", frwd_prvt_handler))
         # Buffer album (media-group) parts admins send to the bot DM so the

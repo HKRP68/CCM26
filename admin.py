@@ -16505,6 +16505,18 @@ def admin_challenge_data():
         db.close()
 
 
+def _team_colour_form(field):
+    """Accept typed hex colours as well as the colour picker, without truncation."""
+    from services.card_identity import normalise_hex
+    raw = (request.form.get(field) or "").strip()
+    if not raw:
+        return None
+    colour = normalise_hex(raw)
+    if not colour:
+        raise ValueError(f"{field.replace('_', ' ').title()} must be a hex code such as #1d4ed8 or #abc.")
+    return colour
+
+
 @app.route("/challenge-data/leagues/<int:league_id>", methods=["GET", "POST"])
 @login_required
 def admin_challenge_league_detail(league_id):
@@ -16547,8 +16559,8 @@ def admin_challenge_league_detail(league_id):
                             short_name=(request.form.get("short_name") or "").strip().upper()[:30] or None,
                             sort_order=_int_form("team_sort_order"),
                             is_active=_checked("team_is_active", True),
-                            primary_color=(request.form.get("primary_color") or "").strip()[:9] or None,
-                            secondary_color=(request.form.get("secondary_color") or "").strip()[:9] or None,
+                            primary_color=_team_colour_form("primary_color"),
+                            secondary_color=_team_colour_form("secondary_color"),
                         )
                         logo_url = _save_challenge_team_logo(request.files.get("team_logo"))
                         if logo_url:
@@ -16721,8 +16733,8 @@ def admin_challenge_team_detail(league_id, team_id):
                 if action == "save_team":
                     team.name = (request.form.get("team_name") or team.name).strip()[:120]
                     team.short_name = (request.form.get("short_name") or "").strip().upper()[:30] or None
-                    team.primary_color = (request.form.get("primary_color") or "").strip()[:9] or None
-                    team.secondary_color = (request.form.get("secondary_color") or "").strip()[:9] or None
+                    team.primary_color = _team_colour_form("primary_color")
+                    team.secondary_color = _team_colour_form("secondary_color")
                     team.sort_order = _int_form("team_sort_order")
                     team.is_active = _checked("team_is_active")
                     if request.form.get("remove_logo") == "on":

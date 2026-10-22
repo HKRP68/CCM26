@@ -1,7 +1,9 @@
 import os
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+
+from telegram.ext import ApplicationHandlerStop
 
 from handlers import forward_broadcast
 from services import admin_ids
@@ -181,13 +183,73 @@ class ForwardBroadcastTests(unittest.IsolatedAsyncioTestCase):
             effective_user=SimpleNamespace(id=999),
             effective_chat=SimpleNamespace(type="private"),
         )
-        context = SimpleNamespace(bot=DummyBot())
+        context = SimpleNamespace(bot=DummyBot(), args=["all"])
 
         with patch.object(forward_broadcast, "_target_chat_ids", return_value=[-1001, 1234]) as targets:
             await forward_broadcast.frwd_handler(update, context)
 
         targets.assert_called_once_with(forward_broadcast.ALL_CHAT_TYPES)
+        self.assertEqual(set(forward_broadcast.ALL_CHAT_TYPES),
+                         {"private", "group", "supergroup", "channel"})
         self.assertEqual(context.bot.copied, [(-1001, 999, 50), (1234, 999, 50)])
+
+    async def test_channel_command_targets_only_channels(self):
+        os.environ["BOT_ADMIN_IDS"] = "999"
+        source = DummyMessage(chat_id=999, message_id=50)
+        command = DummyMessage(chat_id=999, reply_to_message=source)
+        update = SimpleNamespace(effective_message=command,
+                                 effective_user=SimpleNamespace(id=999),
+                                 effective_chat=SimpleNamespace(type="private"))
+        context = SimpleNamespace(bot=DummyBot())
+        with patch.object(forward_broadcast, "_target_chat_ids", return_value=[-1009]) as targets:
+            await forward_broadcast.frwd_chnl_handler(update, context)
+        targets.assert_called_once_with(("channel",))
+        self.assertEqual(context.bot.copied, [(-1009, 999, 50)])
+
+    async def test_channel_command_rejects_non_admin_without_loading_targets(self):
+        command = DummyMessage(reply_to_message=DummyMessage())
+        update = SimpleNamespace(effective_message=command,
+                                 effective_user=SimpleNamespace(id=123),
+                                 effective_chat=SimpleNamespace(type="private"))
+        with patch.object(forward_broadcast, "_target_chat_ids") as targets:
+            await forward_broadcast.frwd_chnl_handler(update, SimpleNamespace())
+        targets.assert_not_called()
+        self.assertIn("Only bot admins", command.replies[0].text)
+
+    async def test_invalid_audience_does_not_start_a_broadcast(self):
+        command = DummyMessage(reply_to_message=DummyMessage())
+        update = SimpleNamespace(effective_message=command)
+        with patch.object(forward_broadcast, "_target_chat_ids") as targets:
+            await forward_broadcast.frwd_handler(update, SimpleNamespace(args=["typo"]))
+        targets.assert_not_called()
+        self.assertIn("Usage:", command.replies[0].text)
+
+    async def test_paused_guard_allows_channel_command_and_uppercase_all_command(self):
+        os.environ["BOT_ADMIN_IDS"] = "999"
+        for text in ("/frwd_chnl", "/Frwd@MyBot all"):
+            update = SimpleNamespace(effective_message=SimpleNamespace(text=text),
+                                     effective_user=SimpleNamespace(id=999),
+                                     effective_chat=SimpleNamespace(type="private"))
+            await forward_broadcast.forward_only_guard(update, SimpleNamespace())
+
+    async def test_paused_guard_buffers_captionless_album(self):
+        os.environ["BOT_ADMIN_IDS"] = "999"
+        photo = DummyMessage(chat_id=999, message_id=50, media_group_id="photos")
+        update = SimpleNamespace(effective_message=photo,
+                                 effective_user=SimpleNamespace(id=999),
+                                 effective_chat=SimpleNamespace(type="private"))
+        with self.assertRaises(ApplicationHandlerStop):
+            await forward_broadcast.forward_only_guard(update, SimpleNamespace())
+        self.assertEqual(forward_broadcast.get_album_message_ids(999, "photos"), [50])
+
+    async def test_paused_guard_tracks_channel_membership_without_replying(self):
+        update = SimpleNamespace(effective_message=None, effective_user=None,
+                                 effective_chat=SimpleNamespace(type="channel"),
+                                 my_chat_member=SimpleNamespace())
+        with patch("handlers.chat_tracker.handle_chat_member_update", new_callable=AsyncMock) as track:
+            with self.assertRaises(ApplicationHandlerStop):
+                await forward_broadcast.forward_only_guard(update, SimpleNamespace())
+        track.assert_awaited_once()
 
 
 if __name__ == "__main__":

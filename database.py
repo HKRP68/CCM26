@@ -917,6 +917,14 @@ def _migrate_add_columns():
     # width for a colour — it fits '#rrggbbaa' — matching challenge_teams above.
     _try_add("users", "team_colour", "VARCHAR(9)")
 
+    # NULL on pre-existing rows means unknown, rather than a fabricated zero.
+    # Live seasons can recover these fields from their stored scorecards.
+    for _table in ("tournament_player_stats", "stats_season_players"):
+        for _field in ("fifties", "hundreds", "ducks", "three_fers", "five_fers",
+                       "hattricks", "potm"):
+            _try_add(_table, _field, "INTEGER")
+        _try_add(_table, "highest_score_not_out", "BOOLEAN")
+
     # ── Career Player (/cmucareer) ──
     # A career card is a normal players row owned by exactly one user. is_career
     # keeps it out of every shared pool; non_tradable is read dynamically by

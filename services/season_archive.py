@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 STAT_FIELDS = ("matches", "bat_innings", "bat_runs", "bat_balls", "bat_fours",
                "bat_sixes", "bat_outs", "highest_score", "bowl_innings",
                "bowl_wickets", "bowl_runs", "bowl_balls", "best_bowl_wickets",
-               "best_bowl_runs")
+               "best_bowl_runs", "highest_score_not_out", "fifties", "hundreds",
+               "ducks", "three_fers", "five_fers", "hattricks", "potm")
 
 
 # ── References ───────────────────────────────────────────────────────
@@ -263,6 +264,8 @@ def archive_tournament(session, tour):
     session.flush()
     rows = (session.query(TournamentPlayerStats)
             .filter(TournamentPlayerStats.tournament_id == tour.id).all())
+    from services.tournament_service import detailed_player_stats
+    rows = detailed_player_stats(session, tour.id, rows)
     for row in rows:
         session.add(StatsSeasonPlayer(
             season_id=season.id, player_id=row.player_id, name=row.name,
@@ -355,10 +358,13 @@ def stat_rows_for(session, tour, row):
 
     seasons = []   # (date, label, stats)
 
-    def _collect(label, date, rows):
+    def _collect(label, date, rows, tournament_id=None):
         rows = list(rows)
         if not rows:
             return
+        if tournament_id is not None:
+            from services.tournament_service import detailed_player_stats
+            rows = detailed_player_stats(session, tournament_id, rows)
         stats = CareerStats(row.name)
         for r in rows:
             stats.add(r)
@@ -368,7 +374,7 @@ def stat_rows_for(session, tour, row):
     _collect(tour.name, _tour_date(tour),
              session.query(TournamentPlayerStats)
              .filter(TournamentPlayerStats.tournament_id == tour.id,
-                     _player_filter(TournamentPlayerStats, row)).all())
+                     _player_filter(TournamentPlayerStats, row)).all(), tour.id)
     for ref in effective_refs(session, tour):
         parsed = _parse_ref(ref)
         if not parsed:
@@ -381,7 +387,7 @@ def stat_rows_for(session, tour, row):
             _collect(t.name, _tour_date(t),
                      session.query(TournamentPlayerStats)
                      .filter(TournamentPlayerStats.tournament_id == t.id,
-                             _player_filter(TournamentPlayerStats, row)).all())
+                             _player_filter(TournamentPlayerStats, row)).all(), t.id)
         else:
             s = session.get(StatsSeason, number)
             if s is None:

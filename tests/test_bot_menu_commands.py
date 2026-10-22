@@ -249,9 +249,10 @@ UNPUBLISHED_ON_PURPOSE = {
     # Both player scopes are at the ceiling; all five are in /help, and the
     # post-match card (ranked + rivalry lines) and /h2h point at them.
     "rank", "ranked", "rivalry", "halloffame",
-    # Forward-only mode: a separate run path where this is the ONLY command
-    # registered at all, so there is no menu for it to be in.
-    "frwd",
+    # Broadcast commands: documented in BOT_COMMANDS.md and published in the
+    # dedicated forward-only menu. Also callable in normal mode; the normal
+    # admin menu is already full, so these do not displace more entries.
+    "frwd", "frwd_chnl",
 }
 
 

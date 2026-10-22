@@ -26,6 +26,23 @@ def _xi(shape, version="Base"):
     return players
 
 
+class SpecialCardDisplayTests(unittest.TestCase):
+    def test_owned_xi_special_cards_show_name_and_edition_with_html_escaped(self):
+        players = _xi((4, 4, 3))
+        players[0].name = "Lara <Legend>"
+        players[0].version = "Icon & Prime"
+        players[1].name = "Kohli"
+        players[1].version = "TOTY"
+        text = chemistry.render_chemistry_card(iter(players))
+        self.assertIn("Your special cards — Playing XI", text)
+        self.assertIn("Lara &lt;Legend&gt; — Icon &amp; Prime (Icon)", text)
+        self.assertIn("Kohli — TOTY (TOTY)", text)
+
+    def test_base_xi_has_an_explicit_empty_special_card_message(self):
+        self.assertIn("No special cards in your Playing XI yet.",
+                      chemistry.render_chemistry_card(_xi((4, 4, 3))))
+
+
 class CountryCurveTests(unittest.TestCase):
 
     def test_block_value_curve_is_concave(self):

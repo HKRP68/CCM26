@@ -860,7 +860,8 @@ def _collect_player_lines(state):
                 "team_name": name_by_user.get(uid),
                 "bat_runs": 0, "bat_balls": 0, "bat_fours": 0, "bat_sixes": 0,
                 "bat_out": False, "batted": False,
-                "bowl_wickets": 0, "bowl_runs": 0, "bowl_balls": 0, "bowl_dots": 0, "bowled": False,
+                "bowl_wickets": 0, "bowl_runs": 0, "bowl_balls": 0, "bowl_dots": 0,
+                "hattricks": 0, "bowled": False,
             })
             st = stats.get(str(rid), {}) or {}
             if kind == "bat":
@@ -881,6 +882,7 @@ def _collect_player_lines(state):
                 entry["bowl_runs"] += int(st.get("runs", 0) or 0)
                 entry["bowl_balls"] += int(st.get("balls", 0) or 0)
                 entry["bowl_dots"] += int(st.get("dots", 0) or 0)
+                entry["hattricks"] += int(bool(st.get("hattrick")))
                 if st.get("balls"):
                     entry["bowled"] = True
     lines = list(agg.values())
@@ -951,8 +953,14 @@ def _apply_line(acc, line):
         acc["bat_sixes"] += int(line.get("bat_sixes", 0) or 0)
         if line.get("bat_out"):
             acc["bat_outs"] += 1
-        if int(line.get("bat_runs", 0) or 0) > acc["highest_score"]:
-            acc["highest_score"] = int(line.get("bat_runs", 0) or 0)
+        runs = int(line.get("bat_runs", 0) or 0)
+        acc["fifties"] += int(50 <= runs < 100)
+        acc["hundreds"] += int(runs >= 100)
+        acc["ducks"] += int(runs == 0 and bool(line.get("bat_out")))
+        if (runs > acc["highest_score"]
+                or (runs == acc["highest_score"] and not line.get("bat_out"))):
+            acc["highest_score"] = runs
+            acc["highest_score_not_out"] = not bool(line.get("bat_out"))
     if bowled:
         acc["bowl_innings"] += 1
         wk = int(line.get("bowl_wickets", 0) or 0)
@@ -960,6 +968,12 @@ def _apply_line(acc, line):
         acc["bowl_wickets"] += wk
         acc["bowl_runs"] += rc
         acc["bowl_balls"] += int(line.get("bowl_balls", 0) or 0)
+        acc["three_fers"] += int(3 <= wk < 5)
+        acc["five_fers"] += int(wk >= 5)
+        if line.get("hattricks") is None or acc["hattricks"] is None:
+            acc["hattricks"] = None
+        else:
+            acc["hattricks"] += int(line["hattricks"])
         if _better_figure(wk, rc, acc["best_bowl_wickets"], acc["best_bowl_runs"]):
             acc["best_bowl_wickets"] = wk
             acc["best_bowl_runs"] = rc
@@ -992,6 +1006,19 @@ def recompute_player_stats(session, tournament_id):
                .filter_by(tournament_id=tid)
                .order_by(TournamentMatch.id).all())
 
+    aggregates = _aggregate_player_stats(matches)
+    for acc in aggregates.values():
+        if acc.get("user_id") is None:
+            continue  # a player row requires a user_id (NOT NULL)
+        session.add(TournamentPlayerStats(tournament_id=tid, **acc))
+
+
+DETAILED_STAT_FIELDS = ("fifties", "hundreds", "ducks", "three_fers", "five_fers",
+                       "hattricks", "potm", "highest_score_not_out")
+
+
+def _aggregate_player_stats(matches):
+    """Fold stored scorecards, including the actual snapshotted POTM winner."""
     aggregates = {}
     for m in matches:
         if not m.scorecard_json:
@@ -1001,7 +1028,12 @@ def recompute_player_stats(session, tournament_id):
         except Exception:
             logger.exception("Bad scorecard_json on tournament_match %s", m.id)
             continue
-        for line in lines or []:
+        if not isinstance(lines, list):
+            continue
+        lines = [line for line in lines if isinstance(line, dict)]
+        winner = next((line["match_potm"] for line in lines
+                       if isinstance(line.get("match_potm"), dict)), None)
+        for line in lines:
             key = _player_identity(line)
             acc = aggregates.get(key)
             if acc is None:
@@ -1012,14 +1044,47 @@ def recompute_player_stats(session, tournament_id):
                     "bat_fours": 0, "bat_sixes": 0, "bat_outs": 0, "highest_score": 0,
                     "bowl_innings": 0, "bowl_wickets": 0, "bowl_runs": 0,
                     "bowl_balls": 0, "best_bowl_wickets": 0, "best_bowl_runs": -1,
+                    "fifties": 0, "hundreds": 0, "ducks": 0,
+                    "three_fers": 0, "five_fers": 0, "hattricks": 0, "potm": 0,
+                    "highest_score_not_out": False,
                 }
                 aggregates[key] = acc
             _apply_line(acc, line)
+            if winner is None:
+                acc["potm"] = None
+            elif acc["potm"] is not None:
+                acc["potm"] += int(
+                    (line.get("name") or "").strip().casefold() ==
+                    (winner.get("name") or "").strip().casefold()
+                    and (line.get("team_name") or "").strip().casefold() ==
+                    (winner.get("team") or "").strip().casefold())
+    return aggregates
 
-    for acc in aggregates.values():
-        if acc.get("user_id") is None:
-            continue  # a player row requires a user_id (NOT NULL)
-        session.add(TournamentPlayerStats(tournament_id=tid, **acc))
+
+def detailed_player_stats(session, tournament_id, rows):
+    """Recover new counters on older live rows without changing base totals.
+
+    Saved seasons with no surviving scorecards retain NULL (unknown) fields.
+    """
+    from types import SimpleNamespace
+    rows = list(rows)
+    if not any(any(getattr(row, f, None) is None for f in DETAILED_STAT_FIELDS)
+               for row in rows):
+        return rows
+    matches = (session.query(TournamentMatch).filter_by(tournament_id=tournament_id)
+               .order_by(TournamentMatch.id).all())
+    aggregates = _aggregate_player_stats(matches)
+    out = []
+    for row in rows:
+        values = {col.name: getattr(row, col.name) for col in row.__table__.columns}
+        key = player_identity(values)
+        acc = aggregates.get(key)
+        if acc:
+            for field in DETAILED_STAT_FIELDS:
+                if values[field] is None:
+                    values[field] = acc[field]
+        out.append(SimpleNamespace(**values))
+    return out
 
 
 def recompute_standings(session, tournament_id):
@@ -1973,7 +2038,8 @@ class CareerStats:
     """
     _SUMMED = ("matches", "bat_innings", "bat_runs", "bat_balls", "bat_fours",
                "bat_sixes", "bat_outs", "bowl_innings", "bowl_wickets",
-               "bowl_runs", "bowl_balls")
+               "bowl_runs", "bowl_balls", "fifties", "hundreds", "ducks",
+               "three_fers", "five_fers", "hattricks", "potm")
 
     def __init__(self, name=None):
         self.name = name
@@ -1981,6 +2047,7 @@ class CareerStats:
         for field in self._SUMMED:
             setattr(self, field, 0)
         self.highest_score = 0
+        self.highest_score_not_out = False
         self.best_bowl_wickets = 0
         self.best_bowl_runs = -1
         self.seasons = 0
@@ -1988,8 +2055,18 @@ class CareerStats:
 
     def add(self, row):
         for field in self._SUMMED:
-            setattr(self, field, getattr(self, field) + int(getattr(row, field, 0) or 0))
-        self.highest_score = max(self.highest_score, int(row.highest_score or 0))
+            value = getattr(row, field, None)
+            current = getattr(self, field)
+            setattr(self, field, None if value is None or current is None
+                    else current + int(value))
+        score = int(row.highest_score or 0)
+        not_out = getattr(row, "highest_score_not_out", None)
+        if score > self.highest_score:
+            self.highest_score, self.highest_score_not_out = score, not_out
+        elif score == self.highest_score:
+            self.highest_score_not_out = (True if not_out or self.highest_score_not_out
+                                         else None if not_out is None or self.highest_score_not_out is None
+                                         else False)
         w = int(row.best_bowl_wickets or 0)
         r = int(row.best_bowl_runs if row.best_bowl_runs is not None else -1)
         if r >= 0 and _better_figure(w, r, self.best_bowl_wickets,

@@ -152,7 +152,7 @@ welcome messages for that chat, `/dwm` turns them off (group admins only).
 | `/swapplayers` | `/swappl` `/swap` | Swap two players' positions |
 | `/setbo` 💬 | `/sbo` `/battingorder` `/bo` | View or change your batting order |
 | `/setcaptain` | `/captain` `/cap` | Set your team captain |
-| `/cmuchem` | `/cmuchemistry` `/chem` `/chemistry` | Check your XI's Team Chemistry 🧪 |
+| `/cmuchem` | `/cmuchemistry` `/chem` `/chemistry` | Check your XI's Team Chemistry and see your special cards by player name, edition and special type 🧪 |
 | `/chemhelp` | `/chemguide` | How Team Chemistry works 📖 |
 | `/change` | — | Change your XI / batting order during match setup (after the toss, before the match starts) |
 
@@ -192,7 +192,7 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/stats` 💬 | `/st` | A player's game statistics |
 | `/gstats` 💬 | `/globalstats` | Global stats — every owner, every match type 🌍 |
 | `/statscl` 💬 | — | Any Challenge League player's stats |
-| `/statstour` | — | A player's **This Season Stats** and **Total Season Stats** (this season plus the linked past seasons — deleted tournaments' saved stats included), plus a season-by-season list, each tap-to-expand |
+| `/statstour` | — | A player's **This Season Stats** and **Total Season Stats**, with batting/bowling innings, runs, wickets, 50s, 100s, 4s/6s, averages, strike rates, economy, ducks, HS (with `*` for not out), 3-/5-fers, hat-tricks, best bowling, overs and POTM awards. Linked past seasons and saved deleted seasons count toward totals; unavailable older records show `—`. Each season section expands on tap |
 | `/seasons [competition] [\| player]` | — | 🏟 **League Seasons**: every season of a competition — champions, runners-up, Orange & Purple Caps, the running season's stage — with a card per season (its top batters and bowlers), **all-time** boards (runs, wickets, sixes, highest score, best figures, average, titles), and `/seasons <player>` for one player season by season |
 | `/tournamentstats` | — | Tournament stat leaderboards (top 25, ranks 11+ behind a tap) |
 | `/cmuleaderboard` | `/leaderboard` `/lb` `/top` | The global leaderboard |
@@ -289,6 +289,11 @@ CL Tour and The Hundred matches always play their full length.
 | `/cint` · `/challengeINT` | Start an international challenge |
 | `/c<league>` | Any extra league an admin has added on the website answers the same way |
 | `/cmulti [overs\|100B]` | **Multi League** — the host picks a league, then a team from it; the guest does the same (e.g. MI vs Sydney Sixers). `/cmulti 10` plays 10 overs, `/cmulti 100B` plays The Hundred (`/cipl multi` still works). Admins choose which leagues appear with the **Include in Multi** tick on the website |
+
+In **Challenge Data → League → Add Team** and **Team Settings**, both Primary color
+and Secondary color accept typed hex codes beside the colour picker. For example,
+enter `#1d4ed8` and `#facc15`; `1d4ed8` and shorthand `#abc` also work. The preview
+and picker update as you type. Invalid codes are rejected without saving the team.
 
 ## 10. Lets Play Tournament
 
@@ -780,7 +785,8 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 
 | Usage | What it does |
 |-------|--------------|
-| `/frwd` *(reply to a message)* | Copy the replied message to every active chat. Registered **only** when `FORWARD_ONLY_MODE=true`, where it is the single command the bot still answers — an admin-only broadcast doorway while gameplay is paused |
+| `/frwd all` or `/frwd` *(reply to a message)* | Copy the replied message to every known active private chat, group, supergroup and channel. Admin-only, from the bot's DM. Works in normal and `FORWARD_ONLY_MODE=true` modes |
+| `/frwd_chnl` *(reply)* | Copy only to known active channels. Admin-only, from the bot's DM; also works in forward-only mode. The bot needs permission to post in each channel |
 | `/frwd_grp` *(reply)* | Forward to all active groups |
 | `/frwd_prvt` *(reply)* | Forward to all active private chats |
 

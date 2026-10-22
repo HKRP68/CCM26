@@ -128,6 +128,31 @@ class ChallengeDataImportTests(unittest.TestCase):
                       self.session.query(ChallengePlayer)
                       .filter(ChallengePlayer.team_id == team.id).all())
 
+    def test_typed_hex_colours_are_normalised_on_create_and_edit(self):
+        from models import ChallengeTeam
+        self.client.post(f"/challenge-data/leagues/{IDS['league']}", data={
+            "action": "add_team", "team_name": "Typed Hex XI",
+            "primary_color": "ABC", "secondary_color": "#12AB34"})
+        team = self.session.query(ChallengeTeam).filter_by(name="Typed Hex XI").one()
+        self.assertEqual((team.primary_color, team.secondary_color), ("#aabbcc", "#12ab34"))
+        url = f"/challenge-data/leagues/{IDS['league']}/teams/{team.id}"
+        self.client.post(url, data={"action": "save_team", "primary_color": "000000",
+                                    "secondary_color": "#fff"})
+        self.session.refresh(team)
+        self.assertEqual((team.primary_color, team.secondary_color), ("#000000", "#ffffff"))
+        self.client.post(url, data={"action": "save_team", "primary_color": "#123456junk",
+                                    "secondary_color": "#fff"})
+        self.session.refresh(team)
+        self.assertEqual(team.primary_color, "#000000")
+
+    def test_team_colour_form_offers_typing_and_picking(self):
+        response = self.client.get(f"/challenge-data/leagues/{IDS['league']}")
+        self.assertEqual(response.status_code, 200)
+        page = response.get_data(as_text=True)
+        self.assertIn('name="primary_color" data-colour-hex', page)
+        self.assertIn('name="secondary_color" data-colour-hex', page)
+        self.assertIn('data-colour-picker', page)
+
     # ── resolver ──────────────────────────────────────────────────────────
     def test_version_suffix_picks_that_card(self):
         p, _ = self.admin._resolve_challenge_source(self.session, "Virat Kohli - Gold")

@@ -2,10 +2,11 @@
 
 Usage in the bot's private chat:
     1. Send the message/media to the bot.
-    2. Reply to that message with /frwd, /frwd_grp, or /frwd_prvt.
+    2. Reply with /frwd all, /frwd_grp, /frwd_prvt, or /frwd_chnl.
 
-/frwd copies the replied message to every active chat. It is the one-command
-option intended for a paused, broadcast-only bot.
+/frwd (or /frwd all) copies the replied message to every active chat, including
+channels. /frwd_chnl copies only to active channels. Both also work when the bot
+is paused in broadcast-only mode.
 /frwd_grp forwards the replied message to active groups/supergroups where the
 bot is present. /frwd_prvt forwards it to active private chats that have talked
 to the bot.
@@ -21,7 +22,7 @@ from dataclasses import dataclass
 
 from telegram import Update
 from telegram.error import BadRequest, Forbidden, TelegramError
-from telegram.ext import ContextTypes
+from telegram.ext import ApplicationHandlerStop, ContextTypes
 
 from database import get_session
 from models import BotChat
@@ -37,7 +38,8 @@ logger = logging.getLogger(__name__)
 
 GROUP_CHAT_TYPES = ("group", "supergroup")
 PRIVATE_CHAT_TYPES = ("private",)
-ALL_CHAT_TYPES = GROUP_CHAT_TYPES + PRIVATE_CHAT_TYPES
+CHANNEL_CHAT_TYPES = ("channel",)
+ALL_CHAT_TYPES = GROUP_CHAT_TYPES + PRIVATE_CHAT_TYPES + CHANNEL_CHAT_TYPES
 DEFAULT_DELAY_SECONDS = 0.05
 
 # ── Album (media-group) buffering ────────────────────────────────────
@@ -89,6 +91,30 @@ async def track_album_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not is_forward_admin(user.id):
         return
     remember_album_message(message.chat_id, message.media_group_id, message.message_id)
+
+
+async def forward_only_guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Allow admin DM broadcasts, buffer albums, and track channel destinations."""
+    message = update.effective_message
+    user = update.effective_user
+    chat = update.effective_chat
+    private_admin = bool(message and user and chat and chat.type == "private"
+                         and is_forward_admin(user.id))
+    parts = (getattr(message, "text", "") or "").split(maxsplit=1)
+    command = parts[0].split("@", 1)[0].lower() if parts else ""
+    if private_admin and command in {"/frwd", "/frwd_chnl"}:
+        return
+    if private_admin and getattr(message, "media_group_id", None):
+        remember_album_message(message.chat_id, message.media_group_id, message.message_id)
+    if chat and chat.type == "channel":
+        # Posts only update tracking; they get no response while gameplay is paused.
+        if update.my_chat_member:
+            from handlers.chat_tracker import handle_chat_member_update
+            await handle_chat_member_update(update, context)
+        else:
+            from services.chat_tracker import record_chat
+            record_chat(update)
+    raise ApplicationHandlerStop
 
 
 @dataclass(frozen=True)
@@ -284,13 +310,27 @@ async def frwd_grp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def frwd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Forward the replied DM message to every active private and group chat."""
+    """/frwd or /frwd all: copy to every active private, group and channel chat."""
+    args = getattr(context, "args", None) or []
+    if args and [arg.lower() for arg in args] != ["all"]:
+        message = update.effective_message
+        if message:
+            await message.reply_text("Usage: reply to a message with /frwd all.")
+        return
     await _handle_forward_command(
         update,
         context,
         command_name="frwd",
         target_label="active",
         chat_types=ALL_CHAT_TYPES,
+    )
+
+
+async def frwd_chnl_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Copy the replied DM message to all known active channels."""
+    await _handle_forward_command(
+        update, context, command_name="frwd_chnl",
+        target_label="channel", chat_types=CHANNEL_CHAT_TYPES,
     )
 
 
