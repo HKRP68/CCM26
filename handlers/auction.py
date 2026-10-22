@@ -2330,7 +2330,7 @@ async def asetsimport_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     await _with_auction(update, work, admin=True, context=context)
 
 
-def _find_player(session, name):
+def _find_player(session, name, version=None):
     """A master card by name. Never guesses between two.
 
     Retaining the wrong card costs a franchise real money and an admin a
@@ -2340,6 +2340,10 @@ def _find_player(session, name):
     from services import player_query
     wanted = (name or "").strip().lower()
     query = player_query.master_player_query(session, {"q": wanted})
+    if version:
+        from models import Player
+        from sqlalchemy import func
+        query = query.filter(func.lower(func.coalesce(Player.version, "Base")) == version.strip().lower())
     rows = player_query.ordered(query).limit(30).all()
     exact = [p for p in rows if (p.name or "").lower() == wanted]
     if len(exact) == 1:
@@ -2348,7 +2352,9 @@ def _find_player(session, name):
         editions = sorted({p.version or "Base" for p in exact})
         if len(editions) > 1:
             raise AuctionError(f"There are {len(exact)} cards called “{name}” — "
-                               f"say which edition: " + ", ".join(editions))
+                               f"choose an edition: " + ", ".join(editions)
+                               + f". Use /apick Team | {name} | {editions[0]} "
+                                 f"or /pick {name} | {editions[0]}.")
         raise AuctionError(
             f"There are {len(exact)} cards called “{name}”, all {editions[0]}. "
             f"Retain from the auction's setup page, where they can be told "
@@ -2359,7 +2365,7 @@ def _find_player(session, name):
         raise AuctionError("That could be " +
                            ", ".join(p.name for p in rows[:5]) +
                            " — type more of the name.")
-    raise AuctionError(f"No player called “{name}”.")
+    raise AuctionError(f"No player called “{name}”" + (f" in version {version}." if version else "."))
 
 
 async def aunretain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2843,8 +2849,11 @@ async def auction_pick_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         if franchise is None:
             raise AuctionError("Only a team owner or co-owner can draft for its team.")
         if not raw:
-            raise AuctionError("Usage: /pick <player name>")
-        player = _find_player(session, raw)
+            raise AuctionError("Usage: /pick <player name> | [version]")
+        parts = [part.strip() for part in raw.split('|')]
+        if len(parts) > 2 or not all(parts):
+            raise AuctionError("Usage: /pick <player name> | [version]")
+        player = _find_player(session, parts[0], parts[1] if len(parts) == 2 else None)
         lot = A.draft_pick(session, season, franchise, player, by_tg_id=user.id)
         following = A.pick_turn(session, season)
         text = f"🆕 {html.escape(franchise.name)} draft {html.escape(lot.name)} for " + A.render_money(lot.sold_price_lakh, season.currency_label)
@@ -2865,18 +2874,27 @@ async def apick_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     def work(session, season):
         A._pick_window(session, season)
         parts = [p.strip() for p in raw.split("|")]
-        if len(parts) < 2 or not parts[0] or not parts[1]:
+        if not 2 <= len(parts) <= 4 or not all(parts[:2]):
             turn = A.pick_turn(session, season)
             whose = (f"\nIt is <b>{html.escape(turn.name)}</b>'s pick."
                      if turn is not None else "")
             raise AuctionError(
-                "Usage: /apick <franchise> | <player> | [price]\n"
+                "Usage: /apick <franchise> | <player> | [version] | [price]\n"
                 "The price is optional — leave it off and the retention "
                 "ladder decides." + whose)
         franchise = _find_franchise(session, season, parts[0])
-        player = _find_player(session, parts[1])
-        price = (A.parse_amount(parts[2])
-                 if len(parts) > 2 and parts[2] else None)
+        version, price = None, None
+        if len(parts) == 4:
+            if not parts[2]:
+                raise AuctionError("Name the version: /apick Team | Player | Version | [price]")
+            version = parts[2]
+            price = A.parse_amount(parts[3]) if parts[3] else None
+        elif len(parts) == 3 and parts[2]:
+            try:
+                price = A.parse_amount(parts[2])
+            except AuctionError:
+                version = parts[2]
+        player = _find_player(session, parts[1], version)
         lot = A.draft_pick(session, season, franchise, player, price,
                            by_tg_id=user.id if user else None)
         used = int(franchise.draft_picks_used or 0)

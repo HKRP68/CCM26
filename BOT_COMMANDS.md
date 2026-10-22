@@ -1213,7 +1213,11 @@ systems — e.g. [`docs/franchise-auction.md`](docs/franchise-auction.md),
 - `/apickorder Gujarat | Lucknow` — set draft seats before the first pick (snake rounds).
 - `/retain Player Name` or `/retain Team Name | Player Name` — owner/co-owner retains their team's previous-squad player at the range cost.
 - `/retainlock` — owner/co-owner makes team retention final after meeting minimums.
-- `/pick Player Name` — new-team owner/co-owner drafts after retention closes; early attempts name unfinished teams.
+- `/pick Player Name | Version` — new-team owner/co-owner drafts a specific edition after retention closes; the version is optional when the name is unique.
+
+Admins can use `/apick Team Name | Player Name | Version | optional price`.
+For example: `/apick INDO-LONDON LIONS | Kagiso Rabada | IPL2026`.
+The older `/apick Team Name | Player Name | price` format still works for unique names.
 
 ### Franchise Auction: readiness and timed expansion draft
 

@@ -2014,7 +2014,7 @@ ADMIN_SECTIONS = (
         ("/aretlimits <min> <max|auto>", "Overall range retention count, e.g. 1 5; zero remains allowed"),
         ("/apickclock <seconds> | pause|skip|shortlist", "Optional expansion timer; off by default"),
         ("/apickclock pause · resume · off", "Pause, resume with full time, or disable"),
-        ("/apick <team> | <player> | [price]", "A new side signs a player"),
+        ("/apick <team> | <player> | [version] | [price]", "A new side signs a specific player edition"),
         ("/apickset · /apickskip · /apickundo", "Deal picks, skip a turn, undo one"),
     )),
     ("🏛 Teams", (

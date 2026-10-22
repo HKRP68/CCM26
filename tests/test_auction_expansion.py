@@ -872,6 +872,61 @@ class CommandTests(ExpansionCase):
                          self.A.drafted(self.session,
                                         gujarat.id)[0].sold_price_lakh)
 
+    def _duplicate_edition(self):
+        from models import Player
+        player = Player(name=self.unique_name, rating=95, category='Batsman',
+                        country='India', version='IPL2026', bat_hand='Right',
+                        bowl_hand='Right', bowl_style='Medium Pacer',
+                        bat_rating=95, bowl_rating=30, is_active=True)
+        self.session.add(player)
+        self.session.flush()
+        self.A.add_players_to_pool(self.session, self.two, [player])
+        self.session.commit()
+        return player.id
+
+    def test_apick_selects_base_edition(self):
+        from handlers import auction as H
+        self._bind()
+        self._duplicate_edition()
+        base_id = self.unique.id
+        self._run(H.apick_handler, CAROL, ('Gujarat', '|', self.unique_name, '|', 'Base'))
+        taken = self.A.drafted(self.session, self._side('Gujarat').id)
+        self.assertEqual([base_id], [lot.player_id for lot in taken])
+
+    def test_apick_selects_edition_and_optional_price(self):
+        from handlers import auction as H
+        self._bind()
+        edition_id = self._duplicate_edition()
+        self._run(H.apick_handler, CAROL,
+                  ('Gujarat', '|', self.unique_name, '|', 'ipl2026', '|', '6'))
+        taken = self.A.drafted(self.session, self._side('Gujarat').id)
+        self.assertEqual([edition_id], [lot.player_id for lot in taken])
+        self.assertEqual(600, taken[0].sold_price_lakh)
+
+    def test_owner_pick_accepts_edition(self):
+        from handlers import auction as H
+        self._bind()
+        edition_id = self._duplicate_edition()
+        self._run(H.auction_pick_handler, CAROL, (self.unique_name, '|', 'IPL2026'))
+        taken = self.A.drafted(self.session, self._side('Gujarat').id)
+        self.assertEqual([edition_id], [lot.player_id for lot in taken])
+
+    def test_edition_error_gives_a_usable_command(self):
+        from handlers import auction as H
+        self._bind()
+        self._duplicate_edition()
+        self._run(H.apick_handler, CAROL, ('Gujarat', '|', self.unique_name))
+        self.assertIn(f'/apick Team | {self.unique_name} | Base', self.replies[-1])
+        self.assertEqual([], self.A.drafted(self.session, self._side('Gujarat').id))
+
+    def test_unknown_edition_does_not_spend_a_pick(self):
+        from handlers import auction as H
+        self._bind()
+        self._duplicate_edition()
+        self._run(H.apick_handler, CAROL, ('Gujarat', '|', self.unique_name, '|', 'Missing'))
+        self.assertIn('version Missing', self.replies[-1])
+        self.assertEqual([], self.A.drafted(self.session, self._side('Gujarat').id))
+
     def test_apick_out_of_turn_is_refused_and_says_whose_it_is(self):
         from handlers import auction as H
         self._bind()
