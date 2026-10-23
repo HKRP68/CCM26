@@ -60,7 +60,7 @@ class ButtonAccessTests(unittest.TestCase):
 
     def test_super_over_invitation_buttons_allow_the_guest(self):
         button_access.register_button_owner(100, 200, 111)
-        for data in ("sop_accept_42", "sop_deny_42", "sos_pick_42_target_8",
+        for data in ("sop_accept_42", "sop_deny_42", "sos_pick_42_target_bat_8", "sos_pick_42_target_bowl_9",
                      "sos_ok_42_target", "sos_cancel_42_target"):
             with self.subTest(data=data):
                 self.assertTrue(button_access.is_shared_callback_data(data))

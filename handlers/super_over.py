@@ -298,7 +298,9 @@ async def start_super_over(context, mid, state) -> bool:
         m = main
         standalone = bool(state.get('standalone_super_over'))
         if standalone:
-            selection_text = ('Three-player squads confirmed; choose your bowler.'
+            selection_text = ('Five-player squads confirmed: 3 batters + 2 bowlers. Choose one of your two bowlers.'
+                              if state.get('super_over_roles') else
+                              'Three-player squads confirmed; choose your bowler.'
                               if state.get('three_player_squads') else
                               'Choose three batters and one bowler.')
             await context.bot.send_message(so['chat_id'],
@@ -532,9 +534,20 @@ def _reset_selection(so):
     so["bat_confirmed"] = False
     so["bowl_confirmed"] = False
     so["sel_msg_id"] = None
-    if (so.get("main_state") or {}).get("three_player_squads"):
-        so["sel_batters"] = [int(p["roster_id"]) for p in so["teams"][so["bat_uid"]]["xi"]]
+    state = so.get("main_state") or {}
+    if state.get("three_player_squads") or state.get("super_over_roles"):
+        so["sel_batters"] = [int(p["roster_id"]) for p in _eligible_batters(so, so["bat_uid"])]
         so["bat_confirmed"] = True
+
+
+def _role_pool(so, uid, role):
+    xi = so["teams"][uid]["xi"]
+    roles = (so.get("main_state") or {}).get("super_over_roles") or {}
+    nominated = roles.get(str(uid))
+    if nominated is None:
+        return list(xi)
+    by_id = {int(p["roster_id"]): p for p in xi}
+    return [by_id[int(rid)] for rid in nominated.get(role, []) if int(rid) in by_id]
 
 
 def _eligible_batters(so, uid):
@@ -548,7 +561,7 @@ def _eligible_batters(so, uid):
     spent batter come back while fresh ones are still available.
     """
     out = so["batted"][uid]
-    xi = so["teams"][uid]["xi"]
+    xi = _role_pool(so, uid, "batters")
     pool = [p for p in xi if int(p["roster_id"]) not in out]
     if len(pool) >= SO_BATTERS:
         return pool
@@ -565,8 +578,9 @@ def _eligible_bowlers(so, uid):
     bowled a Super Over in this tie (not merely the previous one). Falls back to
     the full XI only when the whole side has bowled."""
     used = so["used_bowlers"][uid]
-    pool = [p for p in so["teams"][uid]["xi"] if int(p["roster_id"]) not in used]
-    return pool if pool else list(so["teams"][uid]["xi"])
+    xi = _role_pool(so, uid, "bowlers")
+    pool = [p for p in xi if int(p["roster_id"]) not in used]
+    return pool if pool else xi
 
 
 def _player_by_rid(so, uid, rid):
@@ -600,9 +614,10 @@ def _render_selection(so):
     if (so.get('main_state') or {}).get('standalone_super_over'):
         head += ' · <b>UNRANKED</b>'
     target_line = f"\n🎯 Target: <b>{so['target']}</b>" if so.get("target") else ""
-    squad_locked = bool((so.get("main_state") or {}).get("three_player_squads"))
+    state = so.get("main_state") or {}
+    squad_locked = bool(state.get("three_player_squads") or state.get("super_over_roles"))
     batting_instruction = (
-        "🏏 Batting order: " + " → ".join(html.escape(p['name']) for p in bat['xi'])
+        "🏏 Batting order: " + " → ".join(html.escape(p['name']) for p in _role_pool(so, so['bat_uid'], 'batters'))
         if squad_locked else
         f"{_mention(bat['tg'], bat['name'])}, select <b>{SO_BATTERS} batters</b> (2 openers + 1 backup).")
 
@@ -622,7 +637,7 @@ def _render_selection(so):
     # Batting buttons (toggle, up to 3)
     chosen_b = so["sel_batters"]
     if squad_locked:
-        lines.append("Your three players are confirmed. Choose a bowler from the same squad.")
+        lines.append("Your batting order is confirmed. Choose one of your nominated bowlers.")
     for p in ([] if squad_locked else _eligible_batters(so, so["bat_uid"])):
         rid = int(p["roster_id"])
         mark = "✅ " if rid in chosen_b else ""

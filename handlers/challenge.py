@@ -977,7 +977,7 @@ async def _send_toss_prompt(context, draft, message_obj):
     caller_side = _toss_caller_side(draft)
     caller = draft.get(caller_side) or {}
     caller_tg = caller.get("tg_id") or draft.get(f"{caller_side}_tg_id")
-    selection_label = "three players" if draft.get("standalone_super_over") else "Playing XIs"
+    selection_label = "3 batters and 2 bowlers" if draft.get("standalone_super_over") else "Playing XIs"
     text = (f"🪙 <b>TOSS</b>\n"
             f"{_mention(caller_tg, caller.get('name') or 'Guest')}, "
             f"call the coin:\n\n"
@@ -3326,7 +3326,7 @@ async def _expire_challenge_draft(ctx):
 
 def _selection_phase_label(phase):
     return {"team": "team", "pitch": "pitch", "xi": "Playing XI",
-            "players": "three players", "toss": "toss", "draft": "draft pick"}.get(phase, "selection")
+            "players": "3 batters and 2 bowlers", "toss": "toss", "draft": "draft pick"}.get(phase, "selection")
 
 
 def _mention_for_tg(draft, tg_id):

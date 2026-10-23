@@ -111,10 +111,15 @@ class PracticeSuperOverTests(unittest.TestCase):
                     host=dict(name="Host"), target=dict(name="Guest"),
                     league_key="ipl", league_name="IPL", ball_format="The100",
                     toss_decision=decision, toss_winner_side="host")
+                draft['xi_selections'] = {}
+                for side, user in zip(('host', 'target'), self.users):
+                    ids = [p['roster_id'] for p in self.xi(None, user)[:5]]
+                    draft['xi_selections'][side] = dict(player_ids=ids, batter_ids=ids[:3],
+                                                       bowler_ids=ids[3:], confirmed=True)
                 query = self.query("cl_start_123", self.users[0].telegram_id).callback_query
                 query.message.message_id = 5
                 with patch.object(cp, 'get_session', get_session), \
-                     patch.object(cp, 'build_xi_from_draft', side_effect=lambda s, d, side: self.xi(s, self.users[0 if side == 'host' else 1])[:3]), \
+                     patch.object(cp, 'build_xi_from_draft', side_effect=lambda s, d, side: self.xi(s, self.users[0 if side == 'host' else 1])[:5]), \
                      patch.object(cp, 'build_bench_from_draft', return_value=[]), \
                      patch.object(cp, '_resolve_team_identity', return_value=('XI', '🏏')), \
                      patch.object(cp, '_ss', new=AsyncMock()) as save_main, \
@@ -133,7 +138,17 @@ class PracticeSuperOverTests(unittest.TestCase):
                 self.assertTrue(so['bat_confirmed'])
                 self.assertEqual(len(so['sel_batters']), 3)
                 for team in so['teams'].values():
-                    self.assertEqual(len(team['xi']), 3)
+                    self.assertEqual(len(team['xi']), 5)
+                for uid, team in so['teams'].items():
+                    self.assertEqual([p['roster_id'] for p in self.SO._eligible_batters(so, uid)],
+                                     [p['roster_id'] for p in team['xi'][:3]])
+                    bowlers = [p['roster_id'] for p in team['xi'][3:]]
+                    self.assertEqual([p['roster_id'] for p in self.SO._eligible_bowlers(so, uid)], bowlers)
+                    so['used_bowlers'][uid].add(bowlers[0])
+                    self.assertEqual([p['roster_id'] for p in self.SO._eligible_bowlers(so, uid)], bowlers[1:])
+                    so['used_bowlers'][uid].add(bowlers[1])
+                    self.assertEqual([p['roster_id'] for p in self.SO._eligible_bowlers(so, uid)], bowlers)
+                    so['used_bowlers'][uid].clear()
                 text, keyboard = self.SO._render_selection(so)
                 self.assertNotIn('Confirm Batters', text)
                 self.assertFalse(any(button.callback_data.startswith('so_bat') for row in keyboard for button in row))
@@ -235,10 +250,10 @@ class PracticeSuperOverTests(unittest.TestCase):
     def test_full_game_saves_only_real_super_over_innings_without_competitive_side_effects(self):
         self._check_full_game()
 
-    def test_three_player_game_finishes_without_selecting_batters_again(self):
-        self._check_full_game(three_players=True)
+    def test_five_player_game_finishes_with_nominated_batters_and_bowlers(self):
+        self._check_full_game(five_players=True)
 
-    def _check_full_game(self, three_players=False):
+    def _check_full_game(self, five_players=False):
         row, _ = self.invite()
         forbidden = [patch('services.match_rewards.award_match_rewards_core'),
                      patch('services.post_match.process_completed_match'),
@@ -248,11 +263,13 @@ class PracticeSuperOverTests(unittest.TestCase):
         spies = [p.start() for p in forbidden]
         try:
             self.accept(row)
-            if three_players:
+            if five_players:
                 so = self.ctx.bot_data[f'so_{row.id}']
-                so['main_state']['three_player_squads'] = True
-                for team in so['teams'].values():
-                    team['xi'] = team['xi'][:3]
+                so['main_state']['super_over_roles'] = {}
+                for uid, team in so['teams'].items():
+                    team['xi'] = team['xi'][:5]
+                    ids = [p['roster_id'] for p in team['xi']]
+                    so['main_state']['super_over_roles'][str(uid)] = dict(batters=ids[:3], bowlers=ids[3:])
                 self.SO._reset_selection(so)
             async def play():
                 for _ in range(30):

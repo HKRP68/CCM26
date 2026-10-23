@@ -6,9 +6,12 @@ again when the invitation is accepted.
 For league squads, reply to your opponent in a group with `/sipl`, `/sbbl`,
 `/sint`, or `/s<league short code>` for an active admin-created league (for
 example `/ssa20`). Select league teams, the pitch and the toss as usual, then
-each captain picks exactly three players in batting order: two openers and a
-backup. One of those same three bowls. There is no full XI or second batter
-selection: play starts once both captains confirm their three players.
+each captain picks five different players: three batters in batting order
+(two openers and a backup), plus two bowlers. Only the nominated batters bat,
+and each innings uses one of the two nominated bowlers. A tied Super Over
+offers the unused bowler next; the two-player pool is reused once both have
+bowled. There is no full XI or second batter selection: play starts once both
+captains confirm their five-player squads.
 The toss winner chooses to bat or bowl. You do not need a personal
 roster for this mode. Every league uses six legal balls per Super Over innings,
 including leagues whose regular matches use the Hundred format. Extra overs
