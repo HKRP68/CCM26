@@ -82,6 +82,7 @@ from handlers.team import (teamname_handler, teamcolour_handler, purse_handler,
 from handlers.tournament import (
     statstour_handler, tournamentstats_handler, tournamentstats_callback,
 )
+from handlers.tournament_duels import tvs_handler, th2h_handler
 from handlers.leaderboard import leaderboard_handler, leaderboard_callback
 from handlers.profile import myprofile_handler, myprofile_callback
 
@@ -1781,6 +1782,8 @@ def main():
         app.add_handler(CommandHandler(
             "statscl", dm_only("statscl", statscl_handler)))
         app.add_handler(CommandHandler("statstour", statstour_handler))
+        app.add_handler(CommandHandler("tvs", tvs_handler))
+        app.add_handler(CommandHandler("th2h", th2h_handler))
         app.add_handler(CommandHandler("tournamentstats", tournamentstats_handler))
         app.add_handler(CallbackQueryHandler(tournamentstats_callback, pattern=r"^tstat_"))
         # 🏟 League Seasons: every season of a competition, its champions and

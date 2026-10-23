@@ -761,7 +761,7 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
                       pressure=0.0, balls_faced=None, batter_runs=None,
                       fielding_quality=None, bat_hand=None, chem_bond=0.0,
                       extras_mult=1.0, line=None, footwork=None,
-                      stroke=None, intent=None):
+                      stroke=None, intent=None, boundary_mult=1.0):
     """Calculate one ball outcome.
 
     pitch_wear: 0-100 (deterioration). 0 fresh; 100 fully worn.
@@ -781,6 +781,8 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
                         batters at the crease; improves running only
       extras_mult     — multiplier on the wide/no-ball weights (1.0 = normal;
                         a Super Over passes more, see _apply_dynamic_mods)
+      boundary_mult   — optional boundary-weight multiplier for an attacking
+                        contest; applies equally to either side (default 1.0)
 
     Batter innings context (None → no-op, so legacy callers are unchanged):
       balls_faced     — balls this batter has faced (early vulnerability)
@@ -932,6 +934,14 @@ def calculate_outcome(bowl_style, bowl_hand, variation, length, pitch_type,
         is_spin=bowler_key in ("Off Spinner", "Leg Spinner"),
         line=line, footwork=footwork, stroke=stroke, intent=intent,
     )
+
+    # Planned tournament Super Overs may favour attacking cricket. Retain the
+    # rating/shot/duel weights and every possible outcome rather than editing a
+    # sampled score. Default 1.0 leaves all existing match modes unchanged.
+    if boundary_mult != 1.0:
+        attack = max(1.0, min(1.5, float(boundary_mult)))
+        probs['4'] *= attack
+        probs['6'] *= attack
 
     # Final normalize
     _normalize(probs)

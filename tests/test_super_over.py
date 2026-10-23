@@ -749,7 +749,7 @@ def test_finalize_persists_super_over_innings():
         mws.save_final_scorecard = orig
 
 
-def _simulate_super_over(bat, bowl, pitch, target=None):
+def _simulate_super_over(bat, bowl, pitch, target=None, **ball_options):
     """Headless Super Over innings using the real ball engine + the real rules
     (6 legal balls, 2 wickets, chase ends on the target)."""
     from handlers.super_over import _super_over_ball
@@ -764,7 +764,7 @@ def _simulate_super_over(bat, bowl, pitch, target=None):
             _adapt_player(bat), bowler, pitch, batter_runs=bat_runs,
             balls_faced=bat_balls, free_hit=free_hit, legal=legal,
             target=target, runs=runs, shot="Drive",
-            variation="Stock Ball", length="Good Length")
+            variation="Stock Ball", length="Good Length", **ball_options)
         r = int(oc.get("runs", 0))
         otype, etype = oc.get("type"), oc.get("extra_type")
         free_hit = False
@@ -837,6 +837,35 @@ def test_super_over_balance_scoring_fairness_and_replay_rate():
         f"bat-first {first_wins} vs bat-second {second_wins} of {n}")
     # 3) Another Super Over stays rare (~2%); the countback does the rest.
     assert replays / n < 0.06, f"replay rate {replays / n:.3%}"
+
+
+def test_planned_tournament_super_overs_score_more_without_a_score_floor():
+    player = _so_player('Equal', 75, 70)
+    samples = []
+    for attacking in (False, True):
+        random.seed(734)
+        scores = [_simulate_super_over(player, player, 'Hard', attacking_contest=attacking)[0]
+                  for _ in range(600)]
+        samples.append(sum(scores) / len(scores))
+        if attacking:
+            assert min(scores) < 6  # good bowling can still win a low-scoring contest
+            assert max(scores) >= 24
+    assert samples[1] > samples[0] + 1.0, samples
+
+
+def test_planned_tournament_engine_context_is_symmetric_and_preserves_ratings(monkeypatch):
+    from handlers.super_over import _super_over_ball
+    from services import probability_engine
+    calls = []
+    def calculate(*args, **kwargs):
+        calls.append((args, kwargs))
+        return dict(type='runs', runs=0)
+    monkeypatch.setattr(probability_engine, 'calculate_outcome', calculate)
+    for target in (None, 20):
+        _super_over_ball(dict(bat_rating=88), dict(bowl_rating=79), 'Green',
+                         attacking_contest=True, target=target)
+    assert [c[0][5:7] for c in calls] == [(19, 20), (19, 20)]
+    assert all(c[0][8:10] == (88, 79) for c in calls)
 
 
 def test_many_seeds_always_terminate_with_a_winner():

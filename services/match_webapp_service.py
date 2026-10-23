@@ -80,7 +80,7 @@ def is_view_only_match(state):
 HIDDEN_PLAN_KEYS = ("bowling_approach", "batting_approach", "approach_log",
                     "inn1_approach_log", "last_bat_approach",
                     "last_bowl_approach", "bat_repeat", "bowl_repeat",
-                    "_planned_super_overs")
+                    "_planned_super_overs", "_concussion_plan")
 
 
 def strip_hidden_plans(state):

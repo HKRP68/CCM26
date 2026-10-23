@@ -97,13 +97,15 @@ def is_impact(player):
 
 
 def display_name(player, name=None):
-    """Player name with the ``-IP`` suffix when they came on as a substitute.
+    """Player name with ``-IP`` for Impact or ``-CS`` for concussion substitutes.
 
     ``name`` overrides the dict's own name for callers that have already
     formatted or escaped it.
     """
     base = name if name is not None else (player or {}).get("name", "")
     base = str(base or "")
+    if isinstance(player, dict) and player.get('concussion_replacement'):
+        return base + ' -CS'
     return base + IMPACT_SUFFIX if is_impact(player) else base
 
 

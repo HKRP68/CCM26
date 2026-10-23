@@ -94,6 +94,8 @@ class ChannelTests(F.FourTeamCase):
         media = bot.send_media_group.call_args.kwargs['media']
         self.assertEqual(len(media), 2)
         caption = media[0].caption
+        for link in ('@cricmasterultra', '@cmugames'):
+            self.assertIn(link, caption)
         for text in ('FINAL MATCH', 'MATCH TIED', '172/6', '172/1', '0/2 (0.2', '1/0 (0.1', 'Sanju Samson', '149.1', 'CHAMPIONS', '2 WICKETS'):
             self.assertIn(text, caption)
         self.assertLessEqual(len(caption.encode('utf-16-le'))//2, 1024)
@@ -177,11 +179,14 @@ class ChannelTests(F.FourTeamCase):
         self.C.set_channels(self.tour, '@channel_one')
         link = 'https://t.me/MatchBot/play?startapp=cricket_90003_-10042'
         full = 'Super Over histories\n' + ('Very long match summary line.\n' * 100) + '\n\n📲 Tap to view full match:\n' + link
+        full += '\n\n' + self.C.OFFICIAL_LINKS
         row = self.C.queue(self.session, self.tour, 'long', 'match', full, self.image)[0]
         self.session.commit()
         self.assertLessEqual(len(row.caption.encode('utf-16-le'))//2, 1024)
         self.assertIn('Tap to view full match:', row.caption)
         self.assertIn(link, row.caption)
+        self.assertIn('@cricmasterultra', row.caption)
+        self.assertIn('@cmugames', row.caption)
         self.assertGreater(Image.open(io.BytesIO(row.photo)).height, Image.open(io.BytesIO(self.image)).height)
         bot = self.bot(); asyncio.run(self.C.dispatch(SimpleNamespace(bot=bot), ids=[row.id]))
         bot.send_photo.assert_awaited_once(); bot.send_message.assert_not_awaited()

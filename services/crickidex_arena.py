@@ -121,6 +121,8 @@ def _p(pd):
         "active": pd.get("active", True) is not False,
         "impact_replaced": bool(pd.get("impact_replaced")),
         "impact_replacement": bool(pd.get("impact_replacement")),
+        "concussion_replacement": bool(pd.get("concussion_replacement")),
+        "concussion_replaced": bool(pd.get("concussion_replaced")),
         "isOverseas": bool(pd.get("is_overseas")),
     }
 
@@ -133,6 +135,8 @@ def _full_dismissal(bs):
     reads ``c Kohli b Bumrah`` / ``lbw b Shami`` / ``run out (Jadeja)`` instead
     of a bare ``caught`` / ``bowled`` / ``lbw``.
     """
+    if bs.get('retired_hurt'):
+        return bs.get('dismissal') or 'Retired hurt (concussion)'
     if not bs.get("out"):
         return ""
     pre = (bs.get("dismissal") or "").strip()

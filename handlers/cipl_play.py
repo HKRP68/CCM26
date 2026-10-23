@@ -4186,6 +4186,9 @@ def _render_over_summary(state, summary):
     # Weather / dew that moved before this over (services.weather_drift).
     for wtxt in summary.get("weather_events") or []:
         lines.append(f"<i>{html.escape(str(wtxt))}</i>")
+    incident = summary.get('concussion_substitution')
+    if incident:
+        lines.append(html.escape(incident['text']))
     # What the bot has *noticed* is still said out loud — that it has caught the
     # player repeating themselves is a warning, not a plan, so it keeps the mind
     # game visible without handing over the counter.
@@ -4275,8 +4278,9 @@ def _bat_line(player, bat_stats):
     star = "" if st.get("out") else "*"
     # Escaped: this goes into an HTML message, and a player name is user-set.
     name = html.escape(impact_player.display_name(player))
+    retired = ' · retired hurt (concussion)' if st.get('retired_hurt') else ''
     return (f"{name} {st.get('runs', 0)}{star} "
-            f"({st.get('balls', 0)}b, {st.get('fours', 0)}×4, {st.get('sixes', 0)}×6)")
+            f"({st.get('balls', 0)}b, {st.get('fours', 0)}×4, {st.get('sixes', 0)}×6){retired}")
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -5707,7 +5711,7 @@ def _innings_scorecard(state, innings_label=""):
     lines = [f"<b>{state['bat_team_name']}</b> — {cipl_match.format_score(state)} "
              f"({cipl_match.format_overs(state)}{ov_suffix}){'  · ' + innings_label if innings_label else ''}"]
     bs = state["bat_stats"]
-    batted = [p for p in state["batting_order"]
+    batted = [p for p in state["bat_xi"]
               if bs.get(str(p["roster_id"]), {}).get("balls", 0) > 0
               or bs.get(str(p["roster_id"]), {}).get("out")]
     for p in batted[:7]:

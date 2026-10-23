@@ -171,6 +171,8 @@ def _xi_players(xi):
     for p in xi or []:
         if not isinstance(p, dict):
             continue
+        if p.get('active', True) is False:
+            continue
         rid = p.get("roster_id")
         if rid is None:
             continue
@@ -1157,7 +1159,8 @@ def _required_rate(target, runs, legal):
 def _super_over_ball(batter, bowler, pitch, *, batter_runs=0, balls_faced=0,
                      bat_traits=None, bowl_traits=None, free_hit=False,
                      legal=0, target=None, runs=0, shot=None,
-                     variation=None, length=None, delivery_repeat=0):
+                     variation=None, length=None, delivery_repeat=0,
+                     attacking_contest=False):
     """Resolve ONE Super Over delivery — a single ball of /playmatch.
 
     Pure (no Telegram, no state mutation) so the balance can be simulated and
@@ -1190,10 +1193,14 @@ def _super_over_ball(batter, bowler, pitch, *, batter_runs=0, balls_faced=0,
     from services.probability_engine import calculate_outcome
 
     from services.bowling_service import is_spinner
+    # Planned tournament spectacles use the engine's death-over conditions for
+    # BOTH sides. Ratings, delivery choices, dots and wickets still apply; no
+    # score floor or chosen winner is imposed.
+    engine_over = 19 if attacking_contest else SO_ENGINE_OVER
     bowl_style = (bowler.get("bowl_style") or bowler.get("bowling_type")
                   or "Medium Pacer")
     trait_ctx = {
-        "over": SO_ENGINE_OVER, "total_overs": SO_ENGINE_TOTAL_OVERS,
+        "over": engine_over, "total_overs": SO_ENGINE_TOTAL_OVERS,
         "innings": 1,
         "rrr": _required_rate(target, runs, legal),
         "bat_balls_faced": balls_faced,
@@ -1217,7 +1224,7 @@ def _super_over_ball(batter, bowler, pitch, *, batter_runs=0, balls_faced=0,
         bowler.get("bowl_style") or bowler.get("bowling_type") or "Medium Pacer",
         bowler.get("bowl_hand") or bowler.get("bowling_hand") or "Right",
         variation, length, pitch,
-        SO_ENGINE_OVER, SO_ENGINE_TOTAL_OVERS, shot,
+        engine_over, SO_ENGINE_TOTAL_OVERS, shot,
         int(batter.get("batting_rating") or batter.get("bat_rating") or 50),
         int(bowler.get("bowling_rating") or bowler.get("bowl_rating") or 40),
         striker_traits=bat_traits or [], bowler_traits=bowl_traits or [],
@@ -1228,6 +1235,7 @@ def _super_over_ball(batter, bowler, pitch, *, batter_runs=0, balls_faced=0,
         bat_hand=batter.get("batting_hand") or batter.get("bat_hand") or "Right",
         delivery_repeat=delivery_repeat,
         extras_mult=SO_EXTRAS_MULT,
+        boundary_mult=1.45 if attacking_contest else 1.0,
     )
     activated = oc.get("traits_activated") or []
     oc = _normalize_outcome(oc)
@@ -1267,7 +1275,9 @@ async def _resolve_ball(context, mid, shot):
         free_hit=free_hit, legal=inn["legal"], target=so.get("target"),
         runs=inn["runs"], shot=shot,
         variation=inn["pending"]["delivery"], length=inn["pending"]["length"],
-        delivery_repeat=inn["repeat"])
+        delivery_repeat=inn["repeat"],
+        attacking_contest=bool(so.get('main_state', {}).get('tournament_id')
+                              and so.get('main_state', {}).get('_planned_super_overs')))
 
     if int(so.get('main_state', {}).get('_planned_super_overs') or 0) >= 2 and so['so_number'] == 1 and so.get('target') is None:
         from services.tournament_match_settings import cap_first_innings

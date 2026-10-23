@@ -892,6 +892,10 @@ def _collect_player_lines(state):
         # Keep the player-row array compatible with existing aggregation. Match
         # context is embedded once on a real row, never as a fabricated player.
         lines[0]["record_detail"] = telemetry
+    if lines and state.get('tournament_duels'):
+        lines[0]['player_duels'] = state['tournament_duels']
+    if lines and state.get('concussion_substitutions'):
+        lines[0]['concussion_substitutions'] = state['concussion_substitutions']
     return lines
 
 

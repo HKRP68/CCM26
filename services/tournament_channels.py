@@ -12,6 +12,9 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
+OFFICIAL_LINKS = ('📢 Join our Official Channel: @cricmasterultra\n'
+                  '💬 Join our Official Group: @cmugames')
+
 
 def channels(tour):
     try:
@@ -62,7 +65,7 @@ def match_caption(tour, fixture, state, result, *, super_over=None):
     stage = 'FINAL MATCH 🏆' if fixture.stage == 'final' else f'MATCH {fixture.match_no or fixture.id}'
     def build(limit=70, detail=True):
         name = lambda value: _short(value, limit)
-        lines = [f'🏏 {name(tour.name)} — {stage}', f'🔥 {name(a)} vs {name(b)} 🔥', '']
+        lines = [f'🏏 {name(tour.name)} — {stage}', f'{name(a)} vs {name(b)}', '']
         if super_over:
             lines.append('🤝 MATCH TIED — SUPER OVER THRILLER! ⚡')
         elif result.get('tie'):
@@ -79,7 +82,7 @@ def match_caption(tour, fixture, state, result, *, super_over=None):
                 lines.append(f"🔴 {name(innings['team'])}: {innings['runs']}/{innings['wickets']} ({innings.get('overs', '—')} Overs)")
         if winner:
             phrase = result.get('margin_text') or f"won by {result.get('margin', 0)} {result.get('margin_type', '')}"
-            lines += ['', f'🏆 {name(winner).upper()} {phrase.upper()}! 🔥']
+            lines += ['', f'🏆 {name(winner)} {phrase.upper()}!']
         if potm:
             bat, bowl = potm.get('bat') or {}, potm.get('bowl') or {}
             lines += ['', f"⭐ PLAYER OF THE MATCH: {name(potm['name'])}"]
@@ -92,6 +95,7 @@ def match_caption(tour, fixture, state, result, *, super_over=None):
             lines += ['', f'👑 {name(winner).upper()} — CHAMPIONS' + (' IN A THRILLER! 🏆' if super_over else '! 🏆')]
         if match_link:
             lines += ['', '📲 Tap to view full match:', match_link]
+        lines += ['', OFFICIAL_LINKS]
         return '\n'.join(lines)
     caption = build()
     for limit in (48, 32, 20):
@@ -145,7 +149,9 @@ def _caption_image(caption, photo):
     short = '🏏 Tournament result — full summary on the scorecard.'
     _, marker, link = caption.rpartition('\n\n📲 Tap to view full match:\n')
     if marker:
-        short += marker + link
+        short += marker + link.split('\n', 1)[0]
+    if '@cricmasterultra' in caption or '@cmugames' in caption:
+        short += '\n\n' + OFFICIAL_LINKS
     return short, out.getvalue()
 
 

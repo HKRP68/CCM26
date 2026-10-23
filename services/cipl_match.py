@@ -2335,6 +2335,8 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                 remaining=total_balls(state) - balls_bowled(state),
                 wickets=state['total_wickets'], wicket_limit=state.get('wicket_limit', WICKET_LIMIT),
                 innings_balls=total_balls(state))
+        from services.tournament_duels import record_ball
+        record_ball(state, striker, bowler, oc)
         otype = oc.get("type")
         runs = oc.get("runs", 0)
         is_extra = oc.get("is_extra", False)
@@ -2813,6 +2815,13 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
         "pressure_moments": dict(drama.get("pressure") or {}),
     }
     state.pop("over_drama", None)
+
+    if over_completed and not is_innings_over(state):
+        from services.concussion_substitute import maybe_replace
+        incident = maybe_replace(state)
+        if incident:
+            summary['concussion_substitution'] = incident
+            state['last_over_commentary'] = list(state.get('commentary_log', [])[cmt_start:])
 
     # Advance the over pointer if the over completed and play continues
     if over_completed and not is_innings_over(state):

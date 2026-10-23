@@ -76,6 +76,7 @@ function isActiveXIPlayer(player) {
 // span rather than part of the name string, because names are interpolated raw
 // throughout this file.
 function impactTag(player) {
+  if (player?.concussion_replacement) return '<span class="tb-row-impact">-CS</span>';
   return player?.impact_replacement ? '<span class="tb-row-impact">-IP</span>' : '';
 }
 
