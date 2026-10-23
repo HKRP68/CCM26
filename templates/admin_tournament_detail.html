@@ -3,6 +3,7 @@
 {% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_tournament.css') }}">{% endblock %}
 
 {% block content %}
+{% from "_tournament_macros.html" import release_controls %}
 <style>
 .tour-shell { display:flex; flex-direction:column; gap:1rem; }
 .breadcrumbs { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; color:var(--muted); font-size:.88rem; margin-bottom:.35rem; }
@@ -130,6 +131,7 @@
           <select name="pitch_mode">
             <option value="host" {{ 'selected' if (t.pitch_mode or 'host') == 'host' else '' }}>Host picks (default)</option>
             <option value="fixture" {{ 'selected' if t.pitch_mode == 'fixture' else '' }}>Fixed per fixture — random</option>
+            <option value="round" {{ 'selected' if t.pitch_mode == 'round' else '' }}>Shared per round — balanced rotation</option>
             <option value="home" {{ 'selected' if t.pitch_mode == 'home' else '' }}>Fixed per fixture — home team's pitch</option>
             <option value="tour_preferred" {{ 'selected' if t.pitch_mode == 'tour_preferred' else '' }}>Tournament preferred pitches</option>
             <option value="team_preferred" {{ 'selected' if t.pitch_mode == 'team_preferred' else '' }}>Team preferred pitches</option>
@@ -162,12 +164,7 @@
             Only a team's owner may play with it
           </label>
         </div>
-        <div><label>🗓️ Fixture release</label>
-          <label style="text-transform:none; letter-spacing:0; font-size:.9rem; color:var(--text);">
-            <input type="checkbox" name="fixtures_all_at_once" {{ 'checked' if t.fixtures_all_at_once else '' }}>
-            All fixtures at once (unticked = round by round)
-          </label>
-        </div>
+        {{ release_controls(t) }}
         <div><label>🚑 Injuries</label>
           <label style="text-transform:none; letter-spacing:0; font-size:.9rem; color:var(--text);">
             <input type="checkbox" name="injuries_enabled" {{ 'checked' if t.injuries_enabled else '' }}>

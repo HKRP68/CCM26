@@ -1481,6 +1481,28 @@ def schedule_news(session, tm):
             return ""
         from services import league_schedule_service
         rnd = league_schedule_service.current_round(session, tm.tournament_id)
+        mode = league_schedule_service.release_mode(tour)
+        if mode in ("batch", "manual", "scheduled"):
+            same_round_left = session.query(TournamentMatch).filter(
+                TournamentMatch.tournament_id == tm.tournament_id,
+                TournamentMatch.stage.in_(league_schedule_service.LEAGUE_STAGES),
+                TournamentMatch.round_no == tm.round_no,
+                TournamentMatch.status != "completed").count()
+            if same_round_left:
+                return ""
+            if rnd is None:
+                return "🏁 <b>League stage complete.</b>"
+            end = league_schedule_service.open_round(session, tour.id)
+            if rnd > end:
+                return f"✅ <b>Batch complete — waiting for the next release.</b> See {fixtures_cmd}."
+            if mode == "batch":
+                size = max(1, tour.fixture_round_window)
+                base = tour.fixture_open_through or size
+                before = base + max(0, (int(tm.round_no) - base + size - 1) // size) * size
+                if rnd > before:
+                    return (f"🔓 <b>Batch complete — Rounds {before + 1}–{end} are now open.</b> "
+                            f"See {fixtures_cmd}.")
+            return f"✅ <b>Round {tm.round_no} complete.</b> Other released rounds remain open. See {fixtures_cmd}."
         # With every fixture released at once there is no round to "open".
         if (rnd is not None and rnd > int(tm.round_no)
                 and not getattr(tour, "fixtures_all_at_once", False)):

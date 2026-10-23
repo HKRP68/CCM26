@@ -111,8 +111,9 @@ ADMIN_SECTIONS = (
          "Round deadlines: /tdeadline 48h · /tdeadline +12h · /tdeadline off "
          "(alerts only — nothing is auto-simulated)"),
         ("/tfixturemode", "/tfixmode",
-         "Open one or several rounds, or all: /tfixturemode 3 · /tfixturemode round · "
-         "/tfixturemode all"),
+         "Release rounds: /tfixturemode batch 3 · /tfixturemode manual 3 · "
+         "/tfixturemode next 2 · /tfixturemode scheduled 3 48h · /tfixturemode all "
+         "(rolling window: /tfixturemode 3; one round: /tfixturemode round)"),
         ("/tchannels", "", "Result and ceremony destinations: /tchannels add @channel1 @channel2"),
         ("/awardceremony", "",
          "Present a finished tournament's awards one by one: /awardceremony #7"),

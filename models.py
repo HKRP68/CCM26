@@ -2814,6 +2814,12 @@ class Tournament(Base):
     # with /tfixturemode or on the tournament's Manage page.
     fixtures_all_at_once = Column(Boolean, default=False, nullable=False)
     fixture_round_window = Column(Integer, default=1, nullable=False)
+    # Legacy tournaments keep their rolling window. Batch mode waits for the
+    # whole batch; manual/scheduled modes use an explicit release boundary.
+    fixture_release_mode = Column(String(20), default="rolling", server_default="rolling", nullable=False)
+    fixture_open_through = Column(Integer, default=0, server_default="0", nullable=False)
+    fixture_batch_hours = Column(Integer, default=48, server_default="48", nullable=False)
+    fixture_next_release_at = Column(DateTime, nullable=True)
 
     # How the surface for a tournament match is decided:
     #   "host"    – the host picks it during setup (the original behaviour)
@@ -2821,6 +2827,7 @@ class Tournament(Base):
     #               the schedule is generated; nobody may change it
     #   "home"    – same as "fixture", but the generator seeds each fixture from
     #               the home team's ``home_pitch`` where one is set
+    #   "round"   – all league/group fixtures in a round share one surface
     pitch_mode = Column(String(20), default="host", server_default="host",
                         nullable=False)
 

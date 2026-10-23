@@ -946,7 +946,10 @@ overdraw somebody is refused by name.
 | `/taddmatch <match number> <bot match id>` | Record a fixture from a match the bot played (the id in `MatchNo<id>.txt`) — no file or reply needed |
 | `/tfixsync` | Un-stick fixtures still showing as live |
 | `/tdeadline 48h` · `/tdeadline +12h` · `/tdeadline off` | Round deadlines. Owners are reminded 24h and 2h before; when time runs out the admins are alerted (group + DM, with /tsim and +24h buttons). **Nothing is simulated automatically**; a simulated match can still be played by its two teams, and the real result replaces it |
-| `/tfixturemode round` · `/tfixturemode all` | How the league schedule is released: **round** (default) shows and opens one round at a time, the next unlocking when it's finished; **all** shows every fixture and lets any be played in any order |
+| `/tfixturemode batch 3` | Open rounds **1–3**, then **4–6** only when the whole batch finishes. Any positive batch size up to 1000 is supported |
+| `/tfixturemode manual 3` · `/tfixturemode next 2` | Open an initial batch manually, then release any number of additional rounds. Completing a batch waits for the admin |
+| `/tfixturemode scheduled 3 48h` | Release 3 more rounds every 48 hours while active. The tournament watch handles releases and catches up after restarts; no matches are settled automatically |
+| `/tfixturemode 3` · `/tfixturemode round` · `/tfixturemode all` | Keep a rolling window of 3 rounds, open one round at a time, or release all fixtures. Existing tournaments retain their current mode |
 | `/tsetchat` | Post the tournament's recaps, deadline alerts, bracket and ceremony in this group (default: the first group a tournament match is played in) |
 | `/ttiebreak h2h\|nrr` | Teams level on points: head-to-head first, or wins then NRR |
 | `/tstadiums` · `/tstadiums add\|remove <name>` · `/tstadiums all` | The tournament's grounds, picked from Stadium Data (admin site → Conditions → Stadium) |
@@ -956,6 +959,20 @@ overdraw somebody is refused by name.
 | `/tseasons` · `/tseasons 2 \| 3` | Season links. Bare lists 🟢 **running** and ✅ **completed** tournaments (📦 = deleted, stats kept), each numbered. `/tseasons 2 \| 3` — running #2's **Total Season Stats** adds completed #3; `2 \| 3 5` several; `2 \| -3` unlink; `2 \| auto` back to every season in the league; `/tseasons 2` shows its links. Also the 🔗 Link seasons card on the admin Tournaments page |
 | `/tratingrule [#id] <max rating> <min players>` | Tournament rating rule — `/tratingrule 83 3`: every Playing XI must field at least 3 players rated 83 or lower (bot XIs too). `/tratingrule off 83`, `/tratingrule clear`; bare lists it. Also on the tournament's admin page |
 | `/remindmatch [team] [vs team] [force]` | Nudge two teams to play their pending fixture |
+
+On **Tournaments → Manage**, choose **Shared per round — balanced rotation** to
+give every match in a round the same pitch (including matches in different groups).
+Edit a whole round's pitch on **Schedule** before play starts. Starting any match
+locks the pitch for every match in that round; re-rolling preserves started rounds.
+Playoffs retain their own conditions and open as their opponents are confirmed.
+
+**Schedule → Round opening controls** offers the same release modes as the bot,
+plus a button to open additional rounds immediately. It shows each round's
+status, pitch and completed-match count. Changing the batch size preserves the
+current batch and uses the new size for subsequent releases. In batch modes,
+`/tdeadline` gives all released unfinished rounds one shared deadline; completing
+one round inside the batch does not restart its clock. A completed manual batch
+has no active deadline while it waits for the next release.
 
 ---
 

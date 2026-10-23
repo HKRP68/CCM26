@@ -101,3 +101,37 @@ class DeadlineTests(F.FourTeamCase):
     def test_a_paused_tournament_is_left_alone(self):
         self.tour.status = "paused"
         self.assertEqual(self.tick(100), [])
+
+    def test_batch_deadline_covers_every_open_round_without_restarting(self):
+        self.lss.configure_release(self.session, self.tour, "batch", 2)
+        self.tick()
+        deadline = self.tour.round_deadline_at
+        self.assertEqual(self.tour.round_tracked, 2)
+        _, pending = self.tw.open_round_pending(self.session, self.tour)
+        self.assertEqual({fx.round_no for fx in pending}, {1, 2})
+        self.finish_round(1)
+        self.tick(10)
+        self.assertEqual(self.tour.round_deadline_at, deadline)
+        self.finish_round(2)
+        self.tick(30)
+        self.assertEqual(self.tour.round_tracked, 3)
+        self.assertEqual(self.tour.round_deadline_at, self.t0 + timedelta(hours=78))
+
+    def test_manual_batch_waiting_for_release_has_no_deadline(self):
+        self.lss.configure_release(self.session, self.tour, "manual", 2)
+        self.tick()
+        self.finish_round(1)
+        self.finish_round(2)
+        posts = self.tick(49)
+        self.assertIsNone(self.tour.round_deadline_at)
+        self.assertFalse(any(p.kind == "expired" for p in posts))
+        self.assertIsNone(self.lss.deadline_round(self.session, self.tour))
+
+    def test_scheduled_watch_opens_and_announces_once(self):
+        self.lss.configure_release(self.session, self.tour, "scheduled", 1, 24, now=self.t0)
+        self.tick()
+        posts = self.tick(25)
+        release = [p for p in posts if p.kind == "round_release"]
+        self.assertEqual(len(release), 1)
+        self.assertIn("through 2", release[0].text)
+        self.assertFalse(any(p.kind == "round_release" for p in self.tick(26)))

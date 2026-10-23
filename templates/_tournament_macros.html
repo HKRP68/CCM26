@@ -51,6 +51,25 @@
 
 {# Quick "simulate" for a scheduled fixture nobody will play: pick the winner (or
    random) and a believable score line is generated. Needs `t` and `tt_map`. #}
+{% macro release_controls(t=none) %}
+{% set mode = 'all' if t and t.fixtures_all_at_once else (t.fixture_release_mode or 'rolling') if t else 'batch' %}
+<input type="hidden" name="fixture_release_present" value="1">
+<div><label>Fixture release</label>
+  <select name="fixture_release_mode">
+    {% for value, label in [('batch', 'Automatic batches — finish all, then next batch'), ('manual', 'Manual batches — admin opens more'), ('scheduled', 'Scheduled batches — open at an interval'), ('rolling', 'Rolling window — advance after each round'), ('all', 'All rounds at once')] %}
+    <option value="{{ value }}" {{ 'selected' if mode == value else '' }}>{{ label }}</option>
+    {% endfor %}
+  </select>
+</div>
+<div><label>Rounds per batch / window</label>
+  <input type="number" name="fixture_round_window" min="1" max="1000" value="{{ t.fixture_round_window if t else 3 }}" required>
+</div>
+<div><label>Scheduled release interval (hours)</label>
+  <input type="number" name="fixture_batch_hours" min="1" max="1440" value="{{ t.fixture_batch_hours if t else 48 }}" required>
+</div>
+<small style="grid-column:1 / -1;">Example: batches of 3 open rounds 1–3, then 4–6. Manual opening can add any number of rounds. Changing the batch size applies to the next release.</small>
+{% endmacro %}
+
 {% macro simulate_form(fx) %}
 <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="inline-form"
       onsubmit="return confirm('Simulate this fixture? It is recorded as a result (marked simulated) and the table updates.');">

@@ -1099,13 +1099,14 @@ _DEADLINE_USAGE = (
     "<code>/tdeadline 48h</code> — every round gets 48 hours (or <code>2d</code>)\n"
     "<code>/tdeadline +12h</code> — give the current round 12 more hours\n"
     "<code>/tdeadline off</code> — no deadlines\n\n"
+    "In batch modes this is one shared deadline for all released unfinished rounds. "
     "Reminders go out 24h and 2h before the end. When a round's time runs out "
     "the admins are alerted — <b>nothing is simulated automatically</b>; settle "
     "a match with <code>/tsim</code> or extend the round."
 )
 
 
-# ── /tfixturemode — round by round, or every fixture at once ─────────
+# ── /tfixturemode — rolling, batch, manual, scheduled or all ─────────
 
 _FIXTURE_MODE_USAGE = (
     "Usage: <code>/tfixturemode round</code> — release the schedule one round "
@@ -1113,6 +1114,10 @@ _FIXTURE_MODE_USAGE = (
     "<code>/tfixturemode all</code> — release every fixture at once: all shown, "
     "any of them playable in any order\n"
     "<code>/tfixturemode 3</code> — keep three rounds open at a time\n"
+    "<code>/tfixturemode batch 3</code> — open 1–3, then 4–6 when all finish\n"
+    "<code>/tfixturemode manual 3</code> — open batches only when you choose\n"
+    "<code>/tfixturemode scheduled 3 48h</code> — release 3 more rounds every 48h\n"
+    "<code>/tfixturemode next 2</code> — open 2 additional rounds now\n"
     "Add <code>#id</code> first to pick a tournament when several are running."
 )
 _FIXTURE_MODE_WORDS = {
@@ -1122,8 +1127,15 @@ _FIXTURE_MODE_WORDS = {
 
 
 def _fixture_mode_summary(tour):
+    from services.league_schedule_service import release_mode
+    release = release_mode(tour)
     if getattr(tour, "fixtures_all_at_once", False):
         mode = "📋 <b>All at once</b> — every fixture is shown and playable"
+    elif release in ("batch", "manual", "scheduled"):
+        descriptions = {"batch": "the next batch opens when the whole batch finishes",
+                        "manual": "the admin opens additional rounds with /tfixturemode next",
+                        "scheduled": f"another batch opens every {tour.fixture_batch_hours}h"}
+        mode = f"🔵 <b>{tour.fixture_round_window} rounds per {release} batch</b> — {descriptions[release]}"
     elif (getattr(tour, "fixture_round_window", 1) or 1) > 1:
         mode = (f"🔵 <b>{tour.fixture_round_window} rounds at a time</b> — "
                 "the window advances as the earliest round finishes")
@@ -1134,7 +1146,7 @@ def _fixture_mode_summary(tour):
 
 
 async def tfixturemode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/tfixturemode [round | all] — switch how the league schedule is released."""
+    """Configure league releases, or explicitly open additional rounds."""
     if not await _require_admin(update):
         return
     args = list(context.args or [])
@@ -1149,10 +1161,37 @@ async def tfixturemode_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             await _reply(update, _fixture_mode_summary(tour) + "\n\n"
                          + _FIXTURE_MODE_USAGE)
             return
+        from services import league_schedule_service as lss
+        if args[0].lower() in ("batch", "manual", "scheduled", "next"):
+            try:
+                mode = args[0].lower()
+                if mode == "next" and len(args) <= 2:
+                    end = lss.open_next_rounds(session, tour, int(args[1]) if len(args) == 2 else None)
+                    session.commit()
+                    await _reply(update, f"✅ Rounds through {end} are now open.")
+                    return
+                if len(args) != (3 if mode == "scheduled" else 2):
+                    raise ValueError("Check the command arguments.")
+                hours = 48
+                if mode == "scheduled":
+                    from services.tournament_watch import parse_hours
+                    hours, relative = parse_hours(args[2])
+                    if relative:
+                        raise ValueError("Use an interval such as 48h, without +.")
+                lss.configure_release(session, tour, mode, int(args[1]), hours)
+                session.commit()
+                await _reply(update, "✅ " + _fixture_mode_summary(tour))
+            except (ValueError, OverflowError) as exc:
+                session.rollback()
+                await _reply(update, f"⚠️ {html.escape(str(exc))}\n\n" + _FIXTURE_MODE_USAGE)
+            return
         word = "".join(args).lower().replace("-", "").replace("_", "")
         if len(args) == 1 and args[0].isascii() and args[0].isdigit() and 0 < int(args[0]) <= 2147483647:
             tour.fixture_round_window = int(args[0])
             tour.fixtures_all_at_once = False
+            tour.fixture_release_mode = "rolling"
+            tour.fixture_open_through = 0
+            tour.fixture_next_release_at = None
             session.commit()
             await _reply(update, "✅ " + _fixture_mode_summary(tour))
             return
@@ -1161,6 +1200,9 @@ async def tfixturemode_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             return
         tour.fixtures_all_at_once = _FIXTURE_MODE_WORDS[word]
         tour.fixture_round_window = 1
+        tour.fixture_release_mode = "rolling"
+        tour.fixture_open_through = 0
+        tour.fixture_next_release_at = None
         session.commit()
         await _reply(update, "✅ " + _fixture_mode_summary(tour))
     finally:
@@ -1169,13 +1211,17 @@ async def tfixturemode_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 def _deadline_summary(tour):
     from services import tournament_watch as tw
+    from services.league_schedule_service import release_mode
+    batch = release_mode(tour) in ("batch", "manual", "scheduled")
     if not tour.round_hours:
         return f"⏳ <b>{html.escape(tour.name)}</b> — no round deadlines."
-    line = (f"⏳ <b>{html.escape(tour.name)}</b> — each round gets "
+    unit = "batch" if batch else "round"
+    line = (f"⏳ <b>{html.escape(tour.name)}</b> — each {unit} gets "
             f"<b>{tour.round_hours}h</b>.")
     left = tw.deadline_text(tour)
     if left:
-        line += f"\nCurrent round (Round {tour.round_tracked}): {left}."
+        label = f"Batch through Round {tour.round_tracked}" if batch else f"Round {tour.round_tracked}"
+        line += f"\n{label}: {left}."
     return line
 
 

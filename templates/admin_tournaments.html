@@ -3,6 +3,7 @@
 {% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_tournament.css') }}">{% endblock %}
 
 {% block content %}
+{% from "_tournament_macros.html" import release_controls %}
 {% macro tour_tile(t, is_current) %}
 <div class="tour-tile">
   <div class="tour-tile-head">
@@ -165,8 +166,9 @@
           <div><label>Max overseas in XI</label><input type="number" name="max_overseas" min="0" max="11" placeholder="league default"></div>
           <div><label>Pitch</label>
             <select name="pitch_mode">
-              <option value="host">Host picks (default)</option>
+              <option value="host">Host picks</option>
               <option value="fixture">Fixed per fixture — random</option>
+              <option value="round" selected>Shared per round — balanced rotation</option>
               <option value="home">Fixed per fixture — home team's pitch</option>
               <option value="tour_preferred">Tournament preferred pitches</option>
               <option value="team_preferred">Team preferred pitches</option>
@@ -187,11 +189,7 @@
               <input type="checkbox" name="enforce_team_owner"> Only a team's owner may play with it
             </label>
           </div>
-          <div><label>🗓️ Fixture release</label>
-            <label style="text-transform:none;letter-spacing:0;">
-              <input type="checkbox" name="fixtures_all_at_once"> All fixtures at once (unticked = round by round)
-            </label>
-          </div>
+          {{ release_controls() }}
           <div><label>🚑 Injuries</label>
             <label style="text-transform:none;letter-spacing:0;">
               <input type="checkbox" name="injuries_enabled"> Players can be ruled out of matches

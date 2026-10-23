@@ -7,7 +7,7 @@
    tournament is not in the Challenge League list. #}
 {% set list_ep = 'admin_lp_tournaments_list' if t.kind == 'letsplay' else 'admin_tournaments_list' %}
 {% set list_label = 'Lets Play Tournaments' if t.kind == 'letsplay' else 'Tournaments' %}
-{% from "_tournament_macros.html" import team_badge, result_form, simulate_form with context %}
+{% from "_tournament_macros.html" import team_badge, result_form, simulate_form, release_controls with context %}
 
 {# Per-fixture venue: which side is at home, and the surface the match must be
    played on. The pitch selector only appears when the tournament actually fixes
@@ -29,7 +29,7 @@
     </select>
   </form>
   {% endif %}
-  {% if pitch_locked or fx.stage not in ('league', 'group') %}
+  {% if (pitch_locked or fx.stage not in ('league', 'group')) and not (t.pitch_mode == 'round' and fx.stage in ('league', 'group') and fx.round_no) %}
   <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" style="display:flex; gap:.3rem; align-items:center;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule">
     <input type="hidden" name="action" value="set_fixture_pitch">
@@ -119,6 +119,26 @@
     </div>
   </div>
 
+  <section class="section-card">
+    <h2 class="section-title">Round opening controls</h2>
+    <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="round-release-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule">
+      <input type="hidden" name="action" value="save_fixture_release">
+      {{ release_controls(t) }}
+      <button class="action-btn" type="submit">Save release settings</button>
+    </form>
+    {% if t.fixture_next_release_at %}<p>Next scheduled release: <time class="release-time" datetime="{{ t.fixture_next_release_at.isoformat() }}Z">{{ t.fixture_next_release_at.strftime('%Y-%m-%d %H:%M') }} UTC</time></p>{% endif %}
+    {% if open_round is not none %}
+    <p>Rounds through {{ open_round }} are released. Existing round deadlines apply to the whole batch in batch modes.</p>
+    <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule">
+      <input type="hidden" name="action" value="open_next_rounds">
+      <label>Additional rounds <input type="number" name="round_count" min="1" max="1000" value="{{ t.fixture_round_window }}" required></label>
+      <button class="action-btn" type="submit">Open more rounds now</button>
+    </form>
+    {% endif %}
+  </section>
+
   {% if not fixtures %}
   <section class="section-card">
     <div class="empty-state"><i class="fas fa-calendar-plus"></i>
@@ -132,11 +152,23 @@
     <div class="section-header"><div><h2 class="section-title"><i class="fas fa-list-ol"></i> League Fixtures</h2></div></div>
     <div class="fixtures-grid">
       {% for rno, fxs in rounds %}
-      <div class="round-head">Round {{ rno }}{% if open_round and rno == open_round %} · 🔵 open now{% elif open_round and rno > open_round %} · 🔒 upcoming{% endif %}</div>
+      {% set summary = round_summaries.get(rno) %}
+      <div class="round-head">Round {{ rno }} · {{ summary.status }} · {{ summary.played }}/{{ summary.total }} played{% if summary.pitch %} · 🌱 {{ summary.pitch }}{% endif %}</div>
+      {% if t.pitch_mode == 'round' and rno %}
+      {% if not summary.pitch_locked %}
+      <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="round-pitch-controls">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule">
+        <input type="hidden" name="action" value="set_round_pitch"><input type="hidden" name="round_no" value="{{ rno }}">
+        <label>Pitch for every match in Round {{ rno }} <select name="pitch_type">
+          {% for pt in pitch_types %}<option value="{{ pt }}" {{ 'selected' if summary.pitch == pt else '' }}>{{ pt }}</option>{% endfor %}
+        </select></label><button class="action-btn" type="submit">Save round pitch</button>
+      </form>
+      {% else %}<p class="round-pitch-controls">Round pitch locked — play has started.</p>{% endif %}
+      {% endif %}
       {% for fx in fxs %}
       {% set t1 = tt_map.get(fx.team1_id) %}
       {% set t2 = tt_map.get(fx.team2_id) %}
-      <div class="fixture-card {{ fx.status }}">
+      <div class="fixture-card {{ fx.status }} {{ 'locked' if summary.status == 'Locked' else '' }}">
         <div class="fixture-header">
           <span class="round-badge">{% if fx.group_id and g_map.get(fx.group_id) %}{{ g_map[fx.group_id].name }}{% else %}Match {{ fx.match_no }}{% endif %}</span>
           <span class="status-badge {{ fx.status }}">{{ fx.status }}{% if fx.pitch_type %} · 🌱 {{ fx.pitch_type }}{% endif %}{% if fx.venue %} · 🏟️ {{ fx.venue }}{% endif %}</span>
@@ -267,4 +299,9 @@
     </form>
   </section>
 </div>
+<script>
+document.querySelectorAll('.release-time').forEach(function (el) {
+  el.textContent = new Date(el.dateTime).toLocaleString(undefined, {dateStyle: 'medium', timeStyle: 'short'});
+});
+</script>
 {% endblock %}

@@ -39,9 +39,10 @@ FIXTURE_PITCHES = list(PITCH_TYPES)
 PITCH_MODE_HOST = "host"        # host picks during setup (original behaviour)
 PITCH_MODE_FIXTURE = "fixture"  # each fixture carries its own surface
 PITCH_MODE_HOME = "home"        # ditto, seeded from the home team's home_pitch
+PITCH_MODE_ROUND = "round"      # one shared, balanced surface per league round
 PITCH_MODE_TOUR_PREF = "tour_preferred"  # a share of matches on the tournament's list
 PITCH_MODE_TEAM_PREF = "team_preferred"  # a share of matches on each team's list
-PITCH_MODES = (PITCH_MODE_HOST, PITCH_MODE_FIXTURE, PITCH_MODE_HOME,
+PITCH_MODES = (PITCH_MODE_HOST, PITCH_MODE_FIXTURE, PITCH_MODE_HOME, PITCH_MODE_ROUND,
                PITCH_MODE_TOUR_PREF, PITCH_MODE_TEAM_PREF)
 PREFERRED_MODES = (PITCH_MODE_TOUR_PREF, PITCH_MODE_TEAM_PREF)
 
@@ -53,7 +54,7 @@ DEFAULT_PREFERRED_LIMIT = 4
 def pitch_locked(tour):
     """True when fixtures — not the host — decide the surface for ``tour``."""
     return (getattr(tour, "pitch_mode", PITCH_MODE_HOST) or PITCH_MODE_HOST) \
-        in (PITCH_MODE_FIXTURE, PITCH_MODE_HOME) + PREFERRED_MODES
+        in (PITCH_MODE_FIXTURE, PITCH_MODE_HOME, PITCH_MODE_ROUND) + PREFERRED_MODES
 
 # NOTE: SQLAlchemy / model imports are intentionally deferred into the DB-facing
 # functions below so the pure ``round_robin_rounds`` helper (and its unit tests)
@@ -197,6 +198,8 @@ def pitch_rule_text(tour):
     tail = " — see 🗓️ Fixtures"
     mode = tour.pitch_mode
     pct = preferred_pct(tour)
+    if mode == PITCH_MODE_ROUND:
+        return "one shared pitch per round; locked once play starts" + tail
     if mode == PITCH_MODE_TOUR_PREF:
         pitches = tour_preferred_pitches(tour)
         if pitches:
@@ -402,11 +405,15 @@ def assign_fixture_venues(session, tournament_id, *, overwrite=False):
                 fx.pitch_type = None
                 changed += 1
             continue
+        if mode == PITCH_MODE_ROUND and fx.stage in LEAGUE_STAGES and fx.round_no:
+            continue  # all groups in the same round share a surface
         if mode in PREFERRED_MODES:
             continue  # planned together below, so the quota spans the season
         if overwrite or not (fx.pitch_type or "").strip():
             fx.pitch_type = pick_pitch(mode, fx.home_team_id, home_pitches)
             changed += 1
+    if mode == PITCH_MODE_ROUND:
+        changed += _assign_round_pitches(session, tour, overwrite=overwrite)
     if mode in PREFERRED_MODES:
         # Every fixture takes part: played and live ones are history that seeds
         # the quota; unplayed ones are (re)stamped.
@@ -427,13 +434,74 @@ def assign_fixture_venues(session, tournament_id, *, overwrite=False):
     return changed
 
 
+def _assign_round_pitches(session, tour, *, overwrite=False):
+    """Rotate surfaces by round, preserving the surface of any started round."""
+    from models import TournamentMatch
+    rows = (session.query(TournamentMatch).filter_by(tournament_id=tour.id)
+            .filter(TournamentMatch.stage.in_(LEAGUE_STAGES),
+                    TournamentMatch.round_no > 0)
+            .order_by(TournamentMatch.round_no, TournamentMatch.id).all())
+    rounds = {}
+    for fx in rows:
+        rounds.setdefault(fx.round_no, []).append(fx)
+    usage = Counter()
+    plans = []
+    for rnd, fixtures in rounds.items():
+        started = [fx for fx in fixtures if fx.status != "scheduled"]
+        frozen = {fx.pitch_type for fx in started}
+        if started and (len(frozen) != 1 or not frozen.issubset(FIXTURE_PITCHES)):
+            raise ValueError(f"Round {rnd} already started without a shared pitch. Keep its existing pitch mode.")
+        existing = next((fx.pitch_type for fx in fixtures if fx.pitch_type in FIXTURE_PITCHES), None)
+        pitch = (next(iter(frozen)) if started else
+                 existing if existing and not overwrite else None)
+        if pitch:
+            usage[pitch] += 1
+        plans.append((fixtures, pitch))
+    changed = 0
+    for fixtures, pitch in plans:
+        if not pitch:
+            low = min(usage[p] for p in FIXTURE_PITCHES)
+            pitch = random.choice([p for p in FIXTURE_PITCHES if usage[p] == low])
+            usage[pitch] += 1
+        for fx in fixtures:
+            if fx.status == "scheduled" and fx.pitch_type != pitch:
+                fx.pitch_type = pitch
+                changed += 1
+    return changed
+
+
+def set_round_pitch(session, tournament_id, round_no, pitch):
+    """Change every fixture in a round atomically, before any match starts."""
+    from models import Tournament, TournamentMatch
+    tour = session.get(Tournament, int(tournament_id))
+    if not tour or tour.pitch_mode != PITCH_MODE_ROUND:
+        raise ValueError("Choose the shared round pitch mode first.")
+    if pitch not in FIXTURE_PITCHES:
+        raise ValueError("Choose a valid pitch for the round.")
+    fixtures = (session.query(TournamentMatch).filter_by(tournament_id=tour.id, round_no=int(round_no))
+                .filter(TournamentMatch.stage.in_(LEAGUE_STAGES))
+                .order_by(TournamentMatch.id).populate_existing().with_for_update().all())
+    if not fixtures or int(round_no) <= 0:
+        raise ValueError("Round not found in this tournament.")
+    if any(fx.status != "scheduled" for fx in fixtures):
+        raise ValueError("This round has started — its pitch is locked.")
+    for fx in fixtures:
+        fx.pitch_type = pitch
+    session.flush()
+    return len(fixtures)
+
+
 def set_fixture_pitch(session, fixture_id, pitch):
     """Pin (or clear, with a falsy ``pitch``) one fixture's surface. Caller commits."""
-    from models import TournamentMatch
+    from models import Tournament, TournamentMatch
     fx = session.get(TournamentMatch, int(fixture_id))
     if not fx:
         return None
-    if fx.status == "completed":
+    tour = session.get(Tournament, fx.tournament_id)
+    if tour and tour.pitch_mode == PITCH_MODE_ROUND and fx.stage in LEAGUE_STAGES and fx.round_no:
+        set_round_pitch(session, tour.id, fx.round_no, pitch)
+        return fx
+    if fx.status != "scheduled":
         raise ValueError("That match has already been played — its pitch is history.")
     name = (pitch or "").strip()
     if name and name not in FIXTURE_PITCHES:
@@ -684,7 +752,7 @@ def add_fixture(session, tournament_id, team1_id, team2_id, group_id=None, round
     session.flush()
     # Fill this one fixture's surface without disturbing the rest of the schedule.
     mode = (tour.pitch_mode or PITCH_MODE_HOST) if tour else PITCH_MODE_HOST
-    if mode in PREFERRED_MODES:
+    if mode in PREFERRED_MODES or mode == PITCH_MODE_ROUND:
         # Only blank fixtures are filled, so the rest of the schedule stays put
         # while the new match still counts toward the preferred-pitch quota.
         assign_fixture_venues(session, tid)
@@ -791,14 +859,110 @@ def list_fixtures(session, tournament_id):
 # Round-by-round play
 # ──────────────────────────────────────────────────────────────────────
 #
-# A generated league is released one round at a time: Round 2 only opens once
-# every Round 1 fixture is completed (played, recorded by hand or simulated).
+# A generated league can release a rolling window, complete batches, manual
+# batches, timed batches or all rounds. Old tournaments retain their window.
 # Only the league/group stages are round-locked — a knockout bracket already
 # locks itself, because a later round's slots read TBD until the earlier round
 # is decided. Fixtures with ``round_no`` 0 (added by hand, or rows that predate
 # rounds) are never locked.
 
 LEAGUE_STAGES = ("league", "group")
+RELEASE_MODES = ("rolling", "batch", "manual", "scheduled", "all")
+
+
+def release_mode(tour):
+    if getattr(tour, "fixtures_all_at_once", False):
+        return "all"
+    mode = getattr(tour, "fixture_release_mode", None) or "rolling"
+    return mode if mode in RELEASE_MODES else "rolling"
+
+
+def last_league_round(session, tournament_id):
+    from sqlalchemy import func
+    from models import TournamentMatch
+    return (session.query(func.max(TournamentMatch.round_no))
+            .filter(TournamentMatch.tournament_id == int(tournament_id),
+                    TournamentMatch.stage.in_(LEAGUE_STAGES)).scalar()) or 0
+
+
+def configure_release(session, tour, mode, size=3, hours=48, now=None):
+    """Save release controls without closing any already released round."""
+    from datetime import datetime, timedelta
+    if mode not in RELEASE_MODES:
+        raise ValueError("Choose a valid fixture release mode.")
+    size, hours = int(size), int(hours)
+    if not 1 <= size <= 1000:
+        raise ValueError("Choose between 1 and 1000 rounds per batch.")
+    if not 1 <= hours <= 1440:
+        raise ValueError("Choose a release interval between 1 and 1440 hours.")
+    previous = release_mode(tour)
+    rnd = current_round(session, tour.id) or 1
+    old_end = open_round(session, tour.id)
+    end = max(rnd + size - 1, old_end or 0)
+    if previous == mode and mode in ("batch", "manual", "scheduled"):
+        end = old_end if old_end is not None else (tour.fixture_open_through or end)
+    from sqlalchemy import func
+    from models import TournamentMatch
+    live_round = (session.query(func.max(TournamentMatch.round_no))
+                  .filter(TournamentMatch.tournament_id == tour.id,
+                          TournamentMatch.stage.in_(LEAGUE_STAGES),
+                          TournamentMatch.status == "live").scalar()) or 0
+    end = max(end, live_round)
+    tour.fixtures_all_at_once = mode == "all"
+    tour.fixture_release_mode = "rolling" if mode == "all" else mode
+    tour.fixture_round_window = size
+    tour.fixture_open_through = end
+    tour.fixture_batch_hours = hours
+    if mode == "scheduled":
+        if tour.status == "active" and (previous != mode or not tour.fixture_next_release_at):
+            tour.fixture_next_release_at = (now or datetime.utcnow()) + timedelta(hours=hours)
+    else:
+        tour.fixture_next_release_at = None
+    session.flush()
+
+
+def open_next_rounds(session, tour, count=None):
+    """Extend the explicit boundary; preserve the current automatic batch."""
+    mode = release_mode(tour)
+    if mode == "all":
+        raise ValueError("All rounds are already open.")
+    count = tour.fixture_round_window if count is None else int(count)
+    if not 1 <= count <= 1000:
+        raise ValueError("Choose between 1 and 1000 additional rounds.")
+    end = open_round(session, tour.id)
+    last = last_league_round(session, tour.id)
+    if end is None or end >= last:
+        raise ValueError("There are no more locked rounds to open.")
+    tour.fixture_open_through = min(last, end + count)
+    if mode == "rolling":
+        tour.fixture_release_mode = "manual"
+    session.flush()
+    return tour.fixture_open_through
+
+
+def release_scheduled_rounds(session, tour, now=None):
+    """Release due batches on the watch job; catch up once after a restart."""
+    from datetime import datetime, timedelta
+    now = now or datetime.utcnow()
+    at = tour.fixture_next_release_at
+    if release_mode(tour) != "scheduled" or tour.status != "active":
+        return False
+    interval = timedelta(hours=max(1, tour.fixture_batch_hours or 48))
+    last = last_league_round(session, tour.id)
+    before = tour.fixture_open_through or tour.fixture_round_window
+    if not last or before >= last:
+        tour.fixture_next_release_at = None
+        return False
+    if not at:
+        tour.fixture_next_release_at = now + interval
+        return False
+    if now < at:
+        return False
+    batches = (now - at) // interval + 1
+    tour.fixture_open_through = min(last, before + batches * tour.fixture_round_window)
+    tour.fixture_next_release_at = at + batches * interval if tour.fixture_open_through < last else None
+    session.flush()
+    return tour.fixture_open_through > before
 
 
 def current_round(session, tournament_id):
@@ -827,19 +991,40 @@ def all_at_once(session, tournament_id):
 def open_round(session, tournament_id):
     """The round fixtures are locked behind, or None when nothing is locked.
 
-    This is the current round plus the configured window minus one, and None for
-    one that releases every fixture at once — the value to hand
+    Rolling mode advances after each round; batch mode advances only when the
+    whole batch is complete. Manual/scheduled modes use an explicit boundary.
+    All-at-once mode returns None. This is the value to hand
     :func:`is_round_locked` whenever the question is "may this be played/shown?".
-    ``current_round`` itself still says which round the league is on, for the
-    recaps and deadlines that follow it either way.
+    ``current_round`` still tracks the earliest unfinished round for recaps;
+    ``deadline_round`` supplies a stable deadline key across a whole batch.
     """
-    if all_at_once(session, tournament_id):
-        return None
     from models import Tournament
     tour = session.get(Tournament, int(tournament_id))
+    mode = release_mode(tour)
+    if mode == "all":
+        return None
     rnd = current_round(session, tournament_id)
+    if rnd is None:
+        return None
     window = max(1, int(getattr(tour, "fixture_round_window", 1) or 1))
-    return rnd + window - 1 if rnd is not None else None
+    if mode in ("manual", "scheduled"):
+        end = tour.fixture_open_through or window
+    elif mode == "batch":
+        end = tour.fixture_open_through or window
+        if rnd > end:
+            end += ((rnd - end - 1) // window + 1) * window
+    else:
+        end = max(rnd + window - 1, tour.fixture_open_through or 0)
+    return min(end, last_league_round(session, tournament_id))
+
+
+def deadline_round(session, tour):
+    """Stable deadline key: the batch boundary, or the earliest rolling round."""
+    first = current_round(session, tour.id)
+    if release_mode(tour) in ("batch", "manual", "scheduled"):
+        end = open_round(session, tour.id)
+        return end if first is not None and end is not None and first <= end else None
+    return first
 
 
 def round_progress(session, tournament_id):
@@ -864,6 +1049,29 @@ def round_progress(session, tournament_id):
     return {"round": int(rnd), "rounds": int(rounds),
             "played": sum(1 for r in rows if r.status == "completed"),
             "total": len(rows)}
+
+
+def round_summaries(session, tournament_id):
+    """Admin progress cards include locked rounds and their shared pitch."""
+    from models import TournamentMatch
+    end = open_round(session, tournament_id)
+    rows = (session.query(TournamentMatch).filter_by(tournament_id=int(tournament_id))
+            .filter(TournamentMatch.stage.in_(LEAGUE_STAGES))
+            .order_by(TournamentMatch.round_no, TournamentMatch.id).all())
+    rounds = {}
+    for fx in rows:
+        rounds.setdefault(fx.round_no or 0, []).append(fx)
+    out = {}
+    for rnd, fixtures in rounds.items():
+        played = sum(fx.status == "completed" for fx in fixtures)
+        started = any(fx.status != "scheduled" for fx in fixtures)
+        state = ("Completed" if played == len(fixtures) else
+                 "In Progress" if started else "Locked" if rnd and end is not None and rnd > end else "Open")
+        pitches = {fx.pitch_type for fx in fixtures}
+        out[rnd] = {"status": state, "played": played, "total": len(fixtures),
+                    "pitch": next(iter(pitches)) if len(pitches) == 1 else None,
+                    "pitch_locked": started}
+    return out
 
 
 def is_round_locked(fx, open_round):
@@ -906,8 +1114,12 @@ def split_open_round(session, tournament_id, fixtures):
         return list(fixtures), 0, None
     progress = round_progress(session, tournament_id)
     rnd = open_round(session, tournament_id)
-    if progress and rnd > progress["round"]:
-        progress["open_through"] = min(rnd, progress["rounds"])
+    if progress:
+        from models import Tournament
+        tour = session.get(Tournament, int(tournament_id))
+        progress["open_through"] = rnd
+        progress["release_mode"] = release_mode(tour)
+        progress["awaiting_release"] = progress["round"] > rnd
     visible = [fx for fx in fixtures if not is_round_locked(fx, rnd)]
     return visible, len(fixtures) - len(visible), progress
 
@@ -919,6 +1131,8 @@ def round_banner(progress, locked_count, tour=None):
     """
     if not progress:
         return ""
+    if progress.get("awaiting_release"):
+        return f"Rounds through {progress['open_through']} complete · waiting for the next batch to open"
     text = (f"Round {progress['round']} of {progress['rounds']} · "
             f"{progress['played']}/{progress['total']} played")
     if progress.get("open_through", progress["round"]) > progress["round"]:
@@ -929,8 +1143,10 @@ def round_banner(progress, locked_count, tour=None):
         if left:
             text += f" · {left}"
     if locked_count:
+        rule = {"batch": "when the whole batch finishes", "manual": "when the admin opens them",
+                "scheduled": "on the release schedule"}.get(progress.get("release_mode"), "as each round finishes")
         text += (f" · 🔒 {locked_count} match{'es' if locked_count != 1 else ''}"
-                 f" in later rounds unlock as each round finishes")
+                 f" in later rounds unlock {rule}")
     return text
 
 
@@ -951,8 +1167,13 @@ def round_lock_message(session, tournament_id, team1_id, team2_id):
     if fx is None or not is_round_locked(fx, rnd):
         return None
     first = current_round(session, tournament_id)
-    return (f"That fixture is in Round {fx.round_no} — rounds through {rnd} "
-            f"are open. Finish Round {first} to advance the open rounds.")
+    from models import Tournament
+    mode = release_mode(session.get(Tournament, int(tournament_id)))
+    action = {"batch": "Finish the whole batch to open the next one.",
+              "manual": "Wait for the admin to open the next batch.",
+              "scheduled": "Wait for the scheduled release or an admin opening."}.get(
+                  mode, f"Finish Round {first} to advance the open rounds.")
+    return f"That fixture is in Round {fx.round_no} — rounds through {rnd} are open. {action}"
 
 
 # ──────────────────────────────────────────────────────────────────────

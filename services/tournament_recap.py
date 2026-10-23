@@ -132,8 +132,11 @@ def render_round_recap(session, tour, round_no, now=None):
                        + (f" ({mark})" if mark else ""))
 
     nxt = lss.current_round(session, tour.id)
+    end = lss.open_round(session, tour.id)
     fixtures_cmd = tournament_watch._fixtures_cmd(tour)
-    if nxt is not None:
+    if nxt is not None and end is not None and nxt > end:
+        out += ["", "🔒 <b>Batch complete — waiting for the next release.</b>"]
+    elif nxt is not None:
         out += ["", f"<b>Round {nxt} — up next</b>"]
         teams = {t.id: t for t in
                  session.query(TournamentTeam).filter_by(tournament_id=tour.id).all()}

@@ -201,6 +201,15 @@
 .empty-state i { font-size: 2.2rem; margin-bottom: .8rem; opacity: .5; display: block; }
 
 /* --- Fixture cards --- */
+.round-release-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: .8rem; align-items: end; margin-top: .8rem;
+}
+.round-release-grid label { display: block; color: var(--muted); margin-bottom: .3rem; }
+.round-release-grid input, .round-release-grid select { width: 100%; min-width: 0; }
+.round-pitch-controls {
+  grid-column: 1 / -1; display: flex; align-items: end; flex-wrap: wrap; gap: .6rem;
+}
 .fixtures-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 1rem; }
 .round-head {
   grid-column: 1 / -1; margin: .4rem 0 -.2rem; color: var(--muted);

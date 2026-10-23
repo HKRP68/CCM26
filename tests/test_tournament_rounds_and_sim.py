@@ -557,5 +557,131 @@ class MultipleOpenRoundsTests(RoundCase):
         self.assertTrue(self.lss.fixture_in_open_round(self.session, round_three))
 
 
+class BatchReleaseTests(RoundCase):
+    KNOCKOUT = None
+
+    def setUp(self):
+        super().setUp()
+        self.tour.league_format = "double_rr"
+        self.lss.generate_schedule(self.session, self.tour.id)
+        self.session.commit()
+
+    def test_batches_wait_for_every_round_instead_of_sliding(self):
+        self.lss.configure_release(self.session, self.tour, "batch", 3)
+        self.finish_round(3)  # later rounds can finish first
+        last = self.finish_round(1)
+        self.assertEqual(self.lss.open_round(self.session, self.tour.id), 3)
+        self.assertNotIn("now open", self.ts.schedule_news(self.session, last))
+        last = self.finish_round(2)
+        self.assertEqual(self.lss.open_round(self.session, self.tour.id), 6)
+        self.assertIn("Rounds 4–6 are now open", self.ts.schedule_news(self.session, last))
+
+    def test_manual_batch_waits_and_accepts_a_different_next_size(self):
+        self.lss.configure_release(self.session, self.tour, "manual", 3)
+        for rnd in (1, 2, 3):
+            self.finish_round(rnd)
+        for completed in self.fixtures():
+            if completed.status == "completed":
+                completed.is_simulated = False  # no earlier simulated fixture to replay
+        self.session.flush()
+        self.assertEqual(self.lss.open_round(self.session, self.tour.id), 3)
+        fx = self.fixtures(4)[0]
+        self.assertFalse(self.lss.fixture_in_open_round(self.session, fx))
+        self.assertIsNone(self.lss.reserve_fixture(self.session, self.tour.id, fx.team1_id, fx.team2_id))
+        with self.assertRaises(ValueError):
+            self.ts.simulate_fixture(self.session, fx.id, "1")
+        visible, locked, progress = self.lss.split_open_round(self.session, self.tour.id, self.fixtures())
+        self.assertEqual({f.round_no for f in visible}, {1, 2, 3})
+        self.assertTrue(progress["awaiting_release"])
+        self.assertIn("waiting", self.lss.round_banner(progress, locked, self.tour))
+        self.assertEqual(self.lss.open_next_rounds(self.session, self.tour, 2), 5)
+        self.assertTrue(self.lss.fixture_in_open_round(self.session, fx))
+        self.assertFalse(self.lss.fixture_in_open_round(self.session, self.fixtures(6)[0]))
+        self.session.commit()
+        self.session.expire_all()
+        self.assertEqual(self.lss.open_round(self.session, self.tour.id), 5)
+
+    def test_changing_batch_size_preserves_the_open_batch(self):
+        self.lss.configure_release(self.session, self.tour, "batch", 3)
+        for rnd in (1, 2, 3):
+            self.finish_round(rnd)
+        self.assertEqual(self.lss.open_round(self.session, self.tour.id), 6)
+        self.lss.configure_release(self.session, self.tour, "batch", 1)
+        self.assertEqual(self.lss.open_round(self.session, self.tour.id), 6)
+
+    def test_scheduled_releases_catch_up_without_settling_matches(self):
+        from datetime import datetime, timedelta
+        now = datetime(2026, 10, 23, 10)
+        self.lss.configure_release(self.session, self.tour, "scheduled", 2, 24, now=now)
+        self.assertFalse(self.lss.release_scheduled_rounds(self.session, self.tour, now=now + timedelta(hours=23)))
+        self.assertTrue(self.lss.release_scheduled_rounds(self.session, self.tour, now=now + timedelta(hours=49)))
+        self.assertEqual(self.lss.open_round(self.session, self.tour.id), 6)
+        self.assertIsNone(self.tour.fixture_next_release_at)
+        self.assertTrue(all(f.status == "scheduled" for f in self.fixtures()))
+        self.assertFalse(self.lss.release_scheduled_rounds(self.session, self.tour, now=now + timedelta(hours=100)))
+
+    def test_switching_modes_does_not_close_a_live_fixture(self):
+        self.tour.fixtures_all_at_once = True
+        fx = self.fixtures(5)[0]
+        fx.status = "live"
+        self.session.flush()
+        self.lss.configure_release(self.session, self.tour, "manual", 1)
+        self.assertTrue(self.lss.fixture_in_open_round(self.session, fx))
+
+    def test_invalid_release_controls_leave_existing_settings(self):
+        for mode, size, hours in (("unknown", 3, 48), ("manual", 0, 48), ("scheduled", 3, 0)):
+            with self.assertRaises(ValueError):
+                self.lss.configure_release(self.session, self.tour, mode, size, hours)
+        self.assertEqual(self.lss.release_mode(self.tour), "rolling")
+
+
+class SharedRoundPitchTests(RoundCase):
+    KNOCKOUT = None
+
+    def setUp(self):
+        super().setUp()
+        self.tour.pitch_mode = "round"
+        self.lss.assign_fixture_venues(self.session, self.tour.id, overwrite=True)
+        self.session.commit()
+
+    def test_each_round_shares_one_pitch_and_the_rotation_is_balanced(self):
+        pitches = []
+        for rnd in (1, 2, 3):
+            unique = {fx.pitch_type for fx in self.fixtures(rnd)}
+            self.assertEqual(len(unique), 1)
+            pitches.extend(unique)
+        self.assertEqual(len(set(pitches)), 3)
+        self.assertTrue(self.lss.pitch_locked(self.tour))
+        fx = self.fixtures(1)[0]
+        by_id = {t.id: t.name for t in self.teams.values()}
+        pitch, _ = self.lss.locked_pitch_for_pair(self.session, self.tour, by_id[fx.team1_id], by_id[fx.team2_id])
+        self.assertEqual(pitch, fx.pitch_type)
+
+    def test_fixture_edits_apply_to_the_whole_round(self):
+        self.lss.set_fixture_pitch(self.session, self.fixtures(1)[0].id, "Green")
+        self.assertEqual({fx.pitch_type for fx in self.fixtures(1)}, {"Green"})
+        with self.assertRaises(ValueError):
+            self.lss.set_round_pitch(self.session, self.tour.id, 1, "")
+
+    def test_started_round_is_frozen_even_when_rerolling(self):
+        first, second = self.fixtures(1)
+        pitch = first.pitch_type
+        first.status = "live"
+        self.session.flush()
+        with self.assertRaisesRegex(ValueError, "locked"):
+            self.lss.set_fixture_pitch(self.session, second.id, "Green")
+        self.lss.assign_fixture_venues(self.session, self.tour.id, overwrite=True)
+        self.assertEqual({fx.pitch_type for fx in self.fixtures(1)}, {pitch})
+        self.assertTrue(self.lss.round_summaries(self.session, self.tour.id)[1]["pitch_locked"])
+
+    def test_added_fixture_inherits_the_round_pitch_across_groups(self):
+        first = self.fixtures(1)[0]
+        first.stage = "group"
+        first.status = "live"
+        self.session.flush()
+        extra = self.lss.add_fixture(self.session, self.tour.id, first.team1_id, first.team2_id, round_no=1)
+        self.assertEqual(extra.pitch_type, first.pitch_type)
+
+
 if __name__ == "__main__":
     unittest.main()

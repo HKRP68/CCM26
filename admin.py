@@ -16975,6 +16975,9 @@ def admin_tournaments_list():
                             flash(f"Preferred pitches not set: {e}", "error")
                         db.add(t)
                         db.flush()
+                        if request.form.get("fixture_release_present"):
+                            _lss.configure_release(db, t, request.form.get("fixture_release_mode"),
+                                _int_form("fixture_round_window", 3), _int_form("fixture_batch_hours", 48))
                         for cid in request.form.getlist("team_ids"):
                             ct = db.get(ChallengeTeam, int(cid)) if cid else None
                             if ct and ct.league_id == league.id:
@@ -17188,7 +17191,12 @@ def admin_tournament_detail(tournament_id):
                                                     "min_players": _parse_int(need)})
                         _ts_rr.set_rating_rules(db, t, rating_rows)
                     t.enforce_team_owner = _checked("enforce_team_owner")
-                    t.fixtures_all_at_once = _checked("fixtures_all_at_once")
+                    if request.form.get("fixture_release_present"):
+                        from services import league_schedule_service as _release
+                        _release.configure_release(db, t, request.form.get("fixture_release_mode"),
+                            _int_form("fixture_round_window", 3), _int_form("fixture_batch_hours", 48))
+                    else:
+                        t.fixtures_all_at_once = _checked("fixtures_all_at_once")
                     t.injuries_enabled = _checked("injuries_enabled")
                     t.injury_chance = max(0, min(100, _int_form(
                         "injury_chance", t.injury_chance if t.injury_chance
@@ -17230,6 +17238,14 @@ def admin_tournament_detail(tournament_id):
                     old_pref = (_lss.tour_preferred_pitches(t),
                                 _lss.preferred_pct(t), _lss.preferred_limit(t))
                     pm = (request.form.get("pitch_mode") or "host").strip()
+                    if pm != old_mode and "round" in (pm, old_mode):
+                        started = db.query(TournamentMatch).filter(
+                            TournamentMatch.tournament_id == t.id,
+                            TournamentMatch.stage.in_(_lss.LEAGUE_STAGES),
+                            TournamentMatch.round_no > 0,
+                            TournamentMatch.status != "scheduled").first()
+                        if started:
+                            raise ValueError("The league has started — its shared round pitch rule is locked.")
                     if pm in _lss.PITCH_MODES:
                         t.pitch_mode = pm
                     if "preferred_pitch_pct" in request.form:
@@ -17255,6 +17271,22 @@ def admin_tournament_detail(tournament_id):
                                   "fixture(s) re-stamped.", "info")
                     log_admin(db, "tournament_edit", "tournament", t.id, t.name)
                     flash("✅ Saved tournament settings.", "success")
+                elif action == "save_fixture_release":
+                    from services import league_schedule_service as _release
+                    _release.configure_release(db, t, request.form.get("fixture_release_mode"),
+                        _int_form("fixture_round_window", 3), _int_form("fixture_batch_hours", 48))
+                    log_admin(db, "tournament_fixture_release", "tournament", t.id, t.name)
+                    flash("Fixture release settings saved.", "success")
+                elif action == "open_next_rounds":
+                    from services import league_schedule_service as _release
+                    end = _release.open_next_rounds(db, t, _int_form("round_count", t.fixture_round_window))
+                    log_admin(db, "tournament_open_rounds", "tournament", t.id, f"Through Round {end}")
+                    flash(f"Rounds through {end} are now open.", "success")
+                elif action == "set_round_pitch":
+                    from services import league_schedule_service as _release
+                    count = _release.set_round_pitch(db, t.id, _int_form("round_no"), request.form.get("pitch_type"))
+                    log_admin(db, "tournament_round_pitch", "tournament", t.id, request.form.get("round_no"))
+                    flash(f"Shared pitch saved for all {count} matches in this round.", "success")
                 elif action == "save_tournament_channels":
                     from services.tournament_channels import set_channels
                     set_channels(t, request.form.get("channels") or "")
@@ -17988,9 +18020,11 @@ def admin_tournament_schedule(tournament_id):
         # League-stage-only progress (exclude knockout rows so the count is honest).
         league_total = sum(len(fxs) for _, fxs in rounds)
         league_played = sum(1 for _, fxs in rounds for fx in fxs if fx.status == "completed")
-        open_round = league_schedule_service.current_round(db, t.id)
+        open_round = league_schedule_service.open_round(db, t.id)
+        round_summaries = league_schedule_service.round_summaries(db, t.id)
         return render_template("admin_tournament_schedule.html", t=t, teams=teams,
                                open_round=open_round,
+                               round_summaries=round_summaries,
                                tt_map=tt_map, groups=groups, g_map=g_map,
                                rounds=rounds, fixtures=fixtures, knockout=knockout,
                                pitch_types=league_schedule_service.FIXTURE_PITCHES,

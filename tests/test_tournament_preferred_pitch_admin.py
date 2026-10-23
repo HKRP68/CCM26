@@ -13,6 +13,9 @@ import re
 import sys
 import tempfile
 import unittest
+import asyncio
+from types import SimpleNamespace
+from unittest import mock
 
 _PREV_DATABASE_URL = None
 _SAVED_MODULES = {}
@@ -23,6 +26,7 @@ _ENGINE = None
 # tests/test_auction_bidding.py gives at length. ``admin`` is in the list because
 # it binds ``get_session`` at import time.
 _MODULE_NAMES = ("database", "models", "config", "admin",
+                 "handlers.tournament_admin",
                  "services.tournament_service",
                  "services.league_schedule_service")
 
@@ -240,6 +244,81 @@ class PreferredPitchAdminTests(unittest.TestCase):
         self.assertIn('Winning Captain', body)
         self.detail(t, {'action':'save_tournament_channels', 'channels':'invalid'})
         self.assertEqual(json.loads(t.channels_json), ['@firstchannel', '-1001234567890'])
+
+    def test_shared_round_pitch_can_be_created_and_edited_until_play_starts(self):
+        from services import league_schedule_service as lss
+        t = self.create(pitch_mode="round")
+        lss.generate_schedule(self.session, t.id)
+        self.session.commit()
+        first = lss.list_fixtures(self.session, t.id)[0]
+        self.detail(t, {"action": "set_round_pitch", "round_no": str(first.round_no), "pitch_type": "Green"})
+        rows = [fx for fx in lss.list_fixtures(self.session, t.id) if fx.round_no == first.round_no]
+        self.assertEqual({fx.pitch_type for fx in rows}, {"Green"})
+        first.status = "live"
+        self.session.commit()
+        body = self.detail(t, {"action": "set_round_pitch", "round_no": str(first.round_no), "pitch_type": "Flat"})
+        self.assertIn("pitch is locked", body)
+        self.assertEqual({fx.pitch_type for fx in rows}, {"Green"})
+        self.detail(t, {"action": "save_settings", "name": t.name, "pitch_mode": "host"})
+        self.assertEqual(t.pitch_mode, "round")
+
+    def test_batch_release_controls_save_on_create_manage_and_schedule(self):
+        from services import league_schedule_service as lss
+        t = self.create(fixture_release_present="1", fixture_release_mode="manual",
+                        fixture_round_window="2", fixture_batch_hours="24")
+        lss.generate_schedule(self.session, t.id)
+        self.session.commit()
+        self.assertEqual(lss.release_mode(t), "manual")
+        self.assertEqual(lss.open_round(self.session, t.id), 2)
+        body = self.client.get(f"/tournaments/{t.id}/schedule").get_data(as_text=True)
+        self.assertIn("Round opening controls", body)
+        self.assertIn("Round 1 · Open", body)
+        self.assertIn("Round 2 · Open", body)
+        self.assertIn("Round 3 · Locked", body)
+        self.detail(t, {"action": "open_next_rounds", "round_count": "1"})
+        self.assertEqual(lss.open_round(self.session, t.id), 3)
+        self.detail(t, {"action": "save_fixture_release", "fixture_release_mode": "batch",
+                        "fixture_round_window": "2", "fixture_batch_hours": "48"})
+        self.assertEqual(lss.release_mode(t), "batch")
+        self.assertEqual(lss.open_round(self.session, t.id), 3)
+        self.detail(t, {"action": "save_settings", "name": t.name,
+                        "fixture_release_present": "1", "fixture_release_mode": "scheduled",
+                        "fixture_round_window": "3", "fixture_batch_hours": "72"})
+        self.assertEqual(lss.release_mode(t), "scheduled")
+        self.assertEqual(t.fixture_batch_hours, 72)
+
+    def test_invalid_release_input_rolls_back(self):
+        t = self.create()
+        self.detail(t, {"action": "save_fixture_release", "fixture_release_mode": "manual",
+                        "fixture_round_window": "0", "fixture_batch_hours": "48"})
+        self.assertEqual(t.fixture_release_mode, "rolling")
+
+    def test_bot_release_commands_and_legacy_modes(self):
+        from handlers import tournament_admin as handler
+        from services import league_schedule_service as lss
+        t = self.create()
+        lss.generate_schedule(self.session, t.id)
+        self.session.commit()
+        model, tid = type(t), t.id
+        with mock.patch.object(handler, "get_session", return_value=self.session), \
+             mock.patch.object(handler, "_resolve_tournament", side_effect=lambda db, args: db.get(model, tid)), \
+             mock.patch.object(handler, "_require_admin", new=mock.AsyncMock(return_value=True)), \
+             mock.patch.object(handler, "_reply", new=mock.AsyncMock()) as reply:
+            for args, mode, end in ((["manual", "2"], "manual", 2),
+                                    (["next", "1"], "manual", 3),
+                                    (["round"], "rolling", 1),
+                                    (["batch", "2"], "batch", 2),
+                                    (["scheduled", "2", "24h"], "scheduled", 2),
+                                    (["3"], "rolling", 3),
+                                    (["all"], "all", None)):
+                asyncio.run(handler.tfixturemode_handler(None, SimpleNamespace(args=args)))
+                t = self.session.get(model, tid)
+                self.assertEqual(lss.release_mode(t), mode)
+                self.assertEqual(lss.open_round(self.session, t.id), end)
+            asyncio.run(handler.tfixturemode_handler(None, SimpleNamespace(args=["batch", "0"])))
+            t = self.session.get(model, tid)
+            self.assertEqual(lss.release_mode(t), "all")
+            self.assertIn("Choose between", reply.call_args.args[1])
 
 
 

@@ -135,12 +135,14 @@ def open_round_pending(session, tour):
     """Unplayed fixtures of the open league round (both teams known)."""
     from services import league_schedule_service as lss
     from services import match_reminder_service as mrs
-    rnd = lss.current_round(session, tour.id)
+    rnd = lss.deadline_round(session, tour)
     if rnd is None:
         return rnd, []
     rows = mrs.pending_fixtures(session, tour.id)
+    batch = lss.release_mode(tour) in ("batch", "manual", "scheduled")
     return rnd, [f for f in rows
-                 if (f.stage or "") in lss.LEAGUE_STAGES and int(f.round_no or 0) == rnd]
+                 if (f.stage or "") in lss.LEAGUE_STAGES and
+                 (0 < int(f.round_no or 0) <= rnd if batch else int(f.round_no or 0) == rnd)]
 
 
 def set_round_hours(session, tour, hours, now=None):
@@ -152,7 +154,7 @@ def set_round_hours(session, tour, hours, now=None):
     else:
         tour.round_hours = int(hours)
         from services import league_schedule_service as lss
-        if lss.current_round(session, tour.id) is not None:
+        if lss.deadline_round(session, tour) is not None:
             tour.round_deadline_at = now + timedelta(hours=int(hours))
             tour.round_reminder_stage = STAGE_NONE
     session.flush()
@@ -163,7 +165,7 @@ def extend_deadline(session, tour, hours, now=None):
     """Push the open round's deadline back by ``hours``. Caller commits."""
     from services import league_schedule_service as lss
     now = now or datetime.utcnow()
-    if lss.current_round(session, tour.id) is None:
+    if lss.deadline_round(session, tour) is None:
         raise ValueError("No league round is open right now.")
     base = tour.round_deadline_at or now
     if base < now:
@@ -190,7 +192,9 @@ def _reminder_posts(session, tour, rnd, pending, label):
               if not n.skipped_until]
     if not nudges:
         return []
-    head = (f"⏳ <b>Round {rnd} ends in {label}</b> — "
+    from services import league_schedule_service as lss
+    scope = f"Batch through Round {rnd}" if lss.release_mode(tour) in ("batch", "manual", "scheduled") else f"Round {rnd}"
+    head = (f"⏳ <b>{scope} ends in {label}</b> — "
             f"{escape(tour.name or 'Tournament')}\n")
     if len(nudges) == 1:
         group_text = head + "\n" + nudges[0].text
@@ -214,7 +218,9 @@ def _expired_post(session, tour, rnd, pending):
     from models import TournamentTeam
     for tt in session.query(TournamentTeam).filter_by(tournament_id=tour.id).all():
         teams[tt.id] = tt.name or "—"
-    lines = [f"⏰ <b>Round {rnd} deadline passed</b> — {escape(tour.name or '')}",
+    from services import league_schedule_service as lss
+    label = f"Batch through Round {rnd}" if lss.release_mode(tour) in ("batch", "manual", "scheduled") else f"Round {rnd}"
+    lines = [f"⏰ <b>{label} deadline passed</b> — {escape(tour.name or '')}",
              f"{len(pending)} match{'es' if len(pending) != 1 else ''} unplayed:", ""]
     buttons = []
     for fx in pending:
@@ -355,11 +361,17 @@ def tick(session, tour, now=None):
             session.flush()
             return posts
         return []
-    rnd = lss.current_round(session, tour.id)
+    released = lss.release_scheduled_rounds(session, tour, now=now)
+    rnd = lss.deadline_round(session, tour)
+    current = lss.current_round(session, tour.id)
     # The first time a tournament is seen, take a silent snapshot: an existing
     # season must not get a flood of recaps for rounds finished long ago.
     first_look = not tour.round_tracked and not tour.recap_round
     posts = []
+    if released:
+        posts.append(Post(chat_id=tour.announce_chat_id,
+            text=f"🔓 <b>Rounds through {lss.open_round(session, tour.id)} are now open.</b> See {_fixtures_cmd(tour)}.",
+            kind="round_release"))
     if rnd is not None and rnd != tour.round_tracked:
         tour.round_tracked = rnd
         tour.round_reminder_stage = STAGE_NONE
@@ -368,7 +380,7 @@ def tick(session, tour, now=None):
     elif rnd is None and tour.round_deadline_at:
         tour.round_deadline_at = None
     if first_look:
-        tour.recap_round = _completed_round(session, tour, rnd)
+        tour.recap_round = _completed_round(session, tour, current)
         if not tour.round_tracked:
             # A tournament with no league rounds at all: mark it seen anyway.
             tour.round_tracked = rnd or -1
