@@ -105,6 +105,7 @@ TYPE_PLAYMATCH = "playmatch"
 TYPE_WSP = "wsp"
 TYPE_CHALLENGE = "challenge"
 TYPE_LETSPLAY = "letsplay"
+TYPE_SUPER_OVER = 'super_over_practice'
 TYPE_CIPL = "cipl"
 TYPE_VSBOT = "vsbot"
 TYPE_WSPBOT = "wspbot"
@@ -118,6 +119,7 @@ MATCH_TYPE_LABELS = {
     TYPE_WSP: "WSP",
     TYPE_CHALLENGE: "Challenge League",
     TYPE_LETSPLAY: "Lets Play",
+    TYPE_SUPER_OVER: 'Super Over (Unranked)',
     TYPE_CIPL: "CIPL",
     TYPE_VSBOT: "vs AI",
     TYPE_WSPBOT: "WSP vs AI",
@@ -134,6 +136,7 @@ MATCH_TYPE_FAMILY = {
     TYPE_WSP: "pvp",
     TYPE_CHALLENGE: "pvp",
     TYPE_LETSPLAY: "pvp",
+    TYPE_SUPER_OVER: 'pvp',
     TYPE_CIPL: "pvp",
     TYPE_VSBOT: "ai",
     TYPE_WSPBOT: "ai",

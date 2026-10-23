@@ -349,6 +349,7 @@ MENU_LIMIT = 100   # Telegram's setMyCommands ceiling, per scope
 # Commands whose handler refuses to run outside a group, so listing them in a
 # private chat would only advertise an error message.
 GROUP_ONLY_COMMANDS = frozenset({
+    'superover',
     "bluff", "cartel", "mole", "wordchase", "endchase", "cltour",
     "unscramble", "ju", "eu", "su", "cu", "ewm", "dwm",
     # Lets Play Tournament. A fixture is two people in a chat, and the table /
@@ -381,6 +382,9 @@ GROUP_ONLY_COMMANDS = frozenset({
 # group. They still RUN anywhere — this only decides which slash menu lists
 # them, and the group menu is at Telegram's 100-command ceiling.
 PRIVATE_ONLY_COMMANDS = frozenset({
+    # Personal membership details stay available in DM's slash menu, leaving
+    # room for the group-only standalone Super Over in the group menu.
+    'membership',
     "start", "debut", "redeem", "feedback", "notifications", "invite",
     # Rules pages. Their parent commands (/cmuchem, /fantasy) stay in the group
     # menu and both print a "…for the full guide" pointer to these.
@@ -595,6 +599,7 @@ BOT_MENU_COMMANDS = (
     ("myprofile", "View your profile"),
     ("membership", "View your membership, perks and the plans 💳"),
     ("playmatch", "Challenge another user to a match"),
+    ('superover', 'Play an unranked Super Over against a friend'),
     ("wpm", "Match lobby up to 20 overs — tag/reply to invite a player (Mini App)"),
     ("sim", "Simulate a full match instantly"),
     ("endmatch", "Request to end your active match"),
@@ -2148,6 +2153,9 @@ def main():
             so_bowlok_callback, so_deliv_callback, so_len_callback,
             so_shot_callback,
         )
+        from handlers.play_super_over import superover_handler, superover_invite_callback
+        app.add_handler(CommandHandler(["superover", "pso"], superover_handler))
+        app.add_handler(CallbackQueryHandler(superover_invite_callback, pattern=r'^sop_(accept|deny)_\d+$'))
         app.add_handler(CallbackQueryHandler(so_batok_callback, pattern=r"^so_batok_"))
         app.add_handler(CallbackQueryHandler(so_bat_callback, pattern=r"^so_bat_"))
         app.add_handler(CallbackQueryHandler(so_bowlok_callback, pattern=r"^so_bowlok_"))

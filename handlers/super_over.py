@@ -296,15 +296,26 @@ async def start_super_over(context, mid, state) -> bool:
         context.bot_data[_so_key(mid)] = so
 
         m = main
-        await context.bot.send_message(
-            so["chat_id"],
-            "🏏 <b>MATCH TIED!</b>\n\n"
-            f"{html.escape(m['team1_name'])}: {m['team1_runs']}/{m['team1_wkts']}\n"
-            f"{html.escape(m['team2_name'])}: {m['team2_runs']}/{m['team2_wkts']}\n\n"
-            "🔥 <b>SUPER OVER TIME</b>\n\n"
-            f"<b>{html.escape(teams[second_bat_uid]['name'])}</b> will bat first "
-            "because they batted second in the main match.",
-            parse_mode="HTML")
+        standalone = bool(state.get('standalone_super_over'))
+        if standalone:
+            await context.bot.send_message(so['chat_id'],
+                '⚡ <b>UNRANKED SUPER OVER</b>\n\n'
+                f"Random toss: <b>{html.escape(teams[second_bat_uid]['name'])}</b> bats first.\n"
+                f"Pitch: {html.escape(so['pitch'])}\n"
+                'Choose three batters and one bowler.\n'
+                'Six legal balls or two wickets per innings.\n'
+                'No ranked points, regular rewards or career stats.\n'
+                'Cancel without a fine: /superover cancel', parse_mode='HTML')
+        else:
+            await context.bot.send_message(
+                so["chat_id"],
+                "🏏 <b>MATCH TIED!</b>\n\n"
+                f"{html.escape(m['team1_name'])}: {m['team1_runs']}/{m['team1_wkts']}\n"
+                f"{html.escape(m['team2_name'])}: {m['team2_runs']}/{m['team2_wkts']}\n\n"
+                "🔥 <b>SUPER OVER TIME</b>\n\n"
+                f"<b>{html.escape(teams[second_bat_uid]['name'])}</b> will bat first "
+                "because they batted second in the main match.",
+                parse_mode="HTML")
 
         # Main-match scorecard image, captioned "Match Tied".
         await _send_main_scorecard(
@@ -326,7 +337,8 @@ async def start_super_over(context, mid, state) -> bool:
     # the sole place that persists; a failure HERE must not return False (that
     # would let the fallback double-count career stats for the same match).
     try:
-        _persist_main_stats(mid, state)
+        if not state.get('standalone_super_over'):
+            _persist_main_stats(mid, state)
     except Exception:
         logger.exception("Super Over: deferred main-stat persistence failed (%s)", mid)
     return True
@@ -336,6 +348,8 @@ def _spectate_markup(so):
     """InlineKeyboardMarkup carrying the MAIN match's Mini App spectate button,
     so every Super Over scorecard links back to the same match board."""
     state = so.get("main_state")
+    if state and state.get('standalone_super_over'):
+        return None  # This mode is played on the chat's live Super Over board.
     if not state:
         return None
     try:
@@ -352,7 +366,7 @@ async def _send_main_scorecard(context, so, result, caption):
     only the result line changes — ``{"tie": True}`` → "Match Tied", or a winner
     dict → "X won by N runs/wickets"). Carries the Mini App spectate button."""
     state = so.get("main_state")
-    if not state:
+    if not state or state.get('standalone_super_over'):
         return False
     try:
         from handlers.cipl_play import _build_cipl_summary_image
@@ -576,6 +590,8 @@ def _render_selection(so):
     n = so["so_number"]
     head = f"🔥 <b>SUPER OVER {n} — PLAYER SELECTION</b>" if n > 1 \
         else "🔥 <b>SUPER OVER — PLAYER SELECTION</b>"
+    if (so.get('main_state') or {}).get('standalone_super_over'):
+        head += ' · <b>UNRANKED</b>'
     target_line = f"\n🎯 Target: <b>{so['target']}</b>" if so.get("target") else ""
 
     lines = [
@@ -892,6 +908,8 @@ def _score_card(so, note=None):
     n = so["so_number"]
     title = f"🔥 <b>SUPER OVER {n} — INNINGS {so['innings_no']}</b>" if n > 1 \
         else f"🔥 <b>SUPER OVER — INNINGS {so['innings_no']}</b>"
+    if (so.get('main_state') or {}).get('standalone_super_over'):
+        title += ' · <b>UNRANKED</b>'
 
     s_rid, ns_rid = inn["striker"], inn["non_striker"]
     sb, nb = inn["bat"][int(s_rid)], inn["bat"][int(ns_rid)]
@@ -1487,6 +1505,8 @@ async def _resolve_ball(context, mid, shot):
     # Show the ball result.
     so["inn"]["pending"] = {"delivery": None, "length": None}
     await _show_ball(context, mid, note)
+    if _get(context, mid) is not so:
+        return  # A participant cancelled while the result message was sending.
 
     # ── End-of-innings / chase checks ──
     if so["innings_no"] == 2:
@@ -1685,6 +1705,8 @@ def _decide_super_over(so, first_uid, second_uid, chase_won=False):
 
 async def _end_innings(context, mid, chase_won=False):
     so = _get(context, mid)
+    if not so:
+        return
     inn = so["inn"]
     bat_uid = so["bat_uid"]
     so["score"][bat_uid] = (inn["runs"], inn["wickets"])
@@ -1828,6 +1850,9 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
                      else f"won the match by {margin} {margin_type}")
     so["_winner_uid"] = winner_uid
     so["_margin_text"] = margin_text
+    if (so.get('main_state') or {}).get('standalone_super_over'):
+        await _finalize_practice(context, so, winner_uid, loser_uid, margin_text, margin)
+        return
 
     # Reward + finalise the Match row.
     prize = None
@@ -2122,6 +2147,66 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
     except Exception:
         logger.exception("Super Over cleanup failed (%s)", mid)
     context.bot_data.pop(_so_key(mid), None)
+
+
+async def _finalize_practice(context, so, winner_uid, loser_uid, margin_text, margin):
+    """A standalone result is saved without invoking competitive finalization."""
+    import json
+    from models import MatchScorecard
+    from services.match_outcome import TYPE_SUPER_OVER
+    mid = so['mid']
+    win = so['teams'][winner_uid]
+    result = f"{win['name']} {margin_text} — Unranked Super Over"
+    session = get_session()
+    try:
+        match = session.get(Match, mid)
+        if not match or match.match_type != TYPE_SUPER_OVER or match.status not in ('playing', 'active'):
+            return
+        match.status = 'completed'
+        match.completed_at = datetime.utcnow()
+        mark_end(match, END_COMPLETED)
+        match.winner_id, match.loser_id = winner_uid, loser_uid
+        match.margin_type, match.margin_value = 'super_over', margin
+        pair = (so.get('so_innings') or [])[-2:]
+        if len(pair) == 2:
+            match.batting_first_id, match.bowling_first_id = pair[0]['team_uid'], pair[1]['team_uid']
+            match.inn1_runs, match.inn1_wickets = pair[0]['runs'], pair[0]['wickets']
+            match.inn2_runs, match.inn2_wickets = pair[1]['runs'], pair[1]['wickets']
+        if not session.query(MatchScorecard).filter_by(match_id=mid).first():
+            innings = _super_over_miniapp_innings(so)
+            session.add(MatchScorecard(match_id=mid, result_text=result[:300],
+                scorecard_json=json.dumps(dict(innings=innings, current_innings=len(innings),
+                    super_over=_super_over_summary(so, win['name'], margin_text), unranked=True))))
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+    try:
+        lines = ['🏆 <b>UNRANKED SUPER OVER RESULT</b>', '',
+                 _so_scoreline(so, winner_uid), _so_scoreline(so, loser_uid), '',
+                 f"{html.escape(win['name'])} {html.escape(margin_text)}.",
+                 'Practice only — no ranked points, regular rewards or career stats.']
+        star, performance = _super_over_mvp(so, winner_uid)
+        if star:
+            lines += ['', f"⭐ Super Over Star: {html.escape(star)}", html.escape(performance)]
+        points = _turning_points(so)
+        if points:
+            lines += ['', '🎬 <b>Turning points</b>']
+            lines += [f"• {html.escape(p['team'])} {p['score']} — {html.escape(p['text'])}" for p in points]
+        await context.bot.send_message(so['chat_id'], '\n'.join(lines), parse_mode='HTML')
+        try:
+            card = await asyncio.to_thread(_build_super_over_card, so)
+            if card:
+                await context.bot.send_photo(so['chat_id'], photo=BytesIO(card), caption='⚡ Super Over — Unranked')
+        except Exception:
+            logger.exception('Practice Super Over image delivery failed (%s)', mid)
+    finally:
+        from services.match_state_store import cleanup_state
+        cleanup_state(context, mid)
+        context.bot_data.pop(_so_key(mid), None)
 
 
 def _so_scoreline(so, uid):

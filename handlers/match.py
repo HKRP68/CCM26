@@ -2181,6 +2181,7 @@ async def endmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tg = update.effective_user; cid = update.effective_chat.id
     # Find active match for this user
     mid = None
+    practice_super_over = False
     for k, v in context.bot_data.items():
         if k.startswith("ms_") and isinstance(v, dict):
             if v.get("bat_user_tg") == tg.id or v.get("bowl_user_tg") == tg.id:
@@ -2198,12 +2199,18 @@ async def endmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                       .first())
                 if _m:
                     mid = _m.id
+                    from services.match_outcome import TYPE_SUPER_OVER
+                    practice_super_over = _m.match_type == TYPE_SUPER_OVER
         except Exception:
             logger.exception("endmatch DB fallback failed")
         finally:
             _session.close()
     if not mid:
         await update.message.reply_text("❌ No active match found."); return
+    if practice_super_over:
+        from handlers.play_super_over import cancel_super_over
+        await cancel_super_over(update, context)
+        return
 
     s_prompt = _gs(context, mid)
     balls = _match_balls_bowled(s_prompt)

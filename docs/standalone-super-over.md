@@ -1,0 +1,21 @@
+Use `/superover @username` (alias `/pso`) in a group, or reply to a friend's
+message with `/superover`. The invited player has 30 seconds to accept or decline.
+Both players need a valid Playing XI from their own roster; the XI is checked
+again when the invitation is accepted.
+
+A random toss decides who bats first and a random pitch is announced. Each
+captain selects three batters and one bowler from their XI. Play then follows
+the existing interactive Super Over: delivery, length where applicable, and
+shot choices, six legal balls or two wickets per innings, no-balls, free hits,
+run outs, and the existing tie/replay rules. Traits remain active.
+
+This is a standalone unranked game, with no main innings to play first and no
+tournament result. It awards no ranked points, rivalry progress, regular match
+rewards, quest progress, career player statistics or lifetime win/loss counters.
+The result and its actual Super Over innings are saved as an unranked scorecard.
+
+`/superover cancel` or `/endmatch` cancels your practice game without a fine.
+`/resume` can re-show missing buttons while the Super Over is running. The game
+expires after 20 minutes. Invitations and games use the normal per-chat and
+per-user busy guards. Only the invited captain can accept, and only participants
+can cancel. Results and scorecards retain the Unranked label.

@@ -225,6 +225,7 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/botvsbot` | `/bvb` | Configure a bot-versus-bot match |
 | `/botmatch` | `/spectate` | Spectate a bot-versus-bot match |
 | `/pbo` | `/bowlout` | Start a standalone player bowl-out |
+| `/superover` | `/pso` | Unranked Super Over against a friend: tag/reply to invite, choose 3 batters and 1 bowler from your Playing XI. No ranked points, regular rewards or career stats. `/superover cancel` ends it without a fine |
 | `/impact` | `/ip` | Open the Impact Player picker mid-match (IPL rule: an overseas ✈️ sub only while your XI is under the overseas cap) |
 | `/resume` | `/r` | Resume your active match if the buttons disappear — works exactly like `/rcl` (incl. `/resume <MatchId>`) |
 | `/rcl` | `/resumecl` | Resume a stuck Challenge League / Lets Play match. `/rcl <MatchId>` resumes by id; one resume per match every 5 seconds |
