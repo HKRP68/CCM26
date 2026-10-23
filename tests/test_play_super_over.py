@@ -114,7 +114,7 @@ class PracticeSuperOverTests(unittest.TestCase):
                 query = self.query("cl_start_123", self.users[0].telegram_id).callback_query
                 query.message.message_id = 5
                 with patch.object(cp, 'get_session', get_session), \
-                     patch.object(cp, 'build_xi_from_draft', side_effect=lambda s, d, side: self.xi(s, self.users[0 if side == 'host' else 1])), \
+                     patch.object(cp, 'build_xi_from_draft', side_effect=lambda s, d, side: self.xi(s, self.users[0 if side == 'host' else 1])[:3]), \
                      patch.object(cp, 'build_bench_from_draft', return_value=[]), \
                      patch.object(cp, '_resolve_team_identity', return_value=('XI', '🏏')), \
                      patch.object(cp, '_ss', new=AsyncMock()) as save_main, \
@@ -130,6 +130,13 @@ class PracticeSuperOverTests(unittest.TestCase):
                 so = self.ctx.bot_data[f'so_{mid}']
                 self.assertEqual(so['bat_uid'], self.users[first].id)
                 self.assertTrue(so['main_state']['unranked'])
+                self.assertTrue(so['bat_confirmed'])
+                self.assertEqual(len(so['sel_batters']), 3)
+                for team in so['teams'].values():
+                    self.assertEqual(len(team['xi']), 3)
+                text, keyboard = self.SO._render_selection(so)
+                self.assertNotIn('Confirm Batters', text)
+                self.assertFalse(any(button.callback_data.startswith('so_bat') for row in keyboard for button in row))
                 self.assertEqual(so['main_state']['ball_format'], 'T20')
                 heading = next(call.args[1] for call in reversed(self.ctx.bot.send_message.call_args_list)
                                if 'UNRANKED SUPER OVER</b>' in str(call.args[1]))
@@ -226,6 +233,12 @@ class PracticeSuperOverTests(unittest.TestCase):
         self.assertNotIn(f'so_{row.id}', self.ctx.bot_data)
 
     def test_full_game_saves_only_real_super_over_innings_without_competitive_side_effects(self):
+        self._check_full_game()
+
+    def test_three_player_game_finishes_without_selecting_batters_again(self):
+        self._check_full_game(three_players=True)
+
+    def _check_full_game(self, three_players=False):
         row, _ = self.invite()
         forbidden = [patch('services.match_rewards.award_match_rewards_core'),
                      patch('services.post_match.process_completed_match'),
@@ -235,6 +248,12 @@ class PracticeSuperOverTests(unittest.TestCase):
         spies = [p.start() for p in forbidden]
         try:
             self.accept(row)
+            if three_players:
+                so = self.ctx.bot_data[f'so_{row.id}']
+                so['main_state']['three_player_squads'] = True
+                for team in so['teams'].values():
+                    team['xi'] = team['xi'][:3]
+                self.SO._reset_selection(so)
             async def play():
                 for _ in range(30):
                     so = self.ctx.bot_data.get(f'so_{row.id}')

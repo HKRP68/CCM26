@@ -298,12 +298,15 @@ async def start_super_over(context, mid, state) -> bool:
         m = main
         standalone = bool(state.get('standalone_super_over'))
         if standalone:
+            selection_text = ('Three-player squads confirmed; choose your bowler.'
+                              if state.get('three_player_squads') else
+                              'Choose three batters and one bowler.')
             await context.bot.send_message(so['chat_id'],
                 '⚡ <b>UNRANKED SUPER OVER</b>\n\n'
                 f"{'Toss decision' if state.get('toss_selected') else 'Random toss'}: "
                 f"<b>{html.escape(teams[second_bat_uid]['name'])}</b> bats first.\n"
                 f"Pitch: {html.escape(so['pitch'])}\n"
-                'Choose three batters and one bowler.\n'
+                f'{selection_text}\n'
                 'Six legal balls or two wickets per innings.\n'
                 'No ranked points, regular rewards or career stats.\n'
                 'Cancel without a fine: /superover cancel', parse_mode='HTML')
@@ -529,6 +532,9 @@ def _reset_selection(so):
     so["bat_confirmed"] = False
     so["bowl_confirmed"] = False
     so["sel_msg_id"] = None
+    if (so.get("main_state") or {}).get("three_player_squads"):
+        so["sel_batters"] = [int(p["roster_id"]) for p in so["teams"][so["bat_uid"]]["xi"]]
+        so["bat_confirmed"] = True
 
 
 def _eligible_batters(so, uid):
@@ -594,13 +600,17 @@ def _render_selection(so):
     if (so.get('main_state') or {}).get('standalone_super_over'):
         head += ' · <b>UNRANKED</b>'
     target_line = f"\n🎯 Target: <b>{so['target']}</b>" if so.get("target") else ""
+    squad_locked = bool((so.get("main_state") or {}).get("three_player_squads"))
+    batting_instruction = (
+        "🏏 Batting order: " + " → ".join(html.escape(p['name']) for p in bat['xi'])
+        if squad_locked else
+        f"{_mention(bat['tg'], bat['name'])}, select <b>{SO_BATTERS} batters</b> (2 openers + 1 backup).")
 
     lines = [
         head, "",
         f"Batting: <b>{html.escape(bat['name'])}</b>",
         f"Bowling: <b>{html.escape(bowl['name'])}</b>{target_line}", "",
-        f"{_mention(bat['tg'], bat['name'])}, select <b>{SO_BATTERS} batters</b> "
-        "(2 openers + 1 backup).",
+        batting_instruction,
         f"{_mention(bowl['tg'], bowl['name'])}, select <b>1 bowler</b>.", "",
         "🏏 Every ball is a duel: the bowler picks the delivery, the batter "
         "picks the shot, and ratings decide who wins it.",
@@ -611,14 +621,17 @@ def _render_selection(so):
     kb = []
     # Batting buttons (toggle, up to 3)
     chosen_b = so["sel_batters"]
-    for p in _eligible_batters(so, so["bat_uid"]):
+    if squad_locked:
+        lines.append("Your three players are confirmed. Choose a bowler from the same squad.")
+    for p in ([] if squad_locked else _eligible_batters(so, so["bat_uid"])):
         rid = int(p["roster_id"])
         mark = "✅ " if rid in chosen_b else ""
         kb.append([InlineKeyboardButton(
             f"{mark}🏏 {p['name']}", callback_data=f"so_bat_{so['mid']}_{rid}")])
     bat_done = "✅ Batters confirmed" if so["bat_confirmed"] else \
         f"Confirm Batters ({len(chosen_b)}/{SO_BATTERS})"
-    kb.append([InlineKeyboardButton(bat_done, callback_data=f"so_batok_{so['mid']}")])
+    if not squad_locked:
+        kb.append([InlineKeyboardButton(bat_done, callback_data=f"so_batok_{so['mid']}")])
 
     # Bowling buttons (single choice)
     for p in _eligible_bowlers(so, so["bowl_uid"]):

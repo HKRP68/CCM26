@@ -2156,6 +2156,8 @@ def main():
         from handlers.play_super_over import superover_handler, superover_invite_callback
         app.add_handler(CommandHandler(["superover", "pso"], superover_handler))
         app.add_handler(CallbackQueryHandler(superover_invite_callback, pattern=r'^sop_(accept|deny)_\d+$'))
+        from handlers.super_over_squad import super_over_squad_callback
+        app.add_handler(CallbackQueryHandler(super_over_squad_callback, pattern=r'^sos_(pick|ok|cancel)_'))
         app.add_handler(CallbackQueryHandler(so_batok_callback, pattern=r"^so_batok_"))
         app.add_handler(CallbackQueryHandler(so_bat_callback, pattern=r"^so_bat_"))
         app.add_handler(CallbackQueryHandler(so_bowlok_callback, pattern=r"^so_bowlok_"))

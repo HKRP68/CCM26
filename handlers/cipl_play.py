@@ -1573,7 +1573,8 @@ async def cipl_toss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await q.edit_message_text(
             f"✅ {_mention(winner_tg, winner_name)} won the toss and elected to "
             f"<b>{'BAT' if decision == 'bat' else 'BOWL'}</b> first.\n\n"
-            f"Now pick your Playing XIs below 👇",
+            + ("Now pick your three players below 👇" if draft.get("standalone_super_over")
+             else "Now pick your Playing XIs below 👇"),
             parse_mode="HTML")
     except Exception:
         logger.warning("/cipl toss result edit failed for draft %s — "
@@ -1904,8 +1905,14 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         bowl_xi = build_xi_from_draft(session, draft, bowl_side)
         # Impact Player substitute pools, snapshotted now — the draft is gone by
         # the time an over is bowled. See services/impact_player.py.
-        bat_bench = build_bench_from_draft(session, draft, bat_side)
-        bowl_bench = build_bench_from_draft(session, draft, bowl_side)
+        if draft.get("standalone_super_over"):
+            if len(bat_xi) != 3 or len(bowl_xi) != 3:
+                await _fail("Select exactly three players per team before starting.")
+                return
+            bat_bench, bowl_bench = [], []
+        else:
+            bat_bench = build_bench_from_draft(session, draft, bat_side)
+            bowl_bench = build_bench_from_draft(session, draft, bowl_side)
         if len(bat_xi) < 2 or len(bowl_xi) < 2:
             await _fail("Playing XI missing — restart the challenge.")
             return
@@ -2146,6 +2153,7 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         from handlers.play_super_over import _arm_timeout, GAME_SECONDS
         state.update(standalone_super_over=True, stats_disabled=True,
                      unranked=True, is_letsplay=True, toss_selected=True,
+                     three_player_squads=True,
                      league_key=draft.get("league_key"),
                      league_name=draft.get("league_name"))
         # No main innings or MatchState: the regular innings heartbeat must

@@ -5,9 +5,11 @@ again when the invitation is accepted.
 
 For league squads, reply to your opponent in a group with `/sipl`, `/sbbl`,
 `/sint`, or `/s<league short code>` for an active admin-created league (for
-example `/ssa20`). Both captains select league teams and Playing XIs through
-the usual pitch and toss setup. The toss winner chooses to bat or bowl, then
-the game starts directly as an unranked Super Over. You do not need a personal
+example `/ssa20`). Select league teams, the pitch and the toss as usual, then
+each captain picks exactly three players in batting order: two openers and a
+backup. One of those same three bowls. There is no full XI or second batter
+selection: play starts once both captains confirm their three players.
+The toss winner chooses to bat or bowl. You do not need a personal
 roster for this mode. Every league uses six legal balls per Super Over innings,
 including leagues whose regular matches use the Hundred format. Extra overs
 or multi-league arguments are not accepted by these shortcuts.

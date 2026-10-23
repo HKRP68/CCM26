@@ -977,10 +977,11 @@ async def _send_toss_prompt(context, draft, message_obj):
     caller_side = _toss_caller_side(draft)
     caller = draft.get(caller_side) or {}
     caller_tg = caller.get("tg_id") or draft.get(f"{caller_side}_tg_id")
+    selection_label = "three players" if draft.get("standalone_super_over") else "Playing XIs"
     text = (f"🪙 <b>TOSS</b>\n"
             f"{_mention(caller_tg, caller.get('name') or 'Guest')}, "
             f"call the coin:\n\n"
-            f"<i>The toss comes first — you'll pick your Playing XIs once "
+            f"<i>The toss comes first — you'll pick your {selection_label} once "
             f"it's decided.</i>")
     try:
         if message_obj is not None:
@@ -1005,6 +1006,10 @@ async def _after_toss_decided(context, draft, draft_id, message_obj, decision):
     MATCH READY card's Start Match button with the stored decision.
     """
     draft["toss_decision"] = decision
+    if draft.get("standalone_super_over"):
+        from handlers.super_over_squad import send_squad_pickers
+        await send_squad_pickers(context, draft, message_obj)
+        return
     await _send_challenge_xi_prompt(context, draft, message_obj)
     # Both players now pick their Playing XI — arm the clock on both sides (only
     # the human side exists in a bot match).
@@ -3321,7 +3326,7 @@ async def _expire_challenge_draft(ctx):
 
 def _selection_phase_label(phase):
     return {"team": "team", "pitch": "pitch", "xi": "Playing XI",
-            "toss": "toss", "draft": "draft pick"}.get(phase, "selection")
+            "players": "three players", "toss": "toss", "draft": "draft pick"}.get(phase, "selection")
 
 
 def _mention_for_tg(draft, tg_id):

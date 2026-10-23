@@ -101,6 +101,9 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # callback checks the invited Telegram id and the originating chat.
     "sop_accept_",
     "sop_deny_",
+    "sos_pick_",
+    "sos_ok_",
+    "sos_cancel_",
     # /playmatch (/pm) in-chat flow: invite response + the whole two-player
     # setup/gameplay handshake. Each handler validates the clicker by
     # telegram_id / live match state, so the same message is intentionally
