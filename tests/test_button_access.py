@@ -58,6 +58,14 @@ class ButtonAccessTests(unittest.TestCase):
 
         self.assertTrue(button_access.check_callback_owner(update))
 
+    def test_super_over_invitation_buttons_allow_the_guest(self):
+        button_access.register_button_owner(100, 200, 111)
+        for data in ("sop_accept_42", "sop_deny_42"):
+            with self.subTest(data=data):
+                self.assertTrue(button_access.is_shared_callback_data(data))
+                self.assertTrue(button_access.check_callback_owner(
+                    DummyUpdate(DummyQuery(222, data))))
+
     def test_wpm_join_button_is_shared_for_exact_callback(self):
         button_access.register_button_owner(100, 200, 111)
         update = DummyUpdate(DummyQuery(222, "cric_join"))

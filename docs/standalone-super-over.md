@@ -3,6 +3,15 @@ message with `/superover`. The invited player has 30 seconds to accept or declin
 Both players need a valid Playing XI from their own roster; the XI is checked
 again when the invitation is accepted.
 
+For league squads, reply to your opponent in a group with `/sipl`, `/sbbl`,
+`/sint`, or `/s<league short code>` for an active admin-created league (for
+example `/ssa20`). Both captains select league teams and Playing XIs through
+the usual pitch and toss setup. The toss winner chooses to bat or bowl, then
+the game starts directly as an unranked Super Over. You do not need a personal
+roster for this mode. Every league uses six legal balls per Super Over innings,
+including leagues whose regular matches use the Hundred format. Extra overs
+or multi-league arguments are not accepted by these shortcuts.
+
 A random toss decides who bats first and a random pitch is announced. Each
 captain selects three batters and one bowler from their XI. Play then follows
 the existing interactive Super Over: delivery, length where applicable, and

@@ -19,6 +19,7 @@ ACTIVE = ('pending', 'playing', 'active')
 USAGE = ('⚡ <b>Super Over — Unranked</b>\n\n'
          '<code>/superover @username</code> or reply to their message with <code>/superover</code>.\n'
          'Use your Playing XI; choose 3 batters and 1 bowler. Six legal balls, two wickets.\n'
+         'For league squads, reply with <code>/sipl</code>, <code>/sbbl</code> or <code>/s[league]</code>.\n'
          'No ranked points, regular rewards or career stats.\n'
          'Cancel without a fine: <code>/superover cancel</code>.')
 

@@ -161,6 +161,54 @@ class DummyMessage:
 
 
 class ChallengeLeagueCommandTests(unittest.IsolatedAsyncioTestCase):
+    def test_super_over_shortcuts_resolve_only_known_leagues(self):
+        session = DummySession()
+        for command, league in (("sipl", "ipl"), ("/sBBL", "bbl"), ("sint", "int")):
+            self.assertEqual(challenge.is_super_over_league_command(command, session)[0], league)
+        with patch.object(challenge, "_challenge_leagues", return_value={"sa20": "SA20"}):
+            self.assertEqual(challenge.is_super_over_league_command("ssa20", session), ("sa20", "SA20"))
+            for command in ("stats", "superover", "sunknown", "csa20"):
+                self.assertEqual(challenge.is_super_over_league_command(command, session), (None, None))
+
+    async def test_super_over_shortcut_creates_an_unranked_league_draft(self):
+        message = DummyMessage("/sipl@TestBot", reply_user=SimpleNamespace(id=2, is_bot=False))
+        update = SimpleNamespace(effective_message=message, message=message,
+                                 effective_user=SimpleNamespace(id=1),
+                                 effective_chat=SimpleNamespace(id=-100))
+        context = SimpleNamespace(bot_data={})
+        host = SimpleNamespace(id=10, telegram_id=1)
+        guest = SimpleNamespace(id=20, telegram_id=2)
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "sync_telegram_user", side_effect=[guest, host]):
+            await challenge.challenge_league_handler(update, context)
+        draft = next(v for k, v in context.bot_data.items() if k.startswith("challenge_team_draft_"))
+        self.assertTrue(draft["standalone_super_over"])
+        self.assertFalse(draft["is_tournament"])
+        self.assertEqual(draft["league_key"], "ipl")
+        self.assertIn("UNRANKED SUPER OVER", message.replies[0][0])
+
+    async def test_super_over_shortcut_rejects_custom_overs_and_multi(self):
+        for args in ("10", "multi"):
+            message = DummyMessage(f"/sipl {args}")
+            update = SimpleNamespace(effective_message=message, message=message,
+                                     effective_chat=SimpleNamespace(id=-100))
+            with patch.object(challenge, "get_session", return_value=DummySession()), \
+                 patch.object(challenge, "_send_league_team_picker", new=AsyncMock()) as picker:
+                await challenge.challenge_league_handler(update, SimpleNamespace())
+            picker.assert_not_called()
+            self.assertIn("six legal balls", message.replies[0][0])
+
+    async def test_super_over_shortcut_preserves_existing_bot_commands(self):
+        message = DummyMessage("/stats")
+        update = SimpleNamespace(effective_message=message)
+        context = SimpleNamespace(application=SimpleNamespace(
+            handlers={0: [SimpleNamespace(commands={"stats"})]}))
+        with patch.object(challenge, "get_session", return_value=DummySession()), \
+             patch.object(challenge, "is_super_over_league_command", return_value=("tats", "Tats")) as resolve:
+            await challenge.challenge_league_handler(update, context)
+        resolve.assert_not_called()
+        self.assertEqual(message.replies, [])
+
     def test_builtin_long_and_short_commands_resolve(self):
         session = DummySession()
 

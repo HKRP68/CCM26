@@ -1599,6 +1599,14 @@ async def start_match_launch(context, q, draft, draft_id):
         await q.answer("Starting the match…")
         return
     if draft.get("match_launched"):
+        if draft.get("standalone_super_over"):
+            from handlers.super_over import resume_super_over
+            live = context.bot_data.get(f"so_{draft['match_id']}")
+            await q.answer("Super Over already started — play below 👇" if live
+                           else "This Super Over has ended. Start a new challenge.")
+            if live:
+                await resume_super_over(context, draft["match_id"])
+            return
         # `match_launched` only proves a Match row was COMMITTED — not that the
         # board ever reached the chat. Check the live state before claiming it
         # started, and heal whichever half is broken.
@@ -1928,6 +1936,14 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
                 and not draft.get("is_tournament") and not draft.get("tournament_id")
                 and not draft.get("cl_tour_id")):
             overs = max(1, min(CIPL_OVERS, int(draft["overs"])))
+        standalone_super_over = bool(draft.get("standalone_super_over"))
+        match_type, expire_seconds = TYPE_CIPL, MATCH_EXPIRE
+        if standalone_super_over:
+            from services.match_outcome import TYPE_SUPER_OVER
+            from handlers.play_super_over import GAME_SECONDS
+            # Six legal balls in every league, including Hundred squads.
+            overs, ball_format = 1, "T20"
+            match_type, expire_seconds = TYPE_SUPER_OVER, GAME_SECONDS
         settings = random_match_settings()
         # Honour the host's chosen pitch (selected during setup); fall back to the
         # randomised surface only when no pitch was picked.
@@ -1937,7 +1953,7 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
         conditions = draft.get("conditions") or {}
         match = Match(
             user1_id=host.id, user2_id=target.id, status="active",
-            match_type=TYPE_CIPL,
+            match_type=match_type,
             overs=overs, toss_winner_id=winner.id, toss_decision=decision,
             batting_first_id=bat_user.id, bowling_first_id=bowl_user.id,
             stadium=draft.get("stadium") or settings["stadium"], pitch_type=chosen_pitch,
@@ -1945,7 +1961,7 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
             temperature=conditions.get("temperature") or settings["temperature"],
             umpire1=settings["umpire1"], umpire2=settings["umpire2"],
             chat_id=draft["chat_id"], created_at=datetime.utcnow(),
-            expires_at=datetime.utcnow() + timedelta(seconds=MATCH_EXPIRE),
+            expires_at=datetime.utcnow() + timedelta(seconds=expire_seconds),
             tournament_id=tournament_id,
         )
         session.add(match)
@@ -2008,6 +2024,9 @@ async def _launch_after_toss(context, q, draft, draft_id, decision, winner_side)
     winner_name = (draft.get(winner_side) or {}).get("name", "Winner")
     fmt_label = "The Hundred (100 balls)" if ball_format == "The100" else f"{match_obj.overs} overs"
     unit_flow = "set by set" if ball_format == "The100" else "over by over"
+    if draft.get("standalone_super_over"):
+        fmt_label = "Unranked Super Over · 6 balls · 2 wickets"
+        unit_flow = "ball by ball"
     # The toss-result edit is cosmetic. If Telegram rejects it (the message was
     # deleted, a network blip, an "unmodified" reply) the match must still start
     # — an unguarded edit here used to abort the launch AFTER the Match row had
@@ -2057,6 +2076,10 @@ async def _recover_failed_handoff(context, draft, draft_id, winner_side,
     """
     mid = draft.get("match_id")
     chat_id = draft.get("chat_id")
+    if draft.get("standalone_super_over") and context.bot_data.get(f"so_{mid}"):
+        from handlers.super_over import resume_super_over
+        if await resume_super_over(context, mid):
+            return
     if mid and await _live_cipl_state(context, draft) is not None:
         if await cipl_resume(context, mid):
             logger.info("/cipl recovered stalled launch for match %s", mid)
@@ -2118,6 +2141,19 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         str(bat_user.telegram_id): bat_user.username or bat_user.first_name or "Player",
         str(bowl_user.telegram_id): bowl_user.username or bowl_user.first_name or "Player",
     }
+    if draft and draft.get("standalone_super_over"):
+        from handlers.super_over import start_super_over
+        from handlers.play_super_over import _arm_timeout, GAME_SECONDS
+        state.update(standalone_super_over=True, stats_disabled=True,
+                     unranked=True, is_letsplay=True, toss_selected=True,
+                     league_key=draft.get("league_key"),
+                     league_name=draft.get("league_name"))
+        # No main innings or MatchState: the regular innings heartbeat must
+        # never advance a practice Super Over behind its live buttons.
+        if not await start_super_over(context, match.id, state):
+            raise RuntimeError("Could not start league Super Over")
+        _arm_timeout(context, match.id, chat_id, "active", GAME_SECONDS)
+        return
     # Carry tournament identity through the match so the result is recorded against
     # the active Challenge League Tournament when it completes.
     if draft:

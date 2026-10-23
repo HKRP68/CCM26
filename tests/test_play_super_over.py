@@ -21,6 +21,8 @@ class PracticeSuperOverTests(unittest.TestCase):
         from database import get_session
         from models import User, Match, MatchScorecard
         from handlers import play_super_over as H, super_over as SO
+        from handlers import match as match_handler
+        from services import match_state_store
         self.H, self.SO = H, SO
         self.Match, self.Card = Match, MatchScorecard
         self.db = get_session()
@@ -34,6 +36,8 @@ class PracticeSuperOverTests(unittest.TestCase):
                                 edit_message_text=AsyncMock(), edit_message_reply_markup=AsyncMock(),
                                 send_photo=AsyncMock()))
         self.patches = [patch.object(H, 'get_session', get_session), patch.object(SO, 'get_session', get_session),
+                        patch.object(match_handler, 'get_session', get_session),
+                        patch.object(match_state_store, 'get_session', get_session),
                         patch.object(H, '_xi', side_effect=self.xi), patch.object(SO, '_BALL_PAUSE', 0),
                         patch.object(SO, '_build_super_over_card', return_value=None)]
         for p in self.patches: p.start()
@@ -73,7 +77,14 @@ class PracticeSuperOverTests(unittest.TestCase):
 
     def accept(self, row, who=1):
         update = self.query(f'sop_accept_{row.id}', self.users[who].telegram_id)
-        asyncio.run(self.H.superover_invite_callback(update, self.ctx))
+        from services import button_access
+        update.callback_query.message.message_id = 5
+        button_access.register_button_owner(row.chat_id, 5, self.users[0].telegram_id)
+        try:
+            self.assertTrue(button_access.check_callback_owner(update))
+            asyncio.run(self.H.superover_invite_callback(update, self.ctx))
+        finally:
+            button_access._OWNER_BY_MESSAGE.clear()
         self.db.expire_all()
         return update
 
@@ -86,6 +97,57 @@ class PracticeSuperOverTests(unittest.TestCase):
         self.assertEqual(row.status, 'pending')
         self.assertIn('Only the invited', rejected.callback_query.answer.call_args.args[0])
         self.assertNotIn(f'so_{row.id}', self.ctx.bot_data)
+
+    def test_league_launch_honours_toss_and_skips_regular_innings(self):
+        from handlers import cipl_play as cp
+        from database import get_session
+        from models import MatchState
+        for decision, first in (("bat", 0), ("bowl", 1)):
+            with self.subTest(decision=decision):
+                draft = dict(standalone_super_over=True, chat_id=-10055,
+                    host_user_id=self.users[0].id, target_user_id=self.users[1].id,
+                    host_tg_id=self.users[0].telegram_id, target_tg_id=self.users[1].telegram_id,
+                    host_team="Mumbai Indians", target_team="Chennai Super Kings",
+                    host=dict(name="Host"), target=dict(name="Guest"),
+                    league_key="ipl", league_name="IPL", ball_format="The100",
+                    toss_decision=decision, toss_winner_side="host")
+                query = self.query("cl_start_123", self.users[0].telegram_id).callback_query
+                query.message.message_id = 5
+                with patch.object(cp, 'get_session', get_session), \
+                     patch.object(cp, 'build_xi_from_draft', side_effect=lambda s, d, side: self.xi(s, self.users[0 if side == 'host' else 1])), \
+                     patch.object(cp, 'build_bench_from_draft', return_value=[]), \
+                     patch.object(cp, '_resolve_team_identity', return_value=('XI', '🏏')), \
+                     patch.object(cp, '_ss', new=AsyncMock()) as save_main, \
+                     patch.object(cp, '_prompt_bowler', new=AsyncMock()) as main_prompt:
+                    asyncio.run(cp._launch_after_toss(self.ctx, query, draft, 123, decision, 'host'))
+                self.assertTrue(draft.get('match_launched'), query.answer.call_args_list)
+                mid = draft['match_id']
+                row = self.db.get(self.Match, mid)
+                self.assertEqual((row.match_type, row.overs), ('super_over_practice', 1))
+                self.assertEqual(row.batting_first_id, self.users[first].id)
+                self.assertIsNone(row.tournament_id)
+                self.assertEqual(self.db.query(MatchState).filter_by(match_id=mid).count(), 0)
+                so = self.ctx.bot_data[f'so_{mid}']
+                self.assertEqual(so['bat_uid'], self.users[first].id)
+                self.assertTrue(so['main_state']['unranked'])
+                self.assertEqual(so['main_state']['ball_format'], 'T20')
+                heading = next(call.args[1] for call in reversed(self.ctx.bot.send_message.call_args_list)
+                               if 'UNRANKED SUPER OVER</b>' in str(call.args[1]))
+                self.assertIn('Toss decision:', heading)
+                self.assertNotIn('Random toss:', heading)
+                save_main.assert_not_awaited()
+                main_prompt.assert_not_awaited()
+                # Old Start buttons must neither cancel nor relaunch this game.
+                with patch.object(cp, '_launch_after_toss', new=AsyncMock()) as launch, \
+                     patch.object(self.SO, 'resume_super_over', new=AsyncMock(return_value=True)):
+                    asyncio.run(cp.start_match_launch(self.ctx, query, draft, 123))
+                    launch.assert_not_awaited()
+                    self.ctx.bot_data.pop(f'so_{mid}')
+                    asyncio.run(cp.start_match_launch(self.ctx, query, draft, 123))
+                    launch.assert_not_awaited()
+                asyncio.run(self.H.cancel_super_over(self.update(), self.ctx))
+                self.db.expire_all()
+                self.assertEqual(self.db.get(self.Match, mid).status, 'cancelled')
 
     def test_accept_starts_only_once_and_does_not_claim_a_main_match_tied(self):
         row, _ = self.invite()

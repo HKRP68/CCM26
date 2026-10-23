@@ -300,7 +300,8 @@ async def start_super_over(context, mid, state) -> bool:
         if standalone:
             await context.bot.send_message(so['chat_id'],
                 '⚡ <b>UNRANKED SUPER OVER</b>\n\n'
-                f"Random toss: <b>{html.escape(teams[second_bat_uid]['name'])}</b> bats first.\n"
+                f"{'Toss decision' if state.get('toss_selected') else 'Random toss'}: "
+                f"<b>{html.escape(teams[second_bat_uid]['name'])}</b> bats first.\n"
                 f"Pitch: {html.escape(so['pitch'])}\n"
                 'Choose three batters and one bowler.\n'
                 'Six legal balls or two wickets per innings.\n'

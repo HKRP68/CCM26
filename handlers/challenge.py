@@ -209,6 +209,18 @@ def is_challenge_league_command(command_name, session):
     return league_key, _league_display_from_key(league_key, leagues)
 
 
+def is_super_over_league_command(command_name, session):
+    """Resolve /s<league short code> without accepting unrelated commands."""
+    command = (command_name or "").lower().lstrip("/")
+    if not command.startswith("s") or len(command) < 2:
+        return None, None
+    league_key = command[1:]
+    leagues = _challenge_leagues(session)
+    if league_key not in leagues:
+        return None, None
+    return league_key, leagues[league_key]
+
+
 def _tournament_command_map(session):
     """Return ``{command: ChallengeLeague}`` for every league's tournament command."""
     out = {}
@@ -1972,7 +1984,9 @@ def _team_picker_blocks(draft, player_key):
         title=_league_battle_title(draft.get("league_name")),
         player=draft.get(player_key) or {},
         league_name=_picker_league_name(draft, player_key),
-        status_lines=_team_selection_status(draft),
+        status_lines=(["⚡ UNRANKED SUPER OVER · 6 balls · 2 wickets"]
+                      if draft.get("standalone_super_over") else [])
+                     + _team_selection_status(draft),
         action=(", pick a league." if _multi_side_needs_league(draft, player_key)
                 else None))
 
@@ -1992,6 +2006,8 @@ def _team_picker_prompt(draft, player_key):
         f"🏆 <b>{_league_battle_title(league_name)}</b>",
         "═════════════════════════════",
     ]
+    if draft.get("standalone_super_over"):
+        lines.append("⚡ <b>UNRANKED SUPER OVER · 6 balls · 2 wickets</b>")
     lines.extend(_team_selection_status(draft))
     if len(lines) > 2:
         lines.append("")
@@ -2016,7 +2032,7 @@ def _local_static_path(image_url):
     return None
 
 
-async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None, tournament_name=None, is_tournament=False, vs_bot=False, owner_locked=False, host_teams=None, guest_teams=None, overs=None, multi_leagues=None, ball_format=None):
+async def _send_league_team_picker(update, context, *, challenger, target, league_key, league_name, league_record, teams, session=None, tournament_id=None, tournament_name=None, is_tournament=False, vs_bot=False, owner_locked=False, host_teams=None, guest_teams=None, overs=None, multi_leagues=None, ball_format=None, standalone_super_over=False):
     # ``effective_message`` rather than ``update.message`` so this also works when
     # the picker is opened from a button (the /ciplbot Rematch), where
     # ``update.message`` is None.
@@ -2086,6 +2102,7 @@ async def _send_league_team_picker(update, context, *, challenger, target, leagu
         # /ciplbot: the "target" is the AI opponent. It picks its own team and
         # Playing XI, calls nothing, and the match is unranked practice.
         "vs_bot": bool(vs_bot),
+        "standalone_super_over": bool(standalone_super_over),
         # Custom length for a friendly (/cipl 6); None = the full 20. Never set
         # for a tournament match — see cipl_play._launch_after_toss.
         "overs": (int(overs) if overs and not is_tournament else None),
@@ -2770,8 +2787,23 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
             return
 
         league_key, league_name = is_challenge_league_command(command_name, session)
+        standalone_super_over = False
         if not league_key:
-            return
+            # Explicit bot commands (e.g. /stats) keep their existing meaning,
+            # even if an admin creates a league with a colliding short code.
+            application = getattr(context, "application", None)
+            if application and any(
+                command_name in getattr(handler, "commands", ())
+                for group in application.handlers.values() for handler in group
+            ):
+                return
+            league_key, league_name = is_super_over_league_command(command_name, session)
+            if not league_key:
+                return
+            standalone_super_over = True
+            if update.effective_chat.id > 0:
+                await update.message.reply_text("Use this command in a group, replying to your opponent's message.")
+                return
 
         # Custom length for a friendly: /cipl 6 (as a reply). Tournament and CL
         # Tour matches never come through here, so they stay full length.
@@ -2781,6 +2813,11 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
         _msg = update.effective_message
         _words = ((getattr(_msg, "text", None) or "").split()[1:]
                   if getattr(context, "args", None) is None else context.args)
+        if standalone_super_over and _words:
+            await update.message.reply_text(
+                f"Reply to your opponent with /{command_name}. "
+                "A Super Over always has six legal balls and two wickets per innings.")
+            return
         # /cipl multi [overs | 100B]: each side picks a league, then a team.
         is_multi, multi_overs, multi_format, multi_error = parse_multi_args(_words)
         if is_multi:
@@ -2838,6 +2875,7 @@ async def challenge_league_handler(update: Update, context: ContextTypes.DEFAULT
             league_key=league_key, league_name=league_name,
             league_record=league_record, teams=teams, session=session,
             overs=custom_overs,
+            standalone_super_over=standalone_super_over,
         )
     finally:
         # The bot-alias branch above closes and clears the session before
