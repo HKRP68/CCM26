@@ -226,7 +226,7 @@ UNPUBLISHED_ON_PURPOSE = {
     # Challenge League tournament views — /help, the hub's buttons, and
     # whatever alias a league sets as its fixtures_command.
     "ctour", "cttable", "ctfixtures", "ctteams", "ctinjuries",
-    "clsd", "teamtourstats", "mvp", "teamowner",
+    "clsd", "teamtourstats", "mvp", "teamowner", "clsquad",
     # In-match, offered by the match's own keyboard at the moment it applies.
     "impact", "pitchstats",
     # Saved matches and the Mini App switch — named on the match-start card,

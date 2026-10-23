@@ -38,8 +38,8 @@ class SquadReportTests(F.FeatureCase):
         blocks, text = AR.squad_view(self.session, self.season, self.mumbai)
         for heading in ('Batsmen (1)', 'Bowlers (1)', 'All-rounders (2)', 'Wicket-keepers (1)'):
             self.assertIn(heading, text)
-        self.assertIn(f'{batter.name} [Base] · OVR 91 · BAT 96 · BOWL 45', text)
-        self.assertIn(f'{bowler.name} [IPL2026] · OVR 93 · BAT 49 · BOWL 97', text)
+        self.assertIn(f'{batter.name} [Base] · Batsman · OVR 91 · BAT 96 · BOWL 45', text)
+        self.assertIn(f'{bowler.name} [IPL2026] · Bowler · OVR 93 · BAT 49 · BOWL 97', text)
         headings = [block['text'] for block in blocks if block['type'] == 'heading']
         self.assertIn('All-rounders (2)', headings)
         tables = [block for block in blocks if block['type'] == 'table']
@@ -47,6 +47,18 @@ class SquadReportTests(F.FeatureCase):
         cells = [str(cell) for table in tables for row in table['cells'] for cell in row]
         self.assertTrue(any('BAT' in cell for cell in cells))
         self.assertTrue(any('BOWL' in cell for cell in cells))
+        self.assertTrue(any('Category' in cell for cell in cells))
+
+    def test_squad_rating_is_the_signed_squad_average_in_both_renderings(self):
+        from services import auction_rich as AR
+        self.sign('First', overall=90, batting=94, bowling=40)
+        self.sign('Second', 'Bowler', overall=86, batting=60, bowling=92)
+        blocks, text = AR.squad_view(self.session, self.season, self.mumbai)
+        expected = 'Squad rating: 88.0 OVR · BAT 77.0 · BOWL 66.0'
+        self.assertIn(expected, text)
+        self.assertIn(expected, str(blocks))
+        _, empty = AR.squad_view(self.session, self.season, self.delhi)
+        self.assertIn('Squad rating: — OVR', empty)
 
     def test_net_used_and_contract_value_differ_after_purse_adjustment(self):
         self.sign('Paid batter', price=1000)
@@ -104,6 +116,7 @@ class SquadReportTests(F.FeatureCase):
         self.assertEqual(100, data['contract_value'])
         self.assertEqual(9900, data['left'])
         self.assertEqual(before, len(self.A.lots(self.session, self.season.id)))
+        self.assertIn('Squad rating: 91.0 OVR', text)
 
     def test_summary_command_and_asquad_all_are_public_and_split_without_omission(self):
         from handlers import auction as H

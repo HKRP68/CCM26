@@ -318,6 +318,7 @@ Admin commands for running one: [Appendix B](#appendix-b--admin--owner-commands)
 | `/cttable` | `/ctpoints` | Points table |
 | `/ctfixtures` | `/ctfix` | The schedule, one round at a time — played matches struck through |
 | `/ctteams` | — | The participating teams and who owns them |
+| `/clsquad [league \| team]` | `/csquad` `/ctsquad` | Challenge League squad: player name, category, Overall, Bat and Bowl, plus the squad's average ratings. With no arguments, shows your tournament team or a picker; otherwise browse leagues or search any team |
 | `/ctinjuries` | `/ctinjury` | Who is ruled out injured, and for how many more matches 🚑 |
 | `/clsd` | `/clschedule` `/ctsd` | One team's schedule: standing, form, next matches, results |
 | `/teamowner` | `/teamowners` `/towner` | Who owns and co-owns each team (all teams, or one by name) — names shown, nobody tagged |
@@ -383,7 +384,7 @@ An auction is a group event; these run in the chat the auction is bound to.
 | `/asets [page]` 👥 | — | Every set in running order, numbered — tap one for its first few players, or press its number for the whole set |
 | `/anextset` 👥 | — | The next set's players |
 | `/anextplayer` 👥 | `/anextplayers` | Who comes to the block next |
-| `/asquad [team]` 👥 | `/amysquad` | Full squad by category, with overall/batting/bowling ratings, edition, price and purse |
+| `/asquad [team]` 👥 | `/amysquad` | Full squad by category, with explicit player categories, Overall/Bat/Bowl, squad average ratings, edition, price and purse |
 | `/ateamsummary [team]` 👥 | `/asummary` · `/asquad all` | All-team purse overview and full categorized squads, limits, shortages and max bids |
 | `/asoldlist` 👥 | — | Every player sold, set by set |
 | `/aunsoldlist` 👥 | — | The ⚡ Unsold / Accelerated set |

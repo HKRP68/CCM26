@@ -1810,6 +1810,9 @@ def main():
         app.add_handler(CommandHandler(["cttable", "ctpoints"], cttable_handler))
         app.add_handler(CommandHandler(["ctfixtures", "ctfix"], ctfixtures_handler))
         app.add_handler(CommandHandler("ctteams", ctteams_handler))
+        from handlers.challenge_squad import clsquad_handler, clsquad_callback
+        app.add_handler(CommandHandler(["clsquad", "csquad", "ctsquad"], clsquad_handler))
+        app.add_handler(CallbackQueryHandler(clsquad_callback, pattern=r"^clsq_"))
         app.add_handler(CommandHandler(["ctinjuries", "ctinjury"],
                                        ctinjuries_handler))
         app.add_handler(CallbackQueryHandler(ct_view_callback, pattern=r"^ctv_"))

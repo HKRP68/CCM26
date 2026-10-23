@@ -2331,7 +2331,7 @@ each player. No players are bought and no purses change.
 
 `/asquad` shows the owner's full signed squad; `/asquad Team Name` shows any
 team. Players are grouped as batsmen, wicket-keepers, all-rounders and bowlers,
-with other configured categories preserved. Every player includes edition,
+with other configured categories preserved. Every player includes category, edition,
 overall (OVR), batting (BAT), bowling (BOWL), price and acquisition/trade marks.
 Both rich cards and plain Telegram replies carry the same complete roster;
 long replies are split across messages without dropping players.
@@ -2344,7 +2344,9 @@ for their auction.
 
 Additional information includes minimum/maximum squad size, players still
 needed, free slots, overseas count/cap, category limits and shortages, average
-OVR/BAT/BOWL ratings, retention status, draft picks, RTM cards and rating rules.
+OVR/BAT/BOWL ratings under **Squad rating**, retention status, draft picks, RTM
+cards and rating rules. Squad ratings average the recorded values across all
+signed players; unretained rights are excluded.
 Net purse used is total purse minus remaining purse, including cash trades and
 adjustments. Current signed contract value is shown separately so those figures
 remain understandable after trades.

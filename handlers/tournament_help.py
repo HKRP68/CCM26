@@ -41,6 +41,8 @@ PLAYER_SECTIONS = (
         ("/ctfixtures", "/ctfix",
          "This round's fixtures and the results so far"),
         ("/ctteams", "", "The participating teams and who owns them"),
+        ("/clsquad", "/csquad /ctsquad",
+         "Challenge League squads: player, category, Overall/Bat/Bowl and squad rating; no name shows your tournament team"),
         ("/ctinjuries", "/ctinjury", "Who is injured, and for how many matches"),
         ("/clsd", "/clschedule /ctsd",
          "One team's schedule: standing, form, next matches, results"),

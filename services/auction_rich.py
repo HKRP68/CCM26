@@ -671,10 +671,11 @@ def _squad_blocks(season, data):
     for category, players in data['groups']:
         blocks.append(R.heading(f"{category} ({len(players)})", size=3))
         table = [[R.cell(R.bold(label), header=True) for label in
-                  ('Player / version', 'OVR', 'BAT', 'BOWL', 'Price')]]
+                  ('Player / version', 'Category', 'OVR', 'BAT', 'BOWL', 'Price')]]
         for player in players:
             icon = (A.acquisition_icon(player) + A.trade_mark(player, data['traded'])).strip()
             table.append([R.cell(f"{_flag(player)} {player.name} [{player.version or 'Base'}] {icon}"),
+                          R.cell(player.category or 'Other'),
                           *[R.cell(REPORT.rating(player, attr), align='right')
                             for attr in ('rating', 'bat_rating', 'bowl_rating')],
                           R.cell(_money(season, player.sold_price_lakh), align='right')])
@@ -684,9 +685,10 @@ def _squad_blocks(season, data):
         for category, players in data['rights']:
             blocks.append(R.paragraph(R.bold(f"{category} ({len(players)})")))
             table = [[R.cell(R.bold(label), header=True) for label in
-                      ('Player / version', 'OVR', 'BAT', 'BOWL')]]
+                      ('Player / version', 'Category', 'OVR', 'BAT', 'BOWL')]]
             for player in players:
                 table.append([R.cell(f"{player.name} [{player.version or 'Base'}]"),
+                              R.cell(player.category or 'Other'),
                               *[R.cell(REPORT.rating(player, attr), align='right')
                                 for attr in ('rating', 'bat_rating', 'bowl_rating')]])
             blocks.append(R.table(table, bordered=True, compact=True))

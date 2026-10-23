@@ -1,6 +1,7 @@
 """Read-only squad reports shared by rich cards and Telegram HTML."""
 import re
 from html import escape
+from services import squad_ratings
 
 CATEGORY_ORDER = ('Batsmen', 'Wicket-keepers', 'All-rounders', 'Bowlers')
 
@@ -49,10 +50,7 @@ def team_data(session, season, team):
         ids = [pid for pid in ids if pid not in signed]
         if ids:
             rights = session.query(Player).filter(Player.id.in_(ids)).all()
-    averages = {}
-    for attr in ('rating', 'bat_rating', 'bowl_rating'):
-        values = [getattr(p, attr) for p in rows if getattr(p, attr, None) is not None]
-        averages[attr] = f'{sum(values) / len(values):.1f}' if values else '—'
+    averages = squad_ratings.averages(rows)
     return dict(team=team, players=rows, groups=grouped(rows), rights=grouped(rights),
                 count=len(rows), overseas=sum(bool(p.is_overseas) for p in rows),
                 contract_value=sum(int(p.sold_price_lakh or 0) for p in rows),
@@ -78,7 +76,7 @@ def summary_lines(season, data):
              f"📑 Current contracts: {money(data['contract_value'])} · 🎯 Max bid: {money(data['max_bid'])}",
              f"Squad min {season.min_squad_size}, max {season.max_squad_size} · {data['needed']} needed · {data['slots']} free slots",
              f"✈️ Overseas: {data['overseas']}/{season.max_overseas}",
-             f"Average OVR {data['averages']['rating']} · BAT {data['averages']['bat_rating']} · BOWL {data['averages']['bowl_rating']}"]
+             squad_ratings.summary(data['averages'])]
     if season.max_retentions:
         final = bool(team.retention_finalized_at or A.retention_locked(season))
         state = 'final' if final else ('open' if A.retention_open(season) else 'closed')
@@ -110,7 +108,7 @@ def render_team(season, data):
         for player in players:
             how = A.acquisition_mark(player) + A.trade_mark(player, data['traded'])
             lines.append(f"{'✈️' if player.is_overseas else '🏠'} {escape(player.name)} "
-                         f"[{escape(player.version or 'Base')}] · OVR {rating(player, 'rating')} · "
+                         f"[{escape(player.version or 'Base')}] · {escape(player.category or 'Other')} · OVR {rating(player, 'rating')} · "
                          f"BAT {rating(player, 'bat_rating')} · BOWL {rating(player, 'bowl_rating')} · "
                          f"{A.render_money(player.sold_price_lakh, season.currency_label)}{how}")
     if data['rights']:
@@ -118,7 +116,7 @@ def render_team(season, data):
         for category, players in data['rights']:
             lines.append(f'<b>{escape(category)} ({len(players)})</b>')
             for player in players:
-                lines.append(f"{escape(player.name)} [{escape(player.version or 'Base')}] · "
+                lines.append(f"{escape(player.name)} [{escape(player.version or 'Base')}] · {escape(player.category or 'Other')} · "
                              f"OVR {rating(player, 'rating')} · BAT {rating(player, 'bat_rating')} · "
                              f"BOWL {rating(player, 'bowl_rating')}")
         lines.append('<i>Rights are excluded from signed squad counts and contract totals.</i>')
