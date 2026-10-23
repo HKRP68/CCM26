@@ -8,13 +8,23 @@ Player of the Match when available, and the match link, followed by:
 Both handles stay in the caption when a long Super Over history moves onto the
 scorecard image. Existing delivery retries and duplicate protection still apply.
 
-For tournament fixtures using the existing planned Super Over setting, both
-sides now play under the ball engine's attacking death-over conditions with a
-1.45 multiplier on boundary weights. This
-raises expected scoring, while deliveries, shots, ratings, extras, dots and
-wickets still matter. There is no minimum score or selected winner. Ordinary
-Super Overs retain their existing balance. The existing two-Super-Over setting
-still conditions the first Super Over to finish level.
+The existing tournament Super Over setting remains available. All Super Overs
+now share attacking final-over conditions and bounded chase pressure, using the
+same ball model for ordinary and configured matches. Ratings, shots, deliveries,
+dots and wickets still matter; there is no special tournament scoring boost.
+The existing two-Super-Over setting still conditions the first round to finish
+level, while its deliveries use the shared engine.
+
+No-balls can produce fours or sixes, a bowled/caught dismissal that is overturned,
+or a rare run out while attempting a run. Completed runs and the no-ball penalty
+count separately. A no-ball awards a free hit, which survives intervening wides
+and no-balls; only a run out can dismiss a batter on it. Bowler figures exclude
+run outs. A faced no-ball counts as a batter's ball but never as a legal delivery.
+The auto-simulation follows the same extra-ball and strike-rotation rules.
+
+Live commentary calls out these incidents and late chase equations. A short
+turning-point recap uses actual deliveries from the Super Over, including
+reprieves, wickets, big hits and the winning delivery.
 
 Tournament comparisons:
 

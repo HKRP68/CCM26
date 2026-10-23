@@ -167,7 +167,8 @@ def constrain_tie_outcome(outcome, *, runs, par, remaining, wickets,
     weights = [base.get(n, 0.01) * math.exp(tilt * n) for n in choices]
     selected = rng.choices(choices, weights=weights, k=1)[0]
     return dict(outcome, type='run', runs=selected,
-                is_extra=False, extra_type=None, batter_out=False, wicket_type=None)
+                is_extra=False, extra_type=None, batter_out=False, wicket_type=None,
+                disallowed_wicket=None, dropped_catch=False, misfield=False)
 
 
 def fixture_sections(fixtures):
@@ -192,4 +193,5 @@ def cap_first_innings(outcome, runs, maximum):
     if runs + scored + penalty <= maximum:
         return outcome
     return dict(outcome, type='run', runs=max(0, maximum-runs), is_extra=False,
-                extra_type=None, batter_out=False, wicket_type=None)
+                extra_type=None, batter_out=False, wicket_type=None,
+                disallowed_wicket=None, dropped_catch=False, misfield=False)

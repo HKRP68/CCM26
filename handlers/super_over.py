@@ -40,22 +40,21 @@ Special Super Over rules (per the workflow spec):
     dragging players through Super Over after Super Over.
   • Super Over score is kept separate from the main-match score.
 
-Using the real match engine rather than a separate arcade matrix is what makes
-the Super Over a fair extension of the game instead of a lottery. Measured over
-20,000 simulated Super Overs (see tests/test_super_over.py):
+The shared match engine keeps ratings, traits and captain choices relevant.
+Balance simulations in tests/test_super_over.py check scoring, equal-team
+fairness and replay frequency:
 
-  • Player ratings decide it. The engine's rating layers (differential curve,
-    class tiers, per-ball execution duel) apply in full: a 90-rated batting side
-    beats a 75-rated one ~80% of the time, where the old matrix left it a
-    coin flip.
+  • Rating layers (differential curve, class tiers and per-ball execution duel)
+    apply in full, so stronger batters score more and stronger bowlers concede
+    less over a sample of deliveries.
   • Traits apply in /letsplay, exactly as in the match itself — the XI dicts
     carry each player's traits and they go through the engine's trait layer.
     Challenge League XIs carry no traits, so /cipl is decided on ratings alone;
     the data does the branching, not the code.
-  • Neither side gets a handicap. With no batting-first edge, equal sides split
-    47%/47% (the balance being the ~6% that finish level on runs).
-  • Scoring is realistic: ~11 runs an over between equal sides, against the ~17
-    the boundary-inflated matrix produced.
+  • Both sides use the same final-over conditions. Chase pressure reflects the
+    actual runs and legal balls remaining, with a bounded effect on risk.
+  • Low scores, wickets and boundary-heavy overs remain possible. No-ball
+    boundaries, reprieves and rare run outs add variety without a score floor.
 
 State lives in ``context.bot_data[f"so_{mid}"]`` (in-memory, like the /wpm and
 /cm lobbies). The main Match row stays ``active`` until a winner is found, so the
@@ -77,6 +76,7 @@ from models import Match
 from services.match_outcome import mark_end, END_COMPLETED
 from services.bowling_service import get_delivery_options, AVAILABLE_SHOTS
 from services.sim_match import _adapt_player, _normalize_outcome
+from services import super_over_engine
 
 from engine import pitch_registry
 
@@ -98,14 +98,10 @@ def _engine_pitch(pitch):
 # the chat reads like a live broadcast rather than an instant jump.
 _BALL_PAUSE = 1.4
 
-# The Super Over is simulated as one NEUTRAL middle over: the engine's
-# powerplay window is overs 0-5 and its death window is overs 16-19, and both
-# inflate boundaries hard (death multiplies them by up to 2.2). Handing the
-# Super Over a death over is what turned it into a 17-run slugfest; over 10 sits
-# in neither window, so totals land in the realistic 8-14 band and the result
-# turns on the players rather than on a phase multiplier.
-SO_ENGINE_OVER = 10
-SO_ENGINE_TOTAL_OVERS = 20
+# Every Super Over is an attacking final over. Tournament fixture settings do
+# not change the ball model: ratings, shots, wickets and dots apply to both sides.
+SO_ENGINE_OVER = super_over_engine.ENGINE_OVER
+SO_ENGINE_TOTAL_OVERS = super_over_engine.TOTAL_OVERS
 
 # The Super Over's own rules, named rather than sprinkled as literals so every
 # gate (selection, the per-ball guard, the innings-end check) reads the same
@@ -123,7 +119,7 @@ SO_MAX_DELIVERIES = 24
 # the extras weights puts a wide in about one over in seven and a no-ball — with
 # the free hit that follows — in about one in twenty. Only the extras move; runs
 # and wickets are untouched, so the result still turns on the players.
-SO_EXTRAS_MULT = 2.0
+SO_EXTRAS_MULT = super_over_engine.EXTRAS_MULT
 
 
 def _so_key(mid):
@@ -1089,6 +1085,19 @@ def _ball_commentary(oc, batter_name, bowler_name):
     """
     otype = oc.get("type")
     runs = int(oc.get("runs", 0))
+    if oc.get('batter_out') and oc.get('wicket_type') == 'Run Out':
+        penalty = ' One no-ball penalty plus the completed runs count.' if oc.get('extra_type') == 'No Ball' else ''
+        return f'RUN OUT! {batter_name} is short of the crease.{penalty} No wicket for the bowler.'
+    if oc.get('disallowed_wicket'):
+        reason = 'NO BALL' if oc.get('extra_type') == 'No Ball' else 'FREE HIT'
+        return f"{oc['disallowed_wicket']}… but {reason}! {batter_name} survives; no wicket is counted."
+    if oc.get('extra_type') == 'No Ball' and runs in (4, 6):
+        return (f"NO BALL AND {'SIX' if runs == 6 else 'FOUR'}! {batter_name} puts it away. "
+                f'{runs + 1} runs added, and the delivery must be bowled again.')
+    if oc.get('dropped_catch'):
+        return f'DROPPED! {batter_name} gets a life and {runs} run(s). A huge missed chance.'
+    if oc.get('misfield'):
+        return f'A misfield lets {batter_name} through for {runs}. Pressure in the field.'
     if otype == "wicket":
         how = (oc.get("wicket_type") or "").lower()
         key = {"bowled": "wicket_bowled", "lbw": "wicket_lbw",
@@ -1123,24 +1132,57 @@ def _crowd_line(so, inn, otype, runs, out):
     of numbers. It keys off what just happened AND the state of the chase, so a
     six with two needed off one lands differently from a six in a stroll.
     """
+    line = '🏟 <i>The crowd holds its breath…</i>'
     if out:
-        return "🔴 <i>Stunned silence, then a roar. That is a huge wicket.</i>"
-    if otype == "run" and runs == 6:
-        return "🚀 <i>INTO THE STANDS! The whole ground is on its feet!</i>"
-    if otype == "run" and runs == 4:
-        return "💨 <i>Races away to the fence — the pressure just flipped.</i>"
-    if otype == "run" and runs == 0:
-        return "😤 <i>Dot ball. You can hear the tension from here.</i>"
-    if otype == "extra":
-        return "😬 <i>Nerves from the bowler — free runs in a Super Over!</i>"
+        line = "🔴 <i>Stunned silence, then a roar. That is a huge wicket.</i>"
+    elif otype == "run" and runs == 6:
+        line = "🚀 <i>INTO THE STANDS! The whole ground is on its feet!</i>"
+    elif otype == "run" and runs == 4:
+        line = "💨 <i>Races away to the fence — the pressure just flipped.</i>"
+    elif otype == "run" and runs == 0:
+        line = "😤 <i>Dot ball. You can hear the tension from here.</i>"
+    elif otype == "extra":
+        line = "😬 <i>Nerves from the bowler — the extra delivery could matter.</i>"
     if so["innings_no"] == 2 and so.get("target"):
         need = max(0, so["target"] - inn["runs"])
         left = max(0, SO_LEGAL_BALLS - inn["legal"])
-        if left == 1 and need <= 6:
-            return f"🚨 <i>It all comes down to the final ball — {need} to win.</i>"
-        if need <= 2 and left >= 2:
-            return "😅 <i>Almost home now.</i>"
-    return "🏟 <i>The crowd holds its breath…</i>"
+        if need == 0:
+            return '🏆 <i>That seals the chase! The dugout erupts.</i>'
+        if inn['wickets'] >= SO_MAX_WICKETS or left == 0:
+            return line
+        if left == 1:
+            line += f"\n🚨 <i>Final legal ball — {need} to win, {max(0, need - 1)} to draw level.</i>"
+        elif left <= 3:
+            line += f'\n⚡ <i>{need} needed from {left} legal balls.</i>'
+    return line
+
+
+def _record_turning_point(so, inn, outcome, batter_name, free_hit, commentary):
+    """Keep a small evidence-based recap, never invent a dramatic event."""
+    runs = int(outcome.get('runs') or 0)
+    out = bool(outcome.get('batter_out') or outcome.get('type') == 'wicket')
+    no_ball = outcome.get('extra_type') == 'No Ball'
+    won = so.get('target') is not None and inn['runs'] >= so['target']
+    rank = (11 if won else 10 if out else 9 if outcome.get('disallowed_wicket')
+            else 8 if no_ball and runs in (4, 6) else 7 if outcome.get('dropped_catch')
+            else 6 if free_hit and runs in (4, 6) else 5 if runs == 6
+            else 4 if runs == 0 and so.get('target') and inn['legal'] >= 4 else 0)
+    if not rank:
+        return
+    text = commentary
+    if won:
+        text = f'{batter_name} seals the chase. ' + text
+    points = so.setdefault('turning_points', [])
+    points.append(dict(rank=rank, sequence=sum(d.get('deliveries', 0) for d in so.get('so_innings', [])) + inn['deliveries'],
+                       round=so['so_number'], innings=so['innings_no'],
+                       team=so['teams'][so['bat_uid']]['name'], score=f"{inn['runs']}/{inn['wickets']}",
+                       ball=f"{inn['legal'] // 6}.{inn['legal'] % 6}", text=text))
+    points[:] = sorted(points, key=lambda p: (-p['rank'], p['sequence']))[:6]
+
+
+def _turning_points(so):
+    points = sorted(so.get('turning_points') or [], key=lambda p: (-p['rank'], p['sequence']))[:3]
+    return sorted(points, key=lambda p: p['sequence'])
 
 
 # ── Ball resolution (the main match engine, unchanged rules) ───────────
@@ -1159,8 +1201,7 @@ def _required_rate(target, runs, legal):
 def _super_over_ball(batter, bowler, pitch, *, batter_runs=0, balls_faced=0,
                      bat_traits=None, bowl_traits=None, free_hit=False,
                      legal=0, target=None, runs=0, shot=None,
-                     variation=None, length=None, delivery_repeat=0,
-                     attacking_contest=False):
+                     variation=None, length=None, delivery_repeat=0, wickets=0):
     """Resolve ONE Super Over delivery — a single ball of /playmatch.
 
     Pure (no Telegram, no state mutation) so the balance can be simulated and
@@ -1193,14 +1234,10 @@ def _super_over_ball(batter, bowler, pitch, *, batter_runs=0, balls_faced=0,
     from services.probability_engine import calculate_outcome
 
     from services.bowling_service import is_spinner
-    # Planned tournament spectacles use the engine's death-over conditions for
-    # BOTH sides. Ratings, delivery choices, dots and wickets still apply; no
-    # score floor or chosen winner is imposed.
-    engine_over = 19 if attacking_contest else SO_ENGINE_OVER
     bowl_style = (bowler.get("bowl_style") or bowler.get("bowling_type")
                   or "Medium Pacer")
     trait_ctx = {
-        "over": engine_over, "total_overs": SO_ENGINE_TOTAL_OVERS,
+        "over": SO_ENGINE_OVER, "total_overs": SO_ENGINE_TOTAL_OVERS,
         "innings": 1,
         "rrr": _required_rate(target, runs, legal),
         "bat_balls_faced": balls_faced,
@@ -1224,7 +1261,7 @@ def _super_over_ball(batter, bowler, pitch, *, batter_runs=0, balls_faced=0,
         bowler.get("bowl_style") or bowler.get("bowling_type") or "Medium Pacer",
         bowler.get("bowl_hand") or bowler.get("bowling_hand") or "Right",
         variation, length, pitch,
-        engine_over, SO_ENGINE_TOTAL_OVERS, shot,
+        SO_ENGINE_OVER, SO_ENGINE_TOTAL_OVERS, shot,
         int(batter.get("batting_rating") or batter.get("bat_rating") or 50),
         int(bowler.get("bowling_rating") or bowler.get("bowl_rating") or 40),
         striker_traits=bat_traits or [], bowler_traits=bowl_traits or [],
@@ -1235,7 +1272,8 @@ def _super_over_ball(batter, bowler, pitch, *, batter_runs=0, balls_faced=0,
         bat_hand=batter.get("batting_hand") or batter.get("bat_hand") or "Right",
         delivery_repeat=delivery_repeat,
         extras_mult=SO_EXTRAS_MULT,
-        boundary_mult=1.45 if attacking_contest else 1.0,
+        super_over=True,
+        pressure=super_over_engine.chase_pressure(target, runs, legal, wickets),
     )
     activated = oc.get("traits_activated") or []
     oc = _normalize_outcome(oc)
@@ -1275,9 +1313,7 @@ async def _resolve_ball(context, mid, shot):
         free_hit=free_hit, legal=inn["legal"], target=so.get("target"),
         runs=inn["runs"], shot=shot,
         variation=inn["pending"]["delivery"], length=inn["pending"]["length"],
-        delivery_repeat=inn["repeat"],
-        attacking_contest=bool(so.get('main_state', {}).get('tournament_id')
-                              and so.get('main_state', {}).get('_planned_super_overs')))
+        delivery_repeat=inn["repeat"], wickets=inn['wickets'])
 
     if int(so.get('main_state', {}).get('_planned_super_overs') or 0) >= 2 and so['so_number'] == 1 and so.get('target') is None:
         from services.tournament_match_settings import cap_first_innings
@@ -1286,6 +1322,7 @@ async def _resolve_ball(context, mid, shot):
         from services.tournament_match_settings import constrain_tie_outcome
         oc = constrain_tie_outcome(oc, runs=inn['runs'], par=so['target'] - 1,
             remaining=6 - inn['legal'], wickets=inn['wickets'], wicket_limit=2, innings_balls=6)
+    oc = super_over_engine.protect_dismissal(oc, free_hit=free_hit)
     deliv = inn["pending"]["delivery"] or "delivery"
     if inn["pending"]["length"]:
         deliv = f"{deliv} {inn['pending']['length']}"
@@ -1299,6 +1336,13 @@ async def _resolve_ball(context, mid, shot):
     # out taken off a no-ball, say) still costs the batting side a wicket, so
     # read both and let either one stand.
     out = bool(oc.get("batter_out")) or otype == "wicket"
+    # A completed chase ends before any attempted further run can cause a run
+    # out. The no-ball penalty itself can also be the winning run.
+    if (out and oc.get('wicket_type') == 'Run Out' and so.get('target')
+            and inn['runs'] + runs + int(extra_type == 'No Ball') >= so['target']):
+        out = False
+        otype = 'extra' if extra_type == 'No Ball' else 'run'
+        oc = dict(oc, type=otype, batter_out=False, wicket_type=None)
     wicket_counted = False
 
     def _credit_batter(n):
@@ -1323,6 +1367,7 @@ async def _resolve_ball(context, mid, shot):
         inn["bowl_runs"] += conceded
         if extra_type == "No Ball":
             inn["free_hit"] = True   # next legal ball is a free hit
+            inn['bat'][s_rid]['b'] += 1  # a faced no-ball counts for the batter
             if runs:
                 _credit_batter(runs)  # runs off a no-ball are the batter's
                 rotate = runs % 2 == 1
@@ -1376,10 +1421,10 @@ async def _resolve_ball(context, mid, shot):
         inn["free_hit"] = False   # a legal delivery consumes the free hit
     inn["deliveries"] += 1
     inn["recent"].append(sym)
-
     commentary = _ball_commentary(
         oc, _name(so, so["bat_uid"], s_rid),
         _name(so, so["bowl_uid"], inn["bowler_rid"]))
+    _record_turning_point(so, inn, oc, _name(so, so['bat_uid'], s_rid), free_hit, commentary)
     free_hit_tag = "🆓 <b>FREE HIT</b>\n" if free_hit else ""
     no_ball_tag = ("\n🆓 <i>Free hit coming up — only a run out can dismiss!</i>"
                    if (otype == "extra" and extra_type == "No Ball") else "")
@@ -1507,6 +1552,7 @@ def _capture_innings_detail(so, inn, bat_uid, bowl_uid):
         "team_uid": bat_uid, "opp_uid": bowl_uid,
         "runs": inn["runs"], "wickets": inn["wickets"],
         "overs": f"{legal // 6}.{legal % 6}",
+        "deliveries": inn['deliveries'],
         "batters": batters, "bowlers": bowlers,
     }
 
@@ -1520,7 +1566,9 @@ def _super_over_summary(so, winner_name, margin_text):
             "label": f"Super Over Innings {i}",
             "team": d["team"], "runs": d["runs"], "wickets": d["wickets"],
         })
-    return {"winner": winner_name, "marginText": margin_text, "innings": innings}
+    return {"winner": winner_name, "marginText": margin_text, "innings": innings,
+            'turningPoints': [{k: p[k] for k in ('round', 'innings', 'team', 'score', 'ball', 'text')}
+                              for p in _turning_points(so)]}
 
 
 def _super_over_mvp(so, winner_uid=None):
@@ -1965,6 +2013,12 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
         mvp_block = (f"\n\n⭐ <b>Super Over Star:</b> {html.escape(str(mvp_name))}"
                      f"\n   <i>{html.escape(str(mvp_line))}</i>")
     countback_block = ""
+    turning_points = _turning_points(so)
+    recap = ''
+    if turning_points:
+        recap = '\n\n🎬 <b>Super Over turning points</b>\n' + '\n'.join(
+            f"• SO {p['round']} · {html.escape(p['team'])} {p['score']} — {html.escape(p['text'])}"
+            for p in turning_points)
     if decided_by in _COUNTBACK_TEXT:
         w_six, w_four = _innings_totals(so, winner_uid)[2:]
         l_six, l_four = _innings_totals(so, loser_uid)[2:]
@@ -1982,6 +2036,7 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
         f"🏆 Match Winner: <b>{html.escape(win['name'])}</b>"
         f"{countback_block}"
         f"{mvp_block}"
+        f"{recap}"
         + (f"\n\n{injury_news}" if injury_news else ""),
         parse_mode="HTML")
 

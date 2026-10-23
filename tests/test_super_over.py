@@ -749,7 +749,7 @@ def test_finalize_persists_super_over_innings():
         mws.save_final_scorecard = orig
 
 
-def _simulate_super_over(bat, bowl, pitch, target=None, **ball_options):
+def _simulate_super_over(bat, bowl, pitch, target=None):
     """Headless Super Over innings using the real ball engine + the real rules
     (6 legal balls, 2 wickets, chase ends on the target)."""
     from handlers.super_over import _super_over_ball
@@ -763,21 +763,24 @@ def _simulate_super_over(bat, bowl, pitch, target=None, **ball_options):
         oc = _super_over_ball(
             _adapt_player(bat), bowler, pitch, batter_runs=bat_runs,
             balls_faced=bat_balls, free_hit=free_hit, legal=legal,
-            target=target, runs=runs, shot="Drive",
-            variation="Stock Ball", length="Good Length", **ball_options)
+            target=target, runs=runs, wickets=wickets, shot="Drive",
+            variation="Stock Ball", length="Good Length")
         r = int(oc.get("runs", 0))
         otype, etype = oc.get("type"), oc.get("extra_type")
-        free_hit = False
         is_legal = True
         if otype == "extra" and etype in ("Wide", "No Ball"):
             is_legal = False
-            runs += r
-            free_hit = (etype == "No Ball")
+            runs += 1 + r
+            if etype == 'No Ball':
+                free_hit = True
+                bat_balls += 1
+                bat_runs += r
+                sixes += int(r == 6)
+                fours += int(r == 4)
         elif otype == "extra":
             runs += r
             bat_balls += 1
         elif otype == "wicket":
-            wickets += 1
             runs += r
             bat_balls += 1
         else:
@@ -790,6 +793,9 @@ def _simulate_super_over(bat, bowl, pitch, target=None, **ball_options):
                 fours += 1
         if is_legal:
             legal += 1
+            free_hit = False
+        if otype == 'wicket' or oc.get('batter_out'):
+            wickets += 1
         deliveries += 1
         if target is not None and runs >= target:
             break
@@ -839,21 +845,16 @@ def test_super_over_balance_scoring_fairness_and_replay_rate():
     assert replays / n < 0.06, f"replay rate {replays / n:.3%}"
 
 
-def test_planned_tournament_super_overs_score_more_without_a_score_floor():
+def test_every_super_over_can_be_low_scoring_or_boundary_heavy():
     player = _so_player('Equal', 75, 70)
-    samples = []
-    for attacking in (False, True):
-        random.seed(734)
-        scores = [_simulate_super_over(player, player, 'Hard', attacking_contest=attacking)[0]
-                  for _ in range(600)]
-        samples.append(sum(scores) / len(scores))
-        if attacking:
-            assert min(scores) < 6  # good bowling can still win a low-scoring contest
-            assert max(scores) >= 24
-    assert samples[1] > samples[0] + 1.0, samples
+    random.seed(734)
+    scores = [_simulate_super_over(player, player, 'Hard')[0] for _ in range(600)]
+    assert min(scores) < 6
+    assert max(scores) >= 24
+    assert 8 < sum(scores) / len(scores) < 17
 
 
-def test_planned_tournament_engine_context_is_symmetric_and_preserves_ratings(monkeypatch):
+def test_super_over_engine_context_is_symmetric_and_preserves_ratings(monkeypatch):
     from handlers.super_over import _super_over_ball
     from services import probability_engine
     calls = []
@@ -862,10 +863,10 @@ def test_planned_tournament_engine_context_is_symmetric_and_preserves_ratings(mo
         return dict(type='runs', runs=0)
     monkeypatch.setattr(probability_engine, 'calculate_outcome', calculate)
     for target in (None, 20):
-        _super_over_ball(dict(bat_rating=88), dict(bowl_rating=79), 'Green',
-                         attacking_contest=True, target=target)
+        _super_over_ball(dict(bat_rating=88), dict(bowl_rating=79), 'Green', target=target)
     assert [c[0][5:7] for c in calls] == [(19, 20), (19, 20)]
     assert all(c[0][8:10] == (88, 79) for c in calls)
+    assert all(c[1]['super_over'] is True for c in calls)
 
 
 def test_many_seeds_always_terminate_with_a_winner():
@@ -1007,6 +1008,59 @@ def test_a_dismissal_off_a_no_ball_still_costs_a_wicket():
     assert inn["runs"] == 1                     # the penalty run still stands
     assert inn["wickets"] == 1                  # and the wicket is not lost
     assert inn["legal"] == 0                    # a no-ball is still re-bowled
+
+
+def test_a_no_ball_reprieve_and_a_free_hit_never_cost_a_caught_wicket():
+    ctx, mid = _live_innings()
+    _bowl_scripted(ctx, mid, dict(type='extra', extra_type='No Ball', runs=0,
+                                 batter_out=True, wicket_type='Caught'))
+    inn = _get(ctx, mid)['inn']
+    assert (inn['runs'], inn['wickets'], inn['legal'], inn['free_hit']) == (1, 0, 0, True)
+    _bowl_scripted(ctx, mid, WIDE)
+    assert _get(ctx, mid)['inn']['free_hit'] is True
+    _bowl_scripted(ctx, mid, BOWLED)
+    inn = _get(ctx, mid)['inn']
+    assert (inn['runs'], inn['wickets'], inn['legal'], inn['free_hit']) == (2, 0, 1, False)
+    assert any('FREE HIT' in (m.text or '') and 'no wicket' in (m.text or '') for m in ctx.bot.messages)
+
+
+def test_no_ball_run_out_rotates_completed_runs_and_retains_the_free_hit():
+    ctx, mid = _live_innings()
+    before = _get(ctx, mid)['inn']
+    striker, partner, backup = before['striker'], before['non_striker'], before['backup']
+    _bowl_scripted(ctx, mid, dict(type='extra', extra_type='No Ball', runs=1,
+                                 batter_out=True, wicket_type='Run Out'))
+    inn = _get(ctx, mid)['inn']
+    assert (inn['runs'], inn['wickets'], inn['legal'], inn['bowl_wkts']) == (2, 1, 0, 0)
+    assert inn['bat'][striker]['r'] == 1 and inn['bat'][striker]['b'] == 1
+    assert (inn['striker'], inn['non_striker']) == (partner, backup)
+    assert inn['free_hit'] is True
+
+
+def test_turning_point_recap_records_real_reprieves_and_no_ball_sixes():
+    ctx, mid = _live_innings()
+    _bowl_scripted(ctx, mid, dict(type='extra', extra_type='No Ball', runs=6))
+    so = _get(ctx, mid)
+    points = so_mod._turning_points(so)
+    assert len(points) == 1 and points[0]['score'] == '7/0'
+    assert 'NO BALL AND SIX' in points[0]['text']
+    summary = so_mod._super_over_summary(so, 'Team', 'won')
+    assert summary['turningPoints'][0]['text'] == points[0]['text']
+    assert 'rank' not in summary['turningPoints'][0]
+
+
+def test_tournament_setting_does_not_change_the_underlying_ball_engine(monkeypatch):
+    calls = []
+    def ball(*args, **kwargs):
+        calls.append((args, kwargs))
+        return dict(type='run', runs=0)
+    monkeypatch.setattr(so_mod, '_super_over_ball', ball)
+    for planned in (0, 1, 2):
+        ctx, mid = _live_innings()
+        so = _get(ctx, mid)
+        so['main_state'].update(tournament_id=77, _planned_super_overs=planned)
+        asyncio.run(_bowl_one_ball(ctx, mid))
+    assert calls[0] == calls[1] == calls[2]
 
 
 def test_used_batters_are_not_re_offered_while_fresh_ones_remain():

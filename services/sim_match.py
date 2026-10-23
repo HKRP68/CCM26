@@ -272,28 +272,27 @@ def _normalize_outcome(oc):
     """
     otype = oc.get("type", "")
     # Already new-engine format
-    if otype in ("run", "wicket", "extra"):
+    if otype in ("run", "extra"):
         return oc
     # Legacy format → new format
     if otype == "wide":
         return {"type": "extra", "is_extra": True, "extra_type": "Wide",
                 "runs": oc.get("runs", 0), "batter_out": False, "wicket_type": None}
     if otype == "noball":
-        return {"type": "extra", "is_extra": True, "extra_type": "No Ball",
-                "runs": oc.get("runs", 0), "batter_out": False, "wicket_type": None}
+        return dict(oc, type='extra', is_extra=True, extra_type='No Ball',
+                    runs=oc.get('runs', 0), batter_out=bool(oc.get('batter_out')),
+                    wicket_type=oc.get('wicket_type') or oc.get('how'))
     if otype == "legbye":
         return {"type": "extra", "is_extra": True, "extra_type": "LegByes",
                 "runs": oc.get("runs", 1), "batter_out": False, "wicket_type": None}
     if otype == "runs":
-        return {"type": "run", "is_extra": False,
-                "runs": oc.get("runs", 0), "batter_out": False, "wicket_type": None}
+        return dict(oc, type='run', is_extra=False,
+                    runs=oc.get('runs', 0), batter_out=False, wicket_type=None)
     # Wicket: both old and new use type='wicket', but old uses 'how' not 'wicket_type'
     if otype == "wicket":
-        return {"type": "wicket", "is_extra": False,
-                "runs": oc.get("runs", 0),
-                "batter_out": True,
-                "wicket_type": oc.get("wicket_type") or oc.get("how", "Caught"),
-                "extra_type": ""}
+        return dict(oc, type='wicket', is_extra=False, runs=oc.get('runs', 0),
+                    batter_out=True, wicket_type=oc.get('wicket_type') or oc.get('how', 'Caught'),
+                    extra_type='')
     return oc
 
 

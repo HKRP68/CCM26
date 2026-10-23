@@ -11,6 +11,7 @@ auto-resolved tie-breaker (/sim, bots) and the interactive per-ball flows.
 import random
 
 from services.probability_engine import calculate_outcome
+from services import super_over_engine
 
 SO_WICKET_LIMIT = 2          # a super over ends after 2 wickets
 SO_BALLS = 6                 # ...or 6 legal balls
@@ -24,7 +25,7 @@ SO_MAX_DELIVERIES = 24
 # novelty. Doubling the extras weights (and only those — runs and wickets are
 # untouched) puts a wide in roughly one super over in seven. Shared with the
 # interactive Super Over, which uses the same multiplier.
-SO_EXTRAS_MULT = 2.0
+SO_EXTRAS_MULT = super_over_engine.EXTRAS_MULT
 
 
 # ── Pressure & scenario ────────────────────────────────────────────────
@@ -156,7 +157,7 @@ def simulate_super_over_innings(bat_xi, bowl_xi, pitch, run_factor=1.0,
     still available). Reuses calculate_outcome so scoring matches the rest of
     the engine.
     """
-    from services.sim_match import _HOW_TO_EVENT, _RUNS_TO_EVENT, _ATTACK
+    from services.sim_match import _HOW_TO_EVENT, _RUNS_TO_EVENT, _ATTACK, _normalize_outcome
     batsmen = super_over_batsmen(bat_xi, exclude=exclude_batsmen)
     bowler = super_over_bowler(bowl_xi, exclude=exclude_bowler)
 
@@ -179,7 +180,7 @@ def simulate_super_over_innings(bat_xi, bowl_xi, pitch, run_factor=1.0,
     if non_striker_i != striker_i:
         batted.append(batsmen[non_striker_i].get("name"))
 
-    def _emit(event_key, batsman):
+    def _emit(event_key, batsman, detail=None):
         if feed is None:
             return
         line = None
@@ -190,7 +191,7 @@ def simulate_super_over_innings(bat_xi, bowl_xi, pitch, run_factor=1.0,
             except Exception:
                 line = None
         feed.append({"phase": label, "ball": f"{balls}", "score": f"{runs}/{wkts}",
-                     "event": event_key, "text": line or ""})
+                     "event": event_key, "text": detail or line or ""})
 
     def _chased():
         """Has the target been passed? Checked after every delivery, extras
@@ -203,65 +204,60 @@ def simulate_super_over_innings(bat_xi, bowl_xi, pitch, run_factor=1.0,
         shot = random.choice(_ATTACK)  # super over = all-out attack
         oc = calculate_outcome(
             bowler.get("bowl_style"), bowler.get("bowl_hand"),
-            None, None, pitch, 20, 20, shot,
+            None, None, pitch, super_over_engine.ENGINE_OVER, super_over_engine.TOTAL_OVERS, shot,
             striker.get("bat_rating", 0) or striker.get("rating", 0),
             bowler.get("bowl_rating", 0),
-            free_hit=free_hit, pressure=0.6, extras_mult=SO_EXTRAS_MULT,
+            free_hit=free_hit, pressure=super_over_engine.chase_pressure(target, runs, balls, wkts),
+            extras_mult=SO_EXTRAS_MULT, super_over=True,
+            fielding_quality=bowler.get('fielding_rating'),
         )
+        oc = super_over_engine.protect_dismissal(_normalize_outcome(oc), free_hit=free_hit)
         deliveries += 1
-        t = oc["type"]
-        # Wides and no-balls are re-bowled, but they still carry the penalty run
-        # and can still win a chase — so the target is checked on every delivery,
-        # not just the legal ones.
-        if t == "wide":
-            runs += 1
-            _emit("wide", striker["name"])
-            if _chased():
-                break
-            continue
-        if t == "noball":
-            r = oc.get("runs", 0)
-            runs += 1 + r
-            if r == 6:
-                sixes += 1
-            elif r == 4:
-                fours += 1
+        r = int(oc.get('runs') or 0)
+        extra = oc.get('extra_type') if oc.get('type') == 'extra' else None
+        free_ball = extra in ('Wide', 'No Ball')
+        runs += r + int(free_ball)
+        if not free_ball:
+            balls += 1
+            free_hit = False
+        elif extra == 'No Ball':
             free_hit = True
-            _emit("no_ball", striker["name"])
-            if r % 2 == 1:
-                striker_i, non_striker_i = non_striker_i, striker_i
-            if _chased():
-                break
-            continue
-        balls += 1
-        free_hit = False
-        if t == "legbye":
-            r = oc.get("runs", 1)
-            runs += r
-            _emit("extras", striker["name"])
-            if r % 2 == 1:
-                striker_i, non_striker_i = non_striker_i, striker_i
-        elif t == "wicket":
-            runs += int(oc.get("runs", 0) or 0)   # completed runs on a run out
+        out = bool(oc.get('batter_out') or oc.get('type') == 'wicket')
+        how = oc.get('wicket_type') or 'Caught'
+        if _chased() and how == 'Run Out':
+            out = False  # the winning run ends play before another run is attempted
+        if not extra or extra == 'No Ball':
+            sixes += int(r == 6)
+            fours += int(r == 4)
+        dismissed_idx = striker_i
+        if r % 2:
+            striker_i, non_striker_i = non_striker_i, striker_i
+        detail = None
+        if out:
             wkts += 1
             dismissed.append(striker.get("name"))
-            how = oc.get("how", "Caught")
-            _emit(_HOW_TO_EVENT.get(how, "wicket_caught_fielder"), striker["name"])
+            event = _HOW_TO_EVENT.get(how, 'wicket_caught_fielder')
+            if extra == 'No Ball':
+                detail = f'RUN OUT on a no-ball! One penalty run plus {r} completed run(s). Free hit next.'
+        elif extra:
+            event = {'Wide': 'wide', 'No Ball': 'no_ball'}.get(extra, 'extras')
+            if extra == 'No Ball' and r in (4, 6):
+                detail = f'NO BALL AND {r}! {r + 1} runs added; free hit next.'
+        else:
+            event = _RUNS_TO_EVENT.get(r, 'general')
+        if oc.get('disallowed_wicket'):
+            reason = 'no-ball' if extra == 'No Ball' else 'free hit'
+            detail = f"{oc['disallowed_wicket']} — but it is a {reason}! No wicket."
+        _emit(event, striker['name'], detail)
+        if out:
             if wkts >= SO_WICKET_LIMIT or next_i >= len(batsmen):
                 break                              # 2 down — the innings is over
-            striker_i = next_i                     # new man in at the same end
-            batted.append(batsmen[striker_i].get("name"))
+            if striker_i == dismissed_idx:
+                striker_i = next_i
+            else:
+                non_striker_i = next_i
+            batted.append(batsmen[next_i].get("name"))
             next_i += 1
-        else:
-            r = oc.get("runs", 0)
-            runs += r
-            if r == 6:
-                sixes += 1
-            elif r == 4:
-                fours += 1
-            _emit(_RUNS_TO_EVENT.get(r, "general"), striker["name"])
-            if r % 2 == 1:
-                striker_i, non_striker_i = non_striker_i, striker_i
         if _chased():
             break
 

@@ -169,6 +169,21 @@ def test_a_dismissed_batsman_never_comes_back_to_the_crease():
     assert set(seen[1:]) <= {80, 70}
 
 
+def test_no_ball_run_out_replaces_the_correct_batter_and_preserves_free_hit():
+    out = dict(type='noball', runs=1, batter_out=True, how='Run Out')
+    inn, seen = _run_scripted_innings([out, WIDE, WKT] + [DOT] * 5)
+    assert inn['runs'] == 3 and inn['wickets'] == 1
+    assert inn['balls'] == 6 and inn['deliveries'] == 8
+    assert inn['dismissed'] == ['A0']
+    assert seen[1] == 80 and 90 not in seen[1:]
+
+
+def test_a_no_ball_boundary_counts_once_and_the_next_legal_ball_is_protected():
+    inn, _ = _run_scripted_innings([dict(type='noball', runs=6), WKT] + [DOT] * 5)
+    assert inn['runs'] == 7 and inn['sixes'] == 1
+    assert inn['wickets'] == 0 and inn['balls'] == 6
+
+
 def test_the_innings_stops_dead_on_the_second_wicket():
     inn, seen = _run_scripted_innings([WKT, WKT, ONE, ONE, ONE, ONE])
     assert inn["wickets"] == 2
