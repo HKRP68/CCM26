@@ -4814,6 +4814,31 @@ class AuctionTradeBlock(Base):
 # RANKED LADDER, RIVALRIES, SPECTATOR PREDICTIONS, HALL OF FAME
 # ══════════════════════════════════════════════════════════════════════
 
+class MatchControlAccount(Base):
+    """Serializes a Telegram user's pause/clear allowance across all chats."""
+    __tablename__ = "match_control_accounts"
+    telegram_id = Column(BigInteger, primary_key=True)
+    blocked = Column(Boolean, nullable=False, default=False)
+
+
+class MatchControlAction(Base):
+    """Permanent audit trail; backups are retained for accidental clears."""
+    __tablename__ = "match_control_actions"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telegram_id = Column(BigInteger, nullable=False, index=True)
+    user_id = Column(Integer, nullable=True)
+    chat_id = Column(BigInteger, nullable=False)
+    command = Column(String(20), nullable=False)
+    outcome = Column(String(20), nullable=False, default="pending")
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    finished_at = Column(DateTime, nullable=True)
+    details_json = Column(Text, nullable=True)
+    backup_json = Column(Text, nullable=True)
+    rating_delta = Column(Integer, nullable=False, default=0)
+    undone_at = Column(DateTime, nullable=True)
+    __table_args__ = (Index("ix_match_control_user_time", "telegram_id", "created_at"),)
+
+
 class RankedRating(Base):
     """A user's skill rating on the 1v1 ranked ladder (see services/ranked_service).
 

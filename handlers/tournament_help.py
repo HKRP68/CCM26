@@ -33,7 +33,7 @@ PLAYER_SECTIONS = (
         ("/thome", "/homeground",
          "Team owners: set your home ground — /thome Mumbai | Wankhede Stadium"),
         ("/clearmatches", "/clearmatch",
-         "Clear a stuck match in this chat — a tournament match is saved first"),
+         "Group/bot admins: confirm clearing matches here (−5 Elo; shared 5/day limit)"),
     )),
     ("🏆 Challenge League Tournament (CIPL)", (
         ("/ctour", "/ctournament", "Tournament hub — table, fixtures, teams"),

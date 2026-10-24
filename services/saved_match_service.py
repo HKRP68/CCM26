@@ -144,19 +144,21 @@ def _row_dict(row):
 
 
 def save_snapshot(mid, state, next_action, reason, by_user_id=None,
-                  prev_status=None):
+                  prev_status=None, *, session=None):
     """Store ``state`` (waiting on ``next_action``) as match ``mid``'s save.
 
     One row per match: saving a match that was saved before (paused, resumed,
     paused again) overwrites the older snapshot. Returns the row as a dict.
     Raises on a DB error — a caller about to throw the live state away must
-    not do so unless this landed.
+    not do so unless this landed. An optional caller-owned session keeps the
+    snapshot in the same transaction as a clear; that caller must commit.
     """
     from models import SavedMatch
     snap = clean_state(state)
     state_json = json.dumps(snap, default=str)
     (u1, t1), (u2, t2) = participants(state)
-    session = _session()
+    owns_session = session is None
+    session = session if session is not None else _session()
     try:
         row = (session.query(SavedMatch)
                .filter(SavedMatch.match_id == int(mid)).first())
@@ -178,13 +180,18 @@ def save_snapshot(mid, state, next_action, reason, by_user_id=None,
         row.saved_by_id = by_user_id
         row.saved_at = datetime.utcnow()
         row.resumed_at = None
-        session.commit()
+        if owns_session:
+            session.commit()
+        else:
+            session.flush()
         return _row_dict(row)
     except Exception:
-        session.rollback()
+        if owns_session:
+            session.rollback()
         raise
     finally:
-        session.close()
+        if owns_session:
+            session.close()
 
 
 def get_saved(mid):
@@ -257,7 +264,8 @@ def void(mid):
     return _set_status(mid, (ST_SAVED, ST_RESUMING), ST_VOID)
 
 
-def park_match_row(mid, status="paused", end_reason=None, by_user_id=None):
+def park_match_row(mid, status="paused", end_reason=None, by_user_id=None,
+                   control_action_id=None):
     """Take the live ``Match`` row out of play. Returns its previous status.
 
     A tournament fixture stays reserved for it (``heal_live_fixtures`` leaves a
@@ -269,15 +277,27 @@ def park_match_row(mid, status="paused", end_reason=None, by_user_id=None):
     from services.match_outcome import END_PAUSED, mark_end
     session = _session()
     try:
-        m = session.get(Match, int(mid))
+        m = session.query(Match).filter_by(id=int(mid)).with_for_update().first()
         if m is None:
+            return None
+        if control_action_id is not None and m.status not in _LIVE_STATUSES:
             return None
         prev = m.status
         m.status = status
         m.completed_at = datetime.utcnow()
         m.winner_id = None
         m.loser_id = None
+        if control_action_id is not None:
+            from models import MatchControlAction, SavedMatch
+            action = session.get(MatchControlAction, control_action_id)
+            by_user_id = action.user_id
+            snapshot = session.query(SavedMatch).filter_by(match_id=int(mid)).first()
+            if snapshot is not None:
+                snapshot.saved_by_id = by_user_id
         mark_end(m, end_reason or END_PAUSED, by_user_id=by_user_id)
+        if control_action_id is not None:
+            from services.match_control_service import finish_in_session
+            finish_in_session(session, control_action_id, {"match_ids": [int(mid)]})
         session.commit()
         return prev
     except Exception:

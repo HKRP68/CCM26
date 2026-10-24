@@ -1885,6 +1885,13 @@ def main():
         app.add_handler(CommandHandler("testwpm", testwpm_handler))
         app.add_handler(CommandHandler(["endmatch", "em"], endmatch_handler))
         app.add_handler(CommandHandler(["clearmatches", "clearmatch"], clearmatches_handler))
+        from handlers.match_control import (
+            clear_callback, undoclear_handler, history_handler, access_handler,
+        )
+        app.add_handler(CallbackQueryHandler(clear_callback, pattern=r"^mctrl_(yes|no)_"))
+        app.add_handler(CommandHandler("undoclear", undoclear_handler))
+        app.add_handler(CommandHandler("controlhistory", history_handler))
+        app.add_handler(CommandHandler("controlaccess", access_handler))
         app.add_handler(CommandHandler(["removematch", "rmatch", "kickmatch"], removematch_handler))
         app.add_handler(CommandHandler(["resume", "r"], resume_handler))
         app.add_handler(CommandHandler(["lastmatch", "lm"], lastmatch_handler))

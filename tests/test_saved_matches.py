@@ -301,6 +301,42 @@ class _ChatHarness(_DB):
 
 class PauseContinueFlowTests(_ChatHarness):
 
+    def test_bot_admin_pause_charges_and_records_admin_only(self):
+        from models import User, Match, RankedRating
+        from services import saved_match_service as svc
+        admin = User(telegram_id=self.u1.telegram_id + 5, first_name="Admin")
+        self.session.add(admin)
+        self.session.commit()
+        upd = self._update(admin.telegram_id)
+        with patch.object(self.pause, "_is_admin", return_value=True):
+            asyncio.run(self.pause.pause_handler(upd, self.ctx))
+        self.assertEqual(self._fresh(Match, self.mid).ended_by_id, admin.id)
+        self.assertEqual(svc.get_saved(self.mid)["saved_by_id"], admin.id)
+        self.assertEqual(self.session.query(RankedRating).filter_by(user_id=admin.id).one().rating, 995)
+        self.assertIsNone(self.session.query(RankedRating).filter_by(user_id=self.u1.id).first())
+        self.assertIsNone(self.session.query(RankedRating).filter_by(user_id=self.u2.id).first())
+
+    def test_pause_cannot_target_a_match_in_another_chat(self):
+        from services.match_control_service import history
+        upd = self._update(self.u1.telegram_id)
+        upd.effective_chat.id = -999
+        self.ctx.args = [str(self.mid)]
+        asyncio.run(self.pause.pause_handler(upd, self.ctx))
+        self.assertIn("where the match is running", self._replies(upd)[-1])
+        self.assertEqual(history(self.u1.telegram_id), [])
+
+    def test_failed_pause_save_keeps_match_live_and_charges_nothing(self):
+        from models import Match, RankedRating
+        from services import saved_match_service as svc
+        from services.match_control_service import history
+        upd = self._update(self.u1.telegram_id)
+        with patch.object(svc, "save_snapshot", side_effect=RuntimeError("backup failure")):
+            asyncio.run(self.pause.pause_handler(upd, self.ctx))
+        self.assertEqual(self._fresh(Match, self.mid).status, "active")
+        self.assertIsNotNone(self.store["state"])
+        self.assertEqual(history(self.u1.telegram_id)[0]["outcome"], "failed")
+        self.assertIsNone(self.session.query(RankedRating).filter_by(user_id=self.u1.id).first())
+
     def test_pause_then_continue_picks_up_the_same_ball(self):
         from models import Match
         from services import saved_match_service as svc

@@ -104,13 +104,13 @@ def _continue_kb(mid, with_list=True):
 # ════════════════════════════════════════════════════════════════════
 
 async def park_match(context, mid, state, reason, *, by_user_id=None,
-                     match_status="paused", end_reason=None):
+                     match_status="paused", end_reason=None, control_action_id=None):
     """Save match ``mid`` and take it out of play. Call with the lock held.
 
-    The chat is tidied first (the open picker, the 30-second nag and the pinned
-    card go), then the snapshot is written; only once it has landed is the live
-    state deleted. Returns the saved row (a dict), or None when the snapshot
-    could not be written — in which case the match is left exactly as it was.
+    The snapshot and parked Match row are persisted before tidying the chat
+    and deleting live state. A controlled pause commits the audit and rating
+    deduction with the Match row. Returns the saved row, or None if saving or
+    parking failed, leaving the live match available to play.
     """
     cp = _cp()
     next_action = await cp._get_next_action(context, mid)
@@ -121,6 +121,17 @@ async def park_match(context, mid, state, reason, *, by_user_id=None,
             svc.save_snapshot, mid, state, next_action, reason, by_user_id)
     except Exception:
         logger.exception("saving match %s failed — leaving it live", mid)
+        return None
+
+    try:
+        prev = await asyncio.to_thread(
+            svc.park_match_row, mid, match_status, end_reason, by_user_id,
+            control_action_id)
+        if prev is None:
+            return None
+        await asyncio.to_thread(_record_prev_status, mid, prev)
+    except Exception:
+        logger.exception("parking the Match row of %s failed; leaving it live", mid)
         return None
 
     cp._cancel_timer(context, mid)
@@ -136,13 +147,6 @@ async def park_match(context, mid, state, reason, *, by_user_id=None,
             await context.bot.unpin_chat_message(state["chat_id"], pinned)
         except Exception:
             pass
-    try:
-        prev = await asyncio.to_thread(
-            svc.park_match_row, mid, match_status, end_reason, by_user_id)
-        if prev is not None:
-            await asyncio.to_thread(_record_prev_status, mid, prev)
-    except Exception:
-        logger.exception("parking the Match row of %s failed", mid)
     cleanup_state(context, mid)
     release_match_lock(mid)
     return row
@@ -282,6 +286,9 @@ async def pause_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id not in _captain_tgs(state) and not _is_admin(user.id):
         await msg.reply_text("❌ Only the two captains in this match can pause it.")
         return
+    if state.get("chat_id") != update.effective_chat.id:
+        await msg.reply_text("❌ Use /pause in the group where the match is running.")
+        return
     if cp._super_over_active(context, mid):
         await msg.reply_text("🔥 A Super Over is on — it can't be paused. Finish it!")
         return
@@ -291,6 +298,7 @@ async def pause_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("⏳ The match is in the middle of an over — try "
                              "/pause again in a few seconds.")
         return
+    action_id = None
     try:
         state = await cp._gs(context, mid)
         if not cp.is_cipl_state(state):
@@ -299,10 +307,27 @@ async def pause_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if await cp._get_next_action(context, mid) == A_COMPLETED:
             await msg.reply_text("🏁 That match has already finished.")
             return
+        if state.get("chat_id") != update.effective_chat.id or (
+                user.id not in _captain_tgs(state) and not _is_admin(user.id)):
+            await msg.reply_text("❌ You can no longer pause this match here.")
+            return
+        if cp._super_over_active(context, mid):
+            await msg.reply_text("🔥 A Super Over cannot be paused.")
+            return
+        from services import match_control_service as control
+        try:
+            action_id = await asyncio.to_thread(
+                control.reserve, user.id, update.effective_chat.id, "pause")
+        except control.ControlDenied as exc:
+            await msg.reply_text(str(exc))
+            return
         by_uid = cp._user_id_for_tg(state, user.id)
         row = await park_match(context, mid, state, svc.REASON_PAUSED,
-                               by_user_id=by_uid)
+                               by_user_id=by_uid, control_action_id=action_id)
     finally:
+        if action_id is not None:
+            from services.match_control_service import fail
+            await asyncio.to_thread(fail, action_id, "Pause did not complete")
         try:
             lock.release()
         except RuntimeError:
@@ -323,6 +348,7 @@ async def pause_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⏸️ <b>Match paused &amp; saved</b> (#{mid})\n"
         f"📋 {html.escape(row.get('title') or '')}\n"
         f"Paused by {who}.{tail}\n\n"
+        f"📉 Ranked rating: −5 points. Counts toward your 5 actions / 24 hours.\n\n"
         f"▶️ Carry on any time with <code>/continue {mid}</code> — in this "
         f"group or another one. It picks up from exactly this ball.",
         parse_mode="HTML", reply_markup=_continue_kb(mid))

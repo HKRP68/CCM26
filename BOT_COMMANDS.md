@@ -236,7 +236,12 @@ All trait inventory commands answer in **DM**; `/traitlist` works anywhere.
 | `/playchat` | `/chatmode` | Move the live match back to the chat buttons 💬 |
 | `/endmatch` | `/em` | Request to end your active match (a fine applies) |
 | `/matchinfo` | `/mi` | Live match info — striker, bowler, score, target |
-| `/clearmatches` | `/clearmatch` | Clear stuck matches in this chat (players in the match, or an admin). A Challenge League / Lets Play match is saved first — `/continue` it later |
+| `/clearmatches` | `/clearmatch` | Group admins or bot admins only: preview the exact match/setup counts, then confirm within 2 minutes. Clears only this chat after backing it up; a Challenge League / Lets Play match can also use `/continue` |
+| `/controlhistory [Telegram user ID]` | — | Your latest 10 pause/clear records, timestamps, chat IDs, outcomes and Elo deductions. Bot admins can inspect another user by ID |
+| `/undoclear <action ID>` | — | Group/bot admins: restore an accidental clear within 10 minutes, provided the chat and fixtures have not been reused. Usage and Elo deductions remain |
+| `/controlaccess <Telegram user ID> block\|unblock` | — | Bot admins: revoke or restore a user's pause/clear access |
+
+`/pause` (including `/pausematch`) and `/clearmatches` (including `/clearmatch`) share **5 successful actions per user across all chats in a rolling 24-hour window**, including admins. Each successful command deducts **5 ranked/Elo points from the caller only**, even when it clears multiple matches. A **60-second cooldown** applies between these commands. Previews, cancellations, empty chats and failed actions do not consume allowance or deduct Elo. Pausing is limited to a match captain or bot admin in the match's current chat. A successful action has a permanent audit record; pending reservations count toward the limit while processing. Automatic timeout saves are excluded.
 | `/cltour` | `/cltours` | Challenge League Tour — best-of series vs a friend |
 | `/cmtours` | `/createtour` | Create a tournament |
 | `/mytours` | `/tours` | View your tournaments |
@@ -778,7 +783,7 @@ Everything in `<angle brackets>` is yours to fill in. Everything in
 | `/grant <tier> <telegram_id>` | Grant a subscription tier (e.g. `/grant Upgrade Diamond 12345`) |
 | `/givepack <pack_slot\|pack_id> <telegram_id> [qty]` | Owner: drop 1–20 unopened packs into a user's inventory (they open with `/openpack`) |
 | `/rsim <telegram_id>` (or reply with `/rsim`) | Bot admins: reset one player's /sim cooldown so they can sim again now — alias `/resetsim` |
-| `/clearmatches` | Clear every stuck match in this chat |
+| `/clearmatches` | Group/bot admins: preview and confirm clearing matches in this chat (−5 Elo; shared 5 actions/24 hours) |
 | `/removematch @user` | Pull one user out of their active match |
 | `/testwpm [match_id]` | Mini App match diagnostic |
 | `/cdraftset` | Read or change the `/cdraft` rating band and allowed editions |
