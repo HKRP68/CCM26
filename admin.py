@@ -1033,16 +1033,8 @@ def players_list():
         elif version_mode == "version":
             query = query.filter(Player.parent_player_id.isnot(None))
         if version_filter:
-            vf = version_filter.strip()
-            if vf.lower() == "base":
-                # Base = the original card (no parent) or an explicit "Base" label.
-                query = query.filter(or_(
-                    Player.parent_player_id.is_(None),
-                    Player.version.is_(None),
-                    func.lower(Player.version) == "base",
-                ))
-            else:
-                query = query.filter(func.lower(Player.version) == vf.lower())
+            from services.version_service import filter_version
+            query = filter_version(query, version_filter)
 
         # Sorting
         sort_map = {
@@ -1242,7 +1234,8 @@ def _normalize_player_csv_row(cols):
 
     # Version — column 10 (index 9). Default "Base". Strip stray quotes.
     version_raw = cols[9].strip().strip('"').strip("'")
-    version = version_raw if version_raw else "Base"
+    from services.version_service import normalize_version
+    version = normalize_version(version_raw)
 
     # Is Active — column 11 (index 10). "0"/"false"/"no" → inactive.
     is_active = cols[10].strip().lower() not in ("0", "false", "no", "n", "inactive")
@@ -1293,12 +1286,11 @@ def players_bulk_upload():
         try:
             added = 0; skipped = 0; errors = []
             added_by_version = {}  # for the success flash
-            # Cache of {name: base_player_id} for Base rows added in this batch,
-            # so a Legend row appearing AFTER its Base in the same upload can
-            # still link parent_player_id correctly (the Base row isn't queryable
-            # via db.query until flushed, and we want to avoid flushing on every
-            # row for performance).
-            batch_base_ids = {}
+            from services.version_service import (name_key, normalize_version,
+                                                  sync_version_links)
+            existing_pairs = {(name_key(n), normalize_version(v).lower())
+                              for n, v in not_career(db.query(Player.name, Player.version)).all()}
+            touched_names = set()
             # Parse CSV
             reader = csv.reader(io.StringIO(csv_text))
             rows = list(reader)
@@ -1326,82 +1318,31 @@ def players_bulk_upload():
                     name = data["name"]
                     version = data["version"]
 
-                    # Duplicate check by (name, version) pair — multiple versions
-                    # of the same player are allowed by design.
-                    existing = (db.query(Player)
-                                .filter(Player.name == name,
-                                        Player.version == version)
-                                .first())
-                    if existing:
+                    pair = (name_key(name), normalize_version(version).lower())
+                    touched_names.add(name)
+                    if pair in existing_pairs:
                         skipped += 1
                         continue
-
-                    # For variant versions (non-Base): try to link to base card via
-                    # parent_player_id. Look up the existing Base row with same name.
-                    # Check both the DB (committed) and this batch's pending Base rows.
-                    parent_player_id = None
-                    if version.lower() != "base":
-                        # First, check batch cache (rows added in this loop)
-                        if name in batch_base_ids:
-                            parent_player_id = batch_base_ids[name]
-                        else:
-                            # Then check the DB for already-committed Base rows
-                            base = (db.query(Player)
-                                    .filter(Player.name == name,
-                                            Player.version == "Base")
-                                    .first())
-                            if base:
-                                parent_player_id = base.id
-                        # If still none, parent_player_id stays None. The version
-                        # still saves with the right `version` value. Caller can
-                        # upload Base first if they want the link.
-
-                    p = Player(parent_player_id=parent_player_id, **data)
-                    db.add(p)
-                    # If this is a Base row, flush so its id is set, then cache
-                    # it for any subsequent variant rows in this batch.
-                    if version.lower() == "base":
-                        db.flush()
-                        batch_base_ids[name] = p.id
+                    db.add(Player(**data))
+                    existing_pairs.add(pair)
                     added += 1
                     added_by_version[version] = added_by_version.get(version, 0) + 1
                 except Exception as e:
                     errors.append(f"Row {i}: {str(e)[:80]}")
 
-            db.commit()
-
-            # Second pass: link parent_player_id for any variants that
-            # imported BEFORE their Base row (export sorts by rating desc, so
-            # high-rated variants like Legend can appear before the Base row
-            # in a round-trip).
-            try:
-                orphans = (db.query(Player)
-                           .filter(Player.version != "Base",
-                                   Player.parent_player_id.is_(None))
-                           .all())
-                linked = 0
-                for variant in orphans:
-                    base = (db.query(Player)
-                            .filter(Player.name == variant.name,
-                                    Player.version == "Base")
-                            .first())
-                    if base and base.id != variant.id:
-                        variant.parent_player_id = base.id
-                        linked += 1
-                if linked:
-                    db.commit()
-            except Exception:
-                logger.exception("Second-pass parent link failed (non-fatal)")
-
+            linked = sync_version_links(db, touched_names)
             log_admin(db, "bulk_upload",
                       detail=f"Added {added} (by version: {added_by_version}), "
-                             f"skipped {skipped} duplicates, {len(errors)} errors")
+                             f"skipped {skipped} duplicates, {len(errors)} errors; repaired {linked} version links")
             db.commit()
 
+            from services.player_cache import invalidate
+            invalidate()
             msg = f"✅ Added {added} players"
             if len(added_by_version) > 1 or (added_by_version and "Base" not in added_by_version):
                 breakdown = ", ".join(f"{v}: {n}" for v, n in sorted(added_by_version.items()))
                 msg += f" ({breakdown})"
+            if linked: msg += f" · Updated {linked} version links"
             if skipped: msg += f" · Skipped {skipped} duplicates"
             if errors: msg += f" · {len(errors)} errors"
             flash(msg, "success")
@@ -1472,10 +1413,11 @@ def players_data_change():
                     name = data["name"]
                     version = data["version"]
 
-                    player = (db.query(Player)
-                              .filter(Player.name == name,
-                                      Player.version == version)
-                              .first())
+                    from services.version_service import name_key, normalize_version
+                    candidates = not_career(db.query(Player)).filter(
+                        func.lower(func.trim(Player.name)) == name_key(name)).all()
+                    player = next((p for p in candidates
+                                   if normalize_version(p.version).lower() == version.lower()), None)
                     if not player:
                         not_found.append(f"{name} ({version})")
                         continue
@@ -1575,9 +1517,12 @@ def player_add():
         db = get_session()
         try:
             name = request.form["name"].strip()
-            existing = db.query(Player).filter(Player.name == name).first()
-            if existing:
-                flash(f"Player '{name}' already exists", "error")
+            from services.version_service import name_key, normalize_version, sync_version_links
+            version = normalize_version(request.form.get("version"))
+            existing = not_career(db.query(Player)).filter(
+                func.lower(func.trim(Player.name)) == name_key(name)).all()
+            if any(normalize_version(p.version).lower() == version.lower() for p in existing):
+                flash(f"Player '{name}' already has a {version} card", "error")
                 return redirect(url_for("player_add"))
 
             player = Player(
@@ -1585,7 +1530,7 @@ def player_add():
                 rating=int(request.form["rating"]),
                 category=request.form["category"],
                 country=request.form["country"].strip(),
-                version=request.form.get("version", "Base card").strip() or "Base card",
+                version=version,
                 bat_hand=request.form.get("bat_hand", "Right"),
                 bowl_hand=request.form.get("bowl_hand", "Right"),
                 bowl_style=request.form.get("bowl_style", "Medium Pacer"),
@@ -1603,6 +1548,7 @@ def player_add():
             )
             db.add(player)
             db.flush()
+            sync_version_links(db, [name])
             portrait_file = request.files.get("player_image")
             if portrait_file and portrait_file.filename:
                 from services.player_portrait_service import save_player_portrait
@@ -1612,6 +1558,8 @@ def player_add():
             log_admin(db, "player_add", target_type="player", target_id=player.id,
                       target_name=name, detail=f"Rating {player.rating}, {player.category}, {player.country}")
             db.commit()
+            from services.player_cache import invalidate
+            invalidate()
             flash(f"Player '{name}' created (rating {player.rating})", "success")
             return redirect(url_for("players_list"))
         except Exception as e:
@@ -1643,7 +1591,8 @@ def player_edit(player_id):
             player.rating = int(request.form["rating"])
             player.category = request.form["category"]
             player.country = request.form["country"].strip()
-            player.version = request.form.get("version", "Base card").strip() or "Base card"
+            from services.version_service import normalize_version, sync_version_links
+            player.version = normalize_version(request.form.get("version"))
             player.bat_hand = request.form.get("bat_hand", "Right")
             player.bowl_hand = request.form.get("bowl_hand", "Right")
             player.bowl_style = request.form.get("bowl_style", "Medium Pacer")
@@ -1691,6 +1640,7 @@ def player_edit(player_id):
                 cl_updated = _resync_challenge_players(db, player)
             except Exception:
                 logger.exception("Challenge League re-sync failed (non-fatal)")
+            sync_version_links(db, [old_name, player.name])
             db.commit()
             # Bust in-memory caches — the player row changed
             try:
@@ -2033,6 +1983,62 @@ def admin_cmushop_image(image_id):
 # PlayerImage row attached. Stats are inherited from the base player.
 # ═══════════════════════════════════════════════════════════════════════
 
+@app.route("/players/versions", methods=["GET", "POST"])
+@login_required
+def admin_player_versions():
+    from services.version_service import (
+        MAIN_VERSIONS, main_card, normalize_version, sync_version_links, version_groups,
+    )
+    db = get_session()
+    selected_id = request.values.get("main_player_id", type=int)
+    try:
+        groups = version_groups(db)
+        families = []
+        for cards in groups.values():
+            root = main_card(cards)
+            if len(cards) > 1 and normalize_version(root.version) in MAIN_VERSIONS:
+                families.append({"main": root, "cards": cards,
+                                 "linked": sum(c.parent_player_id == root.id for c in cards)})
+        families.sort(key=lambda family: family["main"].name.lower())
+        selected = next((f for f in families if f["main"].id == selected_id), None)
+        if request.method == "POST":
+            action = request.form.get("action")
+            if action == "repair":
+                changed = sync_version_links(db)
+                detail = f"Repaired {changed} version links"
+            elif action == "add":
+                if not selected:
+                    raise ValueError("Choose a main player with more than one card.")
+                root = selected["main"]
+                ids = {int(value) for value in request.form.getlist("version_ids")}
+                allowed = {c.id: c for c in selected["cards"] if c.id != root.id}
+                if not ids or not ids.issubset(allowed):
+                    raise ValueError("Tick at least one version belonging to the selected player.")
+                changed = 0
+                root.parent_player_id = None
+                for card_id in ids:
+                    card = allowed[card_id]
+                    if card.parent_player_id != root.id:
+                        card.parent_player_id = root.id
+                        changed += 1
+                detail = f"Added {changed} version links for {root.name}; {len(ids)} selected"
+            else:
+                raise ValueError("Unknown version action.")
+            log_admin(db, "player_version_link", detail=detail)
+            db.commit()
+            from services.player_cache import invalidate
+            invalidate()
+            flash(detail + ".", "success")
+            return redirect(url_for("admin_player_versions", main_player_id=selected_id))
+        return render_template("player_versions.html", families=families, selected=selected,
+                               normalize_version=normalize_version, main_versions=MAIN_VERSIONS)
+    except (ValueError, TypeError) as exc:
+        db.rollback()
+        flash(str(exc), "error")
+        return redirect(url_for("admin_player_versions", main_player_id=selected_id))
+    finally:
+        db.close()
+
 @app.route("/players/<int:base_id>/versions/new", methods=["POST"])
 @login_required
 def admin_player_version_new(base_id):
@@ -2049,10 +2055,13 @@ def admin_player_version_new(base_id):
             flash("Can't add a version to a variant. Pick the base player instead.", "error")
             return redirect(url_for("player_edit", player_id=base.parent_player_id))
 
+        from services.version_service import name_key, normalize_version, sync_version_links
         version_label = (request.form.get("version_label") or "").strip()
         if not version_label:
             flash("Version label required (e.g. 'Gold', 'World Cup 2023').", "error")
             return redirect(url_for("player_edit", player_id=base_id))
+
+        version_label = normalize_version(version_label)
 
         file = request.files.get("version_image")
         if not file or not file.filename:
@@ -2090,13 +2099,10 @@ def admin_player_version_new(base_id):
             return redirect(url_for("player_edit", player_id=base_id))
 
         # Make sure label is unique among existing versions of this base
-        existing_labels = set()
-        # Base player itself implicitly has label "Base"
-        existing_labels.add("Base")
-        for v in (db.query(Player)
-                  .filter(Player.parent_player_id == base_id).all()):
-            existing_labels.add((v.version or "").lower())
-        if version_label.lower() in {l.lower() for l in existing_labels}:
+        siblings = not_career(db.query(Player)).filter(
+            func.lower(func.trim(Player.name)) == name_key(base.name)).all()
+        existing_labels = {normalize_version(v.version).lower() for v in siblings}
+        if version_label.lower() in existing_labels:
             flash(f"Version label '{version_label}' already exists. Use a unique name.", "error")
             return redirect(url_for("player_edit", player_id=base_id))
 
@@ -2147,6 +2153,7 @@ def admin_player_version_new(base_id):
         db.add(variant)
         db.flush()
 
+        sync_version_links(db, [base.name])
         # Save the custom image for the new variant Player row
         from services.player_image_service import save_custom_image
         ok, msg = save_custom_image(
@@ -2646,15 +2653,8 @@ def _apply_player_filters(query, filters, range_map):
     elif filters["version_mode"] == "version":
         query = query.filter(Player.parent_player_id.isnot(None))
     if filters["version_filter"]:
-        vf = filters["version_filter"].strip()
-        if vf.lower() == "base":
-            query = query.filter(or_(
-                Player.parent_player_id.is_(None),
-                Player.version.is_(None),
-                func.lower(Player.version) == "base",
-            ))
-        else:
-            query = query.filter(func.lower(Player.version) == vf.lower())
+        from services.version_service import filter_version
+        query = filter_version(query, filters["version_filter"])
     return query
 
 
@@ -4037,9 +4037,8 @@ def _seed_from_json(raw_data):
     db = get_session()
     added = 0
     added_by_version = {}
-    # Track Base rows added in this batch so variant rows in the same upload
-    # can link parent_player_id without an extra DB round-trip per row.
-    batch_base_ids = {}
+    from services.version_service import name_key, normalize_version, sync_version_links
+    touched_names = set()
 
     def _pick(entry, *keys, default=""):
         """Get first non-empty value from any of the supplied keys."""
@@ -4056,27 +4055,12 @@ def _seed_from_json(raw_data):
                     return v
         return default
 
-    def _normalize_version(raw):
-        """Strip whitespace, collapse 'Base card'/'base'/empty → 'Base'."""
-        if not raw:
-            return "Base"
-        s = str(raw).strip()
-        if not s:
-            return "Base"
-        # Treat "Base", "base", "Base card", "base card" all as canonical "Base"
-        low = s.lower()
-        if low in ("base", "base card"):
-            return "Base"
-        # Collapse interior whitespace runs (so "Star  Card" → "Star Card")
-        s = " ".join(s.split())
-        return s
-
     try:
         # Track existing (name, version) pairs so we skip exact duplicates only
         # — multiple versions of same player are allowed.
         existing_pairs = set()
-        for n, v in db.query(Player.name, Player.version).all():
-            existing_pairs.add((n, v or "Base"))
+        for n, v in not_career(db.query(Player.name, Player.version)).all():
+            existing_pairs.add((name_key(n), normalize_version(v).lower()))
 
         for entry in raw_data:
             # Accept multiple possible key spellings
@@ -4091,10 +4075,12 @@ def _seed_from_json(raw_data):
             # original file as well as the cleaner "Version" key.
             version_raw = _pick(entry, "Version", "Version ", "version",
                                 "Card", "card_version", default="")
-            version = _normalize_version(version_raw)
+            version = normalize_version(version_raw)
 
             # Duplicate check by (name, version) — multiple versions allowed
-            if (name, version) in existing_pairs:
+            pair = (name_key(name), version.lower())
+            touched_names.add(name)
+            if pair in existing_pairs:
                 continue
 
             # Rating — try several keys
@@ -4135,59 +4121,22 @@ def _seed_from_json(raw_data):
             except (ValueError, TypeError):
                 bowl_rating = 0
 
-            # parent_player_id linking for non-Base versions
-            parent_player_id = None
-            if version != "Base":
-                if name in batch_base_ids:
-                    parent_player_id = batch_base_ids[name]
-                else:
-                    base = (db.query(Player)
-                            .filter(Player.name == name,
-                                    Player.version == "Base")
-                            .first())
-                    if base:
-                        parent_player_id = base.id
-
             player = Player(
                 name=name, version=version, rating=rating, category=category,
                 country=country, bat_hand=bat_hand, bowl_hand=bowl_hand,
                 bowl_style=bowl_style, bat_rating=bat_rating, bowl_rating=bowl_rating,
-                parent_player_id=parent_player_id,
                 bat_avg=0, strike_rate=0, runs=0, centuries=0,
                 bowl_avg=0, economy=0, wickets=0, is_active=True,
             )
             db.add(player)
-            # If this is a Base row, flush so it's queryable as a parent
-            # for any subsequent variant rows in this batch.
-            if version == "Base":
-                db.flush()
-                batch_base_ids[name] = player.id
-            existing_pairs.add((name, version))
+            existing_pairs.add(pair)
             added += 1
             added_by_version[version] = added_by_version.get(version, 0) + 1
 
+        sync_version_links(db, touched_names)
         db.commit()
-
-        # Second pass: link parent_player_id for any orphan variants (Legend
-        # rows that came before their Base row in the upload).
-        try:
-            orphans = (db.query(Player)
-                       .filter(Player.version != "Base",
-                               Player.parent_player_id.is_(None))
-                       .all())
-            linked = 0
-            for variant in orphans:
-                base = (db.query(Player)
-                        .filter(Player.name == variant.name,
-                                Player.version == "Base")
-                        .first())
-                if base and base.id != variant.id:
-                    variant.parent_player_id = base.id
-                    linked += 1
-            if linked:
-                db.commit()
-        except Exception:
-            logger.exception("Second-pass parent link failed (non-fatal)")
+        from services.player_cache import invalidate
+        invalidate()
 
     except Exception:
         db.rollback()

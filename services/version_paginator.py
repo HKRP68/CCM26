@@ -30,11 +30,9 @@ def get_versions_ordered(session, base_id: int) -> List[Player]:
     versions = get_all_versions(session, base_id)
     if not versions:
         return []
-    # Canonical base = first row with no parent; fall back to the first edition.
-    # NOTE: keep EVERY other edition — including same-named rows that were never
-    # linked (parent_player_id IS NULL) — otherwise the carousel would silently
-    # drop them and never show ◀ Prev / Next ▶.
-    base = next((v for v in versions if v.parent_player_id is None), versions[0])
+    # The service resolves the canonical main card even for unlinked imports.
+    # Keep every other edition, including rows with no saved parent pointer.
+    base = versions[0]
     others = [v for v in versions if v.id != base.id]
     # Remaining editions ordered by version label (alpha) then id
     others.sort(key=lambda v: ((v.version or "").lower(), v.id))
@@ -208,6 +206,7 @@ def find_players_for_search(session, search_term: str,
     term = (search_term or "").strip()
     if not term:
         return []
+    from services.version_service import get_base_id, name_key
 
     # Escape LIKE metacharacters so a literal % or _ in the user's input is
     # matched literally instead of behaving as a SQL wildcard.
@@ -221,7 +220,7 @@ def find_players_for_search(session, search_term: str,
              .order_by(Player.parent_player_id.isnot(None), Player.id)
              .first())
     if exact:
-        base_id = exact.parent_player_id or exact.id
+        base_id = get_base_id(exact.id, session)
         base = session.get(Player, base_id)
         return [base or exact]
 
@@ -232,12 +231,15 @@ def find_players_for_search(session, search_term: str,
             .all())
 
     seen = {}
+    resolved_names = {}
     for p in rows:
-        base_id = p.parent_player_id or p.id
+        key = name_key(p.name)
+        if key not in resolved_names:
+            resolved_names[key] = get_base_id(p.id, session)
+        base_id = resolved_names[key]
         if base_id in seen:
             continue
-        base = (p if p.parent_player_id is None
-                else (session.get(Player, base_id) or p))
+        base = session.get(Player, base_id) or p
         seen[base_id] = base
         if len(seen) >= limit:
             break

@@ -5,6 +5,7 @@
   <h2>Players <span style="color:var(--muted);font-weight:400;font-size:1rem;">({{ total }})</span></h2>
   <div style="display:flex;gap:.5rem;flex-wrap:wrap;">
     <a href="{{ url_for('player_add') }}" class="btn btn-primary">+ Add Player</a>
+    <a href="{{ url_for('admin_player_versions') }}" class="btn btn-blue">🎴 Versions</a>
     <a href="{{ url_for('players_bulk_upload') }}" class="btn btn-green">📤 Bulk Upload</a>
     <a href="{{ url_for('players_data_change') }}" class="btn btn-green">♻️ Data Change</a>
     <a href="{{ url_for('players_download', q=q, category=category, country=country_filter, rating_range=rating_range) }}" class="btn btn-blue">⬇ Download CSV</a>
@@ -135,6 +136,7 @@
       <td><input type="checkbox" class="player-row-cb" value="{{ p.id }}"></td>
       <td style="font-weight:600;">
         {{ p.name }}{% if custom_image_ids and p.id in custom_image_ids %} <span title="Has custom card image" style="cursor:help;">🎨</span>{% endif %}
+        <small style="display:block;color:var(--muted);font-weight:400;">{{ p.version or 'Base' }}</small>
       </td>
       <td><span class="rating-badge tier-{{ p._tier_css }}">{{ p.rating }}</span></td>
       <td>{{ p.category }}</td>

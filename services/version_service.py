@@ -4,9 +4,9 @@ A Player row is either:
   - A "base" card: parent_player_id is NULL
   - A "variant" of another base: parent_player_id points to the base
 
-When a user searches or browses, we show the BASE card by default. The base
-card's detail page shows a list of variants, and clicking one swaps the
-current view to that variant.
+Main card types are Base, Legend and Star. A family uses the first available
+type in that order as its root. Same-name rows are editions even if an older
+import never saved their parent pointers. Career cards remain separate.
 
 Buy logic:
   - Buying a specific version (base or variant) only buys that exact version
@@ -14,6 +14,8 @@ Buy logic:
 """
 
 import logging
+from collections import defaultdict
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from models import Player, UserRoster
@@ -21,6 +23,102 @@ from models import Player, UserRoster
 from services.player_service import not_career
 
 logger = logging.getLogger(__name__)
+
+MAIN_VERSIONS = ("Base", "Legend", "Star")
+
+
+def normalize_version(value):
+    """Recognise legacy main-card labels without renaming special editions."""
+    label = " ".join(str(value or "").split()) or "Base"
+    for main in MAIN_VERSIONS:
+        if label.lower() in (main.lower(), f"{main.lower()} card",
+                             f"{main.lower()} player"):
+            return main
+    return label
+
+
+def name_key(value):
+    return (value or "").strip().lower()
+
+
+def filter_version(query, label):
+    """Filter by the card's edition label, independently of its family role."""
+    label = normalize_version(label)
+    value = func.lower(func.trim(Player.version))
+    if label in MAIN_VERSIONS:
+        main = label.lower()
+        clause = value.in_((main, f"{main} card", f"{main} player"))
+        if label == "Base":
+            clause = or_(clause, Player.version.is_(None), value == "")
+        return query.filter(clause)
+    return query.filter(value == label.lower())
+
+
+def main_card(cards):
+    """Choose one stable family root, even when no Base edition exists."""
+    def order(card):
+        label = normalize_version(card.version)
+        rank = MAIN_VERSIONS.index(label) if label in MAIN_VERSIONS else 3
+        return rank, card.id
+    return min(cards, key=order)
+
+
+def version_groups(session):
+    """All catalogue families, including inactive and unlinked imported cards."""
+    groups = defaultdict(list)
+    for card in not_career(session.query(Player)).order_by(Player.id).all():
+        groups[name_key(card.name)].append(card)
+    return groups
+
+
+def sync_version_links(session, names=None):
+    """Repair family pointers inside the caller's transaction. Never change stats.
+
+    Run after an import has flushed, so row order and missing Base editions do
+    not matter. ``names`` limits repairs to families touched by that import.
+    """
+    session.flush()
+    query = not_career(session.query(Player))
+    if names is not None:
+        keys = {name_key(name) for name in names}
+        if not keys:
+            return 0
+        query = query.filter(func.lower(func.trim(Player.name)).in_(keys))
+    groups = defaultdict(list)
+    for card in query.order_by(Player.id).all():
+        groups[name_key(card.name)].append(card)
+    changed = 0
+    for cards in groups.values():
+        root = main_card(cards)
+        # Keep any older explicit link to a differently named family intact.
+        if root.parent_player_id and root.parent_player_id not in {c.id for c in cards}:
+            continue
+        for card in cards:
+            parent_id = None if card.id == root.id else root.id
+            if card.parent_player_id != parent_id:
+                card.parent_player_id = parent_id
+                changed += 1
+    return changed
+
+
+def _family_cards(session, player):
+    if player.is_career:
+        return [player]
+    # Follow legacy links safely; repaired families are always a single level.
+    seen = set()
+    while player.parent_player_id and player.id not in seen:
+        seen.add(player.id)
+        parent = session.get(Player, player.parent_player_id)
+        if not parent or parent.is_career:
+            break
+        player = parent
+    cards = not_career(session.query(Player)).filter(or_(
+        func.lower(func.trim(Player.name)) == name_key(player.name),
+        Player.id == player.id,
+        Player.parent_player_id == player.id,
+    )).order_by(Player.id).all()
+    root = main_card(cards)
+    return [root] + [c for c in cards if c.id != root.id]
 
 
 def get_base_id(player_id, session=None):
@@ -34,7 +132,7 @@ def get_base_id(player_id, session=None):
         p = session.get(Player, player_id)
         if not p:
             return player_id
-        return p.parent_player_id or p.id
+        return _family_cards(session, p)[0].id
     finally:
         if own:
             session.close()
@@ -56,32 +154,8 @@ def get_all_versions(session: Session, base_id):
     base = session.get(Player, base_id)
     if not base:
         return []
-    # If the supplied id is actually a variant, walk up to its base
-    if base.parent_player_id:
-        parent = session.get(Player, base.parent_player_id)
-        if parent:
-            base = parent
-
-    variants = (session.query(Player)
-                .filter(Player.parent_player_id == base.id,
-                        Player.is_active == True)
-                .order_by(Player.id).all())
-
-    ordered = [base] + variants
-    seen = {p.id for p in ordered}
-
-    # Merge in any other active rows with the same name that aren't linked.
-    if base.name:
-        for p in (session.query(Player)
-                  .filter(Player.name == base.name,
-                          Player.is_active == True,
-                          Player.id != base.id)
-                  .order_by(Player.id).all()):
-            if p.id not in seen:
-                ordered.append(p)
-                seen.add(p.id)
-
-    return ordered
+    cards = _family_cards(session, base)
+    return [cards[0]] + [c for c in cards[1:] if c.is_active]
 
 
 def user_owns_any_version(session: Session, user_id, player_id):
@@ -93,9 +167,8 @@ def user_owns_any_version(session: Session, user_id, player_id):
     base = session.get(Player, player_id)
     if not base:
         return False
-    base_id = base.parent_player_id or base.id
-
-    version_ids = [v.id for v in get_all_versions(session, base_id)]
+    # Inactive editions still belong to their owners.
+    version_ids = [v.id for v in _family_cards(session, base)]
     if not version_ids:
         version_ids = [player_id]
 

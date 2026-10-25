@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Player Versions{% endblock %}
+{% block content %}
+<div class="version-heading">
+  <div><h2>🎴 Player Versions</h2><p class="version-hint">One player. All their cards, together.</p></div>
+  <a href="{{ url_for('players_list') }}" class="btn btn-ghost">← Players</a>
+</div>
+<div class="form-card">
+  <p style="margin-top:0;">Main card types: <strong>Base · Legend · Star</strong>. Other editions are special versions.
+    Cards with the same name belong to the same player, including cards from bulk uploads.</p>
+  <p class="version-hint">Only players with at least two cards appear here. The main card is Base when available,
+    otherwise Legend, then Star. Card names ignore capitalisation and spaces at the beginning or end.</p>
+  <div class="version-pickers">
+    <form method="GET" id="main-player-form">
+      <label id="main-label"><strong>1. Main Player Version</strong></label>
+      <details class="version-dropdown" id="main-picker">
+        <summary>{% if selected %}{{ selected.main.name }} · {{ normalize_version(selected.main.version) }}{% else %}Tick a main player{% endif %}</summary>
+        <div class="version-options" role="group" aria-labelledby="main-label">
+          <input type="search" class="version-search" placeholder="Search players…" aria-label="Search main players" data-search="main-choices">
+          <div id="main-choices">
+          {% for family in families %}
+          <label class="version-choice">
+            <input type="checkbox" name="main_player_id" value="{{ family.main.id }}" {% if selected and selected.main.id == family.main.id %}checked{% endif %}>
+            <span>{{ family.main.name }} · {{ normalize_version(family.main.version) }}<small>{{ family.cards|length }} cards · {{ family.linked }} linked</small></span>
+          </label>
+          {% else %}<p class="version-hint">No players have multiple cards yet. Upload another edition with the same player name.</p>{% endfor %}
+          </div>
+        </div>
+      </details>
+      <button type="submit" class="btn btn-ghost btn-sm" style="margin-top:.5rem;">Choose player</button>
+    </form>
+    <form method="POST" id="version-link-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="add">
+      <input type="hidden" name="main_player_id" value="{{ selected.main.id if selected else '' }}">
+      <label id="special-label"><strong>2. Special Versions</strong></label>
+      <details class="version-dropdown" {% if selected %}open{% endif %}>
+        <summary id="special-summary">{% if selected %}Tick versions to add{% else %}Choose a main player first{% endif %}</summary>
+        <div class="version-options" role="group" aria-labelledby="special-label">
+        {% if selected %}
+          <input type="search" class="version-search" placeholder="Search versions…" aria-label="Search versions" data-search="special-choices">
+          <div style="display:flex;gap:.5rem;margin:.5rem 0;">
+            <button type="button" class="btn btn-ghost btn-sm" id="tick-all">Tick all</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="clear-versions">Clear ticks</button>
+          </div>
+          <div id="special-choices">
+          {% for card in selected.cards if card.id != selected.main.id %}
+          <label class="version-choice">
+            <input type="checkbox" name="version_ids" value="{{ card.id }}" {% if card.parent_player_id == selected.main.id %}checked{% endif %}>
+            <span>{{ normalize_version(card.version) }} · {{ card.rating }} OVR<small>
+              #{{ card.id }} · {{ 'Main type' if normalize_version(card.version) in main_versions else 'Special edition' }}
+              · {{ 'Linked' if card.parent_player_id == selected.main.id else 'Detected by name' }}{% if not card.is_active %} · Inactive{% endif %}
+            </small></span>
+          </label>
+          {% endfor %}
+          </div>
+        {% else %}<p class="version-hint">Available cards will appear here.</p>{% endif %}
+        </div>
+      </details>
+      <p class="version-hint">Tick multiple cards, then add them together. Existing links stay saved when you clear ticks.</p>
+      <button type="submit" class="btn btn-primary" id="add-versions" {% if not selected %}disabled{% endif %}>✓ Add selected versions</button>
+      <span id="version-count" aria-live="polite" class="version-hint"></span>
+    </form>
+  </div>
+</div>
+<div class="form-card" style="margin-top:1rem;">
+  <h3 style="margin-top:0;">Older uploads missing versions?</h3>
+  <p class="version-hint">Repair groups same-name cards and fixes missing links across the catalogue, including inactive cards.
+    Each card keeps its own rating, stats and image.</p>
+  <form method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="repair">
+    <button type="submit" class="btn btn-blue">↻ Repair version links</button>
+  </form>
+</div>
+{% if selected %}
+<div class="table-wrap" style="margin-top:1rem;">
+  <table>
+    <thead><tr><th>{{ selected.main.name }} · {{ selected.cards|length }} cards</th><th>Type</th><th>OVR</th><th>Status</th><th>Actions</th></tr></thead>
+    <tbody>{% for card in selected.cards %}
+      <tr><td>{{ normalize_version(card.version) }}{% if card.id == selected.main.id %} <strong>· Main player</strong>{% endif %}</td>
+        <td>{{ 'Main type' if normalize_version(card.version) in main_versions else 'Special edition' }}</td>
+        <td>{{ card.rating }}</td><td>{{ 'Active' if card.is_active else 'Inactive' }}</td>
+        <td><a href="{{ url_for('player_edit', player_id=card.id) }}" class="btn btn-blue btn-sm">Edit card</a></td></tr>
+    {% endfor %}</tbody>
+  </table>
+</div>
+{% endif %}
+<style>
+.version-heading {display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:1rem;}
+.version-hint {color:var(--muted);font-size:.85rem;line-height:1.6;}
+.version-pickers {display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-top:1.2rem;}
+.version-dropdown {border:1px solid var(--border);border-radius:8px;margin-top:.5rem;background:var(--bg);}
+.version-dropdown summary {padding:.85rem;cursor:pointer;}
+.version-options {padding:.75rem;border-top:1px solid var(--border);max-height:340px;overflow:auto;}
+.version-search {width:100%;margin-bottom:.5rem;}
+.version-choice {display:flex;align-items:center;gap:.7rem;padding:.65rem;border-radius:6px;cursor:pointer;text-transform:none;letter-spacing:normal;font-size:.9rem;}
+.version-choice:hover {background:var(--card);}
+.version-choice input {width:auto;flex:0 0 auto;}
+.version-choice small {display:block;color:var(--muted);font-size:.75rem;margin-top:.2rem;}
+.version-choice[hidden] {display:none;}
+@media(max-width:700px) {.version-pickers {grid-template-columns:1fr;}}
+</style>
+<script>
+document.querySelectorAll('#main-choices input').forEach(input => input.addEventListener('change', () => {
+  document.querySelectorAll('#main-choices input').forEach(other => {if (other !== input) other.checked = false;});
+  if (input.checked) document.getElementById('main-player-form').requestSubmit();
+}));
+document.querySelectorAll('[data-search]').forEach(input => input.addEventListener('input', () => {
+  const query = input.value.trim().toLocaleLowerCase();
+  document.querySelectorAll('#' + input.dataset.search + ' .version-choice').forEach(row => {
+    row.hidden = !row.textContent.toLocaleLowerCase().includes(query);
+  });
+}));
+const versionBoxes = Array.from(document.querySelectorAll('input[name="version_ids"]'));
+function updateVersionCount() {
+  const count = versionBoxes.filter(box => box.checked).length;
+  document.getElementById('version-count').textContent = count + ' selected';
+  document.getElementById('add-versions').disabled = count === 0;
+}
+versionBoxes.forEach(box => box.addEventListener('change', updateVersionCount));
+document.getElementById('tick-all')?.addEventListener('click', () => {
+  versionBoxes.forEach(box => {if (!box.closest('label').hidden) box.checked = true;});
+  updateVersionCount();
+});
+document.getElementById('clear-versions')?.addEventListener('click', () => {
+  versionBoxes.forEach(box => box.checked = false);
+  updateVersionCount();
+});
+updateVersionCount();
+</script>
+{% endblock %}

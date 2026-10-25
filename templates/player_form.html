@@ -4,6 +4,7 @@
 <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:1rem;">
   <a href="{{ url_for('players_list') }}" class="btn btn-ghost btn-sm">← Back</a>
   <h2>{{ 'Edit' if player else 'Add New' }} Player</h2>
+  {% if player %}<a href="{{ url_for('admin_player_versions', main_player_id=base_id) }}" class="btn btn-blue btn-sm">🎴 Versions</a>{% endif %}
 </div>
 
 <div class="form-card">
@@ -38,7 +39,9 @@
     <div class="form-row">
       <div class="form-group">
         <label>Version</label>
-        <input type="text" name="version" value="{{ player.version if player else 'Base card' }}">
+        <input type="text" name="version" list="main-card-types" value="{{ player.version if player else 'Base' }}" maxlength="50">
+        <datalist id="main-card-types"><option value="Base"><option value="Legend"><option value="Star"></datalist>
+        <small style="color:var(--muted);">Choose Base, Legend or Star, or enter a special edition name. Use the same player name to group cards.</small>
       </div>
       <div class="form-group">
         <label>Active</label>
@@ -269,9 +272,9 @@
 <div class="form-card" style="margin-top:1.5rem;">
   <h3 style="margin:0 0 .8rem;">🎴 Card Versions</h3>
   <p style="color:var(--muted); font-size:.9rem; margin-bottom:1rem;">
-    Create alternate cosmetic editions of this player (e.g. "World Cup 2023", "Gold Edition").
-    Each version requires its own custom card image. Stats are inherited from the base — versions
-    are cosmetic only. Users can only own ONE version per player.
+    Main card types are Base, Legend and Star. Other editions are special versions.
+    Each card can have its own rating, stats and image. Users can only own ONE version per player.
+    <a href="{{ url_for('admin_player_versions', main_player_id=base_id) }}">Link existing cards in Versions →</a>
   </p>
 
   {% set variants = versions | rejectattr('id', 'eq', player.id) | list %}

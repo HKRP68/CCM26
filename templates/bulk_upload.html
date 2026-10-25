@@ -29,9 +29,11 @@ Jasprit Bumrah, 98, Bowler, India, Right, Right, Fast, 22, 98, World Cup 2023, 1
     <p style="margin:0;font-size:.9rem;line-height:1.6;">
       <strong>💡 Tips:</strong><br>
       • Only <strong>Name</strong> is strictly required<br>
-      • <strong>Version</strong> defaults to <code>Base</code> — anything else (Gold, Legend, World Cup 2023, etc.) makes it a variant<br>
+      • <strong>Version</strong> defaults to <code>Base</code>. Main types are Base, Legend and Star; other labels are special editions<br>
       • Multiple versions of the same player are allowed — just put one row per version<br>
-      • Variants auto-link to their Base card (parent_player_id) if a Base exists with the same name<br>
+      • Same-name cards auto-link in any upload order, even without a Base card. Main card priority: Base → Legend → Star<br>
+      • Capitalisation, surrounding spaces and legacy labels such as "Base card" are recognised automatically<br>
+      • Use <a href="{{ url_for('admin_player_versions') }}">Versions</a> to review cards or repair links from older uploads<br>
       • <strong>Is Active</strong> defaults to <code>1</code>. Set <code>0</code>/<code>false</code>/<code>no</code> to disable<br>
       • Category accepts abbreviations: "bat"→Batsman, "bowl"→Bowler, "wk"→Wicket Keeper, "ar"→All-rounder<br>
       • Hand accepts: "R"/"L"/"Right"/"Left"<br>
