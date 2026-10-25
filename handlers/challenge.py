@@ -1366,10 +1366,26 @@ def _query_team_players(session, draft, side):
     team = query.first()
     if not team:
         return []
-    return (session.query(ChallengePlayer)
-            .filter(ChallengePlayer.team_id == team.id)
-            .order_by(ChallengePlayer.sort_order, ChallengePlayer.name)
-            .all())
+    players = (session.query(ChallengePlayer)
+               .filter(ChallengePlayer.team_id == team.id)
+               .order_by(ChallengePlayer.sort_order, ChallengePlayer.name)
+               .all())
+    # Every selection path must use the same fit squad: opening the picker,
+    # later button taps, typed numbers, saved XIs, /change and the bot captain.
+    out_list = []
+    if draft.get("is_tournament") and draft.get("tournament_id"):
+        from models import Tournament
+        from services import injury_service
+        tour = session.get(Tournament, int(draft["tournament_id"]))
+        hurt_ids, hurt_rows = injury_service.unavailable_for_team(
+            session, tour, team.id)
+        out_list = [
+            {"name": r.player_name or "Player", "injury": r.injury_type,
+             "matches": int(r.matches_remaining or 0)}
+            for r in hurt_rows]
+        players = [p for p in players if int(p.id) not in hurt_ids]
+    draft.setdefault("injured_out", {})[side] = out_list
+    return players
 
 
 def _challenge_team_players(session, draft, side):
@@ -1437,29 +1453,10 @@ def _load_team_players_with_retry(draft, side, attempts=2):
                         # "At least N players rated ≤X" in every XI.
                         league_cfg["rating_rules"] = (
                             tournament_service.rating_rules(tour))
-            # Injured players are taken out of the squad entirely rather than
-            # shown and refused: the picker's numbering, the typed quick-select
-            # and the bot's XI builder all work off this one list, so removing
-            # them here is what makes "ruled out" actually mean ruled out.
-            # ``out`` is carried back so the prompt can name who is missing.
-            out_list = []
-            if draft.get("is_tournament") and draft.get("tournament_id") and team_id:
-                from models import Tournament
-                from services import injury_service
-                tour = session.get(Tournament, int(draft["tournament_id"]))
-                hurt_ids, hurt_rows = injury_service.unavailable_for_team(
-                    session, tour, team_id)
-                if hurt_ids:
-                    out_list = [
-                        {"name": r.player_name or "Player",
-                         "injury": r.injury_type,
-                         "matches": int(r.matches_remaining or 0)}
-                        for r in hurt_rows]
-                    players = [p for p in players
-                               if int(getattr(p, "id")) not in hurt_ids]
             if league_cfg is None:
                 league_cfg = {}
-            league_cfg["injured_out"] = out_list
+            league_cfg["injured_out"] = (
+                (draft.get("injured_out") or {}).get(side) or [])
             return players, team_id, league_cfg
         except Exception as exc:  # transient DB failure — retry with a fresh session
             last_exc = exc
@@ -3779,7 +3776,10 @@ async def challenge_xi_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     selection = _challenge_xi_selection(draft, side)
-    selected_ids = selection.setdefault("player_ids", [])
+    selected_ids = _valid_saved_subset(selection.get("player_ids") or [], players)
+    selection["player_ids"] = selected_ids
+    if len(selected_ids) != 11:
+        selection["confirmed"] = False
     # Surface the user's last saved XI for this team as a one-tap option. Only the
     # players still on the roster are offered (stale picks are dropped).
     #
@@ -3861,6 +3861,10 @@ async def challenge_xi_useprev_callback(update: Update, context: ContextTypes.DE
             saved_subset = _inline_saved_order(draft, side, players)
         else:
             saved_subset = _valid_saved_subset(load_last_xi(query.from_user.id, team_id), players) if team_id else []
+    # Cached when the picker opened: injuries or squad changes since then
+    # must also invalidate saved picks before the one-tap confirmation.
+    saved_subset = _valid_saved_subset(saved_subset, players)
+    draft.setdefault("saved_xi", {})[side] = saved_subset
     if not saved_subset:
         await query.answer("No saved XI to load for this team yet.", show_alert=True)
         return
@@ -3932,10 +3936,11 @@ async def challenge_xi_pick_callback(update: Update, context: ContextTypes.DEFAU
         return
 
     selection = _challenge_xi_selection(draft, side)
-    selected_ids = selection.setdefault("player_ids", [])
     if selection.get("confirmed"):
         await query.answer("Your Playing XI is already confirmed.", show_alert=True)
         return
+    selected_ids = _valid_saved_subset(selection.get("player_ids") or [], players)
+    selection["player_ids"] = selected_ids
     if player_id in selected_ids:
         selected_ids.remove(player_id)
         await query.answer(f"Removed: {len(selected_ids)}/11")
@@ -4150,6 +4155,8 @@ async def challenge_xi_edit_callback(update: Update, context: ContextTypes.DEFAU
         players = _challenge_team_players(session, draft, side)
     finally:
         session.close()
+    selected_ids = _valid_saved_subset(selected_ids, players)
+    selection["player_ids"] = selected_ids
     _store_xi_message_ref(selection, getattr(query, "message", None))
     await query.answer("Edit your XI." if was_confirmed else "Keep editing.")
     try:

@@ -165,6 +165,34 @@ def unavailable_for_team(session, tour, challenge_team_id):
     return {int(r.roster_id) for r in rows if r.roster_id is not None}, rows
 
 
+def filter_impact_benches(session, state):
+    """Recheck snapshotted Challenge League benches against current injuries.
+
+    An admin can rule a player out after launch, and older saved matches may
+    still carry an injured substitute. Filter both sides before offering or
+    accepting a swap. Caller owns the session and match-state persistence.
+    """
+    if not state.get("tournament_id"):
+        return
+    tour = session.get(Tournament, int(state["tournament_id"]))
+    if not enabled_for(tour):
+        return
+    mapping = state.get("tournament_team_by_user") or {}
+    benches = {}
+    for side in ("bat", "bowl"):
+        uid = state.get(f"{side}_team_id")
+        team_id = mapping.get(str(uid), mapping.get(uid))
+        if not team_id:
+            # A legacy state without team identity cannot establish eligibility.
+            benches[f"{side}_bench"] = []
+            continue
+        hurt_ids, _rows = unavailable_for_team(session, tour, team_id)
+        benches[f"{side}_bench"] = [
+            p for p in state.get(f"{side}_bench") or []
+            if int(p.get("roster_id") or 0) not in hurt_ids]
+    state.update(benches)
+
+
 def severity_label(key):
     return _SEVERITY_LABEL.get(key, (key or "").title() or "Knock")
 

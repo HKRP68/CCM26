@@ -2497,6 +2497,8 @@ async def _bot_consider_impact(context, mid, state):
     try:
         from services import bot_captain
         na = await _get_next_action(context, mid)
+        if not await _refresh_tournament_impact_benches(state):
+            return
         choice = bot_captain.pick_impact_swap(state, bot_uid, na)
         if not choice:
             return
@@ -3384,6 +3386,27 @@ def _impact_cancel_kb(mid, owner_tg):
         "✖️ Cancel", callback_data=_imp_cb("cipl_impx_", owner_tg, mid))]]
 
 
+async def _refresh_tournament_impact_benches(state):
+    """Keep DB work outside the pure Impact Player rules and event loop."""
+    if not state.get("tournament_id"):
+        return True
+
+    def refresh():
+        from services import injury_service
+        session = get_session()
+        try:
+            injury_service.filter_impact_benches(session, state)
+        finally:
+            session.close()
+
+    try:
+        await asyncio.to_thread(refresh)
+        return True
+    except Exception:
+        logger.exception("cipl: could not check tournament impact injuries")
+        return False
+
+
 async def _impact_guard(context, q, mid):
     """Shared entry checks. Returns ``(state, opts)`` or ``(None, None)``."""
     state = await _gs(context, mid)
@@ -3399,6 +3422,9 @@ async def _impact_guard(context, q, mid):
                        show_alert=True)
         return None, None
     na = await _get_next_action(context, mid)
+    if not await _refresh_tournament_impact_benches(state):
+        await q.answer("Couldn't check injuries. Please try again.", show_alert=True)
+        return None, None
     opts = impact_player.cipl_options(state, user_id, na)
     if not opts.get("ok"):
         await q.answer(opts.get("message", "Unavailable."), show_alert=True)
@@ -3641,6 +3667,9 @@ async def cipl_impact_pos_callback(update: Update, context: ContextTypes.DEFAULT
         # Re-check the window against the CURRENT action, not the one that drew
         # the keyboard: the other captain may have started the over in between.
         na = await _get_next_action(context, mid)
+        if not await _refresh_tournament_impact_benches(state):
+            await q.answer("Couldn't check injuries. Please try again.", show_alert=True)
+            return
         ok, msg, rec = impact_player.cipl_use(
             state, user_id, in_rid, out_rid, na, bat_position=pos)
         if not ok:
@@ -3694,6 +3723,8 @@ async def submit_impact(context, mid, actor_tg, in_rid, out_rid, bat_position=No
         if user_id is None:
             return False, "Only the two captains can use Impact Player."
         na = await _get_next_action(context, mid)
+        if not await _refresh_tournament_impact_benches(state):
+            return False, "Couldn't check injuries. Please try again."
         ok, msg, rec = impact_player.cipl_use(
             state, user_id, in_rid, out_rid, na, bat_position=bat_position)
         if not ok:
@@ -3790,6 +3821,9 @@ async def impact_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("Only the two captains can use Impact Player.")
             return
         na = await _get_next_action(context, mid)
+        if not await _refresh_tournament_impact_benches(state):
+            await msg.reply_text("Couldn't check injuries. Please try again.")
+            return
         opts = impact_player.cipl_options(state, user_id, na)
         if not opts.get("can_use"):
             await msg.reply_text(_impact_unavailable_text(opts, na),

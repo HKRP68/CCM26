@@ -756,6 +756,8 @@ def _serialize_match_state_impl(session, match, viewer_user):
     # rules, services.impact_player.cipl_options); every other one in the chat.
     if viewer_uid and status != "completed" and approach_mode and not cipl_view_only:
         try:
+            from services import injury_service
+            injury_service.filter_impact_benches(session, state)
             impact_player = _approach_impact_payload(state, viewer_uid, next_action)
         except Exception:
             logger.exception("approach impact player options failed (non-fatal)")

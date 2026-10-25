@@ -3,7 +3,7 @@
 An opt-in cricket injury system for a Challenge League Tournament. When it is on,
 finishing a match can leave a player carrying a knock that rules them out of
 their team's **next few tournament matches** — they cannot be picked in the XI
-until they are fit again.
+or used as an Impact Player until they are fit again.
 
 Off by default, and scoped to one tournament: an injured card is fit everywhere
 else in the bot, including in another tournament running at the same time.
@@ -89,6 +89,14 @@ prompt says who is missing, so a shorter list is never a mystery:
 • Bumrah — Side Strain, out 2 more matches
 ```
 
+Every subsequent XI action uses that same filtered squad, including saved XIs,
+typed numbers, edits, `/change`, and the bot captain. A cached saved XI is checked
+again before confirmation. The match launch also rechecks both selected XIs.
+
+**Impact Player** uses a bench without injured players. The chat picker, Mini App
+and bot recheck current injuries before a substitution, so an old bench snapshot
+or a button drawn before a player was ruled out cannot bring them on.
+
 **Any time**, with `/ctinjuries` (or the 🚑 Injuries tab on `/ctour`, which only
 appears when the tournament has the system on):
 
@@ -135,5 +143,5 @@ exist.
 
 `tests/test_tournament_injuries.py` — the switch, the ladder and its ceiling, the
 count-down landing exactly on time, the fieldable-XI and no-double-injury
-guards, the workload-weighted victim pool, reset, and the squad the Playing XI
-picker is actually handed.
+guards, the workload-weighted victim pool, reset, XI selection actions and stale
+saved XIs, and injury checks on the Impact Player bench and live substitutions.

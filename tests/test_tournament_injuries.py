@@ -17,12 +17,15 @@ What these pin down:
   • Lets Play tournaments are excluded: there is no squad to rule anyone out of
 """
 
+import asyncio
 import itertools
 import os
 import random
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _module_swap  # noqa: E402  (sibling helper; see its docstring)
@@ -392,6 +395,34 @@ class XiPickerTests(InjuryCase):
 
     CHANCE = 0
 
+    def _draft(self):
+        return {
+            "draft_id": 123, "turn": "complete", "chat_id": -100,
+            "league_key": "inj", "league_id": self.league.id,
+            "is_tournament": True, "tournament_id": self.tour.id,
+            "host_team": self.cteams[0].name, "target_team": self.cteams[1].name,
+            "host": {"tg_id": self.users[0].telegram_id},
+            "target": {"tg_id": self.users[1].telegram_id},
+        }
+
+    def _rule_out(self, idx=0, player_idx=2):
+        victim = self.squad(idx)[player_idx]
+        self.inj.add_manual(self.session, self.tour.id, self.tteams[idx].id,
+                            victim.id, matches=2, player_name=victim.name)
+        self.session.commit()
+        return victim
+
+    def _callback(self, draft, data, handler):
+        import handlers.challenge as challenge
+        query = SimpleNamespace(data=data, from_user=SimpleNamespace(
+            id=self.users[0].telegram_id), answer=AsyncMock(), message=None)
+        context = SimpleNamespace(bot_data={
+            challenge._challenge_team_draft_key(123): draft})
+        with patch.object(challenge, "_touch_selection_timer", new=AsyncMock()), \
+             patch.object(challenge.R, "edit_rich", new=AsyncMock()):
+            asyncio.run(handler(SimpleNamespace(callback_query=query), context))
+        return query
+
     def _squad_for_picker(self, idx):
         """What ``handlers.challenge`` loads for this side of a tournament draft."""
         import handlers.challenge as challenge
@@ -446,6 +477,68 @@ class XiPickerTests(InjuryCase):
         self.assertIn("2 more matches", note)
         self.assertEqual(challenge._injury_note({}, "host"), [])
 
+    def test_a_stale_player_button_cannot_select_an_injured_player(self):
+        import handlers.challenge as challenge
+        victim = self._rule_out()
+        draft = self._draft()
+        query = self._callback(draft, f"cl_pick_123_host_{victim.id}",
+                               challenge.challenge_xi_pick_callback)
+        self.assertNotIn(victim.id,
+                         challenge._challenge_xi_selection(draft, "host")["player_ids"])
+        self.assertIn("not available", query.answer.call_args.args[0])
+
+    def test_confirmation_rechecks_an_injury_added_after_selection(self):
+        import handlers.challenge as challenge
+        draft = self._draft()
+        selection = challenge._challenge_xi_selection(draft, "host")
+        selection["player_ids"] = [p.id for p in self.squad(0)[:11]]
+        self._rule_out()
+        with patch.object(challenge, "_finalize_xi_confirm", new=AsyncMock()) as confirm:
+            self._callback(draft, "cl_confirm_123_host",
+                           challenge.challenge_xi_confirm_callback)
+        confirm.assert_not_awaited()
+        self.assertFalse(selection["confirmed"])
+
+    def test_a_cached_saved_xi_drops_a_newly_injured_player(self):
+        import handlers.challenge as challenge
+        draft = self._draft()
+        draft["saved_xi"] = {"host": [p.id for p in self.squad(0)[:11]]}
+        victim = self._rule_out()
+        with patch.object(challenge, "_finalize_xi_confirm", new=AsyncMock()) as confirm:
+            self._callback(draft, "cl_useprev_123_host",
+                           challenge.challenge_xi_useprev_callback)
+        confirm.assert_not_awaited()
+        selection = challenge._challenge_xi_selection(draft, "host")
+        self.assertEqual(len(selection["player_ids"]), 10)
+        self.assertNotIn(victim.id, selection["player_ids"])
+        self.assertNotIn(victim.id, draft["saved_xi"]["host"])
+
+    def test_typed_numbers_match_the_filtered_picker(self):
+        import handlers.challenge as challenge
+        draft = self._draft()
+        draft.update(toss_decision="bat", xi_started={"host": True})
+        victim = self._rule_out(player_idx=0)
+        message = SimpleNamespace(text="1 2", delete=AsyncMock())
+        update = SimpleNamespace(effective_message=message,
+                                 effective_chat=SimpleNamespace(id=-100),
+                                 effective_user=SimpleNamespace(id=self.users[0].telegram_id))
+        with patch.object(challenge, "_active_draft_in_chat", return_value=draft), \
+             patch.object(challenge, "_touch_selection_timer", new=AsyncMock()), \
+             patch.object(challenge.R, "reply_rich", new=AsyncMock()):
+            asyncio.run(challenge.challenge_xi_quickselect(update, SimpleNamespace(bot_data={})))
+        picked = challenge._challenge_xi_selection(draft, "host")["player_ids"]
+        self.assertEqual(picked, [p.id for p in self.fit(0)[:2]])
+        self.assertNotIn(victim.id, picked)
+
+    def test_the_bot_builds_its_xi_from_fit_players(self):
+        import handlers.challenge as challenge
+        victim = self._rule_out(idx=1, player_idx=0)
+        draft = self._draft()
+        self.assertTrue(challenge._autoconfirm_bot_xi(draft))
+        selected = challenge._challenge_xi_selection(draft, "target")["player_ids"]
+        self.assertEqual(len(selected), 11)
+        self.assertNotIn(victim.id, selected)
+
 
 class ImpactBenchTests(InjuryCase):
     """An injured player is out of the match, substitutes' bench included."""
@@ -491,6 +584,73 @@ class ImpactBenchTests(InjuryCase):
         self.inj.heal(self.session, row.id)
         self.session.commit()
         self.assertIn(victim.id, self._bench())
+
+    def _live_state(self):
+        from services import cipl_match
+        state = cipl_match.build_cipl_state(
+            match_id=999, overs=20,
+            bat_user_id=self.users[0].id, bowl_user_id=self.users[1].id,
+            bat_user_tg=self.users[0].telegram_id,
+            bowl_user_tg=self.users[1].telegram_id,
+            bat_xi=[cipl_match.cp_to_player_dict(p) for p in self.squad(0)[:11]],
+            bowl_xi=[cipl_match.cp_to_player_dict(p) for p in self.squad(1)[:11]],
+            bat_bench=[cipl_match.cp_to_player_dict(p) for p in self.squad(0)[11:]],
+            bowl_bench=[cipl_match.cp_to_player_dict(p) for p in self.squad(1)[11:]],
+            bat_team_name="Alpha", bowl_team_name="Bravo", chat_id=-100)
+        state["tournament_id"] = self.tour.id
+        # Match states are JSON round-tripped: user-id keys become strings.
+        state["tournament_team_by_user"] = {
+            str(u.id): t.id for u, t in zip(self.users, self.cteams)}
+        return state
+
+    def test_a_live_bench_rechecks_injuries_for_both_sides(self):
+        from services import impact_player
+        from services.match_state_store import A_PICK_CIPL_BOWLER
+        state = self._live_state()
+        for idx in (0, 1):
+            victim = self.squad(idx)[12]
+            self.inj.add_manual(self.session, self.tour.id, self.tteams[idx].id,
+                                victim.id, matches=2, player_name=victim.name)
+        self.session.commit()
+        self.inj.filter_impact_benches(self.session, state)
+        for idx, side in enumerate(("bat", "bowl")):
+            opts = impact_player.cipl_options(state, self.users[idx].id,
+                                              A_PICK_CIPL_BOWLER)
+            self.assertNotIn(self.squad(idx)[12].id,
+                             [p["roster_id"] for p in opts["incoming_options"]])
+            self.assertEqual(len(state[f"{side}_bench"]), 3)
+
+    def test_a_stale_app_submission_cannot_bring_on_an_injured_player(self):
+        import handlers.cipl_play as cp
+        from services.match_state_store import A_PICK_CIPL_BOWLER
+        state = self._live_state()
+        victim = self.squad(1)[12]
+        self.inj.add_manual(self.session, self.tour.id, self.tteams[1].id,
+                            victim.id, matches=2, player_name=victim.name)
+        self.session.commit()
+        with patch.object(cp, "_gs", new=AsyncMock(return_value=state)), \
+             patch.object(cp, "_get_next_action", new=AsyncMock(return_value=A_PICK_CIPL_BOWLER)), \
+             patch.object(cp, "_pick_surface_error", return_value=""), \
+             patch.object(cp, "_ss", new=AsyncMock()) as save:
+            ok, _message = asyncio.run(cp.submit_impact(
+                SimpleNamespace(bot_data={}), 999, self.users[1].telegram_id,
+                victim.id, self.squad(1)[0].id))
+        self.assertFalse(ok)
+        save.assert_not_awaited()
+        self.assertNotIn(victim.id, [p["roster_id"] for p in state["bowl_xi"]])
+
+    def test_live_bench_filtering_is_scoped_to_its_tournament(self):
+        state = self._live_state()
+        victim = self.squad(0)[12]
+        self.inj.add_manual(self.session, self.tour.id, self.tteams[0].id,
+                            victim.id, matches=2, player_name=victim.name)
+        other = type(self.tour)(name="Other Cup", league_id=self.league.id,
+                                kind="challenge", injuries_enabled=True)
+        self.session.add(other)
+        self.session.commit()
+        state["tournament_id"] = other.id
+        self.inj.filter_impact_benches(self.session, state)
+        self.assertIn(victim.id, [p["roster_id"] for p in state["bat_bench"]])
 
 
 class ReportTests(InjuryCase):
