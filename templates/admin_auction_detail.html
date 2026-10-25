@@ -363,6 +363,9 @@
           </span>
         </summary>
         <div class="au-fold-body">
+          <div class="au-actions" style="margin-bottom:.8rem;">
+            <a class="btn btn-primary" href="{{ url_for('admin_auction_team_manage', season_id=season.id, franchise_id=f.id) }}">Manage players &amp; purse →</a>
+          </div>
           {% for warning in squad_warnings(f) %}
           <p class="au-note">⚠️ {{ warning.message }}</p>
           {% endfor %}

@@ -191,6 +191,95 @@ class PoolPageCase(unittest.TestCase):
                       self.A.lots(self.session, self.season.id))
 
 
+class TeamManagementPageTests(PoolPageCase):
+    def setUp(self):
+        super().setUp()
+        self.season.min_squad_size = 0
+        self.team = self.A.create_franchise(self.session, self.season, 'Manage team')
+        self.session.commit()
+        self.path = f'/auctions/{self.season_id}/teams/{self.team.id}'
+
+    def manage(self, **fields):
+        response = self.client.post(self.path, data=fields, follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.session.expire_all()
+        return response.get_data(as_text=True)
+
+    def test_website_add_remove_and_purse_forms_share_the_auction_ledger(self):
+        body = self.client.get(self.path).get_data(as_text=True)
+        self.assertIn('Adjust purse', body)
+        self.assertIn('Purse history', body)
+        self.assertIn('Signing price in lakh', body)
+        self.assertIn('Manage players &amp; purse', self.get())
+        initial = self.team.purse_remaining_lakh
+        body = self.manage(action='team_add_player', player_id=self.players[0].id,
+                           price_lakh=100, note='Website signing')
+        self.assertIn('added to Manage team', body)
+        self.assertEqual(self.team.squad_size, 1)
+        self.assertEqual(self.team.purse_remaining_lakh, initial - 100)
+        lot = self.A.squad(self.session, self.team.id)[0]
+        self.assertEqual(self.A.ledger_total(self.session, self.team.id), initial - 100)
+        self.manage(action='team_purse', mode='add', amount_lakh=200,
+                    expected_purse_lakh=initial-100, note='Website grant')
+        self.assertEqual(self.team.purse_remaining_lakh, initial + 100)
+        self.manage(action='team_remove_player', lot_id=lot.id, note='Website refund')
+        self.assertEqual(self.team.squad_size, 0)
+        self.assertEqual(lot.status, self.A.LOT_QUEUED)
+        self.assertEqual(self.A.ledger_total(self.session, self.team.id), initial + 200)
+
+    def test_search_and_stale_purse_submission(self):
+        name = self.players[0].name
+        body = self.client.get(self.path, query_string={'q': name}).get_data(as_text=True)
+        self.assertIn(name, body)
+        self.assertNotIn(self.players[-1].name, body)
+        initial = self.team.purse_remaining_lakh
+        fields = dict(action='team_purse', mode='deduct', amount_lakh=25,
+                      expected_purse_lakh=initial, note='Correction')
+        self.manage(**fields)
+        body = self.manage(**fields)
+        self.assertIn("purse changed", body)
+        self.assertEqual(self.team.purse_remaining_lakh, initial - 25)
+        body = self.manage(action='team_add_player', player_id=self.players[0].id,
+                           price_lakh=0, note='')
+        self.assertIn('Add a reason', body)
+        self.assertEqual(self.team.squad_size, 0)
+
+    def test_management_requires_website_login_and_a_team_in_this_season(self):
+        other = self.A.create_season(self.session, 'Another season')
+        other_team = self.A.create_franchise(self.session, other, 'Elsewhere')
+        self.session.commit()
+        self.assertEqual(self.client.get(f'/auctions/{self.season_id}/teams/{other_team.id}').status_code, 404)
+        with self.client.session_transaction() as state:
+            state.clear()
+        response = self.client.post(self.path, data=dict(action='team_purse', mode='add', amount_lakh=100))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('login', response.location)
+
+    def test_arena_portrait_preference_does_not_change_default_card_output(self):
+        import io
+        from PIL import Image
+        from unittest.mock import patch
+        buffer = io.BytesIO()
+        Image.new('RGB', (300, 180), 'blue').save(buffer, format='PNG')
+        original_card = buffer.getvalue()
+        portrait = Image.new('RGBA', (200, 260), 'green')
+        path = f'/webapp/player-card/{self.players[0].id}'
+        with patch('services.player_portrait_service.get_player_portrait', return_value=portrait) as load:
+            with patch('services.card_generator.generate_card', return_value=original_card) as generate:
+                preferred = self.client.get(path + '?portrait=1')
+                self.assertEqual(preferred.status_code, 200)
+                self.assertEqual(Image.open(io.BytesIO(preferred.data)).size, (200, 260))
+                generate.assert_not_called()
+                load.assert_called_once()
+                default = self.client.get(path)
+                self.assertEqual(default.data, original_card)
+                generate.assert_called_once()
+        with patch('services.player_portrait_service.get_player_portrait', return_value=None):
+            with patch('services.card_generator.generate_card', return_value=original_card):
+                fallback = self.client.get(path + '?portrait=1')
+                self.assertEqual(fallback.data, original_card)
+
+
 class PreviewTests(PoolPageCase):
 
     def test_a_filter_that_matches_nobody_says_so(self):

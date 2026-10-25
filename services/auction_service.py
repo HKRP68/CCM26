@@ -1557,7 +1557,7 @@ def set_opening_purse(session, season, purse_lakh, *, by_tg_id=None,
 
 
 def correct_purse(session, season, franchise, amount_lakh, *, note=None,
-                  by_tg_id=None):
+                  by_tg_id=None, expected_balance=None):
     """An admin's hand on a purse — the escape hatch for anything unforeseen.
 
     Signed, like every ledger row: a positive number is a grant, a negative one
@@ -1574,7 +1574,19 @@ def correct_purse(session, season, franchise, amount_lakh, *, note=None,
             f"That would leave {franchise.name} at "
             f"{render_money(new_balance, season.currency_label)}. A purse "
             f"cannot go below zero.")
-    franchise.purse_remaining_lakh = new_balance
+    query = session.query(AuctionFranchise).filter(
+        AuctionFranchise.id == franchise.id,
+        AuctionFranchise.purse_remaining_lakh + amount >= 0)
+    if expected_balance is not None:
+        query = query.filter(AuctionFranchise.purse_remaining_lakh == expected_balance)
+    changed = query.update({AuctionFranchise.purse_remaining_lakh:
+                            AuctionFranchise.purse_remaining_lakh + amount},
+                           synchronize_session=False)
+    if not changed:
+        raise AuctionError("The purse changed. Refresh and review the balance before retrying.")
+    session.flush()
+    session.refresh(franchise)
+    new_balance = int(franchise.purse_remaining_lakh)
     _ledger(session, franchise, LEDGER_CORRECTION, amount, note=note,
             by_tg_id=by_tg_id)
     log_event(session, season, "purse_corrected",

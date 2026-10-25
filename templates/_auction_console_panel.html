@@ -59,7 +59,7 @@
   {% set warnings = squad_warnings(f) %}
   {% set blocked = bid_block_reason(f) %}
   <div class="au-purse-row">
-    <span>{{ f.name }}{% if lot and lot.current_bidder_id == f.id %} <span class="pill">leading</span>{% endif %}</span>
+    <span><a href="{{ url_for('admin_auction_team_manage', season_id=season.id, franchise_id=f.id) }}">{{ f.name }}</a>{% if lot and lot.current_bidder_id == f.id %} <span class="pill">leading</span>{% endif %}</span>
     <span class="dim">
       {{ money(f.purse_remaining_lakh) }} · {{ f.squad_size }}/{{ season.max_squad_size }}
       {% if season.rtm_enabled %}· 🪪 {{ cards_left(f) }}{% endif %}

@@ -64,3 +64,62 @@
 .au-step { display:inline-flex; width:22px; height:22px; align-items:center; justify-content:center; border-radius:50%; background:rgba(212,168,42,.15); color:var(--accent,#d4a82a); font-size:.72rem; margin-right:.4rem; }
 @media (prefers-reduced-motion:no-preference) { .au-dot.live { animation:au-pulse 2s ease-in-out infinite; } @keyframes au-pulse { 50% { opacity:.35; } } }
 @media (max-width:360px) { .au-head h2 { font-size:1.25rem; } .au-head .au-btn { font-size:.72rem; padding:.55rem; } .au-player-art { width:65px; height:88px; } }
+
+/* Auction desk and franchise management. */
+.auction-app { --au-quiet:#becac2; --au-panel:#14221c; }
+.auction-app [hidden] { display:none !important; }
+.auction-app h4 { margin:.15rem 0 .85rem; font-size:.92rem; }
+.auction-app :is(button,summary,a):focus-visible { outline:2px solid var(--accent,#d4a82a); outline-offset:3px; }
+.au-head { padding:.5rem 0; }
+.au-nav { position:sticky; top:0; z-index:3; background:#101c17; padding:.7rem .3rem; border-block:1px solid var(--au-line); }
+.au-nav button { min-height:44px; }
+.au-toolbar,.au-section-head { display:flex; justify-content:space-between; align-items:center; gap:.75rem; margin-bottom:.8rem; }
+.au-section-head h3 { margin:0; }
+.au-section-head p { margin:.4rem 0 0; }
+.au-refresh { min-height:34px; padding:.35rem .6rem; font-size:.72rem; }
+.au-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.6rem; margin:1rem 0; }
+.au-stats>div { padding:.8rem; border:1px solid var(--au-line); border-radius:12px; background:rgba(0,0,0,.12); min-width:0; }
+.au-stats dt { color:var(--au-quiet); font-size:.7rem; line-height:1.4; }
+.au-stats dd { margin:.4rem 0 0; font-size:clamp(1rem,3vw,1.4rem); font-weight:800; letter-spacing:-.03em; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+.au-dashboard,.au-manager { border-top:3px solid var(--accent,#d4a82a); background:linear-gradient(125deg,#1c3024,#101d18); }
+.au-dashboard .au-actions .au-btn:first-child { background:var(--accent,#d4a82a); color:#142015; }
+.au-manager>.au-stats { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.au-manager { scroll-margin-top:80px; }
+.au-management-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:1rem; margin-top:1.2rem; }
+.au-management-grid>section { min-width:0; border-top:1px solid var(--au-line); padding-top:1rem; }
+.au-change-preview { display:block; padding:.75rem; border:1px dashed var(--au-line); border-radius:9px; font-size:.8rem; line-height:1.5; font-variant-numeric:tabular-nums; }
+.au-selected-player { border-left:3px solid var(--accent,#d4a82a); padding:.5rem .75rem; background:rgba(212,168,42,.06); }
+.au-catalogue-results { max-height:380px; overflow:auto; }
+.au-team-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.au-team-card { margin-bottom:0; min-width:0; }
+.au-team-card .au-budget { margin-top:1rem; }
+.au-team-card .au-section-head h3 { overflow-wrap:anywhere; }
+.au-progress { display:block; appearance:none; width:100%; height:5px; margin:1rem 0 .7rem; overflow:hidden; border:0; border-radius:99px; background:rgba(255,255,255,.1); accent-color:var(--accent,#d4a82a); }
+.au-progress::-webkit-progress-bar { background:rgba(255,255,255,.1); }
+.au-progress::-webkit-progress-value { background:var(--accent,#d4a82a); border-radius:99px; }
+.au-progress::-moz-progress-bar { background:var(--accent,#d4a82a); border-radius:99px; }
+.au-checklist { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.5rem 1rem; }
+.au-checklist li { display:flex; align-items:flex-start; gap:.7rem; padding:.75rem 0; border-top:1px solid var(--au-line); }
+.au-checklist li>span { font-size:1.2rem; line-height:1; }
+.au-checklist strong { font-size:.84rem; }
+.au-credit { color:#8bdfac; }
+.au-warning-icon { color:#e6cf8c; }
+.au-state-live { color:#8bdfac; border-color:rgba(139,223,172,.4); background:rgba(139,223,172,.08); }
+.au-state-paused { color:#e6cf8c; border-color:rgba(230,207,140,.4); }
+.au-state-completed { color:#c8bcfa; }
+.au-controls { border-color:rgba(212,168,42,.35); }
+@media (max-width:720px) {
+  .au-management-grid { grid-template-columns:1fr; }
+  .au-team-grid { grid-template-columns:1fr; }
+  .au-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .au-section-head { align-items:flex-start; flex-wrap:wrap; }
+  .au-manager>.au-stats dd { font-size:1rem; }
+}
+@media (max-width:400px) {
+  .au-checklist { grid-template-columns:1fr; }
+  .au-manager>.au-stats { grid-template-columns:1fr; }
+  .au-manager>.au-stats>div { display:flex; justify-content:space-between; align-items:center; gap:.5rem; }
+  .au-manager>.au-stats dd { margin:0; }
+  .au-row { flex-wrap:wrap; }
+  .au-row-main { min-width:140px; }
+}

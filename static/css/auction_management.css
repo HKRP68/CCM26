@@ -1,0 +1,45 @@
+.au-team-manager { max-width:1200px; margin:auto; }
+.au-management-heading { display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; }
+.au-management-heading h2 { margin:.35rem 0; font-size:2rem; letter-spacing:-.04em; }
+.au-management-heading p { margin:.4rem 0; }
+.au-eyebrow { font-size:.75rem; text-transform:uppercase; letter-spacing:.12em; font-weight:700; color:var(--brand); }
+.au-team-links { display:flex; gap:.45rem; flex-wrap:wrap; }
+.au-team-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.75rem; margin:0; }
+.au-team-stats>div { padding:1.1rem; border:1px solid var(--border); border-radius:14px; background:var(--card); border-top:3px solid var(--brand); }
+.au-team-stats dt { color:var(--muted); font-size:.8rem; }
+.au-team-stats dd { margin:.5rem 0 0; font-size:1.6rem; font-weight:800; letter-spacing:-.04em; font-variant-numeric:tabular-nums; }
+.au-manager-columns { display:grid; grid-template-columns:minmax(260px,.8fr) minmax(0,1.2fr); align-items:start; gap:1rem; }
+.au-team-manager h3 { margin-top:0; }
+.au-team-manager label { display:block; margin:.9rem 0 .35rem; font-size:.82rem; font-weight:600; color:var(--muted); }
+.au-team-manager input:not([type="radio"]):not([type="hidden"]),.au-team-manager select { box-sizing:border-box; width:100%; min-height:44px; }
+.au-team-manager input:focus-visible,.au-team-manager select:focus-visible { outline:2px solid var(--brand); outline-offset:2px; }
+.au-team-manager .au-review-form button[type="submit"] { margin-top:.8rem; }
+.au-management-preview { display:block; border:1px dashed var(--border); padding:.85rem; border-radius:10px; margin-top:.9rem; font-size:.85rem; line-height:1.5; font-variant-numeric:tabular-nums; }
+.au-management-alert { margin:0; border-left:3px solid var(--brand); padding:.8rem 1rem; background:var(--brand-light); border-radius:0 10px 10px 0; font-size:.85rem; line-height:1.6; }
+.au-squad-entry { padding:.85rem 0; border-bottom:1px solid var(--border); }
+.au-squad-entry:last-child { border-bottom:0; }
+.au-squad-entry summary { cursor:pointer; font-size:.8rem; color:var(--brand); margin-top:.5rem; }
+.au-squad-entry .au-review-form { padding:.2rem .8rem .8rem; border:1px solid var(--border); border-radius:10px; margin-top:.6rem; }
+.au-catalogue-search { display:grid; grid-template-columns:1fr auto; align-items:end; gap:.5rem; }
+.au-catalogue-search label { grid-column:1/-1; }
+.au-catalogue-options { max-height:370px; overflow:auto; border:1px solid var(--border); border-radius:12px; padding:.5rem 1rem; }
+.au-catalogue-options legend { font-size:.8rem; color:var(--muted); padding:0 .5rem; }
+.au-team-manager .au-catalogue-option { display:flex; align-items:center; gap:.8rem; padding:.75rem 0; border-bottom:1px solid var(--border); margin:0; cursor:pointer; color:var(--text); text-transform:none; letter-spacing:normal; }
+.au-team-manager .au-catalogue-option input[type="radio"] { accent-color:var(--brand); width:20px; height:20px; min-width:20px; min-height:20px; flex:0 0 20px; margin:0; padding:0; }
+.au-catalogue-option>span:nth-child(2) { flex:1; }
+.au-catalogue-option small { display:block; font-size:.75rem; line-height:1.6; font-weight:400; color:var(--muted); }
+.au-catalogue-option:has(input:checked) { background:var(--brand-light); border-radius:8px; }
+.au-catalogue-option.unavailable { opacity:.6; cursor:default; }
+.au-signing-fields { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+.au-ledger-scroll { overflow-x:auto; }
+.au-ledger-scroll table { width:100%; border-collapse:collapse; font-size:.8rem; }
+.au-ledger-scroll :is(th,td) { padding:.7rem .5rem; text-align:left; border-bottom:1px solid var(--border); }
+.au-ledger-scroll td:last-child { white-space:nowrap; font-variant-numeric:tabular-nums; font-weight:700; }
+.au-credit { color:var(--green); }
+.au-debit { color:var(--red); }
+.au-management-empty { padding:1.5rem 0; text-align:center; }
+@media (max-width:760px) {
+  .au-manager-columns,.au-signing-fields { grid-template-columns:1fr; }
+  .au-team-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .au-team-stats dd { font-size:1.25rem; }
+}

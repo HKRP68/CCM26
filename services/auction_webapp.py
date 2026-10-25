@@ -12,7 +12,7 @@ import os
 import re
 from datetime import datetime
 
-from models import (AuctionBid, AuctionFranchise, AuctionLot, AuctionRetentionOffer,
+from models import (AuctionBid, AuctionEvent, AuctionFranchise, AuctionLot, AuctionRetentionOffer,
                     AuctionRetentionTalk, AuctionSeason, AuctionTrade, Player)
 from services import auction_service as A
 from services import auction_preseason as P
@@ -50,7 +50,9 @@ def plain(value):
 
 
 def admin_for(db, tg_id):
-    return is_admin(tg_id) or A.is_auction_admin(db, tg_id)
+    # Mini App administration requires the verified Telegram bot-admin identity.
+    # Delegated auction admins retain their existing Telegram permissions.
+    return is_admin(tg_id)
 
 
 def season_row(season):
@@ -123,17 +125,18 @@ def player_for(db, raw_id):
 def lot_row(lot):
     return dict(id=lot.id, player_id=lot.player_id, number=lot.lot_no,
                 name=lot.name, rating=lot.rating, role=lot.category,
+                bat_rating=lot.bat_rating, bowl_rating=lot.bowl_rating,
                 country=lot.country, version=lot.version, overseas=bool(lot.is_overseas),
                 set_name=A.set_label(lot), status=lot.status,
                 base_lakh=lot.base_price_lakh, bid_lakh=lot.current_bid_lakh,
                 bidder_id=lot.current_bidder_id, bids=lot.bid_count,
-                sold_to_id=lot.sold_to_id, price_lakh=lot.sold_price_lakh,
+                sold_to_id=lot.sold_to_id, price_lakh=lot.sold_price_lakh, sold_at=stamp(lot.sold_at),
                 acquisition=lot.acquisition, deadline=stamp(lot.deadline_at),
                 rtm_stage=lot.rtm_stage, rtm_holder_id=lot.previous_franchise_id)
 
 
 def team_row(db, season, row, tg_id):
-    return dict(id=row.id, name=row.name, short_name=row.short_name,
+    return dict(id=row.id, name=row.name, short_name=row.short_name, logo_url=row.logo_url,
                 mine=A.may_bid_for(row, tg_id), purse_lakh=row.purse_remaining_lakh,
                 opening_lakh=row.purse_total_lakh, size=row.squad_size,
                 overseas=A.overseas_count(db, row.id), roles=A.role_counts(db, row.id),
@@ -141,6 +144,18 @@ def team_row(db, season, row, tg_id):
                 rtm_left=A.rtm_cards_left(row), retained=row.retained_count,
                 picks_left=A.picks_left(row), finalized=bool(row.retention_finalized_at),
                 warnings=A.squad_warnings(db, season, row))
+
+
+def management_payload(db, season, raw_team=None):
+    from services import auction_management as M
+    field = A.franchises(db, season.id)
+    selected = team(db, season, raw_team) if raw_team is not None else next(iter(field), None)
+    return dict(managed_team_id=selected.id if selected else None,
+                roster_block_reason=M.roster_block_reason(db, season),
+                management_locked=bool(season.published_at or season.status == A.STATUS_CANCELLED),
+                team_ledger=[dict(kind=e.kind, amount_lakh=e.amount_lakh, note=e.note,
+                                  at=stamp(e.created_at)) for e in A.ledger(db, selected.id, limit=40)]
+                if selected else [])
 
 
 def telegram_link(season):
@@ -201,6 +216,24 @@ def live_payload(db, season, tg_id):
                            void=bool(b.is_void), at=stamp(b.created_at)) for b in bids],
                 events=[dict(id=e.id, kind=e.kind, text=plain(e.headline),
                              at=stamp(e.created_at)) for e in A.recent_events(db, season.id, 20)])
+
+
+def arena_payload(db, season, tg_id):
+    """Public room data for the optional Arena; no other team's private ledger."""
+    result = live_payload(db, season, tg_id)
+    for row in result['teams']:
+        row['squad'] = [lot_row(lot) for lot in A.squad(db, row['id'])]
+    result['max_overseas'] = season.max_overseas
+    result['clock_seconds'] = season.bid_seconds
+    event = (db.query(AuctionEvent)
+             .filter(AuctionEvent.season_id == season.id,
+                     AuctionEvent.kind.in_(('lot_sold', 'lot_unsold', 'rtm_matched')))
+             .order_by(AuctionEvent.id.desc()).first())
+    lot = db.get(AuctionLot, event.lot_id) if event and event.lot_id else None
+    result['last_result'] = ({**lot_row(lot), 'event_id': event.id, 'at': stamp(event.created_at)}
+                             if lot and lot.season_id == season.id and lot.status in
+                             (A.LOT_SOLD, A.LOT_UNSOLD) else None)
+    return result
 
 
 def pool_payload(db, season, data):
@@ -296,7 +329,9 @@ def payload(db, season, tg_id, rows, data):
     if season is None:
         return result
     view = data.get('view', 'live')
-    if view == 'live':
+    if view == 'arena':
+        result.update(arena_payload(db, season, tg_id))
+    elif view == 'live':
         result.update(live_payload(db, season, tg_id))
     elif view == 'pool':
         result.update(pool_payload(db, season, data))
@@ -312,6 +347,8 @@ def payload(db, season, tg_id, rows, data):
                 .order_by(AuctionBid.id.desc()).limit(100).all()) if own else []
         result['my_bids'] = [dict(name=l.name, amount_lakh=b.amount_lakh, void=bool(b.is_void),
                                   source=b.source, at=stamp(b.created_at)) for b, l in bids]
+        if result['admin']:
+            result.update(management_payload(db, season, data.get('managed_team_id')))
     elif view == 'preseason':
         result.update(preseason_payload(db, season, tg_id, data.get('team_id')))
     elif view == 'eligible':
@@ -325,14 +362,16 @@ def payload(db, season, tg_id, rows, data):
         result['rules'] = rules_payload(season)
     elif view == 'admin':
         if not result['admin']:
-            raise AccessError("Only auction admins can use the control room.")
+            raise AccessError("Only bot admins can enter the admin panel.")
         from services.auction_simulator import playback_status
         result.update(rules=rules_payload(season), playback=playback_status(db, season),
+                      counts=A.pool_counts(db, season.id),
+                      lot=lot_row(A.current_lot(db, season)) if A.current_lot(db, season) else None,
                       trade_rules=T.trade_rules(season),
                       retention_rules=RN.rules(season),
                       settings={key: getattr(season, key) for key in A.SEASON_RULE_FIELDS},
                       previous_league_id=season.previous_league_id,
-                      teams=[dict(id=f.id, name=f.name, owner_tg_id=str(f.owner_tg_id or ''),
+                      teams=[dict(**team_row(db, season, f, tg_id), owner_tg_id=str(f.owner_tg_id or ''),
                                   owner_name=f.owner_name, co_owners=[str(x) for x in A.co_owner_ids(f)],
                                   draft_picks=f.draft_picks_total, previous_team_id=f.previous_team_id)
                              for f in A.franchises(db, season.id)])
@@ -359,7 +398,7 @@ def perform(db, season, tg_id, data):
         raise A.AuctionError("Choose an auction action.")
     if action.startswith('admin_'):
         if not admin_for(db, tg_id):
-            raise AccessError("Only auction admins can manage an auction.")
+            raise AccessError("Only bot admins can use the admin panel or its actions.")
         return admin_action(db, season, tg_id, data)
     if season is None:
         raise A.AuctionError("Choose an auction first.")
@@ -597,6 +636,24 @@ def admin_action(db, season, tg_id, data):
         A.correct_purse(db, season, team(db, season, data.get('team_id')),
                         integer(data.get('amount_lakh'), 'Correction', -1_000_000),
                         note=str(data.get('note', 'Miniapp correction'))[:200], by_tg_id=tg_id)
+    elif action in ('team_purse', 'team_add_player', 'team_remove_player'):
+        from services import auction_management as M
+        row = team(db, season, data.get('team_id'))
+        if action == 'team_purse':
+            balance = M.adjust_purse(db, season, row, mode=data.get('mode'),
+                                     amount_lakh=data.get('amount_lakh'),
+                                     expected_purse_lakh=data.get('expected_purse_lakh'),
+                                     note=data.get('note'), by_tg_id=tg_id)
+            return dict(message=f'{row.name} purse is now {A.render_money(balance, season.currency_label)}.')
+        if action == 'team_add_player':
+            lot = M.assign_player(db, season, row, integer(data.get('player_id'), 'Player id', 1),
+                                   price_lakh=data.get('price_lakh'), note=data.get('note'), by_tg_id=tg_id)
+            return dict(message=f'{lot.name} added to {row.name}.')
+        refund = M.remove_player(db, season, row, lot_for(db, season, data.get('lot_id')),
+                                  note=data.get('note'), by_tg_id=tg_id,
+                                  expected_price_lakh=data.get('expected_price_lakh'),
+                                  expected_sold_at=data.get('expected_sold_at'))
+        return dict(message=f'Player returned to the pool. {A.render_money(refund, season.currency_label)} refunded.')
     elif action == 'settings':
         save_settings(db, season, tg_id, data.get('settings'))
     elif action == 'timer':

@@ -4560,7 +4560,19 @@ def _render_player_card(player_id):
         if not player or not player.is_active:
             return "Player not found", 404
         from services.card_generator import generate_card
-        image_bytes = generate_card(player)
+        image_bytes = None
+        # Arena prefers an existing uploaded portrait. Default card requests
+        # keep their original output and the same render/concurrency limits.
+        if request.args.get('portrait') == '1':
+            from services.player_portrait_service import get_player_portrait
+            portrait = get_player_portrait(player, include_global=False)
+            if portrait is not None:
+                portrait.thumbnail((480, 600))
+                buffer = io.BytesIO()
+                portrait.save(buffer, format='PNG')
+                image_bytes = buffer.getvalue()
+        if image_bytes is None:
+            image_bytes = generate_card(player)
         if not image_bytes:
             return "Could not generate card", 500
 
@@ -24120,6 +24132,79 @@ def admin_auctions_list():
                 "follows": by_id.get(season.previous_season_id or 0),
             })
         return render_template("admin_auctions.html", rows=rows)
+    finally:
+        db.close()
+
+
+@app.route("/auctions/<int:season_id>/teams/<int:franchise_id>", methods=["GET", "POST"])
+@login_required
+def admin_auction_team_manage(season_id, franchise_id):
+    """One workspace for a team's players, purse and correction history."""
+    from services import auction_management as M
+    db = get_session()
+    try:
+        season = _auction_or_404(db, season_id)
+        franchise = _auction_franchise(db, season, franchise_id)
+        if request.method == "POST":
+            action = request.form.get('action', '')
+            try:
+                note = request.form.get('note')
+                if action == 'team_purse':
+                    balance = M.adjust_purse(
+                        db, season, franchise, mode=request.form.get('mode'),
+                        amount_lakh=request.form.get('amount_lakh'),
+                        expected_purse_lakh=request.form.get('expected_purse_lakh'), note=note)
+                    message = f"Purse updated to {auction_svc.render_money(balance, season.currency_label)}."
+                elif action == 'team_add_player':
+                    lot = M.assign_player(db, season, franchise,
+                                          M.whole(request.form.get('player_id'), 'Player id', 1),
+                                          price_lakh=request.form.get('price_lakh'), note=note)
+                    message = f"{lot.name} added to {franchise.name}."
+                elif action == 'team_remove_player':
+                    lot = _auction_lot(db, season, M.whole(request.form.get('lot_id'), 'Lot id', 1))
+                    refund = M.remove_player(db, season, franchise, lot, note=note,
+                                             expected_price_lakh=request.form.get('expected_price_lakh'),
+                                             expected_sold_at=request.form.get('expected_sold_at'))
+                    message = f"Player returned to the queue; {auction_svc.render_money(refund, season.currency_label)} refunded."
+                else:
+                    raise auction_svc.AuctionError('Choose a team management action.')
+                log_admin(db, 'auction_' + action, 'auction', season.id, franchise.name,
+                          detail=str(note or '')[:200])
+                db.commit()
+                flash(message, 'success')
+            except auction_svc.AuctionError as exc:
+                db.rollback()
+                flash(str(exc), 'error')
+            except Exception:
+                db.rollback()
+                logger.exception('admin_auction_team_manage failed')
+                flash('Could not save the change. Refresh the team before retrying.', 'error')
+            return redirect(url_for('admin_auction_team_manage', season_id=season_id,
+                                    franchise_id=franchise_id, q=request.args.get('q', '')))
+        search = request.args.get('q', '').strip()[:100]
+        page = max(1, request.args.get('page', 1, type=int) or 1)
+        query = player_query.master_player_query(db, {'q': search})
+        total = query.count()
+        pages = max(1, (total + 39) // 40)
+        page = min(page, pages)
+        players = query.order_by(Player.rating.desc(), Player.name, Player.id).offset((page - 1) * 40).limit(40).all()
+        existing = {lot.player_id: lot for lot in db.query(AuctionLot).filter(
+            AuctionLot.season_id == season.id, AuctionLot.player_id.in_([p.id for p in players])).all()}
+        catalogue = [dict(player=p, status=existing[p.id].status if p.id in existing else 'not in pool',
+                          available=p.id not in existing or existing[p.id].status in
+                          (auction_svc.LOT_QUEUED, auction_svc.LOT_UNSOLD),
+                          base_lakh=existing[p.id].base_price_lakh if p.id in existing
+                          else auction_svc.base_price_for(season, p.rating)) for p in players]
+        return render_template('admin_auction_team_manage.html', season=season, team=franchise,
+                               field=auction_svc.franchises(db, season.id),
+                               squad=auction_svc.squad(db, franchise.id),
+                               warnings=auction_svc.squad_warnings(db, season, franchise),
+                               max_bid=max(0, auction_svc.max_bid_now(season, franchise)),
+                               ledger=auction_svc.ledger(db, franchise.id, limit=60),
+                               roster_block_reason=M.roster_block_reason(db, season),
+                               locked=bool(season.published_at or season.status == auction_svc.STATUS_CANCELLED),
+                               catalogue=catalogue, search=search, page=page, pages=pages, total=total,
+                               money=lambda amount: auction_svc.render_money(amount, season.currency_label))
     finally:
         db.close()
 

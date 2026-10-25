@@ -62,7 +62,7 @@ def register(app, authenticate, csrf_exempt, member_rpc):
             # Creation never needs access to a selected auction.
             if kind == 'action' and data.get('action') == 'admin_create':
                 if not W.admin_for(db, tg_id):
-                    raise W.AccessError('Only auction admins can create an auction.')
+                    raise W.AccessError('Only bot admins can create an auction.')
                 result = W.perform(db, None, tg_id, data)
                 db.commit()
                 return dict(ok=True, **result)
@@ -83,7 +83,7 @@ def register(app, authenticate, csrf_exempt, member_rpc):
                 db.commit()
                 return dict(ok=True, **result)
             if not W.admin_for(db, tg_id):
-                raise W.AccessError('Only auction admins can import or export auction setup.')
+                raise W.AccessError('Only bot admins can manage auction setup.')
             if kind == 'catalogue':
                 from models import Player
                 from services import player_query
@@ -92,8 +92,16 @@ def register(app, authenticate, csrf_exempt, member_rpc):
                 if text:
                     query = query.filter(Player.name.ilike('%' + text + '%'))
                 rows = query.order_by(Player.rating.desc(), Player.name).limit(60).all()
+                from models import AuctionLot
+                lots = {l.player_id: l for l in db.query(AuctionLot).filter(
+                    AuctionLot.season_id == season.id, AuctionLot.player_id.in_([p.id for p in rows])).all()}
                 return dict(ok=True, players=[dict(id=p.id, name=p.name, rating=p.rating,
-                                                    role=p.category, version=p.version, country=p.country) for p in rows])
+                                                    role=p.category, version=p.version, country=p.country,
+                                                    status=lots[p.id].status if p.id in lots else 'not_in_pool',
+                                                    base_lakh=lots[p.id].base_price_lakh if p.id in lots
+                                                    else A.base_price_for(season, p.rating),
+                                                    available=p.id not in lots or lots[p.id].status in
+                                                    (A.LOT_QUEUED, A.LOT_UNSOLD)) for p in rows])
             if kind == 'export':
                 if data.get('format') == 'franchises':
                     content = json.dumps(A.export_franchises(db, season), indent=2, ensure_ascii=False)

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}{{ team.name }} — Team management{% endblock %}
+{% block head_extra %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_auction.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/auction_management.css') }}">
+{% endblock %}
+{% block content %}
+<div class="au-shell au-team-manager" data-purse="{{ team.purse_remaining_lakh }}" data-currency="{{ season.currency_label or '₹' }}">
+  <div class="au-management-heading">
+    <div><div class="au-eyebrow">{{ season.name }} · {{ season.status }}</div><h2>{{ team.name }}</h2><p class="au-note">Manage players, adjust the purse and review every change.</p></div>
+    <div class="au-actions"><a class="btn btn-ghost" href="{{ url_for('admin_auction_detail', season_id=season.id) }}#franchises">All franchises</a><a class="btn btn-primary" href="{{ url_for('admin_auction_console', season_id=season.id) }}">Live console →</a></div>
+  </div>
+  <nav class="au-team-links" aria-label="Manage another team">{% for f in field %}<a class="btn {{ 'btn-primary' if f.id == team.id else 'btn-ghost' }}" href="{{ url_for('admin_auction_team_manage', season_id=season.id, franchise_id=f.id) }}" {% if f.id == team.id %}aria-current="page"{% endif %}>{{ f.name }}</a>{% endfor %}</nav>
+  <dl class="au-team-stats"><div><dt>Available purse</dt><dd>{{ money(team.purse_remaining_lakh) }}</dd></div><div><dt>Players signed</dt><dd>{{ team.squad_size }} / {{ season.max_squad_size }}</dd></div><div><dt>Legal bid ceiling</dt><dd>{{ money(max_bid) }}</dd></div><div><dt>Squad slots left</dt><dd>{{ [0, season.max_squad_size - team.squad_size]|max }}</dd></div></dl>
+  {% for warning in warnings %}<p class="au-management-alert">{{ warning.message }}</p>{% endfor %}
+  {% if locked %}<p class="au-management-alert">This auction is published or cancelled. Team management is locked.</p>{% endif %}
+  <div class="au-manager-columns">
+    <section class="au-card">
+      <h3>Adjust purse</h3><p class="au-note">Amounts are in lakh. <b>100 lakh = 1 Cr.</b> Every change requires a reason and creates a ledger entry.</p>
+      {% if not locked %}
+      <form method="POST" class="au-review-form" data-review="purse">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="team_purse"><input type="hidden" name="expected_purse_lakh" value="{{ team.purse_remaining_lakh }}">
+        <label for="purse-mode">Action</label><select id="purse-mode" name="mode"><option value="add">Add funds</option><option value="deduct">Deduct funds</option><option value="set">Set balance</option></select>
+        <label for="purse-amount">Amount in lakh</label><input id="purse-amount" name="amount_lakh" type="number" min="0" max="1000000" step="1" inputmode="numeric" required placeholder="e.g. 200 for 2 Cr">
+        <label for="purse-note">Reason</label><input id="purse-note" name="note" maxlength="200" required placeholder="Why is the purse changing?">
+        <output id="purse-preview" class="au-management-preview" aria-live="polite">Current balance: {{ money(team.purse_remaining_lakh) }}</output>
+        <button class="btn btn-primary" type="submit">Review purse change</button>
+      </form>
+      {% endif %}
+    </section>
+    <section class="au-card">
+      <h3>Current squad <span class="dim">· {{ squad|length }}</span></h3>
+      <p class="au-note">Removing a player refunds their full signing price and returns them to the queue. Retention and trade restrictions still apply.</p>
+      {% if roster_block_reason %}<p class="au-management-alert">{{ roster_block_reason }}</p>{% endif %}
+      {% for lot in squad %}
+      <div class="au-squad-entry"><div class="au-management-heading"><div><strong>{{ lot.name }}</strong><p class="au-note">{{ lot.rating }} OVR · {{ lot.category }} · {{ lot.country }} · {{ lot.acquisition }}</p></div><b>{{ money(lot.sold_price_lakh or 0) }}</b></div>
+        {% if not roster_block_reason %}<details><summary>Remove player &amp; refund</summary><form method="POST" class="au-review-form" data-review="remove" data-player="{{ lot.name }}" data-refund="{{ lot.sold_price_lakh or 0 }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="team_remove_player"><input type="hidden" name="lot_id" value="{{ lot.id }}"><input type="hidden" name="expected_price_lakh" value="{{ lot.sold_price_lakh or 0 }}"><input type="hidden" name="expected_sold_at" value="{{ lot.sold_at.isoformat() ~ 'Z' if lot.sold_at else '' }}"><label for="remove-note-{{ lot.id }}">Reason for removing {{ lot.name }}</label><input id="remove-note-{{ lot.id }}" name="note" maxlength="200" required><p class="au-note">Refund: {{ money(lot.sold_price_lakh or 0) }}</p><button class="btn btn-ghost danger" type="submit">Review removal</button></form></details>{% endif %}
+      </div>
+      {% else %}<p class="au-note au-management-empty">No players signed yet. Choose a player below to build this squad.</p>{% endfor %}
+    </section>
+  </div>
+  <section class="au-card" id="add-player"><div class="au-eyebrow">Player catalogue</div><h3>Add a player to {{ team.name }}</h3><p class="au-note">Find an active player by name. Choose a signing price; the team pays from its purse. Squad, role, rating and overseas limits apply.</p>
+    {% if roster_block_reason %}<p class="au-management-alert">{{ roster_block_reason }}</p>{% else %}
+    <form method="GET" class="au-catalogue-search" action="#add-player"><label for="catalogue-search">Search players</label><input id="catalogue-search" name="q" type="search" value="{{ search }}" placeholder="Player name…"><button class="btn btn-ghost" type="submit">Search</button></form>
+    <p class="au-note">{{ total }} matching players · page {{ page }} of {{ pages }}</p>
+    <form method="POST" class="au-review-form" data-review="sign">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="team_add_player">
+      <fieldset class="au-catalogue-options"><legend>Choose one player</legend>{% for entry in catalogue %}{% set p = entry.player %}<label class="au-catalogue-option {{ '' if entry.available else 'unavailable' }}"><input type="radio" name="player_id" value="{{ p.id }}" data-name="{{ p.name }}" data-price="{{ entry.base_lakh }}" required {% if not entry.available %}disabled{% endif %}><span><strong>{{ p.name }}</strong><small>{{ p.rating }} OVR · {{ p.category }} · {{ p.version or 'Base' }} · {{ p.country }}<br>{{ entry.status|replace('_', ' ') }} · base {{ money(entry.base_lakh) }}</small></span>{% if not entry.available %}<span class="au-note">Unavailable</span>{% endif %}</label>{% else %}<p class="au-note">No players match. Try another name.</p>{% endfor %}</fieldset>
+      <div class="au-signing-fields"><div><label for="signing-price">Signing price in lakh · 0 = free</label><input id="signing-price" name="price_lakh" type="number" min="0" max="1000000" step="1" required></div><div><label for="signing-note">Reason for adding player</label><input id="signing-note" name="note" maxlength="200" required></div></div>
+      <output id="signing-preview" class="au-management-preview" aria-live="polite">Select a player to preview their signing.</output><button class="btn btn-primary" type="submit">Review signing</button>
+    </form>
+    <nav class="au-actions" aria-label="Player catalogue pages">{% if page > 1 %}<a class="btn btn-ghost" href="{{ url_for('admin_auction_team_manage', season_id=season.id, franchise_id=team.id, q=search, page=page-1) }}#add-player">← Previous</a>{% endif %}{% if page < pages %}<a class="btn btn-ghost" href="{{ url_for('admin_auction_team_manage', season_id=season.id, franchise_id=team.id, q=search, page=page+1) }}#add-player">Next →</a>{% endif %}</nav>
+    {% endif %}
+  </section>
+  <section class="au-card"><h3>Purse history</h3><p class="au-note">Latest {{ ledger|length }} entries. Credits add funds; debits spend funds.</p><div class="au-ledger-scroll"><table><thead><tr><th>When</th><th>Type</th><th>Reason</th><th>Amount</th></tr></thead><tbody>{% for e in ledger %}<tr><td>{{ e.created_at.strftime('%d %b %H:%M') }} UTC</td><td>{{ e.kind }}</td><td>{{ e.note or '—' }}</td><td class="{{ 'au-debit' if e.amount_lakh < 0 else 'au-credit' }}">{{ '+' if e.amount_lakh > 0 else '' }}{{ money(e.amount_lakh) }}</td></tr>{% else %}<tr><td colspan="4">No entries yet.</td></tr>{% endfor %}</tbody></table></div></section>
+  <p class="au-note">Suggested routine: resolve the current player, pause for squad corrections, then review the purse history before resuming.</p>
+</div>
+<script src="{{ url_for('static', filename='js/auction_management.js') }}" defer></script>
+{% endblock %}

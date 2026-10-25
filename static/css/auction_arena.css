@@ -1,0 +1,131 @@
+/* All Arena styling is confined to its optional modal. */
+dialog.auction-arena { --aa-bg:#080a09; --aa-panel:#111412; --aa-border:#ffffff12; --aa-muted:#858b91; --aa-gold:#ffd22e; --aa-green:#00d084; --aa-text:#f5f6f7; position:fixed; inset:0; width:100%; height:100%; max-width:100vw; max-height:100dvh; margin:0; padding:0; border:0; background:var(--aa-bg); color:var(--aa-text); font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color-scheme:dark; overscroll-behavior:contain; }
+.auction-arena::backdrop { background:#080a09; }
+.auction-arena,.auction-arena * { box-sizing:border-box; }
+.auction-arena [hidden] { display:none !important; }
+.auction-arena :is(button,input,select) { font:inherit; }
+.auction-arena button { cursor:pointer; }
+.auction-arena button:disabled { cursor:default; opacity:.45; }
+.auction-arena :is(button,select,input,summary):focus-visible { outline:2px solid var(--aa-gold); outline-offset:3px; }
+.auction-arena svg { width:24px; height:24px; flex-shrink:0; }
+.auction-arena h1,.auction-arena h2,.auction-arena h3,.auction-arena p { margin:0; }
+.auction-arena .aa-shell { max-width:1100px; min-height:100%; margin:auto; display:flex; flex-direction:column; }
+.auction-arena .aa-header { position:sticky; top:0; z-index:4; display:flex; align-items:center; justify-content:space-between; gap:12px; background:#090b0af5; border-bottom:1px solid var(--aa-border); padding:18px 24px; padding-top:max(18px,env(safe-area-inset-top)); }
+.auction-arena .aa-room-identity { min-width:0; flex:1; }
+.auction-arena .aa-eyebrow { color:var(--aa-gold); display:block; font-size:9px; letter-spacing:.16em; font-weight:850; margin-bottom:6px; }
+.auction-arena #aa-season { display:block; width:100%; max-width:350px; color:var(--aa-text); font-size:13px; font-weight:750; background:transparent; border:0; padding:0 15px 0 0; text-overflow:ellipsis; }
+.auction-arena .aa-header-actions { display:flex; align-items:center; gap:7px; }
+.auction-arena .aa-icon-button { display:grid; place-items:center; padding:8px; width:36px; height:36px; border:1px solid var(--aa-border); border-radius:11px; color:#a8afb1; background:#ffffff04; }
+.auction-arena .aa-icon-button svg { width:18px; height:18px; }
+.auction-arena .aa-icon-button:hover { color:var(--aa-gold); border-color:#ffd22e50; }
+.auction-arena .aa-room-state { display:flex; align-items:center; gap:5px; font-size:9px; color:#a4b0a7; text-transform:uppercase; margin-right:5px; }
+.auction-arena .aa-room-state i { width:6px; height:6px; border-radius:50%; background:#81898a; }
+.auction-arena .aa-room-state i.live { background:var(--aa-green); box-shadow:0 0 8px #00d08460; }
+.auction-arena .aa-connection { max-width:700px; width:100%; margin:auto; color:#7f9185; font-size:10px; padding:9px 24px; }
+.auction-arena .aa-connection.delayed { color:#ffb15a; }
+.auction-arena .aa-body { width:100%; max-width:620px; margin:0 auto; padding:0 22px 125px; flex:1; }
+.auction-arena .aa-lot-strip { display:flex; align-items:center; gap:10px; padding:15px 0 22px; font-size:9px; color:var(--aa-muted); font-weight:800; white-space:nowrap; }
+.auction-arena .aa-lot-strip>span:nth-child(2) { border-left:1px solid var(--aa-border); padding-left:10px; }
+.auction-arena .aa-lot-strip b { color:#fff; font-size:12px; padding-left:4px; }
+.auction-arena .aa-set { border:1px solid #ffd22e30; background:#ffd22e0b; color:var(--aa-gold); padding:6px 10px; border-radius:30px; text-transform:uppercase; letter-spacing:.06em; overflow:hidden; text-overflow:ellipsis; }
+.auction-arena .aa-bidder { color:var(--aa-green); border:1px solid #00d08432; background:#00d08413; border-radius:8px; padding:6px 8px; margin-left:auto; overflow:hidden; text-overflow:ellipsis; max-width:135px; }
+.auction-arena .aa-player-stage { position:relative; overflow:hidden; border:1px solid #ffffff18; border-radius:30px; background:radial-gradient(ellipse at top,#1d211e 0,#121513 38%,#0c0f0d 100%); padding:24px 25px 22px; box-shadow:0 20px 70px #0005; }
+.auction-arena .aa-timer-line { position:absolute; top:0; left:0; height:3px; width:100%; background:#ff364e; box-shadow:0 0 16px #ff364e70; transition:width .25s linear; }
+.auction-arena .aa-lot-number { position:absolute; top:20px; right:22px; color:#69746c; font-size:9px; font-weight:800; letter-spacing:.16em; }
+.auction-arena .aa-portrait { position:relative; width:155px; height:190px; display:grid; place-items:center; margin:4px auto 21px; border-radius:22px; overflow:hidden; background:radial-gradient(at 20% 10%,#3a4a3f,#161d18); border:1px solid #ffffff15; }
+.auction-arena .aa-portrait img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#121713; }
+.auction-arena .aa-avatar-fallback { color:#9eb3a5; font-size:45px; font-weight:900; letter-spacing:-.06em; }
+.auction-arena .aa-player-tags { display:flex; justify-content:center; gap:9px; margin-bottom:15px; }
+.auction-arena .aa-player-tags span { border:1px solid #4b9fff2d; color:#70b4ff; background:#16325e40; border-radius:99px; font-size:10px; font-weight:850; letter-spacing:.08em; text-transform:uppercase; padding:7px 12px; }
+.auction-arena .aa-player-tags span+span { color:#ce93fa; background:#59217d30; border-color:#b757ec30; }
+.auction-arena .aa-player-stage h1 { text-align:center; font-size:clamp(25px,7vw,36px); font-weight:900; line-height:1.16; letter-spacing:-.045em; overflow-wrap:anywhere; margin:0 0 24px; }
+.auction-arena .aa-player-stats { display:grid; grid-template-columns:1fr 1fr; row-gap:20px; border:1px solid var(--aa-border); background:#ffffff03; border-radius:21px; padding:19px 15px; margin-bottom:28px; }
+.auction-arena .aa-player-stats>div { text-align:center; min-width:0; }
+.auction-arena .aa-player-stats>div:nth-child(odd) { border-right:1px solid var(--aa-border); }
+.auction-arena .aa-player-stats span,.auction-arena .aa-price-row>div>span { display:block; color:var(--aa-muted); font-size:10px; font-weight:850; letter-spacing:.09em; text-transform:uppercase; }
+.auction-arena .aa-player-stats strong { display:block; font-size:24px; margin-top:7px; font-weight:850; overflow-wrap:anywhere; }
+.auction-arena .aa-white { color:#f5f6f7; }.auction-arena .aa-gold { color:var(--aa-gold); }.auction-arena .aa-green { color:var(--aa-green); }.auction-arena .aa-purple { color:#c98ff4; }
+.auction-arena .aa-price-row { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:25px; }
+.auction-arena .aa-price-row>div>strong { display:block; font-size:27px; font-weight:900; letter-spacing:-.035em; margin-top:5px; }
+.auction-arena .aa-price-row small { display:block; color:#939f96; font-size:10px; margin-top:6px; }
+.auction-arena .aa-timer { width:66px; height:66px; border:2px solid #ffd22e85; border-radius:50%; display:flex; flex-direction:column; justify-content:center; align-items:center; color:var(--aa-gold); flex-shrink:0; }
+.auction-arena .aa-timer strong { font-size:25px; font-variant-numeric:tabular-nums; line-height:1; }
+.auction-arena .aa-timer>span { color:inherit !important; font-size:8px !important; margin-top:5px; }
+.auction-arena .aa-timer.urgent { color:#ff4256; border-color:#ff344d; box-shadow:0 0 25px #ff344d18; }
+.auction-arena .aa-purse-strip { display:flex; justify-content:space-between; align-items:center; gap:7px; padding:13px 10px; border:1px solid #ffffff20; border-radius:16px; margin:0 -3px 16px; font-size:8px; color:var(--aa-muted); font-weight:850; }
+.auction-arena .aa-purse-strip>span+span { border-left:1px solid #ffffff15; padding-left:8px; }
+.auction-arena .aa-purse-strip b { color:#70b4ff; font-size:10px; margin-left:3px; }
+.auction-arena .aa-purse-strip>span:nth-child(2) b { color:#ce93fa; }.auction-arena .aa-purse-strip>span:last-child b { color:var(--aa-green); }
+.auction-arena .aa-button { min-height:45px; border:1px solid #ffffff20; background:#ffffff05; color:var(--aa-text); padding:12px 16px; border-radius:12px; font-size:12px; font-weight:750; }
+.auction-arena .aa-bid-controls { display:grid; gap:10px; }
+.auction-arena .aa-bid-dock { position:fixed; z-index:5; bottom:calc(90px + env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%); width:calc(100% - 44px); max-width:576px; max-height:45dvh; overflow:auto; border:1px solid #ffffff16; border-radius:18px 18px 0 0; background:#0d120ff5; padding:12px; backdrop-filter:blur(16px); box-shadow:0 -12px 35px #0007; }
+.auction-arena .aa-bid-dock .aa-purse-strip { margin:0 0 10px; padding:10px; border-radius:10px; }
+.auction-arena .aa-bid-dock .aa-bid-button { min-height:52px; border-radius:12px; }
+.auction-arena .aa-bid-dock .aa-custom-bid { margin-top:0; padding-top:8px; }
+.auction-arena .aa-bid-dock .aa-price-row { margin:0 0 10px; }
+.auction-arena .aa-bid-dock .aa-price-row small { display:none; }
+.auction-arena .aa-bid-dock .aa-price-row>div>strong { font-size:23px; }
+.auction-arena .aa-bid-dock .aa-timer { width:50px; height:50px; }
+.auction-arena .aa-bid-dock .aa-timer strong { font-size:22px; }
+.auction-arena .aa-body:has(.aa-bid-dock) { padding-bottom:330px; }
+.auction-arena .aa-portrait.card-art { width:205px; height:125px; border-radius:16px; }
+.auction-arena .aa-bid-button { min-height:61px; width:100%; border-radius:19px; border:0; background:linear-gradient(110deg,#00dc66,#00b984); color:#001b10; font-size:17px; font-weight:950; letter-spacing:-.02em; box-shadow:0 5px 28px #00d08416; }
+.auction-arena .aa-primary { color:#1c1b09; background:var(--aa-gold); border-color:transparent; }
+.auction-arena .aa-positive { color:#7affc0; border-color:#00d08450; }.auction-arena .aa-danger { color:#ff7180; border-color:#ff344d50; }
+.auction-arena .aa-watch-note { color:#a6b4aa; font-size:11px; line-height:1.6; text-align:center; }
+.auction-arena .aa-legal-max { color:#8f9c94; text-align:center; font-size:10px; padding:16px 0; line-height:1.7; }
+.auction-arena .aa-legal-max b { color:#e9e6d0; }.auction-arena .aa-warning { color:#d7c785; background:#ffd22e08; border-left:2px solid #ffd22e60; padding:10px 12px; border-radius:0 7px 7px 0; font-size:11px; line-height:1.6; margin:8px 0; }
+.auction-arena .aa-custom-bid { color:#8c9c92; font-size:11px; line-height:1.6; border-top:1px solid var(--aa-border); padding-top:12px; margin-top:7px; }
+.auction-arena summary { cursor:pointer; }.auction-arena .aa-field { display:block; font-size:11px; color:#97a39c; margin:12px 0; }
+.auction-arena .aa-field :is(input,select) { display:block; width:100%; color:var(--aa-text); background:#141a16; border:1px solid #ffffff1c; border-radius:10px; padding:12px; margin-top:7px; min-height:44px; font-size:14px; }
+.auction-arena .aa-split-actions { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.auction-arena .aa-result-card { margin-top:6px; border:1px solid #ffffff20; border-radius:30px; padding:28px; text-align:center; background:radial-gradient(circle at 15% 0,#4a0711,#1e090d 50%,#0c0e0d); min-height:530px; box-shadow:0 20px 70px #0007; }
+.auction-arena .aa-result-card.sold { background:radial-gradient(circle at 15% 0,#06442a,#0c2116 50%,#0c0e0d); }
+.auction-arena .aa-result-heading { display:flex; justify-content:space-between; align-items:center; margin-bottom:45px; text-align:right; }
+.auction-arena .aa-result-heading>svg { width:46px; height:46px; padding:10px; border:1px solid #ffd22e20; border-radius:14px; color:var(--aa-gold); }
+.auction-arena .aa-result-heading span { display:block; font-size:8px; color:var(--aa-gold); letter-spacing:.15em; text-transform:uppercase; line-height:1.7; }.auction-arena .aa-result-heading b { display:block; font-size:15px; color:#ff596b; letter-spacing:.15em; margin-top:4px; }
+.auction-arena .aa-result-card.sold .aa-result-heading b { color:var(--aa-green); }
+.auction-arena .aa-result-card .aa-portrait { width:155px; height:180px; margin-bottom:25px; }
+.auction-arena .aa-result-card h1 { font-size:27px; line-height:1.2; font-weight:900; letter-spacing:-.03em; margin-bottom:10px; }
+.auction-arena .aa-result-card>p { text-transform:uppercase; letter-spacing:.13em; color:#b0a5a7; font-size:10px; font-weight:700; }
+.auction-arena .aa-result-stamp { border:1px solid #ff344d40; border-radius:16px; background:#ff344d09; padding:18px 10px; margin-top:25px; font-size:23px; font-weight:950; color:#ff5c6d; letter-spacing:.08em; }
+.auction-arena .sold .aa-result-stamp { color:var(--aa-green); border-color:#00d08450; background:#00d0840b; }
+.auction-arena .aa-result-team { margin-top:15px !important; font-size:10px !important; line-height:1.6; }
+.auction-arena .aa-section-heading { padding:22px 0; }.auction-arena .aa-section-heading>span { font-size:9px; color:var(--aa-muted); font-weight:850; letter-spacing:.14em; }.auction-arena .aa-section-heading h1 { font-size:26px; margin:7px 0; letter-spacing:-.04em; }.auction-arena .aa-section-heading p { color:#7e8b82; font-size:11px; }
+.auction-arena .aa-squad-list details { border-bottom:1px solid var(--aa-border); }
+.auction-arena .aa-squad-list summary { list-style:none; display:flex; align-items:center; gap:12px; padding:20px 0; border-radius:15px; }
+.auction-arena .aa-squad-list summary::-webkit-details-marker { display:none; }
+.auction-arena .aa-squad-list details[open]>summary { background:#ffffff04; padding-inline:10px; margin-inline:-10px; }
+.auction-arena .aa-team-rank { color:#777e84; font-size:11px; width:12px; }
+.auction-arena .aa-team-logo { width:43px; height:43px; border-radius:12px; background:#ffffff06; display:grid; place-items:center; font-size:12px; font-weight:850; color:var(--aa-gold); flex-shrink:0; overflow:hidden; }
+.auction-arena .aa-team-logo img { width:100%; height:100%; object-fit:contain; }
+.auction-arena .aa-team-name { flex:1; min-width:0; }.auction-arena .aa-team-name strong { display:block; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }.auction-arena .aa-team-name small { display:block; margin-top:7px; font-size:8px; color:#7a828b; font-weight:800; letter-spacing:.08em; }.auction-arena .aa-team-name small.mine { color:var(--aa-green); text-transform:none; letter-spacing:0; font-size:10px; }
+.auction-arena .aa-team-budget { text-align:right; white-space:nowrap; }.auction-arena .aa-team-budget b { font-size:12px; }.auction-arena .aa-team-budget small { display:block; font-size:10px; margin-top:5px; color:#7a828b; }.auction-arena .aa-squad-list summary>svg { width:14px; height:14px; color:#7a828b; }.auction-arena details[open]>summary>svg { transform:rotate(180deg); }
+.auction-arena .aa-squad-detail { padding:10px 0 20px; }.auction-arena .aa-squad-metrics { display:flex; justify-content:space-between; gap:10px; font-size:8px; color:#7a828b; padding:7px 0 16px; border-bottom:1px solid var(--aa-border); font-weight:800; }.auction-arena .aa-squad-metrics b { color:var(--aa-gold); margin-left:4px; }
+.auction-arena .aa-squad-player { display:flex; justify-content:space-between; align-items:center; gap:15px; border-bottom:1px solid var(--aa-border); padding:15px 0; font-size:11px; }.auction-arena .aa-squad-player small { display:block; color:#87978c; font-size:9px; margin-top:6px; }.auction-arena .aa-squad-player>b { white-space:nowrap; color:var(--aa-gold); }
+.auction-arena .aa-no-players { color:#6e7b72; text-align:center; text-transform:uppercase; font-size:10px; padding:36px 0; letter-spacing:.05em; }
+.auction-arena .aa-log-tabs { display:flex; gap:0; margin:0 -22px 25px; border-bottom:1px solid var(--aa-border); }.auction-arena .aa-log-tabs button { flex:1; display:flex; align-items:center; justify-content:center; gap:8px; border:0; border-bottom:2px solid transparent; padding:22px 8px; color:#6f7b73; background:none; font-size:11px; text-transform:uppercase; font-weight:850; }.auction-arena .aa-log-tabs button.selected { border-color:#e0e5e1; color:#f5f6f7; }.auction-arena .aa-log-tabs svg { width:17px; height:17px; }
+.auction-arena .aa-timeline { margin:0 0 0 7px; padding:0 0 0 23px; border-left:1px solid #ffffff10; list-style:none; min-height:55vh; }.auction-arena .aa-timeline li { position:relative; padding:0 0 29px; }.auction-arena .aa-timeline p { font-size:12px; color:#c3cbc6; line-height:1.7; }.auction-arena .aa-timeline time { display:block; color:#657169; font-size:9px; text-transform:uppercase; letter-spacing:.08em; font-weight:800; margin-top:6px; }.auction-arena .aa-event-dot { position:absolute; left:-28px; top:7px; width:9px; height:9px; border-radius:50%; background:#4e5b52; box-shadow:0 0 0 5px var(--aa-bg); }.auction-arena .aa-event-dot.sold { background:var(--aa-green); }.auction-arena .aa-event-dot.unsold { background:#df5363; }
+.auction-arena .aa-nav { position:fixed; z-index:5; bottom:0; left:50%; transform:translateX(-50%); width:100%; max-width:1100px; display:flex; align-items:center; justify-content:space-around; gap:10px; background:#070908f5; border-top:1px solid #ffffff13; padding:12px 20px max(14px,env(safe-area-inset-bottom)); backdrop-filter:blur(16px); }
+.auction-arena .aa-nav button { width:110px; display:flex; flex-direction:column; align-items:center; gap:9px; background:none; border:0; color:#626e66; font-size:9px; text-transform:uppercase; letter-spacing:.12em; font-weight:850; min-height:63px; }.auction-arena .aa-nav button>span { display:grid; place-items:center; height:38px; width:45px; border-radius:17px; }.auction-arena .aa-nav button.selected { color:var(--aa-gold); }.auction-arena .aa-nav button.selected>span { background:var(--aa-gold); color:#181a0c; width:50px; height:48px; margin-top:-10px; box-shadow:0 0 30px #ffd22e20; }.auction-arena .aa-nav button[data-tab="squads"].selected { color:#649bff; }.auction-arena .aa-nav button[data-tab="squads"].selected>span { color:#649bff; background:#1a2e5e; box-shadow:none; }.auction-arena .aa-nav button[data-tab="logs"].selected { color:var(--aa-green); }.auction-arena .aa-nav button[data-tab="logs"].selected>span { color:var(--aa-green); background:#0b3323; box-shadow:none; }
+.auction-arena .aa-empty { min-height:400px; display:flex; flex-direction:column; justify-content:center; align-items:center; text-align:center; padding:35px 20px; }.auction-arena .aa-empty-icon { color:var(--aa-gold); padding:20px; background:#ffd22e0a; border:1px solid #ffd22e20; border-radius:24px; margin-bottom:25px; }.auction-arena .aa-empty-icon svg { width:35px; height:35px; }.auction-arena .aa-empty h2 { font-size:27px; font-weight:900; letter-spacing:-.04em; }.auction-arena .aa-empty p { color:#8e9d92; font-size:12px; line-height:1.8; margin-top:13px; max-width:330px; }.auction-arena .aa-mini-stats { display:flex; justify-content:space-around; color:#7d8d82; font-size:9px; font-weight:800; letter-spacing:.08em; padding:20px 0; border-top:1px solid var(--aa-border); }.auction-arena .aa-mini-stats b { display:block; color:var(--aa-gold); font-size:25px; margin-bottom:8px; }
+.auction-arena .aa-toast { position:fixed; z-index:10; bottom:112px; left:50%; transform:translateX(-50%); width:calc(100% - 40px); max-width:520px; border:1px solid #ffd22e40; border-radius:13px; color:#f1e6bc; background:#1b211df7; box-shadow:0 8px 40px #0008; padding:14px 17px; font-size:12px; line-height:1.6; }
+.auction-arena .aa-admin-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; padding:25px 0; }.auction-arena .aa-admin-heading h1 { font-size:25px; letter-spacing:-.04em; margin-bottom:10px; }.auction-arena .aa-admin-heading p,.auction-arena .aa-subtle { color:#94a399; font-size:12px; line-height:1.7; }.auction-arena .aa-admin-card { border:1px solid #ffffff15; border-radius:20px; background:#111713; padding:20px; margin-bottom:17px; }.auction-arena .aa-admin-card h2 { font-size:16px; margin-bottom:13px; }.auction-arena .aa-admin-card h3 { font-size:14px; margin-top:24px; margin-bottom:6px; }.auction-arena .aa-admin-actions { display:flex; flex-wrap:wrap; gap:9px; margin:16px 0 5px; }.auction-arena .aa-admin-team { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; background:none; color:#f2f5f3; text-align:left; padding:17px 0; border:0; border-bottom:1px solid var(--aa-border); font-size:12px; }.auction-arena .aa-admin-team small { display:block; color:#7e9084; font-size:10px; margin-top:6px; }.auction-arena .aa-admin-team b { white-space:nowrap; color:var(--aa-gold); }.auction-arena .aa-admin-card>.aa-button { margin-top:17px; }
+@media(min-width:850px) { .auction-arena .aa-header { margin-bottom:16px; }.auction-arena .aa-player-stage { padding:30px 35px 25px; }.auction-arena .aa-portrait { width:175px; height:205px; }.auction-arena .aa-purse-strip { padding:16px; font-size:10px; }.auction-arena .aa-purse-strip b { font-size:12px; } }
+@media(max-width:400px) { .auction-arena .aa-header { padding-inline:14px; gap:8px; }.auction-arena .aa-header-actions { gap:4px; }.auction-arena .aa-room-state { display:none; }.auction-arena .aa-icon-button { width:32px; height:34px; }.auction-arena #aa-season { font-size:11px; }.auction-arena .aa-body { padding-inline:16px; }.auction-arena .aa-player-stage { padding:23px 18px 18px; border-radius:25px; }.auction-arena .aa-lot-strip { gap:6px; font-size:8px; }.auction-arena .aa-lot-strip b { font-size:10px; }.auction-arena .aa-set { padding:6px 7px; }.auction-arena .aa-bidder { max-width:87px; padding:6px; }.auction-arena .aa-team-logo { width:36px; height:36px; }.auction-arena .aa-squad-list summary { gap:8px; }.auction-arena .aa-team-name strong { font-size:12px; }.auction-arena .aa-team-budget b { font-size:10px; }.auction-arena .aa-purse-strip { font-size:7px; padding:12px 7px; gap:5px; }.auction-arena .aa-purse-strip b { font-size:9px; }.auction-arena .aa-log-tabs { margin-inline:-16px; } }
+@media(prefers-reduced-motion:reduce) { .auction-arena .aa-timer-line { transition:none; } }
+@media(max-width:700px) and (max-height:950px) {
+  .auction-arena .aa-lot-strip { padding-top:10px; padding-bottom:16px; }
+  .auction-arena .aa-player-stage { padding:20px 18px 18px; }
+  .auction-arena .aa-player-stage .aa-portrait { width:125px; height:145px; margin:2px auto 15px; }
+  .auction-arena .aa-player-stage .aa-portrait.card-art { width:200px; height:115px; }
+  .auction-arena .aa-player-tags { margin-bottom:12px; }
+  .auction-arena .aa-player-tags span { font-size:9px; padding:6px 10px; }
+  .auction-arena .aa-player-stage h1 { font-size:28px; margin-bottom:16px; }
+  .auction-arena .aa-player-stats { row-gap:10px; padding:12px; margin-bottom:15px; }
+  .auction-arena .aa-player-stats strong { font-size:21px; margin-top:5px; }
+  .auction-arena .aa-player-stats span { font-size:9px; }
+  .auction-arena .aa-price-row { margin-bottom:0; }
+  .auction-arena .aa-price-row>div>strong { font-size:25px; }
+  .auction-arena .aa-bid-dock { width:calc(100% - 32px); }
+}

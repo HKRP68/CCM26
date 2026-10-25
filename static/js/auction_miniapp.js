@@ -6,6 +6,7 @@ const AuctionApp = (() => {
   let updatedAt = 0, offset = 0, selectedTeam = null;
   let filters = {query:'', status:'', role:'', set_name:'', page:1};
   let eligibleQuery = '';
+  let managedTeamId = null, teamQuery = '', catalogueQuery = '', cataloguePlayers = [], signingPlayer = null, catalogueEpoch = 0;
   const $ = id => document.getElementById(id);
   const esc = value => escapeHtml(String(value ?? ''));
   const money = value => {
@@ -25,9 +26,12 @@ const AuctionApp = (() => {
   const date = value => value ? new Date(value).toLocaleString() : '—';
   const context = lot => lot ? {lot_id:lot.id,stage:lot.rtm_stage,expected_bids:lot.bids} : {};
   const ownId = () => selectedTeam || data?.my_team_ids?.[0];
-  const active = () => typeof currentScreen !== 'undefined' && currentScreen === 'auction';
+  const managedTeam = () => (data?.teams||[]).find(t=>t.id===(managedTeamId||data.managed_team_id));
+  const active = () => typeof currentScreen !== 'undefined' && currentScreen === 'auction' && !$('auction-arena')?.open;
+  const stats = rows => `<dl class="au-stats">${rows.map(([label,value])=>`<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>`;
+  const viewButton = (label,target) => `<button type="button" class="au-btn" data-au-ui="view" data-view="${target}">${esc(label)} →</button>`;
 
-  function setSeason(id) { seasonId = id ? Number(id) : null; selectedTeam=null; data=null; live=null; epoch++; }
+  function setSeason(id) { seasonId = id ? Number(id) : null; selectedTeam=null; managedTeamId=null; signingPlayer=null; cataloguePlayers=[]; catalogueQuery=''; teamQuery=''; filters={query:'',status:'',role:'',set_name:'',page:1}; data=null; live=null; epoch++; catalogueEpoch++; }
   function stop() { clearTimeout(poll); clearInterval(clock); poll=null; clock=null; epoch++; loading=false; }
   function open() {
     stop(); bind();
@@ -36,10 +40,10 @@ const AuctionApp = (() => {
     refresh();
   }
   function shell() {
-    $('auction-app').innerHTML = `<div class="au-head"><div><div class="au-kicker">Franchise auction</div><h2>The auction room</h2></div><button type="button" class="au-btn au-switch" data-au-ui="telegram">Switch to Tg ↗</button></div>
+    $('auction-app').innerHTML = `<div class="au-head"><div><div class="au-kicker">Franchise auction</div><h2>The auction room</h2></div><div class="au-actions"><button type="button" class="au-btn" data-au-ui="arena">Arena ↗</button><button type="button" class="au-btn au-switch" data-au-ui="telegram">Switch to Tg ↗</button></div></div>
       <select id="au-season" class="au-select" aria-label="Select an auction"></select>
       <div class="au-status" id="au-status"></div><nav class="au-nav" id="au-nav" aria-label="Auction sections"></nav>
-      <div class="au-refresh-status" id="au-connection" role="status" aria-live="polite"></div>
+      <div class="au-toolbar"><div class="au-refresh-status" id="au-connection" role="status" aria-live="polite"></div><button type="button" class="au-btn au-refresh" data-au-ui="refresh">↻ Refresh</button></div>
       <div id="au-body">${empty('Opening the auction…')}</div>`;
   }
   function bind() {
@@ -52,16 +56,30 @@ const AuctionApp = (() => {
       const ui=e.target.closest('[data-au-ui]');
       if(!ui) return;
       const key=ui.dataset.auUi;
+      if(busy && key!=='telegram') return;
       if(key==='telegram') switchTelegram();
+      if(key==='arena'&&typeof AuctionArena!=='undefined') {stop();AuctionArena.open(seasonId);}
       if(key==='view') { view=ui.dataset.view; epoch++; refresh(); }
       if(key==='refresh') refresh();
       if(key==='page') { filters.page=Number(ui.dataset.page); refresh(); }
       if(key==='export') download(ui.dataset.format);
       if(key==='team') { selectedTeam=Number(ui.dataset.team); refresh(); }
+      if(key==='manage-team') { managedTeamId=Number(ui.dataset.team); signingPlayer=null; view='teams'; await refresh(); $('au-team-manager')?.scrollIntoView?.({block:'start'}); }
+      if(key==='select-signing') { signingPlayer=cataloguePlayers.find(p=>p.id===Number(ui.dataset.player)); renderBody(); }
+      if(key==='clear-signing') { signingPlayer=null; renderBody(); }
     });
     root.addEventListener('change',e=>{
       if(e.target.id==='au-season') { setSeason(e.target.value); refresh(); }
       if(e.target.dataset.auFilter) { filters[e.target.dataset.auFilter]=e.target.value; filters.page=1; refresh(); }
+      if(e.target.id==='au-managed-team') { managedTeamId=Number(e.target.value); signingPlayer=null; refresh(); }
+      previewChange(e.target);
+    });
+    root.addEventListener('input',e=>{
+      if(e.target.id==='au-team-search') {
+        teamQuery=e.target.value;
+        root.querySelectorAll('[data-au-team-name]').forEach(card=>card.hidden=!card.dataset.auTeamName.includes(teamQuery.trim().toLowerCase()));
+      }
+      previewChange(e.target);
     });
     root.addEventListener('submit',async e=>{
       const f=e.target.closest('[data-au-form]');
@@ -70,6 +88,7 @@ const AuctionApp = (() => {
       let action=f.dataset.auForm;
       if(action==='filter') { filters.query=values.query; filters.page=1; refresh(); return; }
       if(action==='catalogue') { catalogue(values.query); return; }
+      if(action==='team_catalogue') { catalogue(values.query,'team'); return; }
       if(action==='eligible') { eligibleQuery=values.query; loadEligible(); return; }
       if(action==='admin_settings_basic') {
         const settings={};
@@ -101,7 +120,7 @@ const AuctionApp = (() => {
     const requestEpoch=++epoch, requestedSeason=seasonId, requestedView=view;
     loading=true;
     const sent=Date.now();
-    const body={season_id:seasonId,view,...(view==='pool'?filters:{}),...(view==='preseason'&&ownId()?{team_id:ownId()}:{})};
+    const body={season_id:seasonId,view,...(view==='pool'?filters:{}),...(view==='teams'&&managedTeamId?{managed_team_id:managedTeamId}:{}),...(view==='preseason'&&ownId()?{team_id:ownId()}:{})};
     const result=await api('/api/webapp/auction',body,10000);
     if(requestEpoch!==epoch || !active()) return;
     loading=false;
@@ -111,6 +130,7 @@ const AuctionApp = (() => {
       offset=Date.parse(next.server_time)-(sent+Date.now())/2;
       updatedAt=Date.now(); data=next;
       if(data.season) seasonId=data.season.id;
+      if(view==='teams'&&data.admin) managedTeamId=data.managed_team_id;
       if(!selectedTeam || !data.my_team_ids?.includes(selectedTeam)) selectedTeam=data.my_team_ids?.[0]||null;
       if(requestedView==='live') {
         if(live?.lot && next.lot && live.lot.id===next.lot.id && next.my_team_ids?.includes(live.lot.bidder_id) &&
@@ -137,7 +157,7 @@ const AuctionApp = (() => {
     const options=(data.auctions||[]).map(s=>`<option value="${s.id}" ${s.id===seasonId?'selected':''}>${esc(s.name)} · ${esc(s.status)}</option>`).join('');
     $('au-season').innerHTML=options||'<option>No auction available</option>';
     $('au-season').disabled=!data.auctions?.length;
-    $('au-status').innerHTML=data.season?`<span class="au-tag">${esc(data.season.status)}</span><span class="au-dot ${data.season.status==='live'?'live':''}"></span>Shared with Telegram${data.my_team_ids?.length?' · Owner / co-owner':' · Spectator'}${data.season.published?' · Published to league':''}`:(data.admin?'Create or manage an auction':'Your assigned auctions appear here');
+    $('au-status').innerHTML=data.season?`<span class="au-tag au-state-${esc(data.season.status)}">${esc(data.season.status)}</span><span class="au-dot ${data.season.status==='live'?'live':''}"></span>Shared with Telegram${data.admin?' · Auction admin':data.my_team_ids?.length?' · Owner / co-owner':' · Spectator'}${data.season.published?' · Published to league':''}`:(data.admin?'Create or manage an auction':'Your assigned auctions appear here');
     const tabs=[['live','Live room'],['pool',data.admin?'Player pool':'Players'],['teams','Teams & purses'],['preseason','Retention & draft'],['trades','Trades'],['rules','Rulebook']];
     if(data.admin) tabs.push(['admin','Admin']);
     $('au-nav').innerHTML=tabs.map(([key,label])=>`<button type="button" class="${view===key?'active':''}" data-au-ui="view" data-view="${key}" aria-current="${view===key?'page':'false'}">${label}</button>`).join('');
@@ -178,7 +198,7 @@ const AuctionApp = (() => {
     } else content=`<div class="au-card">${empty(data.season.status==='completed'?'Auction complete':data.season.status==='setup'?'Preparing for the first bid':'No player on the block',data.season.status==='setup'?(data.admin?'Build the pool, complete retention and draft picks, then start the auction.':'The auction admins are preparing the season. Your bidding controls will appear here when the auction starts.'):'Results, squads and purses are available in the other tabs.')}</div>`;
     if(data.my_team_ids?.length>1) content=`<div class="au-actions">${teams.filter(t=>t.mine).map(t=>`<button class="au-btn ${t.id===ownId()?'primary':''}" data-au-ui="team" data-team="${t.id}">${esc(t.name)}</button>`).join('')}</div>`+content;
     if(data.admin && data.playback?.left) content+=`<div class="au-notice">Telegram playback: ${data.playback.left} messages remaining · ${esc(data.playback.mode)}<div class="au-actions">${btn('Quick playback','admin_playback',{speed:'quick'})}${btn('Slow playback','admin_playback',{speed:'slow'})}${btn('Skip to summary','admin_playback',{speed:'mute'})}</div></div>`;
-    if(data.admin) content+=details('Auction controls',`<div class="au-actions">${btn(data.season.status==='paused'?'Resume':'Start','admin_start',{},true,data.season.status==='live')}${btn('Pause','admin_pause',{},false,data.season.status!=='live')}${btn('Next player','admin_next',{},false,!!l||data.season.status!=='live')}${l?btn('+15 seconds','admin_extend',{...context(l),seconds:15})+btn('Mark sold','admin_sold',context(l))+btn('Mark unsold','admin_unsold',context(l))+btn('Undo last bid','admin_undo_bid',context(l)):''}</div>${l?form('admin_bid',teamSelect(teams)+field('amount_lakh','Bid on behalf of a franchise (lakh)',l.next_lakh,'number'),'Enter admin bid',context(l)):''}${l?.status==='rtm_offered'?`<div class="au-actions">${l.rtm_stage==='final_offer'?btn('Stand on final offer','admin_rtm_stand',context(l)):btn('Use / match RTM','admin_rtm',{...context(l),accept:true})+btn('Decline RTM','admin_rtm',{...context(l),accept:false})}</div>`:''}`);
+    if(data.admin) content+=`<section class="au-card au-controls"><div class="au-section-head"><div><div class="au-kicker">Auctioneer desk</div><h3>Auction controls</h3></div>${viewButton('Manage teams','teams')}</div><div class="au-actions">${btn(data.season.status==='paused'?'Resume':'Start','admin_start',{},true,!['setup','paused'].includes(data.season.status))}${btn('Pause','admin_pause',{},false,data.season.status!=='live')}${btn('Next player','admin_next',{},false,!!l||data.season.status!=='live')}${l&&l.status==='on_block'?btn('+15 seconds','admin_extend',{...context(l),seconds:15})+btn('Mark sold','admin_sold',context(l),false,!l.bidder_id)+btn('Mark unsold','admin_unsold',context(l))+btn('Undo last bid','admin_undo_bid',context(l),false,!l.bids):''}</div>${l?.status==='on_block'?details('Bid on behalf of a team',form('admin_bid',teamSelect(teams)+field('amount_lakh','Bid in lakh',l.next_lakh,'number'),'Enter admin bid',context(l))):''}${l?.status==='rtm_offered'?`<div class="au-actions">${l.rtm_stage==='final_offer'?btn('Stand on final offer','admin_rtm_stand',context(l)):btn('Use / match RTM','admin_rtm',{...context(l),accept:true})+btn('Decline RTM','admin_rtm',{...context(l),accept:false})}</div>`:''}</section>`;
     const counts=data.counts||{};
     content+=`<div class="au-muted" style="margin:.8rem 0">${counts.sold||0} sold · ${counts.unsold||0} unsold · ${counts.queued||0} waiting · ${counts.total||0} total</div><div class="au-grid"><section class="au-card"><h3>Coming up</h3>${(data.upcoming||[]).map(playerRow).join('')||'<p class="au-muted">The queue is clear.</p>'}</section><section class="au-card"><h3>Latest bids</h3><div class="au-log">${(data.bids||[]).map(b=>`<div class="au-row"><span class="au-muted">${esc(b.team)}${b.void?' · voided':''}<br>${esc(b.source)}</span><strong>${money(b.amount_lakh)}</strong></div>`).join('')||'<p class="au-muted">No bids on this player.</p>'}</div></section></div><section class="au-card"><h3>Room activity</h3><div class="au-log">${(data.events||[]).map(e=>`<p><time>${esc(date(e.at))}</time>${esc(e.text)}</p>`).join('')||'<p class="au-muted">The auction log will appear here.</p>'}</div></section>`;
     return content;
@@ -190,15 +210,55 @@ const AuctionApp = (() => {
   function renderPool() {
     const options=(values,current)=>'<option value="">All</option>'+values.map(v=>`<option value="${esc(v)}" ${v===current?'selected':''}>${esc(v.replaceAll('_',' '))}</option>`).join('');
     const filter=(name,values)=>`<label class="au-field"><span>${esc(name.replace('_',' '))}</span><select class="au-select" data-au-filter="${name}">${options(values,filters[name])}</select></label>`;
-    let out=form('filter',`<div class="au-filters">${field('query','Search players',filters.query,'search',false)}<button class="au-btn" type="submit">Search</button></div>`,'Apply search');
+    let out=`<div class="au-section-head"><div><div class="au-kicker">Player directory</div><h3>${data.admin?'Player pool':'Players'}</h3></div>${data.admin?viewButton('Add players','admin'):''}</div>`+form('filter',field('query','Search players',filters.query,'search',false),'Search');
     out+=`<div class="au-filters">${filter('status',['queued','on_block','sold','unsold','withdrawn','rtm_offered'])}${filter('role',['Batsman','Bowler','All-rounder','Wicket Keeper'])}${filter('set_name',(data.sets||[]).map(s=>s.name))}</div>`;
     out+=details('Set order',`<div>${(data.sets||[]).map(s=>`<div class="au-row"><span class="au-muted">${s.set_no}. ${esc(s.name)} · ${esc(s.state)} · ${s.queued} waiting</span>${data.admin?btn('Bring forward','admin_set_forward',{set_name:s.name}):''}</div>`).join('')}</div>`);
-    out+=`<div class="au-card">${(data.players||[]).map(p=>playerRow(p,data.admin?details('Manage lot #'+p.id,`<div class="au-actions">${[['Force next','force_next'],['Mark withdrawn','withdraw'],['Reinstate','reinstate'],['Recall sale','recall'],['Undo sale','undo_sale'],['Relist','relist'],['Undo RTM','undo_rtm'],['Undo draft pick','undo_pick']].map(([label,action])=>btn(label,'admin_'+action,{lot_id:p.id})).join('')}</div>`):'')).join('')||empty('No players match','Try a different search or filter.')}</div>`;
+    const lotControls=p=>{
+      const actions=p.status==='queued'?[['Put next','force_next'],['Withdraw','withdraw']]:p.status==='unsold'?[['Relist','relist'],['Put next','force_next']]:p.status==='withdrawn'?[['Reinstate','reinstate']]:p.status==='sold'?(p.acquisition==='rtm'?[['Undo RTM','undo_rtm']]:p.acquisition==='drafted'?[['Undo draft pick','undo_pick']]:p.acquisition==='auction'?[['Recall sale','recall'],['Undo sale','undo_sale']]:[]):[];
+      return details('Manage '+p.name,`<div class="au-actions">${actions.map(([label,action])=>btn(label,'admin_'+action,{lot_id:p.id})).join('')}${p.status==='sold'?`<button class="au-btn" type="button" data-au-ui="manage-team" data-team="${p.sold_to_id}">Manage this team</button>`:''}</div>${p.status==='queued'?form('admin_base_price',field('amount_lakh','Base price in lakh',p.base_lakh,'number'),'Save base price',{lot_id:p.id}):''}`);
+    };
+    out+=`<div class="au-card">${(data.players||[]).map(p=>playerRow(p,data.admin?lotControls(p):'')).join('')||empty('No players match','Try a different search or filter.')}</div>`;
     out+=`<div class="au-actions"><button class="au-btn" data-au-ui="page" data-page="${data.page-1}" ${data.page<=1?'disabled':''}>← Previous</button><span class="au-muted" style="align-self:center">${data.total} players · ${data.page}/${data.pages}</span><button class="au-btn" data-au-ui="page" data-page="${data.page+1}" ${data.page>=data.pages?'disabled':''}>Next →</button></div>`;
     return out;
   }
   function renderTeams() {
-    return (data.teams||[]).map(t=>`<section class="au-card"><h3>${esc(t.name)} ${t.mine?'<span class="au-tag">Your team</span>':''}</h3><div class="au-budget"><div class="au-muted">Purse<strong>${money(t.purse_lakh)}</strong></div><div class="au-muted">Max bid<strong>${money(t.max_bid_lakh)}</strong></div><div class="au-muted">Squad<strong>${t.size}/${data.season.max_squad}</strong></div></div><p class="au-muted">${t.overseas} overseas · ${t.retained} retained · ${t.rtm_left} RTM cards</p>${warnings(t)}${details('Squad · '+t.squad.length,t.squad.map(p=>playerRow(p,`<span class="au-tag">${esc(p.acquisition)}</span>`)).join('')||empty('No signings yet'))}</section>`).join('')+details('Your purse ledger',(data.ledger||[]).map(e=>`<div class="au-row"><span class="au-muted">${esc(e.kind)} · ${esc(e.note||'')}<br>${esc(date(e.at))}</span><strong>${money(e.amount_lakh)}</strong></div>`).join('')||'<p class="au-muted">No entries.</p>')+details('Your bid history',(data.my_bids||[]).map(b=>`<div class="au-row"><div class="au-muted">${esc(b.name)} · ${esc(b.source)}${b.void?' · voided':''}<br>${esc(date(b.at))}</div><strong>${money(b.amount_lakh)}</strong></div>`).join('')||'<p class="au-muted">No bids yet.</p>');
+    const teams=data.teams||[];
+    return `<div class="au-section-head"><div><div class="au-kicker">Franchise overview</div><h3>Teams & purses</h3><p class="au-muted">Squads, budgets and what each team needs next.</p></div></div>`+
+      stats([['Teams',teams.length],['Players signed',teams.reduce((n,t)=>n+t.size,0)],['Purse remaining',money(teams.reduce((n,t)=>n+t.purse_lakh,0))],['Need attention',teams.filter(t=>t.warnings?.length).length]])+
+      (data.admin?renderTeamManager():'')+
+      `<label class="au-field"><span>Find a team</span><input class="au-input" id="au-team-search" type="search" placeholder="Search team names…" value="${esc(teamQuery)}"></label><div class="au-grid au-team-grid">`+
+      teams.map(t=>`<section class="au-card au-team-card" data-au-team-name="${esc(t.name.toLowerCase())}" ${t.name.toLowerCase().includes(teamQuery.trim().toLowerCase())?'':'hidden'}><div class="au-section-head"><h3>${esc(t.name)}</h3>${t.mine?'<span class="au-tag">Your team</span>':''}</div><div class="au-budget"><div class="au-muted">Purse<strong>${money(t.purse_lakh)}</strong></div><div class="au-muted">Max bid<strong>${money(t.max_bid_lakh)}</strong></div><div class="au-muted">Squad<strong>${t.size}/${data.season.max_squad}</strong></div></div><progress class="au-progress" value="${t.size}" max="${data.season.max_squad}" aria-label="${esc(t.name)} squad filled"></progress><p class="au-muted">${t.overseas} overseas · ${t.retained} retained · ${t.rtm_left} RTM cards</p>${warnings(t)}${data.admin?`<button class="au-btn" type="button" data-au-ui="manage-team" data-team="${t.id}">Manage players & purse</button>`:''}${details('Squad · '+t.squad.length,t.squad.map(p=>playerRow(p,`<span class="au-tag">${esc(p.acquisition)}</span>`)).join('')||empty('No signings yet'))}</section>`).join('')+`</div>`+
+      (teams.length?'':empty('No franchises yet',data.admin?'Add franchises in the Admin tab.':'The auction admins are preparing the teams.'))+
+      (data.my_team_ids?.length?details('Your purse ledger',ledgerRows(data.ledger))+details('Your bid history',(data.my_bids||[]).map(b=>`<div class="au-row"><div class="au-muted">${esc(b.name)} · ${esc(b.source)}${b.void?' · voided':''}<br>${esc(date(b.at))}</div><strong>${money(b.amount_lakh)}</strong></div>`).join('')||'<p class="au-muted">No bids yet.</p>'):'');
+  }
+  function ledgerRows(rows) {
+    return (rows||[]).map(e=>`<div class="au-row"><div class="au-muted">${esc(e.kind)} · ${esc(e.note||'')}<br>${esc(date(e.at))}</div><strong class="${e.amount_lakh<0?'au-error':'au-credit'}">${e.amount_lakh>0?'+':''}${money(e.amount_lakh)}</strong></div>`).join('')||'<p class="au-muted">No ledger entries yet.</p>';
+  }
+  function renderTeamManager() {
+    const teams=data.teams||[], t=managedTeam();
+    if(!t) return '';
+    const args={team_id:t.id}, blocked=data.roster_block_reason, locked=data.management_locked;
+    const choice=`<label class="au-field"><span>Team to manage</span><select class="au-select" id="au-managed-team">${teams.map(team=>`<option value="${team.id}" ${team.id===t.id?'selected':''}>${esc(team.name)} · ${money(team.purse_lakh)}</option>`).join('')}</select></label>`;
+    const purse=form('admin_team_purse',hidden('expected_purse_lakh',t.purse_lakh)+`<label class="au-field"><span>Action</span><select class="au-select" name="mode"><option value="add">Add funds</option><option value="deduct">Deduct funds</option><option value="set">Set balance</option></select></label>`+field('amount_lakh','Amount in lakh · 100 = 1 Cr','','number')+field('note','Reason for this change')+`<output class="au-change-preview" data-au-preview aria-live="polite">Current balance: ${money(t.purse_lakh)}</output>`,'Review purse change',args);
+    const removal=t.squad.length?form('admin_team_remove_player',hidden('expected_price_lakh',t.squad[0].price_lakh??0)+hidden('expected_sold_at',t.squad[0].sold_at||'')+`<label class="au-field"><span>Player to remove</span><select class="au-select" name="lot_id">${t.squad.map(p=>`<option value="${p.id}">${esc(p.name)} · refund ${money(p.price_lakh)}</option>`).join('')}</select></label>`+field('note','Reason for removing player')+`<p class="au-muted">Returns the player to the auction queue and refunds their full signing price. Retention and trade restrictions still apply.</p>`,'Review removal & refund',args):'<p class="au-muted">This team has no players to remove.</p>';
+    const signing=signingPlayer?`<div class="au-selected-player"><strong>${esc(signingPlayer.name)}</strong><p class="au-muted">${signingPlayer.rating} OVR · ${esc(signingPlayer.role)} · ${esc(signingPlayer.version||'Base')}</p><button class="au-btn" type="button" data-au-ui="clear-signing">Choose another player</button></div>`+form('admin_team_add_player',hidden('player_id',signingPlayer.id)+field('price_lakh','Signing price in lakh · 0 = free',signingPlayer.base_lakh??0,'number')+field('note','Reason for adding player')+`<output class="au-change-preview" data-au-preview aria-live="polite">Purse after signing: ${money(t.purse_lakh-(signingPlayer.base_lakh??0))}</output>`,'Review signing',args):form('team_catalogue',field('query','Search player name',catalogueQuery,'search',false),'Find players')+`<div id="au-team-catalogue" class="au-catalogue-results">${cataloguePlayers.length?catalogueRows('team'):'<p class="au-muted">Search the catalogue, then select a player. Already signed players are marked unavailable.</p>'}</div>`;
+    return `<section class="au-card au-manager" id="au-team-manager"><div class="au-kicker">Admin workspace</div><h3>Manage a team</h3><p class="au-muted">Every change is recorded in the purse ledger and auction activity.</p>${choice}${stats([['Available purse',money(t.purse_lakh)],['Signed players',t.size+'/'+data.season.max_squad],['Legal bid ceiling',money(t.max_bid_lakh)]])}${locked?'<p class="au-warning">This auction is published or cancelled. Management is locked.</p>':`<div class="au-management-grid"><section><h4>Adjust purse</h4>${purse}</section><section><h4>Add a player</h4>${blocked?`<p class="au-warning">${esc(blocked)}</p>${viewButton('Open live controls','live')}`:signing}</section><section><h4>Remove a player</h4>${blocked?`<p class="au-muted">${esc(blocked)}</p>`:removal}</section></div>`}${details(t.name+' · recent purse ledger',ledgerRows(data.team_ledger))}</section>`;
+  }
+  function previewChange(input) {
+    const f=input.closest?.('[data-au-form]');
+    if(f?.dataset.auForm==='admin_team_remove_player'&&input.name==='lot_id') {
+      const p=managedTeam()?.squad.find(p=>p.id===Number(input.value));
+      if(p) {f.elements.expected_price_lakh.value=p.price_lakh??0;f.elements.expected_sold_at.value=p.sold_at||'';}
+    }
+    const out=f?.querySelector('[data-au-preview]');
+    if(!out) return;
+    const t=managedTeam(); if(!t) return;
+    const values=Object.fromEntries(new FormData(f));
+    const amount=Number(values.amount_lakh??values.price_lakh);
+    if(!Number.isSafeInteger(amount)||amount<0) {out.textContent='Enter a whole, non-negative number of lakh.';return;}
+    const next=f.dataset.auForm==='admin_team_add_player'?t.purse_lakh-amount:values.mode==='set'?amount:t.purse_lakh+(values.mode==='deduct'?-amount:amount);
+    out.textContent=`${money(t.purse_lakh)} → ${money(next)}${next<0?' · Balance cannot be negative':''}`;
+    out.classList.toggle('au-error',next<0);
   }
   function renderPreseason() {
     const r=data.readiness||{}, tid=data.team_id;
@@ -278,20 +338,36 @@ const AuctionApp = (() => {
     const pool=details('4 · Build the player pool',form('admin_pool_range',field('low','Minimum rating',70,'number')+field('high','Maximum rating',100,'number')+field('set_name','Set name','','text',false),'Add rating band')+`<div class="au-actions">${btn('Generate automatic sets','admin_pool_auto_sets')}${btn('Relist all unsold','admin_relist_all')}</div>`+form('catalogue',field('query','Search the player catalogue','','search',false),'Search')+'<div id="au-catalogue"></div>'+details('Import player sets',jsonForm('admin_sets_import','Paste an exported set JSON file',{sets:[]}))+`<div class="au-actions"><button class="au-btn" data-au-ui="export" data-format="sets">Export player sets</button><button class="au-btn" data-au-ui="export" data-format="franchises">Export franchises</button></div>`+form('admin_set_order',`<label class="au-field"><span>Set order (one exact name per line)</span><textarea class="au-textarea" name="names" required></textarea></label>`,'Save set order'));
     const pre=details('5 · Retention, expansion and RTM',`<div class="au-actions">${btn('Close retention','admin_retention_lock')}${btn('Reopen retention','admin_retention_unlock')}</div>`+form('admin_retention_offer',teamSelect(teams)+field('player_id','Player id','','number')+field('amount_lakh','Price in lakh (blank = slab)','','number',false),'Send retention offer')+form('admin_draft_picks',teamSelect(teams)+field('picks','Expansion picks',0,'number'),'Set team picks')+form('admin_draft_order',field('team_ids','Draft team ids in order (comma separated)'),'Save draft order')+form('admin_draft_clock',field('seconds','Pick clock in seconds (0 = off)',s.draft_pick_seconds||0,'number')+`<label class="au-field"><span>On timeout</span><select class="au-select" name="timeout_action"><option value="pause">Pause</option><option value="skip">Skip</option><option value="shortlist">Auto-pick shortlist</option></select></label>`,'Save pick clock')+form('admin_rtm_cards',teamSelect(teams)+field('cards','RTM cards',0,'number'),'Set RTM cards'));
     const liveRules=details('Live clock and bidding rules',form('admin_timer',field('seconds','Clock: seconds, or opening reset warning1 warning2 countdown',s.bid_seconds),'Set clock')+form('admin_increments',field('rules','Bid ladder (for example 2cr:10l, 5cr:20l, 50l)'),'Set increments')+form('admin_countdown',field('seconds','Final countdown seconds',s.countdown_seconds,'number'),'Set countdown')+form('admin_bid_gap',field('seconds','Quiet gap after each bid',s.bid_gap_seconds,'number'),'Set gap')+form('admin_snipe',field('window','Anti-snipe window seconds',s.snipe_window_seconds,'number')+field('extend','Extension seconds',s.snipe_extend_seconds,'number')+field('max_extensions','Maximum extensions',s.max_extensions,'number'),'Set anti-snipe')+`<div class="au-actions">${btn(s.direct_bids?'Disable custom bids':'Allow custom bids','admin_direct',{enabled:!s.direct_bids})}${btn(s.focus_mode?'Turn focus mode off':'Turn focus mode on','admin_focus',{enabled:!s.focus_mode})}${btn(s.auto_accelerated?'Disable automatic accelerated round':'Enable automatic accelerated round','admin_accelerated',{enabled:!s.auto_accelerated})}</div>`);
-    const operations=details('6 · Live operations',`<div class="au-actions">${btn('Start / resume','admin_start',{},true)}${btn('Pause','admin_pause')}${btn('Open next player','admin_next')}</div>`+form('admin_purse',teamSelect(teams)+field('amount_lakh','Purse correction in lakh (+ / −)',0,'number')+field('note','Reason'),'Adjust purse')+form('admin_previous_team',teamSelect(teams)+field('team_name','Exact previous team name'),'Link previous team')+form('admin_retention_force',teamSelect(teams)+field('player_id','Player id','','number')+field('amount_lakh','Retention price in lakh','','number',false),'Force retention')+form('admin_unretain',teamSelect(teams)+field('lot_id','Retained lot id','','number'),'Undo retention')+liveRules);
+    const operations=details('6 · Live operations',`<div class="au-actions">${btn('Start / resume','admin_start',{},true)}${btn('Pause','admin_pause')}${btn('Open next player','admin_next')}</div>`+viewButton('Manage team players & purses','teams')+form('admin_previous_team',teamSelect(teams)+field('team_name','Exact previous team name'),'Link previous team')+form('admin_retention_force',teamSelect(teams)+field('player_id','Player id','','number')+field('amount_lakh','Retention price in lakh','','number',false),'Force retention')+form('admin_unretain',teamSelect(teams)+field('lot_id','Retained lot id','','number'),'Undo retention')+liveRules);
     const trading=details('7 · Trade administration',`<div class="au-actions">${btn('Open trade window','admin_trade_window',{open:true})}${btn('Close trade window','admin_trade_window',{open:false})}</div>${jsonForm('admin_trade_rules_json','Trade rules',data.trade_rules)}`);
     const lifecycle=details('8 · Finish and next season',`<p class="au-muted">These actions need the auction name to confirm: ${esc(data.season.name)}</p>`+['publish','simulate','restart','cancel'].map(action=>details({publish:'Publish squads to Challenge League',simulate:'Simulate the remaining auction',restart:'Restart auction',cancel:'Cancel auction'}[action],form('admin_'+action,field('confirm_name','Type the auction name'),'Confirm '+action))).join('')+details('Remove a franchise',form('admin_franchise_remove',teamSelect(teams)+field('confirm_name',"Type the team's exact name"),'Remove team')));
     const admins=data.bot_admin?details('Auction admin access',form('admin_add_admin',field('telegram_id','Telegram user id','','text'),'Add auction admin')+form('admin_remove_admin',field('telegram_id','Telegram user id','','text'),'Remove auction admin')):'';
-    return `<div class="au-notice">Set up the season in order. Owners use the same bids, squads and purse in Telegram and the Miniapp.</div>`+setup+fieldSetup+rules+pool+pre+operations+trading+lifecycle+admins+details('Create another auction',newAuction());
+    const counts=data.counts||{};
+    const checks=[['Telegram group',!!data.season.chat_id,'Bind the auction group in step 1.'],['Franchises & owners',teams.length>=2&&teams.every(t=>t.owner_tg_id||t.co_owners?.length),'Add at least two teams and assign their owners in step 2.'],['Player pool',!!counts.total,'Build the player pool in step 4.'],['Squad capacity',counts.total>=teams.length*(s.min_squad_size||0)&&!!teams.length,'Check that the pool can fill every minimum squad.']];
+    const needs=teams.filter(t=>t.warnings?.length);
+    const dashboard=`<section class="au-card au-dashboard"><div class="au-kicker">Auction control room</div><div class="au-section-head"><div><h3>${esc(data.season.name)}</h3><p class="au-muted">Prepare the room. Keep every team on track.</p></div><span class="au-tag au-state-${esc(data.season.status)}">${esc(data.season.status)}</span></div>${stats([['Franchises',teams.length],['Players in pool',counts.total||0],['Players sold',counts.sold||0],['Purse remaining',money(teams.reduce((n,t)=>n+(t.purse_lakh||0),0))]])}<div class="au-actions">${viewButton('Manage players & purses','teams')}${viewButton('Live auction desk','live')}${viewButton('Browse pool','pool')}</div></section><section class="au-card"><h3>Setup checklist</h3><p class="au-muted">Quick checks for setup. Start also validates retention, draft and auction rules.</p><ul class="au-checklist">${checks.map(([title,ok,hint])=>`<li><span class="${ok?'au-credit':'au-warning-icon'}" aria-label="${ok?'Ready':'Needs attention'}">${ok?'✓':'○'}</span><div><strong>${esc(title)}</strong><p class="au-muted">${ok?'Ready':esc(hint)}</p></div></li>`).join('')}</ul></section>${needs.length?`<section class="au-card"><h3>Teams needing attention</h3>${needs.map(t=>`<div class="au-row"><div class="au-row-main"><strong>${esc(t.name)}</strong>${warnings(t)}</div><button type="button" class="au-btn" data-au-ui="manage-team" data-team="${t.id}">Review</button></div>`).join('')}</section>`:''}<div class="au-notice">Suggested routine: check team warnings before starting, pause and settle the current player before squad edits, and review the ledger after each correction.</div>`;
+    return dashboard+setup+fieldSetup+rules+pool+pre+operations+trading+lifecycle+admins+details('Create another auction',newAuction());
   }
-  async function catalogue(query) {
-    const id=seasonId;
+  function catalogueRows(mode) {
+    return cataloguePlayers.map(p=>`<div class="au-row"><div class="au-row-main"><strong>${esc(p.name)}</strong><div class="au-muted">${p.rating} OVR · ${esc(p.role)} · ${esc(p.version||'Base')} · ${esc(p.country||'')}<br>${esc(p.status.replaceAll('_',' '))} · base ${money(p.base_lakh)}</div></div>${mode==='team'?`<button class="au-btn" type="button" data-au-ui="select-signing" data-player="${p.id}" ${p.available?'':'disabled'}>${p.available?'Select':'Unavailable'}</button>`:btn(p.status==='not_in_pool'?'Add to pool':'In pool','admin_pool_players',{player_ids:[p.id]},false,p.status!=='not_in_pool')}</div>`).join('')||empty('No matching players','Try another name.');
+  }
+  async function catalogue(query,mode='pool') {
+    const id=seasonId, request=++catalogueEpoch, team=managedTeamId;
+    const target=mode==='team'?'au-team-catalogue':'au-catalogue';
+    if($(target)) $(target).innerHTML='<p class="au-muted" role="status">Searching players…</p>';
     const result=await api('/api/webapp/auction/catalogue',{season_id:id,query});
-    if(id!==seasonId||view!=='admin'||!$('au-catalogue')) return;
-    if(!result.ok) {toast(result.data.message||'Could not load players.','error');return;}
-    $('au-catalogue').innerHTML=result.data.players.map(p=>`<div class="au-row"><div class="au-row-main"><strong>${esc(p.name)}</strong><div class="au-muted">ID ${p.id} · ${p.rating} OVR · ${esc(p.role)} · ${esc(p.version||'Base')}</div></div>${btn('Add to pool','admin_pool_players',{player_ids:[p.id]})}</div>`).join('')||empty('No matching cards');
+    if(request!==catalogueEpoch||id!==seasonId||!$(target)||(mode==='team'?(view!=='teams'||team!==managedTeamId):view!=='admin')) return;
+    if(!result.ok) {$(target).innerHTML='<p class="au-error">Could not load players. Search again to retry.</p>';toast(result.data.message||'Could not load players.','error');return;}
+    catalogueQuery=query; cataloguePlayers=result.data.players;
+    $(target).innerHTML=catalogueRows(mode);
   }
-  function disableBusy() { document.querySelectorAll('#au-body [data-au-action], #au-body button[type="submit"]').forEach(b=>{if(busy){b.dataset.auBusy=b.disabled?'1':'0';b.disabled=true;}else if('auBusy' in b.dataset){b.disabled=b.dataset.auBusy==='1';delete b.dataset.auBusy;}}); }
+  function disableBusy() {
+    $('auction-app').setAttribute?.('aria-busy',String(busy));
+    document.querySelectorAll('#au-body button, #au-body input, #au-body select, #au-body textarea, #au-nav button, #au-season').forEach(b=>{
+      if(busy) {if(!('auBusy' in b.dataset))b.dataset.auBusy=b.disabled?'1':'0';b.disabled=true;}
+      else if('auBusy' in b.dataset) {b.disabled=b.dataset.auBusy==='1';delete b.dataset.auBusy;}
+    });
+  }
   async function confirmAction(message) {
     if(tg?.showConfirm) {
       try { return await new Promise(resolve=>tg.showConfirm(message,resolve)); }
@@ -303,18 +379,36 @@ const AuctionApp = (() => {
     if(busy) return;
     if(action.startsWith('admin_')&&!data?.admin) { toast('Only auction admins can manage an auction.','error'); return; }
     const confirmations={retention_confirm:'Finalize this retention list? Finalized retentions cannot be changed by the owner.',release:'Release this player into the auction pool?',trade_accept:'Accept this trade, including its players and cash?',admin_trade_reverse:'Reverse this completed trade?',admin_sold:'Sell the current player at the displayed price?',admin_unsold:'Mark the current player unsold?',admin_force_next:'Bring this player onto the block?',admin_recall:'Recall this sale?',admin_undo_sale:'Undo this sale?',admin_retention_force:'Force this retention as an admin?'};
-    if(confirmations[action]&&!(await confirmAction(confirmations[action]))) return;
+    const t=managedTeam();
+    if(action==='admin_team_purse'&&t) {
+      const amount=Number(args.amount_lakh), before=Number(args.expected_purse_lakh);
+      const after=args.mode==='set'?amount:before+(args.mode==='deduct'?-amount:amount);
+      confirmations[action]=`${t.name}: ${money(before)} → ${money(after)}. Apply this purse change? Reason: ${args.note}`;
+    }
+    if(action==='admin_team_add_player'&&t) confirmations[action]=`Add ${signingPlayer?.name||'this player'} to ${t.name} for ${money(args.price_lakh)}? The price will be deducted from the team purse.`;
+    if(action==='admin_team_remove_player'&&t) {
+      const p=t.squad.find(p=>p.id===Number(args.lot_id));
+      confirmations[action]=`Remove ${p?.name||'this player'} from ${t.name} and refund ${money(p?.price_lakh)}? The player returns to the auction queue.`;
+    }
+    if(confirmations[action]) {
+      busy=true;disableBusy();
+      const accepted=await confirmAction(confirmations[action]);
+      busy=false;disableBusy();
+      if(!accepted) return;
+    }
     if(action==='bid'&&Date.now()-updatedAt>6500) { toast('Refresh the live room before bidding.','error');refresh();return; }
     const id=seasonId;
     busy=true;disableBusy();
     clearTimeout(poll); epoch++;
     const result=await api('/api/webapp/auction/action',{...args,season_id:id,action},10000);
-    busy=false;disableBusy();
     if(result.ok) {
-      haptic('medium');toast(result.data.message||'Auction updated.','success');
+      if(action==='admin_team_add_player') {signingPlayer=null;cataloguePlayers=[];}
       if(result.data.season_id) {setSeason(result.data.season_id);view='admin';}
-    } else toast(result.status===0?'Connection interrupted. Refresh to check whether the action landed before retrying.':(result.data.message||'The action was refused.'),'error');
+    }
     if(active()) await refresh();
+    busy=false;disableBusy();tick();
+    if(result.ok) {haptic('medium');toast(result.data.message||'Auction updated.','success');}
+    else toast(result.status===0?'Connection interrupted. Refresh to check whether the action landed before retrying.':(result.data.message||'The action was refused.'),'error');
   }
   function tick() {
     const el=$('au-clock');
@@ -346,5 +440,11 @@ const AuctionApp = (() => {
   }
   document.addEventListener('visibilitychange',()=>{if(document.hidden)stop();else if(active())open();});
   window.addEventListener('online',()=>{if(active())refresh();});
-  return {open,stop,setSeason};
+  function resumeFromArena(id,target,teamId) {
+    if(id&&id!==seasonId) setSeason(id);
+    if(target) view=target;
+    if(teamId) managedTeamId=teamId;
+    open();
+  }
+  return {open,stop,setSeason,resumeFromArena};
 })();
