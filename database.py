@@ -1100,6 +1100,7 @@ def _migrate_add_columns():
     # NULL reads back as "no ceiling on any role", which is exactly how every
     # season written before this behaved, so there is nothing to backfill.
     _try_add("auction_seasons", "role_maximums_json", "TEXT")
+    _try_add("auction_seasons", "min_overseas", "INTEGER DEFAULT 0")
 
     # ── Rating rules: "at least N players rated X or lower" ──
     # NULL is "no rating rule" on both tables, so nothing to backfill.

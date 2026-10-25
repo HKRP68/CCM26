@@ -53,8 +53,11 @@
 </div>
 
 <div class="au-card" style="margin-top:1rem;">
-  <h3 style="margin-top:0;">Purses</h3>
+  <h3 style="margin-top:0;">Teams &amp; squad warnings</h3>
+  <p class="au-note">Warnings update live. Required slots stay reserved; bids that break a limit are blocked.</p>
   {% for f in field %}
+  {% set warnings = squad_warnings(f) %}
+  {% set blocked = bid_block_reason(f) %}
   <div class="au-purse-row">
     <span>{{ f.name }}{% if lot and lot.current_bidder_id == f.id %} <span class="pill">leading</span>{% endif %}</span>
     <span class="dim">
@@ -63,6 +66,20 @@
       · max {{ money([0, max_bid(season, f)]|max) }}
     </span>
   </div>
+  {% if lot and lot.current_bidder_id != f.id %}
+  <p class="au-note" style="margin:.25rem 0;">
+    {% if blocked %}<b>🚫 Bid unavailable:</b> {{ blocked }}
+    {% else %}✅ Can bid on this player{% endif %}
+  </p>
+  {% endif %}
+  {% if warnings %}
+  <details style="margin:.25rem 0 .8rem;">
+    <summary>{% if warnings[0].level == 'danger' %}🚫{% else %}⚠️{% endif %} {{ warnings[0].message }}</summary>
+    <ul class="au-note">
+      {% for warning in warnings %}<li>{{ warning.message }}</li>{% endfor %}
+    </ul>
+  </details>
+  {% endif %}
   {% endfor %}
 </div>
 

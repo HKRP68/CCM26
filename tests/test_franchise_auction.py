@@ -1135,7 +1135,7 @@ class FlaskTelegramBoundaryTests(unittest.TestCase):
     def setUp(self):
         admin = _read("admin.py")
         start = admin.index("# FRANCHISE AUCTION")
-        self.routes = admin[start:admin.index("# ── Run ──")]
+        self.routes = admin[start:admin.index("# CONDITIONS ENGINE", start)]
 
     def test_no_auction_route_sends_a_telegram_message(self):
         for forbidden in ("send_message", "edit_message_text",

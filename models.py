@@ -4057,6 +4057,7 @@ class AuctionSeason(Base):
     # role minimums; see services/rating_rules.py. NULL = no rating rule.
     rating_rules_json = Column(Text, nullable=True)
     home_country = Column(String(60), default="India", nullable=False)
+    min_overseas = Column(Integer, default=0, nullable=False)
     max_overseas = Column(Integer, default=8, nullable=False)
 
     # ── Retention ──────────────────────────────────────────────────────

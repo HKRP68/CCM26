@@ -696,7 +696,7 @@ SEASON_RULE_FIELDS = (
     "base_price_rules_json", "bid_increment_rules_json",
     # The squad
     "min_squad_size", "max_squad_size", "role_minimums_json",
-    "role_maximums_json", "rating_rules_json", "home_country", "max_overseas",
+    "role_maximums_json", "rating_rules_json", "home_country", "min_overseas", "max_overseas",
     # Retention
     "max_retentions", "min_retentions", "retention_max_spend_lakh",
     "retention_min_rating", "retention_max_rating",
@@ -1647,6 +1647,7 @@ def set_role_rules(session, season, minimums, maximums):
     refused here, at the one moment an admin can still fix them, rather than
     surfacing as a bid refusal in the middle of a live lot.
     """
+    validate_squad_limits(season)
     lows, highs = {}, {}
     for role, value in (minimums or {}).items():
         number = _as_int(value, 0)
@@ -1743,7 +1744,8 @@ def check_rating_rules(session, season, franchise, lot):
         raise AuctionError(
             f"{franchise.name} still need {owed} player(s) rated "
             f"≤{rule['max_rating']} ({RR.describe(rule)}) and would have only "
-            f"{max(0, slots_left)} slot(s) left after this one.")
+            f"{max(0, slots_left)} slot(s) left after this one. "
+            "This bid is blocked to protect the rating minimum.")
 
 
 def rating_rule_line(season):
@@ -1803,6 +1805,132 @@ def role_shortfall(session, season, franchise):
             for role, cap in role_maximums(season).items()
             if counts.get(role, 0) > cap}
     return owed, over
+
+
+def validate_squad_limits(season):
+    """Validate the squad and overseas ranges before saving either form."""
+    low, high = int(season.min_squad_size or 0), int(season.max_squad_size or 0)
+    abroad_low = int(season.min_overseas or 0)
+    abroad_high = int(season.max_overseas or 0)
+    if low < 0 or high < 1 or low > high:
+        raise AuctionError("Squad minimum must be between 0 and the maximum; "
+                           "the maximum must be at least 1.")
+    if abroad_low < 0 or abroad_high < 0 or abroad_low > abroad_high or abroad_low > high:
+        raise AuctionError("Overseas minimum must be between 0 and the overseas "
+                           "maximum, and cannot exceed the squad maximum.")
+
+
+def check_overseas_minimum(session, season, franchise, lot):
+    minimum = int(season.min_overseas or 0)
+    if not minimum:
+        return
+    have = overseas_count(session, franchise.id) + int(bool(lot.is_overseas))
+    owed = max(0, minimum - have)
+    slots = int(season.max_squad_size or 0) - int(franchise.squad_size or 0) - 1
+    if owed > max(0, slots):
+        raise AuctionError(f"{franchise.name} still need {owed} overseas player(s) "
+                           f"and would have only {max(0, slots)} slot(s) left. "
+                           "Bid on overseas players to meet the minimum.")
+
+
+def squad_warnings(session, season, franchise):
+    """Actionable squad warnings, most urgent first; no writes or messages.
+
+    Minimums reserve the remaining slots; overlapping rating and role needs
+    are deliberately not added together. One signing can meet both.
+    """
+    rows = squad(session, franchise.id)
+    size = int(franchise.squad_size or 0)
+    cap = int(season.max_squad_size or 0)
+    slots = max(0, cap - size)
+    finished = season.status == STATUS_COMPLETED or slots == 0
+    warnings = []
+
+    def add(level, message):
+        warnings.append(dict(level=level, message=message))
+
+    def need(owed, label, restriction):
+        if not owed:
+            return
+        if finished or owed > slots:
+            add("danger", f"Needs {owed} {label}; {slots} slots left. "
+                "Ask an admin to review the squad or rules.")
+        elif owed == slots:
+            add("locked", f"{slots} slots left — all must be {restriction}.")
+        else:
+            add("warning", f"Needs {owed} {label} · {slots} slots left.")
+
+    if size > cap:
+        add("danger", f"Squad exceeds the maximum by {size - cap}; no more bids.")
+    elif size == cap:
+        add("info", "Squad full — no more bids.")
+    missing = max(0, int(season.min_squad_size or 0) - size)
+    if missing:
+        add("danger" if finished else "warning", f"Needs {missing} more players "
+            f"to reach the squad minimum of {season.min_squad_size}.")
+
+    counts = {}
+    for row in rows:
+        counts[row.category] = counts.get(row.category, 0) + 1
+    lows, highs = role_minimums(season), role_maximums(season)
+    gaps = {role: low - counts.get(role, 0) for role, low in lows.items()
+            if low > counts.get(role, 0)}
+    owed = sum(gaps.values())
+    if owed:
+        roles = ", ".join(f"{n} {role}" for role, n in sorted(gaps.items()))
+        if finished or owed > slots:
+            add("danger", f"Needs {roles}; only {slots} slots left. "
+                "Ask an admin to review the squad or rules.")
+        elif owed == slots:
+            add("locked", f"{slots} slots left — reserved for {roles}. "
+                "Other roles cannot be signed.")
+        else:
+            add("warning", f"Needs {roles} · {slots} slots left.")
+    for role, high in sorted(highs.items()):
+        have = counts.get(role, 0)
+        if have > high:
+            add("danger", f"{role}: {have}/{high} — over the maximum.")
+        elif have == high:
+            add("info", f"{role}: {have}/{high} — limit reached; cannot sign more.")
+
+    ratings = [row.rating for row in rows]
+    for rule, have in RR.progress(rating_rules(season), ratings):
+        need(max(0, rule['min_players'] - have), f"players rated ≤{rule['max_rating']}",
+             f"rated ≤{rule['max_rating']}")
+    overseas = sum(bool(row.is_overseas) for row in rows)
+    need(max(0, int(season.min_overseas or 0) - overseas), "overseas players", "overseas players")
+    overseas_cap = int(season.max_overseas or 0)
+    if overseas > overseas_cap:
+        add("danger", f"Overseas: {overseas}/{overseas_cap} — over the maximum.")
+    elif overseas == overseas_cap:
+        add("info", f"Overseas: {overseas}/{overseas_cap} — domestic players only.")
+
+    purse = int(franchise.purse_remaining_lakh or 0)
+    reserve = missing * max(0, int(season.min_base_price_lakh or 0))
+    if purse < reserve:
+        add("danger", "Purse too low to fill the minimum squad at base price; "
+            "ask an admin to review the purse.")
+    elif purse <= 0 and slots and not finished:
+        add("warning", "Purse empty — no paid bids available.")
+    priority = {"danger": 0, "locked": 1, "warning": 2, "info": 3}
+    return sorted(warnings, key=lambda row: priority[row['level']])
+
+
+def squad_warning_line(session, season, franchise, *, urgent_only=False):
+    warnings = squad_warnings(session, season, franchise)
+    if urgent_only:
+        warnings = [row for row in warnings if row['level'] in ("danger", "locked")]
+    return warnings[0]['message'] if warnings else ""
+
+
+def bid_block_reason(session, season, lot, franchise, *, now=None):
+    """Preview the next bid using the same validator as Telegram and admin bids."""
+    try:
+        validate_bid(session, season, lot, franchise, next_min_bid(season, lot), now=now,
+                     by_admin=True)
+    except AuctionError as exc:
+        return str(exc)
+    return ""
 
 
 def max_bid_now(season, franchise, *, winning_this_lot=True):
@@ -2509,6 +2637,7 @@ def validate_preauction_signing(session, season, franchise, lot, price, *, verb=
     # an auction that then refuses every bid which might fix it.
     check_role_ceiling(session, season, franchise, lot.category)
     check_rating_rules(session, season, franchise, lot)
+    check_overseas_minimum(session, season, franchise, lot)
 
     remaining = int(franchise.purse_remaining_lakh or 0)
     if price > remaining:
@@ -4522,6 +4651,7 @@ def check_role_rules(session, season, franchise, lot):
     role = lot.category
     check_role_ceiling(session, season, franchise, role, counts=counts)
     check_rating_rules(session, season, franchise, lot)
+    check_overseas_minimum(session, season, franchise, lot)
 
     minimums = role_minimums(season)
     if not minimums:
@@ -5673,9 +5803,9 @@ def rtm_available(session, season, lot):
     if price > max_bid_now(season, holder):
         return (None, f"{holder.name} could not fill its squad afterwards")
     try:
-        check_rating_rules(session, season, holder, lot)
-    except AuctionError:
-        return (None, f"{holder.name} would break the rating rule")
+        check_role_rules(session, season, holder, lot)
+    except AuctionError as exc:
+        return (None, str(exc))
     return (holder, None)
 
 
@@ -5855,6 +5985,11 @@ def rtm_decide(session, season, lot, franchise, matching, *, now=None,
                            f"{holder.name} unable to fill its squad.")
     if rtm_cards_left(holder) <= 0:
         raise AuctionError(f"{holder.name} has no Right To Match left.")
+    if int(holder.squad_size or 0) >= int(season.max_squad_size or 0):
+        raise AuctionError(f"{holder.name} has no squad room left.")
+    if lot.is_overseas and overseas_count(session, holder.id) >= int(season.max_overseas or 0):
+        raise AuctionError(f"{holder.name} is at the overseas limit.")
+    check_role_rules(session, season, holder, lot)
 
     claimed = (session.query(AuctionLot)
                .filter(AuctionLot.id == lot.id,
@@ -6911,6 +7046,10 @@ def autofill_short_squads(session, season, *, now=None):
                     return False
                 if lot.is_overseas and overseas[franchise.id] + 1 > overseas_cap:
                     return False
+                try:
+                    check_role_rules(session, season, franchise, lot)
+                except AuctionError:
+                    return False
                 # A free player is still a player: handing a squad its ninth
                 # bowler under an eight-bowler cap would build a squad the
                 # auction itself would have refused to sell.
@@ -6932,6 +7071,8 @@ def autofill_short_squads(session, season, *, now=None):
                 candidates.sort(key=lambda lot: -sum(
                     1 for cap in owed_caps
                     if lot.rating is not None and int(lot.rating) <= cap))
+            if overseas[franchise.id] < int(season.min_overseas or 0):
+                candidates.sort(key=lambda lot: 0 if lot.is_overseas else 1)
             if not candidates:
                 continue
             lot = candidates[0]
@@ -7286,6 +7427,10 @@ def render_board(session, season, lot=None, *, now=None):
     head.append(f"\n📊 <b>{done}/{counts.get('total', 0)}</b> lots resolved"
                 + (f" · 🔒 {counts['retained']} retained"
                    if counts.get("retained") else ""))
+    for franchise in franchises(session, season.id):
+        warning = squad_warning_line(session, season, franchise, urgent_only=True)
+        if warning:
+            head.append(f"⚠️ <b>{_e(franchise.name)}</b>: {_e(warning)}")
     # Folded behind Telegram's tap-to-expand quote: the board is re-posted on
     # every lot and the purse list was most of its height.
     head.append("\n<b>💼 Team Purses</b> — tap to expand")
@@ -7341,6 +7486,9 @@ def render_purses(session, season):
         if rtm_configured(season):
             block.append(f"  🪪 {rtm_cards_left(franchise)} Right To Match "
                          f"of {int(franchise.rtm_cards_total or 0)}")
+        warning = squad_warning_line(session, season, franchise)
+        if warning:
+            block.append(f"  ⚠️ {_e(warning)}")
         lines.append("\n".join(block))
     return "\n".join(lines)
 

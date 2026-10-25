@@ -327,6 +327,22 @@ class PostAuctionMoney(TradeCase):
                 self.offer(self.csk, self.mi, [home_csk[0]], [overseas_mi[0]])
             self.assertIn("overseas", str(err.exception))
 
+    def test_zero_overseas_cap_blocks_a_trade_for_an_overseas_player(self):
+        self.season.max_overseas = 0
+        overseas = next(lot for lot in self.A.squad(self.session, self.mi.id)
+                        if lot.is_overseas)
+        reason = self.T.check_side(self.session, self.season, self.T.PHASE_POST,
+                                   self.csk, [], [overseas], 0)
+        self.assertIn('cap is 0', reason)
+
+    def test_post_auction_trade_cannot_drop_below_overseas_minimum(self):
+        overseas = next(lot for lot in self.A.squad(self.session, self.mi.id)
+                        if lot.is_overseas)
+        self.season.min_overseas = self.A.overseas_count(self.session, self.mi.id)
+        reason = self.T.check_side(self.session, self.season, self.T.PHASE_POST,
+                                   self.mi, [overseas], [], 0)
+        self.assertIn('overseas minimum', reason)
+
     def test_a_player_moves_once_per_window(self):
         kohli = self.lot_named("Virat")
         bumrah = self.lot_named("Jasprit")

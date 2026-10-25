@@ -124,6 +124,7 @@
   <!-- ── Squad rules ───────────────────────────────────────────── -->
   {{ fold("squad-rules", "🧩 Squad rules",
           season.min_squad_size ~ "–" ~ season.max_squad_size ~ " players"
+          ~ " · overseas " ~ (season.min_overseas or 0) ~ "–" ~ season.max_overseas
           ~ (" · " ~ role_rule_line if role_rule_line else " · no role limits")
           ~ (" · " ~ rating_rule_line if rating_rule_line else "")) }}
     <p class="au-note" style="margin:.2rem 0 .8rem;">
@@ -140,6 +141,7 @@
       <div><label>Min squad</label><input type="number" name="min_squad_size" min="0" max="50" value="{{ season.min_squad_size }}"></div>
       <div><label>Max squad</label><input type="number" name="max_squad_size" min="1" max="50" value="{{ season.max_squad_size }}"></div>
       <div><label>Home country</label><input type="text" name="home_country" value="{{ season.home_country }}"></div>
+      <div><label>Min overseas</label><input type="number" name="min_overseas" min="0" max="50" value="{{ season.min_overseas or 0 }}"></div>
       <div><label>Max overseas</label><input type="number" name="max_overseas" min="0" max="25" value="{{ season.max_overseas }}"></div>
 
       <div style="grid-column:1/-1;">
@@ -213,7 +215,8 @@
       meet once you have broken it is one you cannot plan around.
     </p>
     <p class="au-note" style="margin-bottom:0;">
-      <b>Rating rule.</b> "83 / 4" means every finished squad must hold at
+      <b>Rating rule.</b> For 4 players <b>below 84</b>, enter <b>83 / 4</b>.
+      The cutoff includes the number entered. "83 / 4" means every finished squad must hold at
       least 4 players rated 83 or lower. Like a role minimum it is enforced as
       reachability: a bid (or retention, RTM or auto-fill) is refused once the
       squad would owe the rule more players than it has slots left. Leave both
@@ -360,6 +363,9 @@
           </span>
         </summary>
         <div class="au-fold-body">
+          {% for warning in squad_warnings(f) %}
+          <p class="au-note">⚠️ {{ warning.message }}</p>
+          {% endfor %}
           {% if owed or over %}
           <p class="au-note" style="margin:.6rem 0 0;">
             {% if owed %}Still owes {% for role, n in owed.items() %}<b>{{ n }} {{ role }}</b>{{ ", " if not loop.last }}{% endfor %}.{% endif %}

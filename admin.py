@@ -24268,6 +24268,7 @@ def admin_auction_detail(season_id):
             rating_rule_line=auction_svc.rating_rule_line(season),
             rtm_auto_cards=lambda f: auction_svc.rtm_auto_cards(season, f),
             role_shortfall=lambda f: auction_svc.role_shortfall(db, season, f),
+            squad_warnings=lambda f: auction_svc.squad_warnings(db, season, f),
             squad_roles_of=lambda fid: auction_svc.role_counts(db, fid),
             price_gaps=auction_svc.base_price_gaps(season),
             rating_band=auction_svc.render_rating_band,
@@ -24578,7 +24579,9 @@ def _auction_detail_action(db, season, action):
         # which is what keeps an older bookmarked POST working.
         season.min_squad_size = _int_form("min_squad_size", season.min_squad_size)
         season.max_squad_size = _int_form("max_squad_size", season.max_squad_size)
+        season.min_overseas = _int_form("min_overseas", season.min_overseas or 0)
         season.max_overseas = _int_form("max_overseas", season.max_overseas)
+        auction_svc.validate_squad_limits(season)
         season.home_country = (request.form.get("home_country")
                                or season.home_country or "India").strip()[:60]
         auction_svc.set_anti_snipe(db, season,
@@ -24617,6 +24620,7 @@ def _auction_detail_action(db, season, action):
             highs[role] = _parse_int(raw) if raw else None
         season.min_squad_size = _int_form("min_squad_size", season.min_squad_size)
         season.max_squad_size = _int_form("max_squad_size", season.max_squad_size)
+        season.min_overseas = _int_form("min_overseas", season.min_overseas or 0)
         season.max_overseas = _int_form("max_overseas", season.max_overseas)
         season.home_country = (request.form.get("home_country")
                                or season.home_country or "India").strip()[:60]
@@ -25486,6 +25490,8 @@ def _console_context(db, season):
         "lot": lot,
         "left": auction_svc.seconds_left(lot),
         "field": auction_svc.franchises(db, season.id),
+        "squad_warnings": lambda f: auction_svc.squad_warnings(db, season, f),
+        "bid_block_reason": lambda f: auction_svc.bid_block_reason(db, season, lot, f) if lot else "",
         "counts": auction_svc.pool_counts(db, season.id),
         "upcoming": (db.query(AuctionLot)
                      .filter(AuctionLot.season_id == season.id,

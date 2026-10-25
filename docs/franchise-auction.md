@@ -40,6 +40,43 @@ board said.
 
 ## Running one
 
+### Live squad warnings
+
+The live board shows urgent slot restrictions. `/apurse` shows each team's next
+priority; `/asquad` and `/ateamsummary` show every unmet minimum and reached or
+exceeded maximum. The admin console refreshes these warnings and shows whether
+each team can bid on the current player, including the reason for a blocked bid.
+Warnings update from signed players, including retentions, RTM and trades.
+
+For a maximum squad of **20** and a requirement for **4 players below 84**, set
+the rating rule to **83 / 4** in **Squad rules** or use `/aratingrule 83 4`.
+The rating cutoff is inclusive: **≤83** means below 84.
+If a team has 16 players and none qualify, it sees
+**“4 slots left — all must be rated ≤83.”** A bid for a player rated 84 or above
+is refused. Each qualifying signing uses one reserved slot.
+
+The same slot protection applies to the combined role minimums (BAT, BOWL, ALR,
+WK and any custom role rules) and the overseas minimum. Role and overseas
+maximums, including zero, block additional signings immediately. A low-rated
+bowler can satisfy both a rating rule and a role rule; those needs are not added
+together. Nested rating rules also share qualifying players.
+
+**Min overseas** and **Max overseas** are saved with squad rules. The minimum
+defaults to zero, including for existing seasons through the startup migration,
+and carries into the next auction season. These are auction squad limits;
+Playing XI rules are configured separately on the league.
+
+If rules change after a squad was built, impossible requirements and exceeded
+limits ask for an admin review. Low purse warnings explain when the minimum
+squad cannot be afforded. RTM and free top-ups respect signing restrictions;
+trades cannot worsen an overseas shortfall or exceed a zero overseas cap.
+
+Useful next additions:
+
+- A shortlist filtered to players who meet the team's remaining requirements.
+- A pool check before starting, to flag too few qualifying players across teams.
+- An optional automatic bid ceiling per shortlisted player, within all squad rules.
+
 ### Setting it up (the website)
 
 **Admin → Tournament Panel → 🔨 Franchise Auctions → Create an auction**, then

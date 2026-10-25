@@ -510,6 +510,13 @@ def user_guide():
               "problem with is the only version you can plan around."),
         ]),
 
+        p(B("Squad warnings update live.") + " The board flags reserved slots, "
+          "and /asquad and /apurse explain what your team still needs. With a "
+          "maximum of 20, 16 signed players and no players below 84, a rule "
+          "requiring four below 84 reserves all four remaining slots. Only "
+          "players rated 83 or lower can fill them. Role minimums and overseas "
+          "minimums reserve slots in the same way; maximums block extra signings."),
+
         h1("6. Everything that can refuse a bid"),
         p("In the order they are checked, each with its own message naming the "
           "number that would have worked:"),
@@ -905,7 +912,7 @@ def admin_guide():
           "on the page rather than half-way through a live lot."),
         code(["min / max squad      how many players a squad may hold",
               "home country         anybody else counts as overseas",
-              "max overseas         the cap on those",
+              "min / max overseas   the required range for those",
               "role min / max       per role: Batsman, Bowler,",
               "                     All-rounder, Wicket Keeper"]),
         p("They are enforced differently, and they have to be. A " + B("maximum")
@@ -919,6 +926,13 @@ def admin_guide():
         p("Owners see the whole thing in " + C("/arules") + ", and the board "
           "prints each franchise's max bid, so nobody meets one of these rules "
           "for the first time by being refused by it."),
+        p(B("Live squad warnings") + " appear on the board, purse and squad "
+          "views, and the admin console. The console shows whether each team "
+          "can bid on the current player, with the reason when a bid is blocked. "
+          "Set a rating rule of 83 / 4 for four players below 84: the cutoff "
+          "includes 83. With 16 of 20 players signed and none meeting that "
+          "rule, all four remaining slots must go to players rated 83 or lower. "
+          "Overseas minimum defaults to zero for existing auctions."),
 
         h1("6. The franchise field"),
         p("Name, city, logo, owner and co-owners, and a purse that defaults to "

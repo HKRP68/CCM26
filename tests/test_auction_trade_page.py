@@ -174,6 +174,49 @@ class TradePageTests(unittest.TestCase):
         self.assertIn("Post-auction window open", body)
         self.assertIn("Save trade rules", body)
 
+    def test_squad_rules_save_overseas_range_and_render_warnings(self):
+        response = self.client.post(f"/auctions/{self.season.id}", data={
+            "action": "squad_rules", "min_squad_size": "1", "max_squad_size": "6",
+            "min_overseas": "2", "max_overseas": "3",
+        }, follow_redirects=True)
+        self.assertEqual(200, response.status_code)
+        self.session.expire_all()
+        self.assertEqual(2, self.season.min_overseas)
+        self.assertEqual(3, self.season.max_overseas)
+        self.assertIn('Needs 2 overseas players', response.get_data(as_text=True))
+        response = self.client.post(f"/auctions/{self.season.id}", data={
+            "action": "squad_rules", "min_overseas": "4", "max_overseas": "3",
+        }, follow_redirects=True)
+        self.assertIn('Overseas minimum must be', response.get_data(as_text=True))
+        self.session.expire_all()
+        self.assertEqual(2, self.season.min_overseas)
+
+    def test_live_console_explains_blocked_and_allowed_bids(self):
+        from models import Player
+        from datetime import datetime
+        self.season.status = self.A.STATUS_SETUP
+        self.A.set_rating_rules(self.session, self.season,
+                                [{'max_rating': 83, 'min_players': 4}])
+        player = Player(name=f'Warning preview {self.tag}', rating=90,
+                        is_active=True, **PLAYER_DEFAULTS)
+        self.session.add(player)
+        self.session.flush()
+        self.A.add_players_to_pool(self.session, self.season, [player])
+        lot = self.A.start(self.session, self.season, now=datetime.utcnow())
+        self.session.commit()
+        for path in ('console', 'console/panel'):
+            response = self.client.get(f"/auctions/{self.season.id}/{path}")
+            self.assertEqual(200, response.status_code)
+            body = response.get_data(as_text=True)
+            self.assertIn('Teams &amp; squad warnings', body)
+            self.assertIn('all must be rated ≤83', body)
+            self.assertIn('Bid unavailable:', body)
+            self.assertIn('blocked to protect the rating minimum', body)
+        lot.rating = 83
+        self.session.commit()
+        body = self.client.get(f"/auctions/{self.season.id}/console/panel").get_data(as_text=True)
+        self.assertIn('Can bid on this player', body)
+
     def test_force_a_trade_then_undo_it(self):
         first = f"Trade {self.tag} 0"     # Mumbai's
         body = self.post({"action": "trade_force", "team_a": self.mi.id,

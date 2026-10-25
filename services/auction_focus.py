@@ -67,7 +67,7 @@ AUCTION_COMMANDS = frozenset({
     # The board and the reads.
     "aboard", "auctionboard", "apurse", "apurses", "ainfo", "amenu",
     "arules", "asettings", "asets", "anextset", "anextplayer", "anextplayers",
-    "asquad", "amysquad", "asoldlist", "aunsoldlist",
+    "asquad", "amysquad", "ateamsummary", "asummary", "asoldlist", "aunsoldlist",
     "aleaderboard", "alb", "amybids", "amybidhistory",
     # The admin surface. Registered unconditionally with the gate inside the
     # handler, so a non-admin typing one gets told so rather than silence.
@@ -80,7 +80,8 @@ AUCTION_COMMANDS = frozenset({
     "asnipe", "afocus", "afocusmode", "adirect", "adirectbids",
     "agrant", "aco", "apublish", "acancel",
     "aretain", "aretainforce", "aoffers", "aretcancel", "aunretain",
-    "arelease", "aretlock", "aretention", "aretained", "allretained",
+    "arelease", "aretlock", "retainlock", "aretention", "aretained", "allretained",
+    "aretlimits", "aretranges",
     "aratingrule", "aratingrules",
     "retain", "aretmode", "aretslot", "aretslots", "aretrule", "aretrules",
     "aretdemand", "asetsexport", "asetsimport",
@@ -89,8 +90,9 @@ AUCTION_COMMANDS = frozenset({
     "aaccel", "arelistall", "afinish", "aend", "askip",
     "aclone", "anextseason",
     "apick", "apicks", "apickboard", "apickset", "apickrules",
-    "apickskip", "apickpass", "apickundo",
-    "apool", "aautosets", "aautoset",
+    "apickskip", "apickpass", "apickundo", "apickclock", "apickorder",
+    "apickranges", "aeligible", "aready", "ashortlist",
+    "apool", "aaddpl", "aautosets", "aautoset",
     "asetorder", "aaccelmode", "acall", "acallteams",
     "aremoveteam", "aadminadd", "aadminremove", "aadmins",
     # Trades (handlers/auction_trade.py).

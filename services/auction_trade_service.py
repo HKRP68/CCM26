@@ -690,6 +690,8 @@ def _shape(season, lots, *, building):
                          for role, need in minimums.items()},
         "unreachable": max(0, owed - slots_left) if building else owed,
         "rating_owed": rating_owed,
+        "overseas_owed": max(0, int(season.min_overseas or 0)
+                             - sum(bool(lot.is_overseas) for lot in lots) - slots_left),
     }
 
 
@@ -734,9 +736,11 @@ def check_side(session, season, phase, team, out_lots, in_lots, delta):
                     f"below the squad minimum of {minimum}. Take a player back.")
 
     cap = int(season.max_overseas or 0)
-    if cap and after["overseas"] > cap and after["overseas"] > before["overseas"]:
+    if after["overseas"] > cap and after["overseas"] > before["overseas"]:
         return (f"{team.name} would have {after['overseas']} overseas players "
                 f"and the cap is {cap}.")
+    if after["overseas_owed"] > before["overseas_owed"]:
+        return f"{team.name} would break the overseas minimum of {season.min_overseas}."
 
     for role, ceiling in A.role_maximums(season).items():
         have_after = after["roles"].get(role, 0)

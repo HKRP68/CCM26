@@ -64,7 +64,8 @@ def team_data(session, season, team):
                 trade_net=int(session.query(func.coalesce(func.sum(AuctionLedgerEntry.amount_lakh), 0))
                               .filter(AuctionLedgerEntry.franchise_id == team.id,
                                       AuctionLedgerEntry.kind.in_(('trade', 'trade_cash'))).scalar() or 0),
-                rating_rule=A.rating_progress_line(session, season, team))
+                rating_rule=A.rating_progress_line(session, season, team),
+                warnings=A.squad_warnings(session, season, team))
 
 
 def summary_lines(season, data):
@@ -75,7 +76,7 @@ def summary_lines(season, data):
              f"💰 {money(data['left'])} left of {money(data['total'])} · used (net) {money(data['used'])}",
              f"📑 Current contracts: {money(data['contract_value'])} · 🎯 Max bid: {money(data['max_bid'])}",
              f"Squad min {season.min_squad_size}, max {season.max_squad_size} · {data['needed']} needed · {data['slots']} free slots",
-             f"✈️ Overseas: {data['overseas']}/{season.max_overseas}",
+             f"✈️ Overseas: {data['overseas']}/{season.max_overseas} · min {season.min_overseas or 0}",
              squad_ratings.summary(data['averages'])]
     if season.max_retentions:
         final = bool(team.retention_finalized_at or A.retention_locked(season))
@@ -95,6 +96,9 @@ def summary_lines(season, data):
         lines.append('Needs: ' + ', '.join(f'{need} {escape(role)}' for role, need in data['gaps']))
     if data['rating_rule']:
         lines.append('⭐ Rating rule: ' + escape(data['rating_rule']))
+    for warning in data['warnings']:
+        icon = '🚫' if warning['level'] == 'danger' else '⚠️'
+        lines.append(f"{icon} {escape(warning['message'])}")
     return lines
 
 

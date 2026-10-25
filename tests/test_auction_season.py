@@ -120,7 +120,7 @@ class SeasonCase(unittest.TestCase):
             bid_seconds=45, snipe_window_seconds=7, snipe_extend_seconds=12,
             max_extensions=3, opening_purse_lakh=7_500, currency_label="$",
             min_base_price_lakh=30, min_squad_size=1, max_squad_size=6,
-            max_overseas=4, home_country="Australia",
+            min_overseas=1, max_overseas=4, home_country="Australia",
             max_retentions=3, min_retentions=1,
             retention_max_spend_lakh=4_000,
             retention_min_rating=70, retention_max_rating=99,

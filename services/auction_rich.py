@@ -224,8 +224,10 @@ def _purse_rows(session, season):
     for franchise in A.franchises(session, season.id):
         ceiling = max(0, A.max_bid_now(season, franchise))
         kept = int(franchise.retained_count or 0)
+        warning = A.squad_warning_line(session, season, franchise)
         rows.append([
-            R.cell(franchise.name + (f" 🔒{kept}" if kept else "")),
+            R.cell(franchise.name + (f" 🔒{kept}" if kept else "")
+                   + (" · ⚠️ " + warning if warning else "")),
             R.cell(R.bold(_money(season, franchise.purse_remaining_lakh)),
                    align="right"),
             R.cell(f"{franchise.squad_size}/{season.max_squad_size}",
@@ -316,6 +318,10 @@ def board_blocks(session, season, lot=None, *, now=None):
                              + (" · final" if remaining <= 0
                                 else f" · {remaining} left"))
             blocks.append(R.paragraph(parts))
+    for franchise in A.franchises(session, season.id):
+        warning = A.squad_warning_line(session, season, franchise, urgent_only=True)
+        if warning:
+            blocks.append(R.paragraph(["⚠️ ", R.bold(franchise.name), ": ", warning]))
     blocks.append(R.divider())
     # Team purses fold away behind a tap: the board is re-posted on every
     # lot, and a table of every purse was most of its height. /apurse and
@@ -910,12 +916,12 @@ def rules_view(session, season):
         R.paragraph(["👥 Squad: ", R.bold(f"{season.min_squad_size}–"
                                          f"{season.max_squad_size}"),
                      " players"]),
-        R.paragraph(["✈️ Overseas: at most ", R.bold(str(season.max_overseas)),
+        R.paragraph(["✈️ Overseas: ", R.bold(f"{season.min_overseas or 0}–{season.max_overseas}"),
                      f" — anyone not from {season.home_country}"]),
     ]
     body = [f"💰 Opening purse: <b>{purse}</b>",
             f"👥 Squad: <b>{season.min_squad_size}–{season.max_squad_size}</b> players",
-            f"✈️ Overseas: at most <b>{season.max_overseas}</b> — anyone not "
+            f"✈️ Overseas: <b>{season.min_overseas or 0}–{season.max_overseas}</b> — anyone not "
             f"from {_e(season.home_country)}"]
     if minimums:
         need = ", ".join(f"{role} ×{n}" for role, n in sorted(minimums.items()))
