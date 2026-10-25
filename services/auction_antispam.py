@@ -9,10 +9,9 @@ spam is stopped where it actually comes from: one pair of thumbs.
 
 Three rules, all in memory and all keyed by ``(chat_id, telegram_id)``:
 
-* **A cooldown.** One bid attempt per ``BID_COOLDOWN`` seconds per person.
-  A second ``/bid``, ``.bid`` or button press inside it is dropped without a
-  reply — the first one is already on its way, and a reply per extra tap is
-  the flood this exists to stop.
+* **A cooldown on duplicates.** One attempt per ``BID_COOLDOWN`` seconds for
+  the same server-side lot/price/stage. Being outbid or moving to another lot
+  permits a fresh attempt immediately. Refused attempts get visible feedback.
 * **A burst mute.** More than ``BURST_LIMIT`` taps *dropped by the cooldown*
   inside ``BURST_WINDOW`` seconds (a stuck key, a macro, a bot) mutes that
   person's bidding for ``MUTE_SECONDS``, with ONE warning. Only dropped taps
@@ -30,6 +29,7 @@ Admins are exempt — the caller decides that, since only it knows who is one.
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from collections import deque
@@ -47,6 +47,7 @@ MUTED = "muted"
 _lock = threading.Lock()
 _attempts = {}   # key -> deque of cooldown-dropped tap times (monotonic)
 _last_ok = {}    # key -> time of the last attempt that was let through
+_last_revision = {}  # key -> last server-side opportunity to bid
 _muted = {}      # key -> (muted_until, warned)
 _refusals = {}   # (key, lot_id, text) -> time last said
 
@@ -70,6 +71,26 @@ class Verdict:
         return f"Verdict({self.state!r}, wait={self.wait:.1f}, warn={self.warn})"
 
 
+class RateLimited(Exception):
+    def __init__(self, verdict):
+        self.verdict = verdict
+        super().__init__(limited_message(verdict))
+
+
+def bid_revision(lot, franchise):
+    """A fresh opportunity to bid, derived only from committed auction state.
+
+    A bidder still leading gets no bypass for tapping their own bid again.
+    RTM's final-offer window is a new, explicitly permitted raise.
+    """
+    if lot is None or franchise is None:
+        return None
+    stage = getattr(lot, 'rtm_stage', None)
+    if lot.current_bidder_id == franchise.id and stage != 'final_offer':
+        return None
+    return (lot.id, int(lot.bid_count or 0), stage)
+
+
 def _prune(now):
     """Drop state nobody needs any more, so the maps cannot grow forever."""
     horizon = now - max(BURST_WINDOW, MUTE_SECONDS, REFUSAL_REPEAT) - 1
@@ -77,19 +98,26 @@ def _prune(now):
         _attempts.pop(key, None)
     for key in [k for k, at in _last_ok.items() if at < horizon]:
         _last_ok.pop(key, None)
+        _last_revision.pop(key, None)
     for key in [k for k, (until, _) in _muted.items() if until < now]:
         _muted.pop(key, None)
     for key in [k for k, at in _refusals.items() if at < horizon]:
         _refusals.pop(key, None)
 
 
-def check_bid(chat_id, telegram_id, *, now=None):
+def check_bid(chat_id, telegram_id, *, now=None, revision=None):
     """Record one bid attempt and say whether it may go through."""
     now = time.monotonic() if now is None else now
     key = (int(chat_id or 0), int(telegram_id or 0))
     with _lock:
         if len(_last_ok) > 512:
             _prune(now)
+        if revision is not None and _last_revision.get(key) != revision:
+            _last_revision[key] = revision
+            _last_ok[key] = now
+            _attempts.pop(key, None)
+            _muted.pop(key, None)
+            return Verdict(OK)
         muted = _muted.get(key)
         if muted is not None:
             until, warned = muted
@@ -133,10 +161,18 @@ def muted_message(verdict):
             f"{int(round(verdict.wait)) or 1}s. Everyone else carries on.")
 
 
+def limited_message(verdict):
+    if verdict.state == MUTED:
+        return muted_message(verdict)
+    return (f"⏳ Easy — wait {max(1, math.ceil(verdict.wait))}s before repeating "
+            "this bid. You can bid immediately when another team raises.")
+
+
 def reset():
     """Forget everything (tests, and ``/arestart``)."""
     with _lock:
         _attempts.clear()
         _last_ok.clear()
+        _last_revision.clear()
         _muted.clear()
         _refusals.clear()

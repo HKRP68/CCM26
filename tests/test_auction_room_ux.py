@@ -22,8 +22,10 @@ import asyncio
 import os
 import sys
 import unittest
+import threading
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -391,15 +393,50 @@ class AntiSpamTests(RoomCase):
         self.assertTrue(self.SPAM.should_say(1, 2, 5, "no",
                                              now=10.0 + self.SPAM.REFUSAL_REPEAT))
 
-    def test_a_second_tap_inside_the_cooldown_is_dropped_silently(self):
+    def test_a_fast_rebid_after_being_outbid_is_accepted(self):
         from handlers import auction as H
         self.run_handler(H.bid_handler, ALICE)
         self.run_handler(H.bid_handler, BOB)
-        # Alice again, straight away: the cooldown drops it without a word.
+        # Alice has a new opportunity, even within the one-second cooldown.
         self.run_handler(H.bid_handler, ALICE)
         lot = self.fresh_lot()
-        self.assertEqual(self.chennai.id, lot.current_bidder_id)
+        self.assertEqual(self.mumbai.id, lot.current_bidder_id)
+        self.assertEqual(3, lot.bid_count)
         self.assertEqual([], self.replies)
+
+    def test_a_duplicate_typed_bid_gets_visible_feedback(self):
+        from handlers import auction as H
+        self.run_handler(H.bid_handler, ALICE)
+        self.run_handler(H.bid_handler, ALICE)
+        self.assertEqual(1, self.fresh_lot().bid_count)
+        self.assertIn('wait', self.replies[-1])
+        self.assertIn('another team raises', self.replies[-1])
+
+    def test_a_new_opportunity_clears_a_duplicate_burst_mute(self):
+        first = (1, 0, None)
+        for i in range(self.SPAM.BURST_LIMIT + 2):
+            v = self.SPAM.check_bid(1, 2, now=500+i*.1, revision=first)
+        self.assertEqual(self.SPAM.MUTED, v.state)
+        self.assertTrue(self.SPAM.check_bid(1, 2, now=500.8,
+                                             revision=(1, 2, None)).allowed)
+        self.assertEqual(self.SPAM.COOLDOWN, self.SPAM.check_bid(
+            1, 2, now=500.9, revision=(1, 2, None)).state)
+
+    def test_subsecond_bidding_war_does_not_trigger_a_mute(self):
+        for i in range(40):
+            self.assertTrue(self.SPAM.check_bid(1, 2, now=600+i*.01,
+                                                revision=(1, i*2, None)).allowed)
+
+    def test_a_new_lot_and_rtm_final_offer_are_fresh_opportunities(self):
+        own = SimpleNamespace(id=1)
+        leading = SimpleNamespace(id=10, current_bidder_id=1, bid_count=5, rtm_stage=None)
+        self.assertIsNone(self.SPAM.bid_revision(leading, own))
+        leading.rtm_stage = 'final_offer'
+        self.assertEqual((10, 5, 'final_offer'), self.SPAM.bid_revision(leading, own))
+        self.assertTrue(self.SPAM.check_bid(1, 2, now=700,
+                                            revision=(10, 0, None)).allowed)
+        self.assertTrue(self.SPAM.check_bid(1, 2, now=700.1,
+                                            revision=(11, 0, None)).allowed)
 
     def test_a_button_tap_inside_the_cooldown_gets_a_toast(self):
         from handlers import auction as H
@@ -410,6 +447,81 @@ class AntiSpamTests(RoomCase):
         text, alert = self.answers[-1]
         self.assertIn("Easy", text)
         self.assertFalse(alert)
+
+
+class BidResponsivenessTests(RoomCase):
+
+    def test_slow_bid_database_does_not_block_the_bot_event_loop(self):
+        from handlers import auction as H
+        update, context = self._update(ALICE)
+        gate = threading.Event()
+        released = []
+        threads = []
+        real = self.A.place_bid
+
+        def slow(*args, **kwargs):
+            threads.append(threading.get_ident())
+            released.append(gate.wait(timeout=1))
+            return real(*args, **kwargs)
+
+        async def run():
+            loop_id = threading.get_ident()
+            asyncio.get_running_loop().call_later(.02, gate.set)
+            with patch.object(H.A, 'place_bid', side_effect=slow):
+                await H.bid_handler(update, context)
+            self.assertTrue(all(t != loop_id for t in threads))
+
+        asyncio.run(run())
+        self.assertEqual([True], released, 'the loop must run while the DB is busy')
+        self.assertEqual(1, self.fresh_lot().bid_count)
+
+    def test_reaction_failure_falls_back_to_a_committed_bid_receipt(self):
+        from handlers import auction as H
+        update, context = self._update(ALICE)
+
+        async def fail(**kwargs):
+            raise RuntimeError('reactions unavailable')
+
+        context.bot.set_message_reaction = fail
+        asyncio.run(H.bid_handler(update, context))
+        self.assertEqual(1, self.fresh_lot().bid_count)
+        self.assertIn('Bid accepted', self.replies[-1])
+
+    def test_callback_ack_failure_never_reports_a_committed_bid_as_failed(self):
+        from handlers import auction as H
+        update, context = self._update(ALICE, data=f'au_bid_{self.lot.id}_{self.lot.base_price_lakh}')
+
+        async def fail(*args, **kwargs):
+            raise RuntimeError('callback expired')
+
+        update.callback_query.answer = fail
+        asyncio.run(H.bid_callback(update, context))
+        self.assertEqual(1, self.fresh_lot().bid_count)
+        self.assertIn('Bid accepted', self.replies[-1])
+
+    def test_session_is_closed_before_telegram_acknowledgement(self):
+        from handlers import auction as H
+        update, context = self._update(ALICE)
+        closed = []
+        real = H.get_session
+
+        def tracked():
+            db = real()
+            close = db.close
+            def close_session():
+                closed.append(True)
+                close()
+            db.close = close_session
+            return db
+
+        async def acknowledge(**kwargs):
+            self.assertTrue(closed)
+            return True
+
+        context.bot.set_message_reaction = acknowledge
+        with patch.object(H, 'get_session', side_effect=tracked):
+            asyncio.run(H.bid_handler(update, context))
+        self.assertEqual(1, self.fresh_lot().bid_count)
 
 
 if __name__ == "__main__":

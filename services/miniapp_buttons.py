@@ -1,6 +1,7 @@
 """Helpers for building Telegram Mini App buttons and deep links."""
 
 import os
+import re
 from telegram import InlineKeyboardButton, WebAppInfo
 
 
@@ -51,3 +52,17 @@ def miniapp_deep_link(tab, *, origin_chat_id=None):
 
 def has_miniapp_url():
     return os.getenv("WEBAPP_URL", "").strip().startswith("https://")
+
+
+def auction_launch(value):
+    """Parse an auction route hint; the API separately checks auction access."""
+    match = re.fullmatch(r'auction(?:_(\d+))?(?:_c(-\d+))?', (value or '').strip())
+    if not match:
+        return None
+    return dict(season_id=int(match[1]) if match[1] else None,
+                chat_id=int(match[2]) if match[2] else None)
+
+
+def auction_button(season, *, is_private=False):
+    return miniapp_button('📱 Switch to Miniapp', f'auction_{season.id}',
+                          is_private=is_private, origin_chat_id=season.chat_id)

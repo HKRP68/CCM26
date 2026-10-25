@@ -151,6 +151,10 @@ def bid_keyboard(season, lot):
     purse mid-lot costs the room nothing.
     """
     from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    from services.miniapp_buttons import auction_button
+
+    switch = auction_button(season)
+    switch_rows = [[switch]] if switch else []
 
     if lot is not None and lot.status == A.LOT_RTM_OFFERED:
         # The holder's two answers.
@@ -166,17 +170,17 @@ def bid_keyboard(season, lot):
             return InlineKeyboardMarkup([[
                 InlineKeyboardButton(label, callback_data=f"{tag}yes"),
                 InlineKeyboardButton("Pass", callback_data=f"{tag}no"),
-            ], _me_row()])
+            ], _me_row()] + switch_rows)
         if lot.rtm_stage == A.RTM_FINAL_OFFER:
             # The top bidder's one final raise, as a button too: the lowest
             # legal raise. Anyone else pressing it is refused by the rules.
             minimum = A.next_min_bid(season, lot)
             return InlineKeyboardMarkup([[InlineKeyboardButton(
                 f"⬆️ Final raise {A.render_money(minimum, season.currency_label or '₹')}",
-                callback_data=f"{BID_CB}{lot.id}_{minimum}")], _me_row()])
+                callback_data=f"{BID_CB}{lot.id}_{minimum}")], _me_row()] + switch_rows)
         return None
     if lot is None or lot.status != A.LOT_ON_BLOCK:
-        return None
+        return InlineKeyboardMarkup(switch_rows) if switch_rows else None
     minimum = A.next_min_bid(season, lot)
     step = A.increment_for(season, minimum)
     symbol = season.currency_label or "₹"
@@ -187,7 +191,7 @@ def bid_keyboard(season, lot):
         row.append(InlineKeyboardButton(
             f"➕ Bid {A.render_money(minimum + step, symbol)}",
             callback_data=f"{BID_CB}{lot.id}_{minimum + step}"))
-    return InlineKeyboardMarkup([row, _me_row()])
+    return InlineKeyboardMarkup([row, _me_row()] + switch_rows)
 
 
 def info_keyboard(season=None, owner_id=None):
@@ -208,6 +212,11 @@ def info_keyboard(season=None, owner_id=None):
                for key, label, when in INFO_VIEWS
                if when is None or season is None or when(season)]
     rows = [buttons[i:i + 3] for i in range(0, len(buttons), 3)]
+    if season is not None:
+        from services.miniapp_buttons import auction_button
+        switch = auction_button(season)
+        if switch:
+            rows.append([switch])
     rows.append([close_button(owner_id)])
     return InlineKeyboardMarkup(rows)
 

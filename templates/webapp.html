@@ -2400,6 +2400,7 @@
   .lm-sc-result { font-size: 0.78rem; color: var(--green); margin-bottom: 0.6rem; font-weight: 700; }
   .lm-sc-note { font-size: 0.68rem; color: var(--muted); margin-top: 0.6rem; }
 </style>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/auction_miniapp.css') }}">
 </head>
 <body>
 
@@ -2542,6 +2543,11 @@
   </section>
 
   <div class="tile-grid">
+    <button class="tile season" onclick="navigate('auction')">
+      <div class="tile-icon">🔨</div>
+      <div class="tile-label">Franchise Auction</div>
+      <div class="tile-sub">Live bids · Teams · Retention</div>
+    </button>
     <button class="tile match" onclick="navigate('match')">
       <div class="tile-icon">🏏</div>
       <div class="tile-label">Quick Match</div>
@@ -3183,6 +3189,11 @@
   <div id="tn-content"><div class="empty"><div class="spinner"></div></div></div>
 </div>
 
+<!-- ════ Franchise auction: shared with Telegram ════ -->
+<div class="screen" id="screen-auction">
+  <div class="auction-app" id="auction-app"></div>
+</div>
+
 <!-- ════ Bottom tabs ════ -->
 <div class="tabs" id="bottom-nav">
   <button class="tab active" data-screen="home" onclick="navigate('home')">
@@ -3301,6 +3312,7 @@
   </div>
 </div>
 
+<script src="{{ url_for('static', filename='js/auction_miniapp.js') }}"></script>
 <script>
 const tg = window.Telegram?.WebApp;
 if (tg) {
@@ -3573,6 +3585,7 @@ function renderStarterGuide(onboarding = {}) {
 // ════════════════ Navigation ════════════════
 function navigate(screen) {
   haptic('light');
+  if (currentScreen === 'auction' && screen !== 'auction') AuctionApp.stop();
   // Stop live-match polling whenever we leave that screen
   if (currentScreen === 'livematch' && screen !== 'livematch') {
     stopMatchPolling();
@@ -3608,6 +3621,7 @@ function navigate(screen) {
   if (screen === 'achievements') loadAchievements();
   if (screen === 'season') loadSeason();
   if (screen === 'tournament') loadTournament();
+  if (screen === 'auction') AuctionApp.open();
   if (screen === 'clubs') loadClubs();
   if (screen === 'browse') {
     loadCountries().then(() => {
@@ -3833,7 +3847,7 @@ function syncCommunityCards() {
   // a news article or the submit form, where it would sit above the story.
   const teaser = document.getElementById('quest-teaser');
   const onNews = currentScreen === 'newsarticle' || currentScreen === 'newssubmit';
-  if (teaser) teaser.style.display = communityReady && !onNews ? '' : 'none';
+  if (teaser) teaser.style.display = communityReady && !onNews && currentScreen !== 'auction' ? '' : 'none';
   const box = document.getElementById('suggestion-box');
   const news = document.getElementById('news-box');
   const poll = document.getElementById('poll-box');
@@ -9739,7 +9753,7 @@ function maybeFantasyRedirect() {
 
 // (2) Telegram start_param (?startapp=spin) used by group t.me deep links.
 function handleHashDeepLink() {
-  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'season', 'clubs', 'playerdetail', 'livematch'];
+  const validScreens = ['home', 'spin', 'daily', 'browse', 'roster', 'leaderboard', 'match', 'market', 'xi', 'invite', 'quests', 'freepack', 'packs', 'achievements', 'season', 'clubs', 'playerdetail', 'livematch', 'auction', 'tournament'];
   const alias = {
     // 'wheel' and 'gspin' stay mapped: deep links to the old prize wheel are
     // already out there in group chats and still belong on this screen.
@@ -9759,6 +9773,7 @@ function handleHashDeepLink() {
   // Fantasy deep link (?startapp=fantasy or fantasy_<leagueId>) → squad picker.
   if (maybeFantasyRedirect()) return;
   let target = (window.location.hash || '').replace('#', '').toLowerCase();
+  if (target.includes('=')) target = START_PARAM.toLowerCase();
   if (!target) {
     try {
       const sp = (window.Telegram?.WebApp?.initDataUnsafe?.start_param || '').toLowerCase();
@@ -9768,6 +9783,12 @@ function handleHashDeepLink() {
   // Strip an origin-chat suffix (e.g. "home_c-100123") used to echo Mini App
   // activity back to a group; the tab name is everything before "_c<digits>".
   target = target.replace(/_c-?\d+$/, '');
+  const auctionLink = target.match(/^auction_(\d+)$/);
+  if (auctionLink) {
+    AuctionApp.setSeason(Number(auctionLink[1]));
+    navigate('auction');
+    return;
+  }
   target = alias[target] || target;
   // CMU News / poll links from the channel: news_<id>, poll_<id>, news.
   const newsLink = target.match(/^news_(\d+)$/);
@@ -9788,6 +9809,13 @@ function handleHashDeepLink() {
 (function bootstrap() {
   // Fantasy deep link → jump straight to the picker (no dashboard flash).
   if (maybeFantasyRedirect()) return;
+  // Auction owners may not have a collecting-game account. Open the room
+  // directly; its own signed API checks auction access without a /debut gate.
+  const auctionTarget = START_PARAM || (window.location.hash || '').replace(/^#/, '');
+  if (/^auction(?:_\d+)?(?:_c-?\d+)?$/i.test(auctionTarget)) {
+    handleHashDeepLink();
+    return;
+  }
   const ml = resolveMatchLaunch();
   if (ml) {
     handleHashDeepLink();   // opens the match screen immediately

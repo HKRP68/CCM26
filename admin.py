@@ -26543,6 +26543,10 @@ def admin_league_record_card(series_id,category):
     finally:db.close()
 
 
+from services.auction_webapp_routes import register as _register_auction_webapp
+_register_auction_webapp(app, _webapp_auth, csrf_exempt, _tg_call)
+
+
 if __name__ == "__main__":
     init_db()
     port = int(os.getenv("ADMIN_PORT", 5000))

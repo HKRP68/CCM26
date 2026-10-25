@@ -1,0 +1,66 @@
+.auction-app { --au-line: rgba(255,255,255,.11); --au-quiet: #aeb9b1; max-width: 1000px; margin: auto; padding-bottom: 1rem; }
+.au-head { display:flex; align-items:center; justify-content:space-between; gap:.8rem; margin-bottom:1rem; }
+.au-head h2 { margin:0; font-size:1.5rem; letter-spacing:-.04em; }
+.au-kicker { color:var(--accent,#d4a82a); font-size:.66rem; font-weight:800; letter-spacing:.14em; text-transform:uppercase; margin-bottom:.3rem; }
+.auction-app button, .auction-app input, .auction-app select, .auction-app textarea { font:inherit; }
+.auction-app button { cursor:pointer; }
+.au-btn { border:1px solid var(--au-line); color:var(--text,#eef4ed); background:rgba(255,255,255,.05); padding:.65rem .9rem; border-radius:11px; font-size:.8rem; font-weight:700; min-height:42px; }
+.au-btn:hover { background:rgba(255,255,255,.1); }
+.au-btn:disabled { opacity:.45; cursor:default; }
+.au-btn.primary { background:var(--accent,#d4a82a); color:#142015; border-color:transparent; }
+.au-btn.danger { color:#ffaca8; border-color:rgba(255,120,120,.3); }
+.au-switch { color:var(--accent,#d4a82a); white-space:nowrap; }
+.au-nav { display:flex; gap:.4rem; overflow-x:auto; padding:.7rem 0; margin-bottom:.6rem; scrollbar-width:thin; }
+.au-nav button { border:1px solid var(--au-line); background:transparent; color:var(--au-quiet); border-radius:100px; padding:.6rem .85rem; font-size:.76rem; white-space:nowrap; min-height:38px; }
+.au-nav button.active { color:#142015; background:var(--accent,#d4a82a); border-color:transparent; font-weight:800; }
+.au-select, .au-input, .au-textarea { width:100%; box-sizing:border-box; border:1px solid var(--au-line); background:#131e1a; color:var(--text,#eef4ed); border-radius:10px; padding:.7rem; min-height:42px; }
+.au-input:focus, .au-textarea:focus, .au-select:focus { outline:2px solid var(--accent,#d4a82a); outline-offset:1px; }
+.au-textarea { min-height:110px; resize:vertical; }
+.au-field { display:block; margin:.7rem 0; }
+.au-field>span { display:block; font-size:.74rem; color:var(--au-quiet); margin-bottom:.4rem; }
+.au-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(235px,1fr)); gap:.7rem; }
+.au-card { border:1px solid var(--au-line); border-radius:16px; padding:1rem; background:linear-gradient(145deg,rgba(32,53,39,.6),rgba(14,24,22,.7)); margin-bottom:.75rem; }
+.au-card h3 { margin:0 0 .65rem; font-size:1rem; }
+.au-card p { margin:.4rem 0; }
+.au-muted { font-size:.76rem; line-height:1.5; color:var(--au-quiet); }
+.au-status { display:flex; align-items:center; flex-wrap:wrap; gap:.5rem; font-size:.72rem; color:var(--au-quiet); margin-top:.55rem; }
+.au-dot { width:6px; height:6px; border-radius:50%; display:inline-block; background:#79d29c; }
+.au-tag { font-size:.66rem; padding:.25rem .5rem; border:1px solid var(--au-line); border-radius:6px; text-transform:uppercase; letter-spacing:.04em; }
+.au-lot { position:relative; overflow:hidden; border-color:rgba(212,168,42,.32); }
+.au-lot-top { display:flex; gap:1rem; align-items:flex-start; }
+.au-player-art { width:86px; height:110px; border-radius:10px; object-fit:contain; background:rgba(255,255,255,.025); }
+.au-name { font-size:clamp(1.35rem,5vw,2rem); font-weight:850; line-height:1.1; letter-spacing:-.04em; margin:.4rem 0; }
+.au-live-price { font-size:2.1rem; font-weight:850; color:var(--accent,#d4a82a); letter-spacing:-.035em; }
+.au-price-line { display:flex; justify-content:space-between; align-items:center; gap:.75rem; margin-top:1rem; }
+.au-clock { font-size:2rem; font-variant-numeric:tabular-nums; font-weight:800; text-align:right; }
+.au-clock.urgent { color:#ffaca8; }
+.au-actions { display:flex; flex-wrap:wrap; gap:.45rem; margin-top:.8rem; }
+.au-actions .primary { flex:1; }
+.au-budget { display:grid; grid-template-columns:repeat(3,1fr); gap:.5rem; border-top:1px solid var(--au-line); padding-top:.8rem; margin-top:.8rem; }
+.au-budget strong { display:block; margin-top:.2rem; font-size:.95rem; }
+.au-warning, .au-notice { font-size:.76rem; line-height:1.5; padding:.65rem .75rem; border-radius:9px; margin:.6rem 0; background:rgba(212,168,42,.08); color:#e6cf8c; }
+.au-notice { color:#b8d9c6; background:rgba(101,177,132,.08); }
+.au-row { display:flex; gap:.7rem; justify-content:space-between; align-items:center; padding:.65rem 0; border-bottom:1px solid var(--au-line); }
+.au-row:last-child { border-bottom:none; }
+.au-row-main { min-width:0; flex:1; }
+.au-row-main strong { font-size:.84rem; }
+.au-row-money { text-align:right; white-space:nowrap; font-size:.85rem; font-weight:700; }
+.au-result { font-size:.65rem; color:var(--au-quiet); font-weight:500; text-transform:uppercase; }
+.au-filters { display:flex; flex-wrap:wrap; gap:.5rem; margin-bottom:.75rem; }
+.au-filters>* { flex:1; min-width:120px; }
+.au-filters .au-input { min-width:160px; }
+.au-empty { padding:2rem 1rem; text-align:center; color:var(--au-quiet); font-size:.85rem; line-height:1.6; }
+.au-empty strong { display:block; color:var(--text,#eef4ed); font-size:1.15rem; margin-bottom:.5rem; }
+.au-log { max-height:340px; overflow:auto; }
+.au-log p { padding:.55rem 0; border-bottom:1px solid var(--au-line); font-size:.78rem; line-height:1.45; }
+.au-log time { display:block; color:var(--au-quiet); font-size:.65rem; }
+.auction-app details { border:1px solid var(--au-line); border-radius:12px; padding:.8rem; margin:.7rem 0; }
+.auction-app summary { cursor:pointer; font-size:.85rem; font-weight:750; }
+.au-pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:.73rem; color:var(--au-quiet); line-height:1.5; }
+.au-builder-select { display:flex; align-items:center; gap:.6rem; padding:.55rem 0; font-size:.8rem; }
+.au-builder-select input { width:20px; height:20px; accent-color:var(--accent,#d4a82a); }
+.au-refresh-status { min-height:1.2rem; font-size:.7rem; color:var(--au-quiet); }
+.au-error { color:#ffaca8; }
+.au-step { display:inline-flex; width:22px; height:22px; align-items:center; justify-content:center; border-radius:50%; background:rgba(212,168,42,.15); color:var(--accent,#d4a82a); font-size:.72rem; margin-right:.4rem; }
+@media (prefers-reduced-motion:no-preference) { .au-dot.live { animation:au-pulse 2s ease-in-out infinite; } @keyframes au-pulse { 50% { opacity:.35; } } }
+@media (max-width:360px) { .au-head h2 { font-size:1.25rem; } .au-head .au-btn { font-size:.72rem; padding:.55rem; } .au-player-art { width:65px; height:88px; } }

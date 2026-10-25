@@ -243,17 +243,23 @@ priced button is never raised for anyone; it is answered with "💨 Beaten to it
 
 **Anti-spam is per person** (`services/auction_antispam.py`), never per room:
 
-* one bid attempt per second per person — an extra tap inside that is dropped
-  without a reply (a button gets a small "⏳ Easy" toast);
+* duplicate attempts on the same lot/price/stage are limited to one per second,
+  with a visible wait message (or button toast). A new opportunity after being
+  outbid, a new lot or the RTM final-offer stage is allowed immediately;
 * more than five of those dropped taps in ten seconds (a stuck key, a macro)
   pauses *that person's* bidding for 15 seconds, with one warning — everybody
   else, co-owners included, carries on. Landed bids never count, so an owner
-  re-bidding every time they are outbid never trips it;
+  re-bidding every time they are outbid never trips it, even below one second;
 * the same refusal to the same person on the same lot is said once per six
   seconds, and a refused typed bid tidies itself out of the group after ~8s.
 
 Auction admins are exempt. It is all in memory; a restart just forgets who was
 typing fast.
+
+Bid transactions run in worker threads with their own database sessions, so a
+slow database cannot freeze the bot's event loop. Sessions close before Telegram
+acknowledgements. If reactions are unavailable or a successful button response
+expires, a short accepted-bid receipt confirms the committed price instead.
 
 **The old gap, if you want it.** `/abidgap 3` still turns on the room-wide
 quiet gap (after every bid no *other* team may bid for that long; a bid inside

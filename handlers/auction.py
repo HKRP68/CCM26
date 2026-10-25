@@ -31,8 +31,11 @@ presser actually owns, and the exact price is baked into the callback data so a
 stale button can never bid a number nobody meant.
 """
 
+import asyncio
 import html
 import logging
+
+from sqlalchemy.exc import OperationalError
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -276,14 +279,16 @@ def bid_keyboard(season, lot):
 REFUSAL_TTL = 8
 
 
-def _antispam_verdict(chat_id, user_id):
+def _antispam_verdict(chat_id, user_id, *, revision=None, session=None):
     """The flood guard's verdict, with auction admins waved through.
 
     The admin lookup is only made for somebody the guard would hold back, so
     the ordinary bid costs no query at all.
     """
-    verdict = SPAM.check_bid(chat_id, user_id)
-    if not verdict.allowed and _is_auction_admin(user_id):
+    verdict = SPAM.check_bid(chat_id, user_id, revision=revision)
+    admin = (A.is_auction_admin(session, user_id) if session is not None
+             else _is_auction_admin(user_id)) if not verdict.allowed else False
+    if not verdict.allowed and admin:
         return SPAM.Verdict(SPAM.OK)
     return verdict
 
@@ -349,117 +354,126 @@ def _beaten_text(session, season, lot):
             f"Next bid: {A.render_money(A.next_min_bid(season, lot), symbol)}.")
 
 
-async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    if chat is None or chat.type not in GROUP_CHAT_TYPES:
-        await _reply(update, GROUP_ONLY)
-        return
-    user = update.effective_user
-    if user is None:
-        return
+def _submit_room_bid(chat_id, user_id, *, raw='', lot_id=None, amount=None):
+    """Own the entire bid transaction in one worker, without Telegram I/O.
 
-    # The flood guard runs before any database work: an extra tap inside the
-    # cooldown is dropped without a word (the first one is already landing),
-    # and a burst earns one warning and a short pause — for this person only.
-    verdict = _antispam_verdict(chat.id, user.id)
-    if not verdict.allowed:
-        if verdict.warn:
-            await _refuse(update, context, SPAM.muted_message(verdict))
-        return
-
+    A slow/dead database must not freeze the event loop and auction clock.
+    Only primitive receipt values leave the worker; its session is always
+    closed before a reaction, toast or refusal is sent.
+    """
     session = get_session()
-    landed = None
-    lot_id = 0
+    target_lot_id = lot_id or 0
     try:
-        season = A.season_for_chat(session, chat.id)
+        season = A.season_for_chat(session, chat_id)
         if season is None:
-            await _reply(update, NO_AUCTION)
-            return
-        franchise = A.franchise_for_actor(session, season.id, user.id)
+            raise AuctionError('No auction is running in this chat. An admin can bind one with /abind.')
+        franchise = A.franchise_for_actor(session, season.id, user_id)
         if franchise is None:
-            await _refuse(update, context, NOT_YOURS)
-            return
+            raise AuctionError(NOT_YOURS)
         lot = A.current_lot(session, season)
         if lot is None:
-            await _refuse(update, context,
-                          "⚠️ Nothing is on the block right now.")
-            return
-        lot_id = lot.id
-
-        raw = _arg_text(context)
+            raise AuctionError('Nothing is on the block right now.')
+        if lot_id is not None and lot.id != lot_id:
+            raise AuctionError('That button is for an older player. Check the current board.')
+        target_lot_id = lot.id
+        stage = lot.rtm_stage
+        verdict = _antispam_verdict(chat_id, user_id, session=session,
+                                   revision=SPAM.bid_revision(lot, franchise))
+        if not verdict.allowed:
+            raise SPAM.RateLimited(verdict)
         if raw and not A.direct_bids_on(season):
-            # The ladder-only mode an admin turns on with /adirect off. Bare
-            # /bid and the board's buttons still work, so the refusal names
-            # the number this bid would have been rather than just saying no.
             minimum = A.render_money(A.next_min_bid(season, lot),
                                      season.currency_label or "₹")
-            await _refuse(update, context,
-                          f"🪜 <b>Direct bids are off</b> in this auction — "
-                          f"every raise is one step.\nSend <code>/bid</code> "
-                          f"on its own (or tap the board) to bid "
-                          f"<b>{html.escape(minimum)}</b>.", lot_id)
-            return
-        if raw:
-            amount = A.parse_amount(raw)
+            raise AuctionError('Direct bids are off in this auction. Send /bid '
+                               f'on its own or tap the board to bid {minimum}.')
+        source = 'button' if lot_id is not None else 'tg'
+        if raw or amount is not None:
+            amount = A.parse_amount(raw) if raw else amount
             A.place_bid(session, season, lot, franchise, amount,
-                        by_tg_id=user.id, source="tg")
+                        by_tg_id=user_id, source=source)
         else:
-            # A bare /bid means "the next minimum" — the commonest action in
-            # the room, and the one form that cannot be fat-fingered. When two
-            # franchises send it at the same instant, the one that loses the
-            # race did not mean the OLD minimum, it meant "the next step", so
-            # it tries once more at the fresh one: both bids land, in order.
-            # A typed amount or a priced button is never raised for anyone.
+            # A bare /bid means the next step. Retry one lost price race,
+            # while explicit amounts and priced buttons keep their price.
             amount = A.next_min_bid(season, lot)
             try:
                 A.place_bid(session, season, lot, franchise, amount,
-                            by_tg_id=user.id, source="tg")
+                            by_tg_id=user_id, source=source)
             except A.PriceMoved:
                 session.rollback()
                 session.expire_all()
-                season = A.season_for_chat(session, chat.id)
+                season = A.season_for_chat(session, chat_id)
                 lot = A.current_lot(session, season) if season else None
-                if lot is None or lot.id != lot_id:
+                if lot is None or lot.id != target_lot_id or lot.rtm_stage != stage:
                     raise
+                franchise = A.franchise_for_actor(session, season.id, user_id)
+                if franchise is None:
+                    raise AuctionError(NOT_YOURS)
                 amount = A.next_min_bid(season, lot)
                 A.place_bid(session, season, lot, franchise, amount,
-                            by_tg_id=user.id, source="tg")
+                            by_tg_id=user_id, source=source)
+        currency = season.currency_label or '₹'
         session.commit()
-        landed = amount
-    except A.BidTooSoon as exc:
-        # Inside the quiet gap after the last bid: not an error, just "this is
-        # who holds him" — the gap itself is never shown.
-        session.rollback()
-        await _refuse(update, context, html.escape(str(exc)), lot_id)
-        return
+        return amount, currency
     except A.PriceMoved:
         session.rollback()
         session.expire_all()
         try:
-            season = A.season_for_chat(session, chat.id)
+            season = A.season_for_chat(session, chat_id)
             lot = A.current_lot(session, season) if season else None
             text = _beaten_text(session, season, lot)
         except Exception:
             text = "💨 The price moved — tap again."
-        await _refuse(update, context, html.escape(text), lot_id)
-        return
-    except AuctionError as exc:
+        error = A.PriceMoved(text)
+        error.lot_id = target_lot_id
+        raise error from None
+    except (AuctionError, SPAM.RateLimited) as exc:
+        exc.lot_id = target_lot_id
         session.rollback()
-        await _refuse(update, context, f"⚠️ {html.escape(str(exc))}", lot_id)
-        return
+        raise
     except Exception:
         session.rollback()
-        logger.exception("/bid failed")
-        await _reply(update, "⚠️ Something went wrong. Try again.")
-        return
+        raise
     finally:
         session.close()
 
-    # Acknowledge with a reaction rather than a message: the board carries the
-    # price a tick later, and forty replies inside one lot is the flood this
-    # design exists to avoid. Entirely best-effort — the bid is committed.
-    if landed is not None:
-        await _react(context, update)
+
+async def _bid_accepted(update, context, amount, currency):
+    """Fallback when reactions/callback acknowledgements are unavailable."""
+    try:
+        sent = await _reply(update, f'✅ Bid accepted: {html.escape(A.render_money(amount, currency))}.')
+        await _delete_later(context, update.effective_chat.id,
+                            getattr(sent, 'message_id', None))
+    except Exception:
+        logger.warning('Auction bid committed; acknowledgement unavailable', exc_info=True)
+
+
+async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat, user = update.effective_chat, update.effective_user
+    if chat is None or chat.type not in GROUP_CHAT_TYPES:
+        await _reply(update, GROUP_ONLY)
+        return
+    if user is None:
+        return
+    try:
+        amount, currency = await asyncio.to_thread(_submit_room_bid, chat.id, user.id,
+                                                   raw=_arg_text(context))
+    except SPAM.RateLimited as exc:
+        if exc.verdict.state != SPAM.MUTED or exc.verdict.warn:
+            await _refuse(update, context, html.escape(str(exc)), getattr(exc, 'lot_id', 0))
+        return
+    except AuctionError as exc:
+        await _refuse(update, context, html.escape(str(exc)), getattr(exc, 'lot_id', 0))
+        return
+    except OperationalError:
+        logger.warning('/bid database unavailable', exc_info=True)
+        await _reply(update, '⚠️ Could not confirm your bid. Check the board before trying again.')
+        return
+    except Exception:
+        logger.exception('/bid failed')
+        await _reply(update, '⚠️ Could not confirm your bid. Check the board before trying again.')
+        return
+    if not await _react(context, update):
+        await _bid_accepted(update, context, amount, currency)
 
 
 async def artm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -601,11 +615,13 @@ async def _react(context, update):
     try:
         from telegram import ReactionTypeEmoji
         message = update.effective_message
-        await context.bot.set_message_reaction(
+        result = await context.bot.set_message_reaction(
             chat_id=update.effective_chat.id, message_id=message.message_id,
             reaction=[ReactionTypeEmoji("👍")])
+        return result is not False
     except Exception:
         logger.debug("auction: could not react to the bid", exc_info=True)
+        return False
 
 
 async def bid_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -614,6 +630,8 @@ async def bid_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if query is None:
         return
     user = update.effective_user
+    if user is None:
+        return
     try:
         rest = (query.data or "")[len(BID_CB):]
         lot_id, amount = rest.split("_", 1)
@@ -622,54 +640,26 @@ async def bid_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("That button is from an older auction.", show_alert=True)
         return
 
-    chat_id = getattr(update.effective_chat, "id", 0)
-    verdict = _antispam_verdict(chat_id, user.id)
-    if not verdict.allowed:
-        if verdict.state == SPAM.MUTED:
-            await query.answer(SPAM.muted_message(verdict), show_alert=verdict.warn)
-        else:
-            await query.answer("⏳ Easy — your last tap is still landing.")
-        return
-
-    session = get_session()
     try:
-        from models import AuctionLot
-        season = A.season_for_chat(session, update.effective_chat.id)
-        if season is None:
-            await query.answer("No auction is running here.", show_alert=True)
-            return
-        franchise = A.franchise_for_actor(session, season.id, user.id)
-        if franchise is None:
-            await query.answer("Only a franchise owner or co-owner can bid.",
-                               show_alert=True)
-            return
-        lot = session.query(AuctionLot).filter(AuctionLot.id == lot_id).first()
-        A.place_bid(session, season, lot, franchise, amount,
-                    by_tg_id=user.id, source="button")
-        session.commit()
-        await query.answer(f"✅ Bid {A.render_money(amount, season.currency_label)}")
-    except A.PriceMoved:
-        # Another franchise's tap landed first. Not an error worth an alert:
-        # say who leads and what beats it, and the newest bid message already
-        # carries buttons at the new price.
-        session.rollback()
-        session.expire_all()
-        try:
-            season = A.season_for_chat(session, update.effective_chat.id)
-            lot = A.current_lot(session, season) if season else None
-            text = _beaten_text(session, season, lot)
-        except Exception:
-            text = "💨 The price moved — tap again."
-        await query.answer(text[:190], show_alert=True)
+        amount, currency = await asyncio.to_thread(
+            _submit_room_bid, getattr(update.effective_chat, 'id', 0), user.id,
+            lot_id=lot_id, amount=amount)
+    except SPAM.RateLimited as exc:
+        await query.answer(str(exc)[:190], show_alert=exc.verdict.warn)
+        return
     except AuctionError as exc:
-        session.rollback()
         await query.answer(str(exc)[:190], show_alert=True)
+        return
     except Exception:
-        session.rollback()
         logger.exception("auction quick-bid failed")
-        await query.answer("That did not land — try again.", show_alert=True)
-    finally:
-        session.close()
+        await query.answer('Could not confirm your bid. Check the board before trying again.', show_alert=True)
+        return
+    # Telegram may expire the callback while a database request is in flight.
+    # That cannot roll back or report failure for a bid already committed.
+    try:
+        await query.answer(f"✅ Bid {A.render_money(amount, currency)}")
+    except Exception:
+        await _bid_accepted(update, context, amount, currency)
 
 
 def _purse_popup(session, season, franchise):

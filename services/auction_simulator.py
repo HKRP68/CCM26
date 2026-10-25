@@ -623,7 +623,9 @@ def playback_status(session, season):
     pending = [e for e in _pending_sim(session, season) if e.kind != FOLDED]
     lots = sum(1 for e in pending if e.kind == SIM_PREFIX + "lot")
     batches = sum(1 for e in pending if e.kind == SIM_PREFIX + "batch")
-    mode = "quick" if batches and not lots else "slow" if lots else "summary"
+    # Quick playback can leave one unbatched lot at a set boundary. That
+    # singleton does not mean the room switched back to slow playback.
+    mode = "quick" if batches else "slow" if lots else "summary"
     return {"left": len(pending), "mode": mode,
             "est_seconds": int(len(pending) * (SIM_MESSAGE_GAP + 1))}
 
