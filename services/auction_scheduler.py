@@ -713,7 +713,11 @@ def cancel_countdown(season_id):
     _live_buttons.pop(season_id, None)
     running = _countdowns.pop(season_id, None)
     if running is not None and not running[1].done():
-        running[1].cancel()
+        task = running[1]
+        # Admin transactions also run in workers; Task.cancel is loop-owned.
+        loop = task.get_loop()
+        if not loop.is_closed():
+            loop.call_soon_threadsafe(task.cancel)
 
 
 # ── The sweep ────────────────────────────────────────────────────────

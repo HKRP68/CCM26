@@ -146,6 +146,33 @@ class AuctionWebappTests(unittest.TestCase):
         self.db.rollback()
         self.db.expire_all()
 
+    def test_owner_and_coowner_can_release_retention_only_while_paused(self):
+        self.season.max_retentions = 3
+        self.db.commit()
+        kept = self.A.retain(self.db, self.season, self.alice, self.players[0])
+        self.db.commit()
+        kept_id = kept.id
+        self.start()
+        code, refused = self.action('release', lot_id=kept_id)
+        self.assertNotEqual(200, code, refused)
+        self.assertIn('/apause', refused['message'])
+        self.assert_ok(self.action('admin_pause', tg=ADMIN))
+        self.refresh_db()
+        original_cards = (self.alice.rtm_cards_total, self.alice.rtm_cards_used)
+        original_lot = self.season.current_lot_id
+        code, refused = self.action('release', tg=BOB, lot_id=kept_id)
+        self.assertNotEqual(200, code, refused)
+        self.assert_ok(self.action('release', tg=COOWNER, lot_id=kept_id))
+        self.refresh_db()
+        self.assertEqual(self.A.LOT_QUEUED, kept.status)
+        self.assertEqual(self.alice.purse_total_lakh, self.alice.purse_remaining_lakh)
+        self.assertEqual(original_cards, (self.alice.rtm_cards_total, self.alice.rtm_cards_used))
+        self.assertEqual(original_lot, self.season.current_lot_id)
+        self.assertEqual(self.A.ledger_total(self.db, self.aid), self.alice.purse_remaining_lakh)
+        code, refused = self.action('release', lot_id=kept_id)
+        self.assertNotEqual(200, code, refused)
+        self.assert_ok(self.action('admin_start', tg=ADMIN))
+
     def assert_ok(self, result):
         code, data = result
         self.assertEqual(code, 200, data)

@@ -3188,7 +3188,7 @@ def unretain(session, season, franchise, lot, *, by_tg_id=None, by_admin=True,
     A money operation: the purse is credited back with a ``refund`` row so the
     ledger still adds up, and both counters come down. The lot is returned to
     the queue at its base price rather than deleted — the player is available
-    again, which is the point.
+    again. After opening, release requires a pause and preserves RTM cards.
     """
     from services import auction_preseason as P
     P.claim_turn(session, season)
@@ -3199,12 +3199,19 @@ def unretain(session, season, franchise, lot, *, by_tg_id=None, by_admin=True,
                            f"retained.")
     if lot.season_id != season.id or lot.sold_to_id != franchise.id:
         raise AuctionError("That retained player is not on this team's squad.")
-    if franchise.retention_finalized_at:
+    mid_auction = season.status == STATUS_PAUSED and season.published_at is None
+    if season.status == STATUS_LIVE:
+        raise AuctionError("Pause the auction with /apause before releasing a retained player.")
+    if mid_auction:
+        standing = current_lot(session, season)
+        if standing is not None and standing.rtm_stage:
+            raise AuctionError("Resolve the current RTM before releasing a retained player.")
+    elif franchise.retention_finalized_at:
         raise AuctionError(f"{franchise.name} finalized retention — it is final.")
-    if retention_locked(season):
+    if not mid_auction and retention_locked(season):
         raise AuctionError("Retention is closed — a retained player cannot be "
                            "released now.")
-    if season.status != STATUS_SETUP:
+    if not mid_auction and season.status != STATUS_SETUP:
         raise AuctionError("The auction has already opened.")
 
     price = int(lot.sold_price_lakh or 0)
@@ -3223,6 +3230,13 @@ def unretain(session, season, franchise, lot, *, by_tg_id=None, by_admin=True,
     franchise = (session.query(AuctionFranchise)
                  .filter(AuctionFranchise.id == franchise.id).first())
     lot = session.query(AuctionLot).filter(AuctionLot.id == lot.id).first()
+
+    if mid_auction:
+        standing = current_lot(session, season)
+        if (standing is not None and standing.current_bidder_id == franchise.id
+                and int(standing.current_bid_lakh or 0) > max_bid_now(season, franchise)):
+            raise AuctionError("Releasing this player would leave too little purse "
+                               "to honour the team's standing bid and minimum squad.")
 
     lot.status = LOT_QUEUED
     lot.acquisition = ACQ_AUCTION
@@ -3247,7 +3261,8 @@ def unretain(session, season, franchise, lot, *, by_tg_id=None, by_admin=True,
               f"and the player goes into the auction.",
               lot=lot, franchise=franchise, by_tg_id=by_tg_id,
               by_admin=bool(by_admin))
-    sync_rtm_cards(session, season)
+    if not mid_auction:
+        sync_rtm_cards(session, season)
     return lot
 
 # ── Mini auctions: last season's squads, carried whole ───────────────
@@ -3393,8 +3408,9 @@ def release_by_owner(session, season, lot, tg_id, *, now=None):
     The same ``unretain`` an admin uses, behind the owner's checks: the player
     must be one this franchise kept, the person must own or co-own it (the
     reason ``may_bid_for`` gives — it is that franchise's money), and the
-    window must still be open. ``unretain`` checks the lock and the status but
-    not the deadline, so the deadline is checked here.
+    preseason window must still be open, or the running auction must be
+    paused. ``unretain`` checks the lock and status but not the preseason
+    deadline, so that deadline is checked here.
     """
     if lot is None or lot.season_id != season.id:
         raise AuctionError("That player is not in this auction.")
@@ -3406,6 +3422,11 @@ def release_by_owner(session, season, lot, tg_id, *, now=None):
     if franchise is None or not may_bid_for(franchise, tg_id):
         raise AuctionError(f"Only {franchise.name if franchise else 'his franchise'}"
                            f"'s owner or a co-owner can release {lot.name}.")
+    if not rights and season.status == STATUS_PAUSED and season.published_at is None:
+        return unretain(session, season, franchise, lot, by_tg_id=tg_id,
+                        by_admin=False, set_name=RELEASED_LAST_SEASON_SET)
+    if season.status == STATUS_LIVE:
+        raise AuctionError("Ask an admin to /apause, then use /arelease <player>.")
     if not retention_open(season, now):
         raise AuctionError("The release window is closed.")
     if rights:
@@ -3943,7 +3964,8 @@ def start(session, season, *, now=None, by_tg_id=None):
     # it is said by name, because "someone is short" is not actionable.
     # Flushed first: an admin who retains and starts in one request would
     # otherwise be checked against what is still on disk.
-    if retention_configured(season) and _as_int(season.min_retentions, 0) > 0:
+    if (season.status == STATUS_SETUP and retention_configured(season)
+            and _as_int(season.min_retentions, 0) > 0):
         session.flush()
         minimum = _as_int(season.min_retentions, 0)
         short = [f"{f.name} ({int(f.retained_count or 0)})" for f in field
@@ -5499,8 +5521,22 @@ def recall_sale(session, season, lot, *, now=None, by_tg_id=None):
                            "squad in the league itself.")
 
     price = int(lot.sold_price_lakh or 0)
+    buyer_id = lot.sold_to_id
+    # Claim this particular sale before refunding it. Two admins can press
+    # recall together; only the transaction that changes SOLD may pay back.
+    changed = (session.query(AuctionLot)
+               .filter(AuctionLot.id == lot.id,
+                       AuctionLot.status == LOT_SOLD,
+                       AuctionLot.sold_to_id == buyer_id,
+                       AuctionLot.sold_price_lakh == lot.sold_price_lakh,
+                       AuctionLot.sold_at == lot.sold_at,
+                       func.coalesce(AuctionLot.acquisition, ACQ_AUCTION) == ACQ_AUCTION)
+               .update({"status": LOT_QUEUED}, synchronize_session=False))
+    if not changed:
+        raise AuctionError("That sale has already changed. Refresh before recalling it.")
+    session.expire(lot)
     buyer = (session.query(AuctionFranchise)
-             .filter(AuctionFranchise.id == lot.sold_to_id).first())
+             .filter(AuctionFranchise.id == buyer_id).first())
     if buyer is not None:
         (session.query(AuctionFranchise)
          .filter(AuctionFranchise.id == buyer.id)
@@ -5519,11 +5555,10 @@ def recall_sale(session, season, lot, *, now=None, by_tg_id=None):
                 note=f"Sale recalled: {lot.name}", by_tg_id=by_tg_id)
 
     # A fresh auction: no bid from last time stands.
-    for bid in (session.query(AuctionBid)
-                .filter(AuctionBid.lot_id == lot.id,
-                        AuctionBid.is_void.is_(False)).all()):
-        bid.is_void = True
-        bid.voided_by_tg_id = by_tg_id
+    (session.query(AuctionBid)
+     .filter(AuctionBid.lot_id == lot.id, AuctionBid.is_void.is_(False))
+     .update({"is_void": True, "voided_by_tg_id": by_tg_id},
+             synchronize_session="fetch"))
     session.flush()      # see undo_last_bid — autoflush is off
 
     lot.status = LOT_QUEUED
@@ -6572,14 +6607,19 @@ def _requeue(session, season, front):
     queued = queued_lots(session, season)
     chosen = {lot.id for lot in front}
     order = list(front) + [lot for lot in queued if lot.id not in chosen]
+    untouched = (session.query(func.count(AuctionLot.id))
+                 .filter(AuctionLot.season_id == season.id,
+                         AuctionLot.status != LOT_QUEUED).scalar())
+    # A recalled earlier player is usually already first by lot number.
+    # Leave the remaining pool alone instead of rewriting every player.
+    if ([lot.id for lot in order] == [lot.id for lot in queued]
+            and (untouched or [lot.lot_no for lot in order] == list(range(1, len(order) + 1)))):
+        return order
     base = _next_lot_no(session, season.id)
     for offset, lot in enumerate(order):
         lot.lot_no = base + offset
     session.flush()
 
-    untouched = (session.query(func.count(AuctionLot.id))
-                 .filter(AuctionLot.season_id == season.id,
-                         AuctionLot.status != LOT_QUEUED).scalar())
     if not untouched:
         # Safe in one pass: everything sits above the old high-water mark, so
         # 1..N is unoccupied and no two rows can collide on the way down.

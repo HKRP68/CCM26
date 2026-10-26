@@ -150,6 +150,37 @@ class RecallTests(AuctionCase):
         self.assertIsNone(lot.current_bid_lakh)
         self.assertIsNone(lot.sold_to_id)
 
+    def test_recall_leaves_the_rest_of_the_queue_numbers_alone(self):
+        sold = self.sell_first()
+        self.A.open_next_lot(self.session, self.season, now=NOW)
+        self.session.commit()
+        before = {lot.id: lot.lot_no for lot in self.A.queued_lots(self.session, self.season)}
+        self.A.recall_sale(self.session, self.season, sold, now=NOW)
+        self.session.commit()
+        after = {lot.id: lot.lot_no for lot in self.A.queued_lots(self.session, self.season)
+                 if lot.id != sold.id}
+        self.assertEqual(before, after)
+
+    def test_a_stale_second_recall_cannot_refund_the_same_sale_twice(self):
+        from database import get_session
+        from models import AuctionLot, AuctionSeason
+        sold = self.sell_first()
+        other = get_session()
+        try:
+            stale_season = other.get(AuctionSeason, self.season.id)
+            stale_lot = other.get(AuctionLot, sold.id)
+            self.A.recall_sale(self.session, self.season, sold, now=NOW)
+            self.session.commit()
+            with self.assertRaises(self.A.AuctionError):
+                self.A.recall_sale(other, stale_season, stale_lot, now=NOW)
+            other.rollback()
+            self.assert_ledger_agrees('one recall across stale sessions')
+            refunds = [r for r in self.A.ledger(self.session, self.mumbai.id)
+                       if r.kind == self.A.LEDGER_REFUND]
+            self.assertEqual(1, len(refunds))
+        finally:
+            other.close()
+
     def test_recalled_while_a_lot_is_up_waits_for_it(self):
         sold = self.sell_first()
         standing = self.A.open_next_lot(self.session, self.season, now=NOW)

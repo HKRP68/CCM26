@@ -208,6 +208,117 @@ class AuctionCase(unittest.TestCase):
 # The ladder
 # ══════════════════════════════════════════════════════════════════════
 
+class PausedReleaseTests(AuctionCase):
+
+    def setUp(self):
+        super().setUp()
+        self.season.max_retentions = 3
+        self.session.commit()
+
+    def prepare(self):
+        self.kept = self.A.retain(self.session, self.season, self.mumbai,
+                                  self.players[0], now=NOW)
+        self.build_pool()
+        self.standing = self.start()
+        self.session.commit()
+        self.A.pause(self.session, self.season)
+        self.session.commit()
+
+    def test_owner_releases_during_pause_refunds_and_resumes_same_player(self):
+        self.prepare()
+        self.mumbai.retention_finalized_at = NOW
+        self.mumbai.rtm_cards_total = 2
+        self.mumbai.rtm_cards_used = 1
+        self.session.commit()
+        standing_id = self.standing.id
+        self.A.release_by_owner(self.session, self.season, self.kept, ALICE)
+        self.session.commit()
+        self.session.refresh(self.mumbai)
+        self.assertEqual(self.purse_lakh, self.mumbai.purse_remaining_lakh)
+        self.assertEqual(0, self.mumbai.squad_size)
+        self.assertEqual(0, self.mumbai.retained_count)
+        self.assertEqual((2, 1), (self.mumbai.rtm_cards_total, self.mumbai.rtm_cards_used))
+        self.assertEqual(self.A.LOT_QUEUED, self.kept.status)
+        self.assertIsNone(self.kept.sold_to_id)
+        self.assert_ledger_agrees('paused owner release')
+        self.A.start(self.session, self.season, now=NOW)
+        self.session.commit()
+        self.assertEqual(standing_id, self.season.current_lot_id)
+        self.assertEqual((2, 1), (self.mumbai.rtm_cards_total, self.mumbai.rtm_cards_used))
+
+    def test_live_release_requires_pause(self):
+        self.prepare()
+        self.A.start(self.session, self.season, now=NOW)
+        self.session.commit()
+        with self.assertRaisesRegex(self.A.AuctionError, '/apause'):
+            self.A.release_by_owner(self.session, self.season, self.kept, ALICE)
+        self.session.rollback()
+        self.assertEqual(self.A.LOT_SOLD, self.kept.status)
+
+    def test_other_owner_cannot_release_and_repeat_cannot_refund_twice(self):
+        self.prepare()
+        with self.assertRaises(self.A.AuctionError):
+            self.A.release_by_owner(self.session, self.season, self.kept, BOB)
+        self.session.rollback()
+        self.A.release_by_owner(self.session, self.season, self.kept, ALICE)
+        self.session.commit()
+        with self.assertRaises(self.A.AuctionError):
+            self.A.release_by_owner(self.session, self.season, self.kept, ALICE)
+        self.session.rollback()
+        refunds = [r for r in self.A.ledger(self.session, self.mumbai.id)
+                   if r.kind == self.A.LEDGER_REFUND]
+        self.assertEqual(1, len(refunds))
+        self.assert_ledger_agrees('repeat release')
+
+    def test_current_rtm_must_be_resolved_first(self):
+        self.prepare()
+        self.standing.rtm_stage = 'match'
+        self.session.commit()
+        with self.assertRaisesRegex(self.A.AuctionError, 'RTM'):
+            self.A.release_by_owner(self.session, self.season, self.kept, ALICE)
+        self.session.rollback()
+        self.assertEqual(self.A.LOT_SOLD, self.kept.status)
+
+    def test_published_auction_cannot_release(self):
+        self.prepare()
+        self.season.published_at = NOW
+        self.session.commit()
+        with self.assertRaises(self.A.AuctionError):
+            self.A.release_by_owner(self.session, self.season, self.kept, ALICE)
+
+    def test_release_cannot_make_the_standing_bid_unaffordable(self):
+        kept = self.A.retain(self.session, self.season, self.mumbai,
+                             self.players[0], price_lakh=0, now=NOW)
+        self.build_pool()
+        lot = self.start()
+        self.A.place_bid(self.session, self.season, lot, self.mumbai,
+                         self.purse_lakh, now=NOW, by_tg_id=ALICE)
+        self.A.pause(self.session, self.season)
+        self.session.commit()
+        with self.assertRaisesRegex(self.A.AuctionError, 'standing bid'):
+            self.A.release_by_owner(self.session, self.season, kept, ALICE)
+        self.session.rollback()
+        self.assertEqual(self.A.LOT_SOLD, kept.status)
+        self.assertEqual(1, self.mumbai.retained_count)
+        self.assertEqual(self.mumbai.id, lot.current_bidder_id)
+        self.assert_ledger_agrees('rejected release')
+
+    def test_resume_does_not_reapply_preseason_retention_minimum(self):
+        self.season.min_retentions = 2
+        kept = [self.A.retain(self.session, self.season, self.mumbai, player, now=NOW)
+                for player in self.players[:2]]
+        self.build_pool()
+        self.start()
+        self.A.pause(self.session, self.season)
+        self.session.commit()
+        self.A.release_by_owner(self.session, self.season, kept[0], ALICE)
+        self.session.commit()
+        self.assertEqual(1, self.mumbai.retained_count)
+        self.A.start(self.session, self.season, now=NOW)
+        self.session.commit()
+        self.assertEqual(self.A.STATUS_LIVE, self.season.status)
+
+
 class LadderTests(AuctionCase):
 
     def test_the_slab_falls_by_retention(self):

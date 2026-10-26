@@ -451,6 +451,131 @@ class AntiSpamTests(RoomCase):
 
 class BidResponsivenessTests(RoomCase):
 
+    def test_admin_worker_can_cancel_a_countdown_on_its_own_event_loop(self):
+        from services import auction_scheduler as S
+        async def run():
+            loop = asyncio.get_running_loop()
+            loop.set_debug(True)
+            task = asyncio.create_task(asyncio.Event().wait())
+            await asyncio.sleep(0)
+            S._countdowns[self.season.id] = (self.lot.id, task)
+            try:
+                await asyncio.to_thread(S.cancel_countdown, self.season.id)
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                self.assertNotIn(self.season.id, S._countdowns)
+            finally:
+                task.cancel()
+                S._countdowns.pop(self.season.id, None)
+        asyncio.run(run())
+
+    def test_recall_does_not_block_other_updates(self):
+        from handlers import auction as H
+        sold = self.lot
+        self.A.place_bid(self.session, self.season, sold, self.mumbai,
+                         sold.base_price_lakh, by_tg_id=ALICE)
+        self.A.sell_lot(self.session, self.season, sold)
+        self.session.commit()
+        update, context = self._update(ALICE, sold.name.split())
+        gate = threading.Event()
+        released, threads = [], []
+        real = self.A.recall_sale
+
+        def slow(*args, **kwargs):
+            threads.append(threading.get_ident())
+            released.append(gate.wait(timeout=1))
+            return real(*args, **kwargs)
+
+        async def run():
+            loop_id = threading.get_ident()
+            asyncio.get_running_loop().call_later(.02, gate.set)
+            with patch.object(H, '_is_auction_admin', return_value=True), \
+                    patch.object(H.A, 'recall_sale', side_effect=slow):
+                await H.arecall_handler(update, context)
+            self.assertTrue(threads)
+            self.assertTrue(all(t != loop_id for t in threads))
+
+        asyncio.run(run())
+        self.assertEqual([True], released)
+        self.assertEqual(self.A.LOT_ON_BLOCK, self.fresh_lot().status)
+        self.assert_ledger_agrees('recall in a worker')
+
+    def test_slow_admin_lookup_and_views_leave_the_loop_responsive(self):
+        from handlers import auction as H
+        update, context = self._update(ALICE)
+
+        async def check(call, target, replacement):
+            gate = threading.Event()
+            released = []
+
+            def slow(*args, **kwargs):
+                released.append(gate.wait(timeout=1))
+                return replacement(*args, **kwargs)
+
+            asyncio.get_running_loop().call_later(.02, gate.set)
+            with patch.object(H, target, side_effect=slow):
+                await call()
+            self.assertEqual([True], released)
+
+        async def run():
+            await check(lambda: H._require_admin(update), '_is_auction_admin', lambda _: True)
+            await check(lambda: H._view(update, context, lambda *_: 'Ready'),
+                        '_read_season', H._read_season)
+
+        asyncio.run(run())
+        self.assertTrue(any('Ready' in text for text in self.replies))
+
+    def test_finish_simulation_and_trade_commands_leave_the_loop_responsive(self):
+        from handlers import auction as H
+        from handlers import auction_trade as T
+        from services import auction_simulator as S
+        update, context = self._update(ALICE, ['go'])
+
+        async def run():
+            gate = threading.Event()
+            released = []
+            def slow(*args, **kwargs):
+                released.append(gate.wait(timeout=1))
+                return dict(sold=0, accel_sold=0, rtm=0, autofilled=0)
+            asyncio.get_running_loop().call_later(.02, gate.set)
+            with patch.object(H, '_is_auction_admin', return_value=True), \
+                    patch.object(S, 'playback_pending', return_value=False), \
+                    patch.object(S, 'simulate_finish', side_effect=slow):
+                await H.afinish_handler(update, context)
+            self.assertEqual([True], released)
+            gate.clear()
+            asyncio.get_running_loop().call_later(.02, gate.set)
+            def trade_work(*args):
+                self.assertTrue(gate.wait(timeout=1))
+                return 'Trade ready'
+            with patch.object(T, 'get_session', H.get_session), \
+                    patch.object(T, '_read_season', H._read_season):
+                await T._run(update, trade_work)
+
+        asyncio.run(run())
+        self.assertTrue(any('Trade ready' in text for text in self.replies))
+
+    def test_shared_command_session_is_closed_before_sending_its_reply(self):
+        from handlers import auction as H
+        update, _ = self._update(ALICE)
+        real, closed = H.get_session, []
+        loop_thread = threading.get_ident()
+        def tracked():
+            self.assertNotEqual(loop_thread, threading.get_ident())
+            session = real()
+            close = session.close
+            def close_session():
+                close()
+                closed.append(True)
+            session.close = close_session
+            return session
+        async def reply(*args, **kwargs):
+            self.assertEqual(loop_thread, threading.get_ident())
+            self.assertEqual([True], closed)
+        with patch.object(H, 'get_session', side_effect=tracked), \
+                patch.object(H, '_reply_card', side_effect=reply):
+            asyncio.run(H._with_auction(update, lambda *_: 'Done'))
+
     def test_slow_bid_database_does_not_block_the_bot_event_loop(self):
         from handlers import auction as H
         update, context = self._update(ALICE)

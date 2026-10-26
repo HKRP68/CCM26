@@ -170,6 +170,13 @@ bot scheduler announces them in Telegram; the HTTP request never calls a bot
 send method. Polling the live room every two seconds reads the server deadline;
 the browser countdown does not decide when a lot sells.
 
+During a pause, an owner's retained players in Arena → Squads have a
+**Release & refund** button with confirmation. An admin pauses first, the
+owner/co-owner releases, then the admin resumes. The original retention price
+returns to the purse and the player returns to the auction pool. RTM cards
+stay unchanged. The server checks ownership, the pause, any active RTM and
+the team's ability to honour its standing bid on every release request.
+
 Preseason/trade views also persist the shared service's materialized previous
 squad rights as queued lots, so subsequent release/trade buttons have stable
 lot IDs. Materializing rights does not sign a player or charge a purse.

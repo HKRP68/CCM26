@@ -43,6 +43,7 @@ presser actually owns and the step the trade is on.
 import html
 import logging
 from datetime import datetime, timedelta
+from services.auction_async import run_db, run_session, AuctionWorkerBusy, BUSY_MESSAGE
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -193,32 +194,34 @@ async def _run(update, work, *, admin=False, card=True):
     if admin and not await _require_admin(update):
         return
     user = update.effective_user
-    session = get_session()
-    reply, markup = None, None
+    def transact():
+        session = get_session()
+        try:
+            season = _read_season(session, update)
+            if season is None:
+                return ("❌ No auction here. Trades live in the auction's group, "
+                        "or in a DM for your own franchise."), None
+            out = work(session, season, user.id if user else None)
+            session.commit()
+            return out if isinstance(out, tuple) else (out, None)
+        except BaseException:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
     try:
-        season = _read_season(session, update)
-        if season is None:
-            await _reply(update, "❌ No auction here. Trades live in the "
-                                 "auction's group, or in a DM for your own "
-                                 "franchise.")
-            return
-        out = work(session, season, user.id if user else None)
-        if isinstance(out, tuple):
-            reply, markup = out
-        else:
-            reply = out
-        session.commit()
+        reply, markup = await run_db(transact)
+    except AuctionWorkerBusy:
+        await _reply(update, BUSY_MESSAGE)
+        return
     except AuctionError as exc:
-        session.rollback()
         await _reply(update, f"⚠️ {html.escape(str(exc))}")
         return
     except Exception:
-        session.rollback()
         logger.exception("trade command failed")
         await _reply(update, "⚠️ Something went wrong. Try again.")
         return
-    finally:
-        session.close()
     if reply:
         await _reply(update, reply, reply_markup=markup)
 
@@ -283,18 +286,17 @@ async def atradehelp_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """
     from services import auction_rich as AR
     user = update.effective_user
-    session = get_session()
-    try:
+    def read(session):
         try:
             season = _read_season(session, update)
         except Exception:
             season = None
-        parts = T.render_help(session, season)
+        return T.render_help(session, season)
+    try:
+        parts = await run_session(get_session, read)
     except Exception:
         logger.exception("atradehelp failed")
         parts = T.render_help()
-    finally:
-        session.close()
     for index, part in enumerate(parts):
         last = index == len(parts) - 1
         await _reply(update, part,
@@ -537,17 +539,11 @@ async def trade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         return
     uid = query.from_user.id if query.from_user else None
-    session = get_session()
-    text = markup = None
-    toast = None
-    # A message that must NOTIFY somebody: an edit never pings anyone, so
-    # the people who have to answer get a fresh message that tags them.
-    ping = None          # (chat_id, text, markup)
-    try:
+    def transact(session):
+        text = markup = toast = ping = None
         trade = T.get_trade(session, trade_id)
         if trade is None:
-            await query.answer("That trade no longer exists.", show_alert=True)
-            return
+            raise AuctionError("That trade no longer exists.")
         season = trade.season
         side = T.actor_side(session, trade, uid)
         view, page = "a", 0
@@ -557,9 +553,7 @@ async def trade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if action in ("t", "v", "c", "s"):
             if side != "a":
-                await query.answer(f"Only {T.team_on(session, trade, 'a').name} "
-                                   f"can change this offer.", show_alert=True)
-                return
+                raise AuctionError(f"Only {T.team_on(session, trade, 'a').name} can change this offer.")
             if action == "t":
                 _side, lot = T.toggle_lot(session, trade, int(rest[0]))
                 toast = f"{lot.name} {'in' if lot.id in T.selection(trade, _side) else 'out'}"
@@ -582,15 +576,12 @@ async def trade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ping = (target, "SEND", None)
         elif action == "x":
             if side != "a" and not T.is_bot_admin(uid):
-                await query.answer(NOT_IN_TRADE, show_alert=True)
-                return
+                raise AuctionError(NOT_IN_TRADE)
             T.cancel(session, trade, by_tg_id=uid)
             toast = "Called off"
         elif action in ("y", "n", "k"):
             if side != "b":
-                await query.answer(f"Only {T.team_on(session, trade, 'b').name} "
-                                   f"can answer this offer.", show_alert=True)
-                return
+                raise AuctionError(f"Only {T.team_on(session, trade, 'b').name} can answer this offer.")
             if action == "y":
                 T.accept(session, trade, by_tg_id=uid)
                 toast = ("Accepted — waiting for the bot admin"
@@ -610,8 +601,7 @@ async def trade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 toast = "Your counter-offer — tick, then send"
         elif action in ("ap", "ve"):
             if not T.is_bot_admin(uid):
-                await query.answer(NOT_BOT_ADMIN, show_alert=True)
-                return
+                raise AuctionError(NOT_BOT_ADMIN)
             if action == "ap":
                 T.approve(session, trade, by_tg_id=uid)
                 toast = "Approved"
@@ -619,8 +609,7 @@ async def trade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 T.veto(session, trade, by_tg_id=uid)
                 toast = "Vetoed"
         else:
-            await query.answer()
-            return
+            return None
 
         text = card_for(session, season, trade)
         markup = keyboard_for(session, season, trade, view, page)
@@ -649,18 +638,24 @@ async def trade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     T.render_offer(session, season, trade)
                     + "\n\n📨 <i>Sent to the auction group.</i>")
             markup = None
-        session.commit()
+        return text, markup, toast, ping
+
+    try:
+        result = await run_session(get_session, transact, commit=True)
+    except AuctionWorkerBusy:
+        await query.answer(BUSY_MESSAGE, show_alert=True)
+        return
     except AuctionError as exc:
-        session.rollback()
         await query.answer(str(exc)[:190], show_alert=True)
         return
     except Exception:
-        session.rollback()
         logger.exception("trade button failed")
         await query.answer("Something went wrong. Try again.", show_alert=True)
         return
-    finally:
-        session.close()
+    if result is None:
+        await query.answer()
+        return
+    text, markup, toast, ping = result
 
     await query.answer(toast[:190] if toast else None)
     await _edit(query, text, markup)

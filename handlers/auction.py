@@ -44,6 +44,7 @@ from database import get_session
 from services import auction_antispam as SPAM
 from services import auction_rich as AR
 from services import auction_service as A
+from services.auction_async import run_db, run_session, AuctionWorkerBusy, BUSY_MESSAGE
 from services.admin_ids import is_admin
 from services.auction_service import AuctionError
 
@@ -136,7 +137,7 @@ def _is_auction_admin(user_id):
 
 async def _require_admin(update):
     user = update.effective_user
-    if not user or not _is_auction_admin(user.id):
+    if not user or not await asyncio.to_thread(_is_auction_admin, user.id):
         await _reply(update, NOT_ADMIN)
         return False
     return True
@@ -144,7 +145,7 @@ async def _require_admin(update):
 
 async def _require_bot_admin(update):
     user = update.effective_user
-    if not user or not is_admin(user.id):
+    if not user or not await asyncio.to_thread(is_admin, user.id):
         await _reply(update, NOT_BOT_ADMIN)
         return False
     return True
@@ -235,29 +236,35 @@ async def _with_auction(update, work, *, admin=False, allow_dm=False,
         return
     if admin and not await _require_admin(update):
         return
-    session = get_session()
-    text = None
-    try:
+    def transact(session):
         season = _season_for(session, update)
         if season is None:
-            await _reply(update, NO_AUCTION)
-            return
-        text = work(session, season)
-        session.commit()
+            return NO_AUCTION
+        return work(session, season)
+    return await _session_reply(update, transact)
+
+
+async def _session_reply(update, work):
+    """Commit and close a worker transaction before sending its reply."""
+    try:
+        text = await run_session(get_session, work, commit=True)
+    except AuctionWorkerBusy:
+        await _reply(update, BUSY_MESSAGE)
+        return
     except AuctionError as exc:
-        session.rollback()
         await _reply(update, f"⚠️ {html.escape(str(exc))}")
         return
     except Exception:
-        session.rollback()
         logger.exception("Auction command failed")
         await _reply(update, "⚠️ Something went wrong. Try again.")
         return
-    finally:
-        session.close()
     if text:
-        for part in (text if isinstance(text, list) else [text]):
-            await _reply_card(update, part)
+        if isinstance(text, tuple):
+            await _reply(update, text[0], reply_markup=text[1])
+        else:
+            for part in (text if isinstance(text, list) else [text]):
+                await _reply_card(update, part)
+    return True
 
 
 def bid_keyboard(season, lot):
@@ -477,83 +484,35 @@ async def bid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def artm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """<code>/artm yes</code> / <code>/artm no</code> — the RTM holder answers.
-
-    One command for both questions the rule asks a franchise, because from
-    where they are sitting it is the same question twice: *do you want him at
-    this price?* The bot has already said which stage it is on and what the
-    number is; making them remember two verbs under a thirty-second clock
-    would be a way to lose the lot to a typo.
-    """
-    chat = update.effective_chat
-    if chat is None or chat.type not in GROUP_CHAT_TYPES:
-        await _reply(update, GROUP_ONLY)
-        return
+    """The RTM holder answers without blocking other updates."""
     user = update.effective_user
     raw = _arg_text(context).strip().lower()
-
-    session = get_session()
-    try:
-        season = A.season_for_chat(session, chat.id)
-        if season is None:
-            await _reply(update, NO_AUCTION)
-            return
+    yes, no = ("yes", "y", "use", "match", "rtm"), ("no", "n", "pass", "decline")
+    def work(session, season):
         lot = A.current_lot(session, season)
         if lot is None or lot.status != A.LOT_RTM_OFFERED:
-            await _reply(update, "⚠️ There is no Right To Match to answer "
-                                 "right now.")
-            return
-        franchise = A.franchise_for_actor(session, season.id, user.id)
+            raise AuctionError("There is no Right To Match to answer right now.")
+        franchise = A.franchise_for_actor(session, season.id, user.id) if user else None
         if franchise is None:
-            await _reply(update, NOT_YOURS)
-            return
-
-        if raw in ("yes", "y", "use", "match", "rtm"):
-            wants = True
-        elif raw in ("no", "n", "pass", "decline"):
-            wants = False
-        else:
+            raise AuctionError("Only a franchise's owner or co-owner can answer for it.")
+        if raw not in yes + no:
             holder = A.rtm_holder(session, lot)
-            price = A.render_money(A.rtm_price(season, lot),
-                                   season.currency_label)
-            question = ("use your Right To Match?"
-                        if lot.rtm_stage == A.RTM_INTENT
-                        else f"match at {price}?")
-            await _reply(update,
-                         f"🪪 {html.escape(holder.name) if holder else ''} — "
-                         f"{question}\nAnswer <code>/artm yes</code> or "
-                         f"<code>/artm no</code>.")
-            return
-
+            price = A.render_money(A.rtm_price(season, lot), season.currency_label)
+            question = "use your Right To Match?" if lot.rtm_stage == A.RTM_INTENT else f"match at {price}?"
+            return (f"🪪 {html.escape(holder.name) if holder else ''} — {question}\n"
+                    "Answer <code>/artm yes</code> or <code>/artm no</code>.")
         if lot.rtm_stage == A.RTM_INTENT:
-            A.rtm_intent(session, season, lot, franchise, wants,
-                         by_tg_id=user.id)
+            A.rtm_intent(session, season, lot, franchise, raw in yes, by_tg_id=user.id)
         elif lot.rtm_stage == A.RTM_DECISION:
-            A.rtm_decide(session, season, lot, franchise, wants,
-                         by_tg_id=user.id)
+            A.rtm_decide(session, season, lot, franchise, raw in yes, by_tg_id=user.id)
         else:
-            await _reply(update, "⚠️ It is the top bidder's turn — they have "
-                                 "one final raise.")
-            return
-        session.commit()
-    except AuctionError as exc:
-        session.rollback()
-        await _reply(update, f"⚠️ {html.escape(str(exc))}")
-        return
-    except Exception:
-        session.rollback()
-        logger.exception("/artm failed")
-        await _reply(update, "⚠️ Something went wrong. Try again.")
-        return
-    finally:
-        session.close()
-    # The sweeper announces the outcome within a tick, like every other
-    # auction action — nothing here talks to the room directly.
-    await _react(context, update)
+            raise AuctionError("It is the top bidder's turn — they have one final raise.")
+    if await _with_auction(update, work, context=context) and raw in yes + no:
+        await _react(context, update)
 
 
 async def rtm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """The board's Use it / Pass buttons. Shared, authorised per press."""
+    """The board's RTM buttons, with the transaction off the bot loop."""
     query = update.callback_query
     if query is None:
         return
@@ -561,54 +520,39 @@ async def rtm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         lot_id, stage, answer = (query.data or "")[len(RTM_CB):].split("_", 2)
         lot_id = int(lot_id)
+        if answer not in ("yes", "no"):
+            raise ValueError
     except (ValueError, AttributeError):
-        await query.answer("That button is from an older auction.",
-                           show_alert=True)
+        await query.answer("That button is from an older auction.", show_alert=True)
         return
-
-    session = get_session()
-    try:
+    def work(session):
         season = A.season_for_chat(session, update.effective_chat.id)
         if season is None:
-            await query.answer("No auction is running here.", show_alert=True)
-            return
+            raise AuctionError("No auction is running here.")
         lot = A.current_lot(session, season)
         if lot is None or lot.status != A.LOT_RTM_OFFERED or lot.id != lot_id:
-            await query.answer("That Right To Match has been answered.",
-                               show_alert=True)
-            return
+            raise AuctionError("That Right To Match has been answered.")
         if lot.rtm_stage != stage:
-            # The window moved on under them. Refusing beats guessing: the two
-            # stages ask different questions about different numbers.
-            await query.answer("That window has closed — check the board for "
-                               "what is being asked now.", show_alert=True)
-            return
-        franchise = A.franchise_for_actor(session, season.id, user.id)
+            raise AuctionError("That window has closed — check the board for what is being asked now.")
+        franchise = A.franchise_for_actor(session, season.id, user.id) if user else None
         if franchise is None:
-            await query.answer("Only the franchise that held this player can "
-                               "answer.", show_alert=True)
-            return
-        wants = answer == "yes"
+            raise AuctionError("Only the franchise that held this player can answer.")
         if lot.rtm_stage == A.RTM_INTENT:
-            A.rtm_intent(session, season, lot, franchise, wants,
-                         by_tg_id=user.id)
+            A.rtm_intent(session, season, lot, franchise, answer == "yes", by_tg_id=user.id)
         elif lot.rtm_stage == A.RTM_DECISION:
-            A.rtm_decide(session, season, lot, franchise, wants,
-                         by_tg_id=user.id)
+            A.rtm_decide(session, season, lot, franchise, answer == "yes", by_tg_id=user.id)
         else:
-            await query.answer("It is the top bidder's turn.", show_alert=True)
-            return
-        session.commit()
-        await query.answer("Noted." if wants else "Passed.")
+            raise AuctionError("It is the top bidder's turn.")
+    try:
+        await run_session(get_session, work, commit=True)
+        await query.answer("Noted." if answer == "yes" else "Passed.")
+    except AuctionWorkerBusy:
+        await query.answer(BUSY_MESSAGE, show_alert=True)
     except AuctionError as exc:
-        session.rollback()
         await query.answer(str(exc)[:190], show_alert=True)
     except Exception:
-        session.rollback()
         logger.exception("auction rtm button failed")
         await query.answer("That did not land — try again.", show_alert=True)
-    finally:
-        session.close()
 
 
 async def _react(context, update):
@@ -705,38 +649,30 @@ def _lot_popup(session, season, lot, franchise=None):
 
 
 async def me_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """💼 My Purse / 📊 Status under every bid message — private popups.
-
-    TeleAuction's best small idea: the room never sees these, so any number of
-    owners can check their purse mid-lot without adding a single message.
-    """
+    """Private purse / lot popup, with no database I/O on the bot loop."""
     query = update.callback_query
     if query is None:
         return
     what = (query.data or "")[len(AR.ME_CB):]
     user = update.effective_user
-    session = get_session()
-    try:
+    def read(session):
         season = _read_season(session, update)
         if season is None:
-            await query.answer("No auction is running here.", show_alert=True)
-            return
-        franchise = (A.franchise_for_actor(session, season.id, user.id)
-                     if user else None)
+            return "No auction is running here."
+        franchise = A.franchise_for_actor(session, season.id, user.id) if user else None
         if what == "lot":
-            text = _lot_popup(session, season, A.current_lot(session, season),
-                              franchise)
-        elif franchise is None:
-            text = ("You don't own a franchise in this auction.\n"
-                    "/apurse shows every team's purse.")
-        else:
-            text = _purse_popup(session, season, franchise)
+            return _lot_popup(session, season, A.current_lot(session, season), franchise)
+        if franchise is None:
+            return "You don't own a franchise in this auction.\n/apurse shows every team's purse."
+        return _purse_popup(session, season, franchise)
+    try:
+        text = await run_session(get_session, read)
         await query.answer(text[:199], show_alert=True)
+    except AuctionWorkerBusy:
+        await query.answer(BUSY_MESSAGE, show_alert=True)
     except Exception:
         logger.exception("auction popup failed")
         await query.answer("That did not work — try /apurse.", show_alert=True)
-    finally:
-        session.close()
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -744,29 +680,15 @@ async def me_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ════════════════════════════════════════════════════════════════════
 
 async def aboard_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """A personal copy of the board, with the quick-bid buttons under it."""
-    session = get_session()
-    try:
-        season = _read_season(session, update)
-        if season is None:
-            await _reply(update, _no_auction(update))
-            return
+    """A personal board, built off-loop and sent after the session closes."""
+    def build(session, season):
         lot = A.current_lot(session, season)
-        # The quick-bid buttons only ride on a board shown *in the room*: a
-        # bid is refused outside the bound group, so a button offered anywhere
-        # else is one that can only ever answer "not here".
         chat = update.effective_chat
         in_room = chat is not None and season.chat_id == chat.id
-        user = update.effective_user
-        await _reply_rich(update, context, AR.board_blocks(session, season, lot),
-                          AR.board_html(session, season, lot),
-                          reply_markup=AR.with_close(
-                              bid_keyboard(season, lot) if in_room else None,
-                              user.id if user else None))
-    except AuctionError as exc:
-        await _reply(update, f"⚠️ {html.escape(str(exc))}")
-    finally:
-        session.close()
+        return (AR.board_blocks(session, season, lot),
+                AR.board_html(session, season, lot),
+                bid_keyboard(season, lot) if in_room else None)
+    await _view(update, context, build)
 
 
 async def apurse_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -813,7 +735,7 @@ async def aadmin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _require_admin(update):
         return
     user = update.effective_user
-    blocks, html_text = AR.admin_help(bot_admin=bool(user and is_admin(user.id)))
+    blocks, html_text = AR.admin_help(bot_admin=bool(user and await asyncio.to_thread(is_admin, user.id)))
     await _reply_rich(update, context, blocks, html_text,
                       reply_markup=AR.with_close(
                           None, user.id if user else None))
@@ -830,29 +752,14 @@ async def anew_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not name:
         await _reply(update, "Usage: <code>/anew Season 2</code>")
         return
-    session = get_session()
-    try:
+    def work(session):
         season = A.create_season(session, name)
-        # New auctions run on the staged clock (60 40 20 10 5): warnings
-        # before every hammer, and a bid near the end resets to 40s.
         A.apply_staged_defaults(season)
         A.bind_chat(session, season, chat.id)
-        session.commit()
-        await _reply_card(update,
-                          f"🔨 <b>{html.escape(season.name)}</b> created and "
-                          f"bound to this group.\nBuild the pool and the "
-                          f"franchises on the website, then "
-                          f"<code>/astart</code>. <code>/auction</code> lists "
-                          f"every command.")
-    except AuctionError as exc:
-        session.rollback()
-        await _reply(update, f"⚠️ {html.escape(str(exc))}")
-    except Exception:
-        session.rollback()
-        logger.exception("/anew failed")
-        await _reply(update, "⚠️ Something went wrong. Try again.")
-    finally:
-        session.close()
+        return (f"🔨 <b>{html.escape(season.name)}</b> created and bound to this group.\n"
+                "Build the pool and the franchises on the website, then <code>/astart</code>. "
+                "<code>/auction</code> lists every command.")
+    await _session_reply(update, work)
 
 
 async def abind_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -866,25 +773,15 @@ async def abind_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not name:
         await _reply(update, "Usage: <code>/abind Season 2</code>")
         return
-    session = get_session()
-    try:
+    def work(session):
         from models import AuctionSeason
         from sqlalchemy import func as _func
-        season = (session.query(AuctionSeason)
-                  .filter(_func.lower(AuctionSeason.name) == name.lower()).first())
+        season = session.query(AuctionSeason).filter(_func.lower(AuctionSeason.name) == name.lower()).first()
         if season is None:
-            await _reply(update, f"⚠️ No auction called “{html.escape(name)}”.")
-            return
+            raise AuctionError(f"No auction called “{name}”.")
         A.bind_chat(session, season, chat.id)
-        session.commit()
-        await _reply_card(update,
-                          f"🔗 <b>{html.escape(season.name)}</b> is now bound "
-                          f"to this group.")
-    except AuctionError as exc:
-        session.rollback()
-        await _reply(update, f"⚠️ {html.escape(str(exc))}")
-    finally:
-        session.close()
+        return f"🔗 <b>{html.escape(season.name)}</b> is now bound to this group."
+    await _session_reply(update, work)
 
 
 async def astart_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1969,81 +1866,34 @@ async def _previous_view_reply(update, session, season, prefix=""):
 
 
 async def aprevious_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """<code>/aprevious [league]</code> — the league last season was played in.
-
-    Bare shows which team each franchise was. With a league name or id it
-    links it: every franchise that can be matched is pinned to its team by
-    id, and any that cannot — usually one that changed its name — gets
-    buttons to say which team it was.
-    """
-    chat = update.effective_chat
-    if chat is None or chat.type not in GROUP_CHAT_TYPES:
-        await _reply(update, GROUP_ONLY)
-        return
-    if not await _require_admin(update):
-        return
+    """Link last season and show the franchise mappings."""
     raw = _arg_text(context)
-    session = get_session()
-    try:
-        season = _season_for(session, update)
-        if season is None:
-            await _reply(update, NO_AUCTION)
-            return
+    def work(session, season):
         prefix = ""
         if raw:
             league = _find_league(session, raw)
             A.link_previous_season(session, season, league.id)
-            session.commit()
             prefix = f"🔗 Linked to <b>{html.escape(league.name)}</b>.\n\n"
-        await _previous_view_reply(update, session, season, prefix)
-    except AuctionError as exc:
-        session.rollback()
-        await _reply(update, f"⚠️ {html.escape(str(exc))}")
-    except Exception:
-        session.rollback()
-        logger.exception("/aprevious failed")
-        await _reply(update, "⚠️ Something went wrong. Try again.")
-    finally:
-        session.close()
+        text, markup = AR.previous_teams_view(session, season)
+        return prefix + text, markup
+    await _with_auction(update, work, admin=True, context=context)
 
 
 async def aprevteam_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """<code>/aprevteam Kochi | Kochi Tuskers</code> — for a renamed side."""
-    chat = update.effective_chat
-    if chat is None or chat.type not in GROUP_CHAT_TYPES:
-        await _reply(update, GROUP_ONLY)
-        return
-    if not await _require_admin(update):
-        return
+    """Map a renamed franchise to its previous team."""
     raw = _arg_text(context)
-    session = get_session()
-    try:
-        season = _season_for(session, update)
-        if season is None:
-            await _reply(update, NO_AUCTION)
-            return
+    def work(session, season):
         parts = [p.strip() for p in raw.split("|")]
         if len(parts) < 2 or not parts[0] or not parts[1]:
-            raise AuctionError("Usage: /aprevteam <franchise> | <last "
-                               "season's team>  (| none clears it)")
+            raise AuctionError("Usage: /aprevteam <franchise> | <last season's team> (| none clears it)")
         franchise = _find_franchise(session, season, parts[0])
         team = A.set_previous_team(session, season, franchise, parts[1])
-        session.commit()
-        prefix = (f"📌 <b>{html.escape(franchise.name)}</b> was "
-                  f"<b>{html.escape(team.name)}</b> last season.\n\n"
+        prefix = (f"📌 <b>{html.escape(franchise.name)}</b> was <b>{html.escape(team.name)}</b> last season.\n\n"
                   if team is not None else
-                  f"🧹 {html.escape(franchise.name)}'s last-season team is "
-                  f"cleared.\n\n")
-        await _previous_view_reply(update, session, season, prefix)
-    except AuctionError as exc:
-        session.rollback()
-        await _reply(update, f"⚠️ {html.escape(str(exc))}")
-    except Exception:
-        session.rollback()
-        logger.exception("/aprevteam failed")
-        await _reply(update, "⚠️ Something went wrong. Try again.")
-    finally:
-        session.close()
+                  f"🧹 {html.escape(franchise.name)}'s last-season team is cleared.\n\n")
+        text, markup = AR.previous_teams_view(session, season)
+        return prefix + text, markup
+    await _with_auction(update, work, admin=True, context=context)
 
 
 async def aretmode_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2254,22 +2104,28 @@ async def asetsexport_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     if fmt not in ("json", "csv"):
         await _reply(update, "⚠️ Say json or csv — /asetsexport csv")
         return
-    session = get_session()
-    try:
+    def read(session):
         season = _season_for(session, update)
         if season is None:
-            await _reply(update, NO_AUCTION)
-            return
+            raise AuctionError("No auction is running in this chat.")
         blob = (SIO.export_sets_csv(session, season) if fmt == "csv"
                 else SIO.export_sets_json(session, season))
         name = SIO.file_name(season, fmt)
         sets = len(A.list_sets(session, season))
+        return blob, name, sets
+
+    try:
+        blob, name, sets = await run_session(get_session, read)
+    except AuctionWorkerBusy:
+        await _reply(update, BUSY_MESSAGE)
+        return
+    except AuctionError as exc:
+        await _reply(update, f"⚠️ {html.escape(str(exc))}")
+        return
     except Exception:
         logger.exception("/asetsexport failed")
         await _reply(update, "⚠️ Something went wrong. Try again.")
         return
-    finally:
-        session.close()
     document = io.BytesIO(blob)
     document.name = name
     await update.effective_message.reply_document(
@@ -2369,7 +2225,7 @@ async def aunretain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     user = update.effective_user
     name = _arg_text(context)
-    admin = user is not None and _is_auction_admin(user.id)
+    admin = user is not None and await asyncio.to_thread(_is_auction_admin, user.id)
     if not admin or not name:
         handled = await _owner_release(update, name, quiet_if_not_owner=admin)
         if handled or not admin:
@@ -2417,24 +2273,32 @@ def _match_kept(kept, name):
 def release_picker(session, season, franchise, note=None):
     """The franchise's kept players as buttons — tap one to release him."""
     kept = A.releasable_squad(session, season, franchise)
+    paused = season.status == A.STATUS_PAUSED and season.published_at is None
+    can_release = A.retention_open(season) or paused
+    if paused:
+        kept = [lot for lot in kept if lot.acquisition == A.ACQ_RETAINED]
     symbol = season.currency_label
     left = A.retention_seconds_left(season)
     lines = [f"🔁 <b>{html.escape(franchise.name)}</b> — retained players and squad rights",
              f"Purse: <b>{A.render_money(franchise.purse_remaining_lakh, symbol)}</b>"]
     if note:
         lines.insert(0, note)
-    if not A.retention_open(season):
+    if season.status == A.STATUS_LIVE:
+        lines.append("⏸ Ask an admin to /apause before releasing a retained player.")
+    elif paused:
+        lines.append("⏸ Auction paused. Releases refund the contract; RTM cards stay unchanged.")
+    elif not can_release:
         lines.append("🔒 The release window is closed.")
     elif left is not None:
         hours = max(0, int(left // 3600))
         lines.append(f"⏰ Window closes in {hours}h {max(0, int(left % 3600) // 60)}m.")
     lines.append("Tap a player to release him into the auction — his price "
-                 "comes back to your purse." if kept and A.retention_open(season)
+                 "comes back to your purse." if kept and can_release
                  else ("Nobody kept." if not kept else ""))
     if any(lot.acquisition == A.ACQ_TRADE_RIGHTS for lot in kept):
         lines.append("Unretained squad rights have no retention charge to refund.")
     rows = []
-    if A.retention_open(season):
+    if can_release:
         for lot in kept[:40]:
             rows.append([InlineKeyboardButton(
                 f"🔓 {lot.name} · {A.render_money(lot.sold_price_lakh, symbol)}",
@@ -2448,51 +2312,52 @@ async def _owner_release(update, name, *, quiet_if_not_owner=False):
     user = update.effective_user
     if user is None:
         return False
-    session = get_session()
-    try:
+    def transact():
+        session = get_session()
         try:
             season = _read_season(session, update)
-        except AuctionError as exc:
-            await _reply(update, f"⚠️ {html.escape(str(exc))}")
-            return True
-        if season is None:
-            if quiet_if_not_owner:
-                return False
-            chat = update.effective_chat
-            await _reply(update, NO_AUCTION if chat is not None
-                         and chat.type in GROUP_CHAT_TYPES else NO_AUCTION_DM)
-            return True
-        franchise = A.franchise_for_actor(session, season.id, user.id)
-        if franchise is None:
-            if quiet_if_not_owner:
-                return False
-            await _reply(update, "⛔ Only a franchise's owner or a co-owner can "
-                                 "release its players (or an auction admin).")
-            return True
-        if not name:
-            text, markup = release_picker(session, season, franchise)
+            if season is None:
+                return (None, None) if quiet_if_not_owner else (_no_auction(update), None)
+            franchise = A.franchise_for_actor(session, season.id, user.id)
+            if franchise is None:
+                if quiet_if_not_owner:
+                    return None, None
+                return ("⛔ Only a franchise's owner or a co-owner can release "
+                        "its players (or an auction admin)."), None
+            if not name:
+                result = release_picker(session, season, franchise)
+            else:
+                lot = _match_kept(A.releasable_squad(session, season, franchise), name)
+                A.release_by_owner(session, season, lot, user.id)
+                session.flush()
+                session.refresh(franchise)
+                result = (f"🔓 {html.escape(lot.name)} released — back in "
+                          f"the auction, and {html.escape(franchise.name)} "
+                          f"has <b>{A.render_money(franchise.purse_remaining_lakh, season.currency_label)}</b>.", None)
             session.commit()
-            await _reply(update, text, reply_markup=markup)
-            return True
-        lot = _match_kept(A.releasable_squad(session, season, franchise), name)
-        A.release_by_owner(session, season, lot, user.id)
-        session.commit()
-        session.refresh(franchise)
-        await _reply(update, f"🔓 {html.escape(lot.name)} released — back in "
-                             f"the auction, and {html.escape(franchise.name)} "
-                             f"has <b>{A.render_money(franchise.purse_remaining_lakh, season.currency_label)}</b>.")
+            return result
+        except BaseException:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    try:
+        text, markup = await run_db(transact)
+        if text is None:
+            return False
+        await _reply(update, text, reply_markup=markup)
+        return True
+    except AuctionWorkerBusy:
+        await _reply(update, BUSY_MESSAGE)
         return True
     except AuctionError as exc:
-        session.rollback()
         await _reply(update, f"⚠️ {html.escape(str(exc))}")
         return True
     except Exception:
-        session.rollback()
         logger.exception("/arelease (owner) failed")
         await _reply(update, "⚠️ Something went wrong. Try again.")
         return True
-    finally:
-        session.close()
 
 
 async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2510,8 +2375,21 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (ValueError, AttributeError):
         await query.answer("That button is from an older list.", show_alert=True)
         return
-    session = get_session()
-    try:
+    if step not in ("p", "y", "n"):
+        await query.answer("That button is from an older list.", show_alert=True)
+        return
+
+    def transact():
+        session = get_session()
+        try:
+            return prepare(session)
+        except BaseException:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def prepare(session):
         lot = session.query(AuctionLot).filter(AuctionLot.id == lot_id).first()
         season = (session.query(AuctionSeason)
                   .filter(AuctionSeason.id == lot.season_id).first()
@@ -2520,46 +2398,52 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                      .filter(AuctionFranchise.id == lot.sold_to_id).first()
                      if lot is not None and lot.sold_to_id else None)
         if lot is None or season is None or franchise is None:
-            await query.answer("That player is no longer kept.", show_alert=True)
-            return
+            raise AuctionError("That player is no longer kept.")
         if not A.may_bid_for(franchise, user.id if user else None):
-            await query.answer(f"Only {franchise.name}'s owner or a co-owner "
-                               f"can release its players.", show_alert=True)
-            return
+            raise AuctionError(f"Only {franchise.name}'s owner or a co-owner can release its players.")
         symbol = season.currency_label
         if step == "p":
-            await query.answer()
             markup = InlineKeyboardMarkup([[
                 InlineKeyboardButton("✅ Release", callback_data=f"{REL_CB}y_{lot.id}"),
                 InlineKeyboardButton("✖ Keep", callback_data=f"{REL_CB}n_{lot.id}")]])
-            await query.edit_message_text(
-                f"🔓 Release <b>{html.escape(lot.name)}</b> into the auction? "
+            return (None, f"🔓 Release <b>{html.escape(lot.name)}</b> into the auction? "
                 f"{A.render_money(lot.sold_price_lakh, symbol)} comes back to "
-                f"{html.escape(franchise.name)}'s purse.",
-                parse_mode="HTML", reply_markup=markup)
-            return
+                f"{html.escape(franchise.name)}'s purse.", markup)
         note = None
         if step == "y":
             A.release_by_owner(session, season, lot, user.id)
-            session.commit()
+            session.flush()
             session.refresh(franchise)
             note = f"🔓 {html.escape(lot.name)} released."
-            await query.answer(f"{lot.name} released.")
+            answer = f"{lot.name} released."
         else:
-            await query.answer("Kept.")
+            answer = "Kept."
         text, markup = release_picker(session, season, franchise, note=note)
         session.commit()
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup,
-                                      disable_web_page_preview=True)
+        return answer, text, markup
+
+    try:
+        answer, text, markup = await run_db(transact)
+    except AuctionWorkerBusy:
+        await query.answer(BUSY_MESSAGE, show_alert=True)
+        return
     except AuctionError as exc:
-        session.rollback()
         await query.answer(str(exc)[:190], show_alert=True)
+        return
     except Exception:
-        session.rollback()
         logger.exception("auction release button failed")
         await query.answer("That did not land — try again.", show_alert=True)
-    finally:
-        session.close()
+        return
+    try:
+        await query.answer(answer)
+    except Exception:
+        logger.debug("auction release acknowledgement failed", exc_info=True)
+    try:
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup,
+                                      disable_web_page_preview=True)
+    except Exception:
+        # The release was committed; a failed edit must never invite a retry.
+        logger.warning("could not refresh the release list", exc_info=True)
 
 
 async def aretlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3336,15 +3220,20 @@ async def _view(update, context, build):
     should be able to take it away — and one funnel means no view can be added
     later that quietly has no way out.
     """
-    session = get_session()
     user = update.effective_user
     owner_id = getattr(user, "id", None)
+    def read():
+        session = get_session()
+        try:
+            season = _read_season(session, update)
+            if season is None:
+                return _no_auction(update)
+            return build(session, season)
+        finally:
+            session.close()
+
     try:
-        season = _read_season(session, update)
-        if season is None:
-            await _reply(update, _no_auction(update))
-            return
-        result = build(session, season)
+        result = await run_db(read)
         if isinstance(result, str):
             await _reply(update, result)
             return
@@ -3352,13 +3241,13 @@ async def _view(update, context, build):
         await _reply_rich(update, context, blocks, html_text,
                           reply_markup=AR.with_close(
                               markup[0] if markup else None, owner_id))
+    except AuctionWorkerBusy:
+        await _reply(update, BUSY_MESSAGE)
     except AuctionError as exc:
         await _reply(update, f"⚠️ {html.escape(str(exc))}")
     except Exception:
         logger.exception("auction view failed")
         await _reply(update, "⚠️ Something went wrong. Try again.")
-    finally:
-        session.close()
 
 
 def _own_or_named_franchise(session, season, update, name):
@@ -3550,13 +3439,11 @@ async def dot_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     target, args = parse_dot_command(getattr(message, "text", ""))
     if target is None:
         return
-    session = get_session()
     try:
-        bound = A.season_for_chat(session, chat.id) is not None
+        bound = await run_session(get_session, lambda session:
+                                  A.season_for_chat(session, chat.id) is not None)
     except Exception:
         bound = False
-    finally:
-        session.close()
     if not bound:
         return
     context.args = list(args)
@@ -3596,27 +3483,28 @@ async def info_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("That button is from an older auction.",
                            show_alert=True)
         return
-    session = get_session()
-    try:
+    def read(session):
         season = _read_season(session, update)
         if season is None:
-            await query.answer("No auction is running here.", show_alert=True)
-            return
+            raise AuctionError("No auction is running here.")
+        return build(session, season)
+
+    try:
         # A view may hand back a keyboard of its own — the Sets card does, so
         # its pages and its per-set buttons work when reached from /ainfo too.
-        blocks, html_text, *markup = build(session, season)
+        blocks, html_text, *markup = await run_session(get_session, read)
         await query.answer()
         await AR.send(context.bot, update.effective_chat.id, blocks, html_text,
                       reply_markup=AR.with_close(
                           markup[0] if markup else None, owner_id))
+    except AuctionWorkerBusy:
+        await query.answer(BUSY_MESSAGE, show_alert=True)
     except AuctionError as exc:
         await query.answer(str(exc)[:190], show_alert=True)
     except Exception:
         logger.exception("auction info button failed")
         await query.answer("That did not work — try the command instead.",
                            show_alert=True)
-    finally:
-        session.close()
 
 
 async def close_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3679,14 +3567,15 @@ async def sets_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                            show_alert=True)
         return
 
-    session = get_session()
-    try:
+    def read(session):
         season = _read_season(session, update)
         if season is None:
-            await query.answer("No auction is running here.", show_alert=True)
-            return
-        result = AR.sets_view(session, season, page=page, expand=expand,
-                              lot_page=lot_page, owner_id=owner_id)
+            raise AuctionError("No auction is running here.")
+        return AR.sets_view(session, season, page=page, expand=expand,
+                            lot_page=lot_page, owner_id=owner_id)
+
+    try:
+        result = await run_session(get_session, read)
         if result is None:
             # The set finished and the numbers moved under the open card. Saying
             # so beats opening whichever set now holds that number.
@@ -3697,14 +3586,14 @@ async def sets_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         await AR.edit(context.bot, query.message.chat_id, query.message.message_id,
                       blocks, reply_markup=keyboard, html_text=html_text)
+    except AuctionWorkerBusy:
+        await query.answer(BUSY_MESSAGE, show_alert=True)
     except AuctionError as exc:
         await query.answer(str(exc)[:190], show_alert=True)
     except Exception:
         logger.exception("auction sets button failed")
         await query.answer("That did not work — try /asets instead.",
                            show_alert=True)
-    finally:
-        session.close()
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -3903,20 +3792,28 @@ async def acall_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not message and source is not command:
                 message = getattr(source, "caption", None) or ""
             break
-    session = get_session()
-    try:
+    def prepare(session):
         season = _season_for(session, update)
         if season is None:
-            await _reply(update, NO_AUCTION)
-            return
+            raise AuctionError("No auction is running in this chat.")
         teams = A.franchises(session, season.id)
         for team in teams:
             A.restore_retention_owners(session, season, team)
         recipients = sorted({uid for team in teams for uid in A.owner_ids(team)})
         parts = AR.call_html(session, season, message or None)
-        session.commit()
-    finally:
-        session.close()
+        return recipients, parts
+    try:
+        recipients, parts = await run_session(get_session, prepare, commit=True)
+    except AuctionWorkerBusy:
+        await _reply(update, BUSY_MESSAGE)
+        return
+    except AuctionError as exc:
+        await _reply(update, f"⚠️ {html.escape(str(exc))}")
+        return
+    except Exception:
+        logger.exception("auction call preparation failed")
+        await _reply(update, "⚠️ Something went wrong. Try again.")
+        return
     user = update.effective_user
     await _send_auction_call(context.bot, chat.id, parts, media,
                               AR.with_close(None, user.id if user else None))
@@ -4008,74 +3905,41 @@ def _admin_target(session, update, context):
 
 
 async def aadminadd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """<code>/aadminadd 123456789</code> (or reply) — let someone run auctions."""
+    """Let a bot admin appoint an auction admin."""
     if not await _require_bot_admin(update):
         return
     user = update.effective_user
-    session = get_session()
-    try:
+    def work(session):
         tg_id, name = _admin_target(session, update, context)
-        row = A.add_auction_admin(session, tg_id, name=name,
-                                  by_tg_id=user.id if user else None)
-        session.commit()
+        row = A.add_auction_admin(session, tg_id, name=name, by_tg_id=user.id if user else None)
         label = html.escape(row.name or str(row.tg_id))
-        await _reply_card(update,
-                          f"👮 <a href=\"tg://user?id={row.tg_id}\">{label}</a> "
-                          f"is now an <b>auction admin</b> — every auction "
-                          f"command, and no other admin command. "
-                          f"<code>/adminhelp</code> lists them.")
-    except AuctionError as exc:
-        session.rollback()
-        await _reply(update, f"⚠️ {html.escape(str(exc))}")
-    except Exception:
-        session.rollback()
-        logger.exception("/aadminadd failed")
-        await _reply(update, "⚠️ Something went wrong. Try again.")
-    finally:
-        session.close()
+        return (f'👮 <a href="tg://user?id={row.tg_id}">{label}</a> is now an '
+                '<b>auction admin</b> — every auction command, and no other admin command. '
+                '<code>/adminhelp</code> lists them.')
+    await _session_reply(update, work)
 
 
 async def aadminremove_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """<code>/aadminremove 123456789</code> (or reply) — take it away again."""
+    """Let a bot admin revoke an auction admin's rights."""
     if not await _require_bot_admin(update):
         return
-    session = get_session()
-    try:
-        tg_id, _name = _admin_target(session, update, context)
+    def work(session):
+        tg_id, _ = _admin_target(session, update, context)
         row = A.remove_auction_admin(session, tg_id)
-        session.commit()
-        await _reply_card(update,
-                          f"👮 {html.escape(row.name or str(row.tg_id))} is "
-                          f"no longer an auction admin.")
-    except AuctionError as exc:
-        session.rollback()
-        await _reply(update, f"⚠️ {html.escape(str(exc))}")
-    except Exception:
-        session.rollback()
-        logger.exception("/aadminremove failed")
-        await _reply(update, "⚠️ Something went wrong. Try again.")
-    finally:
-        session.close()
+        return f"👮 {html.escape(row.name or str(row.tg_id))} is no longer an auction admin."
+    await _session_reply(update, work)
 
 
 async def aadmins_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """<code>/aadmins</code> — everyone who may run auctions."""
+    """Everyone who may run auctions."""
     if not await _require_admin(update):
         return
-    session = get_session()
-    try:
+    def work(session):
         rows = A.auction_admins(session)
-    finally:
-        session.close()
-    if not rows:
-        await _reply_card(update,
-                          "👮 <b>Auction admins</b>\n<i>None yet — bot admins "
-                          "can always run auctions. Add one with "
-                          "</i><code>/aadminadd</code>.")
-        return
-    lines = [f"👮 <b>Auction admins — {len(rows)}</b>",
-             "<i>Plus every bot admin.</i>", ""]
-    for row in rows:
-        lines.append(f"· {html.escape(row.name or 'Admin')} — "
-                     f"<code>{row.tg_id}</code>")
-    await _reply_card(update, "\n".join(lines))
+        if not rows:
+            return ("👮 <b>Auction admins</b>\n<i>None yet — bot admins can always run auctions. "
+                    "Add one with </i><code>/aadminadd</code>.")
+        lines = [f"👮 <b>Auction admins — {len(rows)}</b>", "<i>Plus every bot admin.</i>", ""]
+        lines.extend(f"· {html.escape(row.name or 'Admin')} — <code>{row.tg_id}</code>" for row in rows)
+        return "\n".join(lines)
+    await _session_reply(update, work)

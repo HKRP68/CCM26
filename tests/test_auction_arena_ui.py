@@ -52,6 +52,15 @@ async function boot(data,gate=true) {
  await owner.act('bid',{lot_id:9,expected_bids:0,stage:null,team_id:1,amount_lakh:20});
  const bid=owner.calls.find(c=>c.body.action==='bid');assert.equal(bid.body.amount_lakh,20);assert.equal(bid.body.expected_bids,0);assert.equal(bid.body.lot_id,9);
  await owner.click('tab',{tab:'squads'});assert.match(owner.elements['aa-body'].innerHTML,/Auction squads/);
+ const retained={id:12,name:'Kept player',rating:90,role:'Batsman',price_lakh:100,acquisition:'retained'};
+ const squad=[{...base.teams[0],size:1,squad:[retained]}];
+ const paused=await boot({...base,season:{...base.season,status:'paused'},teams:squad});
+ await paused.click('tab',{tab:'squads'});assert.match(paused.elements['aa-body'].innerHTML,/Release &amp; refund|Release & refund/);
+ await paused.act('release',{team_id:1,lot_id:12});assert.equal(paused.calls.find(c=>c.body.action==='release').body.lot_id,12);
+ const playing=await boot({...base,teams:squad});await playing.click('tab',{tab:'squads'});
+ assert.doesNotMatch(playing.elements['aa-body'].innerHTML,/data-aa-action="release"/);
+ const spectator=await boot({...base,season:{...base.season,status:'paused'},teams:[{...squad[0],mine:false}]});
+ await spectator.click('tab',{tab:'squads'});assert.doesNotMatch(spectator.elements['aa-body'].innerHTML,/data-aa-action="release"/);
  await owner.click('tab',{tab:'logs'});assert.match(owner.elements['aa-body'].innerHTML,/Live activity/);
  await owner.click('tab',{tab:'more'});assert.match(owner.elements['aa-body'].innerHTML,/More auction tools/);
  for(const tool of ['pool','preseason','trades','rules'])assert.match(owner.elements['aa-body'].innerHTML,new RegExp('data-tool="'+tool+'"'));

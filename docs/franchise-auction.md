@@ -1607,9 +1607,16 @@ columns above:
 now owner-aware: an owner or co-owner releases one of their own kept players —
 by name, or bare for buttons that ask before they act — while the retention
 window is open, in the group or in a DM (`release_by_owner`, which checks the
-deadline `unretain` does not). An auction admin's `/aunretain <player>` is
-unchanged. The released player goes back into the pool under 🔁 Released with
-his price back in the purse.
+deadline `unretain` does not). During an auction, an admin first uses `/apause`,
+the owner/co-owner uses `/arelease Player Name` (or opens the picker with
+`/arelease`), then the admin resumes with `/astart`. An auction admin can also
+use `/aunretain Player Name` while paused. Arena shows **Release & refund** on
+the owner's retained players in Squads during a pause. The player returns to
+the pool and the original contract is refunded, with an event and ledger entry.
+RTM allocations and used cards remain unchanged. Active RTM decisions must
+finish first, a release cannot invalidate the team's standing winning bid,
+and completed/published auctions cannot use this release path. Preseason
+finalization/deadline rules still apply before the auction first opens.
 
 ---
 
@@ -1625,6 +1632,15 @@ everything past `AuctionSeason.announced_event_id` and says it out loud, in id
 order. Nothing but the database crosses over, the room's message order is the
 id order of one table whichever surface produced it, and "Mark Sold" in the
 browser and `/asold` in the group are literally the same function call.
+
+Shared Telegram auction administration, views and trade transactions run in
+bounded database workers. Sessions open and close within one worker; Telegram
+replies happen afterwards on the bot loop. Heavy commands such as `/arecall`,
+queue changes, pool imports and `/afinish go` therefore leave other updates
+responsive. Saturated workers refuse new management work promptly instead of
+queuing unlimited writes; bids use their separate executor. Recall claims the
+sale before its refund, voids bids in bulk, and skips queue renumbering when
+the recalled player is already first.
 
 The event log had to exist anyway — the proposal asks for a permanent one — so
 this costs nothing.
