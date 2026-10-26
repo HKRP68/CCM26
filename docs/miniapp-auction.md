@@ -123,7 +123,10 @@ Team names on the website's live console also open this workspace.
   window rules; removing an RTM signing returns the used card. Completed trades
   must be reversed before a traded player can be removed.
 - **Change the purse:** choose **Add funds**, **Deduct funds** or **Set balance**.
-  Review the before/after balance and record the reason. The server rejects stale
+  Enter `5100` for ₹51 Cr: **Set balance** makes the remaining purse ₹51 Cr;
+  **Deduct funds** subtracts ₹51 Cr from the current purse. Existing balances
+  above the amount-entry limit can still be corrected. Review the before/after
+  balance and record the reason. The server rejects stale
   balances, negative purses and reductions that cannot cover a standing winning
   bid and its minimum-squad reserve.
 

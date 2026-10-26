@@ -227,6 +227,23 @@ class TeamManagementPageTests(PoolPageCase):
         self.assertEqual(lot.status, self.A.LOT_QUEUED)
         self.assertEqual(self.A.ledger_total(self.session, self.team.id), initial + 200)
 
+    def test_large_existing_purse_can_be_deducted_and_set_to_51_crore(self):
+        initial = self.team.purse_remaining_lakh
+        self.manage(action='team_purse', mode='add', amount_lakh=1_000_000,
+                    expected_purse_lakh=initial, note='Extra funds')
+        large_balance = initial + 1_000_000
+        self.assertEqual(self.team.purse_remaining_lakh, large_balance)
+        body = self.manage(action='team_purse', mode='deduct', amount_lakh=5100,
+                           expected_purse_lakh=large_balance, note='Deduct 51 Cr')
+        self.assertIn('Purse updated', body)
+        self.assertEqual(self.team.purse_remaining_lakh, large_balance - 5100)
+        self.assertEqual(self.A.ledger_total(self.session, self.team.id), large_balance - 5100)
+        body = self.manage(action='team_purse', mode='set', amount_lakh=5100,
+                           expected_purse_lakh=large_balance - 5100, note='Set to 51 Cr')
+        self.assertIn('Purse updated to ₹51 Cr', body)
+        self.assertEqual(self.team.purse_remaining_lakh, 5100)
+        self.assertEqual(self.A.ledger_total(self.session, self.team.id), 5100)
+
     def test_search_and_stale_purse_submission(self):
         name = self.players[0].name
         body = self.client.get(self.path, query_string={'q': name}).get_data(as_text=True)

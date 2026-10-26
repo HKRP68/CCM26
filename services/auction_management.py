@@ -9,13 +9,15 @@ import re
 from datetime import datetime
 
 
-def whole(value, label, minimum=0):
+def whole(value, label, minimum=0, *, maximum=1_000_000):
     from services import auction_service as A
     if isinstance(value, bool) or not re.fullmatch(r"\d+", str(value)):
         raise A.AuctionError(f"{label} must be a whole number of lakh.")
     number = int(value)
-    if not minimum <= number <= 1_000_000:
-        raise A.AuctionError(f"{label} must be between {minimum} and 1000000 lakh.")
+    if number < minimum or (maximum is not None and number > maximum):
+        if maximum is None:
+            raise A.AuctionError(f"{label} must be at least {minimum} lakh.")
+        raise A.AuctionError(f"{label} must be between {minimum} and {maximum} lakh.")
     return number
 
 
@@ -57,7 +59,10 @@ def adjust_purse(session, season, franchise, *, mode, amount_lakh,
     if by_tg_id is not None:
         A.require_auction_manager(session, by_tg_id)
     amount = whole(amount_lakh, 'Amount')
-    expected = whole(expected_purse_lakh, 'Displayed purse')
+    # This is a snapshot of an existing balance, not a new monetary input.
+    # Credits, refunds or imports can legitimately put it above the input cap;
+    # it must still be checked against the stored balance before any correction.
+    expected = whole(expected_purse_lakh, 'Displayed purse', maximum=None)
     reason = reason_required(note)
     if mode not in ('add', 'deduct', 'set'):
         raise A.AuctionError("Choose Add funds, Deduct funds or Set balance.")

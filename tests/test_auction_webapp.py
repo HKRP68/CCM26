@@ -241,6 +241,54 @@ class AuctionWebappTests(unittest.TestCase):
         self.assertEqual(self.alice.purse_remaining_lakh, 750)
         self.assertEqual(self.A.ledger_total(self.db, self.aid), 750)
 
+    def test_large_existing_purse_can_be_corrected_in_lakh(self):
+        initial = self.alice.purse_remaining_lakh
+        # A valid credit can take the balance above the per-input limit.
+        self.assert_ok(self.action('admin_team_purse', tg=ADMIN, team_id=self.aid, mode='add',
+                                   amount_lakh=1_000_000, expected_purse_lakh=initial,
+                                   note='Extra funds'))
+        large_balance = initial + 1_000_000
+        changes = [('deduct', large_balance, large_balance - 5100),
+                   ('add', large_balance - 5100, large_balance),
+                   ('set', large_balance, 5100),
+                   ('deduct', 5100, 0)]
+        for mode, before, after in changes:
+            with self.subTest(mode=mode):
+                result = self.assert_ok(self.action(
+                    'admin_team_purse', tg=ADMIN, team_id=self.aid, mode=mode,
+                    amount_lakh=5100, expected_purse_lakh=str(before), note='Agreed adjustment'))
+                self.assertIn(self.A.render_money(after), result['message'])
+                self.refresh_db()
+                self.assertEqual(self.alice.purse_remaining_lakh, after)
+                self.assertEqual(self.A.ledger_total(self.db, self.aid), after)
+                for view in ('teams', 'live', 'arena'):
+                    payload = self.assert_ok(self.read(view, tg=ADMIN))
+                    row = next(t for t in payload['teams'] if t['id'] == self.aid)
+                    self.assertEqual(row['purse_lakh'], after)
+
+        # The old displayed balance is still stale, however large it was.
+        self.assertEqual(self.action(
+            'admin_team_purse', tg=ADMIN, team_id=self.aid, mode='set',
+            amount_lakh=5100, expected_purse_lakh=str(large_balance), note='Stale review')[0], 409)
+
+    def test_displayed_purse_requires_a_whole_balance_and_amounts_keep_their_limit(self):
+        initial = self.alice.purse_remaining_lakh
+        for displayed in (None, True, -1, 1.5, '5100.0', '51 Cr', ''):
+            with self.subTest(displayed=displayed):
+                self.assertEqual(self.action(
+                    'admin_team_purse', tg=ADMIN, team_id=self.aid, mode='set',
+                    amount_lakh=5100, expected_purse_lakh=displayed,
+                    note='Invalid balance')[0], 400)
+        for mode in ('add', 'deduct', 'set'):
+            with self.subTest(mode=mode):
+                self.assertEqual(self.action(
+                    'admin_team_purse', tg=ADMIN, team_id=self.aid, mode=mode,
+                    amount_lakh=1_000_001, expected_purse_lakh=initial,
+                    note='Invalid amount')[0], 400)
+        self.refresh_db()
+        self.assertEqual(self.alice.purse_remaining_lakh, initial)
+        self.assertEqual(self.A.ledger_total(self.db, self.aid), initial)
+
     def test_purse_correction_preserves_a_standing_winning_bid(self):
         current = self.start()
         lot = self.A.current_lot(self.db, self.season)

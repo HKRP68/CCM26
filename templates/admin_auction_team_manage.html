@@ -21,7 +21,7 @@
       <form method="POST" class="au-review-form" data-review="purse">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="team_purse"><input type="hidden" name="expected_purse_lakh" value="{{ team.purse_remaining_lakh }}">
         <label for="purse-mode">Action</label><select id="purse-mode" name="mode"><option value="add">Add funds</option><option value="deduct">Deduct funds</option><option value="set">Set balance</option></select>
-        <label for="purse-amount">Amount in lakh</label><input id="purse-amount" name="amount_lakh" type="number" min="0" max="1000000" step="1" inputmode="numeric" required placeholder="e.g. 200 for 2 Cr">
+        <label for="purse-amount">Amount in lakh</label><input id="purse-amount" name="amount_lakh" type="number" min="0" max="1000000" step="1" inputmode="numeric" required placeholder="e.g. 5100 for 51 Cr">
         <label for="purse-note">Reason</label><input id="purse-note" name="note" maxlength="200" required placeholder="Why is the purse changing?">
         <output id="purse-preview" class="au-management-preview" aria-live="polite">Current balance: {{ money(team.purse_remaining_lakh) }}</output>
         <button class="btn btn-primary" type="submit">Review purse change</button>
