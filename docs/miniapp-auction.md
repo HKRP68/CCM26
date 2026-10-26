@@ -7,20 +7,23 @@ continue to work. No database migration or separate hosting service is needed.
 
 Player-pool creation, imports, franchise setup and all other Mini App administration
 are restricted to verified **bot admins**. Players browse the prepared player list, manage
-their own franchise and bid; they are never asked to build the pool. The Admin
-tab is hidden for players and the API independently checks every admin action.
+their own franchise and bid; they are never asked to build the pool. Admin
+controls are hidden for players and the API independently checks every admin action.
 Delegated auction-admin status alone does not grant Mini App admin access;
 existing delegated Telegram command permissions are unchanged.
 
 ## Open and switch
 
-- Open **Franchise Auction** from the Mini App home screen.
-- Tap **Arena ↗** for the optional presentation inspired by the reference screens.
-  **Return to current UI** closes it and restores the existing auction interface.
+- Open **Franchise Auction** from the Mini App home screen to enter Arena directly.
+  Arena is the single live auction room; there is no second room to switch to.
+- **More** opens player, purse, retention, trade and rule tools inside the same
+  auction header and navigation. **Back to live auction** returns to Arena.
+- **Back to Mini App** exits the auction and returns home. Back/Escape from a
+  tool returns to More before leaving the auction.
 - The Telegram live board and `/ainfo` menu have **Switch to Miniapp** buttons.
   A group button opens `auction_<seasonId>_c<chatId>`, preserving the auction
   and its group. Private Mini App URLs can use `#auction_<seasonId>`.
-- **Switch to Tg** returns to the pinned auction board in its Telegram group.
+- The Telegram button opens the pinned auction board in its Telegram group.
 - An auction selector supports parallel competitions and completed seasons.
 - Owners can open an auction directly even without a card-collecting `/debut`.
 
@@ -33,15 +36,18 @@ events. This change does not deploy the service or reconfigure BotFather.
 
 ## Screens
 
-### Optional Auction Arena
+### One auction room
 
-The existing Mini App screens remain the default. The Arena uses separate,
-scoped styles in a full-screen dialog, with **Squads / Arena / Logs** navigation.
+Franchise Auction opens Arena, with **Squads / Arena / Logs / More** navigation.
+All tools stay in this workspace; the former duplicate live-room renderer has
+been removed. Scoped styling keeps other Mini App screens unchanged.
 It includes a dark player stage, uploaded portraits (falling back to player card
 artwork), role and country badges,
 four tiles showing stored card ratings/edition, a bid button docked above the
 navigation, current and next bid, the shared
 server countdown, team purse/squad/overseas counts, and Right To Match controls.
+The legal bid ceiling is shown beside bidding, and auction progress plus an
+expandable upcoming queue make the running order easier to follow.
 No real-world career statistics or participant-presence counts are invented.
 
 Sold/unsold result cards come from committed auction events. Teams expand to
@@ -55,20 +61,25 @@ checks the signed Telegram identity on the server, and every action independentl
 requires bot-admin access. Owners, co-owners, spectators and delegated auction
 admins cannot gain access by sending `admin: true` or `bot_admin: true`.
 The panel provides start/resume, pause, next player, sell/unsold, clock extension,
-undo bid, admin bidding and RTM controls. Team buttons open the existing player
-and purse workspace; **Open full control room** provides season setup and rules.
+undo bid, admin bidding and RTM controls. Team buttons open player and purse
+management within Arena; **Open setup & rules** provides season preparation.
+Saving a form disables navigation until the committed state has refreshed.
+Only the active live view or tool owns its polling loop, and hidden tabs suspend
+updates without replacing an unfinished form.
 
-### Existing auction screens
+### Auction sections and tools
 
 | Screen | Available features |
 | --- | --- |
-| Live room | Player card, current and next bid, quick bid, custom bid when allowed, server-timed countdown, all three RTM stages including final raise/stand, purse and legal maximum, squad warnings, bid log, upcoming players and room activity |
+| Arena | Player card, current and next bid, quick bid, custom bid when allowed, server-timed countdown, all three RTM stages including final raise/stand, purse and legal maximum, squad warnings, auction progress and upcoming players |
+| Squads / Logs | Expandable squads with acquisitions and budgets; shared room activity and current-player bid history |
 | Player pool | Name search, role/set/status filters, pagination, running set order, sold/unsold results and admin lot controls |
-| Teams & purses | Every squad, acquisitions, overseas counts, RTM cards, purse, legal bid ceiling and squad warnings; the owner's purse ledger and bid history |
+| More → Players & purses / My purse & bids | Admin player and purse management; the owner's purse ledger, bid history and budget warnings |
 | Retention & draft | Previous-squad candidates, classic/range retention, admin offers and owner answers, dynamic negotiation/counters/withdrawals, owner release, token-checked retention review and finalization, readiness, eligible expansion players, private shortlist, pick and skip |
 | Trades | Build offers, select players from both sides, signed cash, notes, send/counter/accept/reject/withdraw, public trade block and completed trades; bot-admin approval/veto/reversal |
 | Rulebook | Purse, squad/role/rating rules, base prices, increment ladder, clock, anti-snipe, retention bands and RTM rules |
-| Admin | Create/clone seasons, bind groups, add/edit/import owners and co-owners, link/carry previous squads, build/search/import/export pools and sets, reorder sets, configure rules, retention/draft/RTM, live auction controls, purse corrections, trade rules/windows, simulation/playback, publication, restart/cancel and auction-admin access |
+| More → Setup & rules | Create/clone seasons, bind groups, add/edit/import owners and co-owners, link/carry previous squads, build/search/import/export pools and sets, reorder sets, configure rules, retention/draft/RTM, purse corrections, trade rules/windows, simulation/playback, publication, restart/cancel and auction-admin access |
+| More → Download CSV | A current snapshot of every franchise, signed player, signing price and remaining purse; no private ledgers or owner IDs |
 
 The control room walks an admin through group, franchises, rules, player pool,
 preseason, live operations, trades and completion. Complex rule tables use JSON
@@ -77,7 +88,8 @@ labelled forms. Monetary inputs use **integer lakh**: `100` means ₹1 Cr.
 
 ## Manage team players and purses
 
-In the Mini App, open **Teams & purses → Manage a team**. On the website, open
+In the Mini App, open **More → Players & purses**, or a team's **Manage players & purse**
+button in Squads or the bot-admin panel. On the website, open
 **Franchise Auctions → your auction → Franchises → Manage players & purse**.
 Team names on the website's live console also open this workspace.
 
@@ -103,13 +115,14 @@ transactional and repeated signings/removals cannot debit or refund twice.
 
 The enhanced interface includes team search, squad progress, total remaining
 purses, team warnings, a selected team's recent ledger, and visible live controls.
-The Admin tab includes a setup checklist and quick links to common tasks. Its
+Setup & rules includes a setup checklist and quick links to common tasks. Its
 checklist is a quick review; starting still runs the shared backend validation.
 
 Suggested auction routine: review warnings and the setup checklist, run bidding
 from the live desk, pause and resolve the current player before squad corrections,
-then check the ledger before resuming. Future useful additions are a downloadable
-auction results sheet and an optional display-only board for the venue.
+then check the ledger before resuming. Download the squad/purse CSV from More
+when sharing a snapshot; formula-like names are exported as text. A useful next
+addition would be a display-only board for the venue.
 
 ## Improvements included
 
@@ -172,10 +185,11 @@ continue to exercise the shared rules and scheduler. Mobile and desktop browser
 checks cover navigation, search, bidding and the admin screen.
 
 `tests/test_auction_miniapp_ui.py` runs the JavaScript controller in Node to
-check empty-room startup and player/admin separation without browser packages.
-`tests/test_auction_arena_ui.py` checks the optional Arena's bidding context,
-server-checked admin entry, navigation, result cards and restoration of the
-original screen and scroll settings. Signed API tests also cover delegated
+check that the main entry opens only Arena, and embedded tools retain player/admin
+separation and wait for refreshed forms after mutations.
+`tests/test_auction_arena_ui.py` checks bidding context, server-checked admin entry,
+in-room tool navigation, CSV snapshots and formula escaping, result cards, and
+returning home with the original scroll setting restored. Signed API tests also cover delegated
 auction admins being denied Mini App administration and shared Arena results.
 `tests/test_auction_room_ux.py` also verifies rapid rebidding, duplicate feedback,
 event-loop responsiveness during slow database work and acknowledgement failures.
