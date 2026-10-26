@@ -8,6 +8,14 @@ continue to work. No database migration or separate hosting service is needed.
 **Auction Managers** are bot admins plus users appointed with
 `/aadminadd <id | @user | reply>`. They manage the same auction in Telegram and
 the Mini App. Only bot admins can appoint or remove managers.
+Maintenance-bypass access grants no auction authority. Bot-admin identity uses
+explicitly configured administrator/owner IDs, and appointed managers use the
+auction-manager list. These checks apply to every signed request and Telegram
+management command, including pause/resume, purse and player changes, trades,
+and manager appointments.
+Shared auction endpoints require a signed Telegram login even when browser
+development mode is enabled. URL development parameters cannot replace a real
+Telegram session's identity.
 
 Team owners and co-owners can bid for their own franchise, answer live RTM
 questions, and read squads, budgets, upcoming players, rules and bid history.

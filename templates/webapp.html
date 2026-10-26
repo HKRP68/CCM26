@@ -3344,10 +3344,10 @@ const START_PARAM = (() => {
     return p;
   } catch (e) { return ''; }
 })();
-// Dev override: append ?dev=<telegram_id> to the URL during testing
+// Browser development login; a signed Telegram session always identifies its user.
 const urlParams = new URLSearchParams(window.location.search);
 const devId = urlParams.get('dev');
-const AUTH_VALUE = devId ? `DEV_${devId}` : INIT_DATA;
+const AUTH_VALUE = INIT_DATA || (devId ? `DEV_${devId}` : '');
 
 let currentScreen = 'home';
 let userData = null;

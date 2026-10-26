@@ -9,7 +9,9 @@
 | Spectator | Watch live bidding and results, team squads and remaining purses. |
 
 Team ownership and Telegram group-admin status do not grant auction management
-rights. All commands, callbacks and Mini App actions check the actor on every
+rights. Maintenance-bypass users keep their normal auction role; bot-admin
+authority comes from explicitly configured administrator/owner IDs.
+All commands, callbacks and Mini App actions check the actor on every
 request. Only bot admins appoint or remove Auction Managers. Removing a manager
 revokes their management access on the next request.
 

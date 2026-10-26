@@ -78,13 +78,15 @@ class AuctionWebappTests(unittest.TestCase):
 
         self.db = get_session()
         self.A, self.W, self.T = A, W, T
-        self.admin_patch = patch.object(W, 'is_admin', side_effect=lambda uid: uid == ADMIN)
-        self.admin_patch.start()
-        self.identity_patch = patch('services.admin_ids.is_admin', side_effect=lambda uid: uid == ADMIN)
-        self.identity_patch.start()
+        from services.admin_ids import ADMIN_ID_ENV_VARS, OWNER_ID_ENV_VARS
+        identities = {key:'' for key in (*ADMIN_ID_ENV_VARS, *OWNER_ID_ENV_VARS)}
+        identities['BOT_ADMIN_IDS'] = str(ADMIN)
+        self.identity_env = patch.dict(os.environ, identities)
+        self.identity_env.start()
+        self.permission_config = {'maintenance_bypass_ids':''}
+        self.config_patch = patch('services.admin_ids.get_config', return_value=self.permission_config)
+        self.config_patch.start()
         self.managers = []
-        self.bot_patch = patch.object(T, 'is_bot_admin', side_effect=lambda uid: uid == ADMIN)
-        self.bot_patch.start()
         self.app = Flask(__name__)
         self.app.config['TESTING'] = True
         self.membership = None
@@ -123,10 +125,9 @@ class AuctionWebappTests(unittest.TestCase):
         self.db.rollback()
         self.db.query(AuctionAdmin).filter(AuctionAdmin.tg_id.in_(self.managers)).delete(synchronize_session=False)
         self.db.commit()
-        self.identity_patch.stop()
         self.db.close()
-        self.admin_patch.stop()
-        self.bot_patch.stop()
+        self.config_patch.stop()
+        self.identity_env.stop()
 
     def grant_manager(self, uid):
         self.A.add_auction_admin(self.db, uid, by_tg_id=ADMIN)
@@ -462,6 +463,37 @@ class AuctionWebappTests(unittest.TestCase):
         res = self.client.post('/api/webapp/auction', json={'season_id':self.sid}, headers={'Authorization':bad})
         self.assertEqual(res.status_code, 401)
 
+    def test_development_identity_cannot_control_an_auction(self):
+        from flask import Flask
+        from database import get_session
+        from services.auction_webapp_routes import register
+        app = Flask('auction-dev-identity-regression')
+        app.config['TESTING'] = True
+        accepted = []
+
+        def development_auth(**kwargs):
+            accepted.append(True)
+            return (get_session(), None, ADMIN), ADMIN, None
+
+        register(app, development_auth, lambda fn:fn, lambda *a, **k:self.membership)
+        client = app.test_client()
+        self.start()
+        with patch.dict(os.environ, {'WEBAPP_DEV_MODE':'1'}):
+            requests = (('', {'view':'arena'}), ('/action', {'action':'admin_pause'}),
+                        ('/action', {'action':'admin_resume'}),
+                        ('/action', {'action':'admin_create', 'name':'Fake admin'}),
+                        ('/catalogue', {}), ('/export', {'format':'franchises'}))
+            for identity in (f'DEV_{ADMIN}', f'tma DEV_{ADMIN}'):
+                for endpoint, data in requests:
+                    with self.subTest(identity=identity, endpoint=endpoint, data=data):
+                        response = client.post('/api/webapp/auction'+endpoint,
+                            json={'season_id':self.sid, **data}, headers={'Authorization':identity})
+                        self.assertEqual(response.status_code, 401, response.get_json())
+                        self.assertEqual(response.headers['Cache-Control'], 'no-store')
+        self.assertEqual(accepted, [])
+        self.refresh_db()
+        self.assertEqual(self.season.status, self.A.STATUS_LIVE)
+
     def test_json_shape_is_validated(self):
         res = self.client.post('/api/webapp/auction/action', json=['bid'], headers={'Authorization':signed(ALICE)})
         self.assertEqual(res.status_code, 400)
@@ -479,6 +511,69 @@ class AuctionWebappTests(unittest.TestCase):
         self.assertEqual(data['my_team_ids'], [])
         ctx = self.start()
         self.assertEqual(self.action('bid', tg=OUTSIDER, amount_lakh=100, **ctx)[0], 403)
+
+    def test_maintenance_bypass_users_cannot_pause_or_resume(self):
+        self.permission_config['maintenance_bypass_ids'] = f'{ALICE},{COOWNER},{OUTSIDER}'
+        self.membership = {'ok':True, 'result':{'status':'member'}}
+        self.start()
+        for uid in (ALICE, COOWNER, OUTSIDER):
+            code, result = self.action('admin_pause', tg=uid)
+            self.assertEqual(code, 403, result)
+        self.assert_ok(self.action('admin_pause', tg=ADMIN))
+        for uid in (ALICE, COOWNER, OUTSIDER):
+            code, result = self.action('admin_resume', tg=uid)
+            self.assertEqual(code, 403, result)
+        self.assert_ok(self.action('admin_resume', tg=ADMIN))
+
+    def test_maintenance_bypass_does_not_grant_manager_views_or_appointments(self):
+        from services import admin_ids
+        self.permission_config['maintenance_bypass_ids'] = f'{ALICE},{COOWNER},{OUTSIDER}'
+        self.membership = {'ok':True, 'result':{'status':'member'}}
+        for uid in (ALICE, COOWNER, OUTSIDER):
+            self.assertTrue(admin_ids.is_admin(uid), 'Exercise the legacy maintenance identity source')
+            self.assertFalse(admin_ids.is_bot_admin(uid))
+            self.assertFalse(self.A.is_auction_admin(self.db, uid))
+            self.assertFalse(self.T.is_trade_manager(self.db, uid))
+            result = self.assert_ok(self.read('arena', tg=uid))
+            self.assertFalse(result['admin'])
+            self.assertFalse(result['bot_admin'])
+            self.assertFalse(result['permissions']['manage'])
+            self.assertFalse(result['permissions']['manage_admins'])
+            for view in ('admin', 'preseason', 'trades'):
+                self.assertEqual(self.read(view, tg=uid)[0], 403)
+            for endpoint in ('/catalogue', '/export'):
+                self.assertEqual(self.post(endpoint, {'season_id':self.sid}, uid)[0], 403)
+            for action in ('admin_add_admin', 'admin_remove_admin'):
+                self.assertEqual(self.action(action, tg=uid, telegram_id=uid)[0], 403)
+            for operation in (self.T.approve, self.T.veto, self.T.reverse):
+                with self.assertRaisesRegex(self.A.AuctionError, 'Only Auction Managers'):
+                    operation(self.db, None, by_tg_id=uid)
+        self.grant_manager(ALICE)
+        self.assertTrue(self.assert_ok(self.read('admin', tg=ALICE))['admin'])
+        self.assertEqual(self.action('admin_add_admin', tg=ALICE, telegram_id=OUTSIDER)[0], 403)
+        self.assert_ok(self.action('admin_remove_admin', tg=ADMIN, telegram_id=ALICE))
+        self.assertFalse(self.assert_ok(self.read('arena', tg=ALICE))['admin'])
+
+    def test_maintenance_bypass_without_environment_admins_grants_no_manager_access(self):
+        from services.admin_ids import ADMIN_ID_ENV_VARS, OWNER_ID_ENV_VARS
+        self.permission_config['maintenance_bypass_ids'] = str(ALICE)
+        with patch.dict(os.environ, {key:'' for key in (*ADMIN_ID_ENV_VARS, *OWNER_ID_ENV_VARS)}):
+            result = self.assert_ok(self.read('arena'))
+            self.assertEqual(result['role'], 'team')
+            self.assertFalse(result['admin'])
+            self.assertEqual(self.action('admin_pause')[0], 403)
+            self.assertEqual(self.action('admin_add_admin', telegram_id=ALICE)[0], 403)
+
+    def test_configured_bot_owner_can_manage_without_a_team(self):
+        owner = 809997
+        with patch.dict(os.environ, {'BOT_ADMIN_IDS':'', 'BOT_OWNER_IDS':str(owner)}):
+            result = self.assert_ok(self.read('admin', tg=owner))
+            self.assertEqual(result['role'], 'manager')
+            self.assertTrue(result['bot_admin'])
+            self.assertEqual(result['my_team_ids'], [])
+            self.assert_ok(self.action('admin_start', tg=owner))
+            self.assert_ok(self.action('admin_pause', tg=owner))
+            self.assert_ok(self.action('admin_resume', tg=owner))
 
     def test_telegram_group_admins_remain_spectators_until_appointed(self):
         for offset, status in enumerate(('member', 'administrator', 'creator'), 1):
@@ -619,6 +714,7 @@ class AuctionWebappTests(unittest.TestCase):
             self.assertEqual(self.action(name,**args)[0],403)
 
     def test_all_non_bidding_mutations_reject_team_users_and_spectators(self):
+        self.permission_config['maintenance_bypass_ids'] = f'{ALICE},{COOWNER},{OUTSIDER}'
         self.membership = {'ok': True, 'result': {'status': 'member'}}
         actions = ('admin_start', 'admin_pause', 'admin_resume', 'admin_next', 'admin_sold',
                    'admin_unsold', 'admin_extend', 'admin_undo_bid', 'admin_bid', 'admin_cancel',

@@ -45,7 +45,7 @@ from services import auction_antispam as SPAM
 from services import auction_rich as AR
 from services import auction_service as A
 from services.auction_async import run_db, run_session, AuctionWorkerBusy, BUSY_MESSAGE
-from services.admin_ids import is_admin
+from services.admin_ids import is_bot_admin
 from services.auction_service import AuctionError
 
 logger = logging.getLogger(__name__)
@@ -126,7 +126,7 @@ def _is_auction_admin(user_id):
     """
     if user_id is None:
         return False
-    if is_admin(user_id):
+    if is_bot_admin(user_id):
         return True
     session = get_session()
     try:
@@ -151,7 +151,7 @@ async def _require_admin(update):
 
 async def _require_bot_admin(update):
     user = update.effective_user
-    if not user or not await asyncio.to_thread(is_admin, user.id):
+    if not user or not await asyncio.to_thread(is_bot_admin, user.id):
         await _reply(update, NOT_BOT_ADMIN)
         return False
     return True
@@ -745,7 +745,7 @@ async def aadmin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await _require_admin(update):
         return
     user = update.effective_user
-    blocks, html_text = AR.admin_help(bot_admin=bool(user and await asyncio.to_thread(is_admin, user.id)))
+    blocks, html_text = AR.admin_help(bot_admin=bool(user and await asyncio.to_thread(is_bot_admin, user.id)))
     await _reply_rich(update, context, blocks, html_text,
                       reply_markup=AR.with_close(
                           None, user.id if user else None))
@@ -3956,7 +3956,7 @@ async def aadminremove_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     def work(session):
         tg_id, _ = _admin_target(session, update, context)
-        row = A.remove_auction_admin(session, tg_id)
+        row = A.remove_auction_admin(session, tg_id, by_tg_id=update.effective_user.id)
         return f"👮 {html.escape(row.name or str(row.tg_id))} is no longer an auction admin."
     await _session_reply(update, work)
 

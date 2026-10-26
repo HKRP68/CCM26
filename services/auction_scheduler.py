@@ -936,8 +936,8 @@ async def _trade_tick(context, session, now):
 
     if pending_dm:
         try:
-            from services.admin_ids import configured_admin_ids
-            admins = sorted(configured_admin_ids())
+            from services.admin_ids import env_admin_ids
+            admins = sorted(env_admin_ids() | {row.tg_id for row in A.auction_admins(session)})
         except Exception:
             admins = []
         for trade in pending_dm:

@@ -12,6 +12,25 @@ from pathlib import Path
 
 @unittest.skipUnless(shutil.which('node'), 'Node is needed to run the Mini App controller')
 class AuctionMiniappUITests(unittest.TestCase):
+    def test_telegram_identity_cannot_be_overridden_by_a_development_url(self):
+        source = Path(__file__).resolve().parents[1] / 'templates/webapp.html'
+        script = r"""
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const template=fs.readFileSync(process.argv[1],'utf8');
+const start=template.indexOf('const urlParams =');
+const auth=template.slice(start,template.indexOf('\nlet currentScreen',start));
+function identity(initData,search) {
+  return vm.runInNewContext(auth+'\nAUTH_VALUE;', {INIT_DATA:initData,URLSearchParams,window:{location:{search}}});
+}
+assert.equal(identity('signed-telegram-user','?dev=999999'),'signed-telegram-user');
+assert.equal(identity('signed-telegram-user',''),'signed-telegram-user');
+assert.equal(identity('',''),'');
+assert.equal(identity('','?dev=999999'),'DEV_999999');
+"""
+        result = subprocess.run([shutil.which('node'), '-e', script, str(source)],
+                                text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_single_arena_entry_and_embedded_team_management(self):
         source = Path(__file__).resolve().parents[1] / 'static/js/auction_miniapp.js'
         script = r"""

@@ -49,6 +49,10 @@ def register(app, authenticate, csrf_exempt, member_rpc):
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
             return dict(ok=False, message='Send a JSON object.'), 400
+        identity = request.headers.get('Authorization', '').removeprefix('tma ')
+        if identity.startswith('DEV_'):
+            return dict(ok=False, error='bad_init_data',
+                        message='Shared auctions require a verified Telegram login.'), 401
         auth, tg_id, error = authenticate(allow_not_debuted=True)
         if error:
             return error

@@ -182,7 +182,7 @@ def is_bypassed(telegram_id) -> bool:
 
     Asked only about an update the gate is otherwise about to refuse, so the
     auction-admin lookup — a query — costs nothing on the ordinary path, and a
-    bot admin is answered from the config list without one at all.
+    bot admin is answered from explicit administrator/owner IDs without one.
 
     A broken lookup answers "bypassed", which is this module's fail-open rule
     read from the other end: not knowing whether somebody is an admin must cost
@@ -192,8 +192,8 @@ def is_bypassed(telegram_id) -> bool:
     if telegram_id is None:
         return False
     try:
-        from services.admin_ids import is_admin
-        if is_admin(int(telegram_id)):
+        from services.admin_ids import is_bot_admin
+        if is_bot_admin(telegram_id):
             return True
         from database import get_session
         from services.auction_service import is_auction_admin

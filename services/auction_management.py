@@ -54,6 +54,8 @@ def _claim(session, season, franchise, *, roster=False):
 def adjust_purse(session, season, franchise, *, mode, amount_lakh,
                  expected_purse_lakh, note, by_tg_id=None):
     from services import auction_service as A
+    if by_tg_id is not None:
+        A.require_auction_manager(session, by_tg_id)
     amount = whole(amount_lakh, 'Amount')
     expected = whole(expected_purse_lakh, 'Displayed purse')
     reason = reason_required(note)
@@ -78,6 +80,8 @@ def assign_player(session, season, franchise, player_id, *, price_lakh, note,
                   by_tg_id=None):
     from models import AuctionBid, AuctionLot, AuctionFranchise, Player
     from services import auction_service as A, player_query
+    if by_tg_id is not None:
+        A.require_auction_manager(session, by_tg_id)
     price = whole(price_lakh, 'Signing price')
     reason = reason_required(note)
     _claim(session, season, franchise, roster=True)
@@ -135,6 +139,8 @@ def remove_player(session, season, franchise, lot, *, note, by_tg_id=None,
                   expected_price_lakh=None, expected_sold_at=None):
     from models import AuctionBid, AuctionFranchise, AuctionLot
     from services import auction_service as A
+    if by_tg_id is not None:
+        A.require_auction_manager(session, by_tg_id)
     from services.auction_trade_service import traded_lot_ids
     reason = reason_required(note)
     _claim(session, season, franchise, roster=True)

@@ -168,9 +168,9 @@ def is_bot_admin(tg_id):
     """Global bot administrator identity."""
     if tg_id is None:
         return False
-    from services.admin_ids import is_admin, is_owner
+    from services.admin_ids import is_bot_admin as configured_bot_admin
     try:
-        return bool(is_admin(tg_id) or is_owner(tg_id))
+        return configured_bot_admin(tg_id)
     except Exception:
         logger.exception("bot-admin check failed")
         return False

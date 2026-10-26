@@ -4,6 +4,10 @@ Admin IDs come from environment variables (primary) plus the
 ``maintenance_bypass_ids`` admin-config value (convenience, so deployments that
 already maintain admin IDs there don't have to duplicate them).
 
+Privileged auction operations use ``is_bot_admin``, which recognizes explicit
+environment administrator/owner IDs. Maintenance exemptions do not grant that
+identity.
+
 This module intentionally avoids importing ``telegram`` so it can be used from
 both handler and service layers (and unit-tested) without pulling the bot
 framework in.
@@ -112,6 +116,19 @@ def env_admin_ids() -> set[int]:
     """Bot admins and owners from the environment only — no admin-config IDs."""
     return (parse_id_list(os.getenv(name) for name in ADMIN_ID_ENV_VARS)
             | configured_owner_ids())
+
+
+def is_bot_admin(user_id: int | None) -> bool:
+    """Privileged bot identity, excluding maintenance-bypass users.
+
+    Maintenance access is an operational exception. Auction management and
+    appointing managers require an explicit administrator or owner identity.
+    """
+    value = str(user_id).strip()
+    if not value.isascii() or not value.isdigit():
+        return False
+    tg_id = int(value)
+    return tg_id > 0 and tg_id in env_admin_ids()
 
 
 def extra_reviewer_ids() -> set[int]:

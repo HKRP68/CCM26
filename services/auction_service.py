@@ -1480,6 +1480,8 @@ def set_opening_purse(session, season, purse_lakh, *, by_tg_id=None,
     ``apply_to_field=False`` keeps the old behaviour — the default for new
     franchises only — for a caller that wants it.
     """
+    if by_tg_id is not None:
+        require_auction_manager(session, by_tg_id)
     new_purse = _as_int(purse_lakh, None)
     if new_purse is None or new_purse < 0:
         raise AuctionError("A purse cannot be negative.")
@@ -1569,6 +1571,8 @@ def correct_purse(session, season, franchise, amount_lakh, *, note=None,
     column edit precisely because it is the one operation with no rule behind
     it, so it had better be the most visible.
     """
+    if by_tg_id is not None:
+        require_auction_manager(session, by_tg_id)
     amount = _as_int(amount_lakh, 0)
     if amount == 0:
         raise AuctionError("A correction of nothing is not a correction.")
@@ -3965,6 +3969,8 @@ def complete_if_done(session, season):
 
 def start(session, season, *, now=None, by_tg_id=None):
     """Open the auction. Refuses anything that would strand it halfway."""
+    if by_tg_id is not None:
+        require_auction_manager(session, by_tg_id)
     if season.status == STATUS_LIVE:
         raise AuctionError("This auction is already running.")
     if season.status in (STATUS_COMPLETED, STATUS_CANCELLED):
@@ -4064,6 +4070,8 @@ def pause(session, season, *, by_tg_id=None):
     sweeper simply cannot act on, which is the same call
     ``draft_service.pause`` makes.
     """
+    if by_tg_id is not None:
+        require_auction_manager(session, by_tg_id)
     if season.status != STATUS_LIVE:
         raise AuctionError("The auction is not running.")
     season.status = STATUS_PAUSED
@@ -7358,23 +7366,28 @@ def cancel_retention_offer(session, season, offer):
 # ──────────────────────────────────────────────────────────────────────
 
 def is_auction_admin(session, tg_id):
-    """A bot admin, or somebody a bot admin made an auction admin.
+    """An explicit bot admin/owner, or an appointed auction manager.
 
-    The second kind may run every auction admin command and nothing else in
-    the bot: every other admin gate reads ``services.admin_ids.is_admin``,
-    which never sees the ``auction_admins`` table.
+    Maintenance exemptions grant no management authority. Delegated managers
+    receive auction permissions through the ``auction_admins`` table only.
     """
-    from services.admin_ids import is_admin
-    if tg_id is None:
+    from services.admin_ids import is_bot_admin
+    tg_id = _telegram_user_id(tg_id)
+    if not tg_id:
         return False
-    if is_admin(int(tg_id)):
+    if is_bot_admin(tg_id):
         return True
     try:
         return (session.query(AuctionAdmin.id)
-                .filter(AuctionAdmin.tg_id == int(tg_id)).first()) is not None
+                .filter(AuctionAdmin.tg_id == tg_id).first()) is not None
     except Exception:
         logger.debug("auction admin lookup failed", exc_info=True)
         return False
+
+
+def require_auction_manager(session, tg_id):
+    if not is_auction_admin(session, tg_id):
+        raise AuctionError("Only Auction Managers can manage the auction.")
 
 
 def auction_admins(session):
@@ -7382,6 +7395,10 @@ def auction_admins(session):
 
 
 def add_auction_admin(session, tg_id, *, name=None, by_tg_id=None):
+    if by_tg_id is not None:
+        from services.admin_ids import is_bot_admin
+        if not is_bot_admin(by_tg_id):
+            raise AuctionError("Only bot admins can appoint Auction Managers.")
     tg_id = _as_int(tg_id, 0)
     if tg_id <= 0:
         raise AuctionError("An auction admin is a positive Telegram user id.")
@@ -7397,7 +7414,11 @@ def add_auction_admin(session, tg_id, *, name=None, by_tg_id=None):
     return row
 
 
-def remove_auction_admin(session, tg_id):
+def remove_auction_admin(session, tg_id, *, by_tg_id=None):
+    if by_tg_id is not None:
+        from services.admin_ids import is_bot_admin
+        if not is_bot_admin(by_tg_id):
+            raise AuctionError("Only bot admins can remove Auction Managers.")
     tg_id = _as_int(tg_id, 0)
     row = (session.query(AuctionAdmin)
            .filter(AuctionAdmin.tg_id == tg_id).first())

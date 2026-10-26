@@ -166,9 +166,11 @@ class TradeCase(unittest.TestCase):
         self.csk = A.create_franchise(self.session, self.season, "Chennai",
                                       owner_tg_id=BOB, owner_name="Bob")
         self.session.commit()
-        # Only BOSS is the bot admin in these tests.
-        self._patch = mock.patch.object(T, "is_bot_admin",
-                                        lambda tg_id: tg_id == BOSS)
+        # Exercise the real permission resolver with explicit deployment IDs.
+        from services.admin_ids import ADMIN_ID_ENV_VARS, OWNER_ID_ENV_VARS
+        identities = {key:'' for key in (*ADMIN_ID_ENV_VARS, *OWNER_ID_ENV_VARS)}
+        identities['BOT_ADMIN_IDS'] = str(BOSS)
+        self._patch = mock.patch.dict(os.environ, identities)
         self._patch.start()
         self._manager_ids = set()
 
@@ -592,10 +594,22 @@ class Sweeper(TradeCase):
         bot = SimpleNamespace(send_message=send_message)
         import time
         S._last_trade_notice[0] = time.monotonic()   # notices: own tests
-        with mock.patch("services.admin_ids.configured_admin_ids",
-                        return_value={BOSS}):
-            asyncio.run(S._trade_tick(SimpleNamespace(bot=bot), self.session,
-                                      datetime.utcnow()))
+        asyncio.run(S._trade_tick(SimpleNamespace(bot=bot), self.session,
+                                  datetime.utcnow()))
+
+    def test_trade_approval_notices_only_reach_real_managers(self):
+        self.make_auction_admin(CAROL)
+        trade = self.offer(self.mi, self.csk, [self.lot_named('Virat')], [])
+        self.T.accept(self.session, trade, by_tg_id=BOB)
+        self.session.commit()
+        with mock.patch('services.admin_ids.get_config', return_value={
+                'maintenance_bypass_ids':f'{ALICE},{BOB}'}):
+            self.tick()
+        recipients = {chat for chat, _text, _markup in self.sent}
+        self.assertIn(BOSS, recipients)
+        self.assertIn(CAROL, recipients)
+        self.assertNotIn(ALICE, recipients)
+        self.assertNotIn(BOB, recipients)
 
     def test_pending_goes_to_the_group_and_the_bot_admin_then_done_once(self):
         trade = self.offer(self.mi, self.csk, [self.lot_named("Virat")], [])

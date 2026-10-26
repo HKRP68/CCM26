@@ -19,7 +19,7 @@ from services import auction_preseason as P
 from services import auction_trade_service as T
 from services import retention_negotiation as RN
 from services import auction_antispam as SPAM
-from services.admin_ids import is_admin
+from services.admin_ids import is_bot_admin
 
 
 class AccessError(A.AuctionError):
@@ -51,7 +51,7 @@ def plain(value):
 
 def admin_for(db, tg_id):
     """Use the same manager allowlist as the Telegram commands."""
-    return is_admin(tg_id) or A.is_auction_admin(db, tg_id)
+    return A.is_auction_admin(db, tg_id)
 
 
 def season_row(season):
@@ -173,9 +173,9 @@ def base_payload(db, season, tg_id, rows):
     manager = admin_for(db, tg_id)
     owned = [f.id for f in A.franchises(db, season.id) if A.may_bid_for(f, tg_id)] if season else []
     result = dict(ok=True, auctions=[season_row(s) for s in rows],
-                  admin=manager, bot_admin=is_admin(tg_id),
+                  admin=manager, bot_admin=is_bot_admin(tg_id),
                   role='manager' if manager else 'team' if owned else 'spectator',
-                  permissions=dict(manage=manager, manage_admins=is_admin(tg_id), bid=bool(owned)),
+                  permissions=dict(manage=manager, manage_admins=is_bot_admin(tg_id), bid=bool(owned)),
                   server_time=stamp(datetime.utcnow()), season=None)
     if season is None:
         return result
@@ -785,13 +785,13 @@ def admin_action(db, season, tg_id, data):
             raise A.AuctionError("Give trade rules as an object.")
         T.set_trade_rules(db, season, data['rules'], by_tg_id=tg_id)
     elif action in ('add_admin', 'remove_admin'):
-        if not is_admin(tg_id):
+        if not is_bot_admin(tg_id):
             raise AccessError("Only bot admins can assign auction admins.")
         target = integer(data.get('telegram_id'), 'Telegram id', 1, 10**16)
         if action == 'add_admin':
             A.add_auction_admin(db, target, by_tg_id=tg_id)
         else:
-            A.remove_auction_admin(db, target)
+            A.remove_auction_admin(db, target, by_tg_id=tg_id)
     else:
         raise A.AuctionError("Unknown auction admin action.")
     # Existing service events are kept; this additionally attributes rule and

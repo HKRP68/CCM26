@@ -160,14 +160,14 @@ class TheBypassTests(unittest.TestCase):
 
     def test_a_bot_admin_is_bypassed_without_a_query(self):
         from services import admin_ids
-        with patch.object(admin_ids, "is_admin", return_value=True), \
+        with patch.object(admin_ids, "is_bot_admin", return_value=True), \
                 patch("database.get_session") as session:
             self.assertTrue(F.is_bypassed(999))
         session.assert_not_called()
 
     def test_an_auction_admin_is_bypassed(self):
         from services import admin_ids, auction_service
-        with patch.object(admin_ids, "is_admin", return_value=False), \
+        with patch.object(admin_ids, "is_bot_admin", return_value=False), \
                 patch("database.get_session",
                       return_value=SimpleNamespace(close=lambda: None)), \
                 patch.object(auction_service, "is_auction_admin",
@@ -176,7 +176,7 @@ class TheBypassTests(unittest.TestCase):
 
     def test_nobody_else_is(self):
         from services import admin_ids, auction_service
-        with patch.object(admin_ids, "is_admin", return_value=False), \
+        with patch.object(admin_ids, "is_bot_admin", return_value=False), \
                 patch("database.get_session",
                       return_value=SimpleNamespace(close=lambda: None)), \
                 patch.object(auction_service, "is_auction_admin",
@@ -189,7 +189,7 @@ class TheBypassTests(unittest.TestCase):
         from services import admin_ids
         def _boom(_id):
             raise RuntimeError("no config")
-        with patch.object(admin_ids, "is_admin", _boom), \
+        with patch.object(admin_ids, "is_bot_admin", _boom), \
                 patch.object(F, "logger") as log:
             self.assertTrue(F.is_bypassed(999))
         self.assertTrue(log.exception.called)
