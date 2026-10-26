@@ -1,5 +1,25 @@
 # Franchise Auction
 
+## Access rules
+
+| Role | Allowed actions |
+| --- | --- |
+| Auction Manager | Bot admins and users appointed with `/aadminadd <id \| @user \| reply>` manage auction setup, start/pause/resume, players, squads, purses, retention, drafts, trades and publication. |
+| Team user | Assigned owners and co-owners bid for their own franchise, answer its live RTM questions, and view squads, purses, upcoming players, rules and bid history. |
+| Spectator | Watch live bidding and results, team squads and remaining purses. |
+
+Team ownership and Telegram group-admin status do not grant auction management
+rights. All commands, callbacks and Mini App actions check the actor on every
+request. Only bot admins appoint or remove Auction Managers. Removing a manager
+revokes their management access on the next request.
+
+Purse left is the committed balance after signings, refunds, trade cash and
+manager corrections. A standing bid is shown separately with the balance after
+winning; the bid is charged when the sale settles. Net purse use includes cash
+and corrections, while current contract value totals squad prices. Purse edits
+must cover any standing bid and the minimum squad reserve. Paused Telegram
+boards and Mini App purse views refresh when balances change.
+
 The Tournament Draft answers "how does a Challenge League get its squads?" one
 way: an admin uploads a pick order and the owners take turns.
 [`docs/player-draft.md`](player-draft.md) ends with what it could not do —

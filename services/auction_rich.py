@@ -2024,8 +2024,11 @@ ADMIN_SECTIONS = (
         ("/aretain <team> [| <player> | price]", "Offer a retention from last "
                                                  "season's squad — bare team "
                                                  "name lists it as buttons"),
-        ("/aretainforce <team> [| <player> | price]", "Retain your own team's "
-                                                      "player at once — owner/co-owner only"),
+        ("/aretainforce <team> [| <player> | price]", "Auction Manager: retain a "
+                                                      "player for this team at once"),
+        ("/retain [team | player] [| price]", "Manager retention negotiation for an assigned team"),
+        ("/retainlock", "Manager review and finalization of assigned retentions"),
+        ("/arelease [player]", "Manager release with a refund, within the release window"),
         ("/aoffers", "Retention offers still waiting"),
         ("/aretcancel <player>", "Withdraw a waiting offer"),
         ("/aunretain <player>", "Release a retained player into the pool"),
@@ -2094,12 +2097,6 @@ PLAYER_SECTION = ("👥 For owners & everyone", (
     (".bid · .purse · .squad · .board", "Dot shortcuts — the same commands, "
                                         "quicker to type"),
     ("/artm yes|no", "Answer a Right To Match"),
-    ("/retain [player] [| price]", "Dynamic retention: bare lists last "
-                                   "season's squad; then make offers — he "
-                                   "decides"),
-    ("/arelease [player]", "Release one of your kept players back into the "
-                           "auction (price back in your purse) while the "
-                           "window is open; bare lists them as buttons"),
     ("/ainfo", "Buttons for every view below"),
     ("/arules", "Purse, caps, base prices, bid steps, the clock — before a lot opens"),
     ("/asets · /anextset · /anextplayer", "Sets, the next set, the next players"),
@@ -2107,13 +2104,11 @@ PLAYER_SECTION = ("👥 For owners & everyone", (
     ("/ateamsummary [team] · /asummary", "Every team's categorized full squad, all ratings, purse use and limits"),
     ("/aretlock · /apicks", "Who kept whom, and the expansion pick order"),
     ("/aready", "Retention progress, range counts, purses and the next draft turn"),
-    ("/retainlock", "Preview your retentions, then confirm to make them final"),
     ("/aeligible [team | range | role | country | cost | page]", "Browse eligible draft players; cost in Cr"),
-    ("/ashortlist [add Player · remove Player · clear]", "Your team's ordered automatic-pick preferences"),
+    ("/ashortlist", "View your team's ordered automatic-pick preferences"),
     ("/asoldlist · /aunsoldlist", "Everyone sold, everyone unsold"),
     ("/aleaderboard · /amybids", "Who has spent most; your own bid history"),
     ("/aboard", "The live board with quick-bid buttons"),
-    ("/atrade <team>", "🔁 Trade — players, cash or both, IPL rules"),
     ("/atrades · /atradeblock", "The trade log; who is up for offers"),
     ("/atradehelp", "📖 How trades work, and every trade command"),
 ))

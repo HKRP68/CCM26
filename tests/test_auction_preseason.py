@@ -280,6 +280,13 @@ class PreseasonTests(F.ExpansionCase):
 
 
 class PreseasonCommandTests(F.ExpansionCase):
+    def setUp(self):
+        super().setUp()
+        from handlers import auction as H
+        manager_gate = patch.object(H, '_is_auction_admin', return_value=True)
+        manager_gate.start()
+        self.addCleanup(manager_gate.stop)
+
     def callback(self, user_id, token):
         from handlers import auction as H
         self.session.commit()

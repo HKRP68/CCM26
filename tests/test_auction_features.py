@@ -1036,9 +1036,10 @@ class RetentionOfferTests(FeatureCase):
             self.session.expire_all()
 
         press(BOB)
-        self.assertIn("Mumbai", answers[-1])
+        self.assertIn("Auction Managers", answers[-1])
         self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
-        press(ALICE)
+        with AdminEnv(ALICE):
+            press(ALICE)
         self.assertIn("Retained", answers[-1])
         self.assertIn("Accepted", edits[-1])
         self.assertEqual(1, len(self.A.retained(self.session, self.mumbai.id)))

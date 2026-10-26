@@ -207,7 +207,7 @@ class CommandTests(SquadCase):
     def call(self, handler, user_id, args=(), **kw):
         import os
         previous = os.environ.get("BOT_ADMIN_IDS")
-        os.environ["BOT_ADMIN_IDS"] = str(CAROL)
+        os.environ["BOT_ADMIN_IDS"] = f"{CAROL},{ALICE},501"
         try:
             asyncio.run(handler(self.update(user_id, **kw),
                                 SimpleNamespace(args=list(args),
@@ -255,7 +255,7 @@ class CommandTests(SquadCase):
                                           self.A.retained(self.session,
                                                           self.mumbai.id)])
 
-    def test_owner_can_use_instant_picker_without_admin_privileges(self):
+    def test_manager_owner_can_use_instant_picker(self):
         from handlers import auction as H
         self.call(H.retention_pick_callback, ALICE,
                   data=f"au_rpk_f_{self.mumbai.id}_{self.pant.id}")
@@ -286,7 +286,7 @@ class CommandTests(SquadCase):
         self.assertEqual([self.pant.id], [lot.player_id for lot in kept])
         self.assertEqual(1700, kept[0].sold_price_lakh)
 
-    def test_retain_explicit_team_accepts_coowner(self):
+    def test_retain_explicit_team_accepts_manager_coowner(self):
         from handlers import auction as H
         self.mumbai.co_owner_ids_json = '[501]'
         self.session.commit()
@@ -299,7 +299,7 @@ class CommandTests(SquadCase):
         from handlers import auction as H
         for actor in (BOB, CAROL):
             self.call(H.retain_handler, actor, ("Mumbai", "|", "pant"))
-            self.assertIn("Only Mumbai&#x27;s owner", self.replies[-1])
+            self.assertTrue("Only Mumbai&#x27;s owner" in self.replies[-1] or "Auction Managers" in self.replies[-1])
         self.session.expire_all()
         self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
 
@@ -373,13 +373,13 @@ class CommandTests(SquadCase):
             self.assertIn("Usage: /retain", self.replies[-1])
         self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
 
-    def test_other_team_owner_and_admin_cannot_force_retention(self):
+    def test_only_a_manager_can_force_retention_for_another_team(self):
         from handlers import auction as H
-        for actor in (BOB, CAROL):
-            self.call(H.aretainforce_handler, actor, ("Mumbai", "|", "pant"))
-            self.assertIn("owner or a co-owner", self.replies[-1])
+        self.call(H.aretainforce_handler, BOB, ("Mumbai", "|", "pant"))
+        self.assertIn("Auction Managers", self.replies[-1])
+        self.call(H.aretainforce_handler, CAROL, ("Mumbai", "|", "pant"))
         self.session.expire_all()
-        self.assertEqual([], self.A.retained(self.session, self.mumbai.id))
+        self.assertEqual([self.pant.id], [l.player_id for l in self.A.retained(self.session, self.mumbai.id)])
 
     def test_service_rejects_another_teams_player_in_every_format(self):
         for mode in self.RN.MODES:
@@ -423,10 +423,16 @@ class CommandTests(SquadCase):
         from services import retention_negotiation as RN
         RN.set_mode(self.session, self.season, RN.MODE_DYNAMIC)
         self.session.commit()
-        self.call(H.retain_handler, BOB)
-        self.assertIn("Chennai", self.replies[-1])
-        self.assertIn(self.jadeja.name, self.replies[-1])
-        self.assertNotIn(self.pant.name, self.replies[-1])
+        self.A.add_auction_admin(self.session, BOB)
+        self.session.commit()
+        try:
+            self.call(H.retain_handler, BOB)
+            self.assertIn("Chennai", self.replies[-1])
+            self.assertIn(self.jadeja.name, self.replies[-1])
+            self.assertNotIn(self.pant.name, self.replies[-1])
+        finally:
+            self.A.remove_auction_admin(self.session, BOB)
+            self.session.commit()
 
     def test_aprevious_links_and_aprevteam_fixes_a_rename(self):
         from handlers import auction as H

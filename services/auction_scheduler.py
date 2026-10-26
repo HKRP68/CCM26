@@ -780,6 +780,7 @@ async def _auction_tick(context):
             except Exception:
                 session.rollback()
                 logger.exception("auction #%s tick failed", season.id)
+        await _refresh_idle_boards(context, session, now)
         from services import auction_preseason as P
         from models import AuctionEvent
         setup = (session.query(AuctionSeason)
@@ -818,6 +819,33 @@ async def _auction_tick(context):
             logger.exception("auction trade sweep failed")
     finally:
         session.close()
+
+
+async def _refresh_idle_boards(context, session, now):
+    """Pausing the clock must not freeze purse changes on the pinned board."""
+    from models import AuctionEvent, AuctionSeason
+    from services import auction_service as A
+    pending = session.query(AuctionEvent.id).filter(
+        AuctionEvent.season_id == AuctionSeason.id,
+        AuctionEvent.id > func.coalesce(AuctionSeason.announced_event_id, 0))
+    rows = (session.query(AuctionSeason)
+            .filter(AuctionSeason.status.in_((A.STATUS_SETUP, A.STATUS_PAUSED,
+                                             A.STATUS_COMPLETED, A.STATUS_CANCELLED)),
+                    AuctionSeason.chat_id.isnot(None),
+                    ((AuctionSeason.status == A.STATUS_PAUSED)
+                     | AuctionSeason.board_message_id.isnot(None)),
+                    pending.exists(),
+                    ~pending.filter(AuctionEvent.kind.like(SIM_PREFIX + "%")).exists())
+            .all())
+    for season in rows:
+        try:
+            async with _lock():
+                await drain_events(context.bot, session, season)
+                await refresh_board(context.bot, session, season, force=True, now=now)
+                session.commit()
+        except Exception:
+            session.rollback()
+            logger.exception("auction #%s board refresh failed", season.id)
 
 
 # ── Trades ───────────────────────────────────────────────────────────

@@ -62,7 +62,7 @@ def register(app, authenticate, csrf_exempt, member_rpc):
             # Creation never needs access to a selected auction.
             if kind == 'action' and data.get('action') == 'admin_create':
                 if not W.admin_for(db, tg_id):
-                    raise W.AccessError('Only bot admins can create an auction.')
+                    raise W.AccessError('Only Auction Managers can create an auction.')
                 result = W.perform(db, None, tg_id, data)
                 db.commit()
                 return dict(ok=True, **result)
@@ -83,7 +83,7 @@ def register(app, authenticate, csrf_exempt, member_rpc):
                 db.commit()
                 return dict(ok=True, **result)
             if not W.admin_for(db, tg_id):
-                raise W.AccessError('Only bot admins can manage auction setup.')
+                raise W.AccessError('Only Auction Managers can manage auction setup.')
             if kind == 'catalogue':
                 from models import Player
                 from services import player_query

@@ -28,7 +28,7 @@ const AuctionApp = (() => {
   const ownId = () => selectedTeam || data?.my_team_ids?.[0];
   const managedTeam = () => (data?.teams||[]).find(t=>t.id===(managedTeamId||data.managed_team_id));
   const active = () => toolsOpen && typeof currentScreen !== 'undefined' && currentScreen === 'auction' && !!$('auction-app');
-  const stats = rows => `<dl class="au-stats">${rows.map(([label,value])=>`<div><dt>${esc(label)}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>`;
+  const stats = rows => `<dl class="au-stats">${rows.map(([label,value,purseTeam])=>`<div><dt>${esc(label)}</dt><dd ${purseTeam?`data-au-purse="${purseTeam}"`:""}>${esc(value)}</dd></div>`).join('')}</dl>`;
   const viewButton = (label,target) => `<button type="button" class="au-btn" data-au-ui="view" data-view="${target}">${esc(label)} →</button>`;
 
   function setSeason(id) { seasonId = id ? Number(id) : null; selectedTeam=null; managedTeamId=null; signingPlayer=null; cataloguePlayers=[]; catalogueQuery=''; filters={query:'',status:'',role:'',set_name:'',page:1}; data=null; epoch++; catalogueEpoch++; }
@@ -134,22 +134,24 @@ const AuctionApp = (() => {
       // Polls must not erase a half-typed custom bid or close its keyboard.
       const editing = $('au-body').contains(document.activeElement) && document.activeElement?.matches('input, textarea, select');
       if(!background || !editing) renderBody();
+      document.querySelectorAll('[data-au-purse]').forEach(el=>{const team=data.teams?.find(t=>t.id===Number(el.dataset.auPurse));if(team)el.textContent=money(team.purse_lakh);});
       tick();
     } else {
       $('au-connection').innerHTML=`<span class="au-error">${esc(result.data.message||'Could not load the auction.')}</span> <button class="au-btn" data-au-ui="refresh">Retry</button>`;
       document.querySelectorAll('#au-body [data-au-action],#au-body button[type="submit"]').forEach(b=>b.disabled=true);
-      if(result.status===403) {$('au-body').innerHTML=empty('Access denied',result.data.message||'Your account cannot use these controls.');return;}
+      if(result.status===403) {if(data){data.admin=false;data.bot_admin=false;renderHeader();}$('au-body').innerHTML=empty('Access denied',result.data.message||'Your account cannot use these controls.');return;}
       if(!data) $('au-body').innerHTML=empty('The auction could not be loaded','Check your connection, then retry. Open the auction from its Telegram group if you are a spectator.');
     }
-    if(active() && (requestedSeason===seasonId || requestedSeason===null) && ['preseason','trades'].includes(view)) {
-      poll=setTimeout(()=>refresh(true),12000);
+    if(active() && (requestedSeason===seasonId || requestedSeason===null) && ['teams','admin','preseason','trades'].includes(view)) {
+      poll=setTimeout(()=>refresh(true),5000);
     }
   }
   function renderHeader() {
     const labels={pool:'Player pool',teams:data.admin?'Players & purses':'My purse & bids',preseason:'Retention & draft',trades:'Trades',rules:'Rulebook',admin:'Setup & rules'};
     if($('au-title')) $('au-title').textContent=labels[view]||'Auction tools';
     $('au-status').innerHTML=data.season?`<span class="au-tag au-state-${esc(data.season.status)}">${esc(data.season.status)}</span><span class="au-dot ${data.season.status==='live'?'live':''}"></span>Shared with Telegram${data.admin?' · Auction admin':data.my_team_ids?.length?' · Owner / co-owner':' · Spectator'}${data.season.published?' · Published to league':''}`:(data.admin?'Create or manage an auction':'Your assigned auctions appear here');
-    const tabs=[['pool','Players'],['teams',data.admin?'Players & purses':'My purse & bids'],['preseason','Retention & draft'],['trades','Trades'],['rules','Rulebook']];
+    let tabs=[['pool','Players'],['teams',data.admin?'Players & purses':'My purse & bids'],['preseason','Retention & draft'],['trades','Trades'],['rules','Rulebook']];
+    if(!data.admin) tabs=tabs.filter(([key])=>data.my_team_ids?.length?['pool','teams','rules'].includes(key):key==='teams');
     if(data.admin) tabs.push(['admin','Setup & rules']);
     $('au-nav').innerHTML=tabs.map(([key,label])=>`<button type="button" class="${view===key?'active':''}" data-au-ui="view" data-view="${key}" aria-current="${view===key?'page':'false'}">${label}</button>`).join('');
     $('au-connection').textContent='Updated just now';
@@ -159,7 +161,7 @@ const AuctionApp = (() => {
     if(!data.season) {
       $('au-body').innerHTML=data.admin?empty('Manage your auctions','Create an auction or select one above.')+newAuction():empty('Waiting for your auction','Your assigned auctions will appear here. You can also open Switch to Miniapp in your auction group.'); return;
     }
-    if(view==='admin'&&!data.admin) { $('au-body').innerHTML=empty('Bot admin access required','Only verified bot admins can use setup and management.'); return; }
+    if(['admin','preseason','trades'].includes(view)&&!data.admin) { $('au-body').innerHTML=empty('Auction Manager access required','Only Auction Managers can use setup and management.'); return; }
     const renderer={pool:renderPool,teams:renderTeams,preseason:renderPreseason,trades:renderTrades,rules:renderRules,admin:renderAdmin}[view];
     $('au-body').innerHTML=renderer?renderer():'';
     $('au-body').querySelectorAll('details').forEach(d=>{ d.open=openDetails.includes(d.querySelector('summary')?.textContent); });
@@ -185,7 +187,7 @@ const AuctionApp = (() => {
   }
   function renderTeams() {
     const teams=data.teams||[], ownTeams=teams.filter(t=>t.mine);
-    let content=data.admin?renderTeamManager():ownTeams.map(t=>`<section class="au-card"><h3>${esc(t.name)}</h3>${stats([['Purse',money(t.purse_lakh)],['Max legal bid',money(t.max_bid_lakh)],['Squad',t.size+'/'+data.season.max_squad]])}${warnings(t)}</section>`).join('');
+    let content=data.admin?renderTeamManager():ownTeams.map(t=>`<section class="au-card"><h3>${esc(t.name)}</h3>${stats([['Purse left',money(t.purse_lakh),t.id],['Used (net)',money(t.used_lakh??(t.opening_lakh-t.purse_lakh))],['Max legal bid',money(t.max_bid_lakh)],['Squad',t.size+'/'+data.season.max_squad]])}${warnings(t)}</section>`).join('');
     if(!teams.length)content+=empty('No franchises yet',data.admin?'Add franchises in Setup & rules.':'The auction admins are preparing the teams.');
     if(data.my_team_ids?.length)content+=details('Your purse ledger',ledgerRows(data.ledger))+details('Your bid history',(data.my_bids||[]).map(b=>`<div class="au-row"><div class="au-muted">${esc(b.name)}${b.void?' · voided':''}<br>${esc(date(b.at))}</div><strong>${money(b.amount_lakh)}</strong></div>`).join('')||'<p class="au-muted">No bids yet.</p>');
     return content||empty('Franchise owners can review their purse here','Open Squads to browse the complete field.');
@@ -201,7 +203,7 @@ const AuctionApp = (() => {
     const purse=form('admin_team_purse',hidden('expected_purse_lakh',t.purse_lakh)+`<label class="au-field"><span>Action</span><select class="au-select" name="mode"><option value="add">Add funds</option><option value="deduct">Deduct funds</option><option value="set">Set balance</option></select></label>`+field('amount_lakh','Amount in lakh · 100 = 1 Cr','','number')+field('note','Reason for this change')+`<output class="au-change-preview" data-au-preview aria-live="polite">Current balance: ${money(t.purse_lakh)}</output>`,'Review purse change',args);
     const removal=t.squad.length?form('admin_team_remove_player',hidden('expected_price_lakh',t.squad[0].price_lakh??0)+hidden('expected_sold_at',t.squad[0].sold_at||'')+`<label class="au-field"><span>Player to remove</span><select class="au-select" name="lot_id">${t.squad.map(p=>`<option value="${p.id}">${esc(p.name)} · refund ${money(p.price_lakh)}</option>`).join('')}</select></label>`+field('note','Reason for removing player')+`<p class="au-muted">Returns the player to the auction queue and refunds their full signing price. Retention and trade restrictions still apply.</p>`,'Review removal & refund',args):'<p class="au-muted">This team has no players to remove.</p>';
     const signing=signingPlayer?`<div class="au-selected-player"><strong>${esc(signingPlayer.name)}</strong><p class="au-muted">${signingPlayer.rating} OVR · ${esc(signingPlayer.role)} · ${esc(signingPlayer.version||'Base')}</p><button class="au-btn" type="button" data-au-ui="clear-signing">Choose another player</button></div>`+form('admin_team_add_player',hidden('player_id',signingPlayer.id)+field('price_lakh','Signing price in lakh · 0 = free',signingPlayer.base_lakh??0,'number')+field('note','Reason for adding player')+`<output class="au-change-preview" data-au-preview aria-live="polite">Purse after signing: ${money(t.purse_lakh-(signingPlayer.base_lakh??0))}</output>`,'Review signing',args):form('team_catalogue',field('query','Search player name',catalogueQuery,'search',false),'Find players')+`<div id="au-team-catalogue" class="au-catalogue-results">${cataloguePlayers.length?catalogueRows('team'):'<p class="au-muted">Search the catalogue, then select a player. Already signed players are marked unavailable.</p>'}</div>`;
-    return `<section class="au-card au-manager" id="au-team-manager"><div class="au-kicker">Admin workspace</div><h3>Manage a team</h3><p class="au-muted">Every change is recorded in the purse ledger and auction activity.</p>${choice}${stats([['Available purse',money(t.purse_lakh)],['Signed players',t.size+'/'+data.season.max_squad],['Legal bid ceiling',money(t.max_bid_lakh)]])}${locked?'<p class="au-warning">This auction is published or cancelled. Management is locked.</p>':`<div class="au-management-grid"><section><h4>Adjust purse</h4>${purse}</section><section><h4>Add a player</h4>${blocked?`<p class="au-warning">${esc(blocked)}</p>${viewButton('Open live controls','live')}`:signing}</section><section><h4>Remove a player</h4>${blocked?`<p class="au-muted">${esc(blocked)}</p>`:removal}</section></div>`}${details(t.name+' · recent purse ledger',ledgerRows(data.team_ledger))}</section>`;
+    return `<section class="au-card au-manager" id="au-team-manager"><div class="au-kicker">Admin workspace</div><h3>Manage a team</h3><p class="au-muted">Every change is recorded in the purse ledger and auction activity.</p>${choice}${stats([['Purse left',money(t.purse_lakh),t.id],['Signed players',t.size+'/'+data.season.max_squad],['Legal bid ceiling',money(t.max_bid_lakh)]])}${locked?'<p class="au-warning">This auction is published or cancelled. Management is locked.</p>':`<div class="au-management-grid"><section><h4>Adjust purse</h4>${purse}</section><section><h4>Add a player</h4>${blocked?`<p class="au-warning">${esc(blocked)}</p>${viewButton('Open live controls','live')}`:signing}</section><section><h4>Remove a player</h4>${blocked?`<p class="au-muted">${esc(blocked)}</p>`:removal}</section></div>`}${details(t.name+' · recent purse ledger',ledgerRows(data.team_ledger))}</section>`;
   }
   function previewChange(input) {
     const f=input.closest?.('[data-au-form]');
@@ -261,7 +263,7 @@ const AuctionApp = (() => {
       }
       if(t.status==='offered'&&!t.expired&&t.mine_b) actions+=`<div class="au-actions">${btn('Accept trade','trade_accept',args,true)}${btn('Counter','trade_counter',args)}${btn('Reject','trade_reject',args)}</div>`;
       if(t.status==='offered'&&t.mine_a) actions+=`<div class="au-actions">${btn('Withdraw','trade_cancel',args)}</div>`;
-      if(data.bot_admin) actions+=`<div class="au-actions">${t.status==='pending_admin'?btn('Approve','admin_trade_approve',{trade_id:t.id},true)+btn('Veto','admin_trade_veto',{trade_id:t.id}):''}${t.status==='completed'?btn('Reverse trade','admin_trade_reverse',{trade_id:t.id}):''}</div>`;
+      if(data.admin) actions+=`<div class="au-actions">${t.status==='pending_admin'?btn('Approve','admin_trade_approve',{trade_id:t.id},true)+btn('Veto','admin_trade_veto',{trade_id:t.id}):''}${t.status==='completed'?btn('Reverse trade','admin_trade_reverse',{trade_id:t.id}):''}</div>`;
       return `<section class="au-card"><h3>Trade #${t.id} · ${esc(t.status.replaceAll('_',' '))}</h3><p><strong>${esc(t.a)} ↔ ${esc(t.b)}</strong></p><p class="au-muted">${esc(t.a)} sends: ${esc(t.a_lots.map(l=>l.name).join(', ')||'Cash only')}<br>${esc(t.b)} sends: ${esc(t.b_lots.map(l=>l.name).join(', ')||'Cash only')}</p><p class="au-muted">Cash: ${money(t.cash_lakh)} from ${esc(t.a)} to ${esc(t.b)}${t.note?' · '+esc(t.note):''}${t.expires?' · '+(t.expired?'Expired':esc(date(t.expires))):''}</p>${actions}</section>`;
     }).join('')||empty('No trades yet','Offers and completed deals appear here.');
     out+=details('Trade block',(data.block||[]).map(b=>`<div class="au-row"><strong>${esc(b.name)}</strong><span class="au-muted">${esc(b.team)} · ${esc(b.note||'Available for trade')}</span></div>`).join('')||'<p class="au-muted">No listed players.</p>');
@@ -337,7 +339,7 @@ const AuctionApp = (() => {
   }
   async function act(action,args) {
     if(busy) return;
-    if(action.startsWith('admin_')&&!data?.admin) { notify('Only bot admins can manage an auction.','error'); return; }
+    if(!data?.admin&&!['bid','rtm','rtm_stand'].includes(action)) { notify('Only Auction Managers can manage an auction.','error'); return; }
     const confirmations={retention_confirm:'Finalize this retention list? Finalized retentions cannot be changed by the owner.',release:'Release this player into the auction pool?',trade_accept:'Accept this trade, including its players and cash?',admin_trade_reverse:'Reverse this completed trade?',admin_sold:'Sell the current player at the displayed price?',admin_unsold:'Mark the current player unsold?',admin_force_next:'Bring this player onto the block?',admin_recall:'Recall this sale?',admin_undo_sale:'Undo this sale?',admin_retention_force:'Force this retention as an admin?'};
     const t=managedTeam();
     if(action==='admin_team_purse'&&t) {

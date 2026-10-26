@@ -28,10 +28,10 @@ squad already on the wrong side of a rule may still trade, it may not get
 worse. Absolute checks would freeze out exactly the franchises that most need
 a trade to fix themselves.
 
-**Only the bot owner / a bot admin approves.** With ``require_approval`` on
-(the default) a trade both owners accepted waits as ``pending_admin`` until a
-bot admin presses Approve or Veto. Auction admins run the room; they do not
-sign off squads, because a trade is permanent in a way a bid is not.
+**Auction Managers approve trades.** With ``require_approval`` on (the
+default), an agreed trade waits as ``pending_admin`` until a bot admin or a
+manager appointed with ``/aadminadd`` presses Approve or Veto. Telegram and
+Mini App mutations enforce this same manager role.
 
 Contract, matching ``services.auction_service``: session first, **nothing here
 commits**, every refusal is an ``AuctionError`` in plain text; only the
@@ -160,8 +160,12 @@ def _signed_money(season, lakh):
     return ("+" if lakh > 0 else "−") + _money(season, abs(lakh))
 
 
+def is_trade_manager(session, tg_id):
+    return is_bot_admin(tg_id) or A.is_auction_admin(session, tg_id)
+
+
 def is_bot_admin(tg_id):
-    """The bot owner or a bot admin — the only people who approve trades."""
+    """Global bot administrator identity."""
     if tg_id is None:
         return False
     from services.admin_ids import is_admin, is_owner
@@ -231,8 +235,8 @@ def set_trade_rules(session, season, changes, *, by_tg_id=None):
                     raise AuctionError(f"{key} takes on or off.")
             value = bool(value)
             if (key == "require_approval" and by_tg_id is not None
-                    and value != rules[key] and not is_bot_admin(by_tg_id)):
-                raise AuctionError("Only the bot owner or a bot admin can "
+                    and value != rules[key] and not is_trade_manager(session, by_tg_id)):
+                raise AuctionError("Only Auction Managers can "
                                    "change whether trades need approval.")
         else:
             if key == "max_cash_lakh" and isinstance(value, str):
@@ -1249,9 +1253,9 @@ def execute(session, trade, *, by_tg_id=None, now=None, by_admin=False,
 
 
 def approve(session, trade, *, by_tg_id=None, by_web=False, now=None):
-    """The bot owner / a bot admin signs a pending trade off."""
-    if not by_web and not is_bot_admin(by_tg_id):
-        raise AuctionError("Only the bot owner or a bot admin can approve trades.")
+    """An Auction Manager signs a pending trade off."""
+    if not by_web and not is_trade_manager(session, by_tg_id):
+        raise AuctionError("Only Auction Managers can approve trades.")
     if trade.status != STATUS_PENDING:
         raise AuctionError(f"Trade #{trade.id} is not waiting for approval — it "
                            f"is {STATUS_LABEL.get(trade.status, trade.status)}.")
@@ -1260,8 +1264,8 @@ def approve(session, trade, *, by_tg_id=None, by_web=False, now=None):
 
 
 def veto(session, trade, *, by_tg_id=None, by_web=False, reason=None):
-    if not by_web and not is_bot_admin(by_tg_id):
-        raise AuctionError("Only the bot owner or a bot admin can veto trades.")
+    if not by_web and not is_trade_manager(session, by_tg_id):
+        raise AuctionError("Only Auction Managers can veto trades.")
     if trade.status not in LIVE_STATUSES:
         raise AuctionError(f"Trade #{trade.id} is already "
                            f"{STATUS_LABEL.get(trade.status, trade.status)}.")
@@ -1280,8 +1284,8 @@ def reverse(session, trade, *, by_tg_id=None, by_web=False, now=None):
     Refused once any player in it has moved again (traded on, or the sale
     undone), because "put it back how it was" no longer has one meaning.
     """
-    if not by_web and not is_bot_admin(by_tg_id):
-        raise AuctionError("Only the bot owner or a bot admin can undo a trade.")
+    if not by_web and not is_trade_manager(session, by_tg_id):
+        raise AuctionError("Only Auction Managers can undo a trade.")
     if trade.status != STATUS_COMPLETED:
         raise AuctionError(f"Trade #{trade.id} is not a completed trade.")
     now = now or datetime.utcnow()
@@ -1379,8 +1383,8 @@ def admin_trade(session, season, team_a, team_b, a_lots, b_lots, cash_lakh=0,
     Every squad rule still applies; the window does not, because the admin is
     the person who decides when the window is.
     """
-    if not by_web and not is_bot_admin(by_tg_id):
-        raise AuctionError("Only the bot owner or a bot admin can force a trade.")
+    if not by_web and not is_trade_manager(session, by_tg_id):
+        raise AuctionError("Only Auction Managers can force a trade.")
     now = now or datetime.utcnow()
     if team_a is None or team_b is None or team_a.id == team_b.id:
         raise AuctionError("Pick two different franchises.")

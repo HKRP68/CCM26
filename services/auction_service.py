@@ -1494,6 +1494,7 @@ def set_opening_purse(session, season, purse_lakh, *, by_tg_id=None,
 
     field = franchises(session, season.id)
     symbol = season.currency_label or "₹"
+    live_lot = current_lot(session, season)
     # Everything is checked before anything is written: a half-applied purse
     # change is the one outcome worse than a refused one.
     for franchise in field:
@@ -1510,6 +1511,8 @@ def set_opening_purse(session, season, purse_lakh, *, by_tg_id=None,
                 f"{render_money(new_purse, symbol)} purse would put it "
                 f"{render_money(-after, symbol)} in the red. Sell somebody "
                 f"first, or set that franchise's own purse.")
+        if after < standing_bid_reserve(season, franchise, live_lot):
+            raise AuctionError(f"{franchise.name}'s new purse cannot cover its standing bid and squad reserve.")
 
     changed = []
     for franchise in field:
@@ -1525,9 +1528,10 @@ def set_opening_purse(session, season, purse_lakh, *, by_tg_id=None,
         # its purse. The non-negative guard rides in the WHERE for the same
         # reason: the loop above is a courtesy that says WHY in words, this is
         # what actually refuses, and it cannot be overtaken.
+        floor = standing_bid_reserve(season, franchise, live_lot) if delta < 0 else 0
         moved = (session.query(AuctionFranchise)
                  .filter(AuctionFranchise.id == franchise.id,
-                         AuctionFranchise.purse_remaining_lakh + delta >= 0)
+                         AuctionFranchise.purse_remaining_lakh + delta >= floor)
                  .update({"purse_total_lakh": new_purse,
                           "purse_remaining_lakh":
                               AuctionFranchise.purse_remaining_lakh + delta},
@@ -1574,9 +1578,13 @@ def correct_purse(session, season, franchise, amount_lakh, *, note=None,
             f"That would leave {franchise.name} at "
             f"{render_money(new_balance, season.currency_label)}. A purse "
             f"cannot go below zero.")
+    lot = current_lot(session, season)
+    floor = standing_bid_reserve(season, franchise, lot) if amount < 0 else 0
+    if new_balance < floor:
+        raise AuctionError("That balance cannot cover this team's standing bid and squad reserve.")
     query = session.query(AuctionFranchise).filter(
         AuctionFranchise.id == franchise.id,
-        AuctionFranchise.purse_remaining_lakh + amount >= 0)
+        AuctionFranchise.purse_remaining_lakh + amount >= floor)
     if expected_balance is not None:
         query = query.filter(AuctionFranchise.purse_remaining_lakh == expected_balance)
     changed = query.update({AuctionFranchise.purse_remaining_lakh:
@@ -1943,6 +1951,29 @@ def bid_block_reason(session, season, lot, franchise, *, now=None):
     except AuctionError as exc:
         return str(exc)
     return ""
+
+
+def purse_summary(season, franchise, lot=None):
+    """Money already settled and the separate, uncharged standing bid.
+
+    Never reconstruct a balance from squad prices: retentions, trades, refunds
+    and manager corrections are already included in the persisted purse.
+    """
+    remaining = int(franchise.purse_remaining_lakh or 0)
+    total = int(franchise.purse_total_lakh or 0)
+    standing = (int(lot.current_bid_lakh or 0) if lot is not None
+                and lot.status in LOT_LIVE and lot.current_bidder_id == franchise.id else 0)
+    return dict(remaining_lakh=remaining, total_lakh=total,
+                used_lakh=total - remaining, standing_bid_lakh=standing,
+                after_bid_lakh=remaining - standing)
+
+
+def standing_bid_reserve(season, franchise, lot):
+    standing = purse_summary(season, franchise, lot)['standing_bid_lakh']
+    if not standing:
+        return 0
+    slots = max(0, int(season.min_squad_size or 0) - int(franchise.squad_size or 0) - 1)
+    return standing + slots * max(0, int(season.min_base_price_lakh or 0))
 
 
 def max_bid_now(season, franchise, *, winning_this_lot=True):
@@ -2759,7 +2790,7 @@ def _sign_before_auction(session, season, franchise, player, price, *,
 
 def retain(session, season, franchise, player, price_lakh=None, *,
            now=None, by_tg_id=None, slot_key=None, talk_rounds=None,
-           quiet=False):
+           quiet=False, by_admin=False):
     """Keep a player for a franchise, at a price, out of its purse.
 
     Every refusal names the number that would have worked. The order matters:
@@ -2770,7 +2801,10 @@ def retain(session, season, franchise, player, price_lakh=None, *,
     """
     from services import auction_preseason as P
     P.claim_turn(session, season)
-    if by_tg_id is not None:
+    if by_admin:
+        if not is_auction_admin(session, by_tg_id):
+            raise AuctionError("Only Auction Managers can force a retention.")
+    elif by_tg_id is not None:
         require_retention_owner(session, season, franchise, by_tg_id)
     from services import retention_negotiation as RN
     if season.previous_league_id:
@@ -7517,7 +7551,9 @@ def render_purses(session, season):
     ledger read from one end to the other."""
     symbol = season.currency_label or "₹"
     lines = [f"💼 <b>{_e(season.name)}</b> — purses"]
+    current = current_lot(session, season)
     for franchise in franchises(session, season.id):
+        purse = purse_summary(season, franchise, current)
         kept = retention_spent(session, franchise.id)
         block = [f"\n<b>{_e(franchise.name)}</b>"]
         if kept:
@@ -7535,6 +7571,9 @@ def render_purses(session, season):
         block.append(
             f"  🎯 Max bid "
             f"{render_money(max(0, max_bid_now(season, franchise)), symbol)}")
+        if purse['standing_bid_lakh']:
+            block.append(f"  🔨 Standing bid {render_money(purse['standing_bid_lakh'], symbol)}"
+                         f" · after winning {render_money(purse['after_bid_lakh'], symbol)}")
         if rtm_configured(season):
             block.append(f"  🪪 {rtm_cards_left(franchise)} Right To Match "
                          f"of {int(franchise.rtm_cards_total or 0)}")

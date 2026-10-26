@@ -389,8 +389,12 @@ class CommandTests(DynamicCase):
         self.session.expire_all()
         self.assertEqual(85, self.RN.rules(self.season)["counter_pct"])
 
-    def test_an_owner_negotiates_with_retain(self):
+    def test_a_manager_owner_negotiates_with_retain(self):
         from handlers import auction as H
+        from unittest.mock import patch
+        manager_gate = patch.object(H, "_is_auction_admin", return_value=True)
+        manager_gate.start()
+        self.addCleanup(manager_gate.stop)
         from models import Player
         from tests.test_auction_retention import _PID
         solo = Player(name=f"Talk Solo {next(_PID)}", rating=90,

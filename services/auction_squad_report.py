@@ -51,11 +51,12 @@ def team_data(session, season, team):
         if ids:
             rights = session.query(Player).filter(Player.id.in_(ids)).all()
     averages = squad_ratings.averages(rows)
+    purse = A.purse_summary(season, team, A.current_lot(session, season))
     return dict(team=team, players=rows, groups=grouped(rows), rights=grouped(rights),
                 count=len(rows), overseas=sum(bool(p.is_overseas) for p in rows),
                 contract_value=sum(int(p.sold_price_lakh or 0) for p in rows),
-                used=int(team.purse_total_lakh or 0) - int(team.purse_remaining_lakh or 0),
-                left=int(team.purse_remaining_lakh or 0), total=int(team.purse_total_lakh or 0),
+                used=purse['used_lakh'], left=purse['remaining_lakh'], total=purse['total_lakh'],
+                standing_bid=purse['standing_bid_lakh'], after_bid=purse['after_bid_lakh'],
                 slots=max(0, int(season.max_squad_size or 0) - len(rows)),
                 needed=max(0, int(season.min_squad_size or 0) - len(rows)),
                 max_bid=max(0, A.max_bid_now(season, team)), rules=rules, gaps=gaps,
@@ -78,6 +79,8 @@ def summary_lines(season, data):
              f"Squad min {season.min_squad_size}, max {season.max_squad_size} · {data['needed']} needed · {data['slots']} free slots",
              f"✈️ Overseas: {data['overseas']}/{season.max_overseas} · min {season.min_overseas or 0}",
              squad_ratings.summary(data['averages'])]
+    if data['standing_bid']:
+        lines.append(f"🔨 Standing bid {money(data['standing_bid'])} · purse after winning {money(data['after_bid'])}")
     if season.max_retentions:
         final = bool(team.retention_finalized_at or A.retention_locked(season))
         state = 'final' if final else ('open' if A.retention_open(season) else 'closed')

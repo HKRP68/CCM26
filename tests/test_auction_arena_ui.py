@@ -28,7 +28,7 @@ async function boot(data,gate=true) {
    Blob,URL:{createObjectURL(blob){blobs.push(blob);return 'blob:test';},revokeObjectURL(){}},
    navigate(screen){homes.push(screen);},
    escapeHtml:v=>String(v??'').replaceAll('<','&lt;').replaceAll('"','&quot;'),haptic(){},
-   api:async(url,body)=>{calls.push({url,body});return body.view==='admin'?{ok:gate,data:{...data,bot_admin:gate}}:{ok:true,data:url.endsWith('/action')?{}:data};},
+   api:async(url,body)=>{calls.push({url,body});return body.view==='admin'?{ok:gate,data:{...data,admin:gate,bot_admin:data.bot_admin&&gate}}:{ok:true,data:url.endsWith('/action')?{}:data};},
    AuctionApp:{openTools:async(...args)=>{toolCalls.push(args);},stopTools(){},setSeason(){},isBusy:()=>toolBusy,refreshTools:async()=>{}},
    setTimeout(){return 1;},clearTimeout(){},setInterval(){return 1;},clearInterval(){}});
  vm.runInContext(source,context);vm.runInContext('AuctionArena.open(1)',context);await new Promise(setImmediate);
@@ -55,15 +55,18 @@ async function boot(data,gate=true) {
  const retained={id:12,name:'Kept player',rating:90,role:'Batsman',price_lakh:100,acquisition:'retained'};
  const squad=[{...base.teams[0],size:1,squad:[retained]}];
  const paused=await boot({...base,season:{...base.season,status:'paused'},teams:squad});
- await paused.click('tab',{tab:'squads'});assert.match(paused.elements['aa-body'].innerHTML,/Release &amp; refund|Release & refund/);
- await paused.act('release',{team_id:1,lot_id:12});assert.equal(paused.calls.find(c=>c.body.action==='release').body.lot_id,12);
+ await paused.click('tab',{tab:'squads'});assert.doesNotMatch(paused.elements['aa-body'].innerHTML,/data-aa-action="release"/);
+ await paused.act('release',{team_id:1,lot_id:12});assert.equal(paused.calls.filter(c=>c.body.action==='release').length,0);
  const playing=await boot({...base,teams:squad});await playing.click('tab',{tab:'squads'});
  assert.doesNotMatch(playing.elements['aa-body'].innerHTML,/data-aa-action="release"/);
- const spectator=await boot({...base,season:{...base.season,status:'paused'},teams:[{...squad[0],mine:false}]});
+ const spectator=await boot({...base,my_team_ids:[],season:{...base.season,status:'paused'},teams:[{...squad[0],mine:false}]});
  await spectator.click('tab',{tab:'squads'});assert.doesNotMatch(spectator.elements['aa-body'].innerHTML,/data-aa-action="release"/);
+ await spectator.click('tab',{tab:'more'});assert.doesNotMatch(spectator.elements['aa-body'].innerHTML,/data-tool="(pool|preseason|trades|rules|admin)"/);
+ await spectator.act('admin_start',{});assert.equal(spectator.calls.filter(c=>c.body.action==='admin_start').length,0);
  await owner.click('tab',{tab:'logs'});assert.match(owner.elements['aa-body'].innerHTML,/Live activity/);
  await owner.click('tab',{tab:'more'});assert.match(owner.elements['aa-body'].innerHTML,/More auction tools/);
- for(const tool of ['pool','preseason','trades','rules'])assert.match(owner.elements['aa-body'].innerHTML,new RegExp('data-tool="'+tool+'"'));
+ assert.doesNotMatch(owner.elements['aa-body'].innerHTML,/data-tool="preseason"|data-tool="trades"/);
+ for(const tool of ['pool','rules'])assert.match(owner.elements['aa-body'].innerHTML,new RegExp('data-tool="'+tool+'"'));
  await owner.click('tool',{tool:'pool'});assert.equal(owner.elements['auction-arena'].open,true);assert.equal(owner.toolCalls.at(-1)[0],'pool');
  assert.match(owner.elements['aa-body'].innerHTML,/id="auction-app"/);
  owner.setToolBusy(true);const before=owner.calls.length;await owner.click('tab',{tab:'arena'});assert.equal(owner.calls.length,before,'Navigation waits while a tool mutation is saving');
@@ -71,10 +74,13 @@ async function boot(data,gate=true) {
  await owner.click('close');assert.equal(owner.elements['auction-arena'].open,false);assert.equal(owner.homes.at(-1),'home');
  assert.equal(owner.body.style.overflow,'auto','Leaving the auction restores the Mini App scroll setting');
  const admin=await boot({...base,admin:true,bot_admin:true});await admin.click('admin');
- assert.equal(admin.calls.filter(c=>c.body.view==='admin').length,1);assert.match(admin.elements['aa-body'].innerHTML,/VERIFIED BOT ADMIN/);
+ assert.equal(admin.calls.filter(c=>c.body.view==='admin').length,1);assert.match(admin.elements['aa-body'].innerHTML,/AUCTION MANAGER/);
  await admin.click('manage-team',{team:'1'});assert.equal(admin.elements['auction-arena'].open,true);assert.equal(admin.toolCalls[0][0],'teams');assert.equal(admin.toolCalls[0][2],1);
+ const delegated=await boot({...base,admin:true,bot_admin:false});await delegated.click('admin');
+ assert.match(delegated.elements['aa-body'].innerHTML,/AUCTION MANAGER/);
+ await delegated.act('admin_pause',{});assert.equal(delegated.calls.filter(c=>c.body.action==='admin_pause').length,1);
  const revoked=await boot({...base,admin:true,bot_admin:true},false);await revoked.click('admin');
- assert.doesNotMatch(revoked.elements['aa-body'].innerHTML,/VERIFIED BOT ADMIN/);
+ assert.doesNotMatch(revoked.elements['aa-body'].innerHTML,/AUCTION MANAGER/);
  const sold=await boot({...base,lot:null,last_result:{id:9,name:'Player',role:'Batsman',status:'sold',sold_to_id:1,price_lakh:100,event_id:4}});
  assert.match(sold.elements['aa-body'].innerHTML,/SOLD · ₹1.00 Cr/);
  const unsold=await boot({...base,lot:null,last_result:{id:9,name:'Player',role:'Bowler',status:'unsold',event_id:5}});

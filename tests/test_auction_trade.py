@@ -170,10 +170,14 @@ class TradeCase(unittest.TestCase):
         self._patch = mock.patch.object(T, "is_bot_admin",
                                         lambda tg_id: tg_id == BOSS)
         self._patch.start()
+        self._manager_ids = set()
 
     def tearDown(self):
         self._patch.stop()
         self.session.rollback()
+        from models import AuctionAdmin
+        self.session.query(AuctionAdmin).filter(AuctionAdmin.tg_id.in_(self._manager_ids)).delete(synchronize_session=False)
+        self.session.commit()
         self.session.close()
 
     # ── helpers ──
@@ -236,6 +240,7 @@ class TradeCase(unittest.TestCase):
         return trade
 
     def make_auction_admin(self, tg_id):
+        self._manager_ids.add(tg_id)
         if not self.A.is_auction_admin(self.session, tg_id):
             self.A.add_auction_admin(self.session, tg_id)
             self.session.commit()
@@ -381,7 +386,7 @@ class PostAuctionMoney(TradeCase):
                        now=datetime.utcnow() + timedelta(hours=3))
         self.assertEqual(later.status, T.STATUS_EXPIRED)
 
-    def test_only_the_bot_admin_approves(self):
+    def test_only_auction_managers_approve(self):
         T = self.T
         kohli = self.lot_named("Virat")
         bumrah = self.lot_named("Jasprit")
@@ -389,14 +394,14 @@ class PostAuctionMoney(TradeCase):
         T.accept(self.session, trade, by_tg_id=BOB)
         self.session.commit()
         self.assertEqual(trade.status, T.STATUS_PENDING)
-        # An owner, and an auction admin, are both refused.
+        # Team ownership alone does not grant management rights.
         self.make_auction_admin(CAROL)
-        for who in (ALICE, BOB, CAROL):
+        for who in (ALICE, BOB):
             with self.assertRaises(self.A.AuctionError):
                 T.approve(self.session, trade, by_tg_id=who)
             with self.assertRaises(self.A.AuctionError):
                 T.veto(self.session, trade, by_tg_id=who)
-        T.approve(self.session, trade, by_tg_id=BOSS)
+        T.approve(self.session, trade, by_tg_id=CAROL)
         self.session.commit()
         self.assertEqual(trade.status, T.STATUS_COMPLETED)
 
@@ -880,6 +885,8 @@ class Commands(TradeCase):
         self.build_pool()
         self.run_auction([self.mi, self.csk])
         self.replies, self.alerts, self.edits, self.sent = [], [], [], []
+        for uid in (ALICE, BOB, BOSS):
+            self.make_auction_admin(uid)
 
     def _update(self, user_id, args=()):
         from types import SimpleNamespace
@@ -964,14 +971,12 @@ class Commands(TradeCase):
         self.press(f"au_tr_y_{trade.id}", BOB)
         self.assertIn(f"au_tr_ap_{trade.id}", self._buttons(self.edits[-1][1]))
 
-        # An auction admin and both owners are refused the approval.
+        # Spectators are refused; a delegated manager can approve.
+        text, alert = self.press(f"au_tr_ap_{trade.id}", 987654)
+        self.assertTrue(alert)
+        self.assertIn("Auction Managers", text)
         self.make_auction_admin(CAROL)
-        self.session.commit()
-        for who in (ALICE, BOB, CAROL):
-            text, alert = self.press(f"au_tr_ap_{trade.id}", who)
-            self.assertTrue(alert)
-            self.assertIn("bot", text)
-        self.press(f"au_tr_ap_{trade.id}", BOSS)
+        self.press(f"au_tr_ap_{trade.id}", CAROL)
         self.assertIn("TRADE COMPLETED", self.edits[-1][0])
         self.session.expire_all()
         self.assertEqual(T.get_trade(self.session, trade.id).status,
@@ -1027,10 +1032,10 @@ class Commands(TradeCase):
         self.assertEqual(new.team_a_id, self.csk.id)
         self.assertIn("counter-offer", self.edits[-1][0])
 
-    def test_approve_command_is_bot_admin_only(self):
+    def test_approve_command_is_manager_only(self):
         from handlers import auction_trade as H
         text, _ = self.command(H.atradeapprove_handler, CAROL)
-        self.assertIn("bot owner", text)
+        self.assertIn("Auction Managers", text)
         text, _ = self.command(H.atradeapprove_handler, BOSS)
         self.assertIn("No trades are waiting", text)
 

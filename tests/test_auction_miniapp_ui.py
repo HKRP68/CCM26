@@ -66,7 +66,8 @@ async function boot(data,view='teams') {
     const player = await boot({...base, admin: false, season,players:[],sets:[],page:1,pages:1,total:0},'pool');
     assert.doesNotMatch(player['au-body'].innerHTML, /data-au-(form|action)="admin_/);
     assert.doesNotMatch(player['au-nav'].innerHTML, /data-view="admin"|data-view="live"/);
-    assert.match(player['au-nav'].innerHTML, />Players<\/button>/);
+    assert.doesNotMatch(player['au-nav'].innerHTML, /data-view="preseason"|data-view="trades"/);
+    assert.match(player['au-nav'].innerHTML, /data-view="teams"/);
     const admin = await boot({...base, admin: true, season,players:[],sets:[],page:1,pages:1,total:0},'pool');
     assert.match(admin['au-nav'].innerHTML, /data-view="admin"/);
     if(!season)assert.match(admin['au-body'].innerHTML,/admin_create/);

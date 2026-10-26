@@ -50,9 +50,8 @@ def plain(value):
 
 
 def admin_for(db, tg_id):
-    # Mini App administration requires the verified Telegram bot-admin identity.
-    # Delegated auction admins retain their existing Telegram permissions.
-    return is_admin(tg_id)
+    """Use the same manager allowlist as the Telegram commands."""
+    return is_admin(tg_id) or A.is_auction_admin(db, tg_id)
 
 
 def season_row(season):
@@ -135,10 +134,13 @@ def lot_row(lot):
                 rtm_stage=lot.rtm_stage, rtm_holder_id=lot.previous_franchise_id)
 
 
-def team_row(db, season, row, tg_id):
+def team_row(db, season, row, tg_id, *, current=None):
+    purse = A.purse_summary(season, row, current)
     return dict(id=row.id, name=row.name, short_name=row.short_name, logo_url=row.logo_url,
-                mine=A.may_bid_for(row, tg_id), purse_lakh=row.purse_remaining_lakh,
-                opening_lakh=row.purse_total_lakh, size=row.squad_size,
+                mine=A.may_bid_for(row, tg_id), purse_lakh=purse['remaining_lakh'],
+                opening_lakh=purse['total_lakh'], used_lakh=purse['used_lakh'],
+                standing_bid_lakh=purse['standing_bid_lakh'],
+                after_bid_lakh=purse['after_bid_lakh'], size=row.squad_size,
                 overseas=A.overseas_count(db, row.id), roles=A.role_counts(db, row.id),
                 max_bid_lakh=max(0, A.max_bid_now(season, row)),
                 rtm_left=A.rtm_cards_left(row), retained=row.retained_count,
@@ -168,8 +170,12 @@ def telegram_link(season):
 
 
 def base_payload(db, season, tg_id, rows):
+    manager = admin_for(db, tg_id)
+    owned = [f.id for f in A.franchises(db, season.id) if A.may_bid_for(f, tg_id)] if season else []
     result = dict(ok=True, auctions=[season_row(s) for s in rows],
-                  admin=admin_for(db, tg_id), bot_admin=is_admin(tg_id),
+                  admin=manager, bot_admin=is_admin(tg_id),
+                  role='manager' if manager else 'team' if owned else 'spectator',
+                  permissions=dict(manage=manager, manage_admins=is_admin(tg_id), bid=bool(owned)),
                   server_time=stamp(datetime.utcnow()), season=None)
     if season is None:
         return result
@@ -179,8 +185,7 @@ def base_payload(db, season, tg_id, rows):
                           "telegram_url": telegram_link(season),
                           "published": bool(season.published_at),
                           "league_id": season.league_id},
-                  my_team_ids=[f.id for f in A.franchises(db, season.id)
-                               if A.may_bid_for(f, tg_id)])
+                  my_team_ids=owned)
     return result
 
 
@@ -188,7 +193,7 @@ def live_payload(db, season, tg_id):
     from services.auction_simulator import playback_status
     current = A.current_lot(db, season)
     field = A.franchises(db, season.id)
-    teams = [team_row(db, season, f, tg_id) for f in field]
+    teams = [team_row(db, season, f, tg_id, current=current) for f in field]
     live = lot_row(current) if current else None
     if current:
         minimum = A.next_min_bid(season, current)
@@ -210,7 +215,8 @@ def live_payload(db, season, tg_id):
     return dict(lot=live, teams=teams, counts=A.pool_counts(db, season.id),
                 playback=playback_status(db, season),
                 direct_bids=A.direct_bids_on(season),
-                upcoming=[lot_row(l) for l in A.queued_lots(db, season, limit=5)],
+                upcoming=[lot_row(l) for l in A.queued_lots(db, season, limit=5)]
+                if admin_for(db, tg_id) or any(t['mine'] for t in teams) else [],
                 bids=[dict(id=b.id, team=names.get(b.franchise_id, "Team"),
                            amount_lakh=b.amount_lakh, source=b.source,
                            void=bool(b.is_void), at=stamp(b.created_at)) for b in bids],
@@ -298,7 +304,7 @@ def trades_payload(db, season, tg_id):
                 trades=[trade_row(db, season, t, tg_id) for t in rows
                         if t.status in (T.STATUS_COMPLETED, T.STATUS_REVERSED)
                         or t.team_a_id in owned or (t.team_b_id in owned and t.status != T.STATUS_BUILDING)
-                        or is_admin(tg_id)],
+                        or admin_for(db, tg_id)],
                 teams=[dict(id=f.id, name=f.name, mine=f.id in owned,
                             players=[lot_row(l) for l in T.trade_squad(db, season, f)])
                        for f in A.franchises(db, season.id)],
@@ -329,6 +335,12 @@ def payload(db, season, tg_id, rows, data):
     if season is None:
         return result
     view = data.get('view', 'live')
+    if not result['admin']:
+        allowed = {'live', 'arena', 'teams'}
+        if result['my_team_ids']:
+            allowed.update(('pool', 'rules'))
+        if view not in allowed:
+            raise AccessError("Only Auction Managers can use auction management tools.")
     if view == 'arena':
         result.update(arena_payload(db, season, tg_id))
     elif view == 'live':
@@ -336,7 +348,8 @@ def payload(db, season, tg_id, rows, data):
     elif view == 'pool':
         result.update(pool_payload(db, season, data))
     elif view == 'teams':
-        result['teams'] = [{**team_row(db, season, f, tg_id),
+        current = A.current_lot(db, season)
+        result['teams'] = [{**team_row(db, season, f, tg_id, current=current),
                             'squad': [lot_row(l) for l in A.squad(db, f.id)]}
                            for f in A.franchises(db, season.id)]
         own = A.franchise_for_actor(db, season.id, tg_id)
@@ -362,16 +375,17 @@ def payload(db, season, tg_id, rows, data):
         result['rules'] = rules_payload(season)
     elif view == 'admin':
         if not result['admin']:
-            raise AccessError("Only bot admins can enter the admin panel.")
+            raise AccessError("Only Auction Managers can enter the admin panel.")
         from services.auction_simulator import playback_status
+        current = A.current_lot(db, season)
         result.update(rules=rules_payload(season), playback=playback_status(db, season),
                       counts=A.pool_counts(db, season.id),
-                      lot=lot_row(A.current_lot(db, season)) if A.current_lot(db, season) else None,
+                      lot=lot_row(current) if current else None,
                       trade_rules=T.trade_rules(season),
                       retention_rules=RN.rules(season),
                       settings={key: getattr(season, key) for key in A.SEASON_RULE_FIELDS},
                       previous_league_id=season.previous_league_id,
-                      teams=[dict(**team_row(db, season, f, tg_id), owner_tg_id=str(f.owner_tg_id or ''),
+                      teams=[dict(**team_row(db, season, f, tg_id, current=current), owner_tg_id=str(f.owner_tg_id or ''),
                                   owner_name=f.owner_name, co_owners=[str(x) for x in A.co_owner_ids(f)],
                                   draft_picks=f.draft_picks_total, previous_team_id=f.previous_team_id)
                              for f in A.franchises(db, season.id)])
@@ -398,10 +412,12 @@ def perform(db, season, tg_id, data):
         raise A.AuctionError("Choose an auction action.")
     if action.startswith('admin_'):
         if not admin_for(db, tg_id):
-            raise AccessError("Only bot admins can use the admin panel or its actions.")
+            raise AccessError("Only Auction Managers can manage the auction.")
         return admin_action(db, season, tg_id, data)
     if season is None:
         raise A.AuctionError("Choose an auction first.")
+    if action not in ('bid', 'rtm', 'rtm_stand') and not admin_for(db, tg_id):
+        raise AccessError("Only Auction Managers can change squads, retentions, drafts or trades. Team users can bid and view the auction.")
     if action.startswith('trade_'):
         return trade_action(db, season, tg_id, data)
     row = own_team(db, season, tg_id, data.get('team_id'))
@@ -533,6 +549,8 @@ def confirm_name(season, data):
 
 
 def admin_action(db, season, tg_id, data):
+    if not admin_for(db, tg_id):
+        raise AccessError("Only Auction Managers can manage the auction.")
     action = data['action'][6:]
     if action == 'create':
         name = str(data.get('name', '')).strip()
@@ -544,7 +562,9 @@ def admin_action(db, season, tg_id, data):
         return dict(message='Auction created. Add teams, a group and the player pool.', season_id=created.id)
     if season is None:
         raise A.AuctionError("Choose an auction first.")
-    if action == 'start':
+    if action in ('start', 'resume'):
+        if action == 'resume' and season.status != A.STATUS_PAUSED:
+            raise A.AuctionError("Only a paused auction can be resumed.")
         A.start(db, season, by_tg_id=tg_id)
     elif action == 'pause':
         A.pause(db, season, by_tg_id=tg_id)
@@ -734,9 +754,7 @@ def admin_action(db, season, tg_id, data):
             if action == 'retention_offer':
                 A.offer_retention(db, season, row, player, price, by_tg_id=tg_id)
             else:
-                # retain(by_tg_id=...) is deliberately owner-only. An admin's
-                # force action uses the console path and records its actor.
-                A.retain(db, season, row, player, price)
+                A.retain(db, season, row, player, price, by_tg_id=tg_id, by_admin=True)
     elif action == 'retention_cancel_offer':
         offer = db.get(AuctionRetentionOffer, integer(data.get('offer_id'), 'Offer id', 1))
         if offer is None or offer.season_id != season.id:
@@ -755,8 +773,6 @@ def admin_action(db, season, tg_id, data):
         P.set_clock(db, season, seconds=integer(data.get('seconds', season.draft_pick_seconds), 'Seconds', 0, 3600),
                     action=data.get('timeout_action', season.draft_timeout_action), operation=data.get('operation', 'save'))
     elif action in ('trade_approve', 'trade_veto', 'trade_reverse'):
-        if not is_admin(tg_id):
-            raise AccessError("Only bot admins can approve, veto or reverse trades.")
         trade = db.get(AuctionTrade, integer(data.get('trade_id'), 'Trade id', 1))
         if trade is None or trade.season_id != season.id:
             raise A.AuctionError("That trade is not in this auction.")

@@ -2,7 +2,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from tests import test_auction_expansion as F
 
@@ -13,6 +13,10 @@ tearDownModule = F.tearDownModule
 class RetentionAuthorizationTests(F.ExpansionCase):
     def setUp(self):
         super().setUp()
+        from handlers import auction as H
+        manager_gate = patch.object(H, '_is_auction_admin', return_value=True)
+        manager_gate.start()
+        self.addCleanup(manager_gate.stop)
         self.mumbai.co_owner_ids_json = json.dumps([501])
         self.session.commit()
         league = self.publish_one()

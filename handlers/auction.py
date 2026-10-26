@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 GROUP_CHAT_TYPES = ("group", "supergroup")
 
-NOT_ADMIN = "⛔ Only auction admins can manage an auction."
+NOT_ADMIN = "⛔ Only auction admins (Auction Managers) can manage an auction. Team users can bid and view; spectators can watch."
 NOT_BOT_ADMIN = "⛔ Only bot admins can choose who runs auctions."
 GROUP_ONLY = ("❌ Auction commands only work in the group the auction is bound "
               "to.\nAn admin binds one with <code>/abind</code>.")
@@ -136,9 +136,15 @@ def _is_auction_admin(user_id):
 
 
 async def _require_admin(update):
-    user = update.effective_user
+    query = getattr(update, 'callback_query', None)
+    if getattr(query, 'data', None) is None:
+        query = None
+    user = getattr(query, 'from_user', None) or getattr(update, 'effective_user', None)
     if not user or not await asyncio.to_thread(_is_auction_admin, user.id):
-        await _reply(update, NOT_ADMIN)
+        if query is not None:
+            await query.answer("Only Auction Managers can manage the auction.", show_alert=True)
+        else:
+            await _reply(update, NOT_ADMIN)
         return False
     return True
 
@@ -618,6 +624,10 @@ def _purse_popup(session, season, franchise):
              f"{season.max_overseas}"]
     if A.rtm_configured(season):
         lines.append(f"🪪 RTM cards left: {A.rtm_cards_left(franchise)}")
+    purse = A.purse_summary(season, franchise, A.current_lot(session, season))
+    if purse['standing_bid_lakh']:
+        lines.append(f"🔨 Standing bid {A.render_money(purse['standing_bid_lakh'], symbol)}"
+                     f" · after winning {A.render_money(purse['after_bid_lakh'], symbol)}")
     return "\n".join(lines)
 
 
@@ -1394,7 +1404,9 @@ async def aretain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def aretainforce_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Instant retention is restricted to the target team's owner/co-owners."""
+    """An Auction Manager signs a retention for the selected franchise."""
+    if not await _require_admin(update):
+        return
     user = update.effective_user
     raw = _arg_text(context)
     session = get_session()
@@ -1408,11 +1420,10 @@ async def aretainforce_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             raise AuctionError(NO_AUCTION)
         franchise, player, price = _retention_args(session, season, raw,
             "Usage: /aretainforce <your team> | <your player> | [price]")
-        A.require_retention_owner(session, season, franchise, user.id if user else None)
         if player is None:
-            await _send_picker(update, session, season, franchise, 'f')
+            await _send_picker(update, session, season, franchise, 'o')
             return
-        lot = A.retain(session, season, franchise, player, price, by_tg_id=user.id)
+        lot = A.retain(session, season, franchise, player, price, by_tg_id=user.id, by_admin=True)
         text = f"🔒 <b>{html.escape(franchise.name)}</b> retain {html.escape(lot.name)} for {A.render_money(lot.sold_price_lakh, season.currency_label)}."
         session.commit()
         await _reply(update, text)
@@ -1429,6 +1440,8 @@ async def aretainforce_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def retention_offer_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Accept / Decline on a retention offer — that franchise's people only."""
+    if not await _require_admin(update):
+        return
     query = update.callback_query
     if query is None:
         return
@@ -1564,6 +1577,8 @@ async def retain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     franchise's owner or a co-owner can negotiate for it, for the reason
     ``may_bid_for`` gives.
     """
+    if not await _require_admin(update):
+        return
     from services import retention_negotiation as RN
     chat = update.effective_chat
     if chat is None or chat.type not in GROUP_CHAT_TYPES:
@@ -1657,6 +1672,8 @@ async def retain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def retention_talk_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Accept his ask / walk away — the negotiating franchise's people only."""
+    if not await _require_admin(update):
+        return
     from services import retention_negotiation as RN
     query = update.callback_query
     if query is None:
@@ -1723,6 +1740,8 @@ async def retention_pick_callback(update: Update, context: ContextTypes.DEFAULT_
     Shared buttons, authorised on every press: an admin's modes need an
     auction admin; ``r`` and ``f`` need the franchise's own owner or co-owner.
     """
+    if not await _require_admin(update):
+        return
     from models import AuctionFranchise, Player
     from services import retention_negotiation as RN
     query = update.callback_query
@@ -2223,6 +2242,8 @@ async def aunretain_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons; that path also works in a DM, before the group is even bound. An
     admin who owns a team gets the owner's list from a bare command too.
     """
+    if not await _require_admin(update):
+        return
     user = update.effective_user
     name = _arg_text(context)
     admin = user is not None and await asyncio.to_thread(_is_auction_admin, user.id)
@@ -2364,6 +2385,8 @@ async def release_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """``au_rel_p_<lot>`` asks, ``au_rel_y_<lot>`` releases, ``au_rel_n_<lot>``
     keeps. Authorised on every press: the presser must own or co-own the
     franchise that kept the player, and the window must still be open."""
+    if not await _require_admin(update):
+        return
     from models import AuctionFranchise, AuctionLot, AuctionSeason
     query = update.callback_query
     if query is None:
@@ -2548,6 +2571,8 @@ def _retention_preview_html(data, season):
 
 
 async def retainlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _require_admin(update):
+        return
     from services import auction_preseason as P
     user = update.effective_user
     if update.effective_chat is None or update.effective_chat.type not in GROUP_CHAT_TYPES:
@@ -2572,6 +2597,8 @@ async def retainlock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def retention_final_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _require_admin(update):
+        return
     from services import auction_preseason as P
     from models import AuctionFranchise
     query = update.callback_query
@@ -2634,6 +2661,8 @@ async def ashortlist_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     from services import auction_preseason as P
     user = update.effective_user
     raw = _arg_text(context).strip()
+    if raw and not await _require_admin(update):
+        return
     def work(session, season):
         team = A.franchise_for_actor(session, season.id, user.id) if user else None
         if team is None:
@@ -2715,6 +2744,8 @@ async def apickorder_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 async def auction_pick_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _require_admin(update):
+        return
     user = update.effective_user
     raw = _arg_text(context)
     def work(session, season):

@@ -80,6 +80,9 @@ class AuctionWebappTests(unittest.TestCase):
         self.A, self.W, self.T = A, W, T
         self.admin_patch = patch.object(W, 'is_admin', side_effect=lambda uid: uid == ADMIN)
         self.admin_patch.start()
+        self.identity_patch = patch('services.admin_ids.is_admin', side_effect=lambda uid: uid == ADMIN)
+        self.identity_patch.start()
+        self.managers = []
         self.bot_patch = patch.object(T, 'is_bot_admin', side_effect=lambda uid: uid == ADMIN)
         self.bot_patch.start()
         self.app = Flask(__name__)
@@ -116,9 +119,19 @@ class AuctionWebappTests(unittest.TestCase):
         self.sid, self.aid, self.bid = self.season.id, self.alice.id, self.bob.id
 
     def tearDown(self):
+        from models import AuctionAdmin
+        self.db.rollback()
+        self.db.query(AuctionAdmin).filter(AuctionAdmin.tg_id.in_(self.managers)).delete(synchronize_session=False)
+        self.db.commit()
+        self.identity_patch.stop()
         self.db.close()
         self.admin_patch.stop()
         self.bot_patch.stop()
+
+    def grant_manager(self, uid):
+        self.A.add_auction_admin(self.db, uid, by_tg_id=ADMIN)
+        self.db.commit()
+        self.managers.append(uid)
 
     def read(self, view='live', tg=ALICE, **body):
         return self.post('', dict(season_id=self.sid, view=view, **body), tg)
@@ -146,32 +159,23 @@ class AuctionWebappTests(unittest.TestCase):
         self.db.rollback()
         self.db.expire_all()
 
-    def test_owner_and_coowner_can_release_retention_only_while_paused(self):
+    def test_team_users_cannot_release_and_managers_can_refund_retention(self):
         self.season.max_retentions = 3
         self.db.commit()
         kept = self.A.retain(self.db, self.season, self.alice, self.players[0])
         self.db.commit()
         kept_id = kept.id
         self.start()
-        code, refused = self.action('release', lot_id=kept_id)
-        self.assertNotEqual(200, code, refused)
-        self.assertIn('/apause', refused['message'])
+        for uid in (ALICE, COOWNER, BOB):
+            self.assertEqual(self.action('release', tg=uid, lot_id=kept_id)[0], 403)
         self.assert_ok(self.action('admin_pause', tg=ADMIN))
+        for uid in (ALICE, COOWNER, BOB):
+            self.assertEqual(self.action('release', tg=uid, lot_id=kept_id)[0], 403)
+        self.assert_ok(self.action('admin_unretain', tg=ADMIN, team_id=self.aid, lot_id=kept_id))
         self.refresh_db()
-        original_cards = (self.alice.rtm_cards_total, self.alice.rtm_cards_used)
-        original_lot = self.season.current_lot_id
-        code, refused = self.action('release', tg=BOB, lot_id=kept_id)
-        self.assertNotEqual(200, code, refused)
-        self.assert_ok(self.action('release', tg=COOWNER, lot_id=kept_id))
-        self.refresh_db()
-        self.assertEqual(self.A.LOT_QUEUED, kept.status)
-        self.assertEqual(self.alice.purse_total_lakh, self.alice.purse_remaining_lakh)
-        self.assertEqual(original_cards, (self.alice.rtm_cards_total, self.alice.rtm_cards_used))
-        self.assertEqual(original_lot, self.season.current_lot_id)
+        self.assertEqual(kept.status, self.A.LOT_QUEUED)
+        self.assertEqual(self.alice.purse_remaining_lakh, self.alice.purse_total_lakh)
         self.assertEqual(self.A.ledger_total(self.db, self.aid), self.alice.purse_remaining_lakh)
-        code, refused = self.action('release', lot_id=kept_id)
-        self.assertNotEqual(200, code, refused)
-        self.assert_ok(self.action('admin_start', tg=ADMIN))
 
     def assert_ok(self, result):
         code, data = result
@@ -424,22 +428,32 @@ class AuctionWebappTests(unittest.TestCase):
         buyer = next(t for t in arena['teams'] if t['id'] == self.aid)
         self.assertEqual(buyer['squad'][0]['id'], ctx['lot_id'])
 
-    def test_delegated_auction_admin_cannot_enter_the_bot_admin_panel(self):
-        self.A.add_auction_admin(self.db, ALICE)
-        self.db.commit()
-        arena = self.assert_ok(self.read('arena'))
+    def test_delegated_manager_controls_the_miniapp_and_revocation_is_immediate(self):
+        manager = 809998
+        self.grant_manager(manager)
+        arena = self.assert_ok(self.read('arena', tg=manager))
         self.assertFalse(arena['bot_admin'])
-        self.assertFalse(arena['admin'])
-        self.assertEqual(self.read('admin', bot_admin=True, admin=True)[0], 403)
-        self.assertEqual(self.post('/catalogue', dict(season_id=self.sid))[0], 403)
-        self.assertEqual(self.post('/export', dict(season_id=self.sid, format='franchises'))[0], 403)
-        self.assertEqual(self.action('admin_start', bot_admin=True, admin=True)[0], 403)
-        self.assertEqual(self.action('admin_team_purse', team_id=self.aid, mode='add', amount_lakh=10,
-                                     expected_purse_lakh=10000, note='Not a bot admin')[0], 403)
-        self.assertEqual(self.post('/action', dict(action='admin_create', name='No', bot_admin=True))[0], 403)
-        admin = self.assert_ok(self.read('admin', tg=ADMIN))
-        self.assertTrue(admin['bot_admin'])
-        self.assertTrue(self.assert_ok(self.read('arena', tg=ADMIN))['bot_admin'])
+        self.assertTrue(arena['admin'])
+        self.assertEqual(arena['role'], 'manager')
+        self.assertEqual(arena['my_team_ids'], [])
+        self.assert_ok(self.read('admin', tg=manager))
+        self.assert_ok(self.post('/catalogue', dict(season_id=self.sid), manager))
+        self.assert_ok(self.post('/export', dict(season_id=self.sid, format='franchises'), manager))
+        self.assert_ok(self.action('admin_team_purse', tg=manager, team_id=self.aid, mode='add', amount_lakh=10,
+                                   expected_purse_lakh=10000, note='Manager correction'))
+        self.assert_ok(self.action('admin_start', tg=manager))
+        self.assert_ok(self.action('admin_pause', tg=manager))
+        self.assert_ok(self.action('admin_resume', tg=manager))
+        for action in ('admin_add_admin', 'admin_remove_admin'):
+            self.assertEqual(self.action(action, tg=manager, telegram_id=ALICE, bot_admin=True)[0], 403)
+        self.assert_ok(self.post('/action', dict(action='admin_create', name='Managed auction'), manager))
+        self.assert_ok(self.action('admin_remove_admin', tg=ADMIN, telegram_id=manager))
+        self.membership = {'ok': True, 'result': {'status': 'member'}}
+        self.assertEqual(self.read('arena', tg=manager)[1]['role'], 'spectator')
+        self.assertEqual(self.read('admin', tg=manager)[0], 403)
+        self.assertEqual(self.action('admin_pause', tg=manager, admin=True, bot_admin=True)[0], 403)
+        self.assertEqual(self.post('/catalogue', dict(season_id=self.sid), manager)[0], 403)
+        self.assertEqual(self.post('/action', dict(action='admin_create', name='Denied'), manager)[0], 403)
 
     def test_unsigned_and_tampered_requests_are_rejected(self):
         res = self.client.post('/api/webapp/auction', json={'season_id':self.sid})
@@ -533,6 +547,81 @@ class AuctionWebappTests(unittest.TestCase):
         for name,args in [('admin_start',{}),('admin_settings',{'settings':{'max_squad_size':50}}),('admin_create',{'name':'No'})]:
             self.assertEqual(self.action(name,**args)[0],403)
 
+    def test_all_non_bidding_mutations_reject_team_users_and_spectators(self):
+        self.membership = {'ok': True, 'result': {'status': 'member'}}
+        actions = ('admin_start', 'admin_pause', 'admin_resume', 'admin_next', 'admin_sold',
+                   'admin_unsold', 'admin_extend', 'admin_undo_bid', 'admin_bid', 'admin_cancel',
+                   'admin_restart', 'admin_publish', 'admin_simulate', 'admin_clone', 'admin_bind',
+                   'admin_settings', 'admin_franchise', 'admin_franchise_remove', 'admin_team_purse',
+                   'admin_team_add_player', 'admin_team_remove_player', 'admin_retention_force',
+                   'admin_unretain', 'admin_retention_lock', 'admin_draft_picks', 'admin_draft_order',
+                   'admin_trade_window', 'admin_trade_approve', 'admin_add_admin', 'admin_remove_admin',
+                   'retain', 'release', 'retention_answer', 'retention_confirm', 'talk_start',
+                   'talk_offer', 'talk_accept', 'talk_withdraw', 'draft_pick', 'draft_skip', 'shortlist',
+                   'trade_open', 'trade_toggle', 'trade_cash', 'trade_send', 'trade_accept',
+                   'trade_cancel', 'trade_block_add', 'trade_block_remove')
+        for uid in (ALICE, COOWNER, OUTSIDER):
+            for action in actions:
+                with self.subTest(uid=uid, action=action):
+                    code, result = self.action(action, tg=uid, team_id=self.aid,
+                                               admin=True, bot_admin=True, role='manager')
+                    self.assertEqual(code, 403, result)
+        self.refresh_db()
+        self.assertEqual(self.season.status, self.A.STATUS_SETUP)
+        self.assertEqual(self.alice.purse_remaining_lakh, 10000)
+        self.assertEqual(self.A.ledger_total(self.db, self.aid), 10000)
+        self.assertEqual(self.alice.squad_size, 0)
+
+    def test_purse_is_consistent_across_views_after_sales_corrections_and_refunds(self):
+        from services import auction_squad_report as REPORT
+
+        def balances(expected, standing=0):
+            self.refresh_db()
+            self.assertEqual(self.A.ledger_total(self.db, self.aid), expected)
+            for view in ('live', 'arena', 'teams', 'admin'):
+                result = self.assert_ok(self.read(view, tg=ADMIN))
+                team = next(t for t in result['teams'] if t['id'] == self.aid)
+                self.assertEqual(team['purse_lakh'], expected, view)
+                self.assertEqual(team['used_lakh'], team['opening_lakh'] - expected, view)
+                self.assertEqual(team['standing_bid_lakh'], standing, view)
+                self.assertEqual(team['after_bid_lakh'], expected - standing, view)
+            amount = self.A.render_money(expected, self.season.currency_label)
+            self.assertIn(amount, self.A.render_purses(self.db, self.season))
+            self.assertIn(amount, self.A.render_board(self.db, self.season))
+            self.assertIn(amount, self.A.render_squad(self.db, self.season, self.alice))
+            self.assertEqual(REPORT.team_data(self.db, self.season, self.alice)['left'], expected)
+
+        self.assert_ok(self.action('admin_team_purse', tg=ADMIN, team_id=self.aid, mode='add',
+                                   amount_lakh=275, expected_purse_lakh=10000, note='Bonus'))
+        balances(10275)
+        ctx = self.start()
+        minimum = self.assert_ok(self.read())['lot']['next_lakh']
+        self.assert_ok(self.action('bid', amount_lakh=minimum, **ctx))
+        balances(10275, minimum)
+        ctx = self.live_context()
+        self.assert_ok(self.action('admin_sold', tg=ADMIN, **ctx))
+        balances(10275 - minimum)
+        self.assert_ok(self.action('admin_undo_sale', tg=ADMIN, lot_id=ctx['lot_id']))
+        balances(10275)
+        self.refresh_db()
+        self.A.set_opening_purse(self.db, self.season, 12000, by_tg_id=ADMIN)
+        self.db.commit()
+        balances(12275)
+
+    def test_all_purse_deductions_protect_the_standing_bid(self):
+        ctx = self.start()
+        minimum = self.assert_ok(self.read())['lot']['next_lakh']
+        self.assert_ok(self.action('bid', amount_lakh=minimum, **ctx))
+        self.refresh_db()
+        with self.assertRaisesRegex(self.A.AuctionError, 'standing bid'):
+            self.A.correct_purse(self.db, self.season, self.alice, -(10000 - minimum + 1))
+        self.db.rollback()
+        with self.assertRaisesRegex(self.A.AuctionError, 'standing bid'):
+            self.A.set_opening_purse(self.db, self.season, minimum - 1)
+        self.db.rollback()
+        self.assertEqual(self.alice.purse_remaining_lakh, 10000)
+        self.assertEqual(self.A.ledger_total(self.db, self.aid), 10000)
+
     def test_pool_and_franchise_management_are_admin_only(self):
         for action, fields in (
             ('admin_pool_range',dict(low=70,high=100)),
@@ -567,13 +656,21 @@ class AuctionWebappTests(unittest.TestCase):
         self.assertIn('wait',data['message'])
         self.assertGreaterEqual(data['retry_after'],1)
 
-    def test_all_views_serialize_and_private_shortlists_stay_private(self):
-        for view in ('live','pool','teams','preseason','trades','rules'):
-            self.assert_ok(self.read(view))
-        self.assertEqual(self.read('admin')[0],403)
-        self.assert_ok(self.read('admin',tg=ADMIN))
-        self.membership={'ok':True,'result':{'status':'member'}}
-        self.assertEqual(self.read('preseason',tg=OUTSIDER,team_id=self.aid)[0],403)
+    def test_roles_only_see_their_authorized_views(self):
+        for view in ('live', 'arena', 'pool', 'teams', 'rules'):
+            self.assertEqual(self.assert_ok(self.read(view))['role'], 'team')
+        for view in ('admin', 'preseason', 'eligible', 'trades'):
+            self.assertEqual(self.read(view)[0], 403)
+        for view in ('live', 'arena', 'pool', 'teams', 'rules', 'admin', 'preseason', 'trades'):
+            self.assert_ok(self.read(view, tg=ADMIN))
+        self.membership = {'ok': True, 'result': {'status': 'member'}}
+        for view in ('live', 'arena', 'teams'):
+            data = self.assert_ok(self.read(view, tg=OUTSIDER))
+            self.assertEqual(data['role'], 'spectator')
+            self.assertFalse(data['permissions']['bid'])
+            self.assertNotIn('team_ledger', data)
+        for view in ('admin', 'preseason', 'eligible', 'trades', 'pool', 'rules'):
+            self.assertEqual(self.read(view, tg=OUTSIDER)[0], 403)
 
     def test_pool_filters_and_page_limits(self):
         data=self.assert_ok(self.read('pool',query=self.players[1].name,role='Bowler'))
@@ -625,19 +722,23 @@ class AuctionWebappTests(unittest.TestCase):
         franchise=self.assert_ok(self.post('/export',dict(season_id=self.sid,format='franchises'),ADMIN))
         self.assert_ok(self.action('admin_franchise_import',tg=ADMIN,franchises=json.loads(franchise['content'])))
 
-    def test_classic_retention_offer_is_answered_only_by_its_team(self):
-        self.season.max_retentions=2
+    def test_retention_mutations_require_a_manager_even_for_the_team_owner(self):
+        from models import AuctionRetentionOffer
+        self.season.max_retentions = 2
         self.db.commit()
-        self.assert_ok(self.action('admin_retention_offer',tg=ADMIN,team_id=self.aid,player_id=self.players[0].id,amount_lakh=100))
-        data=self.assert_ok(self.read('preseason'))
-        offer=data['offers'][0]
-        self.assertEqual(self.action('retention_answer',tg=BOB,offer_id=offer['id'],accept=True)[0],403)
-        self.assert_ok(self.action('retention_answer',tg=COOWNER,offer_id=offer['id'],accept=True))
+        self.assert_ok(self.action('admin_retention_offer', tg=ADMIN, team_id=self.aid,
+                                   player_id=self.players[0].id, amount_lakh=100))
+        offer = self.db.query(AuctionRetentionOffer).filter_by(season_id=self.sid).one()
+        for uid in (ALICE, BOB, COOWNER):
+            self.assertEqual(self.action('retention_answer', tg=uid, offer_id=offer.id, accept=True)[0], 403)
+        self.assert_ok(self.action('admin_retention_force', tg=ADMIN, team_id=self.aid,
+                                   player_id=self.players[0].id, amount_lakh=100))
         self.refresh_db()
-        self.assertEqual(self.alice.retained_count,1)
-        self.assertEqual(self.alice.purse_remaining_lakh,9900)
+        self.assertEqual(self.alice.retained_count, 1)
+        self.assertEqual(self.alice.purse_remaining_lakh, 9900)
 
     def test_retention_confirmation_rejects_a_changed_preview(self):
+        self.grant_manager(ALICE)
         self.season.max_retentions=2
         self.db.commit()
         data=self.assert_ok(self.read('preseason'))
@@ -668,6 +769,7 @@ class AuctionWebappTests(unittest.TestCase):
         self.assertEqual(self.bob.rtm_cards_used,1)
 
     def test_dynamic_retention_keeps_hidden_demands_private(self):
+        self.grant_manager(ALICE)
         from services import retention_negotiation as RN
         RN.set_mode(self.db,self.season,'dynamic')
         RN.save_slots(self.db,self.season,[dict(key='open',label='Open',emoji='🏏',min_rating=1,max_rating=100,floor_lakh=100)])
@@ -684,6 +786,8 @@ class AuctionWebappTests(unittest.TestCase):
         self.assert_ok(self.action('talk_offer',talk_id=talk['id'],attempts=0,amount_lakh=100))
 
     def test_expansion_shortlist_pick_and_turn_authorization(self):
+        self.grant_manager(BOB)
+        self.grant_manager(ALICE)
         from services import auction_preseason as P
         self.A.set_franchise_picks(self.db,self.season,self.alice,1)
         self.A.set_franchise_picks(self.db,self.season,self.bob,1)
@@ -719,9 +823,10 @@ class AuctionWebappTests(unittest.TestCase):
         self.db.commit()
 
     def test_trade_builder_is_private_and_the_receiver_alone_can_answer(self):
+        self.grant_manager(ALICE)
         self.seed_trade_squads()
         tid=self.assert_ok(self.action('trade_open',other_team_id=self.bid))['trade_id']
-        self.assertFalse(any(t['id']==tid for t in self.assert_ok(self.read('trades',tg=BOB))['trades']))
+        self.assertEqual(self.read('trades', tg=BOB)[0], 403)
         data=self.assert_ok(self.read('trades'))
         trade=next(t for t in data['trades'] if t['id']==tid)
         lot=next(t for t in data['teams'] if t['id']==self.aid)['players'][0]
@@ -729,6 +834,7 @@ class AuctionWebappTests(unittest.TestCase):
         self.assert_ok(self.action('trade_toggle',trade_id=tid,version=trade['version'],lot_id=lot['id']))
         trade=next(t for t in self.assert_ok(self.read('trades'))['trades'] if t['id']==tid)
         self.assert_ok(self.action('trade_send',trade_id=tid,version=trade['version']))
+        self.grant_manager(BOB)
         trade=next(t for t in self.assert_ok(self.read('trades',tg=BOB))['trades'] if t['id']==tid)
         self.assertEqual(self.action('trade_accept',trade_id=tid,version=trade['version'])[0],403)
         self.assert_ok(self.action('trade_accept',tg=BOB,trade_id=tid,version=trade['version']))
@@ -739,17 +845,18 @@ class AuctionWebappTests(unittest.TestCase):
         self.assertEqual(self.action('admin_trade_approve',tg=ADMIN,trade_id=tid)[0],400)
 
     def test_trade_block_and_auction_admin_approval_boundary(self):
+        self.grant_manager(ALICE)
         self.seed_trade_squads()
         lot=self.A.squad(self.db,self.aid)[0]
         self.assert_ok(self.action('trade_block_add',lot_id=lot.id,note='Looking for a bowler'))
         data=self.assert_ok(self.read('trades'))
         self.assertEqual(data['block'][0]['note'],'Looking for a bowler')
-        self.A.add_auction_admin(self.db,OUTSIDER)
-        self.db.commit()
-        self.assertEqual(self.action('admin_trade_approve',tg=OUTSIDER,trade_id=999999)[0],403)
+        self.grant_manager(OUTSIDER)
+        self.assertEqual(self.action('admin_trade_approve',tg=OUTSIDER,trade_id=999999)[0],400)
         self.assertEqual(self.action('admin_add_admin',tg=OUTSIDER,telegram_id=123456)[0],403)
 
     def test_previous_squad_rights_have_persistent_ids_for_release_buttons(self):
+        self.grant_manager(ALICE)
         from models import AuctionLot
         old=self.A.create_season(self.db,'Previous '+str(self.sid),max_retentions=2,
                                   min_squad_size=0,max_squad_size=5)

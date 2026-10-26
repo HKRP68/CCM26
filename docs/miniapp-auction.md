@@ -5,12 +5,16 @@ They share lots, bids, ownership, purses, retention, draft turns, RTM stages,
 trades, the ledger and the restart-safe scheduler. Existing Telegram commands
 continue to work. No database migration or separate hosting service is needed.
 
-Player-pool creation, imports, franchise setup and all other Mini App administration
-are restricted to verified **bot admins**. Players browse the prepared player list, manage
-their own franchise and bid; they are never asked to build the pool. Admin
-controls are hidden for players and the API independently checks every admin action.
-Delegated auction-admin status alone does not grant Mini App admin access;
-existing delegated Telegram command permissions are unchanged.
+**Auction Managers** are bot admins plus users appointed with
+`/aadminadd <id | @user | reply>`. They manage the same auction in Telegram and
+the Mini App. Only bot admins can appoint or remove managers.
+
+Team owners and co-owners can bid for their own franchise, answer live RTM
+questions, and read squads, budgets, upcoming players, rules and bid history.
+Squad changes, releases, retention, draft picks, trades and settings require an
+Auction Manager. Spectators can watch live bidding, teams and purses after a
+successful group-membership check. Management controls are hidden from team
+users and spectators; the API independently checks every action and old button.
 
 ## Open and switch
 
@@ -56,10 +60,10 @@ player bid history. Background updates pause when hidden, preserve typed custom
 bids, reject stale lot/stage/price contexts, and disable bidding when disconnected
 or after the server deadline. The scheduler remains responsible for resolution.
 
-Only a verified bot admin sees the **Bot admin panel** button. Opening the panel
+Auction Managers see the **Auction Manager panel** button. Opening the panel
 checks the signed Telegram identity on the server, and every action independently
-requires bot-admin access. Owners, co-owners, spectators and delegated auction
-admins cannot gain access by sending `admin: true` or `bot_admin: true`.
+checks current manager access. Sending `admin: true`, `bot_admin: true` or a role
+name never grants access. A removed manager immediately loses management rights.
 The panel provides start/resume, pause, next player, sell/unsold, clock extension,
 undo bid, admin bidding and RTM controls. Team buttons open player and purse
 management within Arena; **Open setup & rules** provides season preparation.
@@ -75,8 +79,8 @@ updates without replacing an unfinished form.
 | Squads / Logs | Expandable squads with acquisitions and budgets; shared room activity and current-player bid history |
 | Player pool | Name search, role/set/status filters, pagination, running set order, sold/unsold results and admin lot controls |
 | More → Players & purses / My purse & bids | Admin player and purse management; the owner's purse ledger, bid history and budget warnings |
-| Retention & draft | Previous-squad candidates, classic/range retention, admin offers and owner answers, dynamic negotiation/counters/withdrawals, owner release, token-checked retention review and finalization, readiness, eligible expansion players, private shortlist, pick and skip |
-| Trades | Build offers, select players from both sides, signed cash, notes, send/counter/accept/reject/withdraw, public trade block and completed trades; bot-admin approval/veto/reversal |
+| Retention & draft (managers) | Previous-squad candidates, retention offers, dynamic negotiation, releases, token-checked review and finalization, readiness, eligible expansion players, shortlists, pick and skip |
+| Trades (managers) | Offers, players, cash, notes, send/counter/accept/reject/withdraw, trade block, completed trades, approval/veto/reversal |
 | Rulebook | Purse, squad/role/rating rules, base prices, increment ladder, clock, anti-snipe, retention bands and RTM rules |
 | More → Setup & rules | Create/clone seasons, bind groups, add/edit/import owners and co-owners, link/carry previous squads, build/search/import/export pools and sets, reorder sets, configure rules, retention/draft/RTM, purse corrections, trade rules/windows, simulation/playback, publication, restart/cancel and auction-admin access |
 | More → Download CSV | A current snapshot of every franchise, signed player, signing price and remaining purse; no private ledgers or owner IDs |
@@ -88,8 +92,16 @@ labelled forms. Monetary inputs use **integer lakh**: `100` means ₹1 Cr.
 
 ## Manage team players and purses
 
+Every budget screen reads the persisted purse. Standing bids are separate from
+settled spending and show the purse after winning. Squad contract value and net
+purse use are labelled separately because trades and corrections can change the
+balance independently of squad prices. Team and manager budget tools refresh
+every five seconds while open, preserving unfinished forms; stale balance
+submissions are rejected. The Telegram scheduler also refreshes paused and
+completed boards after a purse change without advancing the auction clock.
+
 In the Mini App, open **More → Players & purses**, or a team's **Manage players & purse**
-button in Squads or the bot-admin panel. On the website, open
+button in Squads or the Auction Manager panel. On the website, open
 **Franchise Auctions → your auction → Franchises → Manage players & purse**.
 Team names on the website's live console also open this workspace.
 
@@ -161,7 +173,7 @@ Telegram `initData` authentication. Read and action responses are not cached.
 
 Owners/co-owners can act only for their assigned franchise. Spectators require
 an affirmative group-membership check, cached for 60 seconds; an unsigned
-launch hint never grants access. Bot-admin rights are checked on every Mini App
+launch hint never grants access. Auction Manager rights are checked on every Mini App
 admin read, catalogue/export request and action. Negotiation MAPs, other teams' shortlists and purse
 ledgers, and unsent outgoing trade builders are not served to other owners.
 
@@ -170,12 +182,10 @@ bot scheduler announces them in Telegram; the HTTP request never calls a bot
 send method. Polling the live room every two seconds reads the server deadline;
 the browser countdown does not decide when a lot sells.
 
-During a pause, an owner's retained players in Arena → Squads have a
-**Release & refund** button with confirmation. An admin pauses first, the
-owner/co-owner releases, then the admin resumes. The original retention price
-returns to the purse and the player returns to the auction pool. RTM cards
-stay unchanged. The server checks ownership, the pause, any active RTM and
-the team's ability to honour its standing bid on every release request.
+Auction Managers remove retained players through **Manage players & purse** or
+`/aunretain`. Team users have read-only squad controls. The original retention
+price is refunded through the ledger; signing restrictions, trade history,
+publication and standing bids remain protected.
 
 Preseason/trade views also persist the shared service's materialized previous
 squad rights as queued lots, so subsequent release/trade buttons have stable
@@ -197,6 +207,6 @@ separation and wait for refreshed forms after mutations.
 `tests/test_auction_arena_ui.py` checks bidding context, server-checked admin entry,
 in-room tool navigation, CSV snapshots and formula escaping, result cards, and
 returning home with the original scroll setting restored. Signed API tests also cover delegated
-auction admins being denied Mini App administration and shared Arena results.
+Auction Managers using Mini App administration, immediate revocation and team users being denied management actions and shared Arena results.
 `tests/test_auction_room_ux.py` also verifies rapid rebidding, duplicate feedback,
 event-loop responsiveness during slow database work and acknowledgement failures.

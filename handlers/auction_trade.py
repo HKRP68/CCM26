@@ -234,9 +234,9 @@ def _my_franchise(session, season, tg_id):
     return team
 
 
-def _require_bot_admin_id(tg_id):
-    if not T.is_bot_admin(tg_id):
-        raise AuctionError("Only the bot owner or a bot admin can do that.")
+def _require_manager_id(session, tg_id):
+    if not T.is_trade_manager(session, tg_id):
+        raise AuctionError("Only Auction Managers can do that.")
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -258,6 +258,8 @@ def _usage(session, season, mine):
 
 async def atrade_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """<code>/atrade &lt;franchise&gt;</code> — open a trade (owner + co-owners)."""
+    if not await _require_admin(update):
+        return
     name = _arg_text(context)
     chat = update.effective_chat
 
@@ -311,6 +313,8 @@ async def atrades_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def atradecash_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """<code>/atradecash 3.5</code> — you pay ₹3.5 Cr on top; <code>-2</code> they pay."""
+    if not await _require_admin(update):
+        return
     raw = _arg_text(context)
 
     def work(session, season, uid):
@@ -334,6 +338,8 @@ async def atradecash_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def atradecancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """<code>/atradecancel</code> — call off your offer, or turn down one made to you."""
+    if not await _require_admin(update):
+        return
     def work(session, season, uid):
         mine = _my_franchise(session, season, uid)
         trade = T.live_trade_for(session, season, mine.id)
@@ -353,6 +359,8 @@ async def atradecancel_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 async def atradeblock_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """<code>/atradeblock</code> · <code>add &lt;player&gt; [| note]</code> · <code>remove &lt;player&gt;</code>."""
     raw = _arg_text(context)
+    if raw and not await _require_admin(update):
+        return
 
     def work(session, season, uid):
         if not raw:
@@ -463,7 +471,7 @@ async def atradeapprove_handler(update: Update, context: ContextTypes.DEFAULT_TY
     raw = _arg_text(context)
 
     def work(session, season, uid):
-        _require_bot_admin_id(uid)
+        _require_manager_id(session, uid)
         trade = _trade_arg(session, season, raw)
         if trade is None:
             pending = T.pending_trades(session, season)
@@ -484,7 +492,7 @@ async def atradeveto_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     raw = _arg_text(context)
 
     def work(session, season, uid):
-        _require_bot_admin_id(uid)
+        _require_manager_id(session, uid)
         trade = _trade_arg(session, season, raw)
         if trade is None:
             raise AuctionError("Name the trade: /atradeveto <id> [reason].")
@@ -499,7 +507,7 @@ async def atradeundo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     raw = _arg_text(context)
 
     def work(session, season, uid):
-        _require_bot_admin_id(uid)
+        _require_manager_id(session, uid)
         trade = _trade_arg(session, season, raw)
         if trade is None:
             raise AuctionError("Name the trade: /atradeundo <id> (see /atrades).")
@@ -531,6 +539,8 @@ async def _edit(query, text, markup):
 
 async def trade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Every ``au_tr_`` press: authorised against the presser on each one."""
+    if not await _require_admin(update):
+        return
     query = update.callback_query
     if query is None:
         return
@@ -575,7 +585,7 @@ async def trade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     trade.chat_id = target
                     ping = (target, "SEND", None)
         elif action == "x":
-            if side != "a" and not T.is_bot_admin(uid):
+            if side != "a" and not T.is_trade_manager(session, uid):
                 raise AuctionError(NOT_IN_TRADE)
             T.cancel(session, trade, by_tg_id=uid)
             toast = "Called off"
@@ -600,7 +610,7 @@ async def trade_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 trade = T.counter(session, trade, by_tg_id=uid)
                 toast = "Your counter-offer — tick, then send"
         elif action in ("ap", "ve"):
-            if not T.is_bot_admin(uid):
+            if not T.is_trade_manager(session, uid):
                 raise AuctionError(NOT_BOT_ADMIN)
             if action == "ap":
                 T.approve(session, trade, by_tg_id=uid)
