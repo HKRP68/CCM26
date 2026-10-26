@@ -23,11 +23,12 @@ const source = fs.readFileSync(process.argv[1], 'utf8');
 async function boot(data,view='teams') {
   const handlers={}, calls=[], confirmations=[], notices=[], arenaCalls=[], parentCalls=[];
   let holdRead=false, releaseRead=null;
+  let editing=false,backgroundPoll=null;
   const control={dataset:{},disabled:false};
   const ids = ['auction-app', 'au-body', 'au-nav', 'au-title', 'au-status', 'au-connection'];
   const elements = Object.fromEntries(ids.map(id => [id, {
     dataset: {}, innerHTML: '', textContent: '', disabled: false, setAttribute() {},
-    addEventListener(type,fn) { if(id==='auction-app')handlers[type]=fn; }, querySelectorAll() { return []; }, contains() { return false; }
+    addEventListener(type,fn) { if(id==='auction-app')handlers[type]=fn; }, querySelectorAll() { return []; }, contains() { return editing; }
   }]));
   const context = vm.createContext({
     document: {getElementById: id => elements[id], addEventListener() {},
@@ -41,7 +42,7 @@ async function boot(data,view='teams') {
       if(holdRead&&!url.endsWith('/action')) await new Promise(resolve=>{releaseRead=resolve;});
       return {ok: true, data:url.endsWith('/action')?{}:data};
     },
-    setTimeout() { return 1; }, clearTimeout() {}, setInterval() { return 1; }, clearInterval() {}
+    setTimeout(fn,delay) { if(delay===5000)backgroundPoll=fn;return 1; }, clearTimeout() {}, setInterval() { return 1; }, clearInterval() {}
   });
   vm.runInContext(source, context);
   await vm.runInContext(`AuctionApp.openTools(${JSON.stringify(view)},${data.season?.id||null})`, context);
@@ -50,6 +51,9 @@ async function boot(data,view='teams') {
   elements.notices=notices; elements.control=control;
   elements.holdRead=()=>{holdRead=true;};
   elements.releaseRead=()=>{holdRead=false;releaseRead();};
+  elements.setData=value=>{data=value;};
+  elements.setEditing=value=>{editing=value;context.document.activeElement=value?{matches:()=>true}:null;};
+  elements.poll=async()=>{assert(backgroundPoll,'Budget tools must keep refreshing');const run=backgroundPoll;backgroundPoll=null;await run();};
   elements.click=async (key,args={})=>handlers.click({target:{closest:selector=>selector==='[data-au-ui]'?{dataset:{auUi:key,...args}}:null}});
   elements.submit=async (action,values,args={})=>{
     const form={dataset:{auForm:action,auArgs:JSON.stringify(args)},values};
@@ -82,8 +86,26 @@ async function boot(data,view='teams') {
   await owner.click('view',{view:'teams'});
   assert.match(owner['au-body'].innerHTML,/Max legal bid/);
   assert.doesNotMatch(owner['au-body'].innerHTML,/admin_team_|Manage a team/);
+  for(const view of ['admin','preseason','trades']) {
+    const before=owner.calls.length;await owner.click('view',{view});
+    assert.equal(owner.calls.length,before,'Team users cannot open '+view);
+  }
+  await owner.click('manage-team',{team:'1'});
+  await owner.click('export',{format:'franchises'});
+  await owner.submit('team_catalogue',{query:'Player'});
+  for(const action of ['admin_start','admin_pause','admin_resume','admin_team_purse','admin_team_add_player','admin_team_remove_player','retain','release','trade_open','draft_pick'])await owner.submit(action,{}, {team_id:1});
+  assert.equal(owner.calls.filter(c=>c.url.endsWith('/action')||c.url.endsWith('/catalogue')||c.url.endsWith('/export')).length,0);
+  const spectator=await boot({...base,admin:false,season:setup});
+  for(const view of ['admin','preseason','trades','pool','rules']) {
+    const before=spectator.calls.length;await spectator.click('view',{view});
+    assert.equal(spectator.calls.length,before,'Spectators cannot open '+view);
+  }
+  for(const action of ['bid','rtm','rtm_stand','admin_pause','admin_resume','release'])await spectator.submit(action,{}, {team_id:1});
+  assert.equal(spectator.calls.filter(c=>c.url.endsWith('/action')).length,0,'Spectators cannot submit auction actions');
   const manager=await boot({...base,admin:true,season:setup,teams:[team],managed_team_id:1,
                             roster_block_reason:'',team_ledger:[]});
+  for(const action of ['admin_add_admin','admin_remove_admin'])await manager.submit(action,{telegram_id:'123456'});
+  assert.equal(manager.calls.filter(c=>['admin_add_admin','admin_remove_admin'].includes(c.body.action)).length,0,'Delegated managers cannot appoint more managers');
   await manager.click('view',{view:'teams'});
   for(const action of ['admin_team_purse','admin_team_add_player','admin_team_remove_player']) {
     assert.match(manager['au-body'].innerHTML,new RegExp(action==='admin_team_add_player'?'Search player name':action));
@@ -107,6 +129,18 @@ async function boot(data,view='teams') {
   assert.equal(manager.notices.length,count+1);
   await manager.click('view',{view:'live'});
   assert.equal(manager.parentCalls.at(-1),'arena','Live links return to the one Arena');
+  const demoted=await boot({...base,admin:true,bot_admin:false,season:setup,teams:[team],my_team_ids:[1],managed_team_id:1,roster_block_reason:'',team_ledger:[]});
+  assert.match(demoted['au-body'].innerHTML,/admin_team_purse/);demoted.setEditing(true);
+  demoted.setData({...base,admin:false,bot_admin:false,season:setup,teams:[team],my_team_ids:[1]});await demoted.poll();
+  assert.doesNotMatch(demoted['au-body'].innerHTML,/admin_team_|Manage a team/,'Manager controls disappear during an active form after revocation');
+  assert.match(demoted['au-body'].innerHTML,/Max legal bid/);
+  await demoted.submit('admin_team_purse',{mode:'add',amount_lakh:'25',expected_purse_lakh:'1000',note:'Revoked'},{team_id:1});
+  assert.equal(demoted.calls.filter(c=>c.url.endsWith('/action')).length,0);
+  const poolData={...base,season:setup,teams:[team],my_team_ids:[1],players:[{id:9,name:'Player One',status:'queued',rating:90,role:'Batsman',base_lakh:20}],sets:[],page:1,pages:1,total:1};
+  const poolManager=await boot({...poolData,admin:true},'pool');
+  assert.match(poolManager['au-body'].innerHTML,/admin_force_next/);poolManager.setEditing(true);
+  poolManager.setData({...poolData,admin:false});await poolManager.poll();
+  assert.doesNotMatch(poolManager['au-body'].innerHTML,/data-au-(form|action)="admin_/,'Player-pool controls also disappear when manager access is removed');
 })().catch(error => { console.error(error); process.exit(1); });
 """
         result = subprocess.run([shutil.which('node'), '-e', script, str(source)],

@@ -14,9 +14,10 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 const source=fs.readFileSync(process.argv[1],'utf8');
 async function boot(data,gate=true) {
  const elements={},events={},calls=[],toolCalls=[],homes=[],blobs=[],downloads=[];let toolBusy=false;
+ let editing=false,backgroundPoll=null,readFailure=null;
  function node(id) {
    const item={id,dataset:{},open:false,textContent:'',hidden:false,className:'',style:{},
-     classList:{toggle(){}},setAttribute(){},contains(){return false;},
+     classList:{toggle(){}},setAttribute(){},contains(){return editing;},
      querySelectorAll(){return [];},addEventListener(type,fn){if(id==='dialog')events[type]=fn;},
      showModal(){this.open=true;},close(){this.open=false;events.close();},click(){downloads.push(this.download);}};
    let html='';Object.defineProperty(item,'innerHTML',{get(){return html;},set(value){html=value;for(const m of value.matchAll(/id="([^"]+)"/g))if(!elements[m[1]])elements[m[1]]=node(m[1]);}});
@@ -28,11 +29,14 @@ async function boot(data,gate=true) {
    Blob,URL:{createObjectURL(blob){blobs.push(blob);return 'blob:test';},revokeObjectURL(){}},
    navigate(screen){homes.push(screen);},
    escapeHtml:v=>String(v??'').replaceAll('<','&lt;').replaceAll('"','&quot;'),haptic(){},
-   api:async(url,body)=>{calls.push({url,body});return body.view==='admin'?{ok:gate,data:{...data,admin:gate,bot_admin:data.bot_admin&&gate}}:{ok:true,data:url.endsWith('/action')?{}:data};},
+   api:async(url,body)=>{calls.push({url,body});if(readFailure&&!url.endsWith('/action'))return {ok:false,status:readFailure,data:{message:'Access revoked.'}};return body.view==='admin'?{ok:gate,data:{...data,admin:gate,bot_admin:data.bot_admin&&gate}}:{ok:true,data:url.endsWith('/action')?{}:data};},
    AuctionApp:{openTools:async(...args)=>{toolCalls.push(args);},stopTools(){},setSeason(){},isBusy:()=>toolBusy,refreshTools:async()=>{}},
-   setTimeout(){return 1;},clearTimeout(){},setInterval(){return 1;},clearInterval(){}});
+   setTimeout(fn,delay){if([2000,5000].includes(delay))backgroundPoll=fn;return 1;},clearTimeout(){},setInterval(){return 1;},clearInterval(){}});
  vm.runInContext(source,context);vm.runInContext('AuctionArena.open(1)',context);await new Promise(setImmediate);
- return {elements,calls,toolCalls,homes,blobs,downloads,setToolBusy:value=>{toolBusy=value;},body:context.document.body,click:async(key,args={})=>events.click({target:{closest:selector=>selector==='[data-aa-ui]'?{dataset:{aaUi:key,...args}}:null}}),
+ return {elements,calls,toolCalls,homes,blobs,downloads,setToolBusy:value=>{toolBusy=value;},
+   setData:value=>{data=value;},setEditing:value=>{editing=value;context.document.activeElement=value?{matches:()=>true}:null;},denyReads:status=>{readFailure=status;},
+   poll:async()=>{assert(backgroundPoll,'A live refresh must be scheduled');const run=backgroundPoll;backgroundPoll=null;await run();},
+   body:context.document.body,click:async(key,args={})=>events.click({target:{closest:selector=>selector==='[data-aa-ui]'?{dataset:{aaUi:key,...args}}:null}}),
    act:async(name,args)=>events.click({target:{closest:selector=>selector==='[data-aa-action]'?{dataset:{aaAction:name,aaArgs:JSON.stringify(args)}}:null}})};
 }
 (async()=>{
@@ -63,6 +67,15 @@ async function boot(data,gate=true) {
  await spectator.click('tab',{tab:'squads'});assert.doesNotMatch(spectator.elements['aa-body'].innerHTML,/data-aa-action="release"/);
  await spectator.click('tab',{tab:'more'});assert.doesNotMatch(spectator.elements['aa-body'].innerHTML,/data-tool="(pool|preseason|trades|rules|admin)"/);
  await spectator.act('admin_start',{});assert.equal(spectator.calls.filter(c=>c.body.action==='admin_start').length,0);
+ for(const name of ['bid','rtm','rtm_stand'])await spectator.act(name,{team_id:1,lot_id:9,amount_lakh:20});
+ assert.equal(spectator.calls.filter(c=>c.url.endsWith('/action')).length,0,'Spectators never submit auction mutations');
+ await owner.act('bid',{team_id:2,lot_id:9,amount_lakh:20});
+ assert.equal(owner.calls.filter(c=>c.body.action==='bid').length,1,'Team users cannot submit bids for another franchise');
+ for(const name of ['admin_pause','admin_resume','admin_settings','admin_team_purse','admin_team_add_player','admin_team_remove_player','admin_restart','admin_publish','retain','release','draft_pick','trade_open']) {
+   await owner.act(name,{team_id:1});await spectator.act(name,{team_id:1});
+   assert.equal(owner.calls.filter(c=>c.body.action===name).length,0,name+' is manager-only');
+   assert.equal(spectator.calls.filter(c=>c.body.action===name).length,0,name+' is manager-only');
+ }
  await owner.click('tab',{tab:'logs'});assert.match(owner.elements['aa-body'].innerHTML,/Live activity/);
  await owner.click('tab',{tab:'more'});assert.match(owner.elements['aa-body'].innerHTML,/More auction tools/);
  assert.doesNotMatch(owner.elements['aa-body'].innerHTML,/data-tool="preseason"|data-tool="trades"/);
@@ -81,6 +94,20 @@ async function boot(data,gate=true) {
  await delegated.act('admin_pause',{});assert.equal(delegated.calls.filter(c=>c.body.action==='admin_pause').length,1);
  const revoked=await boot({...base,admin:true,bot_admin:true},false);await revoked.click('admin');
  assert.doesNotMatch(revoked.elements['aa-body'].innerHTML,/AUCTION MANAGER/);
+ const demoted=await boot({...base,admin:true,bot_admin:false});await demoted.click('admin');
+ demoted.setEditing(true);demoted.setData({...base,admin:false,bot_admin:false});await demoted.poll();
+ assert.doesNotMatch(demoted.elements['aa-header'].innerHTML,/data-aa-ui="admin"/);
+ assert.doesNotMatch(demoted.elements['aa-body'].innerHTML,/AUCTION MANAGER|data-aa-action="admin_/,'Revocation removes the panel even while editing');
+ assert.match(demoted.elements['aa-body'].innerHTML,/PLACE BID/,'A demoted owner retains bidding access');
+ await demoted.act('admin_pause',{});assert.equal(demoted.calls.filter(c=>c.body.action==='admin_pause').length,0);
+ const removedOwner=await boot(base);removedOwner.setEditing(true);
+ removedOwner.setData({...base,my_team_ids:[],teams:[{...base.teams[0],mine:false}]});await removedOwner.poll();
+ assert.match(removedOwner.elements['aa-body'].innerHTML,/Spectator view/);
+ assert.doesNotMatch(removedOwner.elements['aa-body'].innerHTML,/data-aa-action="bid"|data-aa-form="bid"/);
+ const denied=await boot({...base,admin:true,bot_admin:false});await denied.click('admin');denied.denyReads(403);await denied.poll();
+ assert.doesNotMatch(denied.elements['aa-header'].innerHTML,/data-aa-ui="admin"/);
+ assert.match(denied.elements['aa-body'].innerHTML,/Auction access denied/);
+ await denied.act('admin_pause',{});assert.equal(denied.calls.filter(c=>c.body.action==='admin_pause').length,0);
  const sold=await boot({...base,lot:null,last_result:{id:9,name:'Player',role:'Batsman',status:'sold',sold_to_id:1,price_lakh:100,event_id:4}});
  assert.match(sold.elements['aa-body'].innerHTML,/SOLD · ₹1.00 Cr/);
  const unsold=await boot({...base,lot:null,last_result:{id:9,name:'Player',role:'Bowler',status:'unsold',event_id:5}});

@@ -480,6 +480,77 @@ class AuctionWebappTests(unittest.TestCase):
         ctx = self.start()
         self.assertEqual(self.action('bid', tg=OUTSIDER, amount_lakh=100, **ctx)[0], 403)
 
+    def test_telegram_group_admins_remain_spectators_until_appointed(self):
+        for offset, status in enumerate(('member', 'administrator', 'creator'), 1):
+            viewer = OUTSIDER + 100 + offset
+            self.membership = {'ok': True, 'result': {'status': status}}
+            arena = self.assert_ok(self.read('arena', tg=viewer))
+            self.assertEqual(arena['role'], 'spectator')
+            self.assertFalse(arena['admin'])
+            self.assertFalse(arena['bot_admin'])
+            self.assertEqual(arena['permissions'], {'manage':False, 'manage_admins':False, 'bid':False})
+            self.assertEqual(arena['upcoming'], [])
+            teams = self.assert_ok(self.read('teams', tg=viewer))
+            self.assertEqual({t['id'] for t in teams['teams']}, {self.aid, self.bid})
+            self.assertTrue(all(t['purse_lakh'] == 10000 for t in teams['teams']))
+            self.assertEqual(teams['ledger'], [])
+            self.assertNotIn('team_ledger', teams)
+            for view in ('admin', 'preseason', 'eligible', 'trades', 'pool', 'rules'):
+                self.assertEqual(self.read(view, tg=viewer, admin=True, bot_admin=True)[0], 403)
+            for endpoint in ('/catalogue', '/export'):
+                self.assertEqual(self.post(endpoint, {'season_id':self.sid}, viewer)[0], 403)
+            for action in ('admin_create', 'admin_start', 'admin_pause', 'admin_resume',
+                           'admin_settings', 'admin_team_purse', 'admin_team_add_player',
+                           'admin_team_remove_player', 'admin_add_admin', 'admin_remove_admin',
+                           'retain', 'release', 'draft_pick', 'trade_open', 'bid', 'rtm', 'rtm_stand'):
+                with self.subTest(group_status=status, action=action):
+                    code, result = self.action(action, tg=viewer, team_id=self.aid, role='manager',
+                                               admin=True, bot_admin=True,
+                                               permissions={'manage':True, 'bid':True})
+                    self.assertEqual(code, 403, result)
+        self.grant_manager(viewer)
+        manager = self.assert_ok(self.read('admin', tg=viewer))
+        self.assertEqual(manager['role'], 'manager')
+        self.assertTrue(manager['permissions']['manage'])
+        self.assertFalse(manager['permissions']['manage_admins'])
+        self.assert_ok(self.action('admin_start', tg=viewer))
+        self.assert_ok(self.action('admin_pause', tg=viewer))
+        self.assert_ok(self.action('admin_resume', tg=viewer))
+
+    def test_team_users_can_read_upcoming_players_all_squads_and_current_purses(self):
+        self.assert_ok(self.action('admin_team_add_player', tg=ADMIN, team_id=self.aid,
+                                   player_id=self.players[0].id, price_lakh=125, note='Squad setup'))
+        for uid in (ALICE, COOWNER, BOB):
+            arena = self.assert_ok(self.read('arena', tg=uid))
+            self.assertEqual(arena['role'], 'team')
+            self.assertEqual(arena['permissions'], {'manage':False, 'manage_admins':False, 'bid':True})
+            self.assertTrue(arena['upcoming'])
+            self.assertNotIn(self.players[0].id, [p['player_id'] for p in arena['upcoming']])
+            for view in ('arena', 'teams'):
+                result = self.assert_ok(self.read(view, tg=uid))
+                squads = {t['id']:t for t in result['teams']}
+                self.assertEqual(squads[self.aid]['purse_lakh'], 9875)
+                self.assertEqual(squads[self.bid]['purse_lakh'], 10000)
+                self.assertEqual(squads[self.aid]['squad'][0]['player_id'], self.players[0].id)
+                self.assertNotIn('settings', result)
+                self.assertNotIn('team_ledger', result)
+
+    def test_revoked_manager_with_a_team_keeps_only_bidding_and_read_access(self):
+        self.grant_manager(COOWNER)
+        self.assertTrue(self.assert_ok(self.read('admin', tg=COOWNER))['admin'])
+        self.assert_ok(self.action('admin_remove_admin', tg=ADMIN, telegram_id=COOWNER))
+        team = self.assert_ok(self.read('arena', tg=COOWNER))
+        self.assertEqual(team['role'], 'team')
+        self.assertEqual(team['my_team_ids'], [self.aid])
+        self.assertFalse(team['permissions']['manage'])
+        self.assertTrue(team['permissions']['bid'])
+        for action in ('admin_start', 'admin_pause', 'admin_resume', 'admin_settings',
+                       'admin_team_purse', 'release', 'retain', 'trade_open', 'draft_pick'):
+            self.assertEqual(self.action(action, tg=COOWNER, team_id=self.aid)[0], 403)
+        ctx = self.start()
+        self.assert_ok(self.action('bid', tg=COOWNER, amount_lakh=100, **ctx))
+        self.assertEqual(self.assert_ok(self.read('arena', tg=COOWNER))['lot']['bidder_id'], self.aid)
+
     def test_membership_failure_does_not_grant_access(self):
         self.membership = {'ok':False, 'description':'Unavailable'}
         self.assertEqual(self.read(tg=OUTSIDER)[0], 403)

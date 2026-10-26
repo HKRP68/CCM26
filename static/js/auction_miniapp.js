@@ -30,6 +30,8 @@ const AuctionApp = (() => {
   const active = () => toolsOpen && typeof currentScreen !== 'undefined' && currentScreen === 'auction' && !!$('auction-app');
   const stats = rows => `<dl class="au-stats">${rows.map(([label,value,purseTeam])=>`<div><dt>${esc(label)}</dt><dd ${purseTeam?`data-au-purse="${purseTeam}"`:""}>${esc(value)}</dd></div>`).join('')}</dl>`;
   const viewButton = (label,target) => `<button type="button" class="au-btn" data-au-ui="view" data-view="${target}">${esc(label)} →</button>`;
+  const viewAllowed = target => !!data&&(data.admin||target==='teams'||
+    (data.my_team_ids?.length&&['pool','rules'].includes(target)));
 
   function setSeason(id) { seasonId = id ? Number(id) : null; selectedTeam=null; managedTeamId=null; signingPlayer=null; cataloguePlayers=[]; catalogueQuery=''; filters={query:'',status:'',role:'',set_name:'',page:1}; data=null; epoch++; catalogueEpoch++; }
   function pauseTools() { clearTimeout(poll); clearInterval(clock); poll=null; clock=null; epoch++; loading=false; }
@@ -62,12 +64,12 @@ const AuctionApp = (() => {
       const key=ui.dataset.auUi;
       if(busy) return;
       if(key==='back-live') {AuctionArena.showTab('arena');return;}
-      if(key==='view') { if(ui.dataset.view==='live') {AuctionArena.showTab('arena');return;} view=ui.dataset.view; epoch++; refresh(); }
+      if(key==='view') { if(ui.dataset.view==='live') {AuctionArena.showTab('arena');return;} if(!viewAllowed(ui.dataset.view)){notify('Your auction role cannot use these tools.','error');return;} view=ui.dataset.view; epoch++; refresh(); }
       if(key==='refresh') refresh();
       if(key==='page') { filters.page=Number(ui.dataset.page); refresh(); }
       if(key==='export') download(ui.dataset.format);
       if(key==='team') { selectedTeam=Number(ui.dataset.team); refresh(); }
-      if(key==='manage-team') { managedTeamId=Number(ui.dataset.team); signingPlayer=null; view='teams'; await refresh(); $('au-team-manager')?.scrollIntoView?.({block:'start'}); }
+      if(key==='manage-team') { if(!data?.admin){notify('Only Auction Managers can manage teams.','error');return;} managedTeamId=Number(ui.dataset.team); signingPlayer=null; view='teams'; await refresh(); $('au-team-manager')?.scrollIntoView?.({block:'start'}); }
       if(key==='select-signing') { signingPlayer=cataloguePlayers.find(p=>p.id===Number(ui.dataset.player)); renderBody(); }
       if(key==='clear-signing') { signingPlayer=null; renderBody(); }
     });
@@ -124,16 +126,19 @@ const AuctionApp = (() => {
     loading=false;
     if(result.ok) {
       const next=result.data;
+      const accessChanged=!!data&&(!!data.admin!==!!next.admin||!!data.bot_admin!==!!next.bot_admin||
+        (data.my_team_ids||[]).join(',')!==(next.my_team_ids||[]).join(','));
       // Estimate server time at the request midpoint, not from the phone clock.
       offset=Date.parse(next.server_time)-(sent+Date.now())/2;
       data=next;
+      if(accessChanged){catalogueEpoch++;cataloguePlayers=[];signingPlayer=null;if(!data.admin)managedTeamId=null;}
       if(data.season) seasonId=data.season.id;
       if(view==='teams'&&data.admin) managedTeamId=data.managed_team_id;
       if(!selectedTeam || !data.my_team_ids?.includes(selectedTeam)) selectedTeam=data.my_team_ids?.[0]||null;
       renderHeader();
       // Polls must not erase a half-typed custom bid or close its keyboard.
       const editing = $('au-body').contains(document.activeElement) && document.activeElement?.matches('input, textarea, select');
-      if(!background || !editing) renderBody();
+      if(accessChanged || !background || !editing) renderBody();
       document.querySelectorAll('[data-au-purse]').forEach(el=>{const team=data.teams?.find(t=>t.id===Number(el.dataset.auPurse));if(team)el.textContent=money(team.purse_lakh);});
       tick();
     } else {
@@ -142,7 +147,8 @@ const AuctionApp = (() => {
       if(result.status===403) {if(data){data.admin=false;data.bot_admin=false;renderHeader();}$('au-body').innerHTML=empty('Access denied',result.data.message||'Your account cannot use these controls.');return;}
       if(!data) $('au-body').innerHTML=empty('The auction could not be loaded','Check your connection, then retry. Open the auction from its Telegram group if you are a spectator.');
     }
-    if(active() && (requestedSeason===seasonId || requestedSeason===null) && ['teams','admin','preseason','trades'].includes(view)) {
+    if(active() && (requestedSeason===seasonId || requestedSeason===null) &&
+       (data?.admin || ['teams','admin','preseason','trades'].includes(view))) {
       poll=setTimeout(()=>refresh(true),5000);
     }
   }
@@ -161,7 +167,7 @@ const AuctionApp = (() => {
     if(!data.season) {
       $('au-body').innerHTML=data.admin?empty('Manage your auctions','Create an auction or select one above.')+newAuction():empty('Waiting for your auction','Your assigned auctions will appear here. You can also open Switch to Miniapp in your auction group.'); return;
     }
-    if(['admin','preseason','trades'].includes(view)&&!data.admin) { $('au-body').innerHTML=empty('Auction Manager access required','Only Auction Managers can use setup and management.'); return; }
+    if(!viewAllowed(view)) { $('au-body').innerHTML=empty('Access denied','Your auction role cannot use these tools.'); return; }
     const renderer={pool:renderPool,teams:renderTeams,preseason:renderPreseason,trades:renderTrades,rules:renderRules,admin:renderAdmin}[view];
     $('au-body').innerHTML=renderer?renderer():'';
     $('au-body').querySelectorAll('details').forEach(d=>{ d.open=openDetails.includes(d.querySelector('summary')?.textContent); });
@@ -313,6 +319,7 @@ const AuctionApp = (() => {
     return cataloguePlayers.map(p=>`<div class="au-row"><div class="au-row-main"><strong>${esc(p.name)}</strong><div class="au-muted">${p.rating} OVR · ${esc(p.role)} · ${esc(p.version||'Base')} · ${esc(p.country||'')}<br>${esc(p.status.replaceAll('_',' '))} · base ${money(p.base_lakh)}</div></div>${mode==='team'?`<button class="au-btn" type="button" data-au-ui="select-signing" data-player="${p.id}" ${p.available?'':'disabled'}>${p.available?'Select':'Unavailable'}</button>`:btn(p.status==='not_in_pool'?'Add to pool':'In pool','admin_pool_players',{player_ids:[p.id]},false,p.status!=='not_in_pool')}</div>`).join('')||empty('No matching players','Try another name.');
   }
   async function catalogue(query,mode='pool') {
+    if(!data?.admin){notify('Only Auction Managers can search the management catalogue.','error');return;}
     const id=seasonId, request=++catalogueEpoch, team=managedTeamId;
     const target=mode==='team'?'au-team-catalogue':'au-catalogue';
     if($(target)) $(target).innerHTML='<p class="au-muted" role="status">Searching players…</p>';
@@ -340,6 +347,8 @@ const AuctionApp = (() => {
   async function act(action,args) {
     if(busy) return;
     if(!data?.admin&&!['bid','rtm','rtm_stand'].includes(action)) { notify('Only Auction Managers can manage an auction.','error'); return; }
+    if(['bid','rtm','rtm_stand'].includes(action)&&!data?.my_team_ids?.includes(Number(args.team_id))){notify('Only assigned team users can bid or answer RTM for their franchise.','error');return;}
+    if(['admin_add_admin','admin_remove_admin'].includes(action)&&!data?.bot_admin){notify('Only bot admins can appoint or remove Auction Managers.','error');return;}
     const confirmations={retention_confirm:'Finalize this retention list? Finalized retentions cannot be changed by the owner.',release:'Release this player into the auction pool?',trade_accept:'Accept this trade, including its players and cash?',admin_trade_reverse:'Reverse this completed trade?',admin_sold:'Sell the current player at the displayed price?',admin_unsold:'Mark the current player unsold?',admin_force_next:'Bring this player onto the block?',admin_recall:'Recall this sale?',admin_undo_sale:'Undo this sale?',admin_retention_force:'Force this retention as an admin?'};
     const t=managedTeam();
     if(action==='admin_team_purse'&&t) {
@@ -381,6 +390,7 @@ const AuctionApp = (() => {
 
   }
   async function download(format) {
+    if(!data?.admin){notify('Only Auction Managers can export auction setup.','error');return;}
     const result=await api('/api/webapp/auction/export',{season_id:seasonId,format});
     if(!result.ok) {notify(result.data.message||'Export failed.','error');return;}
     const blob=new Blob([result.data.content],{type:'application/json'}),url=URL.createObjectURL(blob);

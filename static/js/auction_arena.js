@@ -133,6 +133,8 @@ const AuctionArena = (() => {
     connected=!!result.ok;
     if(result.ok) {
       const next=result.data;
+      const accessChanged=!!data&&(!!data.admin!==!!next.admin||!!data.bot_admin!==!!next.bot_admin||
+        (data.my_team_ids||[]).join(',')!==(next.my_team_ids||[]).join(','));
       offset=Date.parse(next.server_time)-(sent+Date.now())/2;updatedAt=Date.now();
       if(data?.lot&&next.lot?.id===data.lot.id&&next.my_team_ids?.includes(data.lot.bidder_id)&&next.lot.bidder_id&&!next.my_team_ids.includes(next.lot.bidder_id)) {haptic('heavy');notice('You have been outbid. Next bid: '+money(next.lot.next_lakh));}
       if(next.last_result?.event_id!==lastEvent) {
@@ -144,10 +146,14 @@ const AuctionArena = (() => {
       if(panel&&!next.admin)panel=false;
       renderHeader();renderNav();
       const editing=$('aa-body').contains(document.activeElement)&&document.activeElement?.matches('input,select,textarea');
-      if(!background||!editing)renderBody();
+      if(accessChanged||!background||!editing)renderBody();
       root.querySelectorAll('[data-aa-purse]').forEach(el=>{const team=data.teams?.find(t=>t.id===Number(el.dataset.aaPurse));if(team)el.textContent=money(team.purse_lakh);});
     } else {
-      if(!data)$('aa-body').innerHTML=empty('Arena unavailable',result.data?.message||'Check your connection and retry.');
+      if([401,403].includes(result.status)) {
+        data=null;panel=false;teamId=null;resultCard=null;renderHeader();renderNav();
+        $('aa-body').innerHTML=empty('Auction access denied',result.data?.message||'Your account cannot access this auction.');
+      }
+      else if(!data)$('aa-body').innerHTML=empty('Arena unavailable',result.data?.message||'Check your connection and retry.');
       notice(result.data?.message||'Connection interrupted. Refresh before bidding.');
     }
     tick();if(root.open&&!toolView)poll=setTimeout(()=>refresh(true),result.ok?2000:5000);
@@ -280,6 +286,7 @@ const AuctionArena = (() => {
   async function act(name,args) {
     if(busy||!data?.season)return;
     if(!data.admin&&!['bid','rtm','rtm_stand'].includes(name)){notice('Only Auction Managers can use this panel.');return;}
+    if(['bid','rtm','rtm_stand'].includes(name)&&!data.my_team_ids?.includes(Number(args.team_id))){notice('Only assigned team users can bid or answer RTM for their franchise.');return;}
     if(['bid','rtm','rtm_stand'].includes(name)&&!liveEnough()){notice('Refresh the live room before acting.');await refresh();return;}
     setBusy(true);clearTimeout(poll);epoch++;
     try {
@@ -297,7 +304,7 @@ const AuctionArena = (() => {
     const connection=$('aa-connection');connection.textContent=toolView?'Auction tools · shared with Telegram':live?'Live updates · shared with Telegram':'Updates delayed · refresh before bidding';connection.classList.toggle('delayed',!toolView&&!live);
     const l=data?.lot;
     const left=l?.deadline?Math.max(0,Math.ceil((Date.parse(l.deadline)-Date.now()-offset)/1000)):null;
-    if($('aa-seconds')) {
+    if($('aa-seconds')&&data?.season) {
       const paused=data.season.status==='paused';
       $('aa-seconds').textContent=paused?'Ⅱ':left===null?'—':left;
       $('aa-timer-label').textContent=paused?'PAUSED':left===0?'WAIT':'SEC';
