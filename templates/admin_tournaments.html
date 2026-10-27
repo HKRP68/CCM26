@@ -123,7 +123,7 @@
             ('round_robin','Round Robin','trophy','rr',2),
             ('double_round_robin','Double Round Robin','sync-alt','drr',2),
             ('one_half_round_robin','1.5 Round Robin','sync-alt','halfrr',2),
-            ('cross_group_round_robin','Two-Group 1.5 RR · Even teams','layer-group','crossrr',4),
+            ('cross_group_round_robin','Two-Group 1.5 RR · Any even team count','layer-group','crossrr',4),
             ('pure_knockout','Pure Knockout','sitemap','ko',2),
             ('custom_series','Custom Series','list-ol','series',2),
             ('league_semis_final','League + Semis + Final','ranking-star','rr3',4),
@@ -301,7 +301,7 @@
           else {
             const c = matchCount(ct, n);
             mc.textContent = (c === null) ? (ct === 'halfrr' ? 'Check target' : 'After groups set') :
-              isCross ? (c + ' league matches · ' + (3 * n / 2 - 1) + ' per team' + (n === 10 ? ' · Recommended' : '')) :
+              isCross ? (c + ' league matches · ' + (3 * n / 2 - 1) + ' per team · Recommended for even teams') :
               (c + ' match' + (c === 1 ? '' : 'es'));
           }
         });

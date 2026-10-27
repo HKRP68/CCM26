@@ -2,7 +2,7 @@
 
 For N=2m teams this gives 3m-1 games each in exactly 3m-1 full rounds.
 Odd-sized groups share their bye round with a cross-group fixture, so there
-are no league byes, including the familiar ten-team, two-groups-of-five case.
+are no league byes for any even team count of at least four.
 """
 
 import hashlib

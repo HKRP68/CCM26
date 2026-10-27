@@ -1,29 +1,40 @@
 # Dynamic 1.5 Round Robin
 
-## Recommended for ten teams: Two-Group 1.5 RR
+## Recommended for any even number of teams: Two-Group 1.5 RR
 
-Select **Two-Group 1.5 RR · Even teams** on Create. This implements the requested
-IPL-inspired pattern, with two groups of five:
+Select **Two-Group 1.5 RR · Any even team count** on Create. It supports any even
+number of at least four teams, including 8, 10, 12, 14, 16 and larger fields.
+For `N` teams, split them into two equal groups of `N / 2`:
 
 | Opponents | Games per opponent | Games per team |
 | --- | --- | --- |
-| Four teams in the same group | 1 | 4 |
-| Five teams in the other group | 2, home and away | 10 |
-| Total | | **14** |
+| `N / 2 − 1` teams in the same group | 1 | `N / 2 − 1` |
+| `N / 2` teams in the other group | 2, home and away | `N` |
+| Total | | **`3N / 2 − 1`** |
 
-The league has **70 fixtures in 14 full rounds**, no byes, and **7 home plus
-7 away games per team**. Repeat opponents meet at least five rounds apart.
-The deterministic home/away improvement produces a longest run of three games
-for ten teams. The preview reports actual home/away totals, rematch spacing and
-longest run, rather than promising the same run limit for every field size.
+| Teams | Equal groups | Games per team | League fixtures | Rounds |
+| --- | --- | --- | --- | --- |
+| 8 | 4 + 4 | 11 | 44 | 11 |
+| 10 | 5 + 5 | 14 | 70 | 14 |
+| 12 | 6 + 6 | 17 | 102 | 17 |
+| 14 | 7 + 7 | 20 | 140 | 20 |
+| 16 | 8 + 8 | 23 | 184 | 23 |
+| 20 | 10 + 10 | 29 | 290 | 29 |
+| 32 | 16 + 16 | 47 | 752 | 47 |
+
+Every round is full, with no byes. Home and away totals differ by at most one;
+even game totals split exactly. Repeat meetings are at least `N / 2` rounds
+apart. The preview reports the calculated home/away totals, rematch spacing
+and longest home/away run for the actual number of registered teams.
 
 Use **one combined points table** and qualify the top four for **Qualifier 1,
-Eliminator, Qualifier 2 and Final**. This is the new preset's default: 70 league
-fixtures plus four playoffs, 74 fixtures overall. Group membership decides
-repeat opponents; it does not reserve qualifying places for either group.
+Eliminator, Qualifier 2 and Final**. This is the preset's default for any supported
+even field, adding four playoffs to the calculated league fixture count. No
+playoffs, semifinals or a configurable Top N are also available. Group membership
+decides repeat opponents; it does not reserve qualifying places for either group.
 
 The draw splits each adjacent seed pair between the groups in snake order:
-seeds 1, 4, 5, 8, 9 enter A; 2, 3, 6, 7, 10 enter B. Seed order comes from the
+seeds 1, 4, 5, 8, 9, ... enter A; 2, 3, 6, 7, 10, ... enter B. Seed order comes from the
 admin's team priority, with team id resolving equal priorities. This does not
 infer team strength from player ratings. Set priorities by strength or prior
 season standings, then use **Draw balanced groups from team order** on Manage.
@@ -31,7 +42,7 @@ Memberships can also be assigned manually; exactly two equal groups must be
 complete before confirming fixtures. Redrawing never touches a live or completed
 schedule. Groups and fixtures persist across restarts.
 
-This format generalizes to any even field of at least four teams. For `N = 2m`,
+For `N = 2m`,
 each team plays `3m − 1` games, the league contains `N × (3m − 1) / 2` fixtures,
 and there are exactly `3m − 1` rounds. With odd group sizes, the two internal bye
 teams play one another across groups, so league rounds remain full. The other
@@ -45,9 +56,10 @@ IPL playoffs to reward the top two, and use shared round pitches and release
 batches. These use the existing admin controls; the system does not silently
 reseed or redraw a tournament on restart.
 
-For ten teams this equal-game option adds two league fixtures compared with the
-68-fixture nearest-target scheduler below. It is a separate preset so odd-team
-schedules, custom targets, and existing formats keep their behavior.
+For example, ten teams produce 70 league fixtures in 14 rounds and seven home
+plus seven away games each, adding two fixtures compared with the 68-fixture
+nearest-target scheduler below. The two-group preset is separate so odd-team
+schedules, custom targets and existing formats keep their behavior.
 
 ## Standard dynamic 1.5 RR and custom targets
 
@@ -145,7 +157,9 @@ confirmation, stale previews, custom targets and qualification, persisted
 fixtures, migrations, manual ties/no results, simulation and automatic playoff
 progression through the champion.
 `tests/test_cross_group_schedule.py` independently checks every even field from
-4–64 teams and all group partitions through ten teams, including opponent
+4–64 teams, larger fields through 128 teams and all group partitions through ten teams, including opponent
 frequencies, optimal round counts, home balance and repeat spacing. The admin
 suite also simulates all 70 league matches and the four IPL playoffs, and checks
 group persistence, stale previews, redraw protection and invalid group sizes.
+The admin integration tests also create, preview and persist 8-, 10-, 12-, 14-,
+16- and 20-team tournaments through the same preset.

@@ -87,7 +87,8 @@ class PartialRoundRobinAdminTests(unittest.TestCase):
         response = self.client.post("/tournaments", data=data)
         self.assertEqual(response.status_code, 302)
         self.session.expire_all()
-        tour = self.session.query(Tournament).filter_by(league_id=self.league.id).first()
+        tour = (self.session.query(Tournament).filter_by(league_id=self.league.id)
+                .order_by(Tournament.id.desc()).first())
         self.assertIsNotNone(tour)
         self.assertIn("/schedule/preview", response.location)
         return tour
@@ -333,6 +334,28 @@ class PartialRoundRobinAdminTests(unittest.TestCase):
         self.assertEqual(actual, [(r["round_no"], a, b) for r in plan["rounds"] for a, b in r["pairs"]])
         for page in ("", "/schedule", "/dashboard"):
             self.assertEqual(self.client.get(f"/tournaments/{tour.id}{page}").status_code, 200)
+
+    def test_cross_group_admin_accepts_multiple_even_team_counts(self):
+        from models import ChallengeTeam
+        from services import league_schedule_service as schedule
+        for i in range(len(self.cteams), 20):
+            team = ChallengeTeam(league_id=self.league.id, name=f"Extra {self.league.id}-{i}", sort_order=i)
+            self.session.add(team)
+            self.cteams.append(team)
+        self.session.commit()
+        for n, games, fixtures in ((8, 11, 44), (10, 14, 70), (12, 17, 102),
+                                    (14, 20, 140), (16, 23, 184), (20, 29, 290)):
+            with self.subTest(teams=n):
+                tour = self.create(n=n, tour_format="cross_group_round_robin")
+                plan = schedule.preview_schedule(self.session, tour.id)
+                self.assertEqual([len(group["team_ids"]) for group in plan["groups"]], [n // 2, n // 2])
+                html, token = self.preview(tour)
+                self.assertIn(f"{fixtures}</strong> league fixtures", html)
+                self.assertIn(f"{games} rounds", html)
+                self.confirm(tour, token)
+                saved = self.fixtures(tour)
+                self.assertEqual(len(saved), fixtures)
+                self.assertEqual(max(f.round_no for f in saved), games)
 
     def test_cross_group_membership_changes_require_a_fresh_preview(self):
         from models import TournamentTeam

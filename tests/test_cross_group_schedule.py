@@ -54,6 +54,14 @@ class CrossGroupScheduleTests(unittest.TestCase):
         self.assertGreaterEqual(plan["minimum_repeat_gap"], 5)
         self.assertLessEqual(plan["longest_streak"], 3)
 
+    def test_even_team_examples_and_larger_fields(self):
+        for n, games, fixtures in ((8, 11, 44), (10, 14, 70), (12, 17, 102),
+                                    (14, 20, 140), (16, 23, 184), (20, 29, 290),
+                                    (100, 149, 7450), (128, 191, 12224)):
+            with self.subTest(teams=n):
+                plan = self.check_plan(*seeded_groups(list(range(1, n + 1))))
+                self.assertEqual((plan["matches"], plan["round_count"]), (fixtures, games))
+
     def test_every_small_group_partition(self):
         for n in (4, 6, 8, 10):
             ids = list(range(101, 101 + n))
