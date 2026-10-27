@@ -577,17 +577,81 @@ def locked_pitch_for_pair(session, tour, name1, name2):
 # Schedule generation (DB)
 # ──────────────────────────────────────────────────────────────────────
 
-def generate_schedule(session, tournament_id):
+PREVIEW_FORMATS = ("one_half_rr", "cross_group_rr")
+
+
+def draw_balanced_groups(session, tournament_id):
+    """Persist a snake-seeded two-group draw; clear only an untouched schedule."""
+    from models import Tournament, TournamentTeam, TournamentGroup, TournamentMatch
+    from services.cross_group_schedule import seeded_groups
+    tour = session.get(Tournament, int(tournament_id))
+    if not tour or tour.league_format != "cross_group_rr":
+        raise ValueError("Select Two-Group 1.5 RR before drawing groups.")
+    teams = (session.query(TournamentTeam).filter_by(tournament_id=tour.id)
+             .order_by(TournamentTeam.sort_order, TournamentTeam.id).all())
+    split = seeded_groups([t.id for t in teams])  # validate before any mutation
+    if (session.query(TournamentMatch).filter(TournamentMatch.tournament_id == tour.id,
+                                            TournamentMatch.status != "scheduled").first()):
+        raise ValueError("Reset the tournament before redrawing groups — live or completed matches exist.")
+    session.query(TournamentMatch).filter_by(tournament_id=tour.id).delete(synchronize_session=False)
+    groups = (session.query(TournamentGroup).filter_by(tournament_id=tour.id)
+              .order_by(TournamentGroup.sort_order, TournamentGroup.id).all())
+    while len(groups) < 2:
+        names = {g.name for g in groups}
+        name = next(candidate for candidate in ("Group A", "Group B") if candidate not in names)
+        group = TournamentGroup(tournament_id=tour.id, name=name,
+                                rr_mode="single", sort_order=len(groups))
+        session.add(group)
+        session.flush()
+        groups.append(group)
+    by_id = {t.id: t for t in teams}
+    for group, ids in zip(groups[:2], split):
+        group.rr_mode = "single"
+        for tid in ids:
+            by_id[tid].group_id = group.id
+    session.flush()
+    for group in groups[2:]:
+        session.delete(group)
+    tour.group_points_mode = "combined"
+    tour.schedule_generated = False
+    tour.knockout_generated = False
+    session.flush()
+    return groups[:2]
+
+
+def preview_schedule(session, tournament_id):
+    """Plan a preview format from saved settings and participants, without writes."""
+    from models import Tournament, TournamentTeam, TournamentGroup
+    from services.partial_round_robin import build_schedule
+    tour = session.get(Tournament, int(tournament_id))
+    if not tour or tour.league_format not in PREVIEW_FORMATS:
+        raise ValueError("Select 1.5 Round Robin or Two-Group 1.5 RR to preview the schedule.")
+    teams = (session.query(TournamentTeam).filter_by(tournament_id=tour.id)
+             .order_by(TournamentTeam.sort_order, TournamentTeam.id).all())
+    if tour.league_format == "cross_group_rr":
+        from services.cross_group_schedule import build_schedule as grouped_schedule
+        groups = (session.query(TournamentGroup).filter_by(tournament_id=tour.id)
+                  .order_by(TournamentGroup.sort_order, TournamentGroup.id).all())
+        if len(groups) != 2 or any(t.group_id not in {g.id for g in groups} for t in teams):
+            raise ValueError("Assign every team to exactly two equal groups, or draw balanced groups on Manage.")
+        members = [[t.id for t in teams if t.group_id == g.id] for g in groups]
+        plan = grouped_schedule(*members)
+        plan["groups"] = [{"name": g.name, "team_ids": ids} for g, ids in zip(groups, members)]
+        return plan
+    return build_schedule([t.id for t in teams], tour.league_match_target)
+
+
+def generate_schedule(session, tournament_id, *, preview_fingerprint=None):
     """(Re)generate the fixture schedule for a tournament. Caller commits.
 
     Refuses to run if any match has already been completed (that would orphan
-    recorded results); reset the tournament first. Clears existing
-    scheduled/live fixtures, then creates fresh ones based on ``league_format``.
+    recorded results); reset the tournament first. Live matches also block
+    regeneration. Validates the new plan before replacing scheduled fixtures.
     Returns the number of fixtures created.
     """
     from models import Tournament, TournamentTeam, TournamentGroup, TournamentMatch
     tid = int(tournament_id)
-    tour = session.get(Tournament, tid)
+    tour = session.query(Tournament).filter_by(id=tid).with_for_update().first()
     if not tour:
         return 0
 
@@ -604,16 +668,37 @@ def generate_schedule(session, tournament_id):
     if completed:
         raise ValueError(
             "Completed matches exist — reset the tournament before regenerating the schedule.")
-
-    # Drop any prior scheduled/live fixtures so regeneration is clean.
-    (session.query(TournamentMatch)
-     .filter_by(tournament_id=tid)
-     .filter(TournamentMatch.status != "completed")
-     .delete(synchronize_session=False))
+    if session.query(TournamentMatch).filter_by(tournament_id=tid, status="live").first():
+        raise ValueError("A match is live — finish it before regenerating the schedule.")
 
     teams = (session.query(TournamentTeam).filter_by(tournament_id=tid)
              .order_by(TournamentTeam.sort_order, TournamentTeam.id).all())
     fmt = tour.league_format or "single_rr"
+    # Build and validate everything before removing a previous schedule.
+    plan = preview_schedule(session, tid) if fmt in PREVIEW_FORMATS else None
+    if plan and preview_fingerprint is not None and preview_fingerprint != plan["fingerprint"]:
+        raise ValueError("The schedule changed since its preview. Preview it again before confirming.")
+    batches = []
+    if fmt == "groups":
+        unassigned = [t.name for t in teams if t.group_id is None]
+        if unassigned:
+            raise ValueError("Assign every team to a group first. Unassigned: %s"
+                             % ", ".join(unassigned))
+        groups = (session.query(TournamentGroup).filter_by(tournament_id=tid)
+                  .order_by(TournamentGroup.sort_order, TournamentGroup.id).all())
+        for group in groups:
+            ids = [t.id for t in teams if t.group_id == group.id]
+            batches.append((round_robin_rounds(ids, double=group.rr_mode == "double"),
+                            "group", group.id))
+    else:
+        rounds = ([r["pairs"] for r in plan["rounds"]] if plan else
+                  round_robin_rounds([t.id for t in teams], double=fmt == "double_rr"))
+        batches.append((rounds, "league", None))
+    if not any(pairs for rounds, _, _ in batches for pairs in rounds):
+        raise ValueError("No fixtures were generated — add at least two teams "
+                         "(and, for groups, at least two teams per group).")
+    (session.query(TournamentMatch).filter_by(tournament_id=tid)
+     .delete(synchronize_session=False))
     match_no = 0
     created = 0
 
@@ -630,32 +715,14 @@ def generate_schedule(session, tournament_id):
                     # each without any extra bookkeeping.
                     home_team_id=a,
                     status="scheduled", stage=stage, group_id=group_id,
+                    league_phase=plan["rounds"][rno - 1]["phase"] if plan else None,
                     round_no=rno, match_no=match_no))
                 created += 1
 
-    if fmt == "groups":
-        # Every participating team must belong to a group, else it would be
-        # silently dropped from fixtures and then blocked by fixture gating.
-        unassigned = [t.name for t in teams if t.group_id is None]
-        if unassigned:
-            raise ValueError(
-                "Assign every team to a group first. Unassigned: %s"
-                % ", ".join(unassigned))
-        groups = (session.query(TournamentGroup).filter_by(tournament_id=tid)
-                  .order_by(TournamentGroup.sort_order, TournamentGroup.id).all())
-        for g in groups:
-            gteam_ids = [t.id for t in teams if t.group_id == g.id]
-            rounds = round_robin_rounds(gteam_ids, double=(g.rr_mode == "double"))
-            _emit(rounds, stage="group", group_id=g.id)
-    else:
-        team_ids = [t.id for t in teams]
-        rounds = round_robin_rounds(team_ids, double=(fmt == "double_rr"))
-        _emit(rounds, stage="league", group_id=None)
-
-    if created == 0:
-        raise ValueError("No fixtures were generated — add at least two teams "
-                         "(and, for groups, at least two teams per group).")
+    for rounds, stage, group_id in batches:
+        _emit(rounds, stage=stage, group_id=group_id)
     tour.schedule_generated = True
+    tour.knockout_generated = False
     session.flush()
     # Give every new fixture its surface (a no-op while pitch_mode is "host").
     # The rows were just created, so nothing existing is overwritten.
@@ -1069,6 +1136,7 @@ def round_summaries(session, tournament_id):
                  "In Progress" if started else "Locked" if rnd and end is not None and rnd > end else "Open")
         pitches = {fx.pitch_type for fx in fixtures}
         out[rnd] = {"status": state, "played": played, "total": len(fixtures),
+                    "phase": fixtures[0].league_phase,
                     "pitch": next(iter(pitches)) if len(pitches) == 1 else None,
                     "pitch_locked": started}
     return out

@@ -56,6 +56,9 @@ def status(points, remaining, spots, points_win):
 
 def spots_for(tour):
     """Qualifying places per table for ``tour``, or 0 when there are no playoffs."""
+    if getattr(tour, "knockout_type", None) == "top_n":
+        from services.knockout_service import qualifier_count
+        return qualifier_count(tour)
     return QUALIFY.get((getattr(tour, "knockout_type", None) or "").strip(), 0)
 
 

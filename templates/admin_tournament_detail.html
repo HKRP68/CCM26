@@ -97,11 +97,20 @@
           <select name="league_format">
             <option value="single_rr" {{ 'selected' if t.league_format == 'single_rr' else '' }}>Single Round-Robin</option>
             <option value="double_rr" {{ 'selected' if t.league_format == 'double_rr' else '' }}>Double Round-Robin</option>
+            <option value="one_half_rr" {{ 'selected' if t.league_format == 'one_half_rr' else '' }}>1.5 Round Robin</option>
+            <option value="cross_group_rr" {{ 'selected' if t.league_format == 'cross_group_rr' else '' }}>Two-Group 1.5 RR (even teams)</option>
             <option value="groups" {{ 'selected' if t.league_format == 'groups' else '' }}>Groups</option>
           </select>
         </div>
+        <div><label>1.5 RR: league games per team (target)</label>
+          <input type="number" name="league_match_target" min="1" step="any"
+                 value="{{ t.league_match_target if t.league_match_target is not none else '' }}"
+                 {{ 'disabled' if t.league_format == 'cross_group_rr' else '' }}
+                 placeholder="Automatic: 1.5 × (teams − 1)">
+          <small>{% if t.league_format == 'cross_group_rr' %}Two equal groups fix the total at 1.5 × teams − 1 games each.{% else %}Blank uses the automatic target; preview shows the closest balanced result.{% endif %}</small>
+        </div>
         <div><label>Group points table</label>
-          <select name="group_points_mode">
+          <select name="group_points_mode" {{ 'disabled' if t.league_format == 'cross_group_rr' else '' }}>
             <option value="separate" {{ 'selected' if t.group_points_mode == 'separate' else '' }}>Separate per group</option>
             <option value="combined" {{ 'selected' if t.group_points_mode == 'combined' else '' }}>Single combined</option>
           </select>
@@ -209,6 +218,7 @@
           <select name="tiebreak">
             <option value="nrr" {{ 'selected' if (t.tiebreak or 'nrr') == 'nrr' else '' }}>Wins → net run rate</option>
             <option value="h2h" {{ 'selected' if t.tiebreak == 'h2h' else '' }}>Head-to-head → net run rate</option>
+            <option value="nrr_wins_h2h" {{ 'selected' if t.tiebreak == 'nrr_wins_h2h' else '' }}>Net run rate → wins → head-to-head → admin priority</option>
           </select></div>
         <div><label>⏳ Round length (hours)</label>
           <input type="number" name="round_hours" min="0" max="1440"
@@ -475,21 +485,44 @@
   {% endif %}
 
   <!-- Groups (only meaningful for the groups league format) -->
+  {% if t.tiebreak == 'nrr_wins_h2h' or t.league_format == 'cross_group_rr' %}
+  <section class="tour-card">
+    <h3>Team seed order / final tiebreak priority</h3>
+    <p>Lower numbers seed earlier in a balanced group draw. With the NRR → wins → head-to-head rule, they also decide the final tiebreak. Equal priorities use team id. Redraw unplayed groups after changing seed order.</p>
+    {% for tt in teams %}
+    <form method="POST" style="display:flex;gap:.5rem;align-items:center;margin:.4rem 0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="set_team_priority"><input type="hidden" name="team_id" value="{{ tt.id }}">
+      <label>{{ tt.name }} <input type="number" name="priority" value="{{ tt.sort_order }}" required style="width:6rem;"></label>
+      <button class="btn" type="submit">Save priority</button>
+    </form>
+    {% endfor %}
+  </section>
+  {% endif %}
   <section class="tour-card">
     <h3 style="margin-top:0;">Groups</h3>
+    {% if t.league_format == 'cross_group_rr' %}
+    <p>Use two equal groups. Teams play their own group once and the other group twice, with one combined points table. Both groups must contain {{ teams|length // 2 }} teams before generating.</p>
+    <p>Recommended: seed teams by strength in team priority order, then draw one team from each adjacent seed pair into each group. Rotate group membership in later seasons to vary repeat opponents.</p>
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="draw_balanced_groups">
+      <button class="btn" type="submit">Draw balanced groups from team order</button>
+      <small>Replaces an unplayed schedule. Saved matches block a redraw.</small>
+    </form>
+    {% else %}
     <p style="color:var(--muted); font-size:.84rem; margin:.1rem 0 .7rem;">
-      Used when <strong>League stage = Groups</strong>. Create groups, set each group's round-robin
-      mode, and assign every participating team to a group. Teams left unassigned are skipped when the
-      schedule is generated.
+      Used for the Groups league stage. Set each group's round-robin mode and assign every team before generating fixtures.
     </p>
+    {% endif %}
     {% if groups %}
     <div class="team-list">
       {% for g in groups %}
       <div class="team-pill">
         <span><strong>{{ g.name }}</strong>
-          <span style="color:var(--muted);">— {{ g.rr_mode }} RR •
+          <span style="color:var(--muted);">— {% if t.league_format != 'cross_group_rr' %}{{ g.rr_mode }} RR • {% endif %}
           {{ teams|selectattr('group_id','equalto',g.id)|list|length }} team(s)</span></span>
         <span style="display:flex; gap:.4rem;">
+          {% if t.league_format != 'cross_group_rr' %}
           <form method="POST" style="display:inline;">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="action" value="set_group_rr">
@@ -505,6 +538,7 @@
             <input type="hidden" name="group_id" value="{{ g.id }}">
             <button class="btn danger" type="submit">Delete</button>
           </form>
+          {% endif %}
         </span>
       </div>
       {% endfor %}
@@ -513,6 +547,7 @@
     <p style="color:var(--muted);">No groups yet.</p>
     {% endif %}
 
+    {% if t.league_format != 'cross_group_rr' %}
     <form method="POST" style="margin-top:.7rem; display:flex; gap:.5rem; flex-wrap:wrap; align-items:end;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="action" value="add_group">
@@ -522,6 +557,7 @@
       <select name="group_rr_mode"><option value="single">Single RR</option><option value="double">Double RR</option></select></div>
       <button class="btn btn-primary" type="submit">+ Add group</button>
     </form>
+    {% endif %}
 
     {% if groups and teams %}
     <h4 style="margin:1rem 0 .4rem;">Assign teams to groups</h4>
@@ -556,11 +592,15 @@
       <a href="{{ url_for('admin_tournament_schedule', tournament_id=t.id) }}">Schedule page</a>.
     </p>
     <div class="lifecycle">
+      {% if t.league_format in ('one_half_rr', 'cross_group_rr') %}
+      <a class="btn btn-primary" href="{{ url_for('admin_tournament_schedule_preview', tournament_id=t.id) }}">Preview {{ 'two-group' if t.league_format == 'cross_group_rr' else '1.5 RR' }} schedule</a>
+      {% else %}
       <form method="POST" style="display:inline;" onsubmit="return confirm('Generate (or regenerate) the fixture schedule? Existing unplayed fixtures are replaced.');">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="action" value="generate_schedule">
         <button class="btn btn-primary" type="submit">🗓️ Generate schedule</button>
       </form>
+      {% endif %}
       <a class="btn" href="{{ url_for('admin_tournament_schedule', tournament_id=t.id) }}">📅 View / edit schedule</a>
     </div>
     {% if t.schedule_generated %}<p style="color:#86efac; font-size:.82rem; margin:.6rem 0 0;">✅ A schedule has been generated for this tournament.</p>{% endif %}
@@ -589,13 +629,17 @@
           <select name="knockout_type">
             <option value="" {{ 'selected' if not t.knockout_type else '' }}>— None —</option>
             <option value="top4_sf" {{ 'selected' if t.knockout_type == 'top4_sf' else '' }}>Top 4 → Semifinals → Final</option>
+            <option value="top_n" {{ 'selected' if t.knockout_type == 'top_n' else '' }}>Top N → Seeded elimination (with byes)</option>
             <option value="ipl_playoffs" {{ 'selected' if t.knockout_type == 'ipl_playoffs' else '' }}>IPL Playoffs (Q1 / Eliminator / Q2 / Final)</option>
+            {% if t.league_format != 'cross_group_rr' %}
             <option value="groups_top2_sf" {{ 'selected' if t.knockout_type == 'groups_top2_sf' else '' }}>Groups: Top 2 each → Semifinals → Final</option>
             <option value="groups_top4_qf" {{ 'selected' if t.knockout_type == 'groups_top4_qf' else '' }}>Groups: Top 4 each → Quarters → Semis → Final</option>
             <option value="pure_knockout" {{ 'selected' if t.knockout_type == 'pure_knockout' else '' }}>Pure Knockout (all teams, no league)</option>
+            {% endif %}
             <option value="custom" {{ 'selected' if t.knockout_type == 'custom' else '' }}>Custom (JSON)</option>
           </select>
         </div>
+        <div><label>Playoff qualifiers (Top N)</label><input type="number" name="playoff_qualifiers" min="2" max="{{ teams|length }}" value="{{ playoff_qualifiers }}"></div>
       </div>
       <div style="margin-top:.6rem;">
         <label style="color:var(--muted); font-size:.78rem; text-transform:uppercase; letter-spacing:.06em;">Custom bracket JSON (only for “Custom”)</label>

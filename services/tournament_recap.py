@@ -42,11 +42,16 @@ def movers(session, tour, round_no):
     meta = [(t.id, t.name, t.points_adjust) for t in teams]
     before_matches = tournament_service.completed_league_matches(
         session, tour.id, exclude_round=round_no)
+    before_rows = standings.tally(meta, before_matches, tour.points_win or 0,
+                                 tour.points_tie or 0, tour.points_loss or 0,
+                                 tour.points_no_result or 0)
+    for team in teams:
+        before_rows[team.id].sort_order = team.sort_order
     before = standings.order(
-        standings.tally(meta, before_matches, tour.points_win or 0,
-                        tour.points_tie or 0, tour.points_loss or 0).values(),
+        before_rows.values(),
         tour.tiebreak or "nrr", before_matches,
-        points_win=tour.points_win or 0, points_tie=tour.points_tie or 0)
+        points_win=tour.points_win or 0, points_tie=tour.points_tie or 0,
+        points_no_result=tour.points_no_result or 0)
     old = {r.id: i for i, r in enumerate(before, 1)}
     now = {r.id: i for i, r in enumerate(
         tournament_service.points_table(session, tour.id), 1)}

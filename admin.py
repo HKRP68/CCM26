@@ -16883,6 +16883,8 @@ def admin_tournaments_list():
                     _FMT = {
                         "round_robin":         ("single_rr", None,             "Round Robin"),
                         "double_round_robin":  ("double_rr", None,             "Double Round Robin"),
+                        "one_half_round_robin": ("one_half_rr", None,           "1.5 Round Robin"),
+                        "cross_group_round_robin": ("cross_group_rr", "ipl_playoffs", "Two-Group 1.5 RR"),
                         "league_semis_final":  ("single_rr", "top4_sf",        "League + Playoffs"),
                         "double_league_semis": ("double_rr", "top4_sf",        "Double League + Playoffs"),
                         "ipl_style":           ("double_rr", "ipl_playoffs",   "IPL Playoffs"),
@@ -16901,11 +16903,15 @@ def admin_tournaments_list():
                     elif not league:
                         flash("Select a valid Challenge League.", "error")
                     else:
+                        from services.partial_round_robin import parse_match_target
                         t = Tournament(
                             name=name[:120], league_id=league.id, league_name=league.name,
                             command_snapshot=league.tournament_command,
                             description=(request.form.get("description") or "").strip() or None,
                             format=label[:40], league_format=lf, knockout_type=kt,
+                            league_match_target=(parse_match_target(request.form.get("league_match_target"))
+                                                 if lf == "one_half_rr" else None),
+                            tiebreak="nrr_wins_h2h" if lf in _lss.PREVIEW_FORMATS else "nrr",
                             overs=_int_form("overs", 20), max_teams=_int_form("max_teams", 8),
                             points_win=_int_form("points_win", 2),
                             points_tie=_int_form("points_tie", 1),
@@ -16954,11 +16960,30 @@ def admin_tournaments_list():
                                     owner_tg_id=owner_tg, owner_name=owner_nm,
                                     co_owner_ids_json=tournament_service._dump_ids(co_ids)))
                         db.flush()
+                        if lf in _lss.PREVIEW_FORMATS:
+                            # Draft first: the exact plan is reviewed before any fixtures exist.
+                            if lf == "cross_group_rr":
+                                _lss.draw_balanced_groups(db, t.id)
+                            _lss.preview_schedule(db, t.id)
+                            selected_knockout = request.form.get(
+                                "partial_knockout_type", "ipl_playoffs" if lf == "cross_group_rr" else "") or ""
+                            if selected_knockout not in ("", "top4_sf", "ipl_playoffs", "top_n"):
+                                raise ValueError("Choose a valid playoff format.")
+                            t.knockout_type = selected_knockout or None
+                            count = db.query(TournamentTeam).filter_by(tournament_id=t.id).count()
+                            t.max_teams = max(t.max_teams, count)
+                            qualifiers = int(request.form.get("playoff_qualifiers") or 4) if selected_knockout == "top_n" else 4
+                            if selected_knockout and not 2 <= qualifiers <= count:
+                                raise ValueError("Playoff qualifiers must be between 2 and the number of teams.")
+                            if selected_knockout == "top_n":
+                                t.knockout_config_json = json.dumps({"qualifiers": qualifiers})
                         # One-step setup: build the structure the chosen format implies.
                         setup_msg = ""
                         try:
                             from services import league_schedule_service, knockout_service
-                            if tf == "pure_knockout":
+                            if lf in _lss.PREVIEW_FORMATS:
+                                setup_msg = " — review the schedule, then confirm to save fixtures."
+                            elif tf == "pure_knockout":
                                 n = knockout_service.generate_knockout(db, t.id)
                                 # Mark the bracket as the active fixture schedule so
                                 # the bot team-picker gate restricts to bracket pairings.
@@ -16979,8 +17004,9 @@ def admin_tournaments_list():
                         log_admin(db, "tournament_create", "tournament", t.id, t.name)
                         db.commit()
                         flash(f"✅ Created {label} tournament “{t.name}”.{setup_msg}", "success")
-                        dest = ("admin_tournament_detail" if tf == "groups_knockout"
-                                else "admin_tournament_dashboard")
+                        dest = ("admin_tournament_schedule_preview" if lf in _lss.PREVIEW_FORMATS else
+                                "admin_tournament_detail" if tf == "groups_knockout" else
+                                "admin_tournament_dashboard")
                         return redirect(url_for(dest, tournament_id=t.id))
                 elif action == "link_seasons":
                     from services import season_archive
@@ -17091,9 +17117,10 @@ def admin_tournament_detail(tournament_id):
                 """
                 from services.tournament_service import league_progress
                 played, total = league_progress(db, t.id)
-                if played > 0:
+                live = db.query(TournamentMatch).filter_by(tournament_id=t.id, status="live").first()
+                if played > 0 or live:
                     flash("Reset the tournament before changing the league "
-                          "structure — completed matches exist.", "error")
+                          "structure — live or completed matches exist.", "error")
                     return False
                 if t.schedule_generated or total > 0:
                     (db.query(TournamentMatch)
@@ -17112,13 +17139,30 @@ def admin_tournament_detail(tournament_id):
                     t.description = (request.form.get("description") or "").strip() or None
                     t.format = (request.form.get("format") or t.format).strip()[:40]
                     lf = (request.form.get("league_format") or t.league_format or "single_rr").strip()
-                    if lf in ("single_rr", "double_rr", "groups") and lf != t.league_format:
+                    from services.partial_round_robin import parse_match_target
+                    target = (parse_match_target(request.form.get("league_match_target"))
+                              if "league_match_target" in request.form else t.league_match_target)
+                    if lf == "cross_group_rr":
+                        target = None  # this format fixes equal totals from its group sizes
+                    if lf in ("single_rr", "double_rr", "one_half_rr", "cross_group_rr", "groups") and (
+                            lf != t.league_format or target != t.league_match_target):
+                        if lf == "one_half_rr":
+                            from services.partial_round_robin import build_schedule
+                            ids = [tt.id for tt in db.query(TournamentTeam).filter_by(tournament_id=t.id).all()]
+                            if len(ids) >= 2:
+                                build_schedule(ids, target)
                         # Changing the league format invalidates any existing schedule.
                         if _allow_structural_edit():
                             t.league_format = lf
+                            t.league_match_target = target
+                            if lf == "cross_group_rr":
+                                from services.league_schedule_service import draw_balanced_groups
+                                draw_balanced_groups(db, t.id)
                     gpm = (request.form.get("group_points_mode") or t.group_points_mode or "separate").strip()
                     if gpm in ("separate", "combined"):
                         t.group_points_mode = gpm
+                    if t.league_format == "cross_group_rr":
+                        t.group_points_mode = "combined"
                     t.overs = _int_form("overs", t.overs)
                     t.max_teams = _int_form("max_teams", t.max_teams)
                     t.points_win = _int_form("points_win", t.points_win)
@@ -17186,7 +17230,7 @@ def admin_tournament_detail(tournament_id):
                                               _int_form(f"prize_{_award}_gems", 0) or 0)
                             except ValueError as e:
                                 flash(f"⚠️ {e}", "error")
-                    if request.form.get("tiebreak") in ("nrr", "h2h"):
+                    if request.form.get("tiebreak") in ("nrr", "h2h", "nrr_wins_h2h"):
                         t.tiebreak = request.form.get("tiebreak")
                     if "round_hours" in request.form:
                         from services import tournament_watch as _tw
@@ -17278,10 +17322,20 @@ def admin_tournament_detail(tournament_id):
                     flash("Match setting saved.", "success")
                 elif action == "save_knockout":
                     kt = (request.form.get("knockout_type") or "").strip()
-                    valid = {"top4_sf", "ipl_playoffs", "groups_top2_sf",
+                    valid = {"top4_sf", "top_n", "ipl_playoffs", "groups_top2_sf",
                              "groups_top4_qf", "pure_knockout", "custom"}
+                    if t.league_format == "cross_group_rr" and kt not in ("", "top4_sf", "top_n", "ipl_playoffs", "custom"):
+                        raise ValueError("Two-group league playoffs qualify from the combined points table.")
+                    if t.knockout_generated:
+                        raise ValueError("Reset the tournament before changing an existing playoff bracket.")
                     t.knockout_type = kt if kt in valid else None
                     cfg = (request.form.get("knockout_config_json") or "").strip()
+                    if kt == "top_n":
+                        count = int(request.form.get("playoff_qualifiers") or 4)
+                        total = db.query(TournamentTeam).filter_by(tournament_id=t.id).count()
+                        if not 2 <= count <= total:
+                            raise ValueError("Playoff qualifiers must be between 2 and the number of teams.")
+                        cfg = json.dumps({"qualifiers": count})
                     t.knockout_config_json = cfg or None
                     log_admin(db, "tournament_knockout_save", "tournament", t.id, t.name)
                     flash("✅ Saved knockout settings.", "success")
@@ -17298,6 +17352,11 @@ def admin_tournament_detail(tournament_id):
                     except ValueError as ke:
                         db.rollback()
                         flash(f"⚠️ {ke}", "error")
+                elif action == "draw_balanced_groups":
+                    from services.league_schedule_service import draw_balanced_groups
+                    draw_balanced_groups(db, t.id)
+                    log_admin(db, "tournament_groups_draw", "tournament", t.id, t.name)
+                    flash("Balanced groups drawn from team order; preview and confirm the new schedule.", "success")
                 elif action == "add_group":
                     gname = (request.form.get("group_name") or "").strip()[:60]
                     if not gname:
@@ -17342,7 +17401,13 @@ def admin_tournament_detail(tournament_id):
                 elif action == "generate_schedule":
                     from services import league_schedule_service
                     try:
-                        n = league_schedule_service.generate_schedule(db, t.id)
+                        if t.league_format in league_schedule_service.PREVIEW_FORMATS:
+                            plan = league_schedule_service.preview_schedule(db, t.id)
+                            if request.form.get("preview_fingerprint") != plan["fingerprint"]:
+                                flash("Review the current schedule before saving fixtures.", "info")
+                                return redirect(url_for("admin_tournament_schedule_preview", tournament_id=t.id))
+                        n = league_schedule_service.generate_schedule(
+                            db, t.id, preview_fingerprint=request.form.get("preview_fingerprint"))
                         log_admin(db, "tournament_schedule_generate", "tournament", t.id, t.name)
                         flash(f"✅ Generated {n} fixtures.", "success")
                     except ValueError as ve:
@@ -17422,6 +17487,13 @@ def admin_tournament_detail(tournament_id):
                         flash(f"✅ {tt.name}: "
                               + (f"owner set to {tt.owner_tg_id}."
                                  if tt.owner_tg_id else "owner cleared."), "success")
+                elif action == "set_team_priority":
+                    tt = db.get(TournamentTeam, _int_form("team_id"))
+                    if not tt or tt.tournament_id != t.id:
+                        raise ValueError("Team not found in this tournament.")
+                    tt.sort_order = int(request.form.get("priority") or 0)
+                    log_admin(db, "tournament_team_priority", "tournament", t.id, tt.name)
+                    flash("Final tiebreak priority saved (lower number ranks first).", "success")
                 elif action == "set_co_owners":
                     tt = db.get(TournamentTeam, _int_form("team_id"))
                     if not tt or tt.tournament_id != t.id:
@@ -17826,10 +17898,12 @@ def admin_tournament_detail(tournament_id):
         from services import tournament_stadiums as _tstad
         from services import tournament_awards as _tawards
         from services import tournament_match_settings as _match_settings
+        from services.knockout_service import qualifier_count
         from services import tournament_channels as _channels
         from models import TournamentChannelPost
         from sqlalchemy.orm import defer
         return render_template("admin_tournament_detail.html", t=t, teams=teams,
+                               playoff_qualifiers=qualifier_count(t) if t.knockout_type == "top_n" else 4,
                                stadium_choices=[(r.get("name"), r.get("city") or "")
                                                 for r in _tstad.all_rows()],
                                tour_stadiums=_tstad.tour_stadiums(t),
@@ -17877,7 +17951,7 @@ def admin_tournament_dashboard(tournament_id):
     Lazily heals per-player aggregates from the stored match scorecards, throttled
     so it doesn't rebuild on every page load.
     """
-    from services import tournament_service
+    from services import tournament_service, qualification
     from services.tournament_match_settings import fixture_sections
     import json as _json
     import time
@@ -17942,10 +18016,43 @@ def admin_tournament_dashboard(tournament_id):
         return render_template(
             "admin_tournament_dashboard.html",
             t=t, table=table, group_tables=group_tables, leaders=leaders,
+            qualifying_spots=qualification.spots_for(t),
             match_cards=match_cards, tt_map=tt_map, players=players,
             fixtures=fixtures, next_fixture_id=next_fixture_id,
             fixture_sections=fixture_sections(fixtures),
             champion=champion, league_played=played, league_total=total)
+    finally:
+        db.close()
+
+
+@app.route("/tournaments/<int:tournament_id>/schedule/preview")
+@login_required
+def admin_tournament_schedule_preview(tournament_id):
+    """Read-only exact 1.5-RR preview; confirmation posts to the usual generator."""
+    from services import league_schedule_service, qualification
+    db = get_session()
+    try:
+        t = _get_tournament_or_404(db, tournament_id)
+        if not t:
+            return redirect(url_for("admin_tournaments_list"))
+        try:
+            plan = league_schedule_service.preview_schedule(db, t.id)
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("admin_tournament_detail", tournament_id=t.id))
+        teams = db.query(TournamentTeam).filter_by(tournament_id=t.id).all()
+        started = db.query(TournamentMatch).filter(
+            TournamentMatch.tournament_id == t.id,
+            TournamentMatch.status.in_(("live", "completed"))).first() is not None
+        playoff_description = {
+            "top_n": "Top %d → seeded elimination" % qualification.spots_for(t),
+            "top4_sf": "Top 4 → semifinals → final",
+            "ipl_playoffs": "Top 4 → IPL playoffs",
+            "custom": "Custom bracket",
+        }.get(t.knockout_type, "No playoffs")
+        return render_template("admin_tournament_schedule_preview.html", t=t, plan=plan,
+                               tt_map={tt.id: tt for tt in teams}, started=started,
+                               playoff_description=playoff_description)
     finally:
         db.close()
 
@@ -17977,13 +18084,27 @@ def admin_tournament_schedule(tournament_id):
             else:
                 rounds.setdefault(fx.round_no or 0, []).append(fx)
         rounds = sorted(rounds.items())
+        # The team filter only changes the displayed fixtures; counts, byes and
+        # round controls are always calculated from the complete saved schedule.
+        selected_team = request.args.get("team", type=int)
+        if selected_team not in tt_map:
+            selected_team = None
+        round_byes = {}
+        if t.league_format in league_schedule_service.PREVIEW_FORMATS:
+            for rno, fxs in rounds:
+                playing = {side for fx in fxs for side in (fx.team1_id, fx.team2_id)}
+                round_byes[rno] = [tt for tt in teams if tt.id not in playing]
         knockout.sort(key=lambda m: (m.round_no or 0, m.match_no or 0, m.id))
         # League-stage-only progress (exclude knockout rows so the count is honest).
         league_total = sum(len(fxs) for _, fxs in rounds)
         league_played = sum(1 for _, fxs in rounds for fx in fxs if fx.status == "completed")
         open_round = league_schedule_service.open_round(db, t.id)
         round_summaries = league_schedule_service.round_summaries(db, t.id)
+        if selected_team:
+            rounds = [(rno, [fx for fx in fxs if selected_team in (fx.team1_id, fx.team2_id)])
+                      for rno, fxs in rounds]
         return render_template("admin_tournament_schedule.html", t=t, teams=teams,
+                               selected_team=selected_team, round_byes=round_byes,
                                open_round=open_round,
                                round_summaries=round_summaries,
                                tt_map=tt_map, groups=groups, g_map=g_map,

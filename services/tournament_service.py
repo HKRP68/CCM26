@@ -1119,6 +1119,13 @@ def recompute_standings(session, tournament_id):
     for m in league_matches:
         t1 = teams.get(m.team1_id)
         t2 = teams.get(m.team2_id)
+        if m.result_type == "no_result":
+            for tt in (t1, t2):
+                if tt:
+                    tt.played += 1
+                    tt.no_result += 1
+                    tt.points += tour.points_no_result or 0
+            continue  # abandoned innings never contribute to NRR
         i1r, i1b = int(m.inn1_runs or 0), int(m.inn1_balls or 0)
         i2r, i2b = int(m.inn2_runs or 0), int(m.inn2_balls or 0)
         if t1:
@@ -1331,8 +1338,8 @@ def record_manual_result(session, fixture_id, *,
     updates exactly as it would for a bot-played match. ``team1`` is treated as
     batting first (innings 1) and ``team2`` second — the same orientation
     ``recompute_standings`` uses. The winner is derived from the runs unless
-    ``winner_slot`` ('1' | '2' | 'tie') overrides it (e.g. a super-over decider
-    with level scores). No per-player scorecard is captured, so batting/bowling
+    ``winner_slot`` ('1' | '2' | 'tie' | 'no_result') overrides it, including a
+    super-over decider with level scores. No per-player scorecard is captured, so batting/bowling
     leaderboards are unaffected. Caller commits.
     """
     tm = session.get(TournamentMatch, int(fixture_id))
@@ -1373,7 +1380,7 @@ def record_manual_result(session, fixture_id, *,
         win_id = tm.team1_id
     elif ws == "2":
         win_id = tm.team2_id
-    elif ws == "tie":
+    elif ws in ("tie", "no_result"):
         win_id = None
     elif i1r > i2r:
         win_id = tm.team1_id
@@ -1389,11 +1396,13 @@ def record_manual_result(session, fixture_id, *,
         tt = teams.get(team_id)
         return (tt.name if tt else None) or "Team"
 
-    result_text = "Match Tied" if win_id is None else f"{_name(win_id)} won"
+    result_text = ("No Result" if ws == "no_result" else
+                   "Match Tied" if win_id is None else f"{_name(win_id)} won")
 
     tm.status = "completed"
     tm.is_simulated = False  # simulate_fixture marks its own result afterwards
     tm.winner_team_id = win_id
+    tm.result_type = "no_result" if ws == "no_result" else "tie" if win_id is None else "win"
     tm.result_text = result_text[:300]
     tm.inn1_runs, tm.inn1_wickets, tm.inn1_balls = i1r, i1w, i1b
     tm.inn2_runs, tm.inn2_wickets, tm.inn2_balls = i2r, i2w, i2b
@@ -1766,6 +1775,7 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
         tm.team1_id = t_inn1.id if t_inn1 else None
         tm.team2_id = t_inn2.id if t_inn2 else None
         tm.winner_team_id = win_team.id if win_team else None
+        tm.result_type = "win" if win_team else "tie"
         tm.status = "completed"
         tm.result_text = result_text[:300] if result_text else None
         tm.inn1_runs, tm.inn1_wickets, tm.inn1_balls = inn1_runs, inn1_wkts, inn1_balls
@@ -1780,6 +1790,7 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
             team1_id=t_inn1.id if t_inn1 else None,
             team2_id=t_inn2.id if t_inn2 else None,
             winner_team_id=win_team.id if win_team else None,
+            result_type="win" if win_team else "tie",
             status="completed",
             stage="league",
             result_text=result_text[:300] if result_text else None,
@@ -1849,7 +1860,7 @@ def points_table(session, tournament_id, group_id=None):
     tour = session.get(Tournament, int(tournament_id))
     tiebreak = (getattr(tour, "tiebreak", None) or "nrr") if tour else "nrr"
     matches = []
-    if tiebreak == "h2h":
+    if tiebreak in ("h2h", "nrr_wins_h2h"):
         matches = completed_league_matches(session, tournament_id)
     # Tie-break after points: wins then net run-rate, or head-to-head then net
     # run-rate (``Tournament.tiebreak``). NRR is compared unrounded so near-equal
@@ -1857,7 +1868,8 @@ def points_table(session, tournament_id, group_id=None):
     return standings.order(
         rows, tiebreak, matches,
         points_win=(tour.points_win if tour else 2) or 0,
-        points_tie=(tour.points_tie if tour else 1) or 0)
+        points_tie=(tour.points_tie if tour else 1) or 0,
+        points_no_result=(tour.points_no_result if tour else 1) or 0)
 
 
 def completed_league_matches(session, tournament_id, exclude_round=None):

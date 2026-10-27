@@ -611,6 +611,7 @@ def _migrate_add_columns():
     # New table ``tournament_groups`` is created by create_all above; these add the
     # new columns on the existing tournament_* tables.
     _try_add("tournaments", "league_format", "VARCHAR(20) DEFAULT 'single_rr'")
+    _try_add("tournaments", "league_match_target", "FLOAT")
     _try_add("tournaments", "group_points_mode", "VARCHAR(20) DEFAULT 'separate'")
     _try_add("tournaments", "schedule_generated", "BOOLEAN DEFAULT FALSE")
     _try_add("tournaments", "knockout_type", "VARCHAR(30)")
@@ -620,6 +621,8 @@ def _migrate_add_columns():
     _try_add("tournament_matches", "status", "VARCHAR(20) DEFAULT 'completed'")
     _try_add("tournament_matches", "group_id", "INTEGER")
     _try_add("tournament_matches", "round_no", "INTEGER DEFAULT 0")
+    _try_add("tournament_matches", "league_phase", "INTEGER")
+    _try_add("tournament_matches", "result_type", "VARCHAR(20)")
     _try_add("tournament_matches", "match_no", "INTEGER DEFAULT 0")
     _try_add("tournament_matches", "feeds_winner_to_id", "INTEGER")
     _try_add("tournament_matches", "feeds_loser_to_id", "INTEGER")

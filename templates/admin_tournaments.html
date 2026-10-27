@@ -53,7 +53,7 @@
     <div class="section-header">
       <div>
         <h2 class="section-title"><i class="fas fa-plus-circle"></i> Create a tournament</h2>
-        <div class="section-subtitle">Pick a format — fixtures are generated automatically.</div>
+        <div class="section-subtitle">Choose a format and teams. 1.5 Round Robin includes a fixture preview.</div>
       </div>
     </div>
 
@@ -122,6 +122,8 @@
           {% set fmts = [
             ('round_robin','Round Robin','trophy','rr',2),
             ('double_round_robin','Double Round Robin','sync-alt','drr',2),
+            ('one_half_round_robin','1.5 Round Robin','sync-alt','halfrr',2),
+            ('cross_group_round_robin','Two-Group 1.5 RR · Even teams','layer-group','crossrr',4),
             ('pure_knockout','Pure Knockout','sitemap','ko',2),
             ('custom_series','Custom Series','list-ol','series',2),
             ('league_semis_final','League + Semis + Final','ranking-star','rr3',4),
@@ -141,6 +143,22 @@
             <div class="fmt-check"><i class="fas fa-check-circle"></i></div>
           </label>
           {% endfor %}
+        </div>
+        <div id="partialRRSettings" hidden>
+          <p id="partialRRDescription">Play every opponent once, then repeat approximately half. Review the exact fixtures, rounds and byes before saving them.</p>
+          <div class="form-grid">
+            <div id="partialTargetSettings"><label>League games per team (target)</label>
+              <input type="number" name="league_match_target" id="leagueMatchTarget" min="1" step="any" placeholder="Automatic: 1.5 × (teams − 1)">
+              <small>Blank uses the 1.5 target. Actual team totals differ by at most one game.</small>
+            </div>
+            <div><label>Playoff format</label><select name="partial_knockout_type" id="partialKnockoutType">
+              <option value="">No playoffs</option>
+              <option value="top4_sf">Top 4 → Semifinals → Final</option>
+              <option value="ipl_playoffs">Top 4 → IPL Playoffs</option>
+              <option value="top_n">Top N → Seeded elimination</option>
+            </select></div>
+            <div><label>Qualifiers (Top N)</label><input type="number" name="playoff_qualifiers" value="4" min="2"></div>
+          </div>
         </div>
         <div class="series-stepper" id="seriesStepper">
           <span class="field-label" style="margin:0;">Series length</span>
@@ -249,6 +267,13 @@
         switch (type) {
           case 'rr': return rr;
           case 'drr': return rr * 2;
+          case 'crossrr': return n >= 4 && n % 2 === 0 ? n * (3 * n / 2 - 1) / 2 : null;
+          case 'halfrr': {
+            const raw = document.getElementById('leagueMatchTarget').value;
+            const target = raw === '' ? 1.5 * (n - 1) : Number(raw);
+            return Number.isFinite(target) && target >= n - 1 && target <= 2 * (n - 1)
+              ? Math.floor(target * n / 2 + 0.5) : null;
+          }
           case 'ko': return n >= 2 ? n - 1 : 0;
           case 'rr3': return rr + 3;
           case 'drr3': return rr * 2 + 3;
@@ -266,15 +291,18 @@
           const min = parseInt(card.dataset.min, 10);
           const ct = card.dataset.count;
           const isSeries = card.dataset.format === 'custom_series';
+          const isCross = ct === 'crossrr';
           // Series needs exactly 2 teams; others need >= min.
-          const ok = isSeries ? (n === 2) : (n >= min);
+          const ok = isSeries ? (n === 2) : (n >= min && (!isCross || n % 2 === 0));
           card.classList.toggle('disabled', !ok);
           const mc = card.querySelector('.fmt-mc');
           if (n < 2) { mc.textContent = 'Select teams'; }
-          else if (!ok) { mc.textContent = isSeries ? 'Exactly 2 teams' : ('Needs ' + min + '+ teams'); }
+          else if (!ok) { mc.textContent = isSeries ? 'Exactly 2 teams' : isCross ? 'Even number of teams, at least 4' : ('Needs ' + min + '+ teams'); }
           else {
             const c = matchCount(ct, n);
-            mc.textContent = (c === null) ? 'After groups set' : (c + ' match' + (c === 1 ? '' : 'es'));
+            mc.textContent = (c === null) ? (ct === 'halfrr' ? 'Check target' : 'After groups set') :
+              isCross ? (c + ' league matches · ' + (3 * n / 2 - 1) + ' per team' + (n === 10 ? ' · Recommended' : '')) :
+              (c + ' match' + (c === 1 ? '' : 'es'));
           }
         });
         // If the selected format became disabled, fall back to Round Robin.
@@ -282,15 +310,32 @@
         if (sel && sel.closest('.format-card').classList.contains('disabled')) {
           pickFormat(document.querySelector('.format-card[data-format="round_robin"]'));
         }
+        updatePartialDescription();
+      }
+
+      function updatePartialDescription() {
+        const cross = document.getElementById('tourFormat').value === 'cross_group_round_robin';
+        const n = selectedTeamCount();
+        document.getElementById('partialRRDescription').textContent = cross ?
+          'Two groups of ' + (n / 2) + ': own group once, other group twice. ' + (3 * n / 2 - 1) +
+          ' games per team; one combined table. Balanced seed draw, home/away and spaced rematches. Review and edit groups before confirming.' :
+          'Play every opponent once, then repeat approximately half. Review the exact fixtures, rounds and byes before saving them.';
       }
 
       function pickFormat(card) {
         if (!card || card.classList.contains('disabled')) return;
+        const previous = document.getElementById('tourFormat').value;
         document.querySelectorAll('.format-card').forEach(c => c.classList.remove('selected'));
         card.classList.add('selected');
         card.querySelector('input').checked = true;
         document.getElementById('tourFormat').value = card.dataset.format;
         document.getElementById('seriesStepper').classList.toggle('show', card.dataset.format === 'custom_series');
+        const cross = card.dataset.format === 'cross_group_round_robin';
+        document.getElementById('partialRRSettings').hidden = !cross && card.dataset.format !== 'one_half_round_robin';
+        document.getElementById('partialTargetSettings').hidden = cross;
+        document.getElementById('leagueMatchTarget').disabled = card.dataset.format !== 'one_half_round_robin';
+        updatePartialDescription();
+        if (cross && previous !== card.dataset.format) document.getElementById('partialKnockoutType').value = 'ipl_playoffs';
       }
 
       function pickMatchFormat(card) {
@@ -311,6 +356,7 @@
       }
 
       document.getElementById('league_select').addEventListener('change', renderTeams);
+      document.getElementById('leagueMatchTarget').addEventListener('input', updateFormats);
       document.querySelectorAll('.format-card').forEach(c => c.addEventListener('click', () => pickFormat(c)));
       document.querySelectorAll('#matchFormatGrid .fmt-card').forEach(c => c.addEventListener('click', () => pickMatchFormat(c)));
       document.getElementById('customOvers').addEventListener('input', function () {

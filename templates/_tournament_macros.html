@@ -41,6 +41,7 @@
         <option value="1">{{ tt_map[fx.team1_id].name if tt_map.get(fx.team1_id) else 'Team 1' }}</option>
         <option value="2">{{ tt_map[fx.team2_id].name if tt_map.get(fx.team2_id) else 'Team 2' }}</option>
         <option value="tie">Tie</option>
+        <option value="no_result">No result (1 point each by default)</option>
       </select>
     </div>
     <button class="action-btn accent-btn" type="submit" style="width:auto;">✅ Save result &amp; update table</button>

@@ -1294,7 +1294,7 @@ async def tdeadline_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ──────────────────────────────────────────────────────────────────────
 
 async def ttiebreak_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/ttiebreak [h2h | nrr] — head-to-head or wins/NRR after points."""
+    """/ttiebreak [h2h | nrr | nrr_wins_h2h] — ordering after points."""
     if not await _require_admin(update):
         return
     from services import standings
@@ -1312,13 +1312,16 @@ async def ttiebreak_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                          f"⚖️ <b>{html.escape(tour.name)}</b> — tiebreak: "
                          f"<b>{standings.TIEBREAK_LABEL[cur]}</b>\n\n"
                          "<code>/ttiebreak h2h</code> — head-to-head first\n"
-                         "<code>/ttiebreak nrr</code> — wins, then net run rate")
+                         "<code>/ttiebreak nrr</code> — wins, then net run rate\n"
+                         "<code>/ttiebreak nrr_wins_h2h</code> — NRR, wins, head-to-head, admin priority")
             return
         choice = args[0].lower().replace("-", "")
         choice = {"headtohead": "h2h", "h2h": "h2h", "nrr": "nrr",
                   "netrunrate": "nrr", "wins": "nrr"}.get(choice)
+        if args[0].lower() == "nrr_wins_h2h":
+            choice = "nrr_wins_h2h"
         if choice is None:
-            await _reply(update, "⚠️ Use <code>h2h</code> or <code>nrr</code>.")
+            await _reply(update, "⚠️ Use <code>h2h</code>, <code>nrr</code> or <code>nrr_wins_h2h</code>.")
             return
         tour.tiebreak = choice
         session.commit()

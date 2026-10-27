@@ -93,6 +93,8 @@
           <input type="number" name="series_matches" value="{{ fixtures|length or 3 }}" min="1" max="15" style="width:64px;" title="Number of matches">
           <button class="action-btn accent-btn" type="submit" style="width:auto;"><i class="fas fa-list-ol"></i> Regenerate series</button>
         </form>
+        {% elif t.league_format in ('one_half_rr', 'cross_group_rr') %}
+        <a class="action-btn accent-btn" href="{{ url_for('admin_tournament_schedule_preview', tournament_id=t.id) }}">Preview / regenerate league</a>
         {% else %}
         <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}"
               onsubmit="return confirm('Generate (or regenerate) the schedule? Unplayed fixtures are replaced.');">
@@ -150,10 +152,17 @@
   {% if rounds %}
   <section class="section-card">
     <div class="section-header"><div><h2 class="section-title"><i class="fas fa-list-ol"></i> League Fixtures</h2></div></div>
+    <form method="GET"><label for="scheduleTeam">View by team</label>
+      <select id="scheduleTeam" name="team" onchange="this.form.submit()">
+        <option value="">All teams</option>
+        {% for tt in teams %}<option value="{{ tt.id }}" {{ 'selected' if selected_team == tt.id else '' }}>{{ tt.name }}</option>{% endfor %}
+      </select><button class="action-btn" type="submit">Filter</button>
+    </form>
     <div class="fixtures-grid">
       {% for rno, fxs in rounds %}
       {% set summary = round_summaries.get(rno) %}
-      <div class="round-head">Round {{ rno }} · {{ summary.status }} · {{ summary.played }}/{{ summary.total }} played{% if summary.pitch %} · 🌱 {{ summary.pitch }}{% endif %}</div>
+      <div class="round-head">Round {{ rno }}{% if summary.phase %} · Phase {{ summary.phase }}{% endif %} · {{ summary.status }} · {{ summary.played }}/{{ summary.total }} played{% if summary.pitch %} · 🌱 {{ summary.pitch }}{% endif %}</div>
+      {% if round_byes.get(rno) %}<p>Byes: {% for tt in round_byes[rno] %}{{ tt.name }}{{ ', ' if not loop.last else '' }}{% endfor %}</p>{% endif %}
       {% if t.pitch_mode == 'round' and rno %}
       {% if not summary.pitch_locked %}
       <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}" class="round-pitch-controls">

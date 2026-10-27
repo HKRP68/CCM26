@@ -958,7 +958,7 @@ overdraw somebody is refused by name.
 | `/tfixturemode scheduled 3 48h` | Release 3 more rounds every 48 hours while active. The tournament watch handles releases and catches up after restarts; no matches are settled automatically |
 | `/tfixturemode 3` · `/tfixturemode round` · `/tfixturemode all` | Keep a rolling window of 3 rounds, open one round at a time, or release all fixtures. Existing tournaments retain their current mode |
 | `/tsetchat` | Post the tournament's recaps, deadline alerts, bracket and ceremony in this group (default: the first group a tournament match is played in) |
-| `/ttiebreak h2h\|nrr` | Teams level on points: head-to-head first, or wins then NRR |
+| `/ttiebreak h2h\|nrr\|nrr_wins_h2h` | Teams level on points: head-to-head first; wins then NRR; or NRR, wins, head-to-head and admin priority |
 | `/tstadiums` · `/tstadiums add\|remove <name>` · `/tstadiums all` | The tournament's grounds, picked from Stadium Data (admin site → Conditions → Stadium) |
 | `/thome <team> \| <stadium>` | A team's home ground (admins, or the team's owner) |
 | `/tprize <award> <coins> [gems]` | Prizes paid when the final is decided: champion, runnerup, orange, purple, mvp |

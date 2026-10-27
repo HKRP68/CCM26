@@ -26,7 +26,7 @@
   <div class="standings-container">
     {% for tt in rows %}
     {% set col = pal[tt.id % (pal|length)] %}
-    <div class="standing-row {% if loop.index <= 4 %}qualified{% endif %}">
+    <div class="standing-row {% if loop.index <= qualifying_spots %}qualified{% endif %}">
       <div class="rank-badge">{{ loop.index }}</div>
       <div class="team-section">
         <div class="team-stripe" style="--team-color:{{ col }};"></div>

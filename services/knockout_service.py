@@ -14,6 +14,7 @@ regardless of stage), so no separate bot plumbing is needed — a knockout match
 becomes playable as soon as both its slots are filled.
 
 Supported types:
+  * ``top_n``          - Configurable top N, seeded elimination with byes.
   * ``top4_sf``        - Top 4 (combined): SF1 (1v4), SF2 (2v3), Final.
   * ``ipl_playoffs``   - Top 4: Q1 (1v2), Eliminator (3v4), Q2 (LQ1 v WElim), Final.
   * ``groups_top2_sf`` - Top 2 of each group: cross semis -> Final.
@@ -28,7 +29,20 @@ import logging
 logger = logging.getLogger(__name__)
 
 KNOCKOUT_STAGES = ("quarterfinal", "semifinal", "qualifier1", "eliminator",
-                   "qualifier2", "final", "round_of_16", "round_of_32")
+                   "qualifier2", "final") + tuple("round_of_%d" % (2 ** n)
+                                                  for n in range(4, 21))
+
+
+def qualifier_count(tour):
+    """Configured field size for the top-N elimination format."""
+    try:
+        config = json.loads(tour.knockout_config_json or "{}")
+        count = config.get("qualifiers", 4)
+        if isinstance(count, bool) or int(count) != count or int(count) < 2:
+            raise ValueError
+        return int(count)
+    except (ValueError, TypeError, AttributeError, OverflowError):
+        raise ValueError("Playoff qualifiers must be a whole number of at least 2.") from None
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -352,10 +366,21 @@ def generate_knockout(session, tournament_id):
     ktype = (tour.knockout_type or "").strip()
     if not ktype:
         raise ValueError("Pick a knockout type first.")
+    if tour.league_format == "cross_group_rr" and ktype not in ("top4_sf", "top_n", "ipl_playoffs", "custom"):
+        raise ValueError("Two-group league playoffs must qualify from the combined points table.")
 
+    top_seeds = None
+    if ktype == "top_n":
+        count = qualifier_count(tour)
+        seeds = _combined_seeds(session, tid)
+        if count > len(seeds):
+            raise ValueError("Playoff qualifiers cannot exceed the number of teams.")
+        top_seeds = [s.id for s in seeds[:count]]
     _clear_existing(session, tid)
 
-    if ktype == "top4_sf":
+    if ktype == "top_n":
+        created = _build_single_elim(session, tid, top_seeds)
+    elif ktype == "top4_sf":
         seeds = _combined_seeds(session, tid)
         if len(seeds) < 4:
             raise ValueError("Top-4 semifinals need at least 4 teams.")

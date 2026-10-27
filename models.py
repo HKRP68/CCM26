@@ -2758,8 +2758,12 @@ class Tournament(Base):
     # League-stage structure (the new driver; legacy ``format`` is kept untouched).
     #   single_rr  – one round-robin across all teams
     #   double_rr  – home/away round-robin across all teams
+    #   one_half_rr – single RR followed by a balanced partial second RR
+    #   cross_group_rr – two equal groups; own group once, other group twice
     #   groups     – teams split into TournamentGroups, each round-robin internally
     league_format = Column(String(20), default="single_rr", nullable=False)
+    # Desired league games per team for one_half_rr; NULL = 1.5 * (N - 1).
+    league_match_target = Column(Float, nullable=True)
     # When ``league_format == 'groups'``: keep one points table per group
     # ("separate") or roll every group into a single combined table ("combined").
     group_points_mode = Column(String(20), default="separate", nullable=False)
@@ -2768,7 +2772,7 @@ class Tournament(Base):
     schedule_generated = Column(Boolean, default=False, nullable=False)
 
     # Knockout / playoff configuration (Phase 2).
-    #   top4_sf | ipl_playoffs | groups_top2_sf | groups_top4_qf | custom
+    #   top4_sf | top_n | ipl_playoffs | groups_top2_sf | groups_top4_qf | custom
     knockout_type = Column(String(30), nullable=True)
     knockout_config_json = Column(Text, nullable=True)
     knockout_generated = Column(Boolean, default=False, nullable=False)
@@ -3058,10 +3062,14 @@ class TournamentMatch(Base):
     # Schedule ordering / display.
     round_no = Column(Integer, default=0, nullable=False)
     match_no = Column(Integer, default=0, nullable=False)
+    # Persist the two league phases; NULL for legacy and other formats.
+    league_phase = Column(Integer, nullable=True)
 
     # Stage: league | group | quarterfinal | semifinal | qualifier1 | eliminator |
     # qualifier2 | final. Only league/group rows contribute league points.
     stage = Column(String(30), default="league", nullable=False)
+    # Explicit manual no-result; legacy NULL still infers win/tie from the winner.
+    result_type = Column(String(20), nullable=True)  # win | tie | no_result
     result_text = Column(String(300), nullable=True)
 
     # ── Venue & conditions fixed for this fixture ─────────────────────────

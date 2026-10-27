@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}{{ t.name }} — Schedule preview{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ url_for('static', filename='css/admin_tournament.css') }}">{% endblock %}
+{% block content %}
+<div class="tour-page">
+  <div class="breadcrumbs"><a href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">{{ t.name }}</a><span>›</span><span>Schedule preview</span></div>
+  <section class="section-card">
+    <h1 class="section-title">{{ plan.get('format_label', '1.5 Round Robin') }} — schedule preview</h1>
+    <p>{{ plan.explanation }}</p>
+    <div class="form-grid">
+      <div><strong>{{ plan.team_count }}</strong> teams · target {{ plan.match_target }} games per team</div>
+      <div><strong>{{ plan.matches }}</strong> league fixtures · {{ plan.round_count }} rounds</div>
+      <div>Phase 1: {{ plan.phase1_matches }} fixtures · {{ plan.phase1_rounds }} rounds</div>
+      <div>Phase 2: {{ plan.phase2_matches }} repeat fixtures · {{ plan.phase2_rounds }} rounds</div>
+      <div>{{ plan.bye_count }} total team byes</div>
+      <div>Playoffs: {{ playoff_description }}</div>
+      {% if plan.groups %}
+      <div>Rematches at least {{ plan.minimum_repeat_gap }} rounds apart</div>
+      <div>Longest home/away run: {{ plan.longest_streak }} games</div>
+      {% endif %}
+    </div>
+    <p>Every pair meets once in Phase 1 and at most once more in Phase 2. A team plays at most once per round. The repeat phase uses the minimum possible number of rounds.</p>
+    {% if started %}
+    <p>Live or completed matches exist. Reset the tournament before replacing its schedule.</p>
+    {% else %}
+    <p>Confirming saves these fixtures and replaces any existing unplayed schedule.</p>
+    <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="generate_schedule">
+      <input type="hidden" name="return_to" value="schedule">
+      <input type="hidden" name="preview_fingerprint" value="{{ plan.fingerprint }}">
+      <button class="btn btn-primary" type="submit">Confirm and save {{ plan.matches }} fixtures</button>
+    </form>
+    {% endif %}
+    <p><a href="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">Edit teams, target or playoffs</a> · <a href="{{ url_for('admin_tournament_schedule', tournament_id=t.id) }}">View saved schedule</a></p>
+  </section>
+  {% if plan.groups %}
+  <section class="section-card">
+    <h2 class="section-title">Balanced groups · one combined points table</h2>
+    {% for group in plan.groups %}<p><strong>{{ group.name }}:</strong> {% for tid in group.team_ids %}{{ tt_map[tid].name }}{{ ', ' if not loop.last else '' }}{% endfor %}</p>{% endfor %}
+    <p>The default draw uses team seed order; saved memberships can be edited on Manage. Own-group opponents meet once; other-group opponents meet twice, once at each home venue.</p>
+  </section>
+  {% endif %}
+  <section class="section-card">
+    <h2 class="section-title">Games and byes per team</h2>
+    <div style="overflow-x:auto;">
+      <table class="table" style="width:100%;text-align:left;">
+        <thead><tr><th>Team</th><th>League games</th><th>Repeat opponents</th><th>Byes</th>{% if plan.groups %}<th>Home</th><th>Away</th>{% endif %}</tr></thead>
+        <tbody>{% for row in plan.teams %}<tr><td>{{ tt_map[row.team_id].name }}</td><td>{{ row.matches }}</td><td>{{ row.repeats }}</td><td>{{ row.byes }}</td>{% if plan.groups %}<td>{{ row.home }}</td><td>{{ row.away }}</td>{% endif %}</tr>{% endfor %}</tbody>
+      </table>
+    </div>
+  </section>
+  <section class="section-card">
+    <h2 class="section-title">Planned fixtures</h2>
+    <label for="previewTeam">View fixtures for a team</label>
+    <select id="previewTeam"><option value="">All teams</option>{% for row in plan.teams %}<option value="{{ row.team_id }}">{{ tt_map[row.team_id].name }}</option>{% endfor %}</select>
+    {% for rnd in plan.rounds %}
+    <div class="round-head">Round {{ rnd.round_no }} · Phase {{ rnd.phase }}</div>
+    <ul>{% for a, b in rnd.pairs %}<li data-fixture-teams="{{ a }},{{ b }}">{{ tt_map[a].name }} vs {{ tt_map[b].name }}</li>{% endfor %}</ul>
+    {% if rnd.byes %}<p>Byes: {% for tid in rnd.byes %}{{ tt_map[tid].name }}{{ ', ' if not loop.last else '' }}{% endfor %}</p>{% endif %}
+    {% endfor %}
+  </section>
+</div>
+<script>
+document.getElementById('previewTeam').addEventListener('change', function () {
+  const team = this.value;
+  document.querySelectorAll('[data-fixture-teams]').forEach(function (row) {
+    row.hidden = !!team && !row.dataset.fixtureTeams.split(',').includes(team);
+  });
+});
+</script>
+{% endblock %}

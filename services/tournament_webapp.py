@@ -29,10 +29,6 @@ STAGE_LABEL = {
     "round_of_16": "Round of 16", "round_of_32": "Round of 32",
 }
 
-# How many teams per table go through to the knockout, by ``knockout_type`` —
-# the Mini App draws the qualification line under that row.
-QUALIFY = {"top4_sf": 4, "ipl_playoffs": 4, "groups_top2_sf": 2, "groups_top4_qf": 4}
-
 STATUS_LABEL = {
     "draft": "Draft", "scheduled": "Scheduled", "active": "Live",
     "paused": "Paused", "completed": "Completed", "cancelled": "Cancelled",
@@ -195,6 +191,7 @@ def _fixture(fx, teams, next_id):
     t2 = teams.get(fx.team2_id)
     return {
         "id": fx.id, "match_no": fx.match_no, "round_no": fx.round_no,
+        "league_phase": fx.league_phase,
         "stage": fx.stage, "stage_label": STAGE_LABEL.get(fx.stage, (fx.stage or "").title()),
         "status": fx.status,
         "team1": _team_brief(t1), "team2": _team_brief(t2),
@@ -215,7 +212,7 @@ def _fixture(fx, teams, next_id):
 
 def tournament_payload(session, tour, tg_id=None):
     """Everything the Tournament tab shows except the stat boards."""
-    from services import injury_service
+    from services import injury_service, qualification
     tid = tour.id
     mine = my_team_ids(session, tour, tg_id)
     teams = {tt.id: tt for tt in
@@ -274,7 +271,8 @@ def tournament_payload(session, tour, tg_id=None):
             "status_label": STATUS_LABEL.get((tour.status or "").lower(), tour.status),
             "format": tour.format, "overs": tour.overs,
             "league_format": tour.league_format,
-            "qualify": QUALIFY.get((tour.knockout_type or "").strip()),
+            "league_match_target": tour.league_match_target,
+            "qualify": qualification.spots_for(tour) or None,
             "points_win": tour.points_win, "points_tie": tour.points_tie,
             "points_loss": tour.points_loss,
             "points_no_result": tour.points_no_result,

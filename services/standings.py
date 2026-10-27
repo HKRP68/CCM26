@@ -12,13 +12,15 @@ Tiebreaks after points (``Tournament.tiebreak``):
 * ``"h2h"`` — the head-to-head mini-table among the teams level on points,
   then net run rate. A pair (or group) that hasn't met yet falls straight
   through to NRR.
+* ``"nrr_wins_h2h"`` — points, NRR, wins, head-to-head, then admin priority.
 """
 
 from types import SimpleNamespace
 
-TIEBREAKS = ("nrr", "h2h")
+TIEBREAKS = ("nrr", "h2h", "nrr_wins_h2h")
 TIEBREAK_LABEL = {"nrr": "Points → wins → net run rate",
-                  "h2h": "Points → head-to-head → net run rate"}
+                  "h2h": "Points → head-to-head → net run rate",
+                  "nrr_wins_h2h": "Points → net run rate → wins → head-to-head → admin priority"}
 
 
 def nrr(row):
@@ -30,18 +32,25 @@ def nrr(row):
     return rf - ra
 
 
-def tally(teams, matches, points_win=2, points_tie=1, points_loss=0):
+def tally(teams, matches, points_win=2, points_tie=1, points_loss=0, points_no_result=1):
     """Fresh standings from ``matches`` — ``{team_id: SimpleNamespace}``.
 
     ``teams`` is ``[(id, name, points_adjust)]``. Mirrors
     ``tournament_service.recompute_standings`` exactly, adjustments included.
     """
     rows = {tid: SimpleNamespace(id=tid, name=name, played=0, won=0, lost=0,
-                                 tied=0, points=int(adj or 0), runs_for=0,
+                                 tied=0, no_result=0, points=int(adj or 0), runs_for=0,
                                  balls_for=0, runs_against=0, balls_against=0)
             for tid, name, adj in teams}
     for m in matches:
         t1, t2 = rows.get(m.team1_id), rows.get(m.team2_id)
+        if getattr(m, "result_type", None) == "no_result":
+            for team in (t1, t2):
+                if team:
+                    team.played += 1
+                    team.no_result += 1
+                    team.points += points_no_result
+            continue
         i1r, i1b = int(m.inn1_runs or 0), int(m.inn1_balls or 0)
         i2r, i2b = int(m.inn2_runs or 0), int(m.inn2_balls or 0)
         if t1:
@@ -69,12 +78,15 @@ def tally(teams, matches, points_win=2, points_tie=1, points_loss=0):
     return rows
 
 
-def _h2h_points(ids, matches, points_win, points_tie):
+def _h2h_points(ids, matches, points_win, points_tie, points_no_result=1):
     """Mini-table points among ``ids`` from the matches they played each other."""
     pts = {i: 0 for i in ids}
     for m in matches:
         if m.team1_id in pts and m.team2_id in pts:
-            if m.winner_team_id is None:
+            if getattr(m, "result_type", None) == "no_result":
+                pts[m.team1_id] += points_no_result
+                pts[m.team2_id] += points_no_result
+            elif m.winner_team_id is None:
                 pts[m.team1_id] += points_tie
                 pts[m.team2_id] += points_tie
             elif m.winner_team_id in pts:
@@ -82,12 +94,27 @@ def _h2h_points(ids, matches, points_win, points_tie):
     return pts
 
 
-def order(rows, tiebreak="nrr", matches=(), points_win=2, points_tie=1):
+def order(rows, tiebreak="nrr", matches=(), points_win=2, points_tie=1, points_no_result=1):
     """``rows`` sorted best first. Sets ``_nrr_sort`` and ``_nrr`` on each row."""
     rows = list(rows)
     for r in rows:
         r._nrr_sort = nrr(r)
         r._nrr = round(r._nrr_sort, 3)
+    if tiebreak == "nrr_wins_h2h":
+        def primary(row):
+            return row.points or 0, row._nrr_sort, row.won or 0
+        rows.sort(key=primary, reverse=True)
+        out, i = [], 0
+        while i < len(rows):
+            j = i + 1
+            while j < len(rows) and primary(rows[j]) == primary(rows[i]):
+                j += 1
+            group = rows[i:j]
+            mini = _h2h_points([r.id for r in group], matches, points_win, points_tie, points_no_result)
+            group.sort(key=lambda r: (-mini[r.id], getattr(r, "sort_order", 0) or 0, r.id))
+            out.extend(group)
+            i = j
+        return out
     if (tiebreak or "nrr") != "h2h":
         rows.sort(key=lambda t: (t.points or 0, t.won or 0, t._nrr_sort),
                   reverse=True)
@@ -100,7 +127,7 @@ def order(rows, tiebreak="nrr", matches=(), points_win=2, points_tie=1):
             j += 1
         group = rows[i:j]
         if len(group) > 1:
-            mini = _h2h_points([r.id for r in group], matches, points_win, points_tie)
+            mini = _h2h_points([r.id for r in group], matches, points_win, points_tie, points_no_result)
             group.sort(key=lambda t: (mini.get(t.id, 0), t._nrr_sort), reverse=True)
         out += group
         i = j
