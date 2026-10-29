@@ -55,26 +55,34 @@ def record_changes(session,series,season,game):
     for scope,selected in [('season',season),('all-time',None)]:
         before=R.boards(session,series,selected,exclude_match=game['match_id'],through=game)
         after=R.boards(session,series,selected,through=game)
-        for old,new in zip(before['boards'],after['boards']):
-            if not new['holders']:
-                continue
-            prior=old['holders'][0]['value'] if old['holders'] else None
-            value=new['holders'][0]['value']
-            better=prior is None or (value>prior if new['descending'] else value<prior)
-            old_names={e['name'] for e in old['holders']}
-            if not better and value!=prior:
-                continue
-            holders=[h for h in new['holders'] if better or h['name'] not in old_names]
-            if holders:
-                result.append(dict(scope=scope,label=new['label'],value=new['holders'][0]['display'],unit=new['unit'],
-                    holders=list(dict.fromkeys(h['name'] for h in holders)),kind='broken' if better else 'equalled',
-                    previous=R.format_value(prior) if prior is not None else 'first recorded mark',
-                    previous_holders=list(dict.fromkeys(e['name'] for e in old['holders']))))
+        result.extend(_board_changes(before, after, scope))
     return result
 
 
-def recap_text(session,series,season,game,*,corrected=False):
-    from services import league_records as R, league_season_service as LS
+def _board_changes(before, after, scope):
+    from services import league_records as R
+    result = []
+    for old,new in zip(before['boards'],after['boards']):
+        if not new['holders']:
+            continue
+        prior=old['holders'][0]['value'] if old['holders'] else None
+        value=new['holders'][0]['value']
+        better=prior is None or (value>prior if new['descending'] else value<prior)
+        old_names={e['name'] for e in old['holders']}
+        if not better and value!=prior:
+            continue
+        holders=[h for h in new['holders'] if better or h['name'] not in old_names]
+        if holders:
+            result.append(dict(scope=scope,label=new['label'],value=new['holders'][0]['display'],unit=new['unit'],
+                holders=list(dict.fromkeys(h['name'] for h in holders)),kind='broken' if better else 'equalled',
+                first_record=prior is None,
+                previous=R.format_value(prior) if prior is not None else 'first recorded mark',
+                previous_holders=list(dict.fromkeys(e['name'] for e in old['holders']))))
+    return result
+
+
+def _match_summary_lines(series,season,game,*,corrected=False):
+    from services import league_season_service as LS
     lines=[f"{'CORRECTED MATCH RECAP' if corrected else 'MATCH RECAP'} | {series.name} | {LS.season_title(season)}",
            f"{game.get('team1') or 'Team 1'} {game.get('runs1') if game.get('runs1') is not None else '—'} vs {game.get('team2') or 'Team 2'} {game.get('runs2') if game.get('runs2') is not None else '—'}",
            game.get('result') or 'Result recorded',f"Match #{game.get('match_id') or game['fixture_id']} · {game.get('venue') or 'Venue not supplied'}"]
@@ -88,6 +96,12 @@ def recap_text(session,series,season,game,*,corrected=False):
         for n in (50,100,150):
             if p.get(f'balls_to_{n}'):
                 lines.append(f"Milestone: {p.get('name')} reached {n} in {p[f'balls_to_{n}']} balls")
+    return lines
+
+
+def recap_text(session,series,season,game,*,corrected=False):
+    from services import league_records as R
+    lines = _match_summary_lines(series,season,game,corrected=corrected)
     changes=record_changes(session,series,season,game)
     for record in changes[:10]:
         lines.append(f"{record['scope']} {record['label']} {record['kind']}: {', '.join(record['holders'])} — {record['value']} {record['unit']}")
@@ -134,7 +148,8 @@ def queue(session,season,match_id,chat_id,kind,text,*,fixture_id=None,metadata=N
                 session.add(row);session.flush()
         except IntegrityError:
             row=session.query(LeagueRecordPublication).filter_by(**ident).one()
-    elif row.text!=text[:4000]:
+    elif row.text!=text[:4000] or (kind == 'match_records' and metadata is not None and
+                                 json.loads(row.metadata_json or '{}') != metadata):
         row.text=text[:4000];row.revision+=1;row.status='pending'
         row.fingerprint=fingerprint or row.fingerprint
     if metadata is not None:row.metadata_json=json.dumps(metadata)
@@ -164,16 +179,95 @@ def holders_markdown(session, series, season=None):
 
 
 def match_markdown(session, series, season, game):
-    lines = [f"# Match #{game['match_id']} — Records", "",
-             recap_text(session, series, season, game), "", "## All record achievements", ""]
-    changes = record_changes(session, series, season, game)
+    """Competition-wide record book, frozen at the source match's completion."""
+    from services import league_records as R, league_season_service as LS
+    data = R.boards(session, series, through=game)
+    included = [s for s in LS.seasons(session, series) if s.season_no <= season.season_no]
+    lines = [f"# {series.name} — All-seasons records", "",
+             f"Snapshot after Match #{game['match_id']} · {LS.season_title(season)}", "",
+             "Includes this competition's linked current and archived seasons up to this match. "
+             "Later matches and seasons are excluded.", "", "## Match summary", "",
+             *_match_summary_lines(series, season, game), ""]
+    link = scorecard_url(game.get('match_id'))
+    if link:
+        lines += [f"[Match scorecard]({link})", ""]
+    lines += ["## All-time records established, broken or equalled this match", ""]
+    before = R.boards(session, series, exclude_match=game['match_id'], through=game)
+    changes = _board_changes(before, data, 'all-time')
     for record in changes:
-        lines += [f"### {record['scope']} — {record['label']} ({record['kind']})",
+        kind = 'established' if record['first_record'] else record['kind']
+        lines += [f"### {record['label']} ({kind})",
                   f"{', '.join(record['holders'])}: {record['value']} {record['unit']}",
                   f"Previous: {record['previous']} — {', '.join(record['previous_holders']) or 'none'}", ""]
     if not changes:
-        lines.append("No records broken or equalled in this match.")
+        lines += ["No all-time records established, broken or equalled in this match.", ""]
+
+    lines += ["## All-seasons record holders", "",
+              "All joint holders are listed. Career totals combine every included season.", ""]
+    match_records = {'hs', 'f50', 'f100', 'f150', 'fig', 'total', 'chase', 'partnership', 'p50', 'p100'}
+    for board in data['boards']:
+        lines += [f"### {board['label']}", ""]
+        for holder in board['holders']:
+            source = holder.get('source')
+            context = []
+            if holder.get('team'):
+                context.append(f"{'Team' if source else 'Latest team'}: {holder['team']}")
+            if source:
+                context.append(f"{source['season']} (S{source['season_no']})")
+                if source.get('match_id'):
+                    context.append(f"Match #{source['match_id']}")
+                else:
+                    context.append(f"Fixture #{source['fixture_id']}")
+                if source.get('team1') and source.get('team2'):
+                    context.append(f"{source['team1']} vs {source['team2']}")
+                if source.get('venue'):
+                    context.append(source['venue'])
+                if source.get('date'):
+                    context.append(source['date'][:10])
+                source_link = scorecard_url(source.get('match_id'))
+                if source_link:
+                    context.append(f"[Scorecard]({source_link})")
+            elif board['key'] in match_records:
+                context.append("Season aggregate; match details unavailable")
+            else:
+                context.append("Career total across included seasons")
+            lines.append(f"- {holder['name']} — **{holder['display']} {board['unit']}** · {' · '.join(context)}")
+        if not board['holders']:
+            lines.append("No qualifying performance with saved evidence yet.")
+        lines.append("")
+
+    lines += ["## Career leaderboards — top 3 ranks", "",
+              "Joint ranks are retained, including every player tied at the cutoff.", ""]
+    for key in ('runs', 'wkts'):
+        board = next(b for b in data['boards'] if b['key'] == key)
+        lines += [f"### {board['label']}", "", "| Rank | Player | Total |", "| --- | --- | --- |"]
+        entries = [e for e in board['entries'] if e['rank'] <= 3]
+        for entry in entries:
+            name = entry['name'].replace('\\', '\\\\').replace('|', '\\|').replace('\n', ' ').replace('\r', ' ')
+            lines.append(f"| {entry['rank']} | {name} | {entry['display']} {board['unit']} |")
+        if not entries:
+            lines.append("| — | No qualifying performance yet | — |")
+        lines.append("")
+
+    lines += ["## Coverage and qualification", "",
+              f"- Seasons included ({len(included)}): " + ', '.join(f"{LS.season_title(s)} (S{s.season_no})" for s in included),
+              f"- Verified match scorecards: {len(data['matches'])}. Saved historical aggregates also contribute supported totals and best figures.",
+              "- Simulated fixtures are excluded. Missing milestone, partnership, phase and fielding evidence is not reconstructed."]
+    cfg = data['config']
+    if cfg:
+        lines.append(f"- Rate qualification: {cfg.min_bat_balls} batting balls / {cfg.min_bowl_balls} bowling balls, "
+                     "applied to career totals using the latest included season's settings.")
+    lines.append("- Joint records use exact values; rounding never breaks a tie.")
     return '\n'.join(lines)
+
+
+def _match_file_metadata(session, series, season, game):
+    return {'filename': f"match-{game['match_id']}-all-seasons-records.md",
+            'markdown': match_markdown(session, series, season, game)}
+
+
+def _match_file_caption(series, match_id, *, corrected=False):
+    return f"{series.name} | Match #{match_id} — all-seasons records{' (corrected)' if corrected else ''}"
 
 
 def queue_match_file(session, state):
@@ -185,11 +279,11 @@ def queue_match_file(session, state):
     if game is None:
         return None
     series = LS.series_of(session, season)
+    metadata = _match_file_metadata(session, series, season, game)
     return queue(session, season, state['match_id'], state['chat_id'], 'match_records',
-                 f"Match #{state['match_id']} — records", fixture_id=game['fixture_id'],
-                 metadata={'filename': f"match-{state['match_id']}-records.md",
-                           'markdown': match_markdown(session, series, season, game)},
-                 fingerprint=policy_digest(session, season, game))
+                 _match_file_caption(series, state['match_id']), fixture_id=game['fixture_id'],
+                 metadata=metadata,
+                 fingerprint=hashlib.sha256(metadata['markdown'].encode('utf-8')).hexdigest())
 
 
 def queue_recap(session,state):
@@ -206,16 +300,27 @@ def queue_recap(session,state):
 def reconcile(session,tournament_id):
     """Called inside a scorecard transaction. Only queue edits; never send."""
     from models import LeagueRecordPublication
+    from sqlalchemy import and_, or_
     from services import league_records as R, league_season_service as LS
     season=LS.season_for_tournament(session,tournament_id)
     if season is None: return 0
     series=LS.series_of(session,season)
-    games={g['match_id']:g for g in R.evidence(session,season)}
+    seasons = {s.id: s for s in LS.seasons(session, series)}
+    games_by_season = {}
     count=0
-    for row in session.query(LeagueRecordPublication).filter_by(season_id=season.id):
+    affected = [s.id for s in seasons.values() if s.season_no >= season.season_no]
+    rows = session.query(LeagueRecordPublication).filter(or_(
+        LeagueRecordPublication.season_id == season.id,
+        and_(LeagueRecordPublication.season_id.in_(affected), LeagueRecordPublication.kind == 'match_records')))
+    for row in rows:
         if row.kind.startswith(('watch:', 'record:')): continue
-        game=games.get(row.match_id)
-        fingerprint=policy_digest(session,season,game) if game else 'removed'
+        source_season = seasons[row.season_id]
+        if source_season.id not in games_by_season:
+            games_by_season[source_season.id] = {g['match_id']: g for g in R.evidence(session, source_season)}
+        game = games_by_season[source_season.id].get(row.match_id)
+        metadata = _match_file_metadata(session, series, source_season, game) if game and row.kind == 'match_records' else None
+        fingerprint = (hashlib.sha256(metadata['markdown'].encode('utf-8')).hexdigest() if metadata else
+                       policy_digest(session,source_season,game) if game else 'removed')
         if row.fingerprint is None:
             # First official completion anchors provisional announcements.
             if game is not None:
@@ -224,12 +329,10 @@ def reconcile(session,tournament_id):
         if fingerprint==row.fingerprint: continue
         row.fingerprint=fingerprint;row.revision+=1;row.status='pending'
         if game and row.kind == 'match_records':
-            row.text = f'Match #{row.match_id} — records (corrected)'
-            meta = json.loads(row.metadata_json or '{}')
-            meta['markdown'] = match_markdown(session, series, season, game)
-            row.metadata_json = json.dumps(meta)
+            row.text = _match_file_caption(series, row.match_id, corrected=True)
+            row.metadata_json = json.dumps(metadata)
         elif game:
-            row.text=recap_text(session,series,season,game,corrected=True)
+            row.text=recap_text(session,series,source_season,game,corrected=True)
             if row.kind!='recap':
                 row.text=('SCORECARD CORRECTION — earlier provisional record claims are superseded by this verified summary.\n'+row.text)[:4000]
         else:

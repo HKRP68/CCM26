@@ -308,21 +308,24 @@ values, opposition and a scorecard link when `WEBAPP_URL` is configured.
 
 ### Record watch and automatic recaps
 
-The season page shows players approaching 500-run / 25-wicket multiples and
-run/wicket lead changes. At match start the participating XI gets one combined
-watch message; live checks add newly relevant watches, once per target/player
-per innings. Fastest 50/100/150 watches require an active batter within ten runs
-and a mathematically reachable existing ball record. The website offers
-separate **Automatic record-watch messages** and **Automatic post-match recaps**
-checkboxes. The live-record checkbox also gates automatic watches.
+The automatic post-match **Records file** covers all linked seasons of the
+competition, including archived seasons. It contains a match summary, only
+all-time record changes (with previous holders), every current all-seasons
+record holder, and the top three career runs/wickets ranks including ties.
+Match-based holders include season and source-match details where available;
+aggregate-only history is labelled. The file is a snapshot through the triggering
+match, so later matches and seasons cannot change its historical cutoff. Rate
+minimums come from the latest season included in that snapshot. Correcting an
+earlier season also revises affected later files in place. The group receives
+one document after the official result commits; automatic live watches and
+celebration messages remain silent. On-demand record browsing is still available.
 
-After a committed official result, one recap includes the result, leading batting
-and bowling performances, exact run milestones, record changes and cap-leader
-changes. Provisional records for one holder are grouped and updated in the same
-message when later categories arrive, retaining earlier achievements. Messages
-show their competition and season; configured Mini App links open the source
-match. Historical comparisons are evaluated as of that match, excluding future
-seasons and matches.
+The season page shows players approaching 500-run / 25-wicket multiples and
+run/wicket lead changes. Legacy watch and recap settings remain stored for
+compatibility; the automatic match flow publishes the single records document.
+
+The match summary includes the result, leading batting and bowling performances
+and exact run milestones. Configured Mini App links open the source match.
 
 ### New delivery evidence
 

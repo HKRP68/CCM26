@@ -43,6 +43,26 @@ class RecordTests(pages.PageCase):
     def board(self,key,**kw):
         return next(b for b in self.R.boards(self.session,self.series,self.season,**kw)['boards'] if b['key']==key)
 
+    def earlier_season(self):
+        from models import LeagueSeason, Tournament, TournamentMatch, TournamentTeam
+        self.season.season_no = 2
+        self.session.flush()
+        tour = Tournament(name=f'Historical Cup {self.tag}', kind='challenge', status='completed')
+        self.session.add(tour)
+        self.session.flush()
+        teams = [TournamentTeam(tournament_id=tour.id, name=t.name) for t in self.teams]
+        self.session.add_all(teams)
+        self.session.flush()
+        season = LeagueSeason(series_id=self.series.id, season_no=1, name='Inaugural season', tournament_id=tour.id)
+        game = TournamentMatch(tournament_id=tour.id, match_id=70000+self.tag,
+            team1_id=teams[0].id, team2_id=teams[1].id, winner_team_id=teams[0].id,
+            inn1_runs=250, inn2_runs=150, status='completed', stage='league',
+            venue='Historic Ground', completed_at=datetime(2025,1,1),
+            scorecard_json=json.dumps([self.line('Historic Star',200,70,5,20,30), self.line('Alpha',40,20)]))
+        self.session.add_all([season, game])
+        self.session.flush()
+        return season, tour, game
+
     def test_exact_ties_and_no_secondary_tiebreak(self):
         sr=self.board('sr')
         self.assertEqual([1,1],[e['rank'] for e in sr['entries']])
@@ -440,7 +460,8 @@ class RecordTests(pages.PageCase):
         bot.send_message.assert_not_awaited()
         self.assertTrue(bot.send_document.call_args.kwargs['document'].filename.endswith('.md'))
         row = self.session.query(LeagueRecordPublication).filter_by(match_id=state['match_id'], kind='match_records').one()
-        self.assertIn('All record achievements', json.loads(row.metadata_json)['markdown'])
+        self.assertIn('All-seasons record holders', json.loads(row.metadata_json)['markdown'])
+        self.assertIn('all-seasons records', bot.send_document.call_args.kwargs['caption'])
         self.game.scorecard_json = json.dumps([self.line('Alpha',100,60)])
         recompute_tournament(self.session, self.tour.id)
         self.session.commit()
@@ -451,6 +472,171 @@ class RecordTests(pages.PageCase):
         delete_tournament_match(self.session, self.game.id)
         self.session.commit()
         self.assertIn('RETRACTED', json.loads(row.metadata_json)['markdown'])
+
+    def test_post_match_file_includes_archived_seasons_and_career_totals(self):
+        from services import league_record_publications as P, season_archive
+        past, tour, past_game = self.earlier_season()
+        past_match_id = past_game.match_id
+        season_archive.delete_tournament(self.session, tour, keep_stats=True)
+        self.session.flush()
+        self.assertIsNone(past.tournament_id)
+        state = dict(self.state(), match_id=self.game.match_id)
+        with patch.dict(os.environ, WEBAPP_URL='https://league.example/webapp'):
+            row = P.queue_match_file(self.session, state)
+        meta = json.loads(row.metadata_json)
+        report = meta['markdown']
+        self.assertEqual(f'match-{self.game.match_id}-all-seasons-records.md', meta['filename'])
+        self.assertIn('All-seasons records', report)
+        self.assertIn('Historic Star — **200 runs**', report)
+        self.assertIn('| 2 | Alpha | 100 runs |', report)
+        self.assertIn('Inaugural season (S1)', report)
+        self.assertIn('Historic Ground', report)
+        self.assertIn(f'[Scorecard](https://league.example/cricket?match_id={past_match_id})', report)
+        changes = report.split('## All-time records established, broken or equalled this match')[1].split('## All-seasons record holders')[0]
+        self.assertNotIn('Highest individual score', changes)
+        self.assertNotIn('### season —', report)
+        self.assertIn('Rate qualification: 30 batting balls / 12 bowling balls', report)
+
+    def test_all_time_changes_distinguish_new_records_breaks_and_ties(self):
+        from services import league_record_publications as P
+        _, _, past_game = self.earlier_season()
+        old = self.line('Previous Holder',100,50)
+        old['balls_to_50'] = 14
+        past_game.scorecard_json = json.dumps([old])
+        current = self.line('Alpha',120,50)
+        current.update(balls_to_50=14, balls_to_100=40)
+        self.game.scorecard_json = json.dumps([current])
+        self.session.flush()
+        game = self.R.evidence(self.session, self.season)[0]
+        report = P.match_markdown(self.session, self.series, self.season, game)
+        changes = report.split('## All-time records established, broken or equalled this match')[1].split('## All-seasons record holders')[0]
+        self.assertIn('Highest individual score (broken)', changes)
+        self.assertIn('Previous: 100 — Previous Holder', changes)
+        self.assertIn('Fastest fifty (equalled)', changes)
+        self.assertIn('Previous: 14 — Previous Holder', changes)
+        self.assertIn('Fastest hundred (established)', changes)
+        holders = report.split('### Fastest fifty\n')[1].split('### Fastest hundred')[0]
+        self.assertIn('Alpha — **14 balls**', holders)
+        self.assertIn('Previous Holder — **14 balls**', holders)
+
+    def test_record_file_is_unchanged_by_later_matches_or_other_competitions(self):
+        from models import LeagueRecordConfig, LeagueSeason, TournamentMatch
+        from services import league_record_publications as P
+        self.earlier_season()
+        game = self.R.evidence(self.session, self.season)[0]
+        expected = P.match_markdown(self.session, self.series, self.season, game)
+        row = P.queue_match_file(self.session, dict(self.state(), match_id=self.game.match_id))
+        row.status = 'sent'; row.message_id = 60; row.delivered_revision = 0
+        future = TournamentMatch(tournament_id=self.tour.id, match_id=80000+self.tag,
+            team1_id=self.a.id, team2_id=self.b.id, status='completed',
+            completed_at=datetime(2027,1,1), inn1_runs=9999, inn2_runs=0,
+            scorecard_json=json.dumps([self.line('Future Hero',9999,100)]))
+        future_season = LeagueSeason(series_id=self.series.id, season_no=3)
+        other_series = self.LS.create_series(self.session, f'Unrelated Records {self.tag}')
+        unrelated = LeagueSeason(series_id=other_series.id, season_no=1)
+        self.session.add_all([future, future_season, unrelated])
+        self.session.flush()
+        self.session.add(LeagueRecordConfig(season_id=future_season.id, min_bat_balls=99999, min_bowl_balls=99999))
+        self.session.add(LeagueRecordConfig(season_id=unrelated.id, archive_json=json.dumps([
+            dict(game, match_id=60000+self.tag, lines=[self.line('Unrelated Hero',8888,100)])])))
+        self.session.flush()
+        self.assertEqual(expected, P.match_markdown(self.session, self.series, self.season, game))
+        P.reconcile(self.session, self.tour.id)
+        self.assertEqual(0, row.revision)
+        self.assertEqual('sent', row.status)
+
+    def test_a_match_with_no_all_time_changes_still_gets_the_complete_record_book(self):
+        from models import TournamentMatch
+        from services import league_record_publications as P
+        _, tour, past_game = self.earlier_season()
+        past_game.scorecard_json = json.dumps([self.line('Historic Star',200,70,5,5,10)])
+        past_game.winner_team_id = past_game.team2_id
+        past_game.inn1_runs = 250; past_game.inn2_runs = 251
+        for index in (1, 2):
+            self.session.add(TournamentMatch(tournament_id=tour.id, match_id=60000+self.tag*10+index,
+                team1_id=past_game.team1_id, team2_id=past_game.team2_id,
+                inn1_runs=100, inn2_runs=80, status='completed',
+                completed_at=datetime(2025,1,index+1),
+                scorecard_json=json.dumps([self.line('Historic Star',60,30,5,5,10)])))
+        self.session.flush()
+        row = P.queue_match_file(self.session, dict(self.state(), match_id=self.game.match_id))
+        self.assertIsNotNone(row)
+        report = json.loads(row.metadata_json)['markdown']
+        self.assertIn('No all-time records established, broken or equalled in this match.', report)
+        self.assertIn('All-seasons record holders', report)
+        self.assertIn('Historic Star — **320 runs**', report)
+        self.assertIn('Career leaderboards', report)
+
+    def test_record_file_labels_aggregate_only_history_without_inventing_sources(self):
+        from models import LeagueSeason, StatsSeason, StatsSeasonPlayer
+        from services import league_record_publications as P
+        self.season.season_no = 2
+        self.session.flush()
+        saved = StatsSeason(name='Old aggregate', kind='challenge')
+        self.session.add(saved)
+        self.session.flush()
+        self.session.add(StatsSeasonPlayer(season_id=saved.id, name='Legacy Star',
+            bat_runs=900, bat_balls=400, bat_outs=10, highest_score=180))
+        self.session.add(LeagueSeason(series_id=self.series.id, season_no=1, stats_season_id=saved.id))
+        self.session.flush()
+        game = self.R.evidence(self.session, self.season)[0]
+        report = P.match_markdown(self.session, self.series, self.season, game)
+        self.assertIn('Legacy Star — **900 runs**', report)
+        self.assertIn('Legacy Star — **180 runs** · Season aggregate; match details unavailable', report)
+        self.assertNotIn('Legacy Star — **1 hundreds**', report)
+
+    def test_career_leaderboard_retains_every_joint_third_place(self):
+        from services import league_record_publications as P
+        self.game.scorecard_json = json.dumps([self.line(name, runs, 50) for name, runs in
+            [('Alpha',100), ('Beta',90), ('Gamma',80), ('Delta',80), ('Epsilon',70)]])
+        self.session.flush()
+        game = self.R.evidence(self.session, self.season)[0]
+        report = P.match_markdown(self.session, self.series, self.season, game)
+        leaders = report.split('## Career leaderboards')[1].split('### Most wickets')[0]
+        self.assertIn('| 3 | Gamma | 80 runs |', leaders)
+        self.assertIn('| 3 | Delta | 80 runs |', leaders)
+        self.assertNotIn('Epsilon', leaders)
+
+    def test_earlier_season_corrections_refresh_later_record_files_once(self):
+        from services import league_record_publications as P
+        from services.tournament_service import recompute_tournament, delete_tournament_match
+        _, tour, past_game = self.earlier_season()
+        state = dict(self.state(), match_id=self.game.match_id)
+        row = P.queue_match_file(self.session, state)
+        row.status = 'sent'; row.message_id = 60; row.delivered_revision = 0
+        self.session.commit()
+        past_game.scorecard_json = json.dumps([self.line('Corrected Champion',300,100)])
+        recompute_tournament(self.session, tour.id)
+        self.session.commit()
+        self.assertEqual('pending', row.status)
+        self.assertEqual(60, row.message_id)
+        self.assertEqual(1, row.revision)
+        self.assertIn('Corrected Champion — **300 runs**', json.loads(row.metadata_json)['markdown'])
+        recompute_tournament(self.session, tour.id)
+        self.session.commit()
+        self.assertEqual(1, row.revision)
+        delete_tournament_match(self.session, past_game.id)
+        self.session.commit()
+        self.assertEqual(2, row.revision)
+        self.assertNotIn('Corrected Champion', json.loads(row.metadata_json)['markdown'])
+        self.assertNotIn('RETRACTED', row.text)
+
+    def test_requeue_updates_changed_document_even_when_caption_is_the_same(self):
+        from services import league_record_publications as P
+        _, _, past_game = self.earlier_season()
+        state = dict(self.state(), match_id=self.game.match_id)
+        row = P.queue_match_file(self.session, state)
+        row.status = 'sent'; row.message_id = 60; row.delivered_revision = 0
+        self.session.commit()
+        original_caption = row.text
+        past_game.scorecard_json = json.dumps([self.line('New Historical Holder',300,100)])
+        self.session.flush()
+        updated = P.queue_match_file(self.session, state)
+        self.assertEqual(row.id, updated.id)
+        self.assertEqual(original_caption, updated.text)
+        self.assertEqual(1, updated.revision)
+        self.assertEqual('pending', updated.status)
+        self.assertIn('New Historical Holder', json.loads(updated.metadata_json)['markdown'])
 
     def test_unfinished_match_is_not_mistaken_for_a_removed_scorecard(self):
         from services import league_record_publications as P
