@@ -8,7 +8,8 @@
     <a href="{{ url_for('admin_player_versions') }}" class="btn btn-blue">🎴 Versions</a>
     <a href="{{ url_for('players_bulk_upload') }}" class="btn btn-green">📤 Bulk Upload</a>
     <a href="{{ url_for('players_data_change') }}" class="btn btn-green">♻️ Data Change</a>
-    <a href="{{ url_for('players_download', q=q, category=category, country=country_filter, rating_range=rating_range) }}" class="btn btn-blue">⬇ Download CSV</a>
+    <a href="{{ url_for('players_bulk_gender') }}" class="btn btn-green">Bulk Gender</a>
+    <a href="{{ download_urls.csv }}" class="btn btn-blue">⬇ Download CSV</a>
     <a href="{{ url_for('admin_logs') }}" class="btn btn-ghost">📋 Logs</a>
   </div>
 </div>
@@ -24,6 +25,14 @@
   <select name="country">
     <option value="">All Countries</option>
     {% for c in countries %}<option value="{{ c }}" {{ 'selected' if c == country_filter }}>{{ c }}</option>{% endfor %}
+  </select>
+
+  <select name="gender" aria-label="Filter by gender">
+    <option value="">All Genders</option>
+    {% for value in gender_options %}
+    <option value="{{ value }}" {{ 'selected' if gender_filter == value }}>{{ value }}</option>
+    {% endfor %}
+    <option value="unset" {{ 'selected' if gender_filter == 'unset' }}>Gender not set</option>
   </select>
 
   <select name="rating_range">
@@ -67,7 +76,7 @@
   </select>
 
   <button type="submit" class="btn btn-blue">Apply</button>
-  {% if q or category or country_filter or rating_range or bat_hand or bowl_hand or is_active or rating_min is not none or rating_max is not none or bat_rating_min is not none or bat_rating_max is not none or bowl_rating_min is not none or bowl_rating_max is not none or version_filter %}
+  {% if q or category or country_filter or gender_filter or rating_range or bat_hand or bowl_hand or is_active or rating_min is not none or rating_max is not none or bat_rating_min is not none or bat_rating_max is not none or bowl_rating_min is not none or bowl_rating_max is not none or version_filter %}
   <a href="{{ url_for('players_list') }}" class="btn btn-ghost">Clear</a>
   {% endif %}
 
@@ -118,10 +127,12 @@
     <thead>
       <tr>
         <th><input type="checkbox" id="select-all-players" onclick="toggleAllPlayers(this)"></th>
+        <th>Player ID</th>
         <th>Name</th>
         <th>Rating</th>
         <th>Category</th>
         <th>Country</th>
+        <th>Gender</th>
         <th>Bat / Bowl</th>
         <th>BAT | BOWL</th>
         <th>Style</th>
@@ -134,6 +145,7 @@
     {% for p in players %}
     <tr>
       <td><input type="checkbox" class="player-row-cb" value="{{ p.id }}"></td>
+      <td>{{ p.id }}</td>
       <td style="font-weight:600;">
         {{ p.name }}{% if custom_image_ids and p.id in custom_image_ids %} <span title="Has custom card image" style="cursor:help;">🎨</span>{% endif %}
         <small style="display:block;color:var(--muted);font-weight:400;">{{ p.version or 'Base' }}</small>
@@ -141,6 +153,7 @@
       <td><span class="rating-badge tier-{{ p._tier_css }}">{{ p.rating }}</span></td>
       <td>{{ p.category }}</td>
       <td>{{ p.country }}</td>
+      <td>{{ p.gender or 'Not set' }}</td>
       <td>{{ p.bat_hand }} / {{ p.bowl_hand }}</td>
       <td style="font-size:.8rem;">{{ p.bat_rating }} | {{ p.bowl_rating }}</td>
       <td style="font-size:.8rem;">{{ p.bowl_style }}</td>
@@ -184,7 +197,7 @@
     </tr>
     {% endfor %}
     {% if not players %}
-    <tr><td colspan="11" style="text-align:center;padding:2rem;color:var(--muted);">No players found</td></tr>
+    <tr><td colspan="13" style="text-align:center;padding:2rem;color:var(--muted);">No players found</td></tr>
     {% endif %}
     </tbody>
   </table>

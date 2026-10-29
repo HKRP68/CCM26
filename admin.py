@@ -31,6 +31,7 @@ from services.perf_log import perf_span as _perf_span, perf_timed as _perf_timed
 from services.telegram_user_service import user_lookup_filter
 from services.player_service import not_career
 from services import player_query
+from services import player_gender
 from services import auction_service as auction_svc
 from services import auction_sets_io as auction_sets_io
 from services import retention_negotiation as retention_rn
@@ -959,6 +960,7 @@ def players_list():
         q = request.args.get("q", "").strip()
         category = request.args.get("category", "").strip()
         country_filter = request.args.get("country", "").strip()
+        gender_filter = request.args.get("gender", "").strip()
         rating_range = request.args.get("rating_range", "").strip()
         bat_hand = request.args.get("bat_hand", "").strip()
         bowl_hand = request.args.get("bowl_hand", "").strip()
@@ -998,6 +1000,10 @@ def players_list():
             query = query.filter(Player.category == category)
         if country_filter:
             query = query.filter(Player.country == country_filter)
+        if gender_filter == "unset":
+            query = query.filter(or_(Player.gender.is_(None), Player.gender == ""))
+        elif gender_filter in player_gender.GENDER_OPTIONS:
+            query = query.filter(Player.gender == gender_filter)
         if rating_range and rating_range in RANGE_MAP:
             r_min, r_max = RANGE_MAP[rating_range]
             query = query.filter(Player.rating >= r_min, Player.rating <= r_max)
@@ -1088,6 +1094,7 @@ def players_list():
         if q: active_filters.append(("Search", q))
         if category: active_filters.append(("Category", category))
         if country_filter: active_filters.append(("Country", country_filter))
+        if gender_filter: active_filters.append(("Gender", "Not set" if gender_filter == "unset" else gender_filter))
         if rating_range: active_filters.append(("Rating tier", rating_range))
         if rating_min is not None or rating_max is not None:
             active_filters.append(("Rating", f"{rating_min or 0}–{rating_max or 100}"))
@@ -1118,6 +1125,7 @@ def players_list():
             "players.html",
             players=players, total=total, page=page, total_pages=total_pages,
             q=q, category=category, country_filter=country_filter,
+            gender_filter=gender_filter, gender_options=player_gender.GENDER_OPTIONS,
             rating_range=rating_range,
             rating_ranges=list(RANGE_MAP.keys()),
             bat_hand=bat_hand, bowl_hand=bowl_hand, is_active=is_active,
@@ -1185,6 +1193,7 @@ def players_download():
             "id", "name", "rating", "category", "country", "bat_hand",
             "bowl_hand", "bowl_style", "bat_rating", "bowl_rating",
             "version", "parent_player_id", "is_active", "restricted_from_buypl",
+            "gender",
         ]))
         writer.writeheader()
         writer.writerows(rows)
@@ -1197,6 +1206,72 @@ def players_download():
         )
     finally:
         db.close()
+
+
+# ── Bulk gender entry by Player ID ───────────────────────────────────
+
+@app.route("/players/gender-template")
+@login_required
+def players_gender_template():
+    db = get_session()
+    try:
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Player ID", "Gender"])
+        writer.writerows(db.query(Player.id, Player.gender).order_by(Player.id).all())
+        return Response(
+            output.getvalue(), mimetype="text/csv",
+            headers={"Content-Disposition": "attachment; filename=player_genders.csv"},
+        )
+    finally:
+        db.close()
+
+
+@app.route("/players/bulk-gender", methods=["GET", "POST"])
+@login_required
+def players_bulk_gender():
+    csv_text = request.form.get("csv_text", "")
+    error = None
+    status = 200
+    if request.method == "POST":
+        try:
+            upload = request.files.get("csv_file")
+            if upload and upload.filename:
+                if csv_text.strip():
+                    raise ValueError("Choose a CSV file or paste rows, using one input at a time.")
+                content = upload.read(2 * 1024 * 1024 + 1)
+                if len(content) > 2 * 1024 * 1024:
+                    raise ValueError("CSV files must be 2 MB or smaller.")
+                try:
+                    csv_text = content.decode("utf-8-sig")
+                except UnicodeDecodeError as exc:
+                    raise ValueError("Save the file as CSV UTF-8 and upload it again.") from exc
+            values = player_gender.parse_gender_rows(csv_text)
+        except ValueError as exc:
+            error, status = str(exc), 400
+        else:
+            db = get_session()
+            try:
+                updated, unchanged = player_gender.update_player_genders(db, values)
+                log_admin(db, "players_bulk_gender",
+                          detail=f"Updated {updated} player genders; {unchanged} unchanged")
+                db.commit()
+            except ValueError as exc:
+                db.rollback()
+                error, status = str(exc), 400
+            except Exception:
+                db.rollback()
+                logger.exception("Bulk player gender update failed")
+                error, status = "Could not save the genders. Please try again.", 500
+            finally:
+                db.close()
+            if error is None:
+                if updated:
+                    from services.player_cache import invalidate
+                    invalidate()
+                flash(f"Updated gender for {updated} player(s); {unchanged} unchanged.", "success")
+                return redirect(url_for("players_list"))
+    return render_template("player_genders.html", csv_text=csv_text, error=error), status
 
 
 # ── Bulk upload players via CSV text ─────────────────────────────────
@@ -1530,6 +1605,7 @@ def player_add():
                 rating=int(request.form["rating"]),
                 category=request.form["category"],
                 country=request.form["country"].strip(),
+                gender=player_gender.normalize_gender(request.form.get("gender")),
                 version=version,
                 bat_hand=request.form.get("bat_hand", "Right"),
                 bowl_hand=request.form.get("bowl_hand", "Right"),
@@ -1569,7 +1645,8 @@ def player_add():
         finally:
             db.close()
 
-    return render_template("player_form.html", player=None)
+    return render_template("player_form.html", player=None,
+                           gender_options=player_gender.GENDER_OPTIONS)
 
 
 # ── Edit player ──────────────────────────────────────────────────────
@@ -1591,6 +1668,8 @@ def player_edit(player_id):
             player.rating = int(request.form["rating"])
             player.category = request.form["category"]
             player.country = request.form["country"].strip()
+            if "gender" in request.form:
+                player.gender = player_gender.normalize_gender(request.form["gender"])
             from services.version_service import normalize_version, sync_version_links
             player.version = normalize_version(request.form.get("version"))
             player.bat_hand = request.form.get("bat_hand", "Right")
@@ -1664,6 +1743,7 @@ def player_edit(player_id):
         versions = get_all_versions(db, base_id)
         from services.player_portrait_service import has_player_portrait
         return render_template("player_form.html", player=player,
+                               gender_options=player_gender.GENDER_OPTIONS,
                                image_meta=image_meta, versions=versions, base_id=base_id,
                                has_player_portrait=has_player_portrait(player))
     except Exception as e:
@@ -2130,6 +2210,7 @@ def admin_player_version_new(base_id):
 
         variant = Player(
             name=base.name,
+            gender=base.gender,
             country=_f("country", base.country),
             category=_f("category", base.category),
             rating=v_rating,
@@ -2592,6 +2673,7 @@ def _parse_player_filter_args(args):
         "q": args.get("q", "").strip(),
         "category": args.get("category", "").strip(),
         "country_filter": args.get("country", "").strip(),
+        "gender_filter": args.get("gender", "").strip(),
         "rating_range": args.get("rating_range", "").strip(),
         "bat_hand": args.get("bat_hand", "").strip(),
         "bowl_hand": args.get("bowl_hand", "").strip(),
@@ -2617,6 +2699,10 @@ def _apply_player_filters(query, filters, range_map):
         query = query.filter(Player.category == filters["category"])
     if filters["country_filter"]:
         query = query.filter(Player.country == filters["country_filter"])
+    if filters["gender_filter"] == "unset":
+        query = query.filter(or_(Player.gender.is_(None), Player.gender == ""))
+    elif filters["gender_filter"] in player_gender.GENDER_OPTIONS:
+        query = query.filter(Player.gender == filters["gender_filter"])
     rating_range = filters["rating_range"]
     if rating_range and rating_range in range_map:
         r_min, r_max = range_map[rating_range]
@@ -2674,6 +2760,7 @@ def _player_export_dict(player):
         "parent_player_id": player.parent_player_id,
         "is_active": bool(player.is_active),
         "restricted_from_buypl": bool(getattr(player, "restricted_from_buypl", False)),
+        "gender": player.gender,
     }
 
 
@@ -2683,6 +2770,7 @@ def _build_players_xlsx(rows):
         "id", "name", "rating", "category", "country", "bat_hand",
         "bowl_hand", "bowl_style", "bat_rating", "bowl_rating",
         "version", "parent_player_id", "is_active", "restricted_from_buypl",
+        "gender",
     ]
 
     def cell(col_idx, row_idx, value):

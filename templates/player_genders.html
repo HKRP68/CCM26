@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Bulk Player Gender{% endblock %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;gap:.75rem;flex-wrap:wrap;margin-bottom:1rem;">
+  <h2>Bulk Player Gender</h2>
+  <a href="{{ url_for('players_list') }}" class="btn btn-ghost">← Back to Players</a>
+</div>
+
+<div class="form-card" style="margin-bottom:1rem;">
+  <p>Enter genders using <strong>Player ID, Gender</strong>, one player per row.</p>
+  <p style="margin:.75rem 0;">
+    <a href="{{ url_for('players_gender_template') }}" class="btn btn-blue">Download Player IDs + Gender CSV</a>
+  </p>
+  <p style="color:var(--muted);margin:.75rem 0;line-height:1.6;">
+    The download includes every player's ID and current gender. Fill in the Gender column in your spreadsheet,
+    save as CSV UTF-8, and upload it below. You can also paste rows directly from Excel or Google Sheets.
+    The header is optional.
+  </p>
+  <pre style="padding:.75rem;background:var(--bg);border-radius:.25rem;overflow-x:auto;">Player ID,Gender
+101,Male
+102,Female</pre>
+  <p style="color:var(--muted);margin:.75rem 0;line-height:1.6;">
+    Use <strong>Male</strong>, <strong>Female</strong>, <strong>Non-binary</strong> or <strong>Other</strong>.
+    M/F and lowercase values are accepted. Blank Gender cells are skipped; enter <strong>Not set</strong> to clear a gender.
+    Each row updates only that Player ID. Enter each card version's ID separately.
+    Player IDs are also shown in the Players table.
+  </p>
+</div>
+
+{% if error %}
+<div role="alert" class="form-card" style="border:1px solid var(--red);margin-bottom:1rem;">
+  <strong>No changes were saved.</strong> {{ error }}
+</div>
+{% endif %}
+
+<div class="form-card">
+  <form method="POST" action="{{ url_for('players_bulk_gender') }}" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-group">
+      <label for="gender-csv-file">Upload CSV file (up to 2 MB)</label>
+      <input id="gender-csv-file" type="file" name="csv_file" accept=".csv,text/csv">
+    </div>
+    <div class="form-group">
+      <label for="gender-csv-text">Or paste Player ID, Gender rows</label>
+      <textarea id="gender-csv-text" name="csv_text" rows="15"
+                style="width:100%;font-family:monospace;"
+                placeholder="Player ID,Gender&#10;101,Male&#10;102,Female">{{ csv_text }}</textarea>
+    </div>
+    <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin-top:1rem;">
+      <button type="submit" class="btn btn-primary">Save Genders</button>
+      <a href="{{ url_for('players_list') }}" class="btn btn-ghost">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

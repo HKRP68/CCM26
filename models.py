@@ -157,6 +157,8 @@ class Player(Base):
     rating = Column(Integer, nullable=False)
     category = Column(String(30), nullable=False)
     country = Column(String(60), nullable=False)
+    # Unknown until entered by an admin; never infer gender from a name.
+    gender = Column(String(10), nullable=True)
     bat_hand = Column(String(10), nullable=False)
     bowl_hand = Column(String(10), nullable=False)
     bowl_style = Column(String(30), nullable=False)

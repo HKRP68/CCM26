@@ -770,6 +770,8 @@ def _migrate_add_columns():
 
     # Player versions support
     _try_add("players", "parent_player_id", "INTEGER")
+    # Optional catalogue gender; existing players remain unset.
+    _try_add("players", "gender", "VARCHAR(10)")
     # Persistent generated-card file_id cache (survives restarts; skips re-render)
     _try_add("players", "gen_card_file_id", "VARCHAR(200)")
     # Per-player block on /buypl direct purchase

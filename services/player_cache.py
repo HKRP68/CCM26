@@ -48,6 +48,7 @@ def _player_to_dict(p):
         "version": getattr(p, "version", None),
         "parent_player_id": getattr(p, "parent_player_id", None),
         "country": p.country,
+        "gender": getattr(p, "gender", None),
         "category": p.category,
         "rating": p.rating,
         "bat_rating": p.bat_rating,

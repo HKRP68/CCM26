@@ -34,6 +34,15 @@
         <label>Country *</label>
         <input type="text" name="country" value="{{ player.country if player else '' }}" required>
       </div>
+      <div class="form-group">
+        <label for="player-gender">Gender</label>
+        <select id="player-gender" name="gender">
+          <option value="" {{ 'selected' if not player or not player.gender }}>Not set</option>
+          {% for value in gender_options %}
+          <option value="{{ value }}" {{ 'selected' if player and player.gender == value }}>{{ value }}</option>
+          {% endfor %}
+        </select>
+      </div>
     </div>
 
     <div class="form-row">
