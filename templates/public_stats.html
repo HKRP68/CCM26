@@ -1,17 +1,23 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{ series.name + ' · ' if series else '' }}CricMaster Cricket Centre</title>
   <meta name="description" content="Live cricket scores, fixtures, player profiles, tournament tables, records and searchable cricket statistics.">
-  <link rel="stylesheet" href="{{ url_for('static',filename='css/public_stats.css') }}">
+  <meta name="theme-color" content="#080f1a">
+  <script src="{{ url_for('static',filename='js/public_stats_theme.js',v='arena-1') }}"></script>
+  <link rel="stylesheet" href="{{ url_for('static',filename='css/public_stats.css',v='arena-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='css/public_stats_premium.css',v='arena-1') }}">
 </head>
-<body>
+<body class="page-opening">
+<div id="page-loader" class="page-loader" role="status" aria-live="polite"><div class="loader-brand">cricmaster<span>CRICKET CENTRE</span></div><div class="loader-cricket" aria-hidden="true"><span class="cricket-ball"></span><span class="loader-orbit"></span></div><p>Opening your cricket centre<span class="loading-dots">…</span></p></div>
+<noscript><style>.page-loader{display:none}</style></noscript>
 <a class="skip-link" href="#content">Skip to cricket centre</a>
-<header class="masthead"><a class="brand" href="{{ url_for('public_stats') }}">cricmaster<span>CRICKET CENTRE</span></a><span class="masthead-note">The game. The numbers. The stories.</span>{% if series %}<span class="feed-badge" id="feed-status" role="status">Connecting to scores…</span>{% endif %}</header>
+<header class="masthead"><a class="brand" href="{{ url_for('public_stats') }}">cricmaster<span>CRICKET CENTRE</span></a><span class="masthead-note">The game. The numbers. The stories.</span><button id="theme-toggle" class="theme-toggle" type="button" aria-label="Switch to light mode">Light mode</button>{% if series %}<span class="feed-badge" id="feed-status" role="status">Connecting to scores…</span>{% endif %}</header>
 <main id="content"{% if series %} data-stats-series="{{ series.id }}" data-stats-season="{{ selected.id if selected else 'all' }}"{% endif %}>
-  <div class="intro"><div><p class="eyebrow">YOUR CRICKET, ALL IN ONE PLACE</p><h1>{{ series.name if series else 'Follow every chapter.' }}</h1><p class="intro-copy">{{ season_title(selected) if series and selected else 'Every season. Every rivalry. Every record.' if series else 'Live scores, fixtures, teams and the performances behind every record.' }}</p></div>{% if series %}<form class="season-form" method="get"><label for="season">Season</label><select id="season" name="season"><option value="all" {{ 'selected' if not selected }}>All-time</option>{% for item in seasons %}<option value="{{ item.id }}" {{ 'selected' if selected and selected.id == item.id }}>{{ season_title(item) }}</option>{% endfor %}</select><button type="submit">View</button></form>{% endif %}</div>
-  <nav class="competitions" aria-label="Competitions">{% for competition in competitions %}<a class="{{ 'selected' if series and series.id == competition.id }}" href="{{ url_for('public_stats_series',series_id=competition.id) }}">{{ competition.short_name or competition.name }}</a>{% else %}<p>No competitions have been added yet.</p>{% endfor %}</nav>
+  <section class="arena-hero" aria-label="CricMaster cricket centre"><div class="arena-copy"><p class="eyebrow"><span class="live-dot"></span> CRICKET. WITHOUT LIMITS.</p><h1>The game.<br>The glory.<br><em>The numbers.</em></h1><p>Every season has a story. Every record has a name.<br>Explore the cricket universe, from the first ball to all-time greatness.</p><div class="arena-actions"><a class="hero-primary" href="{{ '#live' if series else '#competitions' }}">{{ 'Enter the match centre' if series else 'Explore competitions' }} <span aria-hidden="true">→</span></a><a class="hero-secondary" href="{{ '#records' if series else '#competitions' }}">{{ 'Explore the record book' if series else 'Find your competition' }}</a></div><div class="arena-tags"><span>LIVE SCORES</span><span>PLAYER CARDS</span><span>ALL-TIME RECORDS</span></div></div><div class="cricket-scene" aria-hidden="true"><div class="stadium-halo"></div><div class="floodlight left"></div><div class="floodlight right"></div><div class="stadium-ring ring-back"></div><div class="stadium-ring ring-front"></div><div class="cricket-pitch"><i></i><i></i><i></i><span class="pitch-line"></span></div><div class="hero-ball"><span class="cricket-ball"></span></div><div class="scene-badge"><span class="badge-dot"></span> THE WORLD OF CRICKET</div><span class="scene-caption">PASSION, IN EVERY FRAME.</span></div></section>
+  <div class="intro"><div><p class="eyebrow">YOUR CRICKET, ALL IN ONE PLACE</p><h2 class="competition-title">{{ series.name if series else 'Follow every chapter.' }}</h2><p class="intro-copy">{{ season_title(selected) if series and selected else 'Every season. Every rivalry. Every record.' if series else 'Live scores, fixtures, teams and the performances behind every record.' }}</p></div>{% if series %}<form class="season-form" method="get"><label for="season">Season</label><select id="season" name="season"><option value="all" {{ 'selected' if not selected }}>All-time</option>{% for item in seasons %}<option value="{{ item.id }}" {{ 'selected' if selected and selected.id == item.id }}>{{ season_title(item) }}</option>{% endfor %}</select><button type="submit">View</button></form>{% endif %}</div>
+  <nav id="competitions" class="competitions" aria-label="Competitions">{% for competition in competitions %}<a class="{{ 'selected' if series and series.id == competition.id }}" href="{{ url_for('public_stats_series',series_id=competition.id) }}">{{ competition.short_name or competition.name }}</a>{% else %}<p>No competitions have been added yet.</p>{% endfor %}</nav>
   {% if series %}
   <nav class="section-nav" aria-label="Cricket centre sections"><a href="#seasons">All seasons</a><a href="#compare">Compare</a><a href="#live">Live scores</a><a href="#fixtures">Fixtures</a><a href="#news">News</a><a href="#tournament">Tournament</a><a href="#teams">Teams</a><a href="#players">Players</a><a href="#explorer">Stats explorer</a><a href="#records">Records</a><a href="#grounds">Grounds &amp; pitches</a></nav>
   <div class="portal-shortcuts"><a href="#seasons">Explore season history <span>→</span></a><a href="#compare">Team &amp; player comparisons <span>→</span></a><a href="#records">Browse the record book <span>→</span></a></div>
@@ -38,6 +44,6 @@
 <a class="back-to-top" href="#content" aria-label="Back to top">↑</a>
 </main>
 <footer><a class="brand footer-brand" href="{{ url_for('public_stats') }}">cricmaster<span>CRICKET CENTRE</span></a><p>CricMaster Ultra · Every innings. Every achievement.</p><span>Live figures are provisional until the match is confirmed.</span></footer>
-{% if series %}<script src="{{ url_for('static',filename='js/public_stats.js') }}" defer></script>{% endif %}
+{% if series %}<script src="{{ url_for('static',filename='js/public_stats.js',v='arena-1') }}" defer></script>{% endif %}
 </body>
 </html>

@@ -12,7 +12,7 @@
   const overs = (balls, bpu = 6) => balls === null || balls === undefined ? '—' : bpu === 5 ? `${balls}b` : `${Math.floor(balls / 6)}.${balls % 6}`;
   const pretty = text => String(text || '').replace(/_/g, ' ').replace(/\b\w/g, m => m.toUpperCase());
   const date = raw => { if (!raw) return ''; const utc = typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw) && !/(Z|[+-]\d{2}:\d{2})$/i.test(raw) ? raw + 'Z' : raw; const d = new Date(utc); return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, {day:'numeric',month:'short',year:'numeric'}); };
-  const empty = text => el('p', text, 'empty');
+  const empty = text => el('p', text, /^Loading/i.test(text)?'empty busy-state':'empty');
   const link = (label, href) => { const node = el('a', label); if (typeof href === 'string' && href.startsWith('/') && !href.startsWith('//')) node.href = href; return node; };
   const playerImages = new Map(), teamImages = new Map();
   const nameKey = name => String(name || '').trim().toLowerCase();
@@ -22,8 +22,8 @@
     const source=src||(type==='team'?teamImages:playerImages).get(nameKey(name));
     const initial=el('span',String(name||'?').split(/\s+/).map(n=>n[0]).join('').slice(0,2).toUpperCase(),'avatar-initial');
     if(mediaURL(source)||type==='player'){
-      const img=el('img');img.src=mediaURL(source)?source:'/static/images/player-placeholder.svg';img.alt='';img.loading='lazy';img.decoding='async';img.referrerPolicy='no-referrer';
-      img.addEventListener('error',()=>{if(type==='player'&&!img.src.endsWith('player-placeholder.svg'))img.src='/static/images/player-placeholder.svg';else wrap.replaceChildren(initial);},{once:true});wrap.append(img);
+      const img=el('img');img.src=mediaURL(source)?source:'/static/images/card-placeholder.svg';img.alt='';img.loading='lazy';img.decoding='async';img.referrerPolicy='no-referrer';
+      img.addEventListener('error',()=>{if(type==='player'&&!img.src.endsWith('card-placeholder.svg'))img.src='/static/images/card-placeholder.svg';else wrap.replaceChildren(initial);},{once:true});if(large&&type==='player'&&mediaURL(source)){const full=el('a');full.href=source;full.target='_blank';full.rel='noopener noreferrer';full.setAttribute('aria-label',`Open ${name} full player card`);full.append(img);wrap.append(full);}else wrap.append(img);
     }else wrap.append(initial);
     return wrap;
   }
@@ -81,9 +81,10 @@
   function renderRecords() {
     const search = byId('record-search').value.trim().toLowerCase(), rows = records.filter(r=>`${r.label} ${list(r.holders).map(h=>h.name).join(' ')}`.toLowerCase().includes(search));
     byId('record-cards').replaceChildren(...rows.map(record=>{
-      const tile=el('article',undefined,'record-tile');tile.append(el('h3',record.label));
+      const tile=el('article',undefined,'record-tile'),title=el('h3'),open=el('button',record.label,'record-title-button');open.type='button';open.dataset.record=record.key;title.append(open);tile.append(title);
       if (!list(record.holders).length) tile.append(el('p','No qualifying performance yet.','muted'));
       else { const val=el('div',record.holders[0].display,'record-value');val.append(el('small',` ${record.unit||''}`));tile.append(val);record.holders.forEach(holder=>{const p=el('p',undefined,'holder');p.append(profileButton(holder.name,teamNames.has(holder.name)?'team':'player'));tile.append(p);}); }
+      const more=el('button','View all rankings →','record-open');more.type='button';more.dataset.record=record.key;more.setAttribute('aria-label',`View all ${record.label.toLowerCase()}`);tile.append(more);
       return tile;
     }));
     if (!rows.length) byId('record-cards').append(empty('No matching records.'));
@@ -209,7 +210,7 @@
   }
   function renderArticle(data){const body=byId('profile-body');body.replaceChildren(el('p',[data.author,date(data.date)].filter(Boolean).join(' · '),'profile-subtitle'));if(typeof data.image_url==='string'&&data.image_url.startsWith('/')&&!data.image_url.startsWith('//')){const image=el('img',undefined,'article-image');image.src=data.image_url;image.alt='';image.loading='lazy';body.append(image);}body.append(el('div',data.body||'','article-body'));}
   async function openProfile(type,name) {
-    if(!name)return;const dialog=byId('profile-dialog'),request=++profileRequest;if(profileController)profileController.abort();profileController=new AbortController();
+    if(!name)return;recordRequest++;if(recordController)recordController.abort();const dialog=byId('profile-dialog'),request=++profileRequest;if(profileController)profileController.abort();profileController=new AbortController();
     byId('profile-kind').textContent=type==='article'?'COMPETITION NEWS':type==='venue'?'GROUND & PITCH GUIDE':`${type.toUpperCase()} PROFILE`;byId('profile-title').textContent=name;byId('profile-body').replaceChildren(empty('Loading recorded performances…'));if(!dialog.open)dialog.showModal();
     try{const data=await load(type,type==='article'?{id:name}:{name},profileController.signal);if(request!==profileRequest||!dialog.open)return;byId('profile-title').textContent=data.title||data.name||name;if(type==='article')renderArticle(data);else if(type==='player')renderPlayerProfile(data);else if(type==='team')renderTeamProfile(data);else renderVenueProfile(data);}
     catch(error){if(request===profileRequest&&dialog.open&&error.name!=='AbortError')byId('profile-body').replaceChildren(empty(error.message||'This profile is temporarily unavailable.'));}
@@ -269,8 +270,39 @@
   byId('comparison-share').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(location.href);byId('comparison-status').textContent='Comparison link copied.';}catch(_){byId('comparison-status').textContent=`Share this link: ${location.href}`;}});
   const initial=new URLSearchParams(location.search);if(['team','player'].includes(initial.get('compare'))){byId('comparison-mode').value=initial.get('compare');byId('comparison-left').value=initial.get('left')||'';byId('comparison-right').value=initial.get('right')||'';byId('comparison-all').checked=initial.get('comparison_season')==='all';compareSides();}
   loadSeasons();
+
+  let recordRequest=0,recordController,recordCategory='',recordPage=1,recordQuery='',recordScope=season;
+  function recordURL(){const url=new URL(location.href);['compare','left','right','comparison_season'].forEach(key=>url.searchParams.delete(key));url.searchParams.set('record',recordCategory);url.searchParams.set('season',recordScope);if(recordQuery)url.searchParams.set('record_q',recordQuery);else url.searchParams.delete('record_q');if(recordPage>1)url.searchParams.set('record_page',recordPage);else url.searchParams.delete('record_page');url.hash='records';return url.href;}
+  async function fetchRecord(page=1){
+    const request=++recordRequest;if(recordController)recordController.abort();recordController=new AbortController();recordPage=page;
+    const target=byId('record-board');if(!target)return;target.setAttribute('aria-busy','true');target.replaceChildren(empty('Loading the full record book…'));
+    byId('record-board-status').textContent='Loading rankings…';byId('record-board-prev').disabled=true;byId('record-board-next').disabled=true;
+    try{const data=await load('leaderboard',{category:recordCategory,q:recordQuery,page,limit:25,season:recordScope},recordController.signal);if(request!==recordRequest||!byId('profile-dialog').open)return;
+      byId('profile-title').textContent=data.title;byId('record-qualification').textContent=[data.scope,data.qualification,data.note].filter(Boolean).join(' · ');
+      list(data.rows).forEach(row=>{if(row.image)playerImages.set(nameKey(row.name),row.image);});
+      target.replaceChildren(table(['Rank','Player / team',data.unit||'Record','Team','Season','Ground','Scorecard'],list(data.rows).map(row=>[row.rank,row.kind==='partnership'?row.name:profileButton(row.name,row.kind==='team'?'team':'player'),row.display,row.team,row.season||'Combined totals',row.venue,row.url?link('View →',row.url):'—']),'No qualifying records match this view.'));
+      recordPage=data.page;byId('record-board-status').textContent=data.total?`${Math.min((data.page-1)*data.page_size+1,data.total)}–${Math.min(data.page*data.page_size,data.total)} of ${data.total} ranked entries${recordQuery?` · original ranks retained`:''}`:'No qualifying entries.';
+      byId('record-board-page').textContent=`Page ${data.page} of ${Math.max(1,Math.ceil(data.total/data.page_size))}`;byId('record-board-prev').disabled=data.page<=1;byId('record-board-next').disabled=data.page*data.page_size>=data.total;
+    }catch(error){if(request===recordRequest&&error.name!=='AbortError'&&byId('record-board-status')){byId('record-board-status').textContent=error.message;target.replaceChildren(empty('Rankings could not be loaded. Use Search to retry.'));}}
+    finally{if(target.isConnected)target.setAttribute('aria-busy','false');}
+  }
+  function openRecord(key,query='',page=1){
+    profileRequest++;if(profileController)profileController.abort();recordCategory=key;recordQuery=query;recordScope=season;
+    const dialog=byId('profile-dialog'),body=byId('profile-body');byId('profile-kind').textContent='THE COMPLETE RECORD BOOK';byId('profile-title').textContent=(records.find(r=>r.key===key)||{}).label||'Record rankings';body.replaceChildren();
+    const intro=el('p',undefined,'notice');intro.id='record-qualification';body.append(intro);
+    const scopeControl=el('label','Season','record-scope-control'),scopeSelect=el('select');scopeSelect.id='record-board-season';scopeSelect.setAttribute('aria-label','Record leaderboard season');Array.from(byId('season').options).forEach(option=>scopeSelect.add(new Option(option.text,option.value)));scopeSelect.value=recordScope;scopeControl.append(scopeSelect);body.append(scopeControl);scopeSelect.addEventListener('change',()=>{recordScope=scopeSelect.value;fetchRecord(1);});
+    const form=el('form',undefined,'record-board-search'),label=el('label','Search rankings'),input=el('input'),submit=el('button','Search');input.type='search';input.id='record-board-query';input.placeholder='Player, team, season or ground';input.value=query;input.maxLength=150;label.htmlFor=input.id;submit.type='submit';form.append(label,input,submit);body.append(form);
+    const status=el('p','Loading rankings…','muted');status.id='record-board-status';status.setAttribute('role','status');body.append(status);
+    const target=el('div',undefined,'table-wrap');target.id='record-board';body.append(target);
+    const controls=el('div',undefined,'pagination'),prev=el('button','← Previous','secondary'),next=el('button','Next →','secondary'),number=el('span',undefined,'muted');prev.id='record-board-prev';next.id='record-board-next';number.id='record-board-page';prev.type=next.type='button';controls.append(prev,number,next);body.append(controls);
+    const share=el('button','Copy ranking link','secondary');share.type='button';share.addEventListener('click',async()=>{const url=recordURL();try{await navigator.clipboard.writeText(url);status.textContent='Ranking link copied.';}catch(_){status.textContent=`Share this ranking: ${url}`;}});body.append(share);
+    form.addEventListener('submit',event=>{event.preventDefault();recordQuery=input.value.trim();fetchRecord(1);});prev.addEventListener('click',()=>fetchRecord(recordPage-1));next.addEventListener('click',()=>fetchRecord(recordPage+1));
+    if(!dialog.open)dialog.showModal();fetchRecord(page);
+  }
+  document.addEventListener('click',event=>{const record=event.target.closest('button[data-record]');if(record)openRecord(record.dataset.record);});
+  const requestedRecord=new URLSearchParams(location.search);if(requestedRecord.get('record'))openRecord(requestedRecord.get('record'),requestedRecord.get('record_q')||'',Math.max(1,Number(requestedRecord.get('record_page'))||1));
   byId('profile-close').addEventListener('click',()=>byId('profile-dialog').close());
-  byId('profile-dialog').addEventListener('close',()=>{profileRequest++;if(profileController)profileController.abort();});
+  byId('profile-dialog').addEventListener('close',()=>{recordRequest++;if(recordController)recordController.abort();profileRequest++;if(profileController)profileController.abort();});
   document.addEventListener('click',event=>{const button=event.target.closest('button[data-profile]');if(button)openProfile(button.dataset.profile,button.dataset.name);const article=event.target.closest('button[data-article]');if(article)openProfile('article',article.dataset.article);});
   byId('player-search').addEventListener('input',renderPlayers);byId('record-search').addEventListener('input',renderRecords);
   document.querySelectorAll('[data-discipline]').forEach(button=>button.addEventListener('click',()=>{discipline=button.dataset.discipline;document.querySelectorAll('[data-discipline]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));renderPlayers();}));

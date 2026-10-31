@@ -127,15 +127,37 @@ and bowling statistics. Missing historical milestone/dot/award data stays
 unavailable. Career totals include preserved aggregate-only seasons, while
 match-specific filters continue to require match evidence.
 
-Available team logos and uploaded portraits appear on match cards, tables,
-squads, profiles and comparisons. Unique catalogue identities use a public
-image endpoint that reads available portraits or custom artwork without
-rendering collectible cards or waiting for remote artwork downloads. Missing
-photos get a neutral silhouette; missing logos get initials. Unknown player
-versions are never assigned an arbitrary image. Media loading is lazy and
-cached independently from the three-second live feed.
+Available team logos and collectible player cards appear on match cards,
+tables, squads, profiles and comparisons. Unique catalogue identities use the
+same custom/template/tier card renderer as the bot, with its existing caches.
+Rendering happens only on website image requests and excludes remote artwork
+downloads. Cards use contained frames so text and borders are not cropped;
+large cards open their full image in a new tab. Unknown identities or unavailable
+artwork get a neutral card placeholder; missing logos get initials. Media loads
+lazily and is cached independently from the three-second live feed.
 
 New read-only endpoints: `/api/stats/<series_id>/seasons` and
 `/api/stats/<series_id>/compare?mode=team|player&left=...&right=...&season=all|ID`.
 The archive always lists all seasons, even while another page section is scoped
 to one season. Historical calculations remain on the website request path.
+
+## Full record leaderboards and premium appearance
+
+Every record category title and its **View all rankings** button opens the full
+ranked record book, not just its leading holders. Users can search by player,
+team, season or venue, switch seasons within the leaderboard, page through
+results and copy a direct ranking link.
+Exact tied ranks and the configured batting/bowling qualification rules are
+retained. Partnership entries link to their match rather than pretending the
+partnership is an individual player. Career aggregates have no invented match.
+
+`GET /api/stats/<series_id>/leaderboard?category=runs&season=all&page=1&limit=25&q=`
+is read-only. The expensive underlying record books are cached once per scope
+and reused across categories, pages and searches. Unknown categories are refused.
+
+The portal defaults to a glossy dark design, with a persistent light-mode toggle
+available on the landing page and every competition page. The cricket landing
+scene uses lightweight CSS ball/stadium animation. Opening and per-panel loading
+states never wait artificially or block user interaction. Reduced-motion users
+receive static artwork and immediate transitions. No external animation or
+font dependency is required.

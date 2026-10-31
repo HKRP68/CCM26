@@ -26757,8 +26757,8 @@ def public_stats_player_image(player_id):
             abort(404)
         art = player_image(db, player_id)
         if art:
-            return send_file(io.BytesIO(art[0]), mimetype=art[1], max_age=3600)
-        return send_file(os.path.join(app.static_folder, 'images', 'player-placeholder.svg'), max_age=300)
+            return send_file(io.BytesIO(art[0]), mimetype=art[1], max_age=300)
+        return send_file(os.path.join(app.static_folder, 'images', 'card-placeholder.svg'), max_age=300)
     finally:
         db.close()
 
@@ -26779,7 +26779,7 @@ def public_stats_team_image(team_id):
 @app.route('/api/stats/<int:series_id>/<kind>')
 def public_stats_feed(series_id, kind):
     from services import live_records
-    if kind not in ('live', 'records', 'portal', 'explorer', 'player', 'team', 'venue', 'seasons', 'compare'):
+    if kind not in ('live', 'records', 'portal', 'explorer', 'player', 'team', 'venue', 'seasons', 'compare', 'leaderboard'):
         abort(404)
     db = get_session()
     try:
@@ -26806,6 +26806,8 @@ def public_stats_feed(series_id, kind):
                 if not name or len(name) > 150:
                     return jsonify(error='A valid name is required.'), 400
                 filters = {'name': name}
+            if kind == 'leaderboard':
+                filters = {key: request.args.get(key, '').strip()[:150] for key in ('category', 'q', 'page', 'limit')}
             if kind in ('portal', 'seasons'):
                 filters = {}
             if kind == 'compare':
@@ -26815,6 +26817,9 @@ def public_stats_feed(series_id, kind):
                     return jsonify(error='Choose two teams or players to compare.'), 400
                 filters = {'mode': mode, 'left': left, 'right': right}
             def build():
+                if kind == 'leaderboard':
+                    from services.cricket_portal_records import leaderboard
+                    return leaderboard(db, series, selected, filters)
                 if kind == 'seasons':
                     return history.seasons_snapshot(db, series)
                 if kind == 'compare':

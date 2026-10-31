@@ -118,7 +118,7 @@ class HistoryTests(pages.PageCase):
         self.assertEqual(1, data['no_result'])
         self.assertIsNone(data['left']['stats']['runs'])
 
-    def test_uploaded_player_and_team_images_are_available_without_card_generation(self):
+    def test_player_cards_and_team_images_use_the_available_artwork_scope(self):
         from models import Player
         from PIL import Image
         player = Player(name='Alpha', rating=85, category='Batsman', country='India',
@@ -127,9 +127,14 @@ class HistoryTests(pages.PageCase):
         self.session.commit()
         image = Image.new('RGBA', (20, 20), (50, 120, 180, 255))
         png = BytesIO(); image.save(png, format='PNG')
-        with patch('services.player_portrait_service.get_player_portrait', return_value=image), \
-             patch('services.card_generator.generate_card', side_effect=AssertionError('Card generation during media read')):
+        from services.tg_storage_service import remote_downloads_allowed
+        def card(source):
+            self.assertEqual(player.id, source.id)
+            self.assertFalse(remote_downloads_allowed())
+            return png.getvalue()
+        with patch('services.card_generator.generate_card', side_effect=card) as generate:
             response = self.client.get(f'/stats/media/players/{player.id}.png')
+        generate.assert_called_once()
         self.assertEqual(200, response.status_code)
         self.assertEqual('image/png', response.mimetype)
         with patch('services.card_identity.team_logo_png', return_value=png.getvalue()):
