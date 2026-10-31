@@ -429,6 +429,43 @@ class PermissionTests(ReminderCase):
             self.assertEqual([f.id for n in plan.sending for f in n.fixtures], [expected.id])
             self.assertEqual(build.call_args.kwargs[scope + '_no'], number)
 
+    def test_compact_round_range_parsing(self):
+        for text in ("R1-R10 Pending", "r1-10 pending", "R1 – R10", "R1-R10"):
+            self.assertEqual(self.handler._round_range(text), (1, 10))
+        self.assertEqual(self.handler._round_range("R3 pending"), (3, 3))
+        self.assertIsNone(self.handler._round_range("Royal Challengers"))
+        for text in ("R10-R1 pending", "R0-R10", "R1-Rx pending", "R1-R10 completed"):
+            with self.assertRaises(ValueError):
+                self.handler._round_range(text)
+
+    def test_range_preview_send_rechecks_status_and_preserves_bounds(self):
+        import asyncio
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+        fixtures = self.mrs.pending_fixtures(self.session, self.tour.id)
+        fixtures[0].round_no = 1
+        fixtures[1].round_no = 10
+        self.session.commit()
+        outside = self.fixture("RR", "CSK", round_no=11, match_no=3)
+        completed = self.fixture("RR", "CSK", status="completed", round_no=5, match_no=4)
+        message = SimpleNamespace(reply_text=AsyncMock())
+        update = SimpleNamespace(effective_message=message, effective_user=SimpleNamespace(id=self.admin))
+        context = SimpleNamespace(args=[f"#{self.tour.id}", "R1-R10", "Pending", "force"])
+        with patch.object(self.handler, "get_session", return_value=self.session), patch.object(self.session, "close"):
+            asyncio.run(self.handler.remindmatch_handler(update, context))
+        text = message.reply_text.call_args.args[0]
+        self.assertIn("Rounds 1–10", text)
+        data = message.reply_text.call_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data
+        fixtures[0].status = "completed"
+        self.session.commit()
+        query = SimpleNamespace(data=data, from_user=SimpleNamespace(id=self.admin),
+                                answer=AsyncMock(), edit_message_text=AsyncMock())
+        update = SimpleNamespace(callback_query=query, effective_chat=None)
+        with patch.object(self.handler, "get_session", return_value=self.session), patch.object(self.session, "close"), patch.object(self.handler, "_send", new=AsyncMock(return_value=True)):
+            asyncio.run(self.handler.remindmatch_callback(update, SimpleNamespace(bot=None)))
+        reminded = self.mrs.last_reminded(self.session, [f.id for f in fixtures] + [outside.id, completed.id])
+        self.assertEqual(set(reminded), {fixtures[1].id})
+
     def test_an_admin_chases_the_whole_tournament(self):
         plan = self.plan(self.admin)
         self.assertIsNone(plan.error)
@@ -496,6 +533,17 @@ class PermissionTests(ReminderCase):
 
 
 class ScopedPendingFixtureTests(ReminderCase):
+    def test_range_includes_both_boundaries_and_only_scheduled_known_teams(self):
+        first = self.fixture("SRH", "RR", round_no=1, match_no=1)
+        last = self.fixture("SRH", "RR", round_no=10, match_no=2)
+        self.fixture("SRH", "RR", round_no=11, match_no=3)
+        self.fixture("SRH", "RR", round_no=0, match_no=4)
+        self.fixture("SRH", "CSK", status="completed", round_no=5, match_no=5)
+        self.fixture("SRH", "CSK", status="live", round_no=5, match_no=6)
+        rows = self.mrs.pending_fixtures(self.session, self.tour.id, round_no=1, round_end=10)
+        self.assertEqual([row.id for row in rows], [first.id, last.id])
+
+
     def test_round_and_match_scope_exclude_other_pending_and_completed_rows(self):
         first = self.fixture('SRH', 'RR', round_no=1, match_no=1)
         second = self.fixture('SRH', 'RR', round_no=2, match_no=2)

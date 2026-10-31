@@ -125,7 +125,7 @@ def team_badge(session, team):
 # ══════════════════════════════════════════════════════════════════════
 
 def pending_fixtures(session, tournament_id, team_id=None, opponent_id=None,
-                     round_no=None, match_no=None):
+                     round_no=None, match_no=None, round_end=None):
     """Unplayed fixtures, in schedule order.
 
     ``team_id`` narrows to one side's fixtures and ``opponent_id`` to the ones
@@ -137,7 +137,11 @@ def pending_fixtures(session, tournament_id, team_id=None, opponent_id=None,
                  TournamentMatch.status.in_(PENDING_STATUSES),
                  TournamentMatch.team1_id.isnot(None),
                  TournamentMatch.team2_id.isnot(None)))
-    if round_no is not None:
+    if round_end is not None:
+        if round_no is None or not 1 <= int(round_no) <= int(round_end):
+            raise ValueError("Invalid round range.")
+        q = q.filter(TournamentMatch.round_no.between(int(round_no), int(round_end)))
+    elif round_no is not None:
         q = q.filter(TournamentMatch.round_no == int(round_no))
     if match_no is not None:
         q = q.filter(TournamentMatch.match_no == int(match_no))

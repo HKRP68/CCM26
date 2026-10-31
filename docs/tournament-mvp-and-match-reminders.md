@@ -292,3 +292,13 @@ The Send button preserves the selected scope and checks pending status again.
 earliest unfinished round. As that round finishes, the window advances.
 `/tfixturemode round` restores one round at a time; `/tfixturemode all` opens
 all fixtures. Use `/tfixturemode #12 3` to select a tournament explicitly.
+
+### Pending matches across a round range
+
+Use `/remindmatch R1-R10 pending` to preview pending fixtures in rounds 1 through
+10 inclusive. Completed, live, and unresolved fixtures are excluded. The range
+is case-insensitive; `r1-10 pending`, `R1-R10`, and `R3 pending` also work.
+Use `/remindmatch #12 R1-R10 pending force` to select a tournament and override
+the cooldown. Reversed or zero-based ranges produce a usage message. The Send
+button preserves both boundaries and rechecks pending status before notifying.
+The existing per-run limit of 12 pairs and cooldown still apply.
