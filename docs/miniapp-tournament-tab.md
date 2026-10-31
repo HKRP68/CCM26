@@ -33,6 +33,6 @@ Scorecards open in the shared bottom-sheet drawer:
 | `POST /api/webapp/tournament/stats` | `{tournament_id}` | `boards[]` and `mvp[]` |
 | `POST /api/webapp/tournament/match` | `{tournament_id, fixture_id}` | a scorecard in the drawer's `innings` shape |
 
-An id that names a tournament which is not active is refused. The main endpoint heals the aggregates (`recompute_tournament`, `heal_live_fixtures`) at most once every `_TOURNAMENT_RECOMPUTE_TTL`, the same throttle the admin dashboard uses.
+An id that names a tournament which is not active is refused. The main endpoint reads persisted standings and fixtures. Aggregates are rebuilt when results are recorded; opening the Mini App does not rebuild player stats or reconcile record publications.
 
 Tests: `tests/test_webapp_tournament.py`.

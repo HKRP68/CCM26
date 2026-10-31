@@ -4946,23 +4946,6 @@ def _get_live_tournament_safe(db):
         return {"live": False, "tournaments": []}
 
 
-def _refresh_tournament_throttled(db, tour):
-    """Heal a tournament's aggregates at most once per TTL (as the dashboard does)."""
-    import time
-    now = time.time()
-    if now - _tournament_recompute_at.get(tour.id, 0) <= _TOURNAMENT_RECOMPUTE_TTL:
-        return
-    try:
-        from services import tournament_service, league_schedule_service
-        tournament_service.recompute_tournament(db, tour.id)
-        league_schedule_service.heal_live_fixtures(db, tour.id)
-        db.commit()
-        _tournament_recompute_at[tour.id] = now
-    except Exception:
-        db.rollback()
-        logger.exception("webapp tournament recompute failed for %s", tour.id)
-
-
 @app.route("/api/webapp/tournament", methods=["POST"])
 @csrf_exempt
 def webapp_tournament():
@@ -4981,7 +4964,8 @@ def webapp_tournament():
         tour = tw.resolve_live(db, data.get("tournament_id"))
         if tour is None:
             return {"ok": True, "live": False, "live_tournaments": live["tournaments"]}
-        _refresh_tournament_throttled(db, tour)
+        # Results persist standings and player stats when recorded. Opening a
+        # read view must not rebuild them or reconcile record publications.
         payload = tw.tournament_payload(db, tour, tg_id=tg_id)
         return {"ok": True, "live": True, "live_tournaments": live["tournaments"],
                 **payload}

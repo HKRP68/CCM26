@@ -157,6 +157,10 @@ class WebappTournamentTests(unittest.TestCase):
                              status="scheduled", stage="league", round_no=2,
                              match_no=4)
         db.add_all([m1, m2, m3, m4])
+        db.flush()
+        # Mirror result recording: aggregates are persisted before a viewer opens.
+        from services.tournament_service import recompute_tournament
+        recompute_tournament(db, tour.id)
         db.commit()
         self.m1, self.m2, self.m3 = m1.id, m2.id, m3.id
 
@@ -199,6 +203,44 @@ class WebappTournamentTests(unittest.TestCase):
         self.assertEqual(info, {"live": False, "tournaments": []})
 
     # ── /tournament ─────────────────────────────────────────────────────
+    def test_opening_tournament_does_not_rebuild_results(self):
+        from unittest.mock import patch
+        with patch("services.tournament_service.recompute_tournament",
+                   side_effect=AssertionError("read request rebuilt results")) as rebuild:
+            status, data = self._post("/api/webapp/tournament")
+        self.assertEqual(status, 200, data)
+        self.assertTrue(data["live"])
+        rebuild.assert_not_called()
+        self.assertEqual(data["table"][0]["points"], 2)
+
+    def test_live_payload_renders_in_miniapp(self):
+        import shutil
+        import subprocess
+        from pathlib import Path
+        if not shutil.which("node"):
+            self.skipTest("Node is needed for the Miniapp renderer")
+        status, data = self._post("/api/webapp/tournament")
+        self.assertEqual(status, 200, data)
+        script = r"""
+const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
+const source = fs.readFileSync(process.argv[1], 'utf8');
+const payload = JSON.parse(fs.readFileSync(0, 'utf8'));
+const content = {innerHTML:''};
+const context = vm.createContext({document:{getElementById:() => content},
+  sessionStorage:{getItem:() => null}, escapeHtml:String, payload});
+vm.runInContext(source.slice(source.indexOf('const TN_SUBS ='),
+  source.indexOf('// Scorecard for a tournament fixture')), context);
+for (const sub of ['overview','table','matches','stats','mvp','injuries']) {
+  vm.runInContext(`tnData=payload; tnId=payload.tournament.id; tnSub='${sub}'; renderTournament();`,context);
+  assert.match(content.innerHTML,/Summer Cup/);
+  assert.doesNotMatch(content.innerHTML,/Loading tournament/);
+}
+"""
+        result = subprocess.run([shutil.which("node"), "-e", script,
+                                 str(Path(__file__).resolve().parents[1] / "templates/webapp.html")],
+                                input=json.dumps(data), text=True, capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_tournament_payload(self):
         status, data = self._post("/api/webapp/tournament")
         self.assertEqual(status, 200, data)
@@ -247,7 +289,7 @@ class WebappTournamentTests(unittest.TestCase):
 
     # ── /tournament/stats ───────────────────────────────────────────────
     def test_stats_boards_and_mvp(self):
-        self._post("/api/webapp/tournament")  # triggers the recompute
+        self._post("/api/webapp/tournament")  # reads persisted aggregates
         status, data = self._post("/api/webapp/tournament/stats",
                                   {"tournament_id": self.tid})
         self.assertEqual(status, 200, data)

@@ -9335,7 +9335,7 @@ let tnStats = null;         // /api/webapp/tournament/stats payload
 let tnSub = 'overview';
 let tnSeg = 'results';      // matches: results | upcoming
 let tnBoard = 'runs';
-let tnLoading = false;
+let tnRequest = 0;
 try {
   tnSub = sessionStorage.getItem('tn_sub') || tnSub;
   tnBoard = sessionStorage.getItem('tn_board') || tnBoard;
@@ -9374,30 +9374,40 @@ async function loadTournament(force = false) {
   const el = document.getElementById('tn-content');
   if (!tnId && tnLive.length) tnId = tnLive[0].id;
   renderTnSwitch();
-  if (tnData && !force && tnData.tournament.id === tnId) { renderTournament(); }
-  else el.innerHTML = `<div class="empty"><div class="spinner"></div><div style="margin-top:0.6rem;">Loading tournament…</div></div>`;
-  if (tnLoading) return;
-  tnLoading = true;
-  const { ok, data } = await api('/api/webapp/tournament', tnId ? { tournament_id: tnId } : {});
-  tnLoading = false;
-  if (!ok) {
-    if (!tnData) el.innerHTML = `<div class="empty">❌ ${escapeHtml(data.message || 'Could not load the tournament')}</div>`;
-    return;
-  }
-  if (Array.isArray(data.live_tournaments)) {
-    updateTournamentTab({ live: data.live_tournaments.length > 0, tournaments: data.live_tournaments });
-  }
-  if (!data.live) {
+  const cached = tnData && !force && tnData.tournament.id === tnId;
+  if (!cached) el.innerHTML = `<div class="empty"><div class="spinner"></div><div style="margin-top:0.6rem;">Loading tournament…</div></div>`;
+  // Each selection owns its response; an older request must not replace it.
+  const request = ++tnRequest;
+  const id = tnId;
+  try {
+    if (cached) renderTournament();
+    const { ok, data } = await api('/api/webapp/tournament', id ? { tournament_id: id } : {});
+    if (request !== tnRequest) return;
+    if (!ok) throw new Error(data.message || 'Could not load the tournament');
+    if (Array.isArray(data.live_tournaments)) {
+      updateTournamentTab({ live: data.live_tournaments.length > 0, tournaments: data.live_tournaments });
+    }
+    if (!data.live) {
+      tnData = null;
+      el.innerHTML = `<div class="empty"><div class="icon">🏟️</div>No tournament is live right now.</div>`;
+      return;
+    }
+    if (!data.tournament || !Array.isArray(data.table) || !Array.isArray(data.fixtures)) {
+      throw new Error('The tournament response was incomplete. Please try again.');
+    }
+    tnData = data;
+    tnId = data.tournament.id;
+    renderTnSwitch();
+    if (force) tnStats = null;
+    renderTournament();
+    if (['overview', 'stats', 'mvp'].includes(tnSub)) loadTnStats();
+  } catch (error) {
+    if (request !== tnRequest) return;
+    console.error('Tournament loading failed', error);
     tnData = null;
-    el.innerHTML = `<div class="empty"><div class="icon">🏟️</div>No tournament is live right now.</div>`;
-    return;
+    el.innerHTML = `<div class="empty">❌ ${escapeHtml(error.message || 'Could not load the tournament')}
+      <div style="margin-top:0.6rem;"><button class="chip" onclick="loadTournament(true)">Try again</button></div></div>`;
   }
-  tnData = data;
-  tnId = data.tournament.id;
-  renderTnSwitch();
-  if (force) tnStats = null;
-  renderTournament();
-  if (['overview', 'stats', 'mvp'].includes(tnSub)) loadTnStats();
 }
 
 async function loadTnStats() {
