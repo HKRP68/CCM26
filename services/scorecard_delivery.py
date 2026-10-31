@@ -1278,15 +1278,15 @@ async def record_and_send(bot, chat_id, match_id, cards,
 
 
 async def send_summary_card(bot, chat_id, match_id, png, *, payload=None,
-                            caption=None, **kwargs):
+                            caption=None, cache_file_id=True, **kwargs):
     """Archive and send a summary card that a mode drew itself.
 
     /cipl, the Challenge League and the Super Over draw their own summary card
     rather than going through :func:`record_and_send`. They used to post it with
     one bare ``send_photo`` and keep nothing: a single timeout or flood-control
     answer lost the card, and ``/lastscorecard`` had no row to rebuild it from,
-    so it said there was no scorecard at all. This gives them the same path as
-    /playmatch: the payload is stored first, the send is retried, the
+    so it said there was no scorecard at all. This keeps a replayable payload
+    while delivery proceeds independently: the send is retried, the
     ``file_id`` is cached, and when there is no image at all the numbers go out
     as text.
 
@@ -1294,22 +1294,31 @@ async def send_summary_card(bot, chat_id, match_id, png, *, payload=None,
     a summary). Without it the card is still sent with retries, just not
     archived. ``kwargs`` pass through to ``send_photo`` (e.g. ``reply_markup``).
 
+    Set ``cache_file_id=False`` for a fast rendering that may omit unavailable
+    artwork, so /lastscorecard redraws from the full payload on its next replay.
+
     Returns the sent ``Message`` or ``None``.
     """
+    archive_task = None
     if payload is not None and match_id is not None:
-        record_cards(match_id, chat_id, [{
+        archive_task = asyncio.create_task(asyncio.to_thread(record_cards, match_id, chat_id, [{
             "card_type": CARD_SUMMARY, "innings": WHOLE_MATCH,
             "caption": caption, "payload": payload,
-        }])
+        }]))
 
-    if not png:
-        if payload is not None:
-            await send_text_fallback(bot, chat_id, [
-                {"card_type": CARD_SUMMARY, "payload": payload}])
-        return None
-
-    msg = await send_photo_with_retry(
-        bot, chat_id, lambda: io.BytesIO(png), caption=caption, **kwargs)
+    # Telegram delivery and archival are independent. A slow DB must not hold
+    # back the photo; still finish storing its replay payload on failed sends.
+    try:
+        if not png:
+            if payload is not None:
+                await send_text_fallback(bot, chat_id, [
+                    {"card_type": CARD_SUMMARY, "payload": payload}])
+            return None
+        msg = await send_photo_with_retry(
+            bot, chat_id, lambda: io.BytesIO(png), caption=caption, **kwargs)
+    finally:
+        if archive_task is not None:
+            await archive_task
     if msg is None:
         logger.error("match %s summary card never reached chat %s — "
                      "recoverable via /lastscorecard", match_id, chat_id)
@@ -1317,9 +1326,9 @@ async def send_summary_card(bot, chat_id, match_id, png, *, payload=None,
     if payload is not None and match_id is not None:
         file_id = None
         try:
-            if msg.photo:
+            if cache_file_id and msg.photo:
                 file_id = msg.photo[-1].file_id
         except Exception:
             logger.debug("file_id capture failed (non-fatal)", exc_info=True)
-        mark_delivered(match_id, WHOLE_MATCH, CARD_SUMMARY, file_id=file_id)
+        await asyncio.to_thread(mark_delivered, match_id, WHOLE_MATCH, CARD_SUMMARY, file_id=file_id)
     return msg

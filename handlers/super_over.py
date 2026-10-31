@@ -374,8 +374,17 @@ async def _send_main_scorecard(context, so, result, caption):
     state = so.get("main_state")
     if not state or state.get('standalone_super_over'):
         return False
+    # Rendering adds private payload/POTM fields; keep them off the state that
+    # the finalization worker is using.
+    from copy import deepcopy
+    state = deepcopy(state)
     try:
-        from handlers.cipl_play import _build_cipl_summary_image
+        from handlers.cipl_play import _build_cipl_summary_image, _cipl_potm_select
+        # The winning side can change the award after a tie; resolve its portrait
+        # from the final result without waiting for career-credit persistence.
+        best = _cipl_potm_select(state, None if result.get("tie") else result.get("winner"))
+        if best and best.get("player_id"):
+            state["potm_player_id"] = best["player_id"]
         # Offload the CPU-bound Pillow render so it doesn't block the event loop.
         img = await asyncio.to_thread(_build_cipl_summary_image, state, result)
         # Archived and retried like every other summary card, so a dropped
@@ -386,13 +395,13 @@ async def _send_main_scorecard(context, so, result, caption):
         if img:
             msg = await scorecard_delivery.send_summary_card(
                 context.bot, so["chat_id"], so.get("mid"), img,
-                payload=payload, caption=caption,
+                payload=payload, caption=caption, cache_file_id=False,
                 reply_markup=_spectate_markup(so))
             return msg is not None
         if payload and so.get("mid") is not None:
             # No image: keep the values so /lastscorecard can try the render
             # again, and let the caller post its own text scorecard.
-            scorecard_delivery.record_cards(so["mid"], so["chat_id"], [{
+            await asyncio.to_thread(scorecard_delivery.record_cards, so["mid"], so["chat_id"], [{
                 "card_type": scorecard_delivery.CARD_SUMMARY,
                 "innings": scorecard_delivery.WHOLE_MATCH,
                 "caption": caption, "payload": payload}])
@@ -429,11 +438,13 @@ def _build_super_over_card(so):
             from services import card_identity
             session = card_identity.open_session()
             try:
-                visuals = card_identity.summary_visuals(
-                    session,
-                    inn1_team=a.get("team"), inn2_team=b.get("team"),
-                    inn1_user_id=a.get("team_uid"), inn2_user_id=b.get("team_uid"),
-                    include_style=False)
+                from services.tg_storage_service import local_assets_only
+                with local_assets_only():
+                    visuals = card_identity.summary_visuals(
+                        session,
+                        inn1_team=a.get("team"), inn2_team=b.get("team"),
+                        inn1_user_id=a.get("team_uid"), inn2_user_id=b.get("team_uid"),
+                        include_style=False)
             finally:
                 session.close()
         except Exception:
@@ -1894,243 +1905,268 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
         await _finalize_practice(context, so, winner_uid, loser_uid, margin_text, margin)
         return
 
-    # Reward + finalise the Match row.
-    prize = None
-    session = get_session()
+    # Keep rewards, standings, quests and the final snapshot off the bot loop.
+    archive_loop = asyncio.get_running_loop()
+
+    def _finalize_db():
+        prize = None
+        injury_news = ""
+        session = get_session()
+        try:
+            m = session.get(Match, mid)
+            if m:
+                m.status = "completed"
+                m.completed_at = datetime.utcnow()
+                mark_end(m, END_COMPLETED)
+                m.winner_id = winner_uid
+                m.loser_id = loser_uid
+                m.margin_type = "super over"
+                m.margin_value = 0
+            try:
+                from services.match_rewards import award_match_rewards_core
+                overs = so["main"].get("overs") or 20
+                # A /letsplay or /wpm mismatch flagged for anti stat-farming counts
+                # for nothing — no coins/gems and no W/L record or streak for the
+                # Super-Over-decided match (award returns zeros).
+                count_result = not bool((so.get("main_state") or {}).get("stats_disabled"))
+                w_coins, w_gems, l_coins, l_gems = award_match_rewards_core(
+                    session, winner_uid, loser_uid, overs, is_vsbot=False,
+                    count_result=count_result)
+                prize = {"wc": w_coins, "wg": w_gems, "lc": l_coins, "lg": l_gems}
+            except Exception:
+                logger.exception("Super Over reward award failed (%s)", mid)
+            # Snapshot the final scorecard / Arena board while the live MatchState
+            # still exists (cleanup_state below removes it) so the Super-Over-decided
+            # match stays viewable in the Mini App — same as the normal completion.
+            try:
+                from services.match_webapp_service import save_final_scorecard
+                save_final_scorecard(
+                    session, mid,
+                    result_text=f"{win['name']} {result_phrase} (Super Over)",
+                    extra_innings=_super_over_miniapp_innings(so),
+                    super_over=_super_over_summary(so, win["name"], margin_text),
+                    archive_loop=archive_loop)
+            except Exception:
+                logger.exception("Super Over final scorecard snapshot failed (%s)", mid)
+            # Record the tournament result if the main match was an official tournament
+            # match — the Super Over winner is the tournament winner.
+            #
+            # This reads "main_state", the finished live match state, and NOT "main":
+            # that one is only the two-line scoreline built for the tie announcement,
+            # and it carries no tournament_id, no match_id and no per-player stats.
+            # Reading it meant every Super-Over-decided tournament match was silently
+            # dropped — the standings never moved and the fixture stayed 'live'
+            # forever, which is exactly what the tournament dashboard showed.
+            try:
+                main_state = so.get("main_state") or {}
+                if main_state.get("tournament_id"):
+                    from services import tournament_service
+                    tm = tournament_service.record_tournament_match(
+                        session, main_state, winner_user_id=winner_uid,
+                        result_text=f"{win['name']} won (Super Over)")
+                    if tm is None:
+                        # Nothing was recorded (no open fixture, or a duplicate).
+                        # Free the fixture this match reserved so it goes back to
+                        # 'scheduled' and can be replayed or entered by hand, rather
+                        # than sitting on the dashboard as a match still in progress.
+                        _release_reserved_fixture(session, main_state, mid)
+                    # Injuries (when the tournament has them on) ride back on the
+                    # recorded row. Render inside the session — the rows are detached
+                    # by the time the announcement below is built.
+                    report = getattr(tm, "_injury_report", None) if tm else None
+                    if report:
+                        from services import injury_service
+                        injury_news = injury_service.render_report(
+                            session, main_state["tournament_id"], report)
+                    news = tournament_service.schedule_news(session, tm)
+                    if news:
+                        injury_news = (f"{injury_news}\n\n{news}"
+                                       if injury_news else news)
+            except Exception:
+                logger.exception("tournament Super Over recording failed (%s)", mid)
+            # Record the CL Tour series result — a Super Over decides a tied tour
+            # match, so the winner here is the series winner. Like the tournament
+            # block above, the tags live on the saved live state under "main_state".
+            try:
+                cl_state = so.get("main_state") or {}
+                if cl_state.get("cl_tour_match_id"):
+                    from services.cl_tour_service import record_cl_match_result
+                    # Savepoint-isolate so a flush failure can't roll back the Super
+                    # Over finalization committed just below.
+                    with session.begin_nested():
+                        record_cl_match_result(
+                            session, cl_state["cl_tour_match_id"], winner_uid)
+            except Exception:
+                logger.exception("CL tour Super Over recording failed (%s)", mid)
+            # Auction League fixture decided by the Super Over.
+            try:
+                al_state = so.get("main_state") or {}
+                if al_state.get("auction_league"):
+                    from services import auction_league_service as _als
+                    with session.begin_nested():
+                        _als.record_user_result(session, al_state,
+                                                winner_user_id=winner_uid)
+            except Exception:
+                logger.exception("auction league Super Over recording failed (%s)", mid)
+            # Player-of-the-Match career credit — taken from the MAIN match (same as
+            # the reward text) with the Super Over winner as the winning team, so
+            # /statscl's POTM(s) count reflects Super-Over-decided matches too.
+            try:
+                from handlers.cipl_play import _cipl_potm_select, _record_cipl_potm
+                main_state = so.get("main_state") or {}
+                # An unranked match (a /letsplay mismatch, /lpmulti) earns no POTM
+                # credit — same gate as the normal completion path.
+                if not main_state.get("stats_disabled"):
+                    best = _cipl_potm_select(main_state, win["name"])
+                    if best and best.get("player_id"):
+                        _record_cipl_potm(session, main_state, best)
+            except Exception:
+                logger.exception("Super Over POTM career credit failed (%s)", mid)
+            # ── Match-end quest tracking ──
+            # A tied match never reaches the ordinary finalize — it returns early to
+            # start the Super Over — so this is the only place the tie-breaker's
+            # match can credit quests. Both sides get the main match's events off
+            # the same shared tracker, and the winner also gets 'super_over_won'.
+            try:
+                from services.quest_service import (
+                    track_user_match_quests, safe_track, match_counts_for_quests)
+                from models import User as _QUser
+                main_state = so.get("main_state") or {}
+                for uid in (main_state.get("inn1_bat_team_id"),
+                            main_state.get("inn1_bowl_team_id")):
+                    if not uid:
+                        continue
+                    qu = session.get(_QUser, uid)
+                    track_user_match_quests(session, main_state, qu,
+                                            uid == winner_uid, False, winner_uid)
+                if match_counts_for_quests(main_state):
+                    safe_track(session, winner_uid, "super_over_won", 1)
+            except Exception:
+                logger.exception("Super Over quest tracking failed (%s)", mid)
+
+            # ── Pitch record ──
+            # A tie returns before the ordinary finalize, so this is the only place
+            # a Super-Over-decided match can reach /pitchstats. The main match's
+            # state is what gets recorded — the tie-breaker over is a separate
+            # contest and does not belong in a surface's run rate — with the Super
+            # Over's winner standing in as the result. record_match is idempotent
+            # on match_id, so this is safe even if the main path also wrote a row.
+            try:
+                from services import pitch_stats
+                main_state = so.get("main_state") or {}
+                if m and main_state:
+                    pitch_stats.record_match(
+                        session, m, main_state,
+                        {"tie": False, "winner": win["name"], "loser": lose["name"],
+                         "winner_id": winner_uid,
+                         "margin_type": margin_type, "margin": margin})
+            except Exception:
+                logger.exception("Super Over pitch stats recording failed (%s)", mid)
+
+            # Ranked ladder and rivalry (services.post_match)
+            # — idempotent, and isolated in its own savepoint.
+            if m:
+                from services.post_match import process_completed_match
+                process_completed_match(
+                    session, m,
+                    count_result=not bool((so.get("main_state") or {}).get("stats_disabled")),
+                    state=so.get("main_state"))
+
+            session.commit()
+        except Exception:
+            session.rollback()
+            prize, injury_news = None, ""
+            logger.exception("Super Over finalisation failed (%s)", mid)
+        finally:
+            session.close()
+
+        return prize, injury_news
+
+    # Freeze presentation inputs before accounting adds POTM/quest fields to the
+    # main state. Copying a dict while the worker mutates it can fail mid-copy.
+    from copy import deepcopy
+    presentation = dict(so, main_state=deepcopy(so.get("main_state")))
+    finalization = asyncio.create_task(asyncio.to_thread(_finalize_db))
+
     try:
-        m = session.get(Match, mid)
-        if m:
-            m.status = "completed"
-            m.completed_at = datetime.utcnow()
-            mark_end(m, END_COMPLETED)
-            m.winner_id = winner_uid
-            m.loser_id = loser_uid
-            m.margin_type = "super over"
-            m.margin_value = 0
+        # Winner announcement.
+        mvp_name, mvp_line = _super_over_mvp(so, winner_uid)
+        mvp_block = ""
+        if mvp_name:
+            mvp_block = (f"\n\n⭐ <b>Super Over Star:</b> {html.escape(str(mvp_name))}"
+                         f"\n   <i>{html.escape(str(mvp_line))}</i>")
+        countback_block = ""
+        turning_points = _turning_points(so)
+        recap = ''
+        if turning_points:
+            recap = '\n\n🎬 <b>Super Over turning points</b>\n' + '\n'.join(
+                f"• SO {p['round']} · {html.escape(p['team'])} {p['score']} — {html.escape(p['text'])}"
+                for p in turning_points)
+        if decided_by in _COUNTBACK_TEXT:
+            w_six, w_four = _innings_totals(so, winner_uid)[2:]
+            l_six, l_four = _innings_totals(so, loser_uid)[2:]
+            countback_block = (
+                f"\n\n⚖️ <b>Scores level — decided on countback</b>\n"
+                f"   {html.escape(win['name'])}: {w_six}×6️⃣ {w_four}×4️⃣\n"
+                f"   {html.escape(lose['name'])}: {l_six}×6️⃣ {l_four}×4️⃣")
         try:
-            from services.match_rewards import award_match_rewards_core
-            overs = so["main"].get("overs") or 20
-            # A /letsplay or /wpm mismatch flagged for anti stat-farming counts
-            # for nothing — no coins/gems and no W/L record or streak for the
-            # Super-Over-decided match (award returns zeros).
-            count_result = not bool((so.get("main_state") or {}).get("stats_disabled"))
-            w_coins, w_gems, l_coins, l_gems = award_match_rewards_core(
-                session, winner_uid, loser_uid, overs, is_vsbot=False,
-                count_result=count_result)
-            prize = {"wc": w_coins, "wg": w_gems, "lc": l_coins, "lg": l_gems}
+            await context.bot.send_message(
+                so["chat_id"],
+                "🏆 <b>SUPER OVER RESULT</b>\n\n"
+                f"{_so_scoreline(so, winner_uid)}\n"
+                f"{_so_scoreline(so, loser_uid)}\n\n"
+                f"🎉 {_mention(win['tg'], win['name'])} (<b>{html.escape(win['name'])}</b>) "
+                "win the Super Over!\n\n"
+                f"🏆 Match Winner: <b>{html.escape(win['name'])}</b>"
+                f"{countback_block}"
+                f"{mvp_block}"
+                f"{recap}",
+                parse_mode="HTML")
         except Exception:
-            logger.exception("Super Over reward award failed (%s)", mid)
-        # Snapshot the final scorecard / Arena board while the live MatchState
-        # still exists (cleanup_state below removes it) so the Super-Over-decided
-        # match stays viewable in the Mini App — same as the normal completion.
-        try:
-            from services.match_webapp_service import save_final_scorecard
-            save_final_scorecard(
-                session, mid,
-                result_text=f"{win['name']} {result_phrase} (Super Over)",
-                extra_innings=_super_over_miniapp_innings(so),
-                super_over=_super_over_summary(so, win["name"], margin_text))
-        except Exception:
-            logger.exception("Super Over final scorecard snapshot failed (%s)", mid)
-        # Record the tournament result if the main match was an official tournament
-        # match — the Super Over winner is the tournament winner.
-        #
-        # This reads "main_state", the finished live match state, and NOT "main":
-        # that one is only the two-line scoreline built for the tie announcement,
-        # and it carries no tournament_id, no match_id and no per-player stats.
-        # Reading it meant every Super-Over-decided tournament match was silently
-        # dropped — the standings never moved and the fixture stayed 'live'
-        # forever, which is exactly what the tournament dashboard showed.
-        try:
-            main_state = so.get("main_state") or {}
-            if main_state.get("tournament_id"):
-                from services import tournament_service
-                tm = tournament_service.record_tournament_match(
-                    session, main_state, winner_user_id=winner_uid,
-                    result_text=f"{win['name']} won (Super Over)")
-                if tm is None:
-                    # Nothing was recorded (no open fixture, or a duplicate).
-                    # Free the fixture this match reserved so it goes back to
-                    # 'scheduled' and can be replayed or entered by hand, rather
-                    # than sitting on the dashboard as a match still in progress.
-                    _release_reserved_fixture(session, main_state, mid)
-                # Injuries (when the tournament has them on) ride back on the
-                # recorded row. Render inside the session — the rows are detached
-                # by the time the announcement below is built.
-                report = getattr(tm, "_injury_report", None) if tm else None
-                if report:
-                    from services import injury_service
-                    injury_news = injury_service.render_report(
-                        session, main_state["tournament_id"], report)
-                news = tournament_service.schedule_news(session, tm)
-                if news:
-                    injury_news = (f"{injury_news}\n\n{news}"
-                                   if injury_news else news)
-        except Exception:
-            logger.exception("tournament Super Over recording failed (%s)", mid)
-        # Record the CL Tour series result — a Super Over decides a tied tour
-        # match, so the winner here is the series winner. Like the tournament
-        # block above, the tags live on the saved live state under "main_state".
-        try:
-            cl_state = so.get("main_state") or {}
-            if cl_state.get("cl_tour_match_id"):
-                from services.cl_tour_service import record_cl_match_result
-                # Savepoint-isolate so a flush failure can't roll back the Super
-                # Over finalization committed just below.
-                with session.begin_nested():
-                    record_cl_match_result(
-                        session, cl_state["cl_tour_match_id"], winner_uid)
-        except Exception:
-            logger.exception("CL tour Super Over recording failed (%s)", mid)
-        # Auction League fixture decided by the Super Over.
-        try:
-            al_state = so.get("main_state") or {}
-            if al_state.get("auction_league"):
-                from services import auction_league_service as _als
-                with session.begin_nested():
-                    _als.record_user_result(session, al_state,
-                                            winner_user_id=winner_uid)
-        except Exception:
-            logger.exception("auction league Super Over recording failed (%s)", mid)
-        # Player-of-the-Match career credit — taken from the MAIN match (same as
-        # the reward text) with the Super Over winner as the winning team, so
-        # /statscl's POTM(s) count reflects Super-Over-decided matches too.
-        try:
-            from handlers.cipl_play import _cipl_potm_select, _record_cipl_potm
-            main_state = so.get("main_state") or {}
-            # An unranked match (a /letsplay mismatch, /lpmulti) earns no POTM
-            # credit — same gate as the normal completion path.
-            if not main_state.get("stats_disabled"):
-                best = _cipl_potm_select(main_state, win["name"])
-                if best and best.get("player_id"):
-                    _record_cipl_potm(session, main_state, best)
-        except Exception:
-            logger.exception("Super Over POTM career credit failed (%s)", mid)
-        # ── Match-end quest tracking ──
-        # A tied match never reaches the ordinary finalize — it returns early to
-        # start the Super Over — so this is the only place the tie-breaker's
-        # match can credit quests. Both sides get the main match's events off
-        # the same shared tracker, and the winner also gets 'super_over_won'.
-        try:
-            from services.quest_service import (
-                track_user_match_quests, safe_track, match_counts_for_quests)
-            from models import User as _QUser
-            main_state = so.get("main_state") or {}
-            for uid in (main_state.get("inn1_bat_team_id"),
-                        main_state.get("inn1_bowl_team_id")):
-                if not uid:
-                    continue
-                qu = session.get(_QUser, uid)
-                track_user_match_quests(session, main_state, qu,
-                                        uid == winner_uid, False, winner_uid)
-            if match_counts_for_quests(main_state):
-                safe_track(session, winner_uid, "super_over_won", 1)
-        except Exception:
-            logger.exception("Super Over quest tracking failed (%s)", mid)
+            logger.exception("Super Over winner announcement failed (%s)", mid)
 
-        # ── Pitch record ──
-        # A tie returns before the ordinary finalize, so this is the only place
-        # a Super-Over-decided match can reach /pitchstats. The main match's
-        # state is what gets recorded — the tie-breaker over is a separate
-        # contest and does not belong in a surface's run rate — with the Super
-        # Over's winner standing in as the result. record_match is idempotent
-        # on match_id, so this is safe even if the main path also wrote a row.
+        # Main scorecard image — same main-match scores, result now reads
+        # "X won the match by N runs/wickets" instead of "Match Tied".
+        sent_main = await _send_main_scorecard(
+            context, presentation,
+            {"tie": False, "winner": win["name"], "margin": margin,
+             "margin_type": margin_type,
+             # A countback win has no run/wicket margin, so hand the card the
+             # finished phrase rather than letting it print "won by 0 sixes".
+             "margin_text": margin_text if decided_by in _COUNTBACK_TEXT else None},
+            caption=f"🏆 <b>{html.escape(win['name'])} {html.escape(result_phrase)}</b>")
+        if not sent_main:
+            # Image unavailable — fall back to the text combined scorecard (scores
+            # only; prize/POTM live in the reward message below).
+            try:
+                await context.bot.send_message(
+                    so["chat_id"], _final_scorecard(so, win, None), parse_mode="HTML")
+            except Exception:
+                logger.exception("Super Over text scorecard failed (%s)", mid)
+
+        # Super Over scorecard image (titled "SUPER OVER").
         try:
-            from services import pitch_stats
-            main_state = so.get("main_state") or {}
-            if m and main_state:
-                pitch_stats.record_match(
-                    session, m, main_state,
-                    {"tie": False, "winner": win["name"], "loser": lose["name"],
-                     "winner_id": winner_uid,
-                     "margin_type": margin_type, "margin": margin})
+            # Offload the CPU-bound Pillow render so it doesn't block the event loop.
+            so_img = await asyncio.to_thread(_build_super_over_card, so)
+            if so_img:
+                from services import scorecard_delivery
+                await scorecard_delivery.send_photo_with_retry(
+                    context.bot, so["chat_id"], lambda: BytesIO(so_img),
+                    caption=f"🔥 <b>Super Over</b> — {html.escape(win['name'])} {margin_text}",
+                    reply_markup=_spectate_markup(so))
         except Exception:
-            logger.exception("Super Over pitch stats recording failed (%s)", mid)
+            logger.exception("Super Over: sending super-over card failed (%s)", mid)
 
-        # Ranked ladder and rivalry (services.post_match)
-        # — idempotent, and isolated in its own savepoint.
-        if m:
-            from services.post_match import process_completed_match
-            process_completed_match(
-                session, m,
-                count_result=not bool((so.get("main_state") or {}).get("stats_disabled")),
-                state=so.get("main_state"))
-
-        session.commit()
-    except Exception:
-        session.rollback()
-        logger.exception("Super Over finalisation failed (%s)", mid)
     finally:
-        session.close()
-
-    # Winner announcement.
-    mvp_name, mvp_line = _super_over_mvp(so, winner_uid)
-    mvp_block = ""
-    if mvp_name:
-        mvp_block = (f"\n\n⭐ <b>Super Over Star:</b> {html.escape(str(mvp_name))}"
-                     f"\n   <i>{html.escape(str(mvp_line))}</i>")
-    countback_block = ""
-    turning_points = _turning_points(so)
-    recap = ''
-    if turning_points:
-        recap = '\n\n🎬 <b>Super Over turning points</b>\n' + '\n'.join(
-            f"• SO {p['round']} · {html.escape(p['team'])} {p['score']} — {html.escape(p['text'])}"
-            for p in turning_points)
-    if decided_by in _COUNTBACK_TEXT:
-        w_six, w_four = _innings_totals(so, winner_uid)[2:]
-        l_six, l_four = _innings_totals(so, loser_uid)[2:]
-        countback_block = (
-            f"\n\n⚖️ <b>Scores level — decided on countback</b>\n"
-            f"   {html.escape(win['name'])}: {w_six}×6️⃣ {w_four}×4️⃣\n"
-            f"   {html.escape(lose['name'])}: {l_six}×6️⃣ {l_four}×4️⃣")
-    await context.bot.send_message(
-        so["chat_id"],
-        "🏆 <b>SUPER OVER RESULT</b>\n\n"
-        f"{_so_scoreline(so, winner_uid)}\n"
-        f"{_so_scoreline(so, loser_uid)}\n\n"
-        f"🎉 {_mention(win['tg'], win['name'])} (<b>{html.escape(win['name'])}</b>) "
-        "win the Super Over!\n\n"
-        f"🏆 Match Winner: <b>{html.escape(win['name'])}</b>"
-        f"{countback_block}"
-        f"{mvp_block}"
-        f"{recap}"
-        + (f"\n\n{injury_news}" if injury_news else ""),
-        parse_mode="HTML")
-
-    # Super Over scorecard image (titled "SUPER OVER").
-    try:
-        # Offload the CPU-bound Pillow render so it doesn't block the event loop.
-        so_img = await asyncio.to_thread(_build_super_over_card, so)
-        if so_img:
-            from services import scorecard_delivery
-            await scorecard_delivery.send_photo_with_retry(
-                context.bot, so["chat_id"], lambda: BytesIO(so_img),
-                caption=f"🔥 <b>Super Over</b> — {html.escape(win['name'])} {margin_text}",
-                reply_markup=_spectate_markup(so))
-    except Exception:
-        logger.exception("Super Over: sending super-over card failed (%s)", mid)
-
-    # Main scorecard image — same main-match scores, result now reads
-    # "X won the match by N runs/wickets" instead of "Match Tied".
-    sent_main = await _send_main_scorecard(
-        context, so,
-        {"tie": False, "winner": win["name"], "margin": margin,
-         "margin_type": margin_type,
-         # A countback win has no run/wicket margin, so hand the card the
-         # finished phrase rather than letting it print "won by 0 sixes".
-         "margin_text": margin_text if decided_by in _COUNTBACK_TEXT else None},
-        caption=f"🏆 <b>{html.escape(win['name'])} {html.escape(result_phrase)}</b>")
-    if not sent_main:
-        # Image unavailable — fall back to the text combined scorecard (scores
-        # only; prize/POTM live in the reward message below).
-        await context.bot.send_message(
-            so["chat_id"], _final_scorecard(so, win, None), parse_mode="HTML")
+        # Presentation errors must not orphan the accounting worker.
+        prize, injury_news = await finalization
 
     # Final match-reward message — ALWAYS sent (independent of whether the images
     # rendered) so the coins/gems from award_match_rewards_core and the Player of
     # the Match are never lost. Carries the spectate button like the cards.
     await context.bot.send_message(
-        so["chat_id"], _final_reward_text(so, win, lose, prize, margin_text),
+        so["chat_id"], (_final_reward_text(so, win, lose, prize, margin_text)
+                        + (f"\n\n{injury_news}" if injury_news else "")),
         parse_mode="HTML", reply_markup=_spectate_markup(so),
         disable_web_page_preview=True)
 

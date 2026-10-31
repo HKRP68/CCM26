@@ -640,7 +640,10 @@ def test_super_over_mvp_can_be_a_bowler():
     assert "2-4" in line
 
 
-def test_scorecard_images_sent_tie_superover_and_winner():
+def test_scorecard_images_sent_tie_superover_and_winner(monkeypatch):
+    # This fake session implements reward commits, not ranked/rivalry tables.
+    from services import post_match
+    monkeypatch.setattr(post_match, 'process_completed_match', lambda *a, **kw: None)
     import handlers.cipl_play as cipl_play
     random.seed(11)
     _patch_finalize(so_mod)
@@ -722,7 +725,8 @@ def test_finalize_persists_super_over_innings():
     captured = {}
 
     def fake_save(session, match_id, result_text=None, extra_innings=None,
-                  super_over=None):
+                  super_over=None, archive_loop=None):
+        captured["archive_loop"] = archive_loop
         captured["result_text"] = result_text
         captured["extra_innings"] = extra_innings
         captured["super_over"] = super_over
@@ -737,6 +741,7 @@ def test_finalize_persists_super_over_innings():
         asyncio.run(start_super_over(ctx, mid, state))
         asyncio.run(_play_match(ctx, mid))
         assert captured.get("extra_innings") is not None
+        assert captured["archive_loop"] is not None
         assert len(captured["extra_innings"]) == 2  # two Super Over innings
         assert "Super Over" in (captured.get("result_text") or "")
         assert "won the match by" in (captured.get("result_text") or "")

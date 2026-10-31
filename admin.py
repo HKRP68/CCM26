@@ -26698,6 +26698,59 @@ def admin_league_season_manual(series_id):
         db.close()
 
 
+# Read-only public score centre. Writes and admin controls remain under login.
+@app.route('/stats')
+def public_stats():
+    from services import live_records
+    db = get_session()
+    try:
+        return render_template('public_stats.html', competitions=live_records.series_list(db), series=None)
+    finally:
+        db.close()
+
+
+@app.route('/stats/<int:series_id>')
+def public_stats_series(series_id):
+    from services import live_records
+    from services.league_season_service import season_title
+    db = get_session()
+    try:
+        series = live_records.public_series(db, series_id)
+        if series is None:
+            abort(404)
+        try:
+            seasons, selected = live_records.selected_season(db, series, request.args.get('season'))
+        except ValueError:
+            abort(404)
+        return render_template('public_stats.html', competitions=live_records.series_list(db),
+            series=series, seasons=seasons, selected=selected, season_title=season_title)
+    finally:
+        db.close()
+
+
+@app.route('/api/stats/<int:series_id>/<kind>')
+def public_stats_feed(series_id, kind):
+    from services import live_records
+    if kind not in ('live', 'records'):
+        abort(404)
+    db = get_session()
+    try:
+        series = live_records.public_series(db, series_id)
+        if series is None:
+            abort(404)
+        try:
+            _, selected = live_records.selected_season(db, series, request.args.get('season'))
+        except ValueError:
+            abort(404)
+        data = (live_records.live_snapshot(db, series, selected) if kind == 'live' else
+                live_records.confirmed_snapshot(db, series, selected))
+        response = jsonify(data)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    finally:
+        db.close()
+
+
 # ── Season records ───────────────────────────────────────────────────
 
 

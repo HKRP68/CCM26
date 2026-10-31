@@ -14,6 +14,7 @@ and only then does the over-by-over flow begin in the chat.
 """
 
 import asyncio
+import copy
 import html
 import logging
 import os
@@ -933,7 +934,13 @@ def _miniapp_row(state):
         kb = play_match_keyboard(
             state["match_id"], chat_id=state.get("chat_id"),
             is_private=bool(state.get("is_private")), label=label)
-        return [list(row) for row in kb.inline_keyboard] if kb else None
+        rows = [list(row) for row in kb.inline_keyboard] if kb else []
+        if state.get("tournament_id") and not state.get("is_private"):
+            from services.match_broadcast import _webapp_host
+            host = _webapp_host()
+            if host:
+                rows.append([InlineKeyboardButton("🏏 Live scores & stats", url=f"{host}/stats")])
+        return rows or None
     except Exception:
         logger.exception("cipl view-match button build failed")
         return None
@@ -4024,6 +4031,8 @@ async def _simulate_live_final_over(context, mid, state, pause):
         except Exception:
             logger.exception("cipl final-ball reveal failed for match %s", mid)
         if not summary.get("delivery_paused"):
+            # Suspense is for an undecided chase. Once the innings has ended,
+            # hand straight over to result delivery without another pause.
             if not cipl_match.is_innings_over(state):
                 await asyncio.sleep(FINAL_OVER_BALL_DELAY)
             return summary
@@ -4103,16 +4112,19 @@ async def _run_over(context, mid, state):
     else:
         await _ss(context, mid, state, next_action=A_PICK_CIPL_BOWLER)
 
-    # The summary post is cosmetic — a failed send must not stop the innings from
-    # ending below, or the match would sit on a consumed approach pick and the
-    # next /rcl would bowl another over.
-    try:
-        await _post_tracked(context, state,
-                            _render_over_summary(state, summary),
-                            keyboard=_between_overs_row(state, mid))
-        await _clear_final_ball(context, state)
-    except Exception:
-        logger.exception("cipl over summary post failed for match %s", mid)
+    # The final match summary contains the finished score. Do not put another
+    # cosmetic over post and Telegram deletion in front of the result.
+    if not (innings_over and state.get("innings", 1) == 2):
+        # The summary post is cosmetic — a failed send must not stop the innings from
+        # ending below, or the match would sit on a consumed approach pick and the
+        # next /rcl would bowl another over.
+        try:
+            await _post_tracked(context, state,
+                                _render_over_summary(state, summary),
+                                keyboard=_between_overs_row(state, mid))
+            await _clear_final_ball(context, state)
+        except Exception:
+            logger.exception("cipl over summary post failed for match %s", mid)
 
     from services import league_records
     await league_records.announce(context, state)
@@ -5013,14 +5025,13 @@ async def _complete_match(context, mid, state):
             message_id = getattr(sent, "message_id", None)
             if isinstance(message_id, int) and message_id > 0:
                 result_msg_id = state["result_msg_id"] = message_id
-                # A retry after interruption can enrich the existing result.
-                await _ss(context, mid, state)
+                # Keep retries in this process on the same result immediately.
+                # The terminal save below persists this cosmetic ID after the
+                # summary; another database round trip must not gate the image.
         except StaleMatchState:
             raise
         except Exception:
             logger.exception("cipl early result message failed for match %s", mid)
-
-    await _delete_prev_over(context, state)
 
     # Persist career stats + finalize the Match row. This is a batch of blocking
     # DB work (stat persistence, Match update, reward payout, scorecard snapshot,
@@ -5204,12 +5215,59 @@ async def _complete_match(context, mid, state):
             session.commit()
         except Exception:
             session.rollback()
+            prize, injury_news = None, ""
             logger.exception("cipl match finalization failed for match %s", mid)
         finally:
             session.close()
         return prize, injury_news
 
-    prize_info, injury_news = await asyncio.to_thread(_finalize_match_db)
+    # Render and accounting are independent. Neither the initial result nor
+    # summary delivery waits for standings, rewards, quests or record rebuilds.
+    render_state = copy.deepcopy(state)
+    try:
+        best = _cipl_potm_select(render_state, None if result["tie"] else result.get("winner"))
+        if best:
+            render_state["potm_player_id"] = best.get("player_id")
+    except Exception:
+        logger.exception("cipl early summary POTM failed for match %s", mid)
+    render_task = asyncio.create_task(asyncio.to_thread(
+        _build_cipl_summary_image, render_state, result))
+    finalize_task = asyncio.create_task(asyncio.to_thread(_finalize_match_db))
+    sent_summary = None
+    channel_summary_image = None
+    try:
+        try:
+            # Pillow rendering is CPU-bound and synchronous — run it off the event
+            # loop so finishing one Challenge League match doesn't freeze every
+            # other user's buttons (and other live matches) while the card renders.
+            img = await render_task
+            for key in ("_summary_payload", "_summary_potm"):
+                if key in render_state:
+                    state[key] = render_state[key]
+            channel_summary_image = img
+            # Archived alongside delivery and retried on the way out: one timeout
+            # or flood-control answer used to lose this card for good,
+            # and with nothing stored /lastscorecard had nothing to bring back.
+            # The payload is popped so it doesn't ride along in the saved state.
+            from services import scorecard_delivery as _sd
+            # The Spectate / View Match button rides on the scorecard image too,
+            # so anyone can open this exact match in the Mini App.
+            sent_summary = await _sd.send_summary_card(
+                context.bot, state["chat_id"], mid, img,
+                payload=state.pop("_summary_payload", None), cache_file_id=False,
+                caption=_summary_caption(state, result_line),
+                reply_markup=InlineKeyboardMarkup(miniapp_row)
+                if miniapp_row else None)
+            if not img:
+                logger.warning("cipl match summary image came back empty for match %s", mid)
+        except Exception:
+            logger.exception("cipl match summary image failed for match %s", mid)
+
+    finally:
+        # Even an unexpected presentation failure must join accounting and
+        # consume the renderer before this handler releases its live state.
+        prize_info, injury_news = await finalize_task
+        await asyncio.gather(render_task, return_exceptions=True)
 
     # Add rewards/news after finalization to the result already visible in chat. A failed
     # initial send gets another chance here without preventing finalization.
@@ -5232,12 +5290,9 @@ async def _complete_match(context, mid, state):
             except Exception:
                 logger.exception("cipl result message failed for match %s", mid)
 
-    # Snapshot the final scorecard + Arena board ON the event loop. This persists
-    # a MatchScorecard row AND schedules the Telegram text-archive upload, which
-    # relies on asyncio.get_running_loop() — so it must NOT run in a worker thread
-    # (there get_running_loop() raises and the MatchNo<id>.txt upload is silently
-    # skipped). The single-row write is cheap; it must run while the live state
-    # still exists (before the cleanup below).
+    # Save the durable final scorecard off-loop, retaining the main loop for
+    # its best-effort text archive upload.
+    archive_loop = asyncio.get_running_loop()
     try:
         if result["tie"]:
             result_text = "Match Tied"
@@ -5245,9 +5300,8 @@ async def _complete_match(context, mid, state):
             result_text = (f"{result['winner']} beat {result['loser']} by "
                            f"{result['margin']} {result['margin_type']}")
         # POTM for the archived MatchNo<id>.txt. Computed here rather than
-        # reusing the card's copy below because the card is rendered later, in a
-        # worker thread, and the archive is written from this block — the
-        # selection is a cheap pure read of the finished state either way.
+        # reusing the renderer's private copy. Selection is a cheap pure read
+        # of the finished state and agrees with the delivered summary.
         try:
             archive_potm = _cipl_calc_potm(
                 state, None if result["tie"] else result.get("winner"))
@@ -5255,16 +5309,18 @@ async def _complete_match(context, mid, state):
             logger.exception("cipl archive POTM failed for match %s", mid)
             archive_potm = None
         from services.match_webapp_service import save_final_scorecard
-        sc_session = get_session()
-        try:
-            save_final_scorecard(sc_session, mid, result_text=result_text,
-                                 potm=archive_potm)
-            sc_session.commit()
-        except Exception:
-            sc_session.rollback()
-            raise
-        finally:
-            sc_session.close()
+        def snapshot():
+            sc_session = get_session()
+            try:
+                save_final_scorecard(sc_session, mid, result_text=result_text,
+                                     potm=archive_potm, archive_loop=archive_loop)
+                sc_session.commit()
+            except Exception:
+                sc_session.rollback()
+                raise
+            finally:
+                sc_session.close()
+        await asyncio.to_thread(snapshot)
     except Exception:
         logger.exception("cipl final scorecard snapshot failed for match %s", mid)
 
@@ -5280,39 +5336,6 @@ async def _complete_match(context, mid, state):
             _fire_milestones_async(context, state["chat_id"], [(key, fields)])
         except Exception:
             logger.exception("cipl match_won milestone failed for match %s", mid)
-
-    channel_summary_image = None
-    try:
-        # Pillow rendering is CPU-bound and synchronous — run it off the event
-        # loop so finishing one Challenge League match doesn't freeze every
-        # other user's buttons (and other live matches) while the card renders.
-        img = await asyncio.to_thread(_build_cipl_summary_image, state, result)
-        channel_summary_image = img
-        # Archived before the send and retried on the way out, like /playmatch:
-        # one timeout or flood-control answer used to lose this card for good,
-        # and with nothing stored /lastscorecard had nothing to bring back.
-        # The payload is popped so it doesn't ride along in the saved state.
-        from services import scorecard_delivery as _sd
-        # The Spectate / View Match button rides on the scorecard image too,
-        # so anyone can open this exact match in the Mini App.
-        sent_summary = await _sd.send_summary_card(
-            context.bot, state["chat_id"], mid, img,
-            payload=state.pop("_summary_payload", None),
-            caption=_summary_caption(state, result_line),
-            reply_markup=InlineKeyboardMarkup(miniapp_row)
-            if miniapp_row else None)
-        if sent_summary is not None:
-            # The winner's own collectible card, straight after the summary
-            # whose POTM strip names them.
-            award = state.get("_summary_potm") or {}
-            await _sd.send_potm_card(
-                context.bot, state["chat_id"],
-                player_id=state.get("potm_player_id"),
-                name=award.get("name"), team=award.get("team"))
-        elif not img:
-            logger.warning("cipl match summary image came back empty for match %s", mid)
-    except Exception:
-        logger.exception("cipl match summary image failed for match %s", mid)
 
     # Ranked / rivalry card, then the highlights reel — both
     # best-effort and read from what the finalize above already stored.
@@ -5335,6 +5358,20 @@ async def _complete_match(context, mid, state):
         await _send_match_analysis(context, mid, state, result, miniapp_row)
     except Exception:
         logger.exception("cipl match analysis failed for match %s", mid)
+
+    # Collectible artwork is optional and follows the scorecard and analysis.
+    if sent_summary is not None:
+        try:
+            from services import scorecard_delivery as _sd
+            award = state.get("_summary_potm") or {}
+            await _sd.send_potm_card(
+                context.bot, state["chat_id"], player_id=state.get("potm_player_id"),
+                name=award.get("name"), team=award.get("team"))
+        except Exception:
+            logger.exception("cipl POTM card failed for match %s", mid)
+
+    # Cosmetic Telegram cleanup follows every result/recap artifact.
+    await _delete_prev_over(context, state)
 
     # Unpin the match-start announcement now that the match is over.
     pinned = state.get("pinned_msg_id")
@@ -5823,7 +5860,11 @@ def _build_cipl_summary_image(state, result):
         "inn2_challenge_team_id": _cipl_challenge_team_id(state, inn2_uid),
     }
     state["_summary_payload"] = payload
-    return scorecard_delivery.render_card(scorecard_delivery.CARD_SUMMARY, payload)
+    # The initial card must never wait for remote artwork restoration. Local
+    # and database assets still render; /lastscorecard can restore missing art.
+    from services.tg_storage_service import local_assets_only
+    with local_assets_only():
+        return scorecard_delivery.render_card(scorecard_delivery.CARD_SUMMARY, payload)
 
 
 def _innings_scorecard(state, innings_label=""):

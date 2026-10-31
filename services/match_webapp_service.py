@@ -2563,7 +2563,7 @@ def build_scorecard(match_id, user_id):
 # ══════════════════ Persisted scorecards (completed matches) ═════════
 
 def save_final_scorecard(session, match_id, result_text=None, extra_innings=None,
-                         super_over=None, potm=None):
+                         super_over=None, potm=None, archive_loop=None):
     """Snapshot the final scorecard from live state into MatchScorecard so it
     can be viewed read-only after the match. Idempotent. Call at completion,
     BEFORE the live state is cleaned up.
@@ -2573,6 +2573,8 @@ def save_final_scorecard(session, match_id, result_text=None, extra_innings=None
     ``super_over`` (optional) is a compact summary (winner + per-innings totals)
     surfaced on the Mini App result screen. ``potm`` (optional) is
     ``(name, stats, team)`` for the archived text scorecard's byline.
+    ``archive_loop`` lets a worker persist this row while scheduling the text
+    upload safely on the caller's running event loop.
     """
     import json as _json
     from models import MatchScorecard
@@ -2610,7 +2612,7 @@ def save_final_scorecard(session, match_id, result_text=None, extra_innings=None
     # storage channel — once, on first save — for every match that flows through
     # this seam (Mini-App /cm, /cipl, Super Over), complete or abandoned.
     _archive_text_scorecard(match_id, all_innings, result_text, super_over,
-                            potm=potm)
+                            potm=potm, archive_loop=archive_loop)
     return True
 
 
@@ -2747,8 +2749,11 @@ def _build_text_scorecard(match_id, innings, result_text=None, super_over=None,
     return "\n".join(out).rstrip() + "\n"
 
 
+_TEXT_ARCHIVE_TASKS = set()
+
+
 def _archive_text_scorecard(match_id, innings, result_text, super_over=None,
-                            potm=None):
+                            potm=None, archive_loop=None):
     """Best-effort, non-blocking upload of the text scorecard. Schedules the
     async upload on the running loop; silently no-ops if storage is unconfigured
     or there is no running loop."""
@@ -2763,10 +2768,17 @@ def _archive_text_scorecard(match_id, innings, result_text, super_over=None,
         text = _build_text_scorecard(match_id, innings, result_text, super_over,
                                      state=mwa.get_state(match_id), potm=potm)
         import asyncio
-        loop = asyncio.get_running_loop()
-        loop.create_task(tg_storage_service.upload_text_async(
-            text, f"MatchNo{match_id}.txt",
-            caption=f"📄 Scorecard · Match {match_id}"))
+        loop = archive_loop or asyncio.get_running_loop()
+        def schedule_upload():
+            task = loop.create_task(tg_storage_service.upload_text_async(
+                text, f"MatchNo{match_id}.txt",
+                caption=f"📄 Scorecard · Match {match_id}"))
+            _TEXT_ARCHIVE_TASKS.add(task)
+            task.add_done_callback(_TEXT_ARCHIVE_TASKS.discard)
+        if archive_loop is not None:
+            loop.call_soon_threadsafe(schedule_upload)
+        else:
+            schedule_upload()
     except RuntimeError:
         pass  # no running event loop — skip (caller is sync/non-async context)
     except Exception:

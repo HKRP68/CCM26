@@ -397,6 +397,31 @@ class SendSummaryCardTests(unittest.TestCase):
                 "inn2_wickets": 9, "inn2_overs": "20", "winner_name": "A",
                 "win_margin_text": "won by 30 runs"}
 
+    def test_photo_does_not_wait_for_archive_database(self):
+        async def run():
+            archive_started = asyncio.Event()
+            photo_sent = asyncio.Event()
+            real_record = sd.record_cards
+
+            async def worker(fn, *args, **kwargs):
+                if fn is real_record:
+                    archive_started.set()
+                    await photo_sent.wait()
+                return fn(*args, **kwargs)
+
+            async def send_photo(*args, **kwargs):
+                await archive_started.wait()
+                photo_sent.set()
+                return MagicMock(photo=[MagicMock(file_id='fast')])
+
+            bot = MagicMock(send_photo=AsyncMock(side_effect=send_photo))
+            with unittest.mock.patch.object(sd.asyncio, 'to_thread', side_effect=worker):
+                await asyncio.wait_for(sd.send_summary_card(
+                    bot, -700, 300, b'png', payload=dict(self._PAYLOAD)), timeout=2)
+            self.assertTrue(sd.load_cards(300)[0]['delivered'])
+
+        _run(run())
+
     def test_it_is_archived_and_its_file_id_cached(self):
         bot = MagicMock()
         bot.send_photo = AsyncMock(return_value=MagicMock(
@@ -413,6 +438,16 @@ class SendSummaryCardTests(unittest.TestCase):
         self.assertEqual(stored[0]["file_id"], "sum-id")
         self.assertTrue(stored[0]["delivered"])
         self.assertEqual(sd.latest_match_id_for_chat(-700), 301)
+
+    def test_fast_render_payload_remains_replayable_without_caching_incomplete_art(self):
+        bot = MagicMock(send_photo=AsyncMock(return_value=MagicMock(
+            photo=[MagicMock(file_id='fast-render')])) )
+        _run(sd.send_summary_card(bot, -700, 305, b'png', payload=dict(self._PAYLOAD),
+                                  cache_file_id=False))
+        stored = sd.load_cards(305)[0]
+        self.assertTrue(stored['delivered'])
+        self.assertIsNone(stored['file_id'])
+        self.assertEqual(stored['payload'], self._PAYLOAD)
 
     def test_a_send_that_never_lands_is_still_replayable(self):
         bot = MagicMock()

@@ -481,11 +481,68 @@ class RecordTests(pages.PageCase):
         async def inline(fn, *args, **kwargs): return fn(*args, **kwargs)
         bot = SimpleNamespace(send_document=AsyncMock(), send_message=AsyncMock())
         with patch.object(P.asyncio, 'to_thread', side_effect=inline):
-            asyncio.run(P.dispatch(SimpleNamespace(bot=bot)))
+            asyncio.run(P.dispatch(SimpleNamespace(bot=bot), ids=[row.id]))
         self.session.expire_all()
         self.assertEqual('cancelled', row.status)
         bot.send_document.assert_not_awaited()
         bot.send_message.assert_not_awaited()
+
+    def test_appending_match_does_not_rebuild_earlier_record_publications(self):
+        from services import league_record_publications as P, tournament_service as TS
+        from models import TournamentMatch
+        row = P.queue_record_update(self.session, dict(self.state(), match_id=self.game.match_id))
+        self.session.commit()
+        later = TournamentMatch(tournament_id=self.tour.id, match_id=95000+self.tag,
+            team1_id=self.a.id, team2_id=self.b.id, winner_team_id=self.a.id,
+            inn1_runs=200, inn2_runs=150, status='completed', stage='league',
+            completed_at=datetime(2026, 2, 1), scorecard_json=json.dumps([self.line('Alpha', 150, 60)]))
+        self.session.add(later); self.session.flush()
+        with patch.object(P, 'record_changes', side_effect=AssertionError('historical rebuild')):
+            TS.recompute_tournament(self.session, self.tour.id, appended_match=later)
+        self.assertEqual(0, row.revision)
+
+    def test_backdated_append_still_updates_later_record_summary(self):
+        from services import league_record_publications as P, tournament_service as TS
+        from models import TournamentMatch
+        row = P.queue_record_update(self.session, dict(self.state(), match_id=self.game.match_id))
+        row.status = 'sent'; row.message_id = 60
+        self.session.commit()
+        previous_text = row.text
+        earlier = TournamentMatch(tournament_id=self.tour.id, match_id=95000+self.tag,
+            team1_id=self.a.id, team2_id=self.b.id, winner_team_id=self.a.id,
+            inn1_runs=300, inn2_runs=150, status='completed', stage='league',
+            completed_at=datetime(2025, 12, 1), scorecard_json=json.dumps([self.line('Historic Star', 250, 90)]))
+        self.session.add(earlier); self.session.flush()
+        TS.recompute_tournament(self.session, self.tour.id, appended_match=earlier)
+        self.assertEqual(1, row.revision)
+        self.assertEqual('pending', row.status)
+        self.assertNotEqual(previous_text, row.text)
+        self.assertEqual(60, row.message_id)
+
+    def test_old_season_append_still_updates_later_season_record_summary(self):
+        from services import league_record_publications as P, tournament_service as TS
+        from models import TournamentMatch
+        _, tour, _ = self.earlier_season()
+        row = P.queue_record_update(self.session, dict(self.state(), match_id=self.game.match_id))
+        self.session.commit()
+        added = TournamentMatch(tournament_id=tour.id, match_id=95000+self.tag,
+            team1_id=self.a.id, team2_id=self.b.id, winner_team_id=self.a.id,
+            inn1_runs=350, inn2_runs=150, status='completed', stage='league',
+            completed_at=datetime(2025, 2, 1), scorecard_json=json.dumps([self.line('Alpha', 300, 90)]))
+        self.session.add(added); self.session.flush()
+        TS.recompute_tournament(self.session, tour.id, appended_match=added)
+        self.assertEqual(1, row.revision)
+
+    def test_cancelled_legacy_report_is_not_rebuilt_on_correction(self):
+        from services import league_record_publications as P
+        row = P.queue_match_file(self.session, dict(self.state(), match_id=self.game.match_id))
+        row.status = 'cancelled'
+        self.session.commit()
+        self.game.scorecard_json = json.dumps([self.line('Alpha', 100, 60)])
+        self.session.flush()
+        with patch.object(P, '_match_file_metadata', side_effect=AssertionError('cancelled report rebuilt')):
+            self.assertEqual(0, P.reconcile(self.session, self.tour.id))
+        self.assertEqual('cancelled', row.status)
 
     def test_no_record_change_queues_nothing(self):
         from services import league_record_publications as P

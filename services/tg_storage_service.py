@@ -23,9 +23,37 @@ opt-in: it works without storage setup, just less efficiently.
 
 import os
 import logging
+from contextlib import contextmanager
+from contextvars import ContextVar
 from telegram import Bot, InputFile
 
 logger = logging.getLogger(__name__)
+
+# Rendering the first match summary must not wait for optional CDN artwork.
+# This is per task/thread context, never a process-wide switch: regular card
+# requests and /lastscorecard keep restoring their durable art concurrently.
+_REMOTE_DOWNLOADS_ALLOWED = ContextVar('tg_remote_downloads_allowed', default=True)
+
+
+def remote_downloads_allowed():
+    """Whether this call may restore an optional asset from Telegram."""
+    return _REMOTE_DOWNLOADS_ALLOWED.get()
+
+
+@contextmanager
+def local_assets_only():
+    """Use existing disk/database artwork without waiting for Telegram restores.
+
+    asyncio.to_thread copies the context, so the scope can surround either the
+    render call itself or the awaited worker call. Always restore the caller's
+    previous value, including when nested or when a renderer fails.
+    """
+    token = _REMOTE_DOWNLOADS_ALLOWED.set(False)
+    try:
+        yield
+    finally:
+        _REMOTE_DOWNLOADS_ALLOWED.reset(token)
+
 
 def _seconds_setting(name, default):
     """Read a positive float timeout from the environment, or fall back.
@@ -92,7 +120,7 @@ async def download_file_bytes_async(file_id: str) -> bytes | None:
     ``None`` on configuration or Telegram errors so callers can gracefully
     fall back without breaking card generation.
     """
-    if not file_id or not _has_bot_token():
+    if not remote_downloads_allowed() or not file_id or not _has_bot_token():
         return None
     try:
         bot = Bot(token=os.getenv("BOT_TOKEN", "").strip())
@@ -120,7 +148,7 @@ def download_file_bytes_sync(file_id: str) -> bytes | None:
 
     Returns None on timeout so the caller falls back rather than breaking.
     """
-    if not file_id or not _has_bot_token():
+    if not remote_downloads_allowed() or not file_id or not _has_bot_token():
         return None
     import asyncio
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as _Timeout

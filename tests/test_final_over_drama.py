@@ -314,3 +314,17 @@ def test_run_over_drives_the_live_finale_then_finishes_once(monkeypatch):
     assert save.await_count == 7  # each of six deliveries, then the final summary state
     assert cm.balls_bowled(s) == 120
     assert "over_milestones_before" not in s
+    cp._post_tracked.assert_not_awaited()  # result has priority over cosmetic over posts
+
+
+def test_winning_delivery_has_no_extra_suspense_pause(monkeypatch):
+    s = ready(needed=1)
+    scripted(monkeypatch, [1])
+    sleep = AsyncMock()
+    monkeypatch.setattr(cp.asyncio, 'sleep', sleep)
+    monkeypatch.setattr(cp, '_ss', AsyncMock())
+    monkeypatch.setattr(cp, '_reveal_final_ball', AsyncMock())
+    asyncio.run(cp._simulate_live_final_over(None, 1, s, {}))
+    assert cm.is_innings_over(s)
+    # Pace the delivery itself, then return immediately once the winner is known.
+    assert sleep.await_count == 1

@@ -333,10 +333,10 @@ def queue_recap(session,state):
                  recap_text(session,LS.series_of(session,season),season,game),fixture_id=game['fixture_id'],fingerprint=policy_digest(session,season,game))
 
 
-def reconcile(session,tournament_id):
+def reconcile(session,tournament_id, *, appended_match=None):
     """Called inside a scorecard transaction. Only queue edits; never send."""
-    from models import LeagueRecordPublication
-    from sqlalchemy import and_, or_
+    from models import LeagueRecordPublication, TournamentMatch
+    from sqlalchemy import and_, or_, select
     from services import league_records as R, league_season_service as LS
     season=LS.season_for_tournament(session,tournament_id)
     if season is None: return 0
@@ -348,6 +348,25 @@ def reconcile(session,tournament_id):
     rows = session.query(LeagueRecordPublication).filter(or_(
         LeagueRecordPublication.season_id == season.id,
         and_(LeagueRecordPublication.season_id.in_(affected), LeagueRecordPublication.kind.in_(('match_records', 'record_summary')))))
+    # Old report files are no longer delivered; don't regenerate their Markdown
+    # on every result after dispatch has cancelled them.
+    rows = rows.filter(or_(LeagueRecordPublication.kind != 'match_records',
+                          LeagueRecordPublication.status != 'cancelled'))
+    if appended_match is not None and appended_match.completed_at is not None:
+        # Record snapshots stop at their source match, ordered by season/date/id.
+        # A later completion cannot affect earlier snapshots. NULL dates sort
+        # last in game_order, so they must remain eligible, as must publications
+        # from later seasons when an old season receives a new/backdated match.
+        earlier = select(TournamentMatch.id).where(
+            TournamentMatch.tournament_id == int(tournament_id),
+            TournamentMatch.status == 'completed',
+            TournamentMatch.completed_at.isnot(None),
+            or_(TournamentMatch.completed_at < appended_match.completed_at,
+                and_(TournamentMatch.completed_at == appended_match.completed_at,
+                     TournamentMatch.id < appended_match.id)))
+        rows = rows.filter(or_(LeagueRecordPublication.season_id != season.id,
+                              LeagueRecordPublication.fixture_id.is_(None),
+                              ~LeagueRecordPublication.fixture_id.in_(earlier)))
     for row in rows:
         if row.kind.startswith(('watch:', 'record:')): continue
         source_season = seasons[row.season_id]

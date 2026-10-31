@@ -158,7 +158,7 @@ class EndOfMatchDeliveryTests(unittest.TestCase):
         cp.cipl_match.compute_result = lambda s: result
 
         async def _to_thread(fn, *args, **kwargs):
-            if fn.__name__ == "_finalize_match_db" and finalization is not None:
+            if getattr(fn, "__name__", "") == "_finalize_match_db" and finalization is not None:
                 return await finalization()
             return fn(*args, **kwargs)
 
@@ -194,7 +194,7 @@ class EndOfMatchDeliveryTests(unittest.TestCase):
                 self.assertIn("6 wickets", text)
                 self.assertLess(text.index("beat"), text.index("<blockquote"))
                 self.assertEqual(self.state["result_msg_id"], 701)
-                self.ctx.bot.send_photo.assert_not_awaited()
+                # Summary delivery now runs alongside this blocked finalizer.
             finally:
                 release.set()
                 await task
@@ -246,6 +246,36 @@ class EndOfMatchDeliveryTests(unittest.TestCase):
         self.assertIn("+100 coins", text)
         self.assertIn("The next round is open.", text)
         self.ctx.bot.send_photo.assert_awaited_once()
+    def test_summary_is_delivered_while_accounting_is_still_running(self):
+        """A slow standings/rewards transaction cannot hold back the summary."""
+        async def run():
+            accounting_started = asyncio.Event()
+            release_accounting = asyncio.Event()
+            delivered = []
+
+            async def worker(fn, *args, **kwargs):
+                if fn.__name__ == '_finalize_match_db':
+                    accounting_started.set()
+                    await release_accounting.wait()
+                    return None, ''
+                if fn.__name__ == 'snapshot':
+                    return None
+                return fn(*args, **kwargs)
+
+            async def photo(*args, **kwargs):
+                await accounting_started.wait()
+                self.assertFalse(release_accounting.is_set())
+                delivered.append('summary')
+                release_accounting.set()
+
+            result = dict(tie=False, winner='Bot XI', loser='You', margin=6, margin_type='wickets')
+            self.ctx.bot.send_photo.side_effect = photo
+            with mock.patch.object(cp.asyncio, 'to_thread', side_effect=worker), \
+                    mock.patch.object(cp.cipl_match, 'compute_result', return_value=result):
+                await asyncio.wait_for(cp._complete_match(self.ctx, 42, self.state), timeout=2)
+            self.assertEqual(['summary'], delivered)
+
+        asyncio.run(run())
 
     def test_a_bot_match_posts_both_the_result_and_the_summary_image(self):
         self._run()

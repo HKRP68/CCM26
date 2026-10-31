@@ -1159,13 +1159,15 @@ def recompute_standings(session, tournament_id):
         tt.points += int(tt.points_adjust or 0)
 
 
-def recompute_tournament(session, tournament_id):
+def recompute_tournament(session, tournament_id, *, appended_match=None):
     """Rebuild both standings and player stats from the recorded matches."""
     recompute_standings(session, tournament_id)
     recompute_player_stats(session, tournament_id)
     session.flush()
     from services.league_record_publications import reconcile
-    reconcile(session, tournament_id)
+    reconcile(session, tournament_id, appended_match=appended_match)
+    from services.live_records import invalidate_after_commit
+    invalidate_after_commit(session)
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1764,6 +1766,7 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
             tid, getattr(t_inn1, "id", None), getattr(t_inn2, "id", None))
         return None
 
+    replacing_simulation = bool(tm is not None and tm.status == "completed" and tm.is_simulated)
     if tm is not None:
         if tm.status == "completed" and tm.is_simulated:
             # A replay of a /tsim fixture: take back what the simulated result
@@ -1805,7 +1808,9 @@ def record_tournament_match(session, state, winner_user_id=None, result_text=Non
     # Rebuild standings + per-player aggregates from all recorded matches (incl.
     # this one). Flush so the new match row is visible to the rebuild queries.
     session.flush()
-    recompute_tournament(session, tid)
+    # A fresh completion cannot change record snapshots from earlier matches.
+    # Replays replace evidence and still need the full correction pass.
+    recompute_tournament(session, tid, appended_match=None if replacing_simulation else tm)
 
     # ── Injuries ──
     # Count one match off everyone already sidelined, then roll for new knocks.
