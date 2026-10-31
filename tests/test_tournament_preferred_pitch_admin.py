@@ -245,6 +245,99 @@ class PreferredPitchAdminTests(unittest.TestCase):
         self.detail(t, {'action':'save_tournament_channels', 'channels':'invalid'})
         self.assertEqual(json.loads(t.channels_json), ['@firstchannel', '-1001234567890'])
 
+    def test_fixture_winner_can_be_selected_changed_and_cleared_from_schedule(self):
+        from services import league_schedule_service as lss
+        t = self.create()
+        lss.generate_schedule(self.session, t.id)
+        fx = lss.list_fixtures(self.session, t.id)[0]
+        fx.planned_super_overs = 2
+        self.session.commit()
+        for winner_id in (fx.team2_id, fx.team1_id, None):
+            body = self.detail(t, {
+                'action': 'set_fixture_winner', 'fixture_id': str(fx.id),
+                'planned_winner_team_id': str(winner_id) if winner_id else '',
+                'return_to': 'schedule',
+            })
+            self.assertIn('Match winner setting saved.', body)
+            self.assertEqual(fx.planned_winner_team_id, winner_id)
+            self.assertEqual(fx.planned_super_overs, 2)
+            forms = re.findall(r'<form\b[^>]*>.*?</form>', body, re.S)
+            form = next(form for form in forms
+                        if 'name="action" value="set_fixture_winner"' in form
+                        and f'name="fixture_id" value="{fx.id}"' in form)
+            self.assertIn('100% Win', form)
+            self.assertIn('name="csrf_token"', form)
+            self.assertIn('name="return_to" value="schedule"', form)
+            self.assertEqual(set(re.findall(r'<option value="([^"]*)"', form)),
+                             {'', str(fx.team1_id), str(fx.team2_id)})
+            value = str(winner_id) if winner_id else ''
+            self.assertRegex(form, rf'<option value="{value}" selected>')
+
+    def test_fixture_winner_rejects_other_teams_fixtures_and_invalid_values(self):
+        from models import TournamentTeam
+        from services import league_schedule_service as lss
+        t, other = self.create(), self.create()
+        lss.generate_schedule(self.session, t.id)
+        lss.generate_schedule(self.session, other.id)
+        self.session.commit()
+        fx = lss.list_fixtures(self.session, t.id)[0]
+        other_fx = lss.list_fixtures(self.session, other.id)[0]
+        outsider = (self.session.query(TournamentTeam)
+                    .filter(TournamentTeam.tournament_id == t.id,
+                            TournamentTeam.id.notin_([fx.team1_id, fx.team2_id]))
+                    .first())
+        self.detail(t, {'action': 'set_fixture_winner', 'fixture_id': str(fx.id),
+                        'planned_winner_team_id': str(fx.team1_id)})
+        for fixture_id, team_id in ((fx.id, outsider.id), (fx.id, other_fx.team1_id),
+                                    (fx.id, 9999999), (fx.id, 'invalid'),
+                                    (other_fx.id, other_fx.team1_id), (9999999, fx.team1_id)):
+            with self.subTest(fixture_id=fixture_id, team_id=team_id):
+                body = self.detail(t, {'action': 'set_fixture_winner',
+                                       'fixture_id': str(fixture_id),
+                                       'planned_winner_team_id': str(team_id)})
+                self.assertIn('Error:', body)
+                self.assertEqual(fx.planned_winner_team_id, fx.team1_id)
+                self.assertIsNone(other_fx.planned_winner_team_id)
+
+    def test_started_fixture_winner_cannot_be_changed_or_cleared(self):
+        from services import league_schedule_service as lss
+        t = self.create()
+        lss.generate_schedule(self.session, t.id)
+        fx = lss.list_fixtures(self.session, t.id)[0]
+        fx.planned_winner_team_id = fx.team1_id
+        self.session.commit()
+        for status in ('live', 'completed'):
+            fx.status = status
+            self.session.commit()
+            for winner_id in (str(fx.team2_id), ''):
+                with self.subTest(status=status, winner_id=winner_id):
+                    body = self.detail(t, {'action': 'set_fixture_winner',
+                                           'fixture_id': str(fx.id),
+                                           'planned_winner_team_id': winner_id})
+                    self.assertIn('Error:', body)
+                    self.assertEqual(fx.planned_winner_team_id, fx.team1_id)
+            schedule = self.client.get(f'/tournaments/{t.id}/schedule').get_data(as_text=True)
+            forms = re.findall(r'<form\b[^>]*>.*?</form>', schedule, re.S)
+            self.assertFalse(any('name="action" value="set_fixture_winner"' in form
+                                 and f'name="fixture_id" value="{fx.id}"' in form
+                                 for form in forms))
+
+    def test_fixture_winner_requires_admin_login(self):
+        from services import league_schedule_service as lss
+        t = self.create()
+        lss.generate_schedule(self.session, t.id)
+        fx = lss.list_fixtures(self.session, t.id)[0]
+        self.session.commit()
+        anonymous = self.admin.app.test_client()
+        response = anonymous.post(f'/tournaments/{t.id}', data={
+            'action': 'set_fixture_winner', 'fixture_id': str(fx.id),
+            'planned_winner_team_id': str(fx.team1_id),
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login', response.location)
+        self.session.expire_all()
+        self.assertIsNone(fx.planned_winner_team_id)
+
     def test_shared_round_pitch_can_be_created_and_edited_until_play_starts(self):
         from services import league_schedule_service as lss
         t = self.create(pitch_mode="round")

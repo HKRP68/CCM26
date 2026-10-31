@@ -599,6 +599,8 @@ def mark_bot_match(state, bot_user_id, difficulty=None, play_mode=None):
     state["tournament_team_by_user"] = {}
     state["tournament_tteam_by_user"] = {}
     state["reserved_fixture_id"] = None
+    state.pop("_planned_super_overs", None)
+    state.pop("_planned_winner_user_id", None)
     state["cl_tour_id"] = None
     state["cl_tour_match_id"] = None
     return state
@@ -2176,6 +2178,7 @@ async def begin_cipl_match(context, chat_id, match, bat_user, bowl_user,
         state["tournament_team_by_user"] = draft.get("tournament_team_by_user") or {}
         state["reserved_fixture_id"] = draft.get("reserved_fixture_id")
         state["_planned_super_overs"] = draft.get("_planned_super_overs", 0)
+        state["_planned_winner_user_id"] = draft.get("_planned_winner_user_id")
         # Carry CL Tour identity so the series score updates when the match ends.
         state["cl_tour_id"] = draft.get("cl_tour_id")
         state["cl_tour_match_id"] = draft.get("cl_tour_match_id")
@@ -4021,7 +4024,8 @@ async def _simulate_live_final_over(context, mid, state, pause):
         except Exception:
             logger.exception("cipl final-ball reveal failed for match %s", mid)
         if not summary.get("delivery_paused"):
-            await asyncio.sleep(FINAL_OVER_BALL_DELAY)
+            if not cipl_match.is_innings_over(state):
+                await asyncio.sleep(FINAL_OVER_BALL_DELAY)
             return summary
 
 
@@ -4925,10 +4929,30 @@ async def _innings_break(context, mid, state):
     await _prompt_bowler(context, mid, state, first=True)
 
 
+def _completion_text(state, result, result_line, prize_info=None, injury_news=""):
+    body = _innings_scorecard(state, innings_label='2nd Innings')
+    costly = _costliest_drop_line(state)
+    if costly:
+        body += f"\n{costly}"
+    if prize_info:
+        body += (
+            f"\n\n💰 <b>Prizes</b>\n"
+            f"🏆 {html.escape(str(result['winner']))}: +{prize_info['w_coins']:,} coins, "
+            f"+{prize_info['w_gems']} 💎\n"
+            f"🤝 {html.escape(str(result['loser']))}: +{prize_info['l_coins']:,} coins, "
+            f"+{prize_info['l_gems']} 💎")
+    text = (f"🏁 <b>Match Over</b>\n{result_line}\n"
+            f"<blockquote expandable>{body}</blockquote>")
+    if injury_news:
+        text += f"\n\n{injury_news}"
+    if _is_bot_match(state) or state.get("unranked"):
+        text += f"\n\n{UNRANKED_NOTE}"
+    return text
+
+
 async def _complete_match(context, mid, state):
-    # Clear the final over's "simulating…" prompt + summary before the result is
-    # posted — even when the chase is won mid-over, the last over message goes.
-    await _delete_prev_over(context, state)
+    # Save the deciding score before announcing it. Message cleanup, standings,
+    # rewards and archives must not hold the winner behind their own latency.
     await _ss(context, mid, state)
 
     result = cipl_match.compute_result(state)
@@ -4948,12 +4972,56 @@ async def _complete_match(context, mid, state):
                          f"it's a SUPER OVER! 🔥"),
             })
             await _ss(context, mid, state)
+            await _delete_prev_over(context, state)
             from handlers.super_over import start_super_over
             if await start_super_over(context, mid, state):
                 return
         except Exception:
             logger.exception("Super Over kickoff failed for match %s — "
                              "falling back to a tied result", mid)
+
+    try:
+        mentions = _team_user_mentions(state)
+    except Exception:
+        logger.exception("cipl result mentions failed for match %s", mid)
+        mentions = {}
+    if result["tie"]:
+        result_line = "🤝 <b>Match Tied!</b>"
+    else:
+        winner = html.escape(str(result["winner"]))
+        loser = html.escape(str(result["loser"]))
+        win_m = mentions.get(result["winner"], f"<b>{winner}</b>")
+        lose_m = mentions.get(result["loser"], loser)
+        result_line = (f"🏆 {win_m} ({winner}) beat {lose_m} ({loser}) "
+                       f"by {result['margin']} {result['margin_type']}!")
+    try:
+        miniapp_row = list(_miniapp_row(state) or [])
+        if _is_bot_match(state):
+            miniapp_row += _rematch_row(state)
+    except Exception:
+        logger.exception("cipl end-of-match keyboard build failed for match %s", mid)
+        miniapp_row = []
+    result_markup = InlineKeyboardMarkup(miniapp_row) if miniapp_row else None
+    result_msg_id = state.get("result_msg_id")
+    result_sent = bool(result_msg_id)
+    if not result_sent:
+        try:
+            sent = await context.bot.send_message(
+                state["chat_id"], _completion_text(state, result, result_line),
+                parse_mode="HTML", reply_markup=result_markup)
+            result_sent = True
+            message_id = getattr(sent, "message_id", None)
+            if isinstance(message_id, int) and message_id > 0:
+                result_msg_id = state["result_msg_id"] = message_id
+                # A retry after interruption can enrich the existing result.
+                await _ss(context, mid, state)
+        except StaleMatchState:
+            raise
+        except Exception:
+            logger.exception("cipl early result message failed for match %s", mid)
+
+    await _delete_prev_over(context, state)
+
     # Persist career stats + finalize the Match row. This is a batch of blocking
     # DB work (stat persistence, Match update, reward payout, scorecard snapshot,
     # tournament recording) — run it all in a worker thread so completing one
@@ -5143,6 +5211,27 @@ async def _complete_match(context, mid, state):
 
     prize_info, injury_news = await asyncio.to_thread(_finalize_match_db)
 
+    # Add rewards/news after finalization to the result already visible in chat. A failed
+    # initial send gets another chance here without preventing finalization.
+    if not result_sent or prize_info or injury_news:
+        text = _completion_text(state, result, result_line, prize_info, injury_news)
+        updated = False
+        if result_msg_id:
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=state["chat_id"], message_id=result_msg_id, text=text,
+                    parse_mode="HTML", reply_markup=result_markup)
+                updated = True
+            except Exception:
+                logger.exception("cipl result update failed for match %s", mid)
+        if not updated:
+            try:
+                await context.bot.send_message(
+                    state["chat_id"], text, parse_mode="HTML",
+                    reply_markup=result_markup)
+            except Exception:
+                logger.exception("cipl result message failed for match %s", mid)
+
     # Snapshot the final scorecard + Arena board ON the event loop. This persists
     # a MatchScorecard row AND schedules the Telegram text-archive upload, which
     # relies on asyncio.get_running_loop() — so it must NOT run in a worker thread
@@ -5179,18 +5268,6 @@ async def _complete_match(context, mid, state):
     except Exception:
         logger.exception("cipl final scorecard snapshot failed for match %s", mid)
 
-    # "Who beat who" line uses clickable @user mentions alongside the team
-    # names: @winner (Team) beat @loser (Team).
-    mentions = _team_user_mentions(state)
-    if result["tie"]:
-        result_line = "🤝 <b>Match Tied!</b>"
-    else:
-        win_m = mentions.get(result["winner"], f"<b>{result['winner']}</b>")
-        lose_m = mentions.get(result["loser"], result["loser"])
-        result_line = (f"🏆 {win_m} ({result['winner']}) beat "
-                       f"{lose_m} ({result['loser']}) "
-                       f"by {result['margin']} {result['margin_type']}!")
-
     # The admin-configured win celebration, if one is set up.
     if not result["tie"]:
         try:
@@ -5204,50 +5281,6 @@ async def _complete_match(context, mid, state):
         except Exception:
             logger.exception("cipl match_won milestone failed for match %s", mid)
 
-    # Win/result message FIRST, then the Match Summary image — same order and
-    # card as /wpm, /wpmbot and /cm. The match-end recap body sits inside an
-    # expandable quote so the chat stays tidy.
-    body = (f"{_innings_scorecard(state, innings_label='2nd Innings')}\n\n"
-            f"{result_line}")
-    costly = _costliest_drop_line(state)
-    if costly:
-        body += f"\n{costly}"
-    if prize_info:
-        body += (
-            f"\n\n💰 <b>Prizes</b>\n"
-            f"🏆 {result['winner']}: +{prize_info['w_coins']:,} coins, "
-            f"+{prize_info['w_gems']} 💎\n"
-            f"🤝 {result['loser']}: +{prize_info['l_coins']:,} coins, "
-            f"+{prize_info['l_gems']} 💎")
-    text = f"🏁 <b>Match Over</b>\n<blockquote expandable>{body}</blockquote>"
-    # Injury news sits outside the expandable quote: a player being ruled out of
-    # the next two matches is the thing both captains most need to see, and
-    # burying it inside a collapsed recap means nobody reads it until selection.
-    if injury_news:
-        text += f"\n\n{injury_news}"
-    # Build the end-of-match keyboard defensively: this runs BEFORE the result
-    # message and the Match Summary card, so anything raising here would cost
-    # the player both of them (and leave the live state uncleaned).
-    try:
-        miniapp_row = list(_miniapp_row(state) or [])
-        if _is_bot_match(state):
-            text += f"\n\n{UNRANKED_NOTE}"
-            miniapp_row += _rematch_row(state)
-        elif state.get("unranked"):
-            # /lpmulti vs a user — unranked, but no bot to rematch.
-            text += f"\n\n{UNRANKED_NOTE}"
-    except Exception:
-        logger.exception("cipl end-of-match keyboard build failed for match %s", mid)
-        miniapp_row = []
-    # The result is already committed at this point — a failed send must not
-    # abort the function, or the live state would stay parked on the last
-    # (consumed) approach pick and /rcl would bowl an over past the limit.
-    try:
-        await context.bot.send_message(state["chat_id"], text, parse_mode="HTML",
-                                       reply_markup=InlineKeyboardMarkup(miniapp_row)
-                                       if miniapp_row else None)
-    except Exception:
-        logger.exception("cipl result message failed for match %s", mid)
     channel_summary_image = None
     try:
         # Pillow rendering is CPU-bound and synchronous — run it off the event

@@ -50,6 +50,19 @@
       <option value="2" {{ 'selected' if fx.planned_super_overs == 2 else '' }}>Two Super Overs</option>
     </select></label>
   </form>
+  {% if fx.team1_id and fx.team2_id %}
+  <form method="POST" action="{{ url_for('admin_tournament_detail', tournament_id=t.id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="return_to" value="schedule">
+    <input type="hidden" name="action" value="set_fixture_winner"><input type="hidden" name="fixture_id" value="{{ fx.id }}">
+    <label>100% Win <select name="planned_winner_team_id" onchange="this.form.submit()">
+      <option value="" {{ 'selected' if not fx.planned_winner_team_id else '' }}>Normal</option>
+      {% for tid in [fx.team1_id, fx.team2_id] %}
+      {% set tt = tt_map.get(tid) %}
+      {% if tt %}<option value="{{ tt.id }}" {{ 'selected' if fx.planned_winner_team_id == tt.id else '' }}>{{ tt.name }}</option>{% endif %}
+      {% endfor %}
+    </select></label>
+  </form>
+  {% endif %}
 </div>
 {% endmacro %}
 {% set is_ko_only = (t.knockout_type == 'pure_knockout') %}

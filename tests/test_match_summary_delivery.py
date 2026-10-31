@@ -11,6 +11,7 @@ is exactly why it read as "the bot matches don't generate a scorecard".
 
 import asyncio
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock
 
@@ -143,12 +144,13 @@ class EndOfMatchDeliveryTests(unittest.TestCase):
         self.ctx.bot.send_photo = AsyncMock()
         self.ctx.bot.send_document = AsyncMock()
         self.ctx.bot.unpin_chat_message = AsyncMock()
+        self.ctx.bot.edit_message_text = AsyncMock()
 
     def tearDown(self):
         for name, value in self._saved.items():
             setattr(cp, name, value)
 
-    def _run(self):
+    async def _complete(self, finalization=None):
         result = {"tie": False, "winner": "Bot XI", "loser": "You",
                   "margin": 6, "margin_type": "wickets"}
         real_compute = cp.cipl_match.compute_result
@@ -156,14 +158,94 @@ class EndOfMatchDeliveryTests(unittest.TestCase):
         cp.cipl_match.compute_result = lambda s: result
 
         async def _to_thread(fn, *args, **kwargs):
+            if fn.__name__ == "_finalize_match_db" and finalization is not None:
+                return await finalization()
             return fn(*args, **kwargs)
 
         cp.asyncio.to_thread = _to_thread
         try:
-            asyncio.run(cp._complete_match(self.ctx, 42, self.state))
+            await cp._complete_match(self.ctx, 42, self.state)
         finally:
             cp.cipl_match.compute_result = real_compute
             cp.asyncio.to_thread = real_finalize
+
+    def _run(self, finalization=None):
+        asyncio.run(self._complete(finalization))
+
+    def test_the_winner_is_visible_while_finalization_is_still_running(self):
+        """A blocked stats/reward transaction must not hide a decided result."""
+        self.ctx.bot.send_message.return_value = SimpleNamespace(message_id=701)
+
+        async def scenario():
+            entered, release = asyncio.Event(), asyncio.Event()
+
+            async def finalize():
+                entered.set()
+                await release.wait()
+                return None, ""
+
+            task = asyncio.create_task(self._complete(finalize))
+            try:
+                await asyncio.wait_for(entered.wait(), timeout=1)
+                self.assertFalse(task.done())
+                self.ctx.bot.send_message.assert_awaited_once()
+                text = self.ctx.bot.send_message.await_args.args[1]
+                self.assertIn("Bot XI", text)
+                self.assertIn("6 wickets", text)
+                self.assertLess(text.index("beat"), text.index("<blockquote"))
+                self.assertEqual(self.state["result_msg_id"], 701)
+                self.ctx.bot.send_photo.assert_not_awaited()
+            finally:
+                release.set()
+                await task
+
+        asyncio.run(scenario())
+
+    def test_a_failed_early_result_send_does_not_stop_finalization(self):
+        self.ctx.bot.send_message.side_effect = [
+            RuntimeError("Telegram offline"), SimpleNamespace(message_id=702)]
+        finalize = AsyncMock(return_value=(None, ""))
+        self._run(finalize)
+        finalize.assert_awaited_once()
+        self.assertEqual(self.ctx.bot.send_message.await_count, 2)
+        self.ctx.bot.send_photo.assert_awaited_once()
+
+    def test_rewards_and_tournament_news_update_the_existing_result(self):
+        self.ctx.bot.send_message.return_value = SimpleNamespace(message_id=703)
+        prize = {"w_coins": 100, "w_gems": 2, "l_coins": 20, "l_gems": 1}
+        self._run(AsyncMock(return_value=(prize, "The next round is open.")))
+        self.ctx.bot.send_message.assert_awaited_once()
+        self.ctx.bot.edit_message_text.assert_awaited_once()
+        edit = self.ctx.bot.edit_message_text.await_args.kwargs
+        self.assertEqual(edit["chat_id"], self.state["chat_id"])
+        self.assertEqual(edit["message_id"], 703)
+        self.assertIn("+100 coins", edit["text"])
+        self.assertIn("The next round is open.", edit["text"])
+        self.assertEqual(edit["reply_markup"],
+                         self.ctx.bot.send_message.await_args.kwargs["reply_markup"])
+
+    def test_retry_reuses_the_saved_result_message(self):
+        self.state["result_msg_id"] = 704
+        prize = {"w_coins": 100, "w_gems": 2, "l_coins": 20, "l_gems": 1}
+        finalize = AsyncMock(return_value=(prize, ""))
+        self._run(finalize)
+        finalize.assert_awaited_once()
+        self.ctx.bot.send_message.assert_not_awaited()
+        self.ctx.bot.edit_message_text.assert_awaited_once()
+        self.assertEqual(
+            self.ctx.bot.edit_message_text.await_args.kwargs["message_id"], 704)
+
+    def test_a_failed_result_edit_sends_the_enriched_result(self):
+        self.ctx.bot.send_message.return_value = SimpleNamespace(message_id=705)
+        self.ctx.bot.edit_message_text.side_effect = RuntimeError("message deleted")
+        prize = {"w_coins": 100, "w_gems": 2, "l_coins": 20, "l_gems": 1}
+        self._run(AsyncMock(return_value=(prize, "The next round is open.")))
+        self.ctx.bot.edit_message_text.assert_awaited_once()
+        self.assertEqual(self.ctx.bot.send_message.await_count, 2)
+        text = self.ctx.bot.send_message.await_args.args[1]
+        self.assertIn("+100 coins", text)
+        self.assertIn("The next round is open.", text)
+        self.ctx.bot.send_photo.assert_awaited_once()
 
     def test_a_bot_match_posts_both_the_result_and_the_summary_image(self):
         self._run()

@@ -248,6 +248,36 @@ def test_live_wicket_saves_the_batsman_pick_and_stops(monkeypatch):
     assert save.await_args.kwargs["next_action"] == A_PICK_CIPL_NEW_BATSMAN
 
 
+@pytest.mark.parametrize("needed,marks", [(1, [4]), (24, [0] * 6)])
+def test_deciding_delivery_has_no_extra_pause(monkeypatch, needed, marks):
+    s = ready(needed=needed)
+    scripted(monkeypatch, marks)
+    sleep = AsyncMock()
+    monkeypatch.setattr(cp.asyncio, "sleep", sleep)
+    monkeypatch.setattr(cp, "_ss", AsyncMock())
+    monkeypatch.setattr(cp, "_reveal_final_ball", AsyncMock())
+    asyncio.run(cp._simulate_live_final_over(None, 1, s, {}))
+    assert cm.is_innings_over(s)
+    # Keep the delay before each ball, without a further pause after the result.
+    assert sleep.await_count == len(marks)
+    assert all(call.args == (cp.FINAL_OVER_BALL_DELAY,)
+               for call in sleep.await_args_list)
+
+
+def test_nonterminal_wicket_keeps_its_reveal_pause(monkeypatch):
+    s = ready()
+    scripted(monkeypatch, ["W"])
+    sleep = AsyncMock()
+    monkeypatch.setattr(cp.asyncio, "sleep", sleep)
+    monkeypatch.setattr(cp, "_ss", AsyncMock())
+    monkeypatch.setattr(cp, "_reveal_final_ball", AsyncMock())
+    summary = asyncio.run(cp._simulate_live_final_over(
+        None, 1, s, {"pause_on_wicket": True}))
+    assert summary["paused"]
+    assert not cm.is_innings_over(s)
+    assert sleep.await_count == 2
+
+
 def test_only_the_live_final_over_uses_pacing():
     s = ready()
     assert cp._live_final_over(s)

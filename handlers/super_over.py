@@ -1362,13 +1362,24 @@ async def _resolve_ball(context, mid, shot):
         variation=inn["pending"]["delivery"], length=inn["pending"]["length"],
         delivery_repeat=inn["repeat"], wickets=inn['wickets'])
 
-    if int(so.get('main_state', {}).get('_planned_super_overs') or 0) >= 2 and so['so_number'] == 1 and so.get('target') is None:
-        from services.tournament_match_settings import cap_first_innings
-        oc = cap_first_innings(oc, inn['runs'], 36)
-    if int(so.get('main_state', {}).get('_planned_super_overs') or 0) >= 2 and so['so_number'] == 1 and so.get('target') is not None:
-        from services.tournament_match_settings import constrain_tie_outcome
-        oc = constrain_tie_outcome(oc, runs=inn['runs'], par=so['target'] - 1,
-            remaining=6 - inn['legal'], wickets=inn['wickets'], wicket_limit=2, innings_balls=6)
+    main_state = so.get('main_state') or {}
+    planned_tie = (int(main_state.get('_planned_super_overs') or 0) >= 2
+                   and so['so_number'] == 1)
+    if planned_tie:
+        if so.get('target') is None:
+            from services.tournament_match_settings import cap_first_innings
+            oc = cap_first_innings(oc, inn['runs'], 36)
+        else:
+            from services.tournament_match_settings import constrain_tie_outcome
+            oc = constrain_tie_outcome(oc, runs=inn['runs'], par=so['target'] - 1,
+                remaining=6 - inn['legal'], wickets=inn['wickets'], wicket_limit=2, innings_balls=6)
+    elif main_state.get('_planned_winner_user_id'):
+        from services.tournament_match_settings import apply_winner_outcome
+        oc = apply_winner_outcome(oc,
+            winner_is_batting=so['bat_uid'] == main_state['_planned_winner_user_id'],
+            runs=inn['runs'], target=so.get('target'), remaining=6 - inn['legal'],
+            wickets=inn['wickets'], wicket_limit=2, innings_balls=6,
+            force_legal=inn['deliveries'] + (6 - inn['legal']) >= SO_MAX_DELIVERIES)
     oc = super_over_engine.protect_dismissal(oc, free_hit=free_hit)
     deliv = inn["pending"]["delivery"] or "delivery"
     if inn["pending"]["length"]:

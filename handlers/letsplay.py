@@ -2305,11 +2305,11 @@ async def _launch_match(context, draft, decision, winner_side):
                 return
             tournament_id = tour.id
             draft["lpt_reserved_fixture_id"] = fixture_id
+            draft["lpt_team_ids"] = {host.id: host_team.id, guest.id: guest_team.id}
             if fixture_id:
                 from models import TournamentMatch
                 from services.tournament_match_settings import apply_to_draft
                 apply_to_draft(session, session.get(TournamentMatch, fixture_id), draft)
-            draft["lpt_team_ids"] = {host.id: host_team.id, guest.id: guest_team.id}
 
         settings = random_match_settings()
         if draft.get("lpt_reserved_fixture_id"):
@@ -2404,6 +2404,7 @@ async def _launch_match(context, draft, decision, winner_side):
             int(k): int(v) for k, v in (draft.get("lpt_team_ids") or {}).items()}
         state["reserved_fixture_id"] = draft.get("lpt_reserved_fixture_id")
         state["_planned_super_overs"] = draft.get("_planned_super_overs", 0)
+        state["_planned_winner_user_id"] = draft.get("_planned_winner_user_id")
         state["lpt_name"] = lpt.get("tournament_name")
     from services.player_stats_service import team_overall, is_stat_farming_mismatch
     state["bat_team_ovr"] = team_overall(bat_xi)

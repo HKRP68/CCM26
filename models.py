@@ -3082,6 +3082,8 @@ class TournamentMatch(Base):
     # means "not fixed" — the host picks, exactly as before.
     pitch_type = Column(String(20), nullable=True)
     planned_super_overs = Column(Integer, default=0, server_default="0", nullable=False)
+    planned_winner_team_id = Column(
+        Integer, ForeignKey("tournament_teams.id", ondelete="SET NULL"), nullable=True)
     # Which of the two sides is at home. Always one of team1_id / team2_id (the
     # generator defaults it to team1); shown in the fixture list and used to
     # seed the pitch in "home" pitch mode.

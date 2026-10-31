@@ -8,6 +8,26 @@ Player of the Match when available, and the match link, followed by:
 Both handles stay in the caption when a long Super Over history moves onto the
 scorecard image. Existing delivery retries and duplicate protection still apply.
 
+The website's Tournament → Schedule page now has a **100% Win** selector beside
+each unstarted fixture's **Match finish** setting. Choose either participating
+team, or **Normal** to clear the selection. The selected side wins the simulated
+match on the final legal delivery: a successful chase, or a defence by 1–3 runs.
+The setting follows the team regardless of who bats first or which registered
+captain plays it. Replacing the selected team in a fixture clears its setting.
+
+It also works alongside one or two configured Super Overs: regulation ends
+level, and the selected side wins the deciding Super Over. Deliveries are
+conditioned before scoring, so the scorecards, player figures and standings
+agree with what was played. Administrative settings remain on the website and
+are filtered from live and archived participant API responses. Manual results
+and forfeits continue to use their existing result rules.
+
+Completed approach matches announce the winner before stats, rewards and
+archives finish processing, then update that message with rewards and
+tournament news. The final delivery has no additional suspense pause. The
+Mini App's open tournament tab refreshes every five seconds while visible and
+online, including stats/MVP when a fixture changes.
+
 The existing tournament Super Over setting remains available. All Super Overs
 now share attacking final-over conditions and bounded chase pressure, using the
 same ball model for ordinary and configured matches. Ratings, shots, deliveries,

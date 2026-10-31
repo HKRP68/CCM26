@@ -3588,6 +3588,7 @@ function renderStarterGuide(onboarding = {}) {
 function navigate(screen) {
   haptic('light');
   if (currentScreen === 'auction' && screen !== 'auction') AuctionApp.stop();
+  if (currentScreen === 'tournament' && screen !== 'tournament') stopTournamentPolling();
   // Stop live-match polling whenever we leave that screen
   if (currentScreen === 'livematch' && screen !== 'livematch') {
     stopMatchPolling();
@@ -9335,7 +9336,12 @@ let tnStats = null;         // /api/webapp/tournament/stats payload
 let tnSub = 'overview';
 let tnSeg = 'results';      // matches: results | upcoming
 let tnBoard = 'runs';
+let tnLoading = false;
+let tnPollTimer = null;
 let tnRequest = 0;
+let tnStatsVersion = 0;
+let tnStatsLoadingVersion = null;
+const TN_REFRESH_MS = 5000;
 try {
   tnSub = sessionStorage.getItem('tn_sub') || tnSub;
   tnBoard = sessionStorage.getItem('tn_board') || tnBoard;
@@ -9344,11 +9350,38 @@ try {
 
 function tnRemember(k, v) { try { sessionStorage.setItem(k, v); } catch (_) {} }
 
+function tnInvalidateStats() { tnStats = null; tnStatsVersion++; }
+
+function stopTournamentPolling() {
+  clearTimeout(tnPollTimer);
+  tnPollTimer = null;
+  tnRequest++;
+  tnLoading = false;
+}
+
+function tnCanRefresh() {
+  return currentScreen === 'tournament' && !document.hidden && navigator.onLine !== false;
+}
+
+function scheduleTournamentPolling() {
+  clearTimeout(tnPollTimer);
+  tnPollTimer = tnCanRefresh() ? setTimeout(() => loadTournament(false, true), TN_REFRESH_MS) : null;
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) stopTournamentPolling();
+  else if (currentScreen === 'tournament') loadTournament(false, true);
+});
+window.addEventListener('offline', stopTournamentPolling);
+window.addEventListener('online', () => {
+  if (currentScreen === 'tournament') loadTournament(false, true);
+});
+
 function updateTournamentTab(info) {
   tnLive = (info && info.live && info.tournaments) ? info.tournaments : [];
   const tab = document.getElementById('tab-tournament');
   if (tab) tab.style.display = tnLive.length ? '' : 'none';
-  if (tnId && !tnLive.some(t => t.id === tnId)) { tnId = null; tnData = null; tnStats = null; }
+  if (tnId && !tnLive.some(t => t.id === tnId)) { tnId = null; tnData = null; tnInvalidateStats(); }
   // Tournament ended while the screen was open: back home.
   if (!tnLive.length && currentScreen === 'tournament') navigate('home');
 }
@@ -9366,27 +9399,35 @@ function renderTnSwitch() {
 function tnSelect(id) {
   if (id === tnId) return;
   haptic('light');
-  tnId = id; tnData = null; tnStats = null;
+  stopTournamentPolling();
+  tnId = id; tnData = null; tnInvalidateStats();
   loadTournament();
 }
 
-async function loadTournament(force = false) {
+async function loadTournament(force = false, background = false) {
+  clearTimeout(tnPollTimer);
+  tnPollTimer = null;
+  if (!tnCanRefresh()) return;
   const el = document.getElementById('tn-content');
   if (!tnId && tnLive.length) tnId = tnLive[0].id;
   renderTnSwitch();
-  const cached = tnData && !force && tnData.tournament.id === tnId;
-  if (!cached) el.innerHTML = `<div class="empty"><div class="spinner"></div><div style="margin-top:0.6rem;">Loading tournament…</div></div>`;
-  // Each selection owns its response; an older request must not replace it.
+  const cached = tnData && tnData.tournament.id === tnId;
+  // Each selection owns its response. A newer request can recover immediately
+  // even if an older request is still waiting for the network.
   const request = ++tnRequest;
   const id = tnId;
+  tnLoading = true;
   try {
-    if (cached) renderTournament();
+    if (cached) {
+      if (!background) renderTournament();
+    } else el.innerHTML = `<div class="empty"><div class="spinner"></div><div style="margin-top:0.6rem;">Loading tournament…</div></div>`;
     const { ok, data } = await api('/api/webapp/tournament', id ? { tournament_id: id } : {});
-    if (request !== tnRequest) return;
+    if (request !== tnRequest || id !== tnId || currentScreen !== 'tournament') return;
     if (!ok) throw new Error(data.message || 'Could not load the tournament');
     if (Array.isArray(data.live_tournaments)) {
       updateTournamentTab({ live: data.live_tournaments.length > 0, tournaments: data.live_tournaments });
     }
+    if (currentScreen !== 'tournament') return;
     if (!data.live) {
       tnData = null;
       el.innerHTML = `<div class="empty"><div class="icon">🏟️</div>No tournament is live right now.</div>`;
@@ -9395,27 +9436,41 @@ async function loadTournament(force = false) {
     if (!data.tournament || !Array.isArray(data.table) || !Array.isArray(data.fixtures)) {
       throw new Error('The tournament response was incomplete. Please try again.');
     }
+    // A new or corrected result must also refresh the stats and MVP race.
+    if (force || (tnData && JSON.stringify(tnData.fixtures) !== JSON.stringify(data.fixtures))) tnInvalidateStats();
     tnData = data;
     tnId = data.tournament.id;
     renderTnSwitch();
-    if (force) tnStats = null;
     renderTournament();
     if (['overview', 'stats', 'mvp'].includes(tnSub)) loadTnStats();
   } catch (error) {
-    if (request !== tnRequest) return;
+    if (request !== tnRequest || currentScreen !== 'tournament') return;
     console.error('Tournament loading failed', error);
-    tnData = null;
-    el.innerHTML = `<div class="empty">❌ ${escapeHtml(error.message || 'Could not load the tournament')}
-      <div style="margin-top:0.6rem;"><button class="chip" onclick="loadTournament(true)">Try again</button></div></div>`;
+    // A transient background failure keeps the last results readable. Initial
+    // loads and manual retries still replace a broken render with recovery UI.
+    if (!background || !cached) {
+      tnData = null;
+      el.innerHTML = `<div class="empty">❌ ${escapeHtml(error.message || 'Could not load the tournament')}
+        <div style="margin-top:0.6rem;"><button class="chip" onclick="loadTournament(true)">Try again</button></div></div>`;
+    }
+  } finally {
+    if (request === tnRequest) {
+      tnLoading = false;
+      scheduleTournamentPolling();
+    }
   }
 }
 
 async function loadTnStats() {
   if (!tnId) return;
   if (tnStats && tnStats.tournament_id === tnId) return;
+  if (tnStatsLoadingVersion === tnStatsVersion) return;
   const id = tnId;
+  const version = tnStatsVersion;
+  tnStatsLoadingVersion = version;
   const { ok, data } = await api('/api/webapp/tournament/stats', { tournament_id: id });
-  if (id !== tnId) return;
+  if (id !== tnId || version !== tnStatsVersion) return;
+  tnStatsLoadingVersion = null;
   tnStats = ok ? data : { tournament_id: id, error: data.message || 'Could not load stats', boards: [], mvp: [] };
   if (currentScreen === 'tournament') renderTournament();
 }

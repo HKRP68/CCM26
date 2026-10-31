@@ -80,7 +80,7 @@ def is_view_only_match(state):
 HIDDEN_PLAN_KEYS = ("bowling_approach", "batting_approach", "approach_log",
                     "inn1_approach_log", "last_bat_approach",
                     "last_bowl_approach", "bat_repeat", "bowl_repeat",
-                    "_planned_super_overs", "_concussion_plan")
+                    "_planned_super_overs", "_planned_winner_user_id", "_concussion_plan")
 
 
 def strip_hidden_plans(state):
@@ -2801,6 +2801,9 @@ def get_scorecard_any(session, match_id, user_id):
         return sc
     final = load_final_scorecard(session, match_id)
     if final:
+        final = dict(final)
+        if isinstance(final.get("arena_state"), dict):
+            final["arena_state"] = strip_hidden_plans(final["arena_state"])
         final["ok"] = True
         return final
     return {"ok": False, "message": "No scorecard available for this match."}

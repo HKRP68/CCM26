@@ -77,6 +77,45 @@ def set_super_overs(session, tour, fixture_id, count):
     return fx
 
 
+def set_winner(session, tour, fixture_id, team_id=None):
+    """Set a simulated fixture's winner before either side starts playing."""
+    from models import TournamentMatch, TournamentTeam
+    try:
+        fixture_id = int(fixture_id)
+        team_id = int(team_id) if team_id not in (None, '') else None
+    except (TypeError, ValueError):
+        raise ValueError('Choose a valid fixture and team.') from None
+    fx = (session.query(TournamentMatch).filter_by(id=fixture_id)
+          .populate_existing().with_for_update().first())
+    if not fx or fx.tournament_id != tour.id:
+        raise ValueError('Fixture not found in this tournament.')
+    if fx.status != 'scheduled':
+        raise ValueError('Only unstarted fixtures can be changed.')
+    if team_id is not None:
+        if not fx.team1_id or not fx.team2_id:
+            raise ValueError('Both fixture teams must be set first.')
+        team = session.get(TournamentTeam, team_id)
+        if (team_id not in (fx.team1_id, fx.team2_id) or not team
+                or team.tournament_id != tour.id):
+            raise ValueError('Choose one of this fixture\'s two teams.')
+    # PostgreSQL holds the row lock above; SQLite ignores FOR UPDATE. Make the
+    # write conditional too, so a concurrent kickoff or team swap cannot accept
+    # a setting after the match has already copied its fixture configuration.
+    changed = (session.query(TournamentMatch)
+               .filter(TournamentMatch.id == fixture_id,
+                       TournamentMatch.tournament_id == tour.id,
+                       TournamentMatch.status == 'scheduled',
+                       TournamentMatch.team1_id == fx.team1_id,
+                       TournamentMatch.team2_id == fx.team2_id)
+               .update({TournamentMatch.planned_winner_team_id: team_id},
+                       synchronize_session=False))
+    if changed != 1:
+        raise ValueError('Only unstarted fixtures can be changed. '
+                         'This fixture changed while its setting was saved.')
+    session.refresh(fx, attribute_names=['planned_winner_team_id'])
+    return fx
+
+
 def apply_to_draft(session, fixture, draft):
     from services.pitch_report import build_pitch_report
     if fixture is None:
@@ -84,6 +123,26 @@ def apply_to_draft(session, fixture, draft):
     period = fixture_period(session, fixture)
     draft['fixture_day_night'] = period
     draft['_planned_super_overs'] = int(fixture.planned_super_overs or 0)
+    draft['_planned_winner_user_id'] = None
+    chosen = getattr(fixture, 'planned_winner_team_id', None)
+    if chosen:
+        from models import TournamentTeam
+        team = session.get(TournamentTeam, chosen)
+        if (not team or team.tournament_id != fixture.tournament_id
+                or chosen not in (fixture.team1_id, fixture.team2_id)):
+            raise ValueError('The selected winner is no longer in this fixture. '
+                             'Update its 100% Win setting before playing.')
+        if draft.get('lpt_team_ids'):
+            mapping, identity = draft['lpt_team_ids'], team.id
+        else:
+            mapping = draft.get('tournament_team_by_user') or {}
+            identity = team.challenge_team_id
+        winner = next((int(uid) for uid, tid in mapping.items()
+                       if tid is not None and int(tid) == identity), None)
+        if winner is None:
+            raise ValueError('The selected winner could not be matched to a '
+                             'captain. Restart this tournament match.')
+        draft['_planned_winner_user_id'] = winner
     from models import Tournament
     from services.league_schedule_service import pitch_locked
     tour = session.get(Tournament, fixture.tournament_id)
@@ -195,3 +254,56 @@ def cap_first_innings(outcome, runs, maximum):
     return dict(outcome, type='run', runs=max(0, maximum-runs), is_extra=False,
                 extra_type=None, batter_out=False, wicket_type=None,
                 disallowed_wicket=None, dropped_catch=False, misfield=False)
+
+
+def _scoring_outcome(outcome, runs):
+    return dict(outcome, type='run', runs=runs, is_extra=False, extra_type=None,
+                batter_out=False, wicket_type=None, disallowed_wicket=None,
+                dropped_catch=False, misfield=False, mixup=False, duel=None)
+
+
+def apply_winner_outcome(outcome, *, winner_is_batting, runs, target, remaining,
+                         wickets, wicket_limit, innings_balls, rng=None,
+                         force_legal=False):
+    """Condition a configured simulation before its delivery is scored.
+
+    Reuse the planned-Super-Over pacing corridor with a winning chase total or
+    a narrow defending margin. All totals, dismissals and player figures still
+    come from the scored deliveries; the finalizer never rewrites the result.
+    """
+    if remaining <= 0:
+        return outcome
+    extra = bool(outcome.get('is_extra') or outcome.get('type') == 'extra')
+    if force_legal and extra and outcome.get('extra_type') in ('Wide', 'No Ball'):
+        outcome = _scoring_outcome(outcome, 0)
+    if target is None:
+        # Even an extreme innings must leave a last-ball chase attainable.
+        outcome = cap_first_innings(outcome, runs, max(1, 6 * innings_balls - 1))
+        scored = int(outcome.get('runs') or 0)
+        free_ball = (outcome.get('is_extra')
+                     and outcome.get('extra_type') in ('Wide', 'No Ball'))
+        scored += int(bool(free_ball))
+        terminal = ((outcome.get('batter_out') or outcome.get('type') == 'wicket')
+                    and wickets >= wicket_limit - 1)
+        # A defending side cannot win a match after posting zero. Make the run
+        # on the delivery itself, before a last wicket/last ball ends innings 1.
+        if winner_is_batting and runs + scored == 0 and (terminal or remaining == 1):
+            return _scoring_outcome(outcome, 1)
+        return outcome
+
+    if winner_is_batting:
+        finish = int(target)
+    else:
+        par = max(0, int(target) - 1)
+        margin = min(par, 1 + int(target) % 3)
+        finish = par - margin
+    conditioned = constrain_tie_outcome(
+        outcome, runs=runs, par=finish, remaining=remaining,
+        wickets=wickets, wicket_limit=wicket_limit,
+        innings_balls=innings_balls, rng=rng)
+    winning_wicket = (winner_is_batting
+                      and (conditioned.get('batter_out') or conditioned.get('type') == 'wicket')
+                      and runs + int(conditioned.get('runs') or 0) >= int(target))
+    if conditioned is not outcome or winning_wicket:
+        conditioned = _scoring_outcome(conditioned, conditioned['runs'])
+    return conditioned

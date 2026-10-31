@@ -2335,6 +2335,17 @@ def simulate_over(state, pause_on_wicket=False, pause_after_delivery=False):
                 remaining=total_balls(state) - balls_bowled(state),
                 wickets=state['total_wickets'], wicket_limit=state.get('wicket_limit', WICKET_LIMIT),
                 innings_balls=total_balls(state))
+        if state.get('_planned_winner_user_id') and not state.get('_planned_super_overs'):
+            from services.tournament_match_settings import apply_winner_outcome
+            oc = apply_winner_outcome(
+                oc, winner_is_batting=(int(state['_planned_winner_user_id'])
+                                       == int(state['bat_team_id'])),
+                runs=state['total_runs'], target=target,
+                remaining=total_balls(state) - balls_bowled(state),
+                wickets=state['total_wickets'],
+                wicket_limit=state.get('wicket_limit', WICKET_LIMIT),
+                innings_balls=total_balls(state),
+                force_legal=deliveries + bpu - balls_this_over > 30)
         from services.tournament_duels import record_ball
         record_ball(state, striker, bowler, oc)
         otype = oc.get("type")

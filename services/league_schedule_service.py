@@ -889,7 +889,8 @@ def delete_fixture(session, fixture_id, *, force=False):
 def swap_fixture_team(session, fixture_id, slot, new_team_id):
     """Replace one side of a *scheduled* fixture. ``slot`` is 1 or 2. Caller commits."""
     from models import TournamentMatch
-    tm = session.get(TournamentMatch, int(fixture_id))
+    tm = (session.query(TournamentMatch).filter_by(id=int(fixture_id))
+          .populate_existing().with_for_update().first())
     if not tm:
         return None
     if tm.status != "scheduled":
@@ -909,6 +910,13 @@ def swap_fixture_team(session, fixture_id, slot, new_team_id):
     # swap when the replaced team was at home, rather than leaving a dangling id.
     if tm.home_team_id == old_id:
         tm.home_team_id = new_id or tm.team1_id or tm.team2_id
+    # The slot write also takes SQLite's write lock. Re-read the selection
+    # afterwards so a concurrently saved winner cannot survive a team swap via
+    # a stale identity-map value (SQLite ignores the row lock above).
+    session.flush()
+    session.refresh(tm, attribute_names=['planned_winner_team_id'])
+    if tm.planned_winner_team_id not in (tm.team1_id, tm.team2_id):
+        tm.planned_winner_team_id = None
     session.flush()
     return tm
 

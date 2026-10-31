@@ -9157,7 +9157,7 @@ def _match_rest_full_state(db, match_id, user_id):
             "ball_seq": 0,
             "roles": participant_roles,
             "snapshot": snapshot,
-            "state": _copy.deepcopy(arena),
+            "state": _copy.deepcopy(strip_hidden_plans(arena)),
             "completed": True,
             "result_text": (final or {}).get("result_text"),
         }
@@ -17402,6 +17402,13 @@ def admin_tournament_detail(tournament_id):
                     fx = set_super_overs(db, t, _int_form("fixture_id"), _int_form("planned_super_overs", 0))
                     log_admin(db, "tournament_match_settings", "tournament", t.id, f"Fixture {fx.id}")
                     flash("Match setting saved.", "success")
+                elif action == "set_fixture_winner":
+                    from services.tournament_match_settings import set_winner
+                    fx = set_winner(db, t, _int_form("fixture_id"),
+                                    request.form.get("planned_winner_team_id") or None)
+                    log_admin(db, "tournament_match_settings", "tournament", t.id,
+                              f"Fixture {fx.id}: planned winner {fx.planned_winner_team_id or 'normal'}")
+                    flash("Match winner setting saved.", "success")
                 elif action == "save_knockout":
                     kt = (request.form.get("knockout_type") or "").strip()
                     valid = {"top4_sf", "top_n", "ipl_playoffs", "groups_top2_sf",

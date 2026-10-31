@@ -226,7 +226,8 @@ const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:a
 const source = fs.readFileSync(process.argv[1], 'utf8');
 const payload = JSON.parse(fs.readFileSync(0, 'utf8'));
 const content = {innerHTML:''};
-const context = vm.createContext({document:{getElementById:() => content},
+const context = vm.createContext({document:{getElementById:() => content,addEventListener:() => {}},
+  window:{addEventListener:() => {}},
   sessionStorage:{getItem:() => null}, escapeHtml:String, payload});
 vm.runInContext(source.slice(source.indexOf('const TN_SUBS ='),
   source.indexOf('// Scorecard for a tournament fixture')), context);
