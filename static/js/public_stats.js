@@ -14,7 +14,20 @@
   const date = raw => { if (!raw) return ''; const utc = typeof raw === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw) && !/(Z|[+-]\d{2}:\d{2})$/i.test(raw) ? raw + 'Z' : raw; const d = new Date(utc); return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, {day:'numeric',month:'short',year:'numeric'}); };
   const empty = text => el('p', text, 'empty');
   const link = (label, href) => { const node = el('a', label); if (typeof href === 'string' && href.startsWith('/') && !href.startsWith('//')) node.href = href; return node; };
-  const profileButton = (name, type = 'player') => { const button = el('button', name || 'Unknown', 'text-link'); button.type = 'button'; button.dataset.profile = type; button.dataset.name = name || ''; return button; };
+  const playerImages = new Map(), teamImages = new Map();
+  const nameKey = name => String(name || '').trim().toLowerCase();
+  const mediaURL = src => typeof src === 'string' && ((src.startsWith('/') && !src.startsWith('//')) || /^https?:\/\//i.test(src));
+  function avatar(name, type='player', src, large=false) {
+    const wrap=el('span',undefined,`entity-avatar ${type} ${large?'large':''}`);
+    const source=src||(type==='team'?teamImages:playerImages).get(nameKey(name));
+    const initial=el('span',String(name||'?').split(/\s+/).map(n=>n[0]).join('').slice(0,2).toUpperCase(),'avatar-initial');
+    if(mediaURL(source)||type==='player'){
+      const img=el('img');img.src=mediaURL(source)?source:'/static/images/player-placeholder.svg';img.alt='';img.loading='lazy';img.decoding='async';img.referrerPolicy='no-referrer';
+      img.addEventListener('error',()=>{if(type==='player'&&!img.src.endsWith('player-placeholder.svg'))img.src='/static/images/player-placeholder.svg';else wrap.replaceChildren(initial);},{once:true});wrap.append(img);
+    }else wrap.append(initial);
+    return wrap;
+  }
+  const profileButton = (name, type = 'player') => { const button = el('button',undefined,'text-link entity-link');button.append(avatar(name,type),el('span',name||'Unknown'));button.type='button';button.dataset.profile=type;button.dataset.name=name||'';return button; };
   const table = (headings, rows, message = 'No qualifying statistics yet.') => {
     const t = el('table'), head = el('thead'), hr = el('tr'), body = el('tbody');
     headings.forEach(h => { const th = el('th', h); th.scope = 'col'; hr.append(th); }); head.append(hr); t.append(head);
@@ -62,6 +75,7 @@
   function renderPlayers() {
     const search = byId('player-search').value.trim().toLowerCase();
     const rows = players.filter(p=>`${p.name} ${p.team||''}`.toLowerCase().includes(search)).slice().sort((a,b)=>discipline==='batting'?b.runs-a.runs:b.wickets-a.wickets||a.conceded-b.conceded);
+    renderSpotlight(rows);
     byId('player-table').replaceChildren(table(discipline==='batting'?['Player','Team','Matches','Runs','Balls','Average','SR','4s','6s']:['Player','Team','Matches','Wickets','Overs','Runs conceded','Economy'],playerRows(rows,discipline)));
   }
   function renderRecords() {
@@ -102,25 +116,30 @@
     });
   }
   function renderPortal(data) {
+    list(data.teams).forEach(t=>teamImages.set(nameKey(t.name),t.logo_url));
     fixtures=list(data.fixtures);teamNames=new Set(list(data.teams).map(t=>t.name));renderFixtures();renderRecords();
     byId('news-list').replaceChildren(...list(data.news).slice(0,6).map((story,index)=>{const card=el('article',undefined,index===0?'news-card lead-story':'news-card');card.append(el('span',pretty(story.kind||'Match news'),'story-kind'),el('h3',story.title||'Competition update'));if(story.body)card.append(el('p',story.body,'story-body'));const bottom=el('div',undefined,'story-footer');if(story.date)bottom.append(el('span',date(story.date)));if(story.url)bottom.append(link('Match report →',story.url));if(story.article_id){const read=el('button','Read story →','text-link');read.type='button';read.dataset.article=story.article_id;bottom.append(read);}card.append(bottom);return card;}));
     if(!list(data.news).length)byId('news-list').append(empty('Match victories and recorded competition updates will appear here.'));
-    const tournament=data.tournament||{};renderCaps(tournament);if(tournament.standings)renderStandings(tournament.standings);
+    const tournament=data.tournament||{};renderCaps(tournament);
+    if(list(tournament.standings).length)renderStandings(tournament.standings);
+    else if(list(tournament.tables).length){const tables=tournament.tables,box=byId('standings-table'),select=el('select');select.setAttribute('aria-label','Points table season');tables.slice().reverse().forEach((t,i)=>select.add(new Option(t.season,i)));const holder=el('div');const draw=()=>{const t=tables.slice().reverse()[Number(select.value)];holder.replaceChildren(table(['Team','P','W','L','Points','NRR'],list(t.standings).map(r=>[profileButton(r.name,'team'),r.played,r.won,r.lost,r.points,value(r.nrr,3)]),'No retained table for this season.'));};select.addEventListener('change',draw);box.replaceChildren(select,holder);draw();}
+    else renderStandings([]);
     const playoffs=list(tournament.playoffs);byId('playoff-list').replaceChildren(...playoffs.map(m=>fixtureCard(m,true)));if(!playoffs.length)byId('playoff-list').append(empty('Playoff fixtures will appear once they are scheduled.'));
-    byId('team-cards').replaceChildren(...list(data.teams).map(team=>{const card=el('article',undefined,'team-card'),top=el('div',undefined,'team-card-heading');const mark=el('span',String(team.name||'?').slice(0,2).toUpperCase(),'team-monogram');if(typeof team.logo_url==='string'&&team.logo_url.startsWith('/')&&!team.logo_url.startsWith('//')){const img=el('img');img.src=team.logo_url;img.alt='';img.loading='lazy';img.addEventListener('error',()=>img.remove());mark.replaceChildren(img);}top.append(mark,profileButton(team.name,'team'));card.append(top);if(team.captain)card.append(el('p',`${team.captain_role||'Team manager'}: ${team.captain}`,'muted'));card.append(metrics([['Played',team.played],['Won',team.won],['Lost',team.lost]]),formBadges(team.form));const more=profileButton(team.name,'team');more.textContent='Team dashboard →';more.classList.add('card-action');card.append(more);return card;}));
+    byId('team-cards').replaceChildren(...list(data.teams).map(team=>{const card=el('article',undefined,'team-card'),top=el('div',undefined,'team-card-heading');const mark=avatar(team.name,'team',team.logo_url,true);top.append(mark,profileButton(team.name,'team'));card.append(top);if(team.captain)card.append(el('p',`${team.captain_role||'Team manager'}: ${team.captain}`,'muted'));card.append(metrics([['Played',team.played],['Won',team.won],['Lost',team.lost]]),formBadges(team.form));const more=profileButton(team.name,'team');more.textContent='Team dashboard →';more.classList.add('card-action');card.append(more);return card;}));
     if(!list(data.teams).length)byId('team-cards').append(empty('Teams will appear once squads or match records are available.'));
     byId('venue-cards').replaceChildren(...list(data.venues).map(venue=>{const card=el('article',undefined,'venue-card');card.append(el('span','GROUND GUIDE','eyebrow'),profileButton(venue.name,'venue'),metrics([['Matches',venue.matches],['Avg. first innings',value(venue.average_first_innings,1)],['Highest total',venue.highest_total]]));const more=profileButton(venue.name,'venue');more.textContent='Explore ground →';more.classList.add('card-action');card.append(more);return card;}));
+    comparisonOptions();renderPlayers();renderSeasons();
     if(!list(data.venues).length)byId('venue-cards').append(empty('Ground statistics appear when venues are recorded on scorecards.'));
   }
   function renderConfirmed(data) {
     const summary=data.summary||{};byId('summary').replaceChildren(...[['matches','Scored matches'],['runs','Team runs'],['wickets','Bowler wickets'],['fours','Fours'],['sixes','Sixes']].map(([key,label])=>{const box=el('div',undefined,'summary-cell');box.append(el('strong',value(summary[key])),el('span',label));return box;}));
-    players=list(data.players);records=list(data.records);renderPlayers();renderRecords();if(list(data.standings).length)renderStandings(data.standings);
+    players=list(data.players);players.forEach(p=>playerImages.set(nameKey(p.name),p.image));records=list(data.records);renderPlayers();comparisonOptions();renderRecords();if(list(data.standings).length)renderStandings(data.standings);
     const results=list(data.matches).map(m=>fixtureCard({...m,status:'completed',match_id:m.id,url:m.id?`/cricket?match_id=${m.id}`:null},true));byId('result-list').replaceChildren(...(results.length?results:[empty('No confirmed matches yet.')]));
   }
   async function load(kind, params={}, signal) {
     const query=new URLSearchParams({season,...params}),controller=new AbortController(),timer=setTimeout(()=>controller.abort(),10000);
     const abort=()=>controller.abort();if(signal)signal.addEventListener('abort',abort,{once:true});
-    try{const endpoint=kind==='article'?`/api/stats/news/${encodeURIComponent(params.id)}`:`${base}${kind}?${query}`;const response=await fetch(endpoint,{cache:'no-store',signal:controller.signal});if(!response.ok)throw new Error(response.status===404?'This profile is not available for the selected competition.':'The cricket feed is temporarily unavailable.');const data=await response.json();if(data.ok===false)throw new Error(data.message||'No recorded data is available.');return data;}
+    try{const endpoint=kind==='article'?`/api/stats/news/${encodeURIComponent(params.id)}`:`${base}${kind}?${query}`;const response=await fetch(endpoint,{cache:'no-store',signal:controller.signal});if(!response.ok){let detail;try{detail=await response.json();}catch(_){}throw new Error((detail&&detail.error)||(response.status===404?'This profile is not available for the selected competition.':'The cricket feed is temporarily unavailable.'));}const data=await response.json();if(data.ok===false)throw new Error(data.message||'No recorded data is available.');return data;}
     finally{clearTimeout(timer);if(signal)signal.removeEventListener('abort',abort);}
   }
   async function pollLive() {
@@ -132,7 +151,7 @@
   }
   async function pollRecords() {
     if(document.hidden||recordsPending)return;recordsPending=true;
-    try{const data=await load('records'),signature=JSON.stringify({...data,updated_at:0});if(signature!==lastRecordsSignature){renderConfirmed(data);lastRecordsSignature=signature;}byId('records-status').textContent=`Confirmed scorecards · ${new Date((data.updated_at||Date.now()/1000)*1000).toLocaleTimeString()}`;}
+    try{const data=await load('records'),signature=JSON.stringify({...data,updated_at:0});if(signature!==lastRecordsSignature){renderConfirmed(data);loadSeasons();lastRecordsSignature=signature;}byId('records-status').textContent=`Confirmed scorecards · ${new Date((data.updated_at||Date.now()/1000)*1000).toLocaleTimeString()}`;}
     catch(_){byId('records-status').textContent='Stats temporarily unavailable · retrying';}finally{recordsPending=false;recordsTimer=setTimeout(pollRecords,refreshRecords?0:30000);refreshRecords=false;}
   }
   async function pollPortal() {
@@ -159,11 +178,13 @@
     const box=el('div',undefined,'profile-records');list(rows).forEach(r=>{const row=el('div');row.append(el('span',r.label),el('strong',`${value(r.value)} ${r.unit||''}`));box.append(row);});if(!list(rows).length)box.append(empty('No individual record marks in this selection.'));return box;
   }
   function renderPlayerProfile(data) {
-    const body=byId('profile-body'),id=data.identity||{};body.replaceChildren();const bio=el('div',undefined,'profile-bio');bio.append(el('p',[id.role,id.country,id.version].filter(Boolean).join(' · ')||'Player profile','muted'),metrics([['OVR',id.ovr],['BAT',id.bat],['BOWL',id.bowl]]));body.append(bio);
+    const body=byId('profile-body'),id=data.identity||{};body.replaceChildren();const bio=el('div',undefined,'profile-bio');bio.append(avatar(data.name,'player',id.image,true),el('p',[id.role,id.country,id.version].filter(Boolean).join(' · ')||'Player profile','muted'),metrics([['OVR',id.ovr],['BAT',id.bat],['BOWL',id.bowl]]));body.append(bio);
     if(id.ambiguous)body.append(el('p','Several player versions share this name. Ratings are shown only when the identity is certain.','notice'));
     if(data.roster_only)body.append(el('p','Registered squad member · no recorded appearances yet.','notice'));
     if((data.coverage||{}).career_aggregate_only_seasons>0)body.append(el('p','Career totals include historical season summaries. Individual match, opponent, pitch and phase details are unavailable for those seasons.','notice'));
     body.append(section(season==='all'?'All linked seasons':'Selected season',metrics(statsEntries(data.selected||{}))),section('Career · all linked seasons',metrics(statsEntries(data.career||{}))));
+    body.append(section('Season-by-season record',wrappedTable(['Season','Matches','Innings','Runs','Average','SR','Wickets','Economy','Record book'],list(data.seasons).map(row=>{const st=row.stats||{};return[row.name,st.matches,st.innings,st.runs,value(st.average,2),value(st.sr,2),st.wickets,value(st.economy,2),link('Season records →',`/stats/${root.dataset.statsSeries}?season=${row.id}#records`)];}))));
+    body.append(section('Complete batting & bowling figures',fullStats(data.selected||{})));
     const form=data.form||{};body.append(section('Recent form',metrics([['Recent matches',form.matches],['Recent runs',form.recent_runs],['Recent wickets',form.recent_wickets]])));
     body.append(section('Recent performances',wrappedTable(['Date','Opponent','Ground','Batting','Bowling','Scorecard'],list(data.recent).map(r=>[date(r.date)||'—',r.opponent,r.venue,r.runs===null||r.runs===undefined?'—':`${r.runs} (${value(r.balls)})`,r.wickets===null||r.wickets===undefined?'—':`${r.wickets}/${value(r.conceded)}`,r.url?link('View →',r.url):'—']))));
     body.append(section('Personal records',recordList(data.records)),section('Phase-wise performance',phaseTable(data.phases)));
@@ -174,7 +195,7 @@
     });
   }
   function renderTeamProfile(data) {
-    const body=byId('profile-body');body.replaceChildren();body.append(el('p',data.captain?`${data.captain_role||'Team manager'}: ${data.captain}`:'Team manager information has not been recorded.','profile-subtitle'));
+    const body=byId('profile-body');body.replaceChildren();body.append(avatar(data.name,'team',data.logo_url,true));body.append(el('p',data.captain?`${data.captain_role||'Team manager'}: ${data.captain}`:'Team manager information has not been recorded.','profile-subtitle'));
     const p=data.performance||{};body.append(metrics([['Played',p.played],['Won',p.won],['Lost',p.lost],['Win %',value(p.win_percentage,1)],['Runs',p.runs],['Wickets',p.wickets]]),formBadges(p.form));
     if(p.played&&p.innings_with_scores<p.played)body.append(el('p',`Scores are recorded for ${value(p.innings_with_scores)} of ${value(p.played)} completed matches. Complete team totals are unavailable.`,'notice'));
     body.append(section('Squad & ratings',wrappedTable(['Player','Role','Country','OVR','BAT','BOWL','Form'],list(data.squad).map(r=>[profileButton(r.name),r.role,r.country,r.ovr,r.bat,r.bowl,value(r.form)]),'No squad has been recorded for this team.')));if(data.squad_source)body.append(el('p',data.squad_source==='recorded_appearances'?'Players with recorded appearances; a full historical squad is unavailable.':'Current registered squad.','muted'));
@@ -193,6 +214,61 @@
     try{const data=await load(type,type==='article'?{id:name}:{name},profileController.signal);if(request!==profileRequest||!dialog.open)return;byId('profile-title').textContent=data.title||data.name||name;if(type==='article')renderArticle(data);else if(type==='player')renderPlayerProfile(data);else if(type==='team')renderTeamProfile(data);else renderVenueProfile(data);}
     catch(error){if(request===profileRequest&&dialog.open&&error.name!=='AbortError')byId('profile-body').replaceChildren(empty(error.message||'This profile is temporarily unavailable.'));}
   }
+
+  function fullStats(stats) {
+    return wrappedTable(['Statistic','Value'],[['Matches',stats.matches],['Batting innings',stats.innings],['Runs',stats.runs],['Balls faced',stats.balls],['Dismissals',stats.outs],['Average',value(stats.average,2)],['Strike rate',value(stats.sr,2)],['Not outs',stats.not_outs],['Fifties',stats.fifties],['Hundreds',stats.hundreds],['Ducks',stats.ducks],['Fours',stats.fours],['Sixes',stats.sixes],['Dot balls',stats.bat_dots],['Dot percentage',value(stats.dot_percentage,2)],['Boundary percentage',value(stats.boundary_percentage,2)],['Highest score',stats.highest_score],['Bowling innings',stats.bowling_innings],['Wickets',stats.wickets],['Balls bowled',stats.bowled],['Runs conceded',stats.conceded],['Economy',value(stats.economy,2)],['Bowling average',value(stats.bowling_average,2)],['Bowling strike rate',value(stats.bowling_strike_rate,2)],['Three-plus wicket hauls',stats.three_fers],['Five-plus wicket hauls',stats.five_fers],['Bowling dot balls',stats.bowl_dots],['Player of the Match awards',stats.potm],['Best bowling',stats.best_bowling]]);
+  }
+  function renderSpotlight(rows) {
+    const box=byId('player-spotlight');box.replaceChildren(...rows.slice(0,4).map(p=>{const card=el('article',undefined,'player-card');card.append(avatar(p.name,'player',p.image,true),profileButton(p.name),el('span',p.team||'Competition player','muted'),metrics(discipline==='batting'?[['Runs',p.runs],['SR',value(p.sr,2)]]:[['Wickets',p.wickets],['Economy',value(p.economy,2)]]));return card;}));
+  }
+  let archiveRows=[], archivePending=false, comparisonRequest=0;
+  function renderSeasons() {
+    const term=byId('season-search').value.trim().toLowerCase();
+    const rows=archiveRows.filter(s=>`${s.name} ${s.champion||''}`.toLowerCase().includes(term));
+    byId('season-archive').replaceChildren(...rows.map(s=>{const card=el('article',undefined,'season-card');card.append(el('div',`${s.archived?'ARCHIVED SEASON':'SEASON'} ${s.number}`,'eyebrow'),el('h3',s.name),el('span',s.status,'season-status'));if(s.champion){const winner=el('div',undefined,'season-champion');winner.append(avatar(s.champion,'team'),el('span',`🏆 ${s.champion}`));card.append(winner);}else card.append(el('p','A season of cricket history.','muted'));card.append(metrics([['Matches',s.matches],['Recorded players',s.players]]));[['Orange Cap',s.orange_cap],['Purple Cap',s.purple_cap]].forEach(([label,holders])=>{if(list(holders).length){const row=el('div',undefined,'season-cap');row.append(el('span',label),profileButton(holders[0].name),el('strong',holders[0].value));if(holders.length>1)row.append(el('small',`+${holders.length-1} joint holders`));card.append(row);}});const awards=Object.entries(s.honours||{}).filter(([key,val])=>key!=='champion'&&val&&typeof val==='object'&&(val.player||val.team));if(awards.length){const more=el('details',undefined,'season-honours');more.append(el('summary','Season honours'));awards.forEach(([key,val])=>{const row=el('p');row.append(el('span',pretty(key)+': '),profileButton(val.player||val.team,val.player?'player':'team'));if(val.value!==undefined&&val.value!==null)row.append(el('small',` · ${value(val.value)}`));more.append(row);});card.append(more);}if(s.aggregate_only)card.append(el('p','Historical totals retained; match-level detail is incomplete.','muted'));const links=el('div',undefined,'season-actions');links.append(link('Explore season →',s.url),link('Records →',s.records_url));card.append(links);return card;}));
+    if(!rows.length)byId('season-archive').append(empty('No seasons match this search.'));
+  }
+  async function loadSeasons() {
+    if(archivePending)return;archivePending=true;
+    try{const data=await load('seasons');archiveRows=list(data.seasons);renderSeasons();}catch(_){byId('season-archive').replaceChildren(empty('The season archive is temporarily unavailable. Try refreshing.'));}finally{archivePending=false;}
+  }
+  function comparisonOptions() {
+    const mode=byId('comparison-mode').value,names=mode==='team'?[...teamNames]:players.map(p=>p.name);
+    byId('comparison-options').replaceChildren(...[...new Set(names)].sort().map(name=>{const option=el('option');option.value=name;return option;}));
+    ['comparison-left','comparison-right'].forEach(id=>byId(id).placeholder=mode==='team'?'Choose a team':'Choose a player');
+  }
+  function comparisonHead(entity,type) {const box=el('div',undefined,'comparison-entity');box.append(avatar(entity.name,type,type==='team'?entity.logo_url:(entity.identity||{}).image,true),profileButton(entity.name,type));return box;}
+  function renderComparison(data) {
+    const box=byId('comparison-result');box.replaceChildren();const heads=el('div',undefined,'comparison-heads');heads.append(comparisonHead(data.left,data.kind),el('span','VS','versus'),comparisonHead(data.right,data.kind));box.append(heads);
+    if(data.kind==='team'){
+      const a=data.left.stats||{},b=data.right.stats||{};box.append(metrics([['Meetings',data.matches],['Ties',data.tied],['No result',data.no_result]]));
+      const bar=el('div',undefined,'rivalry-bar');const total=a.won+b.won;[[data.left.name,a.won],[data.right.name,b.won]].forEach(([name,wins])=>{const part=el('span',`${name} · ${wins} wins`);part.style.flex=total?Math.max(wins,0.15):1;bar.append(part);});box.append(bar);
+      box.append(wrappedTable(['Record',data.left.name,data.right.name],[['Wins',a.won,b.won],['Win percentage',value(a.win_percentage,1),value(b.win_percentage,1)],['Recorded runs',a.runs,b.runs],['Highest recorded score',a.highest_score,b.highest_score],['Average recorded score',value(a.average_score,2),value(b.average_score,2)]]));
+      box.append(section('Season-by-season rivalry',wrappedTable(['Season','Meetings',`${data.left.name} wins`,`${data.right.name} wins`],list(data.seasons).map(s=>[s.name,s.matches,s.left.won,s.right.won]))));
+      const recent=el('div',undefined,'fixture-grid');recent.append(...list(data.recent).map(m=>fixtureCard(m,true)));box.append(section('Recent meetings',recent));
+    }else{
+      const a=data.left.selected||{},b=data.right.selected||{};
+      box.append(wrappedTable(['Statistic',data.left.name,data.right.name],[['Matches',a.matches,b.matches],['Batting innings',a.innings,b.innings],['Runs',a.runs,b.runs],['Balls faced',a.balls,b.balls],['Batting average',value(a.average,2),value(b.average,2)],['Strike rate',value(a.sr,2),value(b.sr,2)],['Highest score',a.highest_score,b.highest_score],['Fifties',a.fifties,b.fifties],['Hundreds',a.hundreds,b.hundreds],['Not outs',a.not_outs,b.not_outs],['Ducks',a.ducks,b.ducks],['Fours',a.fours,b.fours],['Sixes',a.sixes,b.sixes],['Bowling innings',a.bowling_innings,b.bowling_innings],['Wickets',a.wickets,b.wickets],['Economy',value(a.economy,2),value(b.economy,2)],['Bowling average',value(a.bowling_average,2),value(b.bowling_average,2)],['Three-plus wicket hauls',a.three_fers,b.three_fers],['Five-plus wicket hauls',a.five_fers,b.five_fers],['Player of the Match awards',a.potm,b.potm],['Best bowling',a.best_bowling,b.best_bowling]]));
+      const seasonRows=new Map();[['left',data.left.seasons],['right',data.right.seasons]].forEach(([side,rows])=>list(rows).forEach(row=>{if(!byId('comparison-all').checked&&season!=='all'&&String(row.id)!==String(season))return;const bucket=seasonRows.get(row.id)||{name:row.name};bucket[side]=row.stats;seasonRows.set(row.id,bucket);}));
+      box.append(section('Season-by-season player comparison',wrappedTable(['Season',`${data.left.name} runs`,`${data.right.name} runs`,`${data.left.name} wickets`,`${data.right.name} wickets`],[...seasonRows.values()].map(row=>[row.name,row.left?row.left.runs:'—',row.right?row.right.runs:'—',row.left?row.left.wickets:'—',row.right?row.right.wickets:'—']))));
+      box.append(section('Direct batter–bowler encounters',wrappedTable(['Batter','Bowler','Runs','Balls','Dismissals','4s','6s','SR'],list(data.duels).map(d=>[profileButton(d.batter),profileButton(d.bowler),d.runs,d.balls,d.dismissals,d.fours,d.sixes,value(d.sr,2)]),'No saved delivery-level encounters for this pair.')));
+      box.append(el('p',`${value(data.shared_matches)} recorded matches feature both players. Career totals above cover all their appearances in the comparison scope.`,'muted'));
+    }
+    box.append(el('p',data.coverage,'notice'));
+  }
+  async function compareSides() {
+    const left=byId('comparison-left').value.trim(),right=byId('comparison-right').value.trim(),mode=byId('comparison-mode').value;if(!left||!right)return;
+    const request=++comparisonRequest;byId('comparison-status').textContent='Comparing recorded history…';byId('comparison-share').hidden=true;
+    try{const data=await load('compare',{mode,left,right,season:byId('comparison-all').checked?'all':season});if(request!==comparisonRequest)return;renderComparison(data);byId('comparison-status').textContent=byId('comparison-all').checked?'Comparison across every linked season.':'Comparison for the selected season.';byId('comparison-share').hidden=false;const url=new URL(location.href);url.searchParams.set('compare',mode);url.searchParams.set('left',left);url.searchParams.set('right',right);url.searchParams.set('comparison_season',byId('comparison-all').checked?'all':season);url.hash='compare';history.replaceState(null,'',url);}catch(error){if(request===comparisonRequest){byId('comparison-status').textContent=error.message;byId('comparison-result').replaceChildren(empty('Choose different valid names and compare again.'));}}
+  }
+  byId('season-search').addEventListener('input',renderSeasons);
+  byId('comparison-form').addEventListener('submit',event=>{event.preventDefault();compareSides();});
+  byId('comparison-mode').addEventListener('change',()=>{comparisonOptions();byId('comparison-left').value='';byId('comparison-right').value='';});
+  byId('comparison-swap').addEventListener('click',()=>{const left=byId('comparison-left'),right=byId('comparison-right');[left.value,right.value]=[right.value,left.value];if(left.value&&right.value)compareSides();});
+  byId('comparison-all').checked=season==='all';
+  byId('comparison-share').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(location.href);byId('comparison-status').textContent='Comparison link copied.';}catch(_){byId('comparison-status').textContent=`Share this link: ${location.href}`;}});
+  const initial=new URLSearchParams(location.search);if(['team','player'].includes(initial.get('compare'))){byId('comparison-mode').value=initial.get('compare');byId('comparison-left').value=initial.get('left')||'';byId('comparison-right').value=initial.get('right')||'';byId('comparison-all').checked=initial.get('comparison_season')==='all';compareSides();}
+  loadSeasons();
   byId('profile-close').addEventListener('click',()=>byId('profile-dialog').close());
   byId('profile-dialog').addEventListener('close',()=>{profileRequest++;if(profileController)profileController.abort();});
   document.addEventListener('click',event=>{const button=event.target.closest('button[data-profile]');if(button)openProfile(button.dataset.profile,button.dataset.name);const article=event.target.closest('button[data-article]');if(article)openProfile('article',article.dataset.article);});

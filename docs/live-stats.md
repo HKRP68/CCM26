@@ -3,7 +3,7 @@
 The read-only stats website lives in the existing Flask application:
 
 - `/stats` lists active competitions with linked League Seasons.
-- `/stats/<series_id>` opens the latest season's scores and statistics.
+- `/stats/<series_id>` opens all linked seasons by default, including archived records.
 - `?season=all` shows all seasons; `?season=<season_id>` selects a season.
 
 The site includes live scorecards and commentary, fixtures/results, a newsroom,
@@ -107,3 +107,35 @@ The public API adds read-only `/api/stats/<series_id>/portal`, `/explorer`,
 changing view counts. Historical responses have a bounded 20-second cache,
 completion signatures and committed-correction invalidation. They are computed
 on website demand and never during a ball, over or scorecard delivery.
+
+## Season archive, comparisons and artwork
+
+All linked seasons are listed in the season archive, including preserved and
+aggregate-only seasons. Each has a direct page and record-book link, honours,
+cap leaders and data coverage. All-time is the default; the season selector
+still scopes the live feed, tables, player records and queries to one season.
+
+The head-to-head centre supports team vs team and player vs player. Team views
+include actual meetings, wins, ties, no-results and per-season breakdowns.
+Player comparisons include batting/bowling figures, milestone counts, season
+breakdowns and direct batter/bowler encounters when saved deliveries exist.
+Unknown historical meetings and delivery data are not inferred from totals.
+Comparisons can be swapped and shared as URLs with their chosen scope.
+
+Player profiles show every retained season and the complete supported batting
+and bowling statistics. Missing historical milestone/dot/award data stays
+unavailable. Career totals include preserved aggregate-only seasons, while
+match-specific filters continue to require match evidence.
+
+Available team logos and uploaded portraits appear on match cards, tables,
+squads, profiles and comparisons. Unique catalogue identities use a public
+image endpoint that reads available portraits or custom artwork without
+rendering collectible cards or waiting for remote artwork downloads. Missing
+photos get a neutral silhouette; missing logos get initials. Unknown player
+versions are never assigned an arbitrary image. Media loading is lazy and
+cached independently from the three-second live feed.
+
+New read-only endpoints: `/api/stats/<series_id>/seasons` and
+`/api/stats/<series_id>/compare?mode=team|player&left=...&right=...&season=all|ID`.
+The archive always lists all seasons, even while another page section is scoped
+to one season. Historical calculations remain on the website request path.

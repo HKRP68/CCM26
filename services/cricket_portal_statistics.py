@@ -99,13 +99,15 @@ def _legacy_rows(session, series, season, games):
                 name=row.name, team_name=row.team_name,
                 **{key: getattr(row, key, None) for key in ('matches', 'bat_innings', 'bat_runs', 'bat_balls',
                     'bat_outs', 'bat_fours', 'bat_sixes', 'bowl_innings', 'bowl_wickets', 'bowl_runs',
-                    'bowl_balls', 'highest_score', 'best_bowl_wickets', 'best_bowl_runs')}))
+                    'bowl_balls', 'highest_score', 'best_bowl_wickets', 'best_bowl_runs',
+                    'fifties', 'hundreds', 'three_fers', 'five_fers', 'ducks', 'bat_dots', 'bowl_dots', 'potm')}))
     return result
 
 
 def _aggregate(pairs, legacy=()):
     stats = dict(matches=len({_match_key(g) for g, _ in pairs}), innings=0, bowling_innings=0,
                  runs=0, balls=0, outs=0, fours=0, sixes=0, wickets=0, bowled=0, conceded=0)
+    stats.update(fifties=0, hundreds=0, three_fers=0, five_fers=0, ducks=0, bat_dots=0, bowl_dots=0, potm=0)
     unknown = set()
     high, best = None, None
     for game, line in pairs:
@@ -124,6 +126,20 @@ def _aggregate(pairs, legacy=()):
             value = _int(line.get('bat_runs'))
             if value is not None:
                 high = max(high if high is not None else value, value)
+            if value is None:
+                unknown.update(('fifties', 'hundreds', 'ducks'))
+            else:
+                stats['fifties'] += 50 <= value < 100
+                stats['hundreds'] += value >= 100
+                if line.get('bat_out') is None:
+                    unknown.add('ducks')
+                else:
+                    stats['ducks'] += value == 0 and bool(line['bat_out'])
+            dots = _int(line.get('bat_dots'))
+            if dots is None:
+                unknown.add('bat_dots')
+            else:
+                stats['bat_dots'] += dots
         if _played(line, 'bowl'):
             stats['bowling_innings'] += 1
             for key, raw in [('wickets', 'bowl_wickets'), ('bowled', 'bowl_balls'), ('conceded', 'bowl_runs')]:
@@ -136,10 +152,27 @@ def _aggregate(pairs, legacy=()):
             if wkts is not None and runs is not None:
                 candidate = (wkts, -runs)
                 best = max(best if best is not None else candidate, candidate)
+            if wkts is None:
+                unknown.update(('three_fers', 'five_fers'))
+            else:
+                stats['three_fers'] += wkts >= 3
+                stats['five_fers'] += wkts >= 5
+            dots = _int(line.get('bowl_dots'))
+            if dots is None:
+                unknown.add('bowl_dots')
+            else:
+                stats['bowl_dots'] += dots
+        award = next((entry.get('match_potm') for entry in game.get('lines', [])
+                      if isinstance(entry.get('match_potm'), dict)), None)
+        if award is None:
+            unknown.add('potm')
+        elif _norm(award.get('name')) == _norm(line.get('name')) and _norm(award.get('team')) == _norm(line.get('team_name')):
+            stats['potm'] += 1
     for row in legacy:
         for key, raw in [('matches', 'matches'), ('runs', 'bat_runs'), ('balls', 'bat_balls'),
                          ('outs', 'bat_outs'), ('fours', 'bat_fours'), ('sixes', 'bat_sixes'),
-                         ('wickets', 'bowl_wickets'), ('bowled', 'bowl_balls'), ('conceded', 'bowl_runs')]:
+                         ('wickets', 'bowl_wickets'), ('bowled', 'bowl_balls'), ('conceded', 'bowl_runs'),
+                         *[(key,key) for key in ('fifties','hundreds','three_fers','five_fers','ducks','bat_dots','bowl_dots','potm')]]:
             value = _int(row.get(raw))
             if value is None:
                 unknown.add(key)
@@ -165,6 +198,9 @@ def _aggregate(pairs, legacy=()):
             best = max(best if best is not None else candidate, candidate)
     for key in unknown:
         stats[key] = None
+    stats['not_outs'] = stats['innings'] - stats['outs'] if stats['innings'] is not None and stats['outs'] is not None and stats['innings'] >= stats['outs'] else None
+    stats['dot_percentage'] = _rate(stats['bat_dots'], stats['balls'], 100)
+    stats['boundary_percentage'] = _rate(4*stats['fours']+6*stats['sixes'], stats['runs'], 100) if stats['fours'] is not None and stats['sixes'] is not None else None
     stats.update(average=_rate(stats['runs'], stats['outs']), sr=_rate(stats['runs'], stats['balls'], 100),
                  economy=_rate(stats['conceded'], stats['bowled'], 6), bowling_average=_rate(stats['conceded'], stats['wickets']),
                  bowling_strike_rate=_rate(stats['bowled'], stats['wickets']), highest_score=None if 'runs' in unknown else high,
@@ -177,6 +213,7 @@ def _identities(session, pairs):
     """Resolve a version only when IDs/name evidence select a unique card."""
     from models import Player
     from services.league_record_insights import safe_image_url
+    from services.cricket_portal_media import player_image_url
     by_name = defaultdict(list)
     ids = defaultdict(set)
     for _, line in pairs:
@@ -203,7 +240,7 @@ def _identities(session, pairs):
         result[name] = dict(ovr=unique.rating if unique else None,
             bat=unique.bat_rating if unique else None, bowl=unique.bowl_rating if unique else None,
             role=unique.category if unique else None, country=unique.country if unique else None,
-            version=unique.version if unique else None, image=safe_image_url(unique.image_url) if unique else None,
+            version=unique.version if unique else None, image=player_image_url(unique) if unique else None,
             ambiguous=len(candidates) > 1 or len(referenced) > 1,
             note='Same-name player versions are combined; ratings are not inferred.' if len(candidates) > 1 or len(referenced) > 1 else None)
     return result
@@ -227,7 +264,7 @@ def _rows(session, pairs, discipline='batting', legacy=()):
         stats = _aggregate(entries, aggregates)
         rows.append(dict(stats, name=named_rows[-1]['name'], team=teams[-1] if teams else None,
                          teams=teams, ovr=identity['ovr'], bat=identity['bat'], bowl=identity['bowl'],
-                         ambiguous_identity=identity['ambiguous'], aggregate_only_seasons=len(aggregates)))
+                         image=identity.get('image'), ambiguous_identity=identity['ambiguous'], aggregate_only_seasons=len(aggregates)))
     metric = 'wickets' if discipline == 'bowling' else 'runs'
     rows.sort(key=lambda p: (p[metric] is None, -(p[metric] or 0), _norm(p['name'])))
     return rows
@@ -346,12 +383,12 @@ def _roster_profile(session, series, season, name):
                 if details.get(key) is not None:
                     return details[key]
             return getattr(master, attr, None) if master is not None else None
-        from services.league_record_insights import safe_image_url
+        from services.cricket_portal_media import player_image_url
         identity = dict(ovr=_int(value('rating', 'rating', 'overall', 'ovr')),
             bat=_int(value('bat_rating', 'bat_rating', 'batting_rating', 'bat', 'batting')),
             bowl=_int(value('bowl_rating', 'bowl_rating', 'bowling_rating', 'bowl', 'bowling')),
             role=value('category', 'category', 'role'), country=value('country', 'country'),
-            version=getattr(master, 'version', None), image=safe_image_url(getattr(master, 'image_url', None)))
+            version=getattr(master, 'version', None), image=player_image_url(master))
         signature = (player.source_player_id, tuple(str(identity[k]) for k in sorted(identity)))
         identities[signature] = identity
     if len(identities) == 1:
@@ -379,10 +416,10 @@ def player_profile(session, series, season, name):
     identity = _identities(session, career_pairs + [(None, row) for row in legacy])[wanted]
     breakdown = {}
     for game, line in career_pairs:
-        bucket = breakdown.setdefault(game.get('season_id'), dict(id=game.get('season_id'), name=game.get('season'), pairs=[], legacy=[]))
+        bucket = breakdown.setdefault(game.get('season_id'), dict(id=game.get('season_id'), number=game.get('season_no') or 0, name=game.get('season'), pairs=[], legacy=[]))
         bucket['pairs'].append((game, line))
     for row in legacy:
-        bucket = breakdown.setdefault(row['season_id'], dict(id=row['season_id'], name=row['season'], pairs=[], legacy=[]))
+        bucket = breakdown.setdefault(row['season_id'], dict(id=row['season_id'], number=row.get('season_no') or 0, name=row['season'], pairs=[], legacy=[]))
         bucket['legacy'].append(row)
     recent = []
     for game, line in sorted(career_pairs, key=lambda p: (p[0].get('season_no') or 0, p[0].get('date') or '', p[0].get('fixture_id') or 0), reverse=True)[:10]:
@@ -399,7 +436,7 @@ def player_profile(session, series, season, name):
     coverage = _coverage(matched_games, selected_legacy)
     coverage['career_aggregate_only_seasons'] = len({row['season_id'] for row in legacy})
     return dict(name=display, identity=identity, selected=_aggregate(selected_pairs, selected_legacy), career=career,
-        seasons=[dict(id=b['id'], name=b['name'], stats=_aggregate(b['pairs'], b['legacy']), aggregate_only=bool(b['legacy'])) for b in breakdown.values()],
+        seasons=[dict(id=b['id'], name=b['name'], stats=_aggregate(b['pairs'], b['legacy']), aggregate_only=bool(b['legacy'])) for b in sorted(breakdown.values(), key=lambda row: row['number'])],
         recent=recent, form=dict(matches=len(form) if form or not legacy else None,
             recent_runs=None if (not form and legacy) or any(r['batted'] and r['runs'] is None for r in form) else sum(r['runs'] or 0 for r in form),
             recent_wickets=None if (not form and legacy) or any(r['bowled'] and r['wickets'] is None for r in form) else sum(r['wickets'] or 0 for r in form)),

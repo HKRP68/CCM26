@@ -30,7 +30,7 @@ def selected_season(session, series, raw):
     seasons = LS.seasons(session, series)
     if raw == 'all':
         return seasons, None
-    selected = LS.get_season(session, series, raw) if raw else (seasons[-1] if seasons else None)
+    selected = LS.get_season(session, series, raw) if raw else None
     if raw and selected is None:
         raise ValueError('Unknown season')
     return seasons, selected
@@ -193,6 +193,12 @@ def confirmed_snapshot(session, series, season=None):
                         sr=round(100*p['runs']/p['balls'], 2) if p['balls'] else None,
                         economy=round(6*p['conceded']/p['bowled'], 2) if p['bowled'] else None)
                    for p in data['players']]
+        from services.cricket_portal_statistics import _identities, _norm
+        identities = _identities(session, [(None, {'name': p['name']}) for p in players])
+        for player in players:
+            identity = identities.get(_norm(player['name']), {})
+            for field in ('image', 'ovr', 'bat', 'bowl'):
+                player[field] = identity.get(field)
         matches = [dict(id=g['match_id'], team1=g.get('team1'), team2=g.get('team2'),
                         runs1=g.get('runs1'), runs2=g.get('runs2'), result=g.get('result'), stage=g.get('stage'))
                    for g in data['matches'][-20:]][::-1]

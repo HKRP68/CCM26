@@ -48,17 +48,41 @@ def _fixture_context(session, series, season):
         if tour is None:
             # Archive evidence already contains the public team snapshots.
             games = _loads(R.config(session, selected).archive_json, [])
+            saved = LS.season_saved(session, selected)
+            manifest = _loads(getattr(saved, 'franchise_results_json', None), {})
+            # Saved fixture history also retains no-results and explicitly
+            # simulated games; player scorecard archives intentionally don't.
+            if isinstance(manifest.get('matches'), list):
+                recorded = {g.get('fixture_id'): g for g in games if isinstance(g, dict)}
+                complete = []
+                for row in manifest['matches']:
+                    if not isinstance(row, dict) or not row.get('team1') or not row.get('team2'):
+                        continue
+                    original = recorded.get(row.get('fixture_id'), {})
+                    first = row.get('score1') if isinstance(row.get('score1'), dict) else {}
+                    second = row.get('score2') if isinstance(row.get('score2'), dict) else {}
+                    kind = row.get('result')
+                    complete.append(dict(original, fixture_id=row.get('fixture_id'),
+                        team1=row['team1'], team2=row['team2'], winner=row.get('winner'),
+                        runs1=first.get('runs'), runs2=second.get('runs'),
+                        wickets1=first.get('wickets'), wickets2=second.get('wickets'),
+                        stage=row.get('stage'), date=row.get('when'), result_type=kind,
+                        simulated=bool(row.get('simulated')),
+                        result=original.get('result') or ('No result' if kind == 'no_result' else
+                            'Match tied' if kind == 'tie' else f"{row['winner']} won" if row.get('winner') else None)))
+                games = complete
+
             for game in games:
                 if not isinstance(game, dict):
                     continue
                 fixtures.append(dict(id=game.get('fixture_id'), match_id=game.get('match_id'),
                     stage=game.get('stage') or 'league', status='completed', date=game.get('date'),
                     team1=game.get('team1'), team2=game.get('team2'), runs1=_int(game.get('runs1')),
-                    runs2=_int(game.get('runs2')), wickets1=None, wickets2=None,
+                    runs2=_int(game.get('runs2')), wickets1=game.get('wickets1'), wickets2=game.get('wickets2'),
                     winner=game.get('winner'), result=game.get('result'), venue=game.get('venue'),
                     pitch=game.get('pitch'), url=_match_url(game.get('match_id')), season=title,
-                    season_id=selected.id, round_no=None, match_no=None, simulated=False,
-                    result_type='win' if game.get('winner') else 'tie' if game.get('runs1') is not None and game.get('runs1') == game.get('runs2') else None))
+                    season_id=selected.id, round_no=None, match_no=game.get('match_no'), simulated=bool(game.get('simulated')),
+                    result_type=game.get('result_type') or ('win' if game.get('winner') else 'tie' if game.get('runs1') is not None and game.get('runs1') == game.get('runs2') else None)))
             continue
         rows = session.query(TournamentTeam).filter_by(tournament_id=tour.id).all()
         teams = {row.id: row for row in rows}
@@ -148,7 +172,7 @@ def _teams(fixtures, team_rows):
     for key, name in sorted(names.items()):
         row = latest.get(key)
         result.append(dict(name=name, captain=getattr(row, 'owner_name', None) or None, captain_role='Team manager' if getattr(row, 'owner_name', None) else None,
-            logo_url=safe_image_url(getattr(row, 'logo_url', None)), **_performance(fixtures, name)))
+            logo_url=(safe_image_url(row.logo_url) if row and str(row.logo_url or '').startswith(('https://', 'http://')) else f'/stats/media/teams/{row.id}.png' if row else None), **_performance(fixtures, name)))
     return result
 
 
@@ -234,6 +258,7 @@ def portal_snapshot(session, series, season=None):
 def _squad(session, row):
     """Roster fields only: never serialize source model objects or user IDs."""
     from models import ChallengePlayer
+    from services.cricket_portal_media import player_image_url
     from sqlalchemy.orm import joinedload
     if not row or not row.challenge_team_id:
         return []
@@ -254,7 +279,7 @@ def _squad(session, row):
             bat=_int(value('bat_rating', ('bat_rating', 'batting_rating', 'bat', 'batting'))),
             bowl=_int(value('bowl_rating', ('bowl_rating', 'bowling_rating', 'bowl', 'bowling'))),
             role=value('category', ('category', 'role')), country=value('country', ('country',)),
-            form=None))
+            image=player_image_url(master), form=None))
     return result
 
 

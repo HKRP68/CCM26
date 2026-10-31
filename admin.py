@@ -26747,10 +26747,39 @@ def public_stats_article(article_id):
         db.close()
 
 
+@app.route('/stats/media/players/<int:player_id>.png')
+def public_stats_player_image(player_id):
+    from models import Player
+    from services.cricket_portal_media import player_image
+    db = get_session()
+    try:
+        if db.get(Player, player_id) is None:
+            abort(404)
+        art = player_image(db, player_id)
+        if art:
+            return send_file(io.BytesIO(art[0]), mimetype=art[1], max_age=3600)
+        return send_file(os.path.join(app.static_folder, 'images', 'player-placeholder.svg'), max_age=300)
+    finally:
+        db.close()
+
+
+@app.route('/stats/media/teams/<int:team_id>.png')
+def public_stats_team_image(team_id):
+    from services.cricket_portal_media import team_image
+    db = get_session()
+    try:
+        art = team_image(db, team_id)
+        if art:
+            return send_file(io.BytesIO(art[0]), mimetype=art[1], max_age=3600)
+        abort(404)
+    finally:
+        db.close()
+
+
 @app.route('/api/stats/<int:series_id>/<kind>')
 def public_stats_feed(series_id, kind):
     from services import live_records
-    if kind not in ('live', 'records', 'portal', 'explorer', 'player', 'team', 'venue'):
+    if kind not in ('live', 'records', 'portal', 'explorer', 'player', 'team', 'venue', 'seasons', 'compare'):
         abort(404)
     db = get_session()
     try:
@@ -26769,6 +26798,7 @@ def public_stats_feed(series_id, kind):
             from services import cricket_portal_cache as cache
             from services import cricket_portal_competitions as competitions
             from services import cricket_portal_statistics as statistics
+            from services import cricket_portal_history as history
             keys = ('player', 'team', 'opponent', 'pitch', 'venue', 'stage', 'discipline', 'page', 'limit')
             filters = {key: request.args[key].strip()[:150] for key in keys if request.args.get(key)}
             name = (request.args.get('name') or '').strip()
@@ -26776,9 +26806,20 @@ def public_stats_feed(series_id, kind):
                 if not name or len(name) > 150:
                     return jsonify(error='A valid name is required.'), 400
                 filters = {'name': name}
-            if kind == 'portal':
+            if kind in ('portal', 'seasons'):
                 filters = {}
+            if kind == 'compare':
+                mode = request.args.get('mode', 'team')
+                left, right = (request.args.get(k, '').strip() for k in ('left', 'right'))
+                if mode not in ('team', 'player') or not left or not right or max(len(left), len(right)) > 150:
+                    return jsonify(error='Choose two teams or players to compare.'), 400
+                filters = {'mode': mode, 'left': left, 'right': right}
             def build():
+                if kind == 'seasons':
+                    return history.seasons_snapshot(db, series)
+                if kind == 'compare':
+                    compare = history.team_comparison if mode == 'team' else history.player_comparison
+                    return compare(db, series, selected, left, right)
                 if kind == 'portal':
                     return competitions.portal_snapshot(db, series, selected)
                 if kind == 'explorer':
