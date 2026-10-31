@@ -1286,3 +1286,35 @@ def test_website_setting_plays_a_tied_first_super_over_before_the_second(monkeyp
         raise AssertionError('Second Super Over never opened')
     asyncio.run(play())
     assert '_planned_super_overs' not in '\n'.join(m.text or '' for m in ctx.bot.messages)
+
+
+def test_tournament_publications_wait_for_match_chat_results(monkeypatch):
+    """A slow record book/channel must not hold back the result or scorecard."""
+    from services import league_records, tournament_channels
+
+    random.seed(7)
+    _patch_finalize(so_mod)
+    ctx = FakeContext()
+    state = _tied_state()
+    mid = state["match_id"]
+    publications = []
+
+    def assert_results_delivered():
+        texts = "\n".join(m.text for m in ctx.bot.messages if m.text)
+        assert "SUPER OVER RESULT" in texts
+        assert ("won the match by" in texts) or ("MATCH RESULT" in texts)
+        assert _get(ctx, mid) is None
+
+    async def records(*args, **kwargs):
+        assert_results_delivered()
+        publications.append("records")
+
+    async def channels(*args, **kwargs):
+        assert_results_delivered()
+        publications.append("channels")
+
+    monkeypatch.setattr(league_records, "announce", records)
+    monkeypatch.setattr(tournament_channels, "publish_match", channels)
+    assert asyncio.run(start_super_over(ctx, mid, state))
+    asyncio.run(_play_match(ctx, mid))
+    assert publications == ["records", "channels"]

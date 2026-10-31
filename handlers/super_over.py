@@ -2052,14 +2052,6 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
     finally:
         session.close()
 
-    from services import league_records
-    await league_records.announce(context, so.get("main_state") or {}, final=True)
-
-    from services.tournament_channels import publish_match
-    await publish_match(context, so.get('main_state') or {},
-        {'tie': False, 'winner': win['name'], 'margin': margin, 'margin_type': margin_type,
-         'margin_text': margin_text}, super_over=so)
-
     # Winner announcement.
     mvp_name, mvp_line = _super_over_mvp(so, winner_uid)
     mvp_block = ""
@@ -2176,6 +2168,16 @@ async def _finalize(context, mid, winner_uid, loser_uid, decided_by="runs"):
     except Exception:
         logger.exception("Super Over cleanup failed (%s)", mid)
     context.bot_data.pop(_so_key(mid), None)
+
+    # Publish season records and channel copies only once the match chat has
+    # received its result, scorecards, rewards and analysis, and state is clean.
+    from services import league_records
+    await league_records.announce(context, so.get("main_state") or {}, final=True)
+
+    from services.tournament_channels import publish_match
+    await publish_match(context, so.get('main_state') or {},
+        {'tie': False, 'winner': win['name'], 'margin': margin, 'margin_type': margin_type,
+         'margin_text': margin_text}, super_over=so)
 
 
 async def _finalize_practice(context, so, winner_uid, loser_uid, margin_text, margin):

@@ -5191,9 +5191,6 @@ async def _complete_match(context, mid, state):
                        f"{lose_m} ({result['loser']}) "
                        f"by {result['margin']} {result['margin_type']}!")
 
-    from services import league_records
-    await league_records.announce(context, state, final=True)
-
     # The admin-configured win celebration, if one is set up.
     if not result["tie"]:
         try:
@@ -5284,9 +5281,6 @@ async def _complete_match(context, mid, state):
     except Exception:
         logger.exception("cipl match summary image failed for match %s", mid)
 
-    from services.tournament_channels import publish_match
-    await publish_match(context, state, result, photo=channel_summary_image)
-
     # Ranked / rivalry card, then the highlights reel — both
     # best-effort and read from what the finalize above already stored.
     try:
@@ -5320,6 +5314,15 @@ async def _complete_match(context, mid, state):
     await _ss(context, mid, state, next_action=A_COMPLETED, force=True)
     cleanup_state(context, mid)
     release_match_lock(mid)
+
+    # Record books scan linked seasons and upload a document; channel delivery
+    # can also wait on Telegram. Keep both after all match-chat messages and
+    # cleanup so they cannot hold back the result, cards, recap or match lock.
+    from services import league_records
+    await league_records.announce(context, state, final=True)
+
+    from services.tournament_channels import publish_match
+    await publish_match(context, state, result, photo=channel_summary_image)
 
 
 async def _send_highlights(context, state, result):
