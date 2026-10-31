@@ -270,6 +270,42 @@ def _match_file_caption(series, match_id, *, corrected=False):
     return f"{series.name} | Match #{match_id} — all-seasons records{' (corrected)' if corrected else ''}"
 
 
+def record_update_text(changes, match_id):
+    """One small message; combine identical season and all-time achievements."""
+    merged = {}
+    for change in changes:
+        action = 'set' if change['first_record'] else change['kind']
+        key = (change['label'], tuple(change['holders']), change['value'], change['unit'], action)
+        merged.setdefault(key, []).append(change['scope'])
+    if not merged:
+        return ''
+    lines = [f"🏅 Records · Match #{match_id}"]
+    for (label, holders, value, unit, action), scopes in list(merged.items())[:4]:
+        names = ', '.join(holders)
+        if len(names) > 55:
+            names = names[:52] + '…'
+        line = f"• {label} {action}: {names} — {value} {unit} ({' / '.join(scopes)})"
+        lines.append(line[:130])
+    if len(merged) > 4:
+        lines.append(f"+{len(merged) - 4} more records")
+    return '\n'.join(lines)
+
+
+def queue_record_update(session, state):
+    from services import league_records as R, league_season_service as LS
+    season = LS.season_for_tournament(session, state['tournament_id'])
+    if season is None or not R.config(session, season).alerts_enabled:
+        return None
+    game = next((g for g in R.evidence(session, season) if g['match_id'] == state['match_id']), None)
+    if game is None:
+        return None
+    text = record_update_text(record_changes(session, LS.series_of(session, season), season, game), state['match_id'])
+    if not text:
+        return None
+    return queue(session, season, state['match_id'], state['chat_id'], 'record_summary',
+                 text, fixture_id=game['fixture_id'], fingerprint=hashlib.sha256(text.encode('utf-8')).hexdigest())
+
+
 def queue_match_file(session, state):
     from services import league_records as R, league_season_service as LS
     season = LS.season_for_tournament(session, state['tournament_id'])
@@ -311,7 +347,7 @@ def reconcile(session,tournament_id):
     affected = [s.id for s in seasons.values() if s.season_no >= season.season_no]
     rows = session.query(LeagueRecordPublication).filter(or_(
         LeagueRecordPublication.season_id == season.id,
-        and_(LeagueRecordPublication.season_id.in_(affected), LeagueRecordPublication.kind == 'match_records')))
+        and_(LeagueRecordPublication.season_id.in_(affected), LeagueRecordPublication.kind.in_(('match_records', 'record_summary')))))
     for row in rows:
         if row.kind.startswith(('watch:', 'record:')): continue
         source_season = seasons[row.season_id]
@@ -321,6 +357,10 @@ def reconcile(session,tournament_id):
         metadata = _match_file_metadata(session, series, source_season, game) if game and row.kind == 'match_records' else None
         fingerprint = (hashlib.sha256(metadata['markdown'].encode('utf-8')).hexdigest() if metadata else
                        policy_digest(session,source_season,game) if game else 'removed')
+        summary_text = None
+        if game and row.kind == 'record_summary':
+            summary_text = record_update_text(record_changes(session, series, source_season, game), row.match_id) or f'🏅 Records · Match #{row.match_id}: earlier record claims withdrawn.'
+            fingerprint = hashlib.sha256(summary_text.encode('utf-8')).hexdigest()
         if row.fingerprint is None:
             # First official completion anchors provisional announcements.
             if game is not None:
@@ -331,6 +371,8 @@ def reconcile(session,tournament_id):
         if game and row.kind == 'match_records':
             row.text = _match_file_caption(series, row.match_id, corrected=True)
             row.metadata_json = json.dumps(metadata)
+        elif game and row.kind == 'record_summary':
+            row.text = summary_text
         elif game:
             row.text=recap_text(session,series,source_season,game,corrected=True)
             if row.kind!='recap':
@@ -355,6 +397,8 @@ async def dispatch(context,*,ids=None):
         try:
             stale=datetime.utcnow()-timedelta(minutes=5)
             s.query(LeagueRecordPublication).filter(LeagueRecordPublication.status=='sending',LeagueRecordPublication.updated_at<stale).update({'status':'pending'},synchronize_session=False)
+            # Never send queued legacy season-report documents after this change.
+            s.query(LeagueRecordPublication).filter_by(kind='match_records', status='pending').update({'status': 'cancelled'}, synchronize_session=False)
             q=s.query(LeagueRecordPublication).filter_by(status='pending').filter(~LeagueRecordPublication.kind.like('watch:%'), ~LeagueRecordPublication.kind.like('record:%')).order_by(LeagueRecordPublication.id)
             if ids is not None: q=q.filter(LeagueRecordPublication.id.in_(ids))
             result=[]
@@ -378,29 +422,7 @@ async def dispatch(context,*,ids=None):
         finally:s.close()
     for item in await asyncio.to_thread(claim):
         try:
-            if item['kind'] == 'match_records':
-                import io
-                from telegram import InputFile, InputMediaDocument
-                metadata = item['metadata']
-                document = InputFile(io.BytesIO(metadata.get('markdown', item['text']).encode('utf-8')),
-                                     filename=metadata.get('filename', 'match-records.md'))
-                if item['message_id']:
-                    try:
-                        await context.bot.edit_message_media(chat_id=item['chat_id'], message_id=item['message_id'],
-                            media=InputMediaDocument(document, caption=item['text']))
-                    except Exception as exc:
-                        error = str(exc).lower()
-                        if any(reason in error for reason in ('message to edit not found', "message can't be edited", 'message can not be edited')):
-                            message = await context.bot.send_document(chat_id=item['chat_id'], document=document, caption=item['text'])
-                            item['message_id'] = message.message_id
-                        elif 'message is not modified' not in error:
-                            raise
-                    message_id = item['message_id']
-                else:
-                    message = await context.bot.send_document(chat_id=item['chat_id'], document=document,
-                                                              caption=item['text'])
-                    message_id = message.message_id
-            elif item['message_id']:
+            if item['message_id']:
                 try:
                     await context.bot.edit_message_text(chat_id=item['chat_id'],message_id=item['message_id'],text=item['text'])
                 except Exception as exc:

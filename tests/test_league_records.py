@@ -441,13 +441,13 @@ class RecordTests(pages.PageCase):
         season_archive.delete_tournament(self.session,self.tour,keep_stats=True);self.session.commit()
         self.assertEqual(13,self.board('p50')['holders'][0]['value'])
 
-    def test_post_match_file_is_single_durable_document_and_correctable(self):
+    def test_post_match_records_are_one_short_text_and_correctable(self):
         from services import league_record_publications as P
         from services.tournament_service import recompute_tournament, delete_tournament_match
         from models import LeagueRecordPublication
         async def inline(fn, *args, **kwargs): return fn(*args, **kwargs)
         bot = SimpleNamespace(send_document=AsyncMock(return_value=SimpleNamespace(message_id=60)),
-                              edit_message_media=AsyncMock(), send_message=AsyncMock())
+                              edit_message_text=AsyncMock(), send_message=AsyncMock(return_value=SimpleNamespace(message_id=60)))
         context = SimpleNamespace(bot=bot, bot_data={})
         state = self.state()
         state['match_id'] = self.game.match_id
@@ -456,22 +456,42 @@ class RecordTests(pages.PageCase):
             bot.send_document.assert_not_awaited()
             asyncio.run(self.R.announce(context, state, final=True))
             asyncio.run(self.R.announce(context, state, final=True))
-        self.assertEqual(bot.send_document.await_count, 1)
-        bot.send_message.assert_not_awaited()
-        self.assertTrue(bot.send_document.call_args.kwargs['document'].filename.endswith('.md'))
-        row = self.session.query(LeagueRecordPublication).filter_by(match_id=state['match_id'], kind='match_records').one()
-        self.assertIn('All-seasons record holders', json.loads(row.metadata_json)['markdown'])
-        self.assertIn('all-seasons records', bot.send_document.call_args.kwargs['caption'])
+        bot.send_document.assert_not_awaited()
+        self.assertEqual(bot.send_message.await_count, 1)
+        text = bot.send_message.call_args.kwargs['text']
+        self.assertLess(len(text), 650)
+        self.assertIn('Records', text)
+        row = self.session.query(LeagueRecordPublication).filter_by(match_id=state['match_id'], kind='record_summary').one()
+        self.assertEqual({}, json.loads(row.metadata_json))
         self.game.scorecard_json = json.dumps([self.line('Alpha',100,60)])
         recompute_tournament(self.session, self.tour.id)
         self.session.commit()
         with patch.object(P.asyncio, 'to_thread', side_effect=inline):
             asyncio.run(P.dispatch(context))
-        self.assertEqual(bot.edit_message_media.call_args.kwargs['message_id'], 60)
-        self.assertEqual(bot.send_document.await_count, 1)
+        self.assertEqual(bot.edit_message_text.call_args.kwargs['message_id'], 60)
+        bot.send_document.assert_not_awaited()
         delete_tournament_match(self.session, self.game.id)
         self.session.commit()
-        self.assertIn('RETRACTED', json.loads(row.metadata_json)['markdown'])
+        self.assertIn('RETRACTED', row.text)
+
+    def test_pending_legacy_report_is_cancelled_without_sending_a_file(self):
+        from services import league_record_publications as P
+        row = P.queue_match_file(self.session, dict(self.state(), match_id=self.game.match_id))
+        self.session.commit()
+        async def inline(fn, *args, **kwargs): return fn(*args, **kwargs)
+        bot = SimpleNamespace(send_document=AsyncMock(), send_message=AsyncMock())
+        with patch.object(P.asyncio, 'to_thread', side_effect=inline):
+            asyncio.run(P.dispatch(SimpleNamespace(bot=bot)))
+        self.session.expire_all()
+        self.assertEqual('cancelled', row.status)
+        bot.send_document.assert_not_awaited()
+        bot.send_message.assert_not_awaited()
+
+    def test_no_record_change_queues_nothing(self):
+        from services import league_record_publications as P
+        with patch.object(P, 'record_changes', return_value=[]):
+            row = P.queue_record_update(self.session, dict(self.state(), match_id=self.game.match_id))
+        self.assertIsNone(row)
 
     def test_post_match_file_includes_archived_seasons_and_career_totals(self):
         from services import league_record_publications as P, season_archive
@@ -677,3 +697,31 @@ class RecordTests(pages.PageCase):
         alerts=self.R.collect_alerts(self.session,state)
         record=next(a for a in alerts if a[2]['record']=='Highest team total')
         self.assertEqual(self.b.name,record[2]['opponent'])
+
+
+class CompactRecordUpdateTests(unittest.TestCase):
+    def test_no_change_is_silent(self):
+        from services.league_record_publications import record_update_text
+        self.assertEqual('', record_update_text([], 42))
+
+    def test_combines_scopes_and_names_the_record_change(self):
+        from services.league_record_publications import record_update_text
+        changes = [dict(label='Highest score', holders=['Alpha'], value='120', unit='runs',
+                        first_record=False, kind='broken', scope=scope)
+                   for scope in ('season', 'all-time')]
+        text = record_update_text(changes, 42)
+        self.assertEqual(2, len(text.splitlines()))
+        self.assertIn('Highest score broken: Alpha — 120 runs (season / all-time)', text)
+        changes[0].update(first_record=True)
+        changes[1].update(kind='equalled')
+        text = record_update_text(changes, 42)
+        self.assertIn('Highest score set:', text)
+        self.assertIn('Highest score equalled:', text)
+
+    def test_many_changes_stay_small(self):
+        from services.league_record_publications import record_update_text
+        changes = [dict(label=f'Record {i}', holders=['Alpha'], value='100', unit='runs',
+                        first_record=False, kind='broken', scope='season') for i in range(20)]
+        text = record_update_text(changes, 42)
+        self.assertLess(len(text), 650)
+        self.assertIn('+16 more records', text)

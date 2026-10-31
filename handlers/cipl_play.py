@@ -5315,8 +5315,8 @@ async def _complete_match(context, mid, state):
     cleanup_state(context, mid)
     release_match_lock(mid)
 
-    # Record books scan linked seasons and upload a document; channel delivery
-    # can also wait on Telegram. Keep both after all match-chat messages and
+    # Record updates scan linked seasons; channel delivery can also wait on
+    # Telegram. Keep both after all match-chat messages and
     # cleanup so they cannot hold back the result, cards, recap or match lock.
     from services import league_records
     await league_records.announce(context, state, final=True)

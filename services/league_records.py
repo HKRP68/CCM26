@@ -370,7 +370,7 @@ def collect_alerts(session,state,*,final=False):
 
 
 async def announce(context, state, *, final=False):
-    """Publish one verified Markdown record file after the match commits."""
+    """Publish a compact record update only after the match commits."""
     if not final or not state.get('tournament_id') or not state.get('chat_id'):
         return
     from services import league_record_publications as P
@@ -378,7 +378,7 @@ async def announce(context, state, *, final=False):
         from database import get_session
         session = get_session()
         try:
-            row = P.queue_match_file(session, state)
+            row = P.queue_record_update(session, state)
             ids = [row.id] if row else []
             session.commit()
             return ids
