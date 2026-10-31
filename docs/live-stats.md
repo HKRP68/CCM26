@@ -6,12 +6,14 @@ The read-only stats website lives in the existing Flask application:
 - `/stats/<series_id>` opens the latest season's scores and statistics.
 - `?season=all` shows all seasons; `?season=<season_id>` selects a season.
 
-The site includes a live score centre with batting and bowling figures, confirmed
-player statistics, record holders, a points table, and recent match results.
+The site includes live scorecards and commentary, fixtures/results, a newsroom,
+team dashboards, player profiles, a tournament centre, a Statsguru-style search,
+all record categories, and ground/pitch analysis.
 The admin records page links to its public counterpart. Inactive competitions
 are not published. Private live matches are excluded, and responses contain only
-cricket statistics: no captain selections, user identifiers, chat identifiers,
-roster details, or raw match state.
+public cricket facts: no private captain selections, user identifiers, chat
+identifiers, raw roster identifiers, administrative winner settings, or raw
+match state. Public squad names and OVR/BAT/BOWL ratings are visible.
 
 ## Refresh and performance
 
@@ -33,7 +35,7 @@ invalidation for player-only administrative corrections until the outer
 transaction commits. Nested savepoint commits do not expose an uncommitted
 correction through the cache.
 
-Both polling loops pause in background tabs, prevent overlapping requests, abort
+All automatic polling loops pause in background tabs, prevent overlapping requests, abort
 unresponsive requests after 10 seconds, and reconnect on returning to the page.
 Neither endpoint accepts writes. There is no statistics rebuild or network
 publication on the live delivery path and no separate database or deployment.
@@ -63,3 +65,45 @@ replays and backdated additions still update affected historical snapshots.
 Telegram transport latency and server-imposed flood-control waits still apply.
 This removes application work from the critical delivery path rather than
 promising that a remote service will always respond instantly.
+
+## Opening the portal
+
+Use `/cricinfo`, `/statsweb`, or `/recordsweb` in Telegram. Each opens a button to
+`/stats` using the configured `WEBAPP_URL` host. The command does no historical
+work and can be used in a group or private chat. Tournament match messages also
+carry the Live scores & stats button.
+
+## Portal sections and data
+
+- **Fixtures and results**: upcoming/live/completed filters, round, stage, venue,
+  pitch and match links. Match times remain unavailable when no date is recorded.
+- **Newsroom**: published CMU articles/interviews plus factual match victories,
+  active injury reports and completed transfers where recorded. Publishing and
+  moderation stay in the existing News admin screens; unpublished content is hidden.
+- **Tournament centre**: points tables, playoffs, tied Orange/Purple Cap leaders
+  and season selection. Synthetic deadline simulations are labelled on fixtures.
+- **Team dashboards**: registered squads and ratings, recorded manager, recent
+  form, fixtures, team records and injuries. A playing captain is not inferred
+  from the manager. Archived appearances are distinguished from a full roster.
+- **Player profiles**: OVR/BAT/BOWL, selected-season and career totals, recent
+  performances/form, personal records and opponent/pitch/venue splits. Squad
+  members can open a profile before their first recorded appearance. Same-name
+  versions have unknown ratings unless the recorded identity is unambiguous.
+- **Stats explorer**: combine player, season, team, opponent, pitch, venue and
+  stage filters; switch batting/bowling and page through results. Strike rate,
+  average and economy use pooled denominators, rather than averaging match rates.
+- **Records and grounds**: search every available record category and view all
+  joint holders. Ground profiles include team/player results, scoring averages,
+  successful chases, pitch splits and validated phase performance.
+
+Missing historical denominators or surface data remain unavailable, rather than
+being counted as zero. Phase analysis only uses saved and validated deliveries.
+No interviews, transfer reports, results, or ratings are invented for an empty
+section. News articles can cover transfers outside the linked auction system.
+
+The public API adds read-only `/api/stats/<series_id>/portal`, `/explorer`,
+`/player?name=...`, `/team?name=...` and `/venue?name=...`. All accept the existing
+`season` query. `/api/stats/news/<article_id>` serves published articles without
+changing view counts. Historical responses have a bounded 20-second cache,
+completion signatures and committed-correction invalidation. They are computed
+on website demand and never during a ball, over or scorecard delivery.

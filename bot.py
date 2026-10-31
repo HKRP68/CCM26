@@ -1798,6 +1798,8 @@ def main():
         # its players' stats (services/league_season_service.py).
         from handlers.league_seasons import seasons_handler, seasons_callback
         app.add_handler(CommandHandler("seasons", seasons_handler))
+        from handlers.stats_website import stats_website_handler
+        app.add_handler(CommandHandler(["cricinfo", "statsweb", "recordsweb"], stats_website_handler))
         app.add_handler(CallbackQueryHandler(seasons_callback, pattern=r"^ls_"))
 
         # ── Challenge League Tournament: the public follow-along views ──

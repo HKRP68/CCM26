@@ -26728,10 +26728,29 @@ def public_stats_series(series_id):
         db.close()
 
 
+@app.route('/api/stats/news/<int:article_id>')
+def public_stats_article(article_id):
+    from models import NewsArticle
+    from services.news_service import STATUS_PUBLISHED
+    db = get_session()
+    try:
+        article = db.query(NewsArticle).filter_by(id=article_id, status=STATUS_PUBLISHED).first()
+        if article is None:
+            abort(404)
+        response = jsonify(id=article.id, title=article.headline, body=article.body,
+            author=article.author_name, kind=article.kind or 'article',
+            date=article.published_at.isoformat() if article.published_at else None,
+            image_url=f'/api/news/{article.id}/image' if article.image_key else None)
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    finally:
+        db.close()
+
+
 @app.route('/api/stats/<int:series_id>/<kind>')
 def public_stats_feed(series_id, kind):
     from services import live_records
-    if kind not in ('live', 'records'):
+    if kind not in ('live', 'records', 'portal', 'explorer', 'player', 'team', 'venue'):
         abort(404)
     db = get_session()
     try:
@@ -26742,8 +26761,39 @@ def public_stats_feed(series_id, kind):
             _, selected = live_records.selected_season(db, series, request.args.get('season'))
         except ValueError:
             abort(404)
-        data = (live_records.live_snapshot(db, series, selected) if kind == 'live' else
-                live_records.confirmed_snapshot(db, series, selected))
+        if kind == 'live':
+            data = live_records.live_snapshot(db, series, selected)
+        elif kind == 'records':
+            data = live_records.confirmed_snapshot(db, series, selected)
+        else:
+            from services import cricket_portal_cache as cache
+            from services import cricket_portal_competitions as competitions
+            from services import cricket_portal_statistics as statistics
+            keys = ('player', 'team', 'opponent', 'pitch', 'venue', 'stage', 'discipline', 'page', 'limit')
+            filters = {key: request.args[key].strip()[:150] for key in keys if request.args.get(key)}
+            name = (request.args.get('name') or '').strip()
+            if kind in ('player', 'team', 'venue'):
+                if not name or len(name) > 150:
+                    return jsonify(error='A valid name is required.'), 400
+                filters = {'name': name}
+            if kind == 'portal':
+                filters = {}
+            def build():
+                if kind == 'portal':
+                    return competitions.portal_snapshot(db, series, selected)
+                if kind == 'explorer':
+                    return statistics.explorer(db, series, selected, filters)
+                if kind == 'player':
+                    return statistics.player_profile(db, series, selected, name)
+                if kind == 'team':
+                    return competitions.team_profile(db, series, selected, name)
+                return statistics.venue_profile(db, series, selected, name)
+            try:
+                data = cache.read(db, series, selected, kind, filters, build)
+            except ValueError as exc:
+                return jsonify(error=str(exc)), 400
+            if data is None:
+                abort(404)
         response = jsonify(data)
         response.headers['Cache-Control'] = 'no-store'
         return response

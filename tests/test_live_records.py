@@ -163,3 +163,20 @@ class LiveRecordsTests(pages.PageCase):
         data = self.client.get(self.base + '/live').json['matches'][0]
         self.assertEqual(14, data['balls'])
         self.assertEqual(5, data['balls_per_over'])
+
+
+    def test_live_commentary_is_bounded_to_public_delivery_fields(self):
+        _, stored, state = self.live_match()
+        state['commentary_log'] = [dict(type='ball', name='Batter', text='Four through cover',
+            runs=4, over='6.3', score='49/1', isWicket=False,
+            bowling_approach='PRIVATE_PLAN', user_id=999)] * 20
+        state['commentary_log'].append(dict(type='private_plan', text='SECRET_SELECTION'))
+        stored.state_json = json.dumps(state)
+        self.session.commit()
+        response = self.client.get(self.base + '/live')
+        row = response.json['matches'][0]
+        self.assertEqual(12, len(row['commentary']))
+        self.assertIn('Four through cover', row['commentary'][0]['text'])
+        self.assertNotIn('PRIVATE_PLAN', response.text)
+        self.assertNotIn('SECRET_SELECTION', response.text)
+        self.assertNotIn('user_id', row['commentary'][0])

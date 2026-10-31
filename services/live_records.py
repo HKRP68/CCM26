@@ -64,6 +64,22 @@ def _figures(state, side):
     return result
 
 
+def _commentary(state):
+    allowed = {'ball', 'extra', 'four', 'six', 'dot', 'one', 'two', 'three', 'run'}
+    result = []
+    log = state.get('commentary_log') or []
+    if not isinstance(log, list):
+        return result
+    for row in log[-40:]:
+        if not isinstance(row, dict) or row.get('type') not in allowed:
+            continue
+        result.append(dict(type=row['type'], name=str(row.get('name') or '')[:150],
+            text=str(row.get('text') or '')[:600], over=str(row.get('over') or '')[:20],
+            score=str(row.get('score') or '')[:30], runs=_number(row.get('runs')),
+            is_wicket=bool(row.get('isWicket'))))
+    return result[-12:]
+
+
 def live_snapshot(session, series, season=None):
     from models import LeagueSeason, Match, MatchState
     from services.cipl_match import balls_bowled, balls_per_unit
@@ -97,6 +113,11 @@ def live_snapshot(session, series, season=None):
             balls=balls, balls_per_over=bpu, overs=_number(state.get('overs')),
             target=_number(state.get('target')) or None, first_innings=first,
             batting=_figures(state, 'bat'), bowling=_figures(state, 'bowl'),
+            commentary=_commentary(state),
+            run_rate=round(6 * _number(state.get('total_runs')) / balls, 2) if balls else None,
+            required_rate=(round(6 * max(0, _number(state.get('target')) - _number(state.get('total_runs'))) /
+                (max(0, _number(state.get('overs'))) * bpu - balls), 2)
+                if state.get('target') and _number(state.get('overs')) * bpu > balls else None),
             version=_number(stored.version), updated_at=stored.last_modified.isoformat() if stored.last_modified else None,
             url=f'/cricket?match_id={match.id}'))
     return dict(matches=matches, updated_at=int(time.time()))
@@ -120,6 +141,8 @@ def invalidate_records_cache():
     """Used after scorecard corrections; in-flight live polls are unaffected."""
     with _CACHE_LOCK:
         _CACHE.clear()
+    from services.cricket_portal_cache import invalidate
+    invalidate()
 
 
 def invalidate_after_commit(session):
@@ -162,10 +185,14 @@ def confirmed_snapshot(session, series, season=None):
         data = R.boards(session, series, season)
         records = [dict(key=b['key'], label=b['label'], unit=b['unit'],
                         holders=[dict(name=h['name'], team=h.get('team'), display=h['display'])
-                                 for h in b['holders'][:5]]) for b in data['boards']]
+                                 for h in b['holders']]) for b in data['boards']]
         players = [dict(name=p['name'], team=p.get('team'), matches=p['matches'], runs=p['runs'],
                         balls=p['balls'], wickets=p['wkts'], conceded=p['conceded'], bowled=p['bowled'],
-                        fours=p['fours'], sixes=p['sixes']) for p in data['players']]
+                        fours=p['fours'], sixes=p['sixes'], outs=p['outs'],
+                        average=round(p['runs']/p['outs'], 2) if p['outs'] else None,
+                        sr=round(100*p['runs']/p['balls'], 2) if p['balls'] else None,
+                        economy=round(6*p['conceded']/p['bowled'], 2) if p['bowled'] else None)
+                   for p in data['players']]
         matches = [dict(id=g['match_id'], team1=g.get('team1'), team2=g.get('team2'),
                         runs1=g.get('runs1'), runs2=g.get('runs2'), result=g.get('result'), stage=g.get('stage'))
                    for g in data['matches'][-20:]][::-1]
