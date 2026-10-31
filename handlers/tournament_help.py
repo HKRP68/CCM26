@@ -141,7 +141,7 @@ ADMIN_SECTIONS = (
          "Every XI must field N players rated X or lower"),
         ("/tseasons", "/tseason", "Link past seasons into Total Season Stats"),
         ("/remindmatch", "/nudge",
-         "Remind pending matches: /remindmatch pending · round 2 · match 14"),
+         "Remind pending matches: /remindmatch R1-R10 pending · round 2 · match 14"),
     )),
     ("🔒 Admin · Tournament Draft", (
         ("/dadmin", "", "Every draft admin command"),

@@ -39,6 +39,7 @@ A reminded fixture then goes quiet for ``COOLDOWN`` (see
 
 import asyncio
 import logging
+import re
 from html import escape
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -115,6 +116,20 @@ def _split_args(args):
     return " ".join(words).strip(), "", force
 
 
+def _round_range(query):
+    """Parse compact round scopes; return None for ordinary team names."""
+    match = re.fullmatch(r"r([0-9]+)(?:\s*[-–]\s*r?([0-9]+))?(?:\s+pending)?", query, re.I)
+    if match is None:
+        if re.match(r"^r[0-9]+\s*[-–]", query, re.I):
+            raise ValueError("Use R1-R10 pending, with positive rounds in ascending order.")
+        return None
+    start = int(match[1])
+    end = int(match[2] or match[1])
+    if not 1 <= start <= end <= 2147483647:
+        raise ValueError("Round ranges must be positive and ascending, e.g. R1-R10 pending.")
+    return start, end
+
+
 def _resolve_team(session, tours, query):
     """``(tour, team, candidates)`` for a typed team name, across live tournaments."""
     near = (None, [])
@@ -174,7 +189,7 @@ class _Plan:
 
 
 def build_plan(session, tg_id, team_id=None, opponent_id=None, force=False,
-               tour_id=None, round_no=None, match_no=None):
+               tour_id=None, round_no=None, match_no=None, round_end=None):
     """Resolve a run into the nudges it would send, or an error to show instead.
 
     Kept apart from the command handler so the preview and the Send button both
@@ -214,8 +229,9 @@ def build_plan(session, tg_id, team_id=None, opponent_id=None, force=False,
                  else f"{team.name}")
     else:
         fixtures = mrs.pending_fixtures(session, tour.id, round_no=round_no,
-                                        match_no=match_no)
-        scope = (f"Round {round_no}" if round_no is not None else
+                                        match_no=match_no, round_end=round_end)
+        scope = (f"Rounds {round_no}–{round_end} · pending matches" if round_end is not None else
+                 f"Round {round_no}" if round_no is not None else
                  f"Match M{match_no}" if match_no is not None else
                  "every unplayed fixture")
 
@@ -279,7 +295,7 @@ def render_preview(session, plan):
     return "\n".join(out)
 
 
-def _keyboard(opener, team_id, opponent_id, force, tour_id, round_no=None, match_no=None):
+def _keyboard(opener, team_id, opponent_id, force, tour_id, round_no=None, match_no=None, round_end=None):
     """Send / Cancel, bound to the admin who opened the preview.
 
     Everything the Send needs is in the button — the plan is re-resolved from
@@ -289,6 +305,8 @@ def _keyboard(opener, team_id, opponent_id, force, tour_id, round_no=None, match
                f"{1 if force else 0}")
     if round_no is not None or match_no is not None:
         payload += f"_{round_no or 0}_{match_no or 0}"
+    if round_end is not None:
+        payload += f"_{round_end}"
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("📣 Send reminders",
                              callback_data=f"{CB_PREFIX}go_{payload}"),
@@ -329,7 +347,15 @@ async def remindmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
                 return
             tours = [tour]
         first, second, force = _split_args(args)
-        round_no = match_no = None
+        round_no = match_no = round_end = None
+        try:
+            selected_range = _round_range(first) if not second else None
+        except ValueError as exc:
+            await message.reply_text(str(exc))
+            return
+        if selected_range is not None:
+            round_no, round_end = selected_range
+            first = ""
         words = first.split()
         if words and words[0].lower() in ("pending", "round", "match"):
             kind = words[0].lower()
@@ -367,12 +393,12 @@ async def remindmatch_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         plan = build_plan(session, tg_id, team_id=team_id,
                           opponent_id=opponent_id, force=force, tour_id=tour.id,
-                          round_no=round_no, match_no=match_no)
+                          round_no=round_no, match_no=match_no, round_end=round_end)
         if plan.error:
             await message.reply_text(plan.error, parse_mode="HTML")
             return
         markup = (_keyboard(tg_id, team_id, opponent_id, plan.force, plan.tour.id,
-                            round_no, match_no)
+                            round_no, match_no, round_end)
                   if plan.sending else None)
         await message.reply_text(render_preview(session, plan), parse_mode="HTML",
                                  disable_web_page_preview=True,
@@ -453,10 +479,11 @@ async def remindmatch_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     try:
         parts = [int(part) for part in data[3:].split("_")]
-        if len(parts) not in (5, 7):
+        if len(parts) not in (5, 7, 8):
             raise ValueError("Invalid reminder scope")
         opener, tour_id, team_id, opponent_id, force = parts[:5]
-        round_no, match_no = parts[5:] if len(parts) == 7 else (0, 0)
+        round_no, match_no = parts[5:7] if len(parts) >= 7 else (0, 0)
+        round_end = parts[7] if len(parts) == 8 else None
     except (TypeError, ValueError):
         await q.answer("Invalid selection.", show_alert=True)
         return
@@ -476,7 +503,7 @@ async def remindmatch_callback(update: Update, context: ContextTypes.DEFAULT_TYP
         plan = build_plan(session, opener, team_id=team_id or None,
                           opponent_id=opponent_id or None, force=bool(force),
                           tour_id=tour_id, round_no=round_no or None,
-                          match_no=match_no or None)
+                          match_no=match_no or None, round_end=round_end)
         if plan.error or not plan.sending:
             await q.edit_message_text(
                 plan.error or "✅ Nothing left to remind — those matches have "
