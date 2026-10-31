@@ -3200,6 +3200,10 @@ class StatsSeason(Base):
     kind = Column(String(20), nullable=True)
     completed_at = Column(DateTime, nullable=True)
     archived_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    # Recorded batter/bowler encounters survive deleting the source fixtures.
+    player_duels_json = Column(Text, nullable=True)
+    # Completed fixture evidence for franchise rivalries after team deletion.
+    franchise_results_json = Column(Text, nullable=True)
 
     players = relationship("StatsSeasonPlayer", back_populates="season",
                            cascade="all, delete-orphan")

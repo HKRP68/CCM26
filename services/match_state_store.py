@@ -455,7 +455,7 @@ class CasAbort(Exception):
         self.result = result
 
 
-def update_state_cas(ctx, mid, mutator, max_retries=5):
+def update_state_cas(ctx, mid, mutator, max_retries=5, *, with_session=False):
     """Read-modify-write match state under optimistic concurrency control.
 
     Generalizes the version-guarded retry pattern used by save_autoplay_users
@@ -468,6 +468,10 @@ def update_state_cas(ctx, mid, mutator, max_retries=5):
     place, and return `(result, next_action_or_None)`. Raise `CasAbort(result)`
     to signal "validation failed — persist nothing" and return `result` as-is.
 
+    With `with_session=True`, call `mutator(state, session)` in the write's
+    transaction. This lets a handover lock the receiving User until its state
+    update commits, so two matches cannot delegate to that person at once.
+
     Retries up to `max_retries` times if another writer commits between our
     read and write. Returns the mutator's `result`, or `None` if the match
     state row is missing or all retries were exhausted on version conflicts.
@@ -475,6 +479,11 @@ def update_state_cas(ctx, mid, mutator, max_retries=5):
     for attempt in range(max_retries):
         session = get_session()
         try:
+            if with_session and session.get_bind().dialect.name == 'sqlite':
+                # SQLite has no row-level FOR UPDATE. Reserve the write before
+                # reading so cross-match manager availability is serialized.
+                from sqlalchemy import text
+                session.execute(text('BEGIN IMMEDIATE'))
             ms = session.query(MatchState).filter(MatchState.match_id == mid).first()
             if not ms:
                 return None
@@ -483,7 +492,7 @@ def update_state_cas(ctx, mid, mutator, max_retries=5):
             state = _deserialize(ms.state_json)
 
             try:
-                result, next_action = mutator(state)
+                result, next_action = mutator(state, session) if with_session else mutator(state)
             except CasAbort as abort:
                 return abort.result
 

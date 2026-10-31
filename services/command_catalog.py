@@ -62,6 +62,7 @@ COMMAND_CATEGORIES = (
         '/removematch @user - Admin: remove a player stuck in a match',
         '/resume /r - If buttons disappear mid-match',
         '/rcl - Resume a stuck Challenge League (/cipl) match',
+        '/handover /transfermatch @manager - Offer live tournament control to your team’s owner/co-owner; receiver accepts within 60 seconds',
     )),
     ('🏆 Ranked & records', (
         '/pitchstats /ps [pitch] - What each pitch actually does in Lets Play & League matches: runs/over, wickets/over, bat-first vs chasing win %, and which approaches earn',
@@ -85,6 +86,9 @@ COMMAND_CATEGORIES = (
         "/teamowner [team] - Who owns and co-owns each tournament team (names shown, nobody tagged)",
         "/teamtourstats [team] - Your team's tournament by the numbers: standing, what you score and concede, best and worst totals, and your top run-scorers and wicket-takers",
         '/mvp - Tournament Most Valuable Player: batting + bowling + wins + POTM awards in one impact-point total',
+        '/tvs [#ID] Batter | Bowler - Recorded batter/bowler encounters in a tournament',
+        '/svs [#ID] Batter | Bowler - Recorded encounters across the current and linked seasons',
+        '/frivalry /frh2h [#ID] Team A | Team B - Franchise wins, ties, Super Overs and recent meetings across linked seasons',
         "/seasons [competition] [| player] - 🏟 Every season of a competition: champions, Orange & Purple Caps, all-time leaders, and one player's record season by season",
         "/remindmatch [team] [vs team] - Admin: nudge two teams to play what they still owe — posts here and DMs both sides' owners and co-owners",
     )),

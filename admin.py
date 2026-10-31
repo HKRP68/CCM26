@@ -9027,8 +9027,18 @@ def _match_rest_user_and_match(db, user_id, match_id=None):
                  .filter(((Match.user1_id == user.id) | (Match.user2_id == user.id)),
                          Match.status == "playing")
                  .order_by(Match.id.desc()).first())
+    if not match and not match_id:
+        from services.match_handover import controlled_match
+        match = controlled_match(db, user.id)
     if not match:
         return user, None, ({"ok": False, "error": "no_match"}, 404)
+    from services.match_webapp_access import get_state
+    live = get_state(match.id)
+    if live and live.get('captain_controllers'):
+        from services.match_handover import seat_for_user
+        if seat_for_user(live, user.id) is None:
+            return user, match, ({"ok": False, "error": "not_participant"}, 403)
+        return user, match, None
     if user.id not in (match.user1_id, match.user2_id):
         return user, match, ({"ok": False, "error": "not_participant"}, 403)
     return user, match, None

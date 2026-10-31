@@ -147,6 +147,9 @@ def test_no_scope_has_duplicates():
 # This is an allowlist, not an amnesty: a command added without a menu entry
 # and without a line here still fails the test below.
 UNPUBLISHED_ON_PURPOSE = {
+    # Cross-season matchups, franchise rivalries and captain handover are on
+    # /tourhelp and in /commands. Player slash menus are at their 100-entry cap.
+    "svs", "frivalry", "handover",
     # Lets Play Multi (your roster vs a league team) — in BOT_COMMANDS.md and the
     # /help catalog; the player menus are at Telegram's 100-command ceiling.
     "lpmulti",

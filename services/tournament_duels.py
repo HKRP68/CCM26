@@ -4,6 +4,7 @@ Only main-innings deliveries count. Old scorecards cannot reconstruct who faced
 whom, so they deliberately contribute no invented matchup statistics.
 """
 import json
+from copy import deepcopy
 
 COUNTERS = ('runs', 'balls', 'legal_balls', 'dots', 'fours', 'sixes', 'dismissals')
 
@@ -49,8 +50,50 @@ def archived_duels(session, tournament_id):
     return rows
 
 
-def compare(rows, batter_query, bowler_query):
+def season_duels(session, tour):
+    """Current + linked seasons, using the same scope as Total Season Stats.
+
+    Return encounters and coverage (seasons with data / existing seasons).
+    Explicit links are not followed recursively and each source counts once.
+    """
+    from models import StatsSeason, Tournament
+    from services import season_archive as SA
+    rows, recorded, total = [], 0, 0
+    refs = dict.fromkeys([SA.tour_ref(tour.id)] + SA.effective_refs(session, tour))
+    for ref in refs:
+        kind, number = SA._parse_ref(ref)
+        source = session.get(Tournament if kind == 't' else StatsSeason, number)
+        if source is None:
+            continue
+        total += 1
+        if kind == 't':
+            encounters = archived_duels(session, number)
+        else:
+            try:
+                encounters = json.loads(source.player_duels_json or '[]')
+            except (ValueError, TypeError):
+                encounters = []
+        if not isinstance(encounters, list):
+            continue
+        if encounters:
+            recorded += 1
+            rows.extend(encounters)
+    return rows, recorded, total
+
+
+def compare(rows, batter_query, bowler_query, *, across_seasons=False):
     """Resolve unique player identities. ``Name @ Team`` disambiguates names."""
+    if across_seasons:
+        # A franchise's squad is rebuilt each season; roster ids may change.
+        # Keep teams distinct so names shared by different squads stay explicit.
+        rows = deepcopy(rows)
+        identities = {}
+        for row in rows:
+            for role in ('batter', 'bowler'):
+                p = row[role]
+                key = (p['name'].strip().casefold(), p['team'].strip().casefold())
+                row[role] = identities.setdefault(key, dict(
+                    name=p['name'], team=p['team'], roster_id=None))
     def select(role, query):
         name, _, team = query.partition(' @ ')
         name, team = name.strip().casefold(), team.strip().casefold()

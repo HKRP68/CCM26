@@ -362,10 +362,14 @@ def find_active_match(session, user, match_id=None):
             return None
     if not user:
         return None
-    return (session.query(Match)
+    match = (session.query(Match)
             .filter(((Match.user1_id == user.id) | (Match.user2_id == user.id)),
                     Match.status == "playing")
             .order_by(Match.id.desc()).first())
+    if match is not None:
+        return match
+    from services.match_handover import controlled_match
+    return controlled_match(session, user.id)
 
 
 # ── index translation for the write endpoints ───────────────────────
@@ -458,6 +462,9 @@ def _serialize_match_state_impl(session, match, viewer_user):
         tg_of[u1.id] = u1.telegram_id
     if u2:
         tg_of[u2.id] = u2.telegram_id
+    if state.get('captain_controllers'):
+        for side in ('bat', 'bowl'):
+            tg_of[state.get(f'{side}_team_id')] = state.get(f'{side}_user_tg')
 
     bat_team_id = state.get("bat_team_id")
     bowl_team_id = state.get("bowl_team_id")
@@ -498,9 +505,11 @@ def _serialize_match_state_impl(session, match, viewer_user):
         if not team_name:
             team_name = (state.get("bat_team_name") if is_bat
                          else state.get("bowl_team_name"))
+        from services.match_handover import controller_uid
+        captain = _user_lite(session, controller_uid(state, u.id)) or u
         return {
-            "telegramId": u.telegram_id,
-            "username": u.username,
+            "telegramId": captain.telegram_id,
+            "username": captain.username,
             "teamName": team_name or u.team_name or (f"@{u.username}" if u.username else "Player"),
             "xi": [_p(p) for p in xi],
             "confirmed": bool(confirmed),
@@ -899,6 +908,11 @@ def _approach_impact_payload(state, viewer_uid, next_action):
     bat, as the chat picker offers.
     """
     from services import impact_player as ip
+    if state.get('captain_controllers'):
+        from services.match_handover import seat_for_user
+        viewer_uid = seat_for_user(state, viewer_uid)
+        if viewer_uid is None:
+            return {'canUse': False, 'used': False}
     opts = ip.cipl_options(state, viewer_uid, next_action)
     summary = _impact_summary_for_result(state)
     if not opts.get("ok"):

@@ -82,3 +82,61 @@ class DuelTests(F.FourTeamCase):
                                    team1_id=10, team2_id=20, winner_team_id=winner)
         self.assertEqual(captain_record([m(1, 2, 10), m(2, 1, 20), m(1, 2, 20),
                                         m(2, 1, None), m(3, 1, 20)], 1, 2), (2, 1, 1))
+
+    def test_season_scope_merges_rosters_and_survives_archive_and_delete(self):
+        from models import Tournament, TournamentMatch
+        from services import season_archive as SA, tournament_duels as D
+        fixture = self.fixtures(1)[0]
+        fixture.status = 'completed'
+        fixture.scorecard_json = json.dumps([{'player_duels': self.snapshot()['tournament_duels']}])
+        previous = Tournament(name='Previous season', league_id=self.tour.league_id,
+                              status='completed', kind='challenge')
+        unrelated = Tournament(name='Other competition', status='completed')
+        self.session.add_all([previous, unrelated])
+        self.session.flush()
+        rows = self.snapshot()['tournament_duels']
+        for r in rows:
+            r['batter']['roster_id'] += 100
+            r['bowler']['roster_id'] += 100
+        for t in (previous, unrelated):
+            self.session.add(TournamentMatch(tournament_id=t.id, status='completed',
+                scorecard_json=json.dumps([{'player_duels': rows}])))
+        self.session.flush()
+        encounters, recorded, total = D.season_duels(self.session, self.tour)
+        self.assertEqual((recorded, total), (2, 2))
+        self.assertEqual(D.compare(encounters, 'Kohli', 'Bumrah', across_seasons=True)['runs'], 22)
+        # An explicit link excludes the unrelated tournament, even after deletion.
+        SA.set_linked_refs(self.session, self.tour, [SA.tour_ref(previous.id)])
+        saved = SA.delete_tournament(self.session, previous, keep_stats=True)
+        encounters, recorded, total = D.season_duels(self.session, self.tour)
+        self.assertEqual(SA.linked_refs(self.tour), [SA.saved_ref(saved.id)])
+        self.assertEqual((recorded, total), (2, 2))
+        self.assertEqual(D.compare(encounters, 'Kohli', 'Bumrah', across_seasons=True)['runs'], 22)
+
+    def test_svs_coverage_includes_legacy_seasons_without_inventing_deliveries(self):
+        from models import StatsSeason
+        from services import tournament_duels as D
+        from handlers import tournament_duels as H
+        legacy = StatsSeason(name='Legacy', league_id=self.tour.league_id)
+        self.session.add(legacy)
+        fixture = self.fixtures(1)[0]
+        fixture.status = 'completed'
+        fixture.scorecard_json = json.dumps([{'player_duels': self.snapshot()['tournament_duels']}])
+        self.session.commit()
+        self.assertEqual(D.season_duels(self.session, self.tour)[1:], (1, 2))
+        update = SimpleNamespace(message=SimpleNamespace(reply_text=AsyncMock()))
+        context = SimpleNamespace(args=[f'#{self.tour.id}', 'Kohli', '|', 'Bumrah'])
+        asyncio.run(H.svs_handler(update, context))
+        text = update.message.reply_text.call_args.args[0]
+        self.assertIn('Runs: <b>11</b>', text)
+        self.assertIn('1/2 seasons', text)
+
+    def test_season_duplicate_names_still_require_team(self):
+        from services.tournament_duels import compare
+        rows = self.snapshot()['tournament_duels']
+        other = json.loads(json.dumps(rows[0]))
+        other['batter']['team'] = 'Charlie'
+        with self.assertRaises(ValueError):
+            compare(rows + [other], 'Kohli', 'Bumrah', across_seasons=True)
+        self.assertEqual(compare(rows + [other], 'Kohli @ Alpha', 'Bumrah',
+                                 across_seasons=True)['runs'], 11)

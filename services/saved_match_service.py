@@ -78,15 +78,19 @@ def participants(state):
     In the first innings the batting side is the one that won or lost the toss;
     it doesn't matter which is which here, only that both are listed.
     """
-    return [(state.get("bat_team_id"), state.get("bat_user_tg")),
-            (state.get("bowl_team_id"), state.get("bowl_user_tg"))]
+    from services.match_handover import controller_uid
+    return [(controller_uid(state, state.get(f"{side}_team_id")),
+             state.get(f"{side}_user_tg")) for side in ("bat", "bowl")]
 
 
 def human_user_ids(state):
     """The DB user ids of the human captains (the AI captain left out)."""
     bot_uid = state.get("bot_user_id") if state.get("is_bot_match") else None
-    return [uid for uid, _tg in participants(state)
-            if uid is not None and uid != bot_uid]
+    # Both the current captains and the stable result identities must be free
+    # before reviving the same Match row.
+    ids = [uid for uid, _tg in participants(state)]
+    ids += [state.get('bat_team_id'), state.get('bowl_team_id')]
+    return list(dict.fromkeys(uid for uid in ids if uid is not None and uid != bot_uid))
 
 
 def describe(state):

@@ -1360,7 +1360,8 @@ async def _forfeit_live_match(context, mid, state, expected):
                     record_cl_match_result(session, state["cl_tour_match_id"], win_uid)
             except Exception:
                 logger.exception("CL tour forfeit recording failed for %s", mid)
-        idle_user = session.get(User, idle_uid) if idle_uid else None
+        from services.match_handover import controller_uid
+        idle_user = session.get(User, controller_uid(state, idle_uid)) if idle_uid else None
         win_user = session.get(User, win_uid) if win_uid else None
         if idle_user:
             charged_coins = min(idle_user.total_coins or 0, CIPL_FORFEIT_COINS)

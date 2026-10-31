@@ -69,7 +69,10 @@ PLAYER_SECTIONS = (
         ("/statstour", "",
          "A player's This Season and Total Season stats"),
         ("/tvs", "", "Batter vs bowler: /tvs [#ID] Batter | Bowler"),
+        ("/svs", "", "Batter vs bowler across current + linked seasons: /svs [#ID] Batter | Bowler"),
+        ("/handover", "/transfermatch", "Pass match control to your team's owner/co-owner; receiver accepts"),
         ("/th2h", "", "Captain record in a tournament: /th2h [#ID] @user"),
+        ("/frivalry", "/frh2h", "Franchise records across linked seasons: /frivalry [#ID] Team A | Team B"),
         ("/seasons", "",
          "Every season of a competition: champions, awards, all-time stats, "
          "and /seasons <player> season by season"),

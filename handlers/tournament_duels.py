@@ -31,40 +31,58 @@ def _tournament(session, args):
 
 async def tvs_handler(update, context):
     """/tvs [#ID] Batter name | Bowler name (optionally Name @ Team)."""
+    await _duel_handler(update, context, whole_season=False)
+
+
+async def svs_handler(update, context):
+    """/svs [#ID] Batter | Bowler — current and linked saved/live seasons."""
+    await _duel_handler(update, context, whole_season=True)
+
+
+async def _duel_handler(update, context, *, whole_season):
+    command = 'svs' if whole_season else 'tvs'
     session = get_session()
     try:
         tour, args = _tournament(session, context.args)
         names = ' '.join(args).split('|')
         if len(names) != 2 or not all(n.strip() for n in names):
-            raise ValueError('Use /tvs [#ID] Batter name | Bowler name\n'
-                             'Example: /tvs Virat Kohli | Jasprit Bumrah\n'
+            raise ValueError(f'Use /{command} [#ID] Batter name | Bowler name\n'
+                             f'Example: /{command} Virat Kohli | Jasprit Bumrah\n'
                              'For duplicate names use Player name @ Team name.')
-        row = tournament_duels.compare(tournament_duels.archived_duels(session, tour.id), *names)
+        coverage = ''
+        if whole_season:
+            rows, recorded, total = tournament_duels.season_duels(session, tour)
+            coverage = (f'\n\n📚 Current + linked seasons · '
+                        f'Recorded encounters available in {recorded}/{total} seasons.')
+        else:
+            rows = tournament_duels.archived_duels(session, tour.id)
+        row = tournament_duels.compare(rows, *names, across_seasons=whole_season)
         if row is None:
             await update.message.reply_text(
-                'No recorded deliveries for this matchup in this tournament yet. '
+                'No recorded deliveries for this matchup in the selected '
+                + ('seasons' if whole_season else 'tournament') + ' yet. '
                 'Matchups are tracked from this update onward; older scorecards '
-                'and manual results do not contain ball-level encounters.')
+                'and manual results do not contain ball-level encounters.' + coverage)
             return
         bat, bowl = row['batter'], row['bowler']
         sr = f"{row['runs'] * 100 / row['balls']:.1f}" if row['balls'] else '—'
         avg = f"{row['runs'] / row['dismissals']:.1f}" if row['dismissals'] else '—'
         e = html.escape
         await update.message.reply_text(
-            f"🏏 <b>{e(tour.name)} — Player vs Player</b>\n"
+            f"🏏 <b>{e(tour.name)} — {'Season Matchup' if whole_season else 'Player vs Player'}</b>\n"
             f"{e(bat['name'])} ({e(bat['team'])})\nvs "
             f"{e(bowl['name'])} ({e(bowl['team'])})\n\n"
             f"Runs: <b>{row['runs']}</b> · Balls faced: <b>{row['balls']}</b>\n"
             f"Dismissals: <b>{row['dismissals']}</b> · Dots: {row['dots']}\n"
             f"4s: {row['fours']} · 6s: {row['sixes']}\n"
             f"Strike rate: <b>{sr}</b> · Average: {avg}\n\n"
-            'Main innings only. Extras excluded from runs; run outs excluded from dismissals.',
+            'Main innings only. Extras excluded from runs; run outs excluded from dismissals.' + coverage,
             parse_mode='HTML')
     except ValueError as exc:
         await update.message.reply_text(str(exc))
     except Exception:
-        logger.exception('/tvs failed')
-        await update.message.reply_text('Could not load tournament matchups.')
+        logger.exception('/%s failed', command)
+        await update.message.reply_text('Could not load player matchups.')
     finally:
         session.close()
 

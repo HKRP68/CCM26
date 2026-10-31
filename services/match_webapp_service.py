@@ -906,6 +906,9 @@ def role_for(state, user_id):
     """Return the user's role in the current innings."""
     if not state:
         return "spectator"
+    if state.get('captain_controllers'):
+        from services.match_handover import seat_for_user
+        user_id = seat_for_user(state, user_id)
     if user_id == state.get("bat_team_id"):
         return "batsman"
     if user_id == state.get("bowl_team_id"):

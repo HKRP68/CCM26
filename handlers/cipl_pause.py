@@ -439,6 +439,10 @@ def _chat_busy(chat_id, human_uids):
                             or_(Match.user1_id.in_(human_uids),
                                 Match.user2_id.in_(human_uids)))
                     .first())
+            if busy is None:
+                from services.match_handover import controlled_match
+                busy = next((m for uid in human_uids
+                             if (m := controlled_match(session, uid)) is not None), None)
             if busy is not None:
                 return ("🚫 One of the captains is in another match right now "
                         f"(#{busy.id}). Finish or /pause that one first.")

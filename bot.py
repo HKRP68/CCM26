@@ -82,7 +82,8 @@ from handlers.team import (teamname_handler, teamcolour_handler, purse_handler,
 from handlers.tournament import (
     statstour_handler, tournamentstats_handler, tournamentstats_callback,
 )
-from handlers.tournament_duels import tvs_handler, th2h_handler
+from handlers.tournament_duels import tvs_handler, svs_handler, th2h_handler
+from handlers.franchise_rivalry import frivalry_handler
 from handlers.leaderboard import leaderboard_handler, leaderboard_callback
 from handlers.profile import myprofile_handler, myprofile_callback
 
@@ -1788,7 +1789,9 @@ def main():
             "statscl", dm_only("statscl", statscl_handler)))
         app.add_handler(CommandHandler("statstour", statstour_handler))
         app.add_handler(CommandHandler("tvs", tvs_handler))
+        app.add_handler(CommandHandler("svs", svs_handler))
         app.add_handler(CommandHandler("th2h", th2h_handler))
+        app.add_handler(CommandHandler(["frivalry", "frh2h"], frivalry_handler))
         app.add_handler(CommandHandler("tournamentstats", tournamentstats_handler))
         app.add_handler(CallbackQueryHandler(tournamentstats_callback, pattern=r"^tstat_"))
         # 🏟 League Seasons: every season of a competition, its champions and
@@ -2153,6 +2156,9 @@ def main():
         app.add_handler(CommandHandler(["playapp", "appmode"], playapp_handler))
         app.add_handler(CommandHandler(["playchat", "chatmode"], playchat_handler))
         app.add_handler(CallbackQueryHandler(saved_callback, pattern=r"^svm_"))
+        from handlers.match_handover import handover_handler, handover_callback
+        app.add_handler(CommandHandler(["handover", "transfermatch"], handover_handler))
+        app.add_handler(CallbackQueryHandler(handover_callback, pattern=r"^ho_"))
         # Super Over (tied /cipl, /c[league] and /letsplay matches) — interactive
         # user-vs-user, ball by ball; outcomes from the SimCricketX engine.
         from handlers.super_over import (

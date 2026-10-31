@@ -321,11 +321,15 @@ def _active_match_in_chat(session, chat_id):
 def _active_match_for_user(session, user_id):
     """Return an unfinished match involving ``user_id``, if one exists."""
     _expire_stale_pending_matches(session)
-    return (session.query(Match)
+    match = (session.query(Match)
             .filter(or_(Match.user1_id == user_id, Match.user2_id == user_id),
                     Match.status.in_(ACTIVE_MATCH_STATUSES))
             .order_by(Match.id.desc())
             .first())
+    if match is not None:
+        return match
+    from services.match_handover import controlled_match
+    return controlled_match(session, user_id)
 
 
 def _cric_lobby_key(chat_id):

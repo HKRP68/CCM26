@@ -143,6 +143,8 @@ SHARED_CALLBACK_PREFIXES: tuple[str, ...] = (
     # OTHER captain is the one who has to tap ✅ Ready. handlers/cipl_pause.py
     # checks every press against the saved match's two captains.
     "svm_",
+    # A playing captain offers; the receiving manager must answer.
+    "ho_",
     # Super Over (tied /cipl, /c[league], /letsplay): the player-selection and
     # ball-by-ball prompts are shared between the two captains — the bowling side
     # picks delivery/length while the batting side picks the shot, all on the same
