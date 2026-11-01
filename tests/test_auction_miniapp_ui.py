@@ -101,6 +101,9 @@ async function boot(data,view='teams') {
   }
   const team={id:1,name:'Mumbai',mine:true,purse_lakh:1000,max_bid_lakh:1000,size:1,overseas:0,
               retained:0,rtm_left:0,warnings:[],squad:[{id:9,name:'Player One',price_lakh:100,rating:90}]};
+  const preseasonManager=await boot({...base,admin:true,season:setup,readiness:{teams:[]},mode:'classic',team_id:null},'preseason');
+  assert.match(preseasonManager['au-body'].innerHTML,/Manage retention &amp; draft setup|Manage retention & draft setup/);
+  assert.match(preseasonManager['au-body'].innerHTML,/data-view="admin"/,'An unassigned manager can reach retention and pick configuration');
   const owner=await boot({...base,admin:false,season:setup,my_team_ids:[1],teams:[team]});
   await owner.click('view',{view:'teams'});
   assert.match(owner['au-body'].innerHTML,/Max legal bid/);

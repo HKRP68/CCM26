@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0d1829">
+  <meta name="description" content="Your franchise, your season. Live cricket auctions, retentions, draft picks, squads and trades in one workspace.">
+  <title>Franchise HQ · Cricket Auction & Season Management</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/auction_miniapp.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/auction_arena.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/franchise_site.css') }}">
+</head>
+<body class="franchise-website">
+  <a class="fs-skip" href="#fs-main">Skip to content</a>
+  <div class="fs-layout">
+    <aside class="fs-sidebar" aria-label="Franchise workspace">
+      <a class="fs-brand" href="/franchise" aria-label="Franchise HQ home"><span class="fs-brand-mark" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M8 7h16v5c0 7-4 12-8 14-4-2-8-7-8-14V7Z" stroke="currentColor" stroke-width="2"/><path d="m11 17 4-5 5 4-4 5m-2-2-4 5M12 3h8" stroke="currentColor" stroke-width="2"/></svg></span><span>FRANCHISE<span class="fs-brand-hq">HQ<span class="fs-brand-dot">.</span></span></span></a>
+      <div class="fs-sidebar-label">YOUR SEASON, IN ONE PLACE</div>
+      <nav id="fs-navigation" class="fs-navigation" aria-label="Main navigation">
+        <button type="button" class="selected" data-fs-view="home" aria-current="page"><span data-fs-icon="overview"></span>Overview</button>
+        <button type="button" data-fs-view="arena"><span data-fs-icon="arena"></span>Live auction<span class="fs-nav-dot" aria-hidden="true"></span></button>
+        <button type="button" data-fs-view="squads"><span data-fs-icon="squads"></span>Franchises & squads</button>
+        <button type="button" data-fs-view="pool" data-fs-access="owner"><span data-fs-icon="pool"></span>Player pool</button>
+        <button type="button" data-fs-view="preseason" data-fs-access="manager"><span data-fs-icon="picks"></span>Retention & picks</button>
+        <button type="button" data-fs-view="trades" data-fs-access="manager"><span data-fs-icon="trades"></span>Trade centre</button>
+        <button type="button" data-fs-view="rules" data-fs-access="owner"><span data-fs-icon="rules"></span>Rulebook</button>
+        <button type="button" data-fs-view="admin" data-fs-access="manager"><span data-fs-icon="settings"></span>Season setup</button>
+      </nav>
+      <div class="fs-sidebar-bottom"><div class="fs-sidebar-note"><span class="fs-small-label">BUILT FOR THE WHOLE SEASON</span><p>From the first retention to the final winning bid.</p><span class="fs-note-line" aria-hidden="true"></span></div><div class="fs-account" id="fs-account"><span class="fs-avatar" aria-hidden="true">F</span><div><b>Your franchise awaits</b><small>Sign in with Telegram</small></div></div></div>
+    </aside>
+    <div class="fs-workspace">
+      <header class="fs-topbar"><div class="fs-breadcrumb"><span>Franchise HQ</span><i aria-hidden="true">/</i><b>Overview</b></div><div class="fs-top-actions"><span class="fs-telegram-label"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m3 10 18-7-5 18-5-7-8-4ZM11 14l10-11" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>Connected by Telegram</span><button type="button" class="fs-button fs-button-quiet" id="fs-signout" hidden>Sign out</button></div></header>
+      <main id="fs-main" class="fs-main" tabindex="-1">
+        <div class="fs-heading"><div><span class="fs-kicker">THE FRANCHISE WORKSPACE</span><h1 id="fs-title">Build a team.<br>Own the season.</h1></div><span class="fs-edition">AUCTIONS · RETENTIONS · DRAFTS</span></div>
+        <div id="fs-page-status" class="fs-page-status" role="status" aria-live="polite">Opening your workspace…</div>
+        <section id="fs-landing" hidden>
+          <div class="fs-welcome-card"><div class="fs-welcome-copy"><span class="fs-pill"><span></span>YOUR NEXT CHAPTER STARTS HERE</span><h2>Big decisions.<br>One home ground.</h2><p>Run the auction. Keep your core. Make the picks that shape your season. Your entire franchise journey, together in one workspace.</p><div class="fs-login-box" id="fs-login-box"><span class="fs-small-label">ENTER YOUR WORKSPACE</span><div id="fs-telegram-login" class="fs-telegram-login"></div><p class="fs-login-detail">Use your Telegram account to find your teams and auctions.</p></div><div id="fs-login-error" class="fs-inline-error" role="alert" hidden></div><p id="fs-login-setup" class="fs-login-setup" hidden>Telegram sign-in is being set up. Ask your league organiser when the workspace will open.</p></div><div class="fs-field-art" aria-hidden="true"><div class="fs-orbit fs-orbit-one"></div><div class="fs-orbit fs-orbit-two"></div><div class="fs-pitch"><span></span><b>HQ</b><span></span></div><span class="fs-field-caption">WHERE YOUR SEASON TAKES SHAPE</span><span class="fs-field-dot"></span></div></div>
+          <div class="fs-section-title"><h2>A whole season. A clearer view.</h2><span>EVERY DECISION, CONNECTED</span></div>
+          <div class="fs-features"><article><span class="fs-feature-icon" data-fs-icon="arena"></span><span class="fs-card-number">01</span><h3>Own the auction room</h3><p>Follow live bids, watch the clock, and know what your franchise can afford before you bid.</p><span class="fs-feature-tag">LIVE AUCTION & RTM</span></article><article><span class="fs-feature-icon" data-fs-icon="picks"></span><span class="fs-card-number">02</span><h3>Build around your core</h3><p>Keep the right players and prepare retention, draft and expansion picks from the same season.</p><span class="fs-feature-tag">RETENTION & PICKS</span></article><article><span class="fs-feature-icon" data-fs-icon="squads"></span><span class="fs-card-number">03</span><h3>See the whole squad</h3><p>Keep track of signings, available purse, squad requirements and the moves across your league.</p><span class="fs-feature-tag">SQUADS, PURSES & TRADES</span></article></div>
+        </section>
+        <section id="fs-dashboard" hidden><div class="fs-dashboard-toolbar"><label for="fs-season">Your auction<select id="fs-season" aria-label="Select auction"></select></label><div><span id="fs-updated" class="fs-updated"></span><button type="button" class="fs-button fs-button-quiet" id="fs-refresh"><span data-fs-icon="refresh"></span>Refresh</button></div></div><div id="fs-dashboard-content"></div></section>
+        <footer class="fs-footer"><span>FRANCHISE HQ<span class="fs-brand-dot">.</span></span><p>Every squad starts with a decision.</p><span>PLAY THE LONG GAME.</span></footer>
+      </main>
+    </div>
+  </div>
+  <div id="fs-toast" class="fs-toast" role="status" aria-live="polite" hidden></div>
+  <script id="fs-config" type="application/json">{{ {'bot_username': bot_username, 'login_configured': login_configured, 'csrf_token': csrf_token}|tojson }}</script>
+  <script src="{{ url_for('static', filename='js/franchise_site.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/auction_miniapp.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/auction_arena.js') }}"></script>
+</body>
+</html>

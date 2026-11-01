@@ -88,12 +88,23 @@ const AuctionArena = (() => {
       await act(form.dataset.aaForm,{...JSON.parse(form.dataset.aaArgs||'{}'),...values});
     });
   }
-  function open(id) {
-    if(root?.open){leaveTools();tab='arena';panel=false;if(id!==seasonId){seasonId=id||null;data=null;}render();refresh();return;}
+  async function open(id) {
+    if(root?.open){leaveTools();tab='arena';panel=false;if(id!==seasonId){seasonId=id||null;data=null;}render();await refresh();return;}
     mount();suspend();seasonId=id||null;data=null;tab='arena';panel=false;teamId=null;lastEvent=null;resultCard=null;resultUntil=0;teamQuery='';toolView=null;exitingToHome=false;
     bodyOverflow=document.body.style.overflow;document.body.style.overflow='hidden';
     $('aa-toast').hidden=true;
-    root.showModal();render();clock=setInterval(tick,250);refresh();
+    root.showModal();render();clock=setInterval(tick,250);await refresh();
+  }
+  async function openWorkspace(view='arena',id=null) {
+    // Dashboard shortcuts wait for the server's current role and season before
+    // entering a tool. openTools also checks access; the API remains authoritative.
+    await open(id);
+    if(!root?.open||!data)return;
+    if(['arena','squads','logs','more'].includes(view)) {
+      if(view!=='arena')await showTab(view);
+      return;
+    }
+    await openTools(view);
   }
   function suspend() {clearTimeout(poll);clearInterval(clock);poll=null;clock=null;epoch++;connected=false;}
   function leaveTools() {if(toolView){AuctionApp.stopTools();toolView=null;connected=false;}}
@@ -162,7 +173,7 @@ const AuctionArena = (() => {
   function renderHeader() {
     if(!$('aa-header'))return;
     const seasons=data?.auctions||[];
-    $('aa-header').innerHTML=`<div class="aa-room-identity"><span class="aa-eyebrow">FRANCHISE AUCTION · ${data?.admin?'MANAGER':data?.my_team_ids?.length?'TEAM':'SPECTATOR'}</span><select id="aa-season" aria-label="Select auction">${seasons.length?seasons.map(s=>`<option value="${s.id}" ${s.id===seasonId?'selected':''}>${esc(s.name)}</option>`).join(''):'<option>Auction Arena</option>'}</select></div><div class="aa-header-actions"><span class="aa-room-state"><i class="${data?.season?.status==='live'?'live':''}"></i>${esc(data?.season?.status||'Connecting')}</span>${ui('Refresh auction','refresh')}${ui('Open in Telegram','telegram')}${data?.admin?ui('Auction Manager panel','admin','settings'):''}${ui('Back to Mini App','close','back')}</div>`;
+    $('aa-header').innerHTML=`<div class="aa-room-identity"><span class="aa-eyebrow">FRANCHISE AUCTION · ${data?.admin?'MANAGER':data?.my_team_ids?.length?'TEAM':'SPECTATOR'}</span><select id="aa-season" aria-label="Select auction">${seasons.length?seasons.map(s=>`<option value="${s.id}" ${s.id===seasonId?'selected':''}>${esc(s.name)}</option>`).join(''):'<option>Auction Arena</option>'}</select></div><div class="aa-header-actions"><span class="aa-room-state"><i class="${data?.season?.status==='live'?'live':''}"></i>${esc(data?.season?.status||'Connecting')}</span>${ui('Refresh auction','refresh')}${ui('Open in Telegram','telegram')}${data?.admin?ui('Auction Manager panel','admin','settings'):''}${ui(window.FRANCHISE_WEBSITE?'Back to dashboard':'Back to Mini App','close','back')}</div>`;
   }
   function renderNav() {
     const current=toolView?'more':tab;
@@ -318,5 +329,5 @@ const AuctionArena = (() => {
   }
   document.addEventListener('visibilitychange',()=>{clearTimeout(poll);if(root?.open&&!document.hidden)refresh();});
   window.addEventListener('online',()=>{if(root?.open)refresh();});
-  return {open,close,stop,showTab,syncSeason,reflectToolBusy,notify:notice};
+  return {open,openWorkspace,close,stop,showTab,syncSeason,reflectToolBusy,notify:notice};
 })();

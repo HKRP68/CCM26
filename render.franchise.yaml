@@ -1,0 +1,23 @@
+# A second Render web service; the existing bot service keeps its own command.
+# Reuse the bot's PostgreSQL database. This Blueprint creates no database.
+services:
+  - type: web
+    name: ccm26-franchise
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 60 website:app
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DATABASE_URL
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_USERNAME
+        sync: false
+      - key: WEBSITE_SECRET
+        generateValue: true
+      - key: WEBSITE_HTTPS
+        value: "true"

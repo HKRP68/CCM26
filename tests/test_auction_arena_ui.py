@@ -34,6 +34,7 @@ async function boot(data,gate=true) {
    setTimeout(fn,delay){if([2000,5000].includes(delay))backgroundPoll=fn;return 1;},clearTimeout(){},setInterval(){return 1;},clearInterval(){}});
  vm.runInContext(source,context);vm.runInContext('AuctionArena.open(1)',context);await new Promise(setImmediate);
  return {elements,calls,toolCalls,homes,blobs,downloads,setToolBusy:value=>{toolBusy=value;},
+   workspace:async view=>vm.runInContext('AuctionArena.openWorkspace('+JSON.stringify(view)+',1)',context),
    setData:value=>{data=value;},setEditing:value=>{editing=value;context.document.activeElement=value?{matches:()=>true}:null;},denyReads:status=>{readFailure=status;},
    poll:async()=>{assert(backgroundPoll,'A live refresh must be scheduled');const run=backgroundPoll;backgroundPoll=null;await run();},
    body:context.document.body,click:async(key,args={})=>events.click({target:{closest:selector=>selector==='[data-aa-ui]'?{dataset:{aaUi:key,...args}}:null}}),
@@ -92,6 +93,11 @@ async function boot(data,gate=true) {
  const delegated=await boot({...base,admin:true,bot_admin:false});await delegated.click('admin');
  assert.match(delegated.elements['aa-body'].innerHTML,/AUCTION MANAGER/);
  await delegated.act('admin_pause',{});assert.equal(delegated.calls.filter(c=>c.body.action==='admin_pause').length,1);
+ const shortcut=await boot({...base,admin:true,bot_admin:false});
+ await shortcut.workspace('preseason');assert.equal(shortcut.toolCalls.at(-1)[0],'preseason','Website shortcut waits for current manager access');
+ const ownerShortcut=await boot(base);await ownerShortcut.workspace('preseason');
+ assert.equal(ownerShortcut.toolCalls.length,0,'Website shortcuts cannot open manager tools as an owner');
+ await ownerShortcut.workspace('squads');assert.match(ownerShortcut.elements['aa-body'].innerHTML,/Mumbai/,'Squad shortcuts open the requested section');
  const revoked=await boot({...base,admin:true,bot_admin:true},false);await revoked.click('admin');
  assert.doesNotMatch(revoked.elements['aa-body'].innerHTML,/AUCTION MANAGER/);
  const demoted=await boot({...base,admin:true,bot_admin:false});await demoted.click('admin');
