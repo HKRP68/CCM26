@@ -110,9 +110,9 @@ def register(app, authenticate, csrf_exempt, member_rpc):
             return dict(ok=False, error='unavailable', message='Live updates are temporarily unavailable.'), 503
 
         try:
-            limit = max(0, min(64, int(app.config.get('AUCTION_STREAM_MAX_CLIENTS', 12))))
+            limit = max(0, min(64, int(app.config.get('AUCTION_STREAM_MAX_CLIENTS', 2))))
         except (TypeError, ValueError):
-            limit = 12
+            limit = 2
         if not stream_slots.acquire(limit):
             return Response(json.dumps(dict(ok=False, error='stream_capacity',
                                              message='Use automatic refresh while live updates reconnect.')),

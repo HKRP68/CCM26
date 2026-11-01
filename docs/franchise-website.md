@@ -196,7 +196,9 @@ round-trip time are shown in the room.
 The Render command uses two `gthread` workers with 32 threads each.
 `AUCTION_STREAM_MAX_CLIENTS=12` caps streams per worker, leaving threads for bids
 and sign-ins. Use the new start command when updating an existing website
-service. Keep this cap below the configured thread count. The normal bot
+service. Without an explicit setting, the cap defaults to two so an existing
+four-thread service keeps capacity for ordinary requests during an upgrade.
+Keep this cap below the configured thread count. The normal bot
 start command remains `python bot.py`. An always-on Render instance avoids
 free-tier cold starts during live auctions; no instance plan is changed by code.
 
